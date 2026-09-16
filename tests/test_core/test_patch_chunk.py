@@ -1446,7 +1446,11 @@ class TestQuantityTolerance:
         """An infinite count is a coherent request: no boundary is a gap."""
         spool = self._gapped(random_patch, 500)
         with pytest.warns(UserWarning, match="gap in the patch"):
-            assert len(spool.chunk(time=None, tolerance=np.inf)) == 1
+            merged = spool.chunk(time=None, tolerance=np.inf)
+            assert len(merged) == 1
+            # and the patch it advertises actually loads: an infinite
+            # count is no bound on the snap, not a bound of NaT
+            assert isinstance(merged[0].get_coord("time"), CoordSegmented)
 
     def test_exchanged_boundary_warns(self):
         """A forced merge warns even when the partition count is unchanged."""
@@ -2622,6 +2626,49 @@ class TestChunkFillValue:
         # the pathology: one range whose step was stretched to cover the hole
         assert abs(merged_coord.segments[0].step - coord.step) < to_timedelta64(1e-8)
 
+    def test_tolerance_bounds_a_hole_the_planner_never_saw(self, random_patch):
+        """A pending selection hides a hole from the plan; tolerance still rules."""
+        first = random_patch.select(time=(0, 100), samples=True)
+        second = random_patch.select(time=(600, 1000), samples=True)
+        with pytest.warns(UserWarning, match="fill_value"):
+            gapped = dc.spool([first, second]).chunk(time=None, tolerance=600)[0]
+        # the selection resolves against the patch, so the plan describes
+        # the whole of it rather than its runs, holes and all
+        spool = dc.spool([gapped]).select(time=(0.1, -0.1), relative=True)
+        with suppress_warnings(UserWarning):
+            narrow = spool.chunk(time=None, tolerance=1, fill_value=np.nan)[0]
+            wide = spool.chunk(time=None, tolerance=600, fill_value=np.nan)[0]
+        assert not np.isnan(narrow.data).any()
+        assert int(np.isnan(wide.data).all(axis=0).sum()) == 500
+        assert len(wide.get_coord("time")) == len(narrow.get_coord("time")) + 500
+
+    def test_infinite_tolerance_fills_every_hole(self, gapped_spool):
+        """No boundary is a gap, so no hole is too wide to fill."""
+        merged = gapped_spool.chunk(time=None, tolerance=np.inf, fill_value=np.nan)[0]
+        assert isinstance(merged.get_coord("time"), CoordRange)
+        assert len(self._fill_positions(merged)) == self.hole
+
+    def test_absolute_tolerance_fills(self, gapped_spool, random_patch):
+        """A tolerance stated in the coordinate's own units bounds the fill."""
+        step = random_patch.get_coord("time").step
+        wide = gapped_spool.chunk(
+            time=None, tolerance=self.hole * step, fill_value=np.nan
+        )[0]
+        assert len(self._fill_positions(wide)) == self.hole
+        # a hole wider than the tolerance is left as a boundary
+        narrow = gapped_spool.chunk(time=None, tolerance=2 * step, fill_value=np.nan)
+        assert len(narrow) == 2
+
+    def test_pending_sample_selection_still_chunks(self, random_patch):
+        """A selection the plan cannot describe leaves nothing to lend or fill."""
+        first = random_patch.select(time=(0, 100), samples=True)
+        second = random_patch.select(time=(600, 1000), samples=True)
+        with pytest.warns(UserWarning, match="fill_value"):
+            gapped = dc.spool([first, second]).chunk(time=None, tolerance=600)[0]
+        spool = dc.spool([gapped]).select(time=(0, 499), samples=True)
+        with suppress_warnings(UserWarning):
+            assert len(spool.chunk(time=None, tolerance=600, fill_value=np.nan)) == 0
+
     def test_integer_data_raises(self, gapped_spool):
         """Integers have no null, so NaN cannot be what a hole holds."""
         spool = dc.spool([x.new(data=x.data.astype(np.int32)) for x in gapped_spool])
@@ -2776,6 +2823,34 @@ class TestChunkFillWindows:
         # the hole spans 101 to 199, so those windows hold nothing else
         all_fill = [bool(np.isnan(x.data).all()) for x in chunked]
         assert all_fill == [False] * 6 + [True] * 4 + [False] * 5
+
+    def test_windows_off_a_hidden_grid_are_refused(self, random_patch):
+        """A window holding no sample position is no output at all."""
+        first = random_patch.select(time=(0, 100), samples=True)
+        second = random_patch.select(time=(600, 1000), samples=True)
+        with pytest.warns(UserWarning, match="fill_value"):
+            gapped = dc.spool([first, second]).chunk(time=None, tolerance=600)[0]
+        # the selection resolves against the patch, so the partition
+        # envelope the windows are laid over is not stated on the grid
+        spool = dc.spool([gapped]).select(time=(0.1, -0.1), relative=True)
+        with suppress_warnings(UserWarning), pytest.raises(ChunkError, match="chunk"):
+            spool.chunk(time=0.5, tolerance=600, fill_value=np.nan)
+
+    def test_fill_window_needs_a_span_and_a_step(self, random_patch):
+        """Neither the row's span nor the sibling's step can be missing."""
+        coords = random_patch.coords
+        row = {
+            "dims": "distance,time",
+            "time_min": random_patch.get_coord("time").min(),
+            "time_max": random_patch.get_coord("time").max(),
+            "time_step": random_patch.get_coord("time").step,
+        }
+        # the span the window covers is what says how many samples it holds
+        assembly_module.patch_from_fill(coords, row, "time", np.nan)
+        with pytest.raises(ChunkError, match="Cannot fill a hole along 'time'"):
+            assembly_module.patch_from_fill(
+                coords, {**row, "time_step": None}, "time", np.nan
+            )
 
     def test_all_fill_windows_share_one_read(self, spool_and_tolerance):
         """The sibling a fill window copies its structure from is read once."""

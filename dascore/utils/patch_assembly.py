@@ -23,7 +23,7 @@ import pandas as pd
 import dascore as dc
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import _EXACT_GRID_FIELDS, CoordRange, get_coord
-from dascore.exceptions import CoordMergeError, UnitError
+from dascore.exceptions import ChunkError, CoordMergeError, UnitError
 from dascore.io.index.ingest import _is_missing
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
 from dascore.units import get_quantity
@@ -387,10 +387,14 @@ def patch_from_fill(
     sibling = coords.coord_map[plan_dim]
     bounds = _row_values(row, plan_dim)
     step = sibling.step
-    # A plan states the span of every window it publishes, and a spool
-    # whose members have no step never reaches a fill: the plan cannot
-    # measure a chunk length against it, and a merge cannot fill one.
-    assert bounds is not None and not _is_null(step)
+    if bounds is None or _is_null(step):
+        msg = (
+            f"Cannot fill a hole along {plan_dim!r}: a window no source feeds "
+            "takes the span its plan row states and the step its neighbours "
+            "are sampled at, and one of those is missing. Chunk without a "
+            "pending sample or relative selection, or without fill_value."
+        )
+        raise ChunkError(msg)
     # The row's envelope orders values and so states no direction; the
     # step beside it does, which is why the window is rebuilt from both.
     low, high, _ = bounds
@@ -418,7 +422,25 @@ def _whole_steps(ratio) -> int:
     return int(np.floor(float(ratio) + _STEP_SNAP_RTOL))
 
 
-def fill_to_row(patch: dc.Patch, dim: str, row: Mapping, fill_value) -> dc.Patch:
+def _fill_limit(tolerance) -> tuple:
+    """
+    The widest hole a fill may close, as `Patch.fill_gaps` states limits.
+
+    A tolerance admits a spacing of so many steps; a hole of that spacing
+    is missing one fewer sample than it spans. An infinite count sets no
+    limit, which is the one way to ask for every hole to be filled.
+    """
+    if (count := tolerance.count) is not None:
+        if not np.isfinite(count):
+            return None, False
+        return max(int(np.floor(count)) - 1, 0), True
+    # an absolute excess is already stated per hole, not per spacing
+    return tolerance, False
+
+
+def fill_to_row(
+    patch: dc.Patch, dim: str, row: Mapping, fill_value, tolerance
+) -> dc.Patch:
     """
     Write the fill value into every sample an assembled output is missing.
 
@@ -434,13 +456,22 @@ def fill_to_row(patch: dc.Patch, dim: str, row: Mapping, fill_value) -> dc.Patch
     # imports from utils
     from dascore.proc.coords import _fill_scalar, _place_blocks  # noqa: PLC0415
 
-    patch = patch.fill_gaps(dim, value=fill_value)
+    # Bounded by the same tolerance which decided the merge: planning
+    # normally splits a patch at its holes, but a pending sample or
+    # relative selection keeps it from describing them, and the whole
+    # patch arrives here with its holes intact.
+    limit, samples = _fill_limit(tolerance)
+    bound = {dim: limit} if limit is not None else {}
+    args = () if bound else (dim,)
+    patch = patch.fill_gaps(*args, value=fill_value, samples=samples, **bound)
     coord = patch.get_coord(dim)
     bounds = _row_values(row, dim)
     step = coord.step
-    # fill_gaps above refuses a coordinate with no step, and the row of
-    # an output the plan published always states the window's span
-    assert bounds is not None and not _is_null(step)
+    # A row whose envelope the plan could not state -- a pending relative
+    # selection resolves against the patch, not the plan -- says nothing
+    # about where the window ends, so there is no span to pad out to.
+    if bounds is None or _is_null(step):
+        return patch
     # Counted on the samples' own grid and anchored on their own first
     # label, so padding can only ever add positions around them: a target
     # built from the window's edges instead would move every label

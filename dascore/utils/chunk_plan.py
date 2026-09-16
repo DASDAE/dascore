@@ -1687,9 +1687,12 @@ def build_chunk_plan(
                     starts_p, stops_p, g_starts[part], abs(part_step)
                 )
                 starts_p, stops_p = starts_p[on_grid], stops_p[on_grid]
-                # a window shorter than one sample never gets this far:
-                # the length is policed against the step long before
-                assert len(starts_p)
+                # A window can hold no position at all once snapped -- a
+                # partition whose envelope a pending selection resolved
+                # against the patch need not start on the grid -- and a
+                # partition of nothing but those produces no output.
+                if not len(starts_p):
+                    continue
         active[part] = True
         n_out = len(starts_p)
         ids_p = np.arange(next_id, next_id + n_out)
@@ -2336,8 +2339,11 @@ def _grid_snapped(starts, stops, origin, step):
     """
     lo = np.ceil((starts - origin) / step - _GRID_SNAP_RTOL)
     hi = np.floor((stops - origin) / step + _GRID_SNAP_RTOL)
+    # An edge a pending selection left unstated has no position, which
+    # the comparison already answers False; the cast still has to see a
+    # number, so it is given one which the mask then drops.
     keep = hi >= lo
-    lo, hi = lo.astype(np.int64), hi.astype(np.int64)
+    lo, hi = (np.where(keep, x, 0).astype(np.int64) for x in (lo, hi))
     return origin + lo * step, origin + hi * step, keep
 
 

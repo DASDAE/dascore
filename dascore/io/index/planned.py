@@ -794,7 +794,13 @@ class PlanResolver(PatchResolver):
             assert len(assembled) == 1
             patch = assembled[0]
             if fill_row is not None:
-                patch = fill_to_row(patch, self.dim, fill_row, fill_value)
+                patch = fill_to_row(
+                    patch,
+                    self.dim,
+                    fill_row,
+                    fill_value,
+                    self.merge_kwargs["tolerance"],
+                )
         return self._stamp(patch, row)
 
     def _sibling_coords(self, output_id: int):
@@ -1009,10 +1015,11 @@ def _aux_info_for_unfed(aux_info: Mapping, outputs: pd.DataFrame) -> dict:
     missing them would conflict with its siblings' the moment the filled
     spool was merged again.
     """
+    # A pending sample or relative selection keeps the planner from
+    # describing the members at all, so there is nothing to lend.
+    if not aux_info:
+        return {}
     known = np.array(sorted(aux_info))
-    # every output states the dimensions it did not chunk, so there is
-    # always a sibling to lend from
-    assert len(known)
     out = dict(aux_info)
     for value in outputs["output_id"]:
         output_id = int(value)

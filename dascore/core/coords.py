@@ -3472,8 +3472,16 @@ class CoordSegmented(BaseCoord):
         return self._rebuild(result)
 
     def _get_tolerance(self, tolerance):
-        """Coerce the tolerance to the dtype expected for value deviations."""
+        """
+        Coerce the tolerance to the dtype expected for value deviations.
+
+        None is no bound at all, which is what an infinite count asks
+        for: a finite excess cannot express it, and multiplying infinity
+        by a step gives NaT rather than a bound to compare against.
+        """
         if isinstance(tolerance, GapTolerance) and tolerance.count is not None:
+            if not np.isfinite(tolerance.count):
+                return None
             # a count of steps is measured against the runs' own step
             steps = [abs(x.step) for x in self.segments if not _is_null(x.step)]
             tolerance = tolerance.count * get_middle_value(steps) if steps else 0
@@ -3505,7 +3513,8 @@ class CoordSegmented(BaseCoord):
         ).change_length(n)
         actual = np.concatenate([x.values for x in run])
         deviation = np.max(np.abs(candidate.values - actual))
-        if deviation > tol or (keep_step and not _keeps_step(run, ascending)):
+        too_far = tol is not None and deviation > tol
+        if too_far or (keep_step and not _keeps_step(run, ascending)):
             return None
         return candidate
 
