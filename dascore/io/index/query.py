@@ -628,10 +628,15 @@ _HOT_COORDS = ("time", "distance")
 
 
 def _order_clause(
-    order_by, attr_meta: pd.DataFrame, coord_meta: pd.DataFrame
+    order_by, attr_meta: pd.DataFrame, coord_meta: pd.DataFrame, reverse: bool = False
 ) -> tuple[str, list]:
     """
     Resolve an order spec into an ORDER BY clause and its parameters.
+
+    ``reverse`` negates every key, the missing-value keys and tiebreaks
+    included, so rows come back in exactly the opposite order: what a
+    window near the end seeks from, rather than skipping every row before
+    it.
 
     ``order_by`` is ``(kind, name, ascending)`` where kind is "attr"
     (an attrs-table column ordered by its typed column) or "coord"
@@ -640,7 +645,10 @@ def _order_clause(
     The ordinal contract supplies the deterministic tiebreak.
     """
     kind, name, ascending = order_by
-    direction = "ASC" if ascending else "DESC"
+    direction = "ASC" if ascending != reverse else "DESC"
+    # values sort last where they are missing, so reversed they come first
+    nulls = "DESC" if reverse else "ASC"
+    tiebreak = "s.ordinal DESC, p.patch_id DESC" if reverse else "s.ordinal, p.patch_id"
     params: list = []
     missing_time = ""
     # (expression, parameters) of each sort key
@@ -661,7 +669,7 @@ def _order_clause(
                 "AND pc.run_index = 0))"
             )
             params.append(name)
-            missing_time = "p.time_min IS NULL, "
+            missing_time = f"p.time_min IS NULL {nulls}, "
         keys = [(column, params)]
     elif kind == "coord":
         rows = coord_meta[coord_meta["coord_name"] == name]
@@ -685,9 +693,11 @@ def _order_clause(
     # rows without a value sort last regardless of direction (matching
     # the ordinal renumberer's missing-time-last rule); each null key
     # repeats its expression, so its parameters repeat too
-    sql = ", ".join(f"{column} IS NULL, {column} {direction}" for column, _ in keys)
+    sql = ", ".join(
+        f"{column} IS NULL {nulls}, {column} {direction}" for column, _ in keys
+    )
     params = [x for _, key_params in keys for x in (*key_params, *key_params)]
-    return f"ORDER BY {missing_time}{sql}, s.ordinal, p.patch_id", params
+    return f"ORDER BY {missing_time}{sql}, {tiebreak}", params
 
 
 def build_sql(
@@ -698,6 +708,7 @@ def build_sql(
     order_by=None,
     patch_ids=None,
     ids_only: bool = False,
+    reverse: bool = False,
 ) -> tuple[str, list, list[tuple[str, re.Pattern]]]:
     """
     Build SQL for one or more AND-composed queries.
@@ -730,7 +741,9 @@ def build_sql(
         sql = f"SELECT COUNT(p.patch_id) AS n {_FROM}WHERE {where.sql}"
         return sql, where.params, residuals
     if order_by is not None:
-        order, order_params = _order_clause(order_by, attr_meta, coord_meta)
+        order, order_params = _order_clause(order_by, attr_meta, coord_meta, reverse)
+    elif reverse:
+        order, order_params = "ORDER BY s.ordinal DESC, p.patch_id DESC", []
     else:
         # the ordering contract: source ordinal, then file-internal order
         order, order_params = "ORDER BY s.ordinal, p.patch_id", []

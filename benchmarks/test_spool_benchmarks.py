@@ -158,6 +158,17 @@ class TestManyFileDirectoryBenchmarks:
         assert len(indexed_spool.select(time=window))
 
     @pytest.mark.benchmark
+    def test_tail_slice(self, indexed_spool):
+        """Time taking the last few patches of a directory spool."""
+        assert len(indexed_spool[-5:]) == 5
+
+    @pytest.mark.benchmark
+    def test_repeated_reads(self, indexed_spool):
+        """Time reading the first few patches one after another."""
+        for index in range(5):
+            assert indexed_spool[index].shape
+
+    @pytest.mark.benchmark
     def test_merge_many_files(self, indexed_spool):
         """Time merging many files into a single patch."""
         merged = indexed_spool.chunk(time=None)
