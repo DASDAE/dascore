@@ -85,7 +85,7 @@ def _get_coord_manager(resource, snap=True):
         """Get the time coordinate."""
         # TODO: I am not sure if time will always be in ns, check on it.
         time = resource["DasRawData/DasTimeArray"]
-        if not should_snap(snap, "time"):
+        if not should_snap(snap, "time") or len(time) < 2:
             values = np.array(time).astype("datetime64[ns]")
             return get_exact_coord(values)
         t1 = np.int64(time[0]).astype("datetime64[ns]")

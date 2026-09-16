@@ -1160,6 +1160,9 @@ def _stamp_source_ids(
             )
         if hasattr(attrs, STORED_PATCH_ID):
             attrs = attrs.drop(STORED_PATCH_ID)
+        # Expose positional keys after deriving IDs with the original ordinal.
+        if len(patches) > 1 and not origin.key:
+            origin = replace(origin, key=str(index))
         out.append(patch.new(attrs=attrs, source=origin))
     return out
 

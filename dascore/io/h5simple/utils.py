@@ -38,7 +38,7 @@ def _get_attrs_coords_and_data(h5, snap):
 
 def _get_coord(v, snap, name):
     """Get the coord values from a node."""
-    if should_snap(snap, name):
+    if should_snap(snap, name) and len(v) > 1:
         start = v[0] if name != "time" else dc.to_datetime64(v[0])
         stop = v[-1] if name != "time" else dc.to_datetime64(v[-1])
         duration = stop - start

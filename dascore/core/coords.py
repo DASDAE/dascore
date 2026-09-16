@@ -729,6 +729,9 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
     @overload
     def __getitem__(self, item: slice | np.ndarray) -> Self: ...
 
+    @overload
+    def __getitem__(self, item: tuple) -> Any: ...
+
     @abc.abstractmethod
     # Left unannotated on purpose. An int index yields a bare value, so the
     # honest return contains Any, which would absorb the overloads above
@@ -1320,8 +1323,10 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             indexer = tuple(
                 slice(None, None) if i != axis else indexer for i in range(ndims)
             )
-        array = self.data[indexer]
-        return get_coord(data=array, units=self.units)
+        out = self[indexer]
+        return (
+            out if isinstance(out, BaseCoord) else get_coord(data=out, units=self.units)
+        )
 
     def to_summary(self, dims=()) -> CoordSummary:
         """Get the summary info about the coord."""
@@ -2672,7 +2677,7 @@ class CoordArray(BaseCoord):
         # readers) index with these where booleans are not supported.
         if len(self.shape) == 1:
             out = np.arange(len(out))[out]
-        return self.new(values=values[out]), out
+        return self[out], out
 
     def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
         """Sort the coord to be monotonic (maybe range)."""
@@ -2838,7 +2843,7 @@ class CoordMonotonicArray(CoordArray):
         out = slice(new_start, new_stop)
         if self._slice_degenerate(out):
             return self.empty(), slice(0, 0)
-        return self.new(values=self.values[out]), out
+        return self[out], out
 
     def _get_index(self, value, forward=True):
         """

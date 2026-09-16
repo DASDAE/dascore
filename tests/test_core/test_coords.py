@@ -1595,6 +1595,22 @@ class TestCoordRange:
 class TestMonotonicCoord:
     """Tests for monotonic array coords."""
 
+    @pytest.mark.parametrize("coord_type", [CoordArray, CoordMonotonicArray])
+    @pytest.mark.parametrize("temporal", [False, True])
+    @pytest.mark.parametrize("operation", ["select", "index"])
+    def test_select_preserves_exact_values(self, coord_type, temporal, operation):
+        """Selecting stored array labels must not infer a different regular grid."""
+        values = np.array([0, 1_000_001_000, 2_000_000_000, 3_000_000_000])
+        values = values.astype("datetime64[ns]") if temporal else values / 1e9
+        coord = coord_type(values=values, units="s" if temporal else "m")
+        if operation == "select":
+            result, indexer = coord.select((values[1], None))
+            np.testing.assert_array_equal(result.values, values[indexer])
+        else:
+            result = coord.index(slice(1, None))
+        np.testing.assert_array_equal(result.values, values[1:])
+        assert result.units == coord.units
+
     def test_select_basic(self, monotonic_float_coord):
         """Basic select tests for monotonic array."""
         coord = monotonic_float_coord

@@ -41,5 +41,5 @@ class SentekV5(FiberIO):
         self, resource: BinaryReader, *, snap: snap_type = True
     ) -> list[dc.Patch]:
         """Extract metadata from sentek file."""
-        attrs, coords, _ = _get_patch_attrs(resource)
+        attrs, coords, _ = _get_patch_attrs(resource, snap=snap)
         return [dc.Patch(attrs=attrs, coords=coords, dtype=str(np.dtype(np.float32)))]

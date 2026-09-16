@@ -32,6 +32,7 @@ class TestSnap:
                 h5[name] = np.arange(4, dtype=float)
                 h5[name].attrs["units"] = "m"
             h5["das"] = np.zeros((4, 20), dtype="float32")
+            h5["das"].attrs["long_name"] = "strain_rate"
         return path
 
     def test_read_honours_snap(self, jittered_path):
@@ -44,3 +45,8 @@ class TestSnap:
         np.testing.assert_array_equal(
             scanned.get_coord("time").values, patch.get_coord("time").values
         )
+
+    def test_long_name_sets_data_type(self, jittered_path):
+        """The CF signal description supplies the canonical data type."""
+        assert dc.read(jittered_path)[0].attrs.data_type == "strain_rate"
+        assert dc.scan(jittered_path)[0].attrs.data_type == "strain_rate"

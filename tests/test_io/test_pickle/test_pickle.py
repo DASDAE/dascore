@@ -140,11 +140,13 @@ class TestSerializedSourceKeys:
         with path.open("wb") as stream:
             pickle.dump(dc.spool(patches), stream)
         summaries = dc.scan(path)
-        expected_keys = keys if legacy else ["", ""]
+        expected_keys = keys if legacy else ["0", "1"]
         assert [item.source_patch_key for item in summaries] == expected_keys
-        read_keys = keys if legacy else ["0", "1"]
-        for index, key in enumerate(read_keys):
-            loaded = dc.read(path, source_patch_key=key)[0]
+        for index, key in enumerate(expected_keys):
+            spool = dc.read(path, source_patch_key=summaries[index].source_patch_key)
+            assert len(spool) == 1
+            loaded = spool[0]
+            np.testing.assert_array_equal(loaded.data, patches[index].data)
             selected = dc.read(path, source_patch_key=key, time=(1, 4), samples=True)[0]
             expected = patches[index].select(time=(1, 4), samples=True)
             np.testing.assert_array_equal(selected.data, expected.data)

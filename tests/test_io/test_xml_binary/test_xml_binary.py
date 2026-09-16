@@ -167,6 +167,23 @@ class TestGetFormat:
 class TestScanContents:
     """Test scanning contents of xml binary directory."""
 
+    def test_scan_keys_select_one_member(self, binary_xml_directory):
+        """Each public scan key reloads exactly its original directory member."""
+        summaries = dc.scan(binary_xml_directory)
+        keys = [item.source_patch_key for item in summaries]
+        assert keys == ["0", "1"]
+        for summary in summaries:
+            result = dc.read(
+                binary_xml_directory, source_patch_key=summary.source_patch_key
+            )
+            assert len(result) == 1
+            patch = result[0]
+            assert patch.attrs.patch_id == summary.attrs.patch_id
+            assert patch.summary.coords == summary.coords
+            np.testing.assert_array_equal(
+                patch.data, np.arange(10_000, dtype="uint16").reshape(1000, 10)
+            )
+
     def test_two_patches(self, binary_xml_directory):
         """Ensure the default test case has two patches."""
         fiber = XMLBinaryV1()

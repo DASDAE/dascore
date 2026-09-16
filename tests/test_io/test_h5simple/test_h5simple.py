@@ -195,3 +195,39 @@ class TestH5Simple:
             h5.attrs["format"] = "other"
         with pytest.raises(UnknownFiberFormatError):
             dc.get_format(path)
+
+
+class TestSingletonCoordinates:
+    """A one-sample axis has a known position but no inferable interval."""
+
+    @pytest.mark.parametrize("shape", [(1, 3), (4, 1), (1, 1)])
+    @pytest.mark.parametrize("snap", [None, False, "time", ("distance",)])
+    def test_singleton_read_and_scan(self, tmp_path, shape, snap):
+        """Full and bounded reads retain singleton spatial and time values."""
+        path = tmp_path / "singleton.h5"
+        data = (100 + np.arange(np.prod(shape))).reshape(shape).astype("int16")
+        time = 1000.0 + np.arange(shape[0]) * 0.25
+        distance = 11.0 + np.arange(shape[1]) * 2.5
+        expected_time = np.datetime64(1000, "s") + np.arange(shape[0]) * np.timedelta64(
+            250, "ms"
+        )
+        with h5py.File(path, "w") as h5:
+            h5["raw"] = data
+            h5["time"] = time
+            h5["distance"] = distance
+            h5.attrs["dims"] = "time,distance"
+        kwargs = {} if snap is None else {"snap": snap}
+        patch = dc.read(path, **kwargs)[0]
+        scanned = dc.scan_payloads(path, **kwargs)[0]
+        np.testing.assert_array_equal(patch.data, data)
+        assert patch.dtype == data.dtype
+        for name, expected in (("time", expected_time), ("distance", distance)):
+            np.testing.assert_array_equal(patch.get_coord(name).values, expected)
+            np.testing.assert_array_equal(scanned.get_coord(name).values, expected)
+        bounded = dc.read(
+            path,
+            time=(expected_time[0], expected_time[0]),
+            distance=(distance[0], distance[0]),
+            **kwargs,
+        )[0]
+        np.testing.assert_array_equal(bounded.data, data[:1, :1])

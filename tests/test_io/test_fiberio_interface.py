@@ -199,14 +199,14 @@ class TestNamedSnap:
         return self._write_jittered_file(tmp_path, request.param)
 
     @staticmethod
-    def _write_jittered_file(tmp_path, file_format):
+    def _write_jittered_file(tmp_path, file_format, count=5):
         """Build a stored-array fixture without requiring optional backends."""
         path = tmp_path / "jittered.h5"
-        data = np.arange(15).reshape(5, 3)
+        data = np.arange(15).reshape(5, 3)[:count]
         with h5py.File(path, "w") as h5:
             h5.attrs["dims"] = "time,distance"
             h5["data"] = data
-            h5["time"] = [0.0, 1.000001, 2.0, 3.0, 4.0]
+            h5["time"] = [0.0, 1.000001, 2.0, 3.0, 4.0][:count]
             h5["distance"] = [0.0, 1.00000001, 2.0]
         if file_format == "NeubrexRFS":
             with h5py.File(path, "a") as h5:
@@ -272,3 +272,20 @@ class TestNamedSnap:
         np.testing.assert_array_equal(read.data, data)
         np.testing.assert_array_equal(bounded.data, data[1:3])
         assert exact.attrs.patch_id == read.attrs.patch_id == bounded.attrs.patch_id
+
+    @pytest.mark.parametrize("snap", [False, "distance"])
+    @pytest.mark.parametrize("file_format", ["H5Simple", "DASDAE", "NeubrexRFS"])
+    def test_exact_time_after_value_selection(self, tmp_path, file_format, snap):
+        """A bounded read must not snap the remaining stored timestamps."""
+        path, file_format, data = self._write_jittered_file(
+            tmp_path, file_format, count=4
+        )
+        times = np.array(
+            [0, 1_000_001_000, 2_000_000_000, 3_000_000_000],
+            dtype="datetime64[ns]",
+        )
+        out = dc.read(path, file_format=file_format, snap=snap, time=(times[1], None))[
+            0
+        ]
+        np.testing.assert_array_equal(out.data, data[1:])
+        np.testing.assert_array_equal(out.get_coord("time").values, times[1:])
