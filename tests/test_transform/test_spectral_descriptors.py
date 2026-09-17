@@ -354,6 +354,53 @@ class TestFrequencySelection:
         assert out.dims == ("ft_distance",)
 
 
+class TestSpectralFlatness:
+    """Flatness describes spectral shape independently of power scale."""
+
+    @pytest.mark.parametrize(
+        "spectral_format", ["power", "density", "amplitude", "fft"]
+    )
+    @pytest.mark.parametrize("dtype", [np.float32, np.float64])
+    @pytest.mark.parametrize("frequency_first", [False, True])
+    def test_scale_invariance(self, spectral_format, dtype, frequency_first):
+        """Flat and shaped spectra retain their expected values at every scale."""
+        scales = np.array([1e-30, 1e-18, 1.0, 1e30])
+        shapes = np.array([[1.0, 1.0, 1.0], [1.0, 4.0, 16.0]])
+        power = (scales[:, None, None] * shapes).reshape(-1, 3)
+        data = power if spectral_format in {"power", "density"} else np.sqrt(power)
+        data = data.astype(dtype)
+        if spectral_format == "fft":
+            data = data * 1j
+        patch = dc.Patch(
+            data=data,
+            coords={"distance": np.arange(len(data)), "ft_time": np.arange(3.0)},
+            dims=("distance", "ft_time"),
+        )
+        if frequency_first:
+            patch = patch.transpose("ft_time", "distance")
+
+        out = patch.spectral_flatness(spectral_format=spectral_format)
+
+        expected = np.tile([1.0, 4.0 / 7.0], len(scales))
+        np.testing.assert_allclose(out.data, expected, rtol=1e-6)
+        assert np.all((out.data >= 0) & (out.data <= 1))
+
+    @pytest.mark.parametrize("single_bin", [False, True])
+    def test_zero_power(self, single_bin):
+        """Zero bins give zero flatness; zero-only slices remain undefined."""
+        patch = dc.Patch(
+            data=np.array([[0.0, 0.0, 0.0], [1e-18, 0.0, 1e-18]]),
+            coords={"distance": np.arange(2), "ft_time": np.arange(3.0)},
+            dims=("distance", "ft_time"),
+        )
+        limits = {"fmin": 0, "fmax": 0} if single_bin else {}
+        with np.errstate(divide="raise", invalid="raise"):
+            out = patch.spectral_flatness(spectral_format="power", **limits)
+
+        assert np.isnan(out.data[0])
+        assert out.data[1] == (1.0 if single_bin else 0.0)
+
+
 class TestOtherDescriptors:
     """Smoke tests for remaining spectral descriptors."""
 
