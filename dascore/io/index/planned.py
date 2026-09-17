@@ -229,13 +229,18 @@ def _coord_record_from_row(
     fingerprint = _def_key_fingerprint(key)
     # the runs are the source's; once the def key (value identity) is gone,
     # so are the values they described
-    runs = _run_table(row, name, dtype, lo, hi) if fingerprint else None
+    # The envelope is stated in its own kind; the runs count in the
+    # coordinate's own dtype, which for an integer axis is not the float
+    # the envelope became.
+    stored = row.get(f"_{name}_coord_dtype")
+    run_dtype = stored if isinstance(stored, str) and stored else dtype
+    runs = _run_table(row, name, run_dtype, lo, hi) if fingerprint else None
     stops = None
     if runs is not None:
         length = int(runs["length"].sum())
         # Each run's other bound, which the records the summary becomes
         # state per run; without it every run row is dropped.
-        stops = _grid_run_stops(runs, normalize_coord_dtype(dtype))
+        stops = _grid_run_stops(runs, normalize_coord_dtype(run_dtype))
     summary = CoordSummary(
         dtype=dtype,
         min=lo,

@@ -469,7 +469,13 @@ class FloatKernel:
         if reach.max() >= _FLOAT_INDEX_MAX:
             _refuse("A float run's grid index has left the range a float64 counts.")
         ends = cls.labels(grid, slice(None), grid["length"])
+        with np.errstate(over="ignore", invalid="ignore"):
+            # in the coordinate's own dtype: a narrower float overflows to
+            # an infinity the row's own arithmetic never reaches
+            narrow = np.asarray(ends).astype(dtype)
+            first = np.asarray(cls.heads(grid)).astype(dtype)
         bad = ~(np.isfinite(grid["start"]) & np.isfinite(step) & np.isfinite(ends))
+        bad |= ~(np.isfinite(narrow) & np.isfinite(first))
         bad |= (den < 0) & (step == 0)
         if np.any(bad):
             row = grid[np.argmax(bad)]

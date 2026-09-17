@@ -50,6 +50,7 @@ from dascore.core._run_kernels import (
     _record_dtype,
     _rows,
     _same_labels,
+    _tick_bounds,
     _ticked,
     float_rows,
     float_terms,
@@ -3058,6 +3059,11 @@ class NumericND(BaseCoord):
             msg = f"A run needs a first label to start from, got {start}."
             raise CoordError(msg)
         if not _ticked(dtype):
+            if np.dtype(dtype).itemsize > 8:
+                # A row counts in float64, which a wider float's labels are
+                # not; they are kept as the labels they are.
+                labels = np.asarray(start) + np.arange(count) * np.asarray(step)
+                return cls.from_array(labels.astype(dtype), units=units, detect=False)
             rows = _rows(dtype, [float(start)], [count], [num], [den], [0])
             return cls._build(dtype, rows, None, units)
         # Lowest terms before the row is built, phase with them: a step
@@ -3903,7 +3909,11 @@ class NumericND(BaseCoord):
                     payload = self._flat_labels[bounds[index] : bounds[index + 1]]
                 elif not self._ticks:
                     k = np.arange(int(rows["length"][index]), dtype=np.int64)
-                    payload = self._kernel.labels(rows, int(index), k)
+                    # in the coordinate's own dtype: a narrower float rounds
+                    # the row's arithmetic again, and those are its labels
+                    payload = self._from_anchor(
+                        self._kernel.labels(rows, int(index), k)
+                    )
                 else:
                     continue
                 out[index] = _splitmix(
@@ -3982,6 +3992,17 @@ class NumericND(BaseCoord):
         labels = self.labels
         if self._ticks:
             shift = _to_tick(delta)
+            low, high = _tick_bounds(self.dtype)
+            anchors = rows["start"]
+            if labels is not None:
+                anchors = np.concatenate([anchors, self._flat_labels])
+            # in python integers: a tick at the end of int64 and the bound
+            # itself are one float64, which would let a wrap through
+            if anchors.size:
+                ends = [int(anchors.min()) + shift, int(anchors.max()) + shift]
+                if min(ends) < low or max(ends) > high:
+                    msg = f"Shifting by {delta} takes a label outside {self.dtype}."
+                    raise CoordError(msg)
             rows["start"] += shift
             if labels is not None:
                 moved = self._from_anchor(self._flat_labels + shift)
@@ -4078,10 +4099,15 @@ class NumericND(BaseCoord):
             return out.new(**kwargs) if kwargs else out
         if step is not None:
             out = out._with_step(step)
-        if min is not None:
-            out = out._translated(get_compatible_values(min, self.dtype) - out.min())
-        if max is not None:
-            out = out._translated(get_compatible_values(max, self.dtype) - out.max())
+        for bound, end in ((min, "min"), (max, "max")):
+            if bound is None:
+                continue
+            try:
+                shift = get_compatible_values(bound, self.dtype) - getattr(out, end)()
+            except OverflowError:
+                msg = f"{bound} is not a label a {self.dtype} coordinate can hold."
+                raise CoordError(msg) from None
+            out = out._translated(shift)
         return out.new(**kwargs) if kwargs else out
 
     def new(self, **kwargs) -> BaseCoord:
@@ -4325,6 +4351,10 @@ class NumericND(BaseCoord):
         tolerance does not cover.
         """
         if self.evenly_sampled or not self.size:
+            return self
+        if np.dtype(self.dtype).itemsize > 8:
+            # a grid is counted in float64, which a wider float's labels
+            # are not, so fitting one would move every one of them
             return self
         if tolerance is not None and not (self.sorted or self.reverse_sorted):
             # labels in no order lie on no grid, however loosely it is read
@@ -4629,11 +4659,28 @@ def _promoted(tables: list[NumericND]) -> list[NumericND]:
     return [
         x
         if np.dtype(x.dtype) == dtype
-        else NumericND.from_rows(
-            x.runs, labels=x.labels, dtype=dtype, units=x.units, step=x.step
-        )
+        else _widened(x, dtype)
         for x in tables
     ]
+
+
+def _widened(coord: NumericND, dtype) -> NumericND:
+    """
+    One table in a wider dtype, holding the labels it held.
+
+    A row counts in float64 and the coordinate rounds each label into its
+    own dtype, so a narrower float's labels are not the ones its row makes
+    once that rounding goes. The row travels only where it still makes
+    them; where it does not, the labels do.
+    """
+    out = NumericND.from_rows(
+        coord.runs, labels=coord.labels, dtype=dtype, units=coord.units, step=coord.step
+    )
+    if _same_labels(out.values, coord.values.astype(dtype)):
+        return out
+    return NumericND.from_array(
+        coord.values.astype(dtype), units=coord.units, step=coord.step, detect=False
+    )
 
 
 def _ordered(tables: list[NumericND]) -> list[NumericND]:
