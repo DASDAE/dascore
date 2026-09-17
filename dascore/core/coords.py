@@ -4414,17 +4414,13 @@ class NumericND(BaseCoord):
         if allowed.count is None:
             allowed = self._gap_tolerance(allowed)
         ours, theirs = self.values, other.values
-        # Ticks are differenced as ticks -- an epoch in float64 has no
-        # nanoseconds left -- but only where both sides are whole ticks: a
-        # float grid tried against integer labels moves them by the
-        # fraction that casting to int64 would throw away.
-        if self._ticks and _ticked(np.asarray(theirs).dtype):
-            # A time is a count already, so it is viewed; a narrower integer is
-            # widened, which viewing would instead read two labels as one.
-            if np.dtype(self.dtype).kind in "mM":
-                ours, theirs = ours.view(np.int64), theirs.view(np.int64)
-            else:
-                ours, theirs = ours.astype(np.int64), theirs.astype(np.int64)
+        # Times are differenced as the ticks they are counted in, since an
+        # epoch in float64 has no nanoseconds left. Everything else is
+        # differenced in float64, integer labels included: the grid tried
+        # against them is a float one, and the fraction it moves a label by
+        # is exactly what the tolerance bounds.
+        if np.dtype(self.dtype).kind in "mM":
+            ours, theirs = ours.view(np.int64), theirs.view(np.int64)
             moved = np.max(np.abs(ours - theirs))
         else:
             ours = ours.astype(np.float64)

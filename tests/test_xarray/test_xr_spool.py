@@ -7,6 +7,7 @@ import pytest
 
 import dascore as dc
 from dascore.config import config_context
+from dascore.core.coords import get_coord
 from dascore.exceptions import PatchConversionError
 
 
@@ -1133,3 +1134,32 @@ class TestBlockPieces:
 
         assert _samples_per_block(0, np.dtype("float64"), {"t": 5}, "t") is None
         assert _samples_per_block(None, np.dtype("float64"), {"t": 5}, "t") is None
+
+
+class TestEnvelopeCoord:
+    """Sizing a lazy array from a row which carries no run table."""
+
+    @staticmethod
+    def _coord(row):
+        """Call the sizer with dascore's own get_coord."""
+        from dascore.xarray.spool import _envelope_coord  # noqa: PLC0415
+
+        return _envelope_coord(row, "x", get_coord)
+
+    def test_one_sample_needs_no_step(self):
+        """A row whose ends meet is that one label, step or no step."""
+        coord = self._coord({"x_min": 3.0, "x_max": 3.0, "x_step": None})
+        np.testing.assert_array_equal(coord.values, [3.0])
+
+    def test_a_span_without_a_step_cannot_be_sized(self):
+        """How many samples lie between the two ends is exactly what is missing."""
+        with pytest.raises(PatchConversionError, match="no sampling step"):
+            self._coord({"x_min": 0.0, "x_max": 9.0, "x_step": None})
+
+    def test_a_step_sizes_the_span_either_way(self):
+        """A row with no run table is sized by its ends and its step."""
+        up = self._coord({"x_min": 0.0, "x_max": 9.0, "x_step": 1.0})
+        np.testing.assert_array_equal(up.values, np.arange(10.0))
+        # a descending coordinate starts at its max, and stop is exclusive
+        down = self._coord({"x_min": 0.0, "x_max": 9.0, "x_step": -1.0})
+        np.testing.assert_array_equal(down.values, np.arange(9.0, -1.0, -1.0))

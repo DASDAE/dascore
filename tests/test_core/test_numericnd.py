@@ -23,6 +23,7 @@ from dascore.core._run_kernels import (
     get_kernel,
 )
 from dascore.core.coords import (
+    _NS_PER_S,
     CoordPartial,
     CoordSummary,
     NumericND,
@@ -2308,14 +2309,23 @@ class TestSecondReviewFindings:
 
     def test_runs_far_apart_on_a_fine_grid_stay_one_grid(self):
         """A tick difference times its denominator leaves int64; the grid holds."""
-        length = 9999 * 86400 * 20
-        coord = NumericND.from_run(T0, Fraction(1, 9999), length + 10)
-        joined = concat_coords(coord[:10], coord[length:])
-        assert joined.step == coord.step
-        # and the hole is counted on the run's own grid, not on the whole
+        # two ten-sample runs of one 9999 Hz grid, twenty days apart. Built
+        # as rows rather than sliced from the run between them, which is
+        # 1.7e10 samples long and has no index on a 32 bit build.
+        away = 9999 * 86400 * 20
+        num, den = _NS_PER_S, 9999
+        start = int(T0.astype("i8"))
+        far, phase = divmod(away * num, den)
+        coord = NumericND.from_rows(
+            [(start, 10, num, den, 0), (start + far, 10, num, den, phase)],
+            dtype="datetime64[ns]",
+        )
+        assert coord.runs_count == 2
+        assert coord.step == NumericND.from_run(T0, Fraction(1, 9999), 2).step
+        # and the hole is counted on the runs' own grid, not on the whole
         # ticks its step rounds to, which disagree after a few hours
-        (missing,) = joined.missing().runs
-        assert missing[2] == length - 10
+        (missing,) = coord.missing().runs
+        assert missing[2] == away - 10
 
 
 class TestBotReviewFindings:
@@ -2356,6 +2366,13 @@ class TestBotReviewFindings:
         coord = get_coord(data=np.asarray([0, 1, 5], dtype="int64"))
         with pytest.raises(CoordError, match="outside int64"):
             coord.update_limits(min=2**63 - 3)
+
+    def test_a_bound_the_dtype_cannot_hold_is_refused(self):
+        """The difference to it overflows before any shift is worked out."""
+        coord = get_coord(data=np.asarray([0, 1, 5], dtype="int64"))
+        for bound in (2**63 + 10, -(2**63) - 10):
+            with pytest.raises(CoordError, match="not a label"):
+                coord.update_limits(min=bound)
 
     def test_a_narrow_float_run_reaching_infinity_is_refused(self):
         """Finite float64 ends can still be infinite once cast to float32."""

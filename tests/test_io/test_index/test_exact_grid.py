@@ -210,6 +210,19 @@ class TestRowsRefused:
         }
         assert coord_from_row(row, "x") is None
 
+    @pytest.mark.skipif(
+        np.dtype(np.longdouble).itemsize <= 8, reason="longdouble is a double here"
+    )
+    def test_extended_float_envelopes_are_refused(self):
+        """A float envelope in the frame cannot carry a long double's labels."""
+        row = {
+            "x_min": 0.0,
+            "x_max": 9.0,
+            "x_step": 1.0,
+            "_x_coord_dtype": np.dtype(np.longdouble).name,
+        }
+        assert coord_from_row(row, "x") is None
+
     def test_stored_runs_are_refused(self):
         """A run whose labels live in the file cannot be rebuilt from a row."""
         row = {
