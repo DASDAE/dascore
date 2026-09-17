@@ -72,6 +72,16 @@ class TestProdMLFile:
         return new_path
 
     @pytest.fixture(scope="class")
+    def unitless_patch_path(self, tmp_path_factory):
+        """Make a patch whose raw data units are "unitless"."""
+        tmp_path = tmp_path_factory.mktemp("unitless")
+        path = dc.utils.downloader.fetch("prodml_2.0.h5")
+        new_path = shutil.copy2(path, tmp_path / "prod_2_unitless.h5")
+        with h5py.File(new_path, "a") as fi:
+            fi["Acquisition"]["Raw[0]"].attrs["RawDataUnit"] = "unitless"
+        return new_path
+
+    @pytest.fixture(scope="class")
     def silixa_h5_patch(self, idas_h5_example_path):
         """Get the silixa file, return Patch."""
         return dc.spool(idas_h5_example_path)[0]
@@ -98,6 +108,11 @@ class TestProdMLFile:
         """Ensure the patch can be read despite bad attribute info."""
         patch = dc.read(issue_514_patch_path)[0]
         assert isinstance(patch, dc.Patch)
+
+    def test_unitless_data_units(self, unitless_patch_path):
+        """Ensure "unitless" data units don't prevent reading the file."""
+        patch = dc.read(unitless_patch_path)[0]
+        assert patch.attrs.data_units is None
 
 
 class TestReadQuantXV2:
