@@ -14,7 +14,13 @@ from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.misc import raise_on_extra_kwargs, unbyte
 
-from .utils import _get_opto_das_attrs, _get_opto_das_version_str, _read_opto_das
+from .utils import (
+    _apply_data_scale,
+    _get_data_dtype,
+    _get_opto_das_attrs,
+    _get_opto_das_version_str,
+    _read_opto_das,
+)
 
 
 class OptoDASPatchAttrs(dc.PatchAttrs):
@@ -57,7 +63,7 @@ class OptoDASV8(FiberIO):
         attrs = OptoDASPatchAttrs.from_dict(attrs)
         return [
             make_scan_payload(
-                attrs=attrs, coords=coords, dtype=str(resource["data"].dtype)
+                attrs=attrs, coords=coords, dtype=str(_get_data_dtype(resource))
             )
         ]
 
@@ -71,6 +77,10 @@ class OptoDASV8(FiberIO):
     ) -> dc.Spool:
         """
         Read an OptoDAS file and return a spool of patches.
+
+        The header's ``dataScale`` is applied to the selected samples for both
+        integer and floating-point storage. If absent, values are unchanged.
+        This decodes storage scaling only; it does not convert phase to strain.
 
         Parameters
         ----------
@@ -102,7 +112,8 @@ class OptoDASV8(FiberIO):
         """Slice the ``data`` dataset directly, in the header's dimension order."""
         raise_on_extra_kwargs(kwargs, "windows and snap")
         dims = tuple(unbyte(x) for x in resource["header"]["dimensionNames"])
-        return slice_dataset(resource["data"], dims, windows)
+        data = slice_dataset(resource["data"], dims, windows)
+        return _apply_data_scale(resource, data)
 
 
 class OptoDASV9(OptoDASV8):

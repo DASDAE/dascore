@@ -252,7 +252,8 @@ def radians_to_strain(
     Parameters
     ----------
     gauge_length ($L_g$)
-        The gauge length in meters.
+        The gauge length in meters. Only required for phase that is not
+        already normalized per unit length.
     wave_length ($\lambda$)
         The laser wavelength in m.
     stress_constant ($\zeta$)
@@ -277,12 +278,14 @@ def radians_to_strain(
     \epsilon_{xx}(t, x_j) = \frac{\lambda}{4 \pi n L_{g} \zeta} \Delta \Phi
     $$
 
+    For phase already normalized per length (rad/m or rad/(m*s)), the
+    gauge-length division is omitted. Outputs are strain or strain/s,
+    respectively; no time integration is performed.
+
     The output `data_type` is set from the converted data units; it is
     "strain_rate" when they are strain per unit time (eg rad/s becomes
     strain/s) and "strain" otherwise.
     """
-    # First get gauge length, using gl passed into function or attached to attrs.
-    gauge = _get_gauge_length(patch, gauge_length)
     # If units doesn't contain radians just return so function is idempotent
     quant = dc.get_quantity(patch.attrs.data_units)
     if str(dc.get_unit("radians")) not in str(quant):
@@ -292,12 +295,24 @@ def radians_to_strain(
         )
         warnings.warn(msg)
         return patch
-    # Get constant to multiply with data array.
-    const = wave_length / (4 * np.pi * refractive_index * gauge * stress_constant)
-    # Handle unit conversions.
+    # Normalize prefixed units before computing the physical conversion.
     data_units = patch.attrs.get("data_units", None)
     d_factor, d_units = get_factor_and_unit(data_units, simplify=True)
-    new_units = get_unit(d_units) * get_unit("strain/radians")
+    units = get_unit(d_units)
+    dimensions = units.dimensionality
+    supported = ("rad", "rad/s", "rad/m", "rad/m/s")
+    if dimensions not in [get_unit(unit).dimensionality for unit in supported]:
+        msg = f"radians to strain failed to convert {data_units} to strain."
+        raise UnitError(msg)
+    normalized = dimensions.get("[length]", 0) == -1
+    const = wave_length / (4 * np.pi * refractive_index * stress_constant)
+    new_units = units * get_unit("strain/radians")
+    if normalized:
+        # For example, OptoDAS files can contain rad/(m*s): phase is already
+        # normalized per metre, so dividing by gauge length again is incorrect.
+        new_units = new_units * get_unit("m")
+    else:
+        const = const / _get_gauge_length(patch, gauge_length)
     # Radians wasn't eliminated from the output units. Something went wrong.
     if str(dc.get_unit("radians")) in str(new_units):
         msg = f"radians to strain failed to convert {data_units} to strain."
