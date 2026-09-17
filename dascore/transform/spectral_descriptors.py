@@ -727,7 +727,9 @@ def spectral_flatness(
     Compute spectral flatness from a Fourier-domain patch.
 
     Spectral flatness is the ratio between the geometric mean and
-    arithmetic mean of the power spectrum.
+    arithmetic mean of the power spectrum. It is invariant to positive
+    scaling of the power and lies in [0, 1] for finite, nonzero spectra.
+    A zero-power bin gives flatness 0; an entirely zero spectrum gives NaN.
 
     Values near 1 indicate white-noise-like spectra.
     Values near 0 indicate tonal or peaked spectra. The input patch must
@@ -754,9 +756,11 @@ def spectral_flatness(
 
     freq_axis = patch.dims.index(freq_dim)
 
-    eps = np.finfo(float).eps
-
-    geo_mean = np.exp(np.mean(np.log(power + eps), axis=freq_axis))
+    # Normalize each slice to preserve spectral shape at any power scale.
+    peak_power = np.max(power, axis=freq_axis, keepdims=True)
+    power = np.divide(power, peak_power, out=np.zeros_like(power), where=peak_power > 0)
+    log_power = np.log(power, out=np.full_like(power, -np.inf), where=power > 0)
+    geo_mean = np.exp(np.mean(log_power, axis=freq_axis))
 
     arith_mean = np.mean(power, axis=freq_axis)
 
@@ -766,6 +770,7 @@ def spectral_flatness(
         out=np.full_like(geo_mean, np.nan),
         where=arith_mean > 0,
     )
+    flatness = np.clip(flatness, 0, 1)
 
     data_units = None
     data_type = "Spectral Flatness"
