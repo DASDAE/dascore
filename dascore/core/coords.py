@@ -2248,10 +2248,21 @@ def _step_terms(step, dtype) -> tuple[int, int]:
     return _to_tick(_maybe_unpack(step)), 1
 
 
+def _counts(lengths) -> np.ndarray:
+    """
+    Run lengths as the integer numpy counts repeats with.
+
+    A run's length is an int64 column, which a 32 bit build will not take
+    as a repeat count, so it is stated in the platform's own index type.
+    """
+    return np.asarray(lengths).astype(np.intp, copy=False)
+
+
 def _stacked_ranges(starts, counts, stride: int) -> np.ndarray:
     """The ranges ``starts[i] + stride * arange(counts[i])``, concatenated."""
     counts = np.asarray(counts, np.int64)
     total = int(counts.sum())
+    counts = _counts(counts)
     within = np.arange(total, dtype=np.int64) - np.repeat(
         np.cumsum(counts) - counts, counts
     )
@@ -3136,7 +3147,7 @@ class NumericND(BaseCoord):
             # A float grid only holds the labels it reproduces exactly;
             # the runs it cannot keep theirs instead.
             rows = _float_runs(values, starts, lengths, on_grid, dtype)
-        labels = values[np.repeat(rows["den"] == 0, rows["length"])]
+        labels = values[np.repeat(rows["den"] == 0, _counts(rows["length"]))]
         try:
             return cls._build(dtype, rows, labels if len(labels) else None, units)
         except CoordError:
@@ -3190,7 +3201,7 @@ class NumericND(BaseCoord):
             # One label is its own grid, of the declared spacing.
             heads = values[starts[single]].astype(np.float64)
             rows[single] = float_rows(dtype, heads, lengths[single], signed)
-        labels = values[np.repeat(rows["den"] == 0, rows["length"])]
+        labels = values[np.repeat(rows["den"] == 0, _counts(rows["length"]))]
         labels = labels if len(labels) else None
         return cls._build(dtype, rows, labels, units, step=signed)
 
@@ -3468,13 +3479,14 @@ class NumericND(BaseCoord):
             k = np.arange(count, dtype=np.int64)
             return array(self._from_anchor(kernel.labels(rows, 0, k, reach=count)))
         total = int(lengths.sum())
+        counts = _counts(lengths)
         k = np.arange(total, dtype=np.int64) - np.repeat(
-            self._sample_starts[:-1], lengths
+            self._sample_starts[:-1], counts
         )
-        run = np.repeat(np.arange(len(rows)), lengths)
+        run = np.repeat(np.arange(len(rows)), counts)
         out = kernel.labels(rows, run, k, reach=int(lengths.max()))
         if self.labels is not None:
-            out[np.repeat(rows["den"] == 0, lengths)] = self._flat_labels
+            out[np.repeat(rows["den"] == 0, counts)] = self._flat_labels
         return array(self._from_anchor(out))
 
     def _get_index_values(self, indices):
