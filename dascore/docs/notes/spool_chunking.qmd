@@ -164,14 +164,14 @@ with pytest.warns(UserWarning, match="force merging"):
     absolute = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5 * time.step)[0]
 assert absolute.get_coord("time") == coord
 
-# fill_value writes the missing samples, so the merge comes back evenly
-# sampled rather than segmented.
+# fill_value writes the missing samples, so the merge comes back as one
+# evenly sampled run rather than keeping the hole.
 filled = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5, fill_value=np.nan)[0]
-assert isinstance(filled.get_coord("time"), CoordRange)
+assert filled.get_coord("time").evenly_sampled
 assert np.isnan(filled.data).any()
 ```
 
-Segmented coordinates are an in-memory representation only: a written patch must be contiguous, so saving raises unless `split=True` (or `patch.split_gaps()` is used first) to write each contiguous section as its own patch.
+A coordinate with holes is an in-memory representation only: a written patch must be contiguous, so saving raises unless `split=True` (or `patch.split_gaps()` is used first) to write each contiguous section as its own patch.
 
 ## Union spools
 
