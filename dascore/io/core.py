@@ -723,11 +723,20 @@ def scan_to_df(
 def _iterate_scan_inputs(patch_source, ext, mtime, include_directories=True, **kwargs):
     """Yield scan candidates."""
     for el in iterate(patch_source):
-        if isinstance(el, str | Path) and (path := Path(el)).exists():
-            generator = _iter_filesystem(
-                path, ext=ext, timestamp=mtime, include_directories=include_directories
-            )
-            yield from generator
+        if isinstance(el, str | Path):
+            path = Path(el)
+            try:
+                path.stat()
+            except FileNotFoundError:
+                yield el
+            else:
+                generator = _iter_filesystem(
+                    path,
+                    ext=ext,
+                    timestamp=mtime,
+                    include_directories=include_directories,
+                )
+                yield from generator
         else:
             yield el
 
