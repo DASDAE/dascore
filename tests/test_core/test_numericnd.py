@@ -636,6 +636,9 @@ class TestFloats:
         "linspace": np.linspace(0, 1000, 5000),
         "large origin": 1e6 + np.arange(5000) * 0.25,
         "negative step": 10.0 - np.arange(5000) * 0.1,
+        "arange / rate": np.arange(5000) / 250,
+        "negative divided": -np.arange(5000) / 1000.0,
+        "ticks over a second": (119_999_999 + np.arange(5000) * 100_000) / 1e9,
     }
 
     def test_step_is_the_double_it_was_given(self):
@@ -667,6 +670,15 @@ class TestFloats:
         coord = get_coord(data=values)
         assert coord.evenly_sampled
         np.testing.assert_array_equal(coord.values, values)
+
+    def test_a_divided_axis_is_a_run_which_divides(self):
+        """``arange / rate`` rounds unlike ``arange * step``, and is kept as itself."""
+        divided = get_coord(data=self.AXES["arange / rate"])
+        step, stride, _ = float_terms(divided.runs)
+        assert stride[0] < 0 and step[0] == 250.0
+        assert divided.step == 1 / 250
+        multiplied = get_coord(data=self.AXES["arange * step"])
+        assert float_terms(multiplied.runs)[1][0] > 0
 
     @pytest.mark.parametrize("name", AXES)
     def test_no_slice_moves_a_label(self, name):
@@ -761,8 +773,7 @@ class TestFloats:
         out, _ = coord.select((values[10], values[20]))
         np.testing.assert_array_equal(out.values, values[10:21])
         out, _ = coord.select((values[10] + 1e-6, values[20] - 1e-6))
-        # Re-anchoring a float slice may move a label by its last bit.
-        np.testing.assert_allclose(out.values, values[11:20], rtol=1e-15)
+        np.testing.assert_array_equal(out.values, values[11:20])
 
 
 class TestLookup:
@@ -1735,6 +1746,17 @@ class TestRunLimitedByItsLabels:
         late = [int(T0.astype("int64")) + ((cut + k) * 10**9) // rate for k in range(4)]
         np.testing.assert_array_equal(coord[cut:][:4].values.astype("int64"), late)
 
+    def test_runs_far_apart_on_a_long_denominator_do_not_meet(self):
+        """A difference of starts which would wrap int64 is no continuation."""
+        rows = [(0, 4, 1, 2**32, 0), (2**32, 4, 1, 2**32, 4)]
+        coord = NumericND.from_rows(rows, dtype="int64")
+        assert coord.runs_count == 2
+        np.testing.assert_array_equal(coord.values, [0] * 4 + [2**32] * 4)
+        ends = NumericND.from_rows(
+            [(-(2**62), 2, 1, 1, 0), (2**62 + 2, 2, 1, 1, 0)], dtype="int64"
+        )
+        assert ends.runs_count == 2 and ends.sorted
+
     def test_a_run_past_its_dtype_names_what_it_reaches(self):
         """The refusal states the label, not a range the labels never left."""
         with pytest.raises(CoordError, match="exceeds the datetime64"):
@@ -1807,15 +1829,26 @@ class TestTableIntegrity:
     def test_one_label_is_one_coordinate(self):
         """A run of one sample shows no step, so none is part of what it is."""
         parent = grid_1024(10)
-        spellings = [
-            NumericND.from_run(T0, MS, 1),
-            NumericND.from_run(T0, 2 * MS, 1),
-            NumericND.from_array(np.asarray([T0])),
-            parent[0:1],
-            parent[0:3:3],
-        ]
-        assert len({x.fingerprint() for x in spellings}) == 1
-        assert all(x == spellings[0] for x in spellings)
+        floats = get_coord(data=np.arange(10) * 0.1)
+        families = (
+            [
+                NumericND.from_run(T0, MS, 1),
+                NumericND.from_run(T0, 2 * MS, 1),
+                NumericND.from_array(np.asarray([T0])),
+                parent[0:1],
+                parent[0:3:3],
+            ],
+            [
+                NumericND.from_run(0.5, 0.1, 1),
+                NumericND.from_run(0.5, 2.0, 1),
+                NumericND.from_array(np.asarray([0.5])),
+                floats[5:6],
+                floats[5:9:7],
+            ],
+        )
+        for spellings in families:
+            assert len({x.fingerprint() for x in spellings}) == 1
+            assert all(x == spellings[0] for x in spellings)
 
     @pytest.mark.parametrize("start", [np.datetime64("NaT"), np.nan])
     def test_a_run_needs_a_first_label(self, start):
@@ -1827,7 +1860,8 @@ class TestTableIntegrity:
     def test_extreme_integers_keep_their_order(self):
         """Labels a difference of which leaves int64 still read as sorted."""
         coord = get_coord(data=np.asarray([-(2**62), 2**62]))
-        assert coord.sorted and coord.min() < coord.max()
+        assert coord.sorted and not coord.reverse_sorted
+        assert get_coord(data=np.asarray([2**62, -(2**62)])).reverse_sorted
 
 
 class TestSnapTolerance:
@@ -1893,15 +1927,16 @@ class TestEdges:
 
     def test_a_legacy_float_grid_is_read_as_its_step(self):
         """The fraction an older float summary stated is the step it divides to."""
+        # the scalar step disagrees, so it is the fraction which is honoured
         summary = CoordSummary(
             dtype="float64",
             min=0.0,
-            max=2.0,
-            step=0.5,
+            max=0.4,
+            step=0.25,
             step_numerator=1,
-            step_denominator=2,
+            step_denominator=10,
         )
-        np.testing.assert_array_equal(summary.to_coord().values, np.arange(5) * 0.5)
+        np.testing.assert_array_equal(summary.to_coord().values, np.arange(5) * 0.1)
 
     def test_a_declared_step_is_exact_beside_stored_labels(self):
         """Labels held as they are still state the grid they were declared on."""

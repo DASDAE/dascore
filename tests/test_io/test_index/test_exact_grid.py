@@ -282,7 +282,10 @@ class TestRecordsRoundTrip:
 class TestFloatRunsRebuild:
     """The index restates a float run exactly, wherever its grid is counted from."""
 
-    @pytest.fixture(scope="class", params=["sliced", "strided", "divided"])
+    @pytest.fixture(
+        scope="class",
+        params=["sliced", "strided", "divided", "descending", "reversed", "plain"],
+    )
     def float_spool(self, request, tmp_path_factory):
         """A directory holding one patch whose distance axis is awkward."""
         whole = get_coord(data=np.arange(1000) * 0.1, units="m")
@@ -290,6 +293,10 @@ class TestFloatRunsRebuild:
             "sliced": whole[150:450],
             "strided": whole[7::3],
             "divided": get_coord(data=np.arange(325) / 250, units="m")[25:],
+            "descending": get_coord(data=-np.arange(325) / 250, units="m")[25:],
+            "reversed": whole[::-1],
+            # counted from its own first label, so the row needs no origin
+            "plain": get_coord(data=3.7 + np.arange(300) * 0.1, units="m"),
         }
         coord = coords[request.param][:300]
         assert coord.evenly_sampled and len(coord) == 300

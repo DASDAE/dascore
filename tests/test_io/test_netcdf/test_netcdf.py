@@ -942,9 +942,10 @@ class TestXDASSampledCoordinate:
 
     def test_a_float_interval(self):
         """A float block is its start and its step."""
-        dataset = self._dataset([0.0, 100.0], [10, 5], {"sampling_interval": 2.5})
+        dataset = self._dataset([3.7, 100.3], [10, 5], {"sampling_interval": 0.1})
         coord = netcdf_utils._get_dim_coord(dataset, "time", 15)
-        expected = np.concatenate([np.arange(10) * 2.5, 100 + np.arange(5) * 2.5])
+        first, second = 3.7 + np.arange(10) * 0.1, 100.3 + np.arange(5) * 0.1
+        expected = np.concatenate([first, second])
         np.testing.assert_array_equal(coord.values, expected)
         assert coord.runs_count == 2 and coord.labels is None
 
@@ -979,6 +980,29 @@ class TestXDASDeclaredTies:
         np.testing.assert_array_equal(coord.values, expected)
         assert coord.evenly_sampled
         assert coord.labels is None
+
+    def test_later_and_descending_tie_segments_round_alike(self):
+        """The half-tick phase holds through every segment, either way round."""
+        xr = pytest.importorskip("xarray")
+        start = np.datetime64("2026-09-17", "ns")
+        ticks, indices = [0, 999_999_999, 2_500_000_003], [0, 49, 120]
+        for sign in (1, -1):
+            values = [start + np.timedelta64(sign * x, "ns") for x in ticks]
+            dataset = xr.Dataset(
+                {"time_values": ("tie", values), "time_indices": ("tie", indices)}
+            )
+            coord = netcdf_utils._get_tie_point_coord(dataset, "time", 121)
+            expected = []
+            for k in range(121):
+                seg = 0 if k < indices[1] else 1
+                span = sign * (ticks[seg + 1] - ticks[seg])
+                length = indices[seg + 1] - indices[seg]
+                ideal = sign * ticks[seg] + Fraction((k - indices[seg]) * span, length)
+                # nearest tick, halves up
+                expected.append(int((ideal + Fraction(1, 2)) // 1))
+            np.testing.assert_array_equal(
+                coord.values, start + np.asarray(expected).astype("timedelta64[ns]")
+            )
 
     def test_ties_are_noted_until_the_coordinate_changes(self):
         """The ties ride along for a straight hand-back, and no further."""
