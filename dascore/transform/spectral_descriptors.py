@@ -74,8 +74,9 @@ _SPECTRAL_PARAMETER_DOCS = {
     "negative_frequencies": """
     negative_frequencies
         How to handle negative frequency bins. ``"auto"`` drops negative bins
-        only when power is symmetric, ``"drop"`` always uses non-negative
-        frequencies, ``"raise"`` rejects spectra with negative bins, and
+        only when power is symmetric, folding a verified negative Nyquist
+        bin to positive frequency without changing its power. ``"drop"`` uses
+        non-negative frequencies, ``"raise"`` rejects spectra with negative bins, and
         ``"keep"`` includes them in the calculation.
     """,
 }
@@ -257,6 +258,23 @@ def _get_spectral_power(
                 "only non-negative bins, or 'keep' to include all bins."
             )
             raise ValueError(msg)
+        # A full even-length DFT stores its unpaired Nyquist bin at -Nyquist.
+        # Retain its existing weight, matching DASCore's real DFT outputs.
+        original_coord = patch.coords.coord_map.get(freq_dim.removeprefix("ft_"))
+        size = (
+            len(original_coord)
+            if patch.attrs.get("_dft_output") and original_coord is not None
+            else patch.attrs.get("_stft_mfft", 0)
+        )
+        if size >= 2 and size % 2 == 0 and len(freqs) == size:
+            spacing = freqs[1] - freqs[0]
+            expected = np.arange(-size // 2, size // 2) * spacing
+            if np.allclose(freqs, expected, rtol=1e-7, atol=abs(spacing) * 1e-7):
+                freqs = freqs.copy()
+                freqs[0] = -freqs[0]
+                order = np.argsort(freqs)
+                freqs = freqs[order]
+                power = np.take(power, order, axis=freq_axis)
         mask &= freqs >= 0
     if negative_frequencies == "drop":
         mask &= freqs >= 0

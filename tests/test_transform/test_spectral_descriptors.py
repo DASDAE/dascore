@@ -315,6 +315,49 @@ class TestSpectralCentroid:
 class TestFrequencySelection:
     """Tests for frequency-axis and negative-frequency handling."""
 
+    @pytest.mark.parametrize("size", [15, 16])
+    @pytest.mark.parametrize("output", ["FFT", "AS", "PS", "PSD"])
+    @pytest.mark.parametrize("nyquist_only", [False, True])
+    def test_full_matches_real(self, size, output, nyquist_only):
+        """Auto retains Nyquist with the same bin weights as a real DFT."""
+        data = (-1.0) ** np.arange(size)
+        if not nyquist_only:
+            data = data + 2 + np.cos(2 * np.pi * np.arange(size) / size)
+        patch = dc.Patch(
+            data=data[None, :],
+            coords={"distance": np.array([0.0]), "time": np.arange(size) / 16},
+            dims=("distance", "time"),
+        )
+        full = patch.dft("time", real=False, pad=False, output=output)
+        real = patch.dft("time", real=True, pad=False, output=output)
+        for limits in ({}, {"fmin": 8, "fmax": 8}) if size == 16 else ({},):
+            for name in (
+                "spectral_centroid",
+                "median_frequency",
+                "spectral_peak_frequency",
+                "spectral_peak_amplitude",
+                "spectral_entropy",
+                "spectral_kurtosis",
+                "spectral_flatness",
+            ):
+                actual = getattr(full, name)(**limits)
+                expected = getattr(real, name)(**limits)
+                np.testing.assert_allclose(actual.data, expected.data, atol=1e-12)
+        if nyquist_only and size == 16:
+            assert full.spectral_peak_frequency().data == 8
+            assert full.spectral_peak_amplitude().data > 0
+            assert full.spectral_peak_amplitude(negative_frequencies="drop").data == 0
+            assert full.spectral_peak_frequency(negative_frequencies="keep").data == -8
+
+    def test_unverified_negative_bin(self):
+        """An unmatched negative bin without transform metadata is not folded."""
+        patch = dc.Patch(
+            data=np.array([[9.0, 1.0, 2.0, 1.0]]),
+            coords={"distance": np.array([0.0]), "ft_time": np.arange(-2.0, 2.0)},
+            dims=("distance", "ft_time"),
+        )
+        assert patch.spectral_peak_frequency(spectral_format="power").data == 0
+
     def test_negative_frequencies_raise(self, sine_dft):
         """Negative frequency bins can be rejected."""
         with pytest.raises(ValueError, match="negative frequencies"):
