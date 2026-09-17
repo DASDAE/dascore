@@ -58,7 +58,7 @@ def snap_coords(
         [`Spool.chunk`](`dascore.core.spool.BaseSpool.chunk`) is: a number
         is a multiple of the step, and a quantity or timedelta is a distance
         in the coordinate's units. A coordinate no even grid lies that close
-        to keeps its labels, and nothing is sorted. None, the default,
+        to keeps its labels, though it is still sorted. None, the default,
         places no bound. This is the snapping a reader's ``snap=True`` does,
         with the bound in `dascore.config`'s ``snap_tolerance``.
 

@@ -424,12 +424,6 @@ def _read_segment(node):
     )
 
 
-def _stored_coord(array, units):
-    """The values a node holds as a coordinate, exactly as they are."""
-    array = array if np.ndim(array) != 1 else np.atleast_1d(array)
-    return get_coord(data=array, units=units)
-
-
 def _read_coord(node, name, attrs2, snap):
     """Rebuild one coordinate from its node; only a dimension is snapped."""
     node_attrs = node.attrs
@@ -459,7 +453,7 @@ def _read_coord(node, name, attrs2, snap):
             return NumericND.from_array(
                 array, units=units, step=node_step, detect=False
             )
-        return snap_stored_coord(_stored_coord(array, units), snap, name)
+        return snap_stored_coord(get_coord(data=array, units=units), snap, name)
     step = node_step if node_step is not None else attrs2.get(f"{name}_step", None)
     shape = tuple(node.shape)
     can_use_range_fast_path = (
@@ -479,7 +473,7 @@ def _read_coord(node, name, attrs2, snap):
     single = np.ndim(array) == 1 and len(array) == 1
     if single and step is not None and wants_snap(snap, name):
         return get_coord(data=array, units=units, step=step)
-    return snap_stored_coord(_stored_coord(array, units), snap, name)
+    return snap_stored_coord(get_coord(data=array, units=units), snap, name)
 
 
 def _get_coords(patch_group, dims, attrs2, snap=True):

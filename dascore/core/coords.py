@@ -1905,6 +1905,8 @@ _EXACT_GRID_FIELDS = ("step_numerator", "step_denominator", "origin_offset")
 _GRID_COLUMNS = ("num", "den", "offset")
 # Nanoseconds per second: the tick of every exact time grid.
 _NS_PER_S = 10**9
+# The tick a datetime64 or timedelta64 reserves for NaT.
+_NAT_TICK = np.iinfo(np.int64).min
 
 
 def _fraction_step(step) -> Fraction | None:
@@ -2082,16 +2084,10 @@ def _as_dtype(value) -> np.dtype:
 
 def _coord_dtype(dtype) -> np.dtype:
     """The coordinate dtype a dtype states, without an array to read it off."""
-    dtype = np.dtype(dtype)
-    if dtype.kind == "M":
-        return np.dtype("datetime64[ns]")
-    if dtype.kind == "m":
-        return np.dtype("timedelta64[ns]")
-    if dtype.kind in "iuf":
-        return dtype
-    # Anything else -- an object array, a boolean mask -- is held as it is,
-    # since the table has no arithmetic to offer it.
-    return dtype if dtype.kind not in "SUV" else np.dtype("float64")
+    dtype = normalize_coord_dtype(dtype)
+    # Text and voids have no arithmetic the table can offer, so a row
+    # naming one is the float placeholder a frame holds envelopes as.
+    return np.dtype("float64") if dtype.kind in "SUV" else dtype
 
 
 # Numpy's temporal units, coarsest first, so a unit can be told from a
@@ -2880,13 +2876,12 @@ class NumericND(BaseCoord):
     stored runs concatenated in table order.
 
     A tick is one unit of the coordinate's resolution: a nanosecond for a
-    time, one for an integer. Sample ``k`` of a grid run is labeled
-    ``start + floor((offset + k * num) / den)``, so a rate with no whole-tick
-    period, 1024 Hz say, never drifts, and a strided slice keeps the phase it
-    was cut at. A float coordinate has no tick: its label is ``start + step *
-    (k0 + k * stride)``, or that index over ``step`` where the stride is
-    negative, with the three terms spelled as `dascore.core._run_kernels`
-    describes.
+    time, one for an integer. `dascore.core._run_kernels` holds the
+    arithmetic and the field layout for both kinds of label: a tick run is
+    an exact fraction, so a rate with no whole-tick period, 1024 Hz say,
+    never drifts and a strided slice keeps the phase it was cut at; a float
+    run counts an integer grid index, so a slice holds exactly the labels
+    of its parent.
 
     Runs partition the samples, so index space has no holes; a hole is a run
     which does not start where the run before it would put its next sample.
@@ -2936,10 +2931,8 @@ class NumericND(BaseCoord):
     labels: Any = None
 
     if TYPE_CHECKING:
-        # The before-validator below reads a whole family of constructor
-        # forms -- a range's start, stop and grid, segments, values -- and
-        # turns them into the two fields the model actually holds, so the
-        # constructor takes more than those two.
+        # The before-validator below also takes the dtype, which pydantic
+        # cannot see is a field of the base.
         def __init__(self, **data: Any) -> None: ...
 
     # --- construction
@@ -3304,7 +3297,7 @@ class NumericND(BaseCoord):
         if dtype.kind != "f" or dtype.itemsize >= 8 or not self.size:
             return 0.0
         top = np.max(np.abs([self._run_heads[0], self._run_ends[-1]]))
-        return float(np.spacing(dtype.type(top)))
+        return float(np.spacing(dtype.type(top))) / 2
 
     @property
     @cached_method
@@ -3560,6 +3553,12 @@ class NumericND(BaseCoord):
         up, down = bool(np.all(num >= 0)), bool(np.all(num <= 0))
         if self.labels is not None and len(self._flat_labels) > 1:
             flat = self._flat_labels
+            if np.dtype(self.dtype).kind in "mM" and np.any(flat == _NAT_TICK):
+                # A missing time is not the smallest one: read as the tick
+                # it is held as it would sort first and be handed back as
+                # the minimum. NaN does this to itself, since it compares
+                # false either way; NaT held as int64 does not.
+                return 0
             inner = np.ones(len(flat) - 1, dtype=bool)
             cuts = np.unique(self._label_starts)
             inner[cuts[(cuts > 0) & (cuts < len(flat))] - 1] = False
@@ -4343,6 +4342,21 @@ class NumericND(BaseCoord):
             out.append((int(offsets[num]), before, after, expected))
         return out
 
+    def _steps_between(self, index: int, before, after) -> int:
+        """How many grid positions of run ``index`` separate two of its labels."""
+        row = self.runs[index].item()
+        if self._ticks and row[3] > 1:
+            # A fractional tick step does not divide a long span exactly:
+            # dividing by the whole ticks it rounds to disagrees by a
+            # sample after a few hours. The run's own rational terms count
+            # the positions between two of its labels without rounding,
+            # and in python integers, which cannot overflow.
+            forward = self._kernel.index_of
+            return forward(row, _to_tick(after), True) - forward(
+                row, _to_tick(before), True
+            )
+        return int(_on_grid(np.asarray([after - before]), self.step)[0])
+
     def _holes(self) -> list[tuple]:
         """Each hole as ``(first missing label, last missing label, count)``."""
         step = self.step
@@ -4355,7 +4369,7 @@ class NumericND(BaseCoord):
         for index, run in enumerate(self.segments):
             if index:
                 before, after = ends[index - 1], starts[index]
-                count = int(_on_grid(np.asarray([after - before]), step)[0]) - 1
+                count = self._steps_between(index - 1, before, after) - 1
                 if count:
                     rows.append(_hole(before, step, count))
             if run.runs["den"][0] == 0 and len(run) > 1:
@@ -4400,8 +4414,11 @@ class NumericND(BaseCoord):
         if allowed.count is None:
             allowed = self._gap_tolerance(allowed)
         ours, theirs = self.values, other.values
-        if self._ticks:
-            # differenced as ticks: an epoch in float64 has no nanoseconds left.
+        # Ticks are differenced as ticks -- an epoch in float64 has no
+        # nanoseconds left -- but only where both sides are whole ticks: a
+        # float grid tried against integer labels moves them by the
+        # fraction that casting to int64 would throw away.
+        if self._ticks and _ticked(np.asarray(theirs).dtype):
             # A time is a count already, so it is viewed; a narrower integer is
             # widened, which viewing would instead read two labels as one.
             if np.dtype(self.dtype).kind in "mM":
@@ -4410,7 +4427,8 @@ class NumericND(BaseCoord):
                 ours, theirs = ours.astype(np.int64), theirs.astype(np.int64)
             moved = np.max(np.abs(ours - theirs))
         else:
-            moved = np.max(np.abs(ours.astype(np.float64) - theirs))
+            ours = ours.astype(np.float64)
+            moved = np.max(np.abs(ours - theirs.astype(np.float64)))
         # A count of steps is this coordinate's step, or the spacing its
         # labels keep, not the step of the grid being tried against them.
         step = self.step
@@ -4509,22 +4527,11 @@ class NumericND(BaseCoord):
         if n < 2:
             return None
         ascending = self.sorted
-        first = run[0].min() if ascending else run[0].max()
-        last = run[-1].max() if ascending else run[-1].min()
-        span = last - first
-        if is_timedelta64(span) or is_datetime64(first):
-            span_ns = dc.to_timedelta64(span).astype(np.int64)
-            step = np.timedelta64(int(np.round(span_ns / (n - 1))), "ns")
-            zero = dc.to_timedelta64(0)
-        else:
-            step = span / (n - 1)
-            zero = 0
-        # sorted labels span their own direction, so the step is never flat
-        assert step != zero and (step > zero) == ascending
-        candidate = get_coord(
-            start=first, stop=last + step, step=step, units=self.units
-        ).change_length(n)
+        # The grid between the run's two ends is what snapping these same
+        # labels gives, so it is taken from there rather than spelled out
+        # again; the labels are concatenated either way.
         actual = np.concatenate([x.values for x in run])
+        candidate = self.from_array(actual, units=self.units, detect=False)._snapped()
         deviation = np.max(np.abs(candidate.values - actual))
         too_far = tol is not None and deviation > tol
         if too_far or (keep_step and not _keeps_step(run, ascending)):
@@ -4655,9 +4662,6 @@ def concat_tables(*coords: NumericND) -> NumericND:
         The coordinates to join; all must share a dtype and units.
     """
     first, *rest = coords
-    if any(np.dtype(x.dtype).kind != np.dtype(first.dtype).kind for x in rest):
-        msg = f"Runs must share a dtype, got {[str(x.dtype) for x in coords]}."
-        raise CoordError(msg)
     if any(x.dtype != first.dtype for x in rest):
         msg = f"Runs must share a dtype, got {[str(x.dtype) for x in coords]}."
         raise CoordError(msg)
@@ -4698,12 +4702,7 @@ def _promoted(tables: list[NumericND]) -> list[NumericND]:
     dtype = np.result_type(*[np.dtype(x.dtype) for x in tables])
     if all(np.dtype(x.dtype) == dtype for x in tables):
         return tables
-    return [
-        x
-        if np.dtype(x.dtype) == dtype
-        else _widened(x, dtype)
-        for x in tables
-    ]
+    return [x if np.dtype(x.dtype) == dtype else _widened(x, dtype) for x in tables]
 
 
 def _widened(coord: NumericND, dtype) -> NumericND:
@@ -4713,7 +4712,9 @@ def _widened(coord: NumericND, dtype) -> NumericND:
     A row counts in float64 and the coordinate rounds each label into its
     own dtype, so a narrower float's labels are not the ones its row makes
     once that rounding goes. The row travels only where it still makes
-    them; where it does not, the labels do.
+    them; where it does not, the labels do, and the declared step stays with
+    the row -- the promoted labels are a narrower float's roundings, which no
+    longer sit on that step exactly.
     """
     out = NumericND.from_rows(
         coord.runs, labels=coord.labels, dtype=dtype, units=coord.units, step=coord.step
@@ -4721,7 +4722,7 @@ def _widened(coord: NumericND, dtype) -> NumericND:
     if _same_labels(out.values, coord.values.astype(dtype)):
         return out
     return NumericND.from_array(
-        coord.values.astype(dtype), units=coord.units, step=coord.step, detect=False
+        coord.values.astype(dtype), units=coord.units, detect=False
     )
 
 

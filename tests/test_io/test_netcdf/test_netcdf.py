@@ -925,6 +925,13 @@ class TestXDASSampledCoordinate:
         assert coord == declared
         assert coord.step_exact == Fraction(1, 1024) and coord.holes
 
+    def test_a_fractional_interval_over_integer_labels_keeps_its_fraction(self):
+        """Truncating the interval to a whole label loses one per sample."""
+        dataset = self._dataset(np.asarray([0]), [4], {"sampling_interval": 2.5})
+        coord = netcdf_utils._get_dim_coord(dataset, "time", 4)
+        # a run floors its labels, so 2.5 counts out 0, 2, 5, 7
+        np.testing.assert_array_equal(coord.values, [0, 2, 5, 7])
+
     def test_a_whole_tick_rate_has_no_ratio(self):
         """Without a ratio the interval is the step, in the units it names."""
         start = np.datetime64("2020-01-01", "ns")

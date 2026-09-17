@@ -97,6 +97,18 @@ def _attr_delta(attrs, key: str):
     return np.asarray(int(value)).astype(f"timedelta64[{code}]").astype("m8[ns]")[()]
 
 
+def _whole_ticks(step, den: int) -> tuple[int, int]:
+    """An interval over integer labels as whole ticks over a denominator."""
+    if float(step).is_integer():
+        return int(step), den
+    # A run counts `floor(k * num / den)`, so an interval which is no
+    # whole tick has to keep its fraction: truncating it to a tick would
+    # lose one per sample rather than the fraction the file states. The
+    # denominator is bounded as the exact time grids are.
+    ratio = Fraction(float(step)).limit_denominator(10**9) / den
+    return ratio.numerator, ratio.denominator
+
+
 def _get_sampled_coord(h5file, coord_name: str, coord_len: int) -> BaseCoord | None:
     """
     Decode an XDAS sampled coordinate as the run table it already is.
@@ -132,7 +144,8 @@ def _get_sampled_coord(h5file, coord_name: str, coord_len: int) -> BaseCoord | N
         ]
         return NumericND.from_rows(rows, dtype=starts.dtype)
     if values.dtype.kind in "iu":
-        rows = [(int(x), int(n), int(step), den, 0) for x, n in zip(values, lengths)]
+        num, den = _whole_ticks(step, den)
+        rows = [(int(x), int(n), num, den, 0) for x, n in zip(values, lengths)]
         return NumericND.from_rows(rows, dtype=values.dtype)
     rows = float_rows(
         values.dtype, values.astype(np.float64), lengths, float(step) / den

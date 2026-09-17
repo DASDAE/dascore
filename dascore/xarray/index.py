@@ -76,7 +76,11 @@ def _same_labels(first: BaseCoord, second: BaseCoord) -> bool:
         # xarray states units as an attribute beside the labels, so an
         # index compares labels only, as a materialized index does
         first, second = first.set_units(None), second.set_units(None)
-    return first.fingerprint() == second.fingerprint()
+    # The coordinate's own equality, which takes the fingerprints as the
+    # cheap answer and then compares labels: two rational tick grids can
+    # state one set of labels in more than one way, and an alignment
+    # asking whether the labels match must not be told they differ.
+    return first == second
 
 
 def _chained(coords: list[BaseCoord]) -> BaseCoord | None:

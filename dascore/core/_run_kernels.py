@@ -143,8 +143,6 @@ def _span_ok(count: int, den: int) -> bool:
 class TickKernel:
     """Rows of whole ticks: ``start + floor((offset + k * num) / den)``."""
 
-    ticked = True
-
     @staticmethod
     def labels(rows: np.ndarray, run, k, reach: int | None = None) -> np.ndarray:
         """
@@ -352,9 +350,14 @@ class TickKernel:
         before, after = rows[:-1], rows[1:]
         if not num:
             return bool(np.all(after["start"] == before["start"]))
-        rel = (after["start"] - before["start"]) * den
-        rel = rel + after["offset"] - before["offset"]
-        return bool(np.all(rel % num == 0))
+        # In python integers, and one run at a time: runs far apart on a
+        # fine grid have a tick difference which leaves int64 the moment
+        # it is multiplied by the denominator, and there are few of them.
+        for prior, later in zip(before.tolist(), after.tolist()):
+            rel = (later[0] - prior[0]) * den + later[4] - prior[4]
+            if rel % num:
+                return False
+        return True
 
     @staticmethod
     def hash_columns(rows: np.ndarray) -> list[np.ndarray]:
@@ -372,16 +375,10 @@ class FloatKernel:
     """
     Rows of float labels, counted along an integer grid index.
 
-    Sample ``k`` of a run sits at the grid index ``k0 + k * stride``, and its
-    label is that index times the run's ``step`` past ``start``, or, for a
-    run which *divides* (``den < 0``), that index over its ``step``. The two
-    spellings are the two ways float axes are built -- ``start + arange(n) *
-    step`` and ``arange(n) / rate``, which integer ticks over ``1e9`` also
-    is -- and they round differently, so a row keeps the one its labels
-    were made with.
+    The module docstring gives the expression and the fields it is spelled
+    in. The two spellings are the two ways float axes are built, and they
+    round differently, so a row keeps the one its labels were made with.
     """
-
-    ticked = False
 
     @staticmethod
     def labels(rows: np.ndarray, run, k, reach: int | None = None) -> np.ndarray:
@@ -519,7 +516,9 @@ class FloatKernel:
         rising = spacing > 0
         # A label within this of the value is the value: a rounding of the
         # label's own arithmetic, or the resolution of a narrower float.
-        near = max(abs(spacing) * 1e-9, slack)
+        # Half a spacing is the ceiling either way, or a value lying
+        # between two labels would answer to both of them.
+        near = max(abs(spacing) * 1e-9, min(slack, abs(spacing) / 2))
 
         def label(k: int) -> float:
             index = k0 + k * abs(den)

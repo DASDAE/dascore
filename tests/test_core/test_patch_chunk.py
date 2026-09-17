@@ -19,6 +19,7 @@ import pytest
 import dascore as dc
 import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
+from dascore.core.coords import concat_coords
 from dascore.exceptions import ChunkError, CoordMergeError, ParameterError, UnitError
 from dascore.io.febus.core import FebusPatchAttrs
 from dascore.units import get_quantity
@@ -2522,6 +2523,35 @@ class TestChunkFromIndex:
         assert attrs["_source_patch_key"] == "DAS__x"
         for name in ("output_id", "source_path", "time_min", "blank", "_modified"):
             assert name not in dict(attrs)
+
+
+class TestCarriedIntegerRuns:
+    """A coordinate carried past a chunk keeps the runs it arrived with."""
+
+    def test_a_gapped_integer_channel_axis_survives_a_merge(self, tmp_path_factory):
+        """Its `num` is a count of ticks, never the bits of a float step."""
+        path = tmp_path_factory.mktemp("carried_runs")
+        channels = concat_coords(
+            dc.core.get_coord(start=np.int32(0), step=np.int32(1), shape=(4,)),
+            dc.core.get_coord(start=np.int32(10), step=np.int32(1), shape=(4,)),
+        )
+        for num in range(2):
+            time = dc.core.get_coord(
+                start=np.datetime64("2020-01-01", "ns") + np.timedelta64(num * 4, "s"),
+                step=np.timedelta64(1, "s"),
+                shape=(4,),
+            )
+            patch = dc.Patch(
+                data=np.zeros((8, 4)),
+                coords={"distance": channels, "time": time},
+                dims=("distance", "time"),
+            )
+            dc.write(patch, path / f"{num}.h5", "dasdae")
+        merged = dc.spool(path).update().chunk(time=None)[0]
+        carried = merged.get_coord("distance")
+        assert carried.dtype == np.dtype("int32")
+        np.testing.assert_array_equal(carried.values, channels.values)
+        assert carried.runs_count == 2 and carried.holes
 
 
 class TestChunkFillValue:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pickle
+from fractions import Fraction
 
 import numpy as np
 import pandas as pd
@@ -519,6 +520,14 @@ class TestAlignment:
         second = _pair(distance.set_units("ft"))[0]
         out = first + second
         assert isinstance(out.xindexes["x"], CoordIndex)
+
+    def test_one_set_of_labels_spelled_two_ways_joins_exactly(self):
+        """Two rational tick grids can state the same labels; alignment says so."""
+        declared = NumericND.from_run(T0, Fraction(1, 3), 3)
+        read_back = get_coord(data=declared.values)
+        first, second = _pair(declared)[0], _pair(read_back)[0]
+        assert declared == read_back
+        xr.align(first, second, join="exact")
 
     @pytest.mark.parametrize("join", ["inner", "outer"])
     def test_offset_arrays_join(self, join):

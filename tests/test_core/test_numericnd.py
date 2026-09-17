@@ -2278,3 +2278,86 @@ class TestReviewFindings:
         """A cast which drops part of a label reports that label."""
         value = np.asarray(["2020-01-01T00:00:00.5"], dtype="datetime64[ns]")
         assert _out_of_ns(value, np.dtype("datetime64[s]")) == value[0]
+
+
+class TestSecondReviewFindings:
+    """Corners a second review found, each pinned by what it broke."""
+
+    def test_zero_tolerance_leaves_integer_labels_alone(self):
+        """A float grid moves integer labels by a fraction int64 would drop."""
+        coord = get_coord(data=np.asarray([0, 1, 3], dtype=np.int32))
+        assert coord.snap(tolerance=0) is coord
+        assert coord.snap(tolerance=0.01) is coord
+        # a full step is room enough for the 1.5 grid
+        assert coord.snap(tolerance=1).evenly_sampled
+
+    def test_selecting_one_narrow_float_label_takes_one_sample(self):
+        """The rounding a float32 label allows must not reach its neighbour."""
+        coord = get_coord(data=(1e6 + np.arange(10) * 0.07).astype("float32"))
+        label = coord.values[2]
+        out = coord.select((label, label))[0]
+        np.testing.assert_array_equal(out.values, [label])
+
+    def test_a_missing_time_is_no_minimum(self):
+        """NaT held as a tick would sort first and be handed back as the min."""
+        values = np.asarray(["NaT", "2020-01-01", "2020-01-02"], dtype="datetime64[ns]")
+        coord = get_coord(data=values)
+        assert not coord.sorted and not coord.reverse_sorted
+        assert coord.min() == values[1]
+        assert coord.max() == values[2]
+
+    def test_runs_far_apart_on_a_fine_grid_stay_one_grid(self):
+        """A tick difference times its denominator leaves int64; the grid holds."""
+        length = 9999 * 86400 * 20
+        coord = NumericND.from_run(T0, Fraction(1, 9999), length + 10)
+        joined = concat_coords(coord[:10], coord[length:])
+        assert joined.step == coord.step
+        # and the hole is counted on the run's own grid, not on the whole
+        # ticks its step rounds to, which disagree after a few hours
+        (missing,) = joined.missing().runs
+        assert missing[2] == length - 10
+
+
+class TestBotReviewFindings:
+    """The narrow and wide floats, and the ends of int64, a bot review found."""
+
+    def test_equal_narrow_float_labels_hash_alike(self):
+        """A float32 run is its labels, not the float64 arithmetic behind them."""
+        one = NumericND.from_run(0.1, 0.001, 6, dtype="float32")
+        # a start a double apart, which float32 rounds to the same label
+        two = NumericND.from_run(np.nextafter(0.1, 1.0), 0.001, 6, dtype="float32")
+        assert one.runs.tolist() != two.runs.tolist()
+        np.testing.assert_array_equal(one.values, two.values)
+        assert one == two
+        assert one.fingerprint() == two.fingerprint()
+
+    def test_promotion_keeps_the_labels_it_was_given(self):
+        """A float32 run under float64 arithmetic would lose its own rounding."""
+        narrow = NumericND.from_run(0.1, 0.001, 6, dtype="float32")
+        wide = NumericND.from_run(1.0, 0.001, 4, dtype="float64")
+        joined = concat_coords(narrow, wide)
+        assert joined.dtype == np.dtype("float64")
+        np.testing.assert_array_equal(joined.values[:6], narrow.values.astype("f8"))
+
+    @pytest.mark.skipif(
+        np.dtype(np.longdouble).itemsize <= 8, reason="longdouble is a double here"
+    )
+    def test_an_extended_float_keeps_its_own_labels(self):
+        """A grid counted in float64 cannot state a label wider than one."""
+        start = np.nextafter(np.longdouble(1), np.longdouble(2))
+        coord = get_coord(start=start, step=np.longdouble("0.1"), shape=(5,))
+        assert coord.dtype == np.dtype(np.longdouble)
+        assert coord.values[0] == start
+        # and snapping it does not send the labels through a double either
+        assert coord.snap() is coord
+
+    def test_a_shift_past_the_end_of_int64_is_refused(self):
+        """A wrapped label would validate as an ordinary one."""
+        coord = get_coord(data=np.asarray([0, 1, 5], dtype="int64"))
+        with pytest.raises(CoordError, match="outside int64"):
+            coord.update_limits(min=2**63 - 3)
+
+    def test_a_narrow_float_run_reaching_infinity_is_refused(self):
+        """Finite float64 ends can still be infinite once cast to float32."""
+        with pytest.raises(CoordError, match="finite"):
+            NumericND.from_run(np.float32(3e38), 3e37, 10, dtype="float32")
