@@ -74,6 +74,10 @@ class TestNodeCodec:
         coord = CASES[name]
         _save_coord(coord, name, h5, compact=True)
         back = _read_coord(h5[name], name, {}, snap=True)
+        if isinstance(coord, NumericND):
+            # the shape of the table too, not only the labels it makes
+            assert back.runs_count == coord.runs_count
+            assert (back.labels is None) == (coord.labels is None)
         assert back == coord
         assert back.dtype == coord.dtype
 

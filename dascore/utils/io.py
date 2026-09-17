@@ -5,7 +5,6 @@ from __future__ import annotations
 import io
 import typing
 from contextlib import suppress
-from fractions import Fraction
 from functools import cache
 from inspect import isfunction, ismethod
 from pathlib import Path
@@ -452,6 +451,9 @@ def obspy_to_patch(stream, dim="distance") -> dc.Patch:
     _check_stream(stream)
     data = []
     new_dim = []
+    # dascore.io imports this module, so the rate reader is imported here
+    from dascore.io.utils import step_from_rate  # noqa: PLC0415
+
     for tr in stream:
         data.append(tr.data)
         new_dim.append(tr.stats[dim])
@@ -462,8 +464,10 @@ def obspy_to_patch(stream, dim="distance") -> dc.Patch:
         "time": (
             ("time",),
             dc.get_coord(
-                start=dc.to_datetime64(str(tr.stats.starttime)),
-                step=1 / Fraction(str(tr.stats.sampling_rate)),
+                # the stamp itself, which keeps nanoseconds a string drops
+                start=dc.to_datetime64(tr.stats.starttime.datetime)
+                + np.timedelta64(tr.stats.starttime.ns % 1000, "ns"),
+                step=step_from_rate(tr.stats.sampling_rate),
                 shape=(tr.stats.npts,),
             ),
         ),

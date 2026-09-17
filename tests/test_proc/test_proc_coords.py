@@ -1533,7 +1533,11 @@ class TestFillGaps:
         patch = _gapped_patch(concat_coords(first, second))
         out = patch.fill_gaps("time")
         coord = out.get_coord("time")
-        assert isinstance(coord, NumericND) and coord.step == self.ms
+        # the second run lands on the nearest position, and the hole before
+        # it is filled rather than closed
+        position = 8 + round(shift_us / 1000)
+        assert coord.evenly_sampled and coord.step == self.ms
+        assert len(coord) == position + 4
         # every sample keeps its value, at a label at most half a step away
         kept = ~np.isnan(out.data[0])
         assert np.array_equal(out.data[:, kept], patch.data)
@@ -1652,7 +1656,8 @@ class TestFillGaps:
         start = self.t0 + 5 * self.ms + np.timedelta64(400_000, "ns")
         second = get_coord(start=start, step=self.ms, shape=(4,))
         out = _gapped_patch(concat_coords(first, second)).fill_gaps("time")
-        assert isinstance(out.get_coord("time"), NumericND) and out.shape == (3, 9)
+        coord = out.get_coord("time")
+        assert coord.evenly_sampled and len(coord) == 9 and out.shape == (3, 9)
         assert not np.isnan(out.data).any()
 
     def test_float_off_grid(self):

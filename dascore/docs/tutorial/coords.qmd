@@ -44,7 +44,7 @@ Coordinates expose values, units, data type, ordering, sampling regularity, limi
 | `units` | Physical units, if present |
 | `has_values` | Whether the coordinate holds labels, rather than only a shape |
 | `min()`, `max()` | Coordinate limits |
-| `step` | The whole-tick spacing every run shares, or `None` when they disagree |
+| `step` | The spacing every run shares (whole ticks for times and integers), or `None` when they disagree |
 | `step_exact` | The spacing as an exact `Fraction` (seconds for time), or `None` for a float coordinate or when the runs do not share one |
 | `runs_count` | How many evenly sampled runs the coordinate holds |
 | `holes` | Whether any run starts past where the run before it would have ended |

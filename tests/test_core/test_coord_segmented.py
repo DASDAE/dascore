@@ -560,6 +560,7 @@ class TestSimplifyAndSnap:
     def test_simplify_insufficient_tolerance_noop(self, float_gap_coord):
         """A too-small tolerance leaves the coord unchanged."""
         out = float_gap_coord.fuse(0.5)
+        assert out is float_gap_coord or out.runs_count == float_gap_coord.runs_count
         assert out == float_gap_coord
 
     def test_simplify_idempotent(self, float_gap_coord):
@@ -769,10 +770,13 @@ class TestEdgeCases:
         assert out is float_gap_coord
 
     def test_eq_array_reconstruction(self, float_gap_coord):
-        """The exact array factory reconstructs the same runs and labels."""
+        """The exact array factory reconstructs the same coordinate."""
         mono = get_coord(data=float_gap_coord.values)
         assert float_gap_coord == mono
-        np.testing.assert_array_equal(float_gap_coord.values, mono.values)
+        assert mono.runs_count == float_gap_coord.runs_count
+        np.testing.assert_array_equal(mono.values, float_gap_coord.values)
+        # a float row is not canonical, so identity is the labels it makes
+        assert mono.fingerprint() == float_gap_coord.fingerprint()
         three = concat_coords(
             float_gap_coord, get_coord(start=30.0, stop=40.0, step=1.0)
         )

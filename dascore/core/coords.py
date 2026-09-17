@@ -401,7 +401,7 @@ class CoordSummary(DascoreBaseModel):
     def is_exact_grid(self) -> bool:
         """Return True when the summary states one exact grid run.
 
-        Exact means counted in whole ticks, as it always has: a float
+        Exact means counted in whole ticks: a float
         coordinate has no tick, so its grid is not one of them however
         short the fraction its step reduces to.
         """
@@ -1180,9 +1180,10 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         """
         Return the simplest coordinate representing the same values.
 
-        Unlike [`snap`](`dascore.core.coords.BaseCoord.snap`), which forces a
-        uniform coordinate with unbounded interior error, fuse never moves
-        any value by more than `tolerance`.
+        Unlike [`snap`](`dascore.core.coords.BaseCoord.snap`), which fits the
+        whole coordinate to one grid, fuse re-fits runs a seam at a time and
+        keeps a seam it cannot close without moving a value further than
+        `tolerance` (an absolute distance here, not a count of steps).
 
         Parameters
         ----------
@@ -2027,6 +2028,11 @@ def _to_tick(value) -> int:
 
 # --- the run table -----------------------------------------------------
 
+# How many candidate grids the whole of one array may be tried against.
+# A run which follows the grid its neighbour was found on spends nothing,
+# so an ordinary coordinate never reaches this; an array of labels no grid
+# describes stops searching instead of paying a search per run.
+_FIT_BUDGET = 512
 # Float labels this close together meet: a boundary between two float grids
 # cannot ask for equality of values which were never computed the same way.
 _FLOAT_RTOL = 1e-12
@@ -2466,15 +2472,22 @@ def _float_runs(values: np.ndarray, starts, lengths, on_grid, dtype, step=None):
     coordinate with holes in it states one grid throughout; then on a grid
     of its own; and failing both it keeps its labels. ``step`` is a spacing
     the labels are declared to follow, tried before any read off them.
+
+    The search is bounded across the whole array: labels which follow one
+    grid answer in a try or two a run, and labels which follow none stop
+    being asked rather than costing a search each.
     """
     rows = float_rows(dtype, values[starts].astype(np.float64), lengths, 0.0, 0, 0)
+    budget = [_FIT_BUDGET]
     origin = None
     for index in np.flatnonzero(on_grid):
+        if budget[0] <= 0:
+            break
         first = int(starts[index])
         piece = values[first : first + int(lengths[index])]
         if origin is None and step is not None:
             origin = (float(piece[0]), float(step), 1)
-        row = FloatKernel.fit(piece, dtype, origin=origin)
+        row = FloatKernel.fit(piece, dtype, origin=origin, budget=budget)
         if row is None:
             continue
         rows[index] = row[0]
@@ -2654,11 +2667,10 @@ def _grid_fields(start_tick: int, num: int, den: int, offset: int, count: int, d
     """
     The stored fields of an exact grid, normalized and checked.
 
-    The grid is reduced by the common divisor of all three terms, never of
-    the step alone: from (num 3, den 2, offset 1) the stride-two grid (6, 2,
-    1) must stay as it is, since (3, 1, 0) keeps the labels but moves the
-    origin by half a tick. The labels must fit the dtype: a grid that would
-    wrap an int8 or overflow int64 arithmetic is refused.
+    The terms are reduced by their common divisor here; the run table then
+    puts the grid in lowest terms (see `TickKernel.reduced`). The labels
+    must fit the dtype: a grid which would wrap an int8, or whose
+    arithmetic would leave int64, is refused.
     """
     g = math.gcd(num, den, offset)
     num, den, offset = num // g, den // g, offset // g
@@ -2829,8 +2841,10 @@ class NumericND(BaseCoord):
     time, one for an integer. Sample ``k`` of a grid run is labeled
     ``start + floor((offset + k * num) / den)``, so a rate with no whole-tick
     period, 1024 Hz say, never drifts, and a strided slice keeps the phase it
-    was cut at. A float coordinate has no tick, so its offsets are zero and
-    its label is ``start + (k * num) / den``.
+    was cut at. A float coordinate has no tick: its label is ``start + step *
+    (k0 + k * stride)``, or that index over ``step`` where the stride is
+    negative, with the three terms spelled as `dascore.core._run_kernels`
+    describes.
 
     Runs partition the samples, so index space has no holes; a hole is a run
     which does not start where the run before it would put its next sample.
@@ -2851,9 +2865,9 @@ class NumericND(BaseCoord):
 
     Notes
     -----
-    ``step`` is the whole-tick spacing every run shares, or None, so the
-    library can keep reading it as a scalar; `step_exact` states the same
-    spacing as a fraction of coordinate units.
+    ``step`` is the spacing every run shares -- whole ticks for a time or
+    an integer -- or None, so the library can keep reading it as a scalar;
+    `step_exact` states a ticked one as a fraction of coordinate units.
 
     Examples
     --------
@@ -3844,7 +3858,15 @@ class NumericND(BaseCoord):
     @property
     @cached_method
     def _run_fingerprints(self) -> np.ndarray:
-        """A 64 bit hash of each run, independent of where it sits."""
+        """
+        A 64 bit hash of each run, independent of where it sits.
+
+        A row of ticks is canonical, so its own words are what it is. A
+        float row is not -- one set of doubles can be counted from more
+        than one origin, and a slice keeps its parent's -- so a float run
+        is hashed over the labels it makes, which equal labels always
+        share. Float axes are short; the labels of a long one are not.
+        """
         rows = self.runs
         seed = np.uint64(_blake(str(np.dtype(self.dtype)).encode()))
         out = np.full(len(rows), seed, np.uint64)
@@ -3863,10 +3885,18 @@ class NumericND(BaseCoord):
             bounds = self._label_starts
             # A stored run of one label is that label, as a grid run of one
             # sample is, so the two hash alike; longer ones hash their labels.
-            for index in np.flatnonzero((rows["den"] == 0) & (rows["length"] > 1)):
-                payload = self._flat_labels[bounds[index] : bounds[index + 1]]
+            for index in np.flatnonzero(rows["length"] > 1):
+                stored = rows["den"][index] == 0
+                if stored:
+                    payload = self._flat_labels[bounds[index] : bounds[index + 1]]
+                elif not self._ticks:
+                    k = np.arange(int(rows["length"][index]), dtype=np.int64)
+                    payload = self._kernel.labels(rows, int(index), k)
+                else:
+                    continue
                 out[index] = _splitmix(
-                    out[index] ^ np.uint64(_blake(payload.tobytes()))
+                    out[index]
+                    ^ np.uint64(_blake(np.ascontiguousarray(payload).tobytes()))
                 )
         return out
 

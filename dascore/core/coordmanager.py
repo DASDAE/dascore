@@ -522,14 +522,11 @@ class CoordManager(RichRepr, DascoreBaseModel):
         tolerance
             How far a label may move, as
             [`BaseCoord.snap`](`dascore.core.coords.BaseCoord.snap`) reads
-            it. With a tolerance nothing is sorted: a coordinate no even
-            grid lies that close to is left exactly as it is.
+            it. A coordinate no even grid lies that close to keeps its
+            labels, though it is still sorted.
         """
         coords = self.dims if len(coords) == 0 else coords
-        if tolerance is None:
-            cm, array = self.sort(*coords, array=array, reverse=reverse)
-        else:
-            cm = self
+        cm, array = self.sort(*coords, array=array, reverse=reverse)
         # now the arrays are sorted it should be correct to snap dimensions.
         # Only collect coords whose snap actually changes them so an already
         # even manager is returned unchanged (snap returns self when even).

@@ -291,14 +291,16 @@ class TestIsel:
         lazy, _ = _pair(COORDS["segmented"])
         assert isinstance(lazy.isel(x=slice(10, 60)).xindexes["x"], CoordIndex)
         strided = lazy.isel(x=slice(10, 60, 2)).xindexes["x"]
-        assert isinstance(strided.coordinate, NumericND)
+        # a strided cut of runs holds the labels it picked
+        assert strided.coordinate.runs_count == 1
+        assert strided.coordinate.labels is not None
 
     def test_fancy_indexing_holds_its_picks(self):
         """Fancy indexing holds the picked labels, and still aligns with a slice."""
         lazy, eager = _pair(MS)
         index = lazy.isel(x=[1, 5]).xindexes["x"]
         assert isinstance(index, CoordIndex)
-        assert isinstance(index.coordinate, NumericND)
+        assert index.coordinate.labels is not None  # the picks, held
         _assert_same(
             lambda: lazy.isel(x=[0, 1, 2]) + lazy.isel(x=slice(0, 3)),
             lambda: eager.isel(x=[0, 1, 2]) + eager.isel(x=slice(0, 3)),
@@ -420,7 +422,9 @@ class TestConcat:
         """A gap stays lazy as a segmented coordinate, labels unchanged."""
         out = xr.concat(self._parts(slice(0, 30), slice(60, 100)), dim="x")
         index = out.xindexes["x"]
-        assert isinstance(index.coordinate, NumericND)
+        # two runs with the gap between them, and no labels held
+        assert index.coordinate.runs_count == 2 and index.coordinate.holes
+        assert index.coordinate.labels is None
         np.testing.assert_array_equal(
             out["x"].values, np.r_[MS.values[:30], MS.values[60:]]
         )
@@ -442,7 +446,7 @@ class TestConcat:
         """Parts which do not chain in order keep their labels, held as they are."""
         parts = self._parts(*pieces)
         out = xr.concat(parts, dim="x")
-        assert isinstance(out.xindexes["x"].coordinate, NumericND)
+        assert out.xindexes["x"].coordinate.labels is not None
         expected = np.concatenate([x["x"].values for x in parts])
         np.testing.assert_array_equal(out["x"].values, expected)
 
@@ -661,7 +665,8 @@ class TestScale:
             coords=xr.Coordinates.from_xindex(CoordIndex.from_coord("time", coord)),
         )
         sub = array.isel(time=slice(n - 2, n + 2))
-        assert isinstance(sub.xindexes["time"].coordinate, NumericND)
+        # still described, not spelled out, across the seam
+        assert sub.xindexes["time"].coordinate.labels is None
         np.testing.assert_array_equal(
             sub["time"].values, coord._get_index_values(np.arange(n - 2, n + 2))
         )

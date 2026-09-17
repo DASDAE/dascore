@@ -54,7 +54,8 @@ def _get_coord_manager(fi, snap=True):
             coord = get_coord(min=start, max=stop, step=step, units=unit)
         else:  # and distance
             # The channels are ints so we multiply by step to get distance.
-            channels = fi["/header/channels"][:]
+            # signed, so a descending channel map does not wrap its stride
+            channels = np.asarray(fi["/header/channels"][:]).astype("int64")
             strides = np.diff(channels)
             even = len(strides) and np.all(strides == strides[0]) and strides[0]
             if wants_snap(snap, "distance") and even:

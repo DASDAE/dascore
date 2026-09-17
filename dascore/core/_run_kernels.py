@@ -100,7 +100,7 @@ def _rows(dtype, start, length, num, den, offset) -> np.ndarray:
         # One run is the common table, and stating it as a row is four
         # times cheaper than five assignments into an empty array. A value
         # no row can hold -- a NaN or a float past int64 in a tick column --
-        # falls through to the assignments, which cast it as they always did.
+        # falls through to the assignments, which cast it instead.
         with suppress(OverflowError, ValueError):
             return np.array([tuple(_one(x) for x in columns)], record)
     out = np.empty(len(length), record)
@@ -553,16 +553,23 @@ class FloatKernel:
 
     @classmethod
     def hash_columns(cls, rows: np.ndarray) -> list[np.ndarray]:
-        """The row's words as a hash reads them, a run of one sample unspaced."""
+        """
+        The row's words as a hash reads them; a grid run states none.
+
+        A float row is not canonical -- one set of doubles can be counted
+        from more than one origin, and a slice keeps its parent's -- so its
+        words are no identity. The labels it makes are, and
+        `NumericND._run_fingerprints` hashes those for every run of more
+        than one sample. What is left here is a run of one sample, which is
+        its label and nothing else, and a stored run, whose start is its
+        first label already.
+        """
         single = rows["length"] == 1
-        # A run of one sample is its label; where on which grid it was cut
-        # from is no part of what it is.
+        told = single | (rows["den"] == 0)
         start = np.where(single, cls.heads(rows), rows["start"]) + 0.0
-        columns = [start, rows["length"], np.where(single, 0, rows["num"])]
-        columns += [
-            np.where(single, 1, rows["den"]),
-            np.where(single, 0, rows["offset"]),
-        ]
+        columns = [np.where(told, start, 0.0), rows["length"]]
+        columns += [np.where(told & ~single, rows[x], 0) for x in ("num", "den")]
+        columns += [np.where(told & ~single, rows["offset"], 0)]
         return [np.ascontiguousarray(x).view(np.uint64) for x in columns]
 
     # --- reading a grid out of labels
@@ -634,12 +641,15 @@ class FloatKernel:
         return True
 
     @classmethod
-    def fit(cls, values: np.ndarray, dtype, origin=None) -> np.ndarray | None:
+    def fit(cls, values, dtype, origin=None, budget=None) -> np.ndarray | None:
         """
         The one row which reproduces every label exactly, or None.
 
         ``origin`` is a ``(start, step, den)`` to try first: the grid a
-        neighbouring run was found on.
+        neighbouring run was found on, which is the likeliest answer and
+        costs one try. ``budget`` is a mutable list holding how many
+        candidates may still be tried across a whole array, so labels no
+        grid describes cost a bounded search rather than one per run.
         """
         count = len(values)
         wide = np.asarray(values, np.float64)
@@ -654,12 +664,23 @@ class FloatKernel:
                 )
             if math.isfinite(index):
                 tries.append((start, step, den, round(index)))
-        for start, step, den, k0 in dict.fromkeys([*tries, *cls._candidates(wide)]):
+        spent = 0
+        for spent, (start, step, den, k0) in enumerate(
+            dict.fromkeys([*tries, *cls._candidates(wide)])
+        ):
+            if budget is not None and spent >= budget[0]:
+                break
             if abs(k0) + count * abs(den) >= _FLOAT_INDEX_MAX:
                 continue
             row = float_rows(dtype, [start], [count], [step], [den], [k0])
             if cls._reproduces(row, values, dtype):
+                if budget is not None:
+                    # the candidate which answered costs nothing: a run which
+                    # follows is tried on this grid first, and takes one try
+                    budget[0] -= min(spent, 1)
                 return row
+        if budget is not None:
+            budget[0] -= spent + 1
         return None
 
 

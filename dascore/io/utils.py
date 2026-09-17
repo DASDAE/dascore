@@ -303,7 +303,11 @@ def wants_snap(snap, name: str) -> bool:
     """
     if snap is None or isinstance(snap, bool | np.bool_):
         return bool(snap)
-    return name in tuple(iterate(snap))
+    names = tuple(iterate(snap))
+    if not all(isinstance(x, str) for x in names):
+        msg = f"snap is True, False, or the dimensions to snap, not {snap!r}."
+        raise ParameterError(msg)
+    return name in names
 
 
 def snap_stored_coord(coord: BaseCoord, snap, name: str) -> BaseCoord:

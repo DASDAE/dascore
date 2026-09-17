@@ -2547,6 +2547,12 @@ class TestReaderSnapping:
         with dc.config_context(snap_tolerance=0.5):
             assert snap_stored_coord(exact, True, "time").evenly_sampled
 
+    @pytest.mark.parametrize("snap", [1, ("time", 2), object()])
+    def test_a_snap_which_names_nothing_is_refused(self, snap):
+        """``snap`` is True, False, or the dimensions to snap, and says so."""
+        with pytest.raises(ParameterError, match="dimensions to snap"):
+            wants_snap(snap, "time")
+
     def test_only_a_dimension_is_snapped(self, tmp_path):
         """A coordinate along a dimension holds measurements and is left alone."""
         jitter = np.random.default_rng(0).integers(-40, 40, 50)

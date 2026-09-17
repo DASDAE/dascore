@@ -853,7 +853,7 @@ class TestValidationErrors:
 
     def test_grid_construction_errors(self):
         """A grid stated wrongly is refused by name."""
-        with pytest.raises(CoordError, match="must be"):
+        with pytest.raises(CoordError, match="start, stop, and step must be"):
             get_coord(start=0, step=1)
         with pytest.raises(CoordError, match="positive"):
             get_coord(start=0, shape=(3,), step_numerator=1, step_denominator=-2)
@@ -937,7 +937,7 @@ class TestFloatRepresentation:
 
     def test_needs_three_values(self):
         """Fewer than three of start, stop, step, shape is an error."""
-        with pytest.raises(CoordError, match="must be"):
+        with pytest.raises(CoordError, match="start, stop, and step must be"):
             get_coord(start=0.0, step=1.0)
         assert isinstance(get_coord(start=0.0, step=1.0, shape=(2, 3)), CoordPartial)
         from_stop = get_coord(stop=10.0, step=1.0, shape=(10,))
