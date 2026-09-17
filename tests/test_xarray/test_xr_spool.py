@@ -372,6 +372,17 @@ class TestSpoolToXarray:
         )
         np.testing.assert_array_equal(data.values, flipped.data)
 
+    def test_descending_non_dim_coord_without_a_grid(self, random_patch):
+        """A descending coordinate no stored grid describes is sized by envelope."""
+        # float values, so the row states no exact grid to rebuild from
+        # and the envelope is all there is to size the lazy array with
+        values = random_patch.get_coord("distance").values[::-1] * 1.5
+        flipped = random_patch.update_coords(distance=values)
+        leaf = self._leaves(dc.spool([flipped]).io.to_xarray())[0]
+        data = leaf.dataset["data"]
+        np.testing.assert_array_equal(data["distance"].values, values)
+        np.testing.assert_array_equal(data.values, flipped.data)
+
     def test_mixed_dtype_upcasts(self, random_patch):
         """Blocks narrower than the combined dtype upcast at load."""
         coord = random_patch.get_coord("time")

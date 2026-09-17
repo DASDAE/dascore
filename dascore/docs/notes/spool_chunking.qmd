@@ -133,39 +133,42 @@ A size measures the data array alone; coordinates, attrs, and copies made by lat
 
 ## Merged coordinates
 
-Assembly builds the chunked dimension's coordinate by exact concatenation of the member coordinates: contiguous members fuse to a plain evenly sampled range, and every real seam is recorded. When `snap_coords=True` (default) the result is then simplified with **bounded error** — no coordinate value moves more than `tolerance * step`, or more than the tolerance itself when it states the limit in the coordinate's own units. A within-tolerance gap therefore comes back as an evenly sampled range whose worst label error is about half the gap (never more than the tolerance); this is the honest replacement for the old unconditional snap, whose error was unbounded. With `snap_coords=False`, or when accumulated gaps exceed the bound, the coordinate keeps its runs — exactly non-uniform, with every gap queryable.
+Assembly builds the chunked dimension's coordinate by exact concatenation of the member coordinates: contiguous members fuse to one evenly sampled run, and every real seam is recorded. When `snap_coords=True` (default) the result is then fused with **bounded error** — no coordinate value moves more than `tolerance * step`, or more than the tolerance itself when it states the limit in the coordinate's own units — and never at the cost of the sampling step. Fusing therefore absorbs the sub-sample jitter of labels rounded on their way to a file, but a gap the tolerance was wide enough to merge across keeps its hole: its samples are missing, which is not the same as a slower sampling rate. `fill_value` is what writes those samples, and its output is a single run.
 
 ```{python}
 # Contiguous members: exact fuse to a range.
 patch = dc.spool([p1, p2]).chunk(time=None)[0]
 assert patch.get_coord("time").evenly_sampled
 
-# A gap forced together by a loose tolerance warns, and with
-# snap_coords=False the output keeps the exact segmented coordinate.
+# A gap forced together by a loose tolerance warns, and the output keeps
+# the exact segmented coordinate: those samples are absent either way.
 gap_start = time.max() + 3 * time.step
 p_gap = dc.get_example_patch(time_min=gap_start, acquisition_key="XX1.R2D1..RAW")
 with pytest.warns(UserWarning, match="force merging"):
-    forced = dc.spool([p1, p_gap]).chunk(
-        time=None, tolerance=5, snap_coords=False
-    )[0]
+    forced = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5)[0]
 coord = forced.get_coord("time")
 assert coord.runs_count == 2 and coord.holes
 assert len(coord.get_discontinuities("gaps")) == 1
 
-# The default simplifies the same merge to a range with bounded error:
-# every value within tolerance * step of its exact position.
+# snap_coords only ever absorbs sub-sample jitter, so here it changes
+# nothing: no label moves, whether it runs or not.
 with pytest.warns(UserWarning, match="force merging"):
-    snapped = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5)[0]
-snapped_coord = snapped.get_coord("time")
-assert snapped_coord.evenly_sampled
-deviation = abs(snapped_coord.values - coord.values).max()
-assert deviation <= 5 * time.step
+    exact = dc.spool([p1, p_gap]).chunk(
+        time=None, tolerance=5, snap_coords=False
+    )[0]
+assert np.array_equal(exact.get_coord("time").values, coord.values)
 
-# An absolute tolerance -- a quantity, or a timedelta -- bounds the
-# same movement, stated in the coordinate's units rather than in samples.
+# An absolute tolerance -- a quantity, or a timedelta -- spans the same
+# gap, stated in the coordinate's units rather than in samples.
 with pytest.warns(UserWarning, match="force merging"):
     absolute = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5 * time.step)[0]
-assert absolute.get_coord("time") == snapped_coord
+assert absolute.get_coord("time") == coord
+
+# fill_value writes the missing samples, so the merge comes back evenly
+# sampled rather than segmented.
+filled = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5, fill_value=np.nan)[0]
+assert isinstance(filled.get_coord("time"), CoordRange)
+assert np.isnan(filled.data).any()
 ```
 
 Segmented coordinates are an in-memory representation only: a written patch must be contiguous, so saving raises unless `split=True` (or `patch.split_gaps()` is used first) to write each contiguous section as its own patch.

@@ -590,6 +590,30 @@ class TestSimplifyAndSnap:
         with pytest.raises(ParameterError):
             float_gap_coord.fuse(-1.0)
 
+    def test_keep_step_refuses_to_absorb_a_hole(self, float_gap_coord):
+        """With keep_step the missing samples stay missing, tolerance or not."""
+        out = float_gap_coord.fuse(1e6, keep_step=True)
+        assert out.holes
+        assert np.array_equal(out.values, float_gap_coord.values)
+
+    def test_keep_step_still_absorbs_jitter(self):
+        """A seam a fraction of a step off the grid collapses even so."""
+        coord = concat_coords(
+            get_coord(start=0.0, stop=10.0, step=1.0),
+            get_coord(start=10.3, stop=20.3, step=1.0),
+        )
+        out = coord.fuse(0.5, keep_step=True)
+        assert out.evenly_sampled
+        assert np.max(np.abs(out.values - coord.values)) <= 0.5
+
+    def test_keep_step_allows_a_refit_of_disagreeing_steps(self):
+        """Runs stating different steps have no one step to keep."""
+        coord = concat_coords(
+            get_coord(start=0.0, stop=10.0, step=1.0),
+            get_coord(start=10.0, stop=20.2, step=1.02),
+        )
+        assert coord.fuse(0.5, keep_step=True).evenly_sampled
+
     def test_simplify_base_coord_noop(self):
         """Other coords return themselves from fuse."""
         coord = get_coord(start=0.0, stop=10.0, step=1.0)
