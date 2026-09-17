@@ -881,3 +881,59 @@ class TestSelectiveRead:
         for kwargs in ({"time": (10, 20)}, {"distance": (2, 5)}):
             part = dc.read(coordless_path, **kwargs)[0]
             assert part.equals(whole.select(**kwargs))
+
+
+class TestXDASDeclaredTies:
+    """Tie points state grids without interpolation through float epochs."""
+
+    def test_nanosecond_ties_keep_their_grid(self):
+        """Current-epoch timestamps retain the fractional nanosecond cadence."""
+        xr = pytest.importorskip("xarray")
+        start = np.datetime64("2026-09-17", "ns")
+        dataset = xr.Dataset(
+            {
+                "time_values": (
+                    "tie",
+                    [start, start + np.timedelta64(999999999, "ns")],
+                ),
+                "time_indices": ("tie", [0, 49]),
+            }
+        )
+        coord = netcdf_utils._get_tie_point_coord(dataset, "time", 50)
+        expected = start + (np.arange(50) * 999999999 // 49).astype("timedelta64[ns]")
+        np.testing.assert_array_equal(coord.values, expected)
+        assert coord.evenly_sampled
+        assert coord.labels is None
+
+    def test_large_axis_keeps_only_ties(self, monkeypatch):
+        """Decoding a million samples allocates runs instead of sample labels."""
+        xr = pytest.importorskip("xarray")
+        dataset = xr.Dataset(
+            {
+                "distance_values": ("tie", [0.0, 100.0, 400.0]),
+                "distance_indices": ("tie", [0, 500000, 1000000]),
+            }
+        )
+
+        def fail(*args, **kwargs):
+            raise AssertionError("tie points expanded through interpolation")
+
+        monkeypatch.setattr(np, "interp", fail)
+        coord = netcdf_utils._get_tie_point_coord(dataset, "distance", 1000001)
+        assert len(coord) == 1000001
+        assert coord.runs_count == 2 and coord.labels is None
+        np.testing.assert_array_equal(
+            coord.labels_at([0, 500000, 1000000]), [0.0, 100.0, 400.0]
+        )
+
+    def test_values_outside_ties_are_clamped(self):
+        """The runs retain interpolation's constant endpoint extension."""
+        xr = pytest.importorskip("xarray")
+        dataset = xr.Dataset(
+            {
+                "distance_values": ("tie", [10.0, 20.0]),
+                "distance_indices": ("tie", [2, 4]),
+            }
+        )
+        coord = netcdf_utils._get_tie_point_coord(dataset, "distance", 7)
+        np.testing.assert_array_equal(coord.values, [10, 10, 10, 15, 20, 20, 20])

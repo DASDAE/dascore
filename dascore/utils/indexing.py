@@ -10,7 +10,7 @@ from typing import Any, Literal
 import numpy as np
 import pandas as pd
 
-from dascore.core.coords import BaseCoord, CoordRange, CoordSegmented
+from dascore.core.coords import BaseCoord, NumericND
 from dascore.utils.time import dtype_time_like, to_timedelta64
 
 
@@ -100,7 +100,7 @@ def _range_searchsorted(coord, bounds, side):
             positions = size - 1 - positions
         return coord._get_index_values(positions)
 
-    if bounds.dtype.kind in "iufmM" and isinstance(coord, CoordRange) and coord.step:
+    if bounds.dtype.kind in "iufmM" and _is_grid(coord) and coord.step:
         # Reuse select's arithmetic lookup, but verify its bracket against
         # actual labels: grid rounding may move an estimate by a sample.
         estimate = _range_estimate(coord, bounds)
@@ -174,10 +174,15 @@ def _exact_range_indexer(coord, labels):
     return positions
 
 
+def _is_grid(coord) -> bool:
+    """Whether the coordinate is one evenly sampled grid, held compactly."""
+    return isinstance(coord, NumericND) and coord.evenly_sampled
+
+
 def _label_index(coord, probes, require_unique=False):
     """Use stored labels or query-sized samples; never expand a compact grid."""
     # a segmented coordinate is searched like a range, run by run
-    if not isinstance(coord, CoordRange | CoordSegmented):
+    if not (isinstance(coord, NumericND) and (coord.sorted or coord.reverse_sorted)):
         return pd.Index(coord.values), None
     size = len(coord)
     positions = np.unique([0, min(1, size - 1), max(0, size - 2), size - 1])
@@ -186,7 +191,7 @@ def _label_index(coord, probes, require_unique=False):
         # pandas needs every label unique, not just those near the probes;
         # array segments are strictly monotonic, so only ranges can repeat
         for part in getattr(coord, "segments", (coord,)):
-            if isinstance(part, CoordRange):
+            if _is_grid(part):
                 _require_unique_range(part)
     pieces = [positions]
     values = np.asarray(probes)
@@ -250,7 +255,7 @@ def _same_kind(coord, labels) -> bool:
 
 def _exact_slice(coord, start, stop, step) -> slice | None:
     """A label slice on an ascending integer grid, or None to ask pandas."""
-    ascending = isinstance(coord, CoordRange) and coord._exact
+    ascending = _is_grid(coord) and coord._exact
     if not (ascending and coord.step_numerator > 0):
         return None
     # np.timedelta64 subclasses np.integer, so a duration step is refused here
@@ -321,7 +326,7 @@ def label_indexer(
         else:
             tolerance = compatible(tolerance)
     if (
-        isinstance(coord, CoordRange)
+        _is_grid(coord)
         # a scalar only on an integer grid whose labels cannot repeat
         and (labels.ndim == 1 or (labels.ndim == 0 and _unique_grid(coord)))
         and method is None

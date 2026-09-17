@@ -14,7 +14,7 @@ import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidSpoolError, PatchError
-from dascore.io.utils import convert_attr_units, get_exact_coord, resolve_keyed_source
+from dascore.io.utils import convert_attr_units, get_snapped_coord, resolve_keyed_source
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.units import get_quantity_str
 from dascore.utils.hdf5 import encode_h5_strings
@@ -162,7 +162,7 @@ def _get_time_coord(node, snap=True):
     assert array_len > 0, "Missing time array in ProdML file."
     if not snap:
         values = time_array[:].astype("datetime64[us]")
-        return get_exact_coord(values, units="s")
+        return get_coord(data=np.atleast_1d(values), units="s")
     time_attrs = time_array.attrs
     start_str = unbyte(time_attrs["PartStartTime"]).split("+")[0]
     start = dc.to_datetime64(start_str.rstrip("Z"))
@@ -181,7 +181,7 @@ def _get_time_coord(node, snap=True):
     # correct time coordinate from time array if the values are "close" but off.
     if 0 < diff < 10:
         time_array = time_array[:].astype("datetime64[us]")
-        time_coord = get_coord(data=time_array)
+        time_coord = get_snapped_coord(time_array)
     return time_coord
 
 

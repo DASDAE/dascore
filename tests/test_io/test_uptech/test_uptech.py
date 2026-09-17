@@ -114,6 +114,18 @@ class TestRead:
         """Jittered float64 timestamps still yield an evenly sampled coord."""
         assert real_patch.get_coord("time").evenly_sampled
 
+    def test_exact_scan_and_read_preserve_timestamps(self):
+        """The explicit exact mode preserves all converted acquisition stamps."""
+        path = fetch("uptech_as1000_1.hdf5")
+        with h5py.File(path) as resource:
+            expected = dc.to_datetime64(resource["Acquisition/Time"][:])
+        reader = UptechH5V1()
+        read = reader.read(path, snap=False)[0].get_coord("time")
+        scanned = reader.scan(path, snap=False)[0]["coords"].get_coord("time")
+        assert not read.evenly_sampled
+        np.testing.assert_array_equal(read.values, expected)
+        np.testing.assert_array_equal(scanned.values, expected)
+
 
 class TestScan:
     """Tests for scanning Uptech files."""

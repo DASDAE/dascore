@@ -19,7 +19,6 @@ import pytest
 import dascore as dc
 import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
-from dascore.core.coords import CoordRange, CoordSegmented
 from dascore.exceptions import ChunkError, CoordMergeError, ParameterError, UnitError
 from dascore.io.febus.core import FebusPatchAttrs
 from dascore.units import get_quantity
@@ -889,10 +888,13 @@ class TestMixedUnitChunk:
         """The example patch shifted to be distance-contiguous, in units."""
         d = patch.get_coord("distance")
         span = d.max() - d.min() + d.step
-        values = d.data + span
-        if units == "ft":
-            values = values / 0.3048
-        out = patch.update_coords(distance=values)
+        scale = 0.3048 if units == "ft" else 1.0
+        coord = dc.get_coord(
+            start=float(d.min() + span) / scale,
+            step=float(d.step) / scale,
+            shape=d.shape,
+        )
+        out = patch.update_coords(distance=coord)
         return out.set_units(distance=units) if units else out
 
     def test_incompatible_dimensionality_splits(self):
@@ -934,10 +936,7 @@ class TestMixedUnitChunk:
         them natively (adversarial round, D1).
         """
         pm = dc.get_example_patch().set_units(distance="m")
-        d = pm.get_coord("distance")
-        span = float(d.max() - d.min() + d.step)
-        values = (d.data + span) / 0.3048
-        pf = pm.update_coords(distance=values).set_units(distance="ft")
+        pf = self._shifted(pm, "ft")
         sp = dc.spool([pm, pf])
         out = sp.chunk(distance=200, conflict="keep_first", keep_partial=True)
         n = pm.shape[pm.get_axis("distance")]
@@ -948,10 +947,8 @@ class TestMixedUnitChunk:
     def _continuous_mixed_spool():
         """Metre and feet patches covering one continuous 600 m span."""
         pm = dc.get_example_patch().set_units(distance="m")
-        d = pm.get_coord("distance")
-        span = float(d.max() - d.min() + d.step)
-        pf = pm.update_coords(distance=(d.data + span) / 0.3048)
-        return dc.spool([pm, pf.set_units(distance="ft")])
+        pf = TestMixedUnitChunk._shifted(pm, "ft")
+        return dc.spool([pm, pf])
 
     def test_single_member_output_speaks_plan_units(self):
         """An output the merge never visits still matches its plan row.
@@ -1498,8 +1495,8 @@ class TestQuantityTolerance:
         snapped_coord, exact_coord = (x.get_coord("time") for x in (snapped, exact))
         # the hole is wide enough that a looser bound would show: the
         # exact coordinate keeps the seam, the snapped one does not
-        assert isinstance(exact_coord, CoordSegmented)
-        assert isinstance(snapped_coord, CoordRange)
+        assert exact_coord.runs_count > 1
+        assert snapped_coord.evenly_sampled
         deviation = abs(snapped_coord.values - exact_coord.values).max()
         assert deviation <= 41 * step
 

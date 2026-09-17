@@ -7,8 +7,9 @@ import numpy as np
 import dascore as dc
 from dascore import get_coord_manager
 from dascore.constants import timeable_types
+from dascore.core.coords import get_coord
 from dascore.io.core import make_scan_payload
-from dascore.io.utils import drop_blank_attrs, get_exact_coord, get_gridded_coord
+from dascore.io.utils import drop_blank_attrs, get_gridded_coord, get_snapped_coord
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.misc import maybe_get_items
 
@@ -36,7 +37,7 @@ def _get_distance_coord(fi, snap=True):
     dist = fi["Data/Distance"][()]
     if snap:
         return get_gridded_coord(dist, units="m")
-    return get_exact_coord(dist, units="m")
+    return get_coord(data=np.atleast_1d(dist), units="m")
 
 
 def _get_time_coord(fi, snap=True):
@@ -44,8 +45,8 @@ def _get_time_coord(fi, snap=True):
     ts = fi["Data/Time"][()].squeeze()
     times = (ts * 1e9).astype("datetime64[ns]")
     if snap:
-        return dc.get_coord(values=times, units="s")
-    return get_exact_coord(times, units="s")
+        return get_snapped_coord(np.atleast_1d(times), units="s")
+    return get_coord(data=np.atleast_1d(times), units="s")
 
 
 def _get_coords(fi, snap=True) -> dc.CoordManager:

@@ -9,7 +9,8 @@ from pathlib import Path
 import numpy as np
 
 import dascore as dc
-from dascore.io.utils import get_exact_coord, get_gridded_coord
+from dascore.core.coords import get_coord
+from dascore.io.utils import get_gridded_coord, get_snapped_coord
 from dascore.utils.misc import maybe_get_items, unbyte
 
 _G1_H5_BASE_DATASETS = frozenset(
@@ -183,13 +184,6 @@ def _get_g1_h5_version(resource, required_datasets, required_attrs) -> str | boo
 
 def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
     """Return time/distance coords shared by G1 HDF5 files."""
-
-    def _coord(values, units=None):
-        """Return a tolerant or exact coordinate from stored values."""
-        if snap:
-            return dc.get_coord(data=values, units=units)
-        return get_exact_coord(values, units=units)
-
     extra_coords = {} if extra_coords is None else extra_coords
     starts = resource["start_times"][...]
     ends = resource["end_times"][...]
@@ -199,24 +193,26 @@ def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
             f"{ends.shape}; the file is truncated or still being written."
         )
         raise ValueError(msg)
-    time = _coord(dc.to_datetime64(starts))
+    time_values = np.atleast_1d(dc.to_datetime64(starts))
+    time = get_snapped_coord(time_values) if snap else get_coord(data=time_values)
     # Each sample covers a window rather than being instantaneous, so keep how
     # long it ran. The span is differenced off the raw arrays rather than
     # stored as end_times: starts and ends are each near-regular and snap to
     # slightly different steps, so subtracting the two built coords would turn
     # the jitter into a linear drift. Built exactly, and ignoring `snap`,
     # because that jitter is the signal.
-    sample_span = get_exact_coord(dc.to_timedelta64(ends - starts))
+    sample_span = get_coord(data=np.atleast_1d(dc.to_timedelta64(ends - starts)))
     # The interrogator fixes the spatial sampling, so the stored distances
-    # only restate a grid, quantized to float32. That quantization can exceed
-    # the tolerance get_coord uses to recognize an even coordinate, leaving a
-    # monotonic coord with no step, so put it back on the grid it restates.
+    # only restate a grid, quantized to float32. Explicitly restore that
+    # declared sampling instead of asking the exact array factory to fit it.
     distances = resource["distances"][...]
     if snap:
         distance = get_gridded_coord(distances, units="m")
     else:
-        distance = get_exact_coord(distances, units="m")
-    temperature = _coord(resource["temperatures"][...], units="°C")
+        distance = get_coord(data=np.atleast_1d(distances), units="m")
+    temperature = get_coord(
+        data=np.atleast_1d(resource["temperatures"][...]), units="°C"
+    )
     coords = {
         "time": time,
         "distance": distance,

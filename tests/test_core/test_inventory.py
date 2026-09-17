@@ -19,6 +19,7 @@ from dascore.config import config_context
 from dascore.constants import INVENTORY_ATTRS
 from dascore.core import Inventory
 from dascore.core import inventory as inv
+from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidInventoryError
 from dascore.models import InventoryModel, values_equal
 from dascore.utils.mapping import FrozenDict
@@ -1870,6 +1871,22 @@ class TestCoverageCompleteness:
         assert values_equal(np.array([1.0, np.nan]), np.array([1.0, np.nan]))
         assert not values_equal({"a": 1}, {"b": 1})
         assert values_equal((1.0, np.nan), (1.0, np.nan))
+
+    def test_whole_numbers_compare_exactly(self):
+        """A run hash or a tick count has no tolerance to be equal within."""
+        hashes = np.array([14416980811919236065], dtype=np.uint64)
+        assert values_equal(hashes, hashes)
+        assert not values_equal(hashes, hashes + 10**12)
+        stops = np.array([10**18, 2 * 10**18], dtype=np.int64)
+        assert not values_equal(stops, stops + 1)
+
+    def test_a_run_table_equals_itself(self):
+        """A null start is the label a run of NaNs begins with, not a mismatch."""
+        summary = get_coord(data=np.array([np.nan, 1.0, 2.0])).to_summary()
+        assert summary == summary.model_copy()
+        assert hash(summary) == hash(summary.model_copy())
+        other = get_coord(data=np.array([np.nan, 1.0, 3.0])).to_summary()
+        assert summary != other
 
 
 @pytest.fixture(scope="module")

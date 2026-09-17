@@ -20,6 +20,7 @@ import re
 import warnings
 from collections.abc import Hashable
 from dataclasses import dataclass, field, fields, replace
+from fractions import Fraction
 from typing import SupportsInt, TypedDict, cast
 
 import numpy as np
@@ -78,13 +79,14 @@ class _CommonCoordFields(TypedDict):
     coord_hash: str | None
 
 
-class _ExactFields(TypedDict):
-    """The CoordRecord fields describing a range's grid (ty needs the shape)."""
+class _GridFields(TypedDict):
+    """The CoordRecord fields describing one run's grid (ty needs the shape)."""
 
     is_exact: bool
-    step_numerator: int | None
-    step_denominator: int | None
-    origin_offset: int | None
+    num: int | None
+    den: int | None
+    offset: int | None
+    run_hash: int | None
 
 
 @dataclass(frozen=True)
@@ -107,9 +109,13 @@ class CoordRecord:
     min_str: str | None = None
     max_str: str | None = None
     is_relative: bool | None = None
-    step_numerator: int | None = None
-    step_denominator: int | None = None
-    origin_offset: int | None = None
+    # The run's grid in ticks, as `NumericND` states it; a stored run has
+    # den 0, and a row for a whole multi-run coordinate states no grid.
+    num: int | None = None
+    den: int | None = None
+    offset: int | None = None
+    # This one run's 64 bit hash, or the coordinate's when it is one run.
+    run_hash: int | None = None
     coord_hash: str | None = None
     # 0 for the coordinate as a whole, n for its nth run (a link field)
     run_index: int = 0
@@ -439,7 +445,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
     fingerprint = getattr(summary, "fingerprint", None)
     if fingerprint is None and getattr(summary, "is_range_like", False):
         # A range summary contains its complete representation, so recover the
-        # same exact identity a loaded CoordRange would have produced.
+        # same exact identity a loaded range coordinate would have produced.
         fingerprint = summary.to_coord().fingerprint()
     # Stringify the pint Quantity once (a Quantity-keyed cache is unsafe —
     # 1 m == 100 cm with equal hashes but different strings). This is the
@@ -458,14 +464,11 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
     dtype = np.dtype(summary.dtype) if summary.dtype else None
     if dtype is None:
         return None  # nothing to record: not even a dtype was stated
-    # A range's row rebuilds every value, and its grid comes along so a
-    # fractional step rebuilds the same labels the file holds.
-    exact = _ExactFields(
-        is_exact=getattr(summary, "is_range_like", False),
-        step_numerator=getattr(summary, "step_numerator", None),
-        step_denominator=getattr(summary, "step_denominator", None),
-        origin_offset=getattr(summary, "origin_offset", None),
-    )
+    # A coordinate of one run states that run's grid on its own row, and
+    # so rebuilds every value the file holds, fractional step and all. A
+    # coordinate of several states its grid run by run instead, on the
+    # rows `_run_records` builds, and this row is only their envelope.
+    exact = _grid_fields(summary)
     if dtype.kind in "mM":  # datetime64 ("M") / timedelta64 ("m")
         is_datetime = dtype.kind == "M"
         convert = to_datetime64 if is_datetime else to_timedelta64
@@ -508,6 +511,122 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
     return CoordRecord(value_kind="num", **common)
 
 
+def _signed_hash(value) -> int:
+    """A run's unsigned 64 bit hash as the int64 the index stores."""
+    return int(np.asarray(value, dtype=np.uint64).astype(np.int64, casting="unsafe"))
+
+
+def _grid_fields(summary) -> _GridFields:
+    """
+    The grid a summary's row states: its one run's, or none at all.
+
+    A coordinate held as several runs states each run's grid on its own
+    row (see `_run_records`), so the row for the coordinate as a whole is
+    left an envelope; a coordinate of one run is that run, and carries its
+    grid and hash here.
+    """
+    blank = _GridFields(is_exact=False, num=None, den=None, offset=None, run_hash=None)
+    runs = getattr(summary, "runs", None)
+    if runs is None:
+        # An envelope which states a step rebuilds a range, as it always
+        # has; it simply states no table to rebuild anything finer from.
+        exact = bool(getattr(summary, "is_range_like", False))
+        return _GridFields(**{**blank, "is_exact": exact})
+    if len(runs) != 1:
+        return blank
+    row = runs[0]
+    hashes = getattr(summary, "run_hashes", None)
+    return _GridFields(
+        # a stored run keeps its labels in the source, so the row alone
+        # states the run but cannot rebuild it
+        is_exact=bool(row["den"]),
+        num=int(row["num"]),
+        den=int(row["den"]),
+        offset=int(row["offset"]),
+        run_hash=None if hashes is None else _signed_hash(hashes[0]),
+    )
+
+
+def _run_step(num: int, den: int, ticked: bool):
+    """One run's spacing as the envelope's scalar, or None where it has none."""
+    if den == 0:  # a stored run declares no spacing of its own
+        return None
+    fraction = Fraction(num, den)
+    # A coordinate counted in whole ticks -- a time or an integer -- states
+    # the tick its grid rounds to, exactly as a summary's scalar step does,
+    # and the exact terms beside it in `num`/`den`.
+    return round(fraction) if ticked else float(fraction)
+
+
+def _run_records(whole: CoordRecord, summary) -> tuple[CoordRecord, ...]:
+    """
+    One record per run of a coordinate held as more than one.
+
+    A coordinate of a single run is already described by its own row, so
+    it is linked to no runs and an archive of contiguous patches keeps an
+    empty run index. Each run's envelope comes from the table -- its start
+    and its stop, whichever way round the run reads -- so nothing here has
+    to rebuild the coordinate, which a stored run's absent labels would
+    not allow anyway.
+    """
+    runs = getattr(summary, "runs", None)
+    if runs is None or len(runs) < 2 or whole.value_kind == "str":
+        return ()
+    stops = getattr(summary, "run_stops", None)
+    hashes = getattr(summary, "run_hashes", None)
+    if stops is None:
+        return ()
+    is_time = whole.value_kind == "time"
+    # Which columns the envelope goes in follows the value kind; how the
+    # spacing is spelled follows the dtype, since an integer coordinate is
+    # counted in whole ticks but stored in the numeric columns.
+    ticked = bool(whole.dtype) and np.dtype(whole.dtype).kind in "iuMm"
+    out = []
+    for index, row in enumerate(runs):
+        num, den, stop = int(row["num"]), int(row["den"]), stops[index]
+        start = row["start"]
+        low, high = (start, stop) if start <= stop else (stop, start)
+        step = _run_step(num, den, ticked)
+        bounds: dict = dict(
+            min_int=None,
+            max_int=None,
+            step_int=None,
+            min_float=None,
+            max_float=None,
+            step_float=None,
+        )
+        if is_time:
+            bounds.update(
+                min_int=int(low),
+                max_int=int(high),
+                step_int=None if step is None else int(step),
+            )
+        else:
+            bounds.update(
+                min_float=float(low),
+                max_float=float(high),
+                step_float=None if step is None else float(step),
+            )
+        out.append(
+            replace(
+                whole,
+                run_index=index + 1,
+                length=int(row["length"]),
+                is_exact=bool(den),
+                num=num,
+                den=den,
+                offset=int(row["offset"]),
+                run_hash=None if hashes is None else _signed_hash(hashes[index]),
+                # The run's identity is `run_hash`; the coordinate
+                # fingerprint belongs to the whole coordinate alone, and a
+                # run claiming it would name values it does not hold.
+                coord_hash=None,
+                **bounds,
+            )
+        )
+    return tuple(out)
+
+
 def _envelope(coords: tuple[CoordRecord, ...], name: str, kind: str):
     """Pull the (min, max, step) envelope for one coord if present."""
     for rec in coords:
@@ -526,10 +645,9 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
     for name, csum in summary.coords.items():
         if (rec := _coord_record(name, csum)) is not None:
             coords.append(rec)
-            # a segmented coordinate's runs follow it, numbered from one
-            for index, run in enumerate(csum.runs or (), start=1):
-                if (part := _coord_record(name, run)) is not None:
-                    coords.append(replace(part, run_index=index))
+            # a coordinate of several runs is followed by them, numbered
+            # from one, so the index sees the holes inside the patch
+            coords.extend(_run_records(rec, csum))
     coords = tuple(coords)
     time_min, time_max, time_step = _envelope(coords, "time", "time")
     dist_min, dist_max, dist_step = _envelope(coords, "distance", "num")

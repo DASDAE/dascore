@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
-from typing import Literal
+import math
+from fractions import Fraction
+from typing import Any, Literal
 
 import numpy as np
 
 import dascore as dc
 import dascore.compat as compat
 from dascore.constants import PatchType
+from dascore.core.coords import NumericND
 from dascore.exceptions import FilterValueError, ParameterError
 from dascore.units import get_filter_units
 from dascore.utils.imports import lazy_import
@@ -190,17 +193,18 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     dim, axis, samples = get_dim_axis_value(patch, kwargs=kwargs)[0]
     if samples is None:
         coord = patch.coords.coord_map[dim]
-        samples = coord.snap().values
+        coord_new = coord.snap()
+    else:
+        coord_new = dc.core.get_coord(data=samples)
     # interp1d does not support datetime64.
     coord_num = to_int(patch.coords.get_array(dim))
-    samples_num = to_int(samples)
+    samples_num = to_int(coord_new.values)
     func = compat.interp1d(
         coord_num, patch.data, axis=axis, kind=kind, fill_value="extrapolate"
     )
     out = func(samples_num)
     cm = patch.coords
     associated_dims = cm.dim_map[dim]
-    coord_new = dc.core.get_coord(data=samples)
     updates = {dim: (associated_dims, coord_new)}
     updates |= _interpolate_associated(cm, dim, coord_num, samples_num, kind)
     cm_new = cm._update_grid(dim, **updates)
@@ -297,8 +301,28 @@ def resample(
     else:
         new_len = value
     # do the resampling
-    data, new_coord = compat.resample(
-        patch.data, int(np.round(new_len)), t=coord, axis=axis, window=window
+    count = int(np.round(new_len))
+    data = compat.resample(patch.data, count, axis=axis, window=window)
+    assert isinstance(coord, NumericND) and coord.step_exact is not None
+    actual_step = coord.step_exact * Fraction(len(coord), count)
+    temporal = dtype_time_like(coord.dtype)
+    grid: dict[str, Any]
+    if temporal:
+        _, den, phase = coord._grid_terms
+        ticks = actual_step * 1_000_000_000
+        common = math.lcm(ticks.denominator, den)
+        grid = dict(
+            step_numerator=ticks.numerator * (common // ticks.denominator),
+            step_denominator=common,
+            origin_offset=phase * (common // den),
+        )
+    else:
+        grid = dict(step=float(actual_step))
+    new_coord = dc.get_coord(
+        start=coord[0] if temporal else float(coord[0]),
+        shape=(count,),
+        units=coord.units,
+        **grid,
     )
     cm = drop_associated_coords(patch.coords, dim, "Resampling")
     cm = cm._update_grid(dim, **{dim: new_coord})
@@ -306,6 +330,8 @@ def resample(
     # Interpolate if new sampling rate is not very close to desired sampling rate.
     if not samples and not np.isclose(new_len, np.round(new_len)):
         start, stop, step = get_start_stop_step(out, dim)
-        new_coord = np.arange(start, stop, new_step)
+        new_coord = dc.get_coord(
+            start=start, stop=stop, step=new_step, units=coord.units
+        )
         out = interpolate(out, kind=interp_kind, **{dim: new_coord})
     return out

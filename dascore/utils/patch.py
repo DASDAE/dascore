@@ -50,7 +50,7 @@ from dascore.utils.attrs import (
     combine_patch_attrs,
     warn_if_histories_differ,
 )
-from dascore.utils.coordmanager import merge_coord_managers
+from dascore.utils.coordmanager import _concat_numeric_coords, merge_coord_managers
 from dascore.utils.deprecate import deprecate
 from dascore.utils.docs import compose_docstring
 from dascore.utils.gaps import GapTolerance
@@ -1788,10 +1788,11 @@ def _concatenate_group(
             members = [
                 x if x.units is None else x.convert_units(units) for x in members
             ]
-        values = np.concatenate(_joinable(members, dim), axis=0)
-        coords = first.coords.update(
-            **{dim: dc.core.coords.get_coord(data=values, units=units)}
-        )
+        joined = _concat_numeric_coords(members, units=units)
+        if joined is None:
+            values = np.concatenate(_joinable(members, dim), axis=0)
+            joined = dc.core.coords.get_coord(data=values, units=units)
+        coords = first.coords.update(**{dim: joined})
         # coordinates riding the dimension which every member states the
         # same way join along it too; resizing the dimension drops them
         riders = {}
@@ -1821,8 +1822,11 @@ def _concatenate_group(
             rider_axis = cdims.index(dim)
             # a rider joins the same way its dimension does: a member which
             # states nothing takes the kind of the members which do
-            joined = np.concatenate(_joinable(members, dim), axis=rider_axis)
-            riders[name] = (cdims, dc.core.coords.get_coord(data=joined, units=units))
+            joined = _concat_numeric_coords(members, units=units)
+            if joined is None:
+                values = np.concatenate(_joinable(members, dim), axis=rider_axis)
+                joined = dc.core.coords.get_coord(data=values, units=units)
+            riders[name] = (cdims, joined)
         if riders:
             coords = coords.update(**riders)
     warn_if_histories_differ([x.attrs for x in patches], "Concatenating")

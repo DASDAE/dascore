@@ -2859,12 +2859,12 @@ class TestChannelSelectEdges:
         """
         Which channels match is decided on the sample grid.
 
-        A patch with a hole in its distance coordinate records no
-        spacing, so the grid cannot be rebuilt; trimming the wrong
+        A patch with a hole in its distance coordinate has no contiguous
+        grid, even when its runs share a spacing; trimming the wrong
         channels quietly is worse than saying so.
         """
         holed = patch.unselect(distance=(50, 200))
-        assert holed.get_coord("distance").step is None
+        assert holed.get_coord("distance").holes
         spool = dc.spool(holed).attach_inventory(inventory)
         with pytest.raises(PatchError, match="no channel spacing"):
             spool.select(coupling="trench")
@@ -3429,17 +3429,17 @@ class TestChannelSelectContracts:
         """
         Index-reconstructed grids select the same channels as patch grids.
 
-        Compare counts and positions: trimmed CoordRanges regenerate values from a new
+        Compare counts and positions: trimmed ranges regenerate values from a new
         start and may differ by an ulp.
         """
-        distance = start + np.arange(size) * step
+        distance = dc.get_coord(start=start, step=step, shape=(size,))
         span = float(distance.max() - distance.min())
         patch, inventory = _float_grid_pair(distance, span)
         spool = dc.spool(patch).attach_inventory(inventory)
         selected = spool.select(zone="mid")
         got = np.concatenate([x.get_array("distance") for x in selected])
         projected = patch.enrich(inventory, coords=("zone",), attrs=False)
-        wanted = distance[projected.get_array("zone") == "mid"]
+        wanted = distance.values[projected.get_array("zone") == "mid"]
         assert len(wanted)  # the group really does cover part of this fiber
         assert len(got) == len(wanted)
         assert np.allclose(np.sort(got), np.sort(wanted), rtol=0, atol=1e-9)

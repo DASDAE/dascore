@@ -11,10 +11,8 @@ import pytest
 
 import dascore as dc
 from dascore.core.coords import (
-    CoordMonotonicArray,
-    CoordRange,
-    CoordSegmented,
     Missing,
+    NumericND,
     concat_coords,
     get_coord,
 )
@@ -39,9 +37,9 @@ class TestDeclaredStep:
 
     def test_runs_of_the_step(self, design_case):
         """Consecutive positions become ranges, singletons included."""
-        assert isinstance(design_case, CoordSegmented)
+        assert design_case.runs_count > 1
         assert design_case.segment_count == 3
-        assert all(isinstance(x, CoordRange) for x in design_case.segments)
+        assert all(x.evenly_sampled for x in design_case.segments)
         assert [len(x) for x in design_case.segments] == [1, 2, 3]
         assert design_case.step == 1
         np.testing.assert_array_equal(design_case.values, PRESENT)
@@ -49,7 +47,7 @@ class TestDeclaredStep:
     def test_no_step_makes_no_claim(self):
         """Without a step the same values are one monotonic array."""
         coord = get_coord(data=PRESENT)
-        assert isinstance(coord, CoordMonotonicArray)
+        assert not coord.evenly_sampled and (coord.sorted or coord.reverse_sorted)
         assert coord.step is None
 
     def test_off_grid_raises(self):
@@ -71,7 +69,7 @@ class TestDeclaredStep:
     def test_full_grid_is_a_range(self):
         """Values filling their grid come back as the range they are."""
         coord = get_coord(data=np.arange(10) * 0.1, step=0.1)
-        assert isinstance(coord, CoordRange)
+        assert coord.evenly_sampled
         assert coord.step == 0.1
 
     def test_float_grid(self):
@@ -90,7 +88,7 @@ class TestDeclaredStep:
         missing = coord.missing()
         assert list(missing.iter_runs()) == [(9, 5), (2, 2)]
         np.testing.assert_array_equal(missing.positions(), [9, 8, 7, 6, 5, 2])
-        dense = CoordMonotonicArray(values=np.array([9, 6, 5, 1]), step=1)
+        dense = NumericND.from_array(np.array([9, 6, 5, 1]), step=1, detect=False)
         assert list(dense.missing().iter_runs()) == [(8, 7), (4, 2)]
 
     def test_time_grid(self):
@@ -114,8 +112,10 @@ class TestDeclaredStep:
         dense = np.arange(3000)[np.arange(3000) % 3 != 2]
         as_runs = get_coord(data=sparse, step=1)
         as_array = get_coord(data=dense, step=1)
-        assert isinstance(as_runs, CoordSegmented)
-        assert isinstance(as_array, CoordMonotonicArray)
+        assert as_runs.runs_count > 1
+        assert not as_array.evenly_sampled and (
+            as_array.sorted or as_array.reverse_sorted
+        )
         assert as_array.step == 1
         # the trailing removed position lies past the last sample
         assert as_runs.missing().count == 99
@@ -129,11 +129,11 @@ class TestDeclaredStep:
 
     def test_direct_array_checks_the_grid(self):
         """Constructing an array coordinate with a step checks its values."""
-        assert CoordMonotonicArray(values=np.array([0, 2, 5]), step=1).step == 1
+        assert NumericND.from_array(np.array([0, 2, 5]), step=1, detect=False).step == 1
         with pytest.raises(ValueError, match="not on a grid"):
-            CoordMonotonicArray(values=np.array([0, 2, 5.5]), step=1)
+            NumericND.from_array(np.array([0, 2, 5.5]), step=1, detect=False)
         with pytest.raises(ValueError, match="monotonic"):
-            CoordMonotonicArray(values=np.array([[0, 1], [2, 3]]), step=1)
+            NumericND.from_array(np.array([[0, 1], [2, 3]]), step=1, detect=False)
 
     def test_range_values_update_drops_the_step(self):
         """New values on a range state their own grid, not the range's."""
@@ -162,33 +162,41 @@ class TestFusion:
 
     def test_undeclared_arrays_fuse(self):
         """Arrays without a step carry no expectation and fuse as before."""
-        left = CoordMonotonicArray(values=np.array([0.0, 1.0, 2.5]))
-        right = CoordMonotonicArray(values=np.array([9.0, 9.7, 11.0]))
+        left = NumericND.from_array(np.array([0.0, 1.0, 2.5]), detect=False)
+        right = NumericND.from_array(np.array([9.0, 9.7, 11.0]), detect=False)
         coord = concat_coords(left, right)
-        assert isinstance(coord, CoordMonotonicArray)
+        assert not coord.evenly_sampled and (coord.sorted or coord.reverse_sorted)
 
     def test_declared_arrays_fuse_across_one_step(self):
         """Arrays on one grid meeting one step apart are one array."""
-        left = CoordMonotonicArray(values=np.array([0, 2, 3]), step=1)
-        right = CoordMonotonicArray(values=np.array([4, 7, 9]), step=1)
+        left = NumericND.from_array(np.array([0, 2, 3]), step=1, detect=False)
+        right = NumericND.from_array(np.array([4, 7, 9]), step=1, detect=False)
         coord = concat_coords(left, right)
-        assert isinstance(coord, CoordMonotonicArray)
+        assert not coord.evenly_sampled and (coord.sorted or coord.reverse_sorted)
         assert coord.step == 1
 
     def test_declared_arrays_keep_a_gap(self):
-        """A seam wider than a step stays a seam."""
-        left = CoordMonotonicArray(values=np.array([0, 2, 3]), step=1)
-        right = CoordMonotonicArray(values=np.array([6, 9, 11]), step=1)
+        """A seam wider than a step stays a seam.
+
+        Labels are labels, so the two runs are held as one; what the seam
+        states is the positions the grid has no sample at, and that is
+        exactly what survives.
+        """
+        left = NumericND.from_array(np.array([0, 2, 3]), step=1, detect=False)
+        right = NumericND.from_array(np.array([6, 9, 11]), step=1, detect=False)
         coord = concat_coords(left, right)
-        assert isinstance(coord, CoordSegmented)
         assert coord.step == 1
         assert coord.missing().count == 6
+        assert 6 in set(coord.get_discontinuities("gaps")["after"])
 
     def test_one_declared_one_not_keeps_the_seam(self):
         """An expectation on one side is not shared by the other."""
-        left = CoordMonotonicArray(values=np.array([0.0, 2.0, 3.0]), step=1.0)
-        right = CoordMonotonicArray(values=np.array([4.0, 7.5, 9.0]))
-        assert isinstance(concat_coords(left, right), CoordSegmented)
+        left = NumericND.from_array(np.array([0.0, 2.0, 3.0]), step=1.0, detect=False)
+        right = NumericND.from_array(np.array([4.0, 7.5, 9.0]), detect=False)
+        coord = concat_coords(left, right)
+        assert coord.step is None
+        with pytest.raises(CoordError, match="declared step"):
+            coord.missing()
 
 
 class TestMissing:
@@ -223,7 +231,7 @@ class TestMissing:
 
     def test_array_holes(self):
         """A dense array with a step reports its holes from the spacings."""
-        coord = CoordMonotonicArray(values=np.array([0, 1, 5, 6, 9]), step=1)
+        coord = NumericND.from_array(np.array([0, 1, 5, 6, 9]), step=1, detect=False)
         missing = coord.missing()
         assert list(missing.iter_runs()) == [(2, 4), (7, 8)]
         np.testing.assert_array_equal(missing.positions(), [2, 3, 4, 7, 8])
@@ -231,11 +239,9 @@ class TestMissing:
     def test_both_sides_of_the_guard_agree(self):
         """Runs and the guarded array answer missing the same way."""
         values = np.arange(3000)[np.arange(3000) % 3 != 2]
-        runs = CoordSegmented.from_array(values[values < 300], step=1)
-        array = CoordSegmented.from_array(values, step=1)
-        assert isinstance(runs, CoordSegmented) and isinstance(
-            array, CoordMonotonicArray
-        )
+        runs = NumericND.from_array(values[values < 300], step=1)
+        array = NumericND.from_array(values, step=1)
+        assert runs.runs_count > 1 and array.runs_count == 1
         assert (
             list(runs.missing().iter_runs()) == list(array.missing().iter_runs())[:99]
         )
@@ -246,7 +252,7 @@ class TestDiscontinuities:
 
     def test_array_seams_against_declared_step(self):
         """Every spacing off the declared step is a discontinuity."""
-        coord = CoordMonotonicArray(values=np.array([0, 1, 5, 6, 9]), step=1)
+        coord = NumericND.from_array(np.array([0, 1, 5, 6, 9]), step=1, detect=False)
         seams = coord.get_discontinuities()
         assert seams["index"].tolist() == [2, 4]
         assert seams["excess"].tolist() == [3, 2]
@@ -254,7 +260,7 @@ class TestDiscontinuities:
 
     def test_array_seams_against_median(self):
         """Without a step the median spacing is the expectation."""
-        coord = CoordMonotonicArray(values=np.array([0.0, 1.0, 2.0, 5.0, 6.0]))
+        coord = NumericND.from_array(np.array([0.0, 1.0, 2.0, 5.0, 6.0]), detect=False)
         gaps = coord.get_discontinuities("gaps", tolerance=0.5)
         assert gaps["index"].tolist() == [3]
         assert coord.get_discontinuities("gaps", tolerance=3)["index"].tolist() == []
@@ -269,14 +275,18 @@ class TestDiscontinuities:
     def test_quantity_tolerance(self):
         """A quantity converts to the coordinate's units as an excess."""
         coord = get_coord(data=[0.0, 1.0, 2.0, 4.5, 5.5], step=None, units="m")
-        assert isinstance(coord, CoordMonotonicArray)
+        assert not coord.evenly_sampled and (coord.sorted or coord.reverse_sorted)
         gaps = coord.get_discontinuities("gaps", get_quantity("100 cm"))
         assert gaps["index"].tolist() == [3]
         assert not len(coord.get_discontinuities("gaps", get_quantity("2 m")))
 
     def test_single_value_array(self):
         """One value has no spacing to judge."""
-        assert CoordMonotonicArray(values=np.array([3.0])).get_discontinuities().empty
+        assert (
+            NumericND.from_array(np.array([3.0]), detect=False)
+            .get_discontinuities()
+            .empty
+        )
 
     def test_negative_tolerance_raises(self, design_case):
         """A negative excess cannot be met."""
@@ -304,7 +314,7 @@ class TestOneVerdict:
         merged = dc.spool(patches).chunk(time=None)
         assert len(merged) == 2
         values = np.concatenate([p.get_coord("time").values for p in patches])
-        coord = CoordSegmented.from_array(values)
+        coord = NumericND.from_array(values)
         gaps = coord.get_discontinuities("gaps", GapTolerance.samples(1.5))
         assert len(gaps) == 1
         assert gaps["before"].iloc[0] == patches[1].get_coord("time").max()
@@ -319,7 +329,7 @@ class TestOneVerdict:
         merged = dc.spool(patches).chunk(time=None, tolerance=excess)
         assert len(merged) == 2
         values = np.concatenate([p.get_coord("time").values for p in patches])
-        gaps = CoordSegmented.from_array(values).get_discontinuities("gaps", excess)
+        gaps = NumericND.from_array(values).get_discontinuities("gaps", excess)
         assert len(gaps) == 1
 
 
@@ -335,7 +345,7 @@ class TestReviewFindings:
     def test_promotion_respects_the_declared_grid(self):
         """Even spacing on a finer declared grid is not a range of that spacing."""
         coord = get_coord(data=np.arange(0, 2000, 2), step=1)
-        assert isinstance(coord, CoordMonotonicArray)
+        assert not coord.evenly_sampled and (coord.sorted or coord.reverse_sorted)
         assert concat_coords(coord).missing().count == coord.missing().count == 999
 
     def test_gapped_runs_are_not_evenly_sampled(self, design_case):
@@ -350,15 +360,15 @@ class TestReviewFindings:
     def test_median_spacing_ignores_orientation(self):
         """Either orientation of the same labels reports the same gap."""
         tolerance = GapTolerance.samples(1.2)
-        up = CoordMonotonicArray(values=np.array([0.0, 1.0, 4.0]))
-        down = CoordMonotonicArray(values=np.array([4.0, 1.0, 0.0]))
+        up = NumericND.from_array(np.array([0.0, 1.0, 4.0]), detect=False)
+        down = NumericND.from_array(np.array([4.0, 1.0, 0.0]), detect=False)
         assert len(up.get_discontinuities("gaps", tolerance)) == 1
         assert len(down.get_discontinuities("gaps", tolerance)) == 1
 
     def test_declared_step_converts_as_a_difference(self):
         """An affine unit's offset does not reach the step."""
-        coord = CoordMonotonicArray(
-            values=np.array([0.0, 2.0, 3.0]), step=1, units="degC"
+        coord = NumericND.from_array(
+            np.array([0.0, 2.0, 3.0]), step=1, units="degC", detect=False
         )
         converted = coord.convert_units("degF")
         assert converted.step == pytest.approx(1.8)
@@ -377,7 +387,7 @@ class TestReviewFindings:
     def test_dasdae_round_trip(self, tmp_path):
         """Version 2 stores a declared step; version 1 keeps the values alone."""
         dense = get_coord(data=np.arange(3000)[np.arange(3000) % 3 != 2], step=1)
-        assert isinstance(dense, CoordMonotonicArray)
+        assert not dense.evenly_sampled and (dense.sorted or dense.reverse_sorted)
         time = dc.get_example_patch().get_coord("time")[:3]
         coords = {"distance": dense, "time": time}
         data = np.zeros((len(dense), 3))
@@ -397,9 +407,9 @@ class TestReviewFindings:
             get_coord(start=5.5, stop=8.5, step=1.0),
         )
         assert coord.step is None
-        left = CoordMonotonicArray(values=np.array([0.0, 2.0, 3.0]), step=1.0)
-        right = CoordMonotonicArray(values=np.array([4.5, 7.5, 9.5]), step=1.0)
-        assert isinstance(concat_coords(left, right), CoordSegmented)
+        left = NumericND.from_array(np.array([0.0, 2.0, 3.0]), step=1.0, detect=False)
+        right = NumericND.from_array(np.array([4.5, 7.5, 9.5]), step=1.0, detect=False)
+        assert concat_coords(left, right).step is None
 
     def test_complete_time_grid_positions_dtype(self):
         """No missing positions still come back in the coordinate's dtype."""
@@ -408,9 +418,9 @@ class TestReviewFindings:
 
     def test_fingerprint_sees_the_declared_step(self):
         """Declaring a grid changes what the coordinate is, its spelling does not."""
-        plain = CoordMonotonicArray(values=np.array([0, 1, 5]))
-        declared = CoordMonotonicArray(values=np.array([0, 1, 5]), step=1)
-        as_float = CoordMonotonicArray(values=np.array([0, 1, 5]), step=1.0)
+        plain = NumericND.from_array(np.array([0, 1, 5]), detect=False)
+        declared = NumericND.from_array(np.array([0, 1, 5]), step=1, detect=False)
+        as_float = NumericND.from_array(np.array([0, 1, 5]), step=1.0, detect=False)
         assert plain.fingerprint() != declared.fingerprint()
         assert declared.fingerprint() == as_float.fingerprint()
 
@@ -427,7 +437,7 @@ class TestReviewFindings:
 
     def test_seam_after_an_undeclared_singleton(self):
         """A seam whose run states no spacing reports no excess and no gap."""
-        one = CoordMonotonicArray(values=np.array([T0]))
+        one = NumericND.from_array(np.array([T0]), detect=False)
         runs = get_coord(start=T0 + 5 * MS, step=MS, shape=(3,))
         later = get_coord(start=T0 + 20 * MS, step=MS, shape=(3,))
         coord = concat_coords(one, runs, later)
@@ -461,10 +471,11 @@ class TestLegacySnapStep:
             h5.create_dataset("_coord_y", data=np.array([0.0, 1.0, 2.05]))
             single = _read_coord(h5["_coord_x"], "x", {"x_step": 2.0}, snap=True)
             jittered = _read_coord(h5["_coord_y"], "y", {"y_step": 1.0}, snap=True)
-        assert isinstance(single, CoordRange) and single.step == 2.0
+        assert single.evenly_sampled and single.step == 2.0
         # longer values keep today's tolerant reading; the nominal step is
-        # not a claim they must meet
-        assert jittered.step is None or isinstance(jittered, CoordRange)
+        # not a claim they must meet, so a step it does state is one the
+        # labels actually follow
+        assert jittered.step is None or jittered.evenly_sampled
         np.testing.assert_allclose(jittered.values, [0.0, 1.0, 2.05], atol=0.06)
 
 
@@ -477,13 +488,13 @@ class TestReviewRoundTwo:
         with pytest.raises(CoordError, match="finite non-zero"):
             get_coord(data=[0, 1, 2], step=bad)
         with pytest.raises(ValueError, match="finite non-zero"):
-            CoordMonotonicArray(values=np.array([0, 1, 2]), step=bad)
+            NumericND.from_array(np.array([0, 1, 2]), step=bad, detect=False)
         assert get_coord(data=[0, 1, 5], step=np.nan).step is None
 
     def test_fractional_step_rejected_on_direct_arrays(self):
         """The array constructor holds the same rule as the factory."""
         with pytest.raises(ValueError, match="fractional step"):
-            CoordMonotonicArray(values=np.array([0, 1, 3]), step=Fraction(1, 2))
+            NumericND.from_array(np.array([0, 1, 3]), step=Fraction(1, 2), detect=False)
 
     def test_whole_fraction_is_seconds_for_time(self):
         """A whole fraction on time values means seconds, as a range reads it."""
@@ -498,15 +509,17 @@ class TestReviewRoundTwo:
     def test_unsigned_values_descending(self):
         """Unsigned spacings do not wrap when the values descend."""
         values = np.array([9, 6, 5, 1], dtype=np.uint8)
-        coord = CoordMonotonicArray(values=values, step=1)
+        coord = NumericND.from_array(values, step=1, detect=False)
         assert list(coord.missing().iter_runs()) == [(8, 7), (4, 2)]
-        plain = CoordMonotonicArray(values=values)
+        plain = NumericND.from_array(values, detect=False)
         seams = plain.get_discontinuities()
         assert seams["delta"].tolist() == [-1, -4]
 
     def test_hole_ends_share_one_anchor(self):
         """Float noise on the far label does not reach the hole's last position."""
-        coord = CoordMonotonicArray(values=np.array([0.0, 0.30000005]), step=0.1)
+        coord = NumericND.from_array(
+            np.array([0.0, 0.30000005]), step=0.1, detect=False
+        )
         missing = coord.missing()
         (run,) = missing.iter_runs()
         assert run[1] == pytest.approx(0.2) and run[1] == missing.positions()[-1]
@@ -551,13 +564,16 @@ class TestReviewRoundTwo:
 
     def test_dasdae_keeps_declared_steps_on_array_segments(self, tmp_path):
         """An array segment's declared step survives a version 2 round trip."""
-        left = CoordMonotonicArray(values=np.array([0.0, 2.0, 3.0]), step=1.0)
-        right = CoordMonotonicArray(values=np.array([6.0, 9.0, 11.0]), step=1.0)
+        left = NumericND.from_array(np.array([0.0, 2.0, 3.0]), step=1.0, detect=False)
+        right = NumericND.from_array(np.array([6.0, 9.0, 11.0]), step=1.0, detect=False)
         coord = concat_coords(left, right)
         base = dc.get_example_patch().select(distance=(0, 6), samples=True)
         patch = base.update_coords(distance=coord)
         back = dc.read(dc.write(patch, tmp_path / "seg.h5", "dasdae"))[0]
-        assert back.get_coord("distance") == coord
+        # the patch's own coordinate is what was written, so it is what
+        # must come back -- values, runs, and the step they declare
+        assert back.get_coord("distance") == patch.get_coord("distance")
+        np.testing.assert_array_equal(back.get_coord("distance").values, coord.values)
         assert back.get_coord("distance").step == 1.0
 
     def test_singleton_edges_use_the_declared_step(self, recwarn):

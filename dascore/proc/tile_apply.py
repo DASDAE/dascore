@@ -42,7 +42,6 @@ from dascore.utils.signal import (
     get_window_nd,
 )
 from dascore.utils.tiles import get_tile_plan
-from dascore.utils.time import dtype_time_like
 from dascore.utils.window import Window, resolve_window
 
 __all__ = ("TileApply", "reassemble", "tile_apply")
@@ -75,6 +74,31 @@ def _offset_values(coord, offsets: np.ndarray):
             ]
         )
     return coord._labels(offsets)
+
+
+def _offset_coord(coord, first, stride, count, shift=0, relative=False):
+    """Declare a window axis while retaining a tick grid's phase."""
+    start = _offset_values(coord, np.asarray([first]))[0]
+    if relative:
+        start = start - coord[0]
+    if shift:
+        start = start + shift
+    if np.asarray(start).dtype.kind in "iuMm":
+        num, den, phase = coord._grid_terms
+        return get_coord(
+            start=start,
+            shape=(count,),
+            step_numerator=num * stride,
+            step_denominator=den,
+            origin_offset=(phase + first * num) % den,
+            units=coord.units,
+        )
+    return get_coord(
+        start=start,
+        step=float(coord.step_exact * stride),
+        shape=(count,),
+        units=coord.units,
+    )
 
 
 def _engine_for(engine: str, func) -> str:
@@ -359,26 +383,30 @@ def _stack_coords(patch: PatchType, window: Window, analysis: Any):
                 msg = f"The patch already has a coordinate called {name}."
                 raise ParameterError(msg)
         coord = coords.get_coord(dim)
-        starts = np.arange(count) * stride - margin
-        # The tile's middle sample, in the coordinate's units.
-        centres = _offset_values(coord, starts + size // 2)
-        offsets = _offset_values(coord, np.arange(size)) - coord.values[0]
-        # Time ranges beginning at the epoch can have unset units; their
-        # generated labels and bounds must all use the same time units.
-        units = dc.get_quantity("s") if dtype_time_like(coord.dtype) else coord.units
-        new_coords[dim] = get_coord(data=centres, units=units)
-        first = _offset_values(coord, starts)
-        last = _offset_values(coord, starts + size - 1)
+        # These axes are samples of a known grid, including its tick phase.
+        new_coords[dim] = _offset_coord(coord, -margin + size // 2, stride, count)
         half_step = abs(coord.step) / 2
-        low = np.minimum(first, last) - half_step
-        # A whole-tick duration can lose its half tick on division. Give
-        # that tick to the open upper edge so even a 1-tick cell contains
-        # its label, including on descending grids.
-        high = np.maximum(first, last) + (abs(coord.step) - half_step)
-        new_coords[f"{dim}_start"] = (dim, get_coord(data=low, units=units))
-        new_coords[f"{dim}_stop"] = (dim, get_coord(data=high, units=units))
-        new_coords[f"_tile_index_{dim}"] = (dim, starts)
-        new_coords[f"{dim}_offset"] = get_coord(data=offsets, units=coord.units)
+        low_index = -margin if coord.sorted else -margin + size - 1
+        high_index = -margin + size - 1 if coord.sorted else -margin
+        new_coords[f"{dim}_start"] = (
+            dim,
+            _offset_coord(coord, low_index, stride, count, shift=-half_step),
+        )
+        new_coords[f"{dim}_stop"] = (
+            dim,
+            _offset_coord(
+                coord,
+                high_index,
+                stride,
+                count,
+                shift=abs(coord.step) - half_step,
+            ),
+        )
+        new_coords[f"_tile_index_{dim}"] = (
+            dim,
+            get_coord(start=-margin, step=stride, shape=(count,)),
+        )
+        new_coords[f"{dim}_offset"] = _offset_coord(coord, 0, 1, size, relative=True)
         # The coordinate the tiles were cut from, for reassembly, and the
         # window the tiles were cut under, whose dual blends them back.
         new_coords[f"_tile_source_{dim}"] = (None, coord)

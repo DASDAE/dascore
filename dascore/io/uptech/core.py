@@ -38,13 +38,15 @@ class UptechH5V1(FiberIO):
         """Return the format and version when resource is an Uptech file."""
         return (self.name, self.version) if _is_uptech(resource) else False
 
-    def scan(self, resource: H5Reader, **kwargs) -> list[ScanPayload]:
+    def scan(
+        self, resource: H5Reader, snap: bool = True, **kwargs
+    ) -> list[ScanPayload]:
         """Extract metadata without reading the signal array."""
         attrs = UptechPatchAttrs.model_validate(_get_attrs_dict(resource))
         return [
             make_scan_payload(
                 attrs=attrs,
-                coords=_get_coords(resource),
+                coords=_get_coords(resource, snap=snap),
                 dtype=str(resource[_DATASET].dtype),
             )
         ]
@@ -54,11 +56,12 @@ class UptechH5V1(FiberIO):
         resource: H5Reader,
         time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
         distance: tuple[float | None, float | None] | None = None,
+        snap: bool = True,
         **kwargs,
     ) -> dc.Spool:
         """Read an Uptech HDF5 file, optionally selecting time and distance."""
         patches = build_patches(
-            _get_coords(resource),
+            _get_coords(resource, snap=snap),
             resource[_DATASET],
             _get_attrs_dict(resource),
             attr_cls=UptechPatchAttrs,

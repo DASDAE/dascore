@@ -693,7 +693,7 @@ class TestLineageIds:
     @pytest.mark.parametrize("upper", [False, True])
     @pytest.mark.parametrize("start,step", [(0.0, 1.0), (0.1, 0.1), (0.1, 0.001)])
     def test_single_range_keeps_grid_tolerance(self, tmp_path, upper, start, step):
-        """A bound within CoordRange's edge tolerance does not advance lineage."""
+        """A bound within the range's edge tolerance does not advance lineage."""
         patch = dc.get_example_patch().abs()
         values = start + np.arange(patch.shape[0]) * step
         patch.update_coords(distance=values).io.write(tmp_path / "source.h5", "dasdae")
@@ -958,10 +958,13 @@ class TestLineageIds:
                 assert row["processing_id"] == selected.attrs.processing_id
                 assert noop_row.equals(spool._df.iloc[index][columns])
                 assert selected.shape == source.shape
-            if percent_bound and source.get_coord("distance").dtype == np.dtype(
-                "float32"
-            ):
-                assert selected.shape != source.shape
+            if percent_bound:
+                # Exact array construction keeps the original endpoint, so
+                # its complete relative range includes every sample.
+                np.testing.assert_array_equal(
+                    source.get_coord("distance").values, values
+                )
+                assert selected.shape == source.shape
 
     def test_relative_metadata_tracks_each_row(self, tmp_path):
         """A shared relative window trims only the longer source patch."""

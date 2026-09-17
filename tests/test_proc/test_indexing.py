@@ -10,7 +10,7 @@ import pytest
 
 import dascore as dc
 from dascore.core.coordmanager import get_coord_manager
-from dascore.core.coords import CoordArray, CoordRange, concat_coords, get_coord
+from dascore.core.coords import NumericND, concat_coords, get_coord
 from dascore.units import m, s
 from dascore.utils.array_api import to_numpy
 
@@ -44,7 +44,7 @@ def assert_matches(patch, operation, indexers, *, compact_float=False, **kwargs)
         # Range slices keep DASCore's grid arithmetic; compare only their
         # rounding with a tight tolerance. Data and all other labels stay exact.
         for name, coord in actual.coords.coord_map.items():
-            if isinstance(coord, CoordRange) and np.dtype(coord.dtype).kind == "f":
+            if coord.evenly_sampled and np.dtype(coord.dtype).kind == "f":
                 values = expected.coords[name].values
                 source = patch.get_coord(name)
                 scale = max(1, abs(source.min()), abs(source.max()))
@@ -236,7 +236,9 @@ class TestSel:
     @pytest.mark.parametrize("value", [2, slice(2, 8)])
     def test_coordinate_order(self, patch, coords, value):
         """Descending, irregular, and duplicate labels use pandas semantics."""
-        patch = patch.update_coords(distance=CoordArray(values=np.asarray(coords)))
+        patch = patch.update_coords(
+            distance=NumericND.from_array(np.asarray(coords), detect=False)
+        )
         try:
             patch.io.to_xarray().sel(distance=value)
         except (KeyError, pd.errors.InvalidIndexError) as exc:
@@ -358,7 +360,7 @@ class TestIndexingBoundaries:
     def test_float_precision(self, patch):
         """Lookup rounds probes to the float coordinate precision, as xarray does."""
         values = np.array([0.1, 0.2, 0.31, 0.4, 0.5], dtype=np.float32)
-        patch = patch.update_coords(distance=CoordArray(values=values))
+        patch = patch.update_coords(distance=NumericND.from_array(values, detect=False))
         assert_matches(patch, "sel", {"distance": [0.1, 0.31, 0.1]})
 
     def test_nonmonotonic_datetime_slice(self, patch):
@@ -476,8 +478,8 @@ class TestCompactRangeIndexing:
         patch = dc.Patch(
             data=np.broadcast_to(np.array(1), (size,)), coords={"x": coord}, dims=("x",)
         )
-        original = CoordRange.values.fget
-        original_index_values = CoordRange._get_index_values
+        original = NumericND.values.fget
+        original_index_values = NumericND._get_index_values
 
         def bounded_index_values(self, indices):
             """Refuse full-grid allocation through sparse evaluation as well."""
@@ -485,12 +487,17 @@ class TestCompactRangeIndexing:
             return original_index_values(self, indices)
 
         def bounded_values(self):
-            """Allow output labels to materialize, but refuse a full input grid."""
-            assert len(self) < 1000, "Selection expanded the original coordinate"
+            """Allow output labels to materialize, but refuse a full input grid.
+
+            Sized rather than measured by ``len``: every numeric coordinate
+            is one class now, so this also sees the rank-0 coordinate a
+            scalar selection leaves behind.
+            """
+            assert self.size < 1000, "Selection expanded the original coordinate"
             return original(self)
 
-        monkeypatch.setattr(CoordRange, "values", property(bounded_values))
-        monkeypatch.setattr(CoordRange, "_get_index_values", bounded_index_values)
+        monkeypatch.setattr(NumericND, "values", property(bounded_values))
+        monkeypatch.setattr(NumericND, "_get_index_values", bounded_index_values)
         labels = coord._get_index_values(np.array([50, 54]))
         assert patch.sel(x=labels[0]).get_array("x") == labels[0]
         assert patch.sel(x=slice(None, labels[0])).shape == (51,)
@@ -507,11 +514,11 @@ class TestCompactRangeIndexing:
         for method in ("sel", "isel"):
             value = slice(None, labels[0]) if method == "sel" else slice(50, None, 2)
             result = getattr(patch, method)(x=value)
-            assert isinstance(result.get_coord("x"), CoordRange)
+            assert result.get_coord("x").evenly_sampled
             assert np.shares_memory(patch.data, result.data)
         result = patch.sel(x=slice(labels[0], None))
         assert result.shape == (size - 50,)
-        assert isinstance(result.get_coord("x"), CoordRange)
+        assert result.get_coord("x").evenly_sampled
         assert patch.isel(x=[]).shape == (0,)
         assert patch.isel(x=slice(0, 0)).shape == (0,)
         assert patch.select(x=(labels.min(), labels.max())).shape == (5,)
@@ -536,8 +543,8 @@ class TestCompactRangeIndexing:
         )
         indices = np.arange(count) * (size // count)
         labels = coord._get_index_values(indices)
-        original = CoordRange._get_index_values
-        original_values = CoordRange.values.fget
+        original = NumericND._get_index_values
+        original_values = NumericND.values.fget
         calls = 0
 
         def bounded_calls(self, indices):
@@ -554,8 +561,8 @@ class TestCompactRangeIndexing:
             assert len(self) <= count
             return original_values(self)
 
-        monkeypatch.setattr(CoordRange, "_get_index_values", bounded_calls)
-        monkeypatch.setattr(CoordRange, "values", property(bounded_values))
+        monkeypatch.setattr(NumericND, "_get_index_values", bounded_calls)
+        monkeypatch.setattr(NumericND, "values", property(bounded_values))
         actual = patch.sel(x=labels, method=method)
         np.testing.assert_array_equal(actual.get_array("x"), labels)
         assert actual.shape == (count,)
@@ -571,7 +578,7 @@ class TestCompactRangeIndexing:
         actual = patch.select(x=(1, 50))
         for name in ("x", "dependent"):
             selected = actual.get_coord(name)
-            assert isinstance(selected, CoordRange)
+            assert selected.evenly_sampled
             assert selected.step == coord.step
             assert len(selected) == actual.size
 
@@ -676,13 +683,13 @@ class TestRangeLookupPrecision:
             coords={"x": coord},
             dims=("x",),
         )
-        original = CoordRange.values.fget
+        original = NumericND.values.fget
 
         def bounded_values(self):
             assert len(self) < 3, "Precision checking expanded the input grid"
             return original(self)
 
-        monkeypatch.setattr(CoordRange, "values", property(bounded_values))
+        monkeypatch.setattr(NumericND, "values", property(bounded_values))
         if size == 3:
             assert patch.sel(x=[coord.start]).shape == (1,)
         else:
@@ -704,13 +711,13 @@ class TestRangeLookupPrecision:
         patch = dc.Patch(data=np.arange(size), coords={"x": coord}, dims=("x",))
         labels = coord._get_index_values([0, size - 1, 1])
         expected = patch.io.to_xarray().sel(x=labels)
-        original = CoordRange._get_index_values
+        original = NumericND._get_index_values
 
         def bounded_values(self, indices):
             assert np.size(indices) <= 32, "Uniqueness checking expanded the grid"
             return original(self, indices)
 
-        monkeypatch.setattr(CoordRange, "_get_index_values", bounded_values)
+        monkeypatch.setattr(NumericND, "_get_index_values", bounded_values)
         actual = patch.sel(x=labels)
         xr.testing.assert_equal(actual.io.to_xarray(), expected)
 

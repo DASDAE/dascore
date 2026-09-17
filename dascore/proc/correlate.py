@@ -23,9 +23,10 @@ def _get_source_fft(patch, dim, source, source_axis, samples):
     """
     # Extract an array containing just the sources
     coord_source = patch.get_coord(dim)
-    index_source = coord_source.get_next_index(source, samples=samples)
     selector = [slice(None), slice(None), None]
-    selector[source_axis] = np.atleast_1d(index_source)
+    if source is not None:
+        index_source = coord_source.get_next_index(source, samples=samples)
+        selector[source_axis] = np.atleast_1d(index_source)
     source = patch.data[tuple(selector)]
     # Now transpose source so source dim is list. Essentially we just
     # need to swap the source axis with the last axis.
@@ -172,14 +173,18 @@ def correlate(
         padded = patch.pad.func(patch, **{fft_dim: "correlate"})
         patch = padded.dft.func(padded, fft_dim, real=fft_dim if is_real else None)
     # Get the sources.
-    source = patch.get_coord(dim).values if source is None else source
+    source_coord = patch.get_coord(dim) if source is None else None
     source_fft = _get_source_fft(patch, dim, source, source_axis, samples)
     # Need to insert new axis so the arrays broadcast correctly.
     fft_patch_array = patch.data[..., None]
     fft_prod = fft_patch_array * np.conj(source_fft)
     # Create frequency domain patch with results
     source = getattr(source, "magnitude", source)  # strips units
-    new_coord = dc.get_coord(data=np.atleast_1d(source))
+    new_coord = (
+        source_coord
+        if source_coord is not None
+        else dc.get_coord(data=np.atleast_1d(source))
+    )
     dim_name = f"source_{dim}"
     cm = patch.coords.update(**{dim_name: (dim_name, new_coord)})
     out = patch.update(data=fft_prod, coords=cm)

@@ -29,43 +29,38 @@ from xarray.indexes import CoordinateTransform, CoordinateTransformIndex, Pandas
 
 from dascore.core.coords import (
     BaseCoord,
-    CoordArray,
-    CoordMonotonicArray,
-    CoordRange,
-    CoordSegmented,
+    NumericND,
     concat_coords,
     get_coord,
 )
 from dascore.exceptions import CoordError
 from dascore.utils.indexing import label_indexer, positional_indexer
-from dascore.utils.misc import is_strictly_monotonic
 from dascore.utils.time import dtype_time_like
 
 
 def is_servable(coord) -> bool:
     """Whether `CoordIndex` can serve a coordinate's labels."""
-    if isinstance(coord, CoordSegmented):
-        return True
-    # a zero step repeats one label, which no index can look up
-    return isinstance(coord, CoordRange) and bool(coord.step)
+    if not isinstance(coord, NumericND):
+        return False
+    return (coord.runs_count > 1 and (coord.sorted or coord.reverse_sorted)) or (
+        coord.evenly_sampled and bool(coord.step)
+    )
 
 
 def _relabels_exactly(coord) -> bool:
     """Whether slices of a coordinate keep exactly the labels they select."""
     # a float range recomputes a slice's labels from its new start, which
     # can move them in the last bits, and then they no longer align
-    if isinstance(coord, CoordSegmented):
-        return all(_relabels_exactly(x) for x in coord.segments)
-    return not isinstance(coord, CoordRange) or coord._exact
+    if isinstance(coord, NumericND):
+        return coord._ticks or not np.any(coord.runs["den"])
+    return True
 
 
 def _array_coord(labels, units) -> BaseCoord:
     """Labels held as they are, never re-inferred as a range."""
     if np.asarray(labels).dtype.kind in "USO":
         return get_coord(data=labels, units=units)  # text keeps its own class
-    monotonic = len(labels) > 1 and is_strictly_monotonic(labels)
-    cls = CoordMonotonicArray if monotonic else CoordArray
-    return cls(values=labels, units=units)
+    return NumericND.from_array(labels, units=units, detect=False)
 
 
 def _as_pandas(index) -> PandasIndex:
@@ -254,7 +249,7 @@ class CoordIndex(CoordinateTransformIndex):
             start, stop, stride = idx.indices(len(coord))
             positions = range(start, stop, stride)
             # a strided segmented coordinate is an array of its labels
-            lazy = isinstance(coord, CoordRange) or stride == 1
+            lazy = coord.evenly_sampled or stride == 1
             if len(positions) and lazy and _relabels_exactly(coord):
                 return self._with(coord[idx])
             return self._picked(np.asarray(positions, dtype=np.int64))

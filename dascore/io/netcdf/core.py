@@ -9,11 +9,12 @@ from typing import Literal
 import numpy as np
 
 import dascore as dc
+from dascore.core.coords import get_coord
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
 from dascore.io.core import ScanPayload, make_scan_payload
 from dascore.io.utils import (
-    get_exact_coord,
+    get_snapped_coord,
     resolve_keyed_source,
     windows_to_slices,
 )
@@ -253,8 +254,8 @@ class NetCDFCFV18(FiberIO):
             return values
         units = coord.attrs.get("units")
         if snap:
-            return dc.core.get_coord(data=values, units=units)
-        return get_exact_coord(values, units=units)
+            return get_snapped_coord(values, units=units)
+        return get_coord(data=np.atleast_1d(values), units=units)
 
     def _get_source_patch_key(self, data_var_name):
         """Normalize the selected xarray payload name to a patch id."""

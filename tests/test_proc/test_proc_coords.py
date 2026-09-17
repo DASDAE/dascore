@@ -13,8 +13,7 @@ import dascore.proc.coords
 from dascore.compat import is_array
 from dascore.core.coords import (
     BaseCoord,
-    CoordMonotonicArray,
-    CoordRange,
+    NumericND,
     _fill_layout,
     concat_coords,
     get_coord,
@@ -105,7 +104,7 @@ class TestSnapDims:
 
     @pytest.fixture(scope="class")
     def even_time_uneven_distance_patch(self):
-        """A patch with an even (CoordRange) time and monotonic-uneven distance."""
+        """A patch with an evenly sampled time and monotonic-uneven distance."""
         time = dc.to_datetime64(np.arange(20))
         distance = np.cumsum(np.arange(1, 11) ** 1.5)
         data = np.arange(len(time) * len(distance)).reshape(len(time), len(distance))
@@ -686,7 +685,8 @@ class TestUnselect:
         """
         out = random_patch.unselect(distance=(50, 200))
         coord = out.get_coord("distance")
-        assert coord.step is None
+        assert coord.step == random_patch.get_coord("distance").step
+        assert coord.holes and not coord.evenly_sampled
         values = out.get_array("distance")
         assert not ((values >= 50) & (values <= 200)).any()
         assert values.min() < 50 < 200 < values.max()
@@ -1533,7 +1533,7 @@ class TestFillGaps:
         patch = _gapped_patch(concat_coords(first, second))
         out = patch.fill_gaps("time")
         coord = out.get_coord("time")
-        assert isinstance(coord, CoordRange) and coord.step == self.ms
+        assert isinstance(coord, NumericND) and coord.step == self.ms
         # every sample keeps its value, at a label at most half a step away
         kept = ~np.isnan(out.data[0])
         assert np.array_equal(out.data[:, kept], patch.data)
@@ -1583,7 +1583,7 @@ class TestFillGaps:
         """A dense array kept whole with its declared step fills too."""
         values = np.delete(np.arange(3000), np.arange(5, 3000, 7))
         coord = get_coord(data=values, step=1)
-        assert type(coord).__name__ == "CoordMonotonicArray"
+        assert isinstance(coord, NumericND) and coord.labels is not None
         out = _gapped_patch(coord, dim="channel").fill_gaps("channel")
         assert out.get_coord("channel") == get_coord(start=0, stop=3000, step=1)
         assert np.isnan(out.data[0]).sum() == 3000 - len(values)
@@ -1652,7 +1652,7 @@ class TestFillGaps:
         start = self.t0 + 5 * self.ms + np.timedelta64(400_000, "ns")
         second = get_coord(start=start, step=self.ms, shape=(4,))
         out = _gapped_patch(concat_coords(first, second)).fill_gaps("time")
-        assert isinstance(out.get_coord("time"), CoordRange) and out.shape == (3, 9)
+        assert isinstance(out.get_coord("time"), NumericND) and out.shape == (3, 9)
         assert not np.isnan(out.data).any()
 
     def test_float_off_grid(self):
@@ -1667,7 +1667,7 @@ class TestFillGaps:
 
     def test_array_segment_offset(self):
         """An array segment inside a segmented coordinate keeps its data."""
-        array = CoordMonotonicArray(values=np.array([10, 11, 13]), step=1)
+        array = NumericND.from_array(detect=False, data=np.array([10, 11, 13]), step=1)
         coord = concat_coords(get_coord(start=0, step=1, shape=(4,)), array)
         patch = _gapped_patch(coord, dim="x")
         out = patch.fill_gaps("x")
@@ -1796,6 +1796,6 @@ class TestFillGaps:
         """A float array whose spacings drift off its declared step raises."""
         values = np.arange(2_000_010) * (1 + 4e-7)
         values = np.delete(values, [5])
-        coord = CoordMonotonicArray(values=values, step=1.0)
+        coord = NumericND.from_array(detect=False, data=values, step=1.0)
         with pytest.raises(CoordError, match="drift"):
             _fill_layout(coord)

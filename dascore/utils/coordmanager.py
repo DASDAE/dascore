@@ -14,6 +14,16 @@ from dascore.models import ArrayLike
 from dascore.utils.display import get_nice_text
 
 
+def _concat_numeric_coords(coords, units=None):
+    """Join compatible 1D numeric runs in caller order, or defer to arrays."""
+    numeric = dc.core.coords.NumericND
+    if not all(isinstance(x, numeric) and x.ndim == 1 for x in coords):
+        return None
+    if len({x.dtype for x in coords}) != 1:
+        return None
+    return dc.core.coords.concat_tables(*(x.set_units(units) for x in coords))
+
+
 def merge_coord_managers(
     coord_managers: Sequence[dc.CoordManager],
     dim: str,
@@ -31,7 +41,7 @@ def merge_coord_managers(
     dim
         The dimension along which to merge.
     snap_tolerance
-        The tolerance for snapping CoordRanges together. E.G, allows
+        The tolerance for snapping ranges together. E.G, allows
         coord ranges that have snap_tolerances differences from their
         start/end to be joined together. If they don't meet this requirement
         an [CoordMergeError](`dascore.exceptions.CoordMergeError`) is raised.
@@ -131,19 +141,13 @@ def merge_coord_managers(
             # snapped; coords merely associated with dim just follow along.
             if coord_name == dim:
                 merge_coords = _snap_coords(merge_coords)
-            data = [x.data for x in merge_coords]
             dims = managers[0].dim_map[coord_name]
-            new_data = np.concatenate(data, axis=axis)
-            # raw value concatenation loses the coord's units; reattach
-            # the (verified common) units so the merge stays unit-true
             common_units = next(iter(units))
-            if common_units is not None:
-                from dascore.core.coords import get_coord  # noqa: PLC0415
-
-                coord = get_coord(data=new_data, units=common_units)
-                out[coord_name] = (dims, coord)
-            else:
-                out[coord_name] = (dims, new_data)
+            coord = _concat_numeric_coords(merge_coords, units=common_units)
+            if coord is None:
+                new_data = np.concatenate([x.data for x in merge_coords], axis=axis)
+                coord = dc.core.coords.get_coord(data=new_data, units=common_units)
+            out[coord_name] = (dims, coord)
         return out
 
     def _get_new_coords(managers) -> dict[str, tuple[tuple[str, ...], ArrayLike]]:

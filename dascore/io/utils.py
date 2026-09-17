@@ -12,10 +12,9 @@ import numpy as np
 import dascore as dc
 from dascore.constants import INVENTORY_ATTRS
 from dascore.core.coordmanager import CoordManager
-from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
+from dascore.core.coords import BaseCoord, get_coord
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import (
-    CoordError,
     MissingPatchError,
     ParameterError,
     PatchAttributeError,
@@ -23,7 +22,13 @@ from dascore.exceptions import (
 )
 from dascore.models import ArrayLike
 from dascore.units import convert_units, get_quantity_str
-from dascore.utils.misc import _to_slice, _validate_sample_values, unbyte
+from dascore.utils.misc import (
+    _to_slice,
+    _validate_sample_values,
+    all_diffs_close_enough,
+    is_strictly_monotonic,
+    unbyte,
+)
 from dascore.utils.time import to_exact_fraction
 
 
@@ -264,8 +269,8 @@ def get_gridded_coord(values, units=None) -> BaseCoord:
 
     For axes the instrument samples on a fixed grid, where the stored values
     only restate that grid and any departure from it is representation noise.
-    Such an array can jitter past the tolerance `get_coord` uses to recognize
-    an even coordinate and leave a monotonic coord with no step.
+    Such an array can contain representation jitter. The generic array
+    factory preserves that jitter; this helper explicitly fits a grid.
 
     Parameters
     ----------
@@ -289,21 +294,27 @@ def get_gridded_coord(values, units=None) -> BaseCoord:
     return coord.snap() if len(coord) > 1 else coord
 
 
-def get_exact_coord(values, units=None) -> BaseCoord:
+def get_snapped_coord(values, units=None) -> BaseCoord:
     """
-    Return an exact coordinate, including for non-monotonic values.
+    Fit approximately even reader labels, leaving irregular labels alone.
 
-    Monotonic values keep their runs (`CoordSegmented.from_array`, whose
-    dense-array guard keeps a jittery array as one monotonic coordinate);
-    anything else keeps its values as an array.
+    This is the explicit legacy reader policy for ``snap=True``. It uses
+    the median spacing only when all spacings meet the existing relative
+    tolerance. Use ``get_coord(data=values)`` to preserve labels exactly,
+    or ``get_gridded_coord`` when the format requires fitting every axis.
     """
-    # atleast_1d matches get_coord(values=...): a squeezed single-sample
-    # array (0-d) becomes a length-1 coordinate rather than a scalar.
-    values = np.atleast_1d(np.asarray(values))
-    try:
-        return CoordSegmented.from_array(values, tolerance=0, units=units)
-    except CoordError:
-        return get_coord(data=values, units=units)
+    values = np.asarray(values)
+    coord = get_coord(data=values, units=units)
+    if values.ndim != 1 or coord.evenly_sampled or len(values) < 2:
+        return coord
+    if values.dtype.kind not in "fiuMm" or not is_strictly_monotonic(values):
+        return coord
+    diffs = np.sort(np.diff(values))
+    if not all_diffs_close_enough(np.unique(diffs)):
+        return coord
+    return get_coord(
+        start=values[0], step=diffs[len(diffs) // 2], shape=values.shape, units=units
+    )
 
 
 def step_from_rate(rate) -> Fraction | np.timedelta64:

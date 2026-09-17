@@ -22,7 +22,12 @@ import pandas as pd
 
 import dascore as dc
 from dascore.core.coordmanager import CoordManager, get_coord_manager
-from dascore.core.coords import _EXACT_GRID_FIELDS, CoordRange, get_coord
+from dascore.core.coords import (
+    _EXACT_GRID_FIELDS,
+    get_coord,
+    normalize_coord_dtype,
+    runs_from_rows,
+)
 from dascore.exceptions import CoordMergeError, UnitError
 from dascore.io.index.ingest import _is_missing
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
@@ -325,16 +330,62 @@ def _units_converted(row: Mapping, dim: str) -> bool:
     return not _is_null(source_units) and source_units != row.get(f"_{dim}_units")
 
 
+def _coord_from_runs(row: Mapping, dim: str, units=None):
+    """
+    The coordinate a row's run table states, or None where it states none.
+
+    A coordinate held as several runs is rebuilt exactly from them, holes
+    and all, where its envelope alone would describe the gapless range
+    across it. The table counts ticks in the file's own units and dtype,
+    so a unit-converted row cannot use it.
+    """
+    runs = row.get(f"_{dim}_runs")
+    if not isinstance(runs, tuple) or not runs or _units_converted(row, dim):
+        return None
+    stored = row.get(f"_{dim}_coord_dtype")
+    if not isinstance(stored, str) or not stored:
+        return None
+    dtype = normalize_coord_dtype(stored)
+    if dtype.kind not in "iuMmf":
+        return None
+    if dtype.kind == "f" and dtype.itemsize > 8:
+        # The table holds a non-ticked start as f8, which cannot have held
+        # an extended-precision label exactly (the same guard `_row_values`
+        # applies to the envelope).
+        return None
+    # A plan states a placeholder float dtype for a coordinate whose values
+    # it cannot claim; the table counts ticks, so rebuilding a time under
+    # that placeholder would label it with raw nanoseconds.
+    low = row.get(f"{dim}_min")
+    is_time = isinstance(low, pd.Timestamp | pd.Timedelta | np.datetime64)
+    is_time = is_time or isinstance(low, np.timedelta64)
+    if is_time != (dtype.kind in "mM"):
+        return None
+    if any(int(x[3]) == 0 for x in runs):
+        # A stored run states no grid; its labels are only in the file.
+        return None
+    starts = [x[0] for x in runs]
+    if dtype.kind in "iu" and max(abs(x) for x in starts) > 2**53:
+        # the index holds an integer coordinate's bounds as floats, which
+        # past here cannot have held the label exactly
+        return None
+    return get_coord(runs=runs_from_rows(runs, dtype), dtype=dtype, units=units)
+
+
 def coord_from_row(row: Mapping, dim: str, units=None):
     """
-    The evenly sampled coordinate a row states for ``dim``, or None.
+    The coordinate a row states for ``dim``, or None.
 
-    The exact grid a row carries rebuilds the coordinate the file holds,
-    either way it runs; the whole-tick envelope only approximates a
-    fractional step and states no direction. The grid counts ticks in the
-    file's units and dtype, so a unit-converted row, or one whose plan
-    states a placeholder float dtype, is rebuilt from its envelope alone.
+    A row carrying the whole run table rebuilds the coordinate exactly,
+    holes included. Failing that, the exact grid a row carries rebuilds an
+    evenly sampled coordinate either way it runs; the whole-tick envelope
+    only approximates a fractional step and states no direction. Both
+    count ticks in the file's units and dtype, so a unit-converted row, or
+    one whose plan states a placeholder float dtype, is rebuilt from its
+    envelope alone.
     """
+    if (out := _coord_from_runs(row, dim, units)) is not None:
+        return out
     values = _row_values(row, dim)
     if values is None:
         return None
@@ -344,7 +395,7 @@ def coord_from_row(row: Mapping, dim: str, units=None):
     if isinstance(grid, tuple) and ticks and not _units_converted(row, dim):
         *terms, length = grid
         start = hi if terms[0] < 0 else lo
-        return CoordRange(
+        return get_coord(
             start=start,
             shape=(length,),
             units=units,

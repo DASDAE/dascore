@@ -1,4 +1,4 @@
-"""Tests for schema 16: exact grids stored and rebuilt by the index."""
+"""Tests for schema 18: run grids stored and rebuilt by the index."""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.core.coords import CoordRange, get_coord
+from dascore.core.coords import get_coord
 from dascore.core.summary import PatchSummary
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import _coord_from_envelope
@@ -45,8 +45,8 @@ class TestSchema:
         record = _coord_record("time", summary)
         assert record is not None
         assert record.is_exact
-        assert (record.step_numerator, record.step_denominator) == (1953125, 2)
-        assert record.origin_offset == 0
+        assert (record.num, record.den) == (1953125, 2)
+        assert record.offset == 0
         # the envelope still holds the whole-tick step
         assert record.step_int == 976562
 
@@ -56,16 +56,17 @@ class TestSchema:
         record = _coord_record("x", coord.to_summary(dims=("x",)))
         assert record is not None
         assert not record.is_exact
-        assert record.step_numerator is None
+        # a stored run: its labels stay in the source, so den names no grid
+        assert record.den == 0
 
     def test_stored_columns(self, indexed):
         """The coord_defs row stores the grid."""
         back = indexed._catalog.backend
         defs = back._fetch_df("SELECT * FROM coord_defs")
         assert defs["is_exact"].all()
-        time_def = defs[defs["step_denominator"] == 2]
+        time_def = defs[defs["den"] == 2]
         assert len(time_def) == 1
-        assert int(time_def["step_numerator"].iloc[0]) == 1953125
+        assert int(time_def["num"].iloc[0]) == 1953125
 
 
 class TestFlatRelation:
@@ -91,7 +92,7 @@ class TestFlatRelation:
         """A row rebuilds the exact coordinate, not the rounded one."""
         row = indexed._catalog.to_df().iloc[0].to_dict()
         coord = coord_from_row(row, "time", units="s")
-        assert isinstance(coord, CoordRange)
+        assert coord.evenly_sampled
         assert coord == hz_1024_patch.get_coord("time")
         distance = coord_from_row(row, "distance", units="m")
         assert distance == hz_1024_patch.get_coord("distance")
@@ -152,7 +153,7 @@ class TestFlatRelation:
         rows = chunked._catalog.to_df()
         assert rows["_time_grid"].notna().all()
         defs = chunked._catalog.backend._fetch_df("SELECT * FROM coord_defs")
-        assert (defs["step_denominator"] == 2).any()
+        assert (defs["den"] == 2).any()
 
     def test_descending_whole_ticks_carry_grid(self, tmp_path):
         """A descending range needs its grid: the envelope does not name its start."""
@@ -190,6 +191,32 @@ class TestFlatRelation:
         assert coord.step_numerator is None
 
 
+class TestRowsRefused:
+    """A row which cannot state the coordinate exactly states nothing."""
+
+    def test_extended_float_runs_are_refused(self):
+        """A long double's labels do not survive the table's f8 start."""
+        row = {
+            "x_min": 0.0,
+            "x_max": 9.0,
+            "x_step": None,
+            "_x_coord_dtype": "float128",
+            "_x_runs": ((0.0, 5, 1, 1, 0), (20.0, 5, 1, 1, 0)),
+        }
+        assert coord_from_row(row, "x") is None
+
+    def test_stored_runs_are_refused(self):
+        """A run whose labels live in the file cannot be rebuilt from a row."""
+        row = {
+            "x_min": 0.0,
+            "x_max": 9.0,
+            "x_step": None,
+            "_x_coord_dtype": "float64",
+            "_x_runs": ((0.0, 5, 1, 1, 0), (20.0, 5, 0, 0, 0)),
+        }
+        assert coord_from_row(row, "x") is None
+
+
 class TestPlannedRows:
     """Plan outputs keep the grid only while the coordinate's identity holds."""
 
@@ -198,7 +225,7 @@ class TestPlannedRows:
         row = indexed._catalog.to_df().iloc[0].to_dict()
         record = _coord_record_from_row(row, "time")
         assert record is not None
-        assert record.step_denominator == 2
+        assert record.den == 2
         assert record.is_exact
 
     def test_grid_without_identity(self, indexed):
@@ -207,7 +234,7 @@ class TestPlannedRows:
         row["_time_def_key"] = None
         record = _coord_record_from_row(row, "time")
         assert record is not None
-        assert record.step_numerator is None
+        assert record.num is None
 
 
 class TestRecordsRoundTrip:

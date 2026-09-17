@@ -223,7 +223,6 @@ class TestLazyCoordinates:
         lazy. The returned coordinate alone cannot prove this because evenly spaced
         materialized values also infer a range.
         """
-        from dascore.core.coords import CoordRange  # noqa: PLC0415
         from dascore.xarray.index import CoordTransform  # noqa: PLC0415
 
         def _refuse(self, dim_positions):
@@ -231,7 +230,7 @@ class TestLazyCoordinates:
 
         monkeypatch.setattr(CoordTransform, "forward", _refuse)
         coord = tree_leaf.dc.to_patch().get_coord("time")
-        assert isinstance(coord, CoordRange)
+        assert coord.evenly_sampled
 
     def test_the_coordinate_is_the_same_either_way(self, tree_leaf):
         """Staying lazy must not change which samples it names."""
@@ -245,13 +244,13 @@ class TestLazyCoordinates:
         Either xarray's transform or the patch range can materialize labels. Refuse
         both paths; numeric coordinates remain unaffected.
         """
-        from dascore.core.coords import CoordRange  # noqa: PLC0415
+        from dascore.core.coords import NumericND  # noqa: PLC0415
         from dascore.xarray.index import CoordTransform  # noqa: PLC0415
 
         def _refuse_forward(self, dim_positions):
             raise AssertionError("the labels were computed by the transform")
 
-        original = CoordRange.values
+        original = NumericND.values
 
         @property
         def _refuse_values(self):
@@ -259,10 +258,10 @@ class TestLazyCoordinates:
                 self.dtype, np.timedelta64
             ):
                 raise AssertionError("the range spelled out its labels")
-            return original.__get__(self, CoordRange)
+            return original.__get__(self, NumericND)
 
         monkeypatch.setattr(CoordTransform, "forward", _refuse_forward)
-        monkeypatch.setattr(CoordRange, "values", _refuse_values)
+        monkeypatch.setattr(NumericND, "values", _refuse_values)
 
     def test_a_forwarded_call_never_spells_out_the_labels(self, tree_leaf, monkeypatch):
         """Not on the way in, and not on the way back out.

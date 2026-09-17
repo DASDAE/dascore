@@ -493,7 +493,12 @@ class TestToXarrayReadArray:
         metres = dc.get_example_patch().set_units(distance="m")
         dist = metres.get_coord("distance")
         span = float(dist.max() - dist.min() + dist.step)
-        feet = metres.update_coords(distance=(dist.data + span) / 0.3048)
+        feet_distance = dc.get_coord(
+            start=(float(dist.min()) + span) / 0.3048,
+            step=float(dist.step) / 0.3048,
+            shape=dist.shape,
+        )
+        feet = metres.update_coords(distance=feet_distance)
         feet = feet.set_units(distance="ft")
         dc.write(metres, tmp_path / "m.h5", "dasdae")
         dc.write(feet, tmp_path / "ft.h5", "dasdae")
@@ -685,7 +690,12 @@ class TestToXarrayLazyCoords:
         metres = dc.get_example_patch().set_units(distance="m")
         dist = metres.get_coord("distance")
         span = float(dist.max() - dist.min() + dist.step)
-        feet = metres.update_coords(distance=(dist.data + span) / 0.3048)
+        feet_distance = dc.get_coord(
+            start=(float(dist.min()) + span) / 0.3048,
+            step=float(dist.step) / 0.3048,
+            shape=dist.shape,
+        )
+        feet = metres.update_coords(distance=feet_distance)
         feet = feet.set_units(distance="ft")
         dc.write(metres, tmp_path / "m.h5", "dasdae")
         dc.write(feet, tmp_path / "ft.h5", "dasdae")
@@ -737,7 +747,7 @@ class TestToXarrayLazyCoords:
 
     def test_segmented_time_stays_lazy(self, random_patch):
         """A jittered merge is not one range; it is served as its segments."""
-        from dascore.core.coords import CoordSegmented  # noqa: PLC0415
+        from dascore.core.coords import NumericND  # noqa: PLC0415
         from dascore.xarray.index import CoordIndex  # noqa: PLC0415
 
         coord = random_patch.get_coord("time")
@@ -749,7 +759,7 @@ class TestToXarrayLazyCoords:
         data = self._leaf(spool.io.to_xarray())["data"]
         index = data.xindexes["time"]
         assert isinstance(index, CoordIndex)
-        assert isinstance(index.coordinate, CoordSegmented)
+        assert isinstance(index.coordinate, NumericND)
         merged = spool.chunk(time=None)[0]
         np.testing.assert_array_equal(
             data["time"].values, merged.get_coord("time").values

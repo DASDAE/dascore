@@ -17,9 +17,8 @@ from dascore.core.coordmanager import (
 )
 from dascore.core.coords import (
     BaseCoord,
-    CoordMonotonicArray,
     CoordPartial,
-    CoordRange,
+    NumericND,
     get_coord,
 )
 from dascore.exceptions import (
@@ -1064,33 +1063,33 @@ class TestUpdate:
 
 class TestPreserveBaseCoord:
     """
-    Update/select preserve CoordRange and re-infer other coordinate types.
+    Update/select preserve ranges and re-infer other coordinate types.
 
     Canonicalization must not change values: arrays become ranges only when the
     representation is exact.
     """
 
     def test_update_preserves_range_coord_identity(self, cm_basic):
-        """Updating a CoordRange dim with its own coord keeps the same object."""
+        """Updating an evenly sampled dim with its own coord keeps the same object."""
         for name in cm_basic.dims:
             coord = cm_basic.coord_map[name]
-            assert isinstance(coord, CoordRange)
+            assert coord.evenly_sampled
             out = cm_basic.update(**{name: coord})
             assert out.coord_map[name] is coord
 
     def test_full_partial_canonicalizes_to_range(self, cm_non_coord_dim):
-        """A fully-specified CoordPartial must still become a CoordRange.
+        """A fully-specified CoordPartial must still become a range.
 
-        Regression guard: only CoordRange is short-circuited, so a CoordPartial
-        that carries complete start/stop/step is re-inferred into a CoordRange
-        (otherwise value-based selection on it would wrongly raise).
+        Regression guard: only an evenly sampled table is short-circuited, so a
+        CoordPartial that carries complete start/stop/step is re-inferred into a
+        range (otherwise value-based selection on it would wrongly raise).
         """
         cm = cm_non_coord_dim
         assert isinstance(cm.coord_map["time"], CoordPartial)
         size = cm.shape[cm.get_axis("time")]
         full_partial = CoordPartial(shape=(size,), start=0, stop=size, step=1)
         out = cm.update(time=full_partial)
-        assert isinstance(out.coord_map["time"], CoordRange)
+        assert out.coord_map["time"].evenly_sampled
         # value-based selection must work on the canonicalized coord.
         selected, _ = out.select(time=(0, size - 1))
         assert selected.shape[selected.get_axis("time")] <= size
@@ -1104,9 +1103,9 @@ class TestPreserveBaseCoord:
             assert np.array_equal(out.get_array(name), cm_wacky_dims.get_array(name))
 
     def test_select_preserves_untouched_range_coord(self, cm_multidim):
-        """Selecting distance leaves the independent CoordRange time unchanged."""
+        """Selecting distance leaves the independent range time unchanged."""
         original_time = cm_multidim.coord_map["time"]
-        assert isinstance(original_time, CoordRange)
+        assert original_time.evenly_sampled
         new, _ = cm_multidim.select(distance=(100, 400))
         assert new.coord_map["time"] is original_time
         # latitude is tied to distance, so it must be re-sliced (new object).
@@ -1121,7 +1120,7 @@ class TestPreserveBaseCoord:
         assert np.array_equal(dist, expected)
 
     def test_even_subset_of_irregular_coord_canonicalizes(self):
-        """A sample-selected even subset of an irregular coord becomes a CoordRange.
+        """A sample-selected even subset of an irregular coord becomes a range.
 
         Regression guard: array coords must still be re-inferred so slicing that
         happens to be evenly sampled is canonicalized rather than left as an
@@ -1131,7 +1130,7 @@ class TestPreserveBaseCoord:
         patch = dc.Patch(data=np.arange(3.0), coords={"x": coord}, dims=("x",))
         out = patch.select(x=(0, 2), samples=True)  # indices 0..2 -> [0, 1]
         new_coord = out.coords.coord_map["x"]
-        assert isinstance(new_coord, CoordRange)
+        assert new_coord.evenly_sampled
         assert new_coord.evenly_sampled
 
     def test_near_even_coord_keeps_its_values(self):
@@ -1142,27 +1141,27 @@ class TestPreserveBaseCoord:
         inventing sample positions.
         """
         values = np.array([0.0, 1.0, 2.0005, 3.0015, 4.002])
-        coord = CoordMonotonicArray(values=values)
+        coord = NumericND.from_array(values, detect=False)
         cm = get_coord_manager({"distance": coord}, dims=("distance",))
         out = cm.coord_map["distance"]
         assert np.array_equal(out.values, values)
-        # a range here would mean the spacing was made up
-        assert not isinstance(out, CoordRange)
+        # an evenly sampled coord here would mean the spacing was made up
+        assert not out.evenly_sampled
 
     def test_near_even_coord_survives_patch(self):
         """The public Patch path must not move the values either."""
         values = np.array([0.0, 1.0, 2.0005, 3.0015, 4.002])
-        coord = CoordMonotonicArray(values=values)
+        coord = NumericND.from_array(values, detect=False)
         patch = dc.Patch(data=np.zeros(5), coords={"x": coord}, dims=("x",))
         assert np.array_equal(patch.get_coord("x").values, values)
 
     def test_exactly_even_array_still_canonicalizes(self):
         """Preserving values must not disable the lossless collapse."""
         values = np.arange(5, dtype=float)
-        coord = CoordMonotonicArray(values=values)
+        coord = NumericND.from_array(values, detect=False)
         cm = get_coord_manager({"distance": coord}, dims=("distance",))
         out = cm.coord_map["distance"]
-        assert isinstance(out, CoordRange)
+        assert out.evenly_sampled
         assert np.array_equal(out.values, values)
 
 

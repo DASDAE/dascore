@@ -396,3 +396,19 @@ class TestResample:
         """Tests for resample rft axis. See #272."""
         out = random_patch.dft("time", real="time").resample(ft_time=1)
         assert isinstance(out, dc.Patch)
+
+
+class TestDeclaredResampleGrid:
+    """Resampling retains the exact cadence and phase of time grids."""
+
+    def test_fractional_phase_survives(self):
+        """A half-nanosecond phase is retained when the sample count changes."""
+        start = np.datetime64("2020-01-01", "ns")
+        source = dc.get_coord(start=start, step=(1, 1024), shape=(17,))[1:]
+        patch = dc.Patch(data=np.arange(16.0), coords={"time": source}, dims=("time",))
+        result = patch.resample(time=7, samples=True).get_coord("time")
+        # Source phase is 1/2 ns; new interval is 15_625_000/7 ns.
+        ticks = (7 + np.arange(7) * 31_250_000) // 14
+        expected = source[0] + ticks.astype("timedelta64[ns]")
+        np.testing.assert_array_equal(result.values, expected)
+        assert result.evenly_sampled

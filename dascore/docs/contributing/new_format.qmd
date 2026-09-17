@@ -54,7 +54,7 @@ Every scan implementation must accept `snap: bool = True`:
 - `snap=True` may idealize stored coordinates as uniform ranges.
 - `snap=False` must preserve stored coordinate values exactly.
 
-For stored per-sample arrays, use [`get_exact_coord`](`dascore.io.utils.get_exact_coord`) rather than `get_coord(array)`, whose tolerance may hide jitter. Header-defined start/step/count coordinates may treat `snap=False` as a no-op. Exact payloads retain arrays, so use them for targeted files rather than whole directories.
+For stored per-sample arrays, use [`get_coord(data=values)`](`dascore.core.coords.get_coord`), which preserves every supplied label. Declare header-defined grids with `get_coord(start=..., step=..., shape=...)`; those axes may treat `snap=False` as a no-op. Readers that fit measured labels when `snap=True` must request that fitting explicitly, for example with [`get_snapped_coord`](`dascore.io.utils.get_snapped_coord`) for the legacy near-even policy. Exact coordinates retain arrays when no exact grid represents them, so use exact scans for targeted files rather than whole directories.
 
 ## Identify patches within a file
 

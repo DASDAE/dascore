@@ -77,6 +77,10 @@ def _get_null_step_value(summary: CoordSummary):
     return None
 
 
+# What a summary states per run: a table, not columns of a flat dump.
+_RUN_FIELDS = frozenset({"runs", "run_stops", "run_hashes"})
+
+
 def _flatten_coord_summary(
     coord_name: str,
     summary: CoordSummary,
@@ -91,8 +95,9 @@ def _flatten_coord_summary(
     if dim_tuple and coord_name not in exclude:
         out[coord_name] = (summary_dict["min"], summary_dict["max"])
     for field, value in summary_dict.items():
-        # runs are structure, not a flat value; the index reads them whole
-        if field in exclude or field == "runs":
+        # the run table and everything stated run by run is structure, not
+        # a flat value; the index reads it whole
+        if field in exclude or field in _RUN_FIELDS:
             continue
         if field == "dims":
             value = ",".join(value) if value else ""

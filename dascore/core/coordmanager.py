@@ -55,10 +55,9 @@ from rich.text import Text
 from dascore.constants import dascore_styles, select_values_description
 from dascore.core.coords import (
     BaseCoord,
-    CoordArray,
     CoordPartial,
-    CoordRange,
     CoordSummary,
+    NumericND,
     get_coord,
 )
 from dascore.exceptions import (
@@ -187,7 +186,7 @@ def _shift_cell_edge(edge, delta):
             limits.min <= int(edge.min()) + delta
             and int(edge.max()) + delta <= limits.max
         )
-        if isinstance(edge, CoordRange) and delta == int(delta) and in_range:
+        if isinstance(edge, NumericND) and delta == int(delta) and in_range:
             return edge._translated(int(delta))
         values = np.asarray([value.item() + delta for value in edge.values])
         return get_coord(data=values, units=edge.units)
@@ -787,14 +786,13 @@ class CoordManager(RichRepr, DascoreBaseModel):
             if (drop or coord._partial) and old_dims and not new_dims:
                 continue
             key = tuple(indices.get(dim, slice(None)) for dim in old_dims)
-            # Keep slice results compact, including floating grids, as select does.
-            if isinstance(coord, CoordRange) and isinstance(key[0], slice):
+            # Keep slice results compact, including floating grids, as select
+            # does. Labels the coordinate holds are re-read instead: a slice of
+            # them may state a grid the whole did not.
+            table = isinstance(coord, NumericND) and coord.ndim == 1
+            compact = table and coord.labels is None
+            if compact and isinstance(key[0], slice):
                 new_coord = coord[key[0]]
-                if not new_coord.size:
-                    new_coord = CoordArray(
-                        values=np.empty(new_coord.shape, dtype=coord.dtype),
-                        units=coord.units,
-                    )
             elif isinstance(coord, CoordPartial) and new_dims:
                 shape = tuple(
                     len(range(*ind.indices(size)))
@@ -807,12 +805,14 @@ class CoordManager(RichRepr, DascoreBaseModel):
             else:
                 values = (
                     coord._get_index_values(key[0])
-                    if isinstance(coord, CoordRange)
+                    if table and not isinstance(key[0], slice)
                     else np.asarray(_apply_union_indexers(key, coord.values))
                 )
                 new_coord = get_coord(data=values, units=coord.units)
                 if values.dtype.kind not in "US":
-                    original = CoordArray(values=values, units=coord.units)
+                    original = NumericND.from_array(
+                        values, units=coord.units, detect=False
+                    )
                     if new_coord._partial or _canonicalization_moved_values(
                         original, new_coord
                     ):
@@ -1471,16 +1471,14 @@ def _canonicalization_moved_values(original, out) -> bool:
     """
     Return True if canonicalizing `original` to `out` changed any value.
 
-    Collapsing an array coord to a CoordRange is meant to be a change of
-    representation, but the evenness test behind it is tolerant, so a
-    coordinate carrying small real irregularity (measured positions, timing
-    jitter) would be replaced by an idealized ramp. Only the exact case is a
-    canonicalization; the rest is data loss.
+    Collapsing a coordinate to a range may only change its representation.
+    Keep this guard at the manager boundary so coercion cannot replace
+    measured positions or timing jitter with an idealized ramp.
     """
     # Only collapsing to a range can move values, and only a coord we were
-    # handed can be kept, so everything else skips the comparison. A CoordRange
+    # handed can be kept, so everything else skips the comparison. A table
     # cannot reach here; the caller returns it before this is consulted.
-    if original is None or not isinstance(out, CoordRange):
+    if original is None or not (isinstance(out, NumericND) and out.evenly_sampled):
         return False
     # A CoordPartial is a placeholder whose values are all NaN, so it has
     # nothing to lose; canonicalizing it is the whole point.
@@ -1496,15 +1494,21 @@ def _get_coord_dim_map(coords, dims):
 
     def _get_coord(coord):
         """Get a coordinate from various inputs."""
-        # A CoordRange is already canonical (it is the evenly-sampled
-        # representation), so re-parsing it via model_dump -> get_coord is pure
-        # overhead; return it directly. Other coord types are NOT short-circuited:
-        # array coords (CoordArray/CoordMonotonicArray) can be left non-canonical
-        # by slicing (e.g. an evenly spaced subset that should collapse to a
-        # CoordRange), and a fully-specified CoordPartial should canonicalize to a
-        # CoordRange -- get_coord performs that inference.
-        if isinstance(coord, CoordRange):
-            return coord
+        # A table of grid runs is already canonical: they are fused,
+        # reduced and in lowest terms however it was built, so re-parsing
+        # it is pure overhead. One holding its own labels is not: slicing
+        # can leave labels which are evenly sampled after all, and those
+        # should say so. A fully-specified CoordPartial canonicalizes too.
+        if isinstance(coord, NumericND):
+            labels = coord.labels is not None and coord.runs_count == 1
+            if not (labels and coord.ndim == 1):
+                return coord
+            out = get_coord(data=coord.values, units=coord.units, step=coord.step)
+            return (
+                out
+                if out.evenly_sampled and not _canonicalization_moved_values(coord, out)
+                else coord
+            )
         original = coord if isinstance(coord, BaseCoord) else None
         if hasattr(coord, "model_dump"):
             coord = coord.model_dump(exclude_defaults=True)

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import typing
 from contextlib import suppress
+from fractions import Fraction
 from functools import cache
 from inspect import isfunction, ismethod
 from pathlib import Path
@@ -458,7 +459,14 @@ def obspy_to_patch(stream, dim="distance") -> dc.Patch:
     dims = (dim, "time")
     coords = {
         dim: ((dim,), np.asarray(new_dim)),
-        "time": (("time",), dc.to_datetime64(tr.times("timestamp"))),
+        "time": (
+            ("time",),
+            dc.get_coord(
+                start=dc.to_datetime64(str(tr.stats.starttime)),
+                step=1 / Fraction(str(tr.stats.sampling_rate)),
+                shape=(tr.stats.npts,),
+            ),
+        ),
     }
     attrs = _get_attrs(tr)
     patch = dc.Patch(

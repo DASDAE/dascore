@@ -6,6 +6,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
+from dascore.io.utils import get_snapped_coord
 
 _DATASET = "Acquisition/StrainRate"
 _TIME = "Acquisition/Time"
@@ -52,7 +53,8 @@ def _get_time(resource):
         # Times are float64 epoch seconds, so adjacent samples carry a few
         # hundred ns of representation jitter even for a perfect clock. Only
         # the mean step is checked, which still catches a unit mismatch
-        # (ms/us/ns rather than s); get_coord decides on even sampling.
+        # (ms/us/ns rather than s); the reader fits near-even labels only
+        # when snap=True.
         if not np.isclose(steps.mean() * frequency, 1, rtol=5e-2):
             raise ValueError(
                 "Uptech acquisition time disagrees with acquisition_frequency."
@@ -60,10 +62,11 @@ def _get_time(resource):
     return dc.to_datetime64(values)
 
 
-def _get_coords(resource):
+def _get_coords(resource, snap=True):
     """Build time and distance coordinates."""
     data = resource[_DATASET]
-    time = get_coord(data=_get_time(resource))
+    values = _get_time(resource)
+    time = get_snapped_coord(values) if snap else get_coord(data=values)
     # Uptech's sampling interval is the spatial channel pitch. The
     # spatial resolution is the sensing resolution and may be different.
     distance = get_coord(

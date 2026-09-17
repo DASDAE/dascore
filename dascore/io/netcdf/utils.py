@@ -3,11 +3,15 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from fractions import Fraction
+from itertools import pairwise
 from typing import Any, Protocol
 
 import numpy as np
 
 import dascore as dc
+from dascore.core.coords import BaseCoord, NumericND, concat_tables
+from dascore.exceptions import CoordError
 
 XDAS_PAYLOAD_VARIABLE = "__values__"
 
@@ -70,35 +74,74 @@ def get_cf_version(h5file: _HasAttrs) -> str | None:
     return None
 
 
-def _get_tie_point_coord(h5file, coord_name: str, coord_len: int) -> np.ndarray | None:
-    """Decode one XDAS-style tie-point coordinate array."""
+def _get_tie_point_coord(h5file, coord_name: str, coord_len: int) -> BaseCoord | None:
+    """Decode XDAS ties as grid runs without expanding the sample axis."""
     values_name = f"{coord_name}_values"
     indices_name = f"{coord_name}_indices"
     if values_name not in h5file:
         return None
     values_var = h5file[values_name]
-    values = values_var[:]
+    values = np.asarray(values_var[:])
     if indices_name in h5file:
-        indices = h5file[indices_name][:]
+        indices = np.asarray(h5file[indices_name][:])
         if len(values) >= 2 and len(indices) >= 2:
-            sample_index = np.arange(coord_len, dtype=np.float64)
-            if np.issubdtype(np.asarray(values).dtype, np.datetime64):
-                value_ns = values.astype("datetime64[ns]").astype(np.int64)
-                values = np.interp(sample_index, indices, value_ns).astype(np.int64)
-                values = values.astype("datetime64[ns]")
-            else:
-                values = np.interp(sample_index, indices, values)
-    return values
+            if (
+                len(indices) != len(values)
+                or indices.dtype.kind not in "iu"
+                or np.any(np.diff(indices.astype(np.int64)) <= 0)
+            ):
+                raise CoordError(
+                    "XDAS tie indices must be distinct increasing integers "
+                    "matching the values."
+                )
+            temporal = values.dtype.kind in "Mm"
+            if temporal:
+                values = (
+                    dc.to_datetime64(values)
+                    if values.dtype.kind == "M"
+                    else dc.to_timedelta64(values)
+                )
+            runs = []
+            zero = Fraction(0) if temporal else 0.0
+            if indices[0] > 0:
+                start = values[0] if temporal else float(values[0])
+                runs.append(
+                    NumericND.from_run(start, zero, min(int(indices[0]), coord_len))
+                )
+            for i, (left, right) in enumerate(pairwise(indices)):
+                length = int(right) - int(left)
+                if temporal:
+                    ticks = int(values[i + 1].view("i8")) - int(values[i].view("i8"))
+                    step = Fraction(ticks, length * 1_000_000_000)
+                    start = values[i]
+                else:
+                    start = float(values[i])
+                    step = (float(values[i + 1]) - start) / length
+                # Each shared tie belongs to the following run. Only the
+                # last interval owns its right endpoint.
+                lo = max(0, int(left))
+                hi = min(coord_len, int(right) + (i == len(indices) - 2))
+                if hi > lo:
+                    run = NumericND.from_run(start, step, length + 1)
+                    runs.append(run._sliced(lo - int(left), 1, hi - lo))
+            tail = max(int(indices[-1]) + 1, 0)
+            if tail < coord_len:
+                start = values[-1] if temporal else float(values[-1])
+                runs.append(NumericND.from_run(start, zero, coord_len - tail))
+            if not runs:
+                return dc.get_coord(data=values[:0])
+            return concat_tables(*runs)
+    return dc.get_coord(data=values)
 
 
-def _get_dim_coord(h5file, coord_name: str, coord_len: int) -> np.ndarray:
+def _get_dim_coord(h5file, coord_name: str, coord_len: int) -> BaseCoord | np.ndarray:
     """Return one dimension coordinate for a coord-less payload variable."""
     tied_values = _get_tie_point_coord(h5file, coord_name, coord_len)
     if tied_values is not None:
         return tied_values
     if coord_name in h5file:
         return h5file[coord_name][:]
-    return np.arange(coord_len)
+    return dc.get_coord(start=0, step=1, shape=(coord_len,))
 
 
 def get_coord_manager_for_coordless_data_var(

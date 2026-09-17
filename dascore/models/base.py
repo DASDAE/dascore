@@ -64,6 +64,24 @@ def values_equal(val1, val2) -> bool:
         arr1, arr2 = np.asarray(val1), np.asarray(val2)
         if arr1.shape != arr2.shape:
             return False
+        if arr1.dtype.names or arr2.dtype.names:
+            # A record array -- a coordinate's run table -- states exact
+            # values, so there is no tolerance to compare it within, and
+            # pandas cannot test its fields for nulls at all. A null start
+            # (the first label of a run of NaNs) counts as equal to itself,
+            # as every other null does here.
+            if arr1.dtype != arr2.dtype:
+                return False
+            return all(
+                np.array_equal(
+                    arr1[name], arr2[name], equal_nan=arr1[name].dtype.kind == "f"
+                )
+                for name in arr1.dtype.names
+            )
+        if arr1.dtype.kind in "iub" and arr2.dtype.kind in "iub":
+            # Whole numbers -- run hashes, tick counts -- are exact too; a
+            # relative tolerance on them calls distinct values equal.
+            return bool(np.array_equal(arr1, arr2))
         if not np.array_equal(pd.isnull(arr1), pd.isnull(arr2)):
             return False
         return bool(all_close(arr1, arr2))

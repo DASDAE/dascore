@@ -8,7 +8,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.core import get_coord
-from dascore.io.utils import get_exact_coord
+from dascore.io.utils import get_snapped_coord
 
 # --- Getting format/version
 
@@ -52,8 +52,8 @@ def _get_cf_coords(hdf_fi, minimal=False, snap=True) -> dc.core.CoordManager:
         """Return a tolerant or exact coordinate from stored values."""
         values = np.asarray(values)
         if snap:
-            return get_coord(data=values, units=units)
-        return get_exact_coord(values, units=units)
+            return get_snapped_coord(values, units=units)
+        return get_coord(data=np.atleast_1d(values), units=units)
 
     def _get_spatialcoord(hdf_fi, code):
         """Get spatial coord."""
