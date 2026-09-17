@@ -13,6 +13,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import PatchType
+from dascore.transform.fourier import DFT_OUTPUT_DATA_TYPE_MAP
 from dascore.units import Quantity
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import broadcast_for_index
@@ -41,6 +42,11 @@ _DFT_OUTPUT_TO_FORMAT = {
     "AS": "amplitude",
     "PS": "power",
     "PSD": "density",
+}
+# The data_type values dft assigns, eg "power_spectral_density".
+_DATA_TYPE_TO_FORMAT = {
+    name: _DFT_OUTPUT_TO_FORMAT[output]
+    for output, name in DFT_OUTPUT_DATA_TYPE_MAP.items()
 }
 
 
@@ -130,8 +136,9 @@ def _normalize_spectral_format(
         return "fft"
 
     data_type = patch.attrs.get("data_type")
-    # dft names its outputs with underscores (eg amplitude_spectrum)
-    type_key = "" if data_type is None else str(data_type).lower().replace("_", " ")
+    if data_type in _DATA_TYPE_TO_FORMAT:
+        return _DATA_TYPE_TO_FORMAT[data_type]
+    type_key = "" if data_type is None else str(data_type).lower()
     if type_key in _SPECTRAL_FORMAT_ALIASES:
         return _SPECTRAL_FORMAT_ALIASES[type_key]
     if np.iscomplexobj(patch.data):

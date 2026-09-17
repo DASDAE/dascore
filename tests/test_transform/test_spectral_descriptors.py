@@ -236,6 +236,20 @@ class TestSpectralValidation:
         out = spectrum.update_attrs(data_type=data_type).spectral_centroid()
         assert np.allclose(out.data, 2.0)
 
+    @pytest.mark.parametrize(
+        "data_type, expected",
+        [
+            ("amplitude_spectrum", "amplitude"),
+            ("power_spectrum", "power"),
+            ("power_spectral_density", "density"),
+        ],
+    )
+    def test_dft_data_type_inference(self, spectrum, data_type, expected):
+        """The data_type values dft assigns identify unmarked spectra."""
+        patch = spectrum.update_attrs(data_type=data_type)
+        out = spectral_descriptors._normalize_spectral_format(patch, "auto")
+        assert out == expected
+
     def test_complex_inference(self, spectrum):
         """Unmarked complex spectra are interpreted as Fourier coefficients."""
         patch = spectrum.update(data=spectrum.data.astype(complex))
