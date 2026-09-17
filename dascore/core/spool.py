@@ -1682,6 +1682,7 @@ class Spool(NodeRepr, NamespaceOwner):
         conflict: Literal["drop", "raise", "keep_first"] = "raise",
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "raise",
+        fill_value=None,
         **kwargs,
     ):
         """
@@ -1716,6 +1717,7 @@ class Spool(NodeRepr, NamespaceOwner):
             conflict=conflict,
             group=group,
             missing_dim=missing_dim,
+            fill_value=fill_value,
             **kwargs,
         )
         return coalesce_runs(plan, working)
@@ -2002,6 +2004,7 @@ class Spool(NodeRepr, NamespaceOwner):
         conflict: Literal["drop", "raise", "keep_first"] = "raise",
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "raise",
+        fill_value=None,
         **kwargs,
     ) -> Self:
         """
@@ -2017,10 +2020,10 @@ class Spool(NodeRepr, NamespaceOwner):
             This often occurs because of data gaps or at end of chunks.
         snap_coords
             If True (default), simplify the coordinates of joined patches to
-            an evenly sampled range when doing so moves no coordinate value
-            by more than `tolerance` (samples, or the length itself when
-            the tolerance states one). Merges whose gaps exceed that keep
-            an exact segmented coordinate instead.
+            an evenly sampled range, absorbing the sub-sample jitter of
+            labels rounded on their way to a file. A merge across a hole
+            keeps an exact segmented coordinate however wide the tolerance:
+            missing samples are absent data, not a slower sampling rate.
         tolerance
             The maximum number of samples a block of data can be spaced (gap)
             and still be considered contiguous. A quantity or timedelta
@@ -2047,6 +2050,15 @@ class Spool(NodeRepr, NamespaceOwner):
         missing_dim
             What to do when patches lack the chunked dimension: "raise"
             (default) or "drop" (exclude them from the output).
+        fill_value
+            If given, the value written into the samples missing from a
+            merge, so an output spanning a hole is evenly sampled rather
+            than segmented. `tolerance` still decides which holes are
+            bridged at all: a hole it does not span separates patches as
+            before, and nothing is filled across it. The value has to
+            survive a cast to the data's own dtype, so `np.nan` needs
+            float data; fill integer data with an integer, or cast it
+            first.
         kwargs
             kwargs are used to specify the dimension along which to chunk, eg:
             `time=10` chunks along the time axis in 10 second increments.
@@ -2057,6 +2069,8 @@ class Spool(NodeRepr, NamespaceOwner):
 
         Examples
         --------
+        >>> import numpy as np
+        >>>
         >>> import dascore as dc
         >>> from dascore.units import s, megabytes
         >>>
@@ -2069,6 +2083,8 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> size_chunked = spool.chunk(time=1 * megabytes)
         >>> # merge along time axis
         >>> time_merged = spool.chunk(time=...)
+        >>> # merge across holes of up to 9 missing samples, filling them
+        >>> gapless = spool.chunk(time=..., tolerance=10, fill_value=np.nan)
 
         Notes
         -----
@@ -2101,12 +2117,14 @@ class Spool(NodeRepr, NamespaceOwner):
             conflict=conflict,
             group=group,
             missing_dim=missing_dim,
+            fill_value=fill_value,
             **kwargs,
         )
         plan = coalesce_runs(plan, working)
         merge_kwargs = {
             "conflict": conflict,
             "snap_coords": snap_coords,
+            "fill_value": fill_value,
             # the plan's copy is normalized (eg a dimensionless quantity
             # has become the plain multiple it means)
             "tolerance": plan.params["tolerance"],
