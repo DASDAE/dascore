@@ -431,6 +431,24 @@ class TestXdasVirtual:
         with pytest.raises(FileNotFoundError):
             dc.read(path)
 
+    @pytest.mark.parametrize(
+        "windows",
+        [
+            {"time": (5, 5)},
+            {"time": (5, 2)},
+            {"distance": (3, 3)},
+            {"distance": (6, 2)},
+        ],
+    )
+    def test_empty_window_with_missing_source(self, virtual_path, windows):
+        """Interior empty/reversed windows never open a missing virtual source."""
+        path, source = virtual_path
+        source.unlink()
+        data = XdasV1().read_array(path, windows)
+        assert data.size == 0
+        expected_shape = (0, 9) if "time" in windows else (31, 0)
+        assert data.shape == expected_shape
+
     def test_same_file_source(self, tmp_path):
         """A VDS can refer to a signal stored elsewhere in its own file."""
         path = tmp_path / "same_file.nc"

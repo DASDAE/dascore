@@ -429,7 +429,7 @@ def require_filters(node, slices=None):
             if bounds is not None:
                 lower, upper = source.vspace.get_select_bounds()
                 if any(
-                    stop <= left or start > right
+                    start >= stop or stop <= left or start > right
                     for (start, stop, _), left, right in zip(
                         bounds, lower, upper, strict=True
                     )
