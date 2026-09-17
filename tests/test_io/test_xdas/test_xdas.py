@@ -13,6 +13,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import PatchAttributeError
+from dascore.io.h5simple.core import H5Simple
 from dascore.io.netcdf.core import NetCDFCFV18
 from dascore.io.xdas.core import XdasV1
 from dascore.io.xdas.utils import interpolate_coord
@@ -38,6 +39,7 @@ class TestXdas:
         path, *_ = example
         assert XdasV1().get_format(path) == ("xdas", "1")
         assert NetCDFCFV18().get_format(path) is False
+        assert H5Simple().get_format(path) is False
         assert dc.get_format(path) == ("xdas", "1")
 
     def test_read(self, example):
@@ -143,6 +145,7 @@ class TestXdas:
         )
         ds.to_netcdf(path, engine="h5netcdf")
         assert dc.get_format(path) == ("NETCDF_CF", "1.8")
+        assert H5Simple().get_format(path) is False
         np.testing.assert_array_equal(
             dc.read(path, file_format="xdas", file_version="1")[0].data, ds.data.values
         )
@@ -553,3 +556,79 @@ class TestReviewRegressions:
         np.testing.assert_array_equal(
             dc.read(path)[0].get_array("time"), [10, 11, 0, 1]
         )
+
+    @pytest.mark.parametrize("convention", ["CF-1.5", "CF-1.8", "CF-invalid"])
+    def test_h5simple_with_cf_label(self, tmp_path, convention):
+        """A CF label without NetCDF dimensions still permits H5Simple inference."""
+        path = tmp_path / "labelled.h5"
+        with h5py.File(path, "w") as handle:
+            handle.attrs["Conventions"] = convention
+            handle.create_dataset("data", data=np.ones((5, 3)))
+            time = handle.create_dataset("time", data=1_700_000_000.0 + np.arange(5))
+            if convention == "CF-invalid":
+                time.make_scale("time")
+                handle["data"].dims[0].attach_scale(time)
+        assert H5Simple().get_format(path) == ("H5Simple", "1")
+        patch = H5Simple().read(path)[0]
+        assert patch.dims == ("time", "channel")
+
+    def test_generic_fractional_grid_consistency(self, tmp_path):
+        """A CF grid rounded to nanoseconds has identical exact scan/read labels."""
+        path = tmp_path / "3000hz.nc"
+        times = np.datetime64("2025-01-01", "ns") + np.rint(
+            np.arange(20) * 1e9 / 3000
+        ).astype("timedelta64[ns]")
+        xr.Dataset(
+            {"data": ("time", np.arange(20))},
+            coords={"time": times},
+            attrs={"Conventions": "CF-1.8"},
+        ).to_netcdf(path, engine="h5netcdf")
+        for snap in (False, True):
+            payload = NetCDFCFV18().scan(path, snap=snap)[0]
+            read = dc.read(path, snap=snap)[0]
+            np.testing.assert_array_equal(payload["coords"].get_array("time"), times)
+            np.testing.assert_array_equal(read.get_array("time"), times)
+            assert (
+                payload["coords"].get_coord("time").step == read.get_coord("time").step
+            )
+
+    def test_virtual_selection_ignores_unrelated_missing_source(self, tmp_path):
+        """Selecting one virtual block does not open an unrelated archived block."""
+        path = tmp_path / "two_sources.nc"
+        data, times, _ = write_xdas(path)
+        source = tmp_path / "present.h5"
+        with h5py.File(source, "w") as handle:
+            handle.create_dataset("values", data=data[:15])
+        with h5py.File(path, "r+") as handle:
+            attrs = dict(handle["strain rate"].attrs)
+            del handle["strain rate"]
+            layout = h5py.VirtualLayout(shape=data.shape, dtype=data.dtype)
+            layout[:15] = h5py.VirtualSource(str(source), "values", shape=(15, 9))
+            layout[15:] = h5py.VirtualSource(
+                str(tmp_path / "missing.h5"), "values", shape=(16, 9)
+            )
+            node = handle.create_virtual_dataset("strain rate", layout)
+            for name, value in attrs.items():
+                node.attrs[name] = value
+        selected = dc.read(path, time=(times[1], times[4]))[0]
+        np.testing.assert_array_equal(selected.data, data[1:5])
+        np.testing.assert_array_equal(
+            dc.spool(path).select(time=(times[1], times[4]))[0].data, data[1:5]
+        )
+        np.testing.assert_array_equal(
+            XdasV1().read_array(path, {"time": (1, 5)}), data[1:5]
+        )
+        with pytest.raises(FileNotFoundError):
+            dc.read(path, time=(times[20], times[25]))
+        assert len(dc.read(path, time=(times[-1] + np.timedelta64(1, "s"), None))) == 0
+
+    def test_noncontiguous_and_scalar_selection(self, tmp_path):
+        """Exact sample lists and scalar coordinates do not widen the loaded data."""
+        path = tmp_path / "selection.nc"
+        ds, data, times, distances = xdas_dataset()
+        ds = ds.assign_coords(experiment=7)
+        ds.to_netcdf(path, engine="h5netcdf")
+        patch = dc.read(
+            path, time=times[[1, 4]], distance=distances[[1, 3, 5]], experiment=(7, 7)
+        )[0]
+        np.testing.assert_array_equal(patch.data, data[np.ix_([1, 4], [1, 3, 5])])

@@ -248,7 +248,7 @@ class NetCDFCFV18(FiberIO):
 
     @staticmethod
     def _get_scan_coord(coord, snap=True):
-        """Return a coordinate for scanning; snap only controls exactness."""
+        """Return the stored coordinate labels exactly, preserving their units."""
         values = coord.values
         if np.ndim(values) != 1:
             return values

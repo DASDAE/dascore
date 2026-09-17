@@ -388,12 +388,53 @@ def get_attrs(variable, key):
     return attrs | {"_source_patch_key": key}
 
 
-def require_filters(node):
+def selection_slices(coords, selection):
+    """Bound a coordinate selection in sample space without touching signal data."""
+    bounds = {
+        dim: (0, size) for dim, size in zip(coords.dims, coords.shape, strict=True)
+    }
+    for name, value in selection.items():
+        dims = coords.dim_map[name]
+        if len(dims) != 1:
+            continue
+        dim = dims[0]
+        coord = coords.get_coord(name)
+        _, indexer = coord.select(value)
+        if isinstance(indexer, slice):
+            start, stop, _ = indexer.indices(len(coord))
+        else:
+            indices = np.flatnonzero(indexer) if indexer.dtype == bool else indexer
+            start, stop = (
+                (int(indices.min()), int(indices.max()) + 1) if len(indices) else (0, 0)
+            )
+        left, right = bounds[dim]
+        bounds[dim] = (max(left, start), min(right, stop))
+    return tuple(slice(*bounds[dim]) for dim in coords.dims)
+
+
+def require_filters(node, slices=None):
     """Register optional HDF5 codecs only when the signal needs them."""
     if node.is_virtual:
+        bounds = (
+            None
+            if slices is None
+            else tuple(
+                window.indices(size)
+                for window, size in zip(slices, node.shape, strict=True)
+            )
+        )
         # HDF5 silently substitutes fill values for missing virtual sources.
         # Check the sources and register their codecs before reading the VDS.
         for source in node.virtual_sources():
+            if bounds is not None:
+                lower, upper = source.vspace.get_select_bounds()
+                if any(
+                    stop <= left or start > right
+                    for (start, stop, _), left, right in zip(
+                        bounds, lower, upper, strict=True
+                    )
+                ):
+                    continue
             filename = unbyte(source.file_name)
             if filename == ".":
                 require_filters(node.file[source.dset_name])

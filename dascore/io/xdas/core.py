@@ -15,6 +15,7 @@ from dascore.io.xdas.utils import (
     is_xdas_file,
     open_signals,
     require_filters,
+    selection_slices,
 )
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.io import _normalize_source_patch_keys
@@ -64,7 +65,7 @@ class XdasV1(FiberIO):
                     for name, value in kwargs.items()
                     if name in coords.coord_map and value is not None
                 }
-                require_filters(node)
+                require_filters(node, selection_slices(coords, selection))
                 coords, data = coords.select(array=variable, **selection)
                 if data.size:
                     patches.append(
@@ -90,5 +91,5 @@ class XdasV1(FiberIO):
         with open_signals(resource) as signals:
             _, variable, _, node = resolve_keyed_source(signals, source_patch_key)
             slices = windows_to_slices(windows, variable.dims, variable.shape)
-            require_filters(node)
+            require_filters(node, slices)
             return variable[slices].to_numpy()
