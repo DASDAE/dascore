@@ -17,6 +17,10 @@ from dascore.io.index.ingest import _coord_record, summaries_to_records
 from dascore.io.index.planned import _coord_record_from_row
 from dascore.utils.patch_assembly import coord_from_row
 
+# Whether this machine has no dtype wider than a double, as Windows and
+# macOS on arm do, which is what makes "float128" a name rather than a dtype.
+_NO_LONG_DOUBLE = np.dtype(np.longdouble).itemsize <= 8
+
 T0 = np.datetime64("2020-01-01T00:00:00")
 
 
@@ -221,11 +225,19 @@ class TestRowsRefused:
         "changes",
         [
             {"_x_coord_dtype": None},  # no dtype to count the rows in
+            # a name this machine has no dtype for (a long double elsewhere)
+            {"_x_coord_dtype": "float128" if _NO_LONG_DOUBLE else "quadruple"},
             {"_x_coord_dtype": "<U4"},  # nor any arithmetic for text
             {"x_min": pd.Timestamp("2020-01-01")},  # a time under a float dtype
             {"_x_coord_dtype": "int64", "_x_runs": ((2**60, 5, 1, 1, 0),) * 2},
         ],
-        ids=["no dtype", "text", "placeholder dtype", "past float precision"],
+        ids=[
+            "no dtype",
+            "unknown dtype",
+            "text",
+            "placeholder dtype",
+            "past float precision",
+        ],
     )
     def test_rows_the_table_cannot_be_counted_from(self, changes):
         """Anything short of an exact statement rebuilds nothing from runs."""

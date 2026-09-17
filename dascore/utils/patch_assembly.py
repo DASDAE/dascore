@@ -330,6 +330,22 @@ def _units_converted(row: Mapping, dim: str) -> bool:
     return not _is_null(source_units) and source_units != row.get(f"_{dim}_units")
 
 
+def _row_dtype(row: Mapping, dim: str) -> np.dtype | None:
+    """
+    The dtype a row states its coordinate in, or None.
+
+    A name this machine has no dtype for -- a long double where a double
+    is as wide as they come -- states a coordinate it cannot restate.
+    """
+    stored = row.get(f"_{dim}_coord_dtype")
+    if not isinstance(stored, str) or not stored:
+        return None
+    try:
+        return normalize_coord_dtype(stored)
+    except TypeError:
+        return None
+
+
 def _coord_from_runs(row: Mapping, dim: str, units=None):
     """
     The coordinate a row's run table states, or None where it states none.
@@ -342,11 +358,8 @@ def _coord_from_runs(row: Mapping, dim: str, units=None):
     runs = row.get(f"_{dim}_runs")
     if not isinstance(runs, tuple) or not runs or _units_converted(row, dim):
         return None
-    stored = row.get(f"_{dim}_coord_dtype")
-    if not isinstance(stored, str) or not stored:
-        return None
-    dtype = normalize_coord_dtype(stored)
-    if dtype.kind not in "iuMmf":
+    dtype = _row_dtype(row, dim)
+    if dtype is None or dtype.kind not in "iuMmf":
         return None
     if dtype.kind == "f" and dtype.itemsize > 8:
         # The table holds a non-ticked start as f8, which cannot have held
@@ -404,8 +417,7 @@ def coord_from_row(row: Mapping, dim: str, units=None):
             )
         # A float run states its own terms too, counted from its origin
         # where that is not its first label, so no label is re-derived.
-        stored = row.get(f"_{dim}_coord_dtype")
-        dtype = normalize_coord_dtype(stored) if isinstance(stored, str) else None
+        dtype = _row_dtype(row, dim)
         if dtype is not None and dtype.kind == "f" and dtype.itemsize <= 8:
             anchor = float(start) if not origin or origin[0] is None else origin[0]
             runs = runs_from_rows([(anchor, length, num, den, offset)], dtype)
