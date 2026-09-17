@@ -17,6 +17,7 @@ from dascore.io.utils import (
     resolve_keyed_source,
     windows_to_slices,
 )
+from dascore.io.xdas.utils import is_xdas_file
 from dascore.utils.hdf5 import H5Reader, get_h5py_file
 from dascore.utils.misc import optional_import, raise_on_extra_kwargs
 from dascore.xarray import patch_to_xarray
@@ -111,7 +112,7 @@ class NetCDFCFV18(FiberIO):
         **kwargs,
     ) -> tuple[str, str] | Literal[False]:
         """Return format tuple if file is a CF-convention NetCDF-4, else False."""
-        if not is_netcdf4_file(resource):
+        if not is_netcdf4_file(resource) or is_xdas_file(resource):
             return False
         cf_version = get_cf_version(resource)
         if not cf_version:
