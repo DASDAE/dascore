@@ -235,7 +235,7 @@ def _get_gauge_length(patch: PatchType, gauge_length) -> float:
     raise ParameterError(msg)
 
 
-@patch_function()
+@patch_function(version="1.1")
 def radians_to_strain(
     patch: PatchType,
     gauge_length=None,
@@ -252,8 +252,9 @@ def radians_to_strain(
     Parameters
     ----------
     gauge_length ($L_g$)
-        The gauge length in meters. Only required for phase that is not
-        already normalized per unit length.
+        The gauge length in meters. Only used for phase that is not already
+        normalized per unit length (rad or rad/s); ignored for rad/m and
+        rad/(m*s).
     wave_length ($\lambda$)
         The laser wavelength in m.
     stress_constant ($\zeta$)

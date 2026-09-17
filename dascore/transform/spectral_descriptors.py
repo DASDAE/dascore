@@ -74,8 +74,8 @@ _SPECTRAL_PARAMETER_DOCS = {
     "negative_frequencies": """
     negative_frequencies
         How to handle negative frequency bins. ``"auto"`` drops negative bins
-        only when power is symmetric, ``"drop"`` always uses non-negative
-        frequencies, ``"raise"`` rejects spectra with negative bins, and
+        when power is symmetric and raises otherwise, ``"drop"`` always uses
+        non-negative frequencies, ``"raise"`` rejects spectra with negative bins, and
         ``"keep"`` includes them in the calculation.
     """,
 }
@@ -84,10 +84,7 @@ _SPECTRAL_PARAMETER_DOCS = {
 def _get_frequency_dim(patch: PatchType, dim: str | None) -> str:
     """Return the Fourier frequency dimension to use."""
     ft_dims = tuple(x for x in patch.dims if x.startswith("ft_"))
-    stft_dim = patch.attrs.get("_stft_frequency_dimension")
     if dim is None:
-        if stft_dim in patch.dims:
-            return stft_dim
         if len(ft_dims) == 1:
             return ft_dims[0]
         if not ft_dims:
@@ -129,11 +126,12 @@ def _normalize_spectral_format(
     dft_output = patch.attrs.get("_dft_output")
     if dft_output in _DFT_OUTPUT_TO_FORMAT:
         return _DFT_OUTPUT_TO_FORMAT[dft_output]
-    if patch.attrs.get("_stft_performed", False):
+    if "_stft_real" in dict(patch.attrs):
         return "fft"
 
     data_type = patch.attrs.get("data_type")
-    type_key = "" if data_type is None else str(data_type).lower()
+    # dft names its outputs with underscores (eg amplitude_spectrum)
+    type_key = "" if data_type is None else str(data_type).lower().replace("_", " ")
     if type_key in _SPECTRAL_FORMAT_ALIASES:
         return _SPECTRAL_FORMAT_ALIASES[type_key]
     if np.iscomplexobj(patch.data):
