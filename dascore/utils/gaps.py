@@ -150,6 +150,17 @@ class GapTolerance:
         _check_tolerance_value(tolerance, name, allow_infinite=True)
         return cls(count=float(tolerance))
 
+    def allowance(self, step):
+        """
+        How far a label may move under this tolerance, given the ``step``.
+
+        The same two spellings read as a bound on a label's displacement
+        rather than on a spacing: so many steps, or the excess itself.
+        """
+        if self.count is not None:
+            return np.abs(step) * self.count
+        return self.excess
+
     def is_gap(self, delta, step):
         """
         Whether each spacing ``delta`` is a gap against sampling ``step``.

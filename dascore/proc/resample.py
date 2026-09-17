@@ -303,11 +303,12 @@ def resample(
     # do the resampling
     count = int(np.round(new_len))
     data = compat.resample(patch.data, count, axis=axis, window=window)
-    assert isinstance(coord, NumericND) and coord.step_exact is not None
-    actual_step = coord.step_exact * Fraction(len(coord), count)
+    assert isinstance(coord, NumericND)
     temporal = dtype_time_like(coord.dtype)
     grid: dict[str, Any]
     if temporal:
+        assert coord.step_exact is not None
+        actual_step = coord.step_exact * Fraction(len(coord), count)
         _, den, phase = coord._grid_terms
         ticks = actual_step * 1_000_000_000
         common = math.lcm(ticks.denominator, den)
@@ -317,7 +318,7 @@ def resample(
             origin_offset=phase * (common // den),
         )
     else:
-        grid = dict(step=float(actual_step))
+        grid = dict(step=float(coord.step) * len(coord) / count)
     new_coord = dc.get_coord(
         start=coord[0] if temporal else float(coord[0]),
         shape=(count,),

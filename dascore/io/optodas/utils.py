@@ -7,7 +7,7 @@ import numpy as np
 import dascore as dc
 import dascore.core
 from dascore.core.coords import get_coord
-from dascore.io.utils import build_patches
+from dascore.io.utils import build_patches, wants_snap
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
@@ -56,7 +56,8 @@ def _get_coord_manager(fi, snap=True):
             # The channels are ints so we multiply by step to get distance.
             channels = fi["/header/channels"][:]
             strides = np.diff(channels)
-            if snap and len(strides) and np.all(strides == strides[0]) and strides[0]:
+            even = len(strides) and np.all(strides == strides[0]) and strides[0]
+            if wants_snap(snap, "distance") and even:
                 coord = get_coord(
                     start=channels[0] * step,
                     step=int(strides[0]) * step,

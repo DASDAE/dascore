@@ -10,7 +10,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.core.coords import get_coord
-from dascore.io.utils import get_gridded_coord, get_snapped_coord
+from dascore.io.utils import get_gridded_coord, snap_stored_coord, wants_snap
 from dascore.utils.misc import maybe_get_items, unbyte
 
 _G1_H5_BASE_DATASETS = frozenset(
@@ -194,7 +194,7 @@ def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
         )
         raise ValueError(msg)
     time_values = np.atleast_1d(dc.to_datetime64(starts))
-    time = get_snapped_coord(time_values) if snap else get_coord(data=time_values)
+    time = snap_stored_coord(get_coord(data=time_values), snap, "time")
     # Each sample covers a window rather than being instantaneous, so keep how
     # long it ran. The span is differenced off the raw arrays rather than
     # stored as end_times: starts and ends are each near-regular and snap to
@@ -206,7 +206,7 @@ def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
     # only restate a grid, quantized to float32. Explicitly restore that
     # declared sampling instead of asking the exact array factory to fit it.
     distances = resource["distances"][...]
-    if snap:
+    if wants_snap(snap, "distance"):
         distance = get_gridded_coord(distances, units="m")
     else:
         distance = get_coord(data=np.atleast_1d(distances), units="m")

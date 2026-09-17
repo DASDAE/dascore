@@ -1193,7 +1193,7 @@ def _get_dx_or_spacing_and_axes(
         if coord.evenly_sampled:
             val = coord.step
         else:
-            val = coord.data
+            val = coord.values
         # need to convert val to float so datetimes work
         out.append(to_float(val))
         axes.append(patch.get_axis(dim_))
@@ -1524,9 +1524,9 @@ def _merge_aligned_coords(cm1, cm2):
         if coord1.approx_equal(coord2) and dim1 == dim2:
             out[name] = (dim1, coord1)
         # Deal with Non coords
-        non_count = sum([coord1._partial, coord2._partial])
+        non_count = sum([not coord1.has_values, not coord2.has_values])
         if non_count == 1:
-            out[name] = (dim1, coord1 if coord2._partial else coord2)
+            out[name] = (dim1, coord2 if coord2.has_values else coord1)
         elif non_count == 2:
             out[name] = (dim1, coord1 if coord1.size > coord2.size else coord2)
         assert name in out

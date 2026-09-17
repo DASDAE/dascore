@@ -278,9 +278,11 @@ def _run_table(row: Mapping, name: str, coord_dtype: str, lo, hi):
     grid = row.get(f"_{name}_grid")
     if not isinstance(grid, tuple):
         return None
-    num, den, offset, length = grid
-    start = hi if num < 0 else lo
-    return runs_from_rows([(_as_tick(start, dtype), length, num, den, offset)], dtype)
+    num, den, offset, length, *origin = grid
+    start = _as_tick(hi if num < 0 else lo, dtype)
+    if origin and origin[0] is not None:
+        start = origin[0]
+    return runs_from_rows([(start, length, num, den, offset)], dtype)
 
 
 def _extrema(grouped, how: str) -> np.ndarray:

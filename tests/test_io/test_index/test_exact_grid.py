@@ -85,7 +85,8 @@ class TestFlatRelation:
         """
         df = indexed._catalog.to_df()
         grid = df["_time_grid"].iloc[0]
-        assert grid == (1953125, 2, 0, 2000)
+        # the terms, the length, and no origin: a tick run starts on its grid
+        assert grid == (1953125, 2, 0, 2000, None)
         assert df["_distance_grid"].iloc[0] is None
 
     def test_coord_from_row(self, indexed, hz_1024_patch):
@@ -171,9 +172,9 @@ class TestFlatRelation:
         row = indexed._catalog.to_df().iloc[0].to_dict()
         reversed_time = hz_1024_patch.get_coord("time")[::-1]
         num, den, offset = (
-            reversed_time.step_numerator,
-            reversed_time.step_denominator,
-            reversed_time.origin_offset,
+            reversed_time._grid_terms[0],
+            reversed_time._grid_terms[1],
+            reversed_time._grid_terms[2],
         )
         row["time_step"] = -row["time_step"]
         row["_time_grid"] = (num, den, offset, len(reversed_time))
@@ -188,7 +189,7 @@ class TestFlatRelation:
         coord = coord_from_row(row, "x")
         assert coord is not None
         assert coord.dtype == np.dtype("float64")
-        assert coord.step_numerator is None
+        assert not coord._exact
 
 
 class TestRowsRefused:

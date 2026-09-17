@@ -43,6 +43,18 @@ from rich.text import Text
 import dascore as dc
 from dascore.compat import array, is_array
 from dascore.constants import _AGG_FUNCS, DIM_REDUCE_DOCS, dascore_styles
+from dascore.core._run_kernels import (
+    _INT64_MAX,
+    FloatKernel,
+    TickKernel,
+    _record_dtype,
+    _rows,
+    _same_labels,
+    _ticked,
+    float_rows,
+    float_terms,
+    get_kernel,
+)
 from dascore.exceptions import CoordError, ParameterError
 from dascore.models import (
     ArrayLike,
@@ -293,8 +305,10 @@ def _legacy_grid_runs(data: Mapping, dtype) -> np.ndarray | None:
         else:
             span = abs(float(ends[1]) - float(ends[0]))
             length = int(span * den // abs(num)) + 1
-    anchor = _to_tick(start) if ticked else float(np.asarray(start))
-    return _rows(dtype, [anchor], [int(length)], [num], [den], [offset])
+    if not ticked:
+        # the fraction an older float range stated is the step it divides to
+        return float_rows(dtype, [float(np.asarray(start))], [int(length)], num / den)
+    return _rows(dtype, [_to_tick(start)], [int(length)], [num], [den], [offset])
 
 
 class CoordSummary(DascoreBaseModel):
@@ -640,7 +654,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
 
     @model_validator(mode="before")
     @classmethod
-    def check_time_units(cls, data: Any) -> Any:
+    def _check_time_units(cls, data: Any) -> Any:
         """Ensure time units are s if dtype is time-like."""
         if isinstance(data, dict):
             # This handles the coord range case.
@@ -833,7 +847,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         if isinstance(self, CoordPartial) or isinstance(other, CoordPartial):
             valid_non_coord(self, other)
             return self, other, slice(None), slice(None)
-        data1, data2 = self.data, other.data
+        data1, data2 = self.values, other.values
         intersection = np.intersect1d(data1, data2)
         coord1, slice1 = self.order(intersection)
         coord2, slice2 = other.order(intersection)
@@ -879,7 +893,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         # them off the end of the line is not how it is read. A time
         # states its units in the way it is written -- an instant, a
         # step of "0.0005s" -- and says nothing here.
-        stated = None if dtype_time_like(self.dtype) else self.unit_str
+        stated = None if dtype_time_like(self.dtype) else self._unit_str
 
         def measured(value: Text) -> Text:
             """The value, and what it is measured in where it says."""
@@ -932,7 +946,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
 
     def __array__(self, dtype=None, copy=False):
         """Numpy method for getting array data with `np.array(coord)`."""
-        return self.data
+        return self.values
 
     def __hash__(self):
         """Disable Python hash semantics in favor of explicit fingerprints."""
@@ -994,7 +1008,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         coord = self._get_fingerprintable_coord()
         payload = (
             self._coord_identity(coord),
-            coord.unit_str,
+            coord._unit_str,
             *coord._fingerprint_components(),
         )
         encoded = json.dumps(payload, separators=(",", ":")).encode()
@@ -1011,7 +1025,18 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         return self._max()
 
     @property
-    def unit_str(self) -> str | None:
+    def has_values(self) -> bool:
+        """
+        Whether the coordinate holds labels, rather than only a shape.
+
+        False for a [`CoordPartial`](`dascore.core.coords.CoordPartial`),
+        which states how many samples a dimension has, and perhaps their
+        spacing, without saying where any of them is.
+        """
+        return not self._partial
+
+    @property
+    def _unit_str(self) -> str | None:
         """Return a unit string, or None for a coord carrying no units."""
         return get_quantity_str(self.units)
 
@@ -1022,12 +1047,6 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
     @abc.abstractmethod
     def _max(self):
         """Returns (or generates) the array data."""
-
-    @property
-    @cached_method
-    def limits(self) -> tuple[Any, Any]:
-        """Returns a numpy datatype."""
-        return self.min(), self.max()
 
     @property
     @cached_method
@@ -1072,12 +1091,6 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         """Returns True if the coord in sorted in reverse order."""
         return self._reverse_sorted
 
-    @property
-    def degenerate(self) -> bool:
-        """Return True of the coord is degenerate."""
-        shape = self.shape
-        return not len(shape) or np.prod(shape) == 0
-
     def set_units(self, units) -> Self:
         """Set new units on coordinates."""
         if units_match(self.units, units):
@@ -1117,12 +1130,23 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
     def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
         """Sort the contents of the coord. Return new coord and slice for sorting."""
 
-    def snap(self) -> BaseCoord:
+    def snap(self, tolerance=None) -> BaseCoord:
         """
         Snap the coordinates to evenly sampled grid points.
 
         This will cause some loss of precision but often makes the data much
         easier to work with.
+
+        Parameters
+        ----------
+        tolerance
+            How far any label may move, spelled as the ``tolerance`` of
+            [`Spool.chunk`](`dascore.core.spool.BaseSpool.chunk`) is: a
+            number is a multiple of the step (the median spacing of labels
+            which state none), and a quantity or timedelta is a distance in
+            the coordinate's own units. Where no even grid lies that close
+            to every label the coordinate is returned as it is. None, the
+            default, places no bound.
         """
         return self
 
@@ -1283,27 +1307,12 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         For an evenly sampled coordinate stop will be max + step.
         """
 
-    def update_data(
-        self,
-        data: ArrayLike | np.ndarray | None = None,
-        values: ArrayLike | np.ndarray | None = None,
-        **kwargs,
-    ) -> BaseCoord:
-        """
-        Update the data of the coordinate.
-
-        Parameters
-        ----------
-        data
-            A new array to use.
-        values
-            Alias for data.
-        """
+    def _update_data(self, data=None, values=None, **kwargs) -> BaseCoord:
+        """The coordinate new labels state, or this one when none are given."""
         if data is None and values is None:
             return self
         data = values if data is None else data
-        units = kwargs.get("units")
-        return get_coord(data=data, units=units)
+        return get_coord(data=data, units=kwargs.get("units"))
 
     def new(self, **kwargs):
         """Update coordinate."""
@@ -1315,11 +1324,6 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
 
         info.update(kwargs)
         return get_coord(**info)
-
-    @property
-    def data(self):
-        """Return the internal data. Same as values attribute."""
-        return self.values
 
     def _get_index_values(self, indices):
         """The labels at these (possibly negative) sample indices."""
@@ -1366,7 +1370,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         bad_stop = stop is not None and (stop <= 0)
         return between or bad_start or bad_stop
 
-    def get_slice_tuple(
+    def _get_slice_tuple(
         self,
         select: slice | EllipsisType | tuple[Any, Any] | None,
         relative=False,
@@ -1440,7 +1444,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             indexer = tuple(
                 slice(None, None) if i != axis else indexer for i in range(ndims)
             )
-        array = self.data[indexer]
+        array = self.values[indexer]
         return get_coord(data=array, units=self.units)
 
     def to_summary(self, dims=()) -> CoordSummary:
@@ -1468,7 +1472,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         units = update_fields.pop("units", None)
         _ = update_fields.pop("dtype", None)
         if update_fields:
-            out = out.update_limits(**update_fields).update_data(**update_fields)
+            out = out.update_limits(**update_fields)._update_data(**update_fields)
         if units is not None:
             out = out.convert_units(units)
         return out
@@ -1696,11 +1700,11 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             if func is None:
                 msg = "dim_reduce must be 'empty', 'squeeze' or valid aggregator."
                 raise ParameterError(msg)
-            coord_data = self.data
+            coord_data = self.values
             if dtype_time_like(coord_data):
                 result = _reduce_time_like(func, coord_data)
             else:
-                result = func(self.data)
+                result = func(self.values)
             new_coord = self.update(data=result)
         return new_coord
 
@@ -1810,7 +1814,7 @@ class CoordPartial(BaseCoord):
             self._check_order_and_select(relative, samples)
         except CoordError as e:
             if not is_array(args):
-                args = self.get_slice_tuple(args, relative=False)
+                args = self._get_slice_tuple(args, relative=False)
                 # Check if the select has no effect and return self or raise.
                 if all(pd.isnull(x) for x in args):
                     return self, slice(None)
@@ -1994,15 +1998,9 @@ def _to_tick(value) -> int:
 
 # --- the run table -----------------------------------------------------
 
-# The largest denominator a float step is reduced to; a float spacing which
-# is not a short fraction keeps an exact binary one instead.
-_FLOAT_DENOMINATOR = 10**12
-# Float labels this close together sit on one grid; a fuse test cannot ask
-# for equality of values which were never computed the same way.
+# Float labels this close together meet: a boundary between two float grids
+# cannot ask for equality of values which were never computed the same way.
 _FLOAT_RTOL = 1e-12
-_INT64_MAX = 2**63
-# The run record's integer fields; ``start`` leads them, as a tick or a float.
-_RECORD_TAIL = ("length", "num", "den", "offset")
 
 
 def _as_dtype(value) -> np.dtype:
@@ -2028,26 +2026,6 @@ def _coord_dtype(dtype) -> np.dtype:
     # Anything else -- an object array, a boolean mask -- is held as it is,
     # since the table has no arithmetic to offer it.
     return dtype if dtype.kind not in "SUV" else np.dtype("float64")
-
-
-@cache
-def _ticked(dtype) -> bool:
-    """Whether labels are whole ticks (times and integers) rather than floats."""
-    return np.dtype(dtype).kind in "iuMm"
-
-
-@cache
-def _tick_bounds(dtype) -> tuple[int, int]:
-    """
-    The lowest and highest tick a coordinate of this dtype can label.
-
-    Every tick is counted in int64, so a uint64 coordinate is bounded by
-    int64's ceiling rather than its own: past it the vectorised check
-    reads the wrap, and this one reads the bound.
-    """
-    nd = np.dtype(dtype)
-    info = np.iinfo(cast("Any", np.int64 if nd.kind in "mM" else nd))
-    return max(int(info.min), -_INT64_MAX), min(int(info.max), _INT64_MAX - 1)
 
 
 # Numpy's temporal units, coarsest first, so a unit can be told from a
@@ -2135,17 +2113,6 @@ def _as_ticks(values, dtype) -> np.ndarray:
     return values.astype("int64", copy=False)
 
 
-@cache
-def _record_dtype_cached(start: str) -> np.dtype:
-    """One of the two record layouts a run table can have."""
-    return np.dtype([("start", start), *[(x, "i8") for x in _RECORD_TAIL]])
-
-
-def _record_dtype(dtype) -> np.dtype:
-    """The record of one run; only the start field varies with the coordinate."""
-    return _record_dtype_cached("i8" if _ticked(dtype) else "f8")
-
-
 def normalize_coord_dtype(dtype) -> np.dtype:
     """
     The dtype a run table counts in; a time is always in nanoseconds.
@@ -2160,6 +2127,21 @@ def normalize_coord_dtype(dtype) -> np.dtype:
     if dtype.kind == "m":
         return np.dtype("timedelta64[ns]")
     return dtype
+
+
+def _as_record(runs, dtype) -> np.ndarray:
+    """
+    Runs as the native record array a table of this dtype holds.
+
+    Plain rows are cast to the record; a record read from a file of the
+    other byte order is put in this machine's, since a run's hash reads the
+    words as they lie.
+    """
+    record = _record_dtype(dtype)
+    rows = np.asarray(runs)
+    if rows.dtype.names is None:
+        return np.asarray(runs, record)
+    return rows if rows.dtype == record else rows.astype(record)
 
 
 def runs_from_rows(rows, dtype) -> np.ndarray:
@@ -2181,82 +2163,54 @@ def _grid_run_stops(runs: np.ndarray, dtype) -> np.ndarray:
     not carry, so such a row states its start instead.
     """
     rows = np.asarray(runs)
-    k = rows["length"] - 1
-    den = np.maximum(rows["den"], 1)
-    if _ticked(dtype):
-        return rows["start"] + (rows["offset"] + k * rows["num"]) // den
-    return rows["start"] + _scaled(k, rows["num"], den)
+    return get_kernel(dtype).labels(rows, slice(None), rows["length"] - 1)
 
 
-def _one(value):
-    """The single value a column of one row holds, however it was spelled."""
-    if isinstance(value, list | tuple):
-        return value[0]
-    if isinstance(value, np.ndarray):
-        return value[0] if value.ndim else value[()]
-    return value
-
-
-def _row_count(length) -> int:
-    """How many runs a length column states."""
-    if isinstance(length, np.ndarray):
-        return len(length) if length.ndim else 1
-    if isinstance(length, list | tuple):
-        return len(length)
-    return 1
-
-
-def _rows(dtype, start, length, num, den, offset) -> np.ndarray:
-    """A run table from its columns."""
-    columns = (start, length, num, den, offset)
-    record = _record_dtype(dtype)
-    if _row_count(length) == 1:
-        # One run is the common table, and stating it as a row is four
-        # times cheaper than five assignments into an empty array. A value
-        # no row can hold -- a NaN or a float past int64 in a tick column --
-        # falls through to the assignments, which cast it as they always did.
-        with suppress(OverflowError, ValueError):
-            return np.array([tuple(_one(x) for x in columns)], record)
-    out = np.empty(len(length), record)
-    for name, column in zip(("start", *_RECORD_TAIL), columns):
-        out[name] = column
-    return out
-
-
-def _float_fraction(step: float) -> Fraction:
+def run_heads(runs: np.ndarray, dtype) -> np.ndarray:
     """
-    A float spacing as the short fraction it is, else its binary one.
+    Each run's first label, as a tick or a float.
 
-    The short form is kept only when it is the same double and fits int64,
-    so a spacing below the shortening limit stays itself rather than
-    becoming zero; a binary fraction too fine for int64 keeps the closest
-    fraction which is still the same double, and one no fraction of ticks
-    can state at all -- a spacing past 2**63, say -- is refused.
+    A tick row states it as its ``start``; a float row's ``start`` is the
+    origin of its grid, so its first label has to be worked out.
     """
-    short = Fraction(step).limit_denominator(_FLOAT_DENOMINATOR)
-    if (
-        float(short) == step
-        and max(abs(short.numerator), short.denominator) < _INT64_MAX
-    ):
-        return short
-    exact = Fraction(step)
-    if max(abs(exact.numerator), exact.denominator) < _INT64_MAX:
-        return exact
-    close = exact.limit_denominator(_INT64_MAX // 2)
-    if float(close) != step or abs(close.numerator) >= _INT64_MAX:
-        msg = f"A step of {step} has no fraction of ticks within int64."
-        raise CoordError(msg)
-    return close
+    return get_kernel(dtype).heads(np.asarray(runs))
+
+
+def run_step(row, dtype):
+    """One run's spacing as the envelope's scalar, or None for a stored run."""
+    if not row["den"]:
+        return None
+    return get_kernel(dtype).step_of(row.item())
+
+
+def run_rebuilds_from_head(row, dtype) -> bool:
+    """
+    Whether a grid run is rebuilt exactly from its first label and its terms.
+
+    Always for ticks. A float run counts its grid from an origin which is
+    its first label only while its grid index is zero; past that the first
+    label alone cannot restate the rest.
+    """
+    return bool(row["den"]) and (_ticked(dtype) or not row["offset"])
 
 
 def _step_terms(step, dtype) -> tuple[int, int]:
     """
-    A step of any spelling as a numerator and denominator of ticks.
+    A step of any spelling as the two grid terms a run row holds.
 
-    The terms are left as they were given: an origin offset is stated
-    against this denominator, so reducing the step alone would move the
-    phase. Canonicalising the table reduces the two of them together.
+    For ticks the numerator and denominator are left as they were given: an
+    origin offset is stated against this denominator, so reducing the step
+    alone would move the phase. For floats the terms are the step's own
+    bits and a stride of one.
     """
+    if not _ticked(dtype):
+        fraction = _fraction_step(step)
+        value = float(fraction) if fraction is not None else _maybe_unpack(step)
+        value = float(to_float(value)) if is_timedelta64(value) else float(value)
+        if not math.isfinite(value):
+            msg = f"A step must be a finite number, got {step}."
+            raise CoordError(msg)
+        return int(float_rows(dtype, [0.0], [1], [value])["num"][0]), 1
     if _fraction_step(step) is not None:
         if isinstance(step, tuple):
             num, den = int(step[0]), int(step[1])
@@ -2267,34 +2221,7 @@ def _step_terms(step, dtype) -> tuple[int, int]:
             raise CoordError(msg)
         # A fraction is given in coordinate units: seconds for a time.
         return (num * _NS_PER_S, den) if dtype_time_like(dtype) else (num, den)
-    step = _maybe_unpack(step)
-    if not _ticked(dtype) and not is_timedelta64(step):
-        fraction = _float_fraction(float(step))
-        return fraction.numerator, fraction.denominator
-    return _to_tick(step), 1
-
-
-def _float_terms(spacings: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-    """
-    Each float spacing as a numerator over a denominator of ticks.
-
-    A run whose spacing has no such fraction gets a zero denominator, which
-    is the sentinel for a run holding its own labels.
-    """
-    nums = np.zeros(len(spacings), np.int64)
-    dens = np.zeros(len(spacings), np.int64)
-    # One fraction per distinct spacing: a detected table is usually one
-    # rate, and reducing a fraction is not cheap enough to do per run.
-    uniq, inverse = np.unique(spacings, return_inverse=True)
-    for index, value in enumerate(uniq):
-        try:
-            fraction = _float_fraction(float(value))
-        except CoordError:
-            continue  # no fraction of ticks: the run keeps its own labels
-        here = inverse == index
-        nums[here] = fraction.numerator
-        dens[here] = fraction.denominator
-    return nums, dens
+    return _to_tick(_maybe_unpack(step)), 1
 
 
 def _stacked_ranges(starts, counts, stride: int) -> np.ndarray:
@@ -2309,75 +2236,6 @@ def _stacked_ranges(starts, counts, stride: int) -> np.ndarray:
     return np.repeat(np.asarray(starts, np.int64), counts) + within * stride
 
 
-def _scaled(count, num, den) -> np.ndarray:
-    """``count * num / den`` for float labels, in float arithmetic throughout."""
-    return np.multiply(count, num, dtype=np.float64) / np.maximum(den, 1)
-
-
-def _tick_range_error(row, dtype) -> NoReturn:
-    """The message a run whose arithmetic leaves its dtype is refused with."""
-    msg = (
-        f"A grid of {row['length']} samples with step {row['num']}/"
-        f"{row['den']} ticks from {row['start']} exceeds the {dtype} range."
-    )
-    raise CoordError(msg)
-
-
-def _check_one_tick_range(row: np.void, dtype) -> None:
-    """
-    `_check_tick_range` for a single run, in python arithmetic.
-
-    One run is the common table, and the vectorised body below is all
-    overhead on it. The same float64 sums are formed here so that the two
-    agree bit for bit; `test_one_row_check_matches_the_vectorised_one`
-    holds them together.
-    """
-    start, length, num, den, offset = row.item()
-    if den <= 0:  # a stored run has no tick arithmetic to leave
-        return
-    if not _ticked(dtype):  # floats have no tick to leave
-        span = abs(float(start)) + float(length) * float(abs(num)) / float(den)
-        if math.isfinite(span):
-            return
-        _tick_range_error(row, dtype)
-    if float(length) * float(abs(num)) + float(den) >= _INT64_MAX:
-        _tick_range_error(row, dtype)
-    # The span fits, so the last label is exact python arithmetic; the
-    # array body reads the same overflow off the int64 wrap instead.
-    stop = start + (offset + length * num) // den
-    low, high = _tick_bounds(dtype)
-    if min(start, stop) < low or max(start, stop) > high:
-        _tick_range_error(row, dtype)
-
-
-def _check_tick_range(rows: np.ndarray, dtype) -> None:
-    """Refuse a table whose tick arithmetic would leave int64."""
-    grid = rows["den"] > 0
-    length = rows["length"][grid].astype(np.float64)
-    num = np.abs(rows["num"][grid]).astype(np.float64)
-    den = rows["den"][grid].astype(np.float64)
-    if not _ticked(dtype):  # floats have no tick to leave
-        bad = ~np.isfinite(np.abs(rows["start"][grid]) + length * num / den)
-    else:
-        bad = length * num + den >= _INT64_MAX
-        # The span fits, so the last label is int64 arithmetic; a start far
-        # enough out still wraps, which a sign change gives away.
-        delta = (rows["offset"] + rows["length"] * rows["num"]) // np.maximum(
-            rows["den"], 1
-        )
-        stop = rows["start"] + delta
-        wrapped = np.where(delta > 0, stop < rows["start"], stop > rows["start"])
-        bad = bad | wrapped[grid]
-        # A narrow integer coordinate holds fewer labels than int64 does.
-        nd = np.dtype(dtype)
-        info = np.iinfo(cast("Any", np.int64 if nd.kind in "mM" else nd))
-        low = np.minimum(rows["start"], stop)[grid]
-        high = np.maximum(rows["start"], stop)[grid]
-        bad = bad | (low < info.min) | (high > info.max)
-    if np.any(bad):
-        _tick_range_error(rows[grid][np.argmax(bad)], dtype)
-
-
 def _continues(rows: np.ndarray, dtype) -> np.ndarray:
     """Whether each run begins where the run before would put its next sample."""
     before, after = rows[:-1], rows[1:]
@@ -2385,25 +2243,7 @@ def _continues(rows: np.ndarray, dtype) -> np.ndarray:
     # end to end in ``labels``; joining them loses nothing and keeps a
     # jittered coordinate one run however it was assembled.
     stored = (before["den"] == 0) & (after["den"] == 0)
-    same = (
-        (before["num"] == after["num"])
-        & (before["den"] == after["den"])
-        & (before["den"] > 0)
-    )
-    if not _ticked(dtype):
-        expected = before["start"] + _scaled(
-            before["length"], before["num"], before["den"]
-        )
-        return stored | (same & (expected == after["start"]))
-    # Compared through the difference of the starts, which stays small for
-    # runs that could continue, rather than through start * den.
-    gap = after["start"].astype(np.float64) - before["start"].astype(np.float64)
-    same &= np.abs(gap) * before["den"].astype(np.float64) < _INT64_MAX
-    ideal = before["offset"] + before["length"] * before["num"]
-    meets = (after["start"] - before["start"]) * before["den"] + after[
-        "offset"
-    ] == ideal
-    return stored | (same & meets)
+    return stored | get_kernel(dtype).continues(rows)
 
 
 def _canonical(rows: np.ndarray, labels, dtype) -> tuple[np.ndarray, Any]:
@@ -2411,113 +2251,70 @@ def _canonical(rows: np.ndarray, labels, dtype) -> tuple[np.ndarray, Any]:
     A run table in the one form its labels can take.
 
     Empty runs are dropped, each grid is put in lowest terms with its phase,
-    the tick arithmetic is checked, and runs which continue their neighbour
-    on the same grid are fused, so equal labels give an equal table however
+    the arithmetic is checked, and runs which continue their neighbour on
+    the same grid are fused, so equal labels give an equal table however
     they were assembled.
     """
+    kernel = get_kernel(dtype)
     if len(rows) != 1:  # one row is already the table it states
         rows = rows[rows["length"] > 0]
     if len(rows) == 1:
-        # The common case, where the vectorised body below is all overhead:
-        # one row's phase and lowest terms are python integer arithmetic.
-        start, length, num, den, offset = rows[0].item()
-        if length > 0:
-            rows = rows.copy()
-            row = rows[0]
-            if den > 0:
-                carry, offset = divmod(offset, den)
-                common = max(math.gcd(abs(num), den), 1)
-                if carry or common != 1:  # already in lowest terms and phase
-                    row["start"] = start + carry
-                    row["num"] = num // common
-                    row["den"] = den // common
-                    row["offset"] = offset // common
-            _check_one_tick_range(row, dtype)
+        # The common case, where the vectorised body below is all overhead.
+        row = rows[0].item()
+        if row[1] > 0:
+            reduced = kernel.reduced_one(row)
+            if reduced != row:
+                rows = np.array([reduced], rows.dtype)
+            kernel.check_range(rows, dtype)
             return rows, labels
         rows = rows[:0]
     if not len(rows):
         # The empty coordinate is a run of no samples, not an empty table,
         # so it still carries its dtype and concatenates away.
         return _rows(dtype, 0, [0], 0, 1, 0), None
-    rows = rows.copy()
-    grid = rows["den"] > 0
-    # A phase past its denominator is the next tick's phase.
-    carry = np.where(grid, rows["offset"] // np.maximum(rows["den"], 1), 0)
-    rows["start"] += carry.astype(rows["start"].dtype)
-    rows["offset"] -= carry * rows["den"]
-    # Lowest terms: the offset's remainder under gcd(num, den) can never
-    # carry a floor over an integer boundary, so dividing it is label
-    # preserving and leaves one table per set of labels.
-    common = np.where(grid, np.gcd(np.abs(rows["num"]), rows["den"]), 1)
-    common = np.maximum(common, 1)
-    rows["num"] //= common
-    rows["den"] //= common
-    rows["offset"] //= common
-    _check_tick_range(rows, dtype)
-    if len(rows) > 1 and not _ticked(dtype):
-        rows = _merge_float_runs(rows)
-    elif len(rows) > 1:
-        heads = np.flatnonzero(np.concatenate([[True], ~_continues(rows, dtype)]))
-        if len(heads) != len(rows):
-            lengths = np.add.reduceat(rows["length"], heads)
-            rows = rows[heads].copy()
-            rows["length"] = lengths
+    rows = kernel.reduced(rows.copy())
+    kernel.check_range(rows, dtype)
+    heads = np.flatnonzero(np.concatenate([[True], ~_continues(rows, dtype)]))
+    if len(heads) != len(rows):
+        lengths = np.add.reduceat(rows["length"], heads)
+        rows = rows[heads].copy()
+        rows["length"] = lengths
     return rows, labels
 
 
-def _same_labels(left: np.ndarray, right: np.ndarray) -> bool:
-    """Compare finite labels exactly, including the sign of floating zero."""
-    if not np.array_equal(left, right):
-        return False
-    if left.dtype.kind == "f" or right.dtype.kind == "f":
-        return bool(np.array_equal(np.signbit(left), np.signbit(right)))
-    return True
+def _fuse_float_neighbours(rows: np.ndarray, dtype) -> np.ndarray:
+    """
+    Restate a float run on the grid of the run before it, where that is exact.
 
-
-def _merge_float_runs(rows: np.ndarray) -> np.ndarray:
-    """Fuse float runs only when re-anchoring preserves every label."""
+    Two float grids of one spacing built apart -- each anchored at its own
+    first label -- do not read as one, though every label of the second may
+    be a label of the first's. The second is moved onto the first's grid
+    only when that grid reproduces every one of its labels, bit for bit.
+    """
+    if _ticked(dtype) or len(rows) < 2:
+        return rows
     out = rows.copy()
-    head = 0
-    for row in rows[1:]:
-        before = out[head]
-        stored = before["den"] == row["den"] == 0
-        merge = stored
-        if before["den"] > 0 and all(
-            before[name] == row[name] for name in ("num", "den")
-        ):
-            # Comparing only the join is insufficient: rounding farther into
-            # the second run can differ after it acquires the first origin.
-            merge = True
-            for first in range(0, int(row["length"]), 65536):
-                k = np.arange(first, min(first + 65536, int(row["length"])))
-                original = row["start"] + _scaled(k, row["num"], row["den"])
-                joined = before["start"] + _scaled(
-                    k + before["length"], before["num"], before["den"]
-                )
-                if not _same_labels(original, joined):
-                    merge = False
-                    break
-        if merge:
-            before["length"] += row["length"]
-        else:
-            head += 1
-            out[head] = row
-    return out[: head + 1]
+    target = np.dtype(dtype)
+    for index in range(1, len(out)):
+        before, row = out[index - 1], out[index]
+        same = before["num"] == row["num"] and before["den"] == row["den"]
+        if not (same and row["den"] != 0 and row["length"] > 0):
+            continue
+        moved = out[index : index + 1].copy()
+        moved["start"] = before["start"]
+        moved["offset"] = before["offset"] + before["length"] * abs(before["den"])
+        k = np.arange(int(row["length"]), dtype=np.int64)
+        labels = FloatKernel.labels(out, index, k).astype(target, copy=False)
+        if FloatKernel._reproduces(moved, labels, target):
+            out[index] = moved[0]
+    return out
 
 
 def _one_grid(rows: np.ndarray, dtype, num: int, den: int) -> bool:
-    """Whether every run begins on the one grid a spacing of num/den makes."""
+    """Whether every run begins on the one grid these terms make."""
     if len(rows) < 2:
         return True
-    before, after = rows[:-1], rows[1:]
-    if not num:
-        return bool(np.all(after["start"] == before["start"]))
-    if _ticked(dtype):
-        rel = (after["start"] - before["start"]) * den
-        rel = rel + after["offset"] - before["offset"]
-        return bool(np.all(rel % num == 0))
-    steps = (after["start"] - before["start"]) * den / num
-    return bool(np.allclose(steps, np.round(steps), rtol=_FLOAT_RTOL, atol=0.0))
+    return get_kernel(dtype).same_grid(rows, num, den)
 
 
 def _declares(rows: np.ndarray, dtype, step) -> bool:
@@ -2531,7 +2328,7 @@ def _declares(rows: np.ndarray, dtype, step) -> bool:
 
 def _scalar_step(rows: np.ndarray, dtype):
     """
-    The whole-tick spacing every run shares, or None.
+    The spacing every run shares, as the coordinate's scalar step, or None.
 
     A run of one sample states no spacing of its own, so among several runs
     only those holding two or more are asked; a lone run is taken at its
@@ -2558,12 +2355,9 @@ def _scalar_step(rows: np.ndarray, dtype):
 
 
 def _as_step(num: int, den: int, dtype):
-    """A run's spacing of ``num`` ticks over ``den`` as the scalar step."""
-    if not _ticked(dtype):
-        # The quotient a Fraction of these terms would round to, without it.
-        return num / den
-    tick = round(Fraction(num, den))
-    return np.timedelta64(tick, "ns") if dtype_time_like(dtype) else tick
+    """A run's grid terms as the scalar step: whole ticks, or a float."""
+    step = get_kernel(dtype).step_of((0, 0, num, den, 0))
+    return np.timedelta64(int(step), "ns") if dtype_time_like(dtype) else step
 
 
 # The splitmix64 finalizer's three constants, shared by the array and the
@@ -2601,7 +2395,9 @@ def _blake(payload: bytes) -> int:
     return int.from_bytes(hashlib.blake2b(payload, digest_size=8).digest(), "little")
 
 
-def _run_detection(ticks: np.ndarray) -> tuple[np.ndarray, np.ndarray, int]:
+def _run_detection(
+    anchors: np.ndarray, ticked: bool = True
+) -> tuple[np.ndarray, np.ndarray, int]:
     """
     Where each run starts, which of them are grids, and how many were read.
 
@@ -2611,9 +2407,25 @@ def _run_detection(ticks: np.ndarray) -> tuple[np.ndarray, np.ndarray, int]:
     the two runs meet at a sample, which the earlier of them keeps: without
     that cut a change of rate would read as one grid and relabel every
     sample past it.
+
+    Tick spacings match when they are equal. Float spacings of one grid
+    differ by the rounding of their labels, so they match within a few
+    units of that rounding; this only proposes the runs, and each is kept
+    as a grid only if a grid reproduces its labels exactly.
     """
-    diffs = np.diff(ticks)
-    equal = diffs[:-1] == diffs[1:]
+    # Neighbours are compared rather than subtracted where a difference
+    # could leave int64; an overflowing spacing matches nothing.
+    with np.errstate(over="ignore"):
+        diffs = np.diff(anchors)
+    if ticked:
+        wrapped = (diffs > 0) != (anchors[1:] > anchors[:-1])
+        equal = (diffs[:-1] == diffs[1:]) & ~wrapped[:-1] & ~wrapped[1:]
+    else:
+        # a NaN spacing matches nothing, so a null label ends a run
+        finite = anchors[np.isfinite(anchors)]
+        top = np.max(np.abs(finite)) if finite.size else 0.0
+        with np.errstate(invalid="ignore"):
+            equal = np.abs(diffs[:-1] - diffs[1:]) <= 8 * np.spacing(top)
     in_run = np.zeros(len(diffs), dtype=bool)
     in_run[1:] |= equal
     in_run[:-1] |= equal
@@ -2623,39 +2435,47 @@ def _run_detection(ticks: np.ndarray) -> tuple[np.ndarray, np.ndarray, int]:
     opens[1:] = in_run[1:] & in_run[:-1] & ~equal
     splits = np.flatnonzero(~in_run | opens) + 1
     block_starts = np.concatenate([[0], splits])
-    block_lengths = np.diff(np.concatenate([block_starts, [len(ticks)]]))
+    block_lengths = np.diff(np.concatenate([block_starts, [len(anchors)]]))
     # A block of one sample states no grid; only the runs do.
     on_grid = block_lengths > 1
     heads = np.concatenate([[True], on_grid[1:] | on_grid[:-1]])
     return block_starts[heads], on_grid[heads], len(block_starts)
 
 
-def _store_inexact(rows: np.ndarray, values: np.ndarray) -> np.ndarray:
+def _float_runs(values: np.ndarray, starts, lengths, on_grid, dtype, step=None):
     """
-    Store every float run whose grid does not reproduce its own labels.
+    The float rows of proposed runs, each a grid only if it is one exactly.
 
-    A float grid is ``start + k * num / den``, which need not land on the
-    label the spacing was read from. Such a run keeps its labels; the runs
-    around it keep their grid, so a gap between them is still a gap.
+    A run is first tried on the grid of the grid run before it, so a
+    coordinate with holes in it states one grid throughout; then on a grid
+    of its own; and failing both it keeps its labels. ``step`` is a spacing
+    the labels are declared to follow, tried before any read off them.
     """
-    lengths = rows["length"]
-    heads = np.cumsum(lengths) - lengths
-    k = np.arange(int(lengths.sum()), dtype=np.int64) - np.repeat(heads, lengths)
-    predicted = np.repeat(rows["start"], lengths) + _scaled(
-        k,
-        np.repeat(rows["num"], lengths),
-        np.repeat(np.maximum(rows["den"], 1), lengths),
-    )
-    different = (predicted != values) | (np.signbit(predicted) != np.signbit(values))
-    off = np.maximum.reduceat(different.astype(np.int8), heads) > 0
-    if not np.any(off := off & (rows["den"] > 0)):
-        return rows
-    rows = rows.copy()
-    rows["start"][off] = values[heads[off]]
-    rows["num"][off] = 0
-    rows["den"][off] = 0
-    rows["offset"][off] = 0
+    rows = float_rows(dtype, values[starts].astype(np.float64), lengths, 0.0, 0, 0)
+    origin = None
+    for index in np.flatnonzero(on_grid):
+        first = int(starts[index])
+        piece = values[first : first + int(lengths[index])]
+        if origin is None and step is not None:
+            origin = (float(piece[0]), float(step), 1)
+        row = FloatKernel.fit(piece, dtype, origin=origin)
+        if row is None:
+            continue
+        rows[index] = row[0]
+        origin = (
+            float(row["start"][0]),
+            float(float_terms(row)[0][0]),
+            int(row["den"][0]),
+        )
     return rows
+
+
+def _nearly_even(values: np.ndarray) -> bool:
+    """Whether float labels are spaced evenly to within their own rounding."""
+    with np.errstate(over="ignore", invalid="ignore"):
+        diffs = np.diff(values.astype(np.float64, copy=False))
+        slack = 8 * np.spacing(np.max(np.abs(values)))
+        return bool(np.ptp(diffs) <= slack)
 
 
 def _array_grid(values: np.ndarray, dtype) -> np.ndarray | None:
@@ -2666,54 +2486,93 @@ def _array_grid(values: np.ndarray, dtype) -> np.ndarray | None:
         return None
     if _ticked(dtype):
         return _array_tick_grid(_as_ticks(values, dtype), dtype)
-    start = values[0]
-    steps = (values[1] - start, (values[-1] - start) / (len(values) - 1))
-    k = np.arange(len(values), dtype=np.int64)
-    for step in dict.fromkeys(float(x) for x in steps):
-        if not math.isfinite(step) or not step:
-            continue
-        try:
-            terms = (_float_fraction(step), Fraction(step))
-        except CoordError:
-            continue
-        for fraction in dict.fromkeys(terms):
-            num, den = fraction.numerator, fraction.denominator
-            if max(abs(num), den) >= _INT64_MAX:
-                continue
-            if _same_labels(start + _scaled(k, num, den), values):
-                return _rows(dtype, start, [len(values)], num, den, 0)
-    return None
+    if not _nearly_even(values):
+        return None
+    return FloatKernel.fit(values, dtype)
+
+
+def _simplest_between(low: Fraction, high: Fraction) -> Fraction:
+    """
+    The fraction of least denominator strictly between ``low`` and ``high``.
+
+    The walk down the Stern-Brocot tree, a continued-fraction term at a
+    time: a whole number strictly inside is the answer, and otherwise both
+    ends share their whole part and the question recurs on the reciprocals
+    of what is left.
+    """
+    if high <= 0:
+        return -_simplest_between(-high, -low)
+    if low < 0:
+        return Fraction(0)
+    whole = math.floor(low)
+    if whole + 1 < high:
+        return Fraction(whole + 1)
+    top = 1 / (high - whole)
+    if low == whole:
+        return whole + Fraction(1, math.floor(top) + 1)
+    return whole + 1 / _simplest_between(top, 1 / (low - whole))
+
+
+def _tick_residuals(delta: np.ndarray, k: np.ndarray, num: int, den: int):
+    """``delta * den - k * num``, or None where int64 cannot hold it."""
+    top = max(abs(int(delta[-1])), abs(int(delta[0])), 1)
+    if max(top * den, len(delta) * abs(num)) * 2 + den >= _INT64_MAX:
+        return None
+    return delta * den - k * num
 
 
 def _array_tick_grid(anchors: np.ndarray, dtype) -> np.ndarray | None:
-    """Certify a rational tick grid, allowing the phase of a sliced range."""
+    """
+    Certify the rational tick grid whose floors are these labels, or None.
+
+    Label ``k`` is ``d`` ticks past the first exactly when ``d <= phase +
+    k * step < d + 1``, so every pair of labels bounds the step, and the
+    steps the labels allow are one interval. The fraction of least
+    denominator inside it is taken: it is the step a declared rate states,
+    which is what lets windows of one acquisition fitted apart still fuse.
+    The interval starts from each label against the first; a candidate the
+    labels refuse names the pair it broke, which cuts the interval, and the
+    search goes again. Failing a certificate the labels are stored, never
+    approximately fitted.
+    """
     span = int(anchors[-1]) - int(anchors[0])
     if abs(span) >= _INT64_MAX:
         return None
     delta = anchors - anchors[0]
     diffs = np.diff(delta)
-    if np.dtype(dtype).kind in "iu" and np.any(diffs != diffs[0]):
-        return None
     if int(diffs.max()) - int(diffs.min()) > 1:
         return None
-    average = Fraction(span, len(anchors) - 1)
-    # The endpoint average bounds the cadence to within one tick per span.
-    # Try small rational cadences first; a failed certificate leaves labels
-    # stored, never approximately fitted.
-    candidates = dict.fromkeys(
-        [average.limit_denominator(n) for n in (1, 10, 100, 1000, 1000000)] + [average]
-    )
-    k = np.arange(len(anchors), dtype=np.int64)
-    for fraction in candidates:
+    count = len(anchors)
+    if np.dtype(dtype).kind in "iu" or diffs.max() == diffs.min():
+        # One whole-tick spacing throughout, which an integer coordinate
+        # has to be: there is nothing to search for.
+        if diffs.max() != diffs.min():
+            return None
+        return _rows(dtype, anchors[0], [count], int(diffs[0]), 1, 0)
+    k = np.arange(count, dtype=np.int64)
+    wide, index = delta[1:].astype(np.float64), k[1:].astype(np.float64)
+    at_low = int(np.argmax((wide - 1) / index)) + 1
+    at_high = int(np.argmin((wide + 1) / index)) + 1
+    low = Fraction(int(delta[at_low]) - 1, at_low)
+    high = Fraction(int(delta[at_high]) + 1, at_high)
+    for _ in range(64):
+        if low >= high:
+            return None
+        fraction = _simplest_between(low, high)
         num, den = fraction.numerator, fraction.denominator
-        bound = max(abs(span) * den, len(anchors) * abs(num))
-        if not num or 2 * bound + den >= _INT64_MAX:
-            continue
-        residual = delta * den - k * num
-        phase = max(0, int(residual.max()))
-        upper = min(den, int(residual.min()) + den)
-        if phase < upper:
-            return _rows(dtype, anchors[0], [len(anchors)], num, den, phase)
+        residual = _tick_residuals(delta, k, num, den)
+        if residual is None or not num:
+            return None
+        most, least = int(np.argmax(residual)), int(np.argmin(residual))
+        phase = int(residual[most])
+        if phase < int(residual[least]) + den:
+            return _rows(dtype, anchors[0], [count], num, den, phase)
+        # The two labels no phase serves together bound the true step.
+        bound = Fraction(int(delta[least] - delta[most]) + 1, least - most)
+        if least > most:
+            high = min(high, bound)
+        else:
+            low = max(low, bound)
     return None
 
 
@@ -2788,15 +2647,8 @@ def _grid_fields(start_tick: int, num: int, den: int, offset: int, count: int, d
     g = math.gcd(num, den, offset)
     num, den, offset = num // g, den // g, offset // g
     dtype = np.dtype(dtype)
-    info = np.iinfo(np.int64 if dtype.kind in "mM" else cast("Any", dtype))
     stop_tick = start_tick + (offset + count * num) // den
-    low, high = min(start_tick, stop_tick), max(start_tick, stop_tick)
-    if abs(count * num) + den >= 2**63 or low < info.min or high > info.max:
-        msg = (
-            f"A grid of {count} samples with step {num}/{den} ticks from "
-            f"{start_tick} exceeds the {dtype} range."
-        )
-        raise CoordError(msg)
+    TickKernel._check_one((start_tick, count, num, den, offset), dtype)
     ticks = np.asarray([start_tick, stop_tick], dtype=np.int64).astype(dtype)
     step_tick = round(Fraction(num, den))
     step = np.timedelta64(step_tick, "ns") if dtype.kind in "mM" else step_tick
@@ -3053,14 +2905,30 @@ class NumericND(BaseCoord):
         if values.get("runs") is None:
             msg = (
                 "NumericND is built from its own run table; use get_coord, "
-                "from_array, from_run, from_rows, from_coord or concat_coords "
+                "from_array, from_run, from_rows or concat_coords "
                 f"to make one from {sorted(values)}."
             )
             raise CoordError(msg)
-        runs = np.asarray(values["runs"])
-        if runs.dtype.names is None:
-            runs = np.asarray(values["runs"], _record_dtype(values["dtype"]))
-        return {**values, "runs": runs}
+        return {**values, "runs": _as_record(values["runs"], values["dtype"])}
+
+    @model_validator(mode="after")
+    def _check_canonical(self) -> Self:
+        """
+        Refuse a table which is not the one form its labels can take.
+
+        The builders canonicalise what they are given and skip this; only
+        a table handed straight to the class is checked, since an unreduced
+        step, a phase past its denominator or a run of no samples would
+        compare unequal to the coordinate holding the very same labels.
+        """
+        rows, _ = _canonical(self.runs, self.labels, self.dtype)
+        if not np.array_equal(rows, self.runs):
+            msg = (
+                "The run table is not in canonical form; build the coordinate "
+                "with get_coord or NumericND.from_rows, which put it there."
+            )
+            raise CoordError(msg)
+        return self
 
     @classmethod
     def _build(cls, dtype, rows, labels=None, units=None, step=None) -> Self:
@@ -3085,7 +2953,7 @@ class NumericND(BaseCoord):
         shape = nd_shape if nd_shape is not None else (total,)
         if dtype.kind in "mM":
             # A time is measured in seconds whatever a caller states, as
-            # `check_time_units` holds every other coordinate class to.
+            # `_check_time_units` holds every other coordinate class to.
             units = _second_quantity()
         derived = _scalar_step(rows, dtype)
         if derived is None and step is not None and _declares(rows, dtype, step):
@@ -3118,11 +2986,8 @@ class NumericND(BaseCoord):
         step
             The grid stored runs are declared to sit on.
         """
-        if dtype is None:
-            dtype = _as_dtype(labels)
-        rows = np.asarray(runs)
-        if rows.dtype.names is None:
-            rows = np.asarray(runs, _record_dtype(dtype))
+        dtype = _as_dtype(labels) if dtype is None else _coord_dtype(dtype)
+        rows = _as_record(runs, dtype)
         if labels is None and np.any((rows["den"] == 0) & (rows["length"] > 0)):
             # A stored run is nothing but its labels; filling it from its
             # start would silently repeat that one label.
@@ -3163,25 +3028,23 @@ class NumericND(BaseCoord):
         else:
             count = int(np.prod(shape))
         dtype = _as_dtype(start) if dtype is None else _coord_dtype(dtype)
-        try:
-            num, den = _step_terms(step, dtype)
-        except CoordError:
-            if _ticked(dtype):
-                raise
-            # A subnormal float spacing is no ratio of int64s; the labels
-            # themselves are then the only description of the grid.
-            labels = np.asarray(start) + np.arange(count) * np.asarray(step)
-            return cls.from_array(labels.astype(dtype), units=units, detect=False)
+        num, den = _step_terms(step, dtype)
         start = _maybe_unpack(start)
-        anchor = _to_tick(start) if _ticked(dtype) else float(start)
-        rows = _rows(
-            dtype,
-            [anchor],
-            [count],
-            [num],
-            [den],
-            [int(origin_offset) if _ticked(dtype) else 0],
-        )
+        if _is_null(start):
+            msg = f"A run needs a first label to start from, got {start}."
+            raise CoordError(msg)
+        if not _ticked(dtype):
+            rows = _rows(dtype, [float(start)], [count], [num], [den], [0])
+            return cls._build(dtype, rows, None, units)
+        # Lowest terms before the row is built, phase with them: a step
+        # given as a long fraction of seconds is a short one of ticks.
+        offset = int(origin_offset)
+        common = max(math.gcd(abs(num), den), 1)
+        num, den, offset = num // common, den // common, offset // common
+        if max(abs(num), den) >= _INT64_MAX:
+            msg = f"A step of {step} has no fraction of ticks within int64."
+            raise CoordError(msg)
+        rows = _rows(dtype, [_to_tick(start)], [count], [num], [den], [offset])
         return cls._build(dtype, rows, None, units)
 
     @classmethod
@@ -3245,27 +3108,21 @@ class NumericND(BaseCoord):
             _check_unsigned(values, dtype)
             rows = _rows(dtype, [_first_anchor(values, dtype)], [values.size], 0, 0, 0)
             return cls._build(dtype, rows, values, units)
-        anchors = _as_ticks(values, dtype) if _ticked(dtype) else values
-        starts, on_grid, detected = _run_detection(anchors)
+        ticked = _ticked(dtype)
+        anchors = _as_ticks(values, dtype) if ticked else values
+        starts, on_grid, detected = _run_detection(anchors, ticked)
         if _guard_declines(len(values), detected):
             starts, on_grid = np.zeros(1, np.int64), np.zeros(1, bool)
         lengths = np.diff(np.concatenate([starts, [len(values)]]))
-        follow = np.minimum(starts + 1, len(values) - 1)
-        spacings = np.where(on_grid, anchors[follow] - anchors[starts], 0)
-        if _ticked(dtype):
+        if ticked:
+            follow = np.minimum(starts + 1, len(values) - 1)
+            spacings = np.where(on_grid, anchors[follow] - anchors[starts], 0)
             num, den = spacings.astype(np.int64), np.where(on_grid, 1, 0)
+            rows = _rows(dtype, anchors[starts], lengths, num, den, 0)
         else:
-            # A float spacing is a fraction of units, not a whole tick, so
-            # it is reduced rather than truncated into the numerator.
-            num = np.zeros(len(starts), np.int64)
-            den = np.zeros(len(starts), np.int64)
-            picked = np.flatnonzero(on_grid)
-            num[picked], den[picked] = _float_terms(spacings[picked])
-        rows = _rows(dtype, anchors[starts], lengths, num, den, 0)
-        if not _ticked(dtype):
             # A float grid only holds the labels it reproduces exactly;
             # the runs it cannot keep theirs instead.
-            rows = _store_inexact(rows, values)
+            rows = _float_runs(values, starts, lengths, on_grid, dtype)
         labels = values[np.repeat(rows["den"] == 0, rows["length"])]
         try:
             return cls._build(dtype, rows, labels if len(labels) else None, units)
@@ -3296,18 +3153,8 @@ class NumericND(BaseCoord):
         if len(values) < 2:
             num, den = _step_terms(signed, dtype)
             rows = _rows(dtype, anchors[:1], [len(values)], num, den, 0)
-            if not _ticked(dtype):
-                rows = _store_inexact(rows, values)
-            labels = values if rows["den"][0] == 0 else None
-            return cls._build(dtype, rows, labels, units, step=signed)
+            return cls._build(dtype, rows, None, units, step=signed)
         counts = _on_grid(_diffs(values), signed)
-        if detect and not _ticked(dtype) and np.all(counts == 1):
-            grid = _array_grid(values, dtype)
-            if (
-                grid is not None
-                and _as_step(int(grid["num"][0]), int(grid["den"][0]), dtype) == signed
-            ):
-                return cls._build(dtype, grid, None, units)
         splits = np.flatnonzero(counts != 1) + 1
         starts = np.concatenate([[0], splits])
         if not detect or _guard_declines(len(values), len(starts)):
@@ -3316,23 +3163,26 @@ class NumericND(BaseCoord):
             rows = _rows(dtype, anchors[:1], [len(values)], 0, 0, 0)
             return cls._build(dtype, rows, values, units, step=signed)
         lengths = np.diff(np.concatenate([starts, [len(values)]]))
-        num = _to_tick(signed) if _ticked(dtype) else None
-        if num is None:
-            terms = _step_terms(signed, dtype)
-            rows = _rows(dtype, anchors[starts], lengths, terms[0], terms[1], 0)
-        else:
-            rows = _rows(dtype, anchors[starts], lengths, num, 1, 0)
         # Runs of a single sample state no spacing of their own, so the
         # grid they were read against travels with them.
-        labels = None
-        if not _ticked(dtype):
-            rows = _store_inexact(rows, values)
-            labels = values[np.repeat(rows["den"] == 0, rows["length"])]
-            labels = labels if len(labels) else None
+        if _ticked(dtype):
+            rows = _rows(dtype, anchors[starts], lengths, _to_tick(signed), 1, 0)
+            return cls._build(dtype, rows, None, units, step=signed)
+        # Float labels within a rounding of the declared grid are on it;
+        # a run is still a grid only where one reproduces it exactly.
+        grid = np.ones(len(starts), dtype=bool)
+        rows = _float_runs(values, starts, lengths, grid, dtype, step=signed)
+        single = (rows["den"] == 0) & (lengths == 1)
+        if np.any(single):
+            # One label is its own grid, of the declared spacing.
+            heads = values[starts[single]].astype(np.float64)
+            rows[single] = float_rows(dtype, heads, lengths[single], signed)
+        labels = values[np.repeat(rows["den"] == 0, rows["length"])]
+        labels = labels if len(labels) else None
         return cls._build(dtype, rows, labels, units, step=signed)
 
     @classmethod
-    def from_coord(cls, coord: BaseCoord) -> NumericND:
+    def _from_coord(cls, coord: BaseCoord) -> NumericND:
         """Build from any numeric coordinate."""
         if isinstance(coord, NumericND):
             return coord
@@ -3343,11 +3193,6 @@ class NumericND(BaseCoord):
     @property
     def runs_count(self) -> int:
         """How many runs the table holds."""
-        return len(self.runs)
-
-    @property
-    def segment_count(self) -> int:
-        """How many runs the table holds (the segmented coordinate's name)."""
         return len(self.runs)
 
     @property
@@ -3368,6 +3213,32 @@ class NumericND(BaseCoord):
     def _ticks(self) -> bool:
         """Whether labels are whole ticks (times and integers) or floats."""
         return _ticked(self.dtype)
+
+    @property
+    def _kernel(self) -> type[TickKernel] | type[FloatKernel]:
+        """The arithmetic the rows are read with; see `dascore.core._run_kernels`."""
+        return get_kernel(self.dtype)
+
+    @property
+    @cached_method
+    def _slack(self) -> float:
+        """
+        How far a label of this dtype may sit from the double its row makes.
+
+        Rows are counted in float64, so labels of a narrower float are those
+        doubles rounded again, by up to half the spacing of the dtype there.
+        """
+        dtype = np.dtype(self.dtype)
+        if dtype.kind != "f" or dtype.itemsize >= 8 or not self.size:
+            return 0.0
+        top = np.max(np.abs([self._run_heads[0], self._run_ends[-1]]))
+        return float(np.spacing(dtype.type(top)))
+
+    @property
+    @cached_method
+    def _run_heads(self) -> np.ndarray:
+        """The first label (tick or float) of each run."""
+        return self._kernel.heads(self.runs)
 
     @property
     def _all_stored(self) -> bool:
@@ -3398,20 +3269,18 @@ class NumericND(BaseCoord):
     @property
     def start(self):
         """The first label."""
-        return self._from_anchor(self.runs["start"][:1])[0][()]
+        return self._from_anchor(self._run_heads[:1])[0][()]
 
     @property
     def stop(self):
         """One step past the last label, as a range states its end."""
         rows = self.runs
         row = rows[-1]
-        den = max(int(row["den"]), 1)
-        k = int(row["length"])
         if row["den"] == 0:
             last = self._run_ends[-1]
             return self._from_anchor(np.asarray([last]))[0][()]
-        out = self._run_labels(np.asarray([len(rows) - 1]), np.asarray([k]), den)
-        return self._from_anchor(out)[0][()]
+        last, k = np.asarray([len(rows) - 1]), np.asarray([int(row["length"])])
+        return self._from_anchor(self._kernel.labels(rows, last, k))[0][()]
 
     def _from_anchor(self, anchor) -> np.ndarray:
         """Anchors (ticks or floats) as labels of the coordinate dtype."""
@@ -3425,7 +3294,8 @@ class NumericND(BaseCoord):
     def step_exact(self) -> Fraction | None:
         """The exact spacing in coordinate units (seconds for time), or None."""
         rows = self.runs
-        if _scalar_step(rows, self.dtype) is None:
+        if not self._ticks or _scalar_step(rows, self.dtype) is None:
+            # a float spacing is the double it is, which has no exact form
             return super().step_exact
         fraction = Fraction(int(rows["num"][0]), int(rows["den"][0]))
         return fraction / _NS_PER_S if dtype_time_like(self.dtype) else fraction
@@ -3434,27 +3304,12 @@ class NumericND(BaseCoord):
     def evenly_sampled(self) -> bool:
         """Whether the labels are one grid run of at least one sample."""
         rows = self.runs
-        return len(rows) == 1 and bool(rows["den"][0] > 0) and bool(rows["length"][0])
+        return len(rows) == 1 and bool(rows["den"][0]) and bool(rows["length"][0])
 
     @property
     def _exact(self) -> bool:
         """Whether the labels come from an integer grid of one run."""
         return self.evenly_sampled and self._ticks
-
-    @property
-    def step_numerator(self) -> int | None:
-        """The numerator of a single exact grid's spacing, in ticks."""
-        return int(self.runs["num"][0]) if self._exact else None
-
-    @property
-    def step_denominator(self) -> int | None:
-        """The denominator of a single exact grid's spacing, in ticks."""
-        return int(self.runs["den"][0]) if self._exact else None
-
-    @property
-    def origin_offset(self) -> int | None:
-        """The phase of a single exact grid's first sample."""
-        return int(self.runs["offset"][0]) if self._exact else None
 
     @property
     def _grid_terms(self) -> tuple[int, int, int]:
@@ -3473,10 +3328,6 @@ class NumericND(BaseCoord):
         """The ideal origin of an exact grid, in ticks."""
         _, den, offset = self._grid_terms
         return Fraction(self._start_tick * den + offset, den)
-
-    def _labels(self, indices) -> np.ndarray:
-        """The labels at these indices, which may lie outside the coordinate."""
-        return self.labels_at(indices)
 
     def _run_spacing(self, index: int):
         """The spacing a stored run is held to, in anchor space, or None.
@@ -3511,23 +3362,19 @@ class NumericND(BaseCoord):
         rows = self.runs
         if len(rows) < 2:
             return np.zeros(0, dtype=bool)
-        before, after = rows[:-1], rows[1:]
-        den = np.maximum(before["den"], 1)
+        before = rows[:-1]
+        heads = self._run_heads[1:]
+        expected = self._kernel.labels(before, np.arange(len(before)), before["length"])
         if self._ticks:
-            expected = (
-                before["start"]
-                + (before["offset"] + before["length"] * before["num"]) // den
-            )
-            gap = expected != after["start"]
+            gap = expected != heads
         else:
-            expected = before["start"] + _scaled(before["length"], before["num"], den)
-            gap = ~np.isclose(expected, after["start"], rtol=_FLOAT_RTOL, atol=0.0)
+            gap = ~np.isclose(expected, heads, rtol=_FLOAT_RTOL, atol=0.0)
         # A boundary one side of which is not a label at all -- a NaN or a
         # NaT among stored values -- states no distance, so no hole.
         ends = self._run_ends
         known = ~(
             pd.isnull(self._from_anchor(ends[:-1]))
-            | pd.isnull(self._from_anchor(after["start"].copy()))
+            | pd.isnull(self._from_anchor(heads.copy()))
         )
         gap &= known
         for index in np.flatnonzero((before["den"] == 0) & known):
@@ -3537,7 +3384,7 @@ class NumericND(BaseCoord):
                 continue
             # differenced in the anchors' own type, which for a tick is an
             # exact integer where its float would have rounded
-            delta = float(after["start"][index] - ends[index])
+            delta = float(heads[index] - ends[index])
             gap[index] = round(delta / spacing) > 1
         return gap
 
@@ -3548,15 +3395,7 @@ class NumericND(BaseCoord):
 
     # --- labels
 
-    def _run_labels(self, run, k, den) -> np.ndarray:
-        """The labels of the grid rows ``run`` at their own indices ``k``."""
-        rows = self.runs
-        if self._ticks:
-            ticks = (rows["offset"][run] + k * rows["num"][run]) // den
-            return rows["start"][run] + ticks
-        return rows["start"][run] + _scaled(k, rows["num"][run], den)
-
-    def labels_at(self, indices) -> np.ndarray:
+    def _labels(self, indices) -> np.ndarray:
         """
         The labels at these sample indices.
 
@@ -3570,7 +3409,20 @@ class NumericND(BaseCoord):
             np.searchsorted(ends, indices.ravel(), side="right"), 0, len(rows) - 1
         )
         k = indices.ravel() - self._sample_starts[run]
-        out = self._run_labels(run, k, np.maximum(rows["den"][run], 1))
+        if self._ticks and k.size:
+            # Past either end the grid carries on, which its own range check
+            # never vouched for; a label int64 cannot hold is refused.
+            outside = (k < 0) | (k > rows["length"][run])
+            if np.any(outside):
+                reach = np.abs(rows["start"][run][outside].astype(np.float64)) + np.abs(
+                    k[outside].astype(np.float64)
+                ) * np.abs(rows["num"][run][outside].astype(np.float64)) / np.maximum(
+                    rows["den"][run][outside], 1
+                )
+                if np.any(reach >= _INT64_MAX):
+                    msg = "A label that far outside the coordinate leaves int64."
+                    raise CoordError(msg)
+        out = self._kernel.labels(rows, run, k)
         if self.labels is not None:
             stored = rows["den"][run] == 0
             if np.any(stored):
@@ -3590,25 +3442,17 @@ class NumericND(BaseCoord):
         if self.labels is not None and len(rows) == 1:
             return array(self.labels)
         lengths = rows["length"]
+        kernel = self._kernel
         if len(rows) == 1:
-            k = np.arange(int(lengths[0]), dtype=np.int64)
-            return array(
-                self._from_anchor(self._run_labels(0, k, max(int(rows["den"][0]), 1)))
-            )
+            count = int(lengths[0])
+            k = np.arange(count, dtype=np.int64)
+            return array(self._from_anchor(kernel.labels(rows, 0, k, reach=count)))
         total = int(lengths.sum())
         k = np.arange(total, dtype=np.int64) - np.repeat(
             self._sample_starts[:-1], lengths
         )
-        den = np.maximum(rows["den"], 1)
-        if np.all(rows["num"] == rows["num"][0]) and np.all(den == den[0]):
-            num, den = int(rows["num"][0]), int(den[0])
-        else:
-            num, den = np.repeat(rows["num"], lengths), np.repeat(den, lengths)
-        if self._ticks:
-            delta = (np.repeat(rows["offset"], lengths) + k * num) // den
-        else:  # the same expression without the floor
-            delta = _scaled(k, num, den)
-        out = np.repeat(rows["start"], lengths) + delta
+        run = np.repeat(np.arange(len(rows)), lengths)
+        out = kernel.labels(rows, run, k, reach=int(lengths.max()))
         if self.labels is not None:
             out[np.repeat(rows["den"] == 0, lengths)] = self._flat_labels
         return array(self._from_anchor(out))
@@ -3616,7 +3460,7 @@ class NumericND(BaseCoord):
     def _get_index_values(self, indices):
         """The labels at these indices, counting negatives from the end."""
         indices = np.asarray(indices)
-        return self.labels_at(np.where(indices < 0, indices + len(self), indices))
+        return self._labels(np.where(indices < 0, indices + len(self), indices))
 
     # --- order and limits
 
@@ -3625,8 +3469,7 @@ class NumericND(BaseCoord):
     def _run_ends(self) -> np.ndarray:
         """The last label (tick or float) of each run."""
         rows = self.runs
-        k = rows["length"] - 1
-        out = self._run_labels(np.arange(len(rows)), k, np.maximum(rows["den"], 1))
+        out = self._kernel.labels(rows, np.arange(len(rows)), rows["length"] - 1)
         if self.labels is not None:
             stored = rows["den"] == 0
             out[stored] = self._flat_labels[self._label_starts[1:][stored] - 1]
@@ -3637,12 +3480,13 @@ class NumericND(BaseCoord):
     def _direction(self) -> int:
         """1 for increasing labels, -1 for decreasing, 0 for neither."""
         rows = self.runs
-        if self.ndim != 1:
+        if self.ndim != 1 or np.dtype(self.dtype).kind not in "iufMm":
+            # labels the table has no arithmetic for state no order
             return 0
         if not self.size:
             # Nothing to compare, so there is no order to read off.
             return 0
-        grid = rows["den"] > 0
+        grid = rows["den"] != 0
         num = rows["num"][grid]
         # A zero-step run is flat, so it goes either way.
         up, down = bool(np.all(num >= 0)), bool(np.all(num <= 0))
@@ -3652,14 +3496,16 @@ class NumericND(BaseCoord):
             cuts = np.unique(self._label_starts)
             inner[cuts[(cuts > 0) & (cuts < len(flat))] - 1] = False
             try:
-                diffs = np.diff(flat)[inner]
+                # compared, not subtracted: a difference can leave int64
+                rising = (flat[1:] > flat[:-1])[inner]
+                falling = (flat[1:] < flat[:-1])[inner]
             except TypeError:
-                # Labels which cannot be subtracted say nothing about order.
+                # Labels which cannot be ordered say nothing about order.
                 return 0
-            up &= bool(np.all(diffs > 0))
-            down &= bool(np.all(diffs < 0))
+            up &= bool(np.all(rising))
+            down &= bool(np.all(falling))
         if len(rows) > 1:  # runs may overlap, which their boundaries show
-            ends, starts = self._run_ends[:-1], rows["start"][1:]
+            ends, starts = self._run_ends[:-1], self._run_heads[1:]
             up &= bool(np.all(ends < starts))
             down &= bool(np.all(ends > starts))
         return 1 if up else (-1 if down else 0)
@@ -3764,15 +3610,21 @@ class NumericND(BaseCoord):
             last = first + stride * (count - 1)
             return self._sliced(last, -stride, count)._reversed()
         rows = self.runs
-        if len(rows) == 1 and rows["den"][0] > 0:
-            row = rows[0]
-            num, den = int(row["num"]), int(row["den"])
-            if self._ticks:
-                carry, offset = divmod(int(row["offset"]) + first * num, den)
-                start = int(row["start"]) + carry
-            else:
-                start, offset = row["start"] + _scaled(first, num, den), 0
-            new = _rows(self.dtype, [start], [count], [num * stride], [den], [offset])
+        if len(rows) == 1 and rows["den"][0] != 0 and self._ticks:
+            # One tick run, in python integers: it may be sliced far past
+            # either end, where int64 has no room for the products.
+            start, _, num, den, offset = rows[0].item()
+            carry, offset = divmod(offset + first * num, den)
+            if max(abs(num * stride), abs(start + carry)) >= _INT64_MAX:
+                msg = f"Slicing from {first} by {stride} takes the run past int64."
+                raise CoordError(msg)
+            new = _rows(
+                self.dtype, [start + carry], [count], [num * stride], [den], [offset]
+            )
+            return self._build(self.dtype, new, None, self.units, step=self.step)
+        if len(rows) == 1 and rows["den"][0] != 0:
+            new = self._kernel.sliced(rows, first, stride)
+            new["length"] = count
             return self._build(self.dtype, new, None, self.units, step=self.step)
         starts = self._sample_starts
         # The first selected sample inside each run, and how many it holds,
@@ -3782,17 +3634,9 @@ class NumericND(BaseCoord):
         limit = np.minimum(starts[1:], first + stride * count)
         counts = np.maximum(-(-(limit - picked) // stride), 0)
         keep = counts > 0
-        new = rows[keep].copy()
         k = picked[keep] - starts[:-1][keep]
-        den = np.maximum(new["den"], 1)
-        if self._ticks:
-            carry, offset = np.divmod(new["offset"] + k * new["num"], den)
-            new["start"] += carry
-            new["offset"] = offset
-        else:
-            new["start"] += _scaled(k, new["num"], den)
+        new = self._kernel.sliced(rows[keep], k, stride)
         new["length"] = counts[keep]
-        new["num"] *= stride
         labels = None
         if (stored := new["den"] == 0).any():
             gather = _stacked_ranges(
@@ -3809,16 +3653,7 @@ class NumericND(BaseCoord):
     def _reversed(self) -> Self:
         """The same samples in the opposite order."""
         rows = self.runs
-        new = rows.copy()
-        den = np.maximum(rows["den"], 1)
-        k = rows["length"] - 1
-        if self._ticks:
-            carry, offset = np.divmod(rows["offset"] + k * rows["num"], den)
-            new["start"] += carry
-            new["offset"] = offset
-        else:
-            new["start"] += _scaled(k, rows["num"], den)
-        new["num"] = -rows["num"]
+        new = self._kernel.reversed(rows)
         labels = None
         if (stored := rows["den"] == 0).any():
             order = np.flatnonzero(stored)[::-1]
@@ -3870,20 +3705,6 @@ class NumericND(BaseCoord):
             value = math.ceil(value) if forward else math.floor(value)
         return int(min(max(int(value), -_INT64_MAX), _INT64_MAX - 1))
 
-    def _float_index(self, start, length, num, den, value, forward: bool) -> int:
-        """The index a bound maps to inside a float grid run."""
-        if not num:
-            if forward:
-                return 0 if value <= start else length
-            return length - 1 if value >= start else -1
-        # Rounded before it is taken up or down, as the float range has
-        # always done it: a bound a rounding away from a label is that
-        # label, not the one past it.
-        position = round((value - start) * den / num, 10)
-        if not math.isfinite(position):
-            return length if position > 0 else -1
-        return math.ceil(position) if forward else math.floor(position)
-
     def _index_sorted(self, value, forward: bool) -> int:
         """
         The index a query value maps to, for a table of increasing labels.
@@ -3898,10 +3719,11 @@ class NumericND(BaseCoord):
         if isinstance(value, _FLOATS) and not math.isfinite(value):
             return len(self) if value > 0 else -1
         anchor = self._bound_tick(value, forward) if self._ticks else float(value)
+        heads = self._run_heads
         if len(rows) == 1:  # one run needs no search to be found
-            run = 0 if anchor >= rows["start"][0] else -1
+            run = 0 if anchor >= heads[0] else -1
         else:
-            run = int(np.searchsorted(rows["start"], anchor, side="right")) - 1
+            run = int(np.searchsorted(heads, anchor, side="right")) - 1
         if run < 0:
             # Before every run. A first run which is a grid still says
             # where the value would sit; stored labels can only say that
@@ -3909,7 +3731,7 @@ class NumericND(BaseCoord):
             if rows["den"][0] == 0:
                 return -1
             run = 0
-        start, length, num, den, offset = rows[run].item()
+        _, length, _, den, _ = rows[run].item()
         if den == 0:
             piece = self._flat_labels[
                 self._label_starts[run] : self._label_starts[run] + length
@@ -3921,19 +3743,8 @@ class NumericND(BaseCoord):
                 # Past every label the run holds, which the caller reads
                 # as a bound the coordinate does not reach.
                 k = length
-        elif not self._ticks:
-            k = self._float_index(start, length, num, den, value, forward)
-        elif not num:  # every label of a flat run is its start
-            k = (
-                (0 if anchor <= start else length)
-                if forward
-                else (length - 1 if anchor >= start else -1)
-            )
         else:
-            rel = (anchor - start) * den - offset
-            # label(k) >= tick  <=>  (offset + k num) / den >= tick - start
-            # label(k) <= tick  <=>  (offset + k num) / den <  tick - start + 1
-            k = -((-rel) // num) if forward else -((-(rel + den)) // num) - 1
+            k = self._kernel.index_of(rows[run].item(), anchor, forward, self._slack)
         base = 0 if run == 0 else int(self._sample_starts[run])
         k = int(k)
         grid = den != 0
@@ -4008,7 +3819,7 @@ class NumericND(BaseCoord):
             return self._select_by_array(args, relative=relative, samples=samples)
         if samples:
             return self._select_by_samples(args)
-        args = self.get_slice_tuple(args, relative=relative)
+        args = self._get_slice_tuple(args, relative=relative)
         if not self.size:  # nothing to keep, and no order to keep it by
             return self, slice(0, 0)
         if not (self.sorted or self.reverse_sorted):
@@ -4027,16 +3838,12 @@ class NumericND(BaseCoord):
 
     @property
     @cached_method
-    def run_fingerprints(self) -> np.ndarray:
+    def _run_fingerprints(self) -> np.ndarray:
         """A 64 bit hash of each run, independent of where it sits."""
         rows = self.runs
         seed = np.uint64(_blake(str(np.dtype(self.dtype)).encode()))
         out = np.full(len(rows), seed, np.uint64)
-        anchor = rows["start"]
-        if not self._ticks:  # -0.0 and 0.0 are one label
-            anchor = np.where(anchor == 0, 0.0, anchor)
-        columns = [np.ascontiguousarray(anchor).view(np.uint64)]
-        columns += [np.ascontiguousarray(rows[x]).view(np.uint64) for x in _RECORD_TAIL]
+        columns = self._kernel.hash_columns(rows)
         with np.errstate(over="ignore"):
             if len(rows) <= _SMALL_TABLE:
                 words = [column.tolist() for column in columns]
@@ -4049,7 +3856,9 @@ class NumericND(BaseCoord):
                 for column in columns:
                     out = _splitmix(out ^ _splitmix(column))
             bounds = self._label_starts
-            for index in np.flatnonzero(rows["den"] == 0):
+            # A stored run of one label is that label, as a grid run of one
+            # sample is, so the two hash alike; longer ones hash their labels.
+            for index in np.flatnonzero((rows["den"] == 0) & (rows["length"] > 1)):
                 payload = self._flat_labels[bounds[index] : bounds[index + 1]]
                 out[index] = _splitmix(
                     out[index] ^ np.uint64(_blake(payload.tobytes()))
@@ -4066,7 +3875,7 @@ class NumericND(BaseCoord):
         components: tuple[Any, ...] = (
             str(np.dtype(self.dtype)),
             self.shape,
-            hash_array(np.ascontiguousarray(self.run_fingerprints)),
+            hash_array(np.ascontiguousarray(self._run_fingerprints)),
         )
         # A grid the labels are declared to sit on, which they do not state
         # themselves, is part of what the coordinate is; how it was spelled
@@ -4092,13 +3901,13 @@ class NumericND(BaseCoord):
             return False
         if self.fingerprint() == other.fingerprint():
             return True
-        # A grid says what it is in a handful of scalars, and two which
-        # differ in any of them are different coordinates. Only coordinates
-        # which are nothing but stored labels are compared the way float
-        # arrays are, closely rather than exactly.
-        if not (self._all_stored and other._all_stored):
+        # Rows of ticks are canonical: equal labels are equal rows, which
+        # the fingerprints have just compared. Float rows are not -- one
+        # set of doubles can be stated from more than one origin -- so
+        # their labels settle it, exactly; `approx_equal` compares closely.
+        if self._ticks or not (self.size and self.ndim == 1):
             return False
-        return bool(all_close(self.values, other.values))
+        return _same_labels(self.values, other.values)
 
     __hash__ = BaseCoord.__hash__
 
@@ -4158,9 +3967,7 @@ class NumericND(BaseCoord):
             # is free to step by any fraction of its units.
             msg = "A step smaller than one tick would repeat labels."
             raise CoordError(msg)
-        rows = _rows(
-            self.dtype, self.runs["start"], self.runs["length"], [num], [den], 0
-        )
+        rows = _rows(self.dtype, self._run_heads, self.runs["length"], [num], [den], 0)
         return self._build(self.dtype, rows, None, self.units)
 
     @compose_docstring(doc=get_docstring(BaseCoord.change_length))
@@ -4324,31 +4131,24 @@ class NumericND(BaseCoord):
         what keeps a many-run conversion linear in more than name.
         """
         rows, old = self.runs, self.units
-        grid = rows["den"] > 0
-        anchors = self._from_anchor(rows["start"].copy()).astype(np.float64)
+        grid = rows["den"] != 0
+        anchors = self._from_anchor(self._run_heads.copy()).astype(np.float64)
         # Each grid run's exclusive end, so its new spacing comes from its
         # own two ends and its count -- the arithmetic a single run's
         # conversion does, done for every run at once.
-        span = np.where(grid, _scaled(rows["length"], rows["num"], rows["den"]), 0.0)
-        ends = anchors + span
+        stops = self._kernel.labels(rows, np.arange(len(rows)), rows["length"])
+        ends = np.where(grid, self._from_anchor(stops).astype(np.float64), anchors)
         moved = convert_units(
             np.concatenate([anchors, ends]), to_units=units, from_units=old
         )
         starts, stops = np.split(np.asarray(moved, dtype=np.float64), 2)
-        spacings = (stops[grid] - starts[grid]) / rows["length"][grid]
-        num = np.zeros(len(rows), np.int64)
-        den = np.zeros(len(rows), np.int64)
-        num[grid], den[grid] = _float_terms(spacings)
-        if np.any(den[grid] == 0):
-            # A converted spacing with no fraction of its own; the runs
-            # state their labels one at a time instead.
-            converted = (x._convert_units(units) for x in self.segments)
-            return cast("Self", concat_tables(*converted))
+        spacings = np.zeros(len(rows), np.float64)
+        spacings[grid] = (stops[grid] - starts[grid]) / rows["length"][grid]
         labels = self.labels
         if labels is not None:
             labels = convert_units(np.asarray(labels), to_units=units, from_units=old)
         dtype = np.dtype(np.float64)
-        new = _rows(dtype, starts, rows["length"], num, den, 0)
+        new = float_rows(dtype, starts, rows["length"], spacings, grid.astype(np.int64))
         step = self.step
         if step is not None:
             # a step is a difference, so an affine unit's offset cancels
@@ -4366,11 +4166,8 @@ class NumericND(BaseCoord):
                 f"evenly sampled coordinates but {self} is not."
             )
             raise CoordError(msg)
-        row = self.runs[0]
-        den = max(int(row["den"]), 1)
-        ends = self._run_labels(
-            np.zeros(2, np.int64), np.asarray([0, int(row["length"])]), den
-        )
+        count = int(self.runs["length"][0])
+        ends = self._kernel.labels(self.runs, np.zeros(2, np.int64), [0, count])
         return np.abs(self._from_anchor(ends)[1] - self._from_anchor(ends)[0])
 
     def _samples_in(self, duration):
@@ -4440,7 +4237,7 @@ class NumericND(BaseCoord):
             return self._stored_seams() if stored else []
         offsets = self._sample_starts
         ends = self._from_anchor(self._run_ends)
-        starts = self._from_anchor(rows["start"].copy())
+        starts = self._from_anchor(self._run_heads.copy())
         out = []
         for num in range(1, len(rows)):
             before, after = ends[num - 1], starts[num]
@@ -4457,7 +4254,7 @@ class NumericND(BaseCoord):
         # Both columns are the whole table's, so they are taken once rather
         # than rebuilt on every trip round the runs.
         ends = self._from_anchor(self._run_ends)
-        starts = self._from_anchor(self.runs["start"].copy())
+        starts = self._from_anchor(self._run_heads.copy())
         for index, run in enumerate(self.segments):
             if index:
                 before, after = ends[index - 1], starts[index]
@@ -4473,17 +4270,45 @@ class NumericND(BaseCoord):
                 )
         return rows
 
-    def snap(self) -> BaseCoord:
+    @compose_docstring(doc=get_docstring(BaseCoord.snap))
+    def snap(self, tolerance=None) -> BaseCoord:
         """
-        Snap the coordinates to evenly sampled grid points.
+        {doc}
 
-        The min/max of the coordinate remain unchanged; every interior value
-        may move without bound. Use
-        [`simplify`](`dascore.core.coords.BaseCoord.simplify`) for a
-        tolerance-bounded alternative.
+        Notes
+        -----
+        The min/max of the coordinate remain unchanged. Without a tolerance
+        every interior value may move without bound;
+        [`simplify`](`dascore.core.coords.BaseCoord.simplify`) re-fits a
+        coordinate one run at a time instead, keeping the seams a
+        tolerance does not cover.
         """
         if self.evenly_sampled or not self.size:
             return self
+        if tolerance is not None and not (self.sorted or self.reverse_sorted):
+            # labels in no order lie on no grid, however loosely it is read
+            return self
+        out = self._snapped()
+        if tolerance is None or self._within(out, tolerance):
+            return out
+        return self
+
+    def _within(self, other: BaseCoord, tolerance) -> bool:
+        """Whether every label of ``other`` is within ``tolerance`` of this one's."""
+        allowed = GapTolerance.from_user(tolerance)
+        if allowed.count is None:
+            allowed = self._gap_tolerance(allowed)
+        ours, theirs = self.values, other.values
+        if ours.dtype.kind in "mM":
+            ours, theirs = ours.astype(np.int64), theirs.astype(np.int64)
+        moved = np.max(np.abs(ours.astype(np.float64) - theirs.astype(np.float64)))
+        bound = allowed.allowance(other.step)
+        if is_timedelta64(bound):  # in the nanoseconds the labels are counted in
+            bound = np.asarray(bound).astype("timedelta64[ns]").astype(np.int64)
+        return bool(moved <= float(bound))
+
+    def _snapped(self) -> BaseCoord:
+        """The even grid between this coordinate's two ends."""
         min_v, max_v = self.min(), self.max()
         if len(self) == 1:
             _zero = self._get_compatible_value(0)
@@ -4589,7 +4414,7 @@ class NumericND(BaseCoord):
             update=dict(
                 runs=self.runs,
                 run_stops=self._run_ends,
-                run_hashes=self.run_fingerprints,
+                run_hashes=self._run_fingerprints,
             )
         )
 
@@ -4613,7 +4438,7 @@ class NumericND(BaseCoord):
             )
         fields = super()._repr_fields()
         rows = self.runs
-        if self.evenly_sampled and rows["den"][0] != 1:
+        if self._exact and rows["den"][0] != 1:
             # The rounded step misstates a fractional grid, so it is exact.
             exact = cast("Fraction", self.step_exact)
             text = Text(f"{exact}")
@@ -4621,8 +4446,8 @@ class NumericND(BaseCoord):
                 rate = 1 / abs(exact)
                 rate_str = str(rate) if rate.denominator == 1 else f"{float(rate):g}"
                 text += Text(" s") + Text(f" ({rate_str} Hz)", dascore_styles["units"])
-            elif self.unit_str:
-                text += Text(f" {self.unit_str}", dascore_styles["units"])
+            elif self._unit_str:
+                text += Text(f" {self._unit_str}", dascore_styles["units"])
             fields = tuple(
                 ("step", text, True) if name == "step" else (name, value, labelled)
                 for name, value, labelled in fields
@@ -4713,7 +4538,7 @@ def concat_tables(*coords: NumericND) -> NumericND:
     if any(get_quantity(x.units) != get_quantity(first.units) for x in rest):
         msg = "Runs must share units."
         raise CoordError(msg)
-    rows = np.concatenate([x.runs for x in coords])
+    rows = _fuse_float_neighbours(np.concatenate([x.runs for x in coords]), first.dtype)
     pieces = [x.labels for x in coords if x.labels is not None]
     labels = None
     if pieces:
@@ -4818,7 +4643,7 @@ def concat_coords(*coords, units=None) -> BaseCoord:
         if isinstance(coord, NumericND):
             if len(coord):
                 tables.append(coord)
-        elif not coord.degenerate:
+        elif coord.ndim and coord.size:
             msg = (
                 "concat_coords only supports evenly sampled, monotonic, or "
                 f"segmented coordinates, got {type(coord)}."

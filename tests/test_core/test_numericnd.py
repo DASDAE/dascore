@@ -12,12 +12,10 @@ import pytest
 from pydantic import ValidationError
 
 import dascore as dc
+from dascore.core._run_kernels import _record_dtype, float_terms, get_kernel
 from dascore.core.coords import (
     NumericND,
     _canonical,
-    _check_one_tick_range,
-    _check_tick_range,
-    _record_dtype,
     _to_tick,
     concat_coords,
     concat_tables,
@@ -188,9 +186,6 @@ class TestOneRowArithmetic:
         # int64, so it is out of range whatever uint64 could hold.
         ("uint64", 2**63 - 10, 20, 1, 1, 0),
         ("uint64", 2**62, 20, 1, 1, 0),
-        ("float64", 0.0, 10, 1, 1, 0),
-        ("float64", np.inf, 10, 1, 1, 0),
-        ("float64", 1e308, 10, 1, 1, 0),
         ("float64", 0.0, 10, 0, 0, 0),  # a stored run states no grid
     ]
 
@@ -204,12 +199,13 @@ class TestOneRowArithmetic:
 
     @pytest.mark.parametrize("case", CASES)
     def test_one_row_check_matches_the_vectorised_one(self, case):
-        """The scalar tick-range check refuses exactly what the array one does."""
+        """A few rows are checked one at a time; a long table answers the same."""
         name, *fields = case
         dtype = np.dtype(name)
+        kernel = get_kernel(dtype)
         rows = np.asarray([tuple(fields)], _record_dtype(dtype))
-        scalar = self._raised(lambda: _check_one_tick_range(rows[0], dtype))
-        vector = self._raised(lambda: _check_tick_range(rows, dtype))
+        scalar = self._raised(lambda: kernel.check_range(rows, dtype))
+        vector = self._raised(lambda: kernel.check_range(np.repeat(rows, 20), dtype))
         assert scalar == vector
 
     @pytest.mark.parametrize("length", [0, -1])
@@ -414,7 +410,7 @@ class TestMixedRuns:
     def test_labels_at(self, mixed):
         """Labels can be asked for at scattered indices."""
         picked = np.asarray([0, 11, 22, 13])
-        np.testing.assert_array_equal(mixed.labels_at(picked), mixed.values[picked])
+        np.testing.assert_array_equal(mixed._labels(picked), mixed.values[picked])
 
 
 class TestFromArray:
@@ -466,27 +462,29 @@ class TestFromArray:
         assert coord[:2].shape == (2, 4)
 
     def test_float_grid_below_one_is_detected(self):
-        """A float spacing is a fraction, not a truncated whole tick."""
+        """A float spacing below one is a step like any other."""
         values = np.concatenate([np.arange(10) * 0.5, 100 + np.arange(10) * 0.5])
         coord = NumericND.from_array(values, detect=True)
         assert coord.runs_count == 2
-        assert np.all(coord.runs["den"] == 2) and np.all(coord.runs["num"] == 1)
+        assert np.all(float_terms(coord.runs)[0] == 0.5)
         assert coord.step == 0.5
         np.testing.assert_array_equal(coord.values, values)
 
-    def test_a_spacing_with_no_fraction_is_stored(self):
-        """Labels whose spacing has no fraction of ticks keep themselves."""
+    def test_a_huge_spacing_is_still_a_grid(self):
+        """Any finite double is a step; none is too large to state."""
         values = np.asarray([0.0, 1e20, 2e20, 1e21, 1.1e21, 1.2e21])
         coord = NumericND.from_array(values, detect=True)
-        assert coord.labels is not None
         np.testing.assert_array_equal(coord.values, values)
         np.testing.assert_array_equal(get_coord(data=values).values, values)
+        big = get_coord(start=0.0, step=1e30, shape=(5,))
+        np.testing.assert_array_equal(big.values, np.arange(5) * 1e30)
 
-    def test_get_exact_coord_reads_a_float_grid(self):
+    def test_get_coord_reads_a_float_grid(self):
         """The shared reader constructor sees the same grid."""
         coord = get_coord(data=np.arange(20) * 0.25)
         assert coord.evenly_sampled and coord.step == 0.25
-        assert coord.step_exact == Fraction(1, 4)
+        # a float spacing is the double it is, which has no exact form
+        assert coord.step_exact is None
 
     def test_rank_zero_stays_rank_zero(self):
         """A scalar label is a coordinate of no axis, not one of one sample."""
@@ -618,55 +616,133 @@ class TestOverflow:
 
 
 class TestFloats:
-    """A float coordinate is the same table without the floor."""
+    """A float run is ``start + step * (k0 + k * stride)`` in plain doubles."""
 
-    def test_short_step_is_a_short_fraction(self):
-        """A float spacing is stored as the short fraction it is."""
+    # Axes as numpy users build them; each must come back bit for bit.
+    AXES: ClassVar = {
+        "arange * step": np.arange(5000) * 0.1,
+        "start + arange * step": 3.7 + np.arange(5000) * 0.1,
+        "gauge length": np.arange(5000) * 1.02,
+        "linspace": np.linspace(0, 1000, 5000),
+        "large origin": 1e6 + np.arange(5000) * 0.25,
+        "negative step": 10.0 - np.arange(5000) * 0.1,
+    }
+
+    def test_step_is_the_double_it_was_given(self):
+        """A float spacing is stored as itself, with a stride of one."""
         coord = NumericND.from_run(start=0.0, step=0.1, shape=(11,))
-        assert table(coord)[0][2:4] == (1, 10)
+        step, stride, k0 = float_terms(coord.runs)
+        assert (step[0], stride[0], k0[0]) == (0.1, 1, 0)
         assert coord.step == 0.1
-        assert coord.step_exact == Fraction(1, 10)
-        assert coord.values[3] == 0.3
-        assert coord.values[-1] == 1.0
+        assert coord.step_exact is None
+        np.testing.assert_array_equal(coord.values, np.arange(11) * 0.1)
 
-    def test_binary_step_round_trips(self):
-        """A spacing which is no short fraction keeps its binary one."""
-        coord = NumericND.from_run(start=0.0, step=math.pi, shape=(5,))
-        assert coord.values[-1] == 4 * math.pi
-        assert float(coord.step_exact) == math.pi
+    @pytest.mark.parametrize("step", [math.pi, 1e-15, 5e-324, 1e300])
+    def test_any_finite_step_is_a_grid(self, step):
+        """No spacing is too fine or too coarse to be a step."""
+        coord = NumericND.from_run(start=0.0, step=step, shape=(5,))
+        assert coord.evenly_sampled and coord.step == step
+        np.testing.assert_array_equal(coord.values, np.arange(5) * step)
 
-    def test_tiny_step_does_not_vanish(self):
-        """A spacing below the shortening limit stays itself."""
-        coord = NumericND.from_run(start=0.0, step=1e-15, shape=(5,))
-        assert float(coord.step_exact) == 1e-15
-        assert coord.values[1] == 1e-15
-        np.testing.assert_allclose(coord.values, np.arange(5) * 1e-15, rtol=1e-15)
+    @pytest.mark.parametrize("step", [np.nan, np.inf, -np.inf])
+    def test_a_step_which_is_no_number_is_refused(self, step):
+        """A NaN or infinite step raises the coordinate's own error."""
+        with pytest.raises(CoordError, match="finite"):
+            NumericND.from_run(start=0.0, step=step, shape=(5,))
+
+    @pytest.mark.parametrize("name", AXES)
+    def test_array_comes_back_bit_for_bit(self, name):
+        """An axis read from labels is one grid and gives back every double."""
+        values = self.AXES[name]
+        coord = get_coord(data=values)
+        assert coord.evenly_sampled
+        np.testing.assert_array_equal(coord.values, values)
+
+    @pytest.mark.parametrize("name", AXES)
+    def test_no_slice_moves_a_label(self, name):
+        """Slicing and reversal change integers only, so labels cannot move."""
+        values = self.AXES[name]
+        coord = get_coord(data=values)
+        for item in (slice(7, None, 3), slice(None, None, -1), slice(4000, 10, -7)):
+            np.testing.assert_array_equal(coord[item].values, values[item])
+        chained = coord[100:][250:][::2][::-1]
+        np.testing.assert_array_equal(chained.values, values[350::2][::-1])
+
+    def test_routes_to_one_slice_give_one_row(self):
+        """``c[a:][b:]`` is ``c[a + b:]``: equal, with equal run hashes."""
+        coord = get_coord(data=self.AXES["start + arange * step"])
+        one, two = coord[350:], coord[100:][250:]
+        assert one == two
+        np.testing.assert_array_equal(one._run_fingerprints, two._run_fingerprints)
+        assert coord[::-1][::-1] == coord
+
+    def test_a_slice_arriving_as_labels_is_found_on_its_parent_grid(self):
+        """A slice of ``arange * step`` is no grid from its own first label."""
+        values = np.arange(10_000) * 0.1
+        coord = get_coord(data=values[5000:])
+        assert coord.evenly_sampled
+        assert coord == get_coord(data=values)[5000:]
+
+    def test_labels_no_grid_reproduces_are_stored(self):
+        """Near-even labels are kept as they are, never fitted."""
+        values = np.cumsum(np.full(1000, 0.1))
+        coord = get_coord(data=values)
+        assert not coord.evenly_sampled and coord.labels is not None
+        np.testing.assert_array_equal(coord.values, values)
+
+    def test_float32_axis_round_trips(self):
+        """A narrower float is verified in its own dtype."""
+        values = np.arange(1000, dtype=np.float32) * np.float32(0.5)
+        coord = get_coord(data=values)
+        assert coord.dtype == np.float32 and coord.evenly_sampled
+        np.testing.assert_array_equal(coord.values, values)
+
+    def test_holes_share_one_grid(self):
+        """Runs either side of a hole sit on one grid, a grid index apart."""
+        values = np.arange(3000) * 0.1
+        kept = np.concatenate([values[:1000], values[2000:]])
+        coord = NumericND.from_array(kept)
+        assert coord.runs_count == 2 and coord.holes
+        assert coord.runs["start"][0] == coord.runs["start"][1]
+        assert coord.step == 0.1
+        np.testing.assert_array_equal(coord.values, kept)
 
     def test_slice_keeps_its_first_label(self):
-        """A slice starts at exactly the label its parent gave that sample."""
+        """A slice is exactly the labels its parent gave those samples."""
         coord = NumericND.from_run(start=1e6, step=0.1, shape=(1000,))
         for first in (0, 11, 137):
             sliced = coord[first : first + 9]
-            assert sliced.values[0] == coord.values[first]
-            # re-anchoring a float slice may move a label by its last bit
-            np.testing.assert_allclose(
-                sliced.values, coord.values[first : first + 9], rtol=1e-12, atol=0
+            np.testing.assert_array_equal(
+                sliced.values, coord.values[first : first + 9]
             )
 
-    def test_fusion_keeps_reanchored_labels(self):
-        """A rounded slice must not be moved again when its runs are joined."""
+    def test_split_runs_fuse_back(self):
+        """Pieces of one grid rejoin into the run they were cut from."""
         coord = NumericND.from_run(start=-0.3, step=0.1, shape=(6,))
-        first, second = coord[:3], coord[3:]
-        expected = np.concatenate([first.values, second.values])
-        rejoined = concat_tables(first, second)
-        assert rejoined.runs_count == 2
-        np.testing.assert_array_equal(rejoined.values, expected)
+        rejoined = concat_tables(coord[:3], coord[3:])
+        assert rejoined.runs_count == 1 and rejoined == coord
+
+    def test_grids_built_apart_fuse_only_when_exact(self):
+        """Two ranges meeting end to end fuse where one grid holds both."""
+        first = get_coord(start=0.0, stop=10.0, step=1.0)
+        second = get_coord(start=10.0, stop=20.0, step=1.0)
+        joined = concat_tables(first, second)
+        assert joined.runs_count == 1
+        np.testing.assert_array_equal(joined.values, np.arange(20.0))
+        # 0.1 * k and 1.0 + 0.1 * k are different doubles, so these do not
+        awkward = concat_tables(
+            get_coord(start=0.0, step=0.1, shape=(10,)),
+            get_coord(start=1.0, step=0.1, shape=(10,)),
+        )
+        expected = np.concatenate([np.arange(10) * 0.1, 1.0 + np.arange(10) * 0.1])
+        np.testing.assert_array_equal(awkward.values, expected)
+        assert not awkward.holes and awkward.step == 0.1
 
     def test_select(self):
-        """Float labels select on their fraction step within a tolerance."""
+        """A bound within a rounding of a label is that label."""
         coord = NumericND.from_run(start=0.0, step=0.1, shape=(20,))
         out, _ = coord.select((0.3, 0.7))
-        np.testing.assert_array_equal(out.values, np.arange(3, 8) / 10)
+        np.testing.assert_array_equal(out.values, coord.values[3:8])
 
     def test_select_near_a_label(self):
         """A bound a hair inside a label picks the next label in."""
@@ -696,7 +772,7 @@ class TestLookup:
     def test_random_windows(self, segmented, reverse):
         """Random windows give the samples the segmented coordinate gives."""
         reference = segmented[::-1] if reverse else segmented
-        coord = NumericND.from_coord(segmented)
+        coord = NumericND._from_coord(segmented)
         coord = coord[::-1] if reverse else coord
         values = np.asarray(reference.values)
         rng = np.random.default_rng(0)
@@ -792,20 +868,20 @@ class TestFromExisting:
     def test_exact_range_slices(self, item):
         """A strided slice of an exact grid keeps every label it had."""
         reference = get_coord(start=T0, step=Fraction(1, 1024), shape=(500,))[item]
-        coord = NumericND.from_coord(reference)
+        coord = NumericND._from_coord(reference)
         np.testing.assert_array_equal(coord.values, reference.values)
 
     def test_exact_range(self):
         """A range on an exact grid keeps the grid and its phase."""
         reference = get_coord(start=T0, step=Fraction(1, 1024), shape=(500,))
-        coord = NumericND.from_coord(reference)
+        coord = NumericND._from_coord(reference)
         np.testing.assert_array_equal(coord.values, reference.values)
         assert coord.step_exact == reference.step_exact
 
     def test_float_range(self):
         """A float range keeps its labels to within floating precision."""
         reference = get_coord(start=0.5, step=0.25, shape=(9,))
-        coord = NumericND.from_coord(reference)
+        coord = NumericND._from_coord(reference)
         np.testing.assert_array_equal(coord.values, reference.values)
 
     def test_segmented(self):
@@ -814,20 +890,20 @@ class TestFromExisting:
         first = get_coord(start=T0, step=step, shape=(100,))
         second = get_coord(start=first.max() + 10 * step, step=step, shape=(50,))
         reference = concat_coords(first, second)
-        coord = NumericND.from_coord(reference)
-        assert coord.runs_count == reference.segment_count == 2
+        coord = NumericND._from_coord(reference)
+        assert coord.runs_count == reference.runs_count == 2
         np.testing.assert_array_equal(coord.values, reference.values)
 
     def test_array_coordinate(self):
         """An array coordinate is carried as its labels."""
         reference = get_coord(data=np.asarray([1.0, 2.0, 4.0, 8.0]), units="m")
-        coord = NumericND.from_coord(reference)
+        coord = NumericND._from_coord(reference)
         np.testing.assert_array_equal(coord.values, reference.values)
         assert coord.units == reference.units
 
     def test_units_survive(self):
         """Units go along with the labels."""
-        coord = NumericND.from_coord(get_coord(start=0, step=1, shape=(4,), units="m"))
+        coord = NumericND._from_coord(get_coord(start=0, step=1, shape=(4,), units="m"))
         assert coord.units == dc.get_quantity("m")
         assert coord[1:].units == coord.units
 
@@ -888,8 +964,8 @@ class TestHashing:
         other = NumericND.from_run(start=T0 + step * 200, step=step, shape=(5,))
         first = concat_tables(early, late)
         second = concat_tables(early, other, late)
-        assert first.run_fingerprints[-1] == second.run_fingerprints[-1]
-        assert first.run_fingerprints[0] == second.run_fingerprints[0]
+        assert first._run_fingerprints[-1] == second._run_fingerprints[-1]
+        assert first._run_fingerprints[0] == second._run_fingerprints[0]
 
     @pytest.mark.parametrize("kind", ["time", "float", "int", "timedelta"])
     def test_both_folds_agree(self, monkeypatch, kind, mixed):
@@ -909,14 +985,14 @@ class TestHashing:
         }
         coord = coords[kind]
         assert coord.runs_count <= dc.core.coords._SMALL_TABLE
-        small = coord.run_fingerprints.copy()
+        small = coord._run_fingerprints.copy()
         # the same table again, folded by the vectorised path alone
         monkeypatch.setattr(dc.core.coords, "_SMALL_TABLE", -1)
         other = NumericND.from_rows(
             coord.runs, labels=coord.labels, dtype=coord.dtype, units=coord.units
         )
         assert other is not coord
-        np.testing.assert_array_equal(small, other.run_fingerprints)
+        np.testing.assert_array_equal(small, other._run_fingerprints)
 
     def test_order_matters(self):
         """The same runs in another order are another coordinate."""
@@ -928,8 +1004,8 @@ class TestHashing:
     def test_stored_labels_are_hashed(self, mixed):
         """Two stored runs of different labels hash differently."""
         moved = concat_tables(mixed[:10], mixed[10:15]._translated(NS), mixed[15:])
-        assert moved.run_fingerprints[0] == mixed.run_fingerprints[0]
-        assert moved.run_fingerprints[1] != mixed.run_fingerprints[1]
+        assert moved._run_fingerprints[0] == mixed._run_fingerprints[0]
+        assert moved._run_fingerprints[1] != mixed._run_fingerprints[1]
         assert moved != mixed
 
     def test_equal_after_split_and_concat(self, mixed):
@@ -941,7 +1017,7 @@ class TestHashing:
         """An integer table and a float table of the same numbers differ."""
         ints = NumericND.from_run(start=0, step=1, shape=(5,))
         floats = NumericND.from_run(start=0.0, step=1.0, shape=(5,))
-        assert ints.run_fingerprints[0] != floats.run_fingerprints[0]
+        assert ints._run_fingerprints[0] != floats._run_fingerprints[0]
         assert ints != floats
 
     def test_not_hashable(self):
@@ -1188,7 +1264,7 @@ class TestNarrowDtypes:
     def test_from_coord_keeps_a_narrow_range(self):
         """Converting a narrow range does not widen it."""
         reference = get_coord(start=np.int8(0), stop=np.int8(100), step=np.int8(2))
-        coord = NumericND.from_coord(reference)
+        coord = NumericND._from_coord(reference)
         assert coord.dtype == reference.dtype
         np.testing.assert_array_equal(coord.values, reference.values)
 
@@ -1227,7 +1303,7 @@ class TestGaps:
     def test_missing_counts_the_grid_positions(self):
         """A declared grid says how many positions have no sample."""
         coord = get_coord(data=[1, 3, 4, 10, 11, 12], step=1)
-        table = NumericND.from_coord(coord)
+        table = NumericND._from_coord(coord)
         assert table.missing().count == 6
         assert not table.missing().complete
 

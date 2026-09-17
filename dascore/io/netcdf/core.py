@@ -14,8 +14,8 @@ from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
 from dascore.io.core import ScanPayload, make_scan_payload
 from dascore.io.utils import (
-    get_snapped_coord,
     resolve_keyed_source,
+    snap_stored_coord,
     windows_to_slices,
 )
 from dascore.utils.hdf5 import H5Reader, get_h5py_file
@@ -253,9 +253,10 @@ class NetCDFCFV18(FiberIO):
         if np.ndim(values) != 1:
             return values
         units = coord.attrs.get("units")
-        if snap:
-            return get_snapped_coord(values, units=units)
-        return get_coord(data=np.atleast_1d(values), units=units)
+        out = get_coord(data=np.atleast_1d(values), units=units)
+        # only a dimension is snapped, never a coordinate along one
+        dimensional = tuple(coord.dims) == (coord.name,)
+        return snap_stored_coord(out, snap, coord.name) if dimensional else out
 
     def _get_source_patch_key(self, data_var_name):
         """Normalize the selected xarray payload name to a patch id."""

@@ -38,7 +38,7 @@ class TestDeclaredStep:
     def test_runs_of_the_step(self, design_case):
         """Consecutive positions become ranges, singletons included."""
         assert design_case.runs_count > 1
-        assert design_case.segment_count == 3
+        assert design_case.runs_count == 3
         assert all(x.evenly_sampled for x in design_case.segments)
         assert [len(x) for x in design_case.segments] == [1, 2, 3]
         assert design_case.step == 1
@@ -75,7 +75,7 @@ class TestDeclaredStep:
     def test_float_grid(self):
         """Floats sit on a grid within a small tolerance of the step."""
         coord = get_coord(data=[0.0, 0.1, 0.2, 0.5, 0.6], step=0.1)
-        assert coord.segment_count == 2
+        assert coord.runs_count == 2
         assert coord.missing().count == 2
 
     @pytest.mark.parametrize("step", [1, -1])
@@ -95,7 +95,7 @@ class TestDeclaredStep:
         """A time coordinate declares a timedelta step."""
         labels = T0 + np.array([0, 4, 8, 20, 24]) * MS
         coord = get_coord(data=labels, step=4 * MS)
-        assert coord.segment_count == 2
+        assert coord.runs_count == 2
         missing = coord.missing()
         assert missing.count == 2
         assert list(missing.iter_runs()) == [(T0 + 12 * MS, T0 + 16 * MS)]
@@ -103,7 +103,7 @@ class TestDeclaredStep:
     def test_two_values(self):
         """Two values apart by more than a step are two runs."""
         coord = get_coord(data=[0, 5], step=1)
-        assert coord.segment_count == 2
+        assert coord.runs_count == 2
         assert coord.missing().count == 4
 
     def test_dense_guard_keeps_the_step(self):

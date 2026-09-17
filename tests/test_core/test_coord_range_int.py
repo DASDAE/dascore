@@ -52,7 +52,7 @@ class TestDispatch:
         """A timedelta step on a datetime start makes a whole-tick exact grid."""
         coord = get_coord(start=T0, step=ONE_S, shape=(10,))
         assert coord._exact
-        assert coord.step_denominator == 1
+        assert coord._grid_terms[1] == 1
         assert coord.step == ONE_S
 
     def test_timedelta(self):
@@ -197,7 +197,7 @@ class TestConstruction:
         """Start is the floor of the ideal origin count steps before stop."""
         coord = get_coord(stop=10, step=(3, 2), shape=(4,))
         # ideal origin = 10 - 4 * 1.5 = 4
-        assert coord.start == 4 and coord.origin_offset == 0
+        assert coord.start == 4 and coord._grid_terms[2] == 0
         assert np.array_equal(coord.values, [4, 5, 7, 8])
         coord = get_coord(stop=11, step=(3, 2), shape=(4,))
         # ideal origin 5; labels 5, 6.5->6, 8, 9.5->9
@@ -267,14 +267,14 @@ class TestConstruction:
         # over a tick, so (6, 2, 1) and (3, 1, 0) are the same labels and
         # only one of them is the form they are held in.
         coord = get_coord(start=0, step=(3, 2), shape=(20,))[1::2]
-        assert (coord.step_numerator, coord.step_denominator) == (3, 1)
-        assert coord.origin_offset == 0
+        assert (coord._grid_terms[0], coord._grid_terms[1]) == (3, 1)
+        assert coord._grid_terms[2] == 0
         assert np.array_equal(coord.values, [1, 4, 7, 10, 13, 16, 19, 22, 25, 28])
         strided = get_coord(start=0, step=(3, 2), shape=(20,))[::2]
-        assert (strided.step_numerator, strided.step_denominator) == (3, 1)
+        assert (strided._grid_terms[0], strided._grid_terms[1]) == (3, 1)
         odd_origin = get_coord(start=0, step=(3, 2), shape=(20,))[1:]
-        assert (odd_origin.step_numerator, odd_origin.step_denominator) == (3, 2)
-        assert odd_origin.origin_offset == 1
+        assert (odd_origin._grid_terms[0], odd_origin._grid_terms[1]) == (3, 2)
+        assert odd_origin._grid_terms[2] == 1
         assert np.array_equal(odd_origin[::2].values, coord.values)
 
 
@@ -361,7 +361,7 @@ class TestSlicing:
     def test_ideal_positions_survive(self, hz_1024):
         """The origin offset of a slice is compared, not only its labels."""
         sub = hz_1024[1:]
-        assert sub.origin_offset == 1 and sub.step_denominator == 2
+        assert sub._grid_terms[2] == 1 and sub._grid_terms[1] == 2
         assert sub._ideal_origin == hz_1024._ideal_origin + Fraction(1953125, 2)
 
     def test_random_nested_slices_against_oracle(self):
@@ -409,7 +409,7 @@ class TestSlicing:
     def test_empty_slice_keeps_its_type(self, hz_1024):
         """An empty slice is a coordinate of no samples, still typed."""
         out = hz_1024[5:5]
-        assert not len(out) and out.degenerate
+        assert not len(out) and (not (out.ndim and out.size))
         assert out.dtype == hz_1024.dtype
 
     def test_array_getitem(self, int_frac):
@@ -429,7 +429,7 @@ class TestSlicing:
         """Changing the length keeps the grid and offset."""
         longer = hz_1024.change_length(len(hz_1024) + 10)
         assert np.array_equal(longer.values[: len(hz_1024)], hz_1024.values)
-        assert hz_1024[1:].change_length(5).origin_offset == 1
+        assert hz_1024[1:].change_length(5)._grid_terms[2] == 1
 
 
 class TestSelect:
@@ -594,7 +594,7 @@ class TestNewAndRoundTrips:
         """New with a shifted start and stop keeps the grid."""
         sub = hz_1024[1:]
         out = sub.new(start=sub.start + ONE_S, stop=sub.stop + ONE_S)
-        assert out.origin_offset == 1 and out.step_exact == sub.step_exact
+        assert out._grid_terms[2] == 1 and out.step_exact == sub.step_exact
         assert len(out) == len(sub)
 
     def test_new_stop_changes_count(self, hz_1024):
@@ -605,7 +605,7 @@ class TestNewAndRoundTrips:
     def test_new_step_replaces_grid(self, hz_1024):
         """New with a step drops the old grid."""
         out = hz_1024[1:].new(step=ONE_S)
-        assert out.step_denominator == 1 and out.origin_offset == 0
+        assert out._grid_terms[1] == 1 and out._grid_terms[2] == 0
         assert out.step == ONE_S
 
     def test_new_units(self, int_frac):
@@ -722,9 +722,8 @@ class TestStepExact:
         """Timedelta and integer steps are exact; float steps are not."""
         assert get_coord(start=T0, step=ONE_S, shape=(3,)).step_exact == 1
         assert get_coord(start=0, stop=10, step=2).step_exact == 2
-        # A float step is a fraction of its own units too, since the run
-        # holds the reduced fraction rather than a rounded tick.
-        assert get_coord(start=0.0, stop=1.0, step=0.1).step_exact == Fraction(1, 10)
+        # A float step is the double it is, which has no exact form.
+        assert get_coord(start=0.0, stop=1.0, step=0.1).step_exact is None
 
     def test_partial_and_array(self):
         """Coordinates without a step have no exact step."""

@@ -10,6 +10,7 @@ from typing import Any, cast
 import numpy as np
 
 import dascore as dc
+from dascore.config import get_config
 from dascore.constants import INVENTORY_ATTRS
 from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import BaseCoord, get_coord
@@ -25,8 +26,7 @@ from dascore.units import convert_units, get_quantity_str
 from dascore.utils.misc import (
     _to_slice,
     _validate_sample_values,
-    all_diffs_close_enough,
-    is_strictly_monotonic,
+    iterate,
     unbyte,
 )
 from dascore.utils.time import to_exact_fraction
@@ -294,27 +294,40 @@ def get_gridded_coord(values, units=None) -> BaseCoord:
     return coord.snap() if len(coord) > 1 else coord
 
 
-def get_snapped_coord(values, units=None) -> BaseCoord:
+def wants_snap(snap, name: str) -> bool:
     """
-    Fit approximately even reader labels, leaving irregular labels alone.
+    Whether a reader's ``snap`` option asks for the coordinate ``name``.
 
-    This is the explicit legacy reader policy for ``snap=True``. It uses
-    the median spacing only when all spacings meet the existing relative
-    tolerance. Use ``get_coord(data=values)`` to preserve labels exactly,
-    or ``get_gridded_coord`` when the format requires fitting every axis.
+    ``snap`` is True or False for every dimension at once, or the name (or
+    names) of the dimensions to snap.
     """
-    values = np.asarray(values)
-    coord = get_coord(data=values, units=units)
-    if values.ndim != 1 or coord.evenly_sampled or len(values) < 2:
+    if snap is None or isinstance(snap, bool | np.bool_):
+        return bool(snap)
+    return name in tuple(iterate(snap))
+
+
+def snap_stored_coord(coord: BaseCoord, snap, name: str) -> BaseCoord:
+    """
+    A dimensional coordinate read from stored labels, snapped if it was asked for.
+
+    Reading labels never moves one; putting them on an even grid is this
+    separate, named step. It is bounded: a coordinate no even grid lies
+    within the configured ``snap_tolerance`` of keeps the labels its file
+    holds. Only a dimension is ever snapped, never an associated coordinate
+    such as a temperature, whose values are measurements.
+
+    Parameters
+    ----------
+    coord
+        The coordinate as the file states it.
+    snap
+        The reader's ``snap`` option: a bool, or the dimension names to snap.
+    name
+        The dimension this coordinate is.
+    """
+    if not wants_snap(snap, name) or len(coord) < 2:
         return coord
-    if values.dtype.kind not in "fiuMm" or not is_strictly_monotonic(values):
-        return coord
-    diffs = np.sort(np.diff(values))
-    if not all_diffs_close_enough(np.unique(diffs)):
-        return coord
-    return get_coord(
-        start=values[0], step=diffs[len(diffs) // 2], shape=values.shape, units=units
-    )
+    return coord.snap(tolerance=get_config().snap_tolerance)
 
 
 def step_from_rate(rate) -> Fraction | np.timedelta64:

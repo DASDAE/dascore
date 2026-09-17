@@ -55,7 +55,6 @@ from rich.text import Text
 from dascore.constants import dascore_styles, select_values_description
 from dascore.core.coords import (
     BaseCoord,
-    CoordPartial,
     CoordSummary,
     NumericND,
     get_coord,
@@ -500,7 +499,11 @@ class CoordManager(RichRepr, DascoreBaseModel):
         return out, array
 
     def snap(
-        self, *coords, array: MaybeArray = None, reverse: bool = False
+        self,
+        *coords,
+        array: MaybeArray = None,
+        reverse: bool = False,
+        tolerance=None,
     ) -> tuple[Self, MaybeArray]:
         """
         Force the specified coordinates to be monotonic and evenly sampled.
@@ -516,16 +519,24 @@ class CoordManager(RichRepr, DascoreBaseModel):
             The array to sort/snap.
         reverse
             If true, sort in descending order, else ascending.
+        tolerance
+            How far a label may move, as
+            [`BaseCoord.snap`](`dascore.core.coords.BaseCoord.snap`) reads
+            it. With a tolerance nothing is sorted: a coordinate no even
+            grid lies that close to is left exactly as it is.
         """
         coords = self.dims if len(coords) == 0 else coords
-        cm, array = self.sort(*coords, array=array, reverse=reverse)
+        if tolerance is None:
+            cm, array = self.sort(*coords, array=array, reverse=reverse)
+        else:
+            cm = self
         # now the arrays are sorted it should be correct to snap dimensions.
         # Only collect coords whose snap actually changes them so an already
         # even manager is returned unchanged (snap returns self when even).
         updates = {}
         for coord_name in coords:
             current = cm.coord_map[coord_name]
-            snapped = current.snap()
+            snapped = current.snap(tolerance=tolerance)
             if snapped is not current:
                 updates[coord_name] = snapped
         if not updates:
@@ -783,7 +794,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
             if name in selected or not set(old_dims) & set(indices):
                 coords[name] = (old_dims, selected.get(name, coord))
                 continue
-            if (drop or coord._partial) and old_dims and not new_dims:
+            if (drop or not coord.has_values) and old_dims and not new_dims:
                 continue
             key = tuple(indices.get(dim, slice(None)) for dim in old_dims)
             # Keep slice results compact, including floating grids, as select
@@ -793,7 +804,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
             compact = table and coord.labels is None
             if compact and isinstance(key[0], slice):
                 new_coord = coord[key[0]]
-            elif isinstance(coord, CoordPartial) and new_dims:
+            elif not coord.has_values and new_dims:
                 shape = tuple(
                     len(range(*ind.indices(size)))
                     if isinstance(ind, slice)
@@ -813,7 +824,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
                     original = NumericND.from_array(
                         values, units=coord.units, detect=False
                     )
-                    if new_coord._partial or _canonicalization_moved_values(
+                    if not new_coord.has_values or _canonicalization_moved_values(
                         original, new_coord
                     ):
                         new_coord = original
@@ -884,7 +895,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
             name = dims[ind]
             coord = self.get_coord(name)
             # We can just scale up the coord
-            if coord._partial or drop_coords:
+            if not coord.has_values or drop_coords:
                 new_coords[name] = get_coord(shape=max(current, new))
             else:
                 msg = f"Cannot broadcast non-empty coord {name} to shape {new}."
@@ -1482,7 +1493,7 @@ def _canonicalization_moved_values(original, out) -> bool:
         return False
     # A CoordPartial is a placeholder whose values are all NaN, so it has
     # nothing to lose; canonicalizing it is the whole point.
-    if isinstance(original, CoordPartial):
+    if not original.has_values:
         return False
     # Canonicalization re-labels a coordinate, it never resamples one.
     assert original.shape == out.shape

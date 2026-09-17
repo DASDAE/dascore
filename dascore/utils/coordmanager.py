@@ -145,7 +145,7 @@ def merge_coord_managers(
             common_units = next(iter(units))
             coord = _concat_numeric_coords(merge_coords, units=common_units)
             if coord is None:
-                new_data = np.concatenate([x.data for x in merge_coords], axis=axis)
+                new_data = np.concatenate([x.values for x in merge_coords], axis=axis)
                 coord = dc.core.coords.get_coord(data=new_data, units=common_units)
             out[coord_name] = (dims, coord)
         return out

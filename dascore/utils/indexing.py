@@ -125,7 +125,7 @@ def _require_unique_range(coord):
     if coord._exact:
         # integer labels repeat only on a zero step; construction refuses
         # a step finer than one tick
-        if size > 1 and not coord.step_numerator:
+        if size > 1 and not coord._grid_terms[0]:
             raise pd.errors.InvalidIndexError(
                 "Range labels repeat on a zero step; use positional indexing instead."
             )
@@ -242,7 +242,7 @@ def _restore_indexer(indexer, positions):
 
 def _unique_grid(coord) -> bool:
     """Whether a range is an integer grid of distinct labels."""
-    return coord._exact and bool(coord.step_numerator)
+    return coord._exact and bool(coord._grid_terms[0])
 
 
 def _same_kind(coord, labels) -> bool:
@@ -256,7 +256,7 @@ def _same_kind(coord, labels) -> bool:
 def _exact_slice(coord, start, stop, step) -> slice | None:
     """A label slice on an ascending integer grid, or None to ask pandas."""
     ascending = _is_grid(coord) and coord._exact
-    if not (ascending and coord.step_numerator > 0):
+    if not (ascending and coord._grid_terms[0] > 0):
         return None
     # np.timedelta64 subclasses np.integer, so a duration step is refused here
     step_ok = step is None or (
@@ -281,7 +281,7 @@ def label_indexer(
     tolerance: Any = None,
 ) -> int | slice | np.ndarray:
     """Resolve labels with the pandas index semantics used by xarray."""
-    if coord._partial:
+    if not coord.has_values:
         if method is not None or tolerance is not None:
             raise ValueError("Inexact matching requires coordinate labels.")
         return positional_indexer(value, len(coord))

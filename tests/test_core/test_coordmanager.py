@@ -190,13 +190,13 @@ class TestBasicCoordManager:
 
     def test_min(self, cm_basic):
         """Ensure we can get min value."""
-        expected = np.min(cm_basic.time.data).astype(np.int64)
+        expected = np.min(cm_basic.time.values).astype(np.int64)
         got = cm_basic.min("time").astype(np.int64)
         assert np.isclose(got, expected)
 
     def test_max(self, cm_basic):
         """Ensure we can get max value."""
-        expected = np.max(cm_basic.time.data).astype(np.int64)
+        expected = np.max(cm_basic.time.values).astype(np.int64)
         got = cm_basic.max("time").astype(np.int64)
         assert np.isclose(got, expected)
 
@@ -235,7 +235,7 @@ class TestBasicCoordManager:
 
     def test_coord_range(self, random_patch):
         """Ensure we can get a scaler value for the coordinate."""
-        coord_array = random_patch.get_coord("time").data
+        coord_array = random_patch.get_coord("time").values
         expected = (
             np.max(coord_array)
             - np.min(coord_array)
@@ -1321,7 +1321,7 @@ class TestSnap:
         cm, _ = coord_manager.snap()
         for dim in cm.dims:
             coord = cm.coord_map[dim]
-            if coord.degenerate or len(coord) < 2:
+            if (not (coord.ndim and coord.size)) or len(coord) < 2:
                 continue
             assert coord.sorted
             assert not coord.reverse_sorted
@@ -1332,7 +1332,7 @@ class TestSnap:
         cm, _ = coord_manager.snap(reverse=True)
         for dim in cm.dims:
             coord = cm.coord_map[dim]
-            if coord.degenerate or len(coord) < 2:
+            if (not (coord.ndim and coord.size)) or len(coord) < 2:
                 continue
             assert not coord.sorted
             assert coord.reverse_sorted

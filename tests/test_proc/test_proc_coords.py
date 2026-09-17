@@ -1489,7 +1489,7 @@ class TestFillGaps:
         """Only the narrow hole is filled; the wide one stays a seam."""
         out = three_runs.fill_gaps(time=0.005)
         coord = out.get_coord("time")
-        assert coord.segment_count == 2 and out.shape == (3, 14)
+        assert coord.runs_count == 2 and out.shape == (3, 14)
         assert coord.segments[-1] == three_runs.get_coord("time").segments[-1]
         assert np.array_equal(out.data[:, -2:], three_runs.data[:, -2:])
 
@@ -1694,7 +1694,7 @@ class TestFillGaps:
         )
         out = _gapped_patch(coord).fill_gaps(time=0.005)
         new = out.get_coord("time")
-        assert new.segment_count == 2 and out.shape == (3, 12)
+        assert new.runs_count == 2 and out.shape == (3, 12)
         assert new.segments[-1] == get_coord(
             start=self.t0 + 30 * self.ms, step=self.ms, shape=(7,)
         )

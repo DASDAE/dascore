@@ -68,7 +68,7 @@ class TestConstruction:
     def test_concat_returns_segmented(self, float_gap_coord):
         """Two non-contiguous blocks make a segmented coord."""
         assert float_gap_coord.runs_count > 1
-        assert float_gap_coord.segment_count == 2
+        assert float_gap_coord.runs_count == 2
         assert len(float_gap_coord) == 20
 
     def test_exactly_contiguous_fuse(self):
@@ -193,7 +193,7 @@ class TestConstruction:
         c3 = get_coord(start=30.0, stop=40.0, step=1.0)
         out = concat_coords(float_gap_coord, c3)
         assert out.runs_count > 1
-        assert out.segment_count == 3
+        assert out.runs_count == 3
 
     def test_units_param_sets_units(self):
         """The units argument sets units on the result."""
@@ -269,7 +269,7 @@ class TestProperties:
 
     def test_not_degenerate(self, float_gap_coord):
         """A populated segmented coord is not degenerate."""
-        assert not float_gap_coord.degenerate
+        assert not (not (float_gap_coord.ndim and float_gap_coord.size))
 
     def test_str_and_rich(self, float_gap_coord):
         """String representations render."""
@@ -375,7 +375,7 @@ class TestSelect:
         """A window spanning the seam returns a segmented coord."""
         out, indexer = float_gap_coord.select((5.0, 18.0))
         assert out.runs_count > 1
-        assert out.segment_count == 2
+        assert out.runs_count == 2
         assert np.array_equal(out.values, np.array([5.0, 6, 7, 8, 9, 15, 16, 17, 18]))
         assert indexer == slice(5, 14)
 
@@ -451,7 +451,7 @@ class TestGetItem:
     def test_empty_slice(self, float_gap_coord):
         """Empty slices produce an empty coordinate."""
         out = float_gap_coord[5:5]
-        assert len(out) == 0 and out.degenerate
+        assert len(out) == 0 and (not (out.ndim and out.size))
         assert out.dtype == float_gap_coord.dtype
 
     def test_fancy_indexing_materializes(self, float_gap_coord):
@@ -735,7 +735,7 @@ class TestEdgeCases:
         b = NumericND.from_array(np.array([10.0, 11.0, 12.0, 13.5]), detect=False)
         coord = concat_coords(a, b)
         assert coord.runs_count == 2
-        assert coord.segment_count == 2
+        assert coord.runs_count == 2
         out = coord[0:13]
         assert out.runs_count == 2
         assert np.array_equal(out.values, np.arange(13.0))
@@ -1122,7 +1122,7 @@ class TestFromArray:
         values = np.array([0.0, 1, 2, 3, 10, 11, 12, 13])
         coord = NumericND.from_array(values)
         assert coord.runs_count > 1
-        assert coord.segment_count == 2
+        assert coord.runs_count == 2
         assert all(x.evenly_sampled for x in coord.segments)
         assert np.array_equal(coord.values, values)
         gaps = coord.get_discontinuities("gaps")
@@ -1148,7 +1148,7 @@ class TestFromArray:
         values = np.array([0.0, 1, 2, 10, 20, 21, 22])
         coord = NumericND.from_array(values)
         assert coord.runs_count > 1
-        assert coord.segment_count == 3
+        assert coord.runs_count == 3
         assert np.array_equal(coord.values, values)
         assert len(coord.get_discontinuities()) == 2
 
@@ -1161,7 +1161,7 @@ class TestFromArray:
         )
         coord = NumericND.from_array(values)
         assert coord.runs_count > 1
-        assert coord.segment_count == 2
+        assert coord.runs_count == 2
         assert np.array_equal(coord.values, values)
         assert len(coord.get_discontinuities("gaps")) == 1
 
@@ -1177,7 +1177,7 @@ class TestFromArray:
         values = np.array([13.0, 12, 11, 10, 3, 2, 1, 0])
         coord = NumericND.from_array(values)
         assert coord.runs_count > 1
-        assert coord.segment_count == 2
+        assert coord.runs_count == 2
         assert coord.reverse_sorted
         assert np.array_equal(coord.values, values)
 

@@ -453,7 +453,7 @@ class TestProdMLWriteValidation:
         patch = prodml_patch.set_units(distance=None)
         out = dc.read(dc.write(patch, tmp_path / "unitless.h5", "PRODML"))[0]
         distance = out.get_coord("distance")
-        assert distance.unit_str == "m"
+        assert distance._unit_str == "m"
         assert np.array_equal(distance.values, patch.get_coord("distance").values)
 
     @pytest.mark.parametrize("values", ([4.0, 6.0, 9.0, 10.0], [10.0, 8.0, 6.0, 4.0]))

@@ -578,6 +578,7 @@ class TestNetCDFEdgeCases:
         class Coord:
             values: ClassVar = np.array([0.0, 1.0, 2.0, 5.0])
             attrs: ClassVar = {"units": "m"}
+            name, dims = "distance", ("distance",)
 
         coord = netcdf_core.NetCDFCFV18._get_scan_coord(Coord(), snap=False)
 
@@ -590,6 +591,7 @@ class TestNetCDFEdgeCases:
         class Coord:
             values: ClassVar = np.arange(4.0)
             attrs: ClassVar = {"units": "m"}
+            name, dims = "distance", ("distance",)
 
         coord = netcdf_core.NetCDFCFV18._get_scan_coord(Coord(), snap=True)
 
@@ -923,7 +925,7 @@ class TestXDASDeclaredTies:
         assert len(coord) == 1000001
         assert coord.runs_count == 2 and coord.labels is None
         np.testing.assert_array_equal(
-            coord.labels_at([0, 500000, 1000000]), [0.0, 100.0, 400.0]
+            coord._labels([0, 500000, 1000000]), [0.0, 100.0, 400.0]
         )
 
     def test_values_outside_ties_are_clamped(self):

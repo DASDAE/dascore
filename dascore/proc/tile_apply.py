@@ -95,7 +95,7 @@ def _offset_coord(coord, first, stride, count, shift=0, relative=False):
         )
     return get_coord(
         start=start,
-        step=float(coord.step_exact * stride),
+        step=float(coord.step) * stride,
         shape=(count,),
         units=coord.units,
     )

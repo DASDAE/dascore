@@ -6,7 +6,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
-from dascore.io.utils import get_snapped_coord
+from dascore.io.utils import snap_stored_coord
 
 _DATASET = "Acquisition/StrainRate"
 _TIME = "Acquisition/Time"
@@ -66,7 +66,7 @@ def _get_coords(resource, snap=True):
     """Build time and distance coordinates."""
     data = resource[_DATASET]
     values = _get_time(resource)
-    time = get_snapped_coord(values) if snap else get_coord(data=values)
+    time = snap_stored_coord(get_coord(data=values), snap, "time")
     # Uptech's sampling interval is the spatial channel pitch. The
     # spatial resolution is the sensing resolution and may be different.
     distance = get_coord(

@@ -959,10 +959,11 @@ class TestLineageIds:
                 assert noop_row.equals(spool._df.iloc[index][columns])
                 assert selected.shape == source.shape
             if percent_bound:
-                # Exact array construction keeps the original endpoint, so
-                # its complete relative range includes every sample.
-                np.testing.assert_array_equal(
-                    source.get_coord("distance").values, values
+                # The default read snaps the stored labels, which may move a
+                # float32 label by its last bit and no further; the whole
+                # relative range still includes every sample.
+                np.testing.assert_allclose(
+                    source.get_coord("distance").values, values, rtol=1e-6
                 )
                 assert selected.shape == source.shape
 

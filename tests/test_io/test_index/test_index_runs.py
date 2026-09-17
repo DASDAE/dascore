@@ -74,14 +74,14 @@ class TestSummaries:
         """Each run is stated, first to last, with its bounds and its hash."""
         coord = gapped_patch.get_coord("time")
         summary = coord.to_summary(dims=("time",))
-        assert len(summary.runs) == coord.segment_count
+        assert len(summary.runs) == coord.runs_count
         first, last = summary.runs[0], summary.runs[-1]
         assert first["start"] == coord.min().astype("int64")
         assert summary.run_stops[-1] == coord.max().astype("int64")
         assert last["start"] > first["start"]
         # one rate across the hole, so every run shares the same grid
         assert len(set(zip(summary.runs["num"], summary.runs["den"]))) == 1
-        assert len(summary.run_hashes) == coord.segment_count
+        assert len(summary.run_hashes) == coord.runs_count
         # every row, not just the two ends: a wrong start or length inside
         # the table would otherwise pass
         for run, stop, piece in zip(
@@ -254,7 +254,8 @@ class TestPlannedRecords:
 
     def test_plan_row_states_each_run(self, monkeypatch):
         """Its runs carry their stops, which is what makes them rows."""
-        runs = ((0.0, 5, 1, 1, 0), (20.0, 5, 1, 1, 0))
+        one = int(np.float64(1.0).view(np.int64))  # a float row holds its step's bits
+        runs = ((0.0, 5, one, 1, 0), (20.0, 5, one, 1, 0))
         row = {
             "distance_min": 0.0,
             "distance_max": 24.0,

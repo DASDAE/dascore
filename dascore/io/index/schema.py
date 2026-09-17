@@ -198,16 +198,20 @@ class CoordDefRow(NamedTuple):
     # The run's grid, as `NumericND` states it: sample k of the run is
     # labelled start + floor((offset + k * num) / den), counted in the
     # coordinate's ticks (nanoseconds for a time) or, for a float
-    # coordinate, in its own units as the reduced fraction num/den. The
-    # run's `start` and `stop` are the envelope columns above, which the
-    # sign of `num` says which way round to read. A stored run -- labels
-    # no grid can state, which stay in the source -- has den 0, and a row
-    # describing a whole multi-run coordinate states no grid at all.
+    # coordinate, the terms `dascore.core._run_kernels` spells in the same
+    # three fields: the bits of its step, its stride, and its grid index.
+    # The run's first and last labels are the envelope columns above, which
+    # the sign of `num` says which way round to read. A stored run --
+    # labels no grid can state, which stay in the source -- has den 0, and
+    # a row describing a whole multi-run coordinate states no grid at all.
     num: int | None
     den: int | None
     offset: int | None
+    # Where a float run's grid is counted from, when that is not its first
+    # label (a slice keeps its parent's origin so that no label moves).
+    origin: float | None
     # The 64 bit hash of this one run, position independent, as
-    # `NumericND.run_fingerprints` computes it while the coordinate is in
+    # `NumericND` computes it while the coordinate is in
     # memory. NULL on a row describing a whole coordinate, whose identity
     # is `fingerprint`. Two patches sharing a run share this value, which
     # is what overlap and duplicate detection join on.

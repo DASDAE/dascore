@@ -8,7 +8,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.core import get_coord
-from dascore.io.utils import get_snapped_coord
+from dascore.io.utils import snap_stored_coord
 
 # --- Getting format/version
 
@@ -48,21 +48,19 @@ def _get_cf_coords(hdf_fi, minimal=False, snap=True) -> dc.core.CoordManager:
 
     """
 
-    def _coord(values, units=None):
-        """Return a tolerant or exact coordinate from stored values."""
-        values = np.asarray(values)
-        if snap:
-            return get_snapped_coord(values, units=units)
-        return get_coord(data=np.atleast_1d(values), units=units)
+    def _coord(values, units=None, dim=None):
+        """The stored values as a coordinate; only a dimension is snapped."""
+        coord = get_coord(data=np.atleast_1d(np.asarray(values)), units=units)
+        return coord if dim is None else snap_stored_coord(coord, snap, dim)
 
     def _get_spatialcoord(hdf_fi, code):
         """Get spatial coord."""
         return _coord(hdf_fi[code], units=hdf_fi[code].attrs["units"])
 
     coords_map = {
-        "channel": _coord(hdf_fi["channel"][:]),
+        "channel": _coord(hdf_fi["channel"][:], dim="channel"),
         "trace": _coord(hdf_fi["trace"][:]),
-        "time": _coord(dc.to_datetime64(hdf_fi["t"][:])),
+        "time": _coord(dc.to_datetime64(hdf_fi["t"][:]), dim="time"),
         "x": _get_spatialcoord(hdf_fi, "x"),
         "y": _get_spatialcoord(hdf_fi, "y"),
         "z": _get_spatialcoord(hdf_fi, "z"),

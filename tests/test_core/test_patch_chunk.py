@@ -869,7 +869,7 @@ class TestDescendingChunk:
         flipped = p.flip("time")
         t = p.get_coord("time")
         span = t.max() - t.min() + t.step
-        shifted = flipped.update_coords(time=flipped.get_coord("time").data + span)
+        shifted = flipped.update_coords(time=flipped.get_coord("time").values + span)
         merged = dc.spool([shifted, flipped]).chunk(time=None, conflict="drop")
         assert len(merged) == 1
         patch = merged[0]
@@ -1001,7 +1001,7 @@ class TestMixedUnitChunk:
         pm = dc.get_example_patch().set_units(distance="m")
         d = pm.get_coord("distance")
         span = float(d.max() - d.min() + d.step)
-        pf = pm.update_coords(distance=(d.data + span) / 0.3048)
+        pf = pm.update_coords(distance=(d.values + span) / 0.3048)
         pf = pf.set_units(distance="ft")
         first = dc.spool([pm, pf]).chunk(distance=200, keep_partial=True)
         second = first.chunk(distance=None, conflict="keep_first")

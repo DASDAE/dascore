@@ -392,15 +392,24 @@ def coord_from_row(row: Mapping, dim: str, units=None):
     lo, hi, step = values
     grid = row.get(f"_{dim}_grid")
     ticks = np.asarray(lo).dtype.kind in "iuMm"
-    if isinstance(grid, tuple) and ticks and not _units_converted(row, dim):
-        *terms, length = grid
-        start = hi if terms[0] < 0 else lo
-        return get_coord(
-            start=start,
-            shape=(length,),
-            units=units,
-            **dict(zip(_EXACT_GRID_FIELDS, terms)),
-        )
+    if isinstance(grid, tuple) and not _units_converted(row, dim):
+        num, den, offset, length, *origin = grid
+        start = hi if num < 0 else lo
+        if ticks:
+            return get_coord(
+                start=start,
+                shape=(length,),
+                units=units,
+                **dict(zip(_EXACT_GRID_FIELDS, (num, den, offset))),
+            )
+        # A float run states its own terms too, counted from its origin
+        # where that is not its first label, so no label is re-derived.
+        stored = row.get(f"_{dim}_coord_dtype")
+        dtype = normalize_coord_dtype(stored) if isinstance(stored, str) else None
+        if dtype is not None and dtype.kind == "f" and dtype.itemsize <= 8:
+            anchor = float(start) if not origin or origin[0] is None else origin[0]
+            runs = runs_from_rows([(anchor, length, num, den, offset)], dtype)
+            return get_coord(runs=runs, dtype=dtype, units=units)
     if step < np.zeros((), dtype=np.asarray(step).dtype):
         return None
     return get_coord(start=lo, stop=hi + step, step=step, units=units)

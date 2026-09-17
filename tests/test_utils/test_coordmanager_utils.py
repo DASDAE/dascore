@@ -202,7 +202,7 @@ class TestRawMergeKeepsUnits:
         p1 = dc.get_example_patch().set_units(distance="m")
         d = p1.get_coord("distance")
         # non-uniform values force the raw concatenation path
-        values = np.sort(np.random.default_rng(0).uniform(400, 500, len(d.data)))
+        values = np.sort(np.random.default_rng(0).uniform(400, 500, len(d.values)))
         p2 = p1.update_coords(distance=values).set_units(distance="m")
         merged = merge_coord_managers([p1.coords, p2.coords], dim="distance")
         assert str(merged.coord_map["distance"].units) == "1 m"

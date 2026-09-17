@@ -90,7 +90,7 @@ def patch_to_xarray(patch: PatchType, lazy_coords: bool | Collection[str] = Fals
         lazy_coords = patch_dims if lazy_coords else ()
     coords, units, lazy = {}, {}, []
     for name, coord in patch.coords.coord_map.items():
-        if coord._partial:
+        if not coord.has_values:
             continue
         dims = patch.coords.dim_map[name]
         if coord.units is not None and not _is_temporal(coord.dtype):

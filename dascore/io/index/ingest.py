@@ -20,13 +20,13 @@ import re
 import warnings
 from collections.abc import Hashable
 from dataclasses import dataclass, field, fields, replace
-from fractions import Fraction
 from typing import SupportsInt, TypedDict, cast
 
 import numpy as np
 import pandas as pd
 
 from dascore.core.attrs import PatchAttrs
+from dascore.core.coords import normalize_coord_dtype, run_heads, run_step
 from dascore.core.summary import PatchSummary, normalize_source_patch_key
 from dascore.exceptions import InvalidInventoryError
 from dascore.io.index.schema import (
@@ -86,6 +86,7 @@ class _GridFields(TypedDict):
     num: int | None
     den: int | None
     offset: int | None
+    origin: float | None
     run_hash: int | None
 
 
@@ -114,6 +115,8 @@ class CoordRecord:
     num: int | None = None
     den: int | None = None
     offset: int | None = None
+    # a float run's grid origin, where it is not the run's first label
+    origin: float | None = None
     # This one run's 64 bit hash, or the coordinate's when it is one run.
     run_hash: int | None = None
     coord_hash: str | None = None
@@ -525,7 +528,9 @@ def _grid_fields(summary) -> _GridFields:
     left an envelope; a coordinate of one run is that run, and carries its
     grid and hash here.
     """
-    blank = _GridFields(is_exact=False, num=None, den=None, offset=None, run_hash=None)
+    blank = _GridFields(
+        is_exact=False, num=None, den=None, offset=None, origin=None, run_hash=None
+    )
     runs = getattr(summary, "runs", None)
     if runs is None:
         # An envelope which states a step rebuilds a range, as it always
@@ -543,19 +548,17 @@ def _grid_fields(summary) -> _GridFields:
         num=int(row["num"]),
         den=int(row["den"]),
         offset=int(row["offset"]),
+        origin=_run_origin(row, summary.dtype),
         run_hash=None if hashes is None else _signed_hash(hashes[0]),
     )
 
 
-def _run_step(num: int, den: int, ticked: bool):
-    """One run's spacing as the envelope's scalar, or None where it has none."""
-    if den == 0:  # a stored run declares no spacing of its own
+def _run_origin(row, dtype) -> float | None:
+    """Where a float run's grid is counted from, if not from its first label."""
+    ticked = bool(dtype) and np.dtype(normalize_coord_dtype(dtype)).kind in "iuMm"
+    if ticked or not row["den"] or not row["offset"]:
         return None
-    fraction = Fraction(num, den)
-    # A coordinate counted in whole ticks -- a time or an integer -- states
-    # the tick its grid rounds to, exactly as a summary's scalar step does,
-    # and the exact terms beside it in `num`/`den`.
-    return round(fraction) if ticked else float(fraction)
+    return float(row["start"])
 
 
 def _run_records(whole: CoordRecord, summary) -> tuple[CoordRecord, ...]:
@@ -580,13 +583,16 @@ def _run_records(whole: CoordRecord, summary) -> tuple[CoordRecord, ...]:
     # Which columns the envelope goes in follows the value kind; how the
     # spacing is spelled follows the dtype, since an integer coordinate is
     # counted in whole ticks but stored in the numeric columns.
-    ticked = bool(whole.dtype) and np.dtype(whole.dtype).kind in "iuMm"
     out = []
+    run_dtype = normalize_coord_dtype(whole.dtype) if whole.dtype else np.dtype("f8")
+    heads = run_heads(runs, run_dtype)
     for index, row in enumerate(runs):
         num, den, stop = int(row["num"]), int(row["den"]), stops[index]
-        start = row["start"]
+        start = heads[index]
         low, high = (start, stop) if start <= stop else (stop, start)
-        step = _run_step(num, den, ticked)
+        # A coordinate counted in whole ticks states the tick its grid
+        # rounds to, as a summary's scalar step does, beside its exact terms.
+        step = run_step(row, run_dtype)
         bounds: dict = dict(
             min_int=None,
             max_int=None,
@@ -616,6 +622,7 @@ def _run_records(whole: CoordRecord, summary) -> tuple[CoordRecord, ...]:
                 num=num,
                 den=den,
                 offset=int(row["offset"]),
+                origin=_run_origin(row, whole.dtype),
                 run_hash=None if hashes is None else _signed_hash(hashes[index]),
                 # The run's identity is `run_hash`; the coordinate
                 # fingerprint belongs to the whole coordinate alone, and a

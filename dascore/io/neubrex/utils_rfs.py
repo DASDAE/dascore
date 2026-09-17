@@ -4,6 +4,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.core.coords import get_coord
+from dascore.io.utils import wants_snap
 from dascore.utils.misc import maybe_get_items
 
 
@@ -26,7 +27,7 @@ def _get_coord_manager(h5fi, snap=True):
         """Get the time coordinate."""
         # Unix stamps are in us for test files, not sure if always true.
         unix_stamps = dc.to_datetime64(h5fi["stamps_unix"][:] / 1_000_000)
-        if snap:
+        if wants_snap(snap, "time"):
             time_coord = dc.get_coord(data=unix_stamps).snap()
         else:
             time_coord = get_coord(data=np.atleast_1d(unix_stamps))
