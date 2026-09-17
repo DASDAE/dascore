@@ -5,6 +5,7 @@ from __future__ import annotations
 import datetime
 import json
 import math
+import sys
 from fractions import Fraction
 from typing import ClassVar
 
@@ -610,9 +611,9 @@ class TestOverflow:
     @pytest.mark.parametrize(
         "kwargs",
         [
-            dict(start=0, step=10**12, shape=(10**7,)),
+            dict(start=0, step=10**12, shape=(10**7,), dtype="int64"),
             dict(start=T0, step=np.timedelta64(1, "h"), shape=(3_000_000,)),
-            dict(start=2**62, step=2**61, shape=(4,)),
+            dict(start=2**62, step=2**61, shape=(4,), dtype="int64"),
         ],
     )
     def test_refused(self, kwargs):
@@ -622,7 +623,7 @@ class TestOverflow:
 
     def test_extending_is_checked(self):
         """A grid extended past what int64 holds is refused too."""
-        coord = NumericND.from_run(start=0, step=10**11, shape=(10,))
+        coord = NumericND.from_run(start=0, step=10**11, shape=(10,), dtype="int64")
         with pytest.raises(CoordError, match="exceeds"):
             coord.change_length(10**9)
 
@@ -1715,6 +1716,10 @@ class TestExactArrayConstruction:
             factory(data=values)
 
 
+@pytest.mark.skipif(
+    sys.maxsize <= 2**31,
+    reason="a run of more samples than this machine indexes cannot be asked its length",
+)
 class TestRunLimitedByItsLabels:
     """A tick run holds any labels its dtype can; int64 asks only ``length * den``."""
 
@@ -1766,7 +1771,7 @@ class TestRunLimitedByItsLabels:
 
     def test_a_label_far_outside_the_coordinate_is_refused(self):
         """Extending a grid past int64 raises rather than wrapping."""
-        coord = NumericND.from_run(0, 10**12, 10)
+        coord = NumericND.from_run(0, 10**12, 10, dtype="int64")
         with pytest.raises(CoordError, match="leaves int64"):
             coord._labels([10**10])
 
@@ -1994,7 +1999,7 @@ class TestEdges:
 
     def test_a_declared_step_is_exact_beside_stored_labels(self):
         """Labels held as they are still state the grid they were declared on."""
-        ticks = np.delete(np.arange(3000), np.arange(500, 2500)) * 10**6
+        ticks = np.delete(np.arange(3000, dtype="int64"), np.arange(500, 2500)) * 10**6
         coord = get_coord(data=T0 + ticks.astype("timedelta64[ns]"), step=MS)
         assert coord.step_exact == Fraction(1, 1000)
         assert coord.missing().count == 2000
@@ -2089,10 +2094,11 @@ class TestEdges:
 
     def test_a_stride_past_int64_is_refused(self):
         """Whichever path slices a run, its step has to stay a step."""
-        one = NumericND.from_run(0, 2**61, 3)
+        one = NumericND.from_run(0, 2**61, 3, dtype="int64")
         with pytest.raises(CoordError, match="past int64"):
             one._sliced(0, 8, 2)
-        two = concat_tables(one, NumericND.from_run(2**63 - 2**62, 2**59, 2))
+        late = NumericND.from_run(2**63 - 2**62, 2**59, 2, dtype="int64")
+        two = concat_tables(one, late)
         with pytest.raises(CoordError, match="past int64"):
             two[::16]
 

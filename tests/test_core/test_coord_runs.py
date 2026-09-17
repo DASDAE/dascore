@@ -386,7 +386,8 @@ class TestReviewFindings:
 
     def test_dasdae_round_trip(self, tmp_path):
         """Version 2 stores a declared step; version 1 keeps the values alone."""
-        dense = get_coord(data=np.arange(3000)[np.arange(3000) % 3 != 2], step=1)
+        kept = np.arange(3000, dtype="int64")
+        dense = get_coord(data=kept[kept % 3 != 2], step=1)
         assert not dense.evenly_sampled and (dense.sorted or dense.reverse_sorted)
         time = dc.get_example_patch().get_coord("time")[:3]
         coords = {"distance": dense, "time": time}

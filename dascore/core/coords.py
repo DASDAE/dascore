@@ -4341,8 +4341,14 @@ class NumericND(BaseCoord):
             allowed = self._gap_tolerance(allowed)
         ours, theirs = self.values, other.values
         if self._ticks:
-            # differenced as ticks: an epoch in float64 has no nanoseconds left
-            moved = np.max(np.abs(ours.view(np.int64) - theirs.view(np.int64)))
+            # differenced as ticks: an epoch in float64 has no nanoseconds left.
+            # A time is a count already, so it is viewed; a narrower integer is
+            # widened, which viewing would instead read two labels as one.
+            if np.dtype(self.dtype).kind in "mM":
+                ours, theirs = ours.view(np.int64), theirs.view(np.int64)
+            else:
+                ours, theirs = ours.astype(np.int64), theirs.astype(np.int64)
+            moved = np.max(np.abs(ours - theirs))
         else:
             moved = np.max(np.abs(ours.astype(np.float64) - theirs))
         # A count of steps is this coordinate's step, or the spacing its
