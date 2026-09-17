@@ -90,7 +90,9 @@ class TestDataScale:
         np.testing.assert_allclose(result.data, expected, rtol=1e-6)
         expected_dtype = dtype if scale is None else np.result_type(dtype, np.float32)
         assert result.data.dtype == expected_dtype
-        assert result.attrs.data_units == dc.scan(scaled_file)[0].attrs.data_units
+        summary = dc.scan(scaled_file)[0]
+        assert summary.dtype == str(expected_dtype)
+        assert result.attrs.data_units == summary.attrs.data_units
 
     def test_subset(self, scaled_file):
         """Reading a subset scales exactly once and keeps coordinates aligned."""
