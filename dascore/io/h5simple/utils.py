@@ -153,10 +153,10 @@ def _has_required_arrays(h5):
 def _no_format_or_simple_specified(h5):
     """Ensure no other format is specified, or that simpleH5 is."""
     attrs = h5.attrs
-    # NetCDF declares its own storage convention even without a format attr.
-    if "_NCProperties" in attrs or "CF-" in unbyte(attrs.get("Conventions", "")):
-        return False
     names = set(attrs) & FILE_FORMAT_ATTR_NAMES
+    # Explicit format declarations take precedence; otherwise defer CF files.
+    if not names and "CF-" in unbyte(attrs.get("Conventions", "")):
+        return False
     # Every name that states a format has to state this one; a file which
     # names two disagreeing formats belongs to neither.
     return all(unbyte(_maybe_unpack(attrs[name])) == "h5simple" for name in names)

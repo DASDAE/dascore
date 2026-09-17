@@ -5,6 +5,7 @@ from __future__ import annotations
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from itertools import pairwise
+from math import gcd
 from pathlib import Path
 from typing import Literal
 
@@ -12,7 +13,8 @@ import h5py
 import numpy as np
 
 import dascore as dc
-from dascore.exceptions import MissingOptionalDependencyError
+from dascore.core.coords import _validate_segment_chain
+from dascore.exceptions import CoordError, MissingOptionalDependencyError
 from dascore.io.utils import get_exact_coord
 from dascore.utils.hdf5 import get_h5py_file
 from dascore.utils.misc import optional_import, unbyte
@@ -39,11 +41,12 @@ def iter_groups(group):
 
 def is_xdas_file(resource) -> bool:
     """Recognize XDAS metadata without opening xarray or reading samples."""
+    root_has_arrays = any(isinstance(node, h5py.Dataset) for node in resource.values())
     for group in iter_groups(resource):
         if "CF-" not in unbyte(group.attrs.get("Conventions", "")):
             continue
         # Collection leaves carry CF metadata even when the root does not.
-        if group.name != "/":
+        if group.name != "/" and not root_has_arrays:
             return True
         for name, node in group.items():
             if isinstance(node, h5py.Dataset) and (
@@ -139,7 +142,8 @@ def open_signals(resource):
     handle = get_h5py_file(resource)
     with ExitStack() as stack:
         signals = {}
-        for group in iter_groups(handle):
+        groups = iter_groups(handle) if is_xdas_file(handle) else (handle,)
+        for group in groups:
             if "CF-" not in unbyte(group.attrs.get("Conventions", "")):
                 continue
             dataset = stack.enter_context(
@@ -148,6 +152,7 @@ def open_signals(resource):
                     engine="h5netcdf",
                     group=group.name,
                     decode_timedelta=False,
+                    mask_and_scale=False,
                 )
             )
             specs = {
@@ -183,25 +188,57 @@ def _ramp(start, numerator, denominator, length, dtype):
     origin = (
         int(start.astype("datetime64[ns]").astype(np.int64)) if temporal else int(start)
     )
-    # Python integers avoid overflow in both epoch values and intermediate
-    # products. XDAS rounds the offset from each tie point, then adds the origin.
-    products = np.arange(length, dtype=object) * int(numerator)
+    # Reduce the ratio before multiplying. Normal grids use int64 temporaries;
+    # an extreme span still uses Python integers to avoid intermediate overflow.
+    common = gcd(int(numerator), int(denominator))
+    numerator, denominator = int(numerator) // common, int(denominator) // common
+    safe = abs(numerator) * max(0, length - 1) < np.iinfo(np.int64).max // 2
+    products = np.arange(length, dtype=np.int64 if safe else object) * numerator
     quotient = products // int(denominator)
     remainder = products % int(denominator)
-    ticks = origin + quotient
     increment = (2 * remainder > denominator) | (
         (2 * remainder == denominator) & (quotient % 2 != 0)
     )
-    result = np.asarray(ticks + increment, dtype=np.int64 if temporal else dtype)
+    result = np.asarray(
+        quotient + increment + origin, dtype=np.int64 if temporal else dtype
+    )
     return result.astype("datetime64[ns]") if temporal else result
 
 
+def _coord_segment(start, numerator, denominator, length, dtype, units, endpoint=None):
+    """Keep integer/time grids compact when their step is an exact whole tick."""
+    if (
+        not np.issubdtype(dtype, np.floating)
+        and numerator % denominator == 0
+        and numerator != 0
+    ):
+        step = int(numerator) // int(denominator)
+        if np.issubdtype(dtype, np.datetime64):
+            step = np.timedelta64(step, "ns")
+        return dc.get_coord(start=start, step=step, shape=length, units=units)
+    values = _ramp(start, numerator, denominator, length, dtype)
+    if endpoint is not None:
+        values[-1] = endpoint
+    return get_exact_coord(values, units=units)
+
+
+def _join_segments(pieces, units):
+    """Join compact runs without sorting the file's labels into a new order."""
+    try:
+        _validate_segment_chain(tuple(pieces))
+        return dc.get_coord(segments=pieces)
+    except CoordError:
+        return get_exact_coord(
+            np.concatenate([piece.values for piece in pieces]), units=units
+        )
+
+
 def interpolate_coord(
-    values: np.ndarray, indices: np.ndarray, length: int
-) -> np.ndarray:
+    values: np.ndarray, indices: np.ndarray, length: int, *, compact=False, units=None
+):
     """Expand linear tie points, preserving endpoints and discontinuities."""
     if length == 0 and not len(values) and not len(indices):
-        return values
+        return get_exact_coord(values, units=units) if compact else values
     if (
         indices.ndim != 1
         or values.ndim != 1
@@ -228,14 +265,30 @@ def interpolate_coord(
             delta = int(values[index + 1]) - int(values[index])
         else:
             delta = float(values[index + 1]) - float(values[index])
-        pieces.append(_ramp(values[index], delta, span, span, values.dtype))
-    return np.concatenate([*pieces, values[-1:]])
+        count = span + (index == len(indices) - 2)
+        pieces.append(
+            _coord_segment(
+                values[index],
+                delta,
+                span,
+                count,
+                values.dtype,
+                units,
+                endpoint=values[index + 1] if index == len(indices) - 2 else None,
+            )
+        )
+    if not pieces:
+        out = get_exact_coord(values, units=units)
+    else:
+        out = _join_segments(pieces, units)
+    return out if compact else out.values
 
 
 def _sampled_values(dataset, spec, values, lengths, length):
     """Expand constant-rate segments using their stored rational sampling rate."""
+    coord_units = dataset[spec.values].attrs.get("units")
     if length == 0 and not len(values) and not len(lengths):
-        return values
+        return get_exact_coord(values, units=coord_units)
     meta = dataset[spec.descriptor].attrs
     if spec.legacy_sampled:
         numerator = dataset[spec.descriptor].values[()]
@@ -268,12 +321,13 @@ def _sampled_values(dataset, spec, values, lengths, length):
         raise ValueError(
             "Invalid XDAS sampled coordinate lengths or sampling denominator"
         )
-    return np.concatenate(
-        [
-            _ramp(value, numerator, denominator, int(count), values.dtype)
-            for value, count in zip(values, lengths, strict=True)
-        ]
-    )
+    pieces = [
+        _coord_segment(
+            value, numerator, denominator, int(count), values.dtype, coord_units
+        )
+        for value, count in zip(values, lengths, strict=True)
+    ]
+    return _join_segments(pieces, coord_units)
 
 
 def get_coords(dataset, variable, specs, snap=True):
@@ -305,11 +359,17 @@ def get_coords(dataset, variable, specs, snap=True):
                 raise NotImplementedError(
                     "Only linear XDAS coordinate interpolation is supported"
                 )
-            expanded = interpolate_coord(values, indices, length)
+            expanded = interpolate_coord(
+                values,
+                indices,
+                length,
+                compact=True,
+                units=dataset[spec.values].attrs.get("units"),
+            )
         # Tie points define the labels; snapping must not change their spacing.
         coords[spec.name] = (
             (spec.dim,),
-            get_exact_coord(expanded, units=dataset[spec.values].attrs.get("units")),
+            expanded,
         )
     for dim, length in variable.sizes.items():
         if dim not in coords:

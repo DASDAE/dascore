@@ -253,8 +253,6 @@ class NetCDFCFV18(FiberIO):
         if np.ndim(values) != 1:
             return values
         units = coord.attrs.get("units")
-        if snap:
-            return dc.core.get_coord(data=values, units=units)
         return get_exact_coord(values, units=units)
 
     def _get_source_patch_key(self, data_var_name):
@@ -282,7 +280,7 @@ class NetCDFCFV18(FiberIO):
             dataset,
             data_array,
             coords={
-                name: (coord.dims, coord.values)
+                name: (coord.dims, self._get_scan_coord(coord, snap=False))
                 for name, coord in data_array.coords.items()
             },
             dims=data_array.dims,

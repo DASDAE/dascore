@@ -124,10 +124,11 @@ patch = spool.select(time=("2025-02-03T01:02:03", "2025-02-03T01:02:04"))[0]
 patch = dc.read(
     "collection.nc",
     file_format="xdas",
+    file_version="1",
     source_patch_key="/network/fiber_a/signal",
 )[0]
 ```
 
 The reader supports legacy and current XDAS linear tie-point coordinates, sampled segments (including rational sampling rates), and explicit coordinates. It preserves the decoded coordinate labels, including gaps and nanosecond timestamps, for both `snap=True` and `snap=False`. Scanning reads metadata without loading signal samples; selected reads load the requested data window. Materialized arrays and local HDF5 virtual datasets are supported. XDAS tile manifests and writing XDAS files are not supported.
 
-Install `xarray` and `h5netcdf` for reading, plus `hdf5plugin` for compression filters such as ZFP; these are included in `dascore[extras]`. XDAS itself is not a runtime dependency. Plain single-array files with ordinary CF coordinates may be detected as `NETCDF_CF`, since their storage is indistinguishable from generic NetCDF. XDAS collections and files carrying XDAS coordinate metadata are detected as `xdas`.
+Install `xarray` and `h5netcdf` for reading, plus `hdf5plugin` for compression filters such as ZFP; these are included in `dascore[extras]`. XDAS itself is not a runtime dependency. Plain single-array files with ordinary CF coordinates may be detected as `NETCDF_CF`, since their storage is indistinguishable from generic NetCDF. XDAS collections and files carrying XDAS coordinate metadata are detected as `xdas`. To force the XDAS reader for a plain CF array, specify both `file_format="xdas"` and `file_version="1"`.

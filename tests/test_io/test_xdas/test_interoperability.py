@@ -19,6 +19,7 @@ xd = pytest.importorskip("xdas", minversion="0.2.9")
     params=[
         "linear",
         "dense",
+        "fully_explicit",
         "gapped",
         "sampled",
         "rational",
@@ -42,6 +43,9 @@ def xdas_array(request):
     }
     if kind == "dense":
         coords["time"] = times + np.arange(size) ** 2 * np.timedelta64(1, "ns")
+    elif kind == "fully_explicit":
+        times[2] += np.timedelta64(1, "ns")
+        coords = {"time": times, "distance": np.linspace(100.0, 112.5, 6)}
     elif kind == "gapped":
         coords["time"] = {
             "tie_indices": [0, 8, 9, 22],
@@ -90,6 +94,7 @@ def xdas_array(request):
 def _assert_matches(patch, reference):
     """Compare data and every coordinate with XDAS's own decoder."""
     assert patch.dims == reference.dims
+    assert patch.data.dtype == reference.dtype
     np.testing.assert_array_equal(patch.data, np.asarray(reference.data))
     assert set(reference.coords) <= set(patch.coords.coord_map)
     for name, coord in reference.coords.items():
@@ -117,6 +122,14 @@ class TestXdasInteroperability:
                 payload["coords"].get_array(dim), patch.get_array(dim)
             )
         _assert_matches(dc.spool(path)[0], reference)
+        _assert_matches(
+            dc.read(path, file_format="xdas", file_version="1")[0], reference
+        )
+        selected_time = reference.coords["time"].values[min(2, reference.shape[0] - 1)]
+        selected = dc.read(path, time=(selected_time, selected_time))
+        _assert_matches(
+            selected[0], reference.sel(time=slice(selected_time, selected_time))
+        )
 
     def test_nested_collection(self, xdas_array, tmp_path):
         """Array leaves survive repeated names and differing time ranges."""
@@ -140,3 +153,29 @@ class TestXdasInteroperability:
         xdas_array.to_netcdf(source, virtual=False)
         xd.DataArray.from_netcdf(source).to_netcdf(target, virtual=True)
         _assert_matches(dc.read(target)[0], xdas_array)
+
+
+@pytest.mark.parametrize(
+    "encoding,attrs",
+    [
+        ({"fillvalue": 2}, {}),
+        ({}, {"scale_factor": 2.0, "add_offset": 1.0}),
+        ({}, {"missing_value": 2}),
+    ],
+)
+def test_signal_samples_are_raw(tmp_path, encoding, attrs):
+    """XDAS reads stored samples even when signal attrs resemble CF packing."""
+    path = tmp_path / "packing.nc"
+    original = xd.DataArray(
+        np.arange(5, dtype="int16"),
+        coords={"distance": {"tie_indices": [0, 4], "tie_values": [0.0, 4.0]}},
+        dims=("distance",),
+        name="signal",
+        attrs=attrs,
+    )
+    original.to_netcdf(path, virtual=False, encoding=encoding)
+    reference = xd.DataArray.from_netcdf(path)
+    _assert_matches(dc.read(path)[0], reference)
+    data = XdasV1().read_array(path, {})
+    assert data.dtype == reference.dtype
+    np.testing.assert_array_equal(data, reference.values)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import subprocess
 import sys
+import tracemalloc
 import types
 
 import h5py
@@ -14,6 +15,7 @@ import dascore as dc
 from dascore.exceptions import PatchAttributeError
 from dascore.io.netcdf.core import NetCDFCFV18
 from dascore.io.xdas.core import XdasV1
+from dascore.io.xdas.utils import interpolate_coord
 from tests.test_io.test_common_io import _CountingHandle
 from tests.test_io.test_xdas._fixtures import write_xdas, xdas_dataset
 
@@ -439,3 +441,115 @@ class TestXdasVirtual:
             for key, value in attrs.items():
                 node.attrs[key] = value
         np.testing.assert_array_equal(dc.read(path)[0].data, expected)
+
+
+class TestReviewRegressions:
+    """Public regressions for detection and compact metadata decoding."""
+
+    @pytest.mark.parametrize("declared", [False, True])
+    def test_h5simple_without_cf(self, tmp_path, declared):
+        """h5netcdf's storage marker alone must not strand H5Simple data."""
+        path = tmp_path / "simple.nc"
+        attrs = {"file_format": "h5simple"} if declared else {}
+        dataset = xr.Dataset(
+            {"data": (("time", "distance"), np.ones((4, 3)))},
+            coords={"time": 1_700_000_000.0 + np.arange(4), "distance": np.arange(3)},
+            attrs=attrs,
+        )
+        dataset.to_netcdf(path, engine="h5netcdf")
+        assert dc.get_format(path) == ("H5Simple", "1")
+        np.testing.assert_array_equal(dc.read(path)[0].data, dataset.data.values)
+
+    def test_generic_cf_with_quality_group(self, tmp_path):
+        """An incidental CF subgroup does not turn a root signal into a collection."""
+        path = tmp_path / "generic.nc"
+        dataset = xr.Dataset(
+            {"data": ("time", np.arange(5))},
+            coords={"time": np.arange(5)},
+            attrs={"Conventions": "CF-1.8"},
+        )
+        dataset.to_netcdf(path, engine="h5netcdf")
+        dataset.rename({"data": "quality"}).to_netcdf(
+            path, group="quality_control", mode="a", engine="h5netcdf"
+        )
+        assert XdasV1().get_format(path) is False
+        assert dc.get_format(path) == ("NETCDF_CF", "1.8")
+        assert len(dc.read(path)) == len(dc.spool(path)) == 1
+
+    @pytest.mark.parametrize("sampled", [False, True])
+    def test_scan_large_compact_grid(self, tmp_path, sampled):
+        """A million-sample scan keeps its coordinate memory use below 20 MB."""
+        h5netcdf = pytest.importorskip("h5netcdf")
+        path = tmp_path / "compact.nc"
+        size = 1_000_000
+        with h5netcdf.File(path, "w") as handle:
+            handle.attrs["Conventions"] = "CF-1.13"
+            handle.dimensions = {"time": size, "points": 2}
+            variable = handle.create_variable(
+                "signal", ("time",), dtype="float32", chunks=(1000,)
+            )
+            times = handle.create_variable("time_values", ("points",), dtype="int64")
+            times.attrs["units"] = "nanoseconds since 2025-01-01 00:00:00"
+            indices = handle.create_variable("time_indices", ("points",), dtype="int64")
+            if sampled:
+                times[:] = [0, size * 1_000_000]
+                indices[:] = [size // 2, size // 2]
+                descriptor = handle.create_variable("time_sampling", (), dtype="int64")
+                descriptor.attrs.update(
+                    {
+                        "tie_point_mapping": "time: time_indices points",
+                        "sampling_interval": 1_000_000,
+                        "sampling_interval_units": "nanoseconds",
+                    }
+                )
+                variable.attrs["coordinate_sampling"] = "time_values: time_sampling"
+            else:
+                times[:] = [0, (size - 1) * 1_000_000]
+                indices[:] = [0, size - 1]
+                variable.attrs["coordinate_interpolation"] = (
+                    "time: time_indices time_values"
+                )
+        # Warm backend imports before measuring metadata allocations.
+        XdasV1().get_format(path)
+        tracemalloc.start()
+        try:
+            payload = XdasV1().scan(path)[0]
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        assert peak < 20_000_000
+        coord = payload["coords"].get_coord("time")
+        assert len(coord) == size
+        start = np.datetime64("2025-01-01", "ns")
+        patch = dc.read(path, time=(start, start + np.timedelta64(2, "ms")))[0]
+        assert patch.shape == (3,)
+
+    def test_nonmonotonic_interpolation(self):
+        """Turning points retain labels when segments cannot form an ordered chain."""
+        actual = interpolate_coord(np.array([0, 4, 0]), np.array([0, 2, 4]), 5)
+        np.testing.assert_array_equal(actual, [0, 2, 4, 2, 0])
+
+    def test_sampled_order_is_preserved(self, tmp_path):
+        """Separated sampled runs retain file order, including backward jumps."""
+        path = tmp_path / "backward.nc"
+        ds = xr.Dataset(
+            {
+                "signal": ("time", np.arange(4)),
+                "time_values": ("points", [10, 0]),
+                "time_lengths": ("points", [2, 2]),
+                "time_sampling": (
+                    (),
+                    0,
+                    {
+                        "tie_point_mapping": "time: time_lengths points",
+                        "sampling_interval": 1,
+                    },
+                ),
+            },
+            attrs={"Conventions": "CF-1.13"},
+        )
+        ds.signal.attrs["coordinate_sampling"] = "time_values: time_sampling"
+        ds.to_netcdf(path, engine="h5netcdf")
+        np.testing.assert_array_equal(
+            dc.read(path)[0].get_array("time"), [10, 11, 0, 1]
+        )
