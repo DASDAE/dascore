@@ -76,6 +76,29 @@ class TestIterFS:
         out = {Path(x) for x in _iter_filesystem(simple_dir)}
         assert files == out
 
+    @pytest.mark.parametrize("root", [False, True])
+    def test_permission_denied(self, simple_dir, monkeypatch, root):
+        """Skip inaccessible subtrees, but report inaccessible roots as errors."""
+        denied = simple_dir if root else simple_dir / "B"
+        scandir = os.scandir
+
+        def guarded_scandir(path):
+            if Path(path) == denied:
+                raise PermissionError(f"Permission denied: {path}")
+            return scandir(path)
+
+        monkeypatch.setattr(os, "scandir", guarded_scandir)
+        if root:
+            with pytest.raises(PermissionError, match="Permission denied"):
+                list(_iter_filesystem(simple_dir))
+        else:
+            with pytest.warns(
+                UserWarning, match="Permission denied; skipping"
+            ) as caught:
+                out = list(_iter_filesystem(simple_dir))
+            assert str(denied) in str(caught[0].message)
+            assert {Path(x) for x in out} == {simple_dir / "A.txt"}
+
     def test_one_subdir(self, simple_dir):
         """Test with one sub directory."""
         subdirs = simple_dir / "B" / "D"

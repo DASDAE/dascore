@@ -172,6 +172,7 @@ def _iter_filesystem(
     Iterate contents of a filesystem like thing.
 
     Options allow for filtering and terminating early.
+    Inaccessible entries are skipped with a warning; an inaccessible root raises.
 
     Parameters
     ----------
@@ -202,18 +203,21 @@ def _iter_filesystem(
                 return
     try:  # a single path was passed
         for entry in os.scandir(paths):
-            if entry.is_file() and (ext is None or entry.name.endswith(ext)):
-                if timestamp is None or entry.stat().st_mtime >= timestamp:
-                    if entry.name[0] != "." or not skip_hidden:
-                        yield entry.path
-            elif entry.is_dir() and not (skip_hidden and entry.name[0] == "."):
-                yield from _iter_filesystem(
-                    entry.path,
-                    ext=ext,
-                    timestamp=timestamp,
-                    skip_hidden=skip_hidden,
-                    include_directories=include_directories,
-                )
+            try:
+                if entry.is_file() and (ext is None or entry.name.endswith(ext)):
+                    if timestamp is None or entry.stat().st_mtime >= timestamp:
+                        if entry.name[0] != "." or not skip_hidden:
+                            yield entry.path
+                elif entry.is_dir() and not (skip_hidden and entry.name[0] == "."):
+                    yield from _iter_filesystem(
+                        entry.path,
+                        ext=ext,
+                        timestamp=timestamp,
+                        skip_hidden=skip_hidden,
+                        include_directories=include_directories,
+                    )
+            except PermissionError:
+                warnings.warn(f"Permission denied; skipping {entry.path}", UserWarning)
     except (TypeError, AttributeError):  # multiple paths were passed
         for path in paths:
             yield from _iter_filesystem(path, ext, timestamp, skip_hidden)

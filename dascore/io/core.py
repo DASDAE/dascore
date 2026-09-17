@@ -376,6 +376,8 @@ class _FiberIOManager:
                     # raise, in which case the format doesn't belong.
                     func_input = man.get_resource(required_type)
                     format_version = func(func_input, _pre_cast=True)
+                except PermissionError:
+                    raise
                 # For robustness, we need to catch everything else here.
                 except Exception:
                     continue
@@ -808,6 +810,9 @@ def scan(
     """
     Scan a potential patch source, return a list of PatchAttrs.
 
+    Inaccessible files and subdirectories are skipped with a warning.
+    An inaccessible root directory raises PermissionError.
+
     Parameters
     ----------
     path
@@ -879,6 +884,11 @@ def scan(
                     )
                 except UnknownFiberFormatError:  # skip bad entities
                     continue
+                except PermissionError:
+                    warnings.warn(
+                        f"Permission denied; skipping {patch_source}", UserWarning
+                    )
+                    continue
                 # Cache this fiber io to given preferential treatment next
                 # iteration. This speeds up the common case of many files
                 # with the same format.
@@ -888,13 +898,18 @@ def scan(
                     # Directory fiber_io should send skip signal back to generator
                     # so that no files/sub directories are scanned.
                     generator.send("skip")
-                    if not fiber_io._updated_after(resource, timestamp):
+                    try:
+                        if not fiber_io._updated_after(resource, timestamp):
+                            continue
+                        # Directory FiberIO may need the time filter.
+                        source = fiber_io.scan(
+                            resource, timestamp=timestamp, _pre_cast=True
+                        )
+                    except PermissionError:
+                        warnings.warn(
+                            f"Permission denied; skipping {patch_source}", UserWarning
+                        )
                         continue
-                    # Directory FiberIO may need to know the time after which
-                    # contents should be returned.
-                    source = fiber_io.scan(
-                        resource, timestamp=timestamp, _pre_cast=True
-                    )
                 else:
                     try:
                         source = fiber_io.scan(resource, _pre_cast=True)
