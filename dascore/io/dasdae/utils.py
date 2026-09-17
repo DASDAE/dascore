@@ -202,6 +202,24 @@ def _is_segmented(coord) -> bool:
     return bool(coord.sorted or coord.reverse_sorted)
 
 
+def _node_tag(coord) -> str | None:
+    """
+    The class name a version-2 node is tagged with.
+
+    A numeric coordinate is tagged by the shape of what the node holds, with
+    the names the layout has always used, so a reader from before the
+    coordinate classes became one table still reads it.
+    """
+    if not isinstance(coord, NumericND):
+        return get_model_tag(type(coord))
+    if _is_segmented(coord):
+        return "CoordSegmented"
+    if _is_range(coord) and not _extended_float(coord):
+        return "CoordRange"
+    ordered = coord.ndim == 1 and (coord.sorted or coord.reverse_sorted)
+    return "CoordMonotonicArray" if ordered else "CoordArray"
+
+
 def _save_coord(coord, name, group, compact: bool):
     """
     Save one coordinate node.
@@ -227,9 +245,11 @@ def _save_coord(coord, name, group, compact: bool):
             node.attrs["stop"] = _raw(coord.stop, coord.dtype)
             node.attrs["step"] = _raw(coord.step, coord.dtype)
             row = coord.runs[0]
-            if row["den"] != 1 or row["offset"]:
-                # A slice, or an axis built by dividing, is not the range
-                # its first label and spacing restate; its own terms are.
+            first = np.asarray(row["start"]).astype(coord.dtype)[()]
+            if row["den"] != 1 or row["offset"] or first != row["start"]:
+                # A slice, an axis built by dividing, or a narrow float counted
+                # from a wider origin is not the range its first label and
+                # spacing restate; its own terms are.
                 node.attrs[_FLOAT_GRID] = np.asarray(
                     [row["num"], row["den"], row["offset"]], dtype="int64"
                 )
@@ -248,7 +268,7 @@ def _save_coord(coord, name, group, compact: bool):
             node.attrs["step"] = to_int(step) if is_td else step
             node.attrs["step_is_timedelta64"] = is_td
     if compact:
-        node.attrs[_OBJECT_TYPE] = get_model_tag(type(coord))
+        node.attrs[_OBJECT_TYPE] = _node_tag(coord)
     if coord.units is not None:
         node.attrs["units"] = str(coord.units)
 

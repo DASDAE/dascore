@@ -284,7 +284,15 @@ class TestFloatRunsRebuild:
 
     @pytest.fixture(
         scope="class",
-        params=["sliced", "strided", "divided", "descending", "reversed", "plain"],
+        params=[
+            "sliced",
+            "strided",
+            "divided",
+            "descending",
+            "reversed",
+            "plain",
+            "float32",
+        ],
     )
     def float_spool(self, request, tmp_path_factory):
         """A directory holding one patch whose distance axis is awkward."""
@@ -297,6 +305,10 @@ class TestFloatRunsRebuild:
             "reversed": whole[::-1],
             # counted from its own first label, so the row needs no origin
             "plain": get_coord(data=3.7 + np.arange(300) * 0.1, units="m"),
+            # labels a double step rounds again into a narrower float
+            "float32": get_coord(
+                start=np.float32(0), step=0.1, shape=(300,), units="m"
+            ),
         }
         coord = coords[request.param][:300]
         assert coord.evenly_sampled and len(coord) == 300

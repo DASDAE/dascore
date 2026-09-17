@@ -431,7 +431,9 @@ SPOOL_LATE_RENAMES = MappingProxyType(
 # the envelope cannot restate -- a fractional step or offset, or a
 # descending run, whose start the envelope does not name -- so a query
 # need not scan them all.
-GRID_NEEDED = "den != 1 OR offset != 0 OR num < 0"
+# A float run is always among them: the envelope states its step as a
+# double, which a narrower float's labels were not counted with.
+GRID_NEEDED = "den != 1 OR offset != 0 OR num < 0 OR dtype LIKE 'float%'"
 
 # A patch_coords row's coord_variants identity, given its alias; the row's
 # definition is always joined as `cd`.

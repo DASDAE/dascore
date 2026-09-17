@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import json
 import math
 from fractions import Fraction
 from typing import ClassVar
@@ -25,6 +26,7 @@ from dascore.core.coords import (
     CoordSummary,
     NumericND,
     _canonical,
+    _out_of_ns,
     _simplest_between,
     _to_tick,
     concat_coords,
@@ -1925,6 +1927,58 @@ class TestEdges:
         assert summary.runs.dtype.names and summary.run_hashes.dtype == np.uint64
         np.testing.assert_array_equal(summary.to_coord().values, np.arange(10))
 
+    @pytest.mark.parametrize(
+        ("dtype", "units", "exact", "expected"),
+        [
+            ("int64", None, True, [0, 1, 2, 3, 4, 8, 9, 10, 11, 12]),
+            (
+                "float64",
+                "m",
+                False,
+                [0.0, 1.0, 2.0, 3.0, 4.0, 8.0, 9.0, 10.0, 11.0, 12.0],
+            ),
+        ],
+    )
+    def test_a_summary_of_nested_segments_is_read_as_runs(
+        self, dtype, units, exact, expected
+    ):
+        """An older summary held a summary per segment; each is one run."""
+        low, high = (0, 12) if exact else (0.0, 12.0)
+
+        def segment(start, stop):
+            grid = (1, 1, 0) if exact else (None, None, None)
+            fields = ("step_numerator", "step_denominator", "origin_offset")
+            return {
+                "dtype": dtype,
+                "min": start,
+                "max": stop,
+                "step": 1 if exact else 1.0,
+                "units": units,
+                "len": 5,
+                **dict(zip(fields, grid)),
+                "runs": None,
+                "object_type": "CoordSummary",
+            }
+
+        document = {
+            "dtype": dtype,
+            "min": low,
+            "max": high,
+            "step": None,
+            "units": units,
+            "len": 10,
+            "runs": [segment(low, low + 4), segment(high - 4, high)],
+            "object_type": "CoordSummary",
+        }
+        summary = CoordSummary.model_validate(json.loads(json.dumps(document)))
+        assert summary.runs.shape == (2,) and summary.run_stops is None
+        coord = NumericND.from_rows(summary.runs, dtype=dtype)
+        np.testing.assert_array_equal(coord.values, expected)
+        # a segment which states no grid leaves the summary its envelope
+        blank = ("step", "step_numerator", "step_denominator", "origin_offset")
+        document["runs"][1].update(dict.fromkeys(blank))
+        assert CoordSummary.model_validate(document).runs is None
+
     def test_a_legacy_float_grid_is_read_as_its_step(self):
         """The fraction an older float summary stated is the step it divides to."""
         # the scalar step disagrees, so it is the fraction which is honoured
@@ -2131,3 +2185,90 @@ class TestOtherCoordsAnswerTheSameQuestions:
         """Text has no runs, so no seams and no holes."""
         coord = get_coord(data=np.asarray(["a", "b"]))
         assert len(coord.get_discontinuities()) == 0
+
+
+class TestReviewFindings:
+    """Corners a correctness review found, each pinned by what it broke."""
+
+    def test_a_label_far_from_its_origin_is_found(self):
+        """Inverting a label far from the origin loses more than a rounding."""
+        coord = get_coord(start=1e9, step=0.1, shape=20)
+        label = coord[1]
+        assert coord.get_next_index(label) == 1
+        np.testing.assert_array_equal(coord.select((label, label))[0].values, [label])
+
+    def test_a_narrow_float_boundary_label_is_found(self):
+        """A float32 label rounding below its run's wider head is still its run's."""
+        base = get_coord(data=(np.arange(10) * 0.1).astype("float32"))
+        coord = concat_coords(base[:3], base[7:])
+        label = coord[3]
+        assert coord.get_next_index(label) == 3
+        np.testing.assert_array_equal(coord.select((label, label))[0].values, [label])
+
+    def test_bounded_snap_counts_nanoseconds_exactly(self):
+        """Epoch times differenced as floats would hide the label which moved."""
+        coord = get_coord(data=T0 + np.asarray([0, 1000, 2100, 3000]) * NS)
+        assert coord.snap(tolerance=np.timedelta64(1, "ns")) is coord
+        assert coord.snap(tolerance=np.timedelta64(100, "ns")).evenly_sampled
+
+    def test_a_count_of_steps_is_the_coordinates_own_step(self):
+        """Not the step of the grid being tried, which a hole stretches."""
+        coord = get_coord(data=np.asarray([0.0, 1.0, 2.0, 7.0, 8.0, 9.0]))
+        assert coord.snap(tolerance=1) is coord
+        stored = NumericND.from_array(np.asarray([0.0, 1.0, 2.0, 7.0]), detect=False)
+        assert stored.snap(tolerance=1) is stored
+
+    def test_float_grid_index_arithmetic_cannot_wrap(self):
+        """A grid index past what int64 and float64 both count is refused."""
+        rows = float_rows("f8", [0.0], [4], 1.0, 2**62)
+        with pytest.raises(CoordError, match="float64 counts"):
+            NumericND.from_rows(rows, dtype="f8")
+
+    def test_a_phase_carry_cannot_wrap(self):
+        """A first label carried past int64 by its phase is refused."""
+        with pytest.raises(CoordError, match="carries its first label"):
+            NumericND.from_rows([(2**63 - 2, 2, 0, 1, 2), (0, 2, 1, 1, 0)], dtype="i8")
+        with pytest.raises(CoordError, match="carries its first label"):
+            NumericND.from_rows([(2**63 - 2, 2, 0, 1, 2)], dtype="i8")
+
+    def test_equal_labels_are_equal_however_stated(self):
+        """A short run cannot show its phase; its labels still decide equality."""
+        declared = NumericND.from_run(T0, Fraction(1, 3), 3)
+        rebuilt = get_coord(data=declared.values)
+        assert declared == rebuilt
+        assert declared != NumericND.from_run(T0 + NS, Fraction(1, 3), 3)
+        # the same ends and different interiors
+        inner = get_coord(data=T0 + np.asarray([0, 2, 3]) * NS)
+        assert inner != get_coord(data=T0 + np.asarray([0, 1, 3]) * NS)
+
+    def test_a_negative_zero_origin_is_kept(self):
+        """The sign of a zero is part of the label an array gave."""
+        values = np.asarray([-0.0, -1.0, -2.0, -10.0, -11.0, -12.0])
+        coord = get_coord(data=values)
+        np.testing.assert_array_equal(np.signbit(coord.values), np.signbit(values))
+
+    def test_an_estimate_past_the_label_is_walked_back(self):
+        """The division can land a rounding past a label the value sits below."""
+        rows = float_rows("f8", [0.0], [1000], 0.1, 1, -297)
+        coord = NumericND.from_rows(rows, dtype="f8")
+        value = 10.999999999999998  # a double below the label 0.1 * (407 - 297)
+        assert coord.values[407] == 11.0
+        assert coord._index_sorted(value, forward=True) == 407
+        # a value a rounding below a label is that label
+        assert coord._index_sorted(np.nextafter(10.9, 0), forward=False) == 406
+
+    def test_a_value_beyond_what_a_float_counts(self):
+        """An index past 2**53 is no label, only the side it lies on."""
+        coord = get_coord(start=0.0, step=0.1, shape=10)
+        assert coord._index_sorted(1e300, forward=True) >= len(coord)
+
+    def test_stored_n_d_labels_differ_by_their_labels(self):
+        """Arrays of any rank are equal exactly when their labels are."""
+        one = get_coord(data=np.arange(6.0).reshape(2, 3))
+        assert one == get_coord(data=np.arange(6.0).reshape(2, 3))
+        assert one != get_coord(data=np.arange(1.0, 7.0).reshape(2, 3))
+
+    def test_a_lossy_time_cast_names_the_label(self):
+        """A cast which drops part of a label reports that label."""
+        value = np.asarray(["2020-01-01T00:00:00.5"], dtype="datetime64[ns]")
+        assert _out_of_ns(value, np.dtype("datetime64[s]")) == value[0]

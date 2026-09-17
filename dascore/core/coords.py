@@ -261,11 +261,39 @@ def _read_run_fields(data: dict, dtype) -> None:
     """
     runs = data.get("runs")
     if runs is not None and not isinstance(runs, np.ndarray):
-        data["runs"] = runs_from_rows(runs, normalize_coord_dtype(dtype))
+        if len(runs) and isinstance(runs[0], Mapping | CoordSummary):
+            runs = _legacy_segment_rows(runs, dtype)
+            data["run_stops"] = data["run_hashes"] = None
+        data["runs"] = (
+            None if runs is None else runs_from_rows(runs, normalize_coord_dtype(dtype))
+        )
     for name, kind in (("run_stops", None), ("run_hashes", np.uint64)):
         value = data.get(name)
         if value is not None and not isinstance(value, np.ndarray):
             data[name] = np.asarray(value, dtype=kind)
+
+
+def _legacy_segment_rows(segments, dtype) -> list[tuple] | None:
+    """
+    The run rows an older summary's nested per-segment summaries state.
+
+    Before the run table a segmented coordinate's summary held a summary
+    for each segment. Each which states a grid is one run; if any does not,
+    the table cannot be restated and the summary keeps only its envelope.
+    """
+    rows = []
+    for segment in segments:
+        summary = (
+            segment if isinstance(segment, CoordSummary) else CoordSummary(**segment)
+        )
+        runs = summary.runs
+        if runs is None and summary.is_range_like and summary.len:
+            # a float segment stated only its envelope and step
+            runs = cast("NumericND", summary.to_coord()).runs
+        if runs is None or len(runs) != 1 or not runs["den"][0]:
+            return None
+        rows.append(runs[0].item())
+    return rows
 
 
 def _legacy_grid_runs(data: Mapping, dtype) -> np.ndarray | None:
@@ -3694,6 +3722,9 @@ class NumericND(BaseCoord):
             return len(self) if value > 0 else -1
         anchor = self._bound_tick(value, forward) if self._ticks else float(value)
         heads = self._run_heads
+        if self._slack:
+            # the labels are these heads rounded again into a narrower float
+            heads = heads.astype(self.dtype).astype(np.float64)
         if len(rows) == 1:  # one run needs no search to be found
             run = 0 if anchor >= heads[0] else -1
         else:
@@ -3862,10 +3893,13 @@ class NumericND(BaseCoord):
         """
         Whether two coordinates hold the same labels in the same units.
 
-        Equal tables are equal coordinates, which is the cheap answer; two
-        which differ are still compared label by label, and closely enough
-        to call a float array equal to one a rounding away, as comparing
-        coordinates has always been.
+        Equal tables are equal coordinates, which is the cheap answer. Two
+        tables which differ may still hold the same labels -- a short run
+        cannot show the phase of its grid, and one set of doubles can be
+        counted from more than one origin -- so they are then compared label
+        by label, exactly.
+        [`approx_equal`](`dascore.core.coords.NumericND.approx_equal`) compares
+        closely.
         """
         if not isinstance(other, NumericND):
             return False
@@ -3875,11 +3909,11 @@ class NumericND(BaseCoord):
             return False
         if self.fingerprint() == other.fingerprint():
             return True
-        # Rows of ticks are canonical: equal labels are equal rows, which
-        # the fingerprints have just compared. Float rows are not -- one
-        # set of doubles can be stated from more than one origin -- so
-        # their labels settle it, exactly; `approx_equal` compares closely.
-        if self._ticks or not (self.size and self.ndim == 1):
+        if not (self.size and self.ndim == 1):
+            return False  # stored N-D labels are hashed as the labels they are
+        # The two ends are cheap and settle nearly every unequal pair.
+        ends = [0, len(self) - 1]
+        if not _same_labels(self._labels(ends), other._labels(ends)):
             return False
         return _same_labels(self.values, other.values)
 
@@ -4264,13 +4298,20 @@ class NumericND(BaseCoord):
         if allowed.count is None:
             allowed = self._gap_tolerance(allowed)
         ours, theirs = self.values, other.values
-        if ours.dtype.kind in "mM":
-            ours, theirs = ours.astype(np.int64), theirs.astype(np.int64)
-        moved = np.max(np.abs(ours.astype(np.float64) - theirs.astype(np.float64)))
-        bound = allowed.allowance(other.step)
+        if self._ticks:
+            # differenced as ticks: an epoch in float64 has no nanoseconds left
+            moved = np.max(np.abs(ours.view(np.int64) - theirs.view(np.int64)))
+        else:
+            moved = np.max(np.abs(ours.astype(np.float64) - theirs))
+        # A count of steps is this coordinate's step, or the spacing its
+        # labels keep, not the step of the grid being tried against them.
+        step = self.step
+        if _is_null(step):
+            step = np.median(np.abs(_diffs(ours)))
+        bound = allowed.allowance(step)
         if is_timedelta64(bound):  # in the nanoseconds the labels are counted in
             bound = np.asarray(bound).astype("timedelta64[ns]").astype(np.int64)
-        return bool(moved <= float(bound))
+        return bool(float(moved) <= float(bound))
 
     def _snapped(self) -> BaseCoord:
         """The even grid between this coordinate's two ends."""

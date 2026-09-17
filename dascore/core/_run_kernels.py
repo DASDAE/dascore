@@ -242,6 +242,9 @@ class TickKernel:
         den = np.maximum(rows["den"], 1)
         # A phase past its denominator is the next tick's phase.
         carry = np.where(grid, rows["offset"] // den, 0)
+        moved = rows["start"].astype(np.float64) + carry.astype(np.float64)
+        if np.any(np.abs(moved) >= _INT64_MAX):
+            _refuse("A run's phase carries its first label past int64.")
         rows["start"] += carry
         rows["offset"] -= carry * rows["den"]
         # Lowest terms: the offset's remainder under gcd(num, den) can never
@@ -260,6 +263,8 @@ class TickKernel:
         start, length, num, den, offset = row
         if den > 0:
             carry, offset = divmod(offset, den)
+            if not -_INT64_MAX <= start + carry < _INT64_MAX:
+                _refuse("A run's phase carries its first label past int64.")
             common = max(math.gcd(abs(num), den), 1)
             start, num, den = start + carry, num // common, den // common
             offset //= common
@@ -400,10 +405,16 @@ class FloatKernel:
         """Each row moved to its own sample ``k`` and re-strided; no label moves."""
         new = rows.copy()
         new["offset"] = rows["offset"] + k * np.abs(rows["den"])
-        new["den"] = rows["den"] * stride
-        reach = np.abs(new["offset"]) + new["length"] * np.abs(new["den"])
-        if len(new) and int(reach.max()) >= _FLOAT_INDEX_MAX:
+        wide = (
+            np.abs(rows["offset"].astype(np.float64))
+            + np.abs(np.asarray(k, np.float64)) * np.abs(rows["den"].astype(np.float64))
+            + rows["length"].astype(np.float64)
+            * np.abs(rows["den"].astype(np.float64))
+            * abs(stride)
+        )
+        if len(new) and wide.max() >= _FLOAT_INDEX_MAX:
             _refuse("A float run's grid index has left the range a float64 counts.")
+        new["den"] = rows["den"] * stride
         return new
 
     @staticmethod
@@ -437,15 +448,13 @@ class FloatKernel:
 
     @staticmethod
     def reduced(rows: np.ndarray) -> np.ndarray:
-        """A float row has one spelling already, but for a signed zero."""
-        rows["start"] = rows["start"] + 0.0
+        """A float row has one spelling already; even a signed zero is a label."""
         return rows
 
     @staticmethod
     def reduced_one(row: tuple) -> tuple:
         """`reduced` for a single row."""
-        start, *rest = row
-        return (start + 0.0, *rest)
+        return row
 
     @classmethod
     def check_range(cls, rows: np.ndarray, dtype) -> None:
@@ -454,8 +463,10 @@ class FloatKernel:
         if not len(grid):
             return
         step, den, k0 = float_terms(grid)
-        reach = np.abs(k0) + grid["length"] * np.abs(den)
-        if int(reach.max()) >= _FLOAT_INDEX_MAX:
+        reach = np.abs(k0.astype(np.float64)) + grid["length"].astype(
+            np.float64
+        ) * np.abs(den.astype(np.float64))
+        if reach.max() >= _FLOAT_INDEX_MAX:
             _refuse("A float run's grid index has left the range a float64 counts.")
         ends = cls.labels(grid, slice(None), grid["length"])
         bad = ~(np.isfinite(grid["start"]) & np.isfinite(step) & np.isfinite(ends))
@@ -496,11 +507,33 @@ class FloatKernel:
         position = (index - k0) / abs(den)
         if not math.isfinite(position):
             return length if (position > 0) else -1
-        near = round(position)
-        if abs(position - near) <= slack / abs(cls._spacing(bits, den)):
-            return near
-        position = round(position, 9)
-        return math.ceil(position) if forward else math.floor(position)
+        if abs(position) >= _FLOAT_INDEX_MAX:
+            return math.ceil(position) if forward else math.floor(position)
+        spacing = cls._spacing(bits, den)
+        rising = spacing > 0
+        # A label within this of the value is the value: a rounding of the
+        # label's own arithmetic, or the resolution of a narrower float.
+        near = max(abs(spacing) * 1e-9, slack)
+
+        def label(k: int) -> float:
+            index = k0 + k * abs(den)
+            return start + (index / step if den < 0 else step * index)
+
+        # The division only estimates where the value sits, and far from
+        # the origin by a good deal more than a rounding; the labels either
+        # side of the estimate decide, exactly.
+        k = math.floor(position)
+        for _ in range(4):
+            if (label(k) > value) == rising and label(k) != value:
+                k -= 1
+            elif (label(k + 1) <= value) == rising or label(k + 1) == value:
+                k += 1
+            else:
+                break
+        # Now label(k) is at or before the value and label(k + 1) past it.
+        if forward:
+            return k if abs(label(k) - value) <= near else k + 1
+        return k + 1 if abs(label(k + 1) - value) <= near else k
 
     @classmethod
     def step_of(cls, row: tuple) -> float:
@@ -631,9 +664,11 @@ class FloatKernel:
 
 
 def _same_labels(left: np.ndarray, right: np.ndarray) -> bool:
-    """Compare finite float labels exactly, including the sign of zero."""
+    """Compare labels exactly, including the sign of a floating zero."""
     if not np.array_equal(left, right):
         return False
+    if left.dtype.kind != "f":
+        return True
     return bool(np.array_equal(np.signbit(left), np.signbit(right)))
 
 

@@ -95,8 +95,14 @@ class TestNodeCodec:
         """Each node names its coordinate class in plain typed attributes."""
         for name in ("fraction", "segmented", "array", "strings"):
             _save_coord(CASES[name], f"typed_{name}", h5, compact=True)
-        for name in ("fraction", "segmented", "array"):
-            assert h5[f"typed_{name}"].attrs["object_type"] == "NumericND"
+        # the names the layout has always used, so older readers still read it
+        expected = {
+            "fraction": "CoordRange",
+            "segmented": "CoordSegmented",
+            "array": "CoordMonotonicArray",
+        }
+        for name, tag in expected.items():
+            assert h5[f"typed_{name}"].attrs["object_type"] == tag
         assert h5["typed_strings"].attrs["object_type"] == "CoordString"
         attrs = dict(h5["typed_fraction"].attrs)
         assert attrs["step_denominator"] == 2 and attrs["length"] == 4096
@@ -192,7 +198,7 @@ class TestUnorderedRuns:
         coord = cases[name]
         _save_coord(coord, name, h5, compact=True)
         assert isinstance(h5[name], h5py.Dataset)
-        assert h5[name].attrs["object_type"] == "NumericND"
+        assert h5[name].attrs["object_type"] == "CoordArray"
 
     @pytest.mark.parametrize("name", ["overlapping", "unsorted"])
     def test_values_round_trip(self, cases, name, tmp_path):
@@ -337,6 +343,17 @@ class TestFloatGridTerms:
         np.testing.assert_array_equal(back.values, coord.values)
         assert back == coord
         np.testing.assert_array_equal(back.runs, coord.runs)
+
+    def test_a_narrow_float_keeps_its_wider_origin(self, tmp_path):
+        """A float32 run counted from a float64 origin reads back label for label."""
+        coord = NumericND.from_run(0.1, 0.001, 6, dtype="float32")
+        patch = dc.Patch(
+            data=np.zeros(6), coords={"distance": coord}, dims=("distance",)
+        )
+        path = tmp_path / "narrow.h5"
+        patch.io.write(path, "dasdae")
+        back = dc.read(path, snap=False)[0].get_coord("distance")
+        np.testing.assert_array_equal(back.values, coord.values)
 
     def test_a_plain_range_writes_no_extra_terms(self, tmp_path):
         """Counted from its own first label, a range is its start and step."""

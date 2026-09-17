@@ -1128,10 +1128,10 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
     """
     Split the patch into contiguous patches at coordinate gaps.
 
-    Dimensional coordinates holding more than one run (e.g. produced by
-    concatenating nearly-contiguous data) mark where the patch is not
-    contiguous. This splits the patch at every run boundary so each output
-    patch has a plain, contiguous coordinate.
+    A dimensional coordinate with holes -- a run which starts past where
+    the run before it would have put its next sample -- marks where the
+    patch is not contiguous. This splits the patch at every hole, so a
+    change of sampling rate with no hole between the rates stays one patch.
 
     Parameters
     ----------

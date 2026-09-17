@@ -40,7 +40,7 @@ Coordinates expose values, units, data type, ordering, sampling regularity, limi
 | `reverse_sorted` | Whether the coordinate reports descending ordering |
 | `evenly_sampled` | Whether one step describes every value |
 | `dtype` | NumPy data type |
-| `data` | Array of coordinate values |
+| `values` | Array of coordinate values |
 | `units` | Physical units, if present |
 | `has_values` | Whether the coordinate holds labels, rather than only a shape |
 | `min()`, `max()` | Coordinate limits |
@@ -65,7 +65,7 @@ assert time.stop == t0 + np.timedelta64(1, "h")
 assert time.step == np.timedelta64(976562, "ns")
 ```
 
-Float coordinates have no tick to be exact against, so a fraction step on one raises. Their spacing is still kept as a fraction -- `0.1` is `1/10` -- which `step_exact` reports and every label is computed from, so a float range no longer accumulates its step.
+Float coordinates have no tick to be exact against, so a fraction step on one raises. A float step is the double it is, so `step_exact` is `None`; every label is `start + k * step` (or `k / rate` for an axis built by dividing), computed from the start rather than accumulated, and a slice holds exactly the doubles of its parent.
 
 A time coordinate is counted in nanoseconds whatever unit its labels were given in, so `coord.dtype` is always `datetime64[ns]` or `timedelta64[ns]`: a `datetime64[us]` array comes back as `[ns]`, holding the same instants. Two consequences are worth knowing. A date outside 1678-2262 has no nanosecond count and is refused with a `CoordError` naming it, where a coarser unit could hold it before. And a label finer than a nanosecond -- a `timedelta64[ps]` of 10 picoseconds, say -- is refused for the same reason rather than rounded onto the tick; picoseconds which are whole nanoseconds convert as they read.
 
