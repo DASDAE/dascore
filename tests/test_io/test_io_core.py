@@ -369,6 +369,28 @@ class TestScan:
         assert len(out) == 1
         assert str(denied) in str(caught[0].message)
 
+    @pytest.mark.parametrize("method", ["_updated_after", "scan"])
+    def test_unreadable_directory(self, tmp_path, random_patch, monkeypatch, method):
+        """Directory permission errors warn, skip contents, and allow later scans."""
+        fiber_io = FiberIO.manager.get_fiberio(
+            format=_FiberDirectory.name, version=_FiberDirectory.version
+        )
+        denied = tmp_path / fiber_io.name
+        denied.mkdir()
+        readable = tmp_path / "readable.h5"
+        random_patch.io.write(denied / "nested.h5", "dasdae")
+        random_patch.io.write(readable, "dasdae")
+
+        def raise_permission_error(*args, **kwargs):
+            raise PermissionError(f"Permission denied: {denied}")
+
+        monkeypatch.setattr(fiber_io, method, raise_permission_error)
+        with pytest.warns(UserWarning, match="Permission denied; skipping") as caught:
+            out = dc.scan([denied, readable], timestamp=1.0, progress=None)
+        assert [Path(attrs.path) for attrs in out] == [readable]
+        assert len(caught) == 1
+        assert str(denied) in str(caught[0].message)
+
     @pytest.fixture(scope="class")
     def nested_directory_with_patches(self, tmpdir_factory, random_patch):
         """Return a nested directory with patch files interlaced."""
