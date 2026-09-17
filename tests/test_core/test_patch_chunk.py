@@ -1381,7 +1381,7 @@ class TestQuantityTolerance:
         base = random_patch.rename_coords(distance="temp").update_coords(temp=celsius)
         spool = self._shifted(base, "temp", 3)
         # 4 K of extent is 4 degC of extent; read as a point it would be
-        # -269.15 degC, which simplify refuses as negative.
+        # -269.15 degC, which fuse refuses as negative.
         with suppress_warnings(UserWarning):
             merged = spool.chunk(temp=None, tolerance=4 * dc.units.kelvin)[0]
         assert merged.get_coord("temp").step is not None
@@ -1476,7 +1476,7 @@ class TestQuantityTolerance:
         """The merge gets the tolerance the plan resolved, not the raw one.
 
         Asserted on what the merge is handed rather than on a merged
-        coordinate: a dimensionless quantity reaching `simplify` is read
+        coordinate: a dimensionless quantity reaching `fuse` is read
         as *seconds*, which only shows up in a merged coordinate for
         gap geometries where the snap bound is the binding constraint.
         """

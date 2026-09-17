@@ -10,8 +10,10 @@ from typing import Any, Protocol
 import numpy as np
 
 import dascore as dc
+from dascore.core._run_kernels import float_rows
 from dascore.core.coords import BaseCoord, NumericND, concat_tables
 from dascore.exceptions import CoordError
+from dascore.utils.misc import unbyte
 
 XDAS_PAYLOAD_VARIABLE = "__values__"
 
@@ -74,6 +76,85 @@ def get_cf_version(h5file: _HasAttrs) -> str | None:
     return None
 
 
+# The units an XDAS file spells a time interval in, as numpy's codes.
+_XDAS_TIME_UNITS = {
+    "hours": "h",
+    "minutes": "m",
+    "seconds": "s",
+    "milliseconds": "ms",
+    "microseconds": "us",
+    "nanoseconds": "ns",
+}
+
+
+def _attr_delta(attrs, key: str):
+    """One interval attribute as XDAS encodes it, a timedelta where it says so."""
+    value = np.asarray(attrs[key]).ravel()[0]
+    units = attrs.get(f"{key}_units")
+    if units is None:
+        return value
+    code = _XDAS_TIME_UNITS[unbyte(units)]
+    return np.asarray(int(value)).astype(f"timedelta64[{code}]").astype("m8[ns]")[()]
+
+
+def _get_sampled_coord(h5file, coord_name: str, coord_len: int) -> BaseCoord | None:
+    """
+    Decode an XDAS sampled coordinate as the run table it already is.
+
+    The file states each block's first value and length and one interval
+    for them all, as an exact ratio where the interval is no whole tick.
+    Those are a run's start and length and its step, so they are copied,
+    never fitted; XDAS rounds its labels to the nearest tick where a run
+    floors them, which is the only difference the copy leaves.
+    """
+    names = [f"{coord_name}_{x}" for x in ("sampling", "values", "lengths")]
+    if any(name not in h5file for name in names):
+        return None
+    attrs = h5file[names[0]].attrs
+    if "sampling_interval" not in attrs:
+        return None  # the spelling which predates the attributes
+    values = np.asarray(h5file[names[1]][:])
+    lengths = np.asarray(h5file[names[2]][:]).astype(np.int64)
+    if len(values) != len(lengths) or int(lengths.sum()) != coord_len:
+        msg = f"XDAS sampled coordinate {coord_name!r} does not span its dimension."
+        raise CoordError(msg)
+    if "sampling_denominator" in attrs:
+        step = _attr_delta(attrs, "sampling_numerator")
+        den = int(np.asarray(attrs["sampling_denominator"]).ravel()[0])
+    else:
+        step, den = _attr_delta(attrs, "sampling_interval"), 1
+    if values.dtype.kind in "Mm" or isinstance(step, np.timedelta64):
+        starts = dc.to_datetime64(values) if values.dtype.kind != "m" else values
+        starts = np.asarray(starts).astype(f"{starts.dtype.kind}8[ns]")
+        num = int(np.asarray(step).astype("timedelta64[ns]").astype(np.int64))
+        rows = [
+            (int(x), int(n), num, den, 0) for x, n in zip(starts.view("i8"), lengths)
+        ]
+        return NumericND.from_rows(rows, dtype=starts.dtype)
+    if values.dtype.kind in "iu":
+        rows = [(int(x), int(n), int(step), den, 0) for x, n in zip(values, lengths)]
+        return NumericND.from_rows(rows, dtype=values.dtype)
+    rows = float_rows(
+        values.dtype, values.astype(np.float64), lengths, float(step) / den
+    )
+    return NumericND.from_rows(rows, dtype=values.dtype)
+
+
+def _tie_run(left, right, length: int, temporal: bool) -> NumericND:
+    """
+    The run between two tie points, both of them included.
+
+    XDAS rounds an interpolated time to the nearest tick, which a run
+    floored from half a tick up reproduces everywhere but on an exact tie.
+    """
+    if not temporal:
+        start = float(left)
+        return NumericND.from_run(start, (float(right) - start) / length, length + 1)
+    ticks = int(right.view("i8")) - int(left.view("i8"))
+    rows = [(int(left.view("i8")), length + 1, 2 * ticks, 2 * length, length)]
+    return NumericND.from_rows(rows, dtype=left.dtype)
+
+
 def _get_tie_point_coord(h5file, coord_name: str, coord_len: int) -> BaseCoord | None:
     """Decode XDAS ties as grid runs without expanding the sample axis."""
     values_name = f"{coord_name}_values"
@@ -110,19 +191,12 @@ def _get_tie_point_coord(h5file, coord_name: str, coord_len: int) -> BaseCoord |
                 )
             for i, (left, right) in enumerate(pairwise(indices)):
                 length = int(right) - int(left)
-                if temporal:
-                    ticks = int(values[i + 1].view("i8")) - int(values[i].view("i8"))
-                    step = Fraction(ticks, length * 1_000_000_000)
-                    start = values[i]
-                else:
-                    start = float(values[i])
-                    step = (float(values[i + 1]) - start) / length
                 # Each shared tie belongs to the following run. Only the
                 # last interval owns its right endpoint.
                 lo = max(0, int(left))
                 hi = min(coord_len, int(right) + (i == len(indices) - 2))
                 if hi > lo:
-                    run = NumericND.from_run(start, step, length + 1)
+                    run = _tie_run(values[i], values[i + 1], length, temporal)
                     runs.append(run._sliced(lo - int(left), 1, hi - lo))
             tail = max(int(indices[-1]) + 1, 0)
             if tail < coord_len:
@@ -130,15 +204,16 @@ def _get_tie_point_coord(h5file, coord_name: str, coord_len: int) -> BaseCoord |
                 runs.append(NumericND.from_run(start, zero, coord_len - tail))
             if not runs:
                 return dc.get_coord(data=values[:0])
-            return concat_tables(*runs)
+            # The ties themselves, for whoever hands the coordinate back.
+            return concat_tables(*runs)._note_foreign("xdas_ties", indices, values)
     return dc.get_coord(data=values)
 
 
 def _get_dim_coord(h5file, coord_name: str, coord_len: int) -> BaseCoord | np.ndarray:
     """Return one dimension coordinate for a coord-less payload variable."""
-    tied_values = _get_tie_point_coord(h5file, coord_name, coord_len)
-    if tied_values is not None:
-        return tied_values
+    for reader in (_get_sampled_coord, _get_tie_point_coord):
+        if (coord := reader(h5file, coord_name, coord_len)) is not None:
+            return coord
     if coord_name in h5file:
         return h5file[coord_name][:]
     return dc.get_coord(start=0, step=1, shape=(coord_len,))

@@ -354,7 +354,7 @@ class TickKernel:
     @staticmethod
     def hash_columns(rows: np.ndarray) -> list[np.ndarray]:
         """The row's words as a hash reads them, a run of one sample unspaced."""
-        single = (rows["length"] == 1) & (rows["den"] > 0)
+        single = rows["length"] == 1
         columns = [rows["start"], rows["length"]]
         # A run of one sample keeps a step no label shows, so its spacing
         # and phase are no part of what it is.
@@ -631,12 +631,10 @@ class FloatKernel:
 
 
 def _same_labels(left: np.ndarray, right: np.ndarray) -> bool:
-    """Compare finite labels exactly, including the sign of floating zero."""
+    """Compare finite float labels exactly, including the sign of zero."""
     if not np.array_equal(left, right):
         return False
-    if left.dtype.kind == "f" or right.dtype.kind == "f":
-        return bool(np.array_equal(np.signbit(left), np.signbit(right)))
-    return True
+    return bool(np.array_equal(np.signbit(left), np.signbit(right)))
 
 
 def get_kernel(dtype) -> type[TickKernel] | type[FloatKernel]:

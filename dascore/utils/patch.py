@@ -688,7 +688,7 @@ def _get_merged_coord(
             coords, dim=merge_dim, drop_conflicting=drop_conflicting
         )
     if snap_coords:
-        merged = merged.simplify(GapTolerance.from_user(tolerance, merge_dim))
+        merged = merged.fuse(GapTolerance.from_user(tolerance, merge_dim))
     # Passing the pre-built dim coord avoids materializing the members'
     # concatenated values only to discard them.
     return merge_coord_managers(

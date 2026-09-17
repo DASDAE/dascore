@@ -47,15 +47,6 @@ def is_servable(coord) -> bool:
     )
 
 
-def _relabels_exactly(coord) -> bool:
-    """Whether slices of a coordinate keep exactly the labels they select."""
-    # a float range recomputes a slice's labels from its new start, which
-    # can move them in the last bits, and then they no longer align
-    if isinstance(coord, NumericND):
-        return coord._ticks or not np.any(coord.runs["den"])
-    return True
-
-
 def _array_coord(labels, units) -> BaseCoord:
     """Labels held as they are, never re-inferred as a range."""
     if np.asarray(labels).dtype.kind in "USO":
@@ -97,7 +88,7 @@ def _chained(coords: list[BaseCoord]) -> BaseCoord | None:
     # concat_coords orders its inputs; xarray's order is the data's
     starts = [x.min() if out.sorted else x.max() for x in coords]
     ordered = all((a < b) if out.sorted else (a > b) for a, b in pairwise(starts))
-    return out if ordered and is_servable(out) and _relabels_exactly(out) else None
+    return out if ordered and is_servable(out) else None
 
 
 class CoordTransform(CoordinateTransform):
@@ -185,10 +176,8 @@ class CoordIndex(CoordinateTransformIndex):
             raise ValueError(msg)
         values = np.asarray(variable.values)
         units = variable.attrs.get("units")
+        # reading labels never moves one, so whatever grid comes back is theirs
         coord = get_coord(data=values)
-        # a range is kept only where it reproduces the labels exactly
-        if not np.array_equal(coord._get_index_values(np.arange(len(coord))), values):
-            coord = _array_coord(values, None)
         if units is not None and not dtype_time_like(coord.dtype):
             coord = coord.set_units(units)
         return cls(CoordTransform(name, coord, variable.dims[0]))
@@ -250,7 +239,8 @@ class CoordIndex(CoordinateTransformIndex):
             positions = range(start, stop, stride)
             # a strided segmented coordinate is an array of its labels
             lazy = coord.evenly_sampled or stride == 1
-            if len(positions) and lazy and _relabels_exactly(coord):
+            # a slice of a run table holds exactly the labels it selects
+            if len(positions) and lazy:
                 return self._with(coord[idx])
             return self._picked(np.asarray(positions, dtype=np.int64))
         if getattr(idx, "dims", (self.dim,)) != (self.dim,):

@@ -217,6 +217,29 @@ class TestRowsRefused:
         }
         assert coord_from_row(row, "x") is None
 
+    @pytest.mark.parametrize(
+        "changes",
+        [
+            {"_x_coord_dtype": None},  # no dtype to count the rows in
+            {"_x_coord_dtype": "<U4"},  # nor any arithmetic for text
+            {"x_min": pd.Timestamp("2020-01-01")},  # a time under a float dtype
+            {"_x_coord_dtype": "int64", "_x_runs": ((2**60, 5, 1, 1, 0),) * 2},
+        ],
+        ids=["no dtype", "text", "placeholder dtype", "past float precision"],
+    )
+    def test_rows_the_table_cannot_be_counted_from(self, changes):
+        """Anything short of an exact statement rebuilds nothing from runs."""
+        one = int(np.float64(1.0).view(np.int64))
+        row = {
+            "x_min": 0.0,
+            "x_max": 24.0,
+            "x_step": None,
+            "_x_coord_dtype": "float64",
+            "_x_runs": ((0.0, 5, one, 1, 0), (20.0, 5, one, 1, 0)),
+        }
+        assert coord_from_row(row, "x") is not None
+        assert coord_from_row({**row, **changes}, "x") is None
+
 
 class TestPlannedRows:
     """Plan outputs keep the grid only while the coordinate's identity holds."""
@@ -254,3 +277,37 @@ class TestRecordsRoundTrip:
         before = {c.coord_name: c for c in records[0].patches[0].coords}
         after = {c.coord_name: c for c in exported[0].patches[0].coords}
         assert before == after
+
+
+class TestFloatRunsRebuild:
+    """The index restates a float run exactly, wherever its grid is counted from."""
+
+    @pytest.fixture(scope="class", params=["sliced", "strided", "divided"])
+    def float_spool(self, request, tmp_path_factory):
+        """A directory holding one patch whose distance axis is awkward."""
+        whole = get_coord(data=np.arange(1000) * 0.1, units="m")
+        coords = {
+            "sliced": whole[150:450],
+            "strided": whole[7::3],
+            "divided": get_coord(data=np.arange(325) / 250, units="m")[25:],
+        }
+        coord = coords[request.param][:300]
+        assert coord.evenly_sampled and len(coord) == 300
+        patch = dc.get_example_patch().update_coords(distance=coord)
+        path = tmp_path_factory.mktemp(f"float_{request.param}")
+        patch.io.write(path / "patch.h5", "dasdae")
+        return dc.spool(path).update(), coord
+
+    def test_row_rebuilds_the_coordinate(self, float_spool):
+        """The planned coordinate is the file's, label for label."""
+        spool, coord = float_spool
+        row = spool._catalog.to_df().iloc[0].to_dict()
+        rebuilt = coord_from_row(row, "distance", units="m")
+        np.testing.assert_array_equal(rebuilt.values, coord.values)
+        assert rebuilt == coord
+
+    def test_loaded_and_chunked_agree(self, float_spool):
+        """What a chunk plans is what loading gives."""
+        spool, coord = float_spool
+        assert spool[0].get_coord("distance") == coord
+        assert spool.chunk(time=None)[0].get_coord("distance") == coord

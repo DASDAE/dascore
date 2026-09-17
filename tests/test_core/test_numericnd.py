@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import math
 from fractions import Fraction
 from typing import ClassVar
@@ -12,10 +13,19 @@ import pytest
 from pydantic import ValidationError
 
 import dascore as dc
-from dascore.core._run_kernels import _record_dtype, float_terms, get_kernel
+from dascore.core._run_kernels import (
+    _record_dtype,
+    _rows,
+    float_rows,
+    float_terms,
+    get_kernel,
+)
 from dascore.core.coords import (
+    CoordPartial,
+    CoordSummary,
     NumericND,
     _canonical,
+    _simplest_between,
     _to_tick,
     concat_coords,
     concat_tables,
@@ -772,7 +782,7 @@ class TestLookup:
     def test_random_windows(self, segmented, reverse):
         """Random windows give the samples the segmented coordinate gives."""
         reference = segmented[::-1] if reverse else segmented
-        coord = NumericND._from_coord(segmented)
+        coord = segmented
         coord = coord[::-1] if reverse else coord
         values = np.asarray(reference.values)
         rng = np.random.default_rng(0)
@@ -868,20 +878,20 @@ class TestFromExisting:
     def test_exact_range_slices(self, item):
         """A strided slice of an exact grid keeps every label it had."""
         reference = get_coord(start=T0, step=Fraction(1, 1024), shape=(500,))[item]
-        coord = NumericND._from_coord(reference)
+        coord = reference
         np.testing.assert_array_equal(coord.values, reference.values)
 
     def test_exact_range(self):
         """A range on an exact grid keeps the grid and its phase."""
         reference = get_coord(start=T0, step=Fraction(1, 1024), shape=(500,))
-        coord = NumericND._from_coord(reference)
+        coord = reference
         np.testing.assert_array_equal(coord.values, reference.values)
         assert coord.step_exact == reference.step_exact
 
     def test_float_range(self):
         """A float range keeps its labels to within floating precision."""
         reference = get_coord(start=0.5, step=0.25, shape=(9,))
-        coord = NumericND._from_coord(reference)
+        coord = reference
         np.testing.assert_array_equal(coord.values, reference.values)
 
     def test_segmented(self):
@@ -890,20 +900,20 @@ class TestFromExisting:
         first = get_coord(start=T0, step=step, shape=(100,))
         second = get_coord(start=first.max() + 10 * step, step=step, shape=(50,))
         reference = concat_coords(first, second)
-        coord = NumericND._from_coord(reference)
+        coord = reference
         assert coord.runs_count == reference.runs_count == 2
         np.testing.assert_array_equal(coord.values, reference.values)
 
     def test_array_coordinate(self):
         """An array coordinate is carried as its labels."""
         reference = get_coord(data=np.asarray([1.0, 2.0, 4.0, 8.0]), units="m")
-        coord = NumericND._from_coord(reference)
+        coord = reference
         np.testing.assert_array_equal(coord.values, reference.values)
         assert coord.units == reference.units
 
     def test_units_survive(self):
         """Units go along with the labels."""
-        coord = NumericND._from_coord(get_coord(start=0, step=1, shape=(4,), units="m"))
+        coord = get_coord(start=0, step=1, shape=(4,), units="m")
         assert coord.units == dc.get_quantity("m")
         assert coord[1:].units == coord.units
 
@@ -1264,7 +1274,7 @@ class TestNarrowDtypes:
     def test_from_coord_keeps_a_narrow_range(self):
         """Converting a narrow range does not widen it."""
         reference = get_coord(start=np.int8(0), stop=np.int8(100), step=np.int8(2))
-        coord = NumericND._from_coord(reference)
+        coord = reference
         assert coord.dtype == reference.dtype
         np.testing.assert_array_equal(coord.values, reference.values)
 
@@ -1303,7 +1313,7 @@ class TestGaps:
     def test_missing_counts_the_grid_positions(self):
         """A declared grid says how many positions have no sample."""
         coord = get_coord(data=[1, 3, 4, 10, 11, 12], step=1)
-        table = NumericND._from_coord(coord)
+        table = coord
         assert table.missing().count == 6
         assert not table.missing().complete
 
@@ -1340,20 +1350,20 @@ class TestSimplifyAndSnap:
 
     def test_simplify_exact_is_a_no_op(self, holed):
         """With no tolerance the holes stay holes."""
-        assert holed.simplify().runs_count == holed.runs_count
+        assert holed.fuse().runs_count == holed.runs_count
 
     def test_simplify_absorbs_a_small_gap(self):
         """A tolerance wide enough collapses the runs into one grid."""
         values = np.asarray([0.0, 1, 2, 3, 10, 11, 12, 13])
         coord = NumericND.from_array(values)
         assert coord.runs_count == 2
-        out = coord.simplify(tolerance=4.0)
+        out = coord.fuse(tolerance=4.0)
         assert out.runs_count == 1 and out.evenly_sampled
         assert np.max(np.abs(out.values - values)) <= 4.0
 
     def test_simplify_keeps_every_sample(self, holed):
         """Simplifying never changes how many samples there are."""
-        assert len(holed.simplify(tolerance=np.timedelta64(1, "s"))) == len(holed)
+        assert len(holed.fuse(tolerance=np.timedelta64(1, "s"))) == len(holed)
 
     def test_snap_forces_one_grid(self, holed):
         """Snapping forces one grid of the same length from the same start."""
@@ -1524,13 +1534,13 @@ class TestOperationsOnRunTables:
 
     def test_simplify_absorbs_holes_within_tolerance(self, holed):
         """A tolerance wider than every hole leaves one run."""
-        out = holed.simplify(np.timedelta64(100, "ms"))
+        out = holed.fuse(np.timedelta64(100, "ms"))
         assert out.runs_count == 1 and len(out) == 30
         assert np.max(np.abs(out.values - holed.values)) <= np.timedelta64(100, "ms")
 
     def test_simplify_keeps_holes_it_cannot_absorb(self, holed):
         """A tolerance narrower than the holes leaves them where they are."""
-        out = holed.simplify(np.timedelta64(10, "ms"))
+        out = holed.fuse(np.timedelta64(10, "ms"))
         assert out.runs_count == 3
         np.testing.assert_array_equal(out.values, holed.values)
 
@@ -1690,3 +1700,399 @@ class TestExactArrayConstruction:
         """Coarse dates outside the nanosecond range must never wrap."""
         with pytest.raises(CoordError, match="outside the nanosecond range"):
             factory(data=values)
+
+
+class TestRunLimitedByItsLabels:
+    """A tick run holds any labels its dtype can; int64 asks only ``length * den``."""
+
+    DAY = 86_400
+
+    @pytest.mark.parametrize(
+        ("rate", "days"), [(9999, 20), (12345, 60), (99999, 2), (49, 3000)]
+    )
+    def test_long_fractional_rate_runs_build(self, rate, days):
+        """Rates the product ``length * num`` could not reach are ordinary grids."""
+        count = rate * self.DAY * days
+        coord = NumericND.from_run(T0, Fraction(1, rate), count)
+        assert len(coord) == count
+        # the last label against python integers, which cannot wrap
+        last = int(T0.astype("int64")) + ((count - 1) * 10**9) // rate
+        assert int(coord.max().astype("int64")) == last
+        assert int(coord[count - 1].astype("int64")) == last
+
+    def test_long_runs_slice_reverse_and_fuse_exactly(self):
+        """Every route through the arithmetic agrees past the old limit."""
+        rate, count = 9999, 9999 * self.DAY * 20
+        coord = NumericND.from_run(T0, Fraction(1, rate), count)
+        cut = count // 2 + 7
+        assert concat_tables(coord[:cut], coord[cut:]) == coord
+        assert coord[::-1][::-1] == coord
+        probe = np.asarray([0, 1, cut - 1, cut, count - 2, count - 1])
+        ticks = [int(T0.astype("int64")) + (int(k) * 10**9) // rate for k in probe]
+        np.testing.assert_array_equal(
+            coord[probe].values.astype("int64"), np.asarray(ticks)
+        )
+        late = [int(T0.astype("int64")) + ((cut + k) * 10**9) // rate for k in range(4)]
+        np.testing.assert_array_equal(coord[cut:][:4].values.astype("int64"), late)
+
+    def test_a_run_past_its_dtype_names_what_it_reaches(self):
+        """The refusal states the label, not a range the labels never left."""
+        with pytest.raises(CoordError, match="exceeds the datetime64"):
+            NumericND.from_run(T0, np.timedelta64(1, "h"), 3_000_000)
+
+    def test_a_label_far_outside_the_coordinate_is_refused(self):
+        """Extending a grid past int64 raises rather than wrapping."""
+        coord = NumericND.from_run(0, 10**12, 10)
+        with pytest.raises(CoordError, match="leaves int64"):
+            coord._labels([10**10])
+
+
+class TestExactTimeFit:
+    """Floored labels of a fractional rate fit the grid a declared rate states."""
+
+    @pytest.mark.parametrize("rate", [7, 49, 1024, 12345, 44100])
+    def test_labels_become_the_declared_run(self, rate):
+        """Labels arriving as an array equal, and hash as, the declared grid."""
+        declared = NumericND.from_run(T0, Fraction(1, rate), 100_000)
+        fitted = get_coord(data=declared.values)
+        assert fitted == declared
+        assert fitted.step_exact == Fraction(1, rate)
+
+    def test_windows_fitted_apart_fuse(self):
+        """Two windows of one acquisition rejoin into the run they came from."""
+        declared = NumericND.from_run(T0, Fraction(1, 12345), 60_000)
+        values = declared.values
+        first, second = get_coord(data=values[:30_000]), get_coord(data=values[30_000:])
+        assert concat_tables(first, second) == declared
+
+    def test_descending_and_sliced_labels_fit(self):
+        """A reversal or a stride is still one exact grid."""
+        declared = NumericND.from_run(T0, Fraction(1, 1024), 5000)
+        for item in (slice(None, None, -1), slice(3, None, 7)):
+            out = get_coord(data=declared.values[item])
+            assert out.evenly_sampled
+            np.testing.assert_array_equal(out.values, declared.values[item])
+
+    def test_jitter_is_stored_not_fitted(self):
+        """Labels one nanosecond off their grid are kept as they are."""
+        values = NumericND.from_run(T0, Fraction(1, 1024), 5000).values.copy()
+        values[2500] += NS
+        out = get_coord(data=values)
+        assert not out.evenly_sampled
+        np.testing.assert_array_equal(out.values, values)
+
+
+class TestTableIntegrity:
+    """What the class refuses, and what makes two tables one."""
+
+    def test_raw_constructor_refuses_a_non_canonical_table(self):
+        """An unreduced step handed straight to the class is not a coordinate."""
+        good = NumericND.from_run(0, Fraction(1, 2), 4, dtype="int64")
+        for row in [(0, 4, 2, 4, 0), (0, 4, 1, 2, 5), (0, -1, 1, 2, 0)]:
+            runs = np.asarray([row], good.runs.dtype)
+            # pydantic reports a validator's error as its own ValueError
+            with pytest.raises(ValueError, match="canonical"):
+                NumericND(runs=runs, dtype=good.dtype, shape=(4,))
+        again = NumericND(runs=good.runs, dtype=good.dtype, shape=good.shape)
+        assert again == good
+
+    def test_byte_order_is_no_part_of_a_run(self):
+        """A table read from a big-endian file hashes as its native twin does."""
+        coord = grid_1024(300)
+        swapped = coord.runs.astype(coord.runs.dtype.newbyteorder(">"))
+        other = NumericND.from_rows(swapped, dtype=coord.dtype)
+        assert other == coord
+        np.testing.assert_array_equal(other._run_fingerprints, coord._run_fingerprints)
+
+    def test_one_label_is_one_coordinate(self):
+        """A run of one sample shows no step, so none is part of what it is."""
+        parent = grid_1024(10)
+        spellings = [
+            NumericND.from_run(T0, MS, 1),
+            NumericND.from_run(T0, 2 * MS, 1),
+            NumericND.from_array(np.asarray([T0])),
+            parent[0:1],
+            parent[0:3:3],
+        ]
+        assert len({x.fingerprint() for x in spellings}) == 1
+        assert all(x == spellings[0] for x in spellings)
+
+    @pytest.mark.parametrize("start", [np.datetime64("NaT"), np.nan])
+    def test_a_run_needs_a_first_label(self, start):
+        """A null start raises the coordinate's own error."""
+        step = MS if isinstance(start, np.datetime64) else 1.0
+        with pytest.raises(CoordError, match="first label"):
+            NumericND.from_run(start, step, 3)
+
+    def test_extreme_integers_keep_their_order(self):
+        """Labels a difference of which leaves int64 still read as sorted."""
+        coord = get_coord(data=np.asarray([-(2**62), 2**62]))
+        assert coord.sorted and coord.min() < coord.max()
+
+
+class TestSnapTolerance:
+    """``snap`` with a bound moves labels that far and no further."""
+
+    @pytest.fixture(scope="class")
+    def jittered(self):
+        """Millisecond labels, each up to 40 ns off its grid."""
+        jitter = np.random.default_rng(1).integers(-40, 40, 200)
+        ticks = np.arange(200) * 1_000_000 + jitter
+        return get_coord(data=T0 + ticks.astype("timedelta64[ns]"))
+
+    def test_no_bound_forces_the_grid(self, jittered):
+        """Without a tolerance every label goes onto the grid, as it always has."""
+        assert jittered.snap().evenly_sampled
+
+    @pytest.mark.parametrize(
+        ("tolerance", "snaps"),
+        [
+            (1e-3, True),  # a thousandth of a step is a microsecond
+            (1e-6, False),
+            (np.timedelta64(1, "us"), True),
+            (np.timedelta64(10, "ns"), False),
+            (dc.get_quantity("1 us"), True),
+            (dc.get_quantity("0.01 us"), False),
+        ],
+    )
+    def test_spelled_as_chunk_spells_it(self, jittered, tolerance, snaps):
+        """A number counts steps; a timedelta or a quantity is a distance."""
+        out = jittered.snap(tolerance=tolerance)
+        assert out.evenly_sampled is snaps
+        assert snaps or out is jittered
+
+    def test_unsorted_labels_are_left_alone(self):
+        """Labels in no order lie on no grid, however loosely it is read."""
+        coord = get_coord(data=np.asarray([3.0, 1.0, 2.0]))
+        assert coord.snap(tolerance=10) is coord
+
+    def test_patch_snap_coords_takes_the_same_bound(self, jittered):
+        """The patch method hands its tolerance down, and sorts nothing."""
+        patch = dc.Patch(data=np.zeros(200), coords={"time": jittered}, dims=("time",))
+        assert patch.snap_coords("time", tolerance=1e-6) is patch
+        assert (
+            patch.snap_coords("time", tolerance=1e-3).get_coord("time").evenly_sampled
+        )
+
+
+class TestEdges:
+    """The corners of the table: what it refuses, and what it falls back to."""
+
+    def test_documents_state_runs_as_rows(self):
+        """A summary read from a document turns its rows back into a table."""
+        summary = CoordSummary(
+            dtype="int64",
+            min=0,
+            max=9,
+            runs=[(0, 10, 1, 1, 0)],
+            run_stops=[9],
+            run_hashes=[7],
+        )
+        assert summary.runs.dtype.names and summary.run_hashes.dtype == np.uint64
+        np.testing.assert_array_equal(summary.to_coord().values, np.arange(10))
+
+    def test_a_legacy_float_grid_is_read_as_its_step(self):
+        """The fraction an older float summary stated is the step it divides to."""
+        summary = CoordSummary(
+            dtype="float64",
+            min=0.0,
+            max=2.0,
+            step=0.5,
+            step_numerator=1,
+            step_denominator=2,
+        )
+        np.testing.assert_array_equal(summary.to_coord().values, np.arange(5) * 0.5)
+
+    def test_a_declared_step_is_exact_beside_stored_labels(self):
+        """Labels held as they are still state the grid they were declared on."""
+        ticks = np.delete(np.arange(3000), np.arange(500, 2500)) * 10**6
+        coord = get_coord(data=T0 + ticks.astype("timedelta64[ns]"), step=MS)
+        assert coord.step_exact == Fraction(1, 1000)
+        assert coord.missing().count == 2000
+
+    @pytest.mark.parametrize(
+        "step", [(1, 0), (1, -2), (1, 2, 3), Fraction(2**70, 3)], ids=str
+    )
+    def test_a_step_no_run_can_hold_is_refused(self, step):
+        """A malformed or oversized fraction raises the coordinate's own error."""
+        with pytest.raises(CoordError):
+            NumericND.from_run(T0, step, 3)
+
+    def test_stored_labels_with_a_declared_step(self):
+        """The declared grid is what a hole after stored labels is held against."""
+        labels = T0 + np.asarray([0, 1, 2, 5]) * MS
+        stored = NumericND.from_array(labels, step=MS, detect=False)
+        assert stored.labels is not None and stored.step_exact == Fraction(1, 1000)
+        rows = np.concatenate(
+            [stored.runs, NumericND.from_run(T0 + 10 * MS, MS, 3).runs]
+        )
+        joined = NumericND.from_rows(rows, labels=labels, dtype=labels.dtype, step=MS)
+        assert joined.step == MS and joined.holes
+        # a step the labels' dtype cannot hold declares nothing
+        ints = NumericND.from_rows(
+            [(0, 3, 0, 0, 0)], labels=np.asarray([0, 1, 3]), dtype="int64", step=0.5
+        )
+        assert ints.step is None
+
+    def test_nothing_but_nulls(self):
+        """Labels which are all missing are held, in nanoseconds like any time."""
+        nulls = np.asarray(["NaT", "NaT"], dtype="datetime64[s]")
+        coord = NumericND.from_array(nulls)
+        assert (
+            coord.dtype == np.dtype("datetime64[ns]") and pd.isnull(coord.values).all()
+        )
+        assert CoordPartial(shape=(3,), step=1.0).missing().count == 0
+
+    def test_a_label_past_int64_is_refused(self):
+        """An integer no tick can be is named, not wrapped."""
+        with pytest.raises(CoordError, match="outside the int64 range"):
+            _to_tick(2**64)
+
+    def test_a_float_step_on_integer_labels_declares_nothing(self):
+        """A step the labels' dtype cannot hold is refused."""
+        with pytest.raises(CoordError, match="non-integer"):
+            get_coord(data=np.asarray([0, 1, 3]), step=0.5)
+
+    def test_simplest_fraction(self):
+        """The Stern-Brocot walk, either side of zero."""
+        assert _simplest_between(Fraction(-1, 2), Fraction(1, 2)) == 0
+        assert _simplest_between(Fraction(2, 7), Fraction(1, 3)) == Fraction(3, 10)
+        assert _simplest_between(Fraction(-1, 3), Fraction(-2, 7)) == Fraction(-3, 10)
+        assert _simplest_between(Fraction(1), Fraction(5, 4)) == Fraction(6, 5)
+
+    def test_labels_no_grid_floors_to_are_stored(self):
+        """Spacings a tick apart need not be floors of any one line."""
+        uneven = (np.asarray([0, 1, 2, 4, 6, 7, 8]) + 10).astype("datetime64[ns]")
+        vast = np.asarray([0, 2**61, 2**62 + 1]).astype("datetime64[ns]")
+        for values in (uneven, vast):
+            coord = get_coord(data=values)
+            assert not coord.evenly_sampled
+            np.testing.assert_array_equal(coord.values, values)
+
+    def test_python_time_inputs(self):
+        """A python timedelta states a duration as numpy's does."""
+        coord = get_coord(
+            start=datetime.timedelta(0), step=datetime.timedelta(seconds=1), shape=3
+        )
+        assert coord.dtype == np.dtype("timedelta64[ns]") and len(coord) == 3
+
+    def test_from_run_takes_a_shape_of_any_rank(self):
+        """A shape is a sample count, however many axes spell it."""
+        assert NumericND.from_run(0, 1, (2, 3)).shape == (6,)
+
+    def test_stored_labels_answer_the_range_questions(self):
+        """Labels of their own have a stop, and refuse what only a grid can do."""
+        coord = get_coord(data=[1.0, 2.0, 4.0])
+        assert coord.stop == 4.0
+        with pytest.raises(NotImplementedError, match="change its length"):
+            coord.change_length(5)
+        np.testing.assert_array_equal(coord.new(start=0).values, coord.values)
+        with pytest.raises(CoordError, match="declared step"):
+            coord.missing()
+
+    def test_indexing_corners(self):
+        """A mask must fit, and an index of one axis gives one label."""
+        coord = get_coord(start=0, stop=10, step=1)
+        with pytest.raises(IndexError, match="Boolean index"):
+            coord[np.asarray([True, False])]
+        assert coord[(3,)] == 3
+        np.testing.assert_array_equal(coord.new(min=5).values[:2], [5, 6])
+
+    def test_a_stride_past_int64_is_refused(self):
+        """Whichever path slices a run, its step has to stay a step."""
+        one = NumericND.from_run(0, 2**61, 3)
+        with pytest.raises(CoordError, match="past int64"):
+            one._sliced(0, 8, 2)
+        two = concat_tables(one, NumericND.from_run(2**63 - 2**62, 2**59, 2))
+        with pytest.raises(CoordError, match="past int64"):
+            two[::16]
+
+    def test_runs_share_a_dtype_and_stand_alone(self):
+        """Tables of different widths do not join, and runs state everything."""
+        wide = get_coord(start=0.0, stop=3.0, step=1.0)
+        narrow = NumericND.from_array(np.asarray([5, 6, 7], dtype="f4"))
+        with pytest.raises(CoordError, match="share a dtype"):
+            concat_tables(wide, narrow)
+        with pytest.raises(CoordError, match="cannot be combined"):
+            get_coord(runs=wide.runs, data=[1, 2])
+        ints = get_coord(start=0, stop=3, step=1)
+        late = get_coord(start=5, stop=8, step=1)
+        assert concat_coords(ints.model_dump(), late).runs_count == 2
+
+    def test_unordered_runs_are_left_as_they_are(self):
+        """Runs in no order have no seams to close."""
+        early, late = (
+            get_coord(start=0, stop=5, step=1),
+            get_coord(start=3, stop=8, step=1),
+        )
+        mixed = concat_tables(late, early)
+        assert mixed.fuse(10) is mixed
+
+    def test_a_hole_after_stored_labels(self):
+        """Stored labels state the spacing the next run is held against."""
+        jitter = NumericND.from_array(np.asarray([0.0, 1.0, 2.1]), detect=False)
+        one = NumericND.from_array(np.asarray([7.0]), detect=False)
+        grid = NumericND.from_run(20.0, 1.0, 4)
+        assert concat_tables(jitter, grid).holes
+        # one label states no spacing, so nothing says the next run is late
+        assert not concat_tables(one, grid).holes
+        declared = NumericND.from_array(
+            np.asarray([0.0, 1.0, 2.0, 5.0]), step=1.0, detect=False
+        )
+        assert declared.get_next_index(9.0, allow_out_of_bounds=True) == 9
+
+
+class TestKernelCorners:
+    """What each kernel refuses, asked of it directly."""
+
+    def test_rows_from_scalars(self):
+        """A table of one run may be spelled without a single list."""
+        rows = _rows(np.dtype("int64"), 0, 3, 1, 1, 0)
+        assert rows.shape == (1,) and rows["length"][0] == 3
+
+    def test_a_run_too_long_for_its_denominator(self):
+        """``length * den`` is the one thing int64 asks of a tick run."""
+        step = Fraction(2**30 + 1, 2**30)
+        with pytest.raises(CoordError, match="too long for int64"):
+            NumericND.from_run(0, step, 2**40, dtype="int64")
+        short = NumericND.from_run(0, Fraction(10**6 + 1, 10**6), 10, dtype="int64")
+        with pytest.raises(CoordError, match="too long for int64"):
+            short._labels([10**13])
+        assert get_kernel(short.dtype).labels(short.runs, 0, []).shape == (0,)
+
+    def test_float_runs_stay_countable_and_finite(self):
+        """A grid index past 2**53, or a label past the floats, is refused."""
+        with pytest.raises(CoordError, match="range a float64 counts"):
+            NumericND.from_rows(float_rows("f8", [0.0], [4], 1.0, 1, 2**53), dtype="f8")
+        with pytest.raises(CoordError, match="not finite"):
+            NumericND.from_run(1e308, 1e308, 10)
+        two = concat_tables(
+            NumericND.from_run(0.0, 1.0, 4), NumericND.from_run(10.0, 1.0, 4)
+        )
+        with pytest.raises(CoordError, match="range a float64 counts"):
+            two[:: 2**54]
+
+    def test_flat_float_runs_share_a_step(self):
+        """Runs of no spacing meet on a grid only where they all start alike."""
+        flat = NumericND.from_run(1.0, 0.0, 3)
+        assert concat_tables(flat, flat).step == 0.0
+        assert concat_tables(flat, NumericND.from_run(2.0, 0.0, 3)).step is None
+
+
+class TestOtherCoordsAnswerTheSameQuestions:
+    """What the run table asks of itself, a string or a shape answers too."""
+
+    def test_partial(self):
+        """A coordinate without values has nothing to fuse, empty, or measure."""
+        coord = CoordPartial(shape=(3, 4), units="m")
+        assert not coord.has_values and get_coord(data=[1, 2]).has_values
+        assert coord.set_units("m") is coord and coord.fuse(1) is coord
+        assert coord.empty(axes=0).shape == (0, 4)
+        with pytest.raises(CoordError, match="evenly sampled"):
+            coord.coord_range()
+        assert pd.isnull(coord.coord_range(extend=False))
+
+    def test_string(self):
+        """Text has no runs, so no seams and no holes."""
+        coord = get_coord(data=np.asarray(["a", "b"]))
+        assert len(coord.get_discontinuities()) == 0

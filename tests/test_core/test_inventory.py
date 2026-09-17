@@ -1868,6 +1868,10 @@ class TestCoverageCompleteness:
     def test_values_equal_branches(self):
         """Null-pattern and key mismatches compare unequal."""
         assert not values_equal(np.array([np.nan]), np.array([1.0]))
+        # run tables of different layouts are different values
+        ticks = get_coord(start=0, stop=5, step=1).runs
+        floats = get_coord(start=0.0, stop=5.0, step=1.0).runs
+        assert values_equal(ticks, ticks.copy()) and not values_equal(ticks, floats)
         assert values_equal(np.array([1.0, np.nan]), np.array([1.0, np.nan]))
         assert not values_equal({"a": 1}, {"b": 1})
         assert values_equal((1.0, np.nan), (1.0, np.nan))

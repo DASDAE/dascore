@@ -1114,17 +1114,15 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             If true, count the end of the range as max() + sample step. This
             can only work for evenly sampled coordinates.
         """
-        if not self.evenly_sampled and extend:
+        if extend:
+            # Only an evenly sampled coordinate has an exclusive end, and
+            # the class which can be one answers for itself.
             msg = (
                 "If extend is True, the coord_range can only be called on "
                 f"evenly sampled coordinates but {self} is not."
             )
             raise CoordError(msg)
-        coord_range = self.max() - self.min()
-        if extend:
-            # Handle reverse sorted case
-            coord_range += np.abs(self.step)
-        return coord_range
+        return self.max() - self.min()
 
     @abc.abstractmethod
     def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
@@ -1150,12 +1148,12 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         """
         return self
 
-    def simplify(self, tolerance=None) -> BaseCoord:
+    def fuse(self, tolerance=None) -> BaseCoord:
         """
         Return the simplest coordinate representing the same values.
 
         Unlike [`snap`](`dascore.core.coords.BaseCoord.snap`), which forces a
-        uniform coordinate with unbounded interior error, simplify never moves
+        uniform coordinate with unbounded interior error, fuse never moves
         any value by more than `tolerance`.
 
         Parameters
@@ -1218,7 +1216,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         The gap tolerance a public argument spells.
 
         A number is an absolute excess in coordinate units (seconds for
-        time), as [`simplify`](`dascore.core.coords.BaseCoord.simplify`)
+        time), as [`fuse`](`dascore.core.coords.BaseCoord.fuse`)
         reads it; a quantity or timedelta converts to those units; a
         `GapTolerance` counting samples is returned unchanged, and one
         stating an excess has that excess converted likewise.
@@ -1878,6 +1876,9 @@ _NS_PER_S = 10**9
 def _fraction_step(step) -> Fraction | None:
     """A step given as a Fraction or (numerator, denominator) tuple, else None."""
     if isinstance(step, tuple):
+        if len(step) != 2 or not step[1]:
+            msg = f"A step given as a tuple is (numerator, denominator), got {step}."
+            raise CoordError(msg)
         return Fraction(*step)
     return step if isinstance(step, Fraction) else None
 
@@ -2183,17 +2184,6 @@ def run_step(row, dtype):
     return get_kernel(dtype).step_of(row.item())
 
 
-def run_rebuilds_from_head(row, dtype) -> bool:
-    """
-    Whether a grid run is rebuilt exactly from its first label and its terms.
-
-    Always for ticks. A float run counts its grid from an origin which is
-    its first label only while its grid index is zero; past that the first
-    label alone cannot restate the rest.
-    """
-    return bool(row["den"]) and (_ticked(dtype) or not row["offset"])
-
-
 def _step_terms(step, dtype) -> tuple[int, int]:
     """
     A step of any spelling as the two grid terms a run row holds.
@@ -2228,8 +2218,6 @@ def _stacked_ranges(starts, counts, stride: int) -> np.ndarray:
     """The ranges ``starts[i] + stride * arange(counts[i])``, concatenated."""
     counts = np.asarray(counts, np.int64)
     total = int(counts.sum())
-    if not total:
-        return np.zeros(0, np.int64)
     within = np.arange(total, dtype=np.int64) - np.repeat(
         np.cumsum(counts) - counts, counts
     )
@@ -2555,9 +2543,9 @@ def _array_tick_grid(anchors: np.ndarray, dtype) -> np.ndarray | None:
     at_high = int(np.argmin((wide + 1) / index)) + 1
     low = Fraction(int(delta[at_low]) - 1, at_low)
     high = Fraction(int(delta[at_high]) + 1, at_high)
-    for _ in range(64):
-        if low >= high:
-            return None
+    # Every pass cuts the interval at a bound the labels themselves state,
+    # of which there are finitely many, so the search ends.
+    while low < high:
         fraction = _simplest_between(low, high)
         num, den = fraction.numerator, fraction.denominator
         residual = _tick_residuals(delta, k, num, den)
@@ -2569,17 +2557,17 @@ def _array_tick_grid(anchors: np.ndarray, dtype) -> np.ndarray | None:
             return _rows(dtype, anchors[0], [count], num, den, phase)
         # The two labels no phase serves together bound the true step.
         bound = Fraction(int(delta[least] - delta[most]) + 1, least - most)
+        before = (low, high)
         if least > most:
             high = min(high, bound)
         else:
             low = max(low, bound)
+        assert (low, high) != before, "a refused step must narrow the search"
     return None
 
 
 def _first_anchor(values: np.ndarray, dtype) -> float | int:
     """The first label of an array, as a tick or a float."""
-    if not values.size:
-        return 0
     flat = np.ravel(values)[:1]
     return (_as_ticks(flat, dtype) if _ticked(dtype) else flat)[0]
 
@@ -2681,9 +2669,7 @@ def _exact_fields(values, dtype: np.dtype) -> dict:
         # coordinate, so a range is only ever handed one axis.
         assert len(shape) == 1, "a range is built from a 1D shape"
         count = int(shape[0])
-        if count < 1:
-            msg = "A range coordinate needs at least one sample."
-            raise CoordError(msg)
+        assert count >= 1, "get_coord answers an empty shape with a partial coord"
     # The grid: a fraction step wins, then explicit grid fields, then a
     # scalar step, then the span divided by the count.
     offset = int(values.get("origin_offset") or 0)
@@ -2697,12 +2683,8 @@ def _exact_fields(values, dtype: np.dtype) -> dict:
     elif step is not None:
         num, den, offset = _to_tick(step), 1, 0
     else:
-        if start_tick is None or stop_tick is None or count is None:
-            msg = (
-                "Three of ('start', 'stop', 'step', 'shape') are required "
-                f"to create an evenly sampled coord. You passed {values}"
-            )
-            raise CoordError(msg)
+        # get_coord refuses fewer than three of start, stop, step and shape
+        assert start_tick is not None and stop_tick is not None and count
         frac = Fraction(stop_tick - start_tick, count)
         num, den, offset = frac.numerator, frac.denominator, 0
     if den < 1:
@@ -2715,9 +2697,7 @@ def _exact_fields(values, dtype: np.dtype) -> dict:
         msg = f"origin_offset must satisfy 0 <= offset < {den}, got {offset}."
         raise CoordError(msg)
     if count is None:
-        if start_tick is None or stop_tick is None:
-            msg = "start, stop, and step, or a shape, are needed."
-            raise CoordError(msg)
+        assert start_tick is not None and stop_tick is not None
         if num == 0 or start_tick == stop_tick:
             count = 1
         else:
@@ -2749,14 +2729,8 @@ def _float_fields(values) -> dict:
 
     req_values = ("start", "stop", "step", "shape")
     _attrs = [values.get(x, None) for x in req_values]
-    valid_count = sum(not pd.isnull(x) for x in _attrs)
-    if valid_count < 3:
-        msg = (
-            f"Three of {req_values} are required to create an evenly "
-            f"sampled coord. "
-            f"You passed {values}"
-        )
-        raise CoordError(msg)
+    # get_coord refuses fewer than three of these before a range is built
+    assert sum(not pd.isnull(x) for x in _attrs) >= 3
     # Now get start, stop, step from length, if provided.
     start, stop, step, shape = _attrs
     # A time is counted in nanoseconds, so it is restated in them before any
@@ -2793,10 +2767,7 @@ def _float_fields(values) -> dict:
     # so even if the sign is the same, differing precision fails; direct
     # comparisons are also much cheaper than to_float conversions.
     diff = stop - start
-    try:
-        same_sign = ((step > zero) == (diff > zero)) & ((step < zero) == (diff < zero))
-    except TypeError:  # mixed types (e.g. datetime.timedelta vs int zero)
-        same_sign = np.sign(to_float(step)) == np.sign(to_float(diff))
+    same_sign = ((step > zero) == (diff > zero)) & ((step < zero) == (diff < zero))
     if not same_sign:
         msg = "Sign of step must match sign of stop - start"
         raise CoordError(msg)
@@ -3074,13 +3045,13 @@ class NumericND(BaseCoord):
             reproduce every supplied label exactly.
         tolerance
             If not None, apply
-            [`simplify`](`dascore.core.coords.BaseCoord.simplify`) with this
+            [`fuse`](`dascore.core.coords.BaseCoord.fuse`) with this
             tolerance to the result, re-fitting jittery runs and absorbing
             small gaps with bounded error.
         """
         if tolerance is not None:
             out = cls.from_array(data, units=units, step=step, detect=detect)
-            return cast("Self", out.simplify(tolerance))
+            return cast("Self", out.fuse(tolerance))
         values = _as_coord_values(data)
         dtype = _as_dtype(values)
         if not values.size:
@@ -3181,13 +3152,6 @@ class NumericND(BaseCoord):
         labels = labels if len(labels) else None
         return cls._build(dtype, rows, labels, units, step=signed)
 
-    @classmethod
-    def _from_coord(cls, coord: BaseCoord) -> NumericND:
-        """Build from any numeric coordinate."""
-        if isinstance(coord, NumericND):
-            return coord
-        return cls.from_array(coord.values, units=coord.units, step=coord.step)
-
     # --- the run table
 
     @property
@@ -3215,6 +3179,25 @@ class NumericND(BaseCoord):
         return _ticked(self.dtype)
 
     @property
+    def _foreign(self) -> tuple | None:
+        """
+        How another library stated these same labels, or None.
+
+        A converter or reader leaves a ``(kind, *payload)`` note here, such
+        as the tie points an XDAS file interpolates between, so that handing
+        the coordinate straight back gives that library exactly what it
+        gave. It is a note on this one object: no operation carries it to
+        the coordinate it returns, and it is no part of a dump, of equality,
+        or of a fingerprint. The labels are always the run table's.
+        """
+        return self._cache.get("foreign")
+
+    def _note_foreign(self, kind: str, *payload) -> Self:
+        """Leave a note of how another library stated these labels."""
+        self._cache["foreign"] = (kind, *payload)
+        return self
+
+    @property
     def _kernel(self) -> type[TickKernel] | type[FloatKernel]:
         """The arithmetic the rows are read with; see `dascore.core._run_kernels`."""
         return get_kernel(self.dtype)
@@ -3239,11 +3222,6 @@ class NumericND(BaseCoord):
     def _run_heads(self) -> np.ndarray:
         """The first label (tick or float) of each run."""
         return self._kernel.heads(self.runs)
-
-    @property
-    def _all_stored(self) -> bool:
-        """Whether the coordinate is nothing but labels it holds."""
-        return self.labels is not None and not np.any(self.runs["den"])
 
     @property
     @cached_method
@@ -3495,15 +3473,9 @@ class NumericND(BaseCoord):
             inner = np.ones(len(flat) - 1, dtype=bool)
             cuts = np.unique(self._label_starts)
             inner[cuts[(cuts > 0) & (cuts < len(flat))] - 1] = False
-            try:
-                # compared, not subtracted: a difference can leave int64
-                rising = (flat[1:] > flat[:-1])[inner]
-                falling = (flat[1:] < flat[:-1])[inner]
-            except TypeError:
-                # Labels which cannot be ordered say nothing about order.
-                return 0
-            up &= bool(np.all(rising))
-            down &= bool(np.all(falling))
+            # compared, not subtracted: a difference can leave int64
+            up &= bool(np.all((flat[1:] > flat[:-1])[inner]))
+            down &= bool(np.all((flat[1:] < flat[:-1])[inner]))
         if len(rows) > 1:  # runs may overlap, which their boundaries show
             ends, starts = self._run_ends[:-1], self._run_heads[1:]
             up &= bool(np.all(ends < starts))
@@ -3570,6 +3542,8 @@ class NumericND(BaseCoord):
             indices = range(len(self))[slice(start, end, item.step)]
             if not len(indices):
                 return self.empty()
+            if indices == range(len(self)):  # every sample, in order
+                return self
             return self._sliced(indices.start, indices.step, len(indices))
         indices = np.asarray(item) if isinstance(item, (list, np.ndarray)) else None
         if (
@@ -3944,9 +3918,7 @@ class NumericND(BaseCoord):
 
     def _with_step(self, step) -> Self:
         """The same start and sample count on a new cadence."""
-        if not self.evenly_sampled:
-            msg = "Only a single grid run can change its step."
-            raise NotImplementedError(msg)
+        assert self.evenly_sampled, "update_limits re-spaces only a single grid run"
         frac = _fraction_step(step)
         if frac is None:
             # A number beside a time coordinate is a duration in its units.
@@ -4001,7 +3973,7 @@ class NumericND(BaseCoord):
         if step is not None and not self.evenly_sampled and self.size:
             if self.runs_count > 1:
                 msg = (
-                    "Segmented coordinates have no single step; use simplify "
+                    "Segmented coordinates have no single step; use fuse "
                     "or snap to get an evenly sampled coordinate first."
                 )
                 raise ParameterError(msg)
@@ -4009,9 +3981,6 @@ class NumericND(BaseCoord):
             return self.snap().update_limits(step=step, **kwargs)
         out = self
         if min is not None and max is not None:
-            if not self.evenly_sampled:
-                msg = "Cannot specify both min and max in update_limits."
-                raise ParameterError(msg)
             # min is the new start, max the new exclusive stop, and the
             # count is kept; below a tick the labels become floats.
             min = get_compatible_values(min, self.dtype)
@@ -4071,10 +4040,7 @@ class NumericND(BaseCoord):
                 # A new end or cadence re-derives the count, as a range always has.
                 info.pop("shape", None)
             return get_coord(**info)
-        out = self
-        if step is not None:
-            out = out._with_step(step)
-        out = out.set_units(units)
+        out = self.set_units(units)
         if kwargs:
             out = out.update_limits(**kwargs)
         return out
@@ -4248,8 +4214,7 @@ class NumericND(BaseCoord):
     def _holes(self) -> list[tuple]:
         """Each hole as ``(first missing label, last missing label, count)``."""
         step = self.step
-        if _is_null(step):
-            return []
+        assert not _is_null(step), "missing() asks only a coordinate with a step"
         rows = []
         # Both columns are the whole table's, so they are taken once rather
         # than rebuilt on every trip round the runs.
@@ -4279,7 +4244,7 @@ class NumericND(BaseCoord):
         -----
         The min/max of the coordinate remain unchanged. Without a tolerance
         every interior value may move without bound;
-        [`simplify`](`dascore.core.coords.BaseCoord.simplify`) re-fits a
+        [`fuse`](`dascore.core.coords.BaseCoord.fuse`) re-fits a
         coordinate one run at a time instead, keeping the seams a
         tolerance does not cover.
         """
@@ -4331,7 +4296,7 @@ class NumericND(BaseCoord):
         out = get_coord(start=start, stop=stop, step=step, units=self.units)
         return out.change_length(len(self))
 
-    def simplify(self, tolerance=None) -> BaseCoord:
+    def fuse(self, tolerance=None) -> BaseCoord:
         """
         Return the simplest coordinate representing the same values.
 
@@ -4394,8 +4359,8 @@ class NumericND(BaseCoord):
         else:
             step = span / (n - 1)
             zero = 0
-        if step == zero or (step > zero) != ascending:
-            return None
+        # sorted labels span their own direction, so the step is never flat
+        assert step != zero and (step > zero) == ascending
         candidate = get_coord(
             start=first, stop=last + step, step=step, units=self.units
         ).change_length(n)
@@ -4611,7 +4576,7 @@ def concat_coords(*coords, units=None) -> BaseCoord:
     This operation is truth-preserving: no value is ever altered, and every
     boundary between inputs that does not continue exactly becomes a run of
     its own. Inputs which continue each other exactly fuse back into one
-    run. Use [`simplify`](`dascore.core.coords.BaseCoord.simplify`) on the
+    run. Use [`fuse`](`dascore.core.coords.BaseCoord.fuse`) on the
     result for tolerance-bounded gap absorption.
 
     Parameters

@@ -273,7 +273,7 @@ class TestSpoolToXarray:
         assert len(self._leaves(tree)) == 1
 
     def test_quantity_tolerance(self, diverse_spool):
-        """A unit-bearing tolerance is handed to simplify as it stands."""
+        """A unit-bearing tolerance is handed to fuse as it stands."""
         sub = diverse_spool.select(tag="big_gaps")
         default = len(self._leaves(sub.io.to_xarray()))
         loose = len(self._leaves(sub.io.to_xarray(tolerance=dc.get_quantity("1 hour"))))

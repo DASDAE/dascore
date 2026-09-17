@@ -544,7 +544,7 @@ class TestSimplifyAndSnap:
 
     def test_simplify_absorbs_gap_within_tolerance(self, float_gap_coord):
         """A large enough tolerance collapses to a single range."""
-        out = float_gap_coord.simplify(3.0)
+        out = float_gap_coord.fuse(3.0)
         assert out.evenly_sampled
         assert len(out) == len(float_gap_coord)
         assert out.min() == float_gap_coord.min()
@@ -553,23 +553,23 @@ class TestSimplifyAndSnap:
     def test_simplify_error_bounded(self, float_gap_coord):
         """No value moves by more than the tolerance."""
         tol = 3.0
-        out = float_gap_coord.simplify(tol)
+        out = float_gap_coord.fuse(tol)
         deviation = np.max(np.abs(out.values - float_gap_coord.values))
         assert deviation <= tol
 
     def test_simplify_insufficient_tolerance_noop(self, float_gap_coord):
         """A too-small tolerance leaves the coord unchanged."""
-        out = float_gap_coord.simplify(0.5)
+        out = float_gap_coord.fuse(0.5)
         assert out == float_gap_coord
 
     def test_simplify_idempotent(self, float_gap_coord):
         """Simplifying twice equals simplifying once."""
-        once = float_gap_coord.simplify(3.0)
-        assert once.simplify(3.0) == once
+        once = float_gap_coord.fuse(3.0)
+        assert once.fuse(3.0) == once
 
     def test_simplify_time_tolerance_seconds(self, time_gap_coord):
         """Numeric tolerances on time coords mean seconds."""
-        out = time_gap_coord.simplify(2)
+        out = time_gap_coord.fuse(2)
         assert out.evenly_sampled
         deviation = np.max(np.abs(out.values - time_gap_coord.values))
         assert deviation <= np.timedelta64(2, "s")
@@ -580,19 +580,19 @@ class TestSimplifyAndSnap:
         coord = concat_coords(
             get_coord(data=values), get_coord(start=10.0, stop=14.0, step=1.0)
         )
-        out = coord.simplify(0.1)
+        out = coord.fuse(0.1)
         assert out.runs_count > 1
         assert all(x.evenly_sampled for x in out.segments)
 
     def test_negative_tolerance_raises(self, float_gap_coord):
         """Negative tolerances make no sense."""
         with pytest.raises(ParameterError):
-            float_gap_coord.simplify(-1.0)
+            float_gap_coord.fuse(-1.0)
 
     def test_simplify_base_coord_noop(self):
-        """Other coords return themselves from simplify."""
+        """Other coords return themselves from fuse."""
         coord = get_coord(start=0.0, stop=10.0, step=1.0)
-        assert coord.simplify(10) is coord
+        assert coord.fuse(10) is coord
 
     def test_snap_forces_range(self, float_gap_coord):
         """Snap always produces a range preserving min/max and length."""
@@ -604,7 +604,7 @@ class TestSimplifyAndSnap:
 
     def test_reverse_simplify(self, reverse_gap_coord):
         """Simplify works on reverse-sorted coords."""
-        out = reverse_gap_coord.simplify(3.0)
+        out = reverse_gap_coord.fuse(3.0)
         assert out.evenly_sampled
         assert out.reverse_sorted
 
@@ -789,12 +789,12 @@ class TestEdgeCases:
         assert np.allclose(out.values, mixed_segment_coord.values + 100.0)
 
     def test_simplify_single_sample_segment(self):
-        """Length-one segments cannot be fit and pass through simplify."""
+        """Length-one segments cannot be fit and pass through fuse."""
         coord = concat_coords(
             get_coord(start=0.0, stop=10.0, step=1.0),
             NumericND.from_array(np.array([99.0]), detect=False),
         )
-        out = coord.simplify(0.5)
+        out = coord.fuse(0.5)
         assert out == coord
 
     def test_discontinuities_after_array_segment(self):
@@ -900,15 +900,15 @@ class TestReviewFindings:
     def test_quantity_tolerance_numeric(self, float_gap_coord):
         """Unit-bearing tolerances convert to coordinate units."""
         coord = float_gap_coord.set_units("m")
-        out = coord.simplify(get_quantity("3 m"))
+        out = coord.fuse(get_quantity("3 m"))
         assert out.evenly_sampled
         # 300 cm is the same tolerance in other units.
-        out2 = coord.simplify(get_quantity("300 cm"))
+        out2 = coord.fuse(get_quantity("300 cm"))
         assert out2 == out
 
     def test_quantity_tolerance_time(self, time_gap_coord):
         """Time coords accept time-dimensional quantity tolerances."""
-        out = time_gap_coord.simplify(get_quantity("2000 ms"))
+        out = time_gap_coord.fuse(get_quantity("2000 ms"))
         assert out.evenly_sampled
         df = time_gap_coord.get_discontinuities("gaps", tolerance=get_quantity("10 s"))
         assert df.empty
@@ -916,7 +916,7 @@ class TestReviewFindings:
     def test_quantity_tolerance_bad_dimensionality(self, time_gap_coord):
         """Dimensionality mismatches raise."""
         with pytest.raises(Exception, match=r"(?i)cannot convert|dimensionality"):
-            time_gap_coord.simplify(get_quantity("1 m"))
+            time_gap_coord.fuse(get_quantity("1 m"))
 
     def test_select_never_materializes(self, monkeypatch):
         """Value selection must stay O(segments): no full-array pass.

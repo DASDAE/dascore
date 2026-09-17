@@ -16,6 +16,7 @@ from dascore.exceptions import CoordError
 from dascore.io.index import planned
 from dascore.io.index.backend import get_backend
 from dascore.io.index.ingest import (
+    _coord_record,
     _run_records,
     patch_record,
     summaries_to_records,
@@ -279,6 +280,22 @@ class TestPlannedRecords:
         np.testing.assert_array_equal(summary.run_stops, [4.0, 24.0])
         assert whole.length == 10
         assert [x.run_index for x in _run_records(whole, summary)] == [1, 2]
+
+    def test_members_in_different_units_state_no_joined_grid(self):
+        """Coordinates which agree on labels but not on units are not joined."""
+        patch = dc.get_example_patch()
+        pair = dc.spool([patch, patch.convert_units(distance="ft")])
+        members = pair._catalog.to_df().assign(output_id=0)
+        assert set(members["_distance_units"]) == {"m", "ft"}
+        assert planned._with_concat_runs([], members, "distance") == []
+
+    def test_runs_without_their_stops_state_no_rows(self, gapped_patch):
+        """A summary which cannot bound its runs links none of them."""
+        summary = gapped_patch.get_coord("time").to_summary(dims=("time",))
+        whole = _coord_record("time", summary)
+        assert len(_run_records(whole, summary)) == summary.runs.shape[0]
+        bare = summary.model_copy(update={"run_stops": None})
+        assert _run_records(whole, bare) == ()
 
     def test_a_stored_run_leaves_the_plan_its_envelope(self):
         """A plan cannot state labels it does not hold, so it states none."""

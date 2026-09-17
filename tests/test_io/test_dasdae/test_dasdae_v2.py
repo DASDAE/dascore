@@ -311,3 +311,60 @@ class TestVersion2Files:
         leaf = next(node for node in tree.subtree if "data" in node.dataset)
         assert leaf["data"].shape == data.shape
         assert leaf["data"].data.compute().shape == data.shape
+
+
+class TestFloatGridTerms:
+    """A float range which is not counted from its first label states its grid."""
+
+    # a strided slice of a multiplied axis, a divided axis, and slices of one
+    COORDS = (
+        get_coord(data=np.arange(400) * 0.1, units="m")[37::3],
+        get_coord(data=np.arange(400) / 250, units="m"),
+        get_coord(data=np.arange(400) / 250, units="m")[11:],
+        get_coord(data=-np.arange(400) / 1000.0, units="m")[::-1],
+    )
+
+    @pytest.mark.parametrize("coord", COORDS)
+    def test_round_trip_is_bit_for_bit(self, tmp_path, coord):
+        """Writing and reading gives back the same doubles and the same run."""
+        assert coord.evenly_sampled
+        patch = dc.Patch(
+            data=np.zeros(len(coord)), coords={"distance": coord}, dims=("distance",)
+        )
+        path = tmp_path / "grid.h5"
+        patch.io.write(path, "dasdae")
+        back = dc.read(path)[0].get_coord("distance")
+        np.testing.assert_array_equal(back.values, coord.values)
+        assert back == coord
+        np.testing.assert_array_equal(back.runs, coord.runs)
+
+    def test_a_plain_range_writes_no_extra_terms(self, tmp_path):
+        """Counted from its own first label, a range is its start and step."""
+        patch = dc.Patch(
+            data=np.zeros(10),
+            coords={"distance": get_coord(start=3.0, step=0.5, shape=(10,))},
+            dims=("distance",),
+        )
+        path = tmp_path / "plain.h5"
+        patch.io.write(path, "dasdae")
+        with h5py.File(path) as h5:
+            group = next(iter(h5["waveforms"].values()))
+            assert "grid_terms" not in group["_coord_distance"].attrs
+
+
+class TestRangeNodesFromEarlierWriters:
+    """A range an earlier DASCore described by its step alone still reads."""
+
+    def test_a_time_range_stated_by_a_whole_step(self):
+        """Start, stop and a step in the node's own unit rebuild the range."""
+        with h5py.File(io.BytesIO(), "w") as h5:
+            node = h5.create_dataset("_coord_time", shape=(0,), dtype="int64")
+            node.attrs["dtype"] = "datetime64[ms]"
+            node.attrs["start"] = int(T0.astype("datetime64[ms]").astype("int64"))
+            node.attrs["stop"] = node.attrs["start"] + 40
+            node.attrs["step"] = 4
+            node.attrs["length"] = 10
+            node.attrs["object_type"] = "CoordRange"
+            coord = _read_coord(node, "time", {}, snap=True)
+        expected = get_coord(start=T0, step=np.timedelta64(4, "ms"), shape=(10,))
+        assert coord == expected

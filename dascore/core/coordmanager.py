@@ -820,14 +820,11 @@ class CoordManager(RichRepr, DascoreBaseModel):
                     else np.asarray(_apply_union_indexers(key, coord.values))
                 )
                 new_coord = get_coord(data=values, units=coord.units)
-                if values.dtype.kind not in "US":
-                    original = NumericND.from_array(
+                if values.dtype.kind not in "US" and not new_coord.has_values:
+                    # no labels left is still a coordinate of this dtype
+                    new_coord = NumericND.from_array(
                         values, units=coord.units, detect=False
                     )
-                    if not new_coord.has_values or _canonicalization_moved_values(
-                        original, new_coord
-                    ):
-                        new_coord = original
             coords[name] = (new_dims, new_coord)
         dims = tuple(dim for dim in self.dims if dim not in reduced)
         out = self.__class__(
@@ -1478,28 +1475,6 @@ def get_coord_manager(
     return out
 
 
-def _canonicalization_moved_values(original, out) -> bool:
-    """
-    Return True if canonicalizing `original` to `out` changed any value.
-
-    Collapsing a coordinate to a range may only change its representation.
-    Keep this guard at the manager boundary so coercion cannot replace
-    measured positions or timing jitter with an idealized ramp.
-    """
-    # Only collapsing to a range can move values, and only a coord we were
-    # handed can be kept, so everything else skips the comparison. A table
-    # cannot reach here; the caller returns it before this is consulted.
-    if original is None or not (isinstance(out, NumericND) and out.evenly_sampled):
-        return False
-    # A CoordPartial is a placeholder whose values are all NaN, so it has
-    # nothing to lose; canonicalizing it is the whole point.
-    if not original.has_values:
-        return False
-    # Canonicalization re-labels a coordinate, it never resamples one.
-    assert original.shape == out.shape
-    return not np.array_equal(original.values, out.values)
-
-
 def _get_coord_dim_map(coords, dims):
     """Get coord_map, dim_map, and new dims from coord input."""
 
@@ -1514,21 +1489,16 @@ def _get_coord_dim_map(coords, dims):
             labels = coord.labels is not None and coord.runs_count == 1
             if not (labels and coord.ndim == 1):
                 return coord
+            # Reading labels never moves one, so a grid which comes back is
+            # only another way of stating what the coordinate already holds.
             out = get_coord(data=coord.values, units=coord.units, step=coord.step)
-            return (
-                out
-                if out.evenly_sampled and not _canonicalization_moved_values(coord, out)
-                else coord
-            )
-        original = coord if isinstance(coord, BaseCoord) else None
+            return out if out.evenly_sampled else coord
         if hasattr(coord, "model_dump"):
             coord = coord.model_dump(exclude_defaults=True)
         if isinstance(coord, Mapping):  # input is a dict
             out = get_coord(**coord)
         else:
             out = get_coord(data=coord)
-        if _canonicalization_moved_values(original, out):
-            return original
         return out
 
     def _coord_from_simple(name, coord):

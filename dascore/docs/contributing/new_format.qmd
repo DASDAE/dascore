@@ -49,12 +49,13 @@ Scan payloads must match `read()` for attrs, shape, dtype, and patch identity; c
 
 [`FiberIO.scan`](`dascore.io.core.FiberIO.scan`) returns full `CoordManager` objects in `ScanPayload` dictionaries. [`scan_payloads`](`dascore.scan_payloads`) exposes these and adds source provenance; [`scan`](`dascore.scan`) and [`scan_to_df`](`dascore.scan_to_df`) reduce them to index-friendly summaries. Do not add source path, format, or version inside the formatter.
 
-Every scan implementation must accept `snap: bool = True`:
+Every scan implementation must accept `snap`, which is `True`, `False`, or the name (or names) of the dimensions to snap; [`wants_snap`](`dascore.io.utils.wants_snap`) reads all three:
 
-- `snap=True` may idealize stored coordinates as uniform ranges.
+- `snap=True` may idealize stored dimension coordinates as uniform ranges.
 - `snap=False` must preserve stored coordinate values exactly.
+- Only a dimension is ever snapped. A coordinate along one, such as a temperature, holds measurements.
 
-For stored per-sample arrays, use [`get_coord(data=values)`](`dascore.core.coords.get_coord`), which preserves every supplied label. Declare header-defined grids with `get_coord(start=..., step=..., shape=...)`; those axes may treat `snap=False` as a no-op. Readers that fit measured labels when `snap=True` must request that fitting explicitly, for example with [`get_snapped_coord`](`dascore.io.utils.get_snapped_coord`) for the legacy near-even policy. Exact coordinates retain arrays when no exact grid represents them, so use exact scans for targeted files rather than whole directories.
+For stored per-sample arrays, use [`get_coord(data=values)`](`dascore.core.coords.get_coord`), which preserves every supplied label. Declare header-defined grids with `get_coord(start=..., step=..., shape=...)`; those axes may treat `snap=False` as a no-op. Readers that fit measured labels when `snap=True` must request that fitting explicitly, with [`snap_stored_coord`](`dascore.io.utils.snap_stored_coord`): it snaps a dimension only if asked to and only where an even grid lies within the configured `snap_tolerance` of every label. Exact coordinates retain arrays when no exact grid represents them, so use exact scans for targeted files rather than whole directories.
 
 ## Identify patches within a file
 

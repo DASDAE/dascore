@@ -386,6 +386,7 @@ class TestEligibility:
         """Arrays and a zero step, whose labels repeat, are not."""
         assert not is_servable(get_coord(data=np.array([0.0, 1.0, 5.0])))
         assert not is_servable(get_coord(start=0, step=0, shape=(4,)))
+        assert not is_servable(get_coord(data=np.array(["a", "b"])))
         with pytest.raises(AssertionError, match="not servable"):
             CoordIndex.from_coord("x", get_coord(data=np.array([0.0, 1.0, 5.0])))
 

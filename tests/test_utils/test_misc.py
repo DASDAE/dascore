@@ -415,6 +415,11 @@ class TestAllDiffsCloseEnough:
         """An empty set of diffs should not be considered close enough."""
         assert not all_diffs_close_enough([])
 
+    def test_spacings_against_their_median(self):
+        """Spacings within a thousandth of their median are close; others are not."""
+        assert all_diffs_close_enough(np.asarray([1.0, 1.0005, 0.9995]))
+        assert not all_diffs_close_enough(np.asarray([1.0, 1.1, 1.0]))
+
     @pytest.mark.parametrize(
         "diffs",
         [

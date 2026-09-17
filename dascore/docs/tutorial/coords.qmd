@@ -42,10 +42,10 @@ Coordinates expose values, units, data type, ordering, sampling regularity, limi
 | `dtype` | NumPy data type |
 | `data` | Array of coordinate values |
 | `units` | Physical units, if present |
-| `degenerate` | Whether the coordinate is empty or zero-dimensional |
+| `has_values` | Whether the coordinate holds labels, rather than only a shape |
 | `min()`, `max()` | Coordinate limits |
 | `step` | The whole-tick spacing every run shares, or `None` when they disagree |
-| `step_exact` | The spacing as an exact `Fraction` (seconds for time), or `None` when the runs do not share one |
+| `step_exact` | The spacing as an exact `Fraction` (seconds for time), or `None` for a float coordinate or when the runs do not share one |
 | `runs_count` | How many evenly sampled runs the coordinate holds |
 | `holes` | Whether any run starts past where the run before it would have ended |
 
@@ -81,7 +81,7 @@ Paired cell bounds require monotonic row order. Reversals and monotonic subsets 
 
 Selection and raw decimation retain the selected bounds. Operations that build a new grid, including interpolation, resampling, filtered decimation, padding, rolling windows, and correlation lag grids, drop them. Translation and unit conversion transform them with the dimension. Waterfall image extents use the outer cell edges: half a step beyond the first and last labels, or the explicit pair when attached. Spectrograms display each spectrum at its window-centre label over one hop interval; overlapping source-window bounds are omitted from that plotting view.
 
-Array inputs preserve their labels exactly. Near-even values remain uneven unless an exact grid reproduces every value. If an instrument or calculation already supplies the start, sampling interval and count, construct the coordinate with those declarations. To intentionally fit measured labels, call the coordinate's snap method, or simplify with an explicit error tolerance.
+Array inputs preserve their labels exactly. Near-even values remain uneven unless an exact grid reproduces every value. If an instrument or calculation already supplies the start, sampling interval and count, construct the coordinate with those declarations. To intentionally fit measured labels, call the coordinate's `snap` method, with a `tolerance` to bound how far any label may move, or `fuse` to join runs within an error bound.
 
 ## Segmented coordinates
 
@@ -98,7 +98,7 @@ assert segmented.runs_count == 2 and segmented.holes
 print(segmented.get_discontinuities("gaps"))
 ```
 
-Use [`NumericND.from_array(...)`](`dascore.core.coords.NumericND.from_array`) to preserve an exact array. It reads the runs out of the spacings, so uniform input becomes one run and anything no grid describes is stored whole. Such a coordinate reports a `step` only when every run declares the same one, and `None` otherwise. `simplify(tolerance=...)` may fuse runs within an error bound, while `snap()` replaces values with one evenly sampled range. Use `patch.split_gaps()` before writing gapped dimensions to formats that cannot represent gaps; DASDAE version 2 stores them whole.
+Use [`NumericND.from_array(...)`](`dascore.core.coords.NumericND.from_array`) to preserve an exact array. It reads the runs out of the spacings, so uniform input becomes one run and anything no grid describes is stored whole. Such a coordinate reports a `step` only when every run declares the same one, and `None` otherwise. `fuse(tolerance=...)` may fuse runs within an error bound, while `snap()` replaces values with one evenly sampled range. Use `patch.split_gaps()` before writing gapped dimensions to formats that cannot represent gaps; DASDAE version 2 stores them whole.
 
 ```{python}
 from dascore.core.coords import NumericND
@@ -179,9 +179,9 @@ from dascore.units import ft
 selected_in_feet, _ = regular.select((3 * ft, 20 * ft))
 ```
 
-`sort` permutes existing values and returns the matching permutation. `snap` changes values, while `simplify(tolerance=...)` chooses a simpler representation only within the requested displacement bound. The distinction is important whenever coordinate values are measurements rather than ideal labels.
+`sort` permutes existing values and returns the matching permutation. `snap` changes values, while `fuse(tolerance=...)` chooses a simpler representation only within the requested displacement bound. The distinction is important whenever coordinate values are measurements rather than ideal labels.
 
-`snap()` returns only a coordinate because it replaces values rather than permuting them. Use `CoordManager.snap` or `Patch.snap_coords` when data must be sorted with the coordinate before snapping.
+`snap()` returns only a coordinate because it replaces values rather than permuting them. Use `CoordManager.snap` or `Patch.snap_coords` when data must be sorted with the coordinate before snapping. Both take a `tolerance`, spelled as `Spool.chunk` spells its own: a number is a multiple of the step, a quantity or timedelta is a distance. With one, a coordinate is snapped only if no label moves further than that, and is otherwise left exactly as it is; this is what a reader's `snap=True` does, within the configured `snap_tolerance`.
 
 ## String coordinates
 
