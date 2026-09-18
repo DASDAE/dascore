@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import warnings
 from functools import partial
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Self
 
 import numpy as np
 import pandas as pd
-from pydantic import ConfigDict
+from pydantic import ConfigDict, field_validator
 from scipy.interpolate import interp1d
 
 import dascore as dc
@@ -35,6 +35,24 @@ from dascore.utils.patch import (
     get_dim_axis_value,
     patch_function,
 )
+
+
+def _refuse_one_name(cls, field: str, value):
+    """
+    Refuse a single name where a sequence of them belongs.
+
+    The varargs spelling -- `patch.sort_coords("distance")` -- is the patch
+    method's; the operation itself holds the names in one field, so a bare
+    string here is a mistake pydantic would only report as a bad tuple.
+    """
+    if isinstance(value, str):
+        msg = (
+            f"{cls.__name__} holds the names in `{field}`, so one name is "
+            f"still a sequence: write {field}=({value!r},). The bare "
+            f"spelling belongs to the patch method."
+        )
+        raise ValueError(msg)
+    return value
 
 
 class _IndexRecorder:
@@ -64,9 +82,14 @@ class _Reorder(PatchProcessor):
     reverse: bool = False
 
     name = None
-    _var_positional = "coords"
     # Whether the coordinates are snapped to even samples once sorted.
     _snap: ClassVar[bool] = False
+
+    @field_validator("coords", mode="before")
+    @classmethod
+    def _one_name(cls, value):
+        """Say how a single coordinate name is spelled here."""
+        return _refuse_one_name(cls, "coords", value)
 
     def get_metadata(self, meta):
         """Return the sorted coordinates and the indexing they imply."""
@@ -339,7 +362,11 @@ class DropCoords(PatchProcessor):
 
     coords: tuple[Any, ...] = ()
 
-    _var_positional = "coords"
+    @field_validator("coords", mode="before")
+    @classmethod
+    def _one_name(cls, value):
+        """Say how a single coordinate name is spelled here."""
+        return _refuse_one_name(cls, "coords", value)
 
     def get_metadata(self, meta):
         """Return the coordinates which survive; a dimension cannot go."""
@@ -1002,7 +1029,12 @@ class Transpose(PatchProcessor):
     dims: tuple[Any, ...] = ()
 
     history = None
-    _var_positional = "dims"
+
+    @field_validator("dims", mode="before")
+    @classmethod
+    def _one_name(cls, value):
+        """Say how a single dimension name is spelled here."""
+        return _refuse_one_name(cls, "dims", value)
 
     def get_metadata(self, meta):
         """Return the coordinates in their new order, and the permutation."""
@@ -1068,10 +1100,33 @@ class AppendDims(PatchProcessor):
     - If dimension with the same name already exists nothing will happen.
     """
 
-    # Every dimension arrives under its own name; see `append_dims`.
+    # Every dimension arrives under its own name; see `from_names`.
     model_config = ConfigDict(extra="allow", frozen=True)
 
     history = None
+
+    @classmethod
+    def from_names(cls, empty_dims, dim_kwargs) -> Self:
+        """
+        Return the operation for bare dimension names and named values.
+
+        A bare name is a dimension of length one, which is what the keyword
+        form spells as `name=1`, so the two are one mapping here. They are
+        merged by this method rather than declared as a field because a
+        field named for the varargs would swallow
+        `append_dims(empty_dims=[1, 2])`, which asks for a dimension *named*
+        `empty_dims`. Keywords win over bare names.
+        """
+        # Checked before the merge: a name is about to become a keyword,
+        # and CPython's complaint about that ("keywords must be strings",
+        # or "unhashable type") names neither this operation nor the value.
+        if bad := [x for x in empty_dims if not isinstance(x, str)]:
+            msg = (
+                f"append_dims names dimensions with strings; got {bad!r}. "
+                "Give a dimension values with `append_dims(name=values)`."
+            )
+            raise ParameterError(msg)
+        return cls(**{**dict.fromkeys(empty_dims, 1), **dim_kwargs})
 
     def get_metadata(self, meta):
         """Return the longer coordinates, and the shape they describe."""

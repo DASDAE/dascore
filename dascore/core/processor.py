@@ -35,13 +35,15 @@ Examples
 
 from __future__ import annotations
 
+import ast
 import functools
 import inspect
 import numbers
 import sys
+import textwrap
 from contextvars import ContextVar
 from types import FunctionType
-from typing import TYPE_CHECKING, Any, ClassVar, overload
+from typing import TYPE_CHECKING, Any, ClassVar, Self, overload
 
 import numpy as np
 from pydantic import ConfigDict
@@ -120,7 +122,7 @@ class PatchProcessor(DascoreBaseModel):
 
     # Bump when the same fields mean a different result.
     __version__: ClassVar[str] = "1.0"
-    # The registry name, and the generated function's; None for neither.
+    # The registry name, and the patch method's; None for neither.
     name: ClassVar[str | None] = None
     # What the patch must hold.
     required_dims: ClassVar[tuple[str, ...] | str | None] = None
@@ -135,12 +137,14 @@ class PatchProcessor(DascoreBaseModel):
     # Kernels registered per backend by `register_kernel`, looked up in each
     # class's own `__dict__` so a subclass never answers with its parent's.
     _kernels: ClassVar[dict[str, Any]] = {}
-    # The patch method each named subclass declares.
+    # The method which runs this operation, found at class creation:
+    # written in `Patch` or `PatchMeta` for one of DASCore's own, and
+    # declared on the class itself for anything out of tree.
     patch_function: ClassVar[Any] = None
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs):
-        """Register the subclass and generate its patch function."""
+        """Check the subclass, and find the method which runs it."""
         super().__pydantic_init_subclass__(**kwargs)
         if stale := {"derive", "plan"} & set(cls.__dict__):
             msg = (
@@ -407,14 +411,12 @@ def _is_dascores(cls) -> bool:
 
 
 def _meta_hosted(cls) -> bool:
-    """Whether a generated function is bound onto `PatchMeta`."""
+    """Whether `PatchMeta` is the class whose body writes the method."""
     # An operation with no kernel changes metadata alone, so every PatchMeta
-    # can run it and Patch inherits it. One with a kernel needs data, and
-    # `Patch` lists those in its body by hand rather than growing them at
-    # import: a class whose surface is written down is one a type checker,
-    # an IDE and a reader can all see whole.
+    # can run it and Patch inherits it. One with a kernel needs data, so its
+    # method belongs to Patch.
     # A trust boundary, not a namespace detail: the data-less contract is
-    # one DASCore holds itself to, so a plugin never lands on PatchMeta.
+    # one DASCore holds itself to, so a plugin's is never PatchMeta's.
     return _is_dascores(cls) and not _has_kernel(cls)
 
 
@@ -434,6 +436,7 @@ def _check_patch_listing(cls) -> None:
     own = _is_dascores(cls)
     func = _hosted_method(cls) if own else _declared_method(cls)
     _check_signature(cls, func)
+    _check_forwarding(cls, func)
     if own:
         _check_returns_self(cls, func)
     cls.patch_function = _prepare_patch_function(cls, func)
@@ -468,7 +471,11 @@ def _hosted_method(cls: type[PatchProcessor]):
         # one name would otherwise leave the first one's method pointing at
         # the second, and only then be refused.
         owner = getattr(func, "__processor__", None)
-        if owner not in (None, cls):
+        # Spelled rather than compared by identity, the rule
+        # `register_patch_function` already applies: a module reloaded makes
+        # a new class object for the same name, and replacing its own entry
+        # is what reloading means.
+        if owner is not None and _spell(owner) != _spell(cls):
             msg = (
                 f"Two classes claim the tag {cls.name!r}: {owner.__name__} "
                 f"and {cls.__name__}. {host.__name__}.{cls.name} is "
@@ -500,8 +507,9 @@ def _declared_method(cls: type[PatchProcessor]):
             f"{cls.__name__} is registered as {cls.name!r} and is not "
             f"DASCore's own, so it must declare `@staticmethod def "
             f"{cls.name}(patch, /, ...)` itself, whose parameters are the "
-            "operation's. Set `name = None` for a class with no patch "
-            "function."
+            "operation's. A subclass which is a variation rather than an "
+            f"operation of its own sets `name = None`: inheriting a parent's "
+            "method would build the parent, not this class."
         )
         raise ParameterError(msg)
     # Resolved through the class, which is the plain function a staticmethod
@@ -573,13 +581,13 @@ def register_kernel(cls: type[PatchProcessor], backend: str):
         previous = cls.__dict__.get("_kernels")
         cls._kernels = {**cls.__dict__.get("_kernels", {}), backend: func}
         try:
-            # A class body which wrote no kernel looked metadata-only when
-            # its function was generated; this kernel says otherwise, for
+            # A class body which wrote no kernel looked metadata-only
+            # when its method was checked; this kernel says otherwise, for
             # the class and for everything which inherits it.
             _recheck_for_kernel(cls)
         except Exception:
-            # Refused, so the class is left as it was rather than holding a
-            # kernel which nothing is bound to run.
+            # Refused, so the class is left as it was rather than
+            # holding a kernel whose method is on the wrong class.
             if previous is None:
                 del cls._kernels
             else:
@@ -654,17 +662,55 @@ def _check_signature(cls: type[PatchProcessor], func) -> None:
             raise ParameterError(msg)
 
 
+def _check_forwarding(cls: type[PatchProcessor], func) -> None:
+    """Refuse a body which builds its class without one of its fields."""
+    try:
+        tree = ast.parse(textwrap.dedent(inspect.getsource(func)))
+    except (OSError, TypeError, SyntaxError):
+        # Nothing to read for a function built at runtime. The parameters
+        # and their defaults are still checked, which is the drift a class
+        # written in a file can have.
+        return
+    for node in ast.walk(tree):
+        # The call which builds the class, named as the body spells it --
+        # bare, or through the module it is imported from.
+        if not isinstance(node, ast.Call):
+            continue
+        spelled = getattr(node.func, "attr", None) or getattr(node.func, "id", None)
+        if spelled != cls.__name__:
+            continue
+        given = {x.arg for x in node.keywords}
+        # `**something` may carry anything, so it answers for every field.
+        if None in given:
+            return
+        if missing := sorted(set(cls.model_fields) - given):
+            msg = (
+                f"{cls.name} takes {missing} but does not pass them to "
+                f"{cls.__name__}, so the values a caller gives are dropped. "
+                "Pass each one by name."
+            )
+            raise ParameterError(msg)
+        return
+
+
 def _check_returns_self(cls: type[PatchProcessor], func) -> None:
     """Refuse a method which claims a kind other than the one it was given."""
     # `run` gives back what it was handed, so metadata comes back metadata
     # and a `Patch` subclass comes back that subclass. Only `Self` says so;
     # a class named outright would flatten both.
     returns = inspect.signature(func).return_annotation
-    if returns == "Self":
+    # Both spellings: a module with postponed annotations hands back the
+    # name as a string, and one without hands back `Self` itself.
+    if returns in ("Self", Self):
         return
+    spelled = (
+        "is not annotated"
+        if returns is inspect.Signature.empty
+        else f"is annotated `-> {returns}`"
+    )
     msg = (
-        f"{cls.name} is annotated `-> {returns}`, but `run` gives back the "
-        "kind it was given, which only `-> Self` says. Annotate it `-> Self`."
+        f"{cls.name} {spelled}, but `run` gives back the kind it was given, "
+        "which only `-> Self` says. Annotate it `-> Self`."
     )
     raise ParameterError(msg)
 
@@ -684,6 +730,20 @@ def _make_bypass(func):
         finally:
             _RECORD.reset(token)
 
+    # `wraps` marks a wrapper as a view of what it wraps, and two things
+    # read that mark: `inspect.signature` to see the real parameters
+    # through it, which `fingerprint_call` needs, and the docs builder to
+    # resolve a wrapper back to what it wraps. Left in place, the second
+    # makes `select.raw_function` resolve to `select` and gives every
+    # converted operation a page holding a table of itself. Written out
+    # rather than pointed at, so the signature survives and the pointer
+    # does not: a bypass is a second way to call the operation, not a
+    # stand-in for it.
+    # `Any`, because `wraps` types its result as a view of the wrapped
+    # function, which is the very thing being written out here.
+    bypass: Any = raw_function
+    bypass.__signature__ = inspect.signature(func)
+    del bypass.__wrapped__
     # The path which actually resolves, so a process pool can pickle it:
     # `functools.wraps` copied the method's, which names no attribute of
     # its own. Distinct per operation, so two bypasses given as arguments
@@ -694,11 +754,17 @@ def _make_bypass(func):
 
 def _prepare_patch_function(cls: type[PatchProcessor], func):
     """Give a class's method what the framework and the docs read."""
-    # Built first: `functools.wraps` copies the function's `__dict__`, and
-    # the attributes below would then point the bypass back at itself.
-    raw = _make_bypass(func)
     # `Any`, because the attributes below are ones a plain function lacks.
     out: Any = func
+    # The registry tags an operation by the function's name, which must be
+    # the one the class registered: a doorway written as
+    # `scale = staticmethod(_scale_impl)` would otherwise be tagged
+    # `package:_scale_impl`, which nothing resolves and no history replays.
+    out.__name__ = cls.name
+    # Built after the rename and before the attributes below, because
+    # `functools.wraps` copies both the name and the function's `__dict__`,
+    # and the attributes would then point the bypass back at itself.
+    raw = _make_bypass(func)
     out.__version__ = cls.__version__
     # The operation is documented once, with the processor: its parameters,
     # notes and examples are there, and the method's own docstring is the

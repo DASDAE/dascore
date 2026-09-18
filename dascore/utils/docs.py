@@ -122,11 +122,12 @@ def compose_docstring(**kwargs: str | Sequence[str]):
             raise ValueError(msg)
 
         func.__doc__ = docstring
-        # A processor's generated patch function copied the docstring before
-        # this decorator ran.
-        generated = getattr(func, "patch_function", None)
-        if getattr(generated, "__processor__", None) is func:
-            generated.__doc__ = docstring
+        # A class whose module is read after `Patch` exists has its method
+        # found, and its docstring copied, before this decorator runs, so
+        # the copy is made again rather than left holding the placeholder.
+        method = getattr(func, "patch_function", None)
+        if getattr(method, "__processor__", None) is func:
+            method.__doc__ = docstring
         return func
 
     return _wrap

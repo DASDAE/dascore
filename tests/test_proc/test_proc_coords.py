@@ -7,6 +7,7 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from pydantic import ValidationError
 
 import dascore as dc
 import dascore.proc.coords as coords_module
@@ -1450,16 +1451,53 @@ class TestAppendDimsNames:
         A keyword never fills a `*args` parameter, so this has always named
         a dimension rather than filling the varargs. It stays that way only
         while the operation holds the bare names nowhere a caller could
-        also name -- see `AppendDims.append_dims`.
+        also name -- see `AppendDims.from_names`.
         """
         out = random_patch.append_dims(empty_dims=[1, 2])
         assert out.dims[-1] == "empty_dims"
         assert out.shape[-1] == 2
 
-    def test_a_name_which_is_not_a_string(self, random_patch):
-        """Dimensions are named with strings; anything else is refused."""
-        with pytest.raises(TypeError, match="keywords must be strings"):
-            random_patch.append_dims(3)
+    @pytest.mark.parametrize("name", [3, ["a", "b"], None])
+    def test_a_name_which_is_not_a_string(self, random_patch, name):
+        """Dimensions are named with strings; the message says which value.
+
+        Through the patch method, which is the way a caller reaches it.
+        Both spellings reach CPython first otherwise: a number becomes a
+        keyword ("keywords must be strings") and a list becomes a dict key
+        ("unhashable type"), neither naming the operation.
+        """
+        with pytest.raises(ParameterError, match="names dimensions with strings"):
+            random_patch.append_dims(name)
+
+    def test_names_and_values_merge(self):
+        """Bare names and keywords become one mapping, keywords last."""
+        out = coords_module.AppendDims.from_names(("end", "stop"), {"end": [1, 2]})
+        assert out.kwargs == {"end": [1, 2], "stop": 1}
+
+
+class TestProcessorConstruction:
+    """Building an operation directly names the field holding the names."""
+
+    @pytest.mark.parametrize(
+        ("cls", "field"),
+        [
+            (coords_module.SortCoords, "coords"),
+            (coords_module.SnapCoords, "coords"),
+            (coords_module.DropCoords, "coords"),
+            (coords_module.Transpose, "dims"),
+        ],
+    )
+    def test_one_bare_name_is_refused(self, cls, field):
+        """The varargs spelling is the patch method's, not the operation's."""
+        with pytest.raises(ValidationError, match=f"holds the names in `{field}`"):
+            cls("distance")
+
+    def test_a_sequence_of_names_is_how(self, random_patch):
+        """Which is what the message says to write."""
+        assert coords_module.SortCoords(coords=("distance",)).coords == ("distance",)
+        assert coords_module.Transpose(dims=("time", "distance"))(
+            random_patch
+        ).dims == ("time", "distance")
 
 
 class TestDropPrivateCoords:

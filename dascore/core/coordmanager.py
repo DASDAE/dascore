@@ -874,6 +874,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
     def make_broadcastable_to(
         self,
         shape: tuple[int, ...],
+        *,
         drop_coords: bool = False,
     ) -> Self:
         """

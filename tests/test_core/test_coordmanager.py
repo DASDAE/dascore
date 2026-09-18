@@ -1756,3 +1756,29 @@ class TestSelectIndexers:
         coords, indexers = patch.coords.select_indexers(time=(-5, None), samples=True)
         assert coords.shape == (5,)
         assert indexers == {"time": slice(count - 5, count, 1)}
+
+
+class TestMakeBroadcastableTo:
+    """The coord manager stretches; the data are the kernel's business."""
+
+    @pytest.fixture
+    def collapsed(self):
+        """A manager with a dimension nothing has filled in."""
+        patch = dc.get_example_patch().mean("time")
+        return patch.coords
+
+    def test_returns_only_the_manager(self, collapsed):
+        """The array the old signature took is gone, and so is the tuple."""
+        out = collapsed.make_broadcastable_to((collapsed.shape[0], 3))
+        assert isinstance(out, CoordManager)
+        assert out.shape == (collapsed.shape[0], 3)
+
+    def test_the_second_argument_is_keyword_only(self, collapsed):
+        """So a call written for the old signature is refused, not rebound.
+
+        Its second parameter used to be the array. Taking `drop_coords`
+        positionally would read that array as a flag and quietly drop
+        coordinates instead.
+        """
+        with pytest.raises(TypeError, match="positional"):
+            collapsed.make_broadcastable_to((collapsed.shape[0], 3), None)

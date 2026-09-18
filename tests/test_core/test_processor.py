@@ -6,6 +6,8 @@ from __future__ import annotations
 
 import inspect
 import pickle
+import subprocess
+import sys
 from types import FunctionType
 from typing import Any, ClassVar, Self
 
@@ -24,6 +26,7 @@ from dascore.exceptions import (
     PatchDataError,
 )
 from dascore.proc.basic import Abs, Normalize, _known_real
+from dascore.utils.docs import compose_docstring
 from dascore.utils.patch_registry import patch_function_tag, resolve_patch_function
 from dascore.utils.serialize import encode
 
@@ -77,6 +80,17 @@ class SeamExtras(PatchProcessor):
         """Take the names positionally and anything else as an extra."""
         named = {**dict.fromkeys(names, True), **kwargs}
         return SeamExtras(flag=flag, **named).run(patch)
+
+
+def _seam_aliased_impl(patch, /, factor: float = 2.0):
+    """Scale, under a name the class does not register."""
+    return SeamAliased(factor=factor).run(patch)
+
+
+class SeamAliased(SeamScale):
+    """Declare a doorway whose function is named something else."""
+
+    seam_aliased = staticmethod(_seam_aliased_impl)
 
 
 class SeamHidden(PatchProcessor):
@@ -379,6 +393,26 @@ class TestReviewFindings:
 
                 name = "scale-op"
 
+    def test_the_tag_is_the_registered_name(self, patch):
+        """A doorway named otherwise still registers under `name`."""
+        tag = patch_function_tag(SeamAliased.patch_function)
+        assert tag.endswith(":seam_aliased")
+        assert resolve_patch_function(tag) is SeamAliased.patch_function
+
+    def test_a_module_reloaded_replaces_its_own_entry(self):
+        """`%autoreload` redefines a class; that is not two claiming one."""
+        # In a process of its own: a reload rebinds what every later test
+        # in this one would go on using.
+        script = (
+            "import importlib, dascore as dc\n"
+            "importlib.reload(importlib.import_module('dascore.proc.basic'))\n"
+            "assert dc.get_example_patch().abs() is not None\n"
+        )
+        done = subprocess.run(
+            [sys.executable, "-c", script], capture_output=True, text=True
+        )
+        assert done.returncode == 0, done.stderr
+
     def test_generated_functions_pickle(self, patch):
         """So a process pool can run them."""
         assert pickle.loads(pickle.dumps(dc.proc.demean)) is dc.proc.demean
@@ -613,6 +647,35 @@ class TestSignatureDrift:
                     """Take positionally what the class takes by name only."""
                     return Placed(factor=factor).run(patch)
 
+    def test_a_field_the_body_drops_is_refused(self):
+        """A parameter which never reaches the class is silently ignored."""
+        with pytest.raises(ParameterError, match="does not pass them to"):
+
+            class Dropping(PatchProcessor):
+                """Take the factor and forget to forward it."""
+
+                factor: float = 2.0
+
+                @staticmethod
+                def dropping(patch, /, factor: float = 2.0):
+                    """Build the class without the value it was given."""
+                    return Dropping().run(patch)
+
+    def test_a_body_with_no_source_is_taken_on_trust(self, patch):
+        """A function built at runtime has nothing to read."""
+        namespace = {"PatchProcessor": PatchProcessor, "__name__": "seamless"}
+        exec(
+            "class Sourceless(PatchProcessor):\n"
+            "    'Built where no source can be read.'\n"
+            "    factor: float = 2.0\n"
+            "    @staticmethod\n"
+            "    def sourceless(patch, /, factor=2.0):\n"
+            "        'Forward nothing, unreadably.'\n"
+            "        return patch\n",
+            namespace,
+        )
+        assert namespace["Sourceless"].patch_function is not None
+
     def test_a_differing_default_is_refused(self):
         """Unset must mean the same on both sides."""
         with pytest.raises(ParameterError, match="must agree on what unset"):
@@ -830,6 +893,31 @@ class TestGeneratedFunction:
         assert "{sample_explanation}" not in func.__doc__
         assert func.__processor__ is Normalize
         assert dc.proc.normalize is func is dc.Patch.normalize
+
+    def test_a_late_class_composes_its_docstring(self):
+        """A class made after `Patch` exists has its method stamped first.
+
+        `compose_docstring` substitutes the class's placeholders, but by
+        then the method already holds the copy made at class creation, so
+        the copy is made again. In-tree classes are all created while
+        `Patch` is still being built, which is why nothing in DASCore's own
+        import reaches this; a plugin's class does.
+        """
+
+        @compose_docstring(note="substituted")
+        class SeamDocumented(PatchProcessor):
+            """Hand the patch back.
+
+            {note}
+            """
+
+            @staticmethod
+            def seam_documented(patch, /):
+                """Hand the patch back."""
+                return patch
+
+        assert SeamDocumented.patch_function.__doc__ == SeamDocumented.__doc__
+        assert "{note}" not in SeamDocumented.patch_function.__doc__
 
     def test_registered_by_tag(self):
         """DASCore's own are bare; a test module's are namespaced."""

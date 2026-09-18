@@ -102,12 +102,7 @@ An operation whose metadata changes, or whose kernel needs numbers read from the
 - `get_metadata(meta)` gets a [`PatchMeta`](`dascore.PatchMeta`) -- the coords, attrs, dtype and backend of the data, without the data -- and returns two things: the result's metadata, built through the coord manager and `meta.new`, and what the kernel needs as ints, floats, bools, slices, `None`, `Ellipsis`, sequences of those, or numeric arrays. Deriving the one usually computes the other, so they come back together.
 - `kernel(data, **plan)` computes the array; it never sees a patch.
 
-A class which writes no kernel changes metadata alone: applied to a patch it hands the data straight through, and it runs on a patch's metadata as readily as on the patch. One of DASCore's own has its method written in [`PatchMeta`](`dascore.PatchMeta`) so that metadata carries it, and `Patch` inherits it; the data-less contract is one DASCore holds only itself to, so a class defined outside DASCore is never a method of either.
-
 ```{python}
-from dascore.constants import PatchMetaType
-
-
 class RemoveMean(dc.PatchProcessor):
     """Remove the mean along a dimension."""
 
@@ -127,6 +122,8 @@ class RemoveMean(dc.PatchProcessor):
 
 out = RemoveMean(dim="distance")(patch)
 ```
+
+A class which writes no kernel changes metadata alone: applied to a patch it hands the data straight through, and it runs on a patch's metadata as readily as on the patch, so its patch function is annotated `PatchMetaType` rather than `PatchType`. One of DASCore's own has its method written in [`PatchMeta`](`dascore.PatchMeta`) so that metadata carries it, and `Patch` inherits it; the data-less contract is one DASCore holds only itself to, so a class defined outside DASCore is a method of neither.
 
 Class variables declare the rest: `required_dims`, `required_coords`, and `required_attrs` for what a patch must hold, `data_type` for the result's, `history` for how a call is recorded, and `__version__`, bumped when the same fields mean a different result. `name` is the method's name and the registry's, and `name = None` registers nothing and expects no method. [`Transpose`](`dascore.proc.coords.Transpose`) and [`TileApply`](`dascore.proc.tile_apply.TileApply`) show `get_metadata` changing a patch's shape.
 
@@ -150,7 +147,7 @@ Plain NumPy-based functions may raise or return a NumPy-backed patch for other a
 
 NumPy functions such as `np.mean(patch)` and reductions over excluded dtypes always use this fallback; `__array__`-only objects report `numpy` as their backend.
 
-A backend package can give a processor its own kernel without changing the operation. The kernel takes the processor, the data, and whatever the class's `plan` returns (`abs` plans nothing; `normalize` plans `axis`, and `window` when one is given):
+A backend package can give a processor its own kernel without changing the operation. The kernel takes the processor, the data, and whatever the class's `get_metadata` plans (`abs` plans nothing; `normalize` plans `axis`, and `window` when one is given):
 
 ```{python}
 import numpy as np

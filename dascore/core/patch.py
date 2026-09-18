@@ -347,12 +347,9 @@ class Patch(NamespaceOwner, PatchMeta):
 
     def append_dims(self, /, *empty_dims, **dim_kwargs) -> Self:
         """Insert dimensions at the end of the patch."""
-        # Merged here rather than by the processor: a field named
-        # `empty_dims` would swallow `append_dims(empty_dims=[1, 2])`, which
-        # asks for a dimension *named* `empty_dims`. Keywords win over bare
-        # names, as they always have.
-        dims = {**dict.fromkeys(empty_dims, 1), **dim_kwargs}
-        return dascore.proc.coords.AppendDims(**dims).run(self)
+        return dascore.proc.coords.AppendDims.from_names(empty_dims, dim_kwargs).run(
+            self
+        )
 
     def transpose(self, *dims) -> Self:
         """Transpose the data array to any dimension order."""
