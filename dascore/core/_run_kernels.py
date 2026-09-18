@@ -315,7 +315,7 @@ class TickKernel:
             cls._check_one(row.item(), dtype)
 
     @staticmethod
-    def index_of(row: tuple, anchor, forward: bool, slack: float = 0.0) -> int:
+    def index_of(row: tuple, anchor, forward: bool, narrow=None) -> int:
         """
         The sample index of one grid row a tick maps to, in python integers.
 
@@ -488,7 +488,7 @@ class FloatKernel:
         return abs(den) / step if den < 0 else step * den
 
     @classmethod
-    def index_of(cls, row: tuple, value, forward: bool, slack: float = 0.0) -> int:
+    def index_of(cls, row: tuple, value, forward: bool, narrow=None) -> int:
         """
         The sample index of one grid row a value maps to.
 
@@ -497,8 +497,9 @@ class FloatKernel:
         rounded before it is taken up or down, as a float range has always
         done it: a bound a rounding away from a label is that label, not
         the one past it. The index may lie outside the run, which is how a
-        caller reads an open bound. ``slack`` widens that rounding to the
-        resolution of labels held in a float narrower than the row's own.
+        caller reads an open bound. ``narrow`` is the dtype the labels are
+        held in where that is not the float64 a row counts in, so that the
+        labels compared here are the ones the coordinate hands out.
         """
         start, length, bits, den, k0 = row
         step = float(np.int64(bits).view(np.float64))
@@ -514,31 +515,40 @@ class FloatKernel:
             return math.ceil(position) if forward else math.floor(position)
         spacing = cls._spacing(bits, den)
         rising = spacing > 0
-        # A label within this of the value is the value: a rounding of the
-        # label's own arithmetic, or the resolution of a narrower float.
-        # Half a spacing is the ceiling either way, or a value lying
-        # between two labels would answer to both of them.
-        near = max(abs(spacing) * 1e-9, min(slack, abs(spacing) / 2))
+        # A label within a rounding of its own arithmetic is the value.
+        near = abs(spacing) * 1e-9
 
         def label(k: int) -> float:
             index = k0 + k * abs(den)
-            return start + (index / step if den < 0 else step * index)
+            out = start + (index / step if den < 0 else step * index)
+            # In the dtype the labels are held in: a narrower float rounds
+            # the row's arithmetic again, and two of its labels can lie
+            # closer together than the row's own spacing suggests.
+            return out if narrow is None else float(np.asarray(out, narrow))
 
         # The division only estimates where the value sits, and far from
         # the origin by a good deal more than a rounding; the labels either
         # side of the estimate decide, exactly.
+        #
+        # Rounding into a narrower float can make two neighbouring labels
+        # one label, and stepping onto a label the run already holds gains
+        # nothing, so the search moves on only where the labels progress.
         k = math.floor(position)
         for _ in range(4):
             if (label(k) > value) == rising and label(k) != value:
                 k -= 1
-            elif (label(k + 1) <= value) == rising or label(k + 1) == value:
+            elif label(k + 1) != label(k) and (
+                (label(k + 1) <= value) == rising or label(k + 1) == value
+            ):
                 k += 1
             else:
                 break
         # Now label(k) is at or before the value and label(k + 1) past it.
         if forward:
             return k if abs(label(k) - value) <= near else k + 1
-        return k + 1 if abs(label(k + 1) - value) <= near else k
+        if label(k + 1) != label(k) and abs(label(k + 1) - value) <= near:
+            return k + 1
+        return k
 
     @classmethod
     def step_of(cls, row: tuple) -> float:

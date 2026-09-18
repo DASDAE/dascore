@@ -554,10 +554,13 @@ def _grid_fields(summary) -> _GridFields:
 
 
 def _run_origin(row, dtype) -> float | None:
-    """Where a float run's grid is counted from, if not from its first label."""
+    """Where a float run's grid is counted from; a tick run counts from its start."""
     ticked = bool(dtype) and np.dtype(normalize_coord_dtype(dtype)).kind in "iuMm"
-    if ticked or not row["den"] or not row["offset"]:
+    if ticked or not row["den"]:
         return None
+    # Every float grid's origin, phase or no phase: a run of a narrower
+    # float holds its origin as the double it counts from, which is not
+    # the first label the envelope rounds that origin to.
     return float(row["start"])
 
 

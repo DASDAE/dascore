@@ -925,12 +925,19 @@ class TestXDASSampledCoordinate:
         assert coord == declared
         assert coord.step_exact == Fraction(1, 1024) and coord.holes
 
-    def test_a_fractional_interval_over_integer_labels_keeps_its_fraction(self):
-        """Truncating the interval to a whole label loses one per sample."""
+    def test_a_fractional_interval_promotes_integer_starts(self):
+        """XDAS evaluates start + k * interval, and gets doubles; so does this."""
         dataset = self._dataset(np.asarray([0]), [4], {"sampling_interval": 2.5})
         coord = netcdf_utils._get_dim_coord(dataset, "time", 4)
-        # a run floors its labels, so 2.5 counts out 0, 2, 5, 7
-        np.testing.assert_array_equal(coord.values, [0, 2, 5, 7])
+        assert coord.dtype == np.dtype("float64")
+        np.testing.assert_array_equal(coord.values, [0.0, 2.5, 5.0, 7.5])
+
+    def test_a_whole_interval_leaves_integer_starts_alone(self):
+        """An interval of whole units states a grid of whole labels."""
+        dataset = self._dataset(np.asarray([0]), [4], {"sampling_interval": 2})
+        coord = netcdf_utils._get_dim_coord(dataset, "time", 4)
+        assert coord.dtype == np.dtype("int64")
+        np.testing.assert_array_equal(coord.values, [0, 2, 4, 6])
 
     def test_a_whole_tick_rate_has_no_ratio(self):
         """Without a ratio the interval is the step, in the units it names."""

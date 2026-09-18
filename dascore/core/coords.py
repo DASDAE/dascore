@@ -44,6 +44,7 @@ import dascore as dc
 from dascore.compat import array, is_array
 from dascore.constants import _AGG_FUNCS, DIM_REDUCE_DOCS, dascore_styles
 from dascore.core._run_kernels import (
+    _FLOAT_INDEX_MAX,
     _INT64_MAX,
     FloatKernel,
     TickKernel,
@@ -2009,6 +2010,13 @@ def _on_grid(deltas, step) -> np.ndarray:
     return counts.astype(np.int64)
 
 
+def _past_float_counting(values: np.ndarray) -> bool:
+    """Whether these are integer labels a float64 cannot count one by one."""
+    if not np.issubdtype(values.dtype, np.integer) or not values.size:
+        return False
+    return bool(np.max(np.abs(values.astype(np.float64))) > _FLOAT_INDEX_MAX)
+
+
 def _keeps_step(segments, ascending: bool) -> bool:
     """
     Whether any seam between `segments` skips a position of their grid.
@@ -3286,18 +3294,19 @@ class NumericND(BaseCoord):
 
     @property
     @cached_method
-    def _slack(self) -> float:
-        """
-        How far a label of this dtype may sit from the double its row makes.
+    def _narrow(self) -> np.dtype | None:
+        """The dtype the labels are held in, where a row's float64 is not it.
 
-        Rows are counted in float64, so labels of a narrower float are those
-        doubles rounded again, by up to half the spacing of the dtype there.
+        Rows are counted in float64 and the coordinate rounds each label
+        into its own dtype, so a lookup on a narrower float has to compare
+        the rounded labels: the doubles a row makes are not the labels this
+        coordinate hands out, and two of its labels can round closer
+        together than the row's own spacing.
         """
         dtype = np.dtype(self.dtype)
-        if dtype.kind != "f" or dtype.itemsize >= 8 or not self.size:
-            return 0.0
-        top = np.max(np.abs([self._run_heads[0], self._run_ends[-1]]))
-        return float(np.spacing(dtype.type(top))) / 2
+        if dtype.kind != "f" or dtype.itemsize >= 8:
+            return None
+        return dtype
 
     @property
     @cached_method
@@ -3783,7 +3792,7 @@ class NumericND(BaseCoord):
             return len(self) if value > 0 else -1
         anchor = self._bound_tick(value, forward) if self._ticks else float(value)
         heads = self._run_heads
-        if self._slack:
+        if self._narrow is not None:
             # the labels are these heads rounded again into a narrower float
             heads = heads.astype(self.dtype).astype(np.float64)
         if len(rows) == 1:  # one run needs no search to be found
@@ -3810,7 +3819,7 @@ class NumericND(BaseCoord):
                 # as a bound the coordinate does not reach.
                 k = length
         else:
-            k = self._kernel.index_of(rows[run].item(), anchor, forward, self._slack)
+            k = self._kernel.index_of(rows[run].item(), anchor, forward, self._narrow)
         base = 0 if run == 0 else int(self._sample_starts[run])
         k = int(k)
         grid = den != 0
@@ -4422,6 +4431,14 @@ class NumericND(BaseCoord):
         if np.dtype(self.dtype).kind in "mM":
             ours, theirs = ours.view(np.int64), theirs.view(np.int64)
             moved = np.max(np.abs(ours - theirs))
+        elif _past_float_counting(ours):
+            # An integer label past 2**53 is no float64, so rounding it to
+            # one would hide exactly the movement being measured. The whole
+            # part of the candidate differences against the integer exactly,
+            # and whatever fraction it carries is movement of its own, both
+            # of them small enough for float64 to hold.
+            whole = np.floor(theirs)
+            moved = np.max(np.abs((ours - whole.astype(np.int64)) - (theirs - whole)))
         else:
             ours = ours.astype(np.float64)
             moved = np.max(np.abs(ours - theirs.astype(np.float64)))

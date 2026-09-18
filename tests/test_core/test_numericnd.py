@@ -2378,3 +2378,26 @@ class TestBotReviewFindings:
         """Finite float64 ends can still be infinite once cast to float32."""
         with pytest.raises(CoordError, match="finite"):
             NumericND.from_run(np.float32(3e38), 3e37, 10, dtype="float32")
+
+
+class TestThirdReviewFindings:
+    """What the second round of fixes left, each pinned by what it broke."""
+
+    def test_a_narrow_float_label_of_its_own_run_is_found(self):
+        """Two labels of one run can round together; the run still holds both."""
+        coord = NumericND.from_run(1e6, 0.04, 2, dtype="float32")
+        # float32 counts by 0.0625 here, so the row's 1e6 + 0.04 and its
+        # 1e6 + 0.08 are one label, and only the first is the run's
+        np.testing.assert_array_equal(coord.values, [1000000.0, 1000000.0625])
+        label = coord.values[1]
+        assert coord.get_next_index(label) == 1
+        np.testing.assert_array_equal(coord.select((label, label))[0].values, [label])
+
+    def test_zero_tolerance_leaves_large_integer_labels_alone(self):
+        """Past 2**53 a float64 cannot hold the label, nor the move it made."""
+        values = 2**53 + np.asarray([0, 2, 3], dtype="int64")
+        coord = get_coord(data=values)
+        assert coord.snap(tolerance=0) is coord
+        np.testing.assert_array_equal(coord.snap(tolerance=0).values, values)
+        # a tolerance of a step does admit the grid it would not fit before
+        assert coord.snap(tolerance=1).evenly_sampled

@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.core.coords import get_coord
+from dascore.core.coords import NumericND, get_coord
 from dascore.core.summary import PatchSummary
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import _coord_from_envelope
@@ -355,3 +355,31 @@ class TestFloatRunsRebuild:
         spool, coord = float_spool
         assert spool[0].get_coord("distance") == coord
         assert spool.chunk(time=None)[0].get_coord("distance") == coord
+
+
+class TestFloat32Origin:
+    """A float32 grid's origin is a double its first label does not state."""
+
+    def test_a_float32_grid_survives_an_indexed_merge(self, tmp_path_factory):
+        """The merge reads the coordinate from its row, origin and all."""
+        path = tmp_path_factory.mktemp("f32_origin")
+        # 0.1 as a double is not 0.1 as a float32, so the origin the run
+        # counts from is not the label the envelope holds
+        distance = NumericND.from_run(0.1, 0.001, 6, dtype="float32", units="m")
+        for num in range(2):
+            time = get_coord(
+                start=np.datetime64("2020-01-01", "ns") + np.timedelta64(num * 6, "s"),
+                step=np.timedelta64(1, "s"),
+                shape=(6,),
+            )
+            patch = dc.Patch(
+                data=np.zeros((6, 6)),
+                coords={"distance": distance, "time": time},
+                dims=("distance", "time"),
+            )
+            dc.write(patch, path / f"{num}.h5", "dasdae")
+        spool = dc.spool(path).update()
+        direct = dc.read(path / "0.h5")[0].get_coord("distance")
+        merged = spool.chunk(time=None)[0].get_coord("distance")
+        np.testing.assert_array_equal(direct.values, distance.values)
+        np.testing.assert_array_equal(merged.values, distance.values)
