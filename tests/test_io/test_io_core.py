@@ -19,7 +19,7 @@ from dascore.constants import SpoolType
 from dascore.exceptions import InvalidFiberIOError, UnknownFiberFormatError
 from dascore.io.core import FiberIO, PatchFileSummary
 from dascore.io.dasdae.core import DASDAEV1
-from dascore.utils.io import BinaryReader, BinaryWriter
+from dascore.utils.io import BinaryReader, BinaryWriter, IOResourceManager
 from dascore.utils.time import to_datetime64
 
 tvar = TypeVar("tvar", int, float, str, Path)
@@ -347,6 +347,49 @@ class TestGetFormat:
 
 class TestScan:
     """Tests for scanning fiber files."""
+
+    @pytest.mark.parametrize("known_format", [False, True])
+    def test_unreadable_file(self, tmp_path, random_patch, monkeypatch, known_format):
+        """An unreadable file warns without preventing readable files from scanning."""
+        denied = tmp_path / "denied.h5"
+        readable = tmp_path / "readable.h5"
+        random_patch.io.write(denied, "dasdae")
+        random_patch.io.write(readable, "dasdae")
+        get_resource = IOResourceManager.get_resource
+
+        def guarded_resource(manager, required_type):
+            if Path(manager.source) == denied:
+                raise PermissionError(f"Permission denied: {denied}")
+            return get_resource(manager, required_type)
+
+        monkeypatch.setattr(IOResourceManager, "get_resource", guarded_resource)
+        kwargs = {"file_format": "DASDAE", "file_version": "1"} if known_format else {}
+        with pytest.warns(UserWarning, match="Permission denied; skipping") as caught:
+            out = dc.scan([denied, readable], progress=None, **kwargs)
+        assert len(out) == 1
+        assert str(denied) in str(caught[0].message)
+
+    @pytest.mark.parametrize("method", ["_updated_after", "scan"])
+    def test_unreadable_directory(self, tmp_path, random_patch, monkeypatch, method):
+        """Directory permission errors warn, skip contents, and allow later scans."""
+        fiber_io = FiberIO.manager.get_fiberio(
+            format=_FiberDirectory.name, version=_FiberDirectory.version
+        )
+        denied = tmp_path / fiber_io.name
+        denied.mkdir()
+        readable = tmp_path / "readable.h5"
+        random_patch.io.write(denied / "nested.h5", "dasdae")
+        random_patch.io.write(readable, "dasdae")
+
+        def raise_permission_error(*args, **kwargs):
+            raise PermissionError(f"Permission denied: {denied}")
+
+        monkeypatch.setattr(fiber_io, method, raise_permission_error)
+        with pytest.warns(UserWarning, match="Permission denied; skipping") as caught:
+            out = dc.scan([denied, readable], timestamp=1.0, progress=None)
+        assert [Path(attrs.path) for attrs in out] == [readable]
+        assert len(caught) == 1
+        assert str(denied) in str(caught[0].message)
 
     @pytest.fixture(scope="class")
     def nested_directory_with_patches(self, tmpdir_factory, random_patch):
