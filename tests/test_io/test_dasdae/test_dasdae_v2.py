@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.core._run_kernels import float_rows
 from dascore.core.coords import (
     CoordString,
     NumericND,
@@ -326,12 +327,22 @@ class TestVersion2Files:
 class TestFloatGridTerms:
     """A float range which is not counted from its first label states its grid."""
 
-    # a strided slice of a multiplied axis, a divided axis, and slices of one
+    divided = get_coord(
+        runs=float_rows("float64", [0.0], [400], [250.0], [-1], [0]),
+        dtype="float64",
+        units="m",
+    )
+    descending = get_coord(
+        runs=float_rows("float64", [0.0], [400], [-1000.0], [-1], [0]),
+        dtype="float64",
+        units="m",
+    )
+    # A multiplied axis and explicit divided grids exercise persisted terms.
     COORDS = (
         get_coord(data=np.arange(400) * 0.1, units="m")[37::3],
-        get_coord(data=np.arange(400) / 250, units="m"),
-        get_coord(data=np.arange(400) / 250, units="m")[11:],
-        get_coord(data=-np.arange(400) / 1000.0, units="m")[::-1],
+        divided,
+        divided[11:],
+        descending[::-1],
     )
 
     @pytest.mark.parametrize("coord", COORDS)

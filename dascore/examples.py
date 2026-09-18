@@ -324,11 +324,16 @@ def example_event_2():
     """
     path = fetch("example_dasdae_event_1.h5")
     patch = _load_example_patch_from_file(path).update_attrs(data_type="strain_rate")
-    # We convert time to relative time in seconds to match the figure in
-    # the publication.
-    delta_time = patch.coords.get_array("time") - patch.coords.min("time")
+    # Use relative seconds, as in the publication, while retaining the known grid.
+    source_time = patch.get_coord("time")
+    assert source_time.step_exact is not None
+    relative_time = dc.get_coord(
+        start=0.0,
+        step=float(source_time.step_exact),
+        shape=source_time.shape,
+    )
     out = (
-        patch.update_coords(time=delta_time / np.timedelta64(1, "s"))
+        patch.update_coords(time=relative_time)
         .set_units("strain/s", distance="m", time="s")
         .taper(time=0.05)
         .pass_filter(time=(..., 300))

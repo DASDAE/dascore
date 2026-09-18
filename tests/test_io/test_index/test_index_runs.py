@@ -21,9 +21,10 @@ from dascore.io.index.ingest import (
     patch_record,
     summaries_to_records,
 )
-from dascore.io.index.planned import _coord_record_from_row, _run_table
+from dascore.io.index.planned import _coord_record_from_row
 from dascore.io.index.query import Query
 from dascore.io.index.schema import PatchCoordRow
+from dascore.utils.patch_assembly import _decode_index_coord_runs
 
 MS = np.timedelta64(1, "ms")
 HOLE = pd.Timedelta(12, "ms")
@@ -308,7 +309,7 @@ class TestPlannedRecords:
             "_distance_runs": runs,
             "_distance_coord_dtype": "float64",
         }
-        assert _run_table(row, "distance", "float64", 0.0, 24.0) is None
+        assert _decode_index_coord_runs(row, "distance", "float64", 0.0, 24.0) is None
 
 
 class TestLookups:

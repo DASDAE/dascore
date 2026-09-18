@@ -55,7 +55,7 @@ Every scan implementation must accept `snap`, which is `True`, `False`, or the n
 - `snap=False` must preserve stored coordinate values exactly.
 - Only a dimension is ever snapped. A coordinate along one, such as a temperature, holds measurements.
 
-For stored per-sample arrays, use [`get_coord(data=values)`](`dascore.core.coords.get_coord`), which preserves every supplied label. Declare header-defined grids with `get_coord(start=..., step=..., shape=...)`; those axes may treat `snap=False` as a no-op. Readers that fit measured labels when `snap=True` must request that fitting explicitly, with [`snap_stored_coord`](`dascore.io.utils.snap_stored_coord`): it snaps a dimension only if asked to and only where an even grid lies within the configured `snap_tolerance` of every label. Exact coordinates retain arrays when no exact grid represents them, so use exact scans for targeted files rather than whole directories.
+Preserve per-sample labels with [`get_coord(data=values)`](`dascore.core.coords.get_coord`). Declare header-defined grids with `get_coord(start=..., step=..., shape=...)`; those axes may treat `snap=False` as a no-op. To fit measured labels, use [`snap_stored_coord`](`dascore.io.utils.snap_stored_coord`), which honors the requested dimensions and configured `snap_tolerance`. Unrecognized grids remain stored as arrays, so prefer targeted files over whole-directory exact scans.
 
 ## Identify patches within a file
 

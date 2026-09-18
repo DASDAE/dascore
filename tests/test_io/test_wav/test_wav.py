@@ -97,7 +97,8 @@ class TestWriteWav:
         # Offset a copy in time so the two patches don't merge into one.
         time = audio_patch.get_coord("time")
         offset = (time.max() - time.min()) + 1_000 * time.step
-        other = audio_patch.update_coords(time=time.values + offset)
+        shifted = time.update_limits(min=time.min() + offset)
+        other = audio_patch.update_coords(time=shifted)
         spool = dc.spool([audio_patch, other])
         assert len(spool) == 2
         with pytest.raises(ParameterError, match="single patch spools"):

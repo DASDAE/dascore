@@ -23,7 +23,6 @@ import pandas as pd
 import dascore as dc
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import (
-    _EXACT_GRID_FIELDS,
     get_coord,
     normalize_coord_dtype,
     runs_from_rows,
@@ -358,6 +357,34 @@ def _row_dtype(row: Mapping, dim: str) -> np.dtype | None:
         return None
 
 
+def _index_run_start(value, dtype) -> int | float:
+    """Convert an envelope endpoint to the run table's scalar spelling."""
+    array = np.asarray(value, dtype=np.dtype(dtype))
+    if array.dtype.kind in "iu":
+        return int(array)
+    if array.dtype.kind in "mM":
+        return int(array.astype("int64"))
+    return float(array)
+
+
+def _decode_index_coord_runs(row: Mapping, dim: str, dtype, low, high):
+    """Decode the exact non-stored runs an index row states, or None."""
+    dtype = normalize_coord_dtype(dtype)
+    table = row.get(f"_{dim}_runs")
+    if isinstance(table, tuple) and table:
+        if any(int(item[3]) == 0 for item in table):
+            return None
+        return runs_from_rows(table, dtype)
+    grid = row.get(f"_{dim}_grid")
+    if not isinstance(grid, tuple):
+        return None
+    num, den, offset, length, *origin = grid
+    start = _index_run_start(high if num < 0 else low, dtype)
+    if origin and origin[0] is not None:
+        start = origin[0]
+    return runs_from_rows([(start, length, num, den, offset)], dtype)
+
+
 def _coord_from_runs(row: Mapping, dim: str, units=None):
     """
     The coordinate a row's run table states, or None where it states none.
@@ -367,8 +394,8 @@ def _coord_from_runs(row: Mapping, dim: str, units=None):
     across it. The table counts ticks in the file's own units and dtype,
     so a unit-converted row cannot use it.
     """
-    runs = row.get(f"_{dim}_runs")
-    if not isinstance(runs, tuple) or not runs or _units_converted(row, dim):
+    table = row.get(f"_{dim}_runs")
+    if not isinstance(table, tuple) or not table or _units_converted(row, dim):
         return None
     dtype = _row_dtype(row, dim)
     if dtype is None or dtype.kind not in "iuMmf":
@@ -386,15 +413,15 @@ def _coord_from_runs(row: Mapping, dim: str, units=None):
     is_time = is_time or isinstance(low, np.timedelta64)
     if is_time != (dtype.kind in "mM"):
         return None
-    if any(int(x[3]) == 0 for x in runs):
-        # A stored run states no grid; its labels are only in the file.
-        return None
-    starts = [x[0] for x in runs]
+    starts = [item[0] for item in table]
     if dtype.kind in "iu" and max(abs(x) for x in starts) > 2**53:
         # the index holds an integer coordinate's bounds as floats, which
         # past here cannot have held the label exactly
         return None
-    return get_coord(runs=runs_from_rows(runs, dtype), dtype=dtype, units=units)
+    runs = _decode_index_coord_runs(row, dim, dtype, low, row.get(f"{dim}_max"))
+    if runs is None:
+        return None
+    return get_coord(runs=runs, dtype=dtype, units=units)
 
 
 def coord_from_row(row: Mapping, dim: str, units=None):
@@ -418,22 +445,11 @@ def coord_from_row(row: Mapping, dim: str, units=None):
     grid = row.get(f"_{dim}_grid")
     ticks = np.asarray(lo).dtype.kind in "iuMm"
     if isinstance(grid, tuple) and not _units_converted(row, dim):
-        num, den, offset, length, *origin = grid
-        start = hi if num < 0 else lo
-        if ticks:
-            return get_coord(
-                start=start,
-                shape=(length,),
-                units=units,
-                **dict(zip(_EXACT_GRID_FIELDS, (num, den, offset))),
-            )
-        # A float run states its own terms too, counted from its origin
-        # where that is not its first label, so no label is re-derived.
-        dtype = _row_dtype(row, dim)
-        if dtype is not None and dtype.kind == "f" and dtype.itemsize <= 8:
-            anchor = float(start) if not origin or origin[0] is None else origin[0]
-            runs = runs_from_rows([(anchor, length, num, den, offset)], dtype)
-            return get_coord(runs=runs, dtype=dtype, units=units)
+        dtype = np.asarray(lo).dtype if ticks else _row_dtype(row, dim)
+        if dtype is not None and (ticks or (dtype.kind == "f" and dtype.itemsize <= 8)):
+            runs = _decode_index_coord_runs(row, dim, dtype, lo, hi)
+            if runs is not None:
+                return get_coord(runs=runs, dtype=dtype, units=units)
     if step < np.zeros((), dtype=np.asarray(step).dtype):
         return None
     return get_coord(start=lo, stop=hi + step, step=step, units=units)

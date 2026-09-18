@@ -889,10 +889,12 @@ class TestMixedUnitChunk:
         """The example patch shifted to be distance-contiguous, in units."""
         d = patch.get_coord("distance")
         span = d.max() - d.min() + d.step
-        # converted labels, as a user's own arithmetic leaves them
+        # This producer knows its grid, so it declares it explicitly.
         scale = 0.3048 if units == "ft" else 1.0
         coord = dc.get_coord(
-            data=(d.values + span) / scale,
+            start=(d.min() + span) / scale,
+            step=d.step / scale,
+            shape=d.shape,
         )
         out = patch.update_coords(distance=coord)
         return out.set_units(distance=units) if units else out

@@ -29,7 +29,6 @@ from dascore.core.coords import (
     NumericND,
     _canonical,
     _out_of_ns,
-    _simplest_between,
     _to_tick,
     concat_coords,
     concat_tables,
@@ -640,9 +639,6 @@ class TestFloats:
         "linspace": np.linspace(0, 1000, 5000),
         "large origin": 1e6 + np.arange(5000) * 0.25,
         "negative step": 10.0 - np.arange(5000) * 0.1,
-        "arange / rate": np.arange(5000) / 250,
-        "negative divided": -np.arange(5000) / 1000.0,
-        "ticks over a second": (119_999_999 + np.arange(5000) * 100_000) / 1e9,
     }
 
     def test_step_is_the_double_it_was_given(self):
@@ -675,14 +671,19 @@ class TestFloats:
         assert coord.evenly_sampled
         np.testing.assert_array_equal(coord.values, values)
 
-    def test_a_divided_axis_is_a_run_which_divides(self):
-        """``arange / rate`` rounds unlike ``arange * step``, and is kept as itself."""
-        divided = get_coord(data=self.AXES["arange / rate"])
-        step, stride, _ = float_terms(divided.runs)
-        assert stride[0] < 0 and step[0] == 250.0
-        assert divided.step == 1 / 250
-        multiplied = get_coord(data=self.AXES["arange * step"])
-        assert float_terms(multiplied.runs)[1][0] > 0
+    @pytest.mark.parametrize(
+        "values",
+        [
+            np.arange(5000) / 250,
+            -np.arange(5000) / 1000.0,
+            (119_999_999 + np.arange(5000) * 100_000) / 1e9,
+        ],
+    )
+    def test_non_multiplication_formulas_stay_stored(self, values):
+        """Automatic inference does not search rates or decimal time scales."""
+        coord = get_coord(data=values)
+        assert not coord.evenly_sampled
+        np.testing.assert_array_equal(coord.values, values)
 
     @pytest.mark.parametrize("name", AXES)
     def test_no_slice_moves_a_label(self, name):
@@ -703,11 +704,21 @@ class TestFloats:
         assert coord[::-1][::-1] == coord
 
     def test_a_slice_arriving_as_labels_is_found_on_its_parent_grid(self):
-        """A slice of ``arange * step`` is no grid from its own first label."""
+        """A slice needing formula search stays stored and bit exact."""
         values = np.arange(10_000) * 0.1
         coord = get_coord(data=values[5000:])
-        assert coord.evenly_sampled
-        assert coord == get_coord(data=values)[5000:]
+        assert not coord.evenly_sampled
+        np.testing.assert_array_equal(coord.values, values[5000:])
+
+    @pytest.mark.parametrize("rate", [250.0, -250.0])
+    def test_explicit_divided_grid_slices_without_moving_labels(self, rate):
+        """Persisted divided-grid rows retain their slice guarantees."""
+        rows = float_rows("float64", [0.0], [5000], [rate], [-1], [0])
+        coord = get_coord(runs=rows, dtype="float64")
+        values = np.arange(5000) / rate
+        np.testing.assert_array_equal(coord.values, values)
+        for item in (slice(7, None, 3), slice(None, None, -1)):
+            np.testing.assert_array_equal(coord[item].values, values[item])
 
     def test_labels_no_grid_reproduces_are_stored(self):
         """Near-even labels are kept as they are, never fitted."""
@@ -795,21 +806,24 @@ class TestLookup:
 
     @pytest.mark.parametrize("reverse", [False, True])
     def test_random_windows(self, segmented, reverse):
-        """Random windows give the samples the segmented coordinate gives."""
-        reference = segmented[::-1] if reverse else segmented
-        coord = segmented
-        coord = coord[::-1] if reverse else coord
-        values = np.asarray(reference.values)
+        """Random windows keep exactly the NumPy labels within their bounds."""
+        coord = segmented[::-1] if reverse else segmented
+        values = np.asarray(coord.values)
         rng = np.random.default_rng(0)
         bounds = [*values, *(values + MS), *(values - MS), None]
         for _ in range(100):
             low, high = (bounds[i] for i in rng.integers(0, len(bounds), 2))
             if low is not None and high is not None and low > high:
                 low, high = high, low
-            expected = reference.select((low, high))[1]
             out, indexer = coord.select((low, high))
-            assert range(len(values))[indexer] == range(len(values))[expected]
-            np.testing.assert_array_equal(out.values, values[indexer])
+            keep = np.ones(len(values), dtype=bool)
+            if low is not None:
+                keep &= values >= low
+            if high is not None:
+                keep &= values <= high
+            expected = np.flatnonzero(keep)
+            np.testing.assert_array_equal(np.arange(len(values))[indexer], expected)
+            np.testing.assert_array_equal(out.values, values[expected])
 
     def test_window_across_a_hole(self, holed):
         """A window spanning a hole keeps the samples on both sides."""
@@ -841,35 +855,28 @@ class TestLookup:
         out, _ = coord.select((values[10] + NS, values[20] - NS))
         np.testing.assert_array_equal(out.values, values[11:20])
 
-    def test_matches_range_coordinate(self):
-        """The same window selects the same samples as a range coordinate."""
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_fractional_grid_windows(self, reverse):
+        """Fractional-grid windows keep the NumPy labels within their bounds."""
         coord = grid_1024(500)
-        reference = get_coord(start=T0, step=Fraction(1, 1024), shape=(500,))
-        values = coord.values
-        windows = [(values[3], values[400]), (values[0], values[0]), (None, None)]
-        for window in windows:
-            _, ours = coord.select(window)
-            _, theirs = reference.select(window)
-            assert range(500)[ours] == range(500)[theirs]
-
-    def test_reverse_sorted_grid_matches_range(self):
-        """A reversed fractional grid answers as the reversed range does."""
-        coord = grid_1024(500)[::-1]
-        reference = get_coord(start=T0, step=Fraction(1, 1024), shape=(500,))[::-1]
+        coord = coord[::-1] if reverse else coord
         values = coord.values
         windows = [
-            (values[200], values[100]),
-            (values[200] + NS, values[100] - NS),
+            (min(values[100], values[200]), max(values[100], values[200])),
+            (min(values[100], values[200]) + NS, max(values[100], values[200]) - NS),
             (None, values[10]),
             (values[10], None),
         ]
-        for window in windows:
-            out, ours = coord.select(window)
-            _, theirs = reference.select(window)
-            assert range(500)[ours] == range(500)[theirs]
-            np.testing.assert_array_equal(
-                out.values, reference.select(window)[0].values
-            )
+        for low, high in windows:
+            out, indexer = coord.select((low, high))
+            keep = np.ones(len(values), dtype=bool)
+            if low is not None:
+                keep &= values >= low
+            if high is not None:
+                keep &= values <= high
+            expected = np.flatnonzero(keep)
+            np.testing.assert_array_equal(np.arange(len(values))[indexer], expected)
+            np.testing.assert_array_equal(out.values, values[expected])
 
     def test_reverse_sorted(self, holed):
         """Selection on a reversed coordinate mirrors the forward one."""
@@ -888,43 +895,6 @@ class TestLookup:
 
 class TestFromExisting:
     """The existing coordinates convert without losing what they state."""
-
-    @pytest.mark.parametrize("item", [slice(1, None, 2), slice(7, None, 3)])
-    def test_exact_range_slices(self, item):
-        """A strided slice of an exact grid keeps every label it had."""
-        reference = get_coord(start=T0, step=Fraction(1, 1024), shape=(500,))[item]
-        coord = reference
-        np.testing.assert_array_equal(coord.values, reference.values)
-
-    def test_exact_range(self):
-        """A range on an exact grid keeps the grid and its phase."""
-        reference = get_coord(start=T0, step=Fraction(1, 1024), shape=(500,))
-        coord = reference
-        np.testing.assert_array_equal(coord.values, reference.values)
-        assert coord.step_exact == reference.step_exact
-
-    def test_float_range(self):
-        """A float range keeps its labels to within floating precision."""
-        reference = get_coord(start=0.5, step=0.25, shape=(9,))
-        coord = reference
-        np.testing.assert_array_equal(coord.values, reference.values)
-
-    def test_segmented(self):
-        """A segmented coordinate becomes a run table with the same holes."""
-        step = np.timedelta64(4, "ms")
-        first = get_coord(start=T0, step=step, shape=(100,))
-        second = get_coord(start=first.max() + 10 * step, step=step, shape=(50,))
-        reference = concat_coords(first, second)
-        coord = reference
-        assert coord.runs_count == reference.runs_count == 2
-        np.testing.assert_array_equal(coord.values, reference.values)
-
-    def test_array_coordinate(self):
-        """An array coordinate is carried as its labels."""
-        reference = get_coord(data=np.asarray([1.0, 2.0, 4.0, 8.0]), units="m")
-        coord = reference
-        np.testing.assert_array_equal(coord.values, reference.values)
-        assert coord.units == reference.units
 
     def test_units_survive(self):
         """Units go along with the labels."""
@@ -1302,6 +1272,7 @@ class TestGaps:
         df = holed.get_discontinuities("all")
         assert len(df) == holed.runs_count - 1
         assert (df["index"] == [10, 20]).all()
+        assert df["delta"].tolist() == [pd.Timedelta("44ms")] * 2
 
     def test_discontinuities_gaps(self, holed):
         """Each seam of ten missing samples is a gap."""
@@ -1331,6 +1302,7 @@ class TestGaps:
         table = coord
         assert table.missing().count == 6
         assert not table.missing().complete
+        np.testing.assert_array_equal(table.missing().positions(), [2, 5, 6, 7, 8, 9])
 
     def test_missing_is_empty_for_a_full_grid(self):
         """A run with no holes misses nothing."""
@@ -1386,9 +1358,8 @@ class TestSimplifyAndSnap:
         assert out.evenly_sampled
         assert len(out) == len(holed)
         assert out.min() == holed.min()
-        # The step is the span divided by the intervals, rounded to a tick,
-        # so the far end may land a few ticks past the one it replaced.
-        assert abs(out.max() - holed.max()) < abs(out.step)
+        assert out.step == np.timedelta64(6758621, "ns")
+        assert out.max() - holed.max() == np.timedelta64(9, "ns")
 
     def test_snap_of_a_grid_is_itself(self):
         """A coordinate already on one grid snaps to itself."""
@@ -1522,53 +1493,8 @@ class TestManagerContract:
         assert len(out) == 1
 
 
-class TestOperationsOnRunTables:
-    """The operations the four classes used to divide up, on one table."""
-
-    @pytest.fixture()
-    def holed(self):
-        """Three ten-sample 4 ms runs, each starting 80 ms after the last."""
-        step = np.timedelta64(4, "ms")
-        segments = [
-            get_coord(start=T0 + step * 20 * i, step=step, shape=(10,))
-            for i in range(3)
-        ]
-        out = concat_coords(*segments)
-        assert out.runs_count == 3 and len(out) == 30
-        return out
-
-    def test_snap_fits_one_grid(self, holed):
-        """Snapping re-fits every sample onto the one grid that spans them."""
-        out = holed.snap()
-        assert out.evenly_sampled and len(out) == 30
-        assert out.min() == holed.min()
-        # 196 ms over 29 intervals, rounded up to the nanosecond, so the
-        # last label lands nine of them past where it started.
-        assert out.step == np.timedelta64(6758621, "ns")
-        assert out.max() - holed.max() == np.timedelta64(9, "ns")
-
-    def test_simplify_absorbs_holes_within_tolerance(self, holed):
-        """A tolerance wider than every hole leaves one run."""
-        out = holed.fuse(np.timedelta64(100, "ms"))
-        assert out.runs_count == 1 and len(out) == 30
-        assert np.max(np.abs(out.values - holed.values)) <= np.timedelta64(100, "ms")
-
-    def test_simplify_keeps_holes_it_cannot_absorb(self, holed):
-        """A tolerance narrower than the holes leaves them where they are."""
-        out = holed.fuse(np.timedelta64(10, "ms"))
-        assert out.runs_count == 3
-        np.testing.assert_array_equal(out.values, holed.values)
-
-    def test_discontinuities_state_each_boundary(self, holed):
-        """Each run begins 44 ms after the last label of the one before."""
-        frame = holed.get_discontinuities("all")
-        assert frame["index"].tolist() == [10, 20]
-        assert frame["delta"].tolist() == [pd.Timedelta("44ms")] * 2
-
-    def test_missing_states_the_empty_grid_positions(self):
-        """A declared step says which grid positions hold no sample."""
-        coord = get_coord(data=[1, 3, 4, 10, 11, 12], step=1)
-        np.testing.assert_array_equal(coord.missing().positions(), [2, 5, 6, 7, 8, 9])
+class TestIndependentContracts:
+    """Independent checks for selection and exact summaries."""
 
     @pytest.mark.parametrize(
         "kwargs",
@@ -1631,13 +1557,61 @@ class TestExactArrayConstruction:
     @pytest.mark.parametrize("rate", [49, 1024])
     @pytest.mark.parametrize("first,stride", [(0, 1), (7, 3)])
     def test_rational_time_detection(self, rate, first, stride):
-        """Integer timestamp differences need not be identical on a grid."""
+        """Fractional-rate timestamps stay stored unless the grid is declared."""
         source = get_coord(start=T0, step=Fraction(1, rate), shape=(10000,))
         labels = source.values[first::stride]
         coord = get_coord(data=labels)
-        assert coord.evenly_sampled
-        assert coord.step_exact == Fraction(stride, rate)
+        assert not coord.evenly_sampled
+        assert coord.runs_count == 1 and not coord.holes
         np.testing.assert_array_equal(coord.values, labels)
+
+    @pytest.mark.parametrize("rate", [49, 12345, 44100])
+    @pytest.mark.parametrize("count", [200, 999])
+    def test_short_fractional_time_stays_one_stored_run(self, rate, count):
+        """Alternating tick roundoff does not create phantom gaps."""
+        source = NumericND.from_run(T0, Fraction(1, rate), count)
+        coord = get_coord(data=source.values)
+        assert coord.runs_count == 1 and not coord.holes
+        np.testing.assert_array_equal(coord.values, source.values)
+
+    @pytest.mark.parametrize("item", [slice(None, None, -1), slice(3, None, 7)])
+    def test_short_fractional_time_views_stay_one_stored_run(self, item):
+        """Descending and strided fractional labels do not fragment."""
+        values = NumericND.from_run(T0, Fraction(1, 44100), 500).values[item]
+        coord = get_coord(data=values)
+        assert coord.runs_count == 1 and not coord.holes
+        np.testing.assert_array_equal(coord.values, values)
+
+    def test_short_time_array_keeps_a_real_gap(self):
+        """Meaningful uniform runs on either side of a gap remain segmented."""
+        values = T0 + np.asarray([0, 1, 2, 4, 5, 6]) * NS
+        coord = get_coord(data=values)
+        assert coord.runs_count == 2 and coord.holes
+        np.testing.assert_array_equal(coord.values, values)
+
+    def test_short_many_real_gaps_stay_segmented(self):
+        """Many short runs remain distinct and split a spool at their gaps."""
+        step = np.timedelta64(4, "ms")
+        segments = [
+            get_coord(start=T0 + i * 100 * MS, step=step, shape=(3,)) for i in range(10)
+        ]
+        values = concat_coords(*segments).values
+        coord = get_coord(data=values)
+        assert coord.runs_count == 10 and coord.holes
+        np.testing.assert_array_equal(coord.values, values)
+
+        patch = dc.Patch(data=np.arange(30), coords={"time": coord}, dims=("time",))
+        chunks = dc.spool(patch).chunk(time=None)
+        assert len(chunks) == 10
+        assert [len(x.get_coord("time")) for x in chunks] == [3] * 10
+
+    def test_short_contiguous_rate_change_stays_segmented(self):
+        """A short coordinate keeps meaningful runs even without a gap."""
+        values = T0 + np.asarray([0, 2, 4, 6, 7, 8, 9]) * MS
+        coord = get_coord(data=values)
+        assert coord.runs_count == 2
+        assert coord.get_discontinuities("gaps").empty
+        np.testing.assert_array_equal(coord.values, values)
 
     def test_timestamp_jitter_is_not_fitted(self):
         """Near-even stamps remain authoritative through Patch construction."""
@@ -1775,41 +1749,6 @@ class TestRunLimitedByItsLabels:
         coord = NumericND.from_run(0, 10**12, 10, dtype="int64")
         with pytest.raises(CoordError, match="leaves int64"):
             coord._labels([10**10])
-
-
-class TestExactTimeFit:
-    """Floored labels of a fractional rate fit the grid a declared rate states."""
-
-    @pytest.mark.parametrize("rate", [7, 49, 1024, 12345, 44100])
-    def test_labels_become_the_declared_run(self, rate):
-        """Labels arriving as an array equal, and hash as, the declared grid."""
-        declared = NumericND.from_run(T0, Fraction(1, rate), 100_000)
-        fitted = get_coord(data=declared.values)
-        assert fitted == declared
-        assert fitted.step_exact == Fraction(1, rate)
-
-    def test_windows_fitted_apart_fuse(self):
-        """Two windows of one acquisition rejoin into the run they came from."""
-        declared = NumericND.from_run(T0, Fraction(1, 12345), 60_000)
-        values = declared.values
-        first, second = get_coord(data=values[:30_000]), get_coord(data=values[30_000:])
-        assert concat_tables(first, second) == declared
-
-    def test_descending_and_sliced_labels_fit(self):
-        """A reversal or a stride is still one exact grid."""
-        declared = NumericND.from_run(T0, Fraction(1, 1024), 5000)
-        for item in (slice(None, None, -1), slice(3, None, 7)):
-            out = get_coord(data=declared.values[item])
-            assert out.evenly_sampled
-            np.testing.assert_array_equal(out.values, declared.values[item])
-
-    def test_jitter_is_stored_not_fitted(self):
-        """Labels one nanosecond off their grid are kept as they are."""
-        values = NumericND.from_run(T0, Fraction(1, 1024), 5000).values.copy()
-        values[2500] += NS
-        out = get_coord(data=values)
-        assert not out.evenly_sampled
-        np.testing.assert_array_equal(out.values, values)
 
 
 class TestTableIntegrity:
@@ -2047,13 +1986,6 @@ class TestEdges:
         """A step the labels' dtype cannot hold is refused."""
         with pytest.raises(CoordError, match="non-integer"):
             get_coord(data=np.asarray([0, 1, 3]), step=0.5)
-
-    def test_simplest_fraction(self):
-        """The Stern-Brocot walk, either side of zero."""
-        assert _simplest_between(Fraction(-1, 2), Fraction(1, 2)) == 0
-        assert _simplest_between(Fraction(2, 7), Fraction(1, 3)) == Fraction(3, 10)
-        assert _simplest_between(Fraction(-1, 3), Fraction(-2, 7)) == Fraction(-3, 10)
-        assert _simplest_between(Fraction(1), Fraction(5, 4)) == Fraction(6, 5)
 
     def test_labels_no_grid_floors_to_are_stored(self):
         """Spacings a tick apart need not be floors of any one line."""

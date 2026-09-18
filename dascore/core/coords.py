@@ -87,7 +87,7 @@ from dascore.utils.display import (
     span_text,
 )
 from dascore.utils.docs import compose_docstring, get_docstring
-from dascore.utils.gaps import GapTolerance
+from dascore.utils.gaps import DEFAULT_TOLERANCE, GapTolerance
 from dascore.utils.misc import (
     _get_nullish,
     _maybe_array_to_slice,
@@ -1944,12 +1944,8 @@ def _is_int(value) -> bool:
 # A float spacing this close to a whole number of steps is on the grid;
 # a float grid such as 0.1 cannot be held exactly, an off-grid label can.
 _GRID_RTOL = 1e-6
-# The dense-array guard. Stored arrays often carry sub-step jitter
-# (GPS-stamped DAS time), so run detection would give roughly one run per
-# sample; at or past this many samples, an array whose runs would
-# outnumber this fraction of them keeps its values as one array (with
-# its declared step), which is faster to build, smaller, and no less
-# exact.
+# Run detection can turn jitter into many tiny runs. Keep one stored run when
+# runs exceed this fraction and either the array is large or no run exceeds it.
 _MIN_SEGMENT_GUARD_SIZE = 1_000
 _MAX_SEGMENT_FRACTION = 0.1
 
@@ -2069,11 +2065,6 @@ def _to_tick(value) -> int:
 
 # --- the run table -----------------------------------------------------
 
-# How many candidate grids the whole of one array may be tried against.
-# A run which follows the grid its neighbour was found on spends nothing,
-# so an ordinary coordinate never reaches this; an array of labels no grid
-# describes stops searching instead of paying a search per run.
-_FIT_BUDGET = 512
 # Float labels this close together meet: a boundary between two float grids
 # cannot ask for equality of values which were never computed the same way.
 _FLOAT_RTOL = 1e-12
@@ -2315,14 +2306,7 @@ def _continues(rows: np.ndarray, dtype) -> np.ndarray:
 
 
 def _canonical(rows: np.ndarray, labels, dtype) -> tuple[np.ndarray, Any]:
-    """
-    A run table in the one form its labels can take.
-
-    Empty runs are dropped, each grid is put in lowest terms with its phase,
-    the arithmetic is checked, and runs which continue their neighbour on
-    the same grid are fused, so equal labels give an equal table however
-    they were assembled.
-    """
+    """Reduce grids, validate their range, and fuse exact continuations."""
     kernel = get_kernel(dtype)
     if len(rows) != 1:  # one row is already the table it states
         rows = rows[rows["length"] > 0]
@@ -2512,28 +2496,18 @@ def _run_detection(
 
 def _float_runs(values: np.ndarray, starts, lengths, on_grid, dtype, step=None):
     """
-    The float rows of proposed runs, each a grid only if it is one exactly.
+    Try the declared or neighboring grid, then fixed multiplication candidates.
 
-    A run is first tried on the grid of the grid run before it, so a
-    coordinate with holes in it states one grid throughout; then on a grid
-    of its own; and failing both it keeps its labels. ``step`` is a spacing
-    the labels are declared to follow, tried before any read off them.
-
-    The search is bounded across the whole array: labels which follow one
-    grid answer in a try or two a run, and labels which follow none stop
-    being asked rather than costing a search each.
+    Keep labels stored when no candidate reproduces them exactly.
     """
     rows = float_rows(dtype, values[starts].astype(np.float64), lengths, 0.0, 0, 0)
-    budget = [_FIT_BUDGET]
     origin = None
     for index in np.flatnonzero(on_grid):
-        if budget[0] <= 0:
-            break
         first = int(starts[index])
         piece = values[first : first + int(lengths[index])]
         if origin is None and step is not None:
             origin = (float(piece[0]), float(step), 1)
-        row = FloatKernel.fit(piece, dtype, origin=origin, budget=budget)
+        row = FloatKernel.fit(piece, dtype, origin=origin)
         if row is None:
             continue
         rows[index] = row[0]
@@ -2566,91 +2540,16 @@ def _array_grid(values: np.ndarray, dtype) -> np.ndarray | None:
     return FloatKernel.fit(values, dtype)
 
 
-def _simplest_between(low: Fraction, high: Fraction) -> Fraction:
-    """
-    The fraction of least denominator strictly between ``low`` and ``high``.
-
-    The walk down the Stern-Brocot tree, a continued-fraction term at a
-    time: a whole number strictly inside is the answer, and otherwise both
-    ends share their whole part and the question recurs on the reciprocals
-    of what is left.
-    """
-    if high <= 0:
-        return -_simplest_between(-high, -low)
-    if low < 0:
-        return Fraction(0)
-    whole = math.floor(low)
-    if whole + 1 < high:
-        return Fraction(whole + 1)
-    top = 1 / (high - whole)
-    if low == whole:
-        return whole + Fraction(1, math.floor(top) + 1)
-    return whole + 1 / _simplest_between(top, 1 / (low - whole))
-
-
-def _tick_residuals(delta: np.ndarray, k: np.ndarray, num: int, den: int):
-    """``delta * den - k * num``, or None where int64 cannot hold it."""
-    top = max(abs(int(delta[-1])), abs(int(delta[0])), 1)
-    if max(top * den, len(delta) * abs(num)) * 2 + den >= _INT64_MAX:
-        return None
-    return delta * den - k * num
-
-
 def _array_tick_grid(anchors: np.ndarray, dtype) -> np.ndarray | None:
-    """
-    Certify the rational tick grid whose floors are these labels, or None.
-
-    Label ``k`` is ``d`` ticks past the first exactly when ``d <= phase +
-    k * step < d + 1``, so every pair of labels bounds the step, and the
-    steps the labels allow are one interval. The fraction of least
-    denominator inside it is taken: it is the step a declared rate states,
-    which is what lets windows of one acquisition fitted apart still fuse.
-    The interval starts from each label against the first; a candidate the
-    labels refuse names the pair it broke, which cuts the interval, and the
-    search goes again. Failing a certificate the labels are stored, never
-    approximately fitted.
-    """
+    """Return the whole-tick grid stated by identical differences, or None."""
     span = int(anchors[-1]) - int(anchors[0])
     if abs(span) >= _INT64_MAX:
         return None
-    delta = anchors - anchors[0]
-    diffs = np.diff(delta)
-    if int(diffs.max()) - int(diffs.min()) > 1:
+    diffs = np.diff(anchors)
+    if diffs.max() != diffs.min():
         return None
     count = len(anchors)
-    if np.dtype(dtype).kind in "iu" or diffs.max() == diffs.min():
-        # One whole-tick spacing throughout, which an integer coordinate
-        # has to be: there is nothing to search for.
-        if diffs.max() != diffs.min():
-            return None
-        return _rows(dtype, anchors[0], [count], int(diffs[0]), 1, 0)
-    k = np.arange(count, dtype=np.int64)
-    wide, index = delta[1:].astype(np.float64), k[1:].astype(np.float64)
-    at_low = int(np.argmax((wide - 1) / index)) + 1
-    at_high = int(np.argmin((wide + 1) / index)) + 1
-    low = Fraction(int(delta[at_low]) - 1, at_low)
-    high = Fraction(int(delta[at_high]) + 1, at_high)
-    # Every pass cuts the interval at a bound the labels themselves state,
-    # of which there are finitely many, so the search ends.
-    while low < high:
-        fraction = _simplest_between(low, high)
-        num, den = fraction.numerator, fraction.denominator
-        residual = _tick_residuals(delta, k, num, den)
-        if residual is None or not num:
-            return None
-        most, least = int(np.argmax(residual)), int(np.argmin(residual))
-        phase = int(residual[most])
-        if phase < int(residual[least]) + den:
-            return _rows(dtype, anchors[0], [count], num, den, phase)
-        # The two labels no phase serves together bound the true step.
-        bound = Fraction(int(delta[least] - delta[most]) + 1, least - most)
-        before = (low, high)
-        if least > most:
-            high = min(high, bound)
-        else:
-            low = max(low, bound)
-        assert (low, high) != before, "a refused step must narrow the search"
-    return None
+    return _rows(dtype, anchors[0], [count], int(diffs[0]), 1, 0)
 
 
 def _first_anchor(values: np.ndarray, dtype) -> float | int:
@@ -2660,9 +2559,10 @@ def _first_anchor(values: np.ndarray, dtype) -> float | int:
 
 
 def _guard_declines(sample_count: int, run_count: int) -> bool:
-    """Whether a dense array's runs are too many to be worth detecting."""
+    """Whether detection would produce an overly fragmented table."""
     dense = sample_count >= _MIN_SEGMENT_GUARD_SIZE
-    return dense and run_count > _MAX_SEGMENT_FRACTION * sample_count
+    limit = _MAX_SEGMENT_FRACTION * sample_count
+    return dense and run_count > limit
 
 
 def _exact_dtype(start, stop, step, shape) -> np.dtype | None:
@@ -2875,26 +2775,13 @@ class NumericND(BaseCoord):
     """
     A numeric coordinate held as a table of runs.
 
-    The coordinate is a table of *runs*, held as one structured numpy array
-    with a record per run: its first label (``start``), its sample count
-    (``length``), its spacing as a fraction of ticks (``num`` over ``den``),
-    and the phase of its first sample on that grid (``offset``). Where the
-    labels do not follow a grid the run is *stored*: ``den`` is zero and its
-    labels are a slice of the ``labels`` array, which holds the labels of the
-    stored runs concatenated in table order.
-
-    A tick is one unit of the coordinate's resolution: a nanosecond for a
-    time, one for an integer. `dascore.core._run_kernels` holds the
-    arithmetic and the field layout for both kinds of label: a tick run is
-    an exact fraction, so a rate with no whole-tick period, 1024 Hz say,
-    never drifts and a strided slice keeps the phase it was cut at; a float
-    run counts an integer grid index, so a slice holds exactly the labels
-    of its parent.
-
-    Runs partition the samples, so index space has no holes; a hole is a run
-    which does not start where the run before it would put its next sample.
-    Runs may be in any order, overlapping included, and how they are ordered
-    is what `sorted` and `reverse_sorted` are read from.
+    Each structured-array row stores a run's origin, length, grid terms, and
+    phase. Integer and temporal grids use exact tick fractions; float grids
+    use integer indices into a multiplication or division formula. A row
+    with ``den == 0`` instead owns a slice of ``labels``. Runs partition the
+    samples, and a hole is a run that does not continue its predecessor.
+    Runs may be unordered or overlap; `sorted` and `reverse_sorted` describe
+    their label order.
 
     Build one with [`get_coord`](`dascore.core.coords.get_coord`) rather than
     with the class directly.
@@ -2969,14 +2856,7 @@ class NumericND(BaseCoord):
 
     @model_validator(mode="after")
     def _check_canonical(self) -> Self:
-        """
-        Refuse a table which is not the one form its labels can take.
-
-        The builders canonicalise what they are given and skip this; only
-        a table handed straight to the class is checked, since an unreduced
-        step, a phase past its denominator or a run of no samples would
-        compare unequal to the coordinate holding the very same labels.
-        """
+        """Refuse a directly constructed table that is not canonical."""
         rows, _ = _canonical(self.runs, self.labels, self.dtype)
         if not np.array_equal(rows, self.runs):
             msg = (
@@ -3113,11 +2993,11 @@ class NumericND(BaseCoord):
         cls, data, units=None, step=None, detect: bool = True, tolerance=None
     ) -> Self:
         """
-        Build from labels, keeping the runs they happen to follow.
+        Preserve labels, compressing recognized exact grids into runs.
 
-        Evenly sampled stretches become grid runs and everything else a
-        stored run. An array with as many runs as samples -- jittered
-        timestamps, say -- is kept whole rather than split into them.
+        Detection checks whole-tick spacing and simple float multiplication
+        grids. Unrecognized labels remain stored; highly fragmented arrays
+        stay whole rather than splitting into many small runs.
 
         Parameters
         ----------
@@ -3126,9 +3006,9 @@ class NumericND(BaseCoord):
         units
             The units of the labels.
         step
-            The grid the labels are declared to sit on. Every spacing must
-            then be a whole number of steps, and each run of consecutive
-            grid positions becomes a run of this step.
+            Declared spacing for one-dimensional monotonic labels. Every
+            spacing must span whole steps. The declaration survives stored
+            representation.
         detect
             Whether to read runs out of the spacings. Without it the labels
             are kept whole as one stored run. Detected grid runs must
@@ -3175,6 +3055,8 @@ class NumericND(BaseCoord):
         if _guard_declines(len(values), detected):
             starts, on_grid = np.zeros(1, np.int64), np.zeros(1, bool)
         lengths = np.diff(np.concatenate([starts, [len(values)]]))
+        limit = _MAX_SEGMENT_FRACTION * len(values)
+        fragmented = detected > limit and int(lengths.max()) <= limit
         if ticked:
             follow = np.minimum(starts + 1, len(values) - 1)
             spacings = np.where(on_grid, anchors[follow] - anchors[starts], 0)
@@ -3186,11 +3068,18 @@ class NumericND(BaseCoord):
             rows = _float_runs(values, starts, lengths, on_grid, dtype)
         labels = values[np.repeat(rows["den"] == 0, _counts(rows["length"]))]
         try:
-            return cls._build(dtype, rows, labels if len(labels) else None, units)
+            out = cls._build(dtype, rows, labels if len(labels) else None, units)
         except CoordError:
             # A detected run can reach the dtype limit even when the whole
             # array is not a grid. Its supplied labels remain valid.
             return cls.from_array(values, units=units, detect=False)
+        if dtype_time_like(dtype) and fragmented:
+            # Fractional-rate timestamps can alternate between neighbouring
+            # tick spacings. Keep real gaps, but not their phantom seams.
+            tolerance = GapTolerance.samples(DEFAULT_TOLERANCE)
+            if out.get_discontinuities("gaps", tolerance).empty:
+                return cls.from_array(values, units=units, detect=False)
+        return out
 
     @classmethod
     def _from_declared(cls, values, dtype, step, units, detect: bool = True) -> Self:
@@ -3914,15 +3803,7 @@ class NumericND(BaseCoord):
     @property
     @cached_method
     def _run_fingerprints(self) -> np.ndarray:
-        """
-        A 64 bit hash of each run, independent of where it sits.
-
-        A row of ticks is canonical, so its own words are what it is. A
-        float row is not -- one set of doubles can be counted from more
-        than one origin, and a slice keeps its parent's -- so a float run
-        is hashed over the labels it makes, which equal labels always
-        share. Float axes are short; the labels of a long one are not.
-        """
+        """Hash each run independently; hash float and stored labels by value."""
         rows = self.runs
         seed = np.uint64(_blake(str(np.dtype(self.dtype)).encode()))
         out = np.full(len(rows), seed, np.uint64)

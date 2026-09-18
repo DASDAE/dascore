@@ -589,53 +589,28 @@ class FloatKernel:
 
     # --- reading a grid out of labels
 
-    @staticmethod
-    def _short_forms(estimates: list[float]) -> list[float]:
-        """Each estimate, then the short decimals it may be a rounding of."""
-        out = [x for x in dict.fromkeys(estimates) if x and math.isfinite(x)]
-        # A spacing typed as 0.1, or a rate typed as 10000, is rarely the
-        # difference of two labels to the last bit.
-        for digits in range(15, 2, -1):
-            for estimate in tuple(out[:2]):
-                short = float(f"{estimate:.{digits}g}")
-                if short and short not in out:
-                    out.append(short)
-        return out
-
     @classmethod
     def _candidates(cls, values: np.ndarray):
         """
-        Rows the labels might have been built as, likeliest first.
+        Direct multiplication grids the labels might have been built as.
 
-        Each is ``(start, step, den, k0)``. A grid is anchored at its first
-        label, as ``start + arange * step`` builds one, or at zero with a
-        grid index, as a slice of ``arange * step`` arrives. Multiplied
-        spacings come first, then divided ones, and last whole ticks over a
-        power of a thousand, which is a time counted in seconds.
+        The first spacing and endpoint spacing are each tried from the first
+        label and from zero. Exact reproduction decides whether one is the
+        grid; no decimal, reciprocal-rate, or time-scale search is done.
         """
         count, first = len(values), float(values[0])
         with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
-            raw = [
+            steps = [
                 float(values[1] - values[0]),
                 float((values[-1] - values[0]) / (count - 1)),
             ]
-            rates = [1 / x if x else 0.0 for x in raw]
-        for step in cls._short_forms(raw):
+        for step in dict.fromkeys(steps):
+            if not step or not math.isfinite(step):
+                continue
             yield first, step, 1, 0
-            yield 0.0, step, 1, round(first / step)
-        for rate in cls._short_forms(rates):
-            yield first, rate, -1, 0
-            yield 0.0, rate, -1, round(first * rate)
-        for ticks in (1e3, 1e6, 1e9):
-            stride = abs(round(raw[0] * ticks))
-            if stride > 1:
-                yield (
-                    0.0,
-                    math.copysign(ticks, raw[0]),
-                    -stride,
-                    round(abs(first) * ticks)
-                    * (1 if (first >= 0) == (raw[0] >= 0) else -1),
-                )
+            index = first / step
+            if math.isfinite(index):
+                yield 0.0, step, 1, round(index)
 
     @classmethod
     def _reproduces(cls, row: np.ndarray, values: np.ndarray, dtype) -> bool:
@@ -656,15 +631,12 @@ class FloatKernel:
         return True
 
     @classmethod
-    def fit(cls, values, dtype, origin=None, budget=None) -> np.ndarray | None:
+    def fit(cls, values, dtype, origin=None) -> np.ndarray | None:
         """
         The one row which reproduces every label exactly, or None.
 
-        ``origin`` is a ``(start, step, den)`` to try first: the grid a
-        neighbouring run was found on, which is the likeliest answer and
-        costs one try. ``budget`` is a mutable list holding how many
-        candidates may still be tried across a whole array, so labels no
-        grid describes cost a bounded search rather than one per run.
+        ``origin`` is a ``(start, step, den)`` to try first, normally the
+        grid found for a neighbouring run or an explicitly declared step.
         """
         count = len(values)
         wide = np.asarray(values, np.float64)
@@ -679,23 +651,12 @@ class FloatKernel:
                 )
             if math.isfinite(index):
                 tries.append((start, step, den, round(index)))
-        spent = 0
-        for spent, (start, step, den, k0) in enumerate(
-            dict.fromkeys([*tries, *cls._candidates(wide)])
-        ):
-            if budget is not None and spent >= budget[0]:
-                break
+        for start, step, den, k0 in dict.fromkeys([*tries, *cls._candidates(wide)]):
             if abs(k0) + count * abs(den) >= _FLOAT_INDEX_MAX:
                 continue
             row = float_rows(dtype, [start], [count], [step], [den], [k0])
             if cls._reproduces(row, values, dtype):
-                if budget is not None:
-                    # the candidate which answered costs nothing: a run which
-                    # follows is tried on this grid first, and takes one try
-                    budget[0] -= min(spent, 1)
                 return row
-        if budget is not None:
-            budget[0] -= spent + 1
         return None
 
 

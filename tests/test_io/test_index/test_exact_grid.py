@@ -9,7 +9,8 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.core.coords import NumericND, get_coord
+from dascore.core._run_kernels import float_rows
+from dascore.core.coords import NumericND, concat_tables, get_coord
 from dascore.core.summary import PatchSummary
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import _coord_from_envelope
@@ -195,6 +196,42 @@ class TestFlatRelation:
         assert coord.dtype == np.dtype("float64")
         assert not coord._exact
 
+    def test_native_integer_grid_needs_no_stored_dtype(self):
+        """A native integer envelope carries enough dtype for its grid."""
+        row = {
+            "x_min": np.int64(2),
+            "x_max": np.int64(5),
+            "x_step": np.int64(1),
+            "_x_grid": (1, 1, 0, 4),
+        }
+        np.testing.assert_array_equal(coord_from_row(row, "x").values, [2, 3, 4, 5])
+
+    def test_large_integer_grid_envelope_is_refused(self):
+        """A float envelope past exact integer precision cannot state a grid."""
+        row = {
+            "x_min": float(2**60),
+            "x_max": float(2**60 + 3),
+            "x_step": 1.0,
+            "_x_coord_dtype": "int64",
+            "_x_grid": (1, 1, 0, 4),
+        }
+        assert coord_from_row(row, "x") is None
+
+    def test_mixed_rate_run_table_rebuilds_without_a_step(self):
+        """A full run table needs no scalar envelope step."""
+        coord = concat_tables(
+            NumericND.from_run(0.0, 1.0, 3),
+            NumericND.from_run(3.0, 2.0, 3),
+        )
+        row = {
+            "x_min": coord.min(),
+            "x_max": coord.max(),
+            "x_step": None,
+            "_x_coord_dtype": str(coord.dtype),
+            "_x_runs": tuple(tuple(item) for item in coord.runs.tolist()),
+        }
+        assert coord_from_row(row, "x") == coord
+
 
 class TestRowsRefused:
     """A row which cannot state the coordinate exactly states nothing."""
@@ -322,11 +359,21 @@ class TestFloatRunsRebuild:
     def float_spool(self, request, tmp_path_factory):
         """A directory holding one patch whose distance axis is awkward."""
         whole = get_coord(data=np.arange(1000) * 0.1, units="m")
+        divided = get_coord(
+            runs=float_rows("float64", [0.0], [325], [250.0], [-1], [0]),
+            dtype="float64",
+            units="m",
+        )
+        descending = get_coord(
+            runs=float_rows("float64", [0.0], [325], [-250.0], [-1], [0]),
+            dtype="float64",
+            units="m",
+        )
         coords = {
             "sliced": whole[150:450],
             "strided": whole[7::3],
-            "divided": get_coord(data=np.arange(325) / 250, units="m")[25:],
-            "descending": get_coord(data=-np.arange(325) / 250, units="m")[25:],
+            "divided": divided[25:],
+            "descending": descending[25:],
             "reversed": whole[::-1],
             # counted from its own first label, so the row needs no origin
             "plain": get_coord(data=3.7 + np.arange(300) * 0.1, units="m"),

@@ -29,7 +29,6 @@ from dascore.core.coords import (
     CoordSummary,
     _grid_run_stops,
     normalize_coord_dtype,
-    runs_from_rows,
 )
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io.core import FiberIO, _required_resource_type
@@ -62,6 +61,7 @@ from dascore.utils.io import IOResourceManager
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import (
     PatchAssembler,
+    _decode_index_coord_runs,
     coord_from_row,
     fill_to_row,
     patch_from_fill,
@@ -253,7 +253,9 @@ def _coord_record_from_row(
     # the envelope became.
     stored = row.get(f"_{name}_coord_dtype")
     run_dtype = stored if isinstance(stored, str) and stored else dtype
-    runs = _run_table(row, name, run_dtype, lo, hi) if fingerprint else None
+    runs = (
+        _decode_index_coord_runs(row, name, run_dtype, lo, hi) if fingerprint else None
+    )
     stops = None
     if runs is not None:
         length = int(runs["length"].sum())
@@ -273,40 +275,6 @@ def _coord_record_from_row(
         run_stops=stops,
     )
     return _coord_record(name, summary)
-
-
-def _as_tick(value, dtype) -> int | float:
-    """One label as the run table counts it: a tick, or a float."""
-    array = np.asarray(value, dtype=np.dtype(dtype))
-    if array.dtype.kind in "mM":
-        return int(array.astype("int64"))
-    return float(array)
-
-
-def _run_table(row: Mapping, name: str, coord_dtype: str, lo, hi):
-    """
-    The run table a plan's row states for one coordinate, or None.
-
-    A coordinate held as several runs carries them whole, so the output
-    keeps its holes; one held as a single grid run carries that grid,
-    whose numerator says which end of the envelope it starts at.
-    """
-    dtype = normalize_coord_dtype(coord_dtype)
-    table = row.get(f"_{name}_runs")
-    if isinstance(table, tuple) and table:
-        if any(int(x[3]) == 0 for x in table):
-            # A stored run's labels are in the file; the plan cannot state
-            # them, so the coordinate keeps its envelope instead.
-            return None
-        return runs_from_rows(table, dtype)
-    grid = row.get(f"_{name}_grid")
-    if not isinstance(grid, tuple):
-        return None
-    num, den, offset, length, *origin = grid
-    start = _as_tick(hi if num < 0 else lo, dtype)
-    if origin and origin[0] is not None:
-        start = origin[0]
-    return runs_from_rows([(start, length, num, den, offset)], dtype)
 
 
 def _extrema(grouped, how: str) -> np.ndarray:
