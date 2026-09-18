@@ -399,10 +399,12 @@ class TestReviewFindings:
         assert tag.endswith(":seam_aliased")
         assert resolve_patch_function(tag) is SeamAliased.patch_function
 
+    @pytest.mark.concurrency
     def test_a_module_reloaded_replaces_its_own_entry(self):
         """`%autoreload` redefines a class; that is not two claiming one."""
         # In a process of its own: a reload rebinds what every later test
-        # in this one would go on using.
+        # in this one would go on using. Marked so the WebAssembly suite,
+        # which has no processes to spawn, deselects it.
         script = (
             "import importlib, dascore as dc\n"
             "importlib.reload(importlib.import_module('dascore.proc.basic'))\n"
