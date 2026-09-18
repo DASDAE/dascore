@@ -3,15 +3,17 @@
 A [`PatchProcessor`](`dascore.core.processor.PatchProcessor`) subclass is a
 whole operation: its fields are the parameters, `get_metadata` works out the
 result's metadata and the numbers the kernel needs without touching data, and
-`kernel` computes the array. Subclassing registers the operation and
-generates its patch function (`cls.patch_function`), so the class is written
-once and the function is never hand-written.
+`kernel` computes the array. Subclassing registers the operation, so the
+class is written once and the patch method is a two-line body which builds
+it and runs it.
 
 One of DASCore's own operations which writes no kernel changes metadata
-alone, so it is bound onto [`PatchMeta`](`dascore.PatchMeta`) and runs on a
-patch's metadata as readily as on the patch. An operation defined outside
-DASCore is bound to neither class and is called through `dc.proc`: the
-data-less contract is one DASCore holds itself to.
+alone, so its method is written in [`PatchMeta`](`dascore.PatchMeta`) and
+runs on a patch's metadata as readily as on the patch; one with a kernel is
+written in [`Patch`](`dascore.Patch`). A class defined outside DASCore is a
+method of neither -- the data-less contract is one DASCore holds itself to,
+and nothing outside it can write into `Patch` -- so it declares its own
+staticmethod, which is what the registry holds.
 
 Examples
 --------
@@ -20,6 +22,7 @@ Examples
 >>> class ScaleExample(dc.PatchProcessor):
 ...     '''Multiply the data by a factor.'''
 ...
+...     name = None  # so this example claims no name of its own
 ...     factor: float = 2.0
 ...
 ...     def kernel(self, data):
@@ -27,14 +30,17 @@ Examples
 >>>
 >>> patch = dc.get_example_patch()
 >>> out = ScaleExample(3)(patch)
->>> assert out.equals(ScaleExample.patch_function(patch, factor=3))
 >>> assert ScaleExample(3).fingerprint == ScaleExample(3.0).fingerprint
 """
 
 from __future__ import annotations
 
+import functools
 import inspect
 import numbers
+import sys
+from contextvars import ContextVar
+from types import FunctionType
 from typing import TYPE_CHECKING, Any, ClassVar, overload
 
 import numpy as np
@@ -46,6 +52,7 @@ from dascore.config import get_config
 from dascore.constants import PatchMetaType, PatchType
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
+from dascore.utils.attrs import _values_equal
 from dascore.utils.identity import ids_enabled
 from dascore.utils.patch import (
     _call_str,
@@ -68,6 +75,11 @@ from dascore.utils.serialize import model_values
 if TYPE_CHECKING:
     from dascore.core.attrs import PatchAttrs
 
+# Whether the next operation to run writes its call into history and ids.
+# A bypass (`patch_function.raw_function`) clears it for the one call it
+# wraps; `run` spends it, so nothing further down is affected.
+_RECORD: ContextVar[bool] = ContextVar("dascore_record_call", default=True)
+
 
 class PatchProcessor(DascoreBaseModel):
     """
@@ -84,10 +96,24 @@ class PatchProcessor(DascoreBaseModel):
       only the computed data can say.
 
     Each subclass is registered under `name` (snake case of the class name
-    unless set) and gets a generated patch function, `cls.patch_function`:
-    `(patch, <fields in declaration order>)`, with `*name` for the field
-    `_var_positional` names and `**kwargs` when `extra="allow"`. A class
-    with `name = None` gets neither.
+    unless set). One of DASCore's own is reached through a method of that
+    name, written in the body of `Patch` or, for an operation with no
+    kernel, `PatchMeta`:
+
+        def scale(self, factor: float = 2.0) -> Self:
+            '''Multiply the data by a factor.'''
+            return Scale(factor=factor).run(self)
+
+    A real method is one a type checker, an IDE and `help` can all read,
+    which a synthesized function is not, and `-> Self` is what `run`
+    promises: metadata comes back metadata and a subclass comes back a
+    subclass. Every field must appear among its parameters; the method may
+    take more, since a body may resolve something before building the
+    instance. `cls.patch_function` is that method, and carries the class's
+    docstring: the parameters, notes and examples are written once, with
+    the class. A class with `name = None` has no method and is registered
+    nowhere, and a class outside DASCore declares a staticmethod of that
+    name itself, taking the patch positionally.
     """
 
     model_config = ConfigDict(extra="forbid", frozen=True)
@@ -104,17 +130,13 @@ class PatchProcessor(DascoreBaseModel):
     data_type: ClassVar[str | None] = None
     # How a call is written into history: "full", "method_name" or None.
     history: ClassVar[str | None] = "full"
-    # The field a `*args` group fills in the generated function, if any.
-    _var_positional: ClassVar[str | None] = None
     # The fields a call may give positionally, in order; None for all.
     _positional_fields: ClassVar[tuple[str, ...] | None] = None
     # Kernels registered per backend by `register_kernel`, looked up in each
     # class's own `__dict__` so a subclass never answers with its parent's.
     _kernels: ClassVar[dict[str, Any]] = {}
-    # Generated for each named subclass.
+    # The patch method each named subclass declares.
     patch_function: ClassVar[Any] = None
-    # The signature a call binds against: the fields, without the patch.
-    _call_signature: ClassVar[inspect.Signature]
 
     @classmethod
     def __pydantic_init_subclass__(cls, **kwargs):
@@ -139,18 +161,33 @@ class PatchProcessor(DascoreBaseModel):
         if cls.name is not None and not cls.name.isidentifier():
             msg = f"{cls.__name__}.name must be a python identifier; got {cls.name!r}."
             raise ParameterError(msg)
-        cls._call_signature = _call_signature(cls)
         cls.patch_function = None
         if cls.name is not None:
-            cls.patch_function = _make_patch_function(cls, cls.name)
-            register_patch_function(cls.patch_function)
-            _bind_patch_function(cls)
+            _check_patch_listing(cls)
+
+    @classmethod
+    def _positional_names(cls) -> tuple[str, ...]:
+        """Return the fields a call may give positionally, in order."""
+        names = tuple(cls.model_fields)
+        if cls._positional_fields is None:
+            return names
+        return tuple(x for x in names if x in cls._positional_fields)
 
     def __init__(self, /, *args, **kwargs):
-        """Bind positional arguments as the generated function would."""
+        """Take the fields positionally, in the order they are declared."""
         if args:
-            bound = type(self)._call_signature.bind(*args, **kwargs).arguments
-            kwargs = {**bound.pop("kwargs", {}), **bound}
+            names = type(self)._positional_names()
+            if len(args) > len(names):
+                msg = (
+                    f"{type(self).__name__} takes {len(names)} positional "
+                    f"argument(s); got {len(args)}."
+                )
+                raise TypeError(msg)
+            given = dict(zip(names, args, strict=False))
+            if repeated := sorted(set(given) & set(kwargs)):
+                msg = f"{type(self).__name__} got repeated argument(s): {repeated}."
+                raise TypeError(msg)
+            kwargs = {**given, **kwargs}
         super().__init__(**kwargs)
 
     @property
@@ -190,7 +227,7 @@ class PatchProcessor(DascoreBaseModel):
     def __call__(self, patch: PatchType) -> PatchType: ...
 
     @overload
-    def __call__(self, patch: dc.PatchMeta) -> dc.PatchMeta: ...
+    def __call__(self, patch: PatchMetaType) -> PatchMetaType: ...
 
     def __call__(self, patch):
         """Run the operation; see `run`."""
@@ -256,7 +293,7 @@ class PatchProcessor(DascoreBaseModel):
     def run(self, patch: PatchType) -> PatchType: ...
 
     @overload
-    def run(self, patch: dc.PatchMeta) -> dc.PatchMeta: ...
+    def run(self, patch: PatchMetaType) -> PatchMetaType: ...
 
     def run(self, patch):
         """
@@ -267,7 +304,12 @@ class PatchProcessor(DascoreBaseModel):
         the metadata nor the data hands back what it was given, and records
         nothing.
         """
-        return self._run(patch, record=True)
+        record = _RECORD.get()
+        if not record:
+            # Spent on this one call, which is the one a bypass wrapped: an
+            # operation running another inside itself records that one.
+            _RECORD.set(True)
+        return self._run(patch, record=record)
 
     def _run(self, patch: dc.PatchMeta, record: bool) -> dc.PatchMeta:
         """Run the operation; `record=False` writes no history or ids."""
@@ -341,11 +383,11 @@ _RESERVED = frozenset(x for x in vars(PatchProcessor) if not x.startswith("_")) 
 }
 
 
-# Classes whose function is generated before `dascore.core.patch` has
-# finished importing, which is most of DASCore's own; the module drains them
-# once both host classes exist.
-_PENDING: list[type[PatchProcessor]] = []
-# `[Patch, PatchMeta]`, once there are such classes to bind to.
+# Classes created before `dascore.core.patch` has finished importing, which
+# is every one of DASCore's own; they are checked once both classes exist to
+# be checked against.
+_UNCHECKED: list[type[PatchProcessor]] = []
+# `[Patch, PatchMeta]`, once there are such classes to check against.
 _HOSTS: list[type] = []
 
 
@@ -376,46 +418,95 @@ def _meta_hosted(cls) -> bool:
     return _is_dascores(cls) and not _has_kernel(cls)
 
 
-def _bind_patch_function(cls) -> None:
-    """Bind a generated function onto `PatchMeta`, or check `Patch` lists it."""
+def _home(host: type) -> str:
+    """Return the file a class is written in, for a message to point at."""
+    leaf = "patch_meta" if host.__name__ == "PatchMeta" else "patch"
+    return f"dascore/core/{leaf}.py"
+
+
+def _check_patch_listing(cls) -> None:
+    """Find an operation's method, check it, and give it what reads it."""
     if not _HOSTS:
-        _PENDING.append(cls)
+        _UNCHECKED.append(cls)
         return
-    meta_class = _HOSTS[1]
-    if _meta_hosted(cls):
-        existing = getattr(meta_class, cls.name, None)
-        if existing is not None and not hasattr(existing, "__processor__"):
+    # Only reached for a named class, which is the one with a method.
+    assert cls.name is not None
+    own = _is_dascores(cls)
+    func = _hosted_method(cls) if own else _declared_method(cls)
+    _check_signature(cls, func)
+    if own:
+        _check_returns_self(cls, func)
+    cls.patch_function = _prepare_patch_function(cls, func)
+    register_patch_function(cls.patch_function)
+    if not own:
+        return
+    # The operation's long-standing functional spellings, both the method
+    # itself rather than a copy of it: `dascore.proc.coords.select` is a
+    # documented URL, and `dascore.proc.select` is how a body holding no
+    # patch reaches it. Set here because the method is written in a class
+    # which cannot exist when either module is read.
+    for module in (cls.__module__, "dascore.proc"):
+        setattr(sys.modules[module], cls.name, cls.patch_function)
+
+
+def _hosted_method(cls: type[PatchProcessor]):
+    """Return the method DASCore's own class writes for an operation."""
+    patch_class, meta_class = _HOSTS
+    host, other = (meta_class, patch_class)
+    if not _meta_hosted(cls):
+        host, other = other, host
+    if _method_for(cls, other) is not None:
+        because = "writes no kernel" if host is meta_class else "computes data"
+        msg = (
+            f"{other.__name__} defines {cls.name!r}, but {cls.__name__} "
+            f"{because}, so it belongs to {host.__name__}. Move the method "
+            f"from {_home(other)} to {_home(host)}."
+        )
+        raise ParameterError(msg)
+    if (func := _method_for(cls, host)) is not None:
+        # Checked before anything is stamped onto it: two classes claiming
+        # one name would otherwise leave the first one's method pointing at
+        # the second, and only then be refused.
+        owner = getattr(func, "__processor__", None)
+        if owner not in (None, cls):
             msg = (
-                f"{cls.__name__} would bind {cls.name!r} onto "
-                f"{meta_class.__name__}, which already means something else "
-                "there; rename the class or give it a free `name`."
+                f"Two classes claim the tag {cls.name!r}: {owner.__name__} "
+                f"and {cls.__name__}. {host.__name__}.{cls.name} is "
+                f"{owner.__name__}'s, so {cls.__name__} needs a name of its "
+                "own, or `name = None` to claim none."
             )
             raise ParameterError(msg)
-        setattr(meta_class, cls.name, cls.patch_function)
-        return
-    # A kernel, whether written in the body or registered later: metadata
-    # cannot run this, so it must not still answer for it.
-    if meta_class.__dict__.get(cls.name) is cls.patch_function:
-        delattr(meta_class, cls.name)
-
-
-def _check_patch_lists(cls, patch_class) -> None:
-    """Refuse one of DASCore's own operations which `Patch`'s body omits."""
-    # Nothing out of tree can be written into Patch's body, so there is
-    # nothing to check: a plugin's operation is reached through the registry
-    # and `dc.proc`, as it was before any of this was bound anywhere.
-    if not _is_dascores(cls):
-        return
-    # Its own body, not what it inherits: an operation still bound onto
-    # PatchMeta answers `getattr` here right up until it is unbound.
-    if patch_class.__dict__.get(cls.name) is cls.patch_function:
-        return
+        return func
     msg = (
-        f"{cls.__name__} computes data, so it is a {patch_class.__name__} "
-        f"method, but {patch_class.__name__} does not list {cls.name!r}. Add "
-        f"`{cls.name} = dascore.proc.{cls.name}` to dascore/core/patch.py."
+        f"{host.__name__} defines no {cls.name!r} method, which "
+        f"{cls.__name__} is registered as, so nothing can reach it. Add "
+        f"`def {cls.name}(self, ...) -> Self` to {_home(host)}, whose body "
+        f"is `return {cls.__name__}(...).run(self)`."
     )
     raise ParameterError(msg)
+
+
+def _declared_method(cls: type[PatchProcessor]):
+    """Return the method a class outside DASCore declares for itself."""
+    # Only reached for a named class, which is the one with a method.
+    assert cls.name is not None
+    # Nothing outside DASCore can write into `Patch`, and the data-less
+    # contract which puts a method on `PatchMeta` is one DASCore holds only
+    # itself to, so the class carries its own doorway. Its own body, never
+    # a parent's: a subclass reaching one would stamp the parent's function
+    # with its own class.
+    if not isinstance(cls.__dict__.get(cls.name), staticmethod):
+        msg = (
+            f"{cls.__name__} is registered as {cls.name!r} and is not "
+            f"DASCore's own, so it must declare `@staticmethod def "
+            f"{cls.name}(patch, /, ...)` itself, whose parameters are the "
+            "operation's. Set `name = None` for a class with no patch "
+            "function."
+        )
+        raise ParameterError(msg)
+    # Resolved through the class, which is the plain function a staticmethod
+    # holds: the object itself would never be handed the patch.
+    return getattr(cls, cls.name)
 
 
 def _subclasses(cls):
@@ -425,39 +516,39 @@ def _subclasses(cls):
         yield from _subclasses(sub)
 
 
-def _rebind_for_kernel(cls) -> None:
-    """Re-site a class, and its descendants, around a new kernel."""
-    # Nothing is bound yet, and the pending drain asks the question fresh.
+def _recheck_for_kernel(cls) -> None:
+    """Refuse a kernel which would move an operation between the classes."""
+    # Nothing is listed yet, and the deferred check asks the question fresh.
     if not _HOSTS:
         return
+    patch_class, meta_class = _HOSTS
     # `kernel_for` walks the MRO, so this kernel answers for every subclass
-    # as well: one bound as metadata-only before now belongs where the data
-    # are. A subclass with a kernel of its own is already there, and an
-    # unnamed one was never bound at all.
-    patch_class = _HOSTS[0]
-    for klass in (cls, *_subclasses(cls)):
-        if klass.patch_function is None:
-            continue
-        # Asked before anything moves: unbinding it from PatchMeta leaves
-        # nothing behind unless Patch's body lists it, so say which line is
-        # missing rather than deleting a public method quietly.
-        if not _meta_hosted(klass):
-            _check_patch_lists(klass, patch_class)
-        _bind_patch_function(klass)
+    # as well: each of DASCore's own which metadata still lists belongs on
+    # `Patch` now, and a class body is not something a process can rewrite.
+    moved = [
+        x.name
+        for x in (cls, *_subclasses(cls))
+        if x.name is not None
+        and _is_dascores(x)
+        and _method_for(x, meta_class) is not None
+    ]
+    if not moved:
+        return
+    msg = (
+        f"A kernel registered for {cls.__name__} gives {moved} data to "
+        f"compute, so their methods must move from {_home(meta_class)} to "
+        f"{_home(patch_class)}. Move them first, or write the kernel into "
+        "the class body where it is read at class creation."
+    )
+    raise ParameterError(msg)
 
 
-def bind_pending_patch_functions(patch_class, meta_class) -> None:
-    """Bind the functions generated before their host classes existed."""
+def check_patch_listings(patch_class, meta_class) -> None:
+    """Check the classes made before there was anything to check against."""
     _HOSTS[:] = [patch_class, meta_class]
-    pending, _PENDING[:] = list(_PENDING), []
-    for cls in pending:
-        _bind_patch_function(cls)
-        # Asked only of what was written before the tree finished importing,
-        # which is DASCore's own source and nothing else: a plugin, a
-        # notebook or a docstring example cannot add a line to `Patch` and
-        # is not asked to.
-        if not _meta_hosted(cls):
-            _check_patch_lists(cls, patch_class)
+    unchecked, _UNCHECKED[:] = list(_UNCHECKED), []
+    for cls in unchecked:
+        _check_patch_listing(cls)
 
 
 def register_kernel(cls: type[PatchProcessor], backend: str):
@@ -485,7 +576,7 @@ def register_kernel(cls: type[PatchProcessor], backend: str):
             # A class body which wrote no kernel looked metadata-only when
             # its function was generated; this kernel says otherwise, for
             # the class and for everything which inherits it.
-            _rebind_for_kernel(cls)
+            _recheck_for_kernel(cls)
         except Exception:
             # Refused, so the class is left as it was rather than holding a
             # kernel which nothing is bound to run.
@@ -499,102 +590,128 @@ def register_kernel(cls: type[PatchProcessor], backend: str):
     return decorate
 
 
-def _call_signature(cls: type[PatchProcessor]) -> inspect.Signature:
-    """Return the signature a call binds against: the fields, then extras."""
-    kind = inspect.Parameter.POSITIONAL_OR_KEYWORD
-    parameters = []
+def _method_for(cls: type[PatchProcessor], host: type):
+    """Return the method a class's host defines for it, or None."""
+    # Only reached for a named class, which is the one with a method.
+    assert cls.name is not None
+    # Its own body, not what it inherits: `Patch` answers for every name
+    # `PatchMeta` defines, which is the point of defining them there.
+    found = host.__dict__.get(cls.name)
+    return found if isinstance(found, FunctionType) else None
+
+
+def _check_signature(cls: type[PatchProcessor], func) -> None:
+    """Refuse a method whose parameters have drifted from the fields."""
+    parameters = inspect.signature(func).parameters
+    # One way only: a field the method cannot be given is unreachable, while
+    # a parameter which is not a field is a value the body resolves for
+    # itself before building the instance.
+    if missing := sorted(set(cls.model_fields) - set(parameters)):
+        msg = (
+            f"{cls.name} does not take {missing}, which the class declares "
+            "as fields, so no call can reach them. Add them to the method's "
+            "parameters."
+        )
+        raise ParameterError(msg)
+    # A class which takes extras needs somewhere for a call to spell them:
+    # `tile_apply(time=0.05)` is a window, not a field, and a method with no
+    # var-keyword would refuse it before the class ever saw it.
+    if cls.model_config.get("extra") == "allow" and not any(
+        x.kind is x.VAR_KEYWORD for x in parameters.values()
+    ):
+        msg = (
+            f"{cls.name} takes no `**kwargs`, but the class allows extras, "
+            "so no call can reach them. Add a var-keyword parameter, or set "
+            "the class's `extra` to forbid them."
+        )
+        raise ParameterError(msg)
+    positional = cls._positional_names()
     for name, field in cls.model_fields.items():
-        if name == cls._var_positional:
-            parameters.append(inspect.Parameter(name, inspect.Parameter.VAR_POSITIONAL))
-            kind = inspect.Parameter.KEYWORD_ONLY
+        parameter = parameters[name]
+        # `*args` and `**kwargs` collect rather than default.
+        if parameter.kind in {parameter.VAR_POSITIONAL, parameter.VAR_KEYWORD}:
             continue
+        # A field the class refuses by position must be refused by the
+        # method too, or a call places a value the class would not have.
+        if name not in positional and parameter.kind is not parameter.KEYWORD_ONLY:
+            msg = (
+                f"{cls.name} takes {name} by position, which the class "
+                "refuses: it is not in `_positional_fields`. Put a bare `*` "
+                "before it, or add it to `_positional_fields`."
+            )
+            raise ParameterError(msg)
         default = (
             inspect.Parameter.empty
             if field.is_required()
             else field.get_default(call_default_factory=True)
         )
-        if cls._positional_fields is not None and name not in cls._positional_fields:
-            kind = inspect.Parameter.KEYWORD_ONLY
-        annotation = field.annotation or inspect.Parameter.empty
-        # A required field after a defaulted one (a subclass adding one) can
-        # only be given by name.
-        if default is inspect.Parameter.empty and any(
-            x.default is not inspect.Parameter.empty for x in parameters
-        ):
-            kind = inspect.Parameter.KEYWORD_ONLY
-        parameters.append(
-            inspect.Parameter(name, kind, default=default, annotation=annotation)
-        )
-    if cls.model_config.get("extra") == "allow":
-        parameters.append(inspect.Parameter("kwargs", inspect.Parameter.VAR_KEYWORD))
-    return inspect.Signature(parameters)
+        if not _values_equal(parameter.default, default):
+            msg = (
+                f"{cls.name} defaults {name} to {parameter.default!r} where "
+                f"{cls.__name__} defaults it to {default!r}; the two must "
+                "agree on what unset means."
+            )
+            raise ParameterError(msg)
 
 
-def _make_patch_function(cls: type[PatchProcessor], name: str):
-    """Return the patch function a processor class generates."""
+def _check_returns_self(cls: type[PatchProcessor], func) -> None:
+    """Refuse a method which claims a kind other than the one it was given."""
+    # `run` gives back what it was handed, so metadata comes back metadata
+    # and a `Patch` subclass comes back that subclass. Only `Self` says so;
+    # a class named outright would flatten both.
+    returns = inspect.signature(func).return_annotation
+    if returns == "Self":
+        return
+    msg = (
+        f"{cls.name} is annotated `-> {returns}`, but `run` gives back the "
+        "kind it was given, which only `-> Self` says. Annotate it `-> Self`."
+    )
+    raise ParameterError(msg)
 
-    def build(args, kwargs):
-        """Bind a call against the signature, as a function's would be."""
-        bound = cls._call_signature.bind(*args, **kwargs).arguments
-        extras = dict(bound.pop("kwargs", {}))
-        # `bind` fills every field but the `*args` one by name, so that is
-        # the only field which can turn up among the extras, and it does so
-        # only when a caller named something after it -- a coordinate called
-        # `empty_dims`, say. Handed to the constructor it would land on the
-        # field, so it is set as the extra `bind` already said it was.
-        shadowed: dict[str, Any] = {}
-        group = cls._var_positional
-        if group is not None and group in extras:
-            shadowed[group] = extras.pop(group)
-        out = cls(**extras, **bound)
-        if shadowed:
-            # `bind` only had extras to give because the model allows them,
-            # so pydantic has somewhere to put this one.
-            assert out.__pydantic_extra__ is not None
-            out.__pydantic_extra__.update(shadowed)
-        return out
 
-    # The patch is positional-only, so a field or an extra may be named
-    # `patch`: `rename_coords(patch="renamed")`.
-    def patch_function(patch, /, *args, **kwargs):
-        return build(args, kwargs).run(patch)
+def _make_bypass(func):
+    """Return the operation without the history and the ids."""
 
-    def bypass(patch, /, *args, **kwargs):
-        return build(args, kwargs)._run(patch, record=False)
+    @functools.wraps(func)
+    def raw_function(patch, /, *args, **kwargs):
+        """Run the operation, recording nothing of this call."""
+        # The method builds the processor itself, so the flag is where the
+        # two meet. `run` spends it, so an operation which runs another
+        # inside itself still records that one.
+        token = _RECORD.set(False)
+        try:
+            return func(patch, *args, **kwargs)
+        finally:
+            _RECORD.reset(token)
 
+    # The path which actually resolves, so a process pool can pickle it:
+    # `functools.wraps` copied the method's, which names no attribute of
+    # its own. Distinct per operation, so two bypasses given as arguments
+    # to another fingerprint as two callables rather than one closure.
+    raw_function.__qualname__ = f"{func.__qualname__}.raw_function"
+    return raw_function
+
+
+def _prepare_patch_function(cls: type[PatchProcessor], func):
+    """Give a class's method what the framework and the docs read."""
+    # Built first: `functools.wraps` copies the function's `__dict__`, and
+    # the attributes below would then point the bypass back at itself.
+    raw = _make_bypass(func)
     # `Any`, because the attributes below are ones a plain function lacks.
-    func: Any = patch_function
-    patch = inspect.Parameter(
-        "patch", inspect.Parameter.POSITIONAL_ONLY, annotation="PatchType"
-    )
-    signature = cls._call_signature
-    func.__signature__ = signature.replace(
-        parameters=[patch, *signature.parameters.values()],
-        return_annotation="PatchType",
-    )
-    func.__name__ = name
-    # The class attribute it is, so pickle finds it for any class defined at
-    # module level, and two classes claiming one name collide in the
-    # registry rather than one silently replacing the other.
-    func.__qualname__ = f"{cls.__qualname__}.patch_function"
-    func.__module__ = cls.__module__
-    func.__doc__ = cls.__doc__
-    func.__version__ = cls.__version__
+    out: Any = func
+    out.__version__ = cls.__version__
+    # The operation is documented once, with the processor: its parameters,
+    # notes and examples are there, and the method's own docstring is the
+    # one-line summary a reader of the class wants.
+    out.__doc__ = cls.__doc__
     # `_history` is read by `record_call`; `__processor__` by the docs
     # builder, which reads the class for the source file and lines.
-    func._history = cls.history
-    func.__processor__ = cls
+    out._history = cls.history
+    out.__processor__ = cls
     # What a decorated function's `.func` always was: the operation without
     # the history and ids, for a body calling another operation.
-    raw: Any = bypass
-    raw.__signature__ = func.__signature__
-    # Named for its class, so two bypasses given as arguments to another
-    # operation fingerprint as two callables, not one closure.
-    raw.__name__ = name
-    raw.__qualname__ = f"{cls.__qualname__}.patch_function.raw_function"
-    raw.__module__ = cls.__module__
-    func.func = func.raw_function = raw
-    return func
+    out.func = out.raw_function = raw
+    return out
 
 
 def _checked_plan(processor: PatchProcessor, plan: dict[str, Any]) -> dict[str, Any]:

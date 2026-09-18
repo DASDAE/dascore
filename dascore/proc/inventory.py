@@ -45,7 +45,6 @@ from dascore.exceptions import (
     UnresolvedPatchError,
 )
 from dascore.models import values_equal
-from dascore.proc.coords import update_coords
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate, validate_acquisition_key, warn_or_raise
 from dascore.utils.patch import patch_function
@@ -490,5 +489,10 @@ def enrich(
         # The raw function: enrich is the operation worth recording, and the
         # nested entry would paste a rendered repr of every added coordinate
         # into the history of every patch enriched.
-        out = update_coords.raw_function(out, **new_coords)
+        # Through the class rather than the module: the method is written
+        # in `PatchMeta`, and `raw_function` is the operation without this
+        # call's history. ty does not see attributes attached at import.
+        out = dc.PatchMeta.update_coords.raw_function(  # ty: ignore[unresolved-attribute]
+            out, **new_coords
+        )
     return out

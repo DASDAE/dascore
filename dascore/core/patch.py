@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, Final, Literal, Self
 
 import numpy as np
 
 import dascore as dc
+import dascore.proc.basic
 import dascore.proc.coords
 import dascore.utils.io
 from dascore import transform
@@ -15,9 +16,11 @@ from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.patch_meta import PatchMeta, _as_dtype
-from dascore.core.processor import bind_pending_patch_functions
+from dascore.core.processor import check_patch_listings
 from dascore.core.source import PatchSource
 from dascore.models import ArrayLike
+from dascore.proc.adaptive_spectral_filter import AdaptiveSpectralFilter
+from dascore.proc.tile_apply import TileApply
 from dascore.utils.array import (
     PatchUFunc,
     apply_ufunc,
@@ -323,19 +326,55 @@ class Patch(NamespaceOwner, PatchMeta):
 
     equals = dascore.proc.equals
     get_array = dascore.proc.get_array
-    squeeze = dascore.proc.coords.squeeze
-    append_dims = dascore.proc.coords.append_dims
     split_gaps = dascore.proc.coords.split_gaps
     fill_gaps = dascore.proc.coords.fill_gaps
-    transpose = dascore.proc.coords.transpose
     add_distance_to = dascore.proc.coords.add_distance_to
     enrich = dascore.proc.enrich
-    snap_coords = dascore.proc.snap_coords
-    sort_coords = dascore.proc.sort_coords
     radians_to_strain = dascore.transform.radians_to_strain
-    drop_private_coords = dascore.proc.drop_private_coords
-    make_broadcastable_to = dascore.proc.make_broadcastable_to
     full = dascore.proc.full
+
+    # The operations written as `PatchProcessor` subclasses which compute
+    # data. Written here rather than attached at import so that a reader, an
+    # IDE and a type checker all see the patch's surface; each body builds
+    # its processor and runs it, and the framework refuses a method which is
+    # missing, on the wrong class, or whose parameters have drifted from the
+    # processor's fields. The operation is documented once, with its class,
+    # and that docstring replaces the summary line below at import.
+
+    def squeeze(self, dim=None) -> Self:
+        """Return a patch with length-one dimensions removed."""
+        return dascore.proc.coords.Squeeze(dim=dim).run(self)
+
+    def append_dims(self, /, *empty_dims, **dim_kwargs) -> Self:
+        """Insert dimensions at the end of the patch."""
+        # Merged here rather than by the processor: a field named
+        # `empty_dims` would swallow `append_dims(empty_dims=[1, 2])`, which
+        # asks for a dimension *named* `empty_dims`. Keywords win over bare
+        # names, as they always have.
+        dims = {**dict.fromkeys(empty_dims, 1), **dim_kwargs}
+        return dascore.proc.coords.AppendDims(**dims).run(self)
+
+    def transpose(self, *dims) -> Self:
+        """Transpose the data array to any dimension order."""
+        return dascore.proc.coords.Transpose(dims=dims).run(self)
+
+    def snap_coords(self, *coords, reverse: bool = False) -> Self:
+        """Snap coordinates to evenly sampled versions of themselves."""
+        return dascore.proc.coords.SnapCoords(coords=coords, reverse=reverse).run(self)
+
+    def sort_coords(self, *coords, reverse: bool = False) -> Self:
+        """Sort the patch along one or more coordinates."""
+        return dascore.proc.coords.SortCoords(coords=coords, reverse=reverse).run(self)
+
+    def drop_private_coords(self) -> Self:
+        """Drop coordinates whose names start with an underscore."""
+        return dascore.proc.coords.DropPrivateCoords().run(self)
+
+    def make_broadcastable_to(self, shape: tuple[int, ...], drop_coords=False) -> Self:
+        """Make the patch broadcastable to a given shape."""
+        return dascore.proc.coords.MakeBroadcastableTo(
+            shape=shape, drop_coords=drop_coords
+        ).run(self)
 
     def apply_ufunc(self, ufunc, *args, **kwargs) -> Patch:
         """
@@ -376,16 +415,63 @@ class Patch(NamespaceOwner, PatchMeta):
 
     # --- processing funcs
 
-    sel = dascore.proc.sel
-    isel = dascore.proc.isel
-    select = dascore.proc.select
-    unselect = dascore.proc.unselect
-    order = dascore.proc.order
+    def sel(
+        self,
+        /,
+        indexers: Mapping[str, Any] | None = None,
+        method: Literal["nearest"] | None = None,
+        tolerance: Any = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> Self:
+        """Select values by coordinate label, as xarray does."""
+        return dascore.proc.coords.Sel(
+            indexers=indexers,
+            method=method,
+            tolerance=tolerance,
+            drop=drop,
+            **indexers_kwargs,
+        ).run(self)
+
+    def isel(
+        self,
+        /,
+        indexers: Mapping[str, Any] | None = None,
+        drop: bool = False,
+        missing_dims: str = "raise",
+        **indexers_kwargs: Any,
+    ) -> Self:
+        """Select values by integer index, as xarray does."""
+        return dascore.proc.coords.Isel(
+            indexers=indexers,
+            drop=drop,
+            missing_dims=missing_dims,
+            **indexers_kwargs,
+        ).run(self)
+
+    def select(self, /, *, copy=False, relative=False, samples=False, **kwargs) -> Self:
+        """Return a subset of the patch."""
+        return dascore.proc.coords.Select(
+            copy=copy, relative=relative, samples=samples, **kwargs
+        ).run(self)
+
+    def unselect(
+        self, /, *, copy=False, relative=False, samples=False, **kwargs
+    ) -> Self:
+        """Return the patch with the selected range removed."""
+        return dascore.proc.coords.Unselect(
+            copy=copy, relative=relative, samples=samples, **kwargs
+        ).run(self)
+
+    def order(self, /, *, copy=False, relative=False, samples=False, **kwargs) -> Self:
+        """Order the patch along coordinates by a set of values."""
+        return dascore.proc.coords.Order(
+            copy=copy, relative=relative, samples=samples, **kwargs
+        ).run(self)
 
     correlate = dascore.proc.correlate
     correlate_shift = dascore.proc.correlate_shift
     decimate = dascore.proc.decimate
-    demean = dascore.proc.demean
     demedian = dascore.proc.demedian
     detrend = dascore.proc.detrend
     dropna = dascore.proc.dropna
@@ -399,13 +485,7 @@ class Patch(NamespaceOwner, PatchMeta):
     gaussian_filter = dascore.proc.gaussian_filter
     slope_filter = dascore.proc.slope_filter
     wiener_filter = dascore.proc.wiener_filter
-    adaptive_spectral_filter = dascore.proc.adaptive_spectral_filter
-    tile_apply = dascore.proc.tile_apply
     reassemble = dascore.proc.reassemble
-    abs = dascore.proc.abs
-    conj = dascore.proc.conj
-    real = dascore.proc.real
-    imag = dascore.proc.imag
     angle = dascore.proc.angle
     resample = dascore.proc.resample
     pad = dascore.proc.pad
@@ -415,9 +495,90 @@ class Patch(NamespaceOwner, PatchMeta):
     align_to_coord = dascore.proc.align_to_coord
 
     interpolate = dascore.proc.interpolate
-    normalize = dascore.proc.normalize
+
+    def abs(self) -> Self:
+        """Return a patch with the absolute value of its data."""
+        return dascore.proc.basic.Abs().run(self)
+
+    def conj(self) -> Self:
+        """Return a patch with the complex conjugate of its data."""
+        return dascore.proc.basic.Conj().run(self)
+
+    def real(self) -> Self:
+        """Return a patch with the real part of its data."""
+        return dascore.proc.basic.Real().run(self)
+
+    def imag(self) -> Self:
+        """Return a patch with the imaginary part of its data."""
+        return dascore.proc.basic.Imag().run(self)
+
+    def demean(self, dim: str = "time") -> Self:
+        """Remove the mean along a dimension."""
+        return dascore.proc.basic.Demean(dim=dim).run(self)
+
+    def normalize(
+        self,
+        dim: str,
+        norm: str = "l2",
+        window: Any | None = None,
+        samples: bool = False,
+    ) -> Self:
+        """Normalize a patch along a specified dimension."""
+        return dascore.proc.basic.Normalize(
+            dim=dim, norm=norm, window=window, samples=samples
+        ).run(self)
+
+    def standardize(self, dim: str) -> Self:
+        """Standardize a patch along a dimension."""
+        return dascore.proc.basic.Standardize(dim=dim).run(self)
+
+    def adaptive_spectral_filter(
+        self,
+        /,
+        *,
+        overlap: Any = None,
+        exponent: float = 0.8,
+        normalize_power: bool = False,
+        samples: bool = False,
+        engine: str = "auto",
+        **kwargs,
+    ) -> Self:
+        """Apply an adaptive spectral filter to the patch."""
+        return AdaptiveSpectralFilter(
+            overlap=overlap,
+            exponent=exponent,
+            normalize_power=normalize_power,
+            samples=samples,
+            engine=engine,
+            **kwargs,
+        ).run(self)
+
+    def tile_apply(
+        self,
+        /,
+        function: Callable,
+        *,
+        mode: str = "overlap_add",
+        overlap: Any = None,
+        taper: Any = None,
+        analysis: Any = None,
+        samples: bool = False,
+        engine: str = "auto",
+        **kwargs,
+    ) -> Self:
+        """Apply a function to overlapping tiles of the patch."""
+        return TileApply(
+            function=function,
+            mode=mode,
+            overlap=overlap,
+            taper=taper,
+            analysis=analysis,
+            samples=samples,
+            engine=engine,
+            **kwargs,
+        ).run(self)
+
     pow_coord = dascore.proc.pow_coord
-    standardize = dascore.proc.standardize
     taper = dascore.proc.taper
     taper_range = dascore.proc.taper_range
     line_mute = dascore.proc.line_mute
@@ -481,7 +642,7 @@ class Patch(NamespaceOwner, PatchMeta):
     spectral_flatness = transform.spectral_flatness
 
 
-# The operations written as `PatchProcessor` subclasses are bound here: they
-# are generated while this module is still importing, before either class
-# they belong on exists.
-bind_pending_patch_functions(Patch, PatchMeta)
+# Both classes list their operations by hand, and this is what refuses a
+# listing which is missing or on the wrong class. Deferred to here because
+# the classes are created while this module is still importing.
+check_patch_listings(Patch, PatchMeta)

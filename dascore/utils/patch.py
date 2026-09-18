@@ -1247,7 +1247,11 @@ def align_patch_coords(
     patch1 = patch1.append_dims(*dims).transpose(*dims)
     patch2 = patch2.append_dims(*dims).transpose(*dims)
     # Next, find the common coordinates and align.
-    align_1, align_2 = [slice(None)] * len(dims), [slice(None)] * len(dims)
+    # Annotated because `align_to` answers with a slice or an index
+    # array, and the whole-slice start below would otherwise fix the
+    # element type as the former.
+    align_1: list[slice | np.ndarray] = [slice(None)] * len(dims)
+    align_2: list[slice | np.ndarray] = [slice(None)] * len(dims)
     new_coords_1, new_coords_2 = {}, {}
     for dim in shared_dims:
         coord1, coord2 = patch1.get_coord(dim), patch2.get_coord(dim)

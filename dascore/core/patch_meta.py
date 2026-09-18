@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from contextlib import suppress
 from functools import cached_property
-from typing import Any
+from typing import Any, Self
 from uuid import uuid4
 
 import numpy as np
@@ -13,6 +13,7 @@ import pandas as pd
 
 import dascore as dc
 import dascore.proc
+import dascore.proc.coords
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.source import PatchSource
@@ -358,6 +359,40 @@ class PatchMeta(NodeRepr):
         return out.new(attrs=attrs)
 
     # --- metadata operations, which every patch object can run.
+
+    # The operations written as `PatchProcessor` subclasses which compute no
+    # data. Written here rather than attached at import so that a reader, an
+    # IDE and a type checker all see what metadata can do; each body builds
+    # its processor and runs it, and the framework refuses a method which is
+    # missing, on the wrong class, or whose parameters have drifted from the
+    # processor's fields. The operation is documented once, with its class,
+    # and that docstring replaces the summary line below at import.
+
+    def rename_coords(self, /, **kwargs) -> Self:
+        """Rename coordinates (or dimensions) of the patch."""
+        return dascore.proc.coords.RenameCoords(**kwargs).run(self)
+
+    def update_coords(self, /, **kwargs) -> Self:
+        """Update the coordinates of the patch."""
+        return dascore.proc.coords.UpdateCoords(**kwargs).run(self)
+
+    def drop_coords(self, *coords: str | Iterable[str]) -> Self:
+        """Drop coordinates from the patch."""
+        # By name, never positionally: `coords` is one field holding them
+        # all, and `DropCoords(*coords)` would hand the first to the first
+        # field and refuse the rest.
+        return dascore.proc.coords.DropCoords(coords=coords).run(self)
+
+    def coords_from_df(
+        self,
+        dataframe: pd.DataFrame,
+        units: dict[str, Any] | None = None,
+        extrapolate: bool = False,
+    ) -> Self:
+        """Update non-dimensional coordinates from a dataframe."""
+        return dascore.proc.coords.CoordsFromDf(
+            dataframe=dataframe, units=units, extrapolate=extrapolate
+        ).run(self)
 
     update = dascore.proc.update
     # Before 0.1.0 update was called new, this is for backwards compatibility.

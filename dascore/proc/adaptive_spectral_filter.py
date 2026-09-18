@@ -28,7 +28,7 @@ from dascore.utils.signal import get_taper
 from dascore.utils.tiles import TilePlan, get_tile_plan
 from dascore.utils.window import Window, resolve_window
 
-__all__ = ("AdaptiveSpectralFilter", "adaptive_spectral_filter")
+__all__ = ("AdaptiveSpectralFilter",)
 
 
 def _check_window(window: Any, overlap: Any, label: str) -> None:
@@ -340,6 +340,3 @@ class AdaptiveSpectralFilter(PatchProcessor):
             )
         filtered = np.moveaxis(filtered.reshape(moved.shape), tail, axes)
         return _restore_dtype(filtered, data.dtype)
-
-
-adaptive_spectral_filter = AdaptiveSpectralFilter.patch_function

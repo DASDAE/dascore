@@ -45,7 +45,7 @@ from dascore.utils.tiles import get_tile_plan
 from dascore.utils.time import dtype_time_like
 from dascore.utils.window import Window, resolve_window
 
-__all__ = ("TileApply", "reassemble", "tile_apply")
+__all__ = ("TileApply", "reassemble")
 
 _MODES = ("overlap_add", "stack")
 _ENGINES = ("auto", "numpy", "numba")
@@ -308,9 +308,6 @@ class TileApply(PatchProcessor):
             ]
         out = np.stack(blended).reshape(moved.shape)
         return np.moveaxis(out, tail, axes)
-
-
-tile_apply = TileApply.patch_function
 
 
 def _windows(

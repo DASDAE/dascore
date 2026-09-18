@@ -59,10 +59,11 @@ DASCore's own `patch.io`, `inventory.io`, and `annotation_set.io` follow this mo
 
 ## Patch processors
 
-A [`PatchProcessor`](`dascore.PatchProcessor`) subclass is a whole operation. Its fields are the parameters; subclassing registers it and generates its patch function, `cls.patch_function`, which is never written by hand:
+A [`PatchProcessor`](`dascore.PatchProcessor`) subclass is a whole operation, and its fields are the parameters:
 
 ```{python}
 import dascore as dc
+from dascore.constants import PatchType
 
 
 class Scale(dc.PatchProcessor):
@@ -70,14 +71,29 @@ class Scale(dc.PatchProcessor):
 
     factor: float = 2.0
 
+    @staticmethod
+    def scale(patch: PatchType, /, factor: float = 2.0) -> PatchType:
+        """Multiply the data by a factor."""
+        return Scale(factor=factor).run(patch)
+
     def kernel(self, data):
         return data * self.factor
 
 
 patch = dc.get_example_patch()
-out = Scale(3)(patch)
-assert out.equals(Scale.patch_function(patch, factor=3))
+assert Scale.scale(patch, factor=3).equals(Scale(3)(patch))
 ```
+
+The staticmethod is the patch function: what the registry holds and what a stored history resolves to. A class outside DASCore declares it on the class itself, since nothing outside DASCore can write into `Patch`. One of DASCore's own instead writes a real method in the body of [`Patch`](`dascore.Patch`) -- so that a type checker, an IDE and `help` read the whole class, which a synthesized signature does not allow:
+
+```python
+class Patch(NamespaceOwner, PatchMeta):
+    def scale(self, factor: float = 2.0) -> Self:
+        """Multiply the data by a factor."""
+        return Scale(factor=factor).run(self)
+```
+
+Either way, every field must appear among the method's parameters, with the same default, and a field the class refuses by position must be keyword-only, or the class is refused: the two are one declaration of the same parameters. The method may take more than the class stores, since a body may resolve something before building the instance. `-> Self` is what `run` promises for one of DASCore's own: metadata comes back metadata, and a `Patch` subclass comes back that subclass. The operation is documented once, with the class, and the method carries that docstring.
 
 Calling a processor checks the patch, runs it, and records history and lineage ids, exactly as a decorated patch function does. Its fingerprint digests the name, `__version__` and validated fields, so `Scale(3)` and `Scale(3.0)` are one operation.
 
@@ -86,13 +102,21 @@ An operation whose metadata changes, or whose kernel needs numbers read from the
 - `get_metadata(meta)` gets a [`PatchMeta`](`dascore.PatchMeta`) -- the coords, attrs, dtype and backend of the data, without the data -- and returns two things: the result's metadata, built through the coord manager and `meta.new`, and what the kernel needs as ints, floats, bools, slices, `None`, `Ellipsis`, sequences of those, or numeric arrays. Deriving the one usually computes the other, so they come back together.
 - `kernel(data, **plan)` computes the array; it never sees a patch.
 
-A class which writes no kernel changes metadata alone: applied to a patch it hands the data straight through, and it runs on a patch's metadata as readily as on the patch. One of DASCore's own is bound onto [`PatchMeta`](`dascore.PatchMeta`) so that metadata carries it; one defined outside DASCore is bound to neither class and is called as `dc.proc.<name>(patch)`, since the data-less contract is one DASCore holds only itself to.
+A class which writes no kernel changes metadata alone: applied to a patch it hands the data straight through, and it runs on a patch's metadata as readily as on the patch. One of DASCore's own has its method written in [`PatchMeta`](`dascore.PatchMeta`) so that metadata carries it, and `Patch` inherits it; the data-less contract is one DASCore holds only itself to, so a class defined outside DASCore is never a method of either.
 
 ```{python}
+from dascore.constants import PatchMetaType
+
+
 class RemoveMean(dc.PatchProcessor):
     """Remove the mean along a dimension."""
 
     dim: str = "time"
+
+    @staticmethod
+    def remove_mean(patch: PatchType, /, dim: str = "time") -> PatchType:
+        """Remove the mean along a dimension."""
+        return RemoveMean(dim=dim).run(patch)
 
     def get_metadata(self, meta):
         return meta, {"axis": meta.get_axis(self.dim)}
@@ -104,7 +128,7 @@ class RemoveMean(dc.PatchProcessor):
 out = RemoveMean(dim="distance")(patch)
 ```
 
-Class variables declare the rest: `required_dims`, `required_coords`, and `required_attrs` for what a patch must hold, `data_type` for the result's, `history` for how a call is recorded, and `__version__`, bumped when the same fields mean a different result. `name` sets the patch function's name, and `name = None` registers nothing. [`Transpose`](`dascore.proc.coords.Transpose`) and [`TileApply`](`dascore.proc.tile_apply.TileApply`) show `get_metadata` changing a patch's shape.
+Class variables declare the rest: `required_dims`, `required_coords`, and `required_attrs` for what a patch must hold, `data_type` for the result's, `history` for how a call is recorded, and `__version__`, bumped when the same fields mean a different result. `name` is the method's name and the registry's, and `name = None` registers nothing and expects no method. [`Transpose`](`dascore.proc.coords.Transpose`) and [`TileApply`](`dascore.proc.tile_apply.TileApply`) show `get_metadata` changing a patch's shape.
 
 ## Array backends
 

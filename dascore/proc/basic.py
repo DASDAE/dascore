@@ -314,9 +314,6 @@ class Abs(PatchProcessor):
         return array_namespace(data).abs(data)
 
 
-abs = Abs.patch_function
-
-
 class Conj(PatchProcessor):
     """
     Apply the complex conjugate of the patch data.
@@ -338,9 +335,6 @@ class Conj(PatchProcessor):
         return array_namespace(data).conj(data)
 
 
-conj = Conj.patch_function
-
-
 class Real(PatchProcessor):
     """
     Return a new patch with the real part of the data array.
@@ -357,9 +351,6 @@ class Real(PatchProcessor):
         if _known_real(data):
             return data
         return array_namespace(data).real(data)
-
-
-real = Real.patch_function
 
 
 class Imag(PatchProcessor):
@@ -384,9 +375,6 @@ class Imag(PatchProcessor):
         if _known_real(data):
             return xp.zeros_like(data)
         return xp.imag(data)
-
-
-imag = Imag.patch_function
 
 
 @patch_function(data_type="")
@@ -495,9 +483,6 @@ class Normalize(PatchProcessor):
         if window is None:
             return _normalize_kernel(data, axis, self.norm)
         return _windowed_normalize_kernel(data, axis, self.norm, window)
-
-
-normalize = Normalize.patch_function
 
 
 def _window_mean(data, window: int, axis: int):
@@ -777,9 +762,6 @@ class Standardize(PatchProcessor):
         mean = nan_reduce("mean", data, axis=axis, keepdims=True)
         std = nan_reduce("std", data, axis=axis, keepdims=True)
         return (data - mean) / std
-
-
-standardize = Standardize.patch_function
 
 
 # This is left here to not break compatibility. It also forces `apply_ufunc`
@@ -1364,6 +1346,3 @@ class Demean(PatchProcessor):
         """Return the data with the mean of each slice taken out."""
         data = _as_float(data)
         return data - nan_reduce("mean", data, axis=axis, keepdims=True)
-
-
-demean = Demean.patch_function

@@ -908,6 +908,37 @@ class TestDataless:
         assert not one.equals(other, only_required_attrs=False)
         assert not one.drop_data().equals(other.drop_data(), only_required_attrs=False)
 
+    def test_it_needs_coords_dims_and_a_dtype(self, random_patch):
+        """Built directly, it must say what it describes."""
+        with pytest.raises(ValueError, match="describes data it does not hold"):
+            PatchMeta(coords=random_patch.coords)
+        with pytest.raises(ValueError, match="describes data it does not hold"):
+            PatchMeta(dtype="float32")
+
+    def test_another_dtype_is_another_description(self, described):
+        """The dtype is most of what a description has to say."""
+        other = described.new(dtype="int16")
+        assert other.coords == described.coords
+        assert not described.equals(other)
+
+    def test_it_is_not_equal_to_other_kinds(self, described, source):
+        """Only another PatchMeta describes the same data."""
+        assert not described.equals(source)
+        assert not described.equals("not metadata")
+        assert described != source
+
+    def test_attrs_with_different_keys_are_not_equal(self, described):
+        """An attr one carries and the other does not is a difference."""
+        other = described.update_attrs(station="added")
+        assert not described.equals(other, only_required_attrs=False)
+
+    def test_it_measures_the_data_it_describes(self, described, source):
+        """The coordinate summaries answer without any data."""
+        assert described.seconds == source.seconds
+        assert described.channel_count == source.channel_count
+        assert described.ndim == source.ndim
+        assert described.coord_shapes == source.coord_shapes
+
     def test_it_scans_and_names_itself(self, described, source):
         """Naming and scanning read metadata, so metadata answers them."""
         assert described.get_patch_name() == source.get_patch_name()
