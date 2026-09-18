@@ -25,7 +25,11 @@ import pandas as pd
 
 import dascore as dc
 from dascore.core.coordmanager import CoordManager
-from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
+from dascore.core.coords import (
+    CoordSummary,
+    _grid_run_stops,
+    normalize_coord_dtype,
+)
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io.core import FiberIO, _required_resource_type
 from dascore.io.index.backend import get_backend
@@ -42,6 +46,7 @@ from dascore.io.index.ingest import (
     PatchRecord,
     SourceRecord,
     _coord_record,
+    _run_records,
     typed_value,
 )
 from dascore.units import get_quantity
@@ -51,10 +56,13 @@ from dascore.utils.chunk_plan import (
     _ensure_patch_id,
     patch_local_adjusted_envelopes,
 )
+from dascore.utils.coordmanager import _concat_numeric_coords
 from dascore.utils.io import IOResourceManager
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import (
     PatchAssembler,
+    _decode_index_coord_runs,
+    coord_from_row,
     fill_to_row,
     patch_from_fill,
 )
@@ -238,13 +246,22 @@ def _coord_record_from_row(
         length = round(abs(span)) + 1
     key = row.get(f"_{name}_def_key")
     fingerprint = _def_key_fingerprint(key)
-    # the grid is the source's; once the def key (value identity) is gone,
-    # so are the values it described
-    grid = row.get(f"_{name}_grid") if fingerprint else None
-    exact = {}
-    if isinstance(grid, tuple):
-        *terms, length = grid
-        exact = dict(zip(_EXACT_GRID_FIELDS, terms))
+    # the runs are the source's; once the def key (value identity) is gone,
+    # so are the values they described
+    # The envelope is stated in its own kind; the runs count in the
+    # coordinate's own dtype, which for an integer axis is not the float
+    # the envelope became.
+    stored = row.get(f"_{name}_coord_dtype")
+    run_dtype = stored if isinstance(stored, str) and stored else dtype
+    runs = (
+        _decode_index_coord_runs(row, name, run_dtype, lo, hi) if fingerprint else None
+    )
+    stops = None
+    if runs is not None:
+        length = int(runs["length"].sum())
+        # Each run's other bound, which the records the summary becomes
+        # state per run; without it every run row is dropped.
+        stops = _grid_run_stops(runs, normalize_coord_dtype(run_dtype))
     summary = CoordSummary(
         dtype=dtype,
         min=lo,
@@ -254,7 +271,8 @@ def _coord_record_from_row(
         dims=dims,
         len=length,
         fingerprint=fingerprint,
-        **exact,
+        runs=runs,
+        run_stops=stops,
     )
     return _coord_record(name, summary)
 
@@ -1001,8 +1019,54 @@ def derived_catalog(
     )
     if parent is not None:
         records = _with_parent_runs(records, parent.backend, trims, sources, name)
+    if mode == "concat" and name not in trimmed_dims:
+        records = _with_concat_runs(records, member_rows, name)
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
+
+
+def _with_concat_runs(records, members: pd.DataFrame, name: str) -> list:
+    """Retain known concatenated grids so planned gap reports match loaded patches."""
+    coords = {}
+    for output_id, rows in members.groupby("output_id", sort=False):
+        parts = []
+        for row in rows.to_dict("records"):
+            unit = _row_str(row.get(f"_{name}_units")) or None
+            coord = coord_from_row(row, name, units=unit)
+            fingerprint = _def_key_fingerprint(row.get(f"_{name}_def_key"))
+            # Certify that the envelope/run table states the actual labels;
+            # a nominal step on stored labels cannot establish that.
+            if coord is None or fingerprint != coord.fingerprint()[:32]:
+                break
+            parts.append(coord)
+        else:
+            units = parts[0].units
+            if any(part.units != units for part in parts):
+                continue
+            joined = _concat_numeric_coords(parts, units=units)
+            if joined is not None:
+                coords[str(output_id)] = joined
+    out = []
+    for source in records:
+        patches = []
+        for patch in source.patches:
+            coord = coords.get(patch.source_patch_key)
+            if coord is None:
+                patches.append(patch)
+                continue
+            summary = coord.to_summary(dims=(name,))
+            whole = _coord_record(name, summary)
+            assert whole is not None
+            kept = tuple(c for c in patch.coords if c.coord_name != name)
+            if name == "time" and whole.value_kind == "time" and not whole.is_relative:
+                patch = replace(patch, time_step=whole.step_int)
+            elif name == "distance" and whole.value_kind == "num":
+                patch = replace(patch, distance_step=whole.step_float)
+            patches.append(
+                replace(patch, coords=(*kept, whole, *_run_records(whole, summary)))
+            )
+        out.append(replace(source, patches=tuple(patches)))
+    return out
 
 
 def _aux_info_for_unfed(aux_info: Mapping, outputs: pd.DataFrame) -> dict:

@@ -122,8 +122,25 @@ class DASDAEV1(FiberIO):
         version = unbyte(attrs.get("__DASDAE_version__", ""))
         return file_format, version
 
-    def read(self, resource: H5Reader, source_patch_key=(), **kwargs) -> dc.Spool:
-        """Read a dascore file."""
+    def read(
+        self, resource: H5Reader, source_patch_key=(), snap=True, **kwargs
+    ) -> dc.Spool:
+        """
+        Read a dascore file.
+
+        Parameters
+        ----------
+        resource
+            The open file.
+        source_patch_key
+            The name (or names) of the patches to read; all of them if empty.
+        snap
+            True to put each dimension whose stored labels are nearly even
+            onto an even grid, False to keep every label as stored, or the
+            name (or names) of the dimensions to snap.
+        **kwargs
+            Attribute filters and coordinate selections.
+        """
         patches = []
         source_patch_keys = _normalize_source_patch_keys(source_patch_key)
         try:
@@ -139,7 +156,7 @@ class DASDAEV1(FiberIO):
             attrs = _get_patch_attrs(patch_group, legacy)
             if not _matches_attr_filters(attrs, kwargs):
                 continue
-            patch = _read_patch(patch_group, legacy=legacy, **kwargs)
+            patch = _read_patch(patch_group, legacy=legacy, snap=snap, **kwargs)
             if not patch.data.size and not _kwargs_empty(kwargs):
                 continue
             patches.append(patch)

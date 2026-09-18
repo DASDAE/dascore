@@ -14,7 +14,12 @@ import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidSpoolError, PatchError
-from dascore.io.utils import convert_attr_units, get_exact_coord, resolve_keyed_source
+from dascore.io.utils import (
+    convert_attr_units,
+    resolve_keyed_source,
+    snap_stored_coord,
+    wants_snap,
+)
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.units import get_quantity_str
 from dascore.utils.hdf5 import encode_h5_strings
@@ -160,9 +165,9 @@ def _get_time_coord(node, snap=True):
     time_array = node[time_name]
     array_len = len(time_array)
     assert array_len > 0, "Missing time array in ProdML file."
-    if not snap:
+    if not wants_snap(snap, "time"):
         values = time_array[:].astype("datetime64[us]")
-        return get_exact_coord(values, units="s")
+        return get_coord(data=np.atleast_1d(values), units="s")
     time_attrs = time_array.attrs
     start_str = unbyte(time_attrs["PartStartTime"]).split("+")[0]
     start = dc.to_datetime64(start_str.rstrip("Z"))
@@ -181,7 +186,7 @@ def _get_time_coord(node, snap=True):
     # correct time coordinate from time array if the values are "close" but off.
     if 0 < diff < 10:
         time_array = time_array[:].astype("datetime64[us]")
-        time_coord = get_coord(data=time_array)
+        time_coord = snap_stored_coord(get_coord(data=time_array), snap, "time")
     return time_coord
 
 
@@ -287,14 +292,9 @@ def _round_times_to_microseconds(coord):
         microseconds = microsecond_values.astype(np.int64)
         remainder = np.zeros_like(microseconds)
     else:
-        nanosecond_values = values.astype("datetime64[ns]")
-        if not np.array_equal(nanosecond_values.astype(values.dtype), values):
-            msg = (
-                "ProdML time coordinates must fit the microsecond range or have "
-                "nanosecond precision."
-            )
-            raise PatchError(msg)
-        nanoseconds = nanosecond_values.astype(np.int64)
+        # a time coordinate is counted in nanoseconds, whatever it was given in
+        assert values.dtype == np.dtype("datetime64[ns]")
+        nanoseconds = values.astype(np.int64)
         quotient, remainder = np.divmod(nanoseconds, 1_000)
         increment = np.where(nanoseconds >= 0, remainder >= 500, remainder > 500)
         microseconds = quotient + increment

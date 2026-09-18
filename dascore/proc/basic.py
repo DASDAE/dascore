@@ -20,7 +20,7 @@ from dascore.core.coordmanager import (
     CoordManagerInput,
     get_coord_manager,
 )
-from dascore.core.coords import CoordRange, get_coord
+from dascore.core.coords import NumericND, get_coord
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
@@ -1013,7 +1013,7 @@ def pad(
         # an integer coordinate to hold a NaN nothing is going to write.
         if not any(pad_tuple):
             return coord
-        if expand_coords and isinstance(coord, CoordRange):
+        if expand_coords and isinstance(coord, NumericND) and coord.evenly_sampled:
             # Extend the grid itself: rebuilding from the rounded step would
             # move every label of a fractional grid.
             total = len(coord) + pad_tuple[0] + pad_tuple[1]

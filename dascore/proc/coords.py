@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 from collections.abc import Iterable, Mapping
 from functools import partial
 from typing import Any, Literal
@@ -13,7 +14,7 @@ from scipy.interpolate import interp1d
 
 import dascore as dc
 from dascore.constants import PatchType, select_values_description
-from dascore.core.coords import BaseCoord, CoordSegmented, _fill_layout
+from dascore.core.coords import BaseCoord, NumericND, _fill_layout
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import (
     CoordError,
@@ -33,7 +34,9 @@ from dascore.utils.patch import (
 
 
 @patch_function()
-def snap_coords(patch: PatchType, *coords, reverse: bool = False) -> PatchType:
+def snap_coords(
+    patch: PatchType, *coords, reverse: bool = False, tolerance=None
+) -> PatchType:
     """
     Snap coordinates to evenly spaced samples.
 
@@ -50,6 +53,14 @@ def snap_coords(patch: PatchType, *coords, reverse: bool = False) -> PatchType:
         Dimensions to snap. By default, snap every dimensional coordinate.
     reverse
         If True, reverse the sorting of the coordinates.
+    tolerance
+        How far any label may move, spelled as the ``tolerance`` of
+        [`Spool.chunk`](`dascore.core.spool.BaseSpool.chunk`) is: a number
+        is a multiple of the step, and a quantity or timedelta is a distance
+        in the coordinate's units. A coordinate no even grid lies that close
+        to keeps its labels, though it is still sorted. None, the default,
+        places no bound. This is the snapping a reader's ``snap=True`` does,
+        with the bound in `dascore.config`'s ``snap_tolerance``.
 
     Examples
     --------
@@ -63,7 +74,9 @@ def snap_coords(patch: PatchType, *coords, reverse: bool = False) -> PatchType:
     >>> # snap the distance dimension
     >>> dist_snap = patch.snap_coords("distance")
     """
-    cman, data = patch.coords.snap(*coords, array=patch.data, reverse=reverse)
+    cman, data = patch.coords.snap(
+        *coords, array=patch.data, reverse=reverse, tolerance=tolerance
+    )
     # Nothing changed; return the original patch to avoid a rebuild.
     if cman is patch.coords and data is patch.data:
         return patch
@@ -214,7 +227,7 @@ def get_array(
         require_sorted=require_sorted,
         require_evenly_sampled=require_evenly_sampled,
     )
-    return coord.data
+    return coord.values
 
 
 class RenameCoords(PatchProcessor):
@@ -1115,11 +1128,10 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
     """
     Split the patch into contiguous patches at coordinate gaps.
 
-    Dimensional coordinates that are segmented
-    ([`CoordSegmented`](`dascore.core.coords.CoordSegmented`), e.g. produced
-    by concatenating nearly-contiguous data) mark where the patch is not
-    contiguous. This splits the patch at every segment boundary so each
-    output patch has a plain, contiguous coordinate.
+    A dimensional coordinate with holes -- a run which starts past where
+    the run before it would have put its next sample -- marks where the
+    patch is not contiguous. This splits the patch at every hole, so a
+    change of sampling rate with no hole between the rates stays one patch.
 
     Parameters
     ----------
@@ -1158,14 +1170,15 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
         out = []
         for patch in patches:
             coord = patch.get_coord(dname)
-            if not isinstance(coord, CoordSegmented):
+            if not (isinstance(coord, NumericND) and coord.holes):
                 out.append(patch)
                 continue
-            offset = 0
-            for seg in coord.segments:
-                stop = offset + len(seg)
+            # only a boundary which opens a hole ends a piece; a change of
+            # rate, or a run merely held as its own labels, does not
+            cuts = np.flatnonzero(coord._hole_boundaries) + 1
+            edges = [0, *coord._sample_starts[cuts].tolist(), len(coord)]
+            for offset, stop in itertools.pairwise(edges):
                 out.append(patch.select(**{dname: (offset, stop)}, samples=True))
-                offset = stop
         patches = out
     return dc.spool(patches)
 

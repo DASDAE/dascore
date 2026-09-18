@@ -21,7 +21,7 @@ from upath import UPath
 import dascore as dc
 from dascore.config import config_context
 from dascore.core.coordmanager import get_coord_manager
-from dascore.core.coords import CoordSegmented, get_coord
+from dascore.core.coords import get_coord
 from dascore.exceptions import (
     DependencyError,
     InvalidFiberIOError,
@@ -55,11 +55,12 @@ from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.utils import (
     build_patches,
     convert_attr_units,
-    get_exact_coord,
     resolve_keyed_source,
     slice_dataset,
+    snap_stored_coord,
     step_from_interval,
     step_from_rate,
+    wants_snap,
     windows_to_slices,
 )
 from dascore.utils.downloader import fetch
@@ -311,14 +312,14 @@ class _DependencyErrorFormatter(FiberIO):
         return False
 
 
-class TestGetExactCoord:
+class TestExactArrayCoords:
     """Tests for constructing exact coordinates during scans."""
 
     def test_preserves_irregular_monotonic_values(self):
         """Irregular monotonic arrays should retain every stored value."""
         values = np.array([0.0, 1.0, 2.0, 5.0, 6.0])
 
-        coord = get_exact_coord(values, units="m")
+        coord = dc.get_coord(data=values, units="m")
 
         np.testing.assert_array_equal(coord.values, values)
         assert coord.units == dc.get_quantity("m")
@@ -327,7 +328,7 @@ class TestGetExactCoord:
         """Non-monotonic arrays should use the exact generic fallback."""
         values = np.array([0.0, 2.0, 1.0])
 
-        coord = get_exact_coord(values)
+        coord = dc.get_coord(data=values)
 
         np.testing.assert_array_equal(coord.values, values)
 
@@ -339,12 +340,12 @@ class TestGetExactCoord:
             np.arange(n) * 1000 + rng.integers(-3, 4, size=n)
         ).astype("datetime64[ns]")
 
-        coord = get_exact_coord(values)
+        coord = dc.get_coord(data=values)
 
         # Values are preserved exactly, but the degenerate segmented form is
-        # avoided (it would hold roughly n / 2 short segments).
+        # avoided (it would hold roughly n / 2 short runs).
         np.testing.assert_array_equal(coord.values, values)
-        assert not isinstance(coord, CoordSegmented)
+        assert coord.runs_count == 1
 
     @pytest.mark.parametrize("length", [999, 1000, 2000])
     @pytest.mark.parametrize("reverse", [False, True])
@@ -354,10 +355,10 @@ class TestGetExactCoord:
         values += np.random.default_rng(4).uniform(-1e-5, 1e-5, length)
         values = values[::-1] if reverse else values
 
-        coord = get_exact_coord(values, units="m")
+        coord = dc.get_coord(data=values, units="m")
 
         np.testing.assert_array_equal(coord.values, values)
-        assert not isinstance(coord, CoordSegmented)
+        assert coord.runs_count == 1
         assert coord.units == dc.get_quantity("m")
         assert coord.reverse_sorted == reverse
 
@@ -365,7 +366,7 @@ class TestGetExactCoord:
     def test_unsigned_unsorted_selection(self, repeats):
         """Unsigned difference wraparound must not select a monotonic search path."""
         values = np.tile(np.array([0, 2, 1, 3], dtype=np.uint16), repeats)
-        coord = get_exact_coord(values)
+        coord = dc.get_coord(data=values)
 
         np.testing.assert_array_equal(coord.values, values)
         selected, indexer = coord.select((1, 1))
@@ -378,7 +379,7 @@ class TestGetExactCoord:
         rng = np.random.default_rng(1)
         values = rng.permutation(2_000).astype(float)
 
-        coord = get_exact_coord(values, units="m")
+        coord = dc.get_coord(data=values, units="m")
 
         np.testing.assert_array_equal(coord.values, values)
 
@@ -386,9 +387,9 @@ class TestGetExactCoord:
         """Genuinely piecewise-uniform arrays keep their queryable seams."""
         values = np.concatenate([np.arange(0.0, 2_000.0), np.arange(3_000.0, 5_000.0)])
 
-        coord = get_exact_coord(values, units="m")
+        coord = dc.get_coord(data=values, units="m")
 
-        assert isinstance(coord, CoordSegmented)
+        assert coord.runs_count > 1
         np.testing.assert_array_equal(coord.values, values)
         assert len(coord.get_discontinuities("gaps")) == 1
 
@@ -2495,3 +2496,81 @@ class TestStepFromRate:
         coord = get_coord(start=t0, step=step_from_rate(1024.0), shape=(1024,))
         assert coord.step_exact == Fraction(1, 1024)
         assert coord.stop == t0 + np.timedelta64(1, "s")
+
+
+class TestReaderSnapping:
+    """Reading labels never moves one; snapping is a separate, bounded step."""
+
+    near_even = dc.to_datetime64(0) + np.array([0, 1000000, 2000100, 3000150]).astype(
+        "timedelta64[ns]"
+    )
+
+    def test_near_even_fitting_is_explicit(self):
+        """The reader snap changes near-even labels; the generic factory cannot."""
+        exact = dc.get_coord(data=self.near_even)
+        fitted = snap_stored_coord(exact, True, "time")
+        np.testing.assert_array_equal(exact.values, self.near_even)
+        assert not exact.evenly_sampled
+        assert fitted.evenly_sampled
+        assert not np.array_equal(fitted.values, self.near_even)
+
+    @pytest.mark.parametrize("labels", [[0.0, 1.0, 4.0], [3.0, 1.0, 2.0], [1.25]])
+    def test_irregular_and_singleton_labels_are_preserved(self, labels):
+        """The bounded reader policy does not force every array onto a grid."""
+        coord = snap_stored_coord(dc.get_coord(data=labels), True, "distance")
+        np.testing.assert_array_equal(coord.values, labels)
+        assert not coord.evenly_sampled
+
+    @pytest.mark.parametrize(
+        ("snap", "name", "expected"),
+        [
+            (True, "time", True),
+            (False, "time", False),
+            (None, "time", False),
+            ("time", "time", True),
+            ("time", "distance", False),
+            (("time", "distance"), "distance", True),
+            ((), "time", False),
+        ],
+    )
+    def test_snap_names_the_dimensions_it_means(self, snap, name, expected):
+        """``snap`` is a switch for every dimension, or the names of some."""
+        assert wants_snap(snap, name) is expected
+        coord = snap_stored_coord(dc.get_coord(data=self.near_even), snap, name)
+        assert coord.evenly_sampled is expected
+
+    def test_the_bound_is_the_configured_tolerance(self):
+        """Labels past ``snap_tolerance`` of every grid stay as the file has them."""
+        exact = dc.get_coord(data=self.near_even)
+        with dc.config_context(snap_tolerance=1e-6):
+            assert snap_stored_coord(exact, True, "time") is exact
+        with dc.config_context(snap_tolerance=0.5):
+            assert snap_stored_coord(exact, True, "time").evenly_sampled
+
+    @pytest.mark.parametrize("snap", [1, ("time", 2), object()])
+    def test_a_snap_which_names_nothing_is_refused(self, snap):
+        """``snap`` is True, False, or the dimensions to snap, and says so."""
+        with pytest.raises(ParameterError, match="dimensions to snap"):
+            wants_snap(snap, "time")
+
+    def test_only_a_dimension_is_snapped(self, tmp_path):
+        """A coordinate along a dimension holds measurements and is left alone."""
+        jitter = np.random.default_rng(0).integers(-40, 40, 50)
+        time = dc.to_datetime64(0) + (np.arange(50) * 1_000_000 + jitter).astype(
+            "timedelta64[ns]"
+        )
+        heat = 20 + np.arange(50) * 0.5 + jitter * 1e-6
+        patch = dc.Patch(
+            data=np.zeros(50),
+            coords={"time": time, "temperature": ("time", heat)},
+            dims=("time",),
+        )
+        path = tmp_path / "measured.h5"
+        patch.io.write(path, "dasdae")
+        snapped = dc.read(path)[0]
+        assert snapped.get_coord("time").evenly_sampled
+        np.testing.assert_array_equal(snapped.get_coord("temperature").values, heat)
+        kept = dc.read(path, snap=False)[0]
+        np.testing.assert_array_equal(kept.get_coord("time").values, time)
+        named = dc.read(path, snap="distance")[0]
+        np.testing.assert_array_equal(named.get_coord("time").values, time)

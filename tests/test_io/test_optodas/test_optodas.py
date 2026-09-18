@@ -10,6 +10,7 @@ import pytest
 
 import dascore as dc
 from dascore.io.optodas import OptoDASV8
+from dascore.io.optodas.utils import _get_coord_manager
 from dascore.utils.downloader import fetch
 
 
@@ -118,3 +119,32 @@ class TestDataScale:
         expected = dc.read(scaled_file)[0].select(samples=True, **windows)
         np.testing.assert_array_equal(out, expected.data)
         assert str(out.dtype) == dc.scan(scaled_file)[0].dtype
+
+
+class TestChannelMaps:
+    """The channel numbers a file lists become its distance labels."""
+
+    @pytest.fixture(scope="class")
+    def descending_channels(self, tmp_path_factory):
+        """A file whose unsigned channel numbers count down."""
+        path = tmp_path_factory.mktemp("optodas") / "descending.h5"
+        with h5py.File(path, "w") as fi:
+            header = fi.create_group("header")
+            header["channels"] = np.asarray([3, 2, 1], dtype="uint16")
+            header["dimensionNames"] = np.asarray([b"time", b"distance"])
+            header["dimensionUnits"] = np.asarray([b"s", b"m"])
+            header["time"] = 1.0
+            ranges = header.create_group("dimensionRanges")
+            for index, (low, high) in enumerate([(0, 9), (0, 2)]):
+                group = ranges.create_group(f"dimension{index}")
+                group["min"] = np.asarray([low])
+                group["max"] = np.asarray([high])
+                group["unitScale"] = np.asarray([1.0])
+        return path
+
+    @pytest.mark.parametrize("snap", [True, False])
+    def test_descending_unsigned_channels(self, descending_channels, snap):
+        """A stride read from unsigned numbers must not wrap into a huge step."""
+        with h5py.File(descending_channels) as fi:
+            coords = _get_coord_manager(fi, snap=snap)
+        np.testing.assert_array_equal(coords.coord_map["distance"].values, [3, 2, 1])

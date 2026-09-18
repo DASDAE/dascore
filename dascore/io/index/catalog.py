@@ -633,7 +633,7 @@ def _source_envelopes(df: pd.DataFrame, residuals) -> dict[str, pd.Series]:
             continue
         # what rebuilds the coordinate exactly: its grid, dtype, and the
         # units which say whether the grid still applies
-        suffixes = ("_grid", "_coord_dtype", "_units", "_units_source")
+        suffixes = ("_grid", "_runs", "_coord_dtype", "_units", "_units_source")
         columns += [c for s in suffixes if (c := f"_{name}{s}") in df]
         envelopes = df[columns].to_dict("records")
         out[_source_column(name)] = pd.Series(envelopes, index=df.index, dtype=object)

@@ -1230,7 +1230,7 @@ def _carried_columns(
         part_cols = [
             key
             for x in sorted(dim_names)
-            for suffix in ("_def_key", "_grid", "_coord_dtype")
+            for suffix in ("_def_key", "_grid", "_runs", "_coord_dtype")
             if (key := f"_{x}{suffix}") in columns
         ]
         coord_names = set(police_dims[part].split(",")) | {name}

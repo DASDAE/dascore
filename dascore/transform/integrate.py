@@ -35,10 +35,10 @@ def _get_definite_integral(patch, array, dxs_or_vals, dims, axes):
 
     def _get_new_coords_and_array(patch, array, dims):
         """Get new coordinates with smashed (or not) coordinates."""
-        new_coords = {x: _quasi_mean(patch.get_coord(x).data) for x in dims}
+        new_coords = {x: _quasi_mean(patch.get_coord(x).values) for x in dims}
         # also add related coords indicating start/stop
         for name in dims:
-            coord = patch.get_coord(name).data
+            coord = patch.get_coord(name).values
             new_coords[f"pre_integrate_{name}_min"] = (name, np.asarray([coord.min()]))
             new_coords[f"pre_integrate_{name}_max"] = (name, np.asarray([coord.max()]))
         cm = patch.coords.update(**new_coords)

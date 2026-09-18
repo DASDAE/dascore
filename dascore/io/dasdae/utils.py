@@ -16,11 +16,11 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import (
     _EXACT_GRID_FIELDS,
-    CoordMonotonicArray,
-    CoordRange,
-    CoordSegmented,
+    NumericND,
     _scalar_dtype,
+    concat_tables,
     get_coord,
+    runs_from_rows,
 )
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import PatchAttributeError
@@ -31,7 +31,7 @@ from dascore.io.dasdae._compat import (
     strip_legacy_coord_fields,
     translate_legacy_attrs,
 )
-from dascore.io.utils import get_exact_coord, resolve_keyed_source
+from dascore.io.utils import resolve_keyed_source, snap_stored_coord, wants_snap
 from dascore.models.registry import get_model_tag, resolve_tagged_model
 from dascore.utils.array import (
     convert_bytes_to_strings,
@@ -176,43 +176,99 @@ def _extended_float(coord) -> bool:
 _OBJECT_TYPE = "object_type"
 
 
+# A float range which is not counted from its own first label states the
+# grid it is counted on (see `dascore.core._run_kernels`), beside the start
+# and step an earlier DASCore reads.
+_FLOAT_GRID = "grid_terms"
+_FLOAT_ORIGIN = "grid_origin"
+
+
+def _is_range(coord) -> bool:
+    """Whether the coordinate is one evenly sampled grid of at least a sample."""
+    return isinstance(coord, NumericND) and coord.evenly_sampled and bool(coord.size)
+
+
+def _is_segmented(coord) -> bool:
+    """
+    Whether the runs fit the segmented layout DASCore has always written.
+
+    That layout is a group of monotonic, non-overlapping segments, which is
+    all the class it is named for could ever hold. A table whose runs
+    overlap or run in mixed directions is not one, and writing it there
+    would make a file no DASCore can read back; it goes out as its values.
+    """
+    if not isinstance(coord, NumericND) or coord.runs_count < 2:
+        return False
+    return bool(coord.sorted or coord.reverse_sorted)
+
+
+def _node_tag(coord) -> str | None:
+    """
+    The class name a version-2 node is tagged with.
+
+    A numeric coordinate is tagged by the shape of what the node holds, with
+    the names the layout has always used, so a reader from before the
+    coordinate classes became one table still reads it.
+    """
+    if not isinstance(coord, NumericND):
+        return get_model_tag(type(coord))
+    if _is_segmented(coord):
+        return "CoordSegmented"
+    if _is_range(coord) and not _extended_float(coord):
+        return "CoordRange"
+    ordered = coord.ndim == 1 and (coord.sorted or coord.reverse_sorted)
+    return "CoordMonotonicArray" if ordered else "CoordArray"
+
+
 def _save_coord(coord, name, group, compact: bool):
     """
     Save one coordinate node.
 
     Version 2 (``compact``) states each node's class: a range is written
-    as its description and a segmented coordinate as a group of its
-    segments, so a long acquisition costs a few numbers and no label is
-    re-inferred on read; any other class, and version 1 throughout,
-    writes its values.
+    as its description and a multi-run coordinate as a group of its runs,
+    so a long acquisition costs a few numbers and no label is re-inferred
+    on read; anything else, and version 1 throughout, writes its values.
     """
-    if compact and isinstance(coord, CoordSegmented):
+    if compact and _is_segmented(coord):
         node = group.create_group(name)
         for i, segment in enumerate(coord.segments):
             _save_coord(segment, str(i), node, compact)
-    elif compact and isinstance(coord, CoordRange) and not _extended_float(coord):
+    elif compact and _is_range(coord) and not _extended_float(coord):
         node = group.create_dataset(name, shape=(0,), dtype="int64")
         node.attrs["dtype"] = str(coord.dtype)
         node.attrs["start"] = _raw(coord.start, coord.dtype)
         node.attrs["length"] = len(coord)
         if coord._exact:
-            for field in _EXACT_GRID_FIELDS:
-                node.attrs[field] = getattr(coord, field)
+            for field, term in zip(_EXACT_GRID_FIELDS, coord._grid_terms):
+                node.attrs[field] = term
         else:
             node.attrs["stop"] = _raw(coord.stop, coord.dtype)
             node.attrs["step"] = _raw(coord.step, coord.dtype)
+            row = coord.runs[0]
+            first = np.asarray(row["start"]).astype(coord.dtype)[()]
+            if row["den"] != 1 or row["offset"] or first != row["start"]:
+                # A slice, an axis built by dividing, or a narrow float counted
+                # from a wider origin is not the range its first label and
+                # spacing restate; its own terms are.
+                node.attrs[_FLOAT_GRID] = np.asarray(
+                    [row["num"], row["den"], row["offset"]], dtype="int64"
+                )
+                node.attrs[_FLOAT_ORIGIN] = float(row["start"])
     else:
         node = _save_array(coord.values, name, group)
         # Version 1 reads an array's step as a range to rebuild from its
         # first value, so only a range may state one there; version 2
-        # reads it as the grid an array declares.
+        # reads it as the grid an array declares -- which only monotonic
+        # labels can be read against, so an unsorted coordinate states
+        # none and is read back as the values it is.
         step = coord.step
-        if step is not None and (compact or isinstance(coord, CoordRange)):
+        monotonic = coord.ndim == 1 and (coord.sorted or coord.reverse_sorted)
+        if step is not None and (_is_range(coord) or (compact and monotonic)):
             is_td = np.issubdtype(np.asarray(step).dtype, np.timedelta64)
             node.attrs["step"] = to_int(step) if is_td else step
             node.attrs["step_is_timedelta64"] = is_td
     if compact:
-        node.attrs[_OBJECT_TYPE] = get_model_tag(type(coord))
+        node.attrs[_OBJECT_TYPE] = _node_tag(coord)
     if coord.units is not None:
         node.attrs["units"] = str(coord.units)
 
@@ -228,7 +284,7 @@ def _save_coords(patch, patch_group, compact: bool):
 def _check_storable(patch):
     """Refuse a patch version 1 cannot store, before touching the file."""
     for name, coord in patch.coords.coord_map.items():
-        if getattr(coord, "step_denominator", None) not in (None, 1):
+        if getattr(coord, "_exact", False) and coord._grid_terms[1] != 1:
             # Version 1 stores one whole-tick step and rebuilds the range
             # from it, which would quietly move every label off its grid.
             msg = (
@@ -322,9 +378,19 @@ def _read_range(node, units):
     start = np.asarray(attrs["start"]).astype(dtype)[()]
     shape = (int(attrs["length"]),)
     if "step_numerator" in attrs:
-        grid = {name: int(attrs[name]) for name in _EXACT_GRID_FIELDS}
-        return CoordRange(start=start, shape=shape, units=units, **grid)
-    stop = np.asarray(attrs["stop"]).astype(dtype)[()]
+        num, den, offset = (int(attrs[name]) for name in _EXACT_GRID_FIELDS)
+        return get_coord(
+            start=start,
+            shape=shape,
+            units=units,
+            step_numerator=num,
+            step_denominator=den,
+            origin_offset=offset,
+        )
+    if _FLOAT_GRID in attrs:
+        terms = (int(x) for x in attrs[_FLOAT_GRID])
+        rows = runs_from_rows([(float(attrs[_FLOAT_ORIGIN]), shape[0], *terms)], dtype)
+        return NumericND.from_rows(rows, dtype=dtype, units=units)
     step = attrs["step"]
     if dtype.kind in "mM":
         step = np.asarray(step).astype(_scalar_dtype(dtype, "step"))[()]
@@ -332,10 +398,9 @@ def _read_range(node, units):
         # as the python float it was written from: a numpy scalar would
         # promote a float32 range to float64
         step = step.item()
-    coord = CoordRange(start=start, stop=stop, step=step, units=units)
-    # The stored fields are a validated range's own; deriving the count
-    # from them again can move a float32 endpoint by a sample.
-    return coord._construct(dict(start=start, stop=stop, step=step, shape=shape))
+    # Built from the stored count rather than from the span, which deriving
+    # it again could move by a sample at float32 precision.
+    return NumericND.from_run(start, step, shape, units=units, dtype=dtype)
 
 
 def _node_step(attrs):
@@ -351,21 +416,28 @@ def _read_segment(node):
     units = node.attrs.get("units", None)
     if "start" in node.attrs:
         return _read_range(node, units)
-    # the segments were settled exactly when written, so an array
-    # segment is read as the values it holds, never snapped to a range
+    # the runs were settled exactly when written, so an array run is read
+    # as the values it holds, never snapped to a grid
     values = _read_array(node)
-    return CoordMonotonicArray(values=values, units=units, step=_node_step(node.attrs))
+    return NumericND.from_array(
+        values, units=units, step=_node_step(node.attrs), detect=False
+    )
 
 
 def _read_coord(node, name, attrs2, snap):
-    """Rebuild one coordinate from its node."""
+    """Rebuild one coordinate from its node; only a dimension is snapped."""
     node_attrs = node.attrs
     units = node_attrs.get("units", None) or attrs2.get(f"{name}_units", None)
     object_type = unbyte(node_attrs.get(_OBJECT_TYPE, ""))
-    if object_type == "CoordSegmented":
+    # A version-2 node names the class it holds. Files written before the
+    # numeric coordinate classes became one table name CoordRange,
+    # CoordSegmented, CoordMonotonicArray or CoordArray; those names are
+    # read here and nowhere else.
+    if object_type == "CoordSegmented" or (object_type and not hasattr(node, "shape")):
         segments = [_read_segment(node[str(i)]) for i in range(len(node))]
-        return CoordSegmented(segments=segments, units=units)
-    if object_type == "CoordRange" and "start" in node_attrs:
+        coord = concat_tables(*segments)
+        return coord if units is None else coord.set_units(units)
+    if object_type in ("CoordRange", "NumericND") and "start" in node_attrs:
         return _read_range(node, units)
     # any other class, a range too wide to describe, and every version 1
     # node hold their values
@@ -375,10 +447,13 @@ def _read_coord(node, name, attrs2, snap):
         # grid it declares, never a range to rebuild
         array = _read_array(node)
         if node_step is not None:
-            return get_coord(data=array, units=units, step=node_step)
-        if snap or np.ndim(array) != 1:
-            return get_coord(data=array, units=units)
-        return get_exact_coord(array, units=units)
+            # The runs were settled when the node was written, so a step
+            # beside the values is the grid they declare, never a licence
+            # to read runs out of them again.
+            return NumericND.from_array(
+                array, units=units, step=node_step, detect=False
+            )
+        return snap_stored_coord(get_coord(data=array, units=units), snap, name)
     step = node_step if node_step is not None else attrs2.get(f"{name}_step", None)
     shape = tuple(node.shape)
     can_use_range_fast_path = (
@@ -392,13 +467,13 @@ def _read_coord(node, name, attrs2, snap):
         stop = start + node_step * shape[0]
         return get_coord(start=start, stop=stop, step=node_step, units=units)
     array = _read_array(node)
-    if snap or np.ndim(array) != 1:
-        # A stored nominal step is a grid claim the values must meet, which
-        # a legacy file's jittered values need not; it names the spacing
-        # only for a single sample, where the values cannot.
-        single = np.ndim(array) == 1 and len(array) == 1
-        return get_coord(data=array, units=units, step=step if single else None)
-    return get_exact_coord(array, units=units)
+    # A stored nominal step is a grid claim the values must meet, which a
+    # legacy file's jittered values need not; it names the spacing only for
+    # a single sample, where the values cannot.
+    single = np.ndim(array) == 1 and len(array) == 1
+    if single and step is not None and wants_snap(snap, name):
+        return get_coord(data=array, units=units, step=step)
+    return snap_stored_coord(get_coord(data=array, units=units), snap, name)
 
 
 def _get_coords(patch_group, dims, attrs2, snap=True):
@@ -410,7 +485,9 @@ def _get_coords(patch_group, dims, attrs2, snap=True):
         if not name.startswith("_coord_"):
             continue
         name = name.removeprefix("_coord_")
-        coord_dict[name] = _read_coord(node, name, attrs2, snap)
+        # a coordinate which is not a dimension holds measurements
+        coord_snap = snap if name in dims else False
+        coord_dict[name] = _read_coord(node, name, attrs2, coord_snap)
     # associates coordinates with dimensions
     group_attrs = patch_group.attrs
     c_dims = [x for x in group_attrs if x.startswith("_cdims")]
@@ -481,17 +558,17 @@ def _get_patch_attrs(patch_group, legacy: bool) -> dict:
     return attrs
 
 
-def _read_patch(patch_group, legacy: bool = True, **kwargs):
+def _read_patch(patch_group, legacy: bool = True, snap=True, **kwargs):
     """Read a patch group, return Patch."""
     attrs = _get_attrs(patch_group, legacy=legacy)
     dims = _get_dims(patch_group)
     if legacy:
         attrs["dims"] = ",".join(dims)
         attrs = translate_legacy_attrs(attrs, _get_group_coord_names(patch_group))
-        coords = _get_coords(patch_group, dims, attrs)
+        coords = _get_coords(patch_group, dims, attrs, snap=snap)
         attr_info = strip_legacy_coord_fields(attrs, set(coords.coord_map) | set(dims))
     else:
-        coords = _get_coords(patch_group, dims, {})
+        coords = _get_coords(patch_group, dims, {}, snap=snap)
         attr_info = attrs
     attr_info["_source_patch_key"] = patch_group.name.rsplit("/", maxsplit=1)[-1]
     # An id the file carries is the one which survived the round trip;

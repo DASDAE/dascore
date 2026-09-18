@@ -528,6 +528,14 @@ def to_float(obj) -> pd.Series | np.ndarray | float:
     return _to_float(obj)
 
 
+# The type tuples the test below asks about, built once: spelling them as
+# a union inside the function makes a fresh type object on every call, and
+# this is one of the most-called predicates in the library.
+_NOT_TIMELY = (np.generic, bool, int, float, complex, str, bytes)
+_DTYPE_TYPES = (np.dtype, pd.api.extensions.ExtensionDtype)
+_ARRAY_TYPES = (np.ndarray, list, tuple)
+
+
 def _is_dtype(obj, numpy_dtype, pandas_dtype) -> bool:
     """
     Test if a variety of object types are of numpy or pandas dtype.
@@ -536,16 +544,20 @@ def _is_dtype(obj, numpy_dtype, pandas_dtype) -> bool:
     numpy dtype, pandas dtype, or an array-like of dtype values.
     """
     # Handle scalars: np.datetime64, pandas.Timestamp
-    if isinstance(obj, numpy_dtype | pandas_dtype):
+    if isinstance(obj, (numpy_dtype, pandas_dtype)):
         return True
+    # A plain scalar holds no dtype and is no dtype, so it is answered here
+    # rather than through the abstract checks below, which are not cheap.
+    if obj is None or isinstance(obj, _NOT_TIMELY):
+        return False
     # Handle numpy/pandas datetime64 dtypes directly
-    if isinstance(obj, (np.dtype | pd.api.extensions.ExtensionDtype)):
+    if isinstance(obj, _DTYPE_TYPES):
         return np.issubdtype(obj, numpy_dtype)
     # Handle pandas Series
     if isinstance(obj, pd.Series):
         return np.issubdtype(obj.dtype, numpy_dtype)
     # Handle array-like objects (numpy arrays, lists, tuples)
-    if isinstance(obj, np.ndarray | list | tuple):
+    if isinstance(obj, _ARRAY_TYPES):
         return np.issubdtype(np.asarray(obj).dtype, numpy_dtype)
     return False
 

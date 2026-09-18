@@ -111,7 +111,7 @@ def _get_coords(attrs, shape):
     )
     # Also carry the interrogator channel numbers so they stay correct
     # under distance trimming.
-    channel = get_coord(data=np.arange(channel_start, channel_start + n_channel))
+    channel = get_coord(start=channel_start, step=1, shape=(n_channel,))
     return get_coord_manager(
         {"time": time, "distance": distance, "channel": ("distance", channel)},
         dims=("distance", "time"),

@@ -555,6 +555,7 @@ class TestDascoreStyles:
             rf"dascore_styles\[[\"']{name}[\"']\]",
             rf"style\s*=\s*[\"']{name}[\"']",
             rf"_rich_style\s*=\s*[\"']{name}[\"']",
+            rf"_style_name[^=]*=\s*[\"']{name}[\"']",
             rf"[\"']{name}[\"']\s*\)",
         ]
         assert any(re.search(p, x) for p in lookups for x in sources)
@@ -2182,8 +2183,8 @@ class TestCoordinatesAreStated:
 
     def test_the_kind_of_each_coordinate(self, patch):
         """A terminal states it in front of the fields; a panel columns it."""
-        assert "CoordRange(" in str(patch.coords)
-        assert "CoordRange" in patch._repr_html_()
+        assert "NumericND(" in str(patch.coords)
+        assert "NumericND" in patch._repr_html_()
 
     def test_a_name_which_looks_like_markup(self):
         """

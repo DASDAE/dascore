@@ -7,6 +7,7 @@ from collections.abc import Sequence
 import numpy as np
 import numpy.fft as nft
 
+import dascore as dc
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.utils.patch import patch_function
@@ -160,7 +161,12 @@ def dispersion_phase_shift(
         fc[ci, :] = abs(sum(np.exp(preamb / phase_velocities[ci]) * fft_d))
 
     attrs = patch.attrs.update(category="dispersion")
-    coords = dict(velocity=phase_velocities, frequency=w / (2 * np.pi))
+    coords = dict(
+        velocity=phase_velocities,
+        frequency=dc.get_coord(
+            start=f[first_live_f], step=fs / (nf - 1), shape=(int(nlivef),)
+        ),
+    )
 
     disp_patch = patch.new(
         data=fc / nchan, coords=coords, attrs=attrs, dims=["velocity", "frequency"]

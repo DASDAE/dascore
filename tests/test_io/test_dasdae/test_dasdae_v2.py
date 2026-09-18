@@ -9,11 +9,10 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.core._run_kernels import float_rows
 from dascore.core.coords import (
-    CoordMonotonicArray,
-    CoordRange,
-    CoordSegmented,
     CoordString,
+    NumericND,
     concat_coords,
     get_coord,
 )
@@ -40,7 +39,7 @@ def gapped_patch():
     second = patch.select(time=(t0 + np.timedelta64(1012, "ms"), None))
     spool = dc.spool([first, second]).chunk(time=None, tolerance=5, snap_coords=False)
     (out,) = spool
-    assert isinstance(out.get_coord("time"), CoordSegmented)
+    assert out.get_coord("time").runs_count > 1
     return out
 
 
@@ -76,6 +75,10 @@ class TestNodeCodec:
         coord = CASES[name]
         _save_coord(coord, name, h5, compact=True)
         back = _read_coord(h5[name], name, {}, snap=True)
+        if isinstance(coord, NumericND):
+            # the shape of the table too, not only the labels it makes
+            assert back.runs_count == coord.runs_count
+            assert (back.labels is None) == (coord.labels is None)
         assert back == coord
         assert back.dtype == coord.dtype
 
@@ -95,13 +98,36 @@ class TestNodeCodec:
 
     def test_every_node_states_its_class(self, h5):
         """Each node names its coordinate class in plain typed attributes."""
-        for name in ("fraction", "segmented", "array"):
+        for name in ("fraction", "segmented", "array", "strings"):
             _save_coord(CASES[name], f"typed_{name}", h5, compact=True)
-        assert h5["typed_fraction"].attrs["object_type"] == "CoordRange"
-        assert h5["typed_segmented"].attrs["object_type"] == "CoordSegmented"
-        assert h5["typed_array"].attrs["object_type"] == "CoordMonotonicArray"
+        # the names the layout has always used, so older readers still read it
+        expected = {
+            "fraction": "CoordRange",
+            "segmented": "CoordSegmented",
+            "array": "CoordMonotonicArray",
+        }
+        for name, tag in expected.items():
+            assert h5[f"typed_{name}"].attrs["object_type"] == tag
+        assert h5["typed_strings"].attrs["object_type"] == "CoordString"
         attrs = dict(h5["typed_fraction"].attrs)
         assert attrs["step_denominator"] == 2 and attrs["length"] == 4096
+
+    @pytest.mark.parametrize(
+        "name,tag",
+        [
+            ("segmented", "CoordSegmented"),
+            ("fraction", "CoordRange"),
+            ("array", "CoordMonotonicArray"),
+            ("array", "CoordArray"),
+        ],
+    )
+    def test_legacy_tags_still_read(self, h5, name, tag):
+        """A node tagged before the numeric coord classes merged still reads."""
+        coord = CASES[name]
+        node = f"legacy_{name}_{tag}"
+        _save_coord(coord, node, h5, compact=True)
+        h5[node].attrs["object_type"] = tag
+        assert _read_coord(h5[node], node, {}, snap=True) == coord
 
     def test_extended_float_range_keeps_its_values(self, h5):
         """A long-double range exceeds a JSON double, so its values are stored."""
@@ -120,12 +146,16 @@ class TestNodeCodec:
 
     def test_array_segment_stays_exact(self, h5):
         """A near-uniform array segment is not snapped to a range on read."""
-        jitter = CoordMonotonicArray(values=np.array([0.0, 1.0, 2.0005, 3.0, 4.0]))
+        jitter = NumericND.from_array(
+            np.array([0.0, 1.0, 2.0005, 3.0, 4.0]), detect=False
+        )
         coord = concat_coords(jitter, get_coord(start=10.0, stop=15.0, step=1.0))
         _save_coord(coord, "jitter", h5, compact=True)
         back = _read_coord(h5["jitter"], "jitter", {}, snap=True)
         assert back == coord
-        assert isinstance(back.segments[0], CoordMonotonicArray)
+        assert not back.segments[0].evenly_sampled and (
+            back.segments[0].sorted or back.segments[0].reverse_sorted
+        )
 
     def test_float_step_keeps_its_precision(self, h5):
         """A float64 step on a float32 start counts the same samples back."""
@@ -136,6 +166,57 @@ class TestNodeCodec:
         back = _read_coord(h5["mixed"], "mixed", {}, snap=True)
         assert len(back) == len(coord)
         assert back == coord
+
+
+class TestUnorderedRuns:
+    """Runs the segmented layout was never able to hold go out as values."""
+
+    @pytest.fixture(scope="class")
+    def h5(self):
+        """An in-memory HDF5 file."""
+        return h5py.File(io.BytesIO(), "w")
+
+    @pytest.fixture(scope="class")
+    def cases(self):
+        """Multi-run time coordinates the segmented group cannot describe."""
+        ms = np.timedelta64(1, "ms")
+        overlapping = T0 + np.concatenate([np.arange(20), np.arange(15, 35)]) * ms
+        unsorted = (
+            T0
+            + np.concatenate([np.arange(5), np.arange(40, 44), np.arange(5, 16)]) * ms
+        )
+        return {
+            "overlapping": dc.get_coord(data=overlapping),
+            "unsorted": dc.get_coord(data=unsorted),
+        }
+
+    @pytest.mark.parametrize("name", ["overlapping", "unsorted"])
+    def test_runs_are_not_segments(self, cases, name):
+        """These are several runs, but neither sorted nor reverse sorted."""
+        coord = cases[name]
+        assert coord.runs_count > 1
+        assert not coord.sorted and not coord.reverse_sorted
+
+    @pytest.mark.parametrize("name", ["overlapping", "unsorted"])
+    def test_node_holds_its_values(self, h5, cases, name):
+        """Runs the segments group cannot hold go out as one values dataset."""
+        coord = cases[name]
+        _save_coord(coord, name, h5, compact=True)
+        assert isinstance(h5[name], h5py.Dataset)
+        assert h5[name].attrs["object_type"] == "CoordArray"
+
+    @pytest.mark.parametrize("name", ["overlapping", "unsorted"])
+    def test_values_round_trip(self, cases, name, tmp_path):
+        """The labels come back as they went in, in their own order."""
+        coord = cases[name]
+        patch = dc.Patch(
+            data=np.zeros((3, len(coord))),
+            coords={"distance": np.arange(3.0), "time": coord},
+            dims=("distance", "time"),
+        )
+        path = dc.write(patch, tmp_path / f"{name}.h5", "dasdae")
+        (back,) = dc.read(path)
+        np.testing.assert_array_equal(back.get_coord("time").values, coord.values)
 
 
 class TestVersion2Files:
@@ -165,7 +246,7 @@ class TestVersion2Files:
         """A gapped patch is stored as one patch with its segments."""
         path = dc.write(gapped_patch, tmp_path / "gap.h5", "dasdae")
         (back,) = dc.read(path)
-        assert isinstance(back.get_coord("time"), CoordSegmented)
+        assert back.get_coord("time").runs_count > 1
         assert back.get_coord("time") == gapped_patch.get_coord("time")
         assert np.array_equal(back.data, gapped_patch.data)
         (scanned,) = dc.scan(path)
@@ -179,7 +260,7 @@ class TestVersion2Files:
         spool = dc.spool(path)
         assert len(spool) == 2
         for patch in spool:
-            assert isinstance(patch.get_coord("time"), CoordRange)
+            assert patch.get_coord("time").evenly_sampled
 
     def test_gapped_file_still_guarded(self, gapped_patch, tmp_path):
         """A gapped patch read from a file is guarded like one in memory."""
@@ -208,7 +289,10 @@ class TestVersion2Files:
         )
         path = dc.write(patch, tmp_path / "arr.h5", "dasdae")
         back = dc.read(path)[0]
-        assert isinstance(back.get_coord("distance"), CoordMonotonicArray)
+        assert not back.get_coord("distance").evenly_sampled and (
+            back.get_coord("distance").sorted
+            or back.get_coord("distance").reverse_sorted
+        )
         assert isinstance(back.get_coord("tag"), CoordString)
         assert back == patch
 
@@ -220,7 +304,9 @@ class TestVersion2Files:
         path = dc.write(patch, tmp_path / "uneven.h5", "dasdae")
         (payload,) = dc.scan_payloads(path, snap=False)
         distance = payload["coords"].coord_map["distance"]
-        assert isinstance(distance, CoordMonotonicArray)
+        assert not distance.evenly_sampled and (
+            distance.sorted or distance.reverse_sorted
+        )
         np.testing.assert_array_equal(distance.values, uneven)
 
     def test_lazy_array_sizes_by_grid(self, tmp_path):
@@ -236,3 +322,81 @@ class TestVersion2Files:
         leaf = next(node for node in tree.subtree if "data" in node.dataset)
         assert leaf["data"].shape == data.shape
         assert leaf["data"].data.compute().shape == data.shape
+
+
+class TestFloatGridTerms:
+    """A float range which is not counted from its first label states its grid."""
+
+    divided = get_coord(
+        runs=float_rows("float64", [0.0], [400], [250.0], [-1], [0]),
+        dtype="float64",
+        units="m",
+    )
+    descending = get_coord(
+        runs=float_rows("float64", [0.0], [400], [-1000.0], [-1], [0]),
+        dtype="float64",
+        units="m",
+    )
+    # A multiplied axis and explicit divided grids exercise persisted terms.
+    COORDS = (
+        get_coord(data=np.arange(400) * 0.1, units="m")[37::3],
+        divided,
+        divided[11:],
+        descending[::-1],
+    )
+
+    @pytest.mark.parametrize("coord", COORDS)
+    def test_round_trip_is_bit_for_bit(self, tmp_path, coord):
+        """Writing and reading gives back the same doubles and the same run."""
+        assert coord.evenly_sampled
+        patch = dc.Patch(
+            data=np.zeros(len(coord)), coords={"distance": coord}, dims=("distance",)
+        )
+        path = tmp_path / "grid.h5"
+        patch.io.write(path, "dasdae")
+        back = dc.read(path)[0].get_coord("distance")
+        np.testing.assert_array_equal(back.values, coord.values)
+        assert back == coord
+        np.testing.assert_array_equal(back.runs, coord.runs)
+
+    def test_a_narrow_float_keeps_its_wider_origin(self, tmp_path):
+        """A float32 run counted from a float64 origin reads back label for label."""
+        coord = NumericND.from_run(0.1, 0.001, 6, dtype="float32")
+        patch = dc.Patch(
+            data=np.zeros(6), coords={"distance": coord}, dims=("distance",)
+        )
+        path = tmp_path / "narrow.h5"
+        patch.io.write(path, "dasdae")
+        back = dc.read(path, snap=False)[0].get_coord("distance")
+        np.testing.assert_array_equal(back.values, coord.values)
+
+    def test_a_plain_range_writes_no_extra_terms(self, tmp_path):
+        """Counted from its own first label, a range is its start and step."""
+        patch = dc.Patch(
+            data=np.zeros(10),
+            coords={"distance": get_coord(start=3.0, step=0.5, shape=(10,))},
+            dims=("distance",),
+        )
+        path = tmp_path / "plain.h5"
+        patch.io.write(path, "dasdae")
+        with h5py.File(path) as h5:
+            group = next(iter(h5["waveforms"].values()))
+            assert "grid_terms" not in group["_coord_distance"].attrs
+
+
+class TestRangeNodesFromEarlierWriters:
+    """A range an earlier DASCore described by its step alone still reads."""
+
+    def test_a_time_range_stated_by_a_whole_step(self):
+        """Start, stop and a step in the node's own unit rebuild the range."""
+        with h5py.File(io.BytesIO(), "w") as h5:
+            node = h5.create_dataset("_coord_time", shape=(0,), dtype="int64")
+            node.attrs["dtype"] = "datetime64[ms]"
+            node.attrs["start"] = int(T0.astype("datetime64[ms]").astype("int64"))
+            node.attrs["stop"] = node.attrs["start"] + 40
+            node.attrs["step"] = 4
+            node.attrs["length"] = 10
+            node.attrs["object_type"] = "CoordRange"
+            coord = _read_coord(node, "time", {}, snap=True)
+        expected = get_coord(start=T0, step=np.timedelta64(4, "ms"), shape=(10,))
+        assert coord == expected

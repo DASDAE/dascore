@@ -14,7 +14,7 @@ import pytest
 import dascore as dc
 from dascore.compat import random_state
 from dascore.config import config_context
-from dascore.core.coords import CoordRange, CoordString
+from dascore.core.coords import CoordString
 from dascore.exceptions import (
     InvalidFiberFileError,
     MissingPatchError,
@@ -882,7 +882,7 @@ class TestDASDAEInternalHelpers:
             coords = _get_coords(group, ("time",), {})
 
         coord = coords.get_coord("time")
-        assert isinstance(coord, CoordRange)
+        assert coord.evenly_sampled
         assert len(coord) == 3
         assert coord.start == 10
         assert coord.step == 10

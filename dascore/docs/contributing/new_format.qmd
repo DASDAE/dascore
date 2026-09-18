@@ -49,12 +49,13 @@ Scan payloads must match `read()` for attrs, shape, dtype, and patch identity; c
 
 [`FiberIO.scan`](`dascore.io.core.FiberIO.scan`) returns full `CoordManager` objects in `ScanPayload` dictionaries. [`scan_payloads`](`dascore.scan_payloads`) exposes these and adds source provenance; [`scan`](`dascore.scan`) and [`scan_to_df`](`dascore.scan_to_df`) reduce them to index-friendly summaries. Do not add source path, format, or version inside the formatter.
 
-Every scan implementation must accept `snap: bool = True`:
+Every scan implementation must accept `snap`, which is `True`, `False`, or the name (or names) of the dimensions to snap; [`wants_snap`](`dascore.io.utils.wants_snap`) reads all three:
 
-- `snap=True` may idealize stored coordinates as uniform ranges.
+- `snap=True` may idealize stored dimension coordinates as uniform ranges.
 - `snap=False` must preserve stored coordinate values exactly.
+- Only a dimension is ever snapped. A coordinate along one, such as a temperature, holds measurements.
 
-For stored per-sample arrays, use [`get_exact_coord`](`dascore.io.utils.get_exact_coord`) rather than `get_coord(array)`, whose tolerance may hide jitter. Header-defined start/step/count coordinates may treat `snap=False` as a no-op. Exact payloads retain arrays, so use them for targeted files rather than whole directories.
+Preserve per-sample labels with [`get_coord(data=values)`](`dascore.core.coords.get_coord`). Declare header-defined grids with `get_coord(start=..., step=..., shape=...)`; those axes may treat `snap=False` as a no-op. To fit measured labels, use [`snap_stored_coord`](`dascore.io.utils.snap_stored_coord`), which honors the requested dimensions and configured `snap_tolerance`. Unrecognized grids remain stored as arrays, so prefer targeted files over whole-directory exact scans.
 
 ## Identify patches within a file
 

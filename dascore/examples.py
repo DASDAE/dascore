@@ -6,6 +6,7 @@ import io
 import tempfile
 from collections.abc import Sequence
 from contextlib import suppress
+from fractions import Fraction
 from pathlib import Path
 
 import numpy as np
@@ -92,7 +93,7 @@ def random_patch(
     array = rand.random(shape)
     # create attrs
     t1 = np.atleast_1d(np.datetime64(time_min))[0]
-    d1 = np.atleast_1d(distance_min)
+    d1 = np.atleast_1d(distance_min)[0]
     time_step = to_timedelta64(time_step)
     attrs = dict(
         category="DAS",
@@ -101,13 +102,15 @@ def random_patch(
     )
     if time_array is None:
         time_array = dascore.core.get_coord(
-            data=t1 + np.arange(array.shape[1]) * time_step,
+            start=t1,
+            shape=(array.shape[1],),
             step=time_step,
             units="s",
         )
     if dist_array is None:
         dist_array = dascore.core.get_coord(
-            data=d1 + np.arange(array.shape[0]) * distance_step,
+            start=d1,
+            shape=(array.shape[0],),
             step=distance_step,
             units="m",
         )
@@ -146,9 +149,9 @@ def random_patch_lat_lon(**kwargs):
         Parameters passed to [`random_patch`](`dascore.examples.random_patch`).
     """
     patch = random_patch(**kwargs)
-    dist = patch.coords.get_array("distance")
-    lat = np.arange(0, len(dist)) * 0.001 - 109.857952
-    lon = np.arange(0, len(dist)) * 0.001 + 41.544654
+    dist = patch.get_coord("distance")
+    lat = dc.get_coord(start=-109.857952, step=0.001, shape=dist.shape)
+    lon = dc.get_coord(start=41.544654, step=0.001, shape=dist.shape)
     # add a single coord
     out = patch.update_coords(latitude=("distance", lat), longitude=("distance", lon))
     return out
@@ -165,10 +168,10 @@ def random_patch_xyz(**kwargs):
         Parameters passed to [`random_patch`](`dascore.examples.random_patch`).
     """
     patch = random_patch(**kwargs)
-    dist = patch.coords.get_array("distance")
-    x = np.arange(0, len(dist)) * 5
-    y = np.arange(0, len(dist)) * 5
-    z = np.zeros_like(dist)
+    dist = patch.get_coord("distance")
+    x = dc.get_coord(start=0, step=5, shape=dist.shape)
+    y = x
+    z = np.zeros(dist.shape, dtype=dist.dtype)
     # add a single coord
     out = patch.update_coords(x=("distance", x), y=("distance", y), z=("distance", z))
     return out
@@ -222,8 +225,12 @@ def sin_wave_patch(
     """
     t_array = np.linspace(0.0, duration, int(sample_rate * duration))
     # Get time and distance coords
-    distance = np.arange(1, channel_count + 1, 1)
-    time = to_timedelta64(t_array) + np.datetime64(time_min)
+    distance = dc.get_coord(start=1, step=1, shape=(channel_count,))
+    time = dc.get_coord(
+        start=np.datetime64(time_min),
+        step=Fraction(str(duration)) / max(len(t_array) - 1, 1),
+        shape=t_array.shape,
+    )
     freqs = np.atleast_1d(frequency)
     amps = np.broadcast_to(np.atleast_1d(amplitude), shape=freqs.shape)
     # init empty data and add frequencies.
@@ -286,8 +293,12 @@ def chirp(
     t1 = t1 if t1 is not None else np.max(t_array)
     array = spy_chirp(t_array, f0=f0, t1=t1, f1=f1, method=method, phi=phi, **kwargs)
     # Get time and distance coords
-    distance = np.arange(1, channel_count + 1, 1)
-    time = to_timedelta64(t_array) + np.datetime64(time_min)
+    distance = dc.get_coord(start=1, step=1, shape=(channel_count,))
+    time = dc.get_coord(
+        start=np.datetime64(time_min),
+        step=Fraction(str(duration)) / max(len(t_array) - 1, 1),
+        shape=t_array.shape,
+    )
     data = np.array([array for _ in range(len(distance))])
     patch = dc.Patch(
         data=data,
@@ -313,11 +324,16 @@ def example_event_2():
     """
     path = fetch("example_dasdae_event_1.h5")
     patch = _load_example_patch_from_file(path).update_attrs(data_type="strain_rate")
-    # We convert time to relative time in seconds to match the figure in
-    # the publication.
-    delta_time = patch.coords.get_array("time") - patch.coords.min("time")
+    # Use relative seconds, as in the publication, while retaining the known grid.
+    source_time = patch.get_coord("time")
+    assert source_time.step_exact is not None
+    relative_time = dc.get_coord(
+        start=0.0,
+        step=float(source_time.step_exact),
+        shape=source_time.shape,
+    )
     out = (
-        patch.update_coords(time=delta_time / np.timedelta64(1, "s"))
+        patch.update_coords(time=relative_time)
         .set_units("strain/s", distance="m", time="s")
         .taper(time=0.05)
         .pass_filter(time=(..., 300))
@@ -386,7 +402,7 @@ def nd_patch(dim_count=3, coord_lens=10):
     """
     ran = np.random.RandomState(42)
     dims = tuple(f"dim_{i + 1}" for i in range(dim_count))
-    coords = {d: np.arange(coord_lens) for d in dims}
+    coords = {d: dc.get_coord(start=0, step=1, shape=(coord_lens,)) for d in dims}
     shape = tuple(len(coords[d]) for d in dims)
     data = ran.randn(*shape)
     return dc.Patch(data=data, coords=coords, dims=dims)
@@ -458,7 +474,14 @@ def ricker_moveout(
         time_delay = peak_time + actual_shift
         data[:, ind] = _ricker(time, time_delay)
 
-    coords = {"time": to_timedelta64(time), "distance": distance}
+    coords = {
+        "time": dc.get_coord(
+            start=np.timedelta64(0, "ns"),
+            step=Fraction(str(time_step)),
+            shape=time.shape,
+        ),
+        "distance": dc.get_coord(start=0, step=distance_step, shape=distance.shape),
+    }
     dims = ("time", "distance")
     return dc.Patch(data=data, coords=coords, dims=dims)
 
@@ -508,8 +531,12 @@ def plane_wave(
     patch = dc.Patch(
         data=np.cos(phase).astype(np.float32),
         coords={
-            "distance": distance,
-            "time": to_timedelta64(time) + np.datetime64(time_min),
+            "distance": dc.get_coord(start=0, step=distance_step, shape=distance.shape),
+            "time": dc.get_coord(
+                start=np.datetime64(time_min),
+                step=Fraction(str(time_step)),
+                shape=time.shape,
+            ),
         },
         dims=("distance", "time"),
     )
@@ -565,10 +592,11 @@ def delta_patch(
         time_step_td = to_timedelta64(time_step)
         t0 = np.datetime64(time_min)
         time_coord = dascore.core.get_coord(
-            data=t0 + np.arange(time_len) * time_step_td, step=time_step_td, units="s"
+            start=t0, step=time_step_td, shape=(time_len,), units="s"
         )
         dist_coord = dascore.core.get_coord(
-            data=distance_min + np.arange(dist_len) * distance_step,
+            start=distance_min,
+            shape=(dist_len,),
             step=distance_step,
             units="m",
         )

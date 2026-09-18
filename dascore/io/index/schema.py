@@ -33,13 +33,17 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 18 counts patches and
-# coordinate variants; version 17 links a segmented coordinate to each of
-# its runs; version 16 stored each range coordinate's exact grid and named
-# the envelope columns by storage type; version 15 stored source coordinate
-# and numeric attribute dtypes. Earlier indexes lack the metadata required
-# for reconstruction and are rebuilt when opened.
-INDEX_VERSION = 18
+# changes, not only when a column does. Version 19 states every
+# coordinate as the table of runs it is -- one row per run, carrying that
+# run's grid (`num`, `den`, `offset`) and its `run_hash` -- where version
+# 18 counted patches and coordinate variants; version
+# 17 merely linked a segmented coordinate to its runs and spelled one
+# range's grid as `step_numerator`/`step_denominator`/`origin_offset`;
+# version 16 stored each range coordinate's exact grid and named the
+# envelope columns by storage type; version 15 stored source coordinate
+# and numeric attribute dtypes. Earlier indexes lack the metadata
+# required for reconstruction and are rebuilt when opened.
+INDEX_VERSION = 19
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -191,11 +195,27 @@ class CoordDefRow(NamedTuple):
     min_str: str | None
     max_str: str | None
     is_relative: bool | None
-    # The exact grid of a nanosecond-time or integer range, in ticks (see
-    # CoordRange); NULL for float ranges and for rows which are not exact.
-    step_numerator: int | None
-    step_denominator: int | None
-    origin_offset: int | None
+    # The run's grid, as `NumericND` states it: sample k of the run is
+    # labelled start + floor((offset + k * num) / den), counted in the
+    # coordinate's ticks (nanoseconds for a time) or, for a float
+    # coordinate, the terms `dascore.core._run_kernels` spells in the same
+    # three fields: the bits of its step, its stride, and its grid index.
+    # The run's first and last labels are the envelope columns above, which
+    # the sign of `num` says which way round to read. A stored run --
+    # labels no grid can state, which stay in the source -- has den 0, and
+    # a row describing a whole multi-run coordinate states no grid at all.
+    num: int | None
+    den: int | None
+    offset: int | None
+    # Where a float run's grid is counted from, when that is not its first
+    # label (a slice keeps its parent's origin so that no label moves).
+    origin: float | None
+    # The 64 bit hash of this one run, position independent, as
+    # `NumericND` computes it while the coordinate is in
+    # memory. NULL on a row describing a whole coordinate, whose identity
+    # is `fingerprint`. Two patches sharing a run share this value, which
+    # is what overlap and duplicate detection join on.
+    run_hash: int | None
 
 
 class PatchCoordRow(NamedTuple):
@@ -411,7 +431,9 @@ SPOOL_LATE_RENAMES = MappingProxyType(
 # the envelope cannot restate -- a fractional step or offset, or a
 # descending run, whose start the envelope does not name -- so a query
 # need not scan them all.
-GRID_NEEDED = "step_denominator != 1 OR origin_offset != 0 OR step_numerator < 0"
+# A float run is always among them: the envelope states its step as a
+# double, which a narrower float's labels were not counted with.
+GRID_NEEDED = "den != 1 OR offset != 0 OR num < 0 OR dtype LIKE 'float%'"
 
 # A patch_coords row's coord_variants identity, given its alias; the row's
 # definition is always joined as `cd`.
@@ -456,6 +478,9 @@ INDEXES = (
     ("idx_cdefs_grid", "coord_defs", "def_key", GRID_NEEDED),
     # run links only, so an index without runs answers from an empty index
     ("idx_pcoords_runs", "patch_coords", "coord_name", "run_index > 0"),
+    # the run hashes, so runs shared between patches (overlap, duplicate
+    # files) are found by a join rather than a scan of every definition
+    ("idx_cdefs_run_hash", "coord_defs", "run_hash", "run_hash IS NOT NULL"),
 )
 
 

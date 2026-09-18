@@ -155,7 +155,7 @@ class TestSortNonHotCoords:
         p = dc.get_example_patch().rename_coords(time="event_time")
         t = p.get_coord("event_time")
         span = t.max() - t.min() + t.step
-        p2 = p.update_coords(event_time=t.data + span)
+        p2 = p.update_coords(event_time=t.values + span)
         return dc.spool([p2, p])  # deliberately out of order
 
     @pytest.mark.parametrize("key", ["event_time", "event_time_min"])

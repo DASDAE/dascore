@@ -23,7 +23,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.core.coords import _EXACT_GRID_FIELDS
+from dascore.core.coords import _GRID_COLUMNS
 from dascore.exceptions import (
     InvalidIndexError,
     InvalidIndexVersionError,
@@ -1207,7 +1207,7 @@ class SQLiteIndexBackend:
         coords["_key"] = coords["def_key"].where(coords["fingerprint"].notna(), None)
         return coords
 
-    def _grids(self, def_keys=None) -> dict[str, tuple[int, ...]]:
+    def _grids(self, def_keys=None) -> dict[str, tuple]:
         """
         The exact grid and length, by def key, where the envelope cannot restate it.
 
@@ -1218,8 +1218,11 @@ class SQLiteIndexBackend:
         definitions in hand; None reads them all, for a result covering
         most of the archive.
         """
-        columns = ", ".join(_EXACT_GRID_FIELDS)
-        sql = f"SELECT def_key, {columns}, length FROM coord_defs WHERE ({GRID_NEEDED})"
+        columns = ", ".join(_GRID_COLUMNS)
+        sql = (
+            f"SELECT def_key, {columns}, length, origin FROM coord_defs "
+            f"WHERE ({GRID_NEEDED})"
+        )
         if def_keys is None:
             rows = self._fetch_df(sql)
         else:
@@ -1228,9 +1231,72 @@ class SQLiteIndexBackend:
                 for chunk, marks in self._iter_in_batches(list(def_keys))
             ]
             rows = pd.concat(frames, ignore_index=True)
-        rows = rows.dropna()
+        rows = rows.dropna(subset=[*_GRID_COLUMNS, "length"])
+        # the grid's terms and length, then the origin a float run counts
+        # from where its first label is not it
         return {
-            row[0]: tuple(int(x) for x in row[1:]) for row in rows.to_numpy().tolist()
+            row[0]: (*(int(x) for x in row[1:5]), None if pd.isna(row[5]) else row[5])
+            for row in rows.astype(object).to_numpy().tolist()
+        }
+
+    def _run_tables(self, patch_ids) -> dict[tuple[int, str], tuple[tuple, ...]]:
+        """
+        The run table of every coordinate these patches hold as several runs.
+
+        Keyed by (patch id, coord name), each a tuple of the plain
+        ``(start, length, num, den, offset)`` rows `get_coord(runs=...)`
+        rebuilds a coordinate from. Only a coordinate of more than one run
+        is linked to runs, so an archive of contiguous patches answers
+        from the empty run index without reading a patch id.
+        """
+        probe = (
+            "SELECT 1 FROM patch_coords INDEXED BY idx_pcoords_runs "
+            "WHERE run_index > 0 LIMIT 1"
+        )
+        sql = (
+            "SELECT pc.patch_id, pc.coord_name, cd.value_kind, cd.num, cd.den, "
+            "cd.offset, cd.length, cd.min_int, cd.max_int, cd.min_float, "
+            "cd.max_float, cd.origin FROM patch_coords pc "
+            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+            "WHERE pc.run_index > 0 "
+            "AND pc.patch_id IN (SELECT value FROM json_each(?)) "
+            "ORDER BY pc.patch_id, pc.coord_name, pc.run_index"
+        )
+        with self._lock:
+            if self._con.execute(probe).fetchone() is None:
+                return {}
+            ids = json.dumps([int(x) for x in patch_ids])
+            rows = self._con.execute(sql, [ids]).fetchall()
+        out: dict[tuple[int, str], list[tuple]] = {}
+        # A coordinate any one of whose runs the index cannot state is
+        # dropped whole: a partial table would rebuild the wrong values.
+        partial: set[tuple[int, str]] = set()
+        for row in rows:
+            pid, name, kind, num, den, offset, length, lo_i, hi_i, lo_f, hi_f = row[:11]
+            origin = row[11]
+            key = (int(pid), str(name))
+            low, high = (lo_i, hi_i) if kind == "time" else (lo_f, hi_f)
+            if den is None or length is None or low is None or high is None:
+                partial.add(key)
+                continue
+            if int(den) == 0:
+                # A stored run's labels live in the file, never here; its
+                # row states only an envelope, so the coordinate as a whole
+                # has to be read from the patch rather than rebuilt.
+                partial.add(key)
+                continue
+            # the envelope states both ends; which of them the run starts
+            # at is the sign of its numerator, unless its grid is counted
+            # from somewhere else altogether
+            start = high if int(num) < 0 else low
+            start = start if origin is None else origin
+            out.setdefault(key, []).append(
+                (start, int(length), int(num), int(den), int(offset))
+            )
+        return {
+            key: tuple(table)
+            for key, table in out.items()
+            if table and key not in partial
         }
 
     def _pivot_coords(self, out: pd.DataFrame) -> pd.DataFrame:
@@ -1274,6 +1340,19 @@ class SQLiteIndexBackend:
         grids = self._grids(None if most else coords["def_key"].unique())
         grids = coords["def_key"].map(grids).astype(object)
         coords["_grid"] = grids.where(grids.notna(), None)
+        # and the whole table of a coordinate held as several runs, which
+        # no single row can restate
+        run_tables = self._run_tables(ids)
+        if run_tables:
+            keys = list(zip(coords["patch_id"], coords["coord_name"]))
+            tables = pd.Series(
+                [run_tables.get((int(pid), str(name))) for pid, name in keys],
+                index=coords.index,
+                dtype=object,
+            )
+            coords["_runs"] = tables
+        else:
+            coords["_runs"] = None
         for name, group in coords.groupby("coord_name"):
             if not any(coord_dtype_is_stateable(x) for x in group["dtype"].unique()):
                 # Recorded by name alone, so there is no envelope to
@@ -1298,6 +1377,14 @@ class SQLiteIndexBackend:
             out[f"_{name}_grid"] = (
                 out["patch_id"].map(dict(zip(pids, grids)))
                 if grids.notna().any()
+                else None
+            )
+            # the run table of a coordinate with holes, so a row rebuilds
+            # it exactly rather than as the range its envelope suggests
+            tables = group["_runs"]
+            out[f"_{name}_runs"] = (
+                out["patch_id"].map(dict(zip(pids, tables)))
+                if tables.notna().any()
                 else None
             )
             # the stored dtype: an envelope alone cannot say whether 0.0

@@ -108,6 +108,17 @@ class DascoreConfig(BaseModel):
             "separate groups."
         ),
     )
+    snap_tolerance: float = Field(
+        default=0.001,
+        ge=0,
+        description=(
+            "How far a reader's ``snap`` may move a coordinate label to put "
+            "it on an even grid, as a fraction of one step. An axis whose "
+            "labels lie further than this from every even grid keeps the "
+            "labels its file holds. The same meaning as a bare number "
+            "passed to ``Patch.snap_coords(tolerance=...)``."
+        ),
+    )
     patch_kind_attrs: tuple[str, ...] = Field(
         default=(
             "acquisition_key",

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 from dascore.constants import timeable_types
 from dascore.core import Patch
 from dascore.core.attrs import PatchAttrs
@@ -9,7 +11,7 @@ from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.io import ScanPayload
 from dascore.io.core import make_scan_payload
-from dascore.io.utils import get_exact_coord
+from dascore.io.utils import wants_snap
 from dascore.utils.misc import maybe_get_items
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -107,7 +109,7 @@ def _get_raw_time_coord(data_node, time_len):
     """Read timestamps for the written samples without regularizing them."""
     time = _get_time_node(data_node)[:time_len]
     values = to_datetime64(time)
-    return get_exact_coord(values, units="s")
+    return get_coord(data=np.atleast_1d(values), units="s")
 
 
 def _read_terra15(
@@ -176,7 +178,7 @@ def _get_default_attrs(root_node_attrs):
 def _get_time_coord(data_node, snap_dims=True):
     """Get the time coordinate."""
     t_min, t_max, time_len, d_time = _get_scanned_time_info(data_node)
-    if snap_dims:
+    if wants_snap(snap_dims, "time"):
         time_coord = get_coord(start=t_min, stop=t_max + d_time, step=d_time, units="s")
     else:
         time_coord = _get_raw_time_coord(data_node, time_len)

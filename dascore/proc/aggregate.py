@@ -7,7 +7,6 @@ from collections.abc import Callable, Sequence
 import numpy as np
 
 from dascore.constants import _AGG_FUNCS, DIM_REDUCE_DOCS, PatchType
-from dascore.core.coords import CoordPartial
 from dascore.exceptions import ParameterError
 from dascore.utils.array import _apply_aggregator, is_numpy
 from dascore.utils.array_api import (
@@ -393,7 +392,7 @@ def _idx_aggregate(patch, dim, want_max, dim_reduce):
         msg = f"{name} reduces a single dimension; dim must be its name."
         raise ParameterError(msg)
     coord = patch.get_coord(dim)
-    if isinstance(coord, CoordPartial):
+    if not coord.has_values:
         # The coord the default dim_reduce leaves behind holds no values,
         # so indexing it would quietly null the whole result.
         msg = (

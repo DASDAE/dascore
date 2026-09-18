@@ -10,12 +10,12 @@ from typing import Any, cast
 import numpy as np
 
 import dascore as dc
+from dascore.config import get_config
 from dascore.constants import INVENTORY_ATTRS
 from dascore.core.coordmanager import CoordManager
-from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
+from dascore.core.coords import BaseCoord, get_coord
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import (
-    CoordError,
     MissingPatchError,
     ParameterError,
     PatchAttributeError,
@@ -23,7 +23,12 @@ from dascore.exceptions import (
 )
 from dascore.models import ArrayLike
 from dascore.units import convert_units, get_quantity_str
-from dascore.utils.misc import _to_slice, _validate_sample_values, unbyte
+from dascore.utils.misc import (
+    _to_slice,
+    _validate_sample_values,
+    iterate,
+    unbyte,
+)
 from dascore.utils.time import to_exact_fraction
 
 
@@ -264,8 +269,8 @@ def get_gridded_coord(values, units=None) -> BaseCoord:
 
     For axes the instrument samples on a fixed grid, where the stored values
     only restate that grid and any departure from it is representation noise.
-    Such an array can jitter past the tolerance `get_coord` uses to recognize
-    an even coordinate and leave a monotonic coord with no step.
+    Such an array can contain representation jitter. The generic array
+    factory preserves that jitter; this helper explicitly fits a grid.
 
     Parameters
     ----------
@@ -289,21 +294,44 @@ def get_gridded_coord(values, units=None) -> BaseCoord:
     return coord.snap() if len(coord) > 1 else coord
 
 
-def get_exact_coord(values, units=None) -> BaseCoord:
+def wants_snap(snap, name: str) -> bool:
     """
-    Return an exact coordinate, including for non-monotonic values.
+    Whether a reader's ``snap`` option asks for the coordinate ``name``.
 
-    Monotonic values keep their runs (`CoordSegmented.from_array`, whose
-    dense-array guard keeps a jittery array as one monotonic coordinate);
-    anything else keeps its values as an array.
+    ``snap`` is True or False for every dimension at once, or the name (or
+    names) of the dimensions to snap.
     """
-    # atleast_1d matches get_coord(values=...): a squeezed single-sample
-    # array (0-d) becomes a length-1 coordinate rather than a scalar.
-    values = np.atleast_1d(np.asarray(values))
-    try:
-        return CoordSegmented.from_array(values, tolerance=0, units=units)
-    except CoordError:
-        return get_coord(data=values, units=units)
+    if snap is None or isinstance(snap, bool | np.bool_):
+        return bool(snap)
+    names = tuple(iterate(snap))
+    if not all(isinstance(x, str) for x in names):
+        msg = f"snap is True, False, or the dimensions to snap, not {snap!r}."
+        raise ParameterError(msg)
+    return name in names
+
+
+def snap_stored_coord(coord: BaseCoord, snap, name: str) -> BaseCoord:
+    """
+    A dimensional coordinate read from stored labels, snapped if it was asked for.
+
+    Reading labels never moves one; putting them on an even grid is this
+    separate, named step. It is bounded: a coordinate no even grid lies
+    within the configured ``snap_tolerance`` of keeps the labels its file
+    holds. Only a dimension is ever snapped, never an associated coordinate
+    such as a temperature, whose values are measurements.
+
+    Parameters
+    ----------
+    coord
+        The coordinate as the file states it.
+    snap
+        The reader's ``snap`` option: a bool, or the dimension names to snap.
+    name
+        The dimension this coordinate is.
+    """
+    if not wants_snap(snap, name) or len(coord) < 2:
+        return coord
+    return coord.snap(tolerance=get_config().snap_tolerance)
 
 
 def step_from_rate(rate) -> Fraction | np.timedelta64:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import importlib
 import importlib.util
 import tracemalloc
+from fractions import Fraction
 from typing import ClassVar
 
 import h5py
@@ -13,7 +14,8 @@ import pytest
 from upath import UPath
 
 import dascore as dc
-from dascore.exceptions import MissingOptionalDependencyError
+from dascore.core.coords import NumericND, concat_coords, get_coord
+from dascore.exceptions import CoordError, MissingOptionalDependencyError
 from dascore.io.netcdf import core as netcdf_core
 from dascore.io.netcdf import utils as netcdf_utils
 from dascore.io.netcdf.utils import (
@@ -578,6 +580,7 @@ class TestNetCDFEdgeCases:
         class Coord:
             values: ClassVar = np.array([0.0, 1.0, 2.0, 5.0])
             attrs: ClassVar = {"units": "m"}
+            name, dims = "distance", ("distance",)
 
         coord = netcdf_core.NetCDFCFV18._get_scan_coord(Coord(), snap=False)
 
@@ -590,6 +593,7 @@ class TestNetCDFEdgeCases:
         class Coord:
             values: ClassVar = np.arange(4.0)
             attrs: ClassVar = {"units": "m"}
+            name, dims = "distance", ("distance",)
 
         coord = netcdf_core.NetCDFCFV18._get_scan_coord(Coord(), snap=True)
 
@@ -881,3 +885,246 @@ class TestSelectiveRead:
         for kwargs in ({"time": (10, 20)}, {"distance": (2, 5)}):
             part = dc.read(coordless_path, **kwargs)[0]
             assert part.equals(whole.select(**kwargs))
+
+
+class TestXDASSampledCoordinate:
+    """A sampled coordinate is a run table already, and is copied as one."""
+
+    @staticmethod
+    def _dataset(values, lengths, attrs):
+        """The three variables XDAS writes a sampled coordinate as."""
+        xr = pytest.importorskip("xarray")
+        attrs = {"tie_point_mapping": "time: time_lengths time_points", **attrs}
+        return xr.Dataset(
+            {
+                "time_sampling": ((), np.nan, attrs),
+                "time_lengths": ("time_points", lengths),
+                "time_values": ("time_points", values),
+            }
+        )
+
+    def test_a_fractional_rate_is_copied_exactly(self):
+        """The exact ratio becomes the run's step; nothing is fitted."""
+        start = np.datetime64("2020-01-01", "ns")
+        late = start + np.timedelta64(10, "s")
+        attrs = {
+            "sampling_interval": 976562,
+            "sampling_interval_dtype": "timedelta64[ns]",
+            "sampling_interval_units": "nanoseconds",
+            "sampling_numerator": 1953125,
+            "sampling_numerator_dtype": "timedelta64[ns]",
+            "sampling_numerator_units": "nanoseconds",
+            "sampling_denominator": 2,
+        }
+        dataset = self._dataset([start, late], [2048, 1000], attrs)
+        coord = netcdf_utils._get_dim_coord(dataset, "time", 3048)
+        declared = concat_coords(
+            NumericND.from_run(start, Fraction(1, 1024), 2048),
+            NumericND.from_run(late, Fraction(1, 1024), 1000),
+        )
+        assert coord == declared
+        assert coord.step_exact == Fraction(1, 1024) and coord.holes
+
+    def test_a_fractional_interval_promotes_integer_starts(self):
+        """XDAS evaluates start + k * interval, and gets doubles; so does this."""
+        dataset = self._dataset(np.asarray([0]), [4], {"sampling_interval": 2.5})
+        coord = netcdf_utils._get_dim_coord(dataset, "time", 4)
+        assert coord.dtype == np.dtype("float64")
+        np.testing.assert_array_equal(coord.values, [0.0, 2.5, 5.0, 7.5])
+
+    def test_a_whole_interval_leaves_integer_starts_alone(self):
+        """An interval of whole units states a grid of whole labels."""
+        dataset = self._dataset(np.asarray([0]), [4], {"sampling_interval": 2})
+        coord = netcdf_utils._get_dim_coord(dataset, "time", 4)
+        assert coord.dtype == np.dtype("int64")
+        np.testing.assert_array_equal(coord.values, [0, 2, 4, 6])
+
+    def test_a_whole_tick_rate_has_no_ratio(self):
+        """Without a ratio the interval is the step, in the units it names."""
+        start = np.datetime64("2020-01-01", "ns")
+        attrs = {
+            "sampling_interval": 4,
+            "sampling_interval_dtype": "timedelta64[ns]",
+            "sampling_interval_units": "milliseconds",
+        }
+        coord = netcdf_utils._get_dim_coord(
+            self._dataset([start], [1000], attrs), "time", 1000
+        )
+        assert coord == get_coord(
+            start=start, step=np.timedelta64(4, "ms"), shape=(1000,)
+        )
+
+    def test_a_float_interval(self):
+        """A float block is its start and its step."""
+        dataset = self._dataset([3.7, 100.3], [10, 5], {"sampling_interval": 0.1})
+        coord = netcdf_utils._get_dim_coord(dataset, "time", 15)
+        first, second = 3.7 + np.arange(10) * 0.1, 100.3 + np.arange(5) * 0.1
+        expected = np.concatenate([first, second])
+        np.testing.assert_array_equal(coord.values, expected)
+        assert coord.runs_count == 2 and coord.labels is None
+
+    def test_blocks_must_span_the_dimension(self):
+        """Lengths which do not add up to the axis are refused."""
+        dataset = self._dataset([0.0], [10], {"sampling_interval": 2.5})
+        with pytest.raises(CoordError, match="does not span"):
+            netcdf_utils._get_dim_coord(dataset, "time", 11)
+
+
+class TestXDASDeclaredTies:
+    """Tie points state grids without interpolation through float epochs."""
+
+    def test_nanosecond_ties_keep_their_grid(self):
+        """Current-epoch timestamps retain the fractional nanosecond cadence."""
+        xr = pytest.importorskip("xarray")
+        start = np.datetime64("2026-09-17", "ns")
+        dataset = xr.Dataset(
+            {
+                "time_values": (
+                    "tie",
+                    [start, start + np.timedelta64(999999999, "ns")],
+                ),
+                "time_indices": ("tie", [0, 49]),
+            }
+        )
+        coord = netcdf_utils._get_tie_point_coord(dataset, "time", 50)
+        # XDAS rounds an interpolated time to the nearest tick, which the
+        # run reproduces by flooring from half a tick up.
+        ticks = [round(Fraction(k * 999999999, 49)) for k in range(50)]
+        expected = start + np.asarray(ticks).astype("timedelta64[ns]")
+        np.testing.assert_array_equal(coord.values, expected)
+        assert coord.evenly_sampled
+        assert coord.labels is None
+
+    def test_later_and_descending_tie_segments_round_alike(self):
+        """The half-tick phase holds through every segment, either way round."""
+        xr = pytest.importorskip("xarray")
+        start = np.datetime64("2026-09-17", "ns")
+        ticks, indices = [0, 999_999_999, 2_500_000_003], [0, 49, 120]
+        for sign in (1, -1):
+            values = [start + np.timedelta64(sign * x, "ns") for x in ticks]
+            dataset = xr.Dataset(
+                {"time_values": ("tie", values), "time_indices": ("tie", indices)}
+            )
+            coord = netcdf_utils._get_tie_point_coord(dataset, "time", 121)
+            expected = []
+            for k in range(121):
+                seg = 0 if k < indices[1] else 1
+                span = sign * (ticks[seg + 1] - ticks[seg])
+                length = indices[seg + 1] - indices[seg]
+                ideal = sign * ticks[seg] + Fraction((k - indices[seg]) * span, length)
+                # nearest tick, halves up
+                expected.append(int((ideal + Fraction(1, 2)) // 1))
+            np.testing.assert_array_equal(
+                coord.values, start + np.asarray(expected).astype("timedelta64[ns]")
+            )
+
+    def test_ties_are_noted_until_the_coordinate_changes(self):
+        """The ties ride along for a straight hand-back, and no further."""
+        xr = pytest.importorskip("xarray")
+        dataset = xr.Dataset(
+            {
+                "distance_values": ("tie", [0.0, 100.0, 400.0]),
+                "distance_indices": ("tie", [0, 50, 100]),
+            }
+        )
+        coord = netcdf_utils._get_tie_point_coord(dataset, "distance", 101)
+        kind, indices, values = coord._foreign
+        assert kind == "xdas_ties"
+        np.testing.assert_array_equal(indices, [0, 50, 100])
+        np.testing.assert_array_equal(values, [0.0, 100.0, 400.0])
+        # every sample in order is the same coordinate; anything else is not
+        assert coord[:]._foreign is not None
+        assert coord[1:]._foreign is None
+        assert coord.convert_units("m")._foreign is None
+        # and the note is no part of what the coordinate is
+        assert "foreign" not in coord.model_dump()
+        assert coord == NumericND.from_rows(coord.runs, dtype=coord.dtype)
+
+    def test_large_axis_keeps_only_ties(self, monkeypatch):
+        """Decoding a million samples allocates runs instead of sample labels."""
+        xr = pytest.importorskip("xarray")
+        dataset = xr.Dataset(
+            {
+                "distance_values": ("tie", [0.0, 100.0, 400.0]),
+                "distance_indices": ("tie", [0, 500000, 1000000]),
+            }
+        )
+
+        def fail(*args, **kwargs):
+            raise AssertionError("tie points expanded through interpolation")
+
+        monkeypatch.setattr(np, "interp", fail)
+        coord = netcdf_utils._get_tie_point_coord(dataset, "distance", 1000001)
+        assert len(coord) == 1000001
+        assert coord.runs_count == 2 and coord.labels is None
+        np.testing.assert_array_equal(
+            coord._labels([0, 500000, 1000000]), [0.0, 100.0, 400.0]
+        )
+
+    def test_values_outside_ties_are_clamped(self):
+        """The runs retain interpolation's constant endpoint extension."""
+        xr = pytest.importorskip("xarray")
+        dataset = xr.Dataset(
+            {
+                "distance_values": ("tie", [10.0, 20.0]),
+                "distance_indices": ("tie", [2, 4]),
+            }
+        )
+        coord = netcdf_utils._get_tie_point_coord(dataset, "distance", 7)
+        np.testing.assert_array_equal(coord.values, [10, 10, 10, 15, 20, 20, 20])
+
+
+class TestXDASCoordinateCorners:
+    """The spellings an XDAS coordinate can take besides the usual two."""
+
+    def test_integer_sampled_blocks(self):
+        """Whole numbers are counted as ticks, like times."""
+        dataset = TestXDASSampledCoordinate._dataset(
+            np.asarray([0, 100]), [10, 5], {"sampling_interval": 3}
+        )
+        coord = netcdf_utils._get_dim_coord(dataset, "time", 15)
+        expected = np.concatenate([np.arange(10) * 3, 100 + np.arange(5) * 3])
+        np.testing.assert_array_equal(coord.values, expected)
+        assert coord.dtype.kind == "i"
+
+    def test_the_older_sampling_spelling_is_left_to_its_values(self):
+        """Without its attributes a sampling variable states nothing here."""
+        xr = pytest.importorskip("xarray")
+        dataset = xr.Dataset(
+            {
+                "time_sampling": ((), 2.5),
+                "time_lengths": ("time_points", [3]),
+                "time_values": ("time_points", [0.0]),
+            }
+        )
+        assert netcdf_utils._get_sampled_coord(dataset, "time", 3) is None
+
+    def test_tie_indices_must_increase(self):
+        """Ties out of order describe no axis."""
+        xr = pytest.importorskip("xarray")
+        dataset = xr.Dataset(
+            {
+                "distance_values": ("tie", [0.0, 1.0, 2.0]),
+                "distance_indices": ("tie", [0, 5, 5]),
+            }
+        )
+        with pytest.raises(CoordError, match="increasing"):
+            netcdf_utils._get_tie_point_coord(dataset, "distance", 6)
+
+    def test_ties_past_the_axis_leave_nothing(self):
+        """An axis of no samples has no run to state."""
+        xr = pytest.importorskip("xarray")
+        dataset = xr.Dataset(
+            {
+                "distance_values": ("tie", [0.0, 1.0]),
+                "distance_indices": ("tie", [0, 5]),
+            }
+        )
+        assert len(netcdf_utils._get_tie_point_coord(dataset, "distance", 0)) == 0
+
+    def test_values_without_indices_are_the_labels(self):
+        """Tie values alone are read as the labels they are."""
+        xr = pytest.importorskip("xarray")
+        dataset = xr.Dataset({"distance_values": ("tie", [0.0, 1.0, 4.0])})
+        coord = netcdf_utils._get_tie_point_coord(dataset, "distance", 3)
+        np.testing.assert_array_equal(coord.values, [0.0, 1.0, 4.0])

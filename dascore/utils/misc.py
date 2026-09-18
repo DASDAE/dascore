@@ -814,9 +814,13 @@ def cached_method(func):
 
     @functools.wraps(func)
     def wrapper(self, *args, **kwargs):
-        if not hasattr(self, "_cache"):
-            self._cache = {}
-        cache = self._cache
+        try:
+            # One lookup rather than a hasattr and a read: on a pydantic
+            # model each of those goes the long way round, through
+            # BaseModel.__getattr__.
+            cache = self._cache
+        except AttributeError:
+            cache = self._cache = {}
         if not (args or kwargs):
             key = id(func)
         else:

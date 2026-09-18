@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import InvalidSpoolError, PatchError, UnitError
+from dascore.exceptions import CoordError, InvalidSpoolError, PatchError, UnitError
 from dascore.io.prodml.core import ProdMLV2_0, ProdMLV2_1
 from dascore.units import get_quantity_str
 from dascore.utils.misc import suppress_warnings, unbyte
@@ -276,23 +276,31 @@ class TestProdMLWriteTimePrecision:
         assert not record
 
     @pytest.mark.parametrize("year", ("1600", "2500"))
-    def test_microseconds_outside_nanosecond_range(self, year, prodml_patch, tmp_path):
-        """Wide microsecond timestamps should not wrap through nanoseconds."""
+    def test_microseconds_outside_nanosecond_range(self, year, prodml_patch):
+        """A time no nanosecond tick can count never reaches the writer."""
+        # The coordinate counts in nanoseconds, which int64 spans only from
+        # 1678 to 2262, and says so rather than wrapping into that range.
         time = np.datetime64(year, "us") + np.arange(5) * np.timedelta64(2_000, "us")
-        patch = _with_time(prodml_patch, time)
-        path = dc.write(patch, tmp_path / f"wide_{year}.h5", "PRODML")
-        with h5py.File(path, "r") as file:
-            stored = file["Acquisition/Raw[0]/RawDataTime"][:]
-        np.testing.assert_array_equal(stored, time.astype(np.int64))
+        with pytest.raises(CoordError, match="nanosecond range"):
+            _with_time(prodml_patch, time)
 
-    def test_finer_than_nanosecond_precision_is_rejected(self, prodml_patch, tmp_path):
-        """Unsupported sub-nanosecond precision should not be truncated."""
-        time = np.datetime64(1, "ps") + np.arange(5) * np.timedelta64(
+    def test_finer_than_nanosecond_precision_meets_the_tick(
+        self, prodml_patch, tmp_path
+    ):
+        """Sub-nanosecond precision is met by the coordinate, not the writer."""
+        time = np.datetime64(1000, "ps") + np.arange(5) * np.timedelta64(
             2_000_000_000, "ps"
         )
         patch = _with_time(prodml_patch, time)
-        with pytest.raises(PatchError, match="nanosecond precision"):
-            dc.write(patch, tmp_path / "picoseconds.h5", "PRODML")
+        assert patch.get_coord("time").dtype == np.dtype("datetime64[ns]")
+        path = dc.write(patch, tmp_path / "picoseconds.h5", "PRODML")
+        with h5py.File(path, "r") as file:
+            stored = file["Acquisition/Raw[0]/RawDataTime"][:]
+        expected = time.astype("datetime64[ns]").astype("datetime64[us]")
+        np.testing.assert_array_equal(stored, expected.astype(np.int64))
+        # A picosecond off the tick is refused, never quietly rounded onto it.
+        with pytest.raises(CoordError, match="whole number of nanoseconds"):
+            _with_time(prodml_patch, time + np.timedelta64(1, "ps"))
 
     def test_sub_microseconds_round_and_warn_once(self, prodml_patch, tmp_path):
         """Sub-microsecond timestamps should round to nearest microsecond once."""
@@ -445,7 +453,7 @@ class TestProdMLWriteValidation:
         patch = prodml_patch.set_units(distance=None)
         out = dc.read(dc.write(patch, tmp_path / "unitless.h5", "PRODML"))[0]
         distance = out.get_coord("distance")
-        assert distance.unit_str == "m"
+        assert distance._unit_str == "m"
         assert np.array_equal(distance.values, patch.get_coord("distance").values)
 
     @pytest.mark.parametrize("values", ([4.0, 6.0, 9.0, 10.0], [10.0, 8.0, 6.0, 4.0]))

@@ -1,4 +1,4 @@
-"""Tests for schema 16: exact grids stored and rebuilt by the index."""
+"""Tests for schema 18: run grids stored and rebuilt by the index."""
 
 from __future__ import annotations
 
@@ -9,13 +9,18 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.core.coords import CoordRange, get_coord
+from dascore.core._run_kernels import float_rows
+from dascore.core.coords import NumericND, concat_tables, get_coord
 from dascore.core.summary import PatchSummary
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import _coord_from_envelope
 from dascore.io.index.ingest import _coord_record, summaries_to_records
 from dascore.io.index.planned import _coord_record_from_row
 from dascore.utils.patch_assembly import coord_from_row
+
+# Whether this machine has no dtype wider than a double, as Windows and
+# macOS on arm do, which is what makes "float128" a name rather than a dtype.
+_NO_LONG_DOUBLE = np.dtype(np.longdouble).itemsize <= 8
 
 T0 = np.datetime64("2020-01-01T00:00:00")
 
@@ -45,8 +50,8 @@ class TestSchema:
         record = _coord_record("time", summary)
         assert record is not None
         assert record.is_exact
-        assert (record.step_numerator, record.step_denominator) == (1953125, 2)
-        assert record.origin_offset == 0
+        assert (record.num, record.den) == (1953125, 2)
+        assert record.offset == 0
         # the envelope still holds the whole-tick step
         assert record.step_int == 976562
 
@@ -56,16 +61,17 @@ class TestSchema:
         record = _coord_record("x", coord.to_summary(dims=("x",)))
         assert record is not None
         assert not record.is_exact
-        assert record.step_numerator is None
+        # a stored run: its labels stay in the source, so den names no grid
+        assert record.den == 0
 
     def test_stored_columns(self, indexed):
         """The coord_defs row stores the grid."""
         back = indexed._catalog.backend
         defs = back._fetch_df("SELECT * FROM coord_defs")
         assert defs["is_exact"].all()
-        time_def = defs[defs["step_denominator"] == 2]
+        time_def = defs[defs["den"] == 2]
         assert len(time_def) == 1
-        assert int(time_def["step_numerator"].iloc[0]) == 1953125
+        assert int(time_def["num"].iloc[0]) == 1953125
 
 
 class TestFlatRelation:
@@ -84,14 +90,15 @@ class TestFlatRelation:
         """
         df = indexed._catalog.to_df()
         grid = df["_time_grid"].iloc[0]
-        assert grid == (1953125, 2, 0, 2000)
+        # the terms, the length, and no origin: a tick run starts on its grid
+        assert grid == (1953125, 2, 0, 2000, None)
         assert df["_distance_grid"].iloc[0] is None
 
     def test_coord_from_row(self, indexed, hz_1024_patch):
         """A row rebuilds the exact coordinate, not the rounded one."""
         row = indexed._catalog.to_df().iloc[0].to_dict()
         coord = coord_from_row(row, "time", units="s")
-        assert isinstance(coord, CoordRange)
+        assert coord.evenly_sampled
         assert coord == hz_1024_patch.get_coord("time")
         distance = coord_from_row(row, "distance", units="m")
         assert distance == hz_1024_patch.get_coord("distance")
@@ -152,7 +159,7 @@ class TestFlatRelation:
         rows = chunked._catalog.to_df()
         assert rows["_time_grid"].notna().all()
         defs = chunked._catalog.backend._fetch_df("SELECT * FROM coord_defs")
-        assert (defs["step_denominator"] == 2).any()
+        assert (defs["den"] == 2).any()
 
     def test_descending_whole_ticks_carry_grid(self, tmp_path):
         """A descending range needs its grid: the envelope does not name its start."""
@@ -170,9 +177,9 @@ class TestFlatRelation:
         row = indexed._catalog.to_df().iloc[0].to_dict()
         reversed_time = hz_1024_patch.get_coord("time")[::-1]
         num, den, offset = (
-            reversed_time.step_numerator,
-            reversed_time.step_denominator,
-            reversed_time.origin_offset,
+            reversed_time._grid_terms[0],
+            reversed_time._grid_terms[1],
+            reversed_time._grid_terms[2],
         )
         row["time_step"] = -row["time_step"]
         row["_time_grid"] = (num, den, offset, len(reversed_time))
@@ -187,7 +194,113 @@ class TestFlatRelation:
         coord = coord_from_row(row, "x")
         assert coord is not None
         assert coord.dtype == np.dtype("float64")
-        assert coord.step_numerator is None
+        assert not coord._exact
+
+    def test_native_integer_grid_needs_no_stored_dtype(self):
+        """A native integer envelope carries enough dtype for its grid."""
+        row = {
+            "x_min": np.int64(2),
+            "x_max": np.int64(5),
+            "x_step": np.int64(1),
+            "_x_grid": (1, 1, 0, 4),
+        }
+        np.testing.assert_array_equal(coord_from_row(row, "x").values, [2, 3, 4, 5])
+
+    def test_large_integer_grid_envelope_is_refused(self):
+        """A float envelope past exact integer precision cannot state a grid."""
+        row = {
+            "x_min": float(2**60),
+            "x_max": float(2**60 + 3),
+            "x_step": 1.0,
+            "_x_coord_dtype": "int64",
+            "_x_grid": (1, 1, 0, 4),
+        }
+        assert coord_from_row(row, "x") is None
+
+    def test_mixed_rate_run_table_rebuilds_without_a_step(self):
+        """A full run table needs no scalar envelope step."""
+        coord = concat_tables(
+            NumericND.from_run(0.0, 1.0, 3),
+            NumericND.from_run(3.0, 2.0, 3),
+        )
+        row = {
+            "x_min": coord.min(),
+            "x_max": coord.max(),
+            "x_step": None,
+            "_x_coord_dtype": str(coord.dtype),
+            "_x_runs": tuple(tuple(item) for item in coord.runs.tolist()),
+        }
+        assert coord_from_row(row, "x") == coord
+
+
+class TestRowsRefused:
+    """A row which cannot state the coordinate exactly states nothing."""
+
+    def test_extended_float_runs_are_refused(self):
+        """A long double's labels do not survive the table's f8 start."""
+        row = {
+            "x_min": 0.0,
+            "x_max": 9.0,
+            "x_step": None,
+            "_x_coord_dtype": "float128",
+            "_x_runs": ((0.0, 5, 1, 1, 0), (20.0, 5, 1, 1, 0)),
+        }
+        assert coord_from_row(row, "x") is None
+
+    @pytest.mark.skipif(
+        np.dtype(np.longdouble).itemsize <= 8, reason="longdouble is a double here"
+    )
+    def test_extended_float_envelopes_are_refused(self):
+        """A float envelope in the frame cannot carry a long double's labels."""
+        row = {
+            "x_min": 0.0,
+            "x_max": 9.0,
+            "x_step": 1.0,
+            "_x_coord_dtype": np.dtype(np.longdouble).name,
+        }
+        assert coord_from_row(row, "x") is None
+
+    def test_stored_runs_are_refused(self):
+        """A run whose labels live in the file cannot be rebuilt from a row."""
+        row = {
+            "x_min": 0.0,
+            "x_max": 9.0,
+            "x_step": None,
+            "_x_coord_dtype": "float64",
+            "_x_runs": ((0.0, 5, 1, 1, 0), (20.0, 5, 0, 0, 0)),
+        }
+        assert coord_from_row(row, "x") is None
+
+    @pytest.mark.parametrize(
+        "changes",
+        [
+            {"_x_coord_dtype": None},  # no dtype to count the rows in
+            # a name this machine has no dtype for (a long double elsewhere)
+            {"_x_coord_dtype": "float128" if _NO_LONG_DOUBLE else "quadruple"},
+            {"_x_coord_dtype": "<U4"},  # nor any arithmetic for text
+            {"x_min": pd.Timestamp("2020-01-01")},  # a time under a float dtype
+            {"_x_coord_dtype": "int64", "_x_runs": ((2**60, 5, 1, 1, 0),) * 2},
+        ],
+        ids=[
+            "no dtype",
+            "unknown dtype",
+            "text",
+            "placeholder dtype",
+            "past float precision",
+        ],
+    )
+    def test_rows_the_table_cannot_be_counted_from(self, changes):
+        """Anything short of an exact statement rebuilds nothing from runs."""
+        one = int(np.float64(1.0).view(np.int64))
+        row = {
+            "x_min": 0.0,
+            "x_max": 24.0,
+            "x_step": None,
+            "_x_coord_dtype": "float64",
+            "_x_runs": ((0.0, 5, one, 1, 0), (20.0, 5, one, 1, 0)),
+        }
+        assert coord_from_row(row, "x") is not None
+        assert coord_from_row({**row, **changes}, "x") is None
 
 
 class TestPlannedRows:
@@ -198,7 +311,7 @@ class TestPlannedRows:
         row = indexed._catalog.to_df().iloc[0].to_dict()
         record = _coord_record_from_row(row, "time")
         assert record is not None
-        assert record.step_denominator == 2
+        assert record.den == 2
         assert record.is_exact
 
     def test_grid_without_identity(self, indexed):
@@ -207,7 +320,7 @@ class TestPlannedRows:
         row["_time_def_key"] = None
         record = _coord_record_from_row(row, "time")
         assert record is not None
-        assert record.step_numerator is None
+        assert record.num is None
 
 
 class TestRecordsRoundTrip:
@@ -226,3 +339,94 @@ class TestRecordsRoundTrip:
         before = {c.coord_name: c for c in records[0].patches[0].coords}
         after = {c.coord_name: c for c in exported[0].patches[0].coords}
         assert before == after
+
+
+class TestFloatRunsRebuild:
+    """The index restates a float run exactly, wherever its grid is counted from."""
+
+    @pytest.fixture(
+        scope="class",
+        params=[
+            "sliced",
+            "strided",
+            "divided",
+            "descending",
+            "reversed",
+            "plain",
+            "float32",
+        ],
+    )
+    def float_spool(self, request, tmp_path_factory):
+        """A directory holding one patch whose distance axis is awkward."""
+        whole = get_coord(data=np.arange(1000) * 0.1, units="m")
+        divided = get_coord(
+            runs=float_rows("float64", [0.0], [325], [250.0], [-1], [0]),
+            dtype="float64",
+            units="m",
+        )
+        descending = get_coord(
+            runs=float_rows("float64", [0.0], [325], [-250.0], [-1], [0]),
+            dtype="float64",
+            units="m",
+        )
+        coords = {
+            "sliced": whole[150:450],
+            "strided": whole[7::3],
+            "divided": divided[25:],
+            "descending": descending[25:],
+            "reversed": whole[::-1],
+            # counted from its own first label, so the row needs no origin
+            "plain": get_coord(data=3.7 + np.arange(300) * 0.1, units="m"),
+            # labels a double step rounds again into a narrower float
+            "float32": get_coord(
+                start=np.float32(0), step=0.1, shape=(300,), units="m"
+            ),
+        }
+        coord = coords[request.param][:300]
+        assert coord.evenly_sampled and len(coord) == 300
+        patch = dc.get_example_patch().update_coords(distance=coord)
+        path = tmp_path_factory.mktemp(f"float_{request.param}")
+        patch.io.write(path / "patch.h5", "dasdae")
+        return dc.spool(path).update(), coord
+
+    def test_row_rebuilds_the_coordinate(self, float_spool):
+        """The planned coordinate is the file's, label for label."""
+        spool, coord = float_spool
+        row = spool._catalog.to_df().iloc[0].to_dict()
+        rebuilt = coord_from_row(row, "distance", units="m")
+        np.testing.assert_array_equal(rebuilt.values, coord.values)
+        assert rebuilt == coord
+
+    def test_loaded_and_chunked_agree(self, float_spool):
+        """What a chunk plans is what loading gives."""
+        spool, coord = float_spool
+        assert spool[0].get_coord("distance") == coord
+        assert spool.chunk(time=None)[0].get_coord("distance") == coord
+
+
+class TestFloat32Origin:
+    """A float32 grid's origin is a double its first label does not state."""
+
+    def test_a_float32_grid_survives_an_indexed_merge(self, tmp_path_factory):
+        """The merge reads the coordinate from its row, origin and all."""
+        path = tmp_path_factory.mktemp("f32_origin")
+        # 0.1 as a double is not 0.1 as a float32, so the origin the run
+        # counts from is not the label the envelope holds
+        distance = NumericND.from_run(0.1, 0.001, 6, dtype="float32", units="m")
+        for num in range(2):
+            time = get_coord(
+                start=np.datetime64("2020-01-01", "ns") + np.timedelta64(num * 6, "s"),
+                step=np.timedelta64(1, "s"),
+                shape=(6,),
+            )
+            patch = dc.Patch(
+                data=np.zeros((6, 6)),
+                coords={"distance": distance, "time": time},
+                dims=("distance", "time"),
+            )
+            dc.write(patch, path / f"{num}.h5", "dasdae")
+        spool = dc.spool(path).update()
+        direct = dc.read(path / "0.h5")[0].get_coord("distance")
+        merged = spool.chunk(time=None)[0].get_coord("distance")
+        np.testing.assert_array_equal(direct.values, distance.values)
+        np.testing.assert_array_equal(merged.values, distance.values)

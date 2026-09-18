@@ -118,13 +118,13 @@ def _get_coords(fi):
     starttime = _get_time_from_header(header_0)
     dt = np.timedelta64(int(header_0[trace_field.TRACE_SAMPLE_INTERVAL]), "us")
     ns = header_0[trace_field.TRACE_SAMPLE_COUNT]
-    time_array = starttime + dt * np.arange(ns)
+    time_coord = dc.get_coord(start=starttime, step=dt, shape=(ns,))
 
     # Get distance array from SEGY header
-    channel = np.arange(len(fi.header))
+    channel = dc.get_coord(start=0, step=1, shape=(len(fi.header),))
 
     coords = get_coord_manager(
-        {"time": time_array, "channel": channel}, dims=("time", "channel")
+        {"time": time_coord, "channel": channel}, dims=("time", "channel")
     )
     return coords
 
@@ -156,7 +156,7 @@ def _get_patch_with_channel_coord(patch):
     )
     warnings.warn(msg)
     coord = patch.get_coord(non_time)
-    array = np.arange(len(coord))
+    array = dc.get_coord(start=0, step=1, shape=(len(coord),))
     patch = patch.update_coords(**{non_time: array}).rename_coords(
         **{non_time: "channel"}
     )

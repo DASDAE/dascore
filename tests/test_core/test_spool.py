@@ -1735,7 +1735,8 @@ class TestConcatenatePartitions:
         far = other.update_coords(clock=("time", ticks + 10 * nt))
         gapped = dc.spool([a, far]).concatenate(time=None)
         assert pd.isnull(gapped.get_contents()["clock_step"].iloc[0])
-        assert gapped[0].get_coord("clock").step is None
+        assert gapped[0].get_coord("clock").step == 1.0
+        assert gapped[0].get_coord("clock").holes
 
     def test_keep_first_converts_the_data_it_labels(self, pair):
         """Keeping the first data units converts the members stated otherwise."""

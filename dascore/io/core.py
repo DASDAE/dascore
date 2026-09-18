@@ -46,7 +46,7 @@ from dascore.constants import (
 )
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager
-from dascore.core.coords import CoordSegmented
+from dascore.core.coords import NumericND
 from dascore.core.spool import Spool
 from dascore.core.summary import PatchSummary, normalize_source_patch_key
 from dascore.exceptions import (
@@ -2108,7 +2108,7 @@ def _maybe_split_gapped_patches(spool, fiber_io, split):
 
     def _has_gaps(patch):
         coords = (patch.get_coord(x) for x in patch.dims)
-        return any(isinstance(x, CoordSegmented) for x in coords)
+        return any(isinstance(x, NumericND) and x.holes for x in coords)
 
     # Materialize once (cheap; patches are in memory) so gap detection and
     # splitting see the same patch sequence.
