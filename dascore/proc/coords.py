@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Mapping
-from typing import Any, Literal
+import warnings
+from typing import Any, ClassVar
 
 import numpy as np
 import pandas as pd
@@ -23,12 +23,63 @@ from dascore.exceptions import (
 from dascore.utils.array_api import array_namespace
 from dascore.utils.docs import compose_docstring
 from dascore.utils.indexing import get_indexers, label_indexer
-from dascore.utils.misc import get_parent_code_name, iterate
+from dascore.utils.misc import (
+    _apply_union_indexers,
+    get_parent_code_name,
+    iterate,
+)
 from dascore.utils.patch import patch_function
 
 
-@patch_function()
-def snap_coords(patch: PatchType, *coords, reverse: bool = False) -> PatchType:
+class _IndexRecorder:
+    """
+    An array's stand-in, which records the indexing applied to it.
+
+    [`CoordManager.sort`](`dascore.core.CoordManager.sort`) and `snap`
+    reorder an array they are handed but never say how, and the metadata
+    half of an operation runs before the data are touched. Standing in for
+    the array collects exactly the indexing the kernel has to replay,
+    rather than a second copy of the manager's sorting logic.
+    """
+
+    def __init__(self):
+        self.keys: list[tuple] = []
+
+    def __getitem__(self, key):
+        """Record an indexing operation and stand in for its result."""
+        self.keys.append(key)
+        return self
+
+
+class _Reorder(PatchProcessor):
+    """The half snapping and sorting share: putting coordinates in order."""
+
+    coords: tuple[str, ...] = ()
+    reverse: bool = False
+
+    name = None
+    _var_positional = "coords"
+    # Whether the coordinates are snapped to even samples once sorted.
+    _snap: ClassVar[bool] = False
+
+    def get_metadata(self, meta):
+        """Return the sorted coordinates and the indexing they imply."""
+        recorder = _IndexRecorder()
+        method = meta.coords.snap if self._snap else meta.coords.sort
+        coords, _ = method(*self.coords, array=recorder, reverse=self.reverse)
+        # The manager hands back itself when there was nothing to sort.
+        if coords is meta.coords:
+            return meta, {}
+        return meta.new(coords=coords), {"keys": tuple(recorder.keys)}
+
+    def kernel(self, data, *, keys=()):
+        """Return the data reordered the way the coordinates were."""
+        for key in keys:
+            data = data[key]
+        return data
+
+
+class SnapCoords(_Reorder):
     """
     Snap coordinates to evenly spaced samples.
 
@@ -39,8 +90,6 @@ def snap_coords(patch: PatchType, *coords, reverse: bool = False) -> PatchType:
 
     Parameters
     ----------
-    patch
-        The patch whose coordinates should be snapped.
     *coords
         Dimensions to snap. By default, snap every dimensional coordinate.
     reverse
@@ -58,15 +107,14 @@ def snap_coords(patch: PatchType, *coords, reverse: bool = False) -> PatchType:
     >>> # snap the distance dimension
     >>> dist_snap = patch.snap_coords("distance")
     """
-    cman, data = patch.coords.snap(*coords, array=patch.data, reverse=reverse)
-    # Nothing changed; return the original patch to avoid a rebuild.
-    if cman is patch.coords and data is patch.data:
-        return patch
-    return patch.new(data=data, coords=cman)
+
+    _snap = True
 
 
-@patch_function()
-def sort_coords(patch: PatchType, *coords, reverse: bool = False) -> PatchType:
+snap_coords = SnapCoords.patch_function
+
+
+class SortCoords(_Reorder):
     """
     Sort one or more coordinates.
 
@@ -77,8 +125,6 @@ def sort_coords(patch: PatchType, *coords, reverse: bool = False) -> PatchType:
 
     Parameters
     ----------
-    patch
-        The patch whose coordinates should be sorted.
     *coords
         Used to specify the coordinates to sort.
     reverse
@@ -98,11 +144,9 @@ def sort_coords(patch: PatchType, *coords, reverse: bool = False) -> PatchType:
     >>> dist_snap = patch.sort_coords("distance", reverse=True)
     >>> assert dist_snap.coords.coord_map['distance'].reverse_sorted
     """
-    cman, data = patch.coords.sort(*coords, array=patch.data, reverse=reverse)
-    # Nothing changed; return the original patch to avoid a rebuild.
-    if cman is patch.coords and data is patch.data:
-        return patch
-    return patch.new(data=data, coords=cman)
+
+
+sort_coords = SortCoords.patch_function
 
 
 def get_coord(
@@ -234,16 +278,15 @@ class RenameCoords(PatchProcessor):
     # The renames arrive under whatever names the caller used.
     model_config = ConfigDict(extra="allow", frozen=True)
 
-    def derive(self, patch):
+    def get_metadata(self, meta):
         """Return the coordinates under their new names; there is no kernel."""
-        return patch.new(coords=patch.coords.rename_coord(**self.kwargs))
+        return meta.new(coords=meta.coords.rename_coord(**self.kwargs)), {}
 
 
 rename_coords = RenameCoords.patch_function
 
 
-@patch_function()
-def update_coords(self: PatchType, **kwargs) -> PatchType:
+class UpdateCoords(PatchProcessor):
     """
     Update the coordinates of a patch.
 
@@ -267,16 +310,21 @@ def update_coords(self: PatchType, **kwargs) -> PatchType:
     >>> pa2 = pa.update_coords(distance=new_dist)
     >>> assert np.allclose(pa2.coords.get_array('distance'), new_dist)
     """
-    new_coord = self.coords.update(**kwargs)
-    return self.new(coords=new_coord, dims=new_coord.dims)
+
+    # The coordinates arrive under whatever names the caller used.
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    def get_metadata(self, meta):
+        """Return the new coordinates; the data they label do not move."""
+        return meta.new(coords=meta.coords.update(**self.kwargs)), {}
 
 
-@patch_function()
-def drop_coords(self: PatchType, *coords: str | Iterable[str]) -> PatchType:
+update_coords = UpdateCoords.patch_function
+
+
+class DropCoords(PatchProcessor):
     """
-    Update the coordinates of a patch.
-
-    Will either add new coordinates, or update existing ones.
+    Drop one or more non-dimensional coordinates.
 
     Parameters
     ----------
@@ -294,25 +342,31 @@ def drop_coords(self: PatchType, *coords: str | Iterable[str]) -> PatchType:
     >>> # A sequence of names works as well.
     >>> pa_no_lat = pa.drop_coords(["latitude"])
     """
-    names = {x for coord in coords for x in iterate(coord)}
-    if dim_coords := names & set(self.dims):
-        msg = f"Cannot drop dimensional coordinates: {dim_coords}"
-        raise ParameterError(msg)
-    new_coord, data = self.coords.drop_coords(*names, array=self.data)
-    if new_coord is self.coords:  # none of the named coords were here
-        return self
-    return self.new(coords=new_coord, dims=new_coord.dims, data=data)
+
+    coords: tuple[Any, ...] = ()
+
+    _var_positional = "coords"
+
+    def get_metadata(self, meta):
+        """Return the coordinates which survive; a dimension cannot go."""
+        names = {x for coord in self.coords for x in iterate(coord)}
+        if dim_coords := names & set(meta.dims):
+            msg = f"Cannot drop dimensional coordinates: {dim_coords}"
+            raise ParameterError(msg)
+        # Only non-dimensional coordinates get here, so no axis is emptied
+        # and the data are untouched: there is nothing for a kernel to do.
+        coords, _ = meta.coords.drop_coords(*names)
+        if coords is meta.coords:  # none of the named coords were here
+            return meta, {}
+        return meta.new(coords=coords), {}
 
 
-@patch_function()
-def drop_private_coords(self: PatchType) -> PatchType:
+drop_coords = DropCoords.patch_function
+
+
+class DropPrivateCoords(PatchProcessor):
     """
     Drop all private coords in the patch.
-
-    Parameters
-    ----------
-    self
-        Patch
 
     Examples
     --------
@@ -325,22 +379,35 @@ def drop_private_coords(self: PatchType) -> PatchType:
     >>> pa_no_private = pa.drop_private_coords()
     >>> assert "_private" not in pa_no_private.coords.coord_map
     """
-    new_coord, data = self.coords.drop_private_coords(array=self.data)
-    if new_coord is self.coords:  # there were no private coords
-        return self
-    return self.new(coords=new_coord, dims=new_coord.dims, data=data)
+
+    def get_metadata(self, meta):
+        """Return the coordinates whose names are public, and what that costs."""
+        coords, _ = meta.coords.drop_private_coords()
+        if coords is meta.coords:  # there were no private coords
+            return meta, {}
+        # Unlike drop_coords, nothing here refuses a private *dimension*, and
+        # dropping one takes its axis with it: the manager empties that axis
+        # rather than removing it, so the data are emptied to match. Private
+        # coordinates which are not dimensions leave every axis alone.
+        private = {x for x in meta.dims if x.startswith("_")}
+        if not private:
+            return meta.new(coords=coords), {}
+        indexer = tuple(
+            slice(0, 0) if dim in private else slice(None) for dim in meta.dims
+        )
+        return meta.new(coords=coords), {"indexer": indexer}
+
+    def kernel(self, data, *, indexer=None):
+        """Return the data, emptied along any dimension which was private."""
+        return _selected(data, indexer)
 
 
-@patch_function()
-def make_broadcastable_to(
-    self: PatchType,
-    shape: tuple[int, ...],
-    drop_coords=False,
-) -> PatchType:
+drop_private_coords = DropPrivateCoords.patch_function
+
+
+class MakeBroadcastableTo(PatchProcessor):
     """
-    Update the coordinates of a patch.
-
-    Will either add new coordinates, or update existing ones.
+    Stretch a patch until it broadcasts against a shape.
 
     Parameters
     ----------
@@ -359,19 +426,27 @@ def make_broadcastable_to(
     >>> out = patch.make_broadcastable_to(shape=(2, 3))
     >>> assert out.shape == (2, 3)
     """
-    coords, data = self.coords.make_broadcastable_to(
-        shape, array=self.data, drop_coords=drop_coords
-    )
-    return self.new(coords=coords, data=data)
+
+    shape: tuple[int, ...]
+    drop_coords: bool = False
+
+    def get_metadata(self, meta):
+        """Return the stretched coordinates, and the shape to stretch to."""
+        coords, _ = meta.coords.make_broadcastable_to(
+            self.shape, None, drop_coords=self.drop_coords
+        )
+        target = np.broadcast_shapes(meta.coords.shape, self.shape)
+        return meta.new(coords=coords), {"shape": tuple(target)}
+
+    def kernel(self, data, *, shape):
+        """Return the data broadcast to the target shape."""
+        return array_namespace(data).broadcast_to(data, shape)
 
 
-@patch_function(history="method_name")
-def coords_from_df(
-    self: PatchType,
-    dataframe: pd.DataFrame,
-    units: dict[str, str] | None = None,
-    extrapolate: bool = False,
-) -> PatchType:
+make_broadcastable_to = MakeBroadcastableTo.patch_function
+
+
+class CoordsFromDf(PatchProcessor):
     """
     Update non-dimensional coordinate of a patch using a dataframe.
 
@@ -410,48 +485,60 @@ def coords_from_df(
       to get values in patch coords that aren't in the dataframe.
 
     """
-    # match dataframe headings to dims
-    anchor_dim = set(self.dims) & set(dataframe.columns)
-    if len(anchor_dim) != 1:
-        msg = "Exactly one column has to match with an existing dimension"
-        raise ParameterError(msg)
 
-    # Get coordinates of axis being updated
-    anchor_dim = next(iter(anchor_dim))
-    coords = self.coords
-    axis_coords = coords.get_array(anchor_dim)
+    dataframe: pd.DataFrame
+    # Typed loosely because a unit is written as a string or as a unit object.
+    units: dict[str, Any] | None = None
+    extrapolate: bool = False
 
-    # make a dictionary from coordinates("(axis, coordinate array)") as input to
-    # update_coords
-    # coordinate array is an interpolation to match existing coords being updated
-    new_coords = {}
+    history = "method_name"
 
-    for coord in set(dataframe.columns) - {anchor_dim}:
-        if extrapolate:
-            f = interp1d(
-                pd.to_numeric(dataframe[anchor_dim]),
-                pd.to_numeric(dataframe[coord]),
-                fill_value="extrapolate",
-            )
-            new_coords[coord] = (anchor_dim, f(axis_coords))
-        else:
-            new_coords[coord] = (
-                anchor_dim,
-                np.interp(
-                    axis_coords,
+    def get_metadata(self, meta):
+        """Return the coordinates the table interpolates onto a dimension."""
+        dataframe = self.dataframe
+        # match dataframe headings to dims
+        anchor_dim = set(meta.dims) & set(dataframe.columns)
+        if len(anchor_dim) != 1:
+            msg = "Exactly one column has to match with an existing dimension"
+            raise ParameterError(msg)
+
+        # Get coordinates of axis being updated
+        anchor_dim = next(iter(anchor_dim))
+        axis_coords = meta.coords.get_array(anchor_dim)
+
+        # make a dictionary from coordinates("(axis, coordinate array)") as input to
+        # update_coords
+        # coordinate array is an interpolation to match existing coords being updated
+        new_coords = {}
+
+        for coord in set(dataframe.columns) - {anchor_dim}:
+            if self.extrapolate:
+                f = interp1d(
                     pd.to_numeric(dataframe[anchor_dim]),
                     pd.to_numeric(dataframe[coord]),
-                    left=float("nan"),
-                    right=float("nan"),
-                ),
-            )
+                    fill_value="extrapolate",
+                )
+                new_coords[coord] = (anchor_dim, f(axis_coords))
+            else:
+                new_coords[coord] = (
+                    anchor_dim,
+                    np.interp(
+                        axis_coords,
+                        pd.to_numeric(dataframe[anchor_dim]),
+                        pd.to_numeric(dataframe[coord]),
+                        left=float("nan"),
+                        right=float("nan"),
+                    ),
+                )
 
-    out = self.update_coords.func(self, **new_coords)
+        coords = meta.coords.update(**new_coords)
+        # Only coordinates are named, so the conversion never scales data.
+        if self.units is not None:
+            coords = coords.convert_units(**self.units)
+        return meta.new(coords=coords), {}
 
-    if units is not None:
-        out = out.convert_units.func(out, **units)
 
-    return out
+coords_from_df = CoordsFromDf.patch_function
 
 
 def _check_coord_names(patch: PatchType, kwargs) -> None:
@@ -465,11 +552,56 @@ def _check_coord_names(patch: PatchType, kwargs) -> None:
     raise PatchCoordinateError(msg)
 
 
-@patch_function(history=None)
+def _dimension_indexers(coords, queries, **kwargs):
+    """
+    Return what a selection leaves, and the indexer along each dimension.
+
+    [`select_indexers`](`dascore.core.CoordManager.select_indexers`) is the
+    published form of this for plain selection; ordering and positional
+    indexing need the same seam, which the manager only reaches through
+    `_select`.
+    """
+    found: dict[str, Any] = {}
+    out, _ = coords._select(queries, _indexers=found, **kwargs)
+    return out, tuple(found.get(dim, slice(None)) for dim in coords.dims)
+
+
+def _selected(data, indexer, copy=False):
+    """Return the samples an indexer picks out of the data."""
+    if indexer is None:  # nothing was filtered out
+        return data
+    out = _apply_union_indexers(indexer, data)
+    return out.copy() if copy else out
+
+
+with warnings.catch_warnings():
+    # Pydantic warns that a field named `copy` shadows `BaseModel.copy`, the
+    # deprecated v1 method. The name is part of these operations' public
+    # signatures and nothing here calls that method. Declared on the shared
+    # base so the warning is dealt with once rather than at each operation.
+    warnings.filterwarnings("ignore", 'Field name "copy"', UserWarning)
+
+    class _Query(PatchProcessor):
+        """What select, unselect and order share: a query per coordinate."""
+
+        # The queries arrive under whatever coordinates the caller named.
+        model_config = ConfigDict(extra="allow", frozen=True)
+
+        copy: bool = False
+        relative: bool = False
+        samples: bool = False
+
+        name = None
+        history = None
+        _positional_fields = ()
+
+        def kernel(self, data, *, indexer=None):
+            """Return the samples the query picks out."""
+            return _selected(data, indexer, self.copy)
+
+
 @compose_docstring(select_params=select_values_description)
-def select(
-    patch: PatchType, *, copy=False, relative=False, samples=False, **kwargs
-) -> PatchType:
+class Select(_Query):
     """
     Return a subset of the patch.
 
@@ -482,8 +614,6 @@ def select(
 
     Parameters
     ----------
-    patch
-        The patch object.
     copy
         Copy the result so it does not retain the original data array.
     relative
@@ -542,29 +672,24 @@ def select(
     [Patch.sel](`dascore.Patch.sel`) : Xarray-compatible label indexing.
     [Patch.isel](`dascore.Patch.isel`) : Xarray-compatible positional indexing.
     """
-    _check_coord_names(patch, kwargs)
-    new_coords, data = patch.coords.select(
-        **kwargs,
-        array=patch.data,
-        relative=relative,
-        samples=samples,
-    )
-    # no slicing was performed, just return original if coordinates also unchanged.
-    if data.shape == patch.data.shape and new_coords == patch.coords:
-        return patch
-    if copy:
-        data = data.copy()
-    return patch.new(data=data, coords=new_coords)
+
+    def get_metadata(self, meta):
+        """Return the selected coordinates and the indexers behind them."""
+        queries = self.model_extra or {}
+        _check_coord_names(meta, queries)
+        coords, indexer = _dimension_indexers(
+            meta.coords, queries, relative=self.relative, samples=self.samples
+        )
+        # No slicing was performed, so the patch is its own answer.
+        if coords == meta.coords:
+            return meta, {}
+        return meta.new(coords=coords), {"indexer": indexer}
 
 
-@patch_function(history=None)
-def isel(
-    patch: PatchType,
-    indexers: Mapping[str, Any] | None = None,
-    drop: bool = False,
-    missing_dims: str = "raise",
-    **indexers_kwargs: Any,
-) -> PatchType:
+select = Select.patch_function
+
+
+class Isel(PatchProcessor):
     """
     Select sample positions with xarray-compatible dimension indexing.
 
@@ -574,8 +699,6 @@ def isel(
 
     Parameters
     ----------
-    patch
-        Patch to index.
     indexers
         Mapping of dimension names to integer positions, slices, or 1D integer
         arrays or boolean masks. Supply this or keyword indexers.
@@ -585,7 +708,7 @@ def isel(
         use a one-element list to retain a length-one dimension.
     missing_dims
         How to handle absent dimensions: ``"raise"``, ``"warn"``, or ``"ignore"``.
-    **indexers_kwargs
+    **kwargs
         Dimension indexers supplied as keywords.
 
     Notes
@@ -612,27 +735,40 @@ def isel(
     [Patch.sel](`dascore.Patch.sel`) : Xarray-compatible label indexing.
     [Patch.select](`dascore.Patch.select`) : Range filtering and relative selections.
     """
-    coords, data = patch.coords.isel(
-        indexers,
-        array=patch.data,
-        drop=drop,
-        missing_dims=missing_dims,
-        **indexers_kwargs,
-    )
-    if coords is patch.coords and data is patch.data:
-        return patch
-    return patch.new(data=data, coords=coords)
+
+    # The indexers may also arrive as keywords, one per dimension.
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    # Typed loosely so `get_indexers` refuses anything else in its own words,
+    # rather than a field validator refusing it in pydantic's.
+    indexers: Any = None
+    drop: bool = False
+    missing_dims: str = "raise"
+
+    history = None
+
+    def get_metadata(self, meta):
+        """Return the indexed coordinates and the indexers behind them."""
+        requested = get_indexers(
+            self.indexers, self.model_extra or {}, meta.dims, self.missing_dims
+        )
+        coords, indexer = _dimension_indexers(
+            meta.coords, requested, operation="isel", drop=self.drop
+        )
+        # Nothing was named, so nothing moves.
+        if coords is meta.coords:
+            return meta, {}
+        return meta.new(coords=coords), {"indexer": indexer}
+
+    def kernel(self, data, *, indexer=None):
+        """Return the samples at the requested positions."""
+        return _selected(data, indexer)
 
 
-@patch_function(history=None)
-def sel(
-    patch: PatchType,
-    indexers: Mapping[str, Any] | None = None,
-    method: Literal["nearest"] | None = None,
-    tolerance: Any = None,
-    drop: bool = False,
-    **indexers_kwargs: Any,
-) -> PatchType:
+isel = Isel.patch_function
+
+
+class Sel(PatchProcessor):
     """
     Select coordinate labels with xarray-compatible dimension indexing.
 
@@ -642,8 +778,6 @@ def sel(
 
     Parameters
     ----------
-    patch
-        Patch to index.
     indexers
         Mapping of dimension names to scalar labels, slices, or 1D label arrays.
         Supply this or keyword indexers. Quantities convert to coordinate units.
@@ -655,7 +789,7 @@ def sel(
     drop
         Drop coordinates made scalar by indexing instead of retaining them.
         Scalar indexers remove their dimension regardless of this option.
-    **indexers_kwargs
+    **kwargs
         Dimension indexers supplied as keywords.
 
     Notes
@@ -689,20 +823,41 @@ def sel(
     [Patch.isel](`dascore.Patch.isel`) : Xarray-compatible positional indexing.
     [Patch.select](`dascore.Patch.select`) : Range filtering and relative selections.
     """
-    if method not in (None, "nearest"):
-        raise ValueError("method must be None or 'nearest'.")
-    requested = get_indexers(indexers, indexers_kwargs, patch.dims)
-    positions = {
-        dim: label_indexer(patch.get_coord(dim), value, method, tolerance)
-        for dim, value in requested.items()
-    }
-    return isel.func(patch, positions, drop=drop)
+
+    # The indexers may also arrive as keywords, one per dimension.
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    # Typed loosely so each is refused where it is used, in that code's own
+    # words: `get_indexers` for the indexers, `get_metadata` for the method.
+    indexers: Any = None
+    method: Any = None
+    tolerance: Any = None
+    drop: bool = False
+
+    history = None
+
+    def get_metadata(self, meta):
+        """Resolve each label to a position, then index by position."""
+        if self.method not in (None, "nearest"):
+            raise ValueError("method must be None or 'nearest'.")
+        requested = get_indexers(self.indexers, self.model_extra or {}, meta.dims)
+        positions = {
+            dim: label_indexer(
+                meta.coords.get_coord(dim), value, self.method, self.tolerance
+            )
+            for dim, value in requested.items()
+        }
+        return Isel(indexers=positions, drop=self.drop).get_metadata(meta)
+
+    def kernel(self, data, *, indexer=None):
+        """Return the samples the labels resolved to."""
+        return _selected(data, indexer)
 
 
-@patch_function(history=None)
-def unselect(
-    patch: PatchType, *, copy=False, relative=False, samples=False, **kwargs
-) -> PatchType:
+sel = Sel.patch_function
+
+
+class Unselect(_Query):
     """
     Return the patch outside a selection.
 
@@ -713,8 +868,6 @@ def unselect(
 
     Parameters
     ----------
-    patch
-        The patch object.
     copy
         Copy the result so it does not retain the original data array.
     relative
@@ -757,44 +910,52 @@ def unselect(
       coordinates along one dimension therefore both take their range
       out of it, leaving what neither removed.
     """
-    _check_coord_names(patch, kwargs)
-    keep: dict[str, np.ndarray] = {}
-    for name, value in kwargs.items():
-        coord = patch.coords.coord_map[name]
-        dims = patch.coords.dim_map[name]
-        if len(dims) != 1:
-            msg = (
-                f"Coordinate {name!r} spans {list(dims)}, so removing a range "
-                "of it does not name samples of one dimension to drop."
+
+    def get_metadata(self, meta):
+        """Return what selecting the complement of each range leaves."""
+        queries = self.model_extra or {}
+        _check_coord_names(meta, queries)
+        keep: dict[str, np.ndarray] = {}
+        for name, value in queries.items():
+            coord = meta.coords.coord_map[name]
+            dims = meta.coords.dim_map[name]
+            if len(dims) != 1:
+                msg = (
+                    f"Coordinate {name!r} spans {list(dims)}, so removing a range "
+                    "of it does not name samples of one dimension to drop."
+                )
+                raise PatchCoordinateError(msg)
+            # Asking select itself which samples it would keep is what stops
+            # the two from drifting: one selector cannot come to mean
+            # different things in select and its complement.
+            _, indexer = coord.select(
+                value, relative=self.relative, samples=self.samples
             )
-            raise PatchCoordinateError(msg)
-        # Asking select itself which samples it would keep is what stops
-        # the two from drifting: one selector cannot come to mean
-        # different things in select and its complement.
-        _, indexer = coord.select(value, relative=relative, samples=samples)
-        selected = np.zeros(len(coord), dtype=bool)
-        selected[indexer] = True
-        keep[dims[0]] = keep.get(dims[0], True) & ~selected
-    # Kept as sample numbers along each dimension rather than as a mask
-    # per coordinate: coordinates sharing a dimension are applied in
-    # separate passes, so the second mask would meet an already trimmed
-    # axis, and a dimension carrying no values of its own takes samples
-    # where it would refuse an array.
-    trims = {dim: np.flatnonzero(mask) for dim, mask in keep.items()}
-    return patch.select(**trims, samples=True, copy=copy)
+            selected = np.zeros(len(coord), dtype=bool)
+            selected[indexer] = True
+            keep[dims[0]] = keep.get(dims[0], True) & ~selected
+        # Kept as sample numbers along each dimension rather than as a mask
+        # per coordinate: coordinates sharing a dimension are applied in
+        # separate passes, so the second mask would meet an already trimmed
+        # axis, and a dimension carrying no values of its own takes samples
+        # where it would refuse an array.
+        # Typed as the selectors they are: each key is a coordinate name, so
+        # the values never land on select's own bool fields.
+        trims: dict[str, Any] = {
+            dim: np.flatnonzero(mask) for dim, mask in keep.items()
+        }
+        return Select(**trims, samples=True).get_metadata(meta)
 
 
-@patch_function(history=None)
-def order(
-    patch: PatchType, *, copy=False, relative=False, samples=False, **kwargs
-) -> PatchType:
+unselect = Unselect.patch_function
+
+
+class Order(_Query):
     """
     Re-order the patch contents based on coordinate values or indices.
 
     Parameters
     ----------
-    patch
-        The patch object.
     copy
         Copy the result so it does not retain the original data array.
     relative
@@ -827,16 +988,20 @@ def order(
       If there are repeated values in the requested values or in the patch
       coordinate arrays, the data will end up being repeated as well.
     """
-    new_coords, data = patch.coords.order(
-        **kwargs,
-        array=patch.data,
-        relative=relative,
-        samples=samples,
-    )
-    if copy:
-        assert data is not None  # order returns an array when given one
-        data = data.copy()
-    return patch.new(data=data, coords=new_coords)
+
+    def get_metadata(self, meta):
+        """Return the re-ordered coordinates and the indexers behind them."""
+        coords, indexer = _dimension_indexers(
+            meta.coords,
+            self.model_extra or {},
+            operation="order",
+            relative=self.relative,
+            samples=self.samples,
+        )
+        return meta.new(coords=coords), {"indexer": indexer}
+
+
+order = Order.patch_function
 
 
 class Transpose(PatchProcessor):
@@ -872,9 +1037,9 @@ class Transpose(PatchProcessor):
     history = None
     _var_positional = "dims"
 
-    def derive(self, patch):
-        """Return the coordinates in their new order; the input if unchanged."""
-        old_dims = patch.dims
+    def get_metadata(self, meta):
+        """Return the coordinates in their new order, and the permutation."""
+        old_dims = meta.dims
         named = [x for x in self.dims if x is not ...]
         if invalid := set(named) - set(old_dims):
             msg = (
@@ -882,14 +1047,13 @@ class Transpose(PatchProcessor):
                 f"dimensions: {sorted(old_dims)}"
             )
             raise ParameterError(msg)
-        coords = patch.coords.transpose(*self.dims)
-        return patch if coords is patch.coords else patch.new(coords=coords)
+        coords = meta.coords.transpose(*self.dims)
+        if coords is meta.coords:
+            return meta, {}
+        axes = tuple(old_dims.index(x) for x in coords.dims)
+        return meta.new(coords=coords), {"axes": axes}
 
-    def plan(self, patch, out):
-        """Return the permutation from the old axis order to the new."""
-        return {"axes": tuple(patch.dims.index(x) for x in out.dims)}
-
-    def kernel(self, data, *, axes):
+    def kernel(self, data, *, axes=()):
         """Return the data with its axes permuted, or as it was."""
         if axes == tuple(range(len(axes))):
             return data
@@ -899,18 +1063,15 @@ class Transpose(PatchProcessor):
 transpose = Transpose.patch_function
 
 
-@patch_function(history=None)
-def append_dims(patch: PatchType, *empty_dims, **dim_kwargs) -> PatchType:
+class AppendDims(PatchProcessor):
     """
     Insert dimensions at the end of the patch.
 
     Parameters
     ----------
-    patch
-        The patch to add dimensions to.
-    empty_dims
+    *empty_dims
         Used to pass the name of empty dimensions.
-    dim_kwargs
+    **kwargs
         Used to pass keys (new dim names) and values. Values can either be
         an int specifying the length of the new dimension or a sequence
         specifying the coordinate values. If an int is used, the new dimension
@@ -942,31 +1103,58 @@ def append_dims(patch: PatchType, *empty_dims, **dim_kwargs) -> PatchType:
     - Use [`Patch.transpose`](`dascore.Patch.transpose`) to re-arrange dimensions.
     - If dimension with the same name already exists nothing will happen.
     """
-    dim_dict = {x: 1 for x in empty_dims}
-    dim_dict.update(dim_kwargs)
-    # Remove duplicate dims and convert non ints to arrays.
-    kwargs = {
-        i: (i, np.atleast_1d(v) if not isinstance(v, int) else v)
-        for i, v in dim_dict.items()
-        if i not in patch.dims
-    }
-    # Nothing to do.
-    if not kwargs:
-        return patch
-    ndim = patch.ndim
-    # First get data with empty dimensions
-    insert_inds = [x + ndim for x in range(len(kwargs))]
-    data = np.expand_dims(patch.data, tuple(insert_inds))
-    shapes = list(data.shape)
-    for ind, (_, cdata) in zip(insert_inds, kwargs.values()):
-        shapes[ind] = cdata if isinstance(cdata, int) else len(cdata)
-    data = np.broadcast_to(data, shapes)
-    coords = patch.coords.update(**kwargs)
-    return patch.update(data=data, coords=coords)
+
+    # The named dimensions arrive under their own names.
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    empty_dims: tuple[Any, ...] = ()
+
+    history = None
+    _var_positional = "empty_dims"
+
+    def get_metadata(self, meta):
+        """Return the longer coordinates, and the shape they describe."""
+        if bad := [x for x in self.empty_dims if not isinstance(x, str)]:
+            # Reached by `append_dims(empty_dims=[1, 2])`, which named a
+            # dimension `empty_dims` before this was a processor: a keyword
+            # never fills a `*args` parameter, but the generated function
+            # hands the extras back to this class as plain keywords, where
+            # the field of that name takes them. Said plainly here rather
+            # than left to `TypeError: keywords must be strings`.
+            msg = f"append_dims takes dimension names; got {bad}."
+            raise ParameterError(msg)
+        dim_dict = {x: 1 for x in self.empty_dims}
+        dim_dict.update(self.model_extra or {})
+        # Remove duplicate dims and convert non ints to arrays.
+        kwargs = {
+            i: (i, np.atleast_1d(v) if not isinstance(v, int) else v)
+            for i, v in dim_dict.items()
+            if i not in meta.dims
+        }
+        # Nothing to do.
+        if not kwargs:
+            return meta, {}
+        ndim = len(meta.dims)
+        axes = tuple(range(ndim, ndim + len(kwargs)))
+        lengths = tuple(
+            cdata if isinstance(cdata, int) else len(cdata)
+            for _, cdata in kwargs.values()
+        )
+        coords = meta.coords.update(**kwargs)
+        shape = tuple(meta.coords.shape) + lengths
+        return meta.new(coords=coords), {"axes": axes, "shape": shape}
+
+    def kernel(self, data, *, axes=(), shape=()):
+        """Return the data stretched over the dimensions which were added."""
+        if not axes:
+            return data
+        return np.broadcast_to(np.expand_dims(data, axes), shape)
 
 
-@patch_function()
-def squeeze(self: PatchType, dim=None) -> PatchType:
+append_dims = AppendDims.patch_function
+
+
+class Squeeze(PatchProcessor):
     """
     Return a new object with len one dimensions flattened.
 
@@ -997,20 +1185,32 @@ def squeeze(self: PatchType, dim=None) -> PatchType:
     >>> # Squeeze the length-1 time dimension
     >>> squeezed = single_time.squeeze(dim="time")
     """
-    coords = self.coords.squeeze(dim)
-    # Nothing to squeeze; the coord manager returned self, so reuse this patch.
-    if coords is self.coords:
-        return self
-    if not coords.dims:
-        msg = "Cannot squeeze all dimensions; at least one dimension must remain."
-        raise ParameterError(msg)
-    if dim is None:
-        axes = tuple(i for i, x in enumerate(self.shape) if x == 1)
-    else:
-        axes = tuple(self.get_axis(x) for x in iterate(dim))
-    xp = array_namespace(self.data)
-    data = xp.squeeze(self.data, axis=axes)
-    return self.new(data=data, coords=coords)
+
+    dim: Any = None
+
+    def get_metadata(self, meta):
+        """Return the shorter coordinates, and the axes which go with them."""
+        coords = meta.coords.squeeze(self.dim)
+        # Nothing to squeeze; the coord manager returned itself.
+        if coords is meta.coords:
+            return meta, {}
+        if not coords.dims:
+            msg = "Cannot squeeze all dimensions; at least one dimension must remain."
+            raise ParameterError(msg)
+        if self.dim is None:
+            axes = tuple(i for i, x in enumerate(meta.coords.shape) if x == 1)
+        else:
+            axes = tuple(meta.coords.get_axis(x) for x in iterate(self.dim))
+        return meta.new(coords=coords), {"axes": axes}
+
+    def kernel(self, data, *, axes=()):
+        """Return the data without the axes which were squeezed out."""
+        if not axes:
+            return data
+        return array_namespace(data).squeeze(data, axis=axes)
+
+
+squeeze = Squeeze.patch_function
 
 
 @patch_function()

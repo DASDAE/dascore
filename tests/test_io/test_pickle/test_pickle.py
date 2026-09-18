@@ -224,6 +224,6 @@ class TestDecodeLifetime:
         metadata = PickleIO().get_metadata(stream)
         gc.collect()
         assert len(metadata) == 1
-        assert metadata[0]._data is None
+        assert not isinstance(metadata[0], dc.Patch)
         assert not stream.closed
         assert refs and all(ref() is None for ref in refs)

@@ -8,4 +8,5 @@ from .coordmanager import CoordManager, get_coord_manager
 from .coords import CoordSegmented, CoordSummary, concat_coords, get_coord
 from .inventory import Inventory  # noqa
 from .patch import Patch  # noqa
+from .patch_meta import PatchMeta  # noqa
 from .summary import PatchSummary  # noqa

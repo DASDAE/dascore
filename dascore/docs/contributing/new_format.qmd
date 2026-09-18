@@ -46,9 +46,9 @@ Writing is optional: implement `write(self, spool, resource, **kwargs)` when sup
 
 ## Metadata and coordinates
 
-[`FiberIO.get_metadata`](`dascore.io.core.FiberIO.get_metadata`) returns data-less patches carrying full coordinate managers, attrs, and dtype. Dimensions and shape come from the coordinates. Accessing a data-less patch's `.data` raises; the framework later attaches the requested array with `Patch.new(data=...)`.
+[`FiberIO.get_metadata`](`dascore.io.core.FiberIO.get_metadata`) returns [`PatchMeta`](`dascore.PatchMeta`) objects carrying full coordinate managers, attrs, and dtype. Dimensions and shape come from the coordinates. Metadata has no `.data`; the framework later attaches the requested array with [`to_patch`](`dascore.PatchMeta.to_patch`), which makes the patch it describes.
 
-[`scan_payloads`](`dascore.scan_payloads`) exposes these patches with source provenance attached. [`scan`](`dascore.scan`) returns `PatchSummary` objects, and [`scan_to_df`](`dascore.scan_to_df`) flattens those summaries for indexing. Metadata and loaded patches describe the same shape, dtype, and coordinates for a given snap mode. Their attrs also agree, except that Sintela protobuf reads collect additional META records while loading samples.
+[`scan_payloads`](`dascore.scan_payloads`) exposes this metadata with source provenance attached. [`scan`](`dascore.scan`) returns `PatchSummary` objects, and [`scan_to_df`](`dascore.scan_to_df`) flattens those summaries for indexing. Metadata and loaded patches describe the same shape, dtype, and coordinates for a given snap mode. Their attrs also agree, except that Sintela protobuf reads collect additional META records while loading samples.
 
 The metadata hook accepts one option, `snap`:
 

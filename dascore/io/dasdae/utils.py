@@ -484,7 +484,7 @@ def _get_metadata_from_group(group, legacy: bool = True, snap=True):
             f"{group.name} data and coordinate shapes disagree."
         )
     dtype = str(data_node.dtype)
-    return dc.Patch(
+    return dc.PatchMeta(
         attrs=_get_attrs_class(group).from_dict(attr_info),
         coords=coords,
         dims=dims,

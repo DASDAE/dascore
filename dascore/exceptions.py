@@ -95,7 +95,7 @@ class PatchAttributeError(ValueError, PatchError):
 
 
 class PatchDataError(ValueError, PatchError):
-    """Raised when a patch built without data is asked for its data."""
+    """Raised when an operation needing data is given metadata instead."""
 
 
 class PatchConversionError(ValueError, PatchError):

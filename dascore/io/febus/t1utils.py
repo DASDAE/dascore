@@ -84,7 +84,7 @@ def _get_t1_attrs(fi: H5Reader) -> dict[str, str]:
 def _scan_t1(fi: H5Reader, snap=True):
     """Get the coordinates and attributes for a T1 data patch"""
     coords = _get_coords(fi, snap=snap)
-    return dc.Patch(
+    return dc.PatchMeta(
         attrs=_get_t1_attrs(fi),
         coords=coords,
         dtype=str(fi["Data/Temperature"].dtype),

@@ -34,11 +34,13 @@ class DASHDF5(FiberIO):
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Get metadata from file."""
         coords = _get_cf_coords(resource, snap=snap)
         attrs = _get_cf_attrs(resource, coords)
-        return [dc.Patch(attrs=attrs, coords=coords, dtype=str(resource["das"].dtype))]
+        return [
+            dc.PatchMeta(attrs=attrs, coords=coords, dtype=str(resource["das"].dtype))
+        ]
 
     def read_array(
         self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""

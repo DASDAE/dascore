@@ -190,7 +190,7 @@ class NetCDFCFV18(FiberIO):
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Scan NetCDF file metadata without loading the full payload array.
 
         Remote resources are streamed via the ``h5netcdf`` engine over the
@@ -216,7 +216,7 @@ class NetCDFCFV18(FiberIO):
                 dataset, data_array, coords, dims, shape
             )
         return [
-            dc.Patch(
+            dc.PatchMeta(
                 attrs=attrs,
                 coords=coord_manager,
                 dims=dims,

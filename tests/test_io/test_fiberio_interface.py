@@ -25,7 +25,7 @@ class _ArrayReader(FiberIO):
         self.data = np.arange(48, dtype=np.int16).reshape(6, 8)
         self.calls = []
         self.snaps = []
-        self.metadata = dc.Patch(
+        self.metadata = dc.PatchMeta(
             coords={
                 "distance": np.arange(6),
                 "time": np.arange(8),
@@ -128,7 +128,7 @@ class TestDerivedRead:
         monkeypatch.setattr(reader, "read_array", fail)
         monkeypatch.setattr(dc.Patch, "data", property(fail))
         metadata = reader.scan("memory", snap=False)[0]
-        assert metadata._data is None
+        assert not isinstance(metadata, dc.Patch)
         assert metadata.summary.dtype == str(reader.data.dtype)
         assert reader.snaps == [False]
 

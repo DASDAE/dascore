@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from functools import cached_property
-from typing import Any, Final, cast
-from uuid import uuid4
+from typing import Any, Final
 
 import numpy as np
 
@@ -16,8 +14,9 @@ from dascore import transform
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
+from dascore.core.patch_meta import PatchMeta, _as_dtype
+from dascore.core.processor import bind_pending_patch_functions
 from dascore.core.source import PatchSource
-from dascore.core.summary import PatchSummary
 from dascore.models import ArrayLike
 from dascore.utils.array import (
     PatchUFunc,
@@ -25,39 +24,18 @@ from dascore.utils.array import (
     patch_array_function,
     patch_array_ufunc,
 )
-from dascore.utils.array_api import to_numpy
+from dascore.utils.array_api import backend_name, to_numpy
 from dascore.utils.display import (
-    NodeRepr,
     Repr,
     array_to_text,
     attrs_to_text,
-    dataless_to_text,
     get_header_text,
     split_block,
 )
-from dascore.utils.identity import with_patch_id
 from dascore.utils.namespace import NamespaceOwner
-from dascore.utils.patch import (
-    check_patch_attrs,
-    check_patch_coords,
-    check_patch_data,
-    get_patch_names,
-)
-from dascore.utils.time import to_float
 
 
-def _as_dtype(dtype):
-    """Return a numpy dtype where there is one, else the backend's own."""
-    try:
-        return np.dtype(dtype)
-    except TypeError:
-        # A string is a spelling numpy should know; a misspelling is an error.
-        if isinstance(dtype, str):
-            raise
-        return dtype
-
-
-class Patch(NodeRepr, NamespaceOwner):
+class Patch(NamespaceOwner, PatchMeta):
     """
     A Class for managing data and metadata.
 
@@ -84,9 +62,8 @@ class Patch(NodeRepr, NamespaceOwner):
         Optional attributes (non-coordinate metadata) passed as a dict or
         [PatchAttrs](`dascore.core.attrs.PatchAttrs`)
     dtype
-        The data's dtype. Required when coords are given without data, which
-        builds a patch describing data it does not hold; see
-        [`drop_data`](`dascore.Patch.drop_data`).
+        Optional. When given, the data are refused unless that is what
+        they hold; a patch's dtype is always its data's.
 
     source
         Internal source metadata supplied by the I/O framework.
@@ -96,16 +73,14 @@ class Patch(NodeRepr, NamespaceOwner):
     Coordinates are owned by the patch/coord manager, not by attrs.
     Use `Patch.summary` when you need a combined view of attrs plus
     coordinate summary metadata.
+
+    Coords and a dtype describe data without holding any, which is a
+    [`PatchMeta`](`dascore.PatchMeta`); see
+    [`drop_data`](`dascore.Patch.drop_data`).
     """
 
     data: ArrayLike
-    coords: CoordManager
-    dims: tuple[str, ...]
-    attrs: PatchAttrs
-    _data: ArrayLike | None
-    _dtype: Any
-    # The class default also covers patches restored from older pickles.
-    _source: PatchSource | None = None
+    _data: ArrayLike
 
     _namespace_entry_point_group: Final[str] = "dascore.patch_namespace"
 
@@ -126,47 +101,34 @@ class Patch(NodeRepr, NamespaceOwner):
             attrs = dc.PatchAttrs()
         # Init Patch from Patch-like
         if isinstance(data, Patch):
-            dtype = data.dtype if dtype is None else dtype
             data, attrs, coords = data._data, data.attrs, data.coords
         elif isinstance(data, DataArray):
             data, attrs, coords = data.data, data.attrs, data.coords
-        if attrs is None:
-            attrs = dc.PatchAttrs()
+        elif isinstance(data, PatchMeta):
+            # Metadata describes data; it is not data, and no patch can be
+            # made of it without an array to go with it.
+            msg = (
+                "A PatchMeta holds no data, so a Patch cannot be built from "
+                "one. Use meta.to_patch(data) for the patch it describes."
+            )
+            raise ValueError(msg)
         if dims is None and isinstance(coords, CoordManager):
             dims = coords.dims
         # By this point, everything should be defined.
-        if coords is None or dims is None or (data is None and dtype is None):
+        if data is None or coords is None or dims is None:
             msg = (
                 "data, coords, and dims must be defined to init Patch; "
-                "a dtype may stand in for data."
+                "coords and a dtype alone describe data, which is a PatchMeta."
             )
             raise ValueError(msg)
-        if data is None:
-            coords = get_coord_manager(coords, dims=dims)
-            self._dtype = _as_dtype(dtype)
-        else:
-            data = array(data)
-            coords = get_coord_manager(coords, dims=dims, shape=data.shape)
-            data = array(coords.validate_data(data))
-            if dtype is not None and _as_dtype(dtype) != _as_dtype(data.dtype):
-                msg = f"The data are {data.dtype}, not the dtype given: {dtype}."
-                raise ValueError(msg)
-            self._dtype = None
-        attrs = dc.PatchAttrs.from_dict(attrs)
-        # Data which names no source still says which data it is, so that
-        # everything downstream has something to carry forward.
-        attrs = with_patch_id(attrs)
-        self._coords = coords
-        self._attrs = attrs
+        data = array(data)
+        coords = get_coord_manager(coords, dims=dims, shape=data.shape)
+        data = array(coords.validate_data(data))
+        if dtype is not None and _as_dtype(dtype) != _as_dtype(data.dtype):
+            msg = f"The data are {data.dtype}, not the dtype given: {dtype}."
+            raise ValueError(msg)
         self._data = data
-        self._source = source
-        # Lineage identity: minted eagerly so copies made at any point
-        # (deepcopy/pickle carry __dict__) share it deterministically.
-        self._instance_id = uuid4().hex
-
-    def __eq__(self, other):
-        """Compare one Patch."""
-        return dascore.proc.equals(self, other)
+        self._set_state(coords, attrs, source)
 
     def __add__(self, other):
         return apply_ufunc(np.add, self, other)
@@ -258,91 +220,14 @@ class Patch(NodeRepr, NamespaceOwner):
     def _repr_node(self) -> Repr:
         """The banner, the coordinates, the data and the attributes."""
         attrs = self.attrs
-        units = attrs.get("data_units")
-        data_text = (
-            dataless_to_text(self.dtype, units=units)
-            if self._data is None
-            else array_to_text(self._data, units=units)
-        )
         return Repr(
             header=get_header_text("Patch ⚡"),
             body=(
                 self.coords._repr_section(),
-                split_block(data_text),
+                split_block(array_to_text(self._data, units=attrs.get("data_units"))),
                 split_block(attrs_to_text(attrs)),
             ),
         )
-
-    def flat_dump(self, exclude=None) -> dict:
-        """Return a flat summary dict for dataframe-oriented helpers."""
-        return self.summary.flat_dump(exclude=exclude)
-
-    @property
-    def dims(self) -> tuple[str, ...]:
-        """
-        Return the dimensions contained in patch.
-
-        Examples
-        --------
-        >>> import dascore as dc
-        >>> patch = dc.get_example_patch()
-        >>>
-        >>> # Get dims from patch.
-        >>> dims = patch.dims
-        >>> assert 'time' in dims
-        >>> assert 'distance' in dims
-        """
-        return self.coords.dims
-
-    @property
-    def ndim(self) -> int:
-        """Return the number of dimensions contained in patch."""
-        return len(self.coords.dims)
-
-    @property
-    def coord_shapes(self) -> Mapping[str, tuple[int, ...]]:
-        """Return an immutable mapping of {coordinate: (shape, ...)}."""
-        return self.coords.coord_shapes
-
-    @property
-    def attrs(self) -> PatchAttrs:
-        """
-        Return the patch's non-coordinate metadata.
-
-        Examples
-        --------
-        >>> import dascore as dc
-        >>> patch = dc.get_example_patch()
-        >>>
-        >>> # Get attrs from patch.
-        >>> attrs = patch.attrs
-        >>> assert hasattr(attrs, 'data_type')
-        """
-        return self._attrs
-
-    @cached_property
-    def summary(self):
-        """
-        Return a metadata-only summary of the patch.
-        """
-        return PatchSummary.from_patch(self)
-
-    @property
-    def coords(self) -> CoordManager:
-        """
-        Return the patch coordinates.
-
-        Examples
-        --------
-        >>> import dascore as dc
-        >>> patch = dc.get_example_patch()
-        >>> coords = patch.coords
-        >>>
-        >>> # Get coords from patch.
-        >>> assert 'time' in coords
-        >>> assert 'distance' in coords
-        """
-        return self._coords
 
     @property
     def data(self) -> ArrayLike:
@@ -356,53 +241,26 @@ class Patch(NodeRepr, NamespaceOwner):
         >>> data = patch.data
         >>> assert data.shape == patch.shape
         """
-        return cast(ArrayLike, check_patch_data(self)._data)
-
-    @property
-    def shape(self) -> tuple[int, ...]:
-        """
-        Return the shape of the data array.
-
-        Examples
-        --------
-        >>> import dascore as dc
-        >>> patch = dc.get_example_patch()
-        >>>
-        >>> # Get shape from patch.
-        >>> shape = patch.shape
-        >>> assert len(shape) == len(patch.dims)
-        """
-        return self.coords.shape
-
-    @property
-    def size(self) -> int:
-        """
-        Return the size of the data array.
-
-        Examples
-        --------
-        >>> import dascore as dc
-        >>> patch = dc.get_example_patch()
-        >>>
-        >>> # Get size from patch.
-        >>> size = patch.size
-        >>> assert size == patch.data.size
-        """
-        return self.coords.size
+        return self._data
 
     @property
     def dtype(self) -> np.dtype:
-        """Return the dtype of the array, which a patch without data still has."""
-        # `_dtype` is set only for a patch without data; one pickled before
-        # it existed has none, so a patch with data reads its data's.
-        return self._dtype if self._data is None else self._data.dtype
+        """Return the dtype of the data array."""
+        return self._data.dtype
 
-    def drop_data(self) -> Patch:
+    @property
+    def backend(self) -> str:
+        """Return the array backend the data are in."""
+        return backend_name(self._data)
+
+    def drop_data(self) -> PatchMeta:
         """
-        Return this patch without its data.
+        Return this patch's metadata, without its data.
 
         The result keeps the coords, attrs and dtype, so it still describes
-        the data; asking it for `data` raises. `new(data=...)` fills it again.
+        the data. The inverse of
+        [`to_patch`](`dascore.PatchMeta.to_patch`), which gives a
+        description its data back.
 
         Examples
         --------
@@ -411,28 +269,49 @@ class Patch(NodeRepr, NamespaceOwner):
         >>> described = patch.drop_data()
         >>> assert described.shape == patch.shape
         >>> assert described.dtype == patch.dtype
-        >>> assert described.new(data=patch.data).equals(patch)
+        >>> assert described.to_patch(patch.data).equals(patch)
         """
-        # A copy of state already validated, not a new construction: every
-        # processor call makes one, and a subclass's `__init__` need not
-        # take a dtype.
-        out = self.__class__.__new__(self.__class__)
-        out.__dict__.update(self.__dict__)
-        out._dtype = _as_dtype(self.dtype)
-        out._data = None
-        # Another patch, so another identity: a spool keys patches by it.
-        out._instance_id = uuid4().hex
+        out = PatchMeta(
+            coords=self.coords,
+            attrs=self.attrs,
+            dtype=self.dtype,
+            backend=self.backend,
+            source=self._source,
+        )
+        # What `to_patch` builds: this patch's class, so an operation which
+        # drops the data and fills them again keeps a subclass.
+        out._patch_type = type(self)
         return out
 
-    @property
-    def seconds(self) -> float:
-        """Return number of seconds in the time coordinate."""
-        return to_float(self.coords.coord_range("time"))
+    def _new_like(self, data, coords: CoordManager, attrs: PatchAttrs, dtype=None):
+        """Return a patch of this one's class; without new data it keeps its own."""
+        # A dtype is handed on only when one was asked for: a subclass's
+        # `__init__` need not take one, and the data already state theirs.
+        extra = {} if dtype is None else {"dtype": dtype}
+        data = self._data if data is None else data
+        return type(self)(data=data, coords=coords, attrs=attrs, **extra)
 
-    @property
-    def channel_count(self) -> int:
-        """Return number of channels in the distance coordinate."""
-        return self.coords.coord_size("distance")
+    def _reattach(self, out: PatchMeta, attrs: PatchAttrs) -> Patch:
+        """Return `out` under `attrs`, carrying this patch's unchanged data."""
+        return out.update(attrs=attrs).to_patch(self._data)
+
+    def to_patch(self, data) -> Patch:
+        """
+        Return this patch holding `data` instead of its own.
+
+        What [`PatchMeta.to_patch`](`dascore.PatchMeta.to_patch`) means for
+        something which already has data, and the same as `new(data=...)`.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>> assert patch.to_patch(patch.data * 2).shape == patch.shape
+        """
+        # Not inherited: the base reads `_patch_type`, which describes the
+        # patch a `PatchMeta` came from and which a patch never sets, so a
+        # subclass would come back a plain `Patch`.
+        return self.new(data=data)
 
     @property
     def T(self):  # noqa: N802
@@ -442,17 +321,8 @@ class Patch(NodeRepr, NamespaceOwner):
 
     # --- basic patch functionality.
 
-    update = dascore.proc.update
-    # Before 0.1.0 update was called new, this is for backwards compatibility.
-    new = dascore.proc.update
     equals = dascore.proc.equals
-    update_attrs = dascore.proc.update_attrs
-    check_coords = check_patch_coords
-    check_attrs = check_patch_attrs
-    get_coord = dascore.proc.get_coord
     get_array = dascore.proc.get_array
-    pipe = dascore.proc.pipe
-    set_dims = dascore.proc.set_dims
     squeeze = dascore.proc.coords.squeeze
     append_dims = dascore.proc.coords.append_dims
     split_gaps = dascore.proc.coords.split_gaps
@@ -462,14 +332,8 @@ class Patch(NodeRepr, NamespaceOwner):
     snap_coords = dascore.proc.snap_coords
     sort_coords = dascore.proc.sort_coords
     radians_to_strain = dascore.transform.radians_to_strain
-    rename_coords = dascore.proc.rename_coords
-    update_coords = dascore.proc.update_coords
-    drop_coords = dascore.proc.drop_coords
     drop_private_coords = dascore.proc.drop_private_coords
-    coords_from_df = dascore.proc.coords_from_df
     make_broadcastable_to = dascore.proc.make_broadcastable_to
-    get_patch_names = get_patch_names
-    get_axis = dascore.proc.get_axis
     full = dascore.proc.full
 
     def apply_ufunc(self, ufunc, *args, **kwargs) -> Patch:
@@ -504,15 +368,6 @@ class Patch(NodeRepr, NamespaceOwner):
         """
         # The module-level function, not this method.
         return apply_ufunc(ufunc, self, *args, **kwargs)
-
-    def get_patch_name(self, *args, **kwargs) -> str:
-        """
-        Return the name of the patch.
-
-        See [`get_patch_names`](`dascore.utils.patch.get_patch_names`)
-        for argument details.
-        """
-        return get_patch_names(self, *args, **kwargs).iloc[0]
 
     set_units = dascore.proc.set_units
     convert_units = dascore.proc.convert_units
@@ -616,3 +471,9 @@ class Patch(NodeRepr, NamespaceOwner):
     hilbert = transform.hilbert
     envelope = transform.envelope
     phase_weighted_stack = transform.phase_weighted_stack
+
+
+# The operations written as `PatchProcessor` subclasses are bound here: they
+# are generated while this module is still importing, before either class
+# they belong on exists.
+bind_pending_patch_functions(Patch, PatchMeta)

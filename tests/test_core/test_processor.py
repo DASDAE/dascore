@@ -13,6 +13,7 @@ import pytest
 from pydantic import ConfigDict, Field
 
 import dascore as dc
+from dascore.core import processor as processor_module
 from dascore.core.processor import PatchProcessor, register_kernel
 from dascore.exceptions import (
     ParameterError,
@@ -20,7 +21,7 @@ from dascore.exceptions import (
     PatchCoordinateError,
     PatchDataError,
 )
-from dascore.proc.basic import Normalize, _known_real
+from dascore.proc.basic import Abs, Normalize, _known_real
 from dascore.utils.patch_registry import patch_function_tag, resolve_patch_function
 from dascore.utils.serialize import encode
 
@@ -40,18 +41,15 @@ class SeamSum(PatchProcessor):
 
     dim: str = "time"
 
-    def plan(self, patch, out):
-        """Say which axis."""
-        return {"axis": patch.get_axis(self.dim)}
+    def get_metadata(self, meta):
+        """The summed dimension keeps one sample; say which axis."""
+        coord = meta.get_coord(self.dim)
+        out = meta.new(coords=meta.coords.update(**{self.dim: coord[:1]}))
+        return out, {"axis": meta.get_axis(self.dim)}
 
     def kernel(self, data, *, axis):
         """Sum along it."""
         return data.sum(axis=axis, keepdims=True)
-
-    def derive(self, patch):
-        """The summed dimension keeps one sample."""
-        coord = patch.get_coord(self.dim)
-        return patch.new(coords=patch.coords.update(**{self.dim: coord[:1]}))
 
 
 class SeamExtras(PatchProcessor):
@@ -126,8 +124,8 @@ class TestTheSeam:
         assert by_method.attrs.history == by_class.attrs.history
         assert by_method.attrs.processing_id == by_class.attrs.processing_id
 
-    def test_derive_and_plan(self, patch):
-        """A shape change runs through derive, and the kernel gets the axis."""
+    def test_get_metadata(self, patch):
+        """A shape change comes back with the axis the kernel gets."""
         out = SeamSum("time")(patch)
         axis = patch.get_axis("time")
         assert out.shape[axis] == 1
@@ -158,6 +156,27 @@ class TestTheSeam:
                 raise AssertionError
 
         assert Untouched()(patch) is patch
+
+    def test_reconcile_runs_without_a_kernel(self, patch):
+        """Metadata changed, so the hook which sees both halves still runs."""
+
+        class Tagging(PatchProcessor):
+            """Rename a coordinate and tag what the data turned out to be."""
+
+            name = None
+
+            def get_metadata(self, meta):
+                """Rename the distance coordinate, so something changed."""
+                return meta.rename_coords(distance="depth"), {}
+
+            def reconcile(self, data, out):
+                """Record what the data were, which only this hook sees."""
+                seen = "none" if data is None else str(data.dtype)
+                return out.update_attrs(station=seen)
+
+        assert Tagging()(patch).attrs.station == str(patch.data.dtype)
+        # Metadata has no data to show it, and says so rather than lying.
+        assert Tagging()(patch.drop_data()).attrs.station == "none"
 
     def test_a_no_op_hands_back_the_patch(self, patch):
         """Nothing changed, so nothing is recorded."""
@@ -260,6 +279,30 @@ class TestReviewFindings:
         abs_raw, imag_raw = dc.proc.abs.raw_function, dc.proc.imag.raw_function
         assert encode(abs_raw) != encode(imag_raw)
 
+    def test_the_old_seam_is_refused(self):
+        """`derive`/`plan` became `get_metadata`; a stale override must fail."""
+        with pytest.raises(ParameterError, match="get_metadata"):
+
+            class Derived(PatchProcessor):
+                """A subclass written against the seam before the rename."""
+
+                name = None
+
+                def derive(self, patch):
+                    """What `get_metadata` now returns half of."""
+                    return patch
+
+        with pytest.raises(ParameterError, match="get_metadata"):
+
+            class Planned(PatchProcessor):
+                """The other half of the old seam."""
+
+                name = None
+
+                def plan(self, patch, out):
+                    """What `get_metadata` now returns the other half of."""
+                    return {}
+
     def test_a_name_must_be_an_identifier(self):
         """A name the registry cannot tag is refused, not silently skipped."""
         with pytest.raises(ParameterError, match="identifier"):
@@ -323,9 +366,9 @@ class TestReviewFindings:
 
             name = None
 
-            def plan(self, patch, out):
+            def get_metadata(self, meta):
                 """Return one."""
-                return {"flag": np.bool_(True)}
+                return meta, {"flag": np.bool_(True)}
 
             def kernel(self, data, *, flag):
                 """Use it."""
@@ -349,19 +392,47 @@ class TestCheck:
         out = SeamNeedsVelocity()(patch.update_attrs(data_type="velocity"))
         assert out.attrs.data_type == "acceleration"
 
+    def test_a_backend_only_kernel_still_needs_data(self, patch):
+        """`check` asks the class, not this patch's backend."""
+
+        class Elsewhere(PatchProcessor):
+            """Its only kernel is for a backend nothing here runs."""
+
+            name = None
+
+        @register_kernel(Elsewhere, "cupy")
+        def _elsewhere(processor, data):
+            """Never called from these tests."""
+            raise AssertionError
+
+        with pytest.raises(PatchDataError):
+            Elsewhere()(patch.drop_data())
+
     def test_no_data(self, patch):
-        """A patch without data cannot be processed."""
+        """An operation which computes data cannot run on metadata alone."""
         with pytest.raises(PatchDataError):
             SeamScale()(patch.drop_data())
 
+    def test_a_kernel_less_operation_runs_on_metadata(self, patch):
+        """It never asks for data, so metadata is all it needs."""
+        meta = patch.drop_data()
+        out = dc.proc.rename_coords(meta, distance="depth")
+        assert isinstance(out, dc.PatchMeta) and not isinstance(out, dc.Patch)
+        assert out.dims == tuple("depth" if x == "distance" else x for x in patch.dims)
+
+    def test_a_kernel_less_operation_keeps_the_data(self, patch):
+        """Applied to a patch it changes the metadata, not the array."""
+        out = patch.rename_coords(distance="depth")
+        assert out.data is patch.data
+
 
 class TestPlan:
-    """A plan holds numbers, tuples of them, or numeric arrays only."""
+    """A plan holds numbers, indices, or numeric arrays only."""
 
     @pytest.mark.parametrize(
         "value",
-        ["time", None, [1, 2], np.array(["a"])],
-        ids=["string", "none", "list", "string_array"],
+        ["time", {1: 2}, np.array(["a"]), object()],
+        ids=["string", "dict", "string_array", "object"],
     )
     def test_refused(self, patch, value):
         """Anything else is refused before the kernel runs."""
@@ -369,9 +440,9 @@ class TestPlan:
         class Bad(SeamScale):
             """Plan something a kernel may not take."""
 
-            def plan(self, patch, out):
+            def get_metadata(self, meta):
                 """Return the value under test."""
-                return {"value": value}
+                return meta, {"value": value}
 
         with pytest.raises(ParameterError, match="plan may hold only"):
             Bad()(patch)
@@ -383,29 +454,32 @@ class TestPlan:
             class Bad(SeamScale):
                 """Plan a patch."""
 
-                def plan(self, patch, out, value=value):
+                def get_metadata(self, meta, value=value):
                     """Return the value under test."""
-                    return {"value": value}
+                    return meta, {"value": value}
 
             with pytest.raises(ParameterError, match="plan may hold only"):
                 Bad()(patch)
 
     def test_allowed(self, patch):
-        """Ints, floats, bools, nested tuples and numeric arrays pass."""
+        """Numbers, indices, nested sequences and numeric arrays pass."""
 
         class Good(PatchProcessor):
             """Plan every allowed kind."""
 
             name = None
 
-            def plan(self, patch, out):
+            def get_metadata(self, meta):
                 """Return one of each."""
-                return {
+                return meta, {
                     "a": 1,
                     "b": 2.0,
                     "c": True,
                     "d": ((1, 2), 3.0),
                     "e": np.arange(3),
+                    "f": slice(1, None, 2),
+                    "g": (slice(None), Ellipsis, [1, 2]),
+                    "h": None,
                 }
 
             def kernel(self, data, **plan):
@@ -415,12 +489,13 @@ class TestPlan:
         assert Good()(patch).equals(patch)
 
 
-class TestTransposeDerive:
-    """Transpose derives a new shape from a patch without data."""
+class TestTransposeMetadata:
+    """Transpose works out a new shape from metadata alone."""
 
-    def test_derive_without_data(self, patch):
+    def test_metadata_without_data(self, patch):
         """Coords with another shape, and no data read."""
-        out = dc.proc.Transpose(dims=("time", "distance")).derive(patch.drop_data())
+        processor = dc.proc.Transpose(dims=("time", "distance"))
+        out, _ = processor.get_metadata(patch.drop_data())
         assert out.dims == ("time", "distance")
         assert out.shape == patch.shape[::-1]
 
@@ -485,6 +560,31 @@ class TestGeneratedFunction:
         assert kinds[-1] == inspect.Parameter.VAR_KEYWORD
         op = SeamExtras("a", "b", flag=True, other=1)
         assert op.kwargs == {"names": ("a", "b"), "flag": True, "other": 1}
+
+    def test_an_extra_named_for_the_varargs_field(self, patch):
+        """A keyword never fills `*args`, so the two must not be merged."""
+        seen = []
+
+        class Grouped(PatchProcessor):
+            """Take a positional group beside extras which may share its name."""
+
+            name = None
+            names: tuple[str, ...] = ()
+            model_config = ConfigDict(extra="allow", frozen=True)
+            _var_positional = "names"
+
+            def get_metadata(self, meta):
+                """Record the field and the extras this call was built with."""
+                seen.append((self.names, dict(self.model_extra or {})))
+                return meta, {}
+
+        func = processor_module._make_patch_function(Grouped, "grouped")
+        func(patch, "a", "b")
+        assert seen[-1] == (("a", "b"), {})
+        # The field would refuse these, and is not asked to: they are a
+        # caller's own values under a name which merely collides.
+        func(patch, names=[1, 2])
+        assert seen[-1] == ((), {"names": [1, 2]})
 
     def test_positional_fields(self):
         """Fields outside `_positional_fields` can only be given by name."""
@@ -611,6 +711,157 @@ class TestKernelFor:
     def test_no_kernel_at_all_is_metadata_only(self):
         """A processor which touches no data says so by defining none."""
         assert SeamHidden.kernel_for("numpy") is None
+
+
+class TestWhereFunctionsAreBound:
+    """`PatchMeta` grows its operations; `Patch` writes its own down."""
+
+    def test_metadata_only_lands_on_patch_meta(self):
+        """DASCore's own kernel-less operations; Patch inherits them."""
+        func = dc.proc.RenameCoords.patch_function
+        assert vars(dc.PatchMeta)["rename_coords"] is func
+        assert "rename_coords" not in vars(dc.Patch)
+        assert dc.Patch.rename_coords is func
+
+    def test_a_kernel_is_listed_in_the_patch_class_body(self):
+        """Written down, so a reader and a type checker see the whole class."""
+        assert vars(dc.Patch)["abs"] is Abs.patch_function
+        assert "abs" not in vars(dc.PatchMeta)
+
+    def test_a_missing_assignment_is_refused(self, monkeypatch):
+        """The line nobody can forget silently: import fails and says which."""
+        # What the tree looks like mid-import, which is when the check runs.
+        monkeypatch.setattr(processor_module, "_HOSTS", [])
+        monkeypatch.setattr(processor_module, "_PENDING", [])
+
+        class SeamForgotten(PatchProcessor):
+            """One of DASCore's own, with a kernel and no assignment."""
+
+            __module__ = "dascore.proc.basic"
+            __qualname__ = "SeamForgotten"
+
+            def kernel(self, data):
+                """Compute something, so Patch has to list it."""
+                return data
+
+        assert processor_module._PENDING == [SeamForgotten]
+        with pytest.raises(ParameterError, match=r"dascore/core/patch\.py"):
+            processor_module.bind_pending_patch_functions(dc.Patch, dc.PatchMeta)
+
+    def test_an_out_of_tree_class_is_bound_nowhere(self):
+        """A plugin reaches its operation through `dc.proc` and the registry."""
+        assert SeamExtras.kernel_for("numpy") is None
+        assert "seam_extras" not in vars(dc.Patch)
+        assert "seam_extras" not in vars(dc.PatchMeta)
+        assert SeamScale.kernel_for("numpy") is not None
+        assert "seam_scale" not in vars(dc.Patch)
+
+    def test_a_kernel_with_no_assignment_is_refused(self, patch):
+        """Unbinding an operation from PatchMeta must not lose it entirely."""
+
+        class SeamStranded(PatchProcessor):
+            """One of DASCore's own, bound onto PatchMeta at first."""
+
+            __module__ = "dascore.proc.basic"
+            __qualname__ = "SeamStranded"
+
+        try:
+            assert "seam_stranded" in vars(dc.PatchMeta)
+            with pytest.raises(ParameterError, match=r"dascore/core/patch\.py"):
+
+                @register_kernel(SeamStranded, "numpy")
+                def _stranded(processor, data):
+                    """Never reached; the guard refuses the registration."""
+                    return data
+
+            # Refused before anything moved, so it still answers.
+            assert "seam_stranded" in vars(dc.PatchMeta)
+            assert patch.drop_data().seam_stranded() is not None
+        finally:
+            for host in (dc.Patch, dc.PatchMeta):
+                if "seam_stranded" in vars(host):
+                    delattr(host, "seam_stranded")
+
+    def test_a_kernel_registered_later_unbinds_metadata(self, patch):
+        """A class body may write no kernel and still gain one per backend."""
+
+        # Spelled as DASCore's own, so with no kernel it starts on PatchMeta.
+        class SeamLate(PatchProcessor):
+            """A metadata-only operation until its kernel is registered."""
+
+            __module__ = "dascore.proc.basic"
+            __qualname__ = "SeamLate"
+
+        try:
+            assert vars(dc.PatchMeta)["seam_late"] is SeamLate.patch_function
+            # What the class body of `Patch` would say, were this real.
+            dc.Patch.seam_late = SeamLate.patch_function
+
+            @register_kernel(SeamLate, "numpy")
+            def _late(processor, data):
+                """Double it, so a run can be told from a no-op."""
+                return data * 2
+
+            assert "seam_late" not in vars(dc.PatchMeta)
+            assert np.array_equal(patch.seam_late().data, np.asarray(patch.data) * 2)
+            # Left on PatchMeta it would be reached, then die on `.data`.
+            assert not hasattr(patch.drop_data(), "seam_late")
+        finally:
+            for host in (dc.Patch, dc.PatchMeta):
+                if "seam_late" in vars(host):
+                    delattr(host, "seam_late")
+
+    def test_a_kernel_registered_later_unbinds_descendants_too(self, patch):
+        """`kernel_for` walks the MRO, so a subclass inherits that kernel."""
+
+        # Spelled as DASCore's own, so with no kernel they start on PatchMeta.
+        class SeamRoot(PatchProcessor):
+            """Metadata-only until its kernel is registered."""
+
+            __module__ = "dascore.proc.basic"
+            __qualname__ = "SeamRoot"
+
+        class SeamLeaf(SeamRoot):
+            """A named subclass, metadata-only when it is created."""
+
+            __module__ = "dascore.proc.basic"
+            __qualname__ = "SeamLeaf"
+
+        class SeamOwn(SeamRoot):
+            """Out of tree, with a kernel of its own; bound nowhere."""
+
+            def kernel(self, data):
+                """Hand the data back."""
+                return data
+
+        class SeamAnon(SeamRoot):
+            """An unnamed subclass, which was never bound anywhere."""
+
+            name = None
+
+        names = ("seam_root", "seam_leaf")
+        try:
+            assert all(x in vars(dc.PatchMeta) for x in names)
+            assert "seam_own" not in vars(dc.PatchMeta)
+            assert SeamAnon.patch_function is None
+            for name, cls in zip(names, (SeamRoot, SeamLeaf), strict=True):
+                setattr(dc.Patch, name, cls.patch_function)
+
+            @register_kernel(SeamRoot, "numpy")
+            def _root(processor, data):
+                """Double it, so a run can be told from a no-op."""
+                return data * 2
+
+            for name in names:
+                assert name not in vars(dc.PatchMeta)
+            assert np.array_equal(patch.seam_leaf().data, np.asarray(patch.data) * 2)
+            # Left on PatchMeta it would be reached, then die on `.data`.
+            assert not hasattr(patch.drop_data(), "seam_leaf")
+        finally:
+            for host in (dc.Patch, dc.PatchMeta):
+                for name in names:
+                    if name in vars(host):
+                        delattr(host, name)
 
 
 class TestConversionsKeepTheirAxes:

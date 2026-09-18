@@ -113,7 +113,7 @@ class DASDAEV1(FiberIO):
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """
         Get patch info by iterating waveform groups in the file.
 

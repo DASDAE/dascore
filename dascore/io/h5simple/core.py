@@ -56,7 +56,7 @@ class H5Simple(FiberIO):
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Get the attributes of a h5simple file."""
         return self._metadata_and_data(resource, snap)[0]
 
@@ -65,4 +65,4 @@ class H5Simple(FiberIO):
         """Parse metadata and retain its data node for a subsequent read."""
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
         attrs = dc.PatchAttrs.from_dict(attrs)
-        return [dc.Patch(attrs=attrs, coords=cm, dtype=str(data.dtype))], data
+        return [dc.PatchMeta(attrs=attrs, coords=cm, dtype=str(data.dtype))], data

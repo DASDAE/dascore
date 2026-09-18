@@ -112,8 +112,8 @@ class TestG1Scan:
         attrs = g1.scan(g1_path)
         assert len(attrs) == 1
         attr = attrs[0]
-        assert isinstance(attr, dc.Patch)
-        assert attr._data is None
+        assert isinstance(attr, dc.PatchMeta)
+        assert not isinstance(attr, dc.Patch)
         assert attr._source is None
 
     def test_public_scan_adds_source_metadata(self, g1_path):

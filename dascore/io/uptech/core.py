@@ -35,11 +35,11 @@ class UptechH5V1(FiberIO):
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Extract metadata without reading the signal array."""
         attrs = UptechPatchAttrs.model_validate(_get_attrs_dict(resource))
         return [
-            dc.Patch(
+            dc.PatchMeta(
                 attrs=attrs,
                 coords=_get_coords(resource, snap=snap),
                 dtype=str(resource[_DATASET].dtype),

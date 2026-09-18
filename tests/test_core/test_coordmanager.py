@@ -1752,7 +1752,7 @@ class TestSelectIndexers:
         """An index window does not materialize a large regular coordinate."""
         count = min(10**12, np.iinfo(np.intp).max)
         coord = dc.get_coord(start=0, step=1, shape=(count,))
-        patch = dc.Patch(coords={"time": coord}, dims=("time",), dtype="float32")
+        patch = dc.PatchMeta(coords={"time": coord}, dims=("time",), dtype="float32")
         coords, indexers = patch.coords.select_indexers(time=(-5, None), samples=True)
         assert coords.shape == (5,)
         assert indexers == {"time": slice(count - 5, count, 1)}

@@ -102,7 +102,7 @@ class MSeedV2(FiberIO):
 
     def get_metadata(
         self, resource: LocalPath, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Scan a MiniSEED file."""
         pymseed = optional_import("pymseed")
         return _scan_patches(resource, pymseed)

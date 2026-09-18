@@ -312,8 +312,8 @@ def _metadata_from_segments(
     group_key,
     segments: list[_TraceSummary],
     channel_map: dict[str, int] | None = None,
-) -> dc.Patch:
-    """Create a data-less patch from compatible MiniSEED record summaries."""
+) -> dc.PatchMeta:
+    """Create the metadata of compatible MiniSEED record summaries."""
     first = min(segments, key=lambda item: (item.station, item.source_id))
     coords = get_coord_manager(
         _get_coords(segments, channel_map), dims=("channel", "time")
@@ -327,7 +327,7 @@ def _metadata_from_segments(
         "mseed_publication_version": first.publication_version,
         "mseed_record_length": first.record_length,
     }
-    return dc.Patch(
+    return dc.PatchMeta(
         attrs=attrs,
         coords=coords,
         dtype=np.result_type(*[segment.dtype for segment in segments]),
@@ -335,8 +335,8 @@ def _metadata_from_segments(
     )
 
 
-def _scan_patches(path, pymseed) -> list[dc.Patch]:
-    """Return data-less patches for MiniSEED patches."""
+def _scan_patches(path, pymseed) -> list[dc.PatchMeta]:
+    """Return the metadata of each patch in a MiniSEED file."""
     return _metadata_from_summaries(_scan_segments(path, pymseed))
 
 

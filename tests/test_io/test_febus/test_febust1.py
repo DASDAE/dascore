@@ -51,7 +51,7 @@ class TestFebusT1:
 
         monkeypatch.setattr(h5py.Dataset, "__getitem__", checked_getitem)
         patch = dc.scan_payloads(t1_path)[0]
-        assert patch._data is None
+        assert not isinstance(patch, dc.Patch)
         with h5py.File(t1_path, "r") as handle:
             assert patch.dtype == handle["Data/Temperature"].dtype
             assert patch.shape == handle["Data/Temperature"].shape

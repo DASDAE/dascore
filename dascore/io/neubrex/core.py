@@ -65,11 +65,11 @@ class NeubrexRFSV1(FiberIO):
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Get the attributes of a resource belong to this type."""
         cm = rfs_utils._get_coord_manager(resource, snap)
         attrs = NeubrexRFSPatchAttrs.from_dict(rfs_utils._get_attr_dict(resource))
-        return [dc.Patch(attrs=attrs, coords=cm, dtype=str(resource["data"].dtype))]
+        return [dc.PatchMeta(attrs=attrs, coords=cm, dtype=str(resource["data"].dtype))]
 
 
 class NeubrexDASV1(FiberIO):
@@ -95,9 +95,9 @@ class NeubrexDASV1(FiberIO):
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Get the attributes of this format from File."""
         acoustic = resource["Acoustic"]
         cm = das_utils._get_coord_manager(acoustic)
         attrs = NeubrexDASPatchAttrs.from_dict(das_utils._get_attr_dict(acoustic))
-        return [dc.Patch(attrs=attrs, coords=cm, dtype=str(acoustic.dtype))]
+        return [dc.PatchMeta(attrs=attrs, coords=cm, dtype=str(acoustic.dtype))]

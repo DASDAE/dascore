@@ -35,7 +35,7 @@ class Terra15FormatterV4(FiberIO):
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Scan a terra15 v2 file, return summary information."""
         _version, data_node = _get_version_data_node(resource)
         return _scan_terra15(resource, data_node, snap=snap)

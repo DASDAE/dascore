@@ -83,10 +83,10 @@ class PickleIO(FiberIO):
 
     def get_metadata(
         self, resource: _PickleReader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Decode a pickle to describe its patches without retaining their arrays."""
         return [
-            dc.Patch(
+            dc.PatchMeta(
                 coords=p.coords,
                 attrs=p.attrs.drop("_source_patch_key"),
                 dtype=p.dtype,

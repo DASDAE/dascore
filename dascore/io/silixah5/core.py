@@ -48,11 +48,11 @@ class SilixaH5V1(FiberIO):
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Scan a Silixa HDF5 file, return summary information on the contents."""
         attrs, coords = self._attr_getter(resource, SilixaPatchAttrs)
         return [
-            dc.Patch(
+            dc.PatchMeta(
                 attrs=attrs, coords=coords, dtype=str(resource[self._data_name].dtype)
             )
         ]

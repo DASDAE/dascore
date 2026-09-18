@@ -64,9 +64,9 @@ The summary itself is intentionally lossy. A uniform `CoordRange` has a non-null
 
 ## Metadata and summary boundaries
 
-Every [`FiberIO.get_metadata(...)`](`dascore.io.core.FiberIO.get_metadata`) result is a data-less `Patch` containing attrs, a full `CoordManager`, dtype, and optionally a logical source key. Dimensions and shape derive from the coordinate manager. The inherited `FiberIO.scan` uses the same metadata hook.
+Every [`FiberIO.get_metadata(...)`](`dascore.io.core.FiberIO.get_metadata`) result is a [`PatchMeta`](`dascore.PatchMeta`) containing attrs, a full `CoordManager`, dtype, and optionally a logical source key. Dimensions and shape derive from the coordinate manager. The inherited `FiberIO.scan` uses the same metadata hook.
 
-[`dc.scan_payloads(...)`](`dascore.scan_payloads`) exposes those patches and attaches source provenance separately from attrs. With `snap=True`, a format may idealize stored sample values as a uniform range. With `snap=False`, stored coordinate values are represented exactly. Header-defined start/step/count grids are already exact, so the flag is a no-op for those formats. Both modes describe the same written sample extent.
+[`dc.scan_payloads(...)`](`dascore.scan_payloads`) exposes that metadata and attaches source provenance separately from attrs. With `snap=True`, a format may idealize stored sample values as a uniform range. With `snap=False`, stored coordinate values are represented exactly. Header-defined start/step/count grids are already exact, so the flag is a no-op for those formats. Both modes describe the same written sample extent.
 
 [`dc.scan(...)`](`dascore.scan`) consumes the same metadata patches but collapses their coordinates to `CoordSummary` envelopes. It deliberately does not expose a `snap` argument because exact interior values are no longer present in its output. `dc.scan_to_df(...)` flattens the same summaries for tabular/index use.
 

@@ -103,17 +103,24 @@ from dascore.utils.remote_io import (
 # scanning nothing (see #818).
 ScanInput = (
     path_types
-    | dc.Patch
+    | dc.PatchMeta
     | dc.Spool
     | IOResourceManager
-    | Iterable[path_types | dc.Patch | IOResourceManager]
+    | Iterable[path_types | dc.PatchMeta | IOResourceManager]
 )
 
 
 def _validate_metadata(patch):
-    """Require a data-less Patch at the reader's metadata boundary."""
-    if not isinstance(patch, dc.Patch) or patch._data is not None:
-        msg = "FiberIO.get_metadata() must return data-less Patch objects."
+    """Require metadata, not a patch, at the reader's metadata boundary."""
+    if not isinstance(patch, dc.PatchMeta) or isinstance(patch, dc.Patch):
+        # A Patch is a PatchMeta, so a reader which loaded the array lands
+        # here too, and that is the likelier mistake of the two.
+        kind = type(patch).__name__
+        msg = (
+            f"FiberIO.get_metadata() must return PatchMeta objects; got "
+            f"{kind}. Build one directly, or call drop_data() on a patch "
+            "the reader already has."
+        )
         raise TypeError(msg)
     return patch
 
@@ -716,12 +723,12 @@ class FiberIO:
         msg = f"FiberIO: {self.name} has no get_version method"
         raise NotImplementedError(msg)
 
-    def get_metadata(self, resource, *, snap: snap_type = True) -> list[dc.Patch]:
+    def get_metadata(self, resource, *, snap: snap_type = True) -> list[dc.PatchMeta]:
         """
-        Return one data-less patch per logical patch in a resource.
+        Return the metadata of each logical patch in a resource.
 
         The coordinates declare the array's dimensions and shape, and the
-        patch declares its dtype. Multi-patch readers put their logical key
+        metadata declares its dtype. Multi-patch readers put their logical key
         in `PatchSource`. The framework supplies the source path, format,
         and version. `snap` accepts True, False, a coordinate name, or a tuple of
         names. `snap=False` preserves stored coordinate values when
@@ -869,13 +876,14 @@ class FiberIO:
                     )
                     raise InvalidFiberIOError(msg)
                 data = _apply_union_indexers(residual, data)
-                out.append(patch.new(data=data, coords=coords, source=source))
+                described = patch.update(coords=coords, source=source)
+                out.append(described.to_patch(data))
         return dc.spool(out)
 
     def scan(
         self, resource, *, snap: snap_type = True, timestamp=None, **kwargs
-    ) -> list[dc.Patch]:
-        """Return data-less patches; the dispatcher attaches source provenance."""
+    ) -> list[dc.PatchMeta]:
+        """Return patch metadata; the dispatcher attaches source provenance."""
         if self.input_type == "directory":
             resource = coerce_to_upath(resource)
             resource = resource if resource.is_dir() else resource.parent
@@ -1444,7 +1452,7 @@ def _iter_scan_results(
     progress: PROGRESS_LEVELS | Progress = "standard",
     *,
     snap: snap_type = True,
-) -> Generator[tuple[dc.Patch, int], None, None]:
+) -> Generator[tuple[dc.PatchMeta, int], None, None]:
     """
     Yield raw scan results with dispatcher-owned source information.
 
@@ -1483,13 +1491,13 @@ def _iter_scan_results(
         with remote_cache_scope("metadata"):
             for patch_source in tracker:
                 input_index += 1
-                if isinstance(patch_source, dc.Patch):
-                    patch = patch_source
-                    result = dc.Patch(
-                        coords=patch.coords,
-                        attrs=patch.attrs,
-                        dtype=patch.dtype,
-                        source=patch._source,
+                if isinstance(patch_source, dc.PatchMeta):
+                    # A patch scans as the metadata describing it, which is
+                    # what metadata handed in already is.
+                    result = (
+                        patch_source.drop_data()
+                        if isinstance(patch_source, dc.Patch)
+                        else patch_source
                     )
                     output_count += 1
                     yield result, input_index
@@ -1583,7 +1591,7 @@ def scan_payloads(
     timestamp: float | None = None,
     progress: PROGRESS_LEVELS | Progress = "standard",
     snap: snap_type = True,
-) -> list[dc.Patch]:
+) -> list[dc.PatchMeta]:
     """
     Scan a potential patch source and return full coordinate payloads.
 
@@ -1609,7 +1617,7 @@ def scan_payloads(
 
     Returns
     -------
-    A list of data-less [`Patch`](`dascore.Patch`) objects with full coordinate
+    A list of [`PatchMeta`](`dascore.PatchMeta`) objects with full coordinate
     managers, dtype, and private source provenance.
 
     Notes

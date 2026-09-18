@@ -1494,7 +1494,7 @@ def read_payload(resource, *, snap: snap_type = True):
     return _decode_family(parsed, meta, snap=snap)
 
 
-def scan_payload(resource, *, snap: snap_type = True) -> list[dc.Patch]:
+def scan_payload(resource, *, snap: snap_type = True) -> list[dc.PatchMeta]:
     """Decode a Sintela protobuf file and return FiberIO scan payloads."""
     endpoints = _get_endpoint_metadata(resource)
     if endpoints is not None:
@@ -1505,4 +1505,4 @@ def scan_payload(resource, *, snap: snap_type = True) -> list[dc.Patch]:
         family_cls = _FAMILY_CLASSES[_validate_single_family(parsed)]
         metadata = family_cls.from_parsed(parsed, meta, snap=snap)
     _shape, coords, attrs, dtype = metadata.scan()
-    return [dc.Patch(attrs=attrs, coords=coords, dtype=dtype)]
+    return [dc.PatchMeta(attrs=attrs, coords=coords, dtype=dtype)]

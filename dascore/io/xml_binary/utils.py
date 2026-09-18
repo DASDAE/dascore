@@ -151,7 +151,7 @@ def _paths_to_scan_patches(
     metadata,
     attr_cls=dc.PatchAttrs,
     extra_attrs=None,
-) -> list[dc.Patch]:
+) -> list[dc.PatchMeta]:
     """Convert paths to patch summaries for scan/index workflows."""
     extra_attrs = {} if not extra_attrs else extra_attrs
     paths = list(iterate(paths))
@@ -171,7 +171,7 @@ def _paths_to_scan_patches(
         )
         attrs = attr_cls(**base_attrs, **extra_attrs)
         out.append(
-            dc.Patch(
+            dc.PatchMeta(
                 attrs=attrs,
                 coords=coords,
                 dtype=metadata.data_type,

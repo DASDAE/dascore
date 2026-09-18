@@ -55,11 +55,11 @@ class GDR_V1(FiberIO):  # noqa
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Get the attributes of a resource belong to this type."""
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
         return [
-            dc.Patch(
+            dc.PatchMeta(
                 attrs=GDRPatchAttrs.from_dict(attrs), coords=cm, dtype=str(data.dtype)
             )
         ]

@@ -17,13 +17,14 @@ from rich.text import Text
 
 import dascore as dc
 from dascore.compat import random_state
-from dascore.core import Patch
+from dascore.core import Patch, PatchMeta
 from dascore.core.coords import BaseCoord, CoordRange
 from dascore.core.source import PatchSource
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import (
     CoordDataError,
     CoordError,
+    InvalidSpoolError,
     ParameterError,
     PatchAttributeError,
     PatchDataError,
@@ -765,7 +766,7 @@ class TestEmptyPatch:
 
 
 class TestDataless:
-    """A patch built without data describes data it does not hold."""
+    """A `PatchMeta` describes data it does not hold."""
 
     @pytest.fixture(scope="class")
     @classmethod
@@ -789,41 +790,50 @@ class TestDataless:
         assert described.dtype == source.dtype
 
     def test_built_directly(self, random_patch):
-        """Coords and a dtype are enough."""
-        out = Patch(coords=random_patch.coords, dtype="float32")
+        """Coords and a dtype build the metadata, not a patch."""
+        out = PatchMeta(coords=random_patch.coords, dtype="float32")
+        assert type(out) is dc.PatchMeta
         assert out.shape == random_patch.shape
         assert out.dtype == np.float32
 
     def test_needs_a_dtype(self, random_patch):
         """Nothing else says what the data would be."""
-        with pytest.raises(ValueError, match="a dtype may stand in for data"):
+        with pytest.raises(ValueError, match="which is a PatchMeta"):
             Patch(coords=random_patch.coords)
 
-    def test_data_raises(self, described):
-        """There is nothing to return."""
-        with pytest.raises(PatchDataError, match="built without data"):
-            _ = described.data
+    def test_data_is_not_there(self, described):
+        """There is nothing to return, and no method offering to."""
+        assert not hasattr(described, "data")
+        assert not hasattr(described, "abs")
 
     def test_processing_raises(self, described):
-        """Even an operation which would change nothing."""
-        with pytest.raises(PatchDataError, match="built without data"):
-            described.select()
+        """A bare call, which no missing method stops, is refused."""
+        with pytest.raises(PatchDataError, match="holds no data"):
+            dc.proc.set_units(described, "m")
         with pytest.raises(PatchDataError):
-            described.abs()
-        # These never read the data, so only the guard stops them.
-        with pytest.raises(PatchDataError):
-            described.set_units("m")
-        with pytest.raises(PatchDataError):
-            described.squeeze()
+            dc.proc.pass_filter(described, time=(1, 10))
 
-    def test_new_fills_it(self, described, source):
-        """Data given to `new` make a patch with data again."""
-        assert described.new(data=source.data).equals(source)
+    def test_to_patch_fills_it(self, described, source):
+        """`to_patch` is `drop_data` run backwards."""
+        assert described.to_patch(source.data).equals(source)
 
-    def test_new_checks_the_shape(self, described, source):
+    def test_new_refuses_data(self, described, source):
+        """Metadata has nowhere to put data, and says where they go."""
+        with pytest.raises(ParameterError, match="to_patch"):
+            described.new(data=source.data)
+        with pytest.raises(ParameterError, match="to_patch"):
+            described.update(data=source.data)
+
+    def test_new_restates_the_dtype(self, described, source):
+        """Metadata takes the dtype it is given; a patch checks its own."""
+        assert described.new(dtype="int16").dtype == np.int16
+        with pytest.raises(ValueError, match="not the dtype given"):
+            source.new(dtype="int16")
+
+    def test_to_patch_checks_the_shape(self, described, source):
         """Data of the wrong shape are refused."""
         with pytest.raises(CoordDataError):
-            described.new(data=np.asarray(source.data)[:2])
+            described.to_patch(np.asarray(source.data)[:2])
 
     def test_new_without_data_keeps_it_dataless(self, described):
         """New coords are not checked against data it does not have."""
@@ -836,7 +846,7 @@ class TestDataless:
     def test_a_misspelled_dtype(self, random_patch):
         """A string numpy does not know is refused, not stored."""
         with pytest.raises(TypeError, match="flaot64"):
-            Patch(coords=random_patch.coords, dtype="flaot64")
+            PatchMeta(coords=random_patch.coords, dtype="flaot64")
 
     def test_a_subclass_without_dtype(self, random_patch):
         """A subclass whose `__init__` takes no dtype still copies with data."""
@@ -849,8 +859,10 @@ class TestDataless:
         assert type(sub.new(attrs=sub.attrs)) is _Sub
         assert sub.update_attrs(station="x").attrs.station == "x"
         dropped = sub.drop_data()
-        assert type(dropped) is _Sub
         assert dropped.dtype == sub.dtype
+        # The metadata remembers which patch it describes, so filling it
+        # again gives the subclass back.
+        assert type(dropped.to_patch(sub.data)) is _Sub
 
     def test_given_dtype_must_agree(self, random_patch):
         """A dtype which contradicts the data is refused."""
@@ -863,11 +875,43 @@ class TestDataless:
         array = random_patch.io.to_xarray()
         assert Patch(array, dims=array.dims).equals(random_patch)
 
-    def test_copying_a_dataless_patch(self, described):
-        """Building a patch from one without data keeps its dtype."""
+    def test_a_patch_cannot_be_built_from_metadata(self, described):
+        """There is nothing to make one of, and the message says so."""
+        with pytest.raises(ValueError, match="PatchMeta holds no data"):
+            Patch(described)
+
+    def test_copying_metadata(self, described):
+        """A copy of metadata is metadata, and keeps its dtype."""
         assert described.dtype == np.float32
-        assert Patch(described).dtype == np.float32
-        assert described.new().dtype == np.float32
+        copied = described.new()
+        assert type(copied) is dc.PatchMeta
+        assert copied.dtype == np.float32
+
+    def test_a_spool_refuses_it_by_name(self, described):
+        """A spool reads data, so it says which argument had none."""
+        for value in (described, [described]):
+            with pytest.raises(InvalidSpoolError, match="PatchMeta"):
+                dc.spool(value)
+
+    def test_a_summary_validates_from_it(self, described, source):
+        """`from_patch` takes metadata, so the validator behind it does too."""
+        assert PatchSummary.model_validate(described) == described.summary
+        assert PatchSummary.model_validate(described) == source.summary
+
+    def test_equals_agrees_with_the_patch_it_describes(self, source):
+        """The two read one comparison, so odd attrs cannot split them."""
+        odd = {"nan": float("nan"), "arr": np.arange(3)}
+        one, two = source.update_attrs(**odd), source.update_attrs(**odd)
+        assert one.equals(two, only_required_attrs=False)
+        assert one.drop_data().equals(two.drop_data(), only_required_attrs=False)
+        other = source.update_attrs(nan=float("nan"), arr=np.arange(4))
+        assert not one.equals(other, only_required_attrs=False)
+        assert not one.drop_data().equals(other.drop_data(), only_required_attrs=False)
+
+    def test_it_scans_and_names_itself(self, described, source):
+        """Naming and scanning read metadata, so metadata answers them."""
+        assert described.get_patch_name() == source.get_patch_name()
+        assert len(dc.scan(described)) == 1
 
     def test_repr_reads_no_data(self, described):
         """The repr says there is no data rather than raising."""
@@ -881,21 +925,21 @@ class TestDataless:
         patch = random_patch.new(data=xp.asarray(random_patch.data))
         assert patch.drop_data().dtype == patch.dtype
 
-    def test_dropped_is_another_patch(self, source):
-        """A spool holds a patch and its data-less copy as two."""
-        assert len(dc.spool([source, source.drop_data()])) == 2
+    def test_dropped_is_another_object(self, source):
+        """A fresh identity, which is what a spool keys a patch by."""
+        assert source.drop_data()._instance_id != source._instance_id
+        assert source.drop_data()._instance_id != source.drop_data()._instance_id
 
     def test_pickle_round_trip(self, described):
-        """A patch without data pickles as one."""
+        """Metadata pickles as metadata."""
         out = pickle.loads(pickle.dumps(described))
         assert out.dtype == described.dtype
         assert out.coords == described.coords
 
-    def test_pickled_before_dtype_was_stored(self, random_patch):
-        """A patch with data reads its dtype from the data, not `_dtype`."""
-        patch = random_patch.new()
-        del patch.__dict__["_dtype"]
-        assert patch.dtype == random_patch.data.dtype
+    def test_a_patch_reads_its_own_dtype(self, random_patch):
+        """A patch's dtype is its data's, so no copy of it can go stale."""
+        assert "_dtype" not in random_patch.__dict__
+        assert random_patch.dtype == random_patch.data.dtype
 
     def test_empty_patch_takes_the_dtype(self):
         """A dtype alone gives an empty patch of that dtype."""
@@ -1366,6 +1410,13 @@ class TestSetDims:
         )  # set mycoord as dim (rather than time)
         assert "my_coord" in out.dims
 
+    def test_metadata_can_set_dims(self, random_patch_with_lat_lon):
+        """Naming a dimension reaches no sample, so metadata can do it too."""
+        meta = random_patch_with_lat_lon.drop_data()
+        out = meta.set_dims(distance="longitude")
+        assert not isinstance(out, dc.Patch)
+        assert "longitude" in out.dims
+
 
 class TestHistory:
     """Specific tests for tracking history of Patches."""
@@ -1598,7 +1649,7 @@ class TestPatchSource:
         patch = random_patch if loaded else random_patch.drop_data()
         patch = patch.new(source=source)
         assert patch.new(attrs=patch.attrs.update(tag="test"))._source == source
-        attached = patch.new(data=random_patch.data)
+        attached = patch.to_patch(random_patch.data)
         assert attached._source == source
         np.testing.assert_array_equal(attached.data, random_patch.data)
 

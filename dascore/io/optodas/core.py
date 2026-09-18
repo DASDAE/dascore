@@ -38,11 +38,13 @@ class OptoDASV8(FiberIO):
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Scan a OptoDAS file, return summary information about the file's contents."""
         attrs, coords = _get_opto_das_attrs(resource, snap=snap)
         attrs = OptoDASPatchAttrs.from_dict(attrs)
-        return [dc.Patch(attrs=attrs, coords=coords, dtype=str(resource["data"].dtype))]
+        return [
+            dc.PatchMeta(attrs=attrs, coords=coords, dtype=str(resource["data"].dtype))
+        ]
 
     def read_array(
         self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""

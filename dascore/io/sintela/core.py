@@ -61,11 +61,13 @@ class SintelaBinaryV3(FiberIO):
 
     def get_metadata(
         self, resource: BinaryReader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Scan a file, return summary information on the contents."""
         attrs, coords, header = _get_attrs_coords_header(resource, SintelaPatchAttrs)
         return [
-            dc.Patch(attrs=attrs, coords=coords, dtype=str(np.dtype(header["dtype"])))
+            dc.PatchMeta(
+                attrs=attrs, coords=coords, dtype=str(np.dtype(header["dtype"]))
+            )
         ]
 
     def read_array(
@@ -105,7 +107,7 @@ class SintelaProtobufV1(FiberIO):
 
     def get_metadata(
         self, resource: BinaryReader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Scan a Sintela protobuf recording."""
         return scan_payload(resource, snap=snap)
 

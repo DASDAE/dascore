@@ -21,6 +21,7 @@ import dascore as dc
 from dascore.config import get_config
 from dascore.constants import (
     WARN_LEVELS,
+    PatchMetaType,
     PatchType,
     check_behavior_description,
 )
@@ -87,10 +88,10 @@ attr_type = dict[str, Any] | str | Sequence[str] | None
 
 
 def check_patch_coords(
-    patch: PatchType,
+    patch: PatchMetaType,
     dims: Sequence[str] | None = None,
     coords: Sequence[str] | None = None,
-) -> PatchType:
+) -> PatchMetaType:
     """
     Check that a patch has the required coordinates, else raise.
 
@@ -124,28 +125,31 @@ def check_patch_coords(
     return patch
 
 
-def check_patch_data(patch: PatchType) -> PatchType:
+def check_patch_data(patch: PatchMetaType) -> PatchMetaType:
     """
-    Check that a patch holds data, else raise.
+    Check that data are in reach, else raise.
 
-    A patch built without data (`Patch.drop_data`) describes data; it cannot
-    be processed, even by an operation which would change nothing.
+    A `PatchMeta` describes data it does not hold, so an operation which
+    computes data cannot run on one. A method is out of reach there, being
+    bound to `Patch`, but a bare call is not: this is what turns
+    `dc.proc.pass_filter(meta)` into a clear error rather than an
+    `AttributeError` from somewhere inside the operation.
 
     Raises
     ------
     PatchDataError
-        If the patch was built without data.
+        If given a patch's metadata rather than the patch.
     """
-    if getattr(patch, "_data", True) is None:
+    if isinstance(patch, dc.PatchMeta) and not isinstance(patch, dc.Patch):
         msg = (
-            "This patch was built without data, so it has none to use. "
-            "Attach data with patch.new(data=...) first."
+            "This is a patch's metadata, which holds no data to use. "
+            "Attach data with meta.to_patch(data) first."
         )
         raise PatchDataError(msg)
     return patch
 
 
-def check_patch_attrs(patch: PatchType, required_attrs: attr_type) -> PatchType:
+def check_patch_attrs(patch: PatchMetaType, required_attrs: attr_type) -> PatchMetaType:
     """
     Check for expected attributes.
 
@@ -746,7 +750,7 @@ def get_patch_names(
     # io.core.ScanInput: importing that is circular, and hiding it behind
     # TYPE_CHECKING leaves the annotation unresolvable at runtime, which
     # breaks get_type_hints and the API doc renderer.
-    patch_data: pd.DataFrame | dc.Patch | dc.Spool | Iterable[dc.Patch],
+    patch_data: pd.DataFrame | dc.PatchMeta | dc.Spool | Iterable[dc.PatchMeta],
     prefix="DAS",
     attrs=("acquisition_key", "tag"),
     coords=("time",),
@@ -1245,7 +1249,7 @@ def align_patch_coords(
     return out1, out2
 
 
-def get_patch_kind(patch: PatchType | dc.PatchAttrs) -> FrozenDict:
+def get_patch_kind(patch: dc.PatchMeta | dc.PatchAttrs) -> FrozenDict:
     """
     Return the attribute values which decide what kind of patch this is.
 
@@ -1270,7 +1274,7 @@ def get_patch_kind(patch: PatchType | dc.PatchAttrs) -> FrozenDict:
     >>> assert kind["tag"] == patch.attrs.tag
     >>> assert kind["acquisition_key"] is None  # not set
     """
-    attrs = patch.attrs if isinstance(patch, dc.Patch) else patch
+    attrs = patch.attrs if isinstance(patch, dc.PatchMeta) else patch
     names = get_config().patch_kind_attrs
     return FrozenDict({x: _kind_value(attrs.get(x)) for x in names})
 

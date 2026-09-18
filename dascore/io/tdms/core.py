@@ -46,7 +46,7 @@ class TDMSFormatterV4713(FiberIO):
         attrs = dc.PatchAttrs.from_dict(
             {name: out[name] for name in _ATTR_NAMES if name in out}
         )
-        return [dc.Patch(attrs=attrs, coords=coords, dtype=fileinfo["data_type"])]
+        return [dc.PatchMeta(attrs=attrs, coords=coords, dtype=fileinfo["data_type"])]
 
     def _prepare_read(self, manager, snap):
         """Reuse the header parsed for metadata when loading samples."""
@@ -64,7 +64,7 @@ class TDMSFormatterV4713(FiberIO):
 
     def get_metadata(
         self, resource: BinaryReader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Scan a tdms file, return summary information about the file's contents."""
         out, fileinfo = _get_all_attrs(resource)
         return self._metadata(out, fileinfo)

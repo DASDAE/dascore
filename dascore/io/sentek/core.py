@@ -39,7 +39,9 @@ class SentekV5(FiberIO):
 
     def get_metadata(
         self, resource: BinaryReader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Extract metadata from sentek file."""
         attrs, coords, _ = _get_patch_attrs(resource, snap=snap)
-        return [dc.Patch(attrs=attrs, coords=coords, dtype=str(np.dtype(np.float32)))]
+        return [
+            dc.PatchMeta(attrs=attrs, coords=coords, dtype=str(np.dtype(np.float32)))
+        ]

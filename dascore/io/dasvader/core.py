@@ -46,7 +46,7 @@ class DASVaderV1(FiberIO):
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Scan a DASVader file, return summary information about the file."""
         rec = resource["dDAS"][()]
         cm = _get_coord_manager(resource, rec)
@@ -63,7 +63,7 @@ class DASVaderV1(FiberIO):
             else ""
         )
         attrs = dc.PatchAttrs.from_dict(attrs)
-        return [dc.Patch(attrs=attrs, coords=cm, dtype=dtype)]
+        return [dc.PatchMeta(attrs=attrs, coords=cm, dtype=dtype)]
 
     def read_array(
         self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""

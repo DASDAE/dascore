@@ -246,26 +246,21 @@ class TileApply(PatchProcessor):
             min_samples=2,
         )
 
-    def derive(self, patch):
-        """Return a stack's metadata; a blend keeps the input's."""
-        # A blend's window is resolved, and checked, by `plan`.
-        if self.mode == "overlap_add":
-            return patch
-        window = self.window(patch)
+    def get_metadata(self, meta):
+        """Return a stack's metadata, and the windowed axes, size and stride."""
+        window = self.window(meta)
         assert window.stride is not None
+        plan = {"axes": window.axes, "size": window.size, "stride": window.stride}
+        if self.mode == "overlap_add":
+            return meta, plan
         # The stride the tiles were cut at travels in attrs, so a thinned
         # stack still reassembles under the taper it was cut for.
         strides = {
             f"_tile_stride_{d}": int(s) for d, s in zip(window.dims, window.stride)
         }
-        coords = _stack_coords(patch, window, self.analysis)
-        return patch.new(coords=coords, attrs=patch.attrs.update(**strides))
-
-    def plan(self, patch, out):
-        """Return the windowed axes, and the window and stride along each."""
-        window = self.window(patch)
-        assert window.stride is not None
-        return {"axes": window.axes, "size": window.size, "stride": window.stride}
+        coords = _stack_coords(meta, window, self.analysis)
+        out = meta.new(coords=coords, attrs=meta.attrs.update(**strides))
+        return out, plan
 
     def kernel(self, data, *, axes, size, stride):
         """Tile every batch over the windowed axes; blend or stack."""

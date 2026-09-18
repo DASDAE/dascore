@@ -49,7 +49,7 @@ class SegyV1_0(FiberIO):  # noqa
 
     def get_metadata(
         self, resource: LocalPath, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """
         Used to get metadata about a file without reading the whole file.
 
@@ -61,7 +61,7 @@ class SegyV1_0(FiberIO):  # noqa
             coords = _get_coords(fi)
             attrs = dc.PatchAttrs()
             dtype = str(fi.dtype)
-        return [dc.Patch(attrs=attrs, coords=coords, dtype=dtype)]
+        return [dc.PatchMeta(attrs=attrs, coords=coords, dtype=dtype)]
 
     def write(self, spool: dc.Patch | dc.Spool, resource, **kwargs):
         """

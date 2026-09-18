@@ -157,6 +157,21 @@ class _InventoryQuery(NamedTuple):
 _TIMES = _TIME_TYPES
 
 
+def _spool_input_message(data) -> str:
+    """Say what a spool was handed and what it needed instead."""
+    members = data if isinstance(data, list | tuple) else [data]
+    if any(
+        isinstance(x, dc.PatchMeta) and not isinstance(x, dc.Patch) for x in members
+    ):
+        return (
+            "A spool holds patches, and a PatchMeta holds no data for one to "
+            "read; give each one its data with to_patch(data) first."
+        )
+    return (
+        f"Spool accepts a Patch, a sequence of patches, or a spool; got {type(data)}."
+    )
+
+
 class Spool(NodeRepr, NamespaceOwner):
     """
     A container of patches: a view over a `PatchCatalog`.
@@ -235,11 +250,7 @@ class Spool(NodeRepr, NamespaceOwner):
         elif isinstance(data, Sequence) and all(isinstance(x, dc.Patch) for x in data):
             patches = data
         else:
-            msg = (
-                "Spool accepts a Patch, a sequence of patches, or a "
-                f"spool; got {type(data)}."
-            )
-            raise InvalidSpoolError(msg)
+            raise InvalidSpoolError(_spool_input_message(data))
         self._catalog = PatchCatalog.from_patches(patches)
 
     # --- presented relation --------------------------------------------
@@ -2828,3 +2839,9 @@ def _spool_from_patch_list(patch_list, **kwargs):
 def _spool_from_patch(patch):
     """Get a spool from a single patch."""
     return Spool([patch])
+
+
+@spool.register(dc.PatchMeta)
+def _spool_from_patch_meta(patch_meta, **kwargs):
+    """Refuse metadata, which a spool has nothing to read from."""
+    raise InvalidSpoolError(_spool_input_message(patch_meta))

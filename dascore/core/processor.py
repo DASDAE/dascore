@@ -1,11 +1,17 @@
 """Patch operations written as classes.
 
 A [`PatchProcessor`](`dascore.core.processor.PatchProcessor`) subclass is a
-whole operation: its fields are the parameters, `derive` and `plan` work out
-the result's metadata and the numbers the kernel needs without touching data,
-and `kernel` computes the array. Subclassing registers the operation and
+whole operation: its fields are the parameters, `get_metadata` works out the
+result's metadata and the numbers the kernel needs without touching data, and
+`kernel` computes the array. Subclassing registers the operation and
 generates its patch function (`cls.patch_function`), so the class is written
 once and the function is never hand-written.
+
+One of DASCore's own operations which writes no kernel changes metadata
+alone, so it is bound onto [`PatchMeta`](`dascore.PatchMeta`) and runs on a
+patch's metadata as readily as on the patch. An operation defined outside
+DASCore is bound to neither class and is called through `dc.proc`: the
+data-less contract is one DASCore holds itself to.
 
 Examples
 --------
@@ -29,7 +35,7 @@ from __future__ import annotations
 
 import inspect
 import numbers
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar, overload
 
 import numpy as np
 from pydantic import ConfigDict
@@ -37,10 +43,9 @@ from pydantic.alias_generators import to_snake
 
 import dascore as dc
 from dascore.config import get_config
-from dascore.constants import PatchType
+from dascore.constants import PatchMetaType, PatchType
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel
-from dascore.utils.array_api import backend_name
 from dascore.utils.identity import ids_enabled
 from dascore.utils.patch import (
     _call_str,
@@ -70,12 +75,13 @@ class PatchProcessor(DascoreBaseModel):
 
     Subclasses declare their parameters as fields and override some of:
 
-    - `derive(patch)`: the result's metadata, from a patch without data.
-    - `plan(patch, out)`: the numbers `kernel` needs, as a dict of ints,
-      floats, bools, tuples of those, or numeric arrays.
+    - `get_metadata(meta)`: the result's metadata and the arguments `kernel`
+      needs, worked out together from metadata alone. Deriving the one
+      usually computes the other.
     - `kernel(data, **plan)`: the array computation. None of it may see a
       patch, so a chain of kernels can be compiled.
-    - `reconcile(data, out)`: the one hook which sees both halves.
+    - `reconcile(data, out)`: the one hook which sees both halves, for what
+      only the computed data can say.
 
     Each subclass is registered under `name` (snake case of the class name
     unless set) and gets a generated patch function, `cls.patch_function`:
@@ -114,6 +120,14 @@ class PatchProcessor(DascoreBaseModel):
     def __pydantic_init_subclass__(cls, **kwargs):
         """Register the subclass and generate its patch function."""
         super().__pydantic_init_subclass__(**kwargs)
+        if stale := {"derive", "plan"} & set(cls.__dict__):
+            msg = (
+                f"{cls.__name__} defines {', '.join(sorted(stale))}, which "
+                "PatchProcessor no longer calls. The two are now one method, "
+                "`get_metadata(meta)`, returning the result's metadata and "
+                "the kernel's arguments together."
+            )
+            raise ParameterError(msg)
         if clashes := set(cls.model_fields) & _RESERVED:
             msg = (
                 f"{cls.__name__} has fields {sorted(clashes)}, which would "
@@ -130,6 +144,7 @@ class PatchProcessor(DascoreBaseModel):
         if cls.name is not None:
             cls.patch_function = _make_patch_function(cls, cls.name)
             register_patch_function(cls.patch_function)
+            _bind_patch_function(cls)
 
     def __init__(self, /, *args, **kwargs):
         """Bind positional arguments as the generated function would."""
@@ -171,7 +186,13 @@ class PatchProcessor(DascoreBaseModel):
         """Hash a processor the way it compares."""
         return hash(self.fingerprint)
 
-    def __call__(self, patch: PatchType) -> PatchType:
+    @overload
+    def __call__(self, patch: PatchType) -> PatchType: ...
+
+    @overload
+    def __call__(self, patch: dc.PatchMeta) -> dc.PatchMeta: ...
+
+    def __call__(self, patch):
         """Run the operation; see `run`."""
         return self.run(patch)
 
@@ -193,74 +214,105 @@ class PatchProcessor(DascoreBaseModel):
                 return generic
         return None
 
-    def check(self, patch: PatchType) -> PatchType:
+    def check(self, patch: PatchMetaType) -> PatchMetaType:
         """
         Refuse a patch which does not carry what the operation needs.
 
         Raises
         ------
         PatchDataError
-            If the patch holds no data.
+            If the operation computes data and the patch holds none.
         PatchCoordinateError
             If a required dimension or coordinate is missing.
         PatchAttributeError
             If a required attr is missing, or holds a different value.
         """
-        check_patch_data(patch)
+        # Only an operation which computes data needs any; one without a
+        # kernel is metadata all the way through, so it runs on a PatchMeta.
+        # Asked of the class, not of this patch's backend: an operation with
+        # a kernel for some other backend still means to compute.
+        if _has_kernel(type(self)):
+            check_patch_data(patch)
         check_patch_coords(patch, dims=self.required_dims, coords=self.required_coords)
         return check_patch_attrs(patch, self.required_attrs)
 
-    def derive(self, patch: PatchType) -> PatchType:
+    def get_metadata(self, meta: dc.PatchMeta) -> tuple[dc.PatchMeta, dict[str, Any]]:
         """
-        Return the result's metadata, as a patch without data.
+        Return the result's metadata and the arguments `kernel` needs.
 
-        Given a patch without data, so it cannot read `.data`. Work through
-        the coord manager and `patch.new`: patch methods refuse a patch
-        without data. Returning the argument itself says the metadata did
-        not change, which is how `run` spots a no-op.
+        Given a [`PatchMeta`](`dascore.PatchMeta`), so it cannot read
+        `.data`. Work through the coord manager and `meta.new`. Returning
+        the argument itself says the metadata did not change, which is how
+        `run` spots a no-op; an empty dict says the kernel takes nothing
+        beyond the data, which most kernels do.
         """
-        return patch
+        return meta, {}
 
-    def plan(self, patch: PatchType, out: PatchType) -> dict[str, Any]:
-        """Return the keyword arguments `kernel` needs; see the class docs."""
-        return {}
-
-    def reconcile(self, data, out: PatchType) -> PatchType:
+    def reconcile(self, data, out: dc.PatchMeta) -> dc.PatchMeta:
         """Return the result's metadata once the data are known; default as is."""
         return out
 
-    def run(self, patch: PatchType) -> PatchType:
-        """
-        Run the operation: check, derive, plan, kernel, reconcile, record.
+    @overload
+    def run(self, patch: PatchType) -> PatchType: ...
 
-        An operation which changes neither the metadata nor the data hands
-        back the patch it was given, and records nothing.
+    @overload
+    def run(self, patch: dc.PatchMeta) -> dc.PatchMeta: ...
+
+    def run(self, patch):
+        """
+        Run the operation: check, get_metadata, kernel, reconcile, record.
+
+        A patch comes back a patch and metadata comes back metadata, which
+        is what the two overloads say. An operation which changes neither
+        the metadata nor the data hands back what it was given, and records
+        nothing.
         """
         return self._run(patch, record=True)
 
-    def _run(self, patch: PatchType, record: bool) -> PatchType:
+    def _run(self, patch: dc.PatchMeta, record: bool) -> dc.PatchMeta:
         """Run the operation; `record=False` writes no history or ids."""
         self.check(patch)
-        described = patch.drop_data()
-        out = self.derive(described)
-        plan = _checked_plan(self, self.plan(described, out))
+        meta = patch.drop_data() if isinstance(patch, dc.Patch) else patch
+        out, plan = self.get_metadata(meta)
+        plan = _checked_plan(self, plan)
+        # Resolved from the metadata, so an operation with no kernel is
+        # settled before anything asks the patch for its data.
+        kernel = self.kernel_for(meta.backend)
+        if kernel is None:
+            if out is meta:
+                return self._unchanged(patch, record)
+            # The hook which sees both halves runs whether or not a kernel
+            # computed anything: the data are the ones which came in, and
+            # metadata has none to show.
+            unchanged = patch._data if isinstance(patch, dc.Patch) else None
+            out = self.reconcile(unchanged, out)
+            attrs = out.attrs if not record else self._record(patch, out.attrs)
+            # The data are whatever they were: a patch puts its own back,
+            # and metadata has none to put.
+            return patch._reattach(out, attrs)
+        # `check` refused metadata for an operation with a kernel, so what
+        # is left here holds data; the assert is what says so statically.
+        assert isinstance(patch, dc.Patch)
         data = patch.data
-        kernel = self.kernel_for(backend_name(data))
         # A kernel says "nothing to do" by handing its argument back, so it
         # must not write into that argument and return it.
-        result = data if kernel is None else kernel(self, data, **plan)
-        if out is described and result is data:
-            # Nothing done, so nothing recorded; a declared data_type still
-            # applies, as it does for a decorated patch function.
-            if self.data_type is None or not record:
-                return patch
-            return patch.update_attrs(data_type=self.data_type)
+        result = kernel(self, data, **plan)
+        if out is meta and result is data:
+            return self._unchanged(patch, record)
         out = self.reconcile(result, out)
         if not record:
-            return out.new(data=result)
-        return out.new(data=result, attrs=self._record(patch, out.attrs))
+            return out.to_patch(result)
+        return out.update(attrs=self._record(patch, out.attrs)).to_patch(result)
 
-    def _record(self, patch: PatchType, attrs: PatchAttrs) -> PatchAttrs:
+    def _unchanged(self, patch: dc.PatchMeta, record: bool) -> dc.PatchMeta:
+        """Return the patch an operation did nothing to; nothing is recorded."""
+        # A declared data_type still applies, as it does for a decorated
+        # patch function.
+        if self.data_type is None or not record:
+            return patch
+        return patch.update_attrs(data_type=self.data_type)
+
+    def _record(self, patch: dc.PatchMeta, attrs: PatchAttrs) -> PatchAttrs:
         """Return attrs carrying the data_type, history and ids of this call."""
         if self.data_type is not None:
             attrs = attrs.update(data_type=self.data_type)
@@ -289,6 +341,125 @@ _RESERVED = frozenset(x for x in vars(PatchProcessor) if not x.startswith("_")) 
 }
 
 
+# Classes whose function is generated before `dascore.core.patch` has
+# finished importing, which is most of DASCore's own; the module drains them
+# once both host classes exist.
+_PENDING: list[type[PatchProcessor]] = []
+# `[Patch, PatchMeta]`, once there are such classes to bind to.
+_HOSTS: list[type] = []
+
+
+def _has_kernel(cls: type[PatchProcessor]) -> bool:
+    """Whether anything in the MRO computes data; see `kernel_for`."""
+    return any(
+        x.__dict__.get("kernel") is not None or x.__dict__.get("_kernels")
+        for x in cls.__mro__
+    )
+
+
+def _is_dascores(cls) -> bool:
+    """Whether a class is DASCore's own rather than a plugin's."""
+    # Spelled as the package a module belongs to, the rule
+    # `patch_function_tag` uses to tell DASCore's own names apart.
+    return cls.__module__.split(".", 1)[0] == "dascore"
+
+
+def _meta_hosted(cls) -> bool:
+    """Whether a generated function is bound onto `PatchMeta`."""
+    # An operation with no kernel changes metadata alone, so every PatchMeta
+    # can run it and Patch inherits it. One with a kernel needs data, and
+    # `Patch` lists those in its body by hand rather than growing them at
+    # import: a class whose surface is written down is one a type checker,
+    # an IDE and a reader can all see whole.
+    # A trust boundary, not a namespace detail: the data-less contract is
+    # one DASCore holds itself to, so a plugin never lands on PatchMeta.
+    return _is_dascores(cls) and not _has_kernel(cls)
+
+
+def _bind_patch_function(cls) -> None:
+    """Bind a generated function onto `PatchMeta`, or check `Patch` lists it."""
+    if not _HOSTS:
+        _PENDING.append(cls)
+        return
+    meta_class = _HOSTS[1]
+    if _meta_hosted(cls):
+        existing = getattr(meta_class, cls.name, None)
+        if existing is not None and not hasattr(existing, "__processor__"):
+            msg = (
+                f"{cls.__name__} would bind {cls.name!r} onto "
+                f"{meta_class.__name__}, which already means something else "
+                "there; rename the class or give it a free `name`."
+            )
+            raise ParameterError(msg)
+        setattr(meta_class, cls.name, cls.patch_function)
+        return
+    # A kernel, whether written in the body or registered later: metadata
+    # cannot run this, so it must not still answer for it.
+    if meta_class.__dict__.get(cls.name) is cls.patch_function:
+        delattr(meta_class, cls.name)
+
+
+def _check_patch_lists(cls, patch_class) -> None:
+    """Refuse one of DASCore's own operations which `Patch`'s body omits."""
+    # Nothing out of tree can be written into Patch's body, so there is
+    # nothing to check: a plugin's operation is reached through the registry
+    # and `dc.proc`, as it was before any of this was bound anywhere.
+    if not _is_dascores(cls):
+        return
+    # Its own body, not what it inherits: an operation still bound onto
+    # PatchMeta answers `getattr` here right up until it is unbound.
+    if patch_class.__dict__.get(cls.name) is cls.patch_function:
+        return
+    msg = (
+        f"{cls.__name__} computes data, so it is a {patch_class.__name__} "
+        f"method, but {patch_class.__name__} does not list {cls.name!r}. Add "
+        f"`{cls.name} = dascore.proc.{cls.name}` to dascore/core/patch.py."
+    )
+    raise ParameterError(msg)
+
+
+def _subclasses(cls):
+    """Yield every subclass of a class, at any depth."""
+    for sub in cls.__subclasses__():
+        yield sub
+        yield from _subclasses(sub)
+
+
+def _rebind_for_kernel(cls) -> None:
+    """Re-site a class, and its descendants, around a new kernel."""
+    # Nothing is bound yet, and the pending drain asks the question fresh.
+    if not _HOSTS:
+        return
+    # `kernel_for` walks the MRO, so this kernel answers for every subclass
+    # as well: one bound as metadata-only before now belongs where the data
+    # are. A subclass with a kernel of its own is already there, and an
+    # unnamed one was never bound at all.
+    patch_class = _HOSTS[0]
+    for klass in (cls, *_subclasses(cls)):
+        if klass.patch_function is None:
+            continue
+        # Asked before anything moves: unbinding it from PatchMeta leaves
+        # nothing behind unless Patch's body lists it, so say which line is
+        # missing rather than deleting a public method quietly.
+        if not _meta_hosted(klass):
+            _check_patch_lists(klass, patch_class)
+        _bind_patch_function(klass)
+
+
+def bind_pending_patch_functions(patch_class, meta_class) -> None:
+    """Bind the functions generated before their host classes existed."""
+    _HOSTS[:] = [patch_class, meta_class]
+    pending, _PENDING[:] = list(_PENDING), []
+    for cls in pending:
+        _bind_patch_function(cls)
+        # Asked only of what was written before the tree finished importing,
+        # which is DASCore's own source and nothing else: a plugin, a
+        # notebook or a docstring example cannot add a line to `Patch` and
+        # is not asked to.
+        if not _meta_hosted(cls):
+            _check_patch_lists(cls, patch_class)
+
+
 def register_kernel(cls: type[PatchProcessor], backend: str):
     """
     Say that a function is how an operation runs on one array backend.
@@ -308,7 +479,21 @@ def register_kernel(cls: type[PatchProcessor], backend: str):
 
     def decorate(func):
         """Record the kernel against the class and hand it back."""
+        previous = cls.__dict__.get("_kernels")
         cls._kernels = {**cls.__dict__.get("_kernels", {}), backend: func}
+        try:
+            # A class body which wrote no kernel looked metadata-only when
+            # its function was generated; this kernel says otherwise, for
+            # the class and for everything which inherits it.
+            _rebind_for_kernel(cls)
+        except Exception:
+            # Refused, so the class is left as it was rather than holding a
+            # kernel which nothing is bound to run.
+            if previous is None:
+                del cls._kernels
+            else:
+                cls._kernels = previous
+            raise
         return func
 
     return decorate
@@ -351,7 +536,23 @@ def _make_patch_function(cls: type[PatchProcessor], name: str):
     def build(args, kwargs):
         """Bind a call against the signature, as a function's would be."""
         bound = cls._call_signature.bind(*args, **kwargs).arguments
-        return cls(**bound.pop("kwargs", {}), **bound)
+        extras = dict(bound.pop("kwargs", {}))
+        # `bind` fills every field but the `*args` one by name, so that is
+        # the only field which can turn up among the extras, and it does so
+        # only when a caller named something after it -- a coordinate called
+        # `empty_dims`, say. Handed to the constructor it would land on the
+        # field, so it is set as the extra `bind` already said it was.
+        shadowed: dict[str, Any] = {}
+        group = cls._var_positional
+        if group is not None and group in extras:
+            shadowed[group] = extras.pop(group)
+        out = cls(**extras, **bound)
+        if shadowed:
+            # `bind` only had extras to give because the model allows them,
+            # so pydantic has somewhere to put this one.
+            assert out.__pydantic_extra__ is not None
+            out.__pydantic_extra__.update(shadowed)
+        return out
 
     # The patch is positional-only, so a field or an extra may be named
     # `patch`: `rename_coords(patch="renamed")`.
@@ -397,12 +598,13 @@ def _make_patch_function(cls: type[PatchProcessor], name: str):
 
 
 def _checked_plan(processor: PatchProcessor, plan: dict[str, Any]) -> dict[str, Any]:
-    """Refuse a plan holding anything but numbers, tuples of them, or arrays."""
+    """Refuse a plan holding anything but numbers, indices, or arrays."""
     for key, value in plan.items():
         if not _is_plain(value):
             msg = (
-                f"{type(processor).__name__}.plan returned {key}={value!r}; a "
-                "plan may hold only ints, floats, bools, tuples of those, and "
+                f"{type(processor).__name__}.get_metadata returned "
+                f"{key}={value!r}; a plan may hold only ints, floats, bools, "
+                "slices, None, Ellipsis, tuples or lists of those, and "
                 "numeric arrays, so the kernel never sees a patch."
             )
             raise ParameterError(msg)
@@ -410,9 +612,20 @@ def _checked_plan(processor: PatchProcessor, plan: dict[str, Any]) -> dict[str, 
 
 
 def _is_plain(value) -> bool:
-    """Whether a plan value is a number, a tuple of plain values, or an array."""
+    """
+    Whether a plan value is one a kernel may take.
+
+    Numbers and numeric arrays are the computation's; slices, None,
+    Ellipsis and sequences of them are how an index into the data is
+    spelled. Anything else -- a patch, a coord manager, a string -- would
+    put metadata back in front of a kernel.
+    """
+    if value is None or value is Ellipsis:
+        return True
     if isinstance(value, numbers.Number | np.bool_):
         return True
-    if isinstance(value, tuple):
+    if isinstance(value, slice):
+        return all(_is_plain(x) for x in (value.start, value.stop, value.step))
+    if isinstance(value, tuple | list):
         return all(_is_plain(x) for x in value)
     return isinstance(value, np.ndarray) and value.dtype.kind in "biufc"

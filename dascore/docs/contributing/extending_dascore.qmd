@@ -83,9 +83,10 @@ Calling a processor checks the patch, runs it, and records history and lineage i
 
 An operation whose metadata changes, or whose kernel needs numbers read from the metadata, splits the work so that no array is touched until the kernel runs:
 
-- `derive(patch)` returns the result's metadata from a patch without data, through the coord manager and `patch.new`; patch methods refuse a patch without data.
-- `plan(patch, out)` gets the same patch and `derive`'s result, and returns what the kernel needs as ints, floats, bools, tuples of those, or numeric arrays.
+- `get_metadata(meta)` gets a [`PatchMeta`](`dascore.PatchMeta`) -- the coords, attrs, dtype and backend of the data, without the data -- and returns two things: the result's metadata, built through the coord manager and `meta.new`, and what the kernel needs as ints, floats, bools, slices, `None`, `Ellipsis`, sequences of those, or numeric arrays. Deriving the one usually computes the other, so they come back together.
 - `kernel(data, **plan)` computes the array; it never sees a patch.
+
+A class which writes no kernel changes metadata alone: applied to a patch it hands the data straight through, and it runs on a patch's metadata as readily as on the patch. One of DASCore's own is bound onto [`PatchMeta`](`dascore.PatchMeta`) so that metadata carries it; one defined outside DASCore is bound to neither class and is called as `dc.proc.<name>(patch)`, since the data-less contract is one DASCore holds only itself to.
 
 ```{python}
 class RemoveMean(dc.PatchProcessor):
@@ -93,8 +94,8 @@ class RemoveMean(dc.PatchProcessor):
 
     dim: str = "time"
 
-    def plan(self, patch, out):
-        return {"axis": patch.get_axis(self.dim)}
+    def get_metadata(self, meta):
+        return meta, {"axis": meta.get_axis(self.dim)}
 
     def kernel(self, data, *, axis):
         return data - data.mean(axis=axis, keepdims=True)
@@ -103,7 +104,7 @@ class RemoveMean(dc.PatchProcessor):
 out = RemoveMean(dim="distance")(patch)
 ```
 
-Class variables declare the rest: `required_dims`, `required_coords`, and `required_attrs` for what a patch must hold, `data_type` for the result's, `history` for how a call is recorded, and `__version__`, bumped when the same fields mean a different result. `name` sets the patch function's name, and `name = None` registers nothing. [`Transpose`](`dascore.proc.coords.Transpose`) and [`TileApply`](`dascore.proc.tile_apply.TileApply`) show `derive` changing a patch's shape.
+Class variables declare the rest: `required_dims`, `required_coords`, and `required_attrs` for what a patch must hold, `data_type` for the result's, `history` for how a call is recorded, and `__version__`, bumped when the same fields mean a different result. `name` sets the patch function's name, and `name = None` registers nothing. [`Transpose`](`dascore.proc.coords.Transpose`) and [`TileApply`](`dascore.proc.tile_apply.TileApply`) show `get_metadata` changing a patch's shape.
 
 ## Array backends
 

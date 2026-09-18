@@ -39,11 +39,13 @@ class APSensingV10(FiberIO):
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Scan an AP sensing file, return summary info about the contents."""
         coords = _get_coords(resource)
         attrs = APSensingPatchAttrs.model_validate(_get_attrs_dict(resource))
-        return [dc.Patch(attrs=attrs, coords=coords, dtype=str(resource["DAS"].dtype))]
+        return [
+            dc.PatchMeta(attrs=attrs, coords=coords, dtype=str(resource["DAS"].dtype))
+        ]
 
     def read_array(
         self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""

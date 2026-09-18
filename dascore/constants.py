@@ -16,6 +16,9 @@ import dascore as dc
 from dascore.compat import UPath
 
 PatchType = TypeVar("PatchType", bound="dc.Patch")
+# What an operation which never needs the data takes and gives back: a
+# patch, or the metadata describing one.
+PatchMetaType = TypeVar("PatchMetaType", bound="dc.PatchMeta")
 
 SpoolType = TypeVar("SpoolType", bound="dc.Spool")
 

@@ -86,13 +86,13 @@ class Febus2(FiberIO):
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Scan a febus file, return summary information about the file's contents."""
         out = []
         for attr, cm, feb in _yield_attrs_coords(resource):
             attrs = FebusPatchAttrs.from_dict(attr)
             out.append(
-                dc.Patch(
+                dc.PatchMeta(
                     attrs=attrs,
                     coords=cm,
                     dtype=str(feb.zone[feb.data_name].dtype),
@@ -145,12 +145,12 @@ class FebusG1CSV1(FiberIO):
 
     def get_metadata(
         self, resource: TextReader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Get the coords and attrs of a G1 file."""
         coords, attrs = _get_g1_coords_and_attrs(resource)
         attrs_no_private = {i: v for i, v in attrs.items() if not i.startswith("_")}
         attrs = FebusBOTDRStrainAttrs(**attrs_no_private)
-        return [dc.Patch(attrs=attrs, coords=coords, dtype="float64")]
+        return [dc.PatchMeta(attrs=attrs, coords=coords, dtype="float64")]
 
     def read_array(
         self, resource: TextReader, windows: dict[str, tuple[int, int]], key: str = ""
@@ -183,12 +183,12 @@ class FebusMTXH5V1(FiberIO):
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Scan a Febus MTX HDF5 file."""
         attrs = _get_mtx_attrs(resource)
         coords = _get_mtx_coords(resource, snap=snap)
         return [
-            dc.Patch(
+            dc.PatchMeta(
                 attrs=FebusMTXAttrs(**attrs),
                 coords=coords,
                 dtype=str(resource["mtx"].dtype),
@@ -224,12 +224,12 @@ class FebusBSLH5V1(FiberIO):
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Scan a Febus BSL HDF5 file."""
         attrs = _get_bsl_attrs(resource)
         coords = _get_bsl_coords(resource, snap=snap)
         return [
-            dc.Patch(
+            dc.PatchMeta(
                 attrs=FebusBOTDRStrainAttrs(**attrs),
                 coords=coords,
                 dtype=str(resource["bsl_data"].dtype),
@@ -272,7 +272,7 @@ class FebusT1V1(FiberIO):
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Return a list with one PatchAttrs for the file's temperature data."""
         return [_scan_t1(resource, snap=snap)]
 

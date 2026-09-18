@@ -174,7 +174,7 @@ class _FiberDirectory(FiberIO):
         """Return a payload that records the forwarded snap mode."""
         patch = dc.get_example_patch().update_attrs(tag=str(snap))
         return [
-            dc.Patch(
+            dc.PatchMeta(
                 attrs=patch.attrs,
                 coords=patch.coords,
                 dims=patch.dims,
@@ -1203,31 +1203,31 @@ class TestReloadableSourcePath:
     def test_scan_legacy_patch_attrs_raises(self, tmp_path):
         """FiberIO returning PatchAttrs should now fail loudly."""
         path = _misbehaving_scan_path(tmp_path, "patch_attrs")
-        with pytest.raises(TypeError, match="data-less Patch"):
+        with pytest.raises(TypeError, match="must return PatchMeta"):
             dc.scan(path)
 
     def test_scan_payloads_legacy_patch_attrs_raises(self, tmp_path):
         """Raw payload scans should reject legacy summary-only results."""
         path = _misbehaving_scan_path(tmp_path, "patch_attrs")
-        with pytest.raises(TypeError, match="data-less Patch"):
+        with pytest.raises(TypeError, match="must return PatchMeta"):
             dc.scan_payloads(path)
 
     def test_scan_payloads_missing_keys_raises(self, tmp_path):
         """Raw payload scans should validate all required payload keys."""
         path = _misbehaving_scan_path(tmp_path, "missing_keys")
-        with pytest.raises(TypeError, match="data-less Patch"):
+        with pytest.raises(TypeError, match="must return PatchMeta"):
             dc.scan_payloads(path)
 
     def test_scan_payloads_non_mapping_raises(self, tmp_path):
         """Raw payload scans should reject unsupported result types."""
         path = _misbehaving_scan_path(tmp_path, "non_mapping")
-        with pytest.raises(TypeError, match="data-less Patch"):
+        with pytest.raises(TypeError, match="must return PatchMeta"):
             dc.scan_payloads(path)
 
     def test_scan_payloads_requires_coord_manager(self, tmp_path):
         """Raw payload scans should reject collapsed coordinate summaries."""
         path = _misbehaving_scan_path(tmp_path, "summary_coords")
-        with pytest.raises(TypeError, match="data-less Patch"):
+        with pytest.raises(TypeError, match="must return PatchMeta"):
             dc.scan_payloads(path)
 
     def test_scan_payloads_rejects_loaded_patch(self, monkeypatch, terra15_v6_path):
@@ -1237,7 +1237,7 @@ class TestReloadableSourcePath:
         monkeypatch.setattr(
             fiber_io, "get_metadata", lambda *a, **k: [dc.get_example_patch()]
         )
-        with pytest.raises(TypeError, match="data-less Patch"):
+        with pytest.raises(TypeError, match="must return PatchMeta"):
             dc.scan_payloads(terra15_v6_path)
 
     def test_default_fiberio_scan_uses_reloadable_source_path(self, tmp_path):
@@ -1249,7 +1249,7 @@ class TestReloadableSourcePath:
         out = fio.scan(path)
 
         assert len(out) == 1
-        assert isinstance(out[0], dc.Patch)
+        assert isinstance(out[0], dc.PatchMeta)
         assert out[0]._source is None
         assert out[0]._source is None
         assert out[0]._source is None

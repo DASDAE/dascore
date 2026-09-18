@@ -63,7 +63,7 @@ source_spool = dc.spool(
 loaded = source_spool[summary_index]
 ```
 
-[`dc.scan_payloads(...)`](`dascore.scan_payloads`) returns data-less patches with each formatter's full `CoordManager`, attrs, and dtype. With `snap=False`, formats that store per-sample coordinates expose their exact values:
+[`dc.scan_payloads(...)`](`dascore.scan_payloads`) returns [`PatchMeta`](`dascore.PatchMeta`) objects -- patch metadata without the data -- with each formatter's full `CoordManager`, attrs, and dtype. With `snap=False`, formats that store per-sample coordinates expose their exact values:
 
 ```{python}
 payload = dc.scan_payloads(summary.source_path, snap=False)[0]

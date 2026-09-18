@@ -235,7 +235,7 @@ class PatchSummary(DascoreBaseModel):
     @classmethod
     def _normalize_input(cls, data: Any) -> Any:
         """Accept structured summary input."""
-        if isinstance(data, dc.Patch):
+        if isinstance(data, dc.PatchMeta):
             return cls.from_patch(data).dump_structured()
         # Let pydantic raise the normal validation error for unsupported inputs.
         if not isinstance(data, Mapping):
@@ -272,9 +272,9 @@ class PatchSummary(DascoreBaseModel):
         raise TypeError(msg)
 
     @classmethod
-    def from_patch(cls, patch: dc.Patch) -> PatchSummary:
+    def from_patch(cls, patch: dc.PatchMeta) -> PatchSummary:
         """
-        Create a summary from a loaded patch.
+        Create a summary from a patch, or from a patch's metadata alone.
 
         The lineage ids are carried, not dropped: the index stores them,
         so a summary which left them behind would be the one thing which

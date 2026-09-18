@@ -50,12 +50,12 @@ class AI4EPSV1(FiberIO):
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Scan an AI4EPS file, return summary info about the contents."""
         dataset = resource["data"]
         coords = _get_coords(dataset)
         attrs = AI4EPSPatchAttrs.model_validate(_get_attrs_dict(dataset))
-        return [dc.Patch(attrs=attrs, coords=coords, dtype=str(dataset.dtype))]
+        return [dc.PatchMeta(attrs=attrs, coords=coords, dtype=str(dataset.dtype))]
 
     def read_array(
         self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""

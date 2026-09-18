@@ -316,10 +316,11 @@ class AdaptiveSpectralFilter(PatchProcessor):
         )
         return window
 
-    def plan(self, patch, out):
-        """Return the selected axes, and the window and overlap along each."""
-        window = self.geometry(patch)
-        return {"axes": window.axes, "size": window.size, "overlap": window.overlap}
+    def get_metadata(self, meta):
+        """Return the metadata as it is, and the axes, window and overlap."""
+        window = self.geometry(meta)
+        plan = {"axes": window.axes, "size": window.size, "overlap": window.overlap}
+        return meta, plan
 
     def kernel(self, data, *, axes, size, overlap):
         """Filter every batch over the selected axes and stack the results."""

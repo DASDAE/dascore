@@ -43,13 +43,15 @@ class ODH4V1(FiberIO):
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Scan an ODH4 file, return summary info about the contents."""
         file_attrs = _read_attrs(resource)
         coords = _get_coords(file_attrs, resource["raw_data"].shape)
         attrs = ODH4PatchAttrs.model_validate(_get_attrs_dict(file_attrs))
         return [
-            dc.Patch(attrs=attrs, coords=coords, dtype=str(resource["raw_data"].dtype))
+            dc.PatchMeta(
+                attrs=attrs, coords=coords, dtype=str(resource["raw_data"].dtype)
+            )
         ]
 
     def read_array(

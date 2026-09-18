@@ -31,7 +31,7 @@ class SR4731V200(FiberIO):
 
     def get_metadata(
         self, resource: BinaryReader, *, snap: snap_type = True
-    ) -> list[dc.Patch]:
+    ) -> list[dc.PatchMeta]:
         """Scan an SR-4731 SOR file."""
         attrs = _get_patch_attrs(resource, SR4731PatchAttrs)
         return [attrs]

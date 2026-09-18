@@ -79,7 +79,7 @@ def _get_version_data_node(root):
     return version, data_node
 
 
-def _scan_terra15(h5_fi, data_node, extras=None, snap=True) -> list[dc.Patch]:
+def _scan_terra15(h5_fi, data_node, extras=None, snap=True) -> list[dc.PatchMeta]:
     """Scan a terra15 file, return metadata."""
     out = {} if extras is None else dict(extras)
     out.update(_get_default_attrs(h5_fi.attrs))
@@ -89,7 +89,7 @@ def _scan_terra15(h5_fi, data_node, extras=None, snap=True) -> list[dc.Patch]:
     }
     coord_manager = get_coord_manager(coords=coords, dims=tuple(coords))
     return [
-        dc.Patch(
+        dc.PatchMeta(
             attrs=PatchAttrs.from_dict(out),
             coords=coord_manager,
             dtype=str(data_node["data"].dtype),
