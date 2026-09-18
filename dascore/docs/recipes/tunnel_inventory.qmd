@@ -1,8 +1,25 @@
 ---
-title: A Tunnel Inventory
+keywords: [inventory, geometry, deployment, validation]
+title: Create an inventory
+description: Create, validate, repair, serialize, and attach an inventory using a worked tunnel deployment.
 execute:
   warning: false
 ---
+
+Use an inventory to describe the observing system independently of the files containing its measurements. Start from recorded deployment facts; the tunnel example below shows how the pieces fit together.
+
+# Workflow
+
+1. Gather known identity, resource, survey, coupling, acquisition, and validity-time information. Keep unknown deployment facts explicit. Do not invent serial numbers, coordinates, dates, or installation details to fill a schema.
+2. Separate owned resources from components on the optical path, geometry, coupling, labels, and acquisition configuration. Model a continuous run with a shared break history as one fiber array and path.
+3. Use the installed schema's canonical attributes and declared units. Distinguish instrument distance, optical distance, and survey coordinates, including their reference frame. Represent winding and other geometry through coordinate mappings rather than ad hoc corrections.
+4. Load the authored description with `dc.inventory(...)` to validate schemas, references, and track bounds. Repair source mistakes using evidence; represent a changed deployment with a new dated epoch rather than overwriting its history.
+5. Serialize with `inventory.io.to_yaml()`, reload with `dc.inventory(text)`, and compare the result. The final example below performs this round trip.
+6. Attach the inventory to a small representative spool with matching acquisition keys and recording times. Check selected regions and enriched coordinates, including unknown positions. Test epoch boundaries when configuration or geometry changes during the data.
+
+Consult `python -m dascore doc Inventory` with the selected environment's Python executable, and read the relevant field or method documentation when adapting the example to a different deployment.
+
+# Tunnel example
 
 This end-to-end [inventory](../tutorial/inventory.qmd) example models an underground tunnel deployment from survey files through enriched patches. A 1500 m telemetry cable feeds trenched fiber, a buried coil, and three instrumented boreholes.
 
@@ -321,10 +338,3 @@ assert dc.inventory(text) == repaired
 ```
 
 Spools auto-discover `.inventory/`, `.inventory.yaml`, `.inventory.yml`, or JSON from `model_dump_json` as `.inventory.json`.
-
-# Modeling rules
-
-- Model one continuous run with a shared break history as one fiber array and path.
-- Components are on the optical path; resources are owned objects, such as housings, that components reference.
-- Represent winding and other layout details in geometry rather than custom arithmetic.
-- Add a new epoch for a repair instead of editing history.

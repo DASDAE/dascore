@@ -326,6 +326,7 @@ class Patch(NamespaceOwner, PatchMeta):
     squeeze = dascore.proc.coords.squeeze
     append_dims = dascore.proc.coords.append_dims
     split_gaps = dascore.proc.coords.split_gaps
+    fill_gaps = dascore.proc.coords.fill_gaps
     transpose = dascore.proc.coords.transpose
     add_distance_to = dascore.proc.coords.add_distance_to
     enrich = dascore.proc.enrich
@@ -471,6 +472,13 @@ class Patch(NamespaceOwner, PatchMeta):
     hilbert = transform.hilbert
     envelope = transform.envelope
     phase_weighted_stack = transform.phase_weighted_stack
+    median_frequency = transform.median_frequency
+    spectral_centroid = transform.spectral_centroid
+    spectral_peak_frequency = transform.spectral_peak_frequency
+    spectral_peak_amplitude = transform.spectral_peak_amplitude
+    spectral_entropy = transform.spectral_entropy
+    spectral_kurtosis = transform.spectral_kurtosis
+    spectral_flatness = transform.spectral_flatness
 
 
 # The operations written as `PatchProcessor` subclasses are bound here: they

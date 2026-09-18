@@ -72,6 +72,10 @@ _SOURCE_COLUMNS = (
 )
 _PATCH_LOCAL_EMPTY = "_patch_local_empty"
 
+# Slack when deciding which side of a grid position a window edge falls on,
+# so an edge a float rounding error short of a position still holds it.
+_GRID_SNAP_RTOL = 1e-9
+
 
 @dataclass(frozen=True)
 class ChunkPlan:
@@ -1218,11 +1222,15 @@ def _carried_columns(
         if has_dims and not pd.isnull(dims_val):
             dim_names = set(str(dims_val).split(","))
         dim_names.discard(name)
-        # a kept identity brings the exact grid it describes
+        # a kept identity brings the exact grid it describes, and the
+        # dtype that grid's values are stated in: a row is all an output
+        # with no members has to rebuild the coordinate from, and an
+        # integer coordinate rebuilt from the frame's float envelope
+        # would not match the same coordinate on its neighbours
         part_cols = [
             key
             for x in sorted(dim_names)
-            for suffix in ("_def_key", "_grid")
+            for suffix in ("_def_key", "_grid", "_coord_dtype")
             if (key := f"_{x}{suffix}") in columns
         ]
         coord_names = set(police_dims[part].split(",")) | {name}
@@ -1505,6 +1513,7 @@ def build_chunk_plan(
     conflict: Literal["drop", "raise", "keep_first"] = "raise",
     group=None,
     missing_dim: Literal["raise", "drop"] = "raise",
+    fill_value=None,
     **kwargs,
 ) -> ChunkPlan:
     """
@@ -1556,6 +1565,7 @@ def build_chunk_plan(
         keep_partial=keep_partial,
         snap_coords=snap_coords,
         tolerance=tolerance,
+        fill_value=fill_value,
         conflict=conflict,
         missing_dim=missing_dim,
         group=_resolve_group_attrs(group, set(df.columns)),
@@ -1572,12 +1582,15 @@ def build_chunk_plan(
     labels, forced_merge = _partition(
         df, name, params["group"], tolerance, params["sampling_group_tolerance"]
     )
-    if forced_merge:
+    if forced_merge and fill_value is None:
+        # with a fill value the holes are filled, so the outputs are
+        # evenly sampled after all and there is nothing to warn about
         msg = (
             f"There is a gap in the patch along dimension {name} but a "
             f"merge tolerance of {tolerance} was used to force merging "
             "the patches. As a result, some patches in the chunked spool "
-            "may be unevenly sampled, or have their sampling rate increased."
+            "are unevenly sampled. Pass fill_value to fill the missing "
+            "samples instead."
         )
         warnings.warn(msg, UserWarning, stacklevel=_user_stacklevel())
     per_partition = _needs_partition_resolution(value, overlap)
@@ -1669,6 +1682,17 @@ def build_chunk_plan(
                 deferred = exc
                 break
             starts_p, stops_p = start_stop[:, 0], start_stop[:, 1]
+            if fill_value is not None:
+                starts_p, stops_p, on_grid = _grid_snapped(
+                    starts_p, stops_p, g_starts[part], abs(part_step)
+                )
+                starts_p, stops_p = starts_p[on_grid], stops_p[on_grid]
+                # A window can hold no position at all once snapped -- a
+                # partition whose envelope a pending selection resolved
+                # against the patch need not start on the grid -- and a
+                # partition of nothing but those produces no output.
+                if not len(starts_p):
+                    continue
         active[part] = True
         n_out = len(starts_p)
         ids_p = np.arange(next_id, next_id + n_out)
@@ -1698,8 +1722,11 @@ def build_chunk_plan(
             total = int(m_counts.sum())
         # Plan invariant: every published output has at least one member.
         # An advertised row that cannot assemble is never surfaced as a
-        # runtime error; it is not surfaced at all.
-        fed = m_counts > 0
+        # runtime error; it is not surfaced at all. A fill value lifts
+        # that: a window lying wholly inside a bridged hole has no source
+        # to draw from and is assembled from fill alone, so the outputs
+        # cover the partition evenly instead of skipping the hole.
+        fed = np.ones(n_out, dtype=bool) if fill_value is not None else m_counts > 0
         fed_counts[part] = int(fed.sum())
         out_starts.append(starts_p[fed])
         out_stops.append(stops_p[fed])
@@ -1719,6 +1746,9 @@ def build_chunk_plan(
                 # per-output dtype pools are simple slices
                 kdt = kdtypes[lo_k:hi_k]
                 bounds = np.cumsum(m_counts) - m_counts
+                # an all-fill output draws from no member, so it is the
+                # partition, not its own pool, which names its dtype
+                whole = _combined_dtype(pd.Series(part_dtypes, dtype=object))
                 combined = [
                     _combined_dtype(
                         pd.Series(
@@ -1726,6 +1756,8 @@ def build_chunk_plan(
                             dtype=object,
                         )
                     )
+                    if m_counts[out]
+                    else whole
                     for out in np.flatnonzero(fed)
                 ]
                 dtype_parts.append(
@@ -2291,6 +2323,28 @@ def _concatenated_steps(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
     contiguous = pd.Series(follows).groupby(codes).all()
     first = by_output.first()
     return first.where(one_step & contiguous).to_numpy()
+
+
+def _grid_snapped(starts, stops, origin, step):
+    """
+    Window edges moved onto the grid the partition's samples sit on.
+
+    A chunk length need not be a whole number of samples, so an edge can
+    fall between two positions. A filled output builds its coordinate
+    from the envelope its row states, so that envelope has to be the
+    first and last position the window actually holds -- otherwise the
+    coordinate is anchored between samples and every label it carries is
+    wrong. Returns the snapped edges and a mask dropping any window which
+    holds no position at all.
+    """
+    lo = np.ceil((starts - origin) / step - _GRID_SNAP_RTOL)
+    hi = np.floor((stops - origin) / step + _GRID_SNAP_RTOL)
+    # An edge a pending selection left unstated has no position, which
+    # the comparison already answers False; the cast still has to see a
+    # number, so it is given one which the mask then drops.
+    keep = hi >= lo
+    lo, hi = (np.where(keep, x, 0).astype(np.int64) for x in (lo, hi))
+    return origin + lo * step, origin + hi * step, keep
 
 
 def _snapped_cuts(cuts, start, step) -> list:

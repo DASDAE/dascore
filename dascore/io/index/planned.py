@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io.core import FiberIO, _required_resource_type
@@ -52,7 +53,11 @@ from dascore.utils.chunk_plan import (
 )
 from dascore.utils.io import IOResourceManager
 from dascore.utils.patch import concatenate_planned
-from dascore.utils.patch_assembly import PatchAssembler
+from dascore.utils.patch_assembly import (
+    PatchAssembler,
+    fill_to_row,
+    patch_from_fill,
+)
 from dascore.utils.paths import is_memory_uri
 
 # Row columns which name dc.read's own keyword arguments; passing one along
@@ -118,6 +123,15 @@ def _num(value) -> float | None:
 def _row_str(value) -> str:
     """A row cell as a string, with the frame's nulls (None/NaN) as ""."""
     return "" if value is None or pd.isnull(value) else str(value)
+
+
+def _numeric_dtype_str(stored) -> str:
+    """The numeric dtype a row states for a coordinate, else float64."""
+    if not isinstance(stored, str) or not stored:
+        return "float64"
+    # the column is written from a real dtype, as _row_values also assumes
+    dtype = np.dtype(stored)
+    return str(dtype) if np.issubdtype(dtype, np.number) else "float64"
 
 
 def _coord_record_from_row(
@@ -199,7 +213,11 @@ def _coord_record_from_row(
         lo, hi = float(lo), float(hi)
         # the sign says which way the coordinate runs, as ingest records it
         step = None if step is None else float(step)
-        dtype = "float64"
+        # The frame holds every numeric envelope as float, but the row
+        # says what the values really are. Publishing float64 regardless
+        # would make an output rebuilt from its row disagree with the
+        # same coordinate on the patches beside it.
+        dtype = _numeric_dtype_str(row.get(f"_{name}_coord_dtype"))
     if isinstance(step, pd.Timedelta):
         step = step.to_timedelta64()
     if step is not None and not step:
@@ -522,6 +540,7 @@ class PlanResolver(PatchResolver):
         origin_path=None,
         stamped: tuple[str, ...] = (),
         lossy: bool = False,
+        output_rows: pd.DataFrame | None = None,
     ):
         if "output_id" not in member_rows.columns:
             msg = "member_rows must carry an output_id column."
@@ -544,6 +563,17 @@ class PlanResolver(PatchResolver):
         # sources, so re-planning over them would load back what it
         # dropped. See `collapse_working_df`.
         self.lossy = bool(lossy)
+        # What each output advertises about itself, which only a filling
+        # plan needs: the row reaching `resolve` is the caller's, and a
+        # nested plan loading this one's outputs passes its own member
+        # row instead -- trim instructions, with no envelope to fill to.
+        self._output_rows: dict[int, Mapping] = {}
+        # a sibling's coordinates per output which has none of its own
+        self._fill_coords: dict[int, CoordManager] = {}
+        if merge_kwargs.get("fill_value") is not None and output_rows is not None:
+            self._output_rows = {
+                int(row["output_id"]): row for row in output_rows.to_dict("records")
+            }
 
     def live_entries(self) -> dict[str, dc.Patch]:
         """Expose the loader's live registry (for absorption/transfer)."""
@@ -733,7 +763,14 @@ class PlanResolver(PatchResolver):
         """Assemble the output patch a plan row describes."""
         output_id = int(_row_source_patch_key(row))
         members = self.member_rows[self.member_rows["output_id"] == output_id]
-        assert len(members), "no plan members found for output row"
+        fill_value = self.merge_kwargs.get("fill_value")
+        fill_row = self._output_rows.get(output_id) if fill_value is not None else None
+        if not len(members):
+            # only a fill plan publishes an output no source feeds
+            assert fill_row is not None, "no plan members found for output row"
+            coords = self._sibling_coords(output_id)
+            filled = patch_from_fill(coords, fill_row, self.dim, fill_value)
+            return self._stamp(filled, row)
         if self.mode == "identity":
             # one untouched member per output; residuals apply at load
             assert len(members) == 1
@@ -754,7 +791,37 @@ class PlanResolver(PatchResolver):
             assembled = self._assembler()._patch_from_instruction_df(joined)
             assert len(assembled) == 1
             patch = assembled[0]
+            if fill_row is not None:
+                patch = fill_to_row(
+                    patch,
+                    self.dim,
+                    fill_row,
+                    fill_value,
+                    self.merge_kwargs["tolerance"],
+                )
         return self._stamp(patch, row)
+
+    def _sibling_coords(self, output_id: int):
+        """
+        The coordinates of the nearest output a source actually feeds.
+
+        An output with no members still has to look like the ones beside
+        it -- the same coordinates, values, dtypes and units on every
+        dimension but the chunked one -- and only a real patch states
+        those; an envelope cannot restate an arbitrary array, and the
+        frame holds every numeric one as float. Outputs are numbered in
+        order, so the nearest fed one is a neighbour in the same
+        partition. One member is read per hole and its coordinates kept,
+        never its data.
+        """
+        ids = self.member_rows["output_id"].to_numpy()
+        assert len(ids), "a fill plan with no members anywhere has no structure"
+        nearest = int(ids[np.argmin(np.abs(ids - output_id))])
+        if nearest not in self._fill_coords:
+            rows = self.member_rows[self.member_rows["output_id"] == nearest]
+            patch = self._load_member(rows.iloc[0].to_dict())
+            self._fill_coords[nearest] = patch.coords
+        return self._fill_coords[nearest]
 
     def _stamp(self, patch: dc.Patch, row: Mapping) -> dc.Patch:
         """
@@ -909,6 +976,7 @@ def derived_catalog(
         origin_path=origin_path,
         stamped=stamped,
         lossy=lossy,
+        output_rows=plan.outputs,
     )
     backend = get_backend(":memory:")
     # residual selections trim at load; identity claims (def keys) for
@@ -921,6 +989,8 @@ def derived_catalog(
     aux_info = _aux_coord_info(
         sources, trims, name, coord_dims_map, trimmed_dims, concat=mode == "concat"
     )
+    if merge_kwargs.get("fill_value") is not None:
+        aux_info = _aux_info_for_unfed(aux_info, outputs)
     records = _output_records(
         outputs,
         token,
@@ -931,6 +1001,30 @@ def derived_catalog(
         records = _with_parent_runs(records, parent.backend, trims, sources, name)
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
+
+
+def _aux_info_for_unfed(aux_info: Mapping, outputs: pd.DataFrame) -> dict:
+    """
+    Lend each output no source feeds its nearest sibling's auxiliary coords.
+
+    Auxiliary coordinates ride a dimension this plan did not chunk, so
+    every output of a partition describes them identically; one built
+    from fill alone has no member to read them off, and a row silently
+    missing them would conflict with its siblings' the moment the filled
+    spool was merged again.
+    """
+    # A pending sample or relative selection keeps the planner from
+    # describing the members at all, so there is nothing to lend.
+    if not aux_info:
+        return {}
+    known = np.array(sorted(aux_info))
+    out = dict(aux_info)
+    for value in outputs["output_id"]:
+        output_id = int(value)
+        if output_id in out:
+            continue
+        out[output_id] = aux_info[int(known[np.argmin(np.abs(known - output_id))])]
+    return out
 
 
 def _with_parent_runs(
@@ -998,10 +1092,17 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
     their sources, so a re-plan which merges them back is entitled to
     load a source whole. A plan which drops samples — channel selection
     keeping some channels of a patch and not others — breaks exactly
-    that, and collapsing it would quietly load back what it removed.
+    that, and collapsing it would quietly load back what it removed. A
+    plan which *adds* samples, by filling a bridged hole, breaks it the
+    same way and is the second exception.
     """
     resolver = catalog.resolver
     if not isinstance(resolver, PlanResolver) or resolver.lossy:
+        return None
+    # A fill plan is the same exception from the other side: its outputs
+    # hold samples no member has, so a re-plan over the members would
+    # quietly drop the ones it added.
+    if resolver.merge_kwargs.get("fill_value") is not None:
         return None
     if any(samples or relative for _, samples, relative in catalog.residuals):
         return None

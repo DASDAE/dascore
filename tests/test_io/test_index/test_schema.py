@@ -41,6 +41,28 @@ class TestSchemaValidation:
         with pytest.raises(InvalidIndexError, match="missing tables"):
             get_backend(path)
 
+    def test_missing_table_rejected(self, tmp_path):
+        """A current index missing one of its tables asks to be rebuilt."""
+        path = tmp_path / "index.sqlite3"
+        get_backend(path).close()
+        con = sqlite3.connect(path)
+        con.execute("DROP TABLE coord_variants")
+        con.commit()
+        con.close()
+        with pytest.raises(InvalidIndexError, match=r"missing tables \['coord_var"):
+            get_backend(path)
+
+    def test_missing_trigger_rejected(self, tmp_path):
+        """An index which lost a counting trigger would miscount; it is refused."""
+        path = tmp_path / "index.sqlite3"
+        get_backend(path).close()
+        con = sqlite3.connect(path)
+        con.execute("DROP TRIGGER count_patch_added")
+        con.commit()
+        con.close()
+        with pytest.raises(InvalidIndexError, match="missing triggers"):
+            get_backend(path)
+
     def test_old_version_rejected(self, tmp_path):
         """Prototype schemas require an explicit delete and rebuild."""
         path = tmp_path / "old.sqlite3"

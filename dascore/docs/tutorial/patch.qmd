@@ -80,6 +80,19 @@ Dimension coordinates usually share a dimension's name, but that is not required
 
 String coordinates support exact matches, wildcards, compiled regular expressions, masks, and sorting, but not units or numeric ranges. See [String coordinates](coords.qmd#string-coordinates) for examples and literal-label caveats.
 
+## Metadata without data
+
+[`PatchMeta`](`dascore.PatchMeta`) is everything a patch is apart from its data: coordinates, attrs and dtype. Scanning a file returns these, so a patch's shape and extents can be read without loading samples.
+
+```{python}
+meta = patch.drop_data()
+print(meta.shape, meta.dtype)
+
+patch_again = meta.to_patch(patch.data)
+```
+
+`drop_data` and `to_patch` are inverses. Operations which only describe data, such as `rename_coords`, run on a `PatchMeta`; those which compute samples need a `Patch`.
+
 ## Attributes and summaries
 
 `Patch.attrs` contains validated, non-coordinate metadata such as `data_units`, `acquisition_key`, `gauge_length`, and processing history. Coordinate bounds and steps are derived through `Patch.summary` rather than duplicated in `attrs`.

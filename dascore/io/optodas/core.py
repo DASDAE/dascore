@@ -12,7 +12,12 @@ from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.misc import unbyte
 
-from .utils import _get_opto_das_attrs, _get_opto_das_version_str
+from .utils import (
+    _apply_data_scale,
+    _get_data_dtype,
+    _get_opto_das_attrs,
+    _get_opto_das_version_str,
+)
 
 
 class OptoDASPatchAttrs(dc.PatchAttrs):
@@ -43,7 +48,9 @@ class OptoDASV8(FiberIO):
         attrs, coords = _get_opto_das_attrs(resource, snap=snap)
         attrs = OptoDASPatchAttrs.from_dict(attrs)
         return [
-            dc.PatchMeta(attrs=attrs, coords=coords, dtype=str(resource["data"].dtype))
+            dc.PatchMeta(
+                attrs=attrs, coords=coords, dtype=str(_get_data_dtype(resource))
+            )
         ]
 
     def read_array(
@@ -51,7 +58,8 @@ class OptoDASV8(FiberIO):
     ) -> np.ndarray:
         """Slice the ``data`` dataset directly, in the header's dimension order."""
         dims = tuple(unbyte(x) for x in resource["header"]["dimensionNames"])
-        return slice_dataset(resource["data"], dims, windows)
+        data = slice_dataset(resource["data"], dims, windows)
+        return _apply_data_scale(resource, data)
 
 
 class OptoDASV9(OptoDASV8):

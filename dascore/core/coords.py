@@ -1008,7 +1008,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         """
         return self
 
-    def simplify(self, tolerance=None) -> BaseCoord:
+    def simplify(self, tolerance=None, keep_step: bool = False) -> BaseCoord:
         """
         Return the simplest coordinate representing the same values.
 
@@ -1022,6 +1022,10 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             The maximum amount any coordinate value may change. For time-like
             coordinates this is a timedelta (numeric values interpreted as
             seconds). None or 0 permit only exact (lossless) simplifications.
+        keep_step
+            If True, only re-fit at the segments' own step, so missing
+            samples stay missing however large the tolerance. Merging uses
+            this: a hole is data that is absent, not a slower sampling rate.
 
         Notes
         -----
@@ -1860,6 +1864,32 @@ def _on_grid(deltas, step) -> np.ndarray:
         msg = f"Values are not on a grid of step {step}: spacing {deltas[off][0]}."
         raise CoordError(msg)
     return counts.astype(np.int64)
+
+
+def _keeps_step(segments, ascending: bool) -> bool:
+    """
+    Whether any seam between `segments` skips a position of their grid.
+
+    A seam a whole number of steps wider than one is a hole: the samples
+    for those positions are absent, and re-fitting the run to one range
+    would spread the hole over it, reaching the last sample early and
+    relabeling every sample after the hole. A seam which is *not* a whole
+    number of steps is misalignment rather than absent data -- the jitter
+    of labels rounded on their way to a file, or members trimmed where
+    they overlapped -- and remains the tolerance's business.
+    """
+    for prev, nxt in itertools.pairwise(segments):
+        step = prev.step if not _is_null(prev.step) else nxt.step
+        # two adjacent segments which both state no step would have fused
+        # into one array rather than being held apart as segments
+        assert not _is_null(step)
+        before = prev.max() if ascending else prev.min()
+        after = nxt.min() if ascending else nxt.max()
+        steps = abs(after - before) / abs(step)
+        whole = np.round(steps)
+        if whole > 1 and abs(steps - whole) <= _GRID_RTOL * whole:
+            return False
+    return True
 
 
 def _to_tick(value) -> int:
@@ -3416,7 +3446,7 @@ class CoordSegmented(BaseCoord):
         """
         return self._as_monotonic().snap()
 
-    def simplify(self, tolerance=None) -> BaseCoord:
+    def simplify(self, tolerance=None, keep_step: bool = False) -> BaseCoord:
         """
         Return the simplest coordinate representing the same values.
 
@@ -3431,31 +3461,42 @@ class CoordSegmented(BaseCoord):
             The maximum amount any coordinate value may change. For time-like
             coordinates this is a timedelta (numeric values interpreted as
             seconds). None or 0 permit only exact simplifications.
+        keep_step
+            If True, a re-fit may not change the segments' declared step,
+            so a hole stays a hole however large the tolerance.
         """
         tol = self._get_tolerance(tolerance)
         result = []
         run = [self.segments[0]]
-        run_fit = self._fit_run(run, tol)
+        run_fit = self._fit_run(run, tol, keep_step)
         for seg in self.segments[1:]:
             trial = [*run, seg]
-            fit = self._fit_run(trial, tol)
+            fit = self._fit_run(trial, tol, keep_step)
             if fit is not None:
                 run, run_fit = trial, fit
             else:
                 result.append(run_fit if run_fit is not None else run[0])
-                run, run_fit = [seg], self._fit_run([seg], tol)
+                run, run_fit = [seg], self._fit_run([seg], tol, keep_step)
         result.append(run_fit if run_fit is not None else run[0])
         return self._rebuild(result)
 
     def _get_tolerance(self, tolerance):
-        """Coerce the tolerance to the dtype expected for value deviations."""
+        """
+        Coerce the tolerance to the dtype expected for value deviations.
+
+        None is no bound at all, which is what an infinite count asks
+        for: a finite excess cannot express it, and multiplying infinity
+        by a step gives NaT rather than a bound to compare against.
+        """
         if isinstance(tolerance, GapTolerance) and tolerance.count is not None:
+            if not np.isfinite(tolerance.count):
+                return None
             # a count of steps is measured against the runs' own step
             steps = [abs(x.step) for x in self.segments if not _is_null(x.step)]
             tolerance = tolerance.count * get_middle_value(steps) if steps else 0
         return self._gap_tolerance(tolerance).excess
 
-    def _fit_run(self, run, tol) -> CoordRange | None:
+    def _fit_run(self, run, tol, keep_step: bool = False) -> CoordRange | None:
         """Fit a run of segments to a single range within tol, or None."""
         if len(run) == 1 and isinstance(run[0], CoordRange):
             return run[0]
@@ -3481,7 +3522,8 @@ class CoordSegmented(BaseCoord):
         ).change_length(n)
         actual = np.concatenate([x.values for x in run])
         deviation = np.max(np.abs(candidate.values - actual))
-        if deviation > tol:
+        too_far = tol is not None and deviation > tol
+        if too_far or (keep_step and not _keeps_step(run, ascending)):
             return None
         return candidate
 
@@ -3702,6 +3744,159 @@ def concat_coords(*coords, units=None) -> BaseCoord:
     if len(segments) == 1:
         return segments[0]
     return CoordSegmented(segments=segments)
+
+
+def _grid_pieces(coord: BaseCoord) -> list[tuple[int, CoordRange]]:
+    """
+    The runs of consecutive grid positions, each with its source offset.
+
+    A range is one run; an array declaring a step splits at its holes, and
+    a lone sample without a step takes the other runs' step.
+    """
+    segments = coord.segments if isinstance(coord, CoordSegmented) else (coord,)
+    steps = [x.step for x in segments if not _is_null(x.step)]
+    pieces, offset = [], 0
+    for seg in segments:
+        step = seg.step
+        if _is_null(step) and len(seg) == 1 and steps:
+            step = steps[0]
+        if isinstance(seg, CoordRange):
+            pieces.append((offset, seg))
+        elif isinstance(seg, CoordMonotonicArray) and not _is_null(step):
+            values = seg.values
+            counts = _on_grid(_diffs(values), step)
+            edges = np.flatnonzero(counts != 1) + 1
+            for first, stop in itertools.pairwise([0, *edges.tolist(), len(values)]):
+                piece = get_coord(
+                    start=values[first],
+                    step=step,
+                    shape=(stop - first,),
+                    units=seg.units,
+                )
+                # floats pass _on_grid per spacing; the run must not drift
+                drift = np.abs(piece.values - values[first:stop])
+                if values.dtype.kind == "f" and np.max(drift) > abs(step) / 2:
+                    msg = (
+                        f"Values drift more than half a step from the grid of "
+                        f"step {step}; use snap_coords before filling gaps."
+                    )
+                    raise CoordError(msg)
+                pieces.append((offset + first, piece))
+        else:
+            msg = (
+                "Filling gaps needs a coordinate with a declared step; this one "
+                "has none. Use snap_coords or resample to put it on a grid first."
+            )
+            raise CoordError(msg)
+        offset += len(seg)
+    return pieces
+
+
+def _same_step(first: CoordRange, exact, other: CoordRange) -> bool:
+    """
+    Whether a run shares the first run's step, `exact` being its exact form.
+
+    Exactly for ticks; for floats, closely enough that the run drifts from
+    the first run's grid by a negligible fraction of a step.
+    """
+    if exact is not None and (other_exact := other.step_exact) is not None:
+        return exact == other_exact
+    ratio = float(other.step) / float(first.step)
+    return bool(abs(ratio - 1) * max(len(other) - 1, 1) <= _GRID_RTOL)
+
+
+def _grid_position(anchor: CoordRange, label) -> int:
+    """The position on the anchor's grid nearest a label."""
+    if not anchor._exact:
+        return int(np.round((label - anchor.start) / anchor.step))
+    num, den, offset = anchor._grid_terms
+    tick, start = _to_tick(label), anchor._start_tick
+    after = int(anchor._index_of([tick], forward=True)[0])
+    # the labels either side as the integer ticks _labels casts to dtype,
+    # so the comparison stays in Python integers and cannot wrap
+    ticks = [start + (offset + pos * num) // den for pos in (after - 1, after)]
+    return after - 1 if abs(ticks[0] - tick) <= abs(ticks[1] - tick) else after
+
+
+def _max_missing(step: CoordRange, coord: BaseCoord, limit, samples: bool):
+    """The most missing positions a filled hole may have, or None for any."""
+    if limit is None:
+        return None
+    if samples:
+        if not _is_int(limit) or limit < 0:
+            msg = f"A sample limit must be a non-negative integer, got {limit!r}."
+            raise ParameterError(msg)
+        return int(limit)
+    tolerance = coord._gap_tolerance(limit)
+    if tolerance.count is not None:
+        msg = "Pass a count of missing samples with samples=True instead."
+        raise ParameterError(msg)
+    excess = tolerance.excess
+    if (exact := step.step_exact) is not None:
+        if is_timedelta64(excess):
+            # the limit was rounded to whole nanoseconds; allow that rounding
+            excess = Fraction(2 * int(to_int(excess)) + 1, 2 * _NS_PER_S)
+        return int(Fraction(excess) // abs(exact))
+    return math.floor(float(excess) / abs(float(step.step)) * (1 + _GRID_RTOL))
+
+
+def _fill_layout(
+    coord: BaseCoord, limit=None, samples: bool = False
+) -> tuple[BaseCoord, tuple[tuple[int, int, int], ...]] | None:
+    """
+    Place every run of a coordinate on one grid, filling the holes between.
+
+    Returns the filled coordinate and, per run, its ``(source start, source
+    stop, target start)``, or None when there is nothing to fill. `limit`
+    and `samples` are read as in `Patch.fill_gaps`; holes past the limit
+    stay as seams. An off-grid run moves to the nearest position, and two
+    runs on one position raise.
+    """
+    if isinstance(coord, CoordRange) or len(coord) < 2:
+        return None
+    pieces = _grid_pieces(coord)
+    first = pieces[0][1]
+    first_exact = first.step_exact
+    for _, piece in pieces[1:]:
+        if not _same_step(first, first_exact, piece):
+            msg = (
+                f"Runs are sampled at different steps ({first.step} and "
+                f"{piece.step}); resample them to one step before filling gaps."
+            )
+            raise CoordError(msg)
+    max_missing = _max_missing(first, coord, limit, samples)
+    # each group: its anchor run, its filled length, and its runs' blocks
+    groups: list[list] = []
+    for source, piece in pieces:
+        stop = source + len(piece)
+        if groups:
+            anchor, length, blocks = groups[-1]
+            position = _grid_position(anchor, piece.start)
+            missing = position - length
+            if missing < 0:
+                msg = (
+                    f"Samples near {piece.start} land on the same grid position "
+                    f"as the ones before them, so the gap cannot be filled."
+                )
+                raise CoordError(msg)
+            if max_missing is None or missing <= max_missing:
+                blocks.append((source, stop, position))
+                groups[-1][1] = position + len(piece)
+                continue
+        groups.append([piece, len(piece), [(source, stop, 0)]])
+    if all(len(blocks) == 1 for *_, blocks in groups):
+        return None
+    coords, out, offset = [], [], 0
+    for anchor, length, blocks in groups:
+        if len(blocks) == 1:  # untouched: keep the labels as they are
+            coords.append(coord[blocks[0][0] : blocks[0][1]])
+        else:
+            coords.append(anchor.change_length(length))
+        out.extend((start, stop, offset + pos) for start, stop, pos in blocks)
+        offset += length
+    # a lone group is a range, which concat_coords returns unchanged
+    new = concat_coords(*coords)
+    return new, tuple(out)
 
 
 def _get_coord_kind(

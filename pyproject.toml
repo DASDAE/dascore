@@ -71,6 +71,8 @@ dascore = "dascore.cli:main"
 
 [project.optional-dependencies]
 
+agents = ["typer>=0.27.2"]
+
 extras = [
     # A spool converts to a lazily-loaded DataTree (xarray core since
     # 2024.10) whose time coordinates are lazy transform indexes — the
@@ -111,7 +113,15 @@ docs = [
     "jupyter-server",
 ]
 
+test_base = [
+    "dascore[agents]",
+    "pytest",
+    "pytest-timeout",
+    "pytest-xdist",
+]
+
 test = [
+    "dascore[test_base]",
     "build",
     "jinja2",  # documentation-link regression tests import the website renderer
     "markdown-it-py",
@@ -124,10 +134,7 @@ test = [
     "coverage>=7.4,<8",
     "pytest-cov>=4",
     "pre-commit",
-    "pytest",
-    "pytest-timeout",
     "pytest-codeblocks",
-    "pytest-xdist",
     "s3fs",
     "starlette",
     "twine",
@@ -139,7 +146,7 @@ profile_base = [
     "pytest-profiling",
 ]
 
-all = ["dascore[extras]"]
+all = ["dascore[extras]", "dascore[agents]"]
 
 profile = ["dascore[test]", "dascore[profile_base]"]
 
@@ -341,10 +348,11 @@ exclude = ["dascore/docs"]
 
 # No type-checking rule is ignored globally.
 
-# These files lazily import optional or untyped modules (xarray, numba,
+# These files import optional or untyped modules (typer, xarray, numba,
 # h5py.h5r) that are not installed in the pre-commit hook's environment.
 [[tool.ty.overrides]]
 include = [
+    "dascore/_cli.py",
     "dascore/compat.py",
     "dascore/utils/jit.py",
     "dascore/xarray/index.py",

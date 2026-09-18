@@ -33,13 +33,13 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 17 links a segmented
-# coordinate to each of its runs; version 16 stored each range
-# coordinate's exact grid and named the envelope columns by storage type;
-# version 15 stored source coordinate and numeric attribute dtypes. Earlier
-# indexes lack the metadata required for reconstruction and are rebuilt
-# when opened.
-INDEX_VERSION = 17
+# changes, not only when a column does. Version 18 counts patches and
+# coordinate variants; version 17 links a segmented coordinate to each of
+# its runs; version 16 stored each range coordinate's exact grid and named
+# the envelope columns by storage type; version 15 stored source coordinate
+# and numeric attribute dtypes. Earlier indexes lack the metadata required
+# for reconstruction and are rebuilt when opened.
+INDEX_VERSION = 18
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -69,6 +69,8 @@ class MetaDataRow(NamedTuple):
     index_version: int
     dascore_version: str
     last_indexed_ns: int
+    # every patch in the index, kept by the counting triggers
+    patch_count: int
 
 
 class SourceRow(NamedTuple):
@@ -216,6 +218,26 @@ class PatchCoordRow(NamedTuple):
     dtype: str  # source representation; shared definitions identify values
 
 
+class CoordVariantRow(NamedTuple):
+    """
+    A row of the coord_variants table: one per distinct stated coordinate.
+
+    Counts the whole-coordinate links (`run_index` 0) sharing a name,
+    dtype, kind, units and relativity, so coordinate discovery reads these
+    few rows rather than every link. Kept by the counting triggers;
+    `variant_key` is the other five as a JSON array, giving a tuple with
+    nullable members a unique identity.
+    """
+
+    variant_key: str
+    coord_name: str
+    dtype: str
+    value_kind: str
+    units: str | None
+    is_relative: bool | None
+    patch_count: int
+
+
 # The row class declaring each stored table.
 TABLE_ROWS = MappingProxyType(
     {
@@ -226,6 +248,7 @@ TABLE_ROWS = MappingProxyType(
         "attr_meta": AttrMetaRow,
         "coord_defs": CoordDefRow,
         "patch_coords": PatchCoordRow,
+        "coord_variants": CoordVariantRow,
     }
 )
 
@@ -290,6 +313,7 @@ TABLE_CONSTRAINTS = MappingProxyType(
             "FOREIGN KEY (patch_id) REFERENCES patches(patch_id) ON DELETE CASCADE",
             "FOREIGN KEY (coord_def_id) REFERENCES coord_defs(coord_def_id)",
         ),
+        "coord_variants": ("PRIMARY KEY (variant_key)",),
     }
 )
 
@@ -388,6 +412,44 @@ SPOOL_LATE_RENAMES = MappingProxyType(
 # descending run, whose start the envelope does not name -- so a query
 # need not scan them all.
 GRID_NEEDED = "step_denominator != 1 OR origin_offset != 0 OR step_numerator < 0"
+
+# A patch_coords row's coord_variants identity, given its alias; the row's
+# definition is always joined as `cd`.
+VARIANT_COLUMNS = "{0}.coord_name, {0}.dtype, cd.value_kind, cd.units, cd.is_relative"
+_NEW, _OLD = VARIANT_COLUMNS.format("NEW"), VARIANT_COLUMNS.format("OLD")
+_OLD_KEY = (
+    f"(SELECT json_array({_OLD}) FROM coord_defs cd "
+    "WHERE cd.coord_def_id = OLD.coord_def_id)"
+)
+# Triggers keeping the patch and coordinate variant counts. Living in the
+# database, they count every write however it arrives, including cascaded
+# deletes and rows written straight through SQL.
+TRIGGERS = MappingProxyType(
+    {
+        "count_patch_added": (
+            "AFTER INSERT ON patches BEGIN "
+            "UPDATE meta_data SET patch_count = patch_count + 1; END"
+        ),
+        "count_patch_removed": (
+            "AFTER DELETE ON patches BEGIN "
+            "UPDATE meta_data SET patch_count = patch_count - 1; END"
+        ),
+        "count_variant_added": (
+            "AFTER INSERT ON patch_coords WHEN NEW.run_index = 0 BEGIN "
+            f"INSERT INTO coord_variants SELECT json_array({_NEW}), {_NEW}, 1 "
+            "FROM coord_defs cd WHERE cd.coord_def_id = NEW.coord_def_id "
+            "ON CONFLICT (variant_key) "
+            "DO UPDATE SET patch_count = patch_count + 1; END"
+        ),
+        "count_variant_removed": (
+            "AFTER DELETE ON patch_coords WHEN OLD.run_index = 0 BEGIN "
+            "UPDATE coord_variants SET patch_count = patch_count - 1 "
+            f"WHERE variant_key = {_OLD_KEY}; "
+            "DELETE FROM coord_variants "
+            f"WHERE variant_key = {_OLD_KEY} AND patch_count = 0; END"
+        ),
+    }
+)
 INDEXES = (
     # whole coordinates only, so run links never lengthen a coordinate scan
     ("idx_pcoords_name", "patch_coords", "coord_name", "run_index = 0"),
