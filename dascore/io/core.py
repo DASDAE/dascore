@@ -42,6 +42,7 @@ from dascore.constants import (
     path_types,
     snap_type,
     time_select_type,
+    windows_type,
 )
 from dascore.core.coords import CoordSegmented
 from dascore.core.source import ArraySource
@@ -741,7 +742,7 @@ class FiberIO:
         raise NotImplementedError(msg)
 
     def read_array(
-        self, resource, windows: Sequence[tuple[int, int]] = (), key: str = ""
+        self, resource, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """
         Read one logical patch's array over half-open positional windows.
@@ -1018,7 +1019,7 @@ class H5ArrayMixin:
     get_metadata: Callable[..., list[dc.PatchMeta]]
 
     def read_array(
-        self, resource: H5Reader, windows: Sequence[tuple[int, int]] = (), key: str = ""
+        self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """Slice the dataset `key` names, defaulting to the metadata's own."""
         if not key:

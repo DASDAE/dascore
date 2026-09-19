@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.io.core import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.utils.io import BinaryReader, LocalBinaryReader
@@ -25,7 +23,7 @@ class SentekV5(FiberIO):
     def read_array(
         self,
         resource: LocalBinaryReader,
-        windows: Sequence[tuple[int, int]] = (),
+        windows: windows_type = (),
         key: str = "",
     ) -> np.ndarray:
         """Decode the stored layout into the metadata's axis order, then select."""

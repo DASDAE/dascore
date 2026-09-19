@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.core.source import ArraySource
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
@@ -55,7 +53,7 @@ class ProdMLV2_0(FiberIO):  # noqa
         return out
 
     def read_array(
-        self, resource: H5Reader, windows: Sequence[tuple[int, int]] = (), key: str = ""
+        self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """
         Slice one acquisition node's data array directly.

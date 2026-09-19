@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import importlib.util
-from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.core.source import ArraySource
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
@@ -122,7 +121,7 @@ class NetCDFCFV18(FiberIO):
         return None
 
     def read_array(
-        self, resource: H5Reader, windows: Sequence[tuple[int, int]] = (), key: str = ""
+        self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """
         Slice the payload variable through xarray.

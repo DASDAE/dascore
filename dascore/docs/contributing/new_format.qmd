@@ -9,11 +9,10 @@ Adding IO support requires a `FiberIO` subclass, a small fixture, common IO regi
 Create `dascore/io/jingle/__init__.py` and `core.py`. The module docstring should describe basic use and non-obvious format details.
 
 ```{python filename="dascore/io/jingle/core.py"}
-from collections.abc import Sequence
 
 import numpy as np
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO, ArraySource
 
 
@@ -38,7 +37,7 @@ class JingleV1(FiberIO):
             )
         ]
 
-    def read_array(self, resource, windows: Sequence[tuple[int, int]] = (), key: str = "") -> np.ndarray:
+    def read_array(self, resource, windows: windows_type = (), key: str = "") -> np.ndarray:
         """Read the positional sample windows in the metadata's order and dtype."""
 ```
 

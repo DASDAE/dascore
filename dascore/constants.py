@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import textwrap
-from collections.abc import Callable, Collection, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import partial
 from pathlib import Path
 from types import EllipsisType, MappingProxyType
@@ -54,6 +54,9 @@ namespace_select_type = Mapping[str, Any] | str | Iterable[str] | None
 
 # Reader snapping accepts all/none, one coordinate name, or a collection of names.
 snap_type = bool | str | Collection[str]
+
+# One `FiberIO.read_array` window per axis: whole, a slice, or (start, stop).
+windows_type = Sequence[tuple[int | None, int | None] | slice | None]
 
 # Number types
 numeric_types = int | float

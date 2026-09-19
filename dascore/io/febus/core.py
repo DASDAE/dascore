@@ -4,12 +4,10 @@ IO module for reading Febus data.
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.core.source import ArraySource
 from dascore.io import FiberIO
 from dascore.io.utils import resolve_keyed_source, slice_dataset
@@ -102,7 +100,7 @@ class Febus2(FiberIO):
         return out
 
     def read_array(
-        self, resource: H5Reader, windows: Sequence[tuple[int, int]] = (), key: str = ""
+        self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """
         Read one zone's window out of its block-structured data cube.
@@ -155,7 +153,7 @@ class FebusG1CSV1(FiberIO):
     def read_array(
         self,
         resource: TextReader,
-        windows: Sequence[tuple[int, int]] = (),
+        windows: windows_type = (),
         key: str = "",
     ) -> np.ndarray:
         """Decode CSV samples and select the requested positional window."""
@@ -197,7 +195,7 @@ class FebusMTXH5V1(FiberIO):
         ]
 
     def read_array(
-        self, resource: H5Reader, windows: Sequence[tuple[int, int]] = (), key: str = ""
+        self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """
         Slice the ``mtx`` dataset directly.
@@ -238,7 +236,7 @@ class FebusBSLH5V1(FiberIO):
         ]
 
     def read_array(
-        self, resource: H5Reader, windows: Sequence[tuple[int, int]] = (), key: str = ""
+        self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """
         Slice the ``bsl_data`` dataset directly.
@@ -278,7 +276,7 @@ class FebusT1V1(FiberIO):
         return [_scan_t1(resource, snap=snap)]
 
     def read_array(
-        self, resource: H5Reader, windows: Sequence[tuple[int, int]] = (), key: str = ""
+        self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """
         Slice the ``Data/Temperature`` dataset directly.

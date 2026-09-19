@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.utils.hdf5 import H5Reader
@@ -43,7 +41,7 @@ class Terra15FormatterV4(FiberIO):
         return _scan_terra15(resource, data_node, snap=snap)
 
     def read_array(
-        self, resource: H5Reader, windows: Sequence[tuple[int, int]] = (), key: str = ""
+        self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """
         Slice the data node directly.

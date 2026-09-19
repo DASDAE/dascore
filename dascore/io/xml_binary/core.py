@@ -2,14 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from xml.etree.ElementTree import ParseError
 
 import numpy as np
 from pydantic import ValidationError
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io import FiberIO
 from dascore.io.utils import resolve_keyed_source, slice_dataset
@@ -58,7 +57,7 @@ class XMLBinaryV1(FiberIO):
         return _paths_to_scan_patches(paths, metadata, attr_cls=BinaryPatchAttrs)
 
     def read_array(
-        self, resource, windows: Sequence[tuple[int, int]] = (), key: str = ""
+        self, resource, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """Memory-map one raw file and select its positional windows."""
         resource = coerce_to_upath(resource)

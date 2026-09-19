@@ -3,13 +3,12 @@
 from __future__ import annotations
 
 import pickle
-from collections.abc import Sequence
 
 import numpy as np
 
 import dascore
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.core.summary import normalize_source_patch_key
 from dascore.io import ArraySource, BinaryReader, BinaryWriter, FiberIO
 from dascore.io.utils import resolve_keyed_source, slice_dataset
@@ -99,7 +98,7 @@ class PickleIO(FiberIO):
     def read_array(
         self,
         resource: _PickleReader,
-        windows: Sequence[tuple[int, int]] = (),
+        windows: windows_type = (),
         key: str = "",
     ) -> np.ndarray:
         """Slice one logical patch from the entries decoded for this operation."""

@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import numpy as np
 
 import dascore as dc
-from dascore.constants import INVENTORY_ATTRS, snap_type
+from dascore.constants import INVENTORY_ATTRS, snap_type, windows_type
 from dascore.io import FiberIO
 from dascore.io.utils import get_attr_names, windows_to_slices
 from dascore.utils.io import BinaryReader, LocalBinaryReader
@@ -74,7 +72,7 @@ class TDMSFormatterV4713(FiberIO):
     def read_array(
         self,
         resource: LocalBinaryReader,
-        windows: Sequence[tuple[int, int]] = (),
+        windows: windows_type = (),
         key: str = "",
     ) -> np.ndarray:
         """

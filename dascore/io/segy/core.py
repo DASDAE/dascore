@@ -2,12 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
-
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.io.core import FiberIO
 from dascore.io.utils import windows_to_slices
 from dascore.utils.io import LocalBinaryReader, LocalPath
@@ -39,7 +37,7 @@ class SegyV1_0(FiberIO):  # noqa
     def read_array(
         self,
         resource: LocalPath,
-        windows: Sequence[tuple[int, int]] = (),
+        windows: windows_type = (),
         key: str = "",
     ) -> np.ndarray:
         """Read selected trace samples in time/channel order."""

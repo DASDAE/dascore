@@ -31,13 +31,12 @@ https://geofon.gfz.de/redmine/projects/redmine/wiki/DAS.
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io import FiberIO
 from dascore.io.utils import resolve_keyed_source, windows_to_slices
@@ -122,7 +121,7 @@ class MSeedV2(FiberIO):
     def read_array(
         self,
         resource: LocalPath,
-        windows: Sequence[tuple[int, int]] = (),
+        windows: windows_type = (),
         key: str = "",
     ) -> np.ndarray:
         """Decode one compatible MiniSEED group in channel/time order."""

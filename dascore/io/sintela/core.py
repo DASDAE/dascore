@@ -4,12 +4,12 @@ Core module for reading Sintela binary format.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Sequence
+from collections.abc import Iterable
 
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
 from dascore.io.core import _stamp_source_ids
 from dascore.io.utils import slice_dataset, windows_to_slices
@@ -72,7 +72,7 @@ class SintelaBinaryV3(FiberIO):
     def read_array(
         self,
         resource: LocalBinaryReader,
-        windows: Sequence[tuple[int, int]] = (),
+        windows: windows_type = (),
         key: str = "",
     ) -> np.ndarray:
         """
@@ -113,7 +113,7 @@ class SintelaProtobufV1(FiberIO):
     def read_array(
         self,
         resource: BinaryReader,
-        windows: Sequence[tuple[int, int]] = (),
+        windows: windows_type = (),
         key: str = "",
     ) -> np.ndarray:
         """Decode protobuf samples and select the positional window."""
