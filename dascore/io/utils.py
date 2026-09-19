@@ -23,7 +23,7 @@ from dascore.exceptions import (
 )
 from dascore.models import ArrayLike
 from dascore.units import convert_units, get_quantity_str
-from dascore.utils.misc import _to_slice, _validate_sample_values, iterate, unbyte
+from dascore.utils.misc import _to_slice, iterate, unbyte
 from dascore.utils.time import to_exact_fraction
 
 
@@ -112,26 +112,63 @@ def drop_blank_attrs(attrs: dict, names: Iterable[str]) -> dict:
     return attrs
 
 
+_WINDOW_BOUNDS = (int, np.integer, type(None), type(Ellipsis))
+
+
+def validate_windows(windows: Sequence[Any]) -> tuple[Any, ...]:
+    """
+    Return `FiberIO.read_array` windows, refusing a spelling which is not one.
+
+    A window is ``None`` (the whole axis), a slice, or a ``(start, stop)``
+    pair of sample indices; ``windows`` holds one per axis, in order. A
+    bare integer is not a window, so no spelling is read two ways.
+    """
+    if not isinstance(windows, Sequence) or isinstance(windows, str):
+        msg = (
+            f"Windows are one positional window per axis; got {windows!r}. "
+            f"Use ((0, 10),) or slice(0, 10) to window the first axis."
+        )
+        raise ParameterError(msg)
+    for window in windows:
+        if window is None or isinstance(window, slice):
+            continue
+        pair = isinstance(window, Sequence) and not isinstance(window, str)
+        if not (
+            pair
+            and len(window) == 2
+            and all(isinstance(x, _WINDOW_BOUNDS) for x in window)
+        ):
+            msg = (
+                f"Each window is None, a slice, or a (start, stop) pair of "
+                f"sample indices; got {window!r} in {windows!r}. Use "
+                f"((0, 10),) or slice(0, 10) to window the first axis."
+            )
+            raise ParameterError(msg)
+    return tuple(windows)
+
+
 def windows_to_slices(
     windows: Sequence[Any], shape: Sequence[int]
 ) -> tuple[slice, ...]:
     """
     Turn `FiberIO.read_array` windows into one slice per axis.
 
-    Each window is validated as `Patch.select` validates ``samples=True``
-    values and resolved against its axis's length, so every slice comes
-    back with explicit non-negative bounds and ``start <= stop`` (a
-    reversed window is empty); an axis without a window is taken whole.
+    Each window is checked by `validate_windows` and resolved against its
+    axis's length, so every slice comes back with explicit non-negative
+    bounds and ``start <= stop`` (a reversed window is empty); an axis
+    without a window is taken whole.
 
     Parameters
     ----------
     windows
-        A ``(start, stop)`` half-open sample range, or a slice, for each
-        axis in order. Trailing axes may be left out.
+        A ``(start, stop)`` half-open sample range, a slice, or ``None``
+        for a whole axis, one per axis in order. Trailing axes may be
+        left out.
     shape
         The array's shape.
     """
-    if isinstance(windows, Mapping) or len(windows) > max(len(shape), 1):
+    windows = validate_windows(windows)
+    if len(windows) > len(shape):
         msg = (
             f"Windows are one positional range per axis of {tuple(shape)}; "
             f"got {windows!r}."
@@ -142,7 +179,6 @@ def windows_to_slices(
         if axis >= len(windows) or windows[axis] is None:
             out.append(slice(0, size))
             continue
-        _validate_sample_values(windows[axis])
         window = _to_slice(windows[axis])
         if window.step not in (None, 1):
             msg = (

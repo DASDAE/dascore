@@ -36,6 +36,7 @@ from dascore.io import core as io_core
 from dascore.io.core import (
     STORED_PATCH_ID,
     FiberIO,
+    H5ArrayMixin,
     _canonical_path,
     _FiberIOManager,
     _get_missing_install_name,
@@ -59,7 +60,7 @@ from dascore.io.utils import (
     windows_to_slices,
 )
 from dascore.utils.downloader import fetch
-from dascore.utils.hdf5 import H5Writer
+from dascore.utils.hdf5 import H5Reader, H5Writer
 from dascore.utils.identity import source_patch_id
 from dascore.utils.io import (
     BinaryReader,
@@ -2026,6 +2027,134 @@ class TestFiberIOReadArray:
             PlainFormat().read_array("unused", ())
 
 
+class TestReadArrayFunction:
+    """Tests for the format-independent half of `dc.read_array`."""
+
+    @pytest.fixture(scope="class")
+    def patch(self):
+        """A non-square patch, so an axis mix-up cannot pass unnoticed."""
+        return dc.get_example_patch("random_das", shape=(11, 7))
+
+    @pytest.fixture(scope="class")
+    def path(self, tmp_path_factory, patch):
+        """The patch written to a DASDAE file."""
+        path = tmp_path_factory.mktemp("read_array_function") / "one.h5"
+        dc.write(patch, path, "dasdae")
+        return path
+
+    def test_stride_lands_on_its_own_axis(self, path, patch):
+        """Each axis is strided by the step its own window asked for."""
+        out = dc.read_array(path, (slice(None, None, 3), slice(None, None, 2)))
+        assert np.array_equal(out, patch.data[::3, ::2])
+        one = dc.read_array(path, (None, slice(1, 7, 2)))
+        assert np.array_equal(one, patch.data[:, 1:7:2])
+
+    def test_backwards_step_raises(self, path):
+        """A window is read forwards; a negative step is refused."""
+        with pytest.raises(ParameterError, match="steps backwards"):
+            dc.read_array(path, (slice(None, None, -1),))
+
+    @pytest.mark.parametrize(
+        "windows",
+        [(0, 10), 5, (None, 10), ..., ((0, 5, 1),), np.array([0, 10])],
+    )
+    def test_window_spelling_refused(self, path, windows):
+        """A bare integer, or anything but a window, is never guessed at."""
+        with pytest.raises(ParameterError):
+            dc.read_array(path, windows)
+
+    @pytest.mark.parametrize(
+        "windows,index",
+        [
+            (((0, 10),), np.s_[0:10]),
+            ([(0, 10)], np.s_[0:10]),
+            ((None, (2, 7)), np.s_[:, 2:7]),
+            ((slice(1, 9), None), np.s_[1:9]),
+            (((np.int64(1), np.int64(9)),), np.s_[1:9]),
+        ],
+    )
+    def test_window_spelling_accepted(self, path, patch, windows, index):
+        """Every accepted spelling indexes as numpy does, by either route."""
+        expected = patch.data[index]
+        assert np.array_equal(dc.read_array(path, windows), expected)
+        # the reader's own hook must read the same spelling the same way
+        assert np.array_equal(DASDAEV1().read_array(path, windows), expected)
+
+    def test_bare_slice_windows_the_first_axis(self, path, patch):
+        """The one convenience, and it belongs to the function alone."""
+        assert np.array_equal(dc.read_array(path, slice(0, 10)), patch.data[0:10])
+        with pytest.raises(ParameterError):
+            DASDAEV1().read_array(path, slice(0, 10))
+
+    def test_missing_path_key_raises(self, path):
+        """An absolute path naming no dataset is refused, not ignored."""
+        with pytest.raises(PatchAttributeError, match="names no stored array"):
+            dc.read_array(path, key="/waveforms/nope/data")
+
+    def test_group_path_key_raises(self, path):
+        """An absolute path naming a group holds no array."""
+        with pytest.raises(PatchAttributeError, match="names no stored array"):
+            dc.read_array(path, key="/waveforms")
+
+
+class TestH5ArrayMixin:
+    """Tests for the shared single-patch HDF5 array reader."""
+
+    @pytest.fixture(scope="class")
+    def array(self):
+        """The values the mixin reader's file stores."""
+        return np.arange(77, dtype=np.float64).reshape(11, 7)
+
+    @pytest.fixture(scope="class")
+    def path(self, tmp_path_factory, array):
+        """A file with two datasets, so only the named one can pass."""
+        path = tmp_path_factory.mktemp("h5_array_mixin") / "mixin.h5"
+        with h5py.File(path, "w") as h5:
+            h5.create_dataset("group/data", data=array)
+            h5.create_dataset("group/other", data=-array)
+        return path
+
+    @pytest.fixture(scope="class")
+    def mixin_io(self, array):
+        """A reader which takes its array loading from the mixin."""
+
+        class MixinFormat(H5ArrayMixin, FiberIO):
+            name = "_test_h5_array_mixin"
+            version = "1"
+
+            def get_metadata(self, resource: H5Reader, *, snap=True):
+                data = resource["group/data"]
+                coords = {
+                    "distance": np.arange(array.shape[0]),
+                    "time": np.arange(array.shape[1]),
+                }
+                return [
+                    dc.PatchMeta(
+                        coords=coords,
+                        dims=("distance", "time"),
+                        dtype=data.dtype,
+                        source=ArraySource(key=data.name),
+                    )
+                ]
+
+        return MixinFormat()
+
+    def test_key_names_the_dataset(self, mixin_io, path, array):
+        """The key picks which dataset the windows index, not the metadata."""
+        out = mixin_io.read_array(path, ((1, 9),), key="/group/other")
+        assert np.array_equal(out, -array[1:9])
+
+    def test_keyless_uses_the_metadata_key(self, mixin_io, path, array):
+        """Without a key the metadata's own source key is read."""
+        out = mixin_io.read_array(path, ((1, 9),))
+        assert np.array_equal(out, array[1:9])
+
+    def test_wrong_key_raises(self, mixin_io, path):
+        """A key naming nothing in the file is h5py's to refuse."""
+        with pytest.raises(KeyError):
+            mixin_io.read_array(path, (), key="/group/nope")
+
+
 class TestWindowsToSlices:
     """Tests for turning read_array windows into per-axis slices."""
 
@@ -2051,12 +2180,12 @@ class TestWindowsToSlices:
 
     def test_mapping_raises(self):
         """Windows are positional; dimension names live above this layer."""
-        with pytest.raises(ParameterError, match="one positional range per axis"):
+        with pytest.raises(ParameterError, match="one positional window per axis"):
             windows_to_slices({"time": (0, 1)}, (9,))
 
     def test_non_integer_bounds_raise(self):
         """Bounds are sample indices, never values."""
-        with pytest.raises(ParameterError, match="integers"):
+        with pytest.raises(ParameterError, match="sample indices"):
             windows_to_slices(((1.5, 3),), (9,))
 
 

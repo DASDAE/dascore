@@ -53,8 +53,8 @@ class TestReadArray:
         io = OptoDASV8()
         with h5py.File(transposed_path, "r") as h5:
             stored = h5["data"][:] * h5["header/dataScale"][()]
-        # the header now calls the first axis distance, and the array a
-        # positional window takes follows the metadata which says so
+        # the header now calls the first axis distance, so the metadata's
+        # order is (distance, time) and the time window is the second
         assert io.get_metadata(transposed_path)[0].dims == ("distance", "time")
         out = io.read_array(transposed_path, (None, (1, 4)))
         np.testing.assert_allclose(out, stored[:, 1:4], rtol=1e-6)

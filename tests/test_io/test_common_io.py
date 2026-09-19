@@ -708,7 +708,7 @@ class TestRead:
                 assert got != shape, (shape, got)
 
     def test_read_array_function_matches_read(self, io_path_tuple):
-        """`dc.read_array` gives each key's whole array without a reader."""
+        """`dc.read_array` gives each key's array, whole or windowed."""
         _io, path = io_path_tuple
         with skip_missing():
             payloads = dc.scan(path)
@@ -718,21 +718,15 @@ class TestRead:
             out = dc.read_array(path, key=key)
             nan = np.issubdtype(out.dtype, np.inexact)
             assert np.array_equal(out, expected, equal_nan=nan), key
-
-    def test_read_array_function_windows(self, io_path_tuple):
-        """Windows and strides index the array exactly as NumPy would."""
-        _io, path = io_path_tuple
-        with skip_missing():
-            payload = dc.scan(path)[0]
-        key = payload.source_patch_key
-        whole = dc.read(path, source_patch_key=key)[0].data
-        nan = np.issubdtype(whole.dtype, np.inexact)
-        windows = tuple((1, size - 1) if size > 2 else None for size in payload.shape)
-        index = tuple(slice(*x) if x is not None else slice(None) for x in windows)
-        out = dc.read_array(path, windows, key=key)
-        assert np.array_equal(out, whole[index], equal_nan=nan)
-        strided = dc.read_array(path, slice(0, payload.shape[0], 2), key=key)
-        assert np.array_equal(strided, whole[0 : payload.shape[0] : 2], equal_nan=nan)
+            # the windowed and strided reads run through the same route
+            windows = tuple(
+                (1, size - 1) if size > 2 else None for size in payload.shape
+            )
+            index = tuple(slice(*x) if x is not None else slice(None) for x in windows)
+            windowed = dc.read_array(path, windows, key=key)
+            assert np.array_equal(windowed, expected[index], equal_nan=nan), key
+            strided = dc.read_array(path, slice(0, payload.shape[0], 2), key=key)
+            assert np.array_equal(strided, expected[::2], equal_nan=nan), key
 
     def test_slice_single_dim_both_ends(self, io_path_tuple):
         """

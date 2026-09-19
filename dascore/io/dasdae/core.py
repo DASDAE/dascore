@@ -102,8 +102,8 @@ class DASDAEV1(FiberIO):
         """
         Slice one patch's data dataset directly.
 
-        Only the group's ``_dims`` attribute and the requested hyperslab
-        leave the file; patch attrs and coordinates are never parsed. See
+        Only the requested hyperslab leaves the file; the group's
+        ``_dims``, patch attrs, and coordinates are never read. See
         `FiberIO.read_array` for the window contract. ``source_patch_key``
         is the waveform group name `scan` reports; a positional index is
         not accepted, because DASDAE never synthesizes one.

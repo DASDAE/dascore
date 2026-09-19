@@ -495,6 +495,13 @@ class TestLoadMemberArray:
         )
         assert override == [(positional, expected_kwargs)]
 
+    def test_unplaceable_window_returns_none(self, resolver, row, override):
+        """A window the row's dims cannot place has no position to take."""
+        assert resolver._load_member_array(row, {"nope": (0, 5)}) is None
+        blank = dict(row, dims="")
+        assert resolver._load_member_array(blank, {"time": (0, 5)}) is None
+        assert override == []
+
     def test_digit_key_returns_none(self, resolver, row, override):
         """A synthesized positional key only binds against a full read."""
         row = dict(row, source_patch_key="3")
