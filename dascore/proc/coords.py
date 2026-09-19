@@ -766,7 +766,8 @@ class Isel(PatchProcessor):
         # Nothing was named, so nothing moves.
         if coords is meta.coords:
             return meta, {}
-        return meta.new(coords=coords), {"indexer": indexer}
+        source = meta._source and meta._source.narrow(indexer)
+        return meta.new(coords=coords, source=source), {"indexer": indexer}
 
     def kernel(self, data, *, indexer=None):
         """Return the samples at the requested positions."""

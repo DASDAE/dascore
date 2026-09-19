@@ -144,6 +144,11 @@ class TestIdentity:
         assert other == source and hash(other) == hash(source)
         assert other.id == source.id
         assert source[:10][2:5].id == source[2:5].id
+        # Pinned: an id written down must still name the same array later.
+        fixed = ArraySource(
+            "a.h5", "DASDAE", "1", "k", ("time",), ((2, 5),), (3,), np.dtype("f8")
+        )
+        assert fixed.id == "335d4c1b2b99c9ec"
 
     def test_different_arrays(self, source):
         """A selection, a key or a path is a different array."""
@@ -203,6 +208,23 @@ class TestCarry:
         sub = patch.select(time=(time[10], time[50]))
         sub = sub.select(distance=(3, 9), samples=True)
         assert np.array_equal(sub._source.load(), sub.data)
+
+    def test_isel_and_sel(self, patch):
+        """A unit-step slice narrows; any other positional index detaches."""
+        dist = patch.get_array("distance")
+        for sub in (
+            patch.isel(time=slice(3, 9)),
+            patch.sel(distance=slice(dist[10], dist[50])),
+        ):
+            assert sub.size and np.array_equal(sub._source.load(), sub.data)
+        for index in (3, slice(0, 9, 2), [1, 2], slice(9, 3, -1)):
+            assert not patch.isel(time=index)._source.loadable
+
+    def test_meta_dtype(self, patch):
+        """Metadata describing another dtype no longer describes the source."""
+        meta = patch.drop_data()
+        assert meta.update(attrs={"station": "a"})._source.loadable
+        assert not meta.update(dtype="float32")._source.loadable
 
     def test_metadata_only(self, patch):
         """Changing attrs leaves the data, and so the source, alone."""

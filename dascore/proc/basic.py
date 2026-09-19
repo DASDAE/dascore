@@ -296,7 +296,8 @@ def update(
     out = self._new_like(data, coords, attrs, dtype)
     if source is None and (source := self._source) is not None:
         # A source loads the array it was made for, not one replaced or relaid.
-        if data is not None or (out.dims, out.shape) != (self.dims, self.shape):
+        described = (self.dims, self.shape, self.dtype)
+        if data is not None or (out.dims, out.shape, out.dtype) != described:
             source = source.detach()
     out._source = source
     return out
