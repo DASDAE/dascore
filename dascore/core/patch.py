@@ -296,7 +296,10 @@ class Patch(NamespaceOwner, PatchMeta):
 
     def _reattach(self, out: PatchMeta, attrs: PatchAttrs) -> Patch:
         """Return `out` under `attrs`, carrying this patch's unchanged data."""
-        return out.update(attrs=attrs).to_patch(self._data)
+        new = out.update(attrs=attrs).to_patch(self._data)
+        # The data are unchanged, so `out` already says whether its source loads them.
+        new._source = out._source
+        return new
 
     def to_patch(self, data) -> Patch:
         """

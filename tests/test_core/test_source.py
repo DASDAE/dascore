@@ -62,8 +62,13 @@ class TestDescription:
         assert not source.loadable
         with pytest.raises(ParameterError, match="does not say enough"):
             source.load()
-        with pytest.raises(IndexError):
+        with pytest.raises(IndexError, match="describes no array"):
             source[:1]
+
+    def test_data_needs_dims(self, source):
+        """Only an addressed array can go without dimension names."""
+        bare = replace(source, dims=())
+        assert not bare.loadable and replace(bare, address="a").loadable
 
 
 class TestLoad:
@@ -204,6 +209,17 @@ class TestCarry:
         assert sub._source.windows[0] == (100, 201)
         assert np.array_equal(sub._source.load(), sub.data)
 
+    def test_read_not_contiguous(self, path):
+        """Samples picked apart are not what the windows alone would load."""
+        sub = dc.read(path, distance=np.array([1, 5, 9]), samples=True)[0]
+        assert sub.shape[0] == 3 and not sub._source.loadable
+
+    def test_other_data(self, patch):
+        """Metadata given data cannot know the source still loads them."""
+        out = patch.drop_data().to_patch(patch.data * 2)
+        assert not out._source.loadable
+        assert out._source == patch._source.detach()
+
     def test_select(self, patch):
         """Patch selections compose too."""
         time = patch.get_array("time")
@@ -227,6 +243,6 @@ class TestCarry:
     )
     def test_detached(self, patch, func):
         """New values or a new layout keep the provenance and nothing else."""
-        source = func(patch)._source
-        assert not source.loadable
-        assert (source.path, source.key) == (patch._source.path, patch._source.key)
+        origin = patch._source
+        expected = ArraySource(origin.path, origin.format, origin.version, origin.key)
+        assert func(patch)._source == expected

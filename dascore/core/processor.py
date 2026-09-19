@@ -349,10 +349,9 @@ class PatchProcessor(DascoreBaseModel):
         if record:
             out = out.update(attrs=self._record(patch, out.attrs))
         new = out.to_patch(result)
-        # Computed data are no longer what the source loads, unless the
-        # operation said otherwise by giving its result a source of its own.
-        if new._source is not None and new._source is meta._source:
-            new._source = new._source.detach()
+        # Only an operation which set a source of its own says it loads the result.
+        if out._source is not meta._source:
+            new._source = out._source
         return new
 
     def _unchanged(self, patch: dc.PatchMeta, record: bool) -> dc.PatchMeta:

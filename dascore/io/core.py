@@ -758,10 +758,20 @@ class FiberIO:
         self, resource, address: str, windows: Sequence[tuple[int, int]]
     ) -> np.ndarray:
         """
-        Read the array stored at `address` over half-open positional windows.
+        Read the array stored at `address`, such as a dense coordinate.
 
-        For arrays other than a patch's data, such as a dense coordinate.
-        HDF5 resources are read by dataset path; other readers override this.
+        The base class reads an HDF5 dataset by its path; a reader of another
+        kind of resource overrides this.
+
+        Parameters
+        ----------
+        resource
+            The opened resource, cast as `read_array` declares.
+        address
+            The location of the array inside the resource.
+        windows
+            A half-open `(start, stop)` sample range for each stored axis,
+            in order.
         """
         if not isinstance(resource, _ManagedH5pyFile):
             msg = f"FiberIO: {self.name} cannot read an array by address."
@@ -831,7 +841,11 @@ class FiberIO:
             origins = [patch._source or ArraySource() for patch in patches]
             if provenance_source is not None:
                 patches = _stamp_source_ids(
-                    patches, self.name, self.version, provenance_source
+                    patches,
+                    self.name,
+                    self.version,
+                    provenance_source,
+                    describe=self.input_type != "directory",
                 )
             selected, requests = [], []
             for index, (patch, origin) in enumerate(zip(patches, origins, strict=True)):
@@ -872,14 +886,10 @@ class FiberIO:
                     else key
                 )
                 requests.append((windows, array_key))
-                source = replace(source, key=key)
-                if source.loadable:
-                    # Only a contiguous read is what the source alone would load.
-                    contiguous = all(
-                        isinstance(x, slice) and x == slice(None) for x in residual
-                    )
-                    bounds = tuple(slice(*windows[dim]) for dim in patch.dims)
-                    source = source[bounds] if contiguous else source.detach()
+                # Only a contiguous read is what the source alone would load.
+                source = replace(source, key=key).narrow(
+                    tuple(indexers.get(x, slice(None)) for x in patch.dims)
+                )
                 selected.append((patch, coords, source, windows, residual))
             for selection, data in zip(selected, load(requests), strict=True):
                 patch, coords, source, windows, residual = selection
@@ -897,8 +907,9 @@ class FiberIO:
                     )
                     raise InvalidFiberIOError(msg)
                 data = _apply_union_indexers(residual, data)
-                described = patch.update(coords=coords, source=source)
-                out.append(described.to_patch(data))
+                new = patch.update(coords=coords).to_patch(data)
+                new._source = source
+                out.append(new)
         return dc.spool(out)
 
     def scan(
@@ -1163,6 +1174,7 @@ def _load_array_source(source: ArraySource) -> np.ndarray:
     fiberio = FiberIO.manager.get_fiberio(format=source.format, version=source.version)
     with IOResourceManager(source.path) as manager:
         resource = manager.get_resource(_required_resource_type(fiberio.read_array))
+        getattr(resource, "seek", lambda x: None)(0)
         if source.address:
             out = fiberio.read_address(resource, source.address, source.windows)
         else:
@@ -1185,8 +1197,14 @@ def _stamp_source_ids(
     source,
     *,
     indices: Sequence[int] | None = None,
+    describe: bool = False,
 ) -> list[dc.Patch]:
-    """Stamp selected patches, retaining their original source ordinals and keys."""
+    """
+    Stamp selected patches, retaining their original source ordinals and keys.
+
+    `describe` makes each source loadable; only for whole, unselected arrays
+    which `read_array` can find by key.
+    """
     indices = range(len(patches)) if indices is None else indices
     if not indices:
         return []
@@ -1201,8 +1219,7 @@ def _stamp_source_ids(
             format=file_format,
             version=file_version,
         )
-        # A directory's arrays are pinned by member path, which only `read` holds.
-        if reload_path and not coerce_to_upath(reload_path).is_dir():
+        if describe and reload_path:
             origin = origin.describe(patch.shape, patch.dtype, patch.dims)
         attrs = patch.attrs
         if path and ids_enabled():
@@ -1615,6 +1632,7 @@ def _iter_scan_results(
                         fiber_io.version,
                         man.source,
                         indices=indices,
+                        describe=fiber_io.input_type != "directory",
                     )
                     for result in patches:
                         output_count += 1

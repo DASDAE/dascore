@@ -20,8 +20,8 @@ class ArraySource:
     """
     Where an array is stored, and enough to load it without its patch.
 
-    Holds no data and opens nothing until `load`. A reader sets `key`
-    (or `address`); the I/O framework fills in the rest.
+    Holds no data and opens nothing until `load`. A reader sets `key`;
+    the I/O framework fills in the rest.
 
     Parameters
     ----------
@@ -71,7 +71,10 @@ class ArraySource:
     @property
     def loadable(self) -> bool:
         """Whether this says enough to load the array."""
-        return bool(self.path and self.format and self.dtype is not None)
+        described = self.dtype is not None and len(self.windows) == self.ndim
+        # `read_array` takes its windows by dimension name.
+        named = bool(self.address) or len(self.dims) == self.ndim
+        return bool(self.path and self.format and described and named)
 
     @property
     def ndim(self) -> int:
@@ -113,7 +116,10 @@ class ArraySource:
     def __getitem__(self, index) -> ArraySource:
         """Compose contiguous slices onto the windows; nothing is read."""
         index = index if isinstance(index, tuple) else (index,)
-        if not self.loadable or len(index) > self.ndim:
+        if not self.loadable:
+            msg = f"{self} describes no array to index."
+            raise IndexError(msg)
+        if len(index) > self.ndim:
             msg = f"Cannot index a {self.ndim}-dimensional source with {index}."
             raise IndexError(msg)
         index = index + (slice(None),) * (self.ndim - len(index))

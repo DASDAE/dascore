@@ -351,7 +351,8 @@ class PatchMeta(NodeRepr):
         """
         patch_class = self._patch_type or dc.Patch
         out = patch_class(data=data, coords=self.coords, attrs=self.attrs)
-        out._source = self._source
+        # Whatever these data are, they are not known to be what the source loads.
+        out._source = self._source and self._source.detach()
         return out
 
     def _reattach(self, out: PatchMeta, attrs: PatchAttrs) -> PatchMeta:
