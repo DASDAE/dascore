@@ -6,7 +6,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.core.source import PatchSource
+from dascore.core.source import ArraySource
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 
@@ -47,7 +47,7 @@ class ProdMLV2_0(FiberIO):  # noqa
                     attrs=attrs,
                     coords=coords,
                     dtype=attrs.get("dtype", ""),
-                    source=PatchSource(key=source_patch_key),
+                    source=ArraySource(key=source_patch_key),
                 )
             )
         return out

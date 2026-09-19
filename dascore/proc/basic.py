@@ -21,7 +21,7 @@ from dascore.core.coordmanager import (
 )
 from dascore.core.coords import CoordRange, get_coord
 from dascore.core.processor import PatchProcessor
-from dascore.core.source import PatchSource
+from dascore.core.source import ArraySource
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
 from dascore.units import get_quantity
@@ -251,7 +251,7 @@ def update(
     dims: Sequence[str] | None = None,
     attrs: Mapping | PatchAttrs | None = None,
     dtype: Any = None,
-    source: PatchSource | None = None,
+    source: ArraySource | None = None,
 ) -> PatchType:
     """
     Return a copy of the Patch with updated data, coords, dims, or attrs.
@@ -294,7 +294,11 @@ def update(
     # Each kind keeps what it is: `drop_data` and `to_patch`, not a
     # keyword here, are how data come and go.
     out = self._new_like(data, coords, attrs, dtype)
-    out._source = self._source if source is None else source
+    if source is None and (source := self._source) is not None:
+        # A source loads the array it was made for, not one replaced or relaid.
+        if data is not None or (out.dims, out.shape) != (self.dims, self.shape):
+            source = source.detach()
+    out._source = source
     return out
 
 

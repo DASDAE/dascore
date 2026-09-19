@@ -21,7 +21,7 @@ from dascore.core.coords import (
     _scalar_dtype,
     get_coord,
 )
-from dascore.core.source import PatchSource
+from dascore.core.source import ArraySource
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import InvalidFiberFileError, PatchAttributeError
 from dascore.io.core import STORED_PATCH_ID
@@ -489,7 +489,7 @@ def _get_metadata_from_group(group, legacy: bool = True, snap=True):
         coords=coords,
         dims=dims,
         dtype=dtype,
-        source=PatchSource(key=group.name.rsplit("/", maxsplit=1)[-1]),
+        source=ArraySource(key=group.name.rsplit("/", maxsplit=1)[-1]),
     )
 
 

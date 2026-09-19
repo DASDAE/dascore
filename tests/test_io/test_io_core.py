@@ -21,7 +21,7 @@ from upath import UPath
 import dascore as dc
 from dascore.config import config_context
 from dascore.core.coords import CoordSegmented, get_coord
-from dascore.core.source import PatchSource
+from dascore.core.source import ArraySource
 from dascore.exceptions import (
     DependencyError,
     InvalidFiberIOError,
@@ -1037,9 +1037,9 @@ class TestScan:
         payload = out[0]
         assert isinstance(payload.coords, dc.CoordManager)
         assert payload.coords == random_patch.coords
-        assert (payload._source or PatchSource()).path == ""
-        assert (payload._source or PatchSource()).format == ""
-        assert (payload._source or PatchSource()).version == ""
+        assert (payload._source or ArraySource()).path == ""
+        assert (payload._source or ArraySource()).format == ""
+        assert (payload._source or ArraySource()).version == ""
 
     def test_scan_payloads_spool_returns_each_patch(self, random_patch):
         """Spool inputs should produce one raw payload per patch."""
@@ -1253,7 +1253,7 @@ class TestReloadableSourcePath:
         assert out[0]._source is None
         assert out[0]._source is None
         assert out[0]._source is None
-        assert not (out[0]._source or PatchSource()).key
+        assert not (out[0]._source or ArraySource()).key
 
     def test_default_fiberio_scan_forwards_snap_dims(self, tmp_path):
         """Default scans should forward exact-coordinate mode to read()."""
@@ -1330,9 +1330,9 @@ class TestReloadableSourcePath:
         assert seen["snap"] is False
         assert len(out) == 1
         assert isinstance(out[0].coords, dc.CoordManager)
-        assert str((out[0]._source or PatchSource()).path) == str(path)
-        assert (out[0]._source or PatchSource()).format == fiber_io.name
-        assert (out[0]._source or PatchSource()).version == fiber_io.version
+        assert str((out[0]._source or ArraySource()).path) == str(path)
+        assert (out[0]._source or ArraySource()).format == fiber_io.name
+        assert (out[0]._source or ArraySource()).version == fiber_io.version
 
     def test_default_fiberio_scan_multi_patch_does_not_set_source_patch_key(
         self, tmp_path, monkeypatch
@@ -1750,7 +1750,7 @@ class TestSourceIds:
         stat = Path(terra15_path).stat()
         fmt, version = dc.get_format(terra15_path)
         expected = source_patch_id(
-            PatchSource(
+            ArraySource(
                 path=str(terra15_path),
                 format=fmt,
                 version=version,
