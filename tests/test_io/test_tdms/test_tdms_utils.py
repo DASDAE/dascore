@@ -434,7 +434,10 @@ class TestTDMSInterrogator:
         selected = dc.read(tdms_path, samples=True, time=(1, 4), distance=(2, 5))[0]
         np.testing.assert_array_equal(selected.data, patch.data[1:4, 2:5])
         assert selected.attrs == patch.attrs
-        assert selected._source == patch._source == metadata._source
+        assert patch._source == metadata._source
+        # The selection keeps the same provenance and narrows the windows.
+        assert selected._source.detach() == patch._source.detach()
+        assert selected._source.windows == ((1, 4), (2, 5))
 
     def test_name_is_host_name(self, tdms_attrs, raw_host_name):
         """The name is exactly the HostName property, eg "iDAS005"."""

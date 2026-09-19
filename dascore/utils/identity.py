@@ -27,7 +27,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from typing import Any
 from uuid import uuid4
 
-from dascore.core.source import PatchSource
+from dascore.core.source import ArraySource
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.serialize import combine_hashes, digest
 from dascore.warnings import DASCoreWarning
@@ -143,7 +143,7 @@ def new_patch_id() -> str:
 
 
 def source_patch_id(
-    source: PatchSource,
+    source: ArraySource,
     size_bytes: int | None = None,
     mtime_ns: int | None = None,
     *,

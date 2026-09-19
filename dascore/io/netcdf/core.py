@@ -9,7 +9,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.core.source import PatchSource
+from dascore.core.source import ArraySource
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
 from dascore.io.utils import (
@@ -221,7 +221,7 @@ class NetCDFCFV18(FiberIO):
                 coords=coord_manager,
                 dims=dims,
                 dtype=dtype,
-                source=PatchSource(key=source_patch_key),
+                source=ArraySource(key=source_patch_key),
             )
         ]
 

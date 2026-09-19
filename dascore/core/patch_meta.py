@@ -16,7 +16,7 @@ import dascore.proc
 import dascore.proc.coords
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
-from dascore.core.source import PatchSource
+from dascore.core.source import ArraySource
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import ParameterError
 from dascore.utils.attrs import _values_equal
@@ -114,7 +114,7 @@ class PatchMeta(NodeRepr):
     dtype: Any
     backend: str
     # The class default also covers objects restored from older pickles.
-    _source: PatchSource | None = None
+    _source: ArraySource | None = None
     # The class `to_patch` builds; None means a plain `Patch`. Set by
     # `Patch.drop_data`, so an operation on a subclass returns that subclass.
     _patch_type: type | None = None
@@ -126,7 +126,7 @@ class PatchMeta(NodeRepr):
         attrs: Mapping | PatchAttrs | None = None,
         dtype: Any = None,
         backend: str = "numpy",
-        source: PatchSource | None = None,
+        source: ArraySource | None = None,
     ):
         if dims is None and isinstance(coords, CoordManager):
             dims = coords.dims

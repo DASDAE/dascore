@@ -346,9 +346,14 @@ class PatchProcessor(DascoreBaseModel):
         if out is meta and result is data:
             return self._unchanged(patch, record)
         out = self.reconcile(result, out)
-        if not record:
-            return out.to_patch(result)
-        return out.update(attrs=self._record(patch, out.attrs)).to_patch(result)
+        if record:
+            out = out.update(attrs=self._record(patch, out.attrs))
+        new = out.to_patch(result)
+        # Computed data are no longer what the source loads, unless the
+        # operation said otherwise by giving its result a source of its own.
+        if new._source is not None and new._source is meta._source:
+            new._source = new._source.detach()
+        return new
 
     def _unchanged(self, patch: dc.PatchMeta, record: bool) -> dc.PatchMeta:
         """Return the patch an operation did nothing to; nothing is recorded."""

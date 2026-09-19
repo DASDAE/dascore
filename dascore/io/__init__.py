@@ -3,7 +3,7 @@ Modules for reading and writing fiber data.
 """
 from __future__ import annotations
 
-from dascore.core.source import PatchSource
+from dascore.core.source import ArraySource
 from dascore.io.core import (
     FiberIO,
     read,
