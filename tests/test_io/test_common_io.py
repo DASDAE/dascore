@@ -55,6 +55,7 @@ from dascore.io.terra15 import (
     Terra15FormatterV6,
 )
 from dascore.io.uptech import UptechH5V1
+from dascore.io.xdas.core import XdasV1
 from dascore.utils.downloader import fetch, get_registry_df
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.misc import all_close, iterate, order_range_tuple
@@ -67,6 +68,7 @@ from tests.test_io._common_io_test_utils import (
 # No shipped file is DASDAE version 2 yet: the current writer makes one
 # (see `_write_dasdae_v2`) so the format sits in the same matrix as the
 # version it succeeds.
+_NETCDF_PATH = Path(mkdtemp("netcdf")) / "generic.nc"
 _DASDAE_V2_PATH = Path(mkdtemp("dasdae_v2")) / "example_dasdae_v2.h5"
 
 
@@ -74,6 +76,22 @@ _DASDAE_V2_PATH = Path(mkdtemp("dasdae_v2")) / "example_dasdae_v2.h5"
 def _write_dasdae_v2():
     """Write the version 2 example before any fixture fetches it."""
     dc.write(dc.get_example_patch("random_das"), _DASDAE_V2_PATH, "dasdae")
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _write_generic_netcdf():
+    """Keep ordinary CF NetCDF in the matrix after XDAS gets its own reader."""
+    with h5py.File(_NETCDF_PATH, "w") as handle:
+        handle.attrs["Conventions"] = "CF-1.8"
+        time = handle.create_dataset("time", data=np.arange(301) * 0.004)
+        time.attrs["units"] = "seconds since 2025-01-01"
+        time.make_scale("time")
+        distance = handle.create_dataset("distance", data=np.arange(101) * 2.0)
+        distance.attrs["units"] = "m"
+        distance.make_scale("distance")
+        data = handle.create_dataset("data", data=np.ones((301, 101), dtype="float32"))
+        data.dims[0].attach_scale(time)
+        data.dims[1].attach_scale(distance)
 
 
 # --- Fixtures
@@ -123,7 +141,8 @@ COMMON_IO_READ_TESTS = {
     ),
     Terra15FormatterV5(): ("terra15_v5_test_file.hdf5",),
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
-    NetCDFCFV18(): ("xdas_netcdf.nc",),
+    NetCDFCFV18(): (str(_NETCDF_PATH),),
+    XdasV1(): ("xdas_netcdf.nc",),
     MSeedV2(): ("etna_9n_3chan_10s.mseed",),
     UptechH5V1(): ("uptech_as1000_1.hdf5",),
 }
@@ -153,7 +172,7 @@ SKIP_DATA_FILES = {
 # have converted away at the parse boundary.
 # Formats which hand back the attrs stored in the file rather than building
 # them from a header, so the file, not the reader, chooses the names.
-_PASS_THROUGH_FORMATS = frozenset({"DASDAE", "NETCDF_CF"})
+_PASS_THROUGH_FORMATS = frozenset({"DASDAE", "NETCDF_CF", "XDAS"})
 
 VENDOR_ATTRS = frozenset(
     {
@@ -267,7 +286,7 @@ def _replays_stored_attrs(path) -> bool:
     are held to the shared vocabulary.
     """
     with suppress(UnknownFiberFormatError):
-        return dc.get_format(path)[0] in _PASS_THROUGH_FORMATS
+        return dc.get_format(path)[0].upper() in _PASS_THROUGH_FORMATS
     return False
 
 

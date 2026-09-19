@@ -7,7 +7,9 @@ import numpy as np
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.core import get_coord
+from dascore.io.netcdf.utils import get_cf_version, parse_cf_version
 from dascore.io.utils import get_exact_coord
+from dascore.io.xdas.utils import is_xdas_file
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
@@ -154,6 +156,18 @@ def _no_format_or_simple_specified(h5):
     """Ensure no other format is specified, or that simpleH5 is."""
     attrs = h5.attrs
     names = set(attrs) & FILE_FORMAT_ATTR_NAMES
+    # Explicit declarations win. A CF label alone does not establish NetCDF
+    # dimensions; legacy H5Simple writers sometimes supplied that label too.
+    if not names and is_xdas_file(h5):
+        return False
+    if not names and (version := get_cf_version(h5)):
+        data_names = set(h5) & DATA_ARRAY_NAMES
+        has_dimensions = any("DIMENSION_LIST" in h5[name].attrs for name in data_names)
+        try:
+            if has_dimensions and parse_cf_version(version) >= (1, 6):
+                return False
+        except (TypeError, ValueError):
+            pass
     # Every name that states a format has to state this one; a file which
     # names two disagreeing formats belongs to neither.
     return all(unbyte(_maybe_unpack(attrs[name])) == "h5simple" for name in names)

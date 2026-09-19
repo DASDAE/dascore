@@ -98,6 +98,10 @@ jobs:
           python-version: ${{ matrix.python-version }}
           prepare-test-data: "true"
 
+      - name: install XDAS reference writer
+        if: matrix.os == 'ubuntu-latest' && matrix.python-version == needs.setup.outputs.python-default
+        run: python -m pip install "xdas>=0.2.9"
+
       # The generated docs tests and the doctests are the same on every cell
       # and cost minutes, so one cell runs each. The generated tests run
       # inside the measured suite below, so their coverage reaches the gate;

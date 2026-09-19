@@ -8,6 +8,7 @@ from typing import Any, Protocol
 import numpy as np
 
 import dascore as dc
+from dascore.io.xdas.utils import interpolate_coord
 
 XDAS_PAYLOAD_VARIABLE = "__values__"
 
@@ -81,13 +82,9 @@ def _get_tie_point_coord(h5file, coord_name: str, coord_len: int) -> np.ndarray 
     if indices_name in h5file:
         indices = h5file[indices_name][:]
         if len(values) >= 2 and len(indices) >= 2:
-            sample_index = np.arange(coord_len, dtype=np.float64)
-            if np.issubdtype(np.asarray(values).dtype, np.datetime64):
-                value_ns = values.astype("datetime64[ns]").astype(np.int64)
-                values = np.interp(sample_index, indices, value_ns).astype(np.int64)
-                values = values.astype("datetime64[ns]")
-            else:
-                values = np.interp(sample_index, indices, values)
+            values = interpolate_coord(
+                np.asarray(values), np.asarray(indices), coord_len
+            )
     return values
 
 
