@@ -6,7 +6,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import FiberIO
+from dascore.io import ArraySource, FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
@@ -50,7 +50,10 @@ class ODH4V1(FiberIO):
         attrs = ODH4PatchAttrs.model_validate(_get_attrs_dict(file_attrs))
         return [
             dc.PatchMeta(
-                attrs=attrs, coords=coords, dtype=str(resource["raw_data"].dtype)
+                attrs=attrs,
+                coords=coords,
+                dtype=str(resource["raw_data"].dtype),
+                source=ArraySource(key=resource["raw_data"].name),
             )
         ]
 

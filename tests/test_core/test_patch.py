@@ -19,7 +19,7 @@ import dascore as dc
 from dascore.compat import random_state
 from dascore.core import Patch, PatchMeta
 from dascore.core.coords import BaseCoord, CoordRange
-from dascore.core.source import PatchSource
+from dascore.core.source import ArraySource
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import (
     CoordDataError,
@@ -299,7 +299,7 @@ class TestInit:
 
     def test_patch_summary_from_patch_reads_source_key(self, random_patch):
         """Patch summaries built from patches should expose the private source id."""
-        patch = random_patch.new(source=PatchSource(key="node-3"))
+        patch = random_patch.new(source=ArraySource(key="node-3"))
         summary = PatchSummary.from_patch(patch)
         assert summary.source_patch_key == "node-3"
         assert "_source_patch_key" not in summary.attrs
@@ -598,7 +598,7 @@ class TestPatchSummary:
 
     def test_summary_uses_patch_source(self, random_patch):
         """Summary provenance comes from the source, without altering the input."""
-        source = PatchSource(path="some_path", format="DASDAE", version="1", key="part")
+        source = ArraySource(path="some_path", format="DASDAE", version="1", key="part")
         out = random_patch.new(source=source).summary
         assert str(out.source_path) == source.path
         assert out.source_format == source.format
@@ -1649,7 +1649,7 @@ class TestStringCoordinatePatch:
         assert out.shape[0] == 3
 
 
-class TestPatchSource:
+class TestArraySource:
     """Source metadata belongs to framework assembly, not patch equality."""
 
     @pytest.mark.parametrize("dataless", [False, True])
@@ -1657,7 +1657,7 @@ class TestPatchSource:
         """Flattening loaded or data-less patches exposes source fields and dtype."""
         patch = random_patch.drop_data() if dataless else random_patch
         patch = patch.new(
-            source=PatchSource(
+            source=ArraySource(
                 path=str(tmp_path / "record.h5"),
                 format="DASDAE",
                 version="2",
@@ -1674,7 +1674,7 @@ class TestPatchSource:
     @pytest.mark.parametrize("loaded", [True, False])
     def test_new_keeps_source(self, random_patch, loaded):
         """Metadata updates and attaching data retain the logical source."""
-        source = PatchSource(
+        source = ArraySource(
             path="/example.h5", format="DASDAE", version="2", key="one"
         )
         patch = random_patch if loaded else random_patch.drop_data()
@@ -1686,14 +1686,14 @@ class TestPatchSource:
 
     def test_source_does_not_change_equality(self, random_patch):
         """Identical measurements compare equal independently of their source."""
-        other = random_patch.new(source=PatchSource(path="/elsewhere.h5"))
+        other = random_patch.new(source=ArraySource(path="/elsewhere.h5"))
         assert other.equals(random_patch)
         assert random_patch._source is None
 
     def test_new_can_replace_source(self, random_patch):
         """A new I/O resource replaces the earlier source during assembly."""
-        first = random_patch.new(source=PatchSource(path="/one.h5"))
-        second = first.new(source=PatchSource(path="/two.h5"))
+        first = random_patch.new(source=ArraySource(path="/one.h5"))
+        second = first.new(source=ArraySource(path="/two.h5"))
         assert second._source.path == "/two.h5"
         assert first._source.path == "/one.h5"
 

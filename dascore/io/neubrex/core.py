@@ -10,7 +10,7 @@ import dascore as dc
 import dascore.io.neubrex.utils_das as das_utils
 import dascore.io.neubrex.utils_rfs as rfs_utils
 from dascore.constants import snap_type
-from dascore.io import FiberIO
+from dascore.io import ArraySource, FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
@@ -69,7 +69,14 @@ class NeubrexRFSV1(FiberIO):
         """Get the attributes of a resource belong to this type."""
         cm = rfs_utils._get_coord_manager(resource, snap)
         attrs = NeubrexRFSPatchAttrs.from_dict(rfs_utils._get_attr_dict(resource))
-        return [dc.PatchMeta(attrs=attrs, coords=cm, dtype=str(resource["data"].dtype))]
+        return [
+            dc.PatchMeta(
+                attrs=attrs,
+                coords=cm,
+                dtype=str(resource["data"].dtype),
+                source=ArraySource(key=resource["data"].name),
+            )
+        ]
 
 
 class NeubrexDASV1(FiberIO):
@@ -100,4 +107,11 @@ class NeubrexDASV1(FiberIO):
         acoustic = resource["Acoustic"]
         cm = das_utils._get_coord_manager(acoustic)
         attrs = NeubrexDASPatchAttrs.from_dict(das_utils._get_attr_dict(acoustic))
-        return [dc.PatchMeta(attrs=attrs, coords=cm, dtype=str(acoustic.dtype))]
+        return [
+            dc.PatchMeta(
+                attrs=attrs,
+                coords=cm,
+                dtype=str(acoustic.dtype),
+                source=ArraySource(key=acoustic.name),
+            )
+        ]

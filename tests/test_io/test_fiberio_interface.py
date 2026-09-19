@@ -8,7 +8,7 @@ import pytest
 
 import dascore as dc
 from dascore.core.coords import CoordMonotonicArray
-from dascore.core.source import PatchSource
+from dascore.core.source import ArraySource
 from dascore.exceptions import InvalidFiberFileError, InvalidFiberIOError
 from dascore.io import FiberIO, H5Reader
 from dascore.io.dasdae.core import DASDAEV2
@@ -35,7 +35,7 @@ class _ArrayReader(FiberIO):
             dims=("distance", "time"),
             dtype=self.data.dtype,
             attrs={"tag": "kept"},
-            source=PatchSource(key="part"),
+            source=ArraySource(key="part"),
         )
 
     def get_version(self, resource) -> str | None:

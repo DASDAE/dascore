@@ -31,6 +31,7 @@ from typing import (
 
 import numpy as np
 import pandas as pd
+from h5py import Dataset as H5pyDataset
 
 import dascore as dc
 from dascore.compat import Progress, UPath
@@ -42,7 +43,7 @@ from dascore.constants import (
     time_select_type,
 )
 from dascore.core.coords import CoordSegmented
-from dascore.core.source import PatchSource
+from dascore.core.source import ArraySource
 from dascore.core.spool import Spool
 from dascore.core.summary import PatchSummary, normalize_source_patch_key
 from dascore.exceptions import (
@@ -58,6 +59,7 @@ from dascore.exceptions import (
 )
 from dascore.io.utils import selection_windows
 from dascore.utils.downloader import resolve_example_uri
+from dascore.utils.hdf5 import _ManagedH5pyFile
 from dascore.utils.identity import (
     ids_enabled,
     source_patch_id,
@@ -135,7 +137,7 @@ def _resolve_read_spool(spool, source_patch_key: object = "") -> dc.Patch:
     """
     source_patch_key = normalize_source_patch_key(source_patch_key)
     if source_patch_key and len(spool) == 1:
-        found = normalize_source_patch_key((spool[0]._source or PatchSource()).key)
+        found = normalize_source_patch_key((spool[0]._source or ArraySource()).key)
         if found == source_patch_key or (not found and not source_patch_key.isdigit()):
             return spool[0]
     return _select_patch_from_spool(spool, source_patch_key=source_patch_key)
@@ -156,7 +158,7 @@ def _select_patch_from_spool(spool, source_patch_key: object = "") -> dc.Patch:
         matches = [
             patch
             for patch in spool
-            if normalize_source_patch_key((patch._source or PatchSource()).key)
+            if normalize_source_patch_key((patch._source or ArraySource()).key)
             == source_patch_key
         ]
         if len(matches) == 1:
@@ -729,7 +731,7 @@ class FiberIO:
 
         The coordinates declare the array's dimensions and shape, and the
         metadata declares its dtype. Multi-patch readers put their logical key
-        in `PatchSource`. The framework supplies the source path, format,
+        in `ArraySource`. The framework supplies the source path, format,
         and version. `snap` accepts True, False, a coordinate name, or a tuple of
         names. `snap=False` preserves stored coordinate values when
         available; neither setting includes unwritten samples.
@@ -813,14 +815,18 @@ class FiberIO:
                 prepare = FiberIO._prepare_read.__get__(self)
             patches, load = prepare(manager, snap)
             patches = [_validate_metadata(patch) for patch in patches]
-            origins = [patch._source or PatchSource() for patch in patches]
+            origins = [patch._source or ArraySource() for patch in patches]
             if provenance_source is not None:
                 patches = _stamp_source_ids(
-                    patches, self.name, self.version, provenance_source
+                    patches,
+                    self.name,
+                    self.version,
+                    provenance_source,
+                    describe=self.input_type != "directory",
                 )
             selected, requests = [], []
             for index, (patch, origin) in enumerate(zip(patches, origins, strict=True)):
-                source = patch._source or PatchSource()
+                source = patch._source or ArraySource()
                 key = source.key or (str(index) if len(patches) > 1 else "")
                 if wanted and (source.key or str(index)) not in wanted:
                     continue
@@ -857,9 +863,11 @@ class FiberIO:
                     else key
                 )
                 requests.append((windows, array_key))
-                selected.append(
-                    (patch, coords, replace(source, key=key), windows, residual)
+                # Only a contiguous read is what the source alone would load.
+                source = replace(source, key=key).narrow(
+                    tuple(indexers.get(x, slice(None)) for x in patch.dims)
                 )
+                selected.append((patch, coords, source, windows, residual))
             for selection, data in zip(selected, load(requests), strict=True):
                 patch, coords, source, windows, residual = selection
                 expected = (
@@ -876,8 +884,9 @@ class FiberIO:
                     )
                     raise InvalidFiberIOError(msg)
                 data = _apply_union_indexers(residual, data)
-                described = patch.update(coords=coords, source=source)
-                out.append(described.to_patch(data))
+                new = patch.update(coords=coords).to_patch(data)
+                new._source = source
+                out.append(new)
         return dc.spool(out)
 
     def scan(
@@ -910,7 +919,7 @@ class FiberIO:
                 patch
                 for patch in patches
                 if self._updated_after(
-                    (patch._source or PatchSource()).path or resource, timestamp
+                    (patch._source or ArraySource()).path or resource, timestamp
                 )
             ]
         return patches
@@ -1137,6 +1146,31 @@ def source_identity(source) -> tuple[str, int | None, int | None]:
     return path, *_source_stats(path)
 
 
+def _load_array_source(source: ArraySource) -> np.ndarray:
+    """Read the array a source describes, checking it against the description."""
+    fiberio = FiberIO.manager.get_fiberio(format=source.format, version=source.version)
+    with IOResourceManager(source.path) as manager:
+        resource = manager.get_resource(_required_resource_type(fiberio.read_array))
+        getattr(resource, "seek", lambda x: None)(0)
+        stored = None
+        if source.key.startswith("/") and isinstance(resource, _ManagedH5pyFile):
+            # Anything but a dataset is the reader's to refuse.
+            stored = resource[source.key] if source.key in resource else None
+        if isinstance(stored, H5pyDataset):
+            out = np.asarray(stored[tuple(slice(*x) for x in source.windows)])
+        else:
+            windows = dict(zip(source.dims, source.windows, strict=True))
+            reader = cast(_TypeCasterMethod, fiberio.read_array)
+            out = reader(resource, windows, key=source.key, _pre_cast=True)
+    if out.shape != source.shape or np.dtype(out.dtype) != np.dtype(source.dtype):
+        msg = (
+            f"{source.path} gave {out.shape}/{out.dtype}; its source declared "
+            f"{source.shape}/{source.dtype}. The resource may have changed."
+        )
+        raise InvalidFiberIOError(msg)
+    return out
+
+
 def _stamp_source_ids(
     patches: list[dc.Patch],
     file_format: str,
@@ -1144,8 +1178,14 @@ def _stamp_source_ids(
     source,
     *,
     indices: Sequence[int] | None = None,
+    describe: bool = False,
 ) -> list[dc.Patch]:
-    """Stamp selected patches, retaining their original source ordinals and keys."""
+    """
+    Stamp selected patches, retaining their original source ordinals and keys.
+
+    `describe` makes each source loadable; only for whole, unselected arrays
+    which `read_array` can find by key.
+    """
     indices = range(len(patches)) if indices is None else indices
     if not indices:
         return []
@@ -1155,11 +1195,13 @@ def _stamp_source_ids(
     for index in indices:
         patch = patches[index]
         origin = replace(
-            patch._source or PatchSource(),
+            patch._source or ArraySource(),
             path=reload_path,
             format=file_format,
             version=file_version,
         )
+        if describe and reload_path:
+            origin = origin.describe(patch.shape, patch.dtype, patch.dims)
         attrs = patch.attrs
         if path and ids_enabled():
             stored = attrs.get(STORED_PATCH_ID, "")
@@ -1561,7 +1603,7 @@ def _iter_scan_results(
                             index
                             for index, member in enumerate(members)
                             if fiber_io._updated_after(
-                                (member._source or PatchSource()).path or resource,
+                                (member._source or ArraySource()).path or resource,
                                 timestamp,
                             )
                         ]
@@ -1571,6 +1613,7 @@ def _iter_scan_results(
                         fiber_io.version,
                         man.source,
                         indices=indices,
+                        describe=fiber_io.input_type != "directory",
                     )
                     for result in patches:
                         output_count += 1

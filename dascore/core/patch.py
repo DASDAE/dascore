@@ -17,7 +17,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.patch_meta import PatchMeta, _as_dtype
 from dascore.core.processor import check_patch_listings
-from dascore.core.source import PatchSource
+from dascore.core.source import ArraySource
 from dascore.models import ArrayLike
 from dascore.proc.adaptive_spectral_filter import AdaptiveSpectralFilter
 from dascore.proc.tile_apply import TileApply
@@ -94,7 +94,7 @@ class Patch(NamespaceOwner, PatchMeta):
         dims: Sequence[str] | None = None,
         attrs: Mapping | PatchAttrs | None = None,
         dtype: Any = None,
-        source: PatchSource | None = None,
+        source: ArraySource | None = None,
     ):
         # Init empty patch
         if all(x is None for x in (data, coords, dims, attrs)):
@@ -296,7 +296,10 @@ class Patch(NamespaceOwner, PatchMeta):
 
     def _reattach(self, out: PatchMeta, attrs: PatchAttrs) -> Patch:
         """Return `out` under `attrs`, carrying this patch's unchanged data."""
-        return out.update(attrs=attrs).to_patch(self._data)
+        new = out.update(attrs=attrs).to_patch(self._data)
+        # The data are unchanged, so `out` already says whether its source loads them.
+        new._source = out._source
+        return new
 
     def to_patch(self, data) -> Patch:
         """

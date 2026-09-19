@@ -10,7 +10,7 @@ import dascore
 import dascore as dc
 from dascore.constants import snap_type
 from dascore.core.summary import normalize_source_patch_key
-from dascore.io import BinaryReader, BinaryWriter, FiberIO, PatchSource
+from dascore.io import ArraySource, BinaryReader, BinaryWriter, FiberIO
 from dascore.io.utils import resolve_keyed_source, slice_dataset
 from dascore.utils.io import IOResourceManager
 
@@ -18,7 +18,7 @@ from dascore.utils.io import IOResourceManager
 def _read_patches(resource):
     """Load positional entries, retaining unambiguous keys from legacy pickles."""
     patches = list(dascore.spool(pickle.load(resource)))
-    # PatchSource describes the previous file, not positions in this container.
+    # ArraySource describes the previous file, not positions in this container.
     keys = [
         normalize_source_patch_key(p.attrs.get("_source_patch_key", ""))
         for p in patches
@@ -90,7 +90,7 @@ class PickleIO(FiberIO):
                 coords=p.coords,
                 attrs=p.attrs.drop("_source_patch_key"),
                 dtype=p.dtype,
-                source=PatchSource(key=key),
+                source=ArraySource(key=key),
             )
             for p, key in resource.patches
         ]

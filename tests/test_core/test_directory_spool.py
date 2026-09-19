@@ -13,7 +13,7 @@ import pytest
 import dascore as dc
 import dascore.examples
 from dascore.constants import ONE_SECOND
-from dascore.core.source import PatchSource
+from dascore.core.source import ArraySource
 from dascore.core.spool import Spool
 from dascore.exceptions import InvalidSpoolError, MissingPatchError, ParameterError
 from dascore.utils.misc import suppress_warnings
@@ -169,8 +169,8 @@ class TestLoadPatchFastPath:
         self, one_directory_spool, random_patch, monkeypatch
     ):
         """Multi-patch reads resolve source identity from one dc.read call."""
-        patch_1 = random_patch.new(source=PatchSource(key="first"))
-        patch_2 = random_patch.new(source=PatchSource(key="second"))
+        patch_1 = random_patch.new(source=ArraySource(key="first"))
+        patch_2 = random_patch.new(source=ArraySource(key="second"))
         reads = []
 
         def _fake_read(**kwargs):

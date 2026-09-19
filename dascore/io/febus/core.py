@@ -8,7 +8,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.core.source import PatchSource
+from dascore.core.source import ArraySource
 from dascore.io import FiberIO
 from dascore.io.utils import resolve_keyed_source, slice_dataset
 from dascore.models import OptionalFiniteFloat, UTF8Str
@@ -96,7 +96,7 @@ class Febus2(FiberIO):
                     attrs=attrs,
                     coords=cm,
                     dtype=str(feb.zone[feb.data_name].dtype),
-                    source=PatchSource(key=_get_source_patch_key(feb)),
+                    source=ArraySource(key=_get_source_patch_key(feb)),
                 )
             )
         return out

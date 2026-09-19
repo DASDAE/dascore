@@ -692,7 +692,9 @@ class Select(_Query):
         # No slicing was performed, so the patch is its own answer.
         if coords == meta.coords:
             return meta, {}
-        return meta.new(coords=coords), {"indexer": indexer}
+        # A contiguous selection is still something the source can load.
+        source = meta._source and meta._source.narrow(indexer)
+        return meta.new(coords=coords, source=source), {"indexer": indexer}
 
 
 class Isel(PatchProcessor):
@@ -764,7 +766,8 @@ class Isel(PatchProcessor):
         # Nothing was named, so nothing moves.
         if coords is meta.coords:
             return meta, {}
-        return meta.new(coords=coords), {"indexer": indexer}
+        source = meta._source and meta._source.narrow(indexer)
+        return meta.new(coords=coords, source=source), {"indexer": indexer}
 
     def kernel(self, data, *, indexer=None):
         """Return the samples at the requested positions."""

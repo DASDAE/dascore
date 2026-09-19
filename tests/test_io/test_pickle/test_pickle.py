@@ -11,7 +11,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.io import PatchSource
+from dascore.io import ArraySource
 from dascore.io.pickle.core import PickleIO
 
 
@@ -134,7 +134,7 @@ class TestSerializedSourceKeys:
             if legacy:
                 patch = patch.new(attrs=patch.attrs.update(_source_patch_key=key))
             else:
-                patch = patch.new(source=PatchSource(key=key))
+                patch = patch.new(source=ArraySource(key=key))
             patches.append(patch)
         path = tmp_path / "keys.pkl"
         with path.open("wb") as stream:
@@ -163,7 +163,7 @@ class TestSerializedSourceKeys:
     @pytest.mark.parametrize("legacy", [False, True])
     def test_duplicate_origins_use_positions(self, tmp_path, random_patch, legacy):
         """A patch and a derived copy remain separate pickle entries."""
-        patch = random_patch.new(source=PatchSource(key="1"))
+        patch = random_patch.new(source=ArraySource(key="1"))
         if legacy:
             patch = patch.new(attrs=patch.attrs.update(_source_patch_key="1"))
         other = patch.new(data=patch.data * 2)

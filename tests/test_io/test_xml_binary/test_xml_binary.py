@@ -12,7 +12,11 @@ from upath import UPath
 
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
-from dascore.exceptions import InvalidFiberFileError, UnknownFiberFormatError
+from dascore.exceptions import (
+    InvalidFiberFileError,
+    ParameterError,
+    UnknownFiberFormatError,
+)
 from dascore.io import core as io_core
 from dascore.io.xml_binary import XMLBinaryV1
 from dascore.io.xml_binary.utils import _read_xml_metadata
@@ -452,3 +456,17 @@ class TestStorageProvenance:
         summary = dc.scan(binary_xml_directory)[0]
         names = set(dict(summary.attrs))
         assert not names & set(STORAGE_PROVENANCE_ATTRS)
+
+
+class TestDirectorySource:
+    """A directory's arrays are pinned by member path, which only read holds."""
+
+    def test_source_not_loadable(self, binary_xml_directory):
+        """Reads still work, and the source names the directory alone."""
+        patch = dc.read(binary_xml_directory)[0]
+        source = patch._source
+        assert patch.shape and patch.data.size
+        assert source.format == XMLBinaryV1().name
+        assert not source.loadable
+        with pytest.raises(ParameterError, match="does not say enough"):
+            source.load()

@@ -16,7 +16,7 @@ import pytest
 
 import dascore as dc
 import dascore.utils.patch_registry as registry_module
-from dascore.core.source import PatchSource
+from dascore.core.source import ArraySource
 from dascore.units import get_unit
 from dascore.utils.identity import (
     NOTHING_DONE,
@@ -73,7 +73,7 @@ class TestNewDataId:
         assert int(made, 16) >= 0
 
 
-_SOURCE = PatchSource(format="DASDAE", version="1", path="/data/one.h5")
+_SOURCE = ArraySource(format="DASDAE", version="1", path="/data/one.h5")
 
 
 class TestSourceDataId:

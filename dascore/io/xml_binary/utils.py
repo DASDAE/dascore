@@ -12,7 +12,7 @@ from pydantic.alias_generators import to_pascal
 
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
-from dascore.core.source import PatchSource
+from dascore.core.source import ArraySource
 from dascore.io.utils import step_from_rate
 from dascore.models import DateTime64
 from dascore.utils.misc import iterate
@@ -175,7 +175,7 @@ def _paths_to_scan_patches(
                 attrs=attrs,
                 coords=coords,
                 dtype=metadata.data_type,
-                source=PatchSource(path=str(path)),
+                source=ArraySource(path=str(path)),
             )
         )
     return out

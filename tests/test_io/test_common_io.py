@@ -528,6 +528,34 @@ class TestRead:
         for patch in read_spool:
             _assert_coords_attrs_match(patch)
 
+    def test_source_loads_patch_data(self, read_spool):
+        """A source which says it can load gives the data of its own patch."""
+        for patch in read_spool:
+            source = patch._source
+            if source.loadable:
+                assert np.array_equal(source.load(), patch.data, equal_nan=True)
+                part = source[1:]
+                assert np.array_equal(part.load(), patch.data[1:], equal_nan=True)
+
+    def test_path_key_needs_no_reader(self, read_spool):
+        """A key which is a dataset path is all plain h5py needs."""
+        for patch in read_spool:
+            source = patch._source
+            if source.loadable and source.key.startswith("/"):
+                with h5py.File(source.path) as fi:
+                    stored = fi[source.key][tuple(slice(*x) for x in source.windows)]
+                assert np.array_equal(stored, patch.data, equal_nan=True)
+
+    def test_selected_source_loads_patch_data(self, io_path_tuple):
+        """A read which selects gives a source for the selection, or none."""
+        _, path = io_path_tuple
+        with skip_missing():
+            spool = dc.read(path, time=(1, 4), samples=True)
+        for patch in spool:
+            source = patch._source
+            if source.loadable:
+                assert np.array_equal(source.load(), patch.data, equal_nan=True)
+
     def test_time_coords_are_datetimes(self, read_spool):
         """Ensure the time coordinates have the type of datetime."""
         for patch in read_spool:

@@ -15,7 +15,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import ONE_BILLION
 from dascore.core import get_coord, get_coord_manager
-from dascore.core.source import PatchSource
+from dascore.core.source import ArraySource
 from dascore.utils.io import LocalPath, _read_file_header
 
 _T = TypeVar("_T", bound="_TraceSummary")
@@ -331,7 +331,7 @@ def _metadata_from_segments(
         attrs=attrs,
         coords=coords,
         dtype=np.result_type(*[segment.dtype for segment in segments]),
-        source=PatchSource(key=_source_patch_key(group_key)),
+        source=ArraySource(key=_source_patch_key(group_key)),
     )
 
 

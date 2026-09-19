@@ -8,7 +8,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import FiberIO
+from dascore.io import ArraySource, FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
@@ -53,7 +53,10 @@ class SilixaH5V1(FiberIO):
         attrs, coords = self._attr_getter(resource, SilixaPatchAttrs)
         return [
             dc.PatchMeta(
-                attrs=attrs, coords=coords, dtype=str(resource[self._data_name].dtype)
+                attrs=attrs,
+                coords=coords,
+                dtype=str(resource[self._data_name].dtype),
+                source=ArraySource(key=resource[self._data_name].name),
             )
         ]
 
