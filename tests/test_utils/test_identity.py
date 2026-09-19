@@ -90,7 +90,7 @@ class TestH:
         """Nothing process-salted reaches an id."""
         code = (
             "from dascore.utils.identity import H;"
-            "print(H('test', {'a': 1, 'b': [1.5, 'x', None]}))"
+            "print(H('test', {'a': 1, 'b': [1.5, 'x', None], 'c': {'p', 'q', 'r'}}))"
         )
         out = subprocess.run(
             [sys.executable, "-c", code],
@@ -99,7 +99,9 @@ class TestH:
             check=True,
             env={"PYTHONHASHSEED": "12345", "PATH": ""},
         )
-        assert out.stdout.strip() == digest({"a": 1, "b": [1.5, "x", None]})
+        # The set is what a hash seed would reorder.
+        payload = {"a": 1, "b": [1.5, "x", None], "c": {"p", "q", "r"}}
+        assert out.stdout.strip() == digest(payload)
 
     def test_a_written_down_id_holds(self):
         """An id recorded last week names the same payload today."""
@@ -224,6 +226,11 @@ class TestHashArray:
         second = np.empty((1, 0), dtype="i8")
         assert hash_array(first) != hash_array(second)
 
+    def test_the_same_bytes_as_another_dtype(self):
+        """Eight zero bytes are two int32s or one int64."""
+        assert hash_array(np.zeros(2, "i4")) != hash_array(np.zeros(1, "i8"))
+        assert hash_array(np.zeros((2, 1), "i4")) != hash_array(np.zeros((1, 2), "i4"))
+
     def test_structured_dtypes(self):
         """Two record layouts of one width are two dtypes."""
         first = np.zeros(2, dtype=[("x", "i8")])
@@ -297,6 +304,33 @@ class TestRefusals:
         with pytest.raises(ParameterError, match="object"):
             digest(pd.DataFrame({"a": np.array([1, "1"], dtype=object)}))
 
+    def test_object_index_and_categories(self):
+        """The same trap, one level down."""
+        index = pd.Index([1, "1"], dtype=object)
+        with pytest.raises(ParameterError, match="object"):
+            digest(pd.DataFrame({"a": [1, 2]}, index=index))
+        mixed = pd.Categorical([1, "1"])
+        with pytest.raises(ParameterError, match="object"):
+            digest(pd.DataFrame({"a": mixed}))
+
+    def test_a_callable_object(self):
+        """Its state is not its name."""
+
+        class Scale:
+            def __init__(self, factor):
+                self.factor = factor
+
+            def __call__(self, x):
+                return x * self.factor
+
+        with pytest.raises(ParameterError, match="callable object"):
+            digest(Scale(2))
+
+    def test_a_lambda(self):
+        """Nothing tells it from the one beside it."""
+        with pytest.raises(ParameterError, match="lambda"):
+            digest(lambda x: x)
+
     def test_a_closure(self):
         """Two closures read alike and behave differently."""
         assert make_closure(1)(1) != make_closure(2)(1)
@@ -328,11 +362,17 @@ class TestCallables:
         """Closures whose paths resolve are named by them."""
         assert digest(dc.proc.abs.raw_function) != digest(dc.proc.imag.raw_function)
 
-    def test_lambdas_by_source(self):
-        """A lambda's path names every lambda, so its source counts."""
-        first = lambda x: x + 1  # noqa: E731
-        second = lambda x: x + 2  # noqa: E731
-        assert digest(first) != digest(second)
+    def test_local_functions_by_source_and_defaults(self):
+        """A function defined in a call is its source and its defaults."""
+
+        def make(k):
+            def local(x, k=k):
+                return x + k
+
+            return local
+
+        assert digest(make(1)) == digest(make(1))
+        assert digest(make(1)) != digest(make(2))
 
     def test_partial(self):
         """A partial is what it wraps and what it wraps it with."""
@@ -349,6 +389,13 @@ class TestModelsAndFrames:
         assert digest(dc.PatchAttrs(tag="a")) != digest({"tag": "a"})
         assert digest(dc.PatchAttrs(my_extra=1)) != digest(dc.PatchAttrs())
 
+    def test_dataclasses(self):
+        """By class and fields, as a model is."""
+        from dascore.utils.gaps import GapTolerance  # noqa: PLC0415
+
+        assert digest(GapTolerance(count=1.5)) == digest(GapTolerance(count=1.5))
+        assert digest(GapTolerance(count=1.5)) != digest(GapTolerance(count=2.5))
+
     def test_frames(self):
         """Values, labels and dtypes each count."""
         df = pd.DataFrame({"a": [1, 2], "b": [1.0, 2.0]})
@@ -357,6 +404,11 @@ class TestModelsAndFrames:
         assert digest(df) != digest(df.rename(columns={"a": "z"}))
         assert digest(df) != digest(df.assign(a=df["a"].astype(float)))
         assert digest(df["a"]) != digest(df["a"] + 1)
+        # A label is its value, and the index is named.
+        assert digest(df.rename(columns={"a": 1})) != digest(
+            df.rename(columns={"a": "1"})
+        )
+        assert digest(df.rename_axis("i")) != digest(df.rename_axis("j"))
 
 
 class TestCoordIdentity:
@@ -457,6 +509,21 @@ class TestExtractPatches:
         swapped = extract_patches({"group": {"a": other, "b": patch}})
         assert swapped[1][0] is other
 
+    def test_top_level_order_is_by_name(self, patch):
+        """The order the arguments were given in does not number them."""
+        other = patch * 2
+        first = extract_patches({"b": other, "a": patch})
+        assert first[0] == {"a": PatchMarker(0), "b": PatchMarker(1)}
+        assert first[1][0] is patch
+
+    def test_in_a_namedtuple(self, patch):
+        """Which cannot be rebuilt from an iterable, and need not be."""
+        from collections import namedtuple  # noqa: PLC0415
+
+        pair = namedtuple("pair", ["first", "second"])
+        params, found = extract_patches({"items": pair(patch, 3)})
+        assert params == {"items": [PatchMarker(0), 3]} and found == [patch]
+
     def test_in_a_list(self, patch):
         """Order in a sequence is order among the inputs."""
         params, found = extract_patches({"items": [patch, 3, patch]})
@@ -517,12 +584,8 @@ class TestResultIds:
 
     def test_a_refusing_operation_is_random(self, patch):
         """Never the input's id, never twice the same."""
-
-        def _refuses():
-            raise ParameterError("nope")
-
-        first = result_ids([patch.attrs], _refuses)["data_id"]
-        second = result_ids([patch.attrs], _refuses)["data_id"]
+        first = result_ids([patch.attrs], None)["data_id"]
+        second = result_ids([patch.attrs], None)["data_id"]
         assert len({first, second, patch.attrs.data_id}) == 3
 
     def test_a_parent_with_no_id_is_random(self, patch):
@@ -530,6 +593,10 @@ class TestResultIds:
         blank = patch.attrs.update(origin_id="", data_id="")
         first = result_ids([blank], "op")["data_id"]
         assert first and first != result_ids([blank], "op")["data_id"]
+        # One named parent does not make the other's data known.
+        mixed = [patch.attrs, blank]
+        assert result_ids(mixed, "op")["data_id"] != result_ids(mixed, "op")["data_id"]
+        assert result_ids(mixed, "op")["origin_id"] == patch.attrs.origin_id
 
     def test_disabled_clears(self, patch):
         """What changed the data was not recorded, so it claims no id."""
@@ -597,6 +664,31 @@ class TestPatchRules:
         second = patch.set_units(get_unit("s"))
         assert first.attrs.data_id != second.attrs.data_id
 
+    def test_a_refused_call_keeps_every_origin(self, patch):
+        """The data id is random; where the data came from is still known."""
+        from decimal import Decimal  # noqa: PLC0415
+
+        other = dc.get_example_patch() > 0
+        out = patch.where(other, other=Decimal("0"))
+        assert out.attrs.origin_id == fold_origin_ids(
+            [patch.attrs.origin_id, other.attrs.origin_id]
+        )
+        assert out.attrs.data_id not in ("", patch.attrs.data_id)
+
+    def test_a_factory_made_patch_function(self, patch):
+        """Closures over different values never share an id."""
+
+        def make(factor):
+            @dc.patch_function()
+            def scale(patch):
+                """Scale the data."""
+                return patch.new(data=patch.data * factor)
+
+            return scale
+
+        ids = {make(x)(patch).attrs.data_id for x in (1, 2, 2)}
+        assert len(ids) == 3 and "" not in ids
+
     def test_a_closure_argument_is_random(self, patch):
         """The call works; its id is nobody else's."""
 
@@ -615,9 +707,26 @@ class TestPatchRules:
         """Operations which are not patch functions are named too."""
         assert (patch + 1).attrs.data_id != (patch - 1).attrs.data_id
         assert (patch + 1).attrs.data_id == (patch + 1).attrs.data_id
+        # Each site derives, rather than falling back to a random id.
+        assert np.abs(patch).attrs.data_id == np.abs(patch).attrs.data_id
+        first, second = np.mean(patch, axis=0), np.mean(patch, axis=0)
+        assert first.attrs.data_id == second.attrs.data_id
         assert np.abs(patch).attrs.data_id != np.sqrt(np.abs(patch)).attrs.data_id
         by_axis = {np.mean(patch, axis=x).attrs.data_id for x in (0, 1)}
         assert len(by_axis) == 2
+
+    def test_disabled_hashes_nothing(self, patch, monkeypatch):
+        """With ids off, no argument is encoded."""
+        import dascore.utils.identity as identity  # noqa: PLC0415
+
+        def _fail(*args, **kwargs):
+            raise AssertionError("an id was computed with ids disabled")
+
+        with config_context(patch_provenance="disabled"):
+            monkeypatch.setattr(identity, "H", _fail)
+            assert (patch + 1).attrs.data_id == ""
+            assert patch.pass_filter(time=(1, 10)).attrs.data_id == ""
+            assert np.abs(patch).attrs.data_id == ""
 
     def test_two_patches(self, patch):
         """Both are inputs, in order; one origin stays itself."""
@@ -677,8 +786,31 @@ class TestCombinations:
     def test_merge_is_an_operation(self, members):
         """A merged patch is derived from its members, in order."""
         merged = dc.spool(members).chunk(time=None)[0]
-        expected = derive([x.attrs.data_id for x in members], merge_operation())
-        assert merged.attrs.data_id == expected
+        assert merged.attrs.data_id not in {x.attrs.data_id for x in members}
+        assert (
+            merged.attrs.data_id == dc.spool(members).chunk(time=None)[0].attrs.data_id
+        )
+        backwards = derive([x.attrs.data_id for x in members[::-1]], merge_operation())
+        assert merged.attrs.data_id != backwards
+
+    def test_merge_options_are_part_of_it(self, members):
+        """`snap_coords` changes the merged coordinate, so it changes the id."""
+        snapped = dc.spool(members).chunk(time=None)[0]
+        exact = dc.spool(members).chunk(time=None, snap_coords=False)[0]
+        assert snapped.attrs.data_id != exact.attrs.data_id
+
+    def test_former_id_names(self, members):
+        """Attrs from before the rename read as the ids they were."""
+        attrs = dc.PatchAttrs(patch_id="abc", processing_id="def")
+        assert (attrs.origin_id, attrs.data_id) == ("abc", "def")
+        assert "patch_id" not in attrs.model_dump()
+        # Left on an unvalidated (unpickled) instance, they decide no merge.
+        old = []
+        for index, member in enumerate(members):
+            stale = member.attrs.model_copy()
+            stale.__pydantic_extra__ = {"patch_id": str(index)}
+            old.append(member.new(attrs=stale))
+        assert len(dc.spool(old).chunk(time=None)) == 1
 
     def test_a_single_member_merge_is_the_member(self, members):
         """Nothing was combined."""
@@ -711,16 +843,33 @@ class TestSeveralOutputs:
         assert second.attrs.data_id == derive([patch.attrs.data_id], op, 2)
 
     def test_a_spool_comes_back_a_spool(self, patch):
-        """And its members are stamped."""
+        """And its members are stamped by position."""
 
         @dc.patch_function()
         def as_spool(patch):
-            """Return a spool of one new patch."""
-            return dc.spool([patch.new(data=patch.data)])
+            """Return a spool of two new patches."""
+            return dc.spool([patch.new(data=patch.data), patch.new(data=patch.data)])
 
         out = as_spool(patch)
         assert isinstance(out, dc.BaseSpool)
-        assert out[0].attrs.data_id != patch.attrs.data_id
+        op = fingerprint_call(as_spool, (), {})
+        expected = [derive([patch.attrs.data_id], op, x) for x in (0, 1)]
+        assert [x.attrs.data_id for x in out] == expected
+
+    def test_a_namedtuple_comes_back_one(self, patch):
+        """A tuple which takes its members one by one."""
+        from collections import namedtuple  # noqa: PLC0415
+
+        pair = namedtuple("pair", ["low", "high"])
+
+        @dc.patch_function()
+        def split(patch):
+            """Return two new patches by name."""
+            return pair(patch.new(data=patch.data), patch.new(data=patch.data))
+
+        out = split(patch)
+        assert isinstance(out, pair)
+        assert out.low.attrs.data_id != out.high.attrs.data_id
 
 
 class TestStoredIds:

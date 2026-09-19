@@ -244,6 +244,18 @@ class TestBinding:
         with pytest.raises(ParameterError, match="both as a parameter"):
             _bind(dc.proc.append_dims, ("a",), {"empty_dims": 3})
 
+    def test_an_extra_named_for_an_omitted_positional(self):
+        """`f(p, 2)` and `f(p, factor=2)` are two calls, not one mapping."""
+
+        @dc.patch_function()
+        def transform(patch, factor=1, /, **kwargs):
+            """Scale, and add an extra which shares the scale's name."""
+            return patch.new(data=patch.data * factor + kwargs.get("factor", 0))
+
+        assert _bind(transform, (2,), {}) == {"factor": 2}
+        with pytest.raises(ParameterError, match="both as a parameter"):
+            _bind(transform, (), {"factor": 2})
+
     def test_an_argument_the_signature_rejects(self):
         """An argument the function does not take is refused."""
         with pytest.raises(ParameterError, match="cannot be called that way"):

@@ -55,7 +55,7 @@ from dascore.utils.coordmanager import merge_coord_managers
 from dascore.utils.deprecate import deprecate
 from dascore.utils.docs import compose_docstring
 from dascore.utils.gaps import GapTolerance
-from dascore.utils.identity import _ID_FIELDS, operation_id, stamp
+from dascore.utils.identity import _ID_FIELDS, ids_enabled, operation_id, stamp
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _apply_union_indexers,
@@ -313,33 +313,18 @@ def _stamp(patch, attrs, patch_func, args, kwargs, output=None):
 
     Every patch given to the call is an input -- `where(cond_patch,
     other_patch)` uses all three -- in the order the operation's markers
-    number them. A call the encoder cannot spell still made new data, so
-    the result gets a random id rather than none.
+    number them. A call the encoder refuses still made new data, so the
+    result gets a random id rather than none.
     """
-    found: list = []
-
-    def _operation() -> str:
-        fingerprint, patches = call_operation(patch_func, args, kwargs)
-        found.extend(patches)
-        return fingerprint
-
+    if not ids_enabled():
+        return stamp(attrs, (), None)
     try:
-        fingerprint = _operation()
+        operation, others = call_operation(patch_func, args, kwargs)
     except Exception:
-        return stamp(attrs, [patch.attrs], _operation, output)
-    return _stamp_ids(patch, attrs, fingerprint, found, output)
-
-
-def _stamp_ids(patch, attrs, fingerprint: str, others=(), output=None):
-    """
-    Return attrs whose ids say an operation with `fingerprint` made them.
-
-    `patch` and any `others` are the patches the operation was given, read
-    from the inputs rather than from whatever the body returned: filtering
-    data does not make it other data.
-    """
-    members = [patch.attrs, *(x.attrs for x in others)]
-    return stamp(attrs, members, fingerprint, output)
+        # The patches it was plainly given still say where the data came from.
+        given = (*args, *kwargs.values())
+        operation, others = None, [x for x in given if isinstance(x, dc.Patch)]
+    return stamp(attrs, [patch.attrs, *(x.attrs for x in others)], operation, output)
 
 
 def record_call(
@@ -385,7 +370,10 @@ def _record_members(out, patch, patch_func, args, kwargs):
         else x
         for index, x in enumerate(out)
     ]
-    return dc.spool(members) if isinstance(out, dc.BaseSpool) else type(out)(members)
+    if isinstance(out, dc.BaseSpool):
+        return dc.spool(members)
+    # A namedtuple takes its members one by one.
+    return type(out)(*members) if hasattr(out, "_fields") else type(out)(members)
 
 
 def _to_numpy_arg(obj):
@@ -737,7 +725,7 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
         df, merge_dim, coords, drop_conf_coords, **coord_kwargs
     )
     warn_if_histories_differ(attrs, "Merging")
-    new_attrs = combine_patch_attrs(attrs, **attr_kwargs)
+    new_attrs = combine_patch_attrs(attrs, **attr_kwargs, merge_params=merge_kwargs)
     patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
     new_dict = {"patch": patch}
     return [new_dict]
@@ -1572,7 +1560,7 @@ def _merge_models(attrs1, attrs2):
     fill = {
         key: value
         for key, value in attrs2.model_dump(exclude_defaults=True).items()
-        if key not in _ID_FIELDS  # fold_ids returns {} when ids are disabled
+        if key not in _ID_FIELDS
         and key not in ("history", "data_units")
         and not key.startswith("_")
         and not _is_missing(value)

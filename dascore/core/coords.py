@@ -878,7 +878,8 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             coord.unit_str,
             *coord._fingerprint_components(),
         )
-        return H("coord", payload)
+        # Built from strings and None alone, so it is its own encoding.
+        return H("coord", payload, encoded=True)
 
     def _identity(self) -> tuple[str, str]:
         """

@@ -5,7 +5,7 @@ Utils for working with attributes.
 from __future__ import annotations
 
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any, Literal
 
 import numpy as np
@@ -17,6 +17,19 @@ from dascore.exceptions import AttributeMergeError, ParameterError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.identity import _ID_FIELDS, ids_enabled, merge_operation, result_ids
 from dascore.utils.misc import iterate
+
+# Ids never decide a merge; the second pair are what the first were called
+# in attrs pickled before they were renamed.
+_DROPPED_IDS = (*_ID_FIELDS, "patch_id", "processing_id")
+
+
+def _merge_id(params) -> str | None:
+    """Return the merge operation's id, or None if it cannot be encoded."""
+    try:
+        return merge_operation(params)
+    except Exception:
+        return None
+
 
 _VALID_CONFLICT_VALUES = ("drop", "raise", "keep_first")
 
@@ -34,6 +47,7 @@ def combine_patch_attrs(
     model_list: Sequence[dc.PatchAttrs],
     conflict: Literal["drop", "raise", "keep_first"] = "raise",
     drop_attrs: Sequence[str] | None = None,
+    merge_params: Mapping[str, Any] | None = None,
 ) -> dc.PatchAttrs:
     """
     Merge Patch Attributes along a dimension.
@@ -46,6 +60,9 @@ def combine_patch_attrs(
         {conflict_desc}
     drop_attrs
         If provided, attributes which should be dropped.
+    merge_params
+        The merge options which decide the result, such as `snap_coords`;
+        they are part of the operation the result's `data_id` records.
     """
     validate_conflict(conflict)
 
@@ -74,7 +91,7 @@ def combine_patch_attrs(
         # what a merge is for, so an id must never make one raise. The fold
         # below decides what the result carries instead.
         model_dicts = [
-            {i: v for i, v in x.items() if i not in _ID_FIELDS} for x in model_dicts
+            {i: v for i, v in x.items() if i not in _DROPPED_IDS} for x in model_dicts
         ]
         # drop attributes specified.
         if drop := set(iterate(drop_attrs)):
@@ -122,7 +139,7 @@ def combine_patch_attrs(
     if ids_enabled() and len(members) == 1:
         ids.update({x: getattr(members[0], x, "") for x in _ID_FIELDS})
     elif ids_enabled() and members:
-        ids.update(result_ids(members, merge_operation))
+        ids.update(result_ids(members, _merge_id(merge_params)))
     # History is never compared (processing differing between members is
     # what a merge is for); the first member's is carried, like the ids.
     history = (

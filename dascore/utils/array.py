@@ -26,7 +26,13 @@ from dascore.utils.array_api import (
     is_numpy,
     nan_reduce,
 )
-from dascore.utils.identity import PatchMarker, operation_id, stamp
+from dascore.utils.identity import (
+    DIGEST_SIZE,
+    PatchMarker,
+    ids_enabled,
+    stamp,
+    try_operation_id,
+)
 from dascore.utils.misc import iterate
 from dascore.utils.patch import (
     _merge_aligned_coords,
@@ -259,17 +265,15 @@ def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
 
     # As for the binary case: a ufunc has no patch function to name it, so
     # `np.abs(patch)` would otherwise record that nothing happened.
-    def _operation() -> str:
-        return operation_id(
-            "Ufunc",
-            {
-                "name": getattr(operator, "__name__", str(operator)),
-                "operands": _without_patch_values(args, [patch]),
-                "kwargs": _without_patch_values(kwargs, [patch]),
-            },
-        )
-
-    attrs = stamp(patch.attrs, [patch.attrs], _operation)
+    operation = ids_enabled() and try_operation_id(
+        "Ufunc",
+        {
+            "name": getattr(operator, "__name__", str(operator)),
+            "operands": _without_patch_values(args, [patch]),
+            "kwargs": _without_patch_values(kwargs, [patch]),
+        },
+    )
+    attrs = stamp(patch.attrs, [patch.attrs], operation or None)
     return patch.new(data=out, attrs=attrs)
 
 
@@ -744,25 +748,23 @@ def _apply_binary_ufunc(
 
     # A ufunc is not a patch function, so nothing else names it. Without
     # this, `patch + 1` and `patch - (-1)` produce the same data and the
-    # same id, though they are different operations. A function, so that a
+    # same id, though they are different operations. Guarded, so that a
     # process which has turned the ids off does not hash operands for a
     # value nothing will read.
-    def _operation() -> str:
-        rest = () if other_is_patch else (other,)
-        given = [x for x in (patch, other) if isinstance(x, dc.Patch)]
-        return operation_id(
-            "Ufunc",
-            {
-                "name": getattr(operator, "__name__", str(operator)),
-                "reversed": reversed,
-                # `args` reaches the operator too, so two calls which
-                # differ only in those are two operations.
-                "operands": _without_patch_values((*rest, *args), given),
-                "kwargs": _without_patch_values(kwargs, given),
-            },
-        )
-
-    attrs = stamp(attrs, members, _operation)
+    rest = () if other_is_patch else (other,)
+    given = [x for x in (patch, other) if isinstance(x, dc.Patch)]
+    operation = ids_enabled() and try_operation_id(
+        "Ufunc",
+        {
+            "name": getattr(operator, "__name__", str(operator)),
+            "reversed": reversed,
+            # `args` reaches the operator too, so two calls which
+            # differ only in those are two operations.
+            "operands": _without_patch_values((*rest, *args), given),
+            "kwargs": _without_patch_values(kwargs, given),
+        },
+    )
+    attrs = stamp(attrs, members, operation or None)
     new = patch.new(data=new_data, coords=coords, attrs=attrs)
     return new
 
@@ -1045,19 +1047,17 @@ def _apply_array_func(func, *args, **kwargs):
     # An array function is not a patch function either, so nothing else
     # names it: without this `np.mean(patch, axis=0)` leaves the ids where
     # they were and claims nothing was done.
-    def _operation() -> str:
-        return operation_id(
-            "ArrayFunc",
-            {
-                "name": _array_func_name(func),
-                # The positional arguments say which reduction it was:
-                # `np.mean(patch, 0)` and `np.mean(patch, 1)` are two.
-                "args": _without_patch_values(converted_args, patches),
-                "kwargs": _without_patch_values(converted_kwargs, patches),
-            },
-        )
-
-    attrs = stamp(patch.attrs, [x.attrs for x in patches], _operation)
+    operation = ids_enabled() and try_operation_id(
+        "ArrayFunc",
+        {
+            "name": _array_func_name(func),
+            # The positional arguments say which reduction it was:
+            # `np.mean(patch, 0)` and `np.mean(patch, 1)` are two.
+            "args": _without_patch_values(converted_args, patches),
+            "kwargs": _without_patch_values(converted_kwargs, patches),
+        },
+    )
+    attrs = stamp(patch.attrs, [x.attrs for x in patches], operation or None)
     patch = patch if attrs is patch.attrs else patch.new(attrs=attrs)
     return _clear_units_if_bool_dtype(patch)
 
@@ -1280,7 +1280,7 @@ def hash_array(arr: np.ndarray) -> str:
         msg = "hash_array does not support object arrays."
         raise ParameterError(msg)
 
-    h = hashlib.blake2b(digest_size=16)
+    h = hashlib.blake2b(digest_size=DIGEST_SIZE)
 
     # A length-prefixed header of the dtype and shape, so that the shape's
     # bytes cannot read as data, nor two record layouts of one width alike.

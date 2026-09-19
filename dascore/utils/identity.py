@@ -30,6 +30,7 @@ Examples
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import hashlib
 import inspect
@@ -41,7 +42,7 @@ from enum import Enum
 from functools import partial
 from pathlib import PurePath
 from types import ModuleType
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, NoReturn
 from uuid import uuid4
 
 import numpy as np
@@ -87,8 +88,8 @@ _SLICE = "$slice"
 _TIMEDELTA = "$timedelta64"
 _UNIT = "$unit"
 
-# The attrs which say which data a patch is. They are folded rather than
-# compared wherever patches are combined.
+# The attrs which say which data a patch is. Never compared where patches
+# are combined: the result's are worked out from its members'.
 _ID_FIELDS = ("origin_id", "data_id")
 
 
@@ -105,7 +106,7 @@ class PatchMarker:
     index: int
 
 
-def H(domain: str, payload: Any) -> str:  # noqa: N802
+def H(domain: str, payload: Any, *, encoded: bool = False) -> str:  # noqa: N802
     """
     Return the 32 character id of a payload within a domain.
 
@@ -116,6 +117,9 @@ def H(domain: str, payload: Any) -> str:  # noqa: N802
         domains get different ids.
     payload
         Anything [`encode`](`dascore.utils.identity.encode`) can spell.
+    encoded
+        True if the payload is already a canonical JSON-safe tree, which
+        skips encoding it; for hot paths which build one themselves.
 
     Examples
     --------
@@ -124,7 +128,7 @@ def H(domain: str, payload: Any) -> str:  # noqa: N802
     >>> assert H("operation", {"dim": "time"}) != H("operation", {"dim": "distance"})
     """
     text = json.dumps(
-        [SCHEME, domain, encode(payload)],
+        [SCHEME, domain, payload if encoded else encode(payload)],
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=True,
@@ -268,32 +272,25 @@ def with_ids(attrs):
     patch built in memory is not the same data as anything else. A reader
     which knows better stamps over this.
     """
-    # `getattr`, not attribute access: a `PatchAttrs` unpickled from before
-    # these fields existed has neither, and `PatchAttrs.from_dict` hands an
-    # instance back untouched rather than revalidating it into one.
+    # `getattr`: attrs unpickled from before these fields existed lack them.
     if getattr(attrs, "origin_id", None) or not ids_enabled():
         return attrs
     minted = new_id()
     update = {"origin_id": minted}
     if not getattr(attrs, "data_id", None):
         update["data_id"] = minted
-    # Old pickles need their missing defaults restored by validation. Current
-    # attrs are already validated; a generated id changes no scientific fields.
+    # Validation restores an old pickle's missing fields; otherwise copy.
     if not all(hasattr(attrs, name) for name in _ID_FIELDS):
         return attrs.update(**update)
     return attrs.model_copy(update=update)
 
 
-# The operation which splices members along a dimension. It takes no
-# parameters: the members, in order, say which dimension they vary along.
-def merge_operation() -> str:
-    """Return the id of the operation which merges patches into one."""
-    return operation_id("Merge", {})
+def merge_operation(params: Mapping[str, Any] | None = None) -> str:
+    """Return the id of merging patches into one, under these merge options."""
+    return operation_id("Merge", dict(params or {}))
 
 
-def result_ids(
-    members, operation: str | Callable[[], str], output: int | None = None
-) -> dict[str, str]:
+def result_ids(members, operation: str | None, output: int | None = None) -> dict:
     """
     Return the two ids of an operation's result.
 
@@ -303,29 +300,23 @@ def result_ids(
         The attrs of the patches which went into it, in order. A member
         dropped for being incompatible did not contribute its data.
     operation
-        The operation's id, or a function returning it. A function which
-        raises -- a parameter the encoder cannot spell -- gives the result
-        a random data id rather than the input's.
+        The operation's id. None says it could not be derived -- a parameter
+        the encoder refused -- and gives the result a random data id.
     output
         The result's position among several; see
         [`derive`](`dascore.utils.identity.derive`).
     """
     members = list(members)
     parents = [getattr(x, "data_id", "") or "" for x in members]
-    data_id = None
-    # A parent which names no data cannot be derived from: two such inputs
-    # would otherwise lead to one id.
-    if parents and all(parents):
-        try:
-            found = operation if isinstance(operation, str) else operation()
-            data_id = derive(parents, found, output)
-        except Exception:
-            data_id = None
+    # A parent which names no data cannot be derived from either: two such
+    # inputs would otherwise lead to one id.
+    derivable = operation and parents and all(parents)
+    data_id = derive(parents, operation, output) if derivable else new_id()
     origin = fold_origin_ids([getattr(x, "origin_id", "") or "" for x in members])
-    return {"origin_id": origin, "data_id": data_id or new_id()}
+    return {"origin_id": origin, "data_id": data_id}
 
 
-def stamp(attrs, members, operation: str | Callable[[], str], output=None):
+def stamp(attrs, members, operation: str | None, output: int | None = None):
     """
     Return attrs carrying the ids of an operation's result.
 
@@ -335,6 +326,14 @@ def stamp(attrs, members, operation: str | Callable[[], str], output=None):
     if not ids_enabled():
         return _without_ids(attrs)
     return attrs.update(**result_ids(members, operation, output))
+
+
+def try_operation_id(name: str, params: Mapping[str, Any], version="1.0"):
+    """Return an operation's id, or None if the encoder refuses a parameter."""
+    try:
+        return operation_id(name, params, version)
+    except Exception:
+        return None
 
 
 def _without_ids(attrs):
@@ -367,8 +366,10 @@ def extract_patches(params: Mapping[str, Any]) -> tuple[dict[str, Any], list]:
                 return value
             keys = sorted(value, key=lambda key: _sort_key(_encode_value(key)))
             return {key: _walk(value[key]) for key in keys}
+        # A list, whatever it was: the encoder spells every sequence alike,
+        # and a namedtuple cannot be rebuilt from an iterable.
         if isinstance(value, list | tuple) and _holds_patch(value):
-            return type(value)(_walk(x) for x in value)
+            return [_walk(x) for x in value]
         return value
 
     def _holds_patch(value) -> bool:
@@ -439,6 +440,11 @@ def _encode(obj: Any) -> Any:
         return {_ID: list(identity())}
     if isinstance(obj, DascoreBaseModel):
         return _encode_model(obj)
+    if dataclasses.is_dataclass(obj) and not isinstance(obj, type):
+        cls = type(obj)
+        fields = {x.name: getattr(obj, x.name) for x in dataclasses.fields(obj)}
+        tag = f"{cls.__module__}.{cls.__qualname__}"
+        return {_MODEL: {TAG_FIELD: tag, "fields": _encode_mapping(fields)}}
     if isinstance(obj, pd.DataFrame | pd.Series):
         return _encode_dataframe(obj)
     if _is_array(obj):
@@ -458,7 +464,7 @@ def _encode(obj: Any) -> Any:
     return _refuse(obj, "has no encoding")
 
 
-def _refuse(obj: Any, why: str):
+def _refuse(obj: Any, why: str) -> NoReturn:
     """Raise for a value whose id would not be its own."""
     cls = type(obj)
     msg = (
@@ -487,10 +493,8 @@ def _encode_time(value: np.datetime64 | np.timedelta64) -> Any:
         out = value.astype(unit)
     except OverflowError:
         out = None
-    # DASCore works in nanoseconds throughout, and a time outside that range
-    # wraps silently -- to a value centuries away -- on some numpy versions
-    # and raises on others. Either way it is refused rather than hashed as
-    # whatever it wrapped to, which is checked by converting it back.
+    # Out of range wraps silently on some numpy versions and raises on
+    # others; converting back catches the wrap, and both are refused.
     if out is None or (not np.isnat(value) and out.astype(value.dtype) != value):
         msg = f"{value} cannot be represented in nanoseconds."
         raise ParameterError(msg)
@@ -539,14 +543,17 @@ def _encode_dataframe(df: pd.DataFrame | pd.Series) -> Any:
 
     frame = df.to_frame() if isinstance(df, pd.Series) else df
     dtypes = [*frame.dtypes, *frame.index.to_frame().dtypes]
-    # pandas hashes an object column through `str`, so 1 and "1" read alike.
-    if any(np.dtype(x).hasobject for x in dtypes if isinstance(x, np.dtype)):
+    # pandas hashes an object through `str`, so 1 and "1" read alike; a
+    # categorical holds its objects in its categories.
+    kinds = [getattr(x, "categories", pd.Index([], dtype=x)).dtype for x in dtypes]
+    if any(isinstance(x, np.dtype) and x.hasobject for x in kinds):
         _refuse(df, "holds object columns")
     values = pd.util.hash_pandas_object(df, index=True).to_numpy()
     return {
         _DATAFRAME: {
-            "columns": [str(x) for x in frame.columns],
-            "dtypes": [str(x) for x in frame.dtypes],
+            "columns": [_encode_value(x) for x in frame.columns],
+            "index": [_encode_value(x) for x in frame.index.names],
+            "dtypes": [str(x) for x in dtypes],
             "values": hash_array(values),
         }
     }
@@ -554,9 +561,7 @@ def _encode_dataframe(df: pd.DataFrame | pd.Series) -> Any:
 
 def _encode_array(array: Any) -> Any:
     """Encode an array by its dtype, shape and contents."""
-    # hash_array lives in dascore.utils.array, which imports dascore itself,
-    # so naming it at module scope is a cycle; it is the tree's one array
-    # hash and is used rather than repeated.
+    # A module-scope import is a cycle: dascore.utils.array imports dascore.
     from dascore.utils.array import hash_array  # noqa: PLC0415
 
     array = to_numpy(array) if is_foreign(array) else np.asarray(array)
@@ -633,52 +638,53 @@ def _encode_partial(value: partial) -> Any:
 
 
 def _encode_callable(func: Callable) -> Any:
-    """
-    Encode a callable by where it is defined.
+    """Encode a callable by the name which says which one it is."""
+    return {_CALLABLE: callable_name(func)}
 
-    A function which cannot be named -- a lambda, or one defined inside
-    another function -- carries a digest of its source as well, since its
-    path names every one of them alike. One whose path does not lead back
-    to it and which holds state its source does not show -- closure cells,
-    or the instance a method is bound to -- is refused: two of them read
-    alike and behave differently.
+
+def callable_name(func: Any) -> str:
+    """
+    Return a name which says which function or class this is.
+
+    Its import path, when the path leads back to it. Otherwise -- defined
+    inside a call -- the path, a digest of its source and its encoded
+    defaults. Anything holding state that leaves out is refused: closure
+    cells, a bound instance, a callable object, or a lambda, which shares
+    its source line with its neighbours.
     """
     module = getattr(func, "__module__", None) or "<unknown>"
-    qualname = getattr(func, "__qualname__", None) or repr(func)
-    out = {"path": f"{module}:{qualname}"}
+    qualname = getattr(func, "__qualname__", None)
+    if not isinstance(qualname, str):
+        _refuse(func, "is a callable object, whose state is not its name")
+    path = f"{module}:{qualname}"
     if _resolves(func, module, qualname):
-        # Its path finds this very object, so the path says which it is.
-        return {_CALLABLE: out}
+        return path
     # A builtin's `__self__` is its module; a classmethod's, its class.
     bound = getattr(func, "__self__", None)
     if bound is not None and not isinstance(bound, type | ModuleType):
         _refuse(func, "is a method bound to an instance")
     if getattr(func, "__closure__", None):
         _refuse(func, "closes over values its source does not show")
-    if "<lambda>" in qualname or "<locals>" in qualname:
-        # Defined in a shell: nothing tells it from the next one.
-        if (source := _source_digest(func)) is None:
-            _refuse(func, "has no name and no source")
-        out["source"] = source
-    return {_CALLABLE: out}
+    if "<lambda>" in qualname:
+        _refuse(func, "is a lambda, which nothing tells from its neighbours")
+    try:
+        source = inspect.getsource(func)
+    except (OSError, TypeError):
+        _refuse(func, "has no import path and no source")
+    defaults = [
+        getattr(func, "__defaults__", None),
+        getattr(func, "__kwdefaults__", None),
+    ]
+    state = json.dumps(encode(defaults), sort_keys=True)
+    return f"{path}@{_hash_bytes((source + state).encode('utf8'))}"
 
 
-def _resolves(func: Callable, module: str, qualname: str) -> bool:
-    """Return True if a callable's module and qualified name lead back to it."""
+def _resolves(func: Any, module: str, qualname: str) -> bool:
+    """Return True if a module and qualified name lead back to the object."""
     found: Any = sys.modules.get(module)
     for part in qualname.split("."):
         found = getattr(found, part, None)
     return found is func
-
-
-def _source_digest(func: Callable) -> str | None:
-    """Return a digest of a function's source, or None if it has none."""
-    try:
-        source = inspect.getsource(func)
-    except (OSError, TypeError):
-        # Defined in a shell, or built in: there is no text to read.
-        return None
-    return _hash_bytes(source.encode("utf8"))
 
 
 def _sort_key(value: Any) -> str:

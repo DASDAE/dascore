@@ -28,7 +28,12 @@ from typing import Any
 from pydantic.fields import FieldInfo
 
 from dascore.exceptions import ParameterError
-from dascore.utils.identity import PatchMarker, extract_patches, operation_id
+from dascore.utils.identity import (
+    PatchMarker,
+    callable_name,
+    extract_patches,
+    operation_id,
+)
 
 # Stands in for the patch while a call is bound to a signature. The bind
 # only needs something to put in that slot; nothing ever looks at it.
@@ -294,7 +299,7 @@ def _memoized_fingerprint(owner, name: str, params: dict, version: str) -> str:
 # The only leaves a cache key may be built from. The rule is not "hashable":
 # it is "two of these are the same argument exactly when Python says they are
 # equal". A pint quantity fails that -- `1 * m == 100 * cm` and the two hash
-# alike, while the serializer encodes them differently -- so caching on it
+# alike, while the encoder spells them differently -- so caching on it
 # would give one call two answers depending on what ran first.
 _KEYABLE = (str, bytes, int, float, bool, type(None), PatchMarker)
 
@@ -314,7 +319,7 @@ def _as_key(value, budget: int = _KEY_LIMIT):
         if len(value) > budget:
             raise TypeError(value)
         # The keys are typed too: `{1: "x"}` and `{True: "x"}` are equal
-        # mappings to Python and different calls to the serializer.
+        # mappings to Python and different calls to the encoder.
         return (
             dict,
             tuple(
@@ -352,11 +357,10 @@ def _call_name(func) -> str:
     """
     if (tag := patch_function_tag(func)) is not None:
         return tag
-    # Where it was written, and *which* one: a factory making patch
-    # functions gives every one of them the same module and qualname, and
-    # two closures over different values are two operations. The identity
-    # is process-local, which is honest -- so is the function.
-    return f"{_spell(func)}#{id(func):x}"
+    # By its source rather than its address, which is reused once it is
+    # collected. One which holds state its source does not show -- a
+    # closure from a factory -- is refused, and its result's id is random.
+    return callable_name(getattr(func, "raw_function", func))
 
 
 # Bounded, and it holds function references: a process which builds patch
@@ -422,7 +426,9 @@ def _bind(func, args: tuple, kwargs: dict) -> dict:
         # live shape: its `*empty_dims` cannot be given by name, so
         # `empty_dims=3` lands in the `**kwargs` group and would overwrite
         # the group it looks like.
-        if collisions := set(extras) & set(out):
+        # Against every declared name, not only the ones bound: a
+        # positional-only parameter left at its default is absent here.
+        if collisions := set(extras) & (set(out) | set(signature.parameters)):
             msg = (
                 f"{_call_name(func)} was given {sorted(collisions)} both as a "
                 "parameter and as an extra, so the call cannot be written "

@@ -55,11 +55,10 @@ from dascore.constants import PatchMetaType, PatchType
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel, model_values
 from dascore.utils.attrs import _values_equal
-from dascore.utils.identity import extract_patches, stamp
+from dascore.utils.identity import callable_name, extract_patches, ids_enabled, stamp
 from dascore.utils.patch import (
     _call_str,
     _maybe_add_history_str,
-    _stamp_ids,
     attr_type,
     check_patch_attrs,
     check_patch_coords,
@@ -205,9 +204,12 @@ class PatchProcessor(DascoreBaseModel):
         func = cls.patch_function
         if func is not None and (tag := patch_function_tag(func)) is not None:
             return tag
-        # Unregistered or defined inside a call: named by where it was
-        # written and which class it is, which is honestly process-local.
-        return f"{_spell(cls)}#{id(cls):x}"
+        # Unregistered or defined inside a call: named by its source, or --
+        # one with no source to read -- by which class object it is.
+        try:
+            return callable_name(cls)
+        except ParameterError:
+            return f"{_spell(cls)}#{id(cls):x}"
 
     def _operation(self) -> tuple[str, list]:
         """Return this operation's id, and the patches among its fields."""
@@ -393,13 +395,17 @@ class PatchProcessor(DascoreBaseModel):
         if self.history is not None and get_config().patch_history != "disabled":
             spelled = _call_str(name, self.kwargs) if self.history == "full" else name
             attrs = _maybe_add_history_str(attrs, spelled)
+        if not ids_enabled():
+            return stamp(attrs, (), None)
         try:
-            fingerprint, others = self._operation()
+            operation, others = self._operation()
         except Exception:
-            # As for a patch function: a field the encoder cannot spell
-            # still made new data, so the result gets a random id.
-            return stamp(attrs, [patch.attrs], lambda: self._operation()[0])
-        return _stamp_ids(patch, attrs, fingerprint, others)
+            # As for a patch function: a field the encoder refuses still
+            # made new data, so the result gets a random id.
+            fields = self.kwargs.values()
+            operation, others = None, [x for x in fields if isinstance(x, dc.Patch)]
+        members = [patch.attrs, *(x.attrs for x in others)]
+        return stamp(attrs, members, operation)
 
 
 # Names a subclass field may not take: the base's own settings and methods.

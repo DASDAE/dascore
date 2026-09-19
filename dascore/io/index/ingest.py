@@ -327,8 +327,8 @@ def _extract_attrs(
 
 # What a directory name may never claim to be. A path says where data is
 # kept, which is how renaming a directory corrects metadata; it does not
-# get to say which data it is, or a directory called `patch_id=x` would
-# rewrite the lineage of everything under it.
+# get to say which data it is, or a directory called `origin_id=x` would
+# rewrite the identity of everything under it.
 _UNCLAIMABLE_BY_PATH = frozenset({"origin_id", "data_id"})
 
 

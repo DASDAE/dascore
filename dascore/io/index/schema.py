@@ -33,7 +33,8 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 18 counts patches and
+# changes, not only when a column does. Version 19 renamed the two id
+# attrs and rehashed coordinate keys; version 18 counts patches and
 # coordinate variants; version 17 links a segmented coordinate to each of
 # its runs; version 16 stored each range coordinate's exact grid and named
 # the envelope columns by storage type; version 15 stored source coordinate

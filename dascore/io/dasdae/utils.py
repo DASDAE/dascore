@@ -110,8 +110,7 @@ def _save_attrs_and_dims(patch, patch_group):
     # The ids are written. An older DASCore reads them as ordinary attrs
     # and then refuses to merge two patches whose ids differ -- which is
     # every pair -- so chunking such a spool there needs conflict="drop".
-    # Worth it: a stored id is the only one which survives a move, and
-    # everything else DASCore does with a patch already folds them.
+    # Worth it: a stored id is the only one which survives a move.
     for i, v in attr_dict.items():
         encoded, attr_type = _encode_attr_value(i, v)
         patch_group.attrs[f"{_ATTR_PREFIX}{i}"] = encoded

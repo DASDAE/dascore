@@ -313,9 +313,14 @@ def digest(patch) -> dict:
     coords = {
         name: _hash(patch.get_array(name)) for name in sorted(patch.coords.coord_map)
     }
-    # Ignore argument reprs in history. The ids stay: the leaves are pinned,
-    # so a changed id is a changed operation id or stamping rule.
-    attrs = patch.attrs.model_dump(exclude={"history", "coords"})
+    # Ignore argument reprs in history. The ids are a field of their own,
+    # so `--fields` can leave them out against a ref which names or derives
+    # them differently; the leaves are pinned, so a changed id otherwise
+    # means a changed operation id or stamping rule.
+    names = {"origin_id", "data_id", "patch_id", "processing_id"}
+    dumped = patch.attrs.model_dump(exclude={"history", "coords"})
+    ids = {i: str(v) for i, v in sorted(dumped.items()) if i in names}
+    attrs = {i: v for i, v in dumped.items() if i not in names}
     return {
         "dtype": str(data.dtype),
         "shape": list(data.shape),
@@ -323,6 +328,7 @@ def digest(patch) -> dict:
         "data_hash": _hash(data),
         "coords": coords,
         "attrs": {i: str(v) for i, v in sorted(attrs.items())},
+        "ids": ids,
     }
 
 

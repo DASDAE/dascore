@@ -111,6 +111,10 @@ class PatchAttrs(DascoreBaseModel):
             msg = "PatchAttrs no longer accepts coordinate metadata. Received: coords."
             raise ValueError(msg)
         data.pop("dims", None)
+        # What the two ids were called before they were renamed.
+        for old, new in (("patch_id", "origin_id"), ("processing_id", "data_id")):
+            if value := data.pop(old, None):
+                data.setdefault(new, value)
         return data
 
     def __getitem__(self, item):

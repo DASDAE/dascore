@@ -69,6 +69,9 @@ _SOURCE_COLUMNS = (
     "source_patch_key",
     "origin_id",
     "data_id",
+    # The ids' former names, which attrs pickled before the rename hold.
+    "patch_id",
+    "processing_id",
 )
 _PATCH_LOCAL_EMPTY = "_patch_local_empty"
 

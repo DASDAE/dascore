@@ -670,7 +670,9 @@ class PatchAssembler:
             summary_df, merge_dim, coords, drop_conflicting, **coord_kwargs
         )
         warn_if_histories_differ(attrs, "Merging")
-        new_attrs = combine_patch_attrs(attrs, **attr_kwargs)
+        new_attrs = combine_patch_attrs(
+            attrs, **attr_kwargs, merge_params=self.merge_kwargs
+        )
         return dc.Patch(data=buffer, coords=new_coord, attrs=new_attrs, dims=list(dims))
 
     def _member_meta_from_index(self, rows) -> list[_MemberMeta] | None:
