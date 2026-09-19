@@ -537,6 +537,15 @@ class TestRead:
                 part = source[1:]
                 assert np.array_equal(part.load(), patch.data[1:], equal_nan=True)
 
+    def test_path_key_needs_no_reader(self, read_spool):
+        """A key which is a dataset path is all plain h5py needs."""
+        for patch in read_spool:
+            source = patch._source
+            if source.loadable and source.key.startswith("/"):
+                with h5py.File(source.path) as fi:
+                    stored = fi[source.key][tuple(slice(*x) for x in source.windows)]
+                assert np.array_equal(stored, patch.data, equal_nan=True)
+
     def test_selected_source_loads_patch_data(self, io_path_tuple):
         """A read which selects gives a source for the selection, or none."""
         _, path = io_path_tuple

@@ -8,7 +8,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import FiberIO
+from dascore.io import ArraySource, FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
@@ -44,7 +44,12 @@ class APSensingV10(FiberIO):
         coords = _get_coords(resource)
         attrs = APSensingPatchAttrs.model_validate(_get_attrs_dict(resource))
         return [
-            dc.PatchMeta(attrs=attrs, coords=coords, dtype=str(resource["DAS"].dtype))
+            dc.PatchMeta(
+                attrs=attrs,
+                coords=coords,
+                dtype=str(resource["DAS"].dtype),
+                source=ArraySource(key=resource["DAS"].name),
+            )
         ]
 
     def read_array(

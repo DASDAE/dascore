@@ -6,7 +6,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import FiberIO
+from dascore.io import ArraySource, FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
@@ -43,6 +43,7 @@ class UptechH5V1(FiberIO):
                 attrs=attrs,
                 coords=_get_coords(resource, snap=snap),
                 dtype=str(resource[_DATASET].dtype),
+                source=ArraySource(key=resource[_DATASET].name),
             )
         ]
 

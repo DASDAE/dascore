@@ -12,7 +12,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import FiberIO
+from dascore.io import ArraySource, FiberIO
 from dascore.io.gdr.utils_das import _get_attrs_coords_and_data, _get_version
 from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat
@@ -60,6 +60,9 @@ class GDR_V1(FiberIO):  # noqa
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
         return [
             dc.PatchMeta(
-                attrs=GDRPatchAttrs.from_dict(attrs), coords=cm, dtype=str(data.dtype)
+                attrs=GDRPatchAttrs.from_dict(attrs),
+                coords=cm,
+                dtype=str(data.dtype),
+                source=ArraySource(key=data.name),
             )
         ]

@@ -6,7 +6,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import FiberIO
+from dascore.io import ArraySource, FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.utils.hdf5 import H5Reader
 
@@ -39,7 +39,12 @@ class DASHDF5(FiberIO):
         coords = _get_cf_coords(resource, snap=snap)
         attrs = _get_cf_attrs(resource, coords)
         return [
-            dc.PatchMeta(attrs=attrs, coords=coords, dtype=str(resource["das"].dtype))
+            dc.PatchMeta(
+                attrs=attrs,
+                coords=coords,
+                dtype=str(resource["das"].dtype),
+                source=ArraySource(key=resource["das"].name),
+            )
         ]
 
     def read_array(

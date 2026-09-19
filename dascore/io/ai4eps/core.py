@@ -6,7 +6,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import FiberIO
+from dascore.io import ArraySource, FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.models import DateTime64, OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
@@ -55,7 +55,12 @@ class AI4EPSV1(FiberIO):
         dataset = resource["data"]
         coords = _get_coords(dataset)
         attrs = AI4EPSPatchAttrs.model_validate(_get_attrs_dict(dataset))
-        return [dc.PatchMeta(attrs=attrs, coords=coords, dtype=str(dataset.dtype))]
+        source = ArraySource(key=dataset.name)
+        return [
+            dc.PatchMeta(
+                attrs=attrs, coords=coords, dtype=str(dataset.dtype), source=source
+            )
+        ]
 
     def read_array(
         self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
