@@ -1062,24 +1062,16 @@ class TestEnrichContracts:
     def test_update_coords_stays_safe_to_bypass(self):
         """Enrich calls update_coords.raw_function to skip its history entry.
 
-        That is only legal while the wrapper does nothing else: any
-        requirement or data_type added to update_coords would be silently
-        skipped for enriched patches.
+        That is only legal while the operation does nothing else: a
+        data_type added to update_coords would be silently skipped for
+        enriched patches.
         """
-        from dascore.proc.coords import update_coords  # noqa: PLC0415
+        from dascore.proc.coords import UpdateCoords  # noqa: PLC0415
 
-        cells = dict(
-            zip(
-                update_coords.__code__.co_freevars,
-                [x.cell_contents for x in update_coords.__closure__],
-                strict=True,
-            )
+        assert UpdateCoords.data_type is None, (
+            "update_coords now sets a data_type, which Patch.enrich would "
+            "silently skip by calling raw_function."
         )
-        for name in ("required_dims", "required_coords", "required_attrs", "data_type"):
-            assert cells[name] is None, (
-                f"update_coords now sets {name!r}, which Patch.enrich would "
-                "silently skip by calling raw_function."
-            )
 
     def test_enrich_writes_one_history_entry(self, patch, inventory):
         """The operation is enrich; how it updates coords is its own business."""

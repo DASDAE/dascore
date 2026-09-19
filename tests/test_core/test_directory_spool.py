@@ -13,6 +13,7 @@ import pytest
 import dascore as dc
 import dascore.examples
 from dascore.constants import ONE_SECOND
+from dascore.core.source import PatchSource
 from dascore.core.spool import Spool
 from dascore.exceptions import InvalidSpoolError, MissingPatchError, ParameterError
 from dascore.utils.misc import suppress_warnings
@@ -168,8 +169,8 @@ class TestLoadPatchFastPath:
         self, one_directory_spool, random_patch, monkeypatch
     ):
         """Multi-patch reads resolve source identity from one dc.read call."""
-        patch_1 = random_patch.update_attrs(_source_patch_key="first")
-        patch_2 = random_patch.update_attrs(_source_patch_key="second")
+        patch_1 = random_patch.new(source=PatchSource(key="first"))
+        patch_2 = random_patch.new(source=PatchSource(key="second"))
         reads = []
 
         def _fake_read(**kwargs):
@@ -185,7 +186,7 @@ class TestLoadPatchFastPath:
         }
         resolver = one_directory_spool._catalog.resolver
         patch = resolver.resolve(row)
-        assert patch.attrs["_source_patch_key"] == "second"
+        assert patch._source.key == "second"
         assert len(reads) == 1  # the file is read exactly once
 
     def test_positional_id_reads_whole_source(

@@ -10,13 +10,10 @@ from typing import Any, Literal
 
 import numpy as np
 
-from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import get_coord
-from dascore.io.utils import drop_blank_attrs, get_attr_names, step_from_rate
+from dascore.io.utils import drop_blank_attrs, step_from_rate
 from dascore.utils.misc import get_buffer_size
 from dascore.utils.time import to_datetime64
-
-DEFAULT_ATTRS = get_attr_names(PatchAttrs)
 
 
 def type_not_supported(vargin):
@@ -122,18 +119,6 @@ def _get_time_coord(attrs, num_samps):
     dt = step_from_rate(attrs["SamplingFrequency[Hz]"])
     t_min = to_datetime64(str(attrs["GPSTimeStamp"]))
     return get_coord(start=t_min, step=dt, shape=(num_samps,), units="s")
-
-
-def _get_default_attrs(tdms_file, attrs=None):
-    """Return the required/default attributes which can be fetched from attributes."""
-    all_attrs = attrs if attrs is not None else _get_all_attrs(tdms_file)[0]
-    # cull attributes to only include defaults (TODO: think about why?)
-    out = {
-        default_attr: all_attrs[default_attr]
-        for default_attr in DEFAULT_ATTRS
-        if default_attr in all_attrs
-    }
-    return out
 
 
 def _read_attr(tdms_file):

@@ -261,6 +261,17 @@ class TestHistory:
         assert len(history) == 1
         assert "add_one" in history[0]
 
+    def test_history_by_method_name(self, random_patch):
+        """`history="method_name"` records the name without the arguments."""
+
+        @dc.patch_function(history="method_name")
+        def named_only(patch, value=1):
+            """Return a new patch, so the call is recorded."""
+            return patch.update_attrs(station=str(value))
+
+        history = named_only(random_patch, value=2).attrs["history"]
+        assert history[-1] == "named_only"
+
     def test_original_history_unchanged(self, random_patch):
         """Ensure logging history only occurs on new Patch."""
         first_history = list(random_patch.attrs["history"])

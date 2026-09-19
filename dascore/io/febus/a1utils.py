@@ -11,10 +11,8 @@ import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 from dascore.core.coordmanager import CoordManager
 from dascore.io.utils import drop_blank_attrs, windows_to_slices
-from dascore.utils.io import _normalize_source_patch_keys
 from dascore.utils.misc import (
     _maybe_unpack,
-    broadcast_for_index,
     maybe_get_items,
     tukey_fence,
     unbyte,
@@ -311,81 +309,6 @@ def _get_source_patch_key(feb: _FebusSlice) -> str:
     return f"{feb.group_name}:{feb.source_name}:{feb.zone_name}"
 
 
-def _get_data_new_cm(cm, febus, distance=None, time=None):
-    """
-    Get the data from febus file, maybe filtering on time/distance.
-
-    This is a bit more complicated since the febus data are stored in a 3d array,
-    but we want a 2d output.
-    """
-
-    def _get_start_end_time_array(time_coord, total_time_rows, data_shape, time):
-        """Get a 2d array where columns are start/end times for each block."""
-        block_count = data_shape[0]
-        block_duration = total_time_rows * time_coord.step
-        start = (
-            np.arange(block_count) * block_duration + time_coord.step
-        ) + time_coord.min()
-        end = start + block_duration
-        return np.stack([start, end], axis=-1)
-
-    def _get_time_filtered_data(data, t_start_end, time, total_slice, time_coord):
-        """Get new data array filtered from time query."""
-        assert len(time) == 2
-        t1, t2 = time
-        # block for which all data are needed.
-        in_time = np.ones(len(t_start_end), dtype=bool)
-        if t1 is not None and t1 is not ...:
-            in_time = np.logical_and(in_time, ~(t_start_end[:, 1] < t1))
-        if t2 is not None and t2 is not ...:
-            in_time = np.logical_and(in_time, ~(t_start_end[:, 0] > t2))
-        times = t_start_end[in_time]
-        # get start/stop indexes for complete blocks
-        start = np.argmax(in_time)
-        stop = np.argmax(np.cumsum(in_time)) + (1 if len(times) else 0)
-        total_slice[0] = slice(start, stop)
-        # load data from disk.
-        data_2d = data[tuple(total_slice)].reshape(-1, data.shape[-1])
-        # Bail out early, no size on array.
-        if not data_2d.size:
-            return data_2d, time_coord.empty()
-        # Next, get mew time coord and slice.
-        tmin = times[:, 0].min()
-        tmax = times[:, 1].max()
-        new_coord, time_slice = (
-            get_coord(min=tmin, max=tmax, step=time_coord.step)
-            .change_length(len(data_2d))
-            .select((t1, t2))
-        )
-        return data_2d[time_slice], new_coord
-
-    time_info = _get_zone_time(febus)
-    dist_coord, time_coord = cm.coord_map["distance"], cm.coord_map["time"]
-    data = febus.zone[febus.data_name]
-    data_shape = data.shape
-    data_slice = slice(time_info.idx_start, time_info.idx_stop + 1)
-    total_slice = list(broadcast_for_index(3, 1, data_slice))
-    total_time_rows = time_info.idx_stop - time_info.idx_start + 1
-    if distance:
-        dist_coord, total_slice[2] = dist_coord.select(distance)
-    if time:  # need to sub-select blocks to get data we are after.
-        t_start_end = _get_start_end_time_array(
-            time_coord, total_time_rows, data_shape, time
-        )
-        data, time_coord = _get_time_filtered_data(
-            data, t_start_end, time, total_slice, time_coord
-        )
-    else:  # no need to mess with blocks, all time is selected
-        data_3d = data[tuple(total_slice)]
-        # Distance has been selected out (no distance remains)
-        if not len(dist_coord):
-            data = np.zeros((len(time_coord), len(dist_coord)), dtype=data_3d.dtype)
-        else:
-            data = data_3d.reshape(-1, data_3d.shape[2])
-    cm = get_coord_manager({"time": time_coord, "distance": dist_coord}, dims=cm.dims)
-    return data, cm
-
-
 def _read_febus_array(febus: _FebusSlice, windows) -> np.ndarray:
     """
     Read a window of one zone's data as a (time, distance) array.
@@ -414,23 +337,3 @@ def _read_febus_array(febus: _FebusSlice, windows) -> np.ndarray:
     flat = block.reshape(-1, block.shape[2])
     offset = time_slice.start - first * rows
     return flat[offset : offset + length]
-
-
-def _read_febus(
-    fi, distance=None, time=None, source_patch_key=None, attr_cls=dc.PatchAttrs
-):
-    """Read the febus values into a patch."""
-    out = []
-    source_patch_keys = _normalize_source_patch_keys(source_patch_key)
-    for attr, cm, febus in _yield_attrs_coords(fi):
-        patch_id = _get_source_patch_key(febus)
-        if source_patch_keys and patch_id not in source_patch_keys:
-            continue
-        data, new_cm = _get_data_new_cm(cm, febus, distance=distance, time=time)
-        if data.size:
-            attr_info = dict(attr)
-            attr_info["_source_patch_key"] = patch_id
-            attrs = attr_cls.from_dict(attr_info)
-            patch = dc.Patch(data=data, coords=new_cm, attrs=attrs)
-            out.append(patch)
-    return out

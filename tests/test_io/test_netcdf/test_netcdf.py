@@ -24,6 +24,7 @@ from dascore.utils.remote_io import (
     clear_remote_file_cache,
     get_remote_cache_path,
 )
+from tests.test_io.test_fiberio_interface import TestNamedSnap as _NamedSnapCases
 
 pytest.importorskip("xarray")
 
@@ -443,7 +444,7 @@ class TestNetCDFIO:
         assert "time" in patch.coords
         assert "distance" in patch.coords
         assert patch.data.ndim == 2
-        assert patch.attrs["_source_patch_key"] == "data"
+        assert patch._source.key == "data"
 
     def test_scan_netcdf(self, netcdf_path):
         """Test scanning a NetCDF file for metadata."""
@@ -751,7 +752,7 @@ class TestNetCDFUtilsAdvanced:
         patch = spool[0]
         assert set(patch.coords.coord_map) == {"time", "distance"}
         assert patch.attrs.tag == ""
-        assert patch.attrs["_source_patch_key"] == "data"
+        assert patch._source.key == "data"
 
     def test_error_conditions(self, tmp_path):
         """Test various error conditions."""
@@ -881,3 +882,13 @@ class TestSelectiveRead:
         for kwargs in ({"time": (10, 20)}, {"distance": (2, 5)}):
             part = dc.read(coordless_path, **kwargs)[0]
             assert part.equals(whole.select(**kwargs))
+
+
+class TestNamedSnap(_NamedSnapCases):
+    """Apply the shared named-snap contract when a NetCDF backend is available."""
+
+    @pytest.fixture
+    def jittered_file(self, tmp_path):
+        """Reuse the NetCDF suite's existing backend availability requirement."""
+        _require_xarray_netcdf_engine()
+        return self._write_jittered_file(tmp_path, "NETCDF_CF")

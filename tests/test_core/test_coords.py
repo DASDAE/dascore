@@ -25,6 +25,7 @@ from dascore.core.coords import (
     CoordMonotonicArray,
     CoordPartial,
     CoordRange,
+    CoordSegmented,
     CoordString,
     CoordSummary,
     _get_coord_kind,
@@ -1595,6 +1596,22 @@ class TestCoordRange:
 class TestMonotonicCoord:
     """Tests for monotonic array coords."""
 
+    @pytest.mark.parametrize("coord_type", [CoordArray, CoordMonotonicArray])
+    @pytest.mark.parametrize("temporal", [False, True])
+    @pytest.mark.parametrize("operation", ["select", "index"])
+    def test_select_preserves_exact_values(self, coord_type, temporal, operation):
+        """Selecting stored array labels must not infer a different regular grid."""
+        values = np.array([0, 1_000_001_000, 2_000_000_000, 3_000_000_000])
+        values = values.astype("datetime64[ns]") if temporal else values / 1e9
+        coord = coord_type(values=values, units="s" if temporal else "m")
+        if operation == "select":
+            result, indexer = coord.select((values[1], None))
+            np.testing.assert_array_equal(result.values, values[indexer])
+        else:
+            result = coord.index(slice(1, None))
+        np.testing.assert_array_equal(result.values, values[1:])
+        assert result.units == coord.units
+
     def test_select_basic(self, monotonic_float_coord):
         """Basic select tests for monotonic array."""
         coord = monotonic_float_coord
@@ -2996,6 +3013,91 @@ class TestUnitNoOps:
 
 class TestIndexCoordinate:
     """The coordinate-level positional API remains usable independently."""
+
+    @pytest.mark.parametrize("operation", ["index", "getitem"])
+    @pytest.mark.parametrize("indices", [[2, 0, 3, 1], [1, 1, 0, 2]])
+    def test_reordered_array_selection(self, operation, indices):
+        """Reordering or repeating labels must not imply monotonic search order."""
+        coord = CoordMonotonicArray(values=np.array([0.0, 1.0, 3.0, 6.0]), units="m")
+        indices = np.array(indices)
+        out = coord.index(indices) if operation == "index" else coord[indices]
+        np.testing.assert_array_equal(out.values, coord.values[indices])
+        selected, _ = out.select((0.0, 1.0))
+        expected = [0.0, 1.0] if indices[0] == 2 else [1.0, 1.0, 0.0]
+        np.testing.assert_array_equal(selected.values, expected)
+        assert selected.units == coord.units
+
+    @pytest.mark.parametrize("temporal", [False, True])
+    @pytest.mark.parametrize("operation", ["stride", "array", "select", "decimate"])
+    def test_segmented_selection_preserves_labels(self, temporal, operation):
+        """Selecting across stored runs must preserve their small discontinuity."""
+        values = np.array(
+            [
+                0,
+                1_000_000_000,
+                2_000_000_000,
+                3_000_000_000,
+                4_000_001_000,
+                5_000_001_000,
+                6_000_001_000,
+            ]
+        )
+        values = values.astype("datetime64[ns]") if temporal else values / 1e9
+        coord = CoordSegmented.from_array(values)
+        assert isinstance(coord, CoordSegmented)
+        indices = np.array([0, 2, 4, 6])
+        if operation == "stride":
+            out = coord.index(slice(None, None, 2))
+        elif operation == "array":
+            out = coord.index(indices)
+        elif operation == "select":
+            out, _ = coord.select(indices, samples=True)
+        else:
+            patch = dc.Patch(data=np.arange(7), coords={"x": coord}, dims=("x",))
+            selected = patch.decimate(x=2, filter_type=None)
+            np.testing.assert_array_equal(selected.data, [0, 2, 4, 6])
+            out = selected.get_coord("x")
+        np.testing.assert_array_equal(out.values, values[indices])
+
+    @pytest.mark.parametrize("indexer", [slice(1, 4), np.array([3, 2, 1])])
+    def test_partial_index_avoids_full_allocation(self, monkeypatch, indexer):
+        """Selecting a few unknown positions must not allocate all their values."""
+        coord = CoordPartial(shape=(100_000_000,), units="m", dtype="float32")
+        original_empty = np.empty
+
+        def bounded_empty(shape, *args, **kwargs):
+            assert np.prod(shape) < 1_000, "Allocated the full partial coordinate"
+            return original_empty(shape, *args, **kwargs)
+
+        monkeypatch.setattr(np, "empty", bounded_empty)
+        selected = coord.index(indexer)
+        assert selected.shape == (3,)
+        assert selected.units == coord.units
+        assert selected.dtype == coord.dtype
+
+    @pytest.mark.parametrize("indexer", [0, np.int64(-1), (0,)])
+    def test_partial_scalar_index(self, indexer):
+        """Scalar positional indexing still returns a usable one-sample coord."""
+        coord = CoordPartial(shape=(10,), units="m", dtype="float32")
+        out = coord.index(indexer)
+        assert out.shape == (1,)
+        assert len(out) == 1
+        assert out.units == coord.units
+        assert out.dtype == coord.dtype
+        np.testing.assert_array_equal(out.values, np.array([np.nan], dtype="float32"))
+
+    def test_partial_decimation_metadata(self):
+        """Sample decimation preserves a partial coordinate's units and dtype."""
+        coord = CoordPartial(shape=(10,), units="m", dtype="float32")
+        patch = dc.Patch(
+            data=np.arange(10), coords={"distance": coord}, dims=("distance",)
+        )
+        out = patch.decimate(distance=2, filter_type=None)
+        selected = out.get_coord("distance")
+        assert selected.units == coord.units
+        assert selected.dtype == coord.dtype
+        assert selected.shape == (5,)
+        np.testing.assert_array_equal(out.data, [0, 2, 4, 6, 8])
 
     @pytest.mark.parametrize("axis", [0, 1])
     def test_multidimensional(self, axis):

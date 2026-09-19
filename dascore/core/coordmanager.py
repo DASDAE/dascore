@@ -74,7 +74,6 @@ from dascore.models import (
     frozen_dict_serializer,
     frozen_dict_validator,
 )
-from dascore.utils.array_api import array_namespace
 from dascore.utils.display import (
     RichRepr,
     Row,
@@ -83,7 +82,7 @@ from dascore.utils.display import (
     render_text,
 )
 from dascore.utils.docs import compose_docstring
-from dascore.utils.indexing import get_indexers, positional_indexer
+from dascore.utils.indexing import compose_indexers, get_indexers, positional_indexer
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _apply_union_indexers,
@@ -310,7 +309,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
     def __contains__(self, key):
         return key in self.coord_map
 
-    def update(self, **kwargs) -> Self:
+    def update(self, /, **kwargs) -> Self:
         """
         Update the coordinates, return a new Coordinate Manager.
 
@@ -727,6 +726,16 @@ class CoordManager(RichRepr, DascoreBaseModel):
         """
         return self._select(kwargs, array, relative=relative, samples=samples)
 
+    def select_indexers(
+        self, *, relative: bool = False, samples: bool = False, **kwargs
+    ) -> tuple[Self, dict[str, int | slice | np.ndarray]]:
+        """Select coordinates and return positional indexers on their original grid."""
+        indexers = {}
+        coords, _ = self._select(
+            kwargs, relative=relative, samples=samples, _indexers=indexers
+        )
+        return coords, indexers
+
     def isel(
         self,
         indexers: Mapping[str, Any] | None = None,
@@ -749,8 +758,12 @@ class CoordManager(RichRepr, DascoreBaseModel):
         relative=False,
         samples=False,
         drop=False,
+        _indexers=None,
     ):
         """Resolve queries, then apply every selection through one indexing engine."""
+        original_sizes = (
+            dict(zip(self.dims, self.shape)) if _indexers is not None else {}
+        )
         if relative or samples:
             self._check_multiple_relative(queries)
         groups = (
@@ -771,6 +784,12 @@ class CoordManager(RichRepr, DascoreBaseModel):
                 dim: positional_indexer(value, len(self.coord_map[dim]))
                 for dim, value in indices.items()
             }
+            if _indexers is not None:
+                for dim, indexer in indices.items():
+                    previous = _indexers.get(dim, slice(None))
+                    _indexers[dim] = compose_indexers(
+                        original_sizes[dim], previous, indexer
+                    )
             self, array = self._apply_indexers(indices, array, selected, drop=drop)
         return self, array
 
@@ -855,9 +874,9 @@ class CoordManager(RichRepr, DascoreBaseModel):
     def make_broadcastable_to(
         self,
         shape: tuple[int, ...],
-        array: MaybeArray,
+        *,
         drop_coords: bool = False,
-    ) -> tuple[Self, MaybeArray]:
+    ) -> Self:
         """
         Try to make coord manager broadcastable to a given shape.
 
@@ -867,8 +886,6 @@ class CoordManager(RichRepr, DascoreBaseModel):
         ----------
         shape
             A shape tuple (tuple of ints)
-        array
-            An array with the same shape as coord manager.
         drop_coords
             If True, allow dropping coordinates to broadcast coord manager
             dimensions. Otherwise, only NonCoords can change shape.
@@ -889,9 +906,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
             else:
                 msg = f"Cannot broadcast non-empty coord {name} to shape {new}."
                 raise PatchBroadcastError(msg)
-        if array is not None:
-            array = array_namespace(array).broadcast_to(array, target_shape)
-        return self.update_coords(**new_coords), array
+        return self.update_coords(**new_coords)
 
     def _check_multiple_relative(self, kwargs):
         """
@@ -1114,7 +1129,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
             return self
         return self.new(dims=dims)
 
-    def rename_coord(self, **kwargs) -> Self:
+    def rename_coord(self, /, **kwargs) -> Self:
         """
         Rename the coordinates or dimensions.
 

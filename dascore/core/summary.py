@@ -142,20 +142,6 @@ def _normalize_coord_summary_map(
     }
 
 
-def _normalize_source_patch_key(
-    attrs: PatchAttrs, source_patch_key: Any = ""
-) -> tuple[PatchAttrs, str]:
-    """Normalize summary and private attr source ids to one value."""
-    summary_source_patch_key = normalize_source_patch_key(source_patch_key)
-    attrs_source_patch_key = normalize_source_patch_key(
-        attrs.get("_source_patch_key", "")
-    )
-    normalized = summary_source_patch_key or attrs_source_patch_key
-    if normalized:
-        attrs = attrs.update(_source_patch_key=normalized)
-    return attrs, normalized
-
-
 def _upath_from_dump(value) -> UPath | None:
     """
     Return the path a dumped `UPath` describes, or None if it is not one.
@@ -196,7 +182,7 @@ def _build_patch_summary_payload(
     source_patch_key="",
 ) -> dict[str, Any]:
     """Build the canonical structured payload used to validate PatchSummary."""
-    attrs, source_patch_key = _normalize_source_patch_key(attrs, source_patch_key)
+    source_patch_key = normalize_source_patch_key(source_patch_key)
     dims = dims or _infer_dims_from_coords(coords)
     # Only preserve source metadata when the caller already supplied a cheap,
     # path-like reload target. Validation should not touch the filesystem.
@@ -249,7 +235,7 @@ class PatchSummary(DascoreBaseModel):
     @classmethod
     def _normalize_input(cls, data: Any) -> Any:
         """Accept structured summary input."""
-        if isinstance(data, dc.Patch):
+        if isinstance(data, dc.PatchMeta):
             return cls.from_patch(data).dump_structured()
         # Let pydantic raise the normal validation error for unsupported inputs.
         if not isinstance(data, Mapping):
@@ -259,8 +245,17 @@ class PatchSummary(DascoreBaseModel):
         # summaries, so we only need to normalize nested coord values and dims.
         if "attrs" in data or "coords" in data:
             dims = _normalize_dims(data.get("dims", ()))
+            attrs = PatchAttrs.from_dict(data.get("attrs"))
+            key = data.get("source_patch_key", attrs.get("_source_patch_key", ""))
+            # Rebuild legacy pickle attrs to restore missing identity defaults.
+            if (
+                hasattr(attrs, "_source_patch_key")
+                or not hasattr(attrs, "patch_id")
+                or not hasattr(attrs, "processing_id")
+            ):
+                attrs = attrs.drop("_source_patch_key")
             return _build_patch_summary_payload(
-                attrs=PatchAttrs.from_dict(data.get("attrs")),
+                attrs=attrs,
                 coords=_normalize_coord_summary_map(data.get("coords", {}), dims=dims),
                 dims=dims,
                 shape=data.get("shape", ()),
@@ -268,7 +263,7 @@ class PatchSummary(DascoreBaseModel):
                 source_path=data.get("source_path", data.get("path", "")),
                 source_format=data.get("source_format", data.get("file_format", "")),
                 source_version=data.get("source_version", data.get("file_version", "")),
-                source_patch_key=data.get("source_patch_key", ""),
+                source_patch_key=key,
             )
         msg = (
             "PatchSummary requires structured `attrs`/`coords` input. "
@@ -277,9 +272,9 @@ class PatchSummary(DascoreBaseModel):
         raise TypeError(msg)
 
     @classmethod
-    def from_patch(cls, patch: dc.Patch) -> PatchSummary:
+    def from_patch(cls, patch: dc.PatchMeta) -> PatchSummary:
         """
-        Create a summary from a loaded patch.
+        Create a summary from a patch, or from a patch's metadata alone.
 
         The lineage ids are carried, not dropped: the index stores them,
         so a summary which left them behind would be the one thing which
@@ -292,7 +287,10 @@ class PatchSummary(DascoreBaseModel):
             dims=patch.dims,
             shape=patch.shape,
             dtype=str(np.dtype(patch.dtype)),
-            source_patch_key=patch.attrs.get("_source_patch_key", ""),
+            source_path=patch._source.path if patch._source else "",
+            source_format=patch._source.format if patch._source else "",
+            source_version=patch._source.version if patch._source else "",
+            source_patch_key=patch._source.key if patch._source else "",
         )
 
     def dump_structured(self) -> dict[str, Any]:

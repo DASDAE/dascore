@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
@@ -11,7 +12,8 @@ from upath import UPath
 
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
-from dascore.exceptions import UnknownFiberFormatError
+from dascore.exceptions import InvalidFiberFileError, UnknownFiberFormatError
+from dascore.io import core as io_core
 from dascore.io.xml_binary import XMLBinaryV1
 from dascore.io.xml_binary.utils import _read_xml_metadata
 from dascore.utils.time import to_float
@@ -167,6 +169,89 @@ class TestGetFormat:
 class TestScanContents:
     """Test scanning contents of xml binary directory."""
 
+    def test_scan_keys_select_one_member(self, binary_xml_directory):
+        """Each public scan key reloads exactly its original directory member."""
+        summaries = dc.scan(binary_xml_directory)
+        keys = [item.source_patch_key for item in summaries]
+        assert keys == ["0", "1"]
+        for summary in summaries:
+            result = dc.read(
+                binary_xml_directory, source_patch_key=summary.source_patch_key
+            )
+            assert len(result) == 1
+            patch = result[0]
+            assert patch.attrs.patch_id == summary.attrs.patch_id
+            assert patch.summary.coords == summary.coords
+            np.testing.assert_array_equal(
+                patch.data, np.arange(10_000, dtype="uint16").reshape(1000, 10)
+            )
+
+    @pytest.mark.parametrize("survivors", [0, 1, 2])
+    @pytest.mark.parametrize("directory_mtime_offset", [-2, 2])
+    def test_timestamp_filter_preserves_member_identity(
+        self, tmp_path, monkeypatch, survivors, directory_mtime_offset
+    ):
+        """Incremental scans keep original keys, IDs and independently known data."""
+        (tmp_path / "metadata.xml").write_text(metadata)
+        expected = {}
+        for index in range(3):
+            data = np.arange(10_000, dtype="uint16").reshape(1000, 10)
+            data = data + index * 20_000
+            path = tmp_path / f"DAS_20240530T01150{index}_000000Z.raw"
+            path.write_bytes(data.tobytes())
+            start = np.datetime64("2024-05-30T01:15:00", "ns")
+            expected[start + np.timedelta64(index, "s")] = data
+
+        # Assign mtimes in the reader's order, without assuming glob sorting.
+        members = XMLBinaryV1().get_metadata(tmp_path)
+        timestamp = 1_700_000_000
+        for index, member in enumerate(members):
+            mtime = timestamp + (1 if index >= 3 - survivors else -1)
+            os.utime(member._source.path, (mtime, mtime))
+        # Writing existing raw files need not change their directory's mtime.
+        directory_mtime = timestamp + directory_mtime_offset
+        os.utime(tmp_path, (directory_mtime, directory_mtime))
+
+        def no_samples(*args, **kwargs):
+            pytest.fail("Scanning directory metadata must not read sample arrays")
+
+        derived_ordinals = []
+        source_patch_id = io_core.source_patch_id
+
+        def record_derivation(*args, **kwargs):
+            derived_ordinals.append(kwargs["ordinal"])
+            return source_patch_id(*args, **kwargs)
+
+        with monkeypatch.context() as context:
+            context.setattr(XMLBinaryV1, "read_array", no_samples)
+            full = dc.scan(tmp_path)
+            context.setattr(io_core, "source_patch_id", record_derivation)
+            selected = dc.scan(tmp_path, timestamp=timestamp)
+            payloads = dc.scan_payloads(tmp_path, timestamp=timestamp)
+            direct = XMLBinaryV1().scan(tmp_path, timestamp=timestamp)
+
+        assert len(selected) == len(payloads) == len(direct) == survivors
+        assert derived_ordinals == list(range(3 - survivors, 3)) * 2
+        original = full[len(full) - survivors :]
+        assert [item.source_patch_key for item in selected] == [
+            item.source_patch_key for item in original
+        ]
+        assert [item.attrs.patch_id for item in selected] == [
+            item.attrs.patch_id for item in original
+        ]
+        assert [item.summary for item in payloads] == selected
+        for summary in selected:
+            patches = dc.read(
+                summary.source_path, source_patch_key=summary.source_patch_key
+            )
+            assert len(patches) == 1
+            patch = patches[0]
+            assert patch.attrs.patch_id == summary.attrs.patch_id
+            assert patch.summary.coords == summary.coords
+            np.testing.assert_array_equal(
+                patch.data, expected[summary.coords["time"].min]
+            )
+
     def test_two_patches(self, binary_xml_directory):
         """Ensure the default test case has two patches."""
         fiber = XMLBinaryV1()
@@ -221,6 +306,54 @@ class TestScanContents:
 
 class TestRead:
     """Tests for reading contents into Patches."""
+
+    @pytest.mark.parametrize("size_change", [-2, 1, 2])
+    @pytest.mark.parametrize("windows", [{}, {"time": (0, 5)}])
+    def test_reject_wrong_file_size(
+        self, binary_xml_directory, tmp_path, size_change, windows
+    ):
+        """Full and bounded reads reject both trailing and missing raw bytes."""
+        shutil.copy2(binary_xml_directory / "metadata.xml", tmp_path)
+        source = next(binary_xml_directory.glob("*.raw"))
+        path = tmp_path / source.name
+        data = source.read_bytes()
+        data = data[:size_change] if size_change < 0 else data + bytes(size_change)
+        path.write_bytes(data)
+        with pytest.raises(InvalidFiberFileError, match="exactly"):
+            XMLBinaryV1().read_array(path, windows)
+
+    def test_directory_order_cannot_swap_samples(
+        self, binary_xml_directory, tmp_path, monkeypatch
+    ):
+        """Metadata and samples stay paired when listings return different orders."""
+        shutil.copytree(binary_xml_directory, tmp_path, dirs_exist_ok=True)
+        paths = sorted(tmp_path.glob("*.raw"))
+        expected = {}
+        for index, path in enumerate(paths):
+            data = np.full(10000, index + 1, dtype="uint16")
+            path.write_bytes(data.tobytes())
+            patch = XMLBinaryV1().read(path)[0]
+            expected[patch.get_coord("time").min()] = data.reshape(patch.shape)
+        path_type = type(UPath(tmp_path))
+        glob = path_type.glob
+        calls = []
+
+        def alternating_glob(path, pattern, **kwargs):
+            items = list(glob(path, pattern, **kwargs))
+            if str(path) == str(tmp_path) and pattern == "*.raw":
+                calls.append(True)
+                items = sorted(items, reverse=len(calls) % 2 == 0)
+            return iter(items)
+
+        monkeypatch.setattr(path_type, "glob", alternating_glob)
+        patches = dc.read(tmp_path, "XMLBinary", "1")
+        assert len(patches) == 2
+        assert len(calls) >= 2
+        assert [p._source.key for p in patches] == ["0", "1"]
+        for patch in patches:
+            np.testing.assert_array_equal(
+                patch.data, expected[patch.get_coord("time").min()]
+            )
 
     def test_read_single_file(self, binary_xml_directory):
         """Ensure we can read a single binary file in the directory."""

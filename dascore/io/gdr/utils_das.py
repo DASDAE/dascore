@@ -10,7 +10,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.core import get_coord
-from dascore.io.utils import convert_attr_units, get_exact_coord
+from dascore.io.utils import convert_attr_units, get_exact_coord, should_snap
 from dascore.utils.hdf5 import extract_h5_attrs, h5_matches_structure
 from dascore.utils.misc import unbyte
 
@@ -85,13 +85,14 @@ def _get_coord_manager(resource, snap=True):
         """Get the time coordinate."""
         # TODO: I am not sure if time will always be in ns, check on it.
         time = resource["DasRawData/DasTimeArray"]
-        if not snap:
+        length = len(time)
+        if not should_snap(snap, "time") or length < 2:
             values = np.array(time).astype("datetime64[ns]")
             return get_exact_coord(values)
         t1 = np.int64(time[0]).astype("datetime64[ns]")
         t2 = np.int64(time[-1]).astype("datetime64[ns]")
-        step = (t2 - t1) / (len(time) - 1)
-        return get_coord(start=t1, stop=t2, step=step).change_length(len(time))
+        step = (t2 - t1) / (length - 1)
+        return get_coord(start=t1, stop=t2, step=step).change_length(length)
 
     def get_dist_coord(resource, length):
         """Get distance coordinates."""

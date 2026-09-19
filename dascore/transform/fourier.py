@@ -645,8 +645,6 @@ def stft(
     --------
     [Patch.dft](`dascore.Patch.dft`), [Patch.istft](`dascore.Patch.istft`)
     """
-    from dascore.proc.tile_apply import tile_apply  # noqa: PLC0415
-
     resolved = resolve_window(
         patch, kwargs, samples=samples, overlap=overlap, enforce_lt_coord=True
     )
@@ -683,7 +681,10 @@ def stft(
         **dict(zip(dims, sizes)),
     }
     # `.func`: a step of stft, so it records no history or ids of its own.
-    stack = tile_apply.func(patch, **settings)
+    # Through the class rather than the module: the method is written in
+    # `Patch`, and `.func` is the operation without this call's history.
+    # ty does not see attributes attached to a function at import.
+    stack = dc.Patch.tile_apply.func(patch, **settings)  # ty: ignore[unresolved-attribute]
     tiles = stack.data
     tail = tuple(range(-ndim, 0))
     if detrend:

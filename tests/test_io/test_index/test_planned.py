@@ -437,7 +437,12 @@ class TestLoadMemberArray:
         original = format_class.__dict__["read_array"]
 
         def install(func):
-            format_class.read_array = FiberIO.read_array if func is None else func
+            def missing(self, resource, windows, **kwargs):
+                return FiberIO.read_array(
+                    self, resource, windows, key=kwargs.get("key", "")
+                )
+
+            format_class.read_array = missing if func is None else func
 
         yield install
         format_class.read_array = original
@@ -448,24 +453,25 @@ class TestLoadMemberArray:
         swap_read_array(None)
 
     @pytest.fixture
-    def override(self, swap_read_array):
+    def override(self, swap_read_array, format_class):
         """Give the row's format a counting read_array override."""
         calls = []
+        original = format_class.read_array
 
         def read_array(self, resource, windows, **kwargs):
             # a real override's caster wrapper consumes _pre_cast; this
             # raw function sees it and must not forward it to read
             kwargs.pop("_pre_cast", None)
             calls.append((windows, kwargs))
-            return FiberIO.read_array(self, resource, windows, **kwargs)
+            return original(self, resource, windows, **kwargs)
 
         swap_read_array(read_array)
         return calls
 
-    def test_no_override_returns_none(self, resolver, row, format_class, no_override):
-        """A format without an override takes the patch path."""
-        assert not format_class().implements_read_array
-        assert resolver._load_member_array(row, {"time": (0, 5)}) is None
+    def test_missing_array_hook_raises(self, resolver, row, no_override):
+        """A broken reader cannot silently fall back through its derived read."""
+        with pytest.raises(NotImplementedError):
+            resolver._load_member_array(row, {"time": (0, 5)})
 
     def test_real_override_matches_patch_path(self, resolver, row):
         """DASDAE's own override, through the resolver, matches the patch path."""
@@ -476,12 +482,13 @@ class TestLoadMemberArray:
 
     def test_override_loads_window(self, resolver, row, override):
         """The override gets the windows and its array matches the patch path."""
-        out = resolver._load_member_array(row, {"time": (2, 9)})
         expected = resolver._load_member(row).select(time=(2, 9), samples=True).data
+        override.clear()
+        out = resolver._load_member_array(row, {"time": (2, 9)})
         assert np.array_equal(out, expected)
         assert out.dtype == expected.dtype
         # the row's own patch key rides along so multi-patch files resolve
-        expected_kwargs = {"source_patch_key": row["source_patch_key"]}
+        expected_kwargs = {"key": row["source_patch_key"]}
         assert override == [({"time": (2, 9)}, expected_kwargs)]
 
     def test_digit_key_returns_none(self, resolver, row, override):

@@ -7,9 +7,10 @@ import warnings
 import numpy as np
 import pandas as pd
 import pytest
+from pydantic import ValidationError
 
 import dascore as dc
-import dascore.proc.coords
+import dascore.proc.coords as coords_module
 from dascore.compat import is_array
 from dascore.core.coords import (
     BaseCoord,
@@ -20,6 +21,7 @@ from dascore.core.coords import (
     get_coord,
 )
 from dascore.exceptions import (
+    CoordDataError,
     CoordError,
     ParameterError,
     PatchBroadcastError,
@@ -1429,6 +1431,253 @@ class TestIntegerCellTranslation:
             np.testing.assert_array_equal(
                 out.get_array(name), patch.get_array(name).astype(float) + shift
             )
+
+
+class TestAppendDimsNames:
+    """append_dims takes dimension names positionally or as keywords."""
+
+    def test_both_spellings(self, random_patch):
+        """A bare name is a length one dimension; a keyword gives its values."""
+        assert random_patch.append_dims("end", "stop").dims[-2:] == ("end", "stop")
+        assert random_patch.append_dims(face=[1, 2]).shape[-1] == 2
+
+    def test_a_keyword_overrides_the_same_bare_name(self, random_patch):
+        """Naming a dimension twice takes the values, as it always did."""
+        assert random_patch.append_dims("end", end=[1, 2]).shape[-1] == 2
+
+    def test_a_dimension_may_be_named_for_the_varargs(self, random_patch):
+        """`empty_dims` is a dimension name like any other.
+
+        A keyword never fills a `*args` parameter, so this has always named
+        a dimension rather than filling the varargs. It stays that way only
+        while the operation holds the bare names nowhere a caller could
+        also name -- see `AppendDims.from_names`.
+        """
+        out = random_patch.append_dims(empty_dims=[1, 2])
+        assert out.dims[-1] == "empty_dims"
+        assert out.shape[-1] == 2
+
+    @pytest.mark.parametrize("name", [3, ["a", "b"], None])
+    def test_a_name_which_is_not_a_string(self, random_patch, name):
+        """Dimensions are named with strings; the message says which value.
+
+        Through the patch method, which is the way a caller reaches it.
+        Both spellings reach CPython first otherwise: a number becomes a
+        keyword ("keywords must be strings") and a list becomes a dict key
+        ("unhashable type"), neither naming the operation.
+        """
+        with pytest.raises(ParameterError, match="names dimensions with strings"):
+            random_patch.append_dims(name)
+
+    def test_names_and_values_merge(self):
+        """Bare names and keywords become one mapping, keywords last."""
+        out = coords_module.AppendDims.from_names(("end", "stop"), {"end": [1, 2]})
+        assert out.kwargs == {"end": [1, 2], "stop": 1}
+
+
+class TestProcessorConstruction:
+    """Building an operation directly names the field holding the names."""
+
+    @pytest.mark.parametrize(
+        ("cls", "field"),
+        [
+            (coords_module.SortCoords, "coords"),
+            (coords_module.SnapCoords, "coords"),
+            (coords_module.DropCoords, "coords"),
+            (coords_module.Transpose, "dims"),
+        ],
+    )
+    def test_one_bare_name_is_refused(self, cls, field):
+        """The varargs spelling is the patch method's, not the operation's."""
+        with pytest.raises(ValidationError, match=f"holds the names in `{field}`"):
+            cls("distance")
+
+    def test_a_sequence_of_names_is_how(self, random_patch):
+        """Which is what the message says to write."""
+        assert coords_module.SortCoords(coords=("distance",)).coords == ("distance",)
+        assert coords_module.Transpose(dims=("time", "distance"))(
+            random_patch
+        ).dims == ("time", "distance")
+
+
+class TestDropPrivateCoords:
+    """Dropping the coordinates whose names begin with an underscore."""
+
+    def test_private_coord_leaves_data_alone(self, random_patch):
+        """A private coordinate which is not a dimension costs no samples."""
+        patch = random_patch.update_coords(_private=(None, np.array([1, 2, 3])))
+        out = patch.drop_private_coords()
+        assert "_private" not in out.coords.coord_map
+        assert out.shape == random_patch.shape
+        assert np.array_equal(out.data, random_patch.data)
+
+    def test_private_dimension_empties_its_axis(self):
+        """A private dimension takes its axis with it, data included."""
+        patch = dc.Patch(np.arange(3), coords={"_x": np.arange(3)}, dims=("_x",))
+        out = patch.drop_private_coords()
+        assert out.dims == ()
+        assert out.data.shape == (0,)
+
+    def test_private_dimension_beside_a_public_one(self):
+        """The manager empties that axis rather than removing it, so no patch fits.
+
+        Emptying is what makes a patch of nothing but private dimensions work;
+        beside a public dimension it leaves an axis the coordinates no longer
+        describe, which no patch can hold. Pinned so the array half of this
+        operation cannot drift from what the coordinate manager does.
+        """
+        patch = dc.Patch(
+            np.ones((3, 4)),
+            coords={"_x": np.arange(3), "time": dc.to_datetime64(np.arange(4))},
+            dims=("_x", "time"),
+        )
+        with pytest.raises(CoordDataError, match=r"shape of \(0, 4\)"):
+            patch.drop_private_coords()
+
+
+class TestProcessorSeam:
+    """The coordinate operations split their metadata from their array work."""
+
+    # Operations which only re-describe the data; they bind onto metadata.
+    metadata_only = (
+        coords_module.RenameCoords,
+        coords_module.UpdateCoords,
+        coords_module.DropCoords,
+        coords_module.CoordsFromDf,
+    )
+    # Operations which also move, drop or repeat samples.
+    with_kernel = (
+        coords_module.SnapCoords,
+        coords_module.SortCoords,
+        coords_module.DropPrivateCoords,
+        coords_module.Select,
+        coords_module.Isel,
+        coords_module.Sel,
+        coords_module.Unselect,
+        coords_module.Order,
+        coords_module.Transpose,
+        coords_module.AppendDims,
+        coords_module.Squeeze,
+        coords_module.MakeBroadcastableTo,
+    )
+
+    @pytest.fixture(scope="class")
+    def described(self, random_patch_with_lat_lon):
+        """A patch which has no data to fall back on."""
+        return random_patch_with_lat_lon.drop_data()
+
+    @pytest.mark.parametrize("cls", metadata_only)
+    def test_metadata_only_has_no_kernel(self, cls):
+        """A kernel would stop the operation binding onto metadata."""
+        assert cls.kernel_for("numpy") is None
+
+    @pytest.mark.parametrize("cls", with_kernel)
+    def test_array_operations_have_a_kernel(self, cls):
+        """An operation which moves samples has to say so with a kernel."""
+        assert cls.kernel_for("numpy") is not None
+
+    # Each case says what the operation should produce without asking the
+    # operation: comparing the metadata path against the data path alone
+    # only shows the two halves agree, which a broken operation also does.
+    @pytest.mark.parametrize(
+        ("processor", "expected"),
+        [
+            (coords_module.Select(distance=(10, 200)), ("distance", "time", 191, 2000)),
+            (coords_module.Select(time=-1, samples=True), ("distance", "time", 300, 1)),
+            (coords_module.Isel(distance=3), ("time", None, 2000, None)),
+            (
+                coords_module.Isel({"time": slice(0, 100, 2)}),
+                ("distance", "time", 300, 50),
+            ),
+            (
+                coords_module.Sel(distance=slice(10, 20)),
+                ("distance", "time", 11, 2000),
+            ),
+            (
+                coords_module.Unselect(distance=(10, 200)),
+                ("distance", "time", 109, 2000),
+            ),
+            (
+                coords_module.Order(time=[0, 0, 0], samples=True),
+                ("distance", "time", 300, 3),
+            ),
+            (
+                coords_module.Transpose(dims=("time", "distance")),
+                ("time", "distance", 2000, 300),
+            ),
+            (coords_module.AppendDims(face=1), ("distance", "time", 300, 2000)),
+            (
+                coords_module.RenameCoords(distance="fragrance"),
+                ("fragrance", "time", 300, 2000),
+            ),
+            (
+                coords_module.DropCoords(coords=("latitude",)),
+                ("distance", "time", 300, 2000),
+            ),
+        ],
+    )
+    def test_metadata_needs_no_data(
+        self, processor, expected, described, random_patch_with_lat_lon
+    ):
+        """Each operation works out its result without reading the array."""
+        first, second, length, width = expected
+        out, _ = processor.get_metadata(described)
+        assert out.dims[:2] == tuple(x for x in (first, second) if x is not None)
+        assert out.shape[:2] == tuple(x for x in (length, width) if x is not None)
+        # And the metadata half agrees with the same operation over the data.
+        expected_patch = processor(random_patch_with_lat_lon)
+        assert out.coords == expected_patch.coords
+        assert out.dims == expected_patch.dims
+
+    def test_dropped_coordinate_is_gone(self, described):
+        """drop_coords is the one case a shape cannot show."""
+        out, _ = coords_module.DropCoords(coords=("latitude",)).get_metadata(described)
+        assert "latitude" not in out.coords.coord_map
+        assert "latitude" in described.coords.coord_map
+
+    def test_appended_dimension_is_there(self, described):
+        """append_dims is the other: its new dimension is the third."""
+        out, _ = coords_module.AppendDims(face=1).get_metadata(described)
+        assert out.dims == (*described.dims, "face")
+
+    @pytest.mark.parametrize(
+        "processor",
+        [
+            coords_module.SnapCoords(coords=("time",)),
+            coords_module.SnapCoords(coords=("distance",), reverse=True),
+            # Not sort_coords("time"): that coordinate is already sorted, so
+            # sorting it is the no-op this test exists to keep out.
+            coords_module.SortCoords(coords=("distance",)),
+            coords_module.SortCoords(coords=("time",), reverse=True),
+        ],
+    )
+    def test_uneven_coords_need_no_data(self, processor, wacky_dim_patch):
+        """Sorting and snapping are worked out from the coordinates alone.
+
+        On a patch whose coordinates are already sorted and evenly sampled
+        both operations are no-ops, which asserts nothing about either.
+        """
+        described = wacky_dim_patch.drop_data()
+        out, _ = processor.get_metadata(described)
+        for name in processor.coords:
+            coord = out.coords.coord_map[name]
+            assert coord.reverse_sorted if processor.reverse else coord.sorted
+            if isinstance(processor, coords_module.SnapCoords):
+                assert coord.evenly_sampled
+        # The operation really had something to do on these coordinates.
+        assert out.coords != described.coords
+        # And the metadata half agrees with the same operation over the data.
+        expected = processor(wacky_dim_patch)
+        assert out.coords == expected.coords
+        assert out.dims == expected.dims
+
+    def test_plan_reaches_the_kernel(self, described, random_patch_with_lat_lon):
+        """What select plans is the indexing its kernel replays."""
+        select = coords_module.Select(distance=(10, 200))
+        out, plan = select.get_metadata(described)
+        data = np.arange(described.size).reshape(described.shape)
+        assert select.kernel(data, **plan).shape == out.shape
+        assert out.shape == select(random_patch_with_lat_lon).shape
 
 
 def _gapped_patch(coord, dim="time", dtype=np.float64):

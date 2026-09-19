@@ -8,6 +8,7 @@ import warnings as std_warnings
 from rich import print  # noqa
 
 from dascore.core.patch import Patch
+from dascore.core.patch_meta import PatchMeta
 from dascore.core.attrs import PatchAttrs
 from dascore.core.summary import PatchSummary
 from dascore.core.spool import BaseSpool, Spool, spool

@@ -729,6 +729,9 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
     @overload
     def __getitem__(self, item: slice | np.ndarray) -> Self: ...
 
+    @overload
+    def __getitem__(self, item: tuple) -> Any: ...
+
     @abc.abstractmethod
     # Left unannotated on purpose. An int index yields a bare value, so the
     # honest return contains Any, which would absorb the overloads above
@@ -1324,8 +1327,12 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             indexer = tuple(
                 slice(None, None) if i != axis else indexer for i in range(ndims)
             )
-        array = self.data[indexer]
-        return get_coord(data=array, units=self.units)
+        out = self[indexer]
+        if isinstance(out, BaseCoord):
+            if out.ndim:
+                return out
+            out = out.values[()]
+        return get_coord(data=out, units=self.units)
 
     def to_summary(self, dims=()) -> CoordSummary:
         """Get the summary info about the coord."""
@@ -1624,10 +1631,9 @@ class CoordPartial(BaseCoord):
         return value
 
     def __getitem__(self, item):
-        # We init a temporary array just to get numpy to do the
-        # indexing. There is probably a faster way but this is robust.
-        dummy = np.empty(self.shape)[item]
-        return self.__class__(shape=dummy.shape)
+        # Index the broadcast view without allocating the full coordinate.
+        selected = self.values[item]
+        return self.__class__(shape=selected.shape, units=self.units, dtype=self.dtype)
 
     def _max(self):
         """Dummy funct to do nothing but raise."""
@@ -2702,7 +2708,7 @@ class CoordArray(BaseCoord):
         # readers) index with these where booleans are not supported.
         if len(self.shape) == 1:
             out = np.arange(len(out))[out]
-        return self.new(values=values[out]), out
+        return self[out], out
 
     def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
         """Sort the coord to be monotonic (maybe range)."""
@@ -2766,13 +2772,15 @@ class CoordArray(BaseCoord):
             out = get_coord(data=vals, units=self.units)
         return out.new(**kwargs)
 
-    def __getitem__(self, item) -> Self:
+    def __getitem__(self, item):
         out = self.values[item]
         if not np.ndim(out):
             return out
-        # a declared step survives only an order it can be held against
-        step = self.step if out.ndim == 1 and is_strictly_monotonic(out) else None
-        return self.__class__(values=out, units=self.units, step=step)
+        # Reordering can invalidate both monotonic search and a declared grid.
+        monotonic = is_strictly_monotonic(out)
+        step = self.step if monotonic else None
+        cls = self.__class__ if monotonic else CoordArray
+        return cls(values=out, units=self.units, step=step)
 
     def _min(self):
         """Return min value."""
@@ -2868,7 +2876,7 @@ class CoordMonotonicArray(CoordArray):
         out = slice(new_start, new_stop)
         if self._slice_degenerate(out):
             return self.empty(), slice(0, 0)
-        return self.new(values=self.values[out]), out
+        return self[out], out
 
     def _get_index(self, value, forward=True):
         """
@@ -3335,9 +3343,10 @@ class CoordSegmented(BaseCoord):
         out = self.values[item]
         if not np.ndim(out):
             return out
-        # a declared grid survives only an order it can be held against
-        keep = not _is_null(self.step) and is_strictly_monotonic(out)
-        return get_coord(data=out, units=self.units, step=self.step if keep else None)
+        # Keep stored runs exact even when a stride crosses a small seam.
+        if is_strictly_monotonic(out):
+            return self.from_array(out, units=self.units, step=self.step)
+        return get_coord(data=out, units=self.units)
 
     def select(
         self, args, relative=False, samples=False

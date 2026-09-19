@@ -357,3 +357,24 @@ def label_indexer(
         raise KeyError("Not all requested labels were found in the coordinate.")
     result = _restore_indexer(result, positions)
     return int(result[0]) if labels.ndim == 0 else result
+
+
+def compose_indexers(
+    size: int, first: int | slice | np.ndarray, second: int | slice | np.ndarray
+) -> int | slice | np.ndarray:
+    """Compose positional selections without expanding an evenly spaced range."""
+    if isinstance(first, slice):
+        span = range(size)[first]
+        if isinstance(second, slice):
+            selected = span[second]
+            if not selected:
+                return slice(0, 0)
+            stop = None if selected.step < 0 and selected.stop < 0 else selected.stop
+            return slice(selected.start, stop, selected.step)
+        if isinstance(second, int):
+            return span[second]
+        positions = np.asarray(second)
+        if positions.dtype.kind == "b":
+            positions = np.flatnonzero(positions)
+        return span.start + positions * span.step
+    return np.asarray(first)[second]
