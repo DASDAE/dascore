@@ -12,7 +12,7 @@ from dascore.exceptions import ParameterError
 from dascore.utils.serialize import digest
 
 # The fields which say which array this is; `shape` and `dtype` follow from them.
-_ID_FIELDS = ("path", "format", "version", "key", "address", "dims", "windows")
+_ID_FIELDS = ("path", "format", "version", "key", "dims", "windows")
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,10 +32,9 @@ class ArraySource:
     version
         The version of that format.
     key
-        The logical patch within a multi-patch resource.
-    address
-        The array's location inside the resource, such as an HDF5 dataset
-        path. Empty means the data array of the patch named by `key`.
+        Which array in the resource: the logical patch of a multi-patch
+        resource, or an absolute path ("/...") to any stored array, such as
+        a dense coordinate.
     dims
         The stored order of the array's dimensions.
     windows
@@ -62,7 +61,6 @@ class ArraySource:
     format: str = ""
     version: str = ""
     key: str = ""
-    address: str = ""
     dims: tuple[str, ...] = ()
     windows: tuple[tuple[int, int], ...] = ()
     shape: tuple[int, ...] = ()
@@ -71,10 +69,9 @@ class ArraySource:
     @property
     def loadable(self) -> bool:
         """Whether this says enough to load the array."""
-        described = self.dtype is not None and len(self.windows) == self.ndim
         # `read_array` takes its windows by dimension name.
-        named = bool(self.address) or len(self.dims) == self.ndim
-        return bool(self.path and self.format and described and named)
+        described = len(self.windows) == len(self.dims) == self.ndim
+        return bool(self.path and self.format and described and self.dtype is not None)
 
     @property
     def ndim(self) -> int:

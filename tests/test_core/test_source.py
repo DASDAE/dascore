@@ -12,7 +12,11 @@ import pytest
 
 import dascore as dc
 from dascore.core.source import ArraySource
-from dascore.exceptions import InvalidFiberIOError, ParameterError
+from dascore.exceptions import (
+    InvalidFiberIOError,
+    ParameterError,
+    PatchAttributeError,
+)
 from dascore.io import core as io_core
 from dascore.utils.downloader import fetch
 
@@ -65,10 +69,9 @@ class TestDescription:
         with pytest.raises(IndexError, match="describes no array"):
             source[:1]
 
-    def test_data_needs_dims(self, source):
-        """Only an addressed array can go without dimension names."""
-        bare = replace(source, dims=())
-        assert not bare.loadable and replace(bare, address="a").loadable
+    def test_needs_dims(self, source):
+        """Windows are given to the reader by dimension name."""
+        assert not replace(source, dims=()).loadable
 
 
 class TestLoad:
@@ -86,47 +89,22 @@ class TestLoad:
         with pytest.raises(InvalidFiberIOError, match="may have changed"):
             wrong.load()
 
-    def test_address(self, source, path):
-        """An address loads a stored array which is not the patch's data."""
+    def test_stored_array(self, source, path):
+        """An absolute key loads a stored array which is not a patch's data."""
         with h5py.File(path) as fi:
-            name = next(
-                f"{group.name}/_coord_time" for group in fi["waveforms"].values()
-            )
+            name = next(f"{x.name}/_coord_time" for x in fi["waveforms"].values())
             shape, dtype, expected = fi[name].shape, fi[name].dtype, fi[name][3:9]
-        coord = replace(source, key="", address=name).describe(shape, dtype)
+        assert name.startswith("/")
+        coord = replace(source, key=name).describe(shape, dtype, dims=("time",))
         assert np.array_equal(coord[3:9].load(), expected)
 
-    def test_address_needs_support(self, random_patch, tmp_path):
-        """A format which is not HDF5 refuses an address until it says how."""
+    def test_stored_array_needs_hdf5(self, random_patch, tmp_path):
+        """Another kind of resource gives the key to its reader, which refuses."""
         out = tmp_path / "patch.pkl"
         random_patch.io.write(out, "pickle")
-        source = replace(dc.read(out)[0]._source, address="data")
-        with pytest.raises(NotImplementedError, match="by address"):
+        source = replace(dc.read(out)[0]._source, key="/data")
+        with pytest.raises(PatchAttributeError, match="No patch named"):
             source.load()
-
-
-class TestMultiPatch:
-    """Each patch in a resource loads its own array."""
-
-    @pytest.fixture()
-    def two_patch_path(self, tmp_path):
-        """A DASDAE file holding two patches with different data."""
-        path = tmp_path / "two.h5"
-        spool = dc.get_example_spool()
-        dc.write(spool[0], path, "dasdae")
-        dc.write(spool[1].new(data=spool[1].data * 3.0), path, "dasdae", append=True)
-        return path
-
-    def test_each_loads_its_own(self, two_patch_path):
-        """The key tells the two arrays apart, and neither loads the other."""
-        patches = list(dc.read(two_patch_path))
-        assert len(patches) == 2
-        sources = [patch._source for patch in patches]
-        assert sources[0].key != sources[1].key
-        assert sources[0].id != sources[1].id
-        assert not np.array_equal(patches[0].data, patches[1].data)
-        for patch, source in zip(patches, sources, strict=True):
-            assert np.array_equal(source.load(), patch.data)
 
 
 class TestSlicing:
@@ -168,15 +146,14 @@ class TestIdentity:
         assert source[:10][2:5].id == source[2:5].id
 
     def test_different_arrays(self, source):
-        """A selection, a key, an address or a path is a different array."""
+        """A selection, a key or a path is a different array."""
         ids = {
             source.id,
             source[:10].id,
             replace(source, key="b").id,
-            replace(source, address="a/b").id,
             replace(source, path="elsewhere.h5").id,
         }
-        assert len(ids) == 5
+        assert len(ids) == 4
 
     def test_description_not_identity(self, source):
         """Shape and dtype follow from the rest, so they are not hashed."""

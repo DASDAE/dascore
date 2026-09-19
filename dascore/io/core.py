@@ -31,6 +31,7 @@ from typing import (
 
 import numpy as np
 import pandas as pd
+from h5py import Dataset as H5pyDataset
 
 import dascore as dc
 from dascore.compat import Progress, UPath
@@ -680,6 +681,27 @@ def _type_caster(func, sig, required_type, arg_name):
     return caster
 
 
+def _serves_stored_arrays(func):
+    """Let `read_array` answer an absolute HDF5 dataset path given as `key`."""
+    sig = inspect.signature(func)
+
+    @wraps(func)
+    def _wrapper(*args, **kwargs):
+        # Readers name their parameters as they like; the order is fixed.
+        bound = sig.bind(*args, **kwargs).arguments
+        _, resource, windows, *_ = bound.values()
+        key = str(bound.get("key", ""))
+        if key.startswith("/") and isinstance(resource, _ManagedH5pyFile):
+            # Anything but a dataset is the reader's to refuse.
+            stored = resource[key] if key in resource else None
+            if isinstance(stored, H5pyDataset):
+                slices = tuple(slice(*x) for x in windows.values())
+                return np.asarray(stored[slices])
+        return func(*args, **kwargs)
+
+    return _wrapper
+
+
 def _is_wrapped_func(func1, func2):
     """Small helper function to determine if func1 is func2, unwrapping decorators."""
     func = func1
@@ -750,33 +772,14 @@ class FiberIO:
         format-specific layout and scaling. `key` identifies the logical
         patch in a multi-patch resource; single-patch formats ignore it.
         Readers which cannot slice storage decode and then slice here.
+
+        A `key` starting with "/" names a stored array by its absolute path
+        in the resource, such as a dense coordinate, with `windows` applied
+        in order. The framework answers this for HDF5 resources before the
+        reader is called; it returns stored values, undecoded.
         """
         msg = f"FiberIO: {self.name} has no read_array method"
         raise NotImplementedError(msg)
-
-    def read_address(
-        self, resource, address: str, windows: Sequence[tuple[int, int]]
-    ) -> np.ndarray:
-        """
-        Read the array stored at `address`, such as a dense coordinate.
-
-        The base class reads an HDF5 dataset by its path; a reader of another
-        kind of resource overrides this.
-
-        Parameters
-        ----------
-        resource
-            The opened resource, cast as `read_array` declares.
-        address
-            The location of the array inside the resource.
-        windows
-            A half-open `(start, stop)` sample range for each stored axis,
-            in order.
-        """
-        if not isinstance(resource, _ManagedH5pyFile):
-            msg = f"FiberIO: {self.name} cannot read an array by address."
-            raise NotImplementedError(msg)
-        return np.asarray(resource[address][tuple(slice(*x) for x in windows)])
 
     def _prepare_read(self, manager, snap):
         """Return metadata and a loader for ordered ``(windows, key)`` requests.
@@ -1015,6 +1018,9 @@ class FiberIO:
         # decorate methods for type-casting
         for name, param_ind in cls._automatic_type_casters.items():
             method = getattr(cls, name)
+            wrapped = getattr(method, "_type_caster_wrapped", False)
+            if name == "read_array" and not wrapped:
+                method = _serves_stored_arrays(method)
             sig = inspect.signature(method)
             arg_name = list(sig.parameters)[param_ind]
             required_type = get_type_hints(method).get(arg_name)
@@ -1175,12 +1181,9 @@ def _load_array_source(source: ArraySource) -> np.ndarray:
     with IOResourceManager(source.path) as manager:
         resource = manager.get_resource(_required_resource_type(fiberio.read_array))
         getattr(resource, "seek", lambda x: None)(0)
-        if source.address:
-            out = fiberio.read_address(resource, source.address, source.windows)
-        else:
-            windows = dict(zip(source.dims, source.windows, strict=True))
-            reader = cast(_TypeCasterMethod, fiberio.read_array)
-            out = reader(resource, windows, key=source.key, _pre_cast=True)
+        windows = dict(zip(source.dims, source.windows, strict=True))
+        reader = cast(_TypeCasterMethod, fiberio.read_array)
+        out = reader(resource, windows, key=source.key, _pre_cast=True)
     if out.shape != source.shape or np.dtype(out.dtype) != np.dtype(source.dtype):
         msg = (
             f"{source.path} gave {out.shape}/{out.dtype}; its source declared "
