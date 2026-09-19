@@ -55,17 +55,7 @@ from dascore.utils.coordmanager import merge_coord_managers
 from dascore.utils.deprecate import deprecate
 from dascore.utils.docs import compose_docstring
 from dascore.utils.gaps import GapTolerance
-from dascore.utils.identity import (
-    _ID_FIELDS,
-    advance,
-    fold_patch_ids,
-    fold_processing_ids,
-    ids_enabled,
-    operation_fingerprint,
-    patch_id_of,
-    processing_id_of,
-    stamp_combination,
-)
+from dascore.utils.identity import _ID_FIELDS, operation_id, stamp
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _apply_union_indexers,
@@ -77,7 +67,7 @@ from dascore.utils.misc import (
     warn_or_raise,
     yield_sub_sequences,
 )
-from dascore.utils.patch_registry import fingerprint_call, register_patch_function
+from dascore.utils.patch_registry import call_operation, register_patch_function
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.time import to_float
 from dascore.warnings import DASCoreWarning
@@ -317,45 +307,39 @@ class _PatchFunction(Protocol):
     def __call__(self, patch, *args, **kwargs): ...
 
 
-def _stamp(patch, attrs, patch_func, args, kwargs):
+def _stamp(patch, attrs, patch_func, args, kwargs, output=None):
     """
-    Return attrs saying which data this is and what was just done to it.
+    Return attrs saying which data this is after a call to a patch function.
 
-    Every patch given to the call counts towards which data the result is
-    -- `where(cond_patch, other_patch)` uses all three -- so their ids are
-    folded rather than the first one being copied across. The ids are read
-    with `getattr`, because attrs unpickled from before these fields
-    existed have neither.
+    Every patch given to the call is an input -- `where(cond_patch,
+    other_patch)` uses all three -- in the order the operation's markers
+    number them. A call the encoder cannot spell still made new data, so
+    the result gets a random id rather than none.
     """
+    found: list = []
+
+    def _operation() -> str:
+        fingerprint, patches = call_operation(patch_func, args, kwargs)
+        found.extend(patches)
+        return fingerprint
+
     try:
-        fingerprint = fingerprint_call(patch_func, args, kwargs)
+        fingerprint = _operation()
     except Exception:
-        # Provenance is metadata about the work, not the work. An argument
-        # the serializer cannot encode is a reason to say nothing about
-        # this call, never a reason to fail a call which otherwise worked.
-        return attrs
-    others = [x for x in (*args, *kwargs.values()) if isinstance(x, dc.Patch)]
-    return _stamp_ids(patch, attrs, fingerprint, others)
+        return stamp(attrs, [patch.attrs], _operation, output)
+    return _stamp_ids(patch, attrs, fingerprint, found, output)
 
 
-def _stamp_ids(patch, attrs, fingerprint: str, others=()):
+def _stamp_ids(patch, attrs, fingerprint: str, others=(), output=None):
     """
     Return attrs whose ids say an operation with `fingerprint` made them.
 
-    `patch` and any `others` are the patches the operation was given; all
-    of them count towards which data the result is.
+    `patch` and any `others` are the patches the operation was given, read
+    from the inputs rather than from whatever the body returned: filtering
+    data does not make it other data.
     """
     members = [patch.attrs, *(x.attrs for x in others)]
-    return attrs.update(
-        # Carried from the inputs rather than from whatever the body
-        # returned: filtering data does not make it other data, and a
-        # function building its result from scratch would otherwise mint a
-        # new id and claim it had.
-        patch_id=fold_patch_ids([patch_id_of(x) for x in members]),
-        processing_id=advance(
-            fold_processing_ids([processing_id_of(x) for x in members]), fingerprint
-        ),
-    )
+    return stamp(attrs, members, fingerprint, output)
 
 
 def record_call(
@@ -364,6 +348,7 @@ def record_call(
     patch_func: Callable,
     args: tuple,
     kwargs: Mapping[str, object],
+    output: int | None = None,
 ) -> dc.Patch:
     """
     Return ``out`` carrying what a call to ``patch_func`` records.
@@ -382,9 +367,25 @@ def record_call(
     history = getattr(patch_func, "_history", "full")
     hist_str = _get_history_str(patch, func, *args, _history=history, **kwargs)
     attrs = _maybe_add_history_str(out.attrs, hist_str)
-    if ids_enabled():
-        attrs = _stamp(patch, attrs, patch_func, args, kwargs)
+    attrs = _stamp(patch, attrs, patch_func, args, kwargs, output)
     return out if attrs is out.attrs else out.update(attrs=attrs)
+
+
+def _record_members(out, patch, patch_func, args, kwargs):
+    """
+    Return several results, each recording the call and its place among them.
+
+    The place is the absolute position in what the function returned, so a
+    member which is the input itself -- nothing was done to it -- keeps its
+    ids without moving the others'.
+    """
+    members = [
+        record_call(x, patch, patch_func, args, kwargs, output=index)
+        if isinstance(x, dc.Patch) and x is not patch
+        else x
+        for index, x in enumerate(out)
+    ]
+    return dc.spool(members) if isinstance(out, dc.BaseSpool) else type(out)(members)
 
 
 def _to_numpy_arg(obj):
@@ -530,6 +531,8 @@ def patch_function(
             # is what it records.
             if out is not patch and hasattr(out, "attrs"):
                 out = record_call(out, patch, patch_func, args, kwargs)
+            elif isinstance(out, dc.BaseSpool | list | tuple):
+                out = _record_members(out, patch, patch_func, args, kwargs)
             if attr_updates and hasattr(out, "attrs"):
                 out = out.update_attrs(**attr_updates)
             return out
@@ -1756,7 +1759,7 @@ def concatenate_patches(
 
     dim, val = _get_dim_and_value(kwargs)
     patches = get_compatible_patches(patches, dim, check_behavior)
-    fingerprint = operation_fingerprint(
+    fingerprint = operation_id(
         "Concatenate",
         {"arguments": tuple(kwargs.items()), "check_behavior": check_behavior},
     )
@@ -1840,7 +1843,7 @@ def _concatenate_group(
             coords = coords.update(**riders)
     warn_if_histories_differ([x.attrs for x in patches], "Concatenating")
     attrs = _maybe_add_history_str(attrs, "concatenate")
-    attrs = stamp_combination(attrs, [x.attrs for x in patches], fingerprint)
+    attrs = stamp(attrs, [x.attrs for x in patches], fingerprint)
     return dc.Patch(data=data, attrs=attrs, coords=coords, dims=dims)
 
 
@@ -1976,7 +1979,7 @@ def concatenate_planned(
             for x in patches
         ]
         attrs = attrs.update(data_units=kept)
-    fingerprint = operation_fingerprint(
+    fingerprint = operation_id(
         "Concatenate", {"arguments": ((dim, count),), "conflict": conflict}
     )
     return _concatenate_group(patches, dim, attrs, fingerprint)
@@ -2037,12 +2040,10 @@ def stack_patches(
     stack_attrs = _maybe_add_history_str(init_patch.attrs, "stack")
     # The kept members only: one dropped for being incompatible did not
     # contribute its data, so it is not part of what this data is.
-    stack_attrs = stamp_combination(
+    stack_attrs = stamp(
         stack_attrs,
         kept,
-        operation_fingerprint(
-            "Stack", {"dim_vary": dim_vary, "check_behavior": check_behavior}
-        ),
+        operation_id("Stack", {"dim_vary": dim_vary, "check_behavior": check_behavior}),
     )
 
     # create coords array for the stack

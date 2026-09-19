@@ -27,8 +27,8 @@ from dascore.exceptions import (
 )
 from dascore.proc.basic import Abs, Normalize, _known_real
 from dascore.utils.docs import compose_docstring
+from dascore.utils.identity import encode
 from dascore.utils.patch_registry import patch_function_tag, resolve_patch_function
-from dascore.utils.serialize import encode
 
 
 class SeamScale(PatchProcessor):
@@ -169,15 +169,15 @@ class TestTheSeam:
     def test_it_advances_the_ids(self, patch):
         """Which data stays; what was done moves."""
         out = SeamScale(3)(patch)
-        assert out.attrs.patch_id == patch.attrs.patch_id
-        assert out.attrs.processing_id != patch.attrs.processing_id
+        assert out.attrs.origin_id == patch.attrs.origin_id
+        assert out.attrs.data_id != patch.attrs.data_id
 
     def test_the_method_and_the_class_stamp_alike(self, patch):
         """One route, so one history and one id."""
         by_method = patch.normalize("time")
         by_class = Normalize(dim="time")(patch)
         assert by_method.attrs.history == by_class.attrs.history
-        assert by_method.attrs.processing_id == by_class.attrs.processing_id
+        assert by_method.attrs.data_id == by_class.attrs.data_id
 
     def test_get_metadata(self, patch):
         """A shape change comes back with the axis the kernel gets."""
@@ -328,7 +328,7 @@ class TestReviewFindings:
             out = bypass(patch, "time")
             assert out.equals(patch.normalize("time"))
             assert out.attrs.history == patch.attrs.history
-            assert out.attrs.processing_id == patch.attrs.processing_id
+            assert out.attrs.data_id == patch.attrs.data_id
 
     def test_signature_carries_annotations(self):
         """The method's own annotations, which static tooling can read."""
@@ -464,8 +464,8 @@ class TestReviewFindings:
                 if "factory" in vars(host):
                     delattr(host, "factory")
 
-    def test_an_unencodable_field_skips_the_ids(self, patch):
-        """A field the serializer refuses costs the ids, not the call."""
+    def test_an_unencodable_field_gets_a_random_id(self, patch):
+        """A field the encoder refuses costs a derived id, not the call."""
 
         class Dated(SeamScale):
             """Carry a time outside the nanosecond range."""
@@ -473,9 +473,14 @@ class TestReviewFindings:
             name = None
             when: Any = np.datetime64("3000-01-01")
 
-        out = Dated()(patch)
+        # Not the default, which is left out of the id unread.
+        late = np.datetime64("3000-01-02")
+        out = Dated(when=late)(patch)
         assert np.allclose(out.data, patch.data * 2)
-        assert out.attrs.processing_id == patch.attrs.processing_id
+        # New data never keeps its input's id, and no two runs share one.
+        assert out.attrs.data_id not in ("", patch.attrs.data_id)
+        assert out.attrs.data_id != Dated(when=late)(patch).attrs.data_id
+        assert out.attrs.origin_id == patch.attrs.origin_id
 
     def test_a_numpy_bool_in_a_plan(self, patch):
         """Numpy scalars are numbers too."""

@@ -10,7 +10,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.exceptions import ParameterError
-from dascore.utils.serialize import digest
+from dascore.utils.identity import H
 
 # The fields which say which array this is; `shape` and `dtype` follow from them.
 _ID_FIELDS = ("path", "format", "version", "key", "dims", "windows")
@@ -87,7 +87,7 @@ class ArraySource:
     @property
     def id(self) -> str:
         """A digest of which array this is; equal sources share it."""
-        return digest({name: getattr(self, name) for name in _ID_FIELDS})
+        return H("window", {name: getattr(self, name) for name in _ID_FIELDS})
 
     def describe(self, shape, dtype, dims=()) -> ArraySource:
         """Return a source for the whole of an array of this shape and dtype."""

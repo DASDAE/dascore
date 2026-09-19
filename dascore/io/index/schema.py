@@ -39,7 +39,7 @@ from typing import NamedTuple, get_args, get_type_hints
 # the envelope columns by storage type; version 15 stored source coordinate
 # and numeric attribute dtypes. Earlier indexes lack the metadata required
 # for reconstruction and are rebuilt when opened.
-INDEX_VERSION = 18
+INDEX_VERSION = 19
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -322,11 +322,9 @@ TABLE_CONSTRAINTS = MappingProxyType(
 # not indexed; ingest warns about them.
 RESERVED_ATTR_COLUMNS = frozenset(
     {
-        # storage tables. `patch_id` is deliberately absent: the row id it
-        # names here is renamed private (SPOOL_EARLY_RENAMES) before attr
-        # columns are applied, so a patch's own `patch_id` claims the
-        # public spelling rather than colliding with it. A path may still
-        # not claim it; see `_UNCLAIMABLE_BY_PATH`.
+        # storage tables. `patch_id` is absent: the row id it names here
+        # is renamed private (SPOOL_EARLY_RENAMES) before attr columns are
+        # applied, so an attr of that name cannot collide with it.
         "source_id",
         "source_patch_key",
         "source_path",
@@ -388,10 +386,9 @@ RESERVED_ATTR_COLUMNS = frozenset(
 # with differing element types, and a public `data_size` would do the
 # same to every merge of patches of different lengths. `present_columns`
 # gives both back their public spelling on the way out to a caller.
-# `patch_id` is the one of these an attr also legitimately claims: it
-# names a row in this schema and a datum on a patch. It is renamed in the
-# backend, before attr columns land, so the attr finds the public spelling
-# free; the rest are renamed where the spool relation is built.
+# `patch_id`, the row id, is renamed in the backend before attr columns
+# land: residual queries and the catalog's ordering read `_patch_id`. The
+# rest are renamed where the spool relation is built.
 SPOOL_EARLY_RENAMES = MappingProxyType({"patch_id": "_patch_id"})
 SPOOL_LATE_RENAMES = MappingProxyType(
     {

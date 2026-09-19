@@ -250,8 +250,8 @@ class PatchSummary(DascoreBaseModel):
             # Rebuild legacy pickle attrs to restore missing identity defaults.
             if (
                 hasattr(attrs, "_source_patch_key")
-                or not hasattr(attrs, "patch_id")
-                or not hasattr(attrs, "processing_id")
+                or not hasattr(attrs, "origin_id")
+                or not hasattr(attrs, "data_id")
             ):
                 attrs = attrs.drop("_source_patch_key")
             return _build_patch_summary_payload(

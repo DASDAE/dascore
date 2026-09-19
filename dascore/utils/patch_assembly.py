@@ -264,7 +264,7 @@ def _attrs_from_row(
     # them; a merged patch folds them, and folding nothing is not the
     # same as folding what the members carried. A moved source has its
     # patch id cleared until it is read again.
-    for name in ("patch_id", "processing_id"):
+    for name in ("origin_id", "data_id"):
         if not _is_null(value := row.get(name)):
             out[name] = value
     return dc.PatchAttrs.from_dict(out)
@@ -712,7 +712,7 @@ class PatchAssembler:
         # A moved source has its id cleared until it is read again, and
         # folding no id is not folding the one the patch carries; an attr
         # the index could not hold is on the patch and would be lost here.
-        if ids_enabled() and "patch_id" in row and _is_missing(row["patch_id"]):
+        if ids_enabled() and "origin_id" in row and _is_missing(row["origin_id"]):
             return None
         if not _is_null(complete := row.get("_attrs_complete")) and not complete:
             return None

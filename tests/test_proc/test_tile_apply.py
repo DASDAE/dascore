@@ -649,7 +649,7 @@ class TestArguments:
         out, expected = op(patch), patch.tile_apply(halve, time=64, samples=True)
         assert out.equals(expected)
         assert out.attrs.history == expected.attrs.history
-        assert out.attrs.processing_id == expected.attrs.processing_id
+        assert out.attrs.data_id == expected.attrs.data_id
 
 
 class TestPhysicalTileBounds:

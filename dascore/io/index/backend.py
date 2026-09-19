@@ -163,8 +163,8 @@ def _classic_dtypes(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-# The attr a moved source can no longer vouch for; see `_forget_lineage`.
-_LINEAGE_ATTR = "patch_id"
+# The attrs a moved source can no longer vouch for; see `_forget_lineage`.
+_LINEAGE_ATTRS = ("origin_id", "data_id")
 
 
 class SQLiteIndexBackend:
@@ -867,7 +867,7 @@ class SQLiteIndexBackend:
 
     def _forget_lineage(self, source_ids: list[int]) -> None:
         """
-        Clear the indexed `patch_id` of sources which have moved.
+        Clear the indexed ids of sources which have moved.
 
         A derived id names the path it was derived from, so a moved
         source's stored id is the id of where it used to be: selecting by
@@ -878,7 +878,9 @@ class SQLiteIndexBackend:
 
         A missing id is a missed lookup. A stale one is a wrong answer.
         """
-        columns = [column for _, column in self._attr_kinds(_LINEAGE_ATTR)]
+        columns = [
+            column for name in _LINEAGE_ATTRS for _, column in self._attr_kinds(name)
+        ]
         if not columns or not source_ids:
             return
         assignments = ", ".join(f"{quote(col)} = NULL" for col in columns)
@@ -927,9 +929,8 @@ class SQLiteIndexBackend:
         df = self._fetch_df(sql, params)
         df, attr_columns = self._flatten(df, attr_meta)
         df = self._pivot_coords(df)
-        # Renamed before the attrs land, not after: `patch_id` names a
-        # row here and a datum on a patch, and the attr must find the
-        # public spelling free rather than collide with the row's.
+        # The row id goes private before the attrs land; residual queries
+        # and the catalog's ordering read it under that name.
         df = df.rename(columns=dict(SPOOL_EARLY_RENAMES))
         df = self._apply_attr_columns(df, attr_columns)
         if residuals:

@@ -93,9 +93,9 @@ class DascoreConfig(BaseModel):
     patch_provenance: Literal["ids", "disabled"] = Field(
         default="ids",
         description=(
-            "Controls whether DASCore maintains the patch_id and "
-            "processing_id which say which data a patch is and what was "
-            "done to it."
+            "Controls whether DASCore maintains the origin_id and data_id "
+            "which say which stored data a patch came from and which "
+            "array it is."
         ),
     )
     sampling_group_tolerance: float = Field(

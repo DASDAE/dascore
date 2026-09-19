@@ -2499,8 +2499,8 @@ class Spool(NodeRepr, NamespaceOwner):
             drop = [
                 "source_path",
                 "_patch_id",
-                "patch_id",
-                "processing_id",
+                "origin_id",
+                "data_id",
                 "source_patch_key",
                 "source_format",
                 "source_version",

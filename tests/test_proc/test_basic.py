@@ -1286,7 +1286,7 @@ class TestWhere:
         # Check that attributes are preserved (except the ones the
         # decorator maintains: history, and the ids which say what was
         # done to the data).
-        managed = {"history", "processing_id"}
+        managed = {"history", "data_id"}
         assert result.attrs.model_dump(exclude=managed) == (
             random_patch.attrs.model_dump(exclude=managed)
         )

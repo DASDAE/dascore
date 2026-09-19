@@ -62,7 +62,7 @@ from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.hdf5 import _ManagedH5pyFile
 from dascore.utils.identity import (
     ids_enabled,
-    source_patch_id,
+    origin_id_for,
 )
 from dascore.utils.io import (
     IOResourceManager,
@@ -1010,7 +1010,7 @@ def _reinit_manager_lock():
 
 # What a reader which keeps its own patch ids leaves behind for `read` to
 # find. Only a format which stores an id sets it; see the DASDAE reader.
-STORED_PATCH_ID = "_stored_patch_id"
+STORED_ORIGIN_ID = "_stored_origin_id"
 
 
 def _source_stats(source) -> tuple[int | None, int | None]:
@@ -1139,7 +1139,7 @@ def source_identity(source) -> tuple[str, int | None, int | None]:
 
     The three fields of a derived id which come from the source rather
     than from the reader; see
-    [`source_patch_id`](`dascore.utils.identity.source_patch_id`).
+    [`origin_id_for`](`dascore.utils.identity.origin_id_for`).
     """
     if not (path := _source_path_string(source)):
         return "", None, None
@@ -1204,22 +1204,24 @@ def _stamp_source_ids(
             origin = origin.describe(patch.shape, patch.dtype, patch.dims)
         attrs = patch.attrs
         if path and ids_enabled():
-            stored = attrs.get(STORED_PATCH_ID, "")
-            patch_id = stored or source_patch_id(
+            stored = attrs.get(STORED_ORIGIN_ID, "")
+            origin_id = stored or origin_id_for(
                 replace(origin, path=path),
                 size_bytes,
                 mtime_ns,
                 ordinal=index,
             )
+            # A freshly read patch is its origin, unless the file says what
+            # was done before it was written.
+            ids = {
+                "origin_id": origin_id,
+                "data_id": (attrs.data_id if stored else "") or origin_id,
+            }
             # Validate IDs supplied by a reader; derived IDs are trusted strings
             # and need no second validation of every scientific attribute.
-            attrs = (
-                attrs.update(patch_id=patch_id)
-                if stored
-                else attrs.model_copy(update={"patch_id": patch_id})
-            )
-        if hasattr(attrs, STORED_PATCH_ID):
-            attrs = attrs.drop(STORED_PATCH_ID)
+            attrs = attrs.update(**ids) if stored else attrs.model_copy(update=ids)
+        if hasattr(attrs, STORED_ORIGIN_ID):
+            attrs = attrs.drop(STORED_ORIGIN_ID)
         # Expose positional keys after deriving IDs with the original ordinal.
         if len(patches) > 1 and not origin.key:
             origin = replace(origin, key=str(index))

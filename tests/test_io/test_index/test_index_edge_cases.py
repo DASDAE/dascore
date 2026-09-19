@@ -904,7 +904,7 @@ class TestIngestEdges:
         """
         An attr named for a structural column is skipped with a warning.
 
-        It used to be spelled with `patch_id`, which is now a field of
+        It used to be spelled with `patch_id` (now `origin_id`), which is now a field of
         `PatchAttrs` in its own right -- a first-class id rather than a
         user attr which happens to collide -- and is skipped silently.
         `source_id` is still only a column, so it still warns.
@@ -931,7 +931,7 @@ class TestIngestEdges:
             records = s2r([summary])
         assert "source_id" not in records[0].patches[0].attrs
 
-    @pytest.mark.parametrize("name", ["patch_id"])
+    @pytest.mark.parametrize("name", ["origin_id", "data_id"])
     def test_the_ids_are_indexed_silently(self, name):
         """
         An id is a search term: it is how a result finds its data again.

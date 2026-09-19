@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Sequence
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 import pandas as pd
@@ -15,7 +15,7 @@ import dascore as dc
 from dascore.constants import attr_conflict_description
 from dascore.exceptions import AttributeMergeError, ParameterError
 from dascore.utils.docs import compose_docstring
-from dascore.utils.identity import _ID_FIELDS, fold_ids
+from dascore.utils.identity import _ID_FIELDS, ids_enabled, merge_operation, result_ids
 from dascore.utils.misc import iterate
 
 _VALID_CONFLICT_VALUES = ("drop", "raise", "keep_first")
@@ -117,7 +117,12 @@ def combine_patch_attrs(
         return [out]
 
     mod_dict_list = _get_model_dict_list(model_list)
-    ids = fold_ids([_to_patch_attrs(x) for x in model_list])
+    members = [_to_patch_attrs(x) for x in model_list]
+    ids: dict[str, Any] = {}
+    if ids_enabled() and len(members) == 1:
+        ids.update({x: getattr(members[0], x, "") for x in _ID_FIELDS})
+    elif ids_enabled() and members:
+        ids.update(result_ids(members, merge_operation))
     # History is never compared (processing differing between members is
     # what a merge is for); the first member's is carried, like the ids.
     history = (

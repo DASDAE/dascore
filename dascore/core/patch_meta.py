@@ -28,7 +28,7 @@ from dascore.utils.display import (
     get_header_text,
     split_block,
 )
-from dascore.utils.identity import with_patch_id
+from dascore.utils.identity import with_ids
 from dascore.utils.patch import (
     check_patch_attrs,
     check_patch_coords,
@@ -145,7 +145,7 @@ class PatchMeta(NodeRepr):
         self._coords = coords
         # Data which names no source still says which data it is, so that
         # everything downstream has something to carry forward.
-        self._attrs = with_patch_id(PatchAttrs.from_dict(attrs))
+        self._attrs = with_ids(PatchAttrs.from_dict(attrs))
         self._source = source
         # Lineage identity: minted eagerly so copies made at any point
         # (deepcopy/pickle carry __dict__) share it deterministically, and

@@ -603,9 +603,9 @@ class TestRead:
         np.testing.assert_array_equal(selected.data, expected.data)
         assert selected.coords == expected.coords
         assert selected.dtype == expected.dtype
-        assert selected.attrs.patch_id == full.attrs.patch_id
+        assert selected.attrs.origin_id == full.attrs.origin_id
         assert selected._source.key == full._source.key
-        assert selected.attrs.processing_id == full.attrs.processing_id
+        assert selected.attrs.data_id == full.attrs.data_id
         assert selected.attrs.history == full.attrs.history
 
     def test_read_array_matches_default(self, io_path_tuple):
@@ -755,17 +755,20 @@ class TestRead:
         asked for, so a reader which recorded it too would record it twice.
         """
         io, path = io_path_tuple
+        # Through `dc.read`, which says which data a patch is; a patch a
+        # reader builds on its own is new data each time.
+        kwargs = {"file_format": io.name, "file_version": io.version}
         with skip_missing():
-            whole = io.read(path)
+            whole = dc.read(path, **kwargs)
         if len(whole) != 1 or "time" not in whole[0].dims:
             pytest.skip("Test requires a single patch with a time dimension.")
         patch = whole[0]
         values = patch.get_coord("time").values
         if len(values) < 6:
             pytest.skip("Test requires a time dimension with room to trim.")
-        bounded = io.read(path, time=(values[2], values[-3]))
+        bounded = dc.read(path, time=(values[2], values[-3]), **kwargs)
         assert len(bounded) == 1
-        assert bounded[0].attrs.processing_id == patch.attrs.processing_id
+        assert bounded[0].attrs.data_id == patch.attrs.data_id
         assert bounded[0].attrs.history == patch.attrs.history
 
     def test_slice_out_all_patches_distance(self, io_path_tuple):

@@ -408,13 +408,13 @@ class TestPatchSummary:
     def test_legacy_attrs_restore_defaults(self, random_patch):
         """Summaries of old pickles restore missing identity defaults."""
         attrs = random_patch.attrs.model_copy()
-        del attrs.__dict__["patch_id"]
-        del attrs.__dict__["processing_id"]
+        del attrs.__dict__["origin_id"]
+        del attrs.__dict__["data_id"]
         summary = dc.PatchSummary(attrs=attrs, coords={})
-        assert summary.attrs.patch_id == ""
-        assert summary.attrs.processing_id == ""
-        assert summary.flat_dump()["processing_id"] == ""
-        assert not hasattr(attrs, "processing_id")
+        assert summary.attrs.origin_id == ""
+        assert summary.attrs.data_id == ""
+        assert summary.flat_dump()["data_id"] == ""
+        assert not hasattr(attrs, "data_id")
 
     def test_summary_uses_structured_access(self, random_patch):
         """Summary should expose coord summaries explicitly."""

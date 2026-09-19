@@ -2,8 +2,9 @@
 
 Every patch function is registered under a tag as it is decorated: bare for
 DASCore's own (``normalize``), ``package:name`` for a plugin's.
-[`fingerprint_call`](`dascore.utils.patch_registry.fingerprint_call`) digests
-one call's bound arguments; it is what advances a patch's ``processing_id``.
+[`fingerprint_call`](`dascore.utils.patch_registry.fingerprint_call`) gives
+the id of one call's bound arguments, which a result's ``data_id`` is derived
+from.
 
 Examples
 --------
@@ -27,8 +28,7 @@ from typing import Any
 from pydantic.fields import FieldInfo
 
 from dascore.exceptions import ParameterError
-from dascore.utils.identity import operation_fingerprint
-from dascore.utils.serialize import PATCH_ARGUMENT
+from dascore.utils.identity import PatchMarker, extract_patches, operation_id
 
 # Stands in for the patch while a call is bound to a signature. The bind
 # only needs something to put in that slot; nothing ever looks at it.
@@ -217,10 +217,11 @@ def _sweep_patch_functions() -> None:
 
 def fingerprint_call(func, args: tuple = (), kwargs: dict | None = None) -> str:
     """
-    Return the digest which identifies one call to a patch function.
+    Return the id of one call to a patch function.
 
-    Positional and keyword spellings of one call bind alike, so they are
-    one operation with one fingerprint.
+    Positional and keyword spellings of one call bind alike, and an
+    argument left at its default is the same call as one which passes it,
+    so they are one operation with one id.
 
     Parameters
     ----------
@@ -239,15 +240,19 @@ def fingerprint_call(func, args: tuple = (), kwargs: dict | None = None) -> str:
     >>> called = fingerprint_call(dc.proc.normalize, (), {"dim": "time"})
     >>> assert called == fingerprint_call(dc.proc.normalize, ("time",))
     """
+    return call_operation(func, args, kwargs or {})[0]
+
+
+def call_operation(func, args: tuple, kwargs: dict) -> tuple[str, list]:
+    """Return the id of a call, and the patches among its arguments."""
     version = getattr(func, "__version__", "1.0")
-    name = _call_name(func)
-    bound = _without_patches(_bind(func, args, kwargs or {}))
-    return _memoized_fingerprint(func, name, bound, version)
+    params, patches = extract_patches(_bind(func, args, kwargs))
+    return _memoized_fingerprint(func, _call_name(func), params, version), patches
 
 
 def _memoized_fingerprint(owner, name: str, params: dict, version: str) -> str:
     """
-    Return `operation_fingerprint(name, params, version)`, cached.
+    Return `operation_id(name, params, version)`, cached.
 
     A loop over a spool makes the same call every time. Hashing the
     parameters costs a few microseconds; the digest of their canonical
@@ -260,7 +265,7 @@ def _memoized_fingerprint(owner, name: str, params: dict, version: str) -> str:
     name
         The operation's name.
     params
-        Its parameters, with any patch replaced by the patch marker.
+        Its parameters, with any patch replaced by its marker.
     version
         Its version.
     """
@@ -275,9 +280,9 @@ def _memoized_fingerprint(owner, name: str, params: dict, version: str) -> str:
     except TypeError:
         # Something unhashable -- an array argument, most often. Its
         # digest is the honest cost of saying which array it was.
-        return operation_fingerprint(name, params, version)
+        return operation_id(name, params, version)
     if (found := _FINGERPRINTS.get(key)) is None:
-        found = operation_fingerprint(name, params, version)
+        found = operation_id(name, params, version)
         # Bounded, and simply stops growing rather than evicting: the
         # entries are one small string each, and a process which has made
         # four thousand distinct calls is not one this is hot for.
@@ -291,33 +296,11 @@ def _memoized_fingerprint(owner, name: str, params: dict, version: str) -> str:
 # equal". A pint quantity fails that -- `1 * m == 100 * cm` and the two hash
 # alike, while the serializer encodes them differently -- so caching on it
 # would give one call two answers depending on what ran first.
-_KEYABLE = (str, bytes, int, float, bool, type(None))
+_KEYABLE = (str, bytes, int, float, bool, type(None), PatchMarker)
 
 # Beyond this many elements, working the key out costs more than the digest
 # it saves.
 _KEY_LIMIT = 32
-
-
-def _without_patches(kwargs: dict) -> dict:
-    """
-    Return the bound arguments with any patch replaced by a marker.
-
-    A patch given as an argument is not a *parameter* of the operation, it
-    is another input to it: `where(cond_patch)` is the same operation
-    whichever patch it was handed, and which one it was is said by the ids
-    folded from the operands. Encoding it here would also hash a whole
-    patch on every call, and warn that it has no encoding of its own.
-    """
-    # Imported here rather than at module scope: this module is imported
-    # while `dascore.utils.patch` is still being imported.
-    import dascore as dc  # noqa: PLC0415
-
-    if not any(isinstance(x, dc.Patch) for x in kwargs.values()):
-        return kwargs
-    return {
-        key: PATCH_ARGUMENT if isinstance(value, dc.Patch) else value
-        for key, value in kwargs.items()
-    }
 
 
 def _as_key(value, budget: int = _KEY_LIMIT):
@@ -363,7 +346,7 @@ def _call_name(func) -> str:
 
     The registry tag when the function has one. When it does not -- a patch
     function defined inside another call -- something was still done to the
-    patch, and a `processing_id` which did not move would claim it was not.
+    patch, and a `data_id` which did not move would claim it was not.
     So the call is named by where it was written instead: enough to tell it
     from another operation, and honestly not resolvable.
     """
@@ -412,17 +395,22 @@ def _bind(func, args: tuple, kwargs: dict) -> dict:
     """
     Return the arguments of a call as the one mapping they mean.
 
-    Positional and keyword spellings of one call bind alike, defaults are
-    filled in, the patch is dropped, and a `**kwargs` group is spread back
-    out so that a dimension given as an extra reads as itself.
+    Positional and keyword spellings of one call bind alike, an argument
+    which only restates its default is left out, the patch is dropped, and
+    a `**kwargs` group is spread back out so that a dimension given as an
+    extra reads as itself.
     """
     signature = _signature(func)
     _check(func, args, kwargs)
     bound = signature.bind(_PATCH, *args, **kwargs)
-    bound.apply_defaults()
-    # A default spelled `x=Field(default=3)` means 3.
-    out = {key: _resolve_default(value) for key, value in bound.arguments.items()}
     parameters = list(signature.parameters.values())
+    # Left out rather than filled in, so that a parameter added later with
+    # a default does not change the id of every call made before it.
+    out = {
+        key: value
+        for key, value in bound.arguments.items()
+        if not is_default(value, signature.parameters[key].default)
+    }
     # The patch is what the operation is given, not part of what it is.
     out.pop(parameters[0].name, None)
     for parameter in parameters:
@@ -443,6 +431,21 @@ def _bind(func, args: tuple, kwargs: dict) -> dict:
             raise ParameterError(msg)
         out |= extras
     return out
+
+
+def is_default(value: Any, default: Any) -> bool:
+    """Return True if a value only restates the default it was declared with."""
+    default = _resolve_default(default)
+    if default is inspect.Parameter.empty:
+        return False
+    if value is default:
+        return True
+    # Keyed rather than compared: `0.0 == -0.0` and `1 == True`, and each
+    # pair is two calls.
+    try:
+        return _as_key(value) == _as_key(default)
+    except TypeError:
+        return False
 
 
 def _resolve_default(default: Any) -> Any:

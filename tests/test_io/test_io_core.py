@@ -34,7 +34,7 @@ from dascore.exceptions import (
 )
 from dascore.io import core as io_core
 from dascore.io.core import (
-    STORED_PATCH_ID,
+    STORED_ORIGIN_ID,
     FiberIO,
     _canonical_path,
     _FiberIOManager,
@@ -60,7 +60,7 @@ from dascore.io.utils import (
 )
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import H5Writer
-from dascore.utils.identity import source_patch_id
+from dascore.utils.identity import origin_id_for
 from dascore.utils.io import (
     BinaryReader,
     BinaryWriter,
@@ -927,7 +927,7 @@ class TestExampleUri:
         """A patch read by uri has the id of one read by path."""
         by_uri = dc.read(example_uri)[0]
         by_path = dc.read(example_path)[0]
-        assert by_uri.attrs.patch_id == by_path.attrs.patch_id
+        assert by_uri.attrs.origin_id == by_path.attrs.origin_id
         assert by_uri.attrs.history == by_path.attrs.history
 
 
@@ -1741,15 +1741,15 @@ class TestSourceIds:
         """Which is the whole point of deriving the id."""
         first = dc.read(terra15_path)[0]
         second = dc.read(terra15_path)[0]
-        assert first.attrs.patch_id
-        assert first.attrs.patch_id == second.attrs.patch_id
+        assert first.attrs.origin_id
+        assert first.attrs.origin_id == second.attrs.origin_id
 
     def test_the_id_names_the_source(self, terra15_path):
         """Every field the index keeps, and nothing else."""
         patch = dc.read(terra15_path)[0]
         stat = Path(terra15_path).stat()
         fmt, version = dc.get_format(terra15_path)
-        expected = source_patch_id(
+        expected = origin_id_for(
             ArraySource(
                 path=str(terra15_path),
                 format=fmt,
@@ -1760,23 +1760,23 @@ class TestSourceIds:
             stat.st_mtime_ns,
             ordinal=0,
         )
-        assert patch.attrs.patch_id == expected
+        assert patch.attrs.origin_id == expected
 
     def test_a_rewritten_file_is_new_data(self, terra15_path, tmp_path):
         """Data written over a path does not inherit the id it replaced."""
         path = tmp_path / "rewritten.hdf5"
         shutil.copy(terra15_path, path)
-        before = dc.read(path)[0].attrs.patch_id
+        before = dc.read(path)[0].attrs.origin_id
         stat = path.stat()
         os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
-        assert dc.read(path)[0].attrs.patch_id != before
+        assert dc.read(path)[0].attrs.origin_id != before
 
     def test_a_stored_id_beats_a_derived_one(self, dasdae_path, tmp_path):
         """A DASDAE file carries its ids, so they survive being moved."""
         patch = dc.read(dasdae_path)[0]
         moved = tmp_path / "moved.h5"
         patch.io.write(moved, "dasdae")
-        assert dc.read(moved)[0].attrs.patch_id == patch.attrs.patch_id
+        assert dc.read(moved)[0].attrs.origin_id == patch.attrs.origin_id
 
     @pytest.mark.parametrize("nameless", [False, True])
     @pytest.mark.parametrize("disabled", [False, True])
@@ -1788,12 +1788,12 @@ class TestSourceIds:
         mode = "disabled" if disabled else "ids"
         with config_context(patch_provenance=mode):
             patch = dc.read(resource, *dc.get_format(dasdae_path))[0]
-        assert STORED_PATCH_ID not in dict(patch.attrs)
+        assert STORED_ORIGIN_ID not in dict(patch.attrs)
 
     def test_the_marker_does_not_survive(self, dasdae_path):
         """The stored id is consumed, not left lying on the attrs."""
         patch = dc.read(dasdae_path)[0]
-        assert STORED_PATCH_ID not in dict(patch.attrs)
+        assert STORED_ORIGIN_ID not in dict(patch.attrs)
 
     def test_an_open_file_is_the_file_it_was_opened_on(self, terra15_path):
         """Reading by handle is reading the same data as reading by name."""
@@ -1801,20 +1801,20 @@ class TestSourceIds:
         by_name = dc.read(terra15_path)[0]
         with Path(terra15_path).open("rb") as fid:
             by_handle = dc.read(fid, name, version)[0]
-        assert by_handle.attrs.patch_id == by_name.attrs.patch_id
+        assert by_handle.attrs.origin_id == by_name.attrs.origin_id
 
     def test_a_manager_names_what_it_was_built_around(self, terra15_path):
         """A manager is a way of holding a source, not a source of its own."""
         by_name = dc.read(terra15_path)[0]
         with IOResourceManager(terra15_path) as man:
-            assert dc.read(man)[0].attrs.patch_id == by_name.attrs.patch_id
+            assert dc.read(man)[0].attrs.origin_id == by_name.attrs.origin_id
 
     def test_a_source_with_no_path_keeps_its_own_id(self, terra15_path):
         """Two streams must not derive one id out of having no path."""
         name, version = dc.get_format(terra15_path)
         data = Path(terra15_path).read_bytes()
         streams = (io.BytesIO(data), io.BytesIO(data))
-        ids = {dc.read(x, name, version)[0].attrs.patch_id for x in streams}
+        ids = {dc.read(x, name, version)[0].attrs.origin_id for x in streams}
         assert all(ids) and len(ids) == 2
 
     def test_a_key_naming_several_patches_names_none(self, idless_multi_patch):
@@ -1822,7 +1822,8 @@ class TestSourceIds:
         spool = dc.read(idless_multi_patch)
         keys = [x._source.key for x in spool]
         ids = {
-            x.attrs.patch_id for x in dc.read(idless_multi_patch, source_patch_key=keys)
+            x.attrs.origin_id
+            for x in dc.read(idless_multi_patch, source_patch_key=keys)
         }
         assert len(ids) == len(keys)
 
@@ -1830,7 +1831,7 @@ class TestSourceIds:
         """Two spellings resolve to one reader, so they name one datum."""
         name, version = dc.get_format(terra15_path)
         spelled = dc.read(terra15_path, name.lower(), version)[0]
-        assert spelled.attrs.patch_id == dc.read(terra15_path)[0].attrs.patch_id
+        assert spelled.attrs.origin_id == dc.read(terra15_path)[0].attrs.origin_id
 
     def test_a_hidden_member_is_not_part_of_a_directory(self, tmp_path):
         """Including one under a hidden directory, which is hidden too."""
@@ -1848,9 +1849,9 @@ class TestSourceIds:
         `relpath` refuses to answer across windows drives, and where the
         test data is cached is not this test's business.
         """
-        absolute = dc.read(terra15_path)[0].attrs.patch_id
+        absolute = dc.read(terra15_path)[0].attrs.origin_id
         monkeypatch.chdir(Path(terra15_path).parent)
-        assert dc.read(Path(terra15_path).name)[0].attrs.patch_id == absolute
+        assert dc.read(Path(terra15_path).name)[0].attrs.origin_id == absolute
 
     def test_a_path_which_cannot_be_canonicalized(self, monkeypatch):
         """
@@ -1869,7 +1870,7 @@ class TestSourceIds:
     def test_scanning_with_the_ids_disabled(self, terra15_path):
         """The config which turns the ids off turns scanning off too."""
         with config_context(patch_provenance="disabled"):
-            assert dc.scan(terra15_path)[0].attrs.patch_id == ""
+            assert dc.scan(terra15_path)[0].attrs.origin_id == ""
 
     def test_a_source_which_will_not_answer(self):
         """Nothing said is better than fields which pretend to be equal."""
@@ -1904,13 +1905,13 @@ class TestSourceIds:
         with config_context(patch_provenance="disabled"):
             first = dc.get_example_patch().update_attrs(tag="first")
             second = dc.get_example_patch().update_attrs(tag="second")
-            assert not first.attrs.patch_id
+            assert not first.attrs.origin_id
             dc.write(dc.spool([first, second]), path, "dasdae")
         return path
 
     def test_each_patch_of_a_file_is_its_own_data(self, idless_multi_patch):
         """Or every patch of a file would answer to one id."""
-        ids = {patch.attrs.patch_id for patch in dc.read(idless_multi_patch)}
+        ids = {patch.attrs.origin_id for patch in dc.read(idless_multi_patch)}
         assert len(ids) == 2
 
     def test_one_patch_read_by_key(self, idless_multi_patch):
@@ -1919,12 +1920,12 @@ class TestSourceIds:
         wanted = spool[1]
         key = wanted._source.key
         alone = dc.read(idless_multi_patch, source_patch_key=key)[0]
-        assert alone.attrs.patch_id == wanted.attrs.patch_id
+        assert alone.attrs.origin_id == wanted.attrs.origin_id
 
     def test_disabled_mints_nothing(self, terra15_path):
         """The config which turns the ids off turns this off too."""
         with config_context(patch_provenance="disabled"):
-            assert dc.read(terra15_path)[0].attrs.patch_id == ""
+            assert dc.read(terra15_path)[0].attrs.origin_id == ""
 
 
 class TestFiberIOReadArray:

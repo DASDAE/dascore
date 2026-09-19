@@ -143,20 +143,33 @@ MATRIX_CALLS = {
 }
 
 
-def _matrix_patch(array):
+def _pinned(patch, label: str):
+    """
+    Give a patch built here the same ids in every process.
+
+    A patch built in memory gets random ids, and every id downstream is
+    derived from them, so without this no two runs could be compared.
+    """
+    names = [x for x in ("origin_id", "data_id") if x in dc.PatchAttrs.model_fields]
+    fixed = hashlib.blake2b(label.encode(), digest_size=16).hexdigest()
+    return patch.update_attrs(**dict.fromkeys(names, fixed))
+
+
+def _matrix_patch(array, label: str = "matrix"):
     """Wrap an array in a patch with evenly sampled coordinates."""
     coords = {
         "distance": np.arange(array.shape[0]) * 1.0,
         "time": np.arange(array.shape[1]) * 0.5,
     }
-    return dc.Patch(data=array, coords=coords, dims=("distance", "time"))
+    patch = dc.Patch(data=array, coords=coords, dims=("distance", "time"))
+    return _pinned(patch, label)
 
 
 def get_matrix_calls() -> dict:
     """Return every call in MATRIX_CALLS against every array."""
     out = {}
     for array_name, array in make_arrays().items():
-        patch = _matrix_patch(array)
+        patch = _matrix_patch(array, array_name)
         out[f"matrix/{array_name}/input"] = lambda patch=patch: patch
         for call_name, call in MATRIX_CALLS.items():
             key = f"matrix/{array_name}/{call_name}"
@@ -166,8 +179,8 @@ def get_matrix_calls() -> dict:
 
 def get_calls() -> dict:
     """Return the calls to compare, keyed by a name for the report."""
-    patch = dc.get_example_patch()
-    null_patch = dc.get_example_patch("patch_with_null")
+    patch = _pinned(dc.get_example_patch(), "example")
+    null_patch = _pinned(dc.get_example_patch("patch_with_null"), "null")
     dft_patch = patch.dft("time")
     int_patch = patch.new(data=(np.asarray(patch.data) * 10).astype("int32"))
     bool_patch = patch.new(data=np.asarray(patch.data) > 0.5)
@@ -300,9 +313,9 @@ def digest(patch) -> dict:
     coords = {
         name: _hash(patch.get_array(name)) for name in sorted(patch.coords.coord_map)
     }
-    # Ignore argument reprs in history and process-specific patch IDs. Keep
-    # processing_id to detect changes in operation stamping and fingerprints.
-    attrs = patch.attrs.model_dump(exclude={"history", "coords", "patch_id"})
+    # Ignore argument reprs in history. The ids stay: the leaves are pinned,
+    # so a changed id is a changed operation id or stamping rule.
+    attrs = patch.attrs.model_dump(exclude={"history", "coords"})
     return {
         "dtype": str(data.dtype),
         "shape": list(data.shape),

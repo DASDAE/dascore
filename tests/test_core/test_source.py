@@ -148,7 +148,7 @@ class TestIdentity:
         fixed = ArraySource(
             "a.h5", "DASDAE", "1", "k", ("time",), ((2, 5),), (3,), np.dtype("f8")
         )
-        assert fixed.id == "335d4c1b2b99c9ec"
+        assert fixed.id == "98493216fbed2598d2206a504d98e070"
 
     def test_different_arrays(self, source):
         """A selection, a key or a path is a different array."""

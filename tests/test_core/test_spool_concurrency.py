@@ -306,8 +306,8 @@ class TestUpdateExecutor:
         try:
             with config_context(patch_provenance="disabled"):
                 root.update(progress=False, client=client)
-            assert "patch_id" not in root.get_contents()
-            assert all(x.attrs.patch_id for x in dc.scan(directory, progress=False))
+            assert "origin_id" not in root.get_contents()
+            assert all(x.attrs.origin_id for x in dc.scan(directory, progress=False))
             extra = dc.get_example_patch(shape=(3, 20), tag="new")
             extra.io.write(directory / "extra.h5", "DASDAE")
             (directory / "00.h5").unlink()

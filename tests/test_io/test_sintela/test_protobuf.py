@@ -100,7 +100,7 @@ def _without_ids(summary):
     one minted for any in-memory patch and a scan payload carries none.
     Comparing the two at this level would compare that, not the metadata.
     """
-    attrs = summary.attrs.update(patch_id="", processing_id="")
+    attrs = summary.attrs.update(origin_id="", data_id="")
     return summary.model_copy(update={"attrs": attrs})
 
 

@@ -53,9 +53,9 @@ import dascore as dc
 from dascore.config import get_config
 from dascore.constants import PatchMetaType, PatchType
 from dascore.exceptions import ParameterError
-from dascore.models.base import DascoreBaseModel
+from dascore.models.base import DascoreBaseModel, model_values
 from dascore.utils.attrs import _values_equal
-from dascore.utils.identity import ids_enabled
+from dascore.utils.identity import extract_patches, stamp
 from dascore.utils.patch import (
     _call_str,
     _maybe_add_history_str,
@@ -68,11 +68,10 @@ from dascore.utils.patch import (
 from dascore.utils.patch_registry import (
     _memoized_fingerprint,
     _spell,
-    _without_patches,
+    is_default,
     patch_function_tag,
     register_patch_function,
 )
-from dascore.utils.serialize import model_values
 
 if TYPE_CHECKING:
     from dascore.core.attrs import PatchAttrs
@@ -210,12 +209,36 @@ class PatchProcessor(DascoreBaseModel):
         # written and which class it is, which is honestly process-local.
         return f"{_spell(cls)}#{id(cls):x}"
 
+    def _operation(self) -> tuple[str, list]:
+        """Return this operation's id, and the patches among its fields."""
+        fields = type(self).model_fields
+        # A field which only restates its default is left out, so a field
+        # added later does not change the id of every operation before it.
+        given = {
+            name: value
+            for name, value in self.kwargs.items()
+            if name not in fields
+            or fields[name].is_required()
+            or not is_default(value, fields[name])
+        }
+        params, patches = extract_patches(given)
+        found = _memoized_fingerprint(type(self), self.tag, params, self.__version__)
+        return found, patches
+
     @property
     def fingerprint(self) -> str:
-        """Return the digest of the tag, version and validated fields."""
-        return _memoized_fingerprint(
-            type(self), self.tag, _without_patches(self.kwargs), self.__version__
-        )
+        """Return the id of the tag, version and non-default fields."""
+        return self._operation()[0]
+
+    def _identity(self) -> tuple[str, str]:
+        """Return the id this operation has as another's parameter."""
+        found, patches = self._operation()
+        if patches:
+            # Its id does not say which patches it holds, so an operation
+            # given it could not tell two of them apart.
+            msg = f"{type(self).__name__} holds a patch, so it has no id of its own."
+            raise ParameterError(msg)
+        return "operation", found
 
     def __eq__(self, other) -> bool:
         """Two processors are equal if they are the same operation."""
@@ -370,15 +393,12 @@ class PatchProcessor(DascoreBaseModel):
         if self.history is not None and get_config().patch_history != "disabled":
             spelled = _call_str(name, self.kwargs) if self.history == "full" else name
             attrs = _maybe_add_history_str(attrs, spelled)
-        if not ids_enabled():
-            return attrs
         try:
-            fingerprint = self.fingerprint
+            fingerprint, others = self._operation()
         except Exception:
-            # As for a patch function: a field the serializer cannot encode
-            # means no ids for this call, never a failed call.
-            return attrs
-        others = [x for x in self.kwargs.values() if isinstance(x, dc.Patch)]
+            # As for a patch function: a field the encoder cannot spell
+            # still made new data, so the result gets a random id.
+            return stamp(attrs, [patch.attrs], lambda: self._operation()[0])
         return _stamp_ids(patch, attrs, fingerprint, others)
 
 
