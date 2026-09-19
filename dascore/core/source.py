@@ -8,6 +8,7 @@ from typing import Any
 
 import numpy as np
 
+import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.utils.serialize import digest
 
@@ -132,13 +133,10 @@ class ArraySource:
 
     def load(self) -> np.ndarray:
         """Read and return the array."""
-        # The reader registry imports the patch, which imports this module.
-        from dascore.io.core import _load_array_source  # noqa: PLC0415
-
         if not self.loadable:
             msg = f"{self} does not say enough to load an array."
             raise ParameterError(msg)
-        return _load_array_source(self)
+        return dc.io.core._load_array_source(self)
 
     def __array__(self, dtype=None, copy=None) -> np.ndarray:
         """Load the array for numpy; each call reads the resource."""
