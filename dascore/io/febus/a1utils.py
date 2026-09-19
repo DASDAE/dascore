@@ -323,7 +323,7 @@ def _read_febus_array(febus: _FebusSlice, windows) -> np.ndarray:
     data = febus.zone[febus.data_name]
     rows = time_info.idx_stop - time_info.idx_start + 1
     shape = (rows * data.shape[0], data.shape[2])
-    time_slice, dist_slice = windows_to_slices(windows, ("time", "distance"), shape)
+    time_slice, dist_slice = windows_to_slices(windows, shape)
     length = time_slice.stop - time_slice.start
     width = dist_slice.stop - dist_slice.start
     if not length or not width:

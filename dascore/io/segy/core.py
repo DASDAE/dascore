@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 
 import dascore as dc
@@ -35,13 +37,16 @@ class SegyV1_0(FiberIO):  # noqa
         return _match[1] if (_match := _get_segy_version(resource)) else None
 
     def read_array(
-        self, resource: LocalPath, windows: dict[str, tuple[int, int]], key: str = ""
+        self,
+        resource: LocalPath,
+        windows: Sequence[tuple[int, int]] = (),
+        key: str = "",
     ) -> np.ndarray:
         """Read selected trace samples in time/channel order."""
         segyio = optional_import(self._package_name)
         with segyio.open(str(resource), ignore_geometry=True) as stream:
             shape = (len(stream.samples), len(stream.header))
-            time, channel = windows_to_slices(windows, ("time", "channel"), shape)
+            time, channel = windows_to_slices(windows, shape)
             channels = range(shape[1])[channel]
             if not channels:
                 return np.empty((len(range(shape[0])[time]), 0), dtype=stream.dtype)

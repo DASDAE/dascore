@@ -22,6 +22,7 @@ from functools import cached_property, wraps
 from pathlib import Path
 from threading import RLock
 from typing import (
+    Any,
     Literal,
     Protocol,
     TypeVar,
@@ -57,9 +58,9 @@ from dascore.exceptions import (
     RemoteCacheError,
     UnknownFiberFormatError,
 )
-from dascore.io.utils import selection_windows
+from dascore.io.utils import selection_windows, slice_dataset
 from dascore.utils.downloader import resolve_example_uri
-from dascore.utils.hdf5 import _ManagedH5pyFile
+from dascore.utils.hdf5 import H5Reader, _ManagedH5pyFile
 from dascore.utils.identity import (
     ids_enabled,
     source_patch_id,
@@ -740,17 +741,18 @@ class FiberIO:
         raise NotImplementedError(msg)
 
     def read_array(
-        self, resource, windows: dict[str, tuple[int, int]], key: str = ""
+        self, resource, windows: Sequence[tuple[int, int]] = (), key: str = ""
     ) -> np.ndarray:
         """
         Read one logical patch's array over half-open positional windows.
 
-        `windows` maps dimension names to `(start, stop)` sample indices.
-        Missing dimensions are returned whole. The array follows the
-        dimensions, shape, and dtype declared by `get_metadata`, including
-        format-specific layout and scaling. `key` identifies the logical
-        patch in a multi-patch resource; single-patch formats ignore it.
-        Readers which cannot slice storage decode and then slice here.
+        `windows` holds a `(start, stop)` sample range for each axis of the
+        returned array, in order, as `array[start:stop, ...]` would; trailing
+        axes left out are returned whole. The array has the axis order,
+        shape, and dtype declared by `get_metadata`, including
+        format-specific layout and scaling. `key` names the array: the
+        logical patch of a multi-patch resource, or a path inside the
+        resource. Readers which cannot slice storage decode and then slice.
         """
         msg = f"FiberIO: {self.name} has no read_array method"
         raise NotImplementedError(msg)
@@ -871,7 +873,7 @@ class FiberIO:
             for selection, data in zip(selected, load(requests), strict=True):
                 patch, coords, source, windows, residual = selection
                 expected = (
-                    tuple(stop - start for start, stop in windows.values())
+                    tuple(stop - start for start, stop in windows)
                     if patch.dims
                     else patch.shape
                 )
@@ -985,9 +987,8 @@ class FiberIO:
         if not cls.name:
             msg = "You must specify the file format with the name field."
             raise InvalidFiberIOError(msg)
-        # register fiber_io
-        parent = cls.__mro__[1]
-        assert issubclass(parent, FiberIO)  # only FiberIO subclasses get here
+        # register fiber_io; a mixin may sit ahead of the FiberIO ancestor
+        parent = next(x for x in cls.__mro__[1:] if issubclass(x, FiberIO))
         parent.manager.register_fiberio(cls())
         # decorate methods for type-casting
         for name, param_ind in cls._automatic_type_casters.items():
@@ -1000,6 +1001,27 @@ class FiberIO:
         if "_prepare_read" in cls.__dict__:
             # Keep the original hooks so subclass and runtime wrappers take effect.
             cls._prepared_read_hooks = (cls.get_metadata, cls.read_array)
+
+
+class H5ArrayMixin:
+    """
+    Read a single-patch HDF5 format's array by slicing its dataset.
+
+    For a reader whose `get_metadata` names its data with
+    `ArraySource(key=<dataset>.name)`; list it before `FiberIO` in the bases.
+    """
+
+    # Supplied by the FiberIO this is mixed into.
+    get_metadata: Callable[..., list[dc.PatchMeta]]
+
+    def read_array(
+        self, resource: H5Reader, windows: Sequence[tuple[int, int]] = (), key: str = ""
+    ) -> np.ndarray:
+        """Slice the dataset `key` names, defaulting to the metadata's own."""
+        if not key:
+            metadata_func = cast(_TypeCasterMethod, self.get_metadata)
+            key = metadata_func(resource, _pre_cast=True)[0]._source.key
+        return slice_dataset(resource[key], windows)
 
 
 @_reinit_after_fork
@@ -1146,22 +1168,25 @@ def source_identity(source) -> tuple[str, int | None, int | None]:
     return path, *_source_stats(path)
 
 
+def _read_open_resource(fiberio, resource, windows, key: str) -> np.ndarray:
+    """Read windows of an open resource, answering an absolute HDF5 path here."""
+    getattr(resource, "seek", lambda x: None)(0)
+    stored = None
+    if key.startswith("/") and isinstance(resource, _ManagedH5pyFile):
+        # Anything but a dataset is the reader's to refuse.
+        stored = resource[key] if key in resource else None
+    if isinstance(stored, H5pyDataset):
+        return np.asarray(slice_dataset(stored, windows))
+    reader = cast(_TypeCasterMethod, fiberio.read_array)
+    return reader(resource, windows, key=key, _pre_cast=True)
+
+
 def _load_array_source(source: ArraySource) -> np.ndarray:
     """Read the array a source describes, checking it against the description."""
     fiberio = FiberIO.manager.get_fiberio(format=source.format, version=source.version)
     with IOResourceManager(source.path) as manager:
         resource = manager.get_resource(_required_resource_type(fiberio.read_array))
-        getattr(resource, "seek", lambda x: None)(0)
-        stored = None
-        if source.key.startswith("/") and isinstance(resource, _ManagedH5pyFile):
-            # Anything but a dataset is the reader's to refuse.
-            stored = resource[source.key] if source.key in resource else None
-        if isinstance(stored, H5pyDataset):
-            out = np.asarray(stored[tuple(slice(*x) for x in source.windows)])
-        else:
-            windows = dict(zip(source.dims, source.windows, strict=True))
-            reader = cast(_TypeCasterMethod, fiberio.read_array)
-            out = reader(resource, windows, key=source.key, _pre_cast=True)
+        out = _read_open_resource(fiberio, resource, source.windows, source.key)
     if out.shape != source.shape or np.dtype(out.dtype) != np.dtype(source.dtype):
         msg = (
             f"{source.path} gave {out.shape}/{out.dtype}; its source declared "
@@ -1201,7 +1226,7 @@ def _stamp_source_ids(
             version=file_version,
         )
         if describe and reload_path:
-            origin = origin.describe(patch.shape, patch.dtype, patch.dims)
+            origin = origin.describe(patch.shape, patch.dtype)
         attrs = patch.attrs
         if path and ids_enabled():
             stored = attrs.get(STORED_PATCH_ID, "")
@@ -1303,6 +1328,89 @@ def read(
             # `dc.read(path, "netcdf_cf")` and `dc.read(path, "NETCDF_CF")`
             # resolve to one FiberIO and must name one datum.
             return out
+
+
+def _split_strided_windows(windows):
+    """Split windows into contiguous reads and the strides applied afterwards."""
+    scalars = (int, np.integer, type(None), type(Ellipsis))
+    if isinstance(windows, slice) or (
+        isinstance(windows, Sequence)
+        and len(windows) == 2
+        and all(isinstance(x, scalars) for x in windows)
+    ):
+        windows = (windows,)
+    reads, residual = [], []
+    for window in windows:
+        step = window.step if isinstance(window, slice) else None
+        if step is not None and step != 1:
+            if step < 0:
+                msg = f"A window is read forwards; {window!r} steps backwards."
+                raise ParameterError(msg)
+            window = slice(window.start, window.stop)
+            residual.append(slice(None, None, step))
+        else:
+            residual.append(slice(None))
+        reads.append(window)
+    return tuple(reads), tuple(residual)
+
+
+def read_array(
+    path: path_types | IOResourceManager,
+    windows: Sequence[Any] | slice = (),
+    key: str = "",
+    file_format: str | None = None,
+    file_version: str | None = None,
+) -> np.ndarray:
+    """
+    Read an array, or part of one, out of a fiber file.
+
+    Parameters
+    ----------
+    path
+        A path to the file to read.
+    windows
+        A half-open ``(start, stop)`` sample range, or a slice, for each axis
+        of the array in order; trailing axes left out are read whole. A single
+        window need not be wrapped in a tuple. A slice may step, in which case
+        the enclosing contiguous range is read and strided afterwards.
+    key
+        Which array to read: the logical patch of a multi-patch resource, or
+        an absolute path ("/...") to an array stored in an HDF5 file.
+    file_format
+        A string indicating the file format. If not provided dascore will
+        try to estimate the format.
+    file_version
+        An optional string indicating the format version.
+
+    Notes
+    -----
+    The array has the axis order, shape and dtype
+    [`scan`](`dascore.scan`) reports; dimension names play no part here.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>>
+    >>> array = dc.read_array("examples://terra15_das_1_trimmed.hdf5")
+    >>> window = dc.read_array("examples://terra15_das_1_trimmed.hdf5", (0, 10))
+    >>> window.shape == (10, array.shape[1])
+    True
+    """
+    path = resolve_example_uri(path)
+    reads, residual = _split_strided_windows(windows)
+    with remote_cache_scope("read"), IOResourceManager(path) as man:
+        if not file_format or not file_version:
+            file_format, file_version = get_format(
+                man, file_format=file_format, file_version=file_version
+            )
+            # Some remote stacks do not reuse a sniffing handle for a full read.
+            man.clear_cache()
+        fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=file_version)
+        resource = man.get_resource(_required_resource_type(fiber_io.read_array))
+        out = _read_open_resource(fiber_io, resource, reads, key)
+    if any(x != slice(None) for x in residual):
+        out = _apply_union_indexers(residual, out)
+    return out
 
 
 def scan_to_df(

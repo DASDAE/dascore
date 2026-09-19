@@ -31,6 +31,7 @@ https://geofon.gfz.de/redmine/projects/redmine/wiki/DAS.
 from __future__ import annotations
 
 from collections import defaultdict
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -119,7 +120,10 @@ class MSeedV2(FiberIO):
         return _metadata_from_summaries(summaries), load
 
     def read_array(
-        self, resource: LocalPath, windows: dict[str, tuple[int, int]], key: str = ""
+        self,
+        resource: LocalPath,
+        windows: Sequence[tuple[int, int]] = (),
+        key: str = "",
     ) -> np.ndarray:
         """Decode one compatible MiniSEED group in channel/time order."""
         pymseed = optional_import("pymseed")
@@ -140,7 +144,7 @@ class MSeedV2(FiberIO):
             )
             dtype = np.result_type(*[item.dtype for item in summaries])
             shape = (len(summaries), summaries[0].sample_count)
-            channels, time = windows_to_slices(windows, ("channel", "time"), shape)
+            channels, time = windows_to_slices(windows, shape)
             selected = summaries[channels]
             array = np.empty((len(selected), time.stop - time.start), dtype=dtype)
             arrays.append(array)

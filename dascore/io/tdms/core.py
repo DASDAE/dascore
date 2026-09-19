@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 
 import dascore as dc
@@ -72,7 +74,7 @@ class TDMSFormatterV4713(FiberIO):
     def read_array(
         self,
         resource: LocalBinaryReader,
-        windows: dict[str, tuple[int, int]],
+        windows: Sequence[tuple[int, int]] = (),
         key: str = "",
     ) -> np.ndarray:
         """
@@ -88,6 +90,6 @@ class TDMSFormatterV4713(FiberIO):
     @staticmethod
     def _read_array(resource, fileinfo, shape, windows):
         """Decode a window using an already parsed header."""
-        time_slice, dist_slice = windows_to_slices(windows, ("time", "distance"), shape)
+        time_slice, dist_slice = windows_to_slices(windows, shape)
         data = _read_sample_range(resource, fileinfo, time_slice.start, time_slice.stop)
         return data[:, dist_slice]

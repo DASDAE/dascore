@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 
 import dascore as dc
@@ -23,15 +25,15 @@ class SentekV5(FiberIO):
     def read_array(
         self,
         resource: LocalBinaryReader,
-        windows: dict[str, tuple[int, int]],
+        windows: Sequence[tuple[int, int]] = (),
         key: str = "",
     ) -> np.ndarray:
-        """Decode the stored layout and select in the metadata's dimension order."""
-        _, coords, offsets = _get_patch_attrs(resource)
+        """Decode the stored layout into the metadata's axis order, then select."""
+        _, _, offsets = _get_patch_attrs(resource)
         resource.seek(offsets[0])
         data = np.fromfile(resource, dtype=np.float32, count=offsets[1] * offsets[2])
         data = data.reshape((offsets[1], offsets[2])).T
-        return slice_dataset(data, coords.dims, windows)
+        return slice_dataset(data, windows)
 
     def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""

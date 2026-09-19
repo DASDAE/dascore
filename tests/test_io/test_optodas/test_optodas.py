@@ -53,9 +53,10 @@ class TestReadArray:
         io = OptoDASV8()
         with h5py.File(transposed_path, "r") as h5:
             stored = h5["data"][:] * h5["header/dataScale"][()]
-        out = io.read_array(transposed_path, {"time": (1, 4)})
-        # the header now calls the first axis distance, so a time window
-        # takes columns rather than rows
+        # the header now calls the first axis distance, and the array a
+        # positional window takes follows the metadata which says so
+        assert io.get_metadata(transposed_path)[0].dims == ("distance", "time")
+        out = io.read_array(transposed_path, (None, (1, 4)))
         np.testing.assert_allclose(out, stored[:, 1:4], rtol=1e-6)
 
 
@@ -113,8 +114,7 @@ class TestDataScale:
         """read_array applies the same scale as read, and scan reports its dtype."""
         with h5py.File(scaled_file, "r+") as fi:
             fi["header/dataScale"][...] = 0.25
-        windows = {"time": (1, 4)}
-        out = OptoDASV8().read_array(scaled_file, windows)
-        expected = dc.read(scaled_file)[0].select(samples=True, **windows)
+        out = OptoDASV8().read_array(scaled_file, ((1, 4),))
+        expected = dc.read(scaled_file)[0].select(samples=True, time=(1, 4))
         np.testing.assert_array_equal(out, expected.data)
         assert str(out.dtype) == dc.scan(scaled_file)[0].dtype

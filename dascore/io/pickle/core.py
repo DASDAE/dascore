@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import pickle
+from collections.abc import Sequence
 
 import numpy as np
 
@@ -98,7 +99,7 @@ class PickleIO(FiberIO):
     def read_array(
         self,
         resource: _PickleReader,
-        windows: dict[str, tuple[int, int]],
+        windows: Sequence[tuple[int, int]] = (),
         key: str = "",
     ) -> np.ndarray:
         """Slice one logical patch from the entries decoded for this operation."""
@@ -106,7 +107,7 @@ class PickleIO(FiberIO):
             [(native or str(i), p) for i, (p, native) in enumerate(resource.patches)],
             key,
         )
-        return slice_dataset(patch.data, patch.dims, windows)
+        return slice_dataset(patch.data, windows)
 
     def write(self, spool, resource: BinaryWriter, **kwargs):
         """Write a Patch/Spool to disk."""

@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import numpy as np
-
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import ArraySource, FiberIO
-from dascore.io.utils import slice_dataset
+from dascore.io import ArraySource, FiberIO, H5ArrayMixin
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
 
@@ -21,7 +18,7 @@ class ODH4PatchAttrs(dc.PatchAttrs):
     scale_factor_to_strain: OptionalFiniteFloat = None
 
 
-class ODH4V1(FiberIO):
+class ODH4V1(H5ArrayMixin, FiberIO):
     """
     Support for the OptaSense ODH4 HDF5 format.
 
@@ -56,9 +53,3 @@ class ODH4V1(FiberIO):
                 source=ArraySource(key=resource["raw_data"].name),
             )
         ]
-
-    def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
-    ) -> np.ndarray:
-        """Slice the ``raw_data`` dataset directly."""
-        return slice_dataset(resource["raw_data"], ("distance", "time"), windows)

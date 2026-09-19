@@ -4,6 +4,8 @@ IO module for reading Febus data.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 
 import dascore as dc
@@ -23,8 +25,6 @@ from .a1utils import (
     _yield_attrs_coords,
 )
 from .g1utils import (
-    _BSL_DIMS,
-    _MTX_DIMS,
     _bsl_version,
     _get_bsl_attrs,
     _get_bsl_coords,
@@ -102,7 +102,7 @@ class Febus2(FiberIO):
         return out
 
     def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
+        self, resource: H5Reader, windows: Sequence[tuple[int, int]] = (), key: str = ""
     ) -> np.ndarray:
         """
         Read one zone's window out of its block-structured data cube.
@@ -153,15 +153,16 @@ class FebusG1CSV1(FiberIO):
         return [dc.PatchMeta(attrs=attrs, coords=coords, dtype="float64")]
 
     def read_array(
-        self, resource: TextReader, windows: dict[str, tuple[int, int]], key: str = ""
+        self,
+        resource: TextReader,
+        windows: Sequence[tuple[int, int]] = (),
+        key: str = "",
     ) -> np.ndarray:
         """Decode CSV samples and select the requested positional window."""
         coords, attrs = _get_g1_coords_and_attrs(resource)
         resource.seek(0)
         data = np.loadtxt(resource, skiprows=int(attrs.get("_data_start_line", 0)))
-        return slice_dataset(
-            np.asarray(data).reshape(coords.shape), coords.dims, windows
-        )
+        return slice_dataset(np.asarray(data).reshape(coords.shape), windows)
 
 
 class FebusMTXH5V1(FiberIO):
@@ -196,12 +197,12 @@ class FebusMTXH5V1(FiberIO):
         ]
 
     def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
+        self, resource: H5Reader, windows: Sequence[tuple[int, int]] = (), key: str = ""
     ) -> np.ndarray:
         """
         Slice the ``mtx`` dataset directly.
         """
-        return slice_dataset(resource["mtx"], _MTX_DIMS, windows)
+        return slice_dataset(resource["mtx"], windows)
 
 
 class FebusBSLH5V1(FiberIO):
@@ -237,12 +238,12 @@ class FebusBSLH5V1(FiberIO):
         ]
 
     def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
+        self, resource: H5Reader, windows: Sequence[tuple[int, int]] = (), key: str = ""
     ) -> np.ndarray:
         """
         Slice the ``bsl_data`` dataset directly.
         """
-        return slice_dataset(resource["bsl_data"], _BSL_DIMS, windows)
+        return slice_dataset(resource["bsl_data"], windows)
 
 
 class FebusT1V1(FiberIO):
@@ -277,11 +278,9 @@ class FebusT1V1(FiberIO):
         return [_scan_t1(resource, snap=snap)]
 
     def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
+        self, resource: H5Reader, windows: Sequence[tuple[int, int]] = (), key: str = ""
     ) -> np.ndarray:
         """
         Slice the ``Data/Temperature`` dataset directly.
         """
-        return slice_dataset(
-            resource["Data/Temperature"], ("time", "distance"), windows
-        )
+        return slice_dataset(resource["Data/Temperature"], windows)

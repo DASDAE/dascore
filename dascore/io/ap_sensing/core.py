@@ -4,12 +4,9 @@ Core modules for AP sensing support.
 
 from __future__ import annotations
 
-import numpy as np
-
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import ArraySource, FiberIO
-from dascore.io.utils import slice_dataset
+from dascore.io import ArraySource, FiberIO, H5ArrayMixin
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
 
@@ -23,7 +20,7 @@ class APSensingPatchAttrs(dc.PatchAttrs):
     radians_to_nano_strain: OptionalFiniteFloat = None
 
 
-class APSensingV10(FiberIO):
+class APSensingV10(H5ArrayMixin, FiberIO):
     """Support for APSensing V 10."""
 
     name = "APSensing"
@@ -51,9 +48,3 @@ class APSensingV10(FiberIO):
                 source=ArraySource(key=resource["DAS"].name),
             )
         ]
-
-    def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
-    ) -> np.ndarray:
-        """Slice the ``DAS`` dataset directly."""
-        return slice_dataset(resource["DAS"], ("time", "distance"), windows)

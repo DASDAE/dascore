@@ -1962,20 +1962,20 @@ class TestFiberIOReadArray:
         """
         patch = dc.read(single_patch_path)[0]
         assert patch.dims == ("distance", "time")
-        windows = {"time": (5, 50), "distance": (2, 9)}
-        out = dasdae_io.read_array(single_patch_path, windows)
+        out = dasdae_io.read_array(single_patch_path, ((2, 9), (5, 50)))
         expected = patch.data[2:9, 5:50]
         assert np.array_equal(out, expected)
         # untransposed and uncast: the file's own order and dtype
         assert out.dtype == patch.data.dtype
 
-    def test_absent_dimensions_load_whole(self, dasdae_io, single_patch_path):
-        """A dimension missing from windows comes back whole."""
+    def test_absent_axes_load_whole(self, dasdae_io, single_patch_path):
+        """An axis left out of windows, or given None, comes back whole."""
         patch = dc.read(single_patch_path)[0]
-        out = dasdae_io.read_array(single_patch_path, {"time": (0, 10)})
-        expected = patch.select(time=(0, 10), samples=True).data
-        assert np.array_equal(out, expected)
-        whole = dasdae_io.read_array(single_patch_path, {})
+        out = dasdae_io.read_array(single_patch_path, ((0, 10),))
+        assert np.array_equal(out, patch.data[:10])
+        leading = dasdae_io.read_array(single_patch_path, (None, (0, 10)))
+        assert np.array_equal(leading, patch.data[:, :10])
+        whole = dasdae_io.read_array(single_patch_path, ())
         assert np.array_equal(whole, patch.data)
 
     def test_multi_patch_selects_keyed_patch(self, dasdae_io, multi_patch_path):
@@ -1983,14 +1983,14 @@ class TestFiberIOReadArray:
         for payload in dc.scan(multi_patch_path):
             key = payload.source_patch_key
             wanted = dc.read(multi_patch_path, source_patch_key=key)[0]
-            out = dasdae_io.read_array(multi_patch_path, {"time": (3, 17)}, key=key)
+            out = dasdae_io.read_array(multi_patch_path, (None, (3, 17)), key=key)
             expected = wanted.select(time=(3, 17), samples=True).data
             assert np.array_equal(out, expected)
 
     def test_multi_patch_without_key_raises(self, dasdae_io, multi_patch_path):
         """Windows on an ambiguous grid never guess a patch."""
         with pytest.raises(PatchAttributeError, match="several patches"):
-            dasdae_io.read_array(multi_patch_path, {"time": (0, 5)})
+            dasdae_io.read_array(multi_patch_path, (None, (0, 5)))
 
     def test_override_resource_coercion(self, single_patch_path):
         """An override's resource annotation is honored like read's.
@@ -2011,7 +2011,7 @@ class TestFiberIOReadArray:
                 return np.zeros(2)
 
         fiber_io = ReadArrayCastFormat()
-        out = fiber_io.read_array(single_patch_path, {})
+        out = fiber_io.read_array(single_patch_path, ())
         assert np.array_equal(out, np.zeros(2))
         assert hasattr(seen["resource"], "read")  # a handle, not a path
 
@@ -2023,38 +2023,41 @@ class TestFiberIOReadArray:
             version = "1"
 
         with pytest.raises(NotImplementedError):
-            PlainFormat().read_array("unused", {})
+            PlainFormat().read_array("unused", ())
 
 
 class TestWindowsToSlices:
-    """Tests for turning read_array windows into per-dimension slices."""
+    """Tests for turning read_array windows into per-axis slices."""
 
-    def test_absent_dimension_is_whole(self):
-        """A dimension without a window spans its whole length."""
-        out = windows_to_slices({"time": (2, 5)}, ("distance", "time"), (7, 9))
-        assert out == (slice(0, 7), slice(2, 5))
+    def test_absent_axis_is_whole(self):
+        """An axis left out, or given None, spans its whole length."""
+        assert windows_to_slices(((2, 5),), (7, 9)) == (slice(2, 5), slice(0, 9))
+        assert windows_to_slices((None, (2, 5)), (7, 9)) == (slice(0, 7), slice(2, 5))
 
     def test_open_negative_and_overlong_bounds_resolve(self):
         """None, ..., negative, and past-the-end bounds resolve like numpy."""
-        out = windows_to_slices(
-            {"time": (..., 3), "distance": (-2, 50)}, ("time", "distance"), (9, 7)
-        )
+        out = windows_to_slices(((..., 3), (-2, 50)), (9, 7))
         assert out == (slice(0, 3), slice(5, 7))
-        assert windows_to_slices({"time": (4, None)}, ("time",), (9,)) == (slice(4, 9),)
+        assert windows_to_slices(((4, None),), (9,)) == (slice(4, 9),)
 
     def test_empty_window_stays_empty(self):
         """A reversed window is empty, never negative-length."""
-        assert windows_to_slices({"time": (6, 2)}, ("time",), (9,)) == (slice(6, 6),)
+        assert windows_to_slices(((6, 2),), (9,)) == (slice(6, 6),)
 
-    def test_unknown_dimension_raises(self):
-        """A window on a dimension the array lacks raises."""
-        with pytest.raises(ParameterError, match="not among patch dims"):
-            windows_to_slices({"bob": (0, 1)}, ("time",), (9,))
+    def test_more_windows_than_axes_raises(self):
+        """A window past the last axis has nothing to index."""
+        with pytest.raises(ParameterError, match="one positional range per axis"):
+            windows_to_slices(((0, 1), (0, 1)), (9,))
+
+    def test_mapping_raises(self):
+        """Windows are positional; dimension names live above this layer."""
+        with pytest.raises(ParameterError, match="one positional range per axis"):
+            windows_to_slices({"time": (0, 1)}, (9,))
 
     def test_non_integer_bounds_raise(self):
         """Bounds are sample indices, never values."""
         with pytest.raises(ParameterError, match="integers"):
-            windows_to_slices({"time": (1.5, 3)}, ("time",), (9,))
+            windows_to_slices(((1.5, 3),), (9,))
 
 
 class TestSliceDataset:
@@ -2071,16 +2074,16 @@ class TestSliceDataset:
 
     def test_windows_read_in_the_file(self, dataset):
         """Only the window's values come back, in the dataset's order."""
-        out = slice_dataset(dataset, ("time", "distance"), {"time": (2, 5)})
+        out = slice_dataset(dataset, ((2, 5),))
         assert np.array_equal(out, dataset[2:5, :])
 
     def test_shape_caps_a_shorter_grid(self, dataset):
         """A grid shorter than the stored array never reads past its end."""
-        dims, short = ("time", "distance"), (4, 6)
-        whole = slice_dataset(dataset, dims, {}, short)
+        short = (4, 6)
+        whole = slice_dataset(dataset, (), short)
         assert np.array_equal(whole, dataset[:4, :])
         # a window past the shortened grid clips to it, not to the file
-        tail = slice_dataset(dataset, dims, {"time": (2, 50)}, short)
+        tail = slice_dataset(dataset, ((2, 50),), short)
         assert np.array_equal(tail, dataset[2:4, :])
 
 

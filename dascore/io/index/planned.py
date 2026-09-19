@@ -686,9 +686,10 @@ class PlanResolver(PatchResolver):
             resource = manager.get_resource(
                 _required_resource_type(fiber_io.read_array)
             )
-            return fiber_io.read_array(
-                resource, dict(windows), _pre_cast=True, **kwargs
-            )
+            # The reader takes its windows by position, in the source's order.
+            dims = [x for x in str(row.get("dims") or "").split(",") if x]
+            positional = tuple(windows.get(dim) for dim in dims)
+            return fiber_io.read_array(resource, positional, _pre_cast=True, **kwargs)
 
     def can_read_array(self, row: Mapping) -> bool:
         """

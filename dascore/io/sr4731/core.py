@@ -4,6 +4,8 @@ Core module for reading SR-4731 OTDR SOR files.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
+
 import numpy as np
 
 import dascore as dc
@@ -37,9 +39,12 @@ class SR4731V200(FiberIO):
         return [attrs]
 
     def read_array(
-        self, resource: BinaryReader, windows: dict[str, tuple[int, int]], key: str = ""
+        self,
+        resource: BinaryReader,
+        windows: Sequence[tuple[int, int]] = (),
+        key: str = "",
     ) -> np.ndarray:
         """Decode the trace and select its time/distance sample window."""
         parsed = _parse_sor(resource, load_samples=True)
         data = parsed["data_points"]["samples"][np.newaxis, :]
-        return slice_dataset(data, ("time", "distance"), windows)
+        return slice_dataset(data, windows)

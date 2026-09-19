@@ -4,12 +4,9 @@ Core modules for Silixa H5 support.
 
 from __future__ import annotations
 
-import numpy as np
-
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import ArraySource, FiberIO
-from dascore.io.utils import slice_dataset
+from dascore.io import ArraySource, FiberIO, H5ArrayMixin
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
 
@@ -28,7 +25,7 @@ class SilixaPatchAttrs(dc.PatchAttrs):
     pulse_width: OptionalFiniteFloat = None
 
 
-class SilixaH5V1(FiberIO):
+class SilixaH5V1(H5ArrayMixin, FiberIO):
     """Support for Silixa hdf5 format."""
 
     name = "Silixa_H5"
@@ -59,12 +56,6 @@ class SilixaH5V1(FiberIO):
                 source=ArraySource(key=resource[self._data_name].name),
             )
         ]
-
-    def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
-    ) -> np.ndarray:
-        """Slice the version's data dataset (``Acoustic`` or ``Fiber``)."""
-        return slice_dataset(resource[self._data_name], ("time", "distance"), windows)
 
 
 class SilixaH5V2(SilixaH5V1):

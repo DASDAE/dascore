@@ -70,7 +70,7 @@ class TestReadArrayKeys:
         arrays = {}
         for payload in payloads:
             key = payload.source_patch_key
-            out = io.read_array(prodml_fbe_path, {}, key=key)
+            out = io.read_array(prodml_fbe_path, (), key=key)
             with h5py.File(prodml_fbe_path, "r") as handle:
                 expected = handle["Acquisition/Processed/Fbe[0]"][key][:]
             assert np.array_equal(out, expected, equal_nan=True), key
@@ -84,12 +84,12 @@ class TestReadArrayKeys:
     def test_unknown_key_raises(self, prodml_fbe_path):
         """A key naming no node is not silently resolved to one."""
         with pytest.raises(PatchAttributeError, match="No patch named"):
-            ProdMLV2_0().read_array(prodml_fbe_path, {}, key="nope")
+            ProdMLV2_0().read_array(prodml_fbe_path, (), key="nope")
 
     def test_keyless_multi_node_raises(self, prodml_fbe_path):
         """Several nodes and no key cannot be resolved."""
         with pytest.raises(PatchAttributeError, match="pass an explicit key"):
-            ProdMLV2_0().read_array(prodml_fbe_path, {})
+            ProdMLV2_0().read_array(prodml_fbe_path, ())
 
 
 class TestNodeDims:
@@ -113,13 +113,11 @@ class TestNodeDims:
         io = ProdMLV2_0()
         payload = dc.scan(fbe_without_dimensions)[0]
         key = payload.source_patch_key
-        out = io.read_array(fbe_without_dimensions, {}, key=key)
+        out = io.read_array(fbe_without_dimensions, (), key=key)
         with h5py.File(fbe_without_dimensions, "r") as handle:
             expected = handle["Acquisition/Processed/Fbe[0]"][key][:]
         assert payload.dims == ("time", "distance")
         assert out.shape == expected.shape == payload.shape
         assert np.array_equal(out, expected, equal_nan=True)
-        bounded = io.read_array(
-            fbe_without_dimensions, {"time": (3, 9), "distance": (5, 17)}, key=key
-        )
+        bounded = io.read_array(fbe_without_dimensions, ((3, 9), (5, 17)), key=key)
         assert np.array_equal(bounded, expected[3:9, 5:17], equal_nan=True)

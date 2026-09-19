@@ -312,7 +312,7 @@ class TestRead:
     """Tests for reading contents into Patches."""
 
     @pytest.mark.parametrize("size_change", [-2, 1, 2])
-    @pytest.mark.parametrize("windows", [{}, {"time": (0, 5)}])
+    @pytest.mark.parametrize("windows", [(), ((0, 5),)])
     def test_reject_wrong_file_size(
         self, binary_xml_directory, tmp_path, size_change, windows
     ):

@@ -9,6 +9,8 @@ Adding IO support requires a `FiberIO` subclass, a small fixture, common IO regi
 Create `dascore/io/jingle/__init__.py` and `core.py`. The module docstring should describe basic use and non-obvious format details.
 
 ```{python filename="dascore/io/jingle/core.py"}
+from collections.abc import Sequence
+
 import numpy as np
 import dascore as dc
 from dascore.constants import snap_type
@@ -36,8 +38,8 @@ class JingleV1(FiberIO):
             )
         ]
 
-    def read_array(self, resource, windows: dict[str, tuple[int, int]], key: str = "") -> np.ndarray:
-        """Read one patch window in the metadata's dimension order and dtype."""
+    def read_array(self, resource, windows: Sequence[tuple[int, int]] = (), key: str = "") -> np.ndarray:
+        """Read the positional sample windows in the metadata's order and dtype."""
 ```
 
 Every reader implements these three hooks. The base class derives `get_format`, `scan`, and `read`; keep those inherited for new formats. Sintela protobuf retains a specialized `read` because its fast scan inspects only the endpoints, while loading samples also collects META records occurring in the middle. This avoids making directory indexing walk every packet. `get_version` detects the family and may return a version other than the class's own version, allowing the manager to select the matching implementation. `None` means the resource belongs to another family; an empty version string is valid.
