@@ -238,6 +238,7 @@ class TestConstant:
             (np.nan, "i8", "Cannot fill"),
             (2.7, "i8", "Cannot fill"),
             (300, "i1", "Cannot fill"),
+            (2**100, "i8", "Cannot fill"),
         ],
     )
     def test_refused(self, value, dtype, match):

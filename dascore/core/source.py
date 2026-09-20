@@ -91,7 +91,9 @@ class ArraySource:
     value: Any = None
 
     @classmethod
-    def full(cls, shape, value, dtype=None) -> ArraySource:
+    def full(
+        cls, shape: int | tuple[int, ...], value: bool | int | float, dtype: Any = None
+    ) -> ArraySource:
         """
         Return a source for a constant array, as `np.full` would build one.
 
@@ -116,7 +118,7 @@ class ArraySource:
             msg = f"A constant source takes a real scalar, not {value!r} of {dtype}."
             raise ParameterError(msg)
         value = _fill_scalar(value, dtype).item()
-        shape = (shape,) if np.ndim(shape) == 0 else shape
+        shape = (shape,) if isinstance(shape, int) else shape
         return cls(value=value).describe(shape, dtype)
 
     @property
