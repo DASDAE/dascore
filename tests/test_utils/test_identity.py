@@ -1242,6 +1242,28 @@ class TestSeveralOutputs:
         assert first.attrs.data_id == derive([patch.attrs.data_id], op, 1)
         assert second.attrs.data_id == derive([patch.attrs.data_id], op, 2)
 
+    def test_a_declared_data_type_reaches_every_member(self, patch):
+        """What the decorator declares holds for each new patch it returns."""
+
+        @dc.patch_function(data_type="velocity")
+        def pair(patch):
+            """Return the input and two new patches."""
+            return [patch, patch.new(data=patch.data), patch.new(data=patch.data)]
+
+        same, first, second = pair(patch)
+        assert same is patch
+        assert first.attrs.data_type == second.attrs.data_type == "velocity"
+
+    def test_a_declared_data_type_and_no_patch_at_all(self, patch):
+        """A patch function which answers with a number is left its answer."""
+
+        @dc.patch_function(data_type="velocity")
+        def count(patch):
+            """Return how many samples the patch holds."""
+            return patch.data.size
+
+        assert count(patch) == patch.data.size
+
     def test_a_spool_comes_back_a_spool(self, patch):
         """And its members are stamped by position."""
 

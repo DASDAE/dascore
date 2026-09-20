@@ -377,6 +377,29 @@ def record_call(
     return out if attrs is out.attrs else out.update(attrs=attrs)
 
 
+def _with_data_type(out, patch, data_type):
+    """Return a result, or each new patch among several, as the declared type."""
+    if hasattr(out, "attrs"):
+        return out.update_attrs(data_type=data_type)
+    if not isinstance(out, dc.BaseSpool | list | tuple):
+        return out
+    members = [
+        x.update_attrs(data_type=data_type)
+        if isinstance(x, dc.Patch) and x is not patch
+        else x
+        for x in out
+    ]
+    return _like_collection(out, members)
+
+
+def _like_collection(out, members):
+    """Return members in the kind of collection `out` was."""
+    if isinstance(out, dc.BaseSpool):
+        return dc.spool(members)
+    # A namedtuple takes its members one by one.
+    return type(out)(*members) if hasattr(out, "_fields") else type(out)(members)
+
+
 def _record_members(out, patch, patch_func, args, kwargs):
     """
     Return several results, each recording the call and its place among them.
@@ -391,10 +414,7 @@ def _record_members(out, patch, patch_func, args, kwargs):
         else x
         for index, x in enumerate(out)
     ]
-    if isinstance(out, dc.BaseSpool):
-        return dc.spool(members)
-    # A namedtuple takes its members one by one.
-    return type(out)(*members) if hasattr(out, "_fields") else type(out)(members)
+    return _like_collection(out, members)
 
 
 def _to_numpy_arg(obj):
@@ -546,8 +566,8 @@ def patch_function(
                     out = record_call(out, patch, patch_func, args, kwargs)
                 elif isinstance(out, dc.BaseSpool | list | tuple):
                     out = _record_members(out, patch, patch_func, args, kwargs)
-                if data_type is not None and hasattr(out, "attrs"):
-                    out = out.update_attrs(data_type=data_type)
+                if data_type is not None:
+                    out = _with_data_type(out, patch, data_type)
             return out
 
         # Attach original function. Although we want to encourage raw_function

@@ -526,3 +526,31 @@ class TestScalarAttrs:
         two = random_patch.update_attrs(tag="x", on_non_scalar="ignore")
         assert one.attrs.data_id == two.attrs.data_id
         assert one.attrs.history == two.attrs.history
+
+
+class TestReviewThreads:
+    """Edges the pull request's reviewers raised."""
+
+    def test_a_declared_field_given_one_value_in_an_array(self):
+        """A file's length-1 array for `data_type` is the name, not its repr."""
+        attrs = dc.PatchAttrs.from_dict({"data_type": np.array(["strain_rate"])})
+        assert attrs.data_type == "strain_rate"
+        assert dc.PatchAttrs(tag=np.array([b"bob"])).tag == "bob"
+
+    def test_history_is_not_unwrapped(self):
+        """A one-entry history is still a history."""
+        assert dc.PatchAttrs(history=("one",)).history == ("one",)
+
+    def test_a_bad_mode_is_refused_for_an_instance_too(self):
+        """The early return does not skip the check on the mode."""
+        with pytest.raises(ParameterError, match="on_non_scalar"):
+            dc.PatchAttrs.from_dict(dc.PatchAttrs(), on_non_scalar="drop")
+
+    def test_arrays_with_matching_nans_agree(self):
+        """As two null scalars do."""
+        from dascore.utils.attrs import _attr_values_equal  # noqa: PLC0415
+
+        one = np.array([1.0, np.nan])
+        assert _attr_values_equal(one, one.copy())
+        assert not _attr_values_equal(one, np.array([1.0, 2.0]))
+        assert _attr_values_equal(np.array(["a"]), np.array(["a"]))

@@ -185,7 +185,10 @@ def _attr_values_equal(one, two) -> bool:
     included, yet two of them agree on being nothing.
     """
     if isinstance(one, np.ndarray) or isinstance(two, np.ndarray):
-        return np.array_equal(one, two)
+        one, two = np.asarray(one), np.asarray(two)
+        # Two NaNs agree here, as two null scalars do; only floats have one.
+        nulls = one.dtype.kind in "fc" and two.dtype.kind in "fc"
+        return np.array_equal(one, two, equal_nan=nulls)
     if bool(one == two):
         return True
     # A list answers `isnull` elementwise, which is not the question here.

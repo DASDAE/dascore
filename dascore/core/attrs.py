@@ -121,6 +121,11 @@ def _scalar_pass(data: dict, on_non_scalar: WARN_LEVELS, declared) -> None:
     skipped = []
     for name, value in data.items():
         if name in declared:
+            # Left to its annotation, but for the one-value array a file
+            # spells a scalar with: a string validator would store its repr.
+            one = isinstance(value, np.ndarray) and value.size == 1
+            if one and (got := _scalar_attr(value)) is not _NOT_SCALAR:
+                data[name] = got
             continue
         got = _scalar_attr(value)
         if got is _NOT_SCALAR:
@@ -284,6 +289,7 @@ class PatchAttrs(DascoreBaseModel):
         >>> attrs = dc.PatchAttrs.from_dict(foreign, on_non_scalar="ignore")
         >>> assert attrs.project == "survey" and attrs.epsg_code == 4326
         """
+        validate_warn_level(on_non_scalar, "on_non_scalar")
         if isinstance(attr_map, cls):
             return attr_map
         if attr_map is None:
