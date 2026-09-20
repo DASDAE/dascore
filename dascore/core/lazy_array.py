@@ -30,9 +30,9 @@ import hashlib
 import json
 import math
 import struct
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from types import SimpleNamespace
+from types import MappingProxyType, SimpleNamespace
 from typing import Any
 
 import numpy as np
@@ -288,7 +288,7 @@ class LazyTable:
     dtypes: _Column
     concat_axes: np.ndarray
     members: _Members
-    axes: dict[str, np.ndarray]
+    axes: Mapping[str, np.ndarray]
     _ids: dict[int, str] = field(default_factory=dict, repr=False)
 
     def __post_init__(self):
@@ -305,7 +305,13 @@ class LazyTable:
             *self.axes.values(),
             *[getattr(members, x).codes for x in MEMBER_FIELDS],
         ):
+            # A view can be written through whatever it is a view of.
             array.setflags(write=False)
+            base = array.base
+            while base is not None:
+                base.setflags(write=False)
+                base = base.base
+        object.__setattr__(self, "axes", MappingProxyType(dict(self.axes)))
 
     @classmethod
     def from_arrays(cls, arrays: Sequence[LazyArray]) -> LazyTable:
@@ -1061,12 +1067,11 @@ def _check_stack(block: _Block, axis: int) -> None:
     shape = np.asarray(block.shape, np.int64)
     others = [x for x in range(block.ndim) if x != axis]
     full = np.all(start[:, others] == 0) and np.all(stop[:, others] == shape[others])
-    tiles = (
-        len(block)
-        and start[0, axis] == 0
-        and stop[-1, axis] == shape[axis]
-        and np.array_equal(start[1:, axis], stop[:-1, axis])
-    )
+    # An array of no samples has no member, and every cut of it is empty.
+    tiles = np.array_equal(
+        np.concatenate([[0], stop[:, axis]]),
+        np.concatenate([start[:, axis], shape[axis : axis + 1]]),
+    ) or not math.prod(block.shape)
     if not (full and tiles):
         msg = (
             f"Rechunking axis {axis} needs members which are full width "
@@ -1079,11 +1084,15 @@ def _rechunk(block: _Block, bounds: np.ndarray, axis: int) -> LazyTable:
     """Cut a stack of slabs at new bounds, as one table of many arrays."""
     start = block.axes["out_start"][:, axis]
     stop = block.axes["out_stop"][:, axis]
-    edges = _merge_sorted_unique(np.concatenate([start, stop[-1:]]), bounds)
-    # The pieces the bounds keep are one run of edges, so they are a view.
-    first = np.searchsorted(edges, bounds[0])
-    last = np.searchsorted(edges, bounds[-1])
-    low, high = edges[first:last], edges[first + 1 : last + 1]
+    if len(block):
+        edges = _merge_sorted_unique(np.concatenate([start, stop[-1:]]), bounds)
+        # The pieces the bounds keep are one run of edges, so they are a view.
+        first = np.searchsorted(edges, bounds[0])
+        last = np.searchsorted(edges, bounds[-1])
+        low, high = edges[first:last], edges[first + 1 : last + 1]
+    else:
+        # An array of no samples gives no member to any piece.
+        low = high = np.empty(0, np.int64)
     member = np.searchsorted(start, low, "right") - 1
     chunk = np.searchsorted(bounds, low, "right") - 1
     axes = {name: matrix[member] for name, matrix in block.axes.items()}
@@ -1148,6 +1157,11 @@ def _validate(block: _Block) -> None:
         msg = "The members are not in canonical placement order."
         raise ParameterError(msg)
     axis = block.concat_axis
+    if axis != NEW_AXIS and not 0 <= axis < block.ndim:
+        msg = (
+            f"The stacking axis {axis} is outside an array of {block.ndim} dimensions."
+        )
+        raise ParameterError(msg)
     if axis >= 0 and len(block) > 1 and np.any(start[1:, axis] < stop[:-1, axis]):
         msg = f"The members are not stacked along axis {axis}, which is claimed."
         raise ParameterError(msg)

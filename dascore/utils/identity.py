@@ -148,7 +148,8 @@ def dtype_description(dtype: Any) -> list | str:
 
     The one spelling every id takes a dtype under: the field description of
     a structured dtype, which its string flattens to a width, and the string
-    of any other. Equal dtypes have equal descriptions.
+    of any other. Equal dtypes have equal descriptions. The padding of an
+    aligned record dtype is described as a field of its own.
 
     Examples
     --------

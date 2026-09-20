@@ -186,6 +186,16 @@ def storage(table):
     ]
 
 
+def owned_storage(table):
+    """Return every array a table holds and each ndarray backing one."""
+    out = []
+    for array in storage(table):
+        while isinstance(array, np.ndarray):
+            out.append(array)
+            array = array.base
+    return out
+
+
 class TestDescription:
     """An array knows what it is without reading anything."""
 
@@ -735,6 +745,14 @@ class TestValidate:
         with pytest.raises(ParameterError, match="stacked along axis 1"):
             bent_table[0].validate()
 
+    @pytest.mark.parametrize("hint", [2, 7, -2])
+    def test_a_stacking_hint_outside_the_array_is_refused(self, hint):
+        """A hint names an axis of the array, or no axis at all."""
+        array = constant((3, 4), 1.0)
+        bent_table = replace(array.table, concat_axes=np.array([hint], np.int64))
+        with pytest.raises(ParameterError, match="outside an array"):
+            bent_table[0].validate()
+
     @pytest.mark.parametrize("shape", [(0,), (0, 3), (2, 0, 4), (2, 3, 0, 5)])
     def test_a_source_of_no_samples(self, shape):
         """A source with an empty axis is the empty array it describes."""
@@ -742,6 +760,17 @@ class TestValidate:
         assert array.shape == shape and len(array) == 0
         assert array.validate() is array
         assert np.array_equal(array.load(), np.full(shape, 1))
+
+    def test_operations_on_a_memberless_array(self):
+        """Every operation works on an array which has no members."""
+        array = LazyArray.from_source(ArraySource.full((0, 3), 1))
+        back = LazyArray.from_frame(array.to_frame(), array.shape, array.dtype)
+        assert back.data_id == array.data_id == array[:, 0:3].data_id
+        assert array[:, 0:2].shape == (0, 2)
+        assert array.transpose().shape == (3, 0)
+        assert concat([array, array], axis=1).shape == (0, 6)
+        assert stack([array, array]).shape == (2, 0, 3)
+        assert array.validate().load().shape == (0, 3)
 
     def test_an_empty_source_among_others(self):
         """A source of no samples is left out, and the rest still cover."""
@@ -1150,6 +1179,24 @@ class TestIdentity:
         assert np.array_equal(pinwheel.load(), whole.load())
         assert pinwheel.data_id != whole.data_id
 
+    @pytest.mark.xfail(
+        strict=True,
+        reason="greedy coalescing is not an exact canonical form; decision pending",
+    )
+    def test_nested_cuts_on_two_axes_keep_the_id(self):
+        """Slicing and joining alone build a partition which is renamed."""
+        array = constant((3, 4), 1.0)
+        top = concat(
+            [array[:2, :1], concat([array[:1, 1:2], array[1:2, 1:2]], axis=0)],
+            axis=1,
+        )
+        left = concat([top, array[2:, :2]], axis=0)
+        right = concat([array[:1, 2:], array[1:, 2:]], axis=0)
+        joined = concat([left, right], axis=1)
+        joined.validate()
+        assert np.array_equal(joined.load(), array.load())
+        assert joined.data_id == array.data_id
+
 
 class TestPinnedIds:
     """The canonical bytes an id is taken over are a stored format."""
@@ -1357,6 +1404,38 @@ class TestFrames:
         with pytest.raises(ValueError, match="read-only"):
             table.axes["out_start"][0] = 5
 
+    def test_every_owner_of_the_storage_is_read_only(self, joined):
+        """The arrays a table's storage is a view of cannot be written."""
+        array = joined[0:10]
+        tables = [
+            LazyArray.from_source(ArraySource.full((4, 3), 1.0)).table,
+            LazyArray.from_sources([ArraySource.full((4, 3), 1.0)]).table,
+            LazyArray.from_frame(array.to_frame(), array.shape, array.dtype).table,
+            array.table,
+            concat([array, array], axis=0).table,
+            stack([array, array], axis=0).table,
+            array.transpose().table,
+            array.rechunk([0, 4, 10]),
+            LazyTable.from_arrays([array, joined]),
+        ]
+        for table in tables:
+            assert not any(x.flags.writeable for x in owned_storage(table))
+
+    def test_a_shared_owner_cannot_be_bent(self):
+        """Writing through a view's owner would change two tables at once."""
+        array = LazyArray.from_source(stored((6,), dtype=np.int64)[0:2])
+        shared = LazyTable.from_arrays([array])[0]
+        before = (array.data_id, shared.data_id)
+        with pytest.raises(ValueError, match="read-only"):
+            array.table.axes["src_start"].base[0, 0] = 2
+        assert (array.data_id, shared.data_id) == before
+
+    def test_axes_cannot_be_rebound(self):
+        """A table's axes mapping refuses a new array under an old name."""
+        table = constant((2, 3), 1.0).table
+        with pytest.raises(TypeError):
+            table.axes["src_start"] = np.zeros(2, np.int64)
+
 
 class TestRechunk:
     """Cutting an array at new bounds gives many arrays in one table."""
@@ -1399,6 +1478,23 @@ class TestRechunk:
         table = constant((10, 3), 2.0).rechunk([0, 4, 10])
         assert table[0].data_id == ArraySource.full((4, 3), 2.0).data_id
         assert np.array_equal(table[1].load(), np.full((6, 3), 2.0))
+
+    @pytest.mark.parametrize(
+        "shape,axis,bounds,expected",
+        [
+            ((0, 3), 1, [0, 1, 3], [(0, 1), (0, 2)]),
+            ((2, 0, 4), 0, [0, 1, 2], [(1, 0, 4), (1, 0, 4)]),
+            ((2, 0, 4), 2, [0, 1, 4], [(2, 0, 1), (2, 0, 3)]),
+        ],
+    )
+    def test_a_memberless_array(self, shape, axis, bounds, expected):
+        """An array with no members is cut into the empty pieces asked for."""
+        array = LazyArray.from_source(ArraySource.full(shape, 1))
+        table = array.rechunk(bounds, axis=axis)
+        assert [x.shape for x in table] == expected
+        for piece in table:
+            assert len(piece) == 0 and piece.dtype == array.dtype
+            assert np.array_equal(piece.validate().load(), np.empty(piece.shape))
 
     def test_refuses_a_grid(self):
         """An array which is not a stack of slabs is not rechunked yet."""
