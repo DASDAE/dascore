@@ -1,0 +1,1630 @@
+"""
+A recipe for an array which is read a block at a time.
+
+A [`LazyArray`](`dascore.core.lazy_array.LazyArray`) holds no data. It holds
+members, and each member says "this window of this source goes in this box of
+the output". Everything is positional: axis numbers and sample indices, never
+dimension names, coordinates or units.
+
+Many arrays share one [`LazyTable`](`dascore.core.lazy_array.LazyTable`),
+which owns the storage; an array is a view of one of its rows. Members of an
+array are stored together, in canonical placement order, so slicing, joining
+and rechunking are vectorized over members and never open a file.
+
+Examples
+--------
+>>> import numpy as np
+>>> from dascore.core.source import ArraySource
+>>> from dascore.core.lazy_array import LazyArray, concat
+>>>
+>>> left = LazyArray.from_source(ArraySource.full((4, 3), 1.0))
+>>> right = LazyArray.from_source(ArraySource.full((4, 3), 2.0))
+>>> array = concat([left, right], axis=0)
+>>> assert array.shape == (8, 3) and len(array) == 2
+>>> assert np.array_equal(array[0:5].load()[:4], np.ones((4, 3)))
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import math
+import struct
+from collections.abc import Sequence
+from dataclasses import dataclass, field
+from typing import Any
+
+import numpy as np
+import pandas as pd
+
+from dascore.core.source import ArraySource
+from dascore.exceptions import ParameterError
+from dascore.utils.identity import DIGEST_SIZE, SCHEME, H
+
+# The src_axis of an output axis which no stored axis feeds.
+NEW_AXIS = -1
+
+# The per member per axis matrices, in the order the digest takes them.
+AXIS_FIELDS = ("out_start", "out_stop", "src_axis", "src_start", "src_extent")
+
+# The fields of the sources dictionary, which is the sources table.
+SOURCE_FIELDS = ("base_uri", "path", "format", "version")
+
+# The version of the byte layout the data_id digest is taken over. Bump it
+# when the layout changes, so ids from two layouts cannot meet.
+DIGEST_LAYOUT = 1
+
+# The bytes the digest starts with, so no other payload can read alike.
+_DIGEST_TAG = b"dascore-lazy-blocks\0"
+
+# The name the array api reports for a lazy array.
+BACKEND_NAME = "lazy"
+
+
+def _dict_key(value: Any) -> Any:
+    """Return the key a value is deduplicated under; nan is one value."""
+    if isinstance(value, float) and value != value:
+        return "$nan"
+    return value
+
+
+class _Column:
+    """A dictionary encoded column: the distinct values and a code per row."""
+
+    __slots__ = ("codes", "values")
+
+    def __init__(self, values: Sequence, codes):
+        self.values = tuple(values)
+        self.codes = np.asarray(codes, dtype=np.int32)
+
+    @classmethod
+    def of(cls, values: Sequence) -> _Column:
+        """Encode a sequence of values."""
+        index: dict = {}
+        codes = np.empty(len(values), np.int32)
+        for row, value in enumerate(values):
+            codes[row] = index.setdefault(_dict_key(value), len(index))
+        return cls(_ordered_values(index, values), codes)
+
+    @classmethod
+    def constant(cls, value: Any, rows: int) -> _Column:
+        """Encode one value repeated over rows."""
+        return cls((value,), np.zeros(rows, np.int32))
+
+    def __getitem__(self, row: int) -> Any:
+        """Return the value of one row."""
+        return self.values[self.codes[row]]
+
+    def take(self, rows) -> _Column:
+        """Return the column of a selection of rows; the values are kept."""
+        return _Column(self.values, self.codes[rows])
+
+    def tolist(self) -> list:
+        """Return the value of every row."""
+        values = self.values
+        return [values[code] for code in self.codes.tolist()]
+
+
+def _ordered_values(index: dict, values: Sequence) -> list:
+    """Return one value per code, in code order."""
+    out: list = [None] * len(index)
+    for value in values:
+        out[index[_dict_key(value)]] = value
+    return out
+
+
+def _merge_columns(columns: Sequence[_Column]) -> _Column:
+    """Concatenate columns, merging their dictionaries."""
+    index: dict = {}
+    values: list = []
+    seen: dict[int, np.ndarray] = {}
+    parts = []
+    for column in columns:
+        codes, dictionary = column.codes, column.values
+        # Columns cut from one table share a dictionary, which may be far
+        # bigger than the rows which are left; both are worth skipping.
+        remap = seen.get(id(dictionary))
+        if remap is None and len(dictionary) > len(codes):
+            used, codes = np.unique(codes, return_inverse=True)
+            dictionary = [dictionary[x] for x in used.tolist()]
+        if remap is None:
+            remap = np.empty(len(dictionary), np.int32)
+            for code, value in enumerate(dictionary):
+                key = _dict_key(value)
+                if key not in index:
+                    index[key] = len(values)
+                    values.append(value)
+                remap[code] = index[key]
+            if dictionary is column.values:
+                seen[id(dictionary)] = remap
+        parts.append(remap[codes])
+    codes = np.concatenate(parts) if parts else np.empty(0, np.int32)
+    return _Column(values, codes)
+
+
+@dataclass(frozen=True, eq=False)
+class _Members:
+    """The columns which say what each member reads."""
+
+    source: _Column
+    key: _Column
+    origin_id: _Column
+    dtype: _Column
+    filled: np.ndarray
+    value: _Column
+
+    def __len__(self) -> int:
+        return len(self.filled)
+
+    def take(self, rows) -> _Members:
+        """Return the members of a selection of rows."""
+        return _Members(
+            self.source.take(rows),
+            self.key.take(rows),
+            self.origin_id.take(rows),
+            self.dtype.take(rows),
+            self.filled[rows],
+            self.value.take(rows),
+        )
+
+
+def _merge_members(members: Sequence[_Members]) -> _Members:
+    """Concatenate members, merging every dictionary in one pass."""
+    if len(members) == 1:
+        return members[0]
+    columns = {
+        name: _merge_columns([getattr(x, name) for x in members])
+        for name in ("source", "key", "origin_id", "dtype", "value")
+    }
+    filled = [x.filled for x in members]
+    stacked = np.concatenate(filled) if filled else np.empty(0, bool)
+    return _Members(filled=stacked, **columns)
+
+
+@dataclass(frozen=True, eq=False)
+class _Block:
+    """One array's header and members, before they are stacked in a table."""
+
+    shape: tuple[int, ...]
+    dtype: np.dtype
+    concat_axis: int
+    members: _Members
+    axes: dict[str, np.ndarray]
+
+    @property
+    def ndim(self) -> int:
+        """The number of output axes."""
+        return len(self.shape)
+
+    def __len__(self) -> int:
+        return len(self.members)
+
+    def take(self, rows) -> _Block:
+        """Return the block holding a selection of members."""
+        axes = {name: matrix[rows] for name, matrix in self.axes.items()}
+        return _Block(
+            self.shape, self.dtype, self.concat_axis, self.members.take(rows), axes
+        )
+
+
+def _is_slab(block: _Block, axis: int) -> bool:
+    """Whether the members are full width blocks stacked along one axis."""
+    return len(block) <= 1 or block.concat_axis == axis
+
+
+def _check_axis(axis: int, ndim: int) -> int:
+    """Return a positive axis number, refusing one outside the array."""
+    out = int(axis)
+    out = out + ndim if out < 0 else out
+    if not 0 <= out < ndim:
+        msg = f"Axis {axis} is outside an array of {ndim} dimensions."
+        raise ParameterError(msg)
+    return out
+
+
+def _is_canonical(out_start: np.ndarray) -> bool:
+    """Whether the corners are in lexicographic order; nothing is sorted."""
+    if len(out_start) < 2:
+        return True
+    difference = np.diff(out_start, axis=0)
+    first = np.argmax(difference != 0, axis=1)
+    lead = np.take_along_axis(difference, first[:, None], axis=1)[:, 0]
+    return bool(np.all(lead >= 0))
+
+
+def _canonical(block: _Block) -> _Block:
+    """Return the block in canonical placement order."""
+    out_start = block.axes["out_start"]
+    if _is_canonical(out_start):
+        return block
+    return block.take(np.lexsort(out_start.T[::-1]))
+
+
+def _merge_sorted_unique(first: np.ndarray, second: np.ndarray) -> np.ndarray:
+    """Merge two sorted arrays without sorting them again, dropping repeats."""
+    out = np.empty(len(first) + len(second), first.dtype)
+    out[np.arange(len(first)) + np.searchsorted(second, first, "left")] = first
+    out[np.arange(len(second)) + np.searchsorted(first, second, "right")] = second
+    keep = np.ones(len(out), bool)
+    keep[1:] = out[1:] != out[:-1]
+    return out[keep]
+
+
+@dataclass(frozen=True, eq=False)
+class LazyTable:
+    """
+    The storage many lazy arrays share.
+
+    Members of array `k` are the rows `member_offsets[k]:member_offsets[k+1]`
+    of every member column, and its axis rows start at `axis_offsets[k]` in
+    each flat placement array. Arrays of different `ndim` therefore sit in
+    one table: the placement block is flat and ragged, one row per member per
+    output axis, which is the shape the database tables take.
+
+    Nothing here is modified in place, so views may share every array.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.core.source import ArraySource
+    >>> from dascore.core.lazy_array import LazyArray, LazyTable
+    >>>
+    >>> flat = LazyArray.from_source(ArraySource.full((4, 3), 1.0))
+    >>> cube = LazyArray.from_source(ArraySource.full((2, 3, 4), 2.0))
+    >>> table = LazyTable.from_arrays([flat, cube])
+    >>> assert [x.ndim for x in table] == [2, 3]
+    """
+
+    member_offsets: np.ndarray
+    axis_offsets: np.ndarray
+    shape_offsets: np.ndarray
+    shapes: np.ndarray
+    dtypes: _Column
+    concat_axes: np.ndarray
+    members: _Members
+    axes: dict[str, np.ndarray]
+    _ids: dict[int, str] = field(default_factory=dict, repr=False)
+
+    @classmethod
+    def from_arrays(cls, arrays: Sequence[LazyArray]) -> LazyTable:
+        """Stack arrays, which may differ in ndim, into one table."""
+        return _table([x._block() for x in arrays])
+
+    def __len__(self) -> int:
+        """The number of arrays in the table."""
+        return len(self.member_offsets) - 1
+
+    def __getitem__(self, row: int) -> LazyArray:
+        """Return the array stored in one row."""
+        row = int(row)
+        row = row + len(self) if row < 0 else row
+        if not 0 <= row < len(self):
+            msg = f"Row {row} is outside a table of {len(self)} arrays."
+            raise IndexError(msg)
+        return LazyArray(self, row)
+
+    def __iter__(self):
+        """Iterate over the arrays in the table."""
+        return (LazyArray(self, row) for row in range(len(self)))
+
+    @property
+    def n_members(self) -> int:
+        """The number of members in the whole table."""
+        return len(self.members)
+
+    @property
+    def nbytes(self) -> int:
+        """The bytes the table's own arrays take, dictionaries aside."""
+        arrays = [
+            self.member_offsets,
+            self.axis_offsets,
+            self.shape_offsets,
+            self.shapes,
+            self.concat_axes,
+            self.members.filled,
+            self.members.source.codes,
+            self.members.key.codes,
+            self.members.origin_id.codes,
+            self.members.dtype.codes,
+            self.members.value.codes,
+            self.dtypes.codes,
+            *self.axes.values(),
+        ]
+        return int(sum(x.nbytes for x in arrays))
+
+    def to_frames(self) -> dict[str, pd.DataFrame]:
+        """
+        Return the table as the frames the database tables hold.
+
+        The frames are `sources`, `lazy_arrays`, `lazy_members` and
+        `lazy_member_axes`; `from_frames` reads them back.
+        """
+        sources = pd.DataFrame(
+            list(self.members.source.values) or None, columns=list(SOURCE_FIELDS)
+        )
+        sources.insert(0, "source_row", np.arange(len(sources), dtype=np.int64))
+        counts = np.diff(self.member_offsets)
+        ndim = np.diff(self.shape_offsets)
+        arrays = pd.DataFrame(
+            {
+                "array_row": np.arange(len(self), dtype=np.int64),
+                "data_id": [x.data_id for x in self],
+                "ndim": ndim,
+                "shape": [x.shape for x in self],
+                "dtype": [np.dtype(x).str for x in self.dtypes.tolist()],
+            }
+        )
+        array_row = np.repeat(np.arange(len(self), dtype=np.int64), counts)
+        ordinal = np.arange(self.n_members, dtype=np.int64)
+        ordinal -= np.repeat(self.member_offsets[:-1], counts)
+        members = pd.DataFrame(
+            {
+                "array_row": array_row,
+                "ordinal": ordinal,
+                "source_row": self.members.source.codes.astype(np.int64),
+                "key": self.members.key.tolist(),
+                "origin_id": self.members.origin_id.tolist(),
+                "dtype": self.members.dtype.tolist(),
+                "filled": self.members.filled,
+                "value": self.members.value.tolist(),
+            }
+        )
+        per_axis = np.repeat(ndim, counts)
+        axes = pd.DataFrame(
+            {
+                "array_row": np.repeat(array_row, per_axis),
+                "ordinal": np.repeat(ordinal, per_axis),
+                "out_axis": _axis_numbers(per_axis),
+                **{name: self.axes[name] for name in AXIS_FIELDS},
+            }
+        )
+        return {
+            "sources": sources,
+            "lazy_arrays": arrays,
+            "lazy_members": members,
+            "lazy_member_axes": axes,
+        }
+
+    @classmethod
+    def from_frames(cls, frames: dict[str, pd.DataFrame]) -> LazyTable:
+        """Return the table `to_frames` wrote."""
+        sources = frames["sources"]
+        locations = list(
+            zip(*[sources[name].astype(str) for name in SOURCE_FIELDS])
+        ) or [()]
+        arrays, members, axes = (
+            frames["lazy_arrays"],
+            frames["lazy_members"],
+            frames["lazy_member_axes"],
+        )
+        blocks = []
+        headers = zip(
+            arrays["array_row"], arrays["ndim"], arrays["shape"], arrays["dtype"]
+        )
+        for array_row, ndim, shape, dtype in headers:
+            member = members[members["array_row"] == array_row]
+            axis = axes[axes["array_row"] == array_row]
+            source = [locations[x] for x in member["source_row"]]
+            matrices = {
+                name: axis[name].to_numpy(np.int64).reshape(len(member), ndim)
+                for name in AXIS_FIELDS
+            }
+            blocks.append(
+                _Block(
+                    shape=tuple(shape),
+                    dtype=np.dtype(dtype),
+                    concat_axis=NEW_AXIS,
+                    members=_members_of(member, source),
+                    axes=matrices,
+                )
+            )
+        return _table(blocks)
+
+
+def _axis_numbers(per_axis: np.ndarray) -> np.ndarray:
+    """Return the output axis of each row of a ragged placement block."""
+    total = int(per_axis.sum())
+    out = np.arange(total, dtype=np.int64)
+    starts = np.zeros(len(per_axis) + 1, np.int64)
+    np.cumsum(per_axis, out=starts[1:])
+    return out - np.repeat(starts[:-1], per_axis)
+
+
+def _members_of(frame: pd.DataFrame, source: Sequence) -> _Members:
+    """Return the members one array's rows of a member frame describe."""
+    return _Members(
+        source=_Column.of(source),
+        key=_Column.of(list(frame["key"])),
+        origin_id=_Column.of(list(frame["origin_id"])),
+        dtype=_Column.of(list(frame["dtype"])),
+        filled=frame["filled"].to_numpy(bool),
+        value=_Column.of(list(frame["value"])),
+    )
+
+
+def _table(blocks: Sequence[_Block]) -> LazyTable:
+    """Stack blocks into one table."""
+    counts = np.array([len(x) for x in blocks], np.int64)
+    ndim = np.array([x.ndim for x in blocks], np.int64)
+    shapes = [np.asarray(x.shape, np.int64) for x in blocks]
+    if len(blocks) == 1:
+        axes = {name: blocks[0].axes[name].reshape(-1) for name in AXIS_FIELDS}
+    else:
+        axes = {
+            name: np.concatenate([x.axes[name].reshape(-1) for x in blocks])
+            if blocks
+            else np.empty(0, np.int64)
+            for name in AXIS_FIELDS
+        }
+    return LazyTable(
+        member_offsets=_offsets(counts),
+        axis_offsets=_offsets(counts * ndim),
+        shape_offsets=_offsets(ndim),
+        shapes=np.concatenate(shapes) if shapes else np.empty(0, np.int64),
+        dtypes=_Column.of([x.dtype for x in blocks]),
+        concat_axes=np.array([x.concat_axis for x in blocks], np.int64),
+        members=_merge_members([x.members for x in blocks])
+        if blocks
+        else _empty_members(),
+        axes=axes,
+    )
+
+
+def _offsets(counts: np.ndarray) -> np.ndarray:
+    """Return the start of each run, and the total, from run lengths."""
+    out = np.zeros(len(counts) + 1, np.int64)
+    np.cumsum(counts, out=out[1:])
+    return out
+
+
+def _empty_members() -> _Members:
+    """Return the members of a table which holds no arrays."""
+    empty = np.empty(0, np.int32)
+    return _Members(
+        source=_Column((), empty),
+        key=_Column((), empty),
+        origin_id=_Column((), empty),
+        dtype=_Column((), empty),
+        filled=np.empty(0, bool),
+        value=_Column((), empty),
+    )
+
+
+class LazyArray:
+    """
+    An array which says where each of its blocks is read from.
+
+    A view of one row of a [`LazyTable`](`dascore.core.lazy_array.LazyTable`).
+    The shape, ndim and dtype are stored rather than derived, so an array
+    which selects nothing still knows what it is. Boxes may not overlap and
+    must cover the whole output; a hole is an explicit constant member.
+    [`validate`](`dascore.core.lazy_array.LazyArray.validate`) checks both,
+    on demand.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.core.source import ArraySource
+    >>> from dascore.core.lazy_array import LazyArray
+    >>>
+    >>> array = LazyArray.from_source(ArraySource.full((6, 4), np.nan))
+    >>> assert array.shape == (6, 4) and array.ndim == 2
+    >>> window = array[2:5]
+    >>> assert window.shape == (3, 4)
+    >>> assert np.isnan(window.load()).all()
+    """
+
+    __slots__ = ("_row", "_table")
+
+    def __init__(self, table: LazyTable, row: int):
+        self._table = table
+        self._row = int(row)
+
+    @classmethod
+    def from_source(cls, source: ArraySource, base_uri: str = "") -> LazyArray:
+        """
+        Return the array one source loads, placed at the origin.
+
+        Parameters
+        ----------
+        source
+            A loadable source which states the extent of its whole array.
+        base_uri
+            A prefix the source's path is stored relative to.
+
+        Examples
+        --------
+        >>> from dascore.core.source import ArraySource
+        >>> from dascore.core.lazy_array import LazyArray
+        >>>
+        >>> array = LazyArray.from_source(ArraySource.full((3, 2), 0))
+        >>> assert len(array) == 1
+        """
+        return cls.from_sources([source], base_uri=base_uri)
+
+    @classmethod
+    def from_sources(
+        cls,
+        sources: Sequence[ArraySource],
+        starts=None,
+        axis: int = 0,
+        shape: tuple[int, ...] | None = None,
+        base_uri: str = "",
+    ) -> LazyArray:
+        """
+        Return an array which reads one block from each source.
+
+        Parameters
+        ----------
+        sources
+            The loadable sources, each of which states the extent of its
+            whole array.
+        starts
+            The corner each source is placed at, as an `(n, ndim)` array of
+            sample numbers. By default the sources are laid end to end.
+        axis
+            The axis the sources are laid along when `starts` is not given.
+        shape
+            The shape of the output; the smallest which holds every block
+            by default.
+        base_uri
+            A prefix the sources' paths are stored relative to. A path
+            which does not start with it is stored whole, and a member's
+            path is always the two joined.
+
+        Examples
+        --------
+        >>> from dascore.core.source import ArraySource
+        >>> from dascore.core.lazy_array import LazyArray
+        >>>
+        >>> sources = [ArraySource.full((2, 3), x) for x in (1.0, 2.0)]
+        >>> assert LazyArray.from_sources(sources).shape == (4, 3)
+        >>> assert LazyArray.from_sources(sources, axis=1).shape == (2, 6)
+        """
+        sources = list(sources)
+        if not sources:
+            msg = "A lazy array takes at least one source."
+            raise ParameterError(msg)
+        block = _block_of_sources(sources, base_uri)
+        ndim = block.ndim
+        axis = _check_axis(axis, ndim)
+        lengths = block.axes["out_stop"]
+        if starts is None:
+            corners = np.zeros_like(lengths)
+            corners[1:, axis] = np.cumsum(lengths[:-1, axis])
+            concat_axis = axis
+        else:
+            corners = np.asarray(starts, np.int64).reshape(len(sources), ndim)
+            concat_axis = NEW_AXIS
+        block.axes["out_start"][:] = corners
+        block.axes["out_stop"][:] = corners + lengths
+        out_shape = tuple(int(x) for x in block.axes["out_stop"].max(axis=0))
+        block = _Block(
+            shape=out_shape if shape is None else tuple(int(x) for x in shape),
+            dtype=block.dtype,
+            concat_axis=concat_axis,
+            members=block.members,
+            axes=block.axes,
+        )
+        return _array(_canonical(block))
+
+    @classmethod
+    def from_frame(cls, frame: pd.DataFrame, shape, dtype) -> LazyArray:
+        """
+        Return the array `to_frame` wrote.
+
+        Parameters
+        ----------
+        frame
+            One row per member per output axis, as `to_frame` returns.
+        shape
+            The shape of the array, which its members do not state.
+        dtype
+            The dtype of the array.
+
+        Examples
+        --------
+        >>> from dascore.core.source import ArraySource
+        >>> from dascore.core.lazy_array import LazyArray
+        >>>
+        >>> array = LazyArray.from_source(ArraySource.full((3, 2), 1.0))
+        >>> back = LazyArray.from_frame(array.to_frame(), array.shape, array.dtype)
+        >>> assert back.data_id == array.data_id
+        """
+        shape = tuple(int(x) for x in shape)
+        ndim = len(shape)
+        keys = ["ordinal", "out_axis"]
+        order = frame[keys].to_numpy(np.int64)
+        if not _is_canonical(order):
+            frame = frame.sort_values(keys, kind="stable")
+        count = len(frame) // ndim
+        matrices = {
+            name: frame[name].to_numpy(np.int64).reshape(count, ndim)
+            for name in AXIS_FIELDS
+        }
+        members = frame.iloc[::ndim]
+        source = list(zip(*[members[name].astype(str) for name in SOURCE_FIELDS]))
+        block = _Block(
+            shape=shape,
+            dtype=np.dtype(dtype),
+            concat_axis=NEW_AXIS,
+            members=_members_of(members, source),
+            axes=matrices,
+        )
+        return _array(block)
+
+    @property
+    def table(self) -> LazyTable:
+        """The table which holds this array."""
+        return self._table
+
+    @property
+    def row(self) -> int:
+        """Which row of the table this array is."""
+        return self._row
+
+    @property
+    def shape(self) -> tuple[int, ...]:
+        """The shape of the array the members cover."""
+        table = self._table
+        start, stop = table.shape_offsets[self._row : self._row + 2]
+        return tuple(table.shapes[start:stop].tolist())
+
+    @property
+    def ndim(self) -> int:
+        """The number of dimensions of the array."""
+        offsets = self._table.shape_offsets
+        return int(offsets[self._row + 1] - offsets[self._row])
+
+    @property
+    def dtype(self) -> np.dtype:
+        """The dtype of the loaded array."""
+        return np.dtype(self._table.dtypes[self._row])
+
+    @property
+    def size(self) -> int:
+        """The number of elements in the array."""
+        return math.prod(self.shape)
+
+    @property
+    def placement(self) -> dict[str, np.ndarray]:
+        """
+        The placement matrices, each `(n_members, ndim)`.
+
+        Views of the table's own arrays: `out_start` and `out_stop` are the
+        box in the output, `src_axis` is the stored axis which feeds each
+        output axis (`-1` for a new or broadcast axis), and `src_start` with
+        `src_extent` are the window and the whole stored length.
+        """
+        return self._block().axes
+
+    def __len__(self) -> int:
+        """The number of members."""
+        offsets = self._table.member_offsets
+        return int(offsets[self._row + 1] - offsets[self._row])
+
+    def __repr__(self) -> str:
+        name = type(self).__name__
+        return f"{name}(shape={self.shape}, dtype={self.dtype}, members={len(self)})"
+
+    def _block(self) -> _Block:
+        """Return this array's storage, as views of the table's arrays."""
+        table, row = self._table, self._row
+        first, last = table.member_offsets[row : row + 2]
+        start = int(table.axis_offsets[row])
+        count, ndim = int(last - first), self.ndim
+        stop = start + count * ndim
+        axes = {
+            name: table.axes[name][start:stop].reshape(count, ndim)
+            for name in AXIS_FIELDS
+        }
+        return _Block(
+            shape=self.shape,
+            dtype=self.dtype,
+            concat_axis=int(table.concat_axes[row]),
+            members=table.members.take(slice(int(first), int(last))),
+            axes=axes,
+        )
+
+    def source(self, member: int) -> ArraySource:
+        """
+        Return the source one member reads, resolved against its base uri.
+
+        Parameters
+        ----------
+        member
+            Which member, by its place in the array.
+
+        Examples
+        --------
+        >>> from dascore.core.source import ArraySource
+        >>> from dascore.core.lazy_array import LazyArray
+        >>>
+        >>> source = ArraySource.full((2, 2), 3.0)
+        >>> assert LazyArray.from_source(source).source(0) == source
+        """
+        return _member_source(self._block(), int(member))
+
+    @property
+    def sources(self) -> tuple[ArraySource, ...]:
+        """The source each member reads, in placement order."""
+        block = self._block()
+        return tuple(_member_source(block, row) for row in range(len(block)))
+
+    def __getitem__(self, index) -> LazyArray:
+        """
+        Return the array a selection of samples describes; nothing is read.
+
+        Only slices with a step of one are taken, and trailing axes may be
+        left out. Each box is clipped to the request, its window moved by
+        what was clipped, and members the request misses are dropped.
+        """
+        index = index if isinstance(index, tuple) else (index,)
+        shape = self.shape
+        if len(index) > len(shape):
+            msg = f"Cannot index a {self.ndim} dimensional array with {index}."
+            raise ParameterError(msg)
+        spans = [_resolve(item, size) for item, size in zip(index, shape)]
+        spans += [(0, size) for size in shape[len(index) :]]
+        starts = np.array([x[0] for x in spans], np.int64)
+        stops = np.array([x[1] for x in spans], np.int64)
+        if not starts.any() and np.array_equal(stops, np.asarray(shape)):
+            return self
+        return _array(_clip(self._block(), starts, stops))
+
+    def transpose(self, order: Sequence[int] | None = None) -> LazyArray:
+        """
+        Return the array with its output axes permuted.
+
+        Parameters
+        ----------
+        order
+            The output axis each new axis takes; reversed by default.
+
+        Examples
+        --------
+        >>> from dascore.core.source import ArraySource
+        >>> from dascore.core.lazy_array import LazyArray
+        >>>
+        >>> array = LazyArray.from_source(ArraySource.full((2, 3), 1.0))
+        >>> assert array.transpose().shape == (3, 2)
+        """
+        ndim = self.ndim
+        if order is None:
+            order = tuple(reversed(range(ndim)))
+        order = tuple(_check_axis(x, ndim) for x in order)
+        if sorted(order) != list(range(ndim)):
+            msg = f"{order} is not a permutation of {ndim} axes."
+            raise ParameterError(msg)
+        block = self._block()
+        shape = tuple(self.shape[x] for x in order)
+        concat_axis = block.concat_axis
+        concat_axis = order.index(concat_axis) if concat_axis >= 0 else NEW_AXIS
+        axes = {name: matrix[:, order] for name, matrix in block.axes.items()}
+        moved = _Block(shape, block.dtype, concat_axis, block.members, axes)
+        return _array(_canonical(moved))
+
+    def rechunk(self, bounds, axis: int = 0) -> LazyTable:
+        """
+        Cut the array at new bounds along one axis, giving one array each.
+
+        Parameters
+        ----------
+        bounds
+            The sample numbers the pieces are cut at, ascending; `n` bounds
+            give `n - 1` arrays, and samples outside them are dropped.
+        axis
+            The axis to cut along. The members must already be full width
+            blocks stacked along it.
+
+        Notes
+        -----
+        The pieces come back as one table, which shares one set of matrices
+        however many arrays it holds. Overlapping bounds are not supported.
+
+        Examples
+        --------
+        >>> from dascore.core.source import ArraySource
+        >>> from dascore.core.lazy_array import LazyArray
+        >>>
+        >>> array = LazyArray.from_source(ArraySource.full((10, 3), 1.0))
+        >>> table = array.rechunk([0, 4, 10])
+        >>> assert [x.shape for x in table] == [(4, 3), (6, 3)]
+        """
+        axis = _check_axis(axis, self.ndim)
+        block = self._block()
+        _check_stack(block, axis)
+        bounds = np.asarray(bounds, np.int64).reshape(-1)
+        if len(bounds) < 2:
+            msg = "Rechunking takes at least two bounds, which are the ends."
+            raise ParameterError(msg)
+        if np.any(np.diff(bounds) <= 0):
+            msg = "Rechunking into overlapping or empty pieces is not supported."
+            raise NotImplementedError(msg)
+        if bounds[0] < 0 or bounds[-1] > self.shape[axis]:
+            msg = f"Bounds {bounds} fall outside the array."
+            raise ParameterError(msg)
+        return _rechunk(block, bounds, axis)
+
+    def validate(self) -> LazyArray:
+        """
+        Check the array's rules, raising `ParameterError` for the first broken.
+
+        The boxes must be inside the array, may not overlap, and must cover
+        every sample; each window must be inside its source; and the members
+        must be in canonical placement order. Operations do not validate,
+        because they start from arrays which already hold.
+
+        Examples
+        --------
+        >>> from dascore.core.source import ArraySource
+        >>> from dascore.core.lazy_array import LazyArray
+        >>>
+        >>> array = LazyArray.from_source(ArraySource.full((4, 2), 1.0))
+        >>> assert array.validate() is array
+        """
+        _validate(self._block())
+        return self
+
+    def load(self) -> np.ndarray:
+        """
+        Read every member and return the array they make.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from dascore.core.source import ArraySource
+        >>> from dascore.core.lazy_array import LazyArray
+        >>>
+        >>> array = LazyArray.from_source(ArraySource.full((2, 3), 7.0))
+        >>> assert np.array_equal(array.load(), np.full((2, 3), 7.0))
+        """
+        block = self._block()
+        out = np.empty(self.shape, self.dtype)
+        start, stop = block.axes["out_start"], block.axes["out_stop"]
+        src_axis = block.axes["src_axis"]
+        for row in range(len(block)):
+            data = _member_source(block, row).load()
+            data = _to_output(data, src_axis[row])
+            box = tuple(map(slice, start[row].tolist(), stop[row].tolist()))
+            out[box] = data
+        return out
+
+    def __array__(self, dtype=None, copy=None) -> np.ndarray:
+        """Load the array for numpy; each call reads every member."""
+        out = self.load()
+        return out if dtype is None else out.astype(dtype, copy=False)
+
+    def __array_namespace__(self, api_version: str | None = None):
+        """Return the namespace which owns this array."""
+        return _NAMESPACE
+
+    @property
+    def data_id(self) -> str:
+        """
+        The id of the array the members make; nothing is read to work it out.
+
+        Derived from a canonical form, in which members which are abutting
+        windows of one source are one member, so how an array was cut up
+        cannot reach its id. Each member is named exactly as its source is,
+        and the digest is taken over the placement matrices and those names,
+        so where the members are stored never reaches the id either.
+
+        Examples
+        --------
+        >>> from dascore.core.source import ArraySource
+        >>> from dascore.core.lazy_array import LazyArray
+        >>>
+        >>> array = LazyArray.from_source(ArraySource.full((8, 2), 1.0))
+        >>> assert array[0:4].data_id == array[0:8][0:4].data_id
+        """
+        cache = self._table._ids
+        out = cache.get(self._row)
+        if out is None:
+            cache[self._row] = out = self._data_id()
+        return out
+
+    def _identity(self) -> tuple[str, str]:
+        """Return the id this array has as an operation's parameter."""
+        return "array", self.data_id
+
+    def _data_id(self) -> str:
+        """Work out the id of the array the members make."""
+        block = _coalesce(self._block())
+        if len(block) == 1 and _is_identity(block):
+            return _member_source(block, 0).data_id
+        ids = _member_ids(block)
+        return H("blocks", [list(self.shape), self.dtype.str, _digest(block, ids)])
+
+    def to_frame(self) -> pd.DataFrame:
+        """
+        Return one row per member per output axis, for inspection.
+
+        The columns are those of the member and axis database tables, joined:
+        `ordinal`, `out_axis`, the placement, and what the member reads.
+
+        Examples
+        --------
+        >>> from dascore.core.source import ArraySource
+        >>> from dascore.core.lazy_array import LazyArray
+        >>>
+        >>> array = LazyArray.from_source(ArraySource.full((2, 3), 1.0))
+        >>> assert len(array.to_frame()) == 2  # one member, two axes
+        """
+        block = self._block()
+        count, ndim = len(block), self.ndim
+        members = block.members
+        repeat = np.repeat(np.arange(count, dtype=np.int64), ndim)
+        source = np.empty(count, object)
+        source[:] = members.source.tolist()
+        out = {
+            "ordinal": repeat,
+            "out_axis": np.tile(np.arange(ndim, dtype=np.int64), count),
+            **{name: block.axes[name].reshape(-1) for name in AXIS_FIELDS},
+        }
+        for index, name in enumerate(SOURCE_FIELDS):
+            out[name] = np.repeat([x[index] for x in source], ndim)
+        for name in ("key", "origin_id", "dtype"):
+            out[name] = np.repeat(getattr(members, name).tolist(), ndim)
+        out["filled"] = np.repeat(members.filled, ndim)
+        values = np.empty(count, object)
+        values[:] = members.value.tolist()
+        out["value"] = np.repeat(values, ndim)
+        return pd.DataFrame(out)
+
+
+def _array(block: _Block) -> LazyArray:
+    """Return the array one block describes, in a table of its own."""
+    return LazyArray(_table([block]), 0)
+
+
+def _resolve(item, size: int) -> tuple[int, int]:
+    """Return the samples one index selects, refusing what cannot be a box."""
+    if not isinstance(item, slice):
+        msg = (
+            f"A lazy array takes slices with a step of one, not {item!r}. "
+            "Integers, steps, ellipses and index arrays are not supported."
+        )
+        raise ParameterError(msg)
+    if item.step is not None and item.step != 1:
+        msg = f"A lazy array takes a step of one, not {item.step}."
+        raise ParameterError(msg)
+    start, stop, _ = item.indices(size)
+    return start, max(start, stop)
+
+
+def _clip(block: _Block, starts: np.ndarray, stops: np.ndarray) -> _Block:
+    """Return the members a request selects, each clipped to it."""
+    rows = _candidates(block, starts, stops)
+    axes = {name: matrix[rows] for name, matrix in block.axes.items()}
+    start = np.maximum(axes["out_start"], starts)
+    stop = np.minimum(axes["out_stop"], stops)
+    keep = np.flatnonzero(np.all(stop > start, axis=1))
+    start, stop = start[keep], stop[keep]
+    axes = {name: matrix[keep] for name, matrix in axes.items()}
+    stored = axes["src_axis"] >= 0
+    moved = np.where(stored, start - axes["out_start"], 0)
+    axes["src_start"] = axes["src_start"] + moved
+    axes["out_start"] = start - starts
+    axes["out_stop"] = stop - starts
+    # The candidates are one run, so both selections are one gather.
+    members = block.members.take(keep + (rows.start or 0))
+    _flatten_constants(axes, members.filled)
+    shape = tuple((stops - starts).tolist())
+    return _Block(shape, block.dtype, block.concat_axis, members, axes)
+
+
+def _candidates(block: _Block, starts: np.ndarray, stops: np.ndarray) -> slice:
+    """Return the rows a request can touch, by binary search where it can."""
+    axis = block.concat_axis
+    if axis < 0 or len(block) == 0:
+        return slice(None)
+    first = np.searchsorted(block.axes["out_stop"][:, axis], starts[axis], "right")
+    last = np.searchsorted(block.axes["out_start"][:, axis], stops[axis], "left")
+    return slice(int(first), int(max(first, last)))
+
+
+def _block_of_sources(sources: Sequence[ArraySource], base_uri: str = "") -> _Block:
+    """Return a block which reads each source whole, placed at the origin."""
+    ndim = sources[0].ndim
+    count = len(sources)
+    for source in sources:
+        if not source.loadable:
+            msg = f"{source} does not say enough to load an array."
+            raise ParameterError(msg)
+        if source.ndim != ndim:
+            msg = "Every source of one lazy array must have the same ndim."
+            raise ParameterError(msg)
+        if len(source.extent) != ndim:
+            msg = f"{source} does not state the extent of its whole array."
+            raise ParameterError(msg)
+    if ndim == 0:
+        msg = "A lazy array takes sources of at least one dimension."
+        raise ParameterError(msg)
+    axes = {
+        "out_start": np.zeros((count, ndim), np.int64),
+        "out_stop": np.array([x.shape for x in sources], np.int64),
+        "src_axis": np.tile(np.arange(ndim, dtype=np.int64), (count, 1)),
+        "src_start": np.array([[w[0] for w in x.windows] for x in sources], np.int64),
+        "src_extent": np.array([x.extent for x in sources], np.int64),
+    }
+    members = _Members(
+        source=_Column.of(
+            [(*_split_path(x.path, base_uri), x.format, x.version) for x in sources]
+        ),
+        key=_Column.of([x.key for x in sources]),
+        origin_id=_Column.of([x.origin_id for x in sources]),
+        dtype=_Column.of([np.dtype(x.dtype).str for x in sources]),
+        filled=np.array([x.filled for x in sources], bool),
+        value=_Column.of([x.value for x in sources]),
+    )
+    _flatten_constants(axes, members.filled)
+    dtype = np.result_type(*[np.dtype(x.dtype) for x in sources])
+    return _Block((0,) * ndim, dtype, NEW_AXIS, members, axes)
+
+
+def _flatten_constants(axes: dict[str, np.ndarray], filled: np.ndarray) -> None:
+    """Set the source fields of every constant member to its box."""
+    rows = np.flatnonzero(filled)
+    if not len(rows):
+        return
+    axes["src_start"][rows] = 0
+    axes["src_extent"][rows] = axes["out_stop"][rows] - axes["out_start"][rows]
+
+
+def _split_path(path: str, base_uri: str) -> tuple[str, str]:
+    """Split a path into the prefix it is stored under and the rest."""
+    if base_uri and path.startswith(base_uri):
+        return base_uri, path[len(base_uri) :]
+    return "", path
+
+
+def _member_source(block: _Block, row: int) -> ArraySource:
+    """Return the source one member of a block reads."""
+    members = block.members
+    base_uri, path, format_, version = members.source[row]
+    src_axis = block.axes["src_axis"][row]
+    src_start = block.axes["src_start"][row]
+    lengths = block.axes["out_stop"][row] - block.axes["out_start"][row]
+    extent = block.axes["src_extent"][row]
+    stored = np.flatnonzero(src_axis >= 0)
+    windows: list = [()] * len(stored)
+    sizes: list = [0] * len(stored)
+    for out_axis in stored.tolist():
+        axis = int(src_axis[out_axis])
+        start = int(src_start[out_axis])
+        windows[axis] = (start, start + int(lengths[out_axis]))
+        sizes[axis] = int(extent[out_axis])
+    return ArraySource(
+        path=base_uri + path,
+        format=format_,
+        version=version,
+        key=members.key[row],
+        windows=tuple(windows),
+        shape=tuple(stop - start for start, stop in windows),
+        dtype=np.dtype(members.dtype[row]),
+        origin_id=members.origin_id[row],
+        extent=tuple(sizes),
+        filled=bool(members.filled[row]),
+        value=members.value[row],
+    )
+
+
+def _to_output(data: np.ndarray, src_axis: np.ndarray) -> np.ndarray:
+    """Return a member's array with its stored axes on the output's."""
+    axes = src_axis.tolist()
+    order = [x for x in axes if x >= 0]
+    if order != sorted(order):
+        data = np.transpose(data, order)
+    new = [index for index, axis in enumerate(axes) if axis < 0]
+    return np.expand_dims(data, tuple(new)) if new else data
+
+
+def concat(arrays: Sequence[LazyArray], axis: int = 0) -> LazyArray:
+    """
+    Join arrays end to end along one axis, in one pass over their members.
+
+    Parameters
+    ----------
+    arrays
+        The arrays to join; they must agree on every other axis.
+    axis
+        The axis to join along.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.core.source import ArraySource
+    >>> from dascore.core.lazy_array import LazyArray, concat
+    >>>
+    >>> parts = [LazyArray.from_source(ArraySource.full((2, 3), x)) for x in (1, 2)]
+    >>> joined = concat(parts, axis=1)
+    >>> assert joined.shape == (2, 6)
+    >>> expected = np.concatenate([x.load() for x in parts], axis=1)
+    >>> assert np.array_equal(joined.load(), expected)
+    """
+    arrays = list(arrays)
+    blocks, ndim = _blocks_of(arrays)
+    axis = _check_axis(axis, ndim)
+    shapes = [x.shape for x in blocks]
+    for other in range(ndim):
+        sizes = {x[other] for x in shapes}
+        if other != axis and len(sizes) > 1:
+            msg = f"Arrays with shapes {shapes} cannot be joined on axis {axis}."
+            raise ParameterError(msg)
+    lengths = np.array([x[axis] for x in shapes], np.int64)
+    axes = _stacked_axes(blocks)
+    counts = np.array([len(x) for x in blocks], np.int64)
+    shift = np.repeat(_offsets(lengths)[:-1], counts)
+    axes["out_start"][:, axis] += shift
+    axes["out_stop"][:, axis] += shift
+    shape = list(shapes[0])
+    shape[axis] = int(lengths.sum())
+    slabs = all(_is_slab(x, axis) for x in blocks)
+    block = _Block(
+        shape=tuple(shape),
+        dtype=np.result_type(*[x.dtype for x in blocks]),
+        concat_axis=axis if slabs else NEW_AXIS,
+        members=_merge_members([x.members for x in blocks]),
+        axes=axes,
+    )
+    return _array(_canonical(block))
+
+
+def stack(arrays: Sequence[LazyArray], axis: int = 0) -> LazyArray:
+    """
+    Join arrays along a new axis, in one pass over their members.
+
+    Parameters
+    ----------
+    arrays
+        The arrays to stack; they must all have the same shape.
+    axis
+        Where the new axis goes in the output.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.core.source import ArraySource
+    >>> from dascore.core.lazy_array import LazyArray, stack
+    >>>
+    >>> parts = [LazyArray.from_source(ArraySource.full((2, 3), x)) for x in (1, 2)]
+    >>> stacked = stack(parts, axis=1)
+    >>> assert stacked.shape == (2, 2, 3)
+    >>> assert np.array_equal(stacked.load(), np.stack([x.load() for x in parts], 1))
+    """
+    arrays = list(arrays)
+    blocks, ndim = _blocks_of(arrays)
+    axis = _check_axis(axis, ndim + 1)
+    shapes = {x.shape for x in blocks}
+    if len(shapes) > 1:
+        msg = f"Arrays with shapes {sorted(shapes)} cannot be stacked."
+        raise ParameterError(msg)
+    axes = {}
+    for name in AXIS_FIELDS:
+        fills = {"out_stop": 1, "src_axis": NEW_AXIS}
+        parts = [
+            np.insert(
+                block.axes[name],
+                axis,
+                index if name == "out_start" else fills.get(name, 0),
+                axis=1,
+            )
+            for index, block in enumerate(blocks)
+        ]
+        axes[name] = np.concatenate(parts)
+    counts = np.array([len(x) for x in blocks], np.int64)
+    axes["out_stop"][:, axis] = np.repeat(np.arange(len(blocks)), counts) + 1
+    shape = list(blocks[0].shape)
+    shape.insert(axis, len(blocks))
+    block = _Block(
+        shape=tuple(shape),
+        dtype=np.result_type(*[x.dtype for x in blocks]),
+        concat_axis=axis if all(len(x) <= 1 for x in blocks) else NEW_AXIS,
+        members=_merge_members([x.members for x in blocks]),
+        axes=axes,
+    )
+    return _array(_canonical(block))
+
+
+def _blocks_of(arrays: Sequence[LazyArray]) -> tuple[list[_Block], int]:
+    """Return the block of each array, which must agree on ndim."""
+    if not arrays:
+        msg = "At least one array is needed."
+        raise ParameterError(msg)
+    blocks = [x._block() for x in arrays]
+    ndims = {x.ndim for x in blocks}
+    if len(ndims) > 1:
+        msg = f"Arrays of {sorted(ndims)} dimensions cannot be combined."
+        raise ParameterError(msg)
+    return blocks, blocks[0].ndim
+
+
+def _stacked_axes(blocks: Sequence[_Block]) -> dict[str, np.ndarray]:
+    """Return the placement matrices of every block, stacked and writable."""
+    return {
+        name: np.concatenate([x.axes[name] for x in blocks]) for name in AXIS_FIELDS
+    }
+
+
+def _check_stack(block: _Block, axis: int) -> None:
+    """Refuse a block which is not full width blocks stacked along an axis."""
+    start, stop = block.axes["out_start"], block.axes["out_stop"]
+    shape = np.asarray(block.shape, np.int64)
+    others = [x for x in range(block.ndim) if x != axis]
+    full = np.all(start[:, others] == 0) and np.all(stop[:, others] == shape[others])
+    tiles = (
+        len(block)
+        and start[0, axis] == 0
+        and stop[-1, axis] == shape[axis]
+        and np.array_equal(start[1:, axis], stop[:-1, axis])
+    )
+    if not (full and tiles):
+        msg = (
+            f"Rechunking axis {axis} needs members which are full width "
+            "blocks stacked along it."
+        )
+        raise NotImplementedError(msg)
+
+
+def _rechunk(block: _Block, bounds: np.ndarray, axis: int) -> LazyTable:
+    """Cut a stack of blocks at new bounds, as one table of many arrays."""
+    start = block.axes["out_start"][:, axis]
+    stop = block.axes["out_stop"][:, axis]
+    edges = _merge_sorted_unique(np.concatenate([start, stop[-1:]]), bounds)
+    # The pieces the bounds keep are one run of edges, so they are a view.
+    first = np.searchsorted(edges, bounds[0])
+    last = np.searchsorted(edges, bounds[-1])
+    low, high = edges[first:last], edges[first + 1 : last + 1]
+    member = np.searchsorted(start, low, "right") - 1
+    chunk = np.searchsorted(bounds, low, "right") - 1
+    axes = {name: matrix[member] for name, matrix in block.axes.items()}
+    moved = np.where(axes["src_axis"][:, axis] >= 0, low - start[member], 0)
+    axes["src_start"][:, axis] += moved
+    axes["out_start"][:, axis] = low - bounds[chunk]
+    axes["out_stop"][:, axis] = high - bounds[chunk]
+    members = block.members.take(member)
+    _flatten_constants(axes, members.filled)
+    counts = np.diff(np.searchsorted(chunk, np.arange(len(bounds))))
+    shapes = np.tile(np.asarray(block.shape, np.int64), (len(bounds) - 1, 1))
+    shapes[:, axis] = np.diff(bounds)
+    ndim = block.ndim
+    return LazyTable(
+        member_offsets=_offsets(counts),
+        axis_offsets=_offsets(counts * ndim),
+        shape_offsets=_offsets(np.full(len(counts), ndim, np.int64)),
+        shapes=shapes.reshape(-1),
+        dtypes=_Column.constant(block.dtype, len(counts)),
+        concat_axes=np.full(len(counts), axis, np.int64),
+        members=members,
+        axes={name: matrix.reshape(-1) for name, matrix in axes.items()},
+    )
+
+
+def _validate(block: _Block) -> None:
+    """Check one block's rules, raising for the first which is broken."""
+    shape = np.asarray(block.shape, np.int64)
+    if np.any(shape < 0):
+        msg = f"A lazy array cannot have shape {block.shape}."
+        raise ParameterError(msg)
+    start, stop = block.axes["out_start"], block.axes["out_stop"]
+    if np.any(start < 0) or np.any(stop > shape) or np.any(stop <= start):
+        msg = f"Some boxes are empty or fall outside an array of {block.shape}."
+        raise ParameterError(msg)
+    src_axis = block.axes["src_axis"]
+    stored = src_axis >= 0
+    if np.any(src_axis >= block.ndim) or np.any(src_axis < NEW_AXIS):
+        msg = f"A stored axis of {block.shape} is outside the array."
+        raise ParameterError(msg)
+    if _repeats(src_axis):
+        msg = "A member reads one stored axis onto two output axes."
+        raise ParameterError(msg)
+    window = block.axes["src_start"]
+    extent = block.axes["src_extent"]
+    inside = (window >= 0) & (window + (stop - start) <= extent)
+    if not np.all(np.where(stored, inside, (window == 0) & (extent == 0))):
+        msg = "Some windows fall outside the source they read."
+        raise ParameterError(msg)
+    if not _is_canonical(start):
+        msg = "The members are not in canonical placement order."
+        raise ParameterError(msg)
+    _check_cover(block, shape)
+
+
+def _repeats(src_axis: np.ndarray) -> bool:
+    """Whether any member names one stored axis twice."""
+    ordered = np.sort(src_axis, axis=1)
+    repeated = (ordered[:, 1:] == ordered[:, :-1]) & (ordered[:, 1:] >= 0)
+    return bool(repeated.any())
+
+
+def _check_cover(block: _Block, shape: np.ndarray) -> None:
+    """Check the boxes cover the whole array exactly once."""
+    size = math.prod(block.shape)
+    start, stop = block.axes["out_start"], block.axes["out_stop"]
+    if size == 0:
+        # Every box was checked above and none can be empty, so there are none.
+        assert not len(block)
+        return
+    covered = int(np.prod(stop - start, axis=1).sum())
+    if covered != size:
+        why = "overlap" if covered > size else "leave a hole, which must be a member"
+        msg = f"The members cover {covered} of {size} samples, so they {why}."
+        raise ParameterError(msg)
+    if not _tiles(start, stop, tuple(block.shape)):
+        msg = "Some members overlap, so the boxes do not tile the array."
+        raise ParameterError(msg)
+
+
+def _tiles(start: np.ndarray, stop: np.ndarray, sizes: tuple[int, ...]) -> bool:
+    """Whether boxes tile a region exactly; the ndim is cut down as it goes."""
+    if not len(start):
+        return not any(sizes)
+    keep = [
+        axis
+        for axis, size in enumerate(sizes)
+        if not (np.all(start[:, axis] == 0) and np.all(stop[:, axis] == size))
+    ]
+    if not keep:
+        return len(start) == 1
+    axis = keep[0]
+    if len(keep) == 1:
+        low, high = start[:, axis], stop[:, axis]
+        return bool(
+            low[0] == 0
+            and high[-1] == sizes[axis]
+            and np.array_equal(low[1:], high[:-1])
+        )
+    others = [x for x in range(len(sizes)) if x != axis]
+    shape = tuple(sizes[x] for x in others)
+    # The region's own ends are edges, so a gap is a slab with no members.
+    edges = np.unique(np.concatenate([start[:, axis], stop[:, axis], [0, sizes[axis]]]))
+    for low, high in zip(edges[:-1].tolist(), edges[1:].tolist()):
+        rows = (start[:, axis] <= low) & (stop[:, axis] >= high)
+        if not _tiles(start[rows][:, others], stop[rows][:, others], shape):
+            return False
+    return True
+
+
+def _coalesce(block: _Block) -> _Block:
+    """Return the block with abutting windows of one source merged."""
+    for axis in range(block.ndim - 1, -1, -1):
+        block = _merge_along(block, axis)
+    return block
+
+
+def _merge_along(block: _Block, axis: int) -> _Block:
+    """Merge runs of members which abut on one axis and agree on the rest."""
+    count = len(block)
+    if count < 2:
+        return block
+    members, axes = block.members, block.axes
+    # Ordered by cost: most arrays hold nothing to merge and stop here.
+    same = axes["out_stop"][:-1, axis] == axes["out_start"][1:, axis]
+    if not same.any():
+        return block
+    for name in ("source", "key", "origin_id", "dtype", "value"):
+        codes = getattr(members, name).codes
+        same &= codes[1:] == codes[:-1]
+        if not same.any():
+            return block
+    same &= members.filled[1:] == members.filled[:-1]
+    others = [x for x in range(block.ndim) if x != axis]
+    constant = members.filled[1:] & members.filled[:-1]
+    lengths = axes["out_stop"][:-1, axis] - axes["out_start"][:-1, axis]
+    steps = np.where(axes["src_axis"][:-1, axis] >= 0, lengths, 0)
+    abuts = axes["src_start"][1:, axis] == axes["src_start"][:-1, axis] + steps
+    same &= constant | abuts
+    # A constant's extent is its box, which the merge grows.
+    extent = axes["src_extent"][:, axis]
+    same &= constant | (extent[1:] == extent[:-1])
+    if not same.any():
+        return block
+    for name in AXIS_FIELDS:
+        matrix = axes[name]
+        # The merged axis is checked above; the rest must match outright.
+        if name != "src_axis":
+            matrix = matrix[:, others]
+        same &= np.all(matrix[1:] == matrix[:-1], axis=1)
+    if not same.any():
+        return block
+    first = np.concatenate([[0], np.flatnonzero(~same) + 1])
+    last = np.concatenate([first[1:], [count]]) - 1
+    merged = block.take(first)
+    merged.axes["out_stop"][:, axis] = axes["out_stop"][last, axis]
+    _flatten_constants(merged.axes, merged.members.filled)
+    return merged
+
+
+def _is_identity(block: _Block) -> bool:
+    """Whether one member covers the array with its stored axes in order."""
+    shape = np.asarray(block.shape, np.int64)
+    axes = block.axes
+    return bool(
+        not axes["out_start"].any()
+        and np.array_equal(axes["out_stop"][0], shape)
+        and np.array_equal(axes["src_axis"][0], np.arange(block.ndim))
+    )
+
+
+def _member_ids(block: _Block) -> np.ndarray:
+    """
+    Return the 16 bytes which name each member, in one pass over the table.
+
+    Every id is the one the member's `ArraySource` carries. They are worked
+    out per distinct description rather than per row: one hash for each
+    location, and, for the windows which are the bulk of a large table, the
+    canonical text of the id is built without walking the encoder.
+    """
+    count = len(block)
+    out = np.zeros((count, 16), np.uint8)
+    if not count:
+        return out
+    members = block.members
+    lengths = block.axes["out_stop"] - block.axes["out_start"]
+    filled = np.flatnonzero(members.filled)
+    if len(filled):
+        out[filled] = _constant_ids(block, lengths, filled)
+    rows = np.flatnonzero(~members.filled)
+    if not len(rows):
+        return out
+    bases, base_code = _base_ids(block, rows)
+    stored = block.axes["src_axis"][rows] >= 0
+    window = block.axes["src_start"][rows]
+    whole = np.all(
+        ~stored | ((window == 0) & (lengths[rows] == block.axes["src_extent"][rows])),
+        axis=1,
+    )
+    raw = _id_bytes(bases)
+    out[rows[whole]] = raw[base_code[whole]]
+    left = np.flatnonzero(~whole)
+    if not len(left):
+        return out
+    quoted = [json.dumps(x, ensure_ascii=True) for x in bases]
+    counts = stored.sum(axis=1)
+    for size in np.unique(counts[left]).tolist():
+        group = left[counts[left] == size]
+        texts = _window_texts(
+            [quoted[x] for x in base_code[group].tolist()],
+            block.axes["src_axis"][rows[group]],
+            window[group],
+            lengths[rows[group]],
+            size,
+        )
+        digests = b"".join(
+            hashlib.blake2b(x.encode("ascii"), digest_size=DIGEST_SIZE).digest()
+            for x in texts
+        )
+        out[rows[group]] = np.frombuffer(digests, np.uint8).reshape(len(group), 16)
+    return out
+
+
+def _window_texts(
+    bases: list[str],
+    src_axis: np.ndarray,
+    src_start: np.ndarray,
+    lengths: np.ndarray,
+    size: int,
+) -> map:
+    """Return the canonical text of the id of each window, in source order."""
+    rows, out_axes = np.nonzero(src_axis >= 0)
+    stored = src_axis[rows, out_axes]
+    windows = np.zeros((len(bases), 2 * size), np.int64)
+    windows[rows, 2 * stored] = src_start[rows, out_axes]
+    windows[rows, 2 * stored + 1] = src_start[rows, out_axes] + lengths[rows, out_axes]
+    boxes = ",".join(["[%d,%d]"] * size)
+    template = f'[{SCHEME},"window",[%s,[{boxes}]]]'
+    return map(template.__mod__, zip(bases, *windows.T.tolist()))
+
+
+def _group_codes(columns: Sequence[_Column], rows: np.ndarray) -> np.ndarray | None:
+    """Return one code per row for the combination of several columns."""
+    out = None
+    for column in columns:
+        codes = column.codes[rows]
+        if codes.max() == codes.min():
+            continue
+        codes = codes.astype(np.int64)
+        if out is None:
+            out = codes
+            continue
+        # Renumbered each time, so the packed key stays well inside int64.
+        width = int(codes.max()) + 1
+        out = np.unique(out * width + codes, return_inverse=True)[1].reshape(-1)
+    return out
+
+
+def _base_ids(block: _Block, rows: np.ndarray) -> tuple[list[str], np.ndarray]:
+    """Return the id each member builds on, and which one each row uses."""
+    members = block.members
+    columns = (members.key, members.source, members.origin_id)
+    keys = _group_codes(columns, rows)
+    if keys is None:
+        index = np.zeros(1, np.int64)
+        inverse = np.zeros(len(rows), np.int64)
+    else:
+        _, index, inverse = np.unique(keys, return_index=True, return_inverse=True)
+    bases = []
+    for row in rows[index].tolist():
+        origin = members.origin_id[row]
+        if not origin:
+            _, path, format_, version = members.source[row]
+            location = {
+                "path": path,
+                "format": format_,
+                "version": version,
+                "key": members.key[row],
+            }
+            origin = H("location", location)
+        bases.append(origin)
+    return bases, inverse.reshape(-1)
+
+
+def _constant_ids(block: _Block, lengths: np.ndarray, rows: np.ndarray) -> np.ndarray:
+    """Return the id of each constant member; equal blocks are one array."""
+    members = block.members
+    cache: dict = {}
+    ids = []
+    for row in rows.tolist():
+        shape = tuple(lengths[row].tolist())
+        key = (int(members.value.codes[row]), int(members.dtype.codes[row]), shape)
+        out = cache.get(key)
+        if out is None:
+            content = {
+                "value": members.value[row],
+                "dtype": members.dtype[row],
+                "shape": shape,
+            }
+            cache[key] = out = H("constant", content)
+        ids.append(out)
+    return _id_bytes(ids)
+
+
+def _id_bytes(ids: Sequence[str]) -> np.ndarray:
+    """Return the 16 bytes of each id, folding any which is not 32 hex."""
+    try:
+        raw = bytes.fromhex("".join(ids))
+        if len(raw) != 16 * len(ids):
+            raise ValueError
+    except ValueError:
+        raw = b"".join(_fold(x) for x in ids)
+    return np.frombuffer(raw, np.uint8).reshape(len(ids), 16)
+
+
+def _fold(value: str) -> bytes:
+    """Return the 16 bytes of one id, hashing one which is not 32 hex."""
+    if len(value) == 32:
+        try:
+            return bytes.fromhex(value)
+        except ValueError:
+            pass
+    return hashlib.blake2b(value.encode(), digest_size=DIGEST_SIZE).digest()
+
+
+def _digest(block: _Block, ids: np.ndarray) -> str:
+    r"""
+    Return the digest of a canonical block.
+
+    The bytes hashed are, in order: the tag `dascore-lazy-blocks\0`; the
+    layout version, the number of members and the ndim, as three
+    little-endian int64; the `out_start`, `out_stop`, `src_axis`,
+    `src_start` and `src_extent` matrices, each `n_members` by `ndim`
+    little-endian int64 in row-major order; and the 16 bytes of each
+    member's id. Paths never appear.
+    """
+    out = hashlib.blake2b(digest_size=DIGEST_SIZE)
+    out.update(_DIGEST_TAG)
+    out.update(struct.pack("<3q", DIGEST_LAYOUT, len(block), block.ndim))
+    for name in AXIS_FIELDS:
+        out.update(np.ascontiguousarray(block.axes[name], dtype="<i8"))
+    out.update(np.ascontiguousarray(ids))
+    return out.hexdigest()
+
+
+class _Namespace:
+    """The array api namespace of a lazy array, which only names itself."""
+
+    __name__ = BACKEND_NAME
+
+
+_NAMESPACE = _Namespace()
