@@ -507,6 +507,18 @@ class TestOperationId:
         other = slopes | {"dims": ["time", "distance"]}
         assert fingerprint_call(func, (), slopes) != fingerprint_call(func, (), other)
 
+    def test_a_tuple_restates_a_list_default(self):
+        """Either way round."""
+
+        @dc.patch_function()
+        def listed(patch, names=["a", "b"]):
+            """Take a list default."""
+            return patch.new(data=patch.data)
+
+        base = fingerprint_call(listed, (), {})
+        assert base == fingerprint_call(listed, (), {"names": ("a", "b")})
+        assert base != fingerprint_call(listed, (), {"names": ("b", "a")})
+
     def test_none_is_not_the_default(self):
         """`filter_type=None` slices raw; leaving it out filters first."""
         func = dc.proc.decimate

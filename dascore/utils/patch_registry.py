@@ -452,8 +452,8 @@ def is_default(value: Any, default: Any) -> bool:
     if value is default:
         return True
     # Keyed rather than compared: `0.0 == -0.0` and `1 == True`, and each
-    # pair is two calls. A list restates a tuple, as the encoder reads them.
-    if isinstance(value, list) and isinstance(default, list | tuple):
+    # pair is two calls. A list and a tuple are one, as the encoder reads them.
+    if isinstance(value, list | tuple) and isinstance(default, list | tuple):
         value, default = tuple(value), tuple(default)
     try:
         return _as_key(value) == _as_key(default)

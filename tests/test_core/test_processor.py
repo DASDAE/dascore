@@ -494,6 +494,23 @@ class TestReviewFindings:
         assert first == first and first != second
         assert len({first, second}) == 2
 
+    def test_a_refused_operation_keeps_nested_origins(self, patch):
+        """A patch held in a list still says where the data came from."""
+        from dascore.utils.identity import fold_origin_ids  # noqa: PLC0415
+
+        class Holding(SeamScale):
+            """Hold patches in a list, and something nothing spells."""
+
+            name = None
+            items: Any = None
+            odd: Any = None
+
+        other = dc.get_example_patch()
+        with pytest.warns(dc.warnings.DASCoreWarning, match="random data_id"):
+            out = Holding(items=[other], odd=object())(patch)
+        expected = fold_origin_ids([patch.attrs.origin_id, other.attrs.origin_id])
+        assert out.attrs.origin_id == expected
+
     def test_a_class_with_no_source(self, patch):
         """Made from text, it is named by which class object it is."""
         made = type("Made", (SeamScale,), {"name": None, "__doc__": "Made up."})

@@ -217,8 +217,8 @@ class PatchProcessor(DascoreBaseModel):
         except ParameterError:
             return f"{_spell(cls)}#{id(cls):x}"
 
-    def _operation(self) -> tuple[str, list]:
-        """Return this operation's id, and the patches among its fields."""
+    def _inputs(self) -> tuple[dict, list]:
+        """Return the non-default fields, and the patches found among them."""
         fields = type(self).model_fields
         # A field which only restates its default is left out, so a field
         # added later does not change the id of every operation before it.
@@ -229,7 +229,11 @@ class PatchProcessor(DascoreBaseModel):
             or fields[name].is_required()
             or not is_default(value, fields[name])
         }
-        params, patches = extract_patches(given)
+        return extract_patches(given)
+
+    def _operation(self) -> tuple[str, list]:
+        """Return this operation's id, and the patches among its fields."""
+        params, patches = self._inputs()
         found = _memoized_fingerprint(type(self), self.tag, params, self.__version__)
         return found, patches
 
@@ -418,8 +422,8 @@ class PatchProcessor(DascoreBaseModel):
             # As for a patch function: a field the encoder refuses still
             # made new data, so the result gets a random id.
             warn_random_id(type(self).__name__, error)
-            fields = self.kwargs.values()
-            operation, others = None, [x for x in fields if isinstance(x, dc.Patch)]
+            # The patches it holds still say where the data came from.
+            operation, others = None, self._inputs()[1]
         members = [patch.attrs, *(x.attrs for x in others)]
         return stamp(attrs, members, operation)
 
