@@ -1384,7 +1384,7 @@ def _fill_scalar(value, dtype) -> np.ndarray:
             # a float may round the value, but never overflow it to inf
             tol = np.finfo(cast.dtype).resolution
             same = bool(np.isfinite(cast) and np.isclose(cast, ref, rtol=tol, atol=0))
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         same = False
     if not same:
         msg = (
