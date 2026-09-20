@@ -35,7 +35,9 @@ import datetime
 import hashlib
 import inspect
 import json
+import re
 import sys
+import warnings
 from collections.abc import Callable, Mapping, Sequence, Set
 from dataclasses import dataclass
 from enum import Enum
@@ -53,6 +55,7 @@ from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel, model_values
 from dascore.models.registry import TAG_FIELD, get_model_tag
 from dascore.utils.array_api import is_foreign, to_numpy
+from dascore.warnings import DASCoreWarning
 
 if TYPE_CHECKING:
     from dascore.core.source import ArraySource
@@ -83,6 +86,7 @@ _MODEL = "$model"
 _PARTIAL = "$partial"
 _PATCH = "$patch"
 _QUANTITY = "$quantity"
+_REGEX = "$regex"
 _SET = "$set"
 _SLICE = "$slice"
 _TIMEDELTA = "$timedelta64"
@@ -329,11 +333,21 @@ def stamp(attrs, members, operation: str | None, output: int | None = None):
 
 
 def try_operation_id(name: str, params: Mapping[str, Any], version="1.0"):
-    """Return an operation's id, or None if the encoder refuses a parameter."""
+    """Return an operation's id, or None (and warn) if a parameter is refused."""
     try:
         return operation_id(name, params, version)
-    except Exception:
+    except Exception as error:
+        warn_random_id(name, error)
         return None
+
+
+def warn_random_id(name: str, error: Exception) -> None:
+    """Say that an operation worked but its result's id could not be derived."""
+    msg = (
+        f"No id could be derived for {name}: {error} Its result carries a "
+        "random data_id, so it cannot be matched to the same call made again."
+    )
+    warnings.warn(msg, DASCoreWarning, stacklevel=3)
 
 
 def _without_ids(attrs):
@@ -426,6 +440,10 @@ def _encode(obj: Any) -> Any:
         return {_UNIT: f"{obj:~}"}
     if isinstance(obj, Enum):
         return _encode_value(obj.value)
+    if obj is pd.NA:
+        return {_FLOAT: "na"}
+    if isinstance(obj, re.Pattern):
+        return {_REGEX: [_encode_value(obj.pattern), int(obj.flags)]}
     if isinstance(obj, PurePath):
         return obj.as_posix()
     if isinstance(obj, slice):
@@ -670,6 +688,11 @@ def callable_name(func: Any) -> str:
     try:
         source = inspect.getsource(func)
     except (OSError, TypeError):
+        source = ""
+    # Text given to `exec` lives in a file called "<string>", whose source
+    # reads back blank or as whatever was last compiled under that name.
+    filename = getattr(getattr(func, "__code__", None), "co_filename", "")
+    if not source.strip() or filename.startswith("<"):
         _refuse(func, "has no import path and no source")
     defaults = [
         getattr(func, "__defaults__", None),

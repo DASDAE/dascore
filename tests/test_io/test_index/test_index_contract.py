@@ -1047,6 +1047,17 @@ class TestLineageIds:
             assert selected.get_contents()["data_id"].iloc[0] == wanted
             assert selected[0].attrs.data_id == wanted
 
+    def test_an_empty_string_is_a_query(self, written_spool):
+        """Selecting `tag=""` asks for the patches which state no tag."""
+        spool = written_spool.update()
+        tags = spool.get_contents()["tag"]
+        assert len(spool.select(tag="")) == int((tags == "").sum())
+
+    def test_nothing_to_forget(self, written_spool):
+        """Forgetting the ids of no sources is not an error."""
+        backend = written_spool.update()._catalog.backend
+        assert backend._forget_lineage([]) is None
+
     def test_a_memory_spool_too(self):
         """A summary carries the ids, so a patch never written is findable."""
         patches = list(dc.get_example_spool("random_das"))

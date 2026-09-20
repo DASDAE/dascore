@@ -55,7 +55,13 @@ from dascore.constants import PatchMetaType, PatchType
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel, model_values
 from dascore.utils.attrs import _values_equal
-from dascore.utils.identity import callable_name, extract_patches, ids_enabled, stamp
+from dascore.utils.identity import (
+    callable_name,
+    extract_patches,
+    ids_enabled,
+    stamp,
+    warn_random_id,
+)
 from dascore.utils.patch import (
     _call_str,
     _maybe_add_history_str,
@@ -246,11 +252,20 @@ class PatchProcessor(DascoreBaseModel):
         """Two processors are equal if they are the same operation."""
         if not isinstance(other, PatchProcessor):
             return NotImplemented
-        return type(self) is type(other) and self.fingerprint == other.fingerprint
+        if type(self) is not type(other):
+            return False
+        try:
+            return self.fingerprint == other.fingerprint
+        except Exception:
+            # A field with no faithful spelling: only itself is surely equal.
+            return self is other
 
     def __hash__(self) -> int:
         """Hash a processor the way it compares."""
-        return hash(self.fingerprint)
+        try:
+            return hash(self.fingerprint)
+        except Exception:
+            return object.__hash__(self)
 
     @overload
     def __call__(self, patch: PatchType) -> PatchType: ...
@@ -399,9 +414,10 @@ class PatchProcessor(DascoreBaseModel):
             return stamp(attrs, (), None)
         try:
             operation, others = self._operation()
-        except Exception:
+        except Exception as error:
             # As for a patch function: a field the encoder refuses still
             # made new data, so the result gets a random id.
+            warn_random_id(type(self).__name__, error)
             fields = self.kwargs.values()
             operation, others = None, [x for x in fields if isinstance(x, dc.Patch)]
         members = [patch.attrs, *(x.attrs for x in others)]

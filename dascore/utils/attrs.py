@@ -15,20 +15,17 @@ import dascore as dc
 from dascore.constants import attr_conflict_description
 from dascore.exceptions import AttributeMergeError, ParameterError
 from dascore.utils.docs import compose_docstring
-from dascore.utils.identity import _ID_FIELDS, ids_enabled, merge_operation, result_ids
+from dascore.utils.identity import (
+    _ID_FIELDS,
+    ids_enabled,
+    result_ids,
+    try_operation_id,
+)
 from dascore.utils.misc import iterate
 
 # Ids never decide a merge; the second pair are what the first were called
 # in attrs pickled before they were renamed.
 _DROPPED_IDS = (*_ID_FIELDS, "patch_id", "processing_id")
-
-
-def _merge_id(params) -> str | None:
-    """Return the merge operation's id, or None if it cannot be encoded."""
-    try:
-        return merge_operation(params)
-    except Exception:
-        return None
 
 
 _VALID_CONFLICT_VALUES = ("drop", "raise", "keep_first")
@@ -139,7 +136,8 @@ def combine_patch_attrs(
     if ids_enabled() and len(members) == 1:
         ids.update({x: getattr(members[0], x, "") for x in _ID_FIELDS})
     elif ids_enabled() and members:
-        ids.update(result_ids(members, _merge_id(merge_params)))
+        operation = try_operation_id("Merge", dict(merge_params or {}))
+        ids.update(result_ids(members, operation))
     # History is never compared (processing differing between members is
     # what a merge is for); the first member's is carried, like the ids.
     history = (

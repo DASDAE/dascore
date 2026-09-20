@@ -464,6 +464,42 @@ class TestReviewFindings:
                 if "factory" in vars(host):
                     delattr(host, "factory")
 
+    def test_a_processor_as_a_parameter(self, patch):
+        """It is its operation id, unless it holds a patch."""
+        from dascore.utils.identity import encode as _encode  # noqa: PLC0415
+
+        first, other = SeamScale(factor=2.0), SeamScale(factor=3.0)
+        assert _encode(first) == {"$id": ["operation", first.fingerprint]}
+        assert _encode(first) != _encode(other)
+
+        class Holder(SeamScale):
+            """Hold a patch as a field."""
+
+            name = None
+            held: Any = None
+
+        with pytest.raises(ParameterError, match="holds a patch"):
+            _encode(Holder(held=patch))
+
+    def test_equality_with_a_field_nothing_spells(self):
+        """It compares and hashes, but only as itself."""
+
+        class Odd(SeamScale):
+            """Hold a value the encoder refuses."""
+
+            name = None
+            thing: Any = None
+
+        first, second = Odd(thing=object()), Odd(thing=object())
+        assert first == first and first != second
+        assert len({first, second}) == 2
+
+    def test_a_class_with_no_source(self, patch):
+        """Made from text, it is named by which class object it is."""
+        made = type("Made", (SeamScale,), {"name": None, "__doc__": "Made up."})
+        assert "#" in made().tag
+        assert made()(patch).attrs.data_id == made()(patch).attrs.data_id
+
     def test_an_unencodable_field_gets_a_random_id(self, patch):
         """A field the encoder refuses costs a derived id, not the call."""
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime
+import os
 import pickle
 import subprocess
 import sys
@@ -32,9 +33,11 @@ from dascore.utils.identity import (
     origin_id_for,
     result_ids,
     stamp,
+    try_operation_id,
     with_ids,
 )
-from dascore.utils.patch_registry import fingerprint_call
+from dascore.utils.patch_registry import _as_key, _signature, fingerprint_call
+from dascore.warnings import DASCoreWarning
 
 
 def digest(value) -> str:
@@ -86,6 +89,9 @@ class TestH:
         """Mappings are canonical."""
         assert digest({"a": 1, "b": 2}) == digest({"b": 2, "a": 1})
 
+    @pytest.mark.skipif(
+        sys.platform == "emscripten", reason="emscripten does not support processes"
+    )
     def test_same_in_another_process(self):
         """Nothing process-salted reaches an id."""
         code = (
@@ -97,7 +103,7 @@ class TestH:
             capture_output=True,
             text=True,
             check=True,
-            env={"PYTHONHASHSEED": "12345", "PATH": ""},
+            env=os.environ | {"PYTHONHASHSEED": "12345"},
         )
         # The set is what a hash seed would reorder.
         payload = {"a": 1, "b": [1.5, "x", None], "c": {"p", "q", "r"}}
@@ -147,6 +153,15 @@ class TestScalars:
         """A None is a value: `{}` is not `{"x": None}`."""
         assert digest({}) != digest({"x": None})
         assert digest({"a": {"x": None}}) != digest({"a": {}})
+
+    def test_missing_and_patterns(self):
+        """`pd.NA` and a compiled pattern are values `select` is given."""
+        import re  # noqa: PLC0415
+
+        assert digest(pd.NA) != digest(None) != digest(float("nan"))
+        assert digest(re.compile("a.*")) == digest(re.compile("a.*"))
+        assert digest(re.compile("a.*")) != digest(re.compile("b.*"))
+        assert digest(re.compile("a", re.IGNORECASE)) != digest(re.compile("a"))
 
     def test_paths(self):
         """A path is its posix spelling."""
@@ -326,6 +341,13 @@ class TestRefusals:
         with pytest.raises(ParameterError, match="callable object"):
             digest(Scale(2))
 
+    def test_no_path_and_no_source(self):
+        """Made from text: nothing to resolve and nothing to read."""
+        scope: dict = {}
+        exec("def made(x):\n    return x", scope)
+        with pytest.raises(ParameterError, match="no source"):
+            digest(scope["made"])
+
     def test_a_lambda(self):
         """Nothing tells it from the one beside it."""
         with pytest.raises(ParameterError, match="lambda"):
@@ -475,6 +497,41 @@ class TestOperationId:
 
         assert fingerprint_call(shifted, (), {}) == fingerprint_call(shifted, (0.0,))
         assert fingerprint_call(shifted, (), {}) != fingerprint_call(shifted, (-0.0,))
+
+
+class TestRegistryKeys:
+    """What the operation-id cache will and will not key."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            pytest.param([0] * 64, id="a long sequence"),
+            pytest.param({str(x): x for x in range(64)}, id="a big mapping"),
+        ],
+    )
+    def test_a_big_argument_is_not_worth_keying(self, value):
+        """`TypeError` is how `_as_key` says "do not cache this"."""
+        with pytest.raises(TypeError):
+            _as_key(value)
+
+    def test_a_callable_which_cannot_be_hashed(self):
+        """Its signature is asked for the slow way rather than cached."""
+
+        class Unhashable:
+            """A callable which refuses to be a dict key."""
+
+            __hash__ = None
+
+            def __call__(self, patch, factor=1):
+                """Do nothing."""
+                return patch
+
+        assert _signature(Unhashable()) is not None
+
+    def test_try_operation_id(self):
+        """None is how a refused operation is spelled."""
+        assert try_operation_id("x", {"a": 1}) == operation_id("x", {"a": 1})
+        assert try_operation_id("x", {"a": object()}) is None
 
 
 class TestExtractPatches:
@@ -697,7 +754,8 @@ class TestPatchRules:
             """Apply a function to the data."""
             return patch.new(data=fn(patch.data))
 
-        first = apply(patch, fn=make_closure(1))
+        with pytest.warns(DASCoreWarning, match="random data_id"):
+            first = apply(patch, fn=make_closure(1))
         second = apply(patch, fn=make_closure(1))
         ids = {first.attrs.data_id, second.attrs.data_id, patch.attrs.data_id, ""}
         assert len(ids) == 4
@@ -714,6 +772,13 @@ class TestPatchRules:
         assert np.abs(patch).attrs.data_id != np.sqrt(np.abs(patch)).attrs.data_id
         by_axis = {np.mean(patch, axis=x).attrs.data_id for x in (0, 1)}
         assert len(by_axis) == 2
+
+    def test_a_dtype_argument(self, patch):
+        """A numpy dtype is spelled out, so it tells two calls apart."""
+        first = np.sum(patch, axis=0, dtype=np.dtype("float32"))
+        again = np.sum(patch, axis=0, dtype=np.dtype("float32"))
+        other = np.sum(patch, axis=0, dtype=np.dtype("float64"))
+        assert first.attrs.data_id == again.attrs.data_id != other.attrs.data_id
 
     def test_disabled_hashes_nothing(self, patch, monkeypatch):
         """With ids off, no argument is encoded."""
@@ -798,6 +863,15 @@ class TestCombinations:
         snapped = dc.spool(members).chunk(time=None)[0]
         exact = dc.spool(members).chunk(time=None, snap_coords=False)[0]
         assert snapped.attrs.data_id != exact.attrs.data_id
+
+    def test_unencodable_merge_options(self, members):
+        """The merge still happens; its id is nobody else's."""
+        attrs = [x.attrs for x in members]
+        kwargs = {"merge_params": {"odd": object()}}
+        first = dc.utils.attrs.combine_patch_attrs(attrs, **kwargs)
+        second = dc.utils.attrs.combine_patch_attrs(attrs, **kwargs)
+        assert first.data_id != second.data_id
+        assert first.origin_id == second.origin_id
 
     def test_former_id_names(self, members):
         """Attrs from before the rename read as the ids they were."""

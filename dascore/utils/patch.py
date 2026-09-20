@@ -55,7 +55,13 @@ from dascore.utils.coordmanager import merge_coord_managers
 from dascore.utils.deprecate import deprecate
 from dascore.utils.docs import compose_docstring
 from dascore.utils.gaps import GapTolerance
-from dascore.utils.identity import _ID_FIELDS, ids_enabled, operation_id, stamp
+from dascore.utils.identity import (
+    _ID_FIELDS,
+    ids_enabled,
+    operation_id,
+    stamp,
+    warn_random_id,
+)
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _apply_union_indexers,
@@ -320,7 +326,8 @@ def _stamp(patch, attrs, patch_func, args, kwargs, output=None):
         return stamp(attrs, (), None)
     try:
         operation, others = call_operation(patch_func, args, kwargs)
-    except Exception:
+    except Exception as error:
+        warn_random_id(getattr(patch_func, "__name__", "a patch function"), error)
         # The patches it was plainly given still say where the data came from.
         given = (*args, *kwargs.values())
         operation, others = None, [x for x in given if isinstance(x, dc.Patch)]
