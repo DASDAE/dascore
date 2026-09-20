@@ -66,6 +66,7 @@ from dascore.utils.identity import (
     derive,
     ids_enabled,
     narrowed_data_id,
+    operation_context,
     origin_id_for,
     read_operation_id,
     stamp,
@@ -903,7 +904,9 @@ class FiberIO:
                     relative=relative,
                     samples=samples,
                 )
-                new = patch.update(coords=coords, attrs=attrs).to_patch(data)
+                # The ids were worked out above; the read is the operation.
+                with operation_context():
+                    new = patch.update(coords=coords, attrs=attrs).to_patch(data)
                 new._source = source
                 out.append(new)
         return dc.spool(out)

@@ -28,7 +28,7 @@ from dascore.utils.display import (
     get_header_text,
     split_block,
 )
-from dascore.utils.identity import with_ids
+from dascore.utils.identity import ids_enabled, inside_operation, new_id, with_ids
 from dascore.utils.patch import (
     check_patch_attrs,
     check_patch_coords,
@@ -350,7 +350,12 @@ class PatchMeta(NodeRepr):
         >>> assert meta.to_patch(patch.data).equals(patch)
         """
         patch_class = self._patch_type or dc.Patch
-        out = patch_class(data=data, coords=self.coords, attrs=self.attrs)
+        attrs = self.attrs
+        # Outside an operation nothing says these are the data described, so
+        # they are an array of their own; where it came from still stands.
+        if not inside_operation() and getattr(attrs, "data_id", ""):
+            attrs = attrs.update(data_id=new_id() if ids_enabled() else "")
+        out = patch_class(data=data, coords=self.coords, attrs=attrs)
         # Whatever these data are, they are not known to be what the source loads.
         out._source = self._source and self._source.detach()
         return out

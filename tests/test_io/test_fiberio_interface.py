@@ -73,7 +73,10 @@ class TestDerivedRead:
 
     def test_noncontiguous_both_axes(self, reader):
         """Compose associated constraints on the original grid, then trim residuals."""
-        whole = reader.metadata.to_patch(reader.data)
+        # Read, not `metadata.to_patch(data)`: only a read says these are the
+        # data the metadata describes.
+        whole = reader.read("memory")[0]
+        reader.calls.clear()
         selection = {
             "distance": (1, 4),
             "time": (2, 6),

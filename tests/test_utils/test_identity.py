@@ -965,11 +965,17 @@ class TestMutationBoundary:
         first, second = rebuild(patch), rebuild(patch)
         assert first.attrs.data_id == second.attrs.data_id
 
-    def test_metadata_is_left_to_the_routes_which_build_it(self, patch):
-        """A `PatchMeta` describes data it does not hold; see the report."""
+    def test_metadata_given_data(self, patch):
+        """Nothing says an array handed to metadata is the one it described."""
         meta = patch.drop_data()
+        first, second = meta.to_patch(patch.data), meta.to_patch(patch.data * 0)
+        ids = {first.attrs.data_id, second.attrs.data_id, patch.attrs.data_id, ""}
+        assert len(ids) == 4
+        assert first.attrs.origin_id == patch.attrs.origin_id
+        with config_context(patch_provenance="disabled"):
+            assert meta.to_patch(patch.data).attrs.data_id == ""
+        # Metadata alone describes data it does not hold, so its ids stand.
         assert meta.update_attrs(tag="one").attrs.data_id == patch.attrs.data_id
-        assert meta.to_patch(patch.data).attrs.data_id == patch.attrs.data_id
 
     @pytest.mark.parametrize("kind", ["data", "metadata"])
     def test_ids_off_leaves_nothing_behind(self, patch, kind):
