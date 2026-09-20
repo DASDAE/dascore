@@ -213,7 +213,9 @@ class TestConstant:
 
     def test_dtype_and_value(self):
         """The dtype follows the value, and the value is a plain scalar."""
-        assert ArraySource.full((3,), 0).load().dtype == np.dtype(int)
+        ints = ArraySource.full(3, 0)
+        assert ints.shape == (3,) and ints.load().dtype == np.dtype(int)
+        assert ArraySource.full((3,), 0, dtype="float32").value == 0.0
         source = ArraySource.full((3,), np.float64(2), dtype="float32")
         assert source.load().dtype == np.dtype("float32")
         assert type(source.value) is float
@@ -226,15 +228,26 @@ class TestConstant:
         assert np.isnan(sub.load()).all() and not reads
 
     @pytest.mark.parametrize(
-        ("value", "dtype"), [([1, 2], None), (None, None), (1j, None), (np.nan, "i8")]
+        ("value", "dtype", "match"),
+        [
+            ([1, 2], None, "Cannot fill"),
+            (None, None, "real scalar"),
+            (1j, None, "real scalar"),
+            (1, "U8", "real scalar"),
+            ("3", "f8", "Cannot fill"),
+            (np.nan, "i8", "Cannot fill"),
+            (2.7, "i8", "Cannot fill"),
+            (300, "i1", "Cannot fill"),
+        ],
     )
-    def test_refused(self, value, dtype):
-        """Only a real scalar the dtype can hold makes a constant."""
-        with pytest.raises(ParameterError):
+    def test_refused(self, value, dtype, match):
+        """Only a real scalar the dtype holds unchanged makes a constant."""
+        with pytest.raises(ParameterError, match=match):
             ArraySource.full((2,), value, dtype=dtype)
 
     def test_id_is_the_contents(self, nans):
         """Value, dtype and shape say which array a constant is; nothing else."""
+        assert replace(nans, base_id="x", path="a.h5").id == nans.id
         assert nans.id == ArraySource.full((2, 3), np.nan).id
         assert nans[:1].id == ArraySource.full((1, 3), np.nan).id
         others = {
@@ -243,7 +256,6 @@ class TestConstant:
             ArraySource.full((3, 3), np.nan).id,
         }
         assert len(others) == 3 and nans.id not in others
-        assert replace(nans, base_id="x").id == "x"
 
     @pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf, 0])
     def test_json(self, value):
@@ -266,8 +278,7 @@ class TestConstant:
 
     def test_detach(self, nans):
         """Detaching drops the value: the array is no longer that constant."""
-        assert not nans.detach().constant
-        assert not nans.detach().loadable
+        assert nans.detach() == ArraySource()
 
 
 class TestCarry:

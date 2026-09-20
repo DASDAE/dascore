@@ -10,19 +10,21 @@ import numpy as np
 
 import dascore as dc
 from dascore.exceptions import ParameterError
+from dascore.proc.coords import _fill_scalar
 from dascore.utils.identity import H
 
 # Where an array is, which names it when nothing better does.
 _LOCATION_FIELDS = ("path", "format", "version", "key")
 
-# The dtype kinds a constant may take: bool, int, uint and float.
+# The dtype kinds a constant may take: bool, uint, int and float.
 _REAL_KINDS = frozenset("buif")
 
 
 @dataclass(frozen=True, slots=True)
 class ArraySource:
     """
-    Where an array is stored, and enough to load it without its patch.
+    Where an array is stored, or the constant which fills it, and enough
+    to load it without its patch.
 
     Holds no data and opens nothing until `load`. A reader sets `key`;
     the I/O framework fills in the rest.
@@ -98,28 +100,23 @@ class ArraySource:
         shape
             The shape of the array.
         value
-            The real scalar which fills it.
+            The real scalar which fills it; one the dtype would change is
+            refused.
         dtype
             The dtype of the array; the value's own when not given.
 
         Examples
         --------
-        >>> import numpy as np
         >>> from dascore.core.source import ArraySource
         >>> assert ArraySource.full((3,), 0).load().dtype.kind == "i"
         """
-        array = np.asarray(value)
-        dtype = array.dtype if dtype is None else np.dtype(dtype)
-        if array.ndim or not {array.dtype.kind, dtype.kind} <= _REAL_KINDS:
+        dtype = np.asarray(value).dtype if dtype is None else np.dtype(dtype)
+        # A longdouble has no python scalar, which the id and JSON need.
+        if dtype.kind not in _REAL_KINDS or dtype.itemsize > 8:
             msg = f"A constant source takes a real scalar, not {value!r} of {dtype}."
             raise ParameterError(msg)
-        # Cast the python scalar, not the array: numpy refuses a value the
-        # dtype cannot hold rather than casting it to something else.
-        try:
-            value = np.asarray(array.item(), dtype=dtype).item()
-        except (ValueError, OverflowError) as error:
-            msg = f"A constant of {value!r} does not fit in dtype {dtype}."
-            raise ParameterError(msg) from error
+        value = _fill_scalar(value, dtype).item()
+        shape = (shape,) if np.ndim(shape) == 0 else shape
         return cls(value=value).describe(shape, dtype)
 
     @property
@@ -156,10 +153,10 @@ class ArraySource:
         The whole array's id is its `base_id`. A window's is derived from
         the base and the absolute windows, so it does not depend on the
         slices which led to it, nor -- given a base -- on where the array
-        is kept. A constant with no base is its contents alone, so any two
-        constant blocks of the same value, dtype and shape are one array.
+        is kept. A constant is its contents alone, so any two constant
+        blocks of the same value, dtype and shape are one array.
         """
-        if self.constant and not self.base_id:
+        if self.constant:
             content = {"value": self.value, "dtype": self._dtype, "shape": self.shape}
             return H("constant", content)
         location = {name: getattr(self, name) for name in _LOCATION_FIELDS}
@@ -178,7 +175,7 @@ class ArraySource:
 
     def detach(self) -> ArraySource:
         """Return the provenance alone, for an array this no longer loads."""
-        # A constant keeps nothing: its value was the array, not its origin.
+        # A constant's value was the array, not its origin.
         return replace(self, windows=(), shape=(), dtype=None, extent=(), value=None)
 
     def narrow(self, indexer) -> ArraySource:
@@ -226,7 +223,7 @@ class ArraySource:
         """Return a JSON-compatible dict which `from_dict` reads back."""
         out = asdict(self)
         out["dtype"] = self._dtype
-        # JSON spells no nan or inf, so a constant which is one is named.
+        # Strict JSON has no nan or inf, so they are written as strings.
         value = self.value
         if isinstance(value, float) and not isfinite(value):
             out["value"] = "nan" if isnan(value) else ("inf" if value > 0 else "-inf")
