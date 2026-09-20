@@ -1,18 +1,18 @@
-"""Name, resolve and fingerprint patch functions.
+"""Name, resolve and identify patch functions.
 
 Every patch function is registered under a tag as it is decorated: bare for
 DASCore's own (``normalize``), ``package:name`` for a plugin's.
-[`fingerprint_call`](`dascore.utils.patch_registry.fingerprint_call`) gives
+[`call_operation_id`](`dascore.utils.patch_registry.call_operation_id`) gives
 the id of one call's bound arguments, which a result's ``data_id`` is derived
 from.
 
 Examples
 --------
 >>> import dascore as dc
->>> from dascore.utils.patch_registry import fingerprint_call
+>>> from dascore.utils.patch_registry import call_operation_id
 >>>
->>> first = fingerprint_call(dc.proc.normalize, (), {"dim": "time"})
->>> assert first == fingerprint_call(dc.proc.normalize, ("time",))
+>>> first = call_operation_id(dc.proc.normalize, (), {"dim": "time"})
+>>> assert first == call_operation_id(dc.proc.normalize, ("time",))
 """
 
 from __future__ import annotations
@@ -60,10 +60,10 @@ _DEFERRED_MODULES = ("dascore.viz",)
 # Set once the install has been swept looking for an unregistered tag.
 _swept = False
 
-# Fingerprints of calls already made, so a loop over a spool pays for the
+# Operation ids of calls already made, so a loop over a spool pays for the
 # digest of one call rather than of every one.
-_FINGERPRINTS: dict[Any, str] = {}
-_FINGERPRINT_LIMIT = 4096
+_OPERATION_IDS: dict[Any, str] = {}
+_OPERATION_ID_LIMIT = 4096
 
 
 def patch_function_tag(func) -> str | None:
@@ -220,7 +220,7 @@ def _sweep_patch_functions() -> None:
     _swept = True
 
 
-def fingerprint_call(func, args: tuple = (), kwargs: dict | None = None) -> str:
+def call_operation_id(func, args: tuple = (), kwargs: dict | None = None) -> str:
     """
     Return the id of one call to a patch function.
 
@@ -240,10 +240,10 @@ def fingerprint_call(func, args: tuple = (), kwargs: dict | None = None) -> str:
     Examples
     --------
     >>> import dascore as dc
-    >>> from dascore.utils.patch_registry import fingerprint_call
+    >>> from dascore.utils.patch_registry import call_operation_id
     >>>
-    >>> called = fingerprint_call(dc.proc.normalize, (), {"dim": "time"})
-    >>> assert called == fingerprint_call(dc.proc.normalize, ("time",))
+    >>> called = call_operation_id(dc.proc.normalize, (), {"dim": "time"})
+    >>> assert called == call_operation_id(dc.proc.normalize, ("time",))
     """
     return call_operation(func, args, kwargs or {})[0]
 
@@ -252,7 +252,7 @@ def call_operation(func, args: tuple, kwargs: dict) -> tuple[str, list]:
     """Return the id of a call, and the patches among its arguments."""
     params, patches = call_inputs(func, args, kwargs)
     version = getattr(func, "__version__", "1.0")
-    return _memoized_fingerprint(func, _call_name(func), params, version), patches
+    return _memoized_operation_id(func, _call_name(func), params, version), patches
 
 
 def call_inputs(func, args: tuple, kwargs: dict) -> tuple[dict, list]:
@@ -260,7 +260,7 @@ def call_inputs(func, args: tuple, kwargs: dict) -> tuple[dict, list]:
     return extract_patches(_bind(func, args, kwargs))
 
 
-def _memoized_fingerprint(owner, name: str, params: dict, version: str) -> str:
+def _memoized_operation_id(owner, name: str, params: dict, version: str) -> str:
     """
     Return `operation_id(name, params, version)`, cached.
 
@@ -283,7 +283,7 @@ def _memoized_fingerprint(owner, name: str, params: dict, version: str) -> str:
         # The owner is in the key, not just its name. For one which has no
         # tag the name ends in `id(owner)`, and CPython reuses an address
         # once the owner is collected -- so a factory making one per call
-        # could hand a later one the earlier one's fingerprint. Holding the
+        # could hand a later one the earlier one's operation id. Holding the
         # owner here makes the key exact and keeps the address from being
         # reused underneath it.
         key = (owner, name, version, _as_key(params))
@@ -291,13 +291,13 @@ def _memoized_fingerprint(owner, name: str, params: dict, version: str) -> str:
         # Something unhashable -- an array argument, most often. Its
         # digest is the honest cost of saying which array it was.
         return operation_id(name, params, version)
-    if (found := _FINGERPRINTS.get(key)) is None:
+    if (found := _OPERATION_IDS.get(key)) is None:
         found = operation_id(name, params, version)
         # Bounded, and simply stops growing rather than evicting: the
         # entries are one small string each, and a process which has made
         # four thousand distinct calls is not one this is hot for.
-        if len(_FINGERPRINTS) < _FINGERPRINT_LIMIT:
-            _FINGERPRINTS[key] = found
+        if len(_OPERATION_IDS) < _OPERATION_ID_LIMIT:
+            _OPERATION_IDS[key] = found
     return found
 
 
@@ -352,7 +352,7 @@ def _as_key(value, budget: int = _KEY_LIMIT):
 
 def _call_name(func) -> str:
     """
-    Return the name a call is fingerprinted under.
+    Return the name a call is identified by.
 
     The registry tag when the function has one. When it does not -- a patch
     function defined inside another call -- something was still done to the
@@ -382,7 +382,7 @@ def _signature(func) -> inspect.Signature:
     Return the signature of the function inside a patch function.
 
     Cached on the function: `inspect.signature` is not cheap, a signature
-    cannot change, and every call which is fingerprinted asks for one.
+    cannot change, and every call which is given an id asks for one.
     """
     inner = getattr(func, "raw_function", func)
     try:

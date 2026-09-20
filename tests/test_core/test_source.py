@@ -141,42 +141,50 @@ class TestIdentity:
         """The same recipe built twice agrees, in a dict and by digest."""
         other = replace(source)
         assert other == source and hash(other) == hash(source)
-        assert other.id == source.id
-        assert source[:10][2:5].id == source[2:5].id
+        assert other.data_id == source.data_id
+        assert source[:10][2:5].data_id == source[2:5].data_id
         # Pinned: an id written down must still name the same array later.
         fixed = ArraySource("a.h5", "DASDAE", "1", "k", ((2, 5),), (3,), np.dtype("f8"))
-        assert fixed.id == "c0e60b662c53454f69b039af7477d3ca"
+        assert fixed.data_id == "c0e60b662c53454f69b039af7477d3ca"
+
+    def test_as_an_operation_parameter(self, source):
+        """It encodes as its id, so its field names are not part of any hash."""
+        from dascore.utils.identity import encode  # noqa: PLC0415
+
+        assert encode(source) == {"$id": ["array", source.data_id]}
+        assert encode(source[:10]) != encode(source)
 
     def test_different_arrays(self, source):
         """A selection, a key or a path is a different array."""
-        located = replace(source, base_id="")
+        located = replace(source, origin_id="")
         ids = {
-            located.id,
-            located[:10].id,
-            replace(located, key="b").id,
-            replace(located, path="elsewhere.h5").id,
+            located.data_id,
+            located[:10].data_id,
+            replace(located, key="b").data_id,
+            replace(located, path="elsewhere.h5").data_id,
         }
         assert len(ids) == 4
 
-    def test_a_base_id_names_the_array(self, source, patch):
+    def test_an_origin_id_names_the_array(self, source, patch):
         """Given a base, where the array is kept is not part of which it is."""
-        assert source.base_id == source.id == patch.attrs.origin_id
+        assert source.origin_id == source.data_id == patch.attrs.origin_id
         moved = replace(source, path="elsewhere.h5")
-        assert moved.id == source.id and moved[:10].id == source[:10].id
-        assert replace(source, base_id="other")[:10].id != source[:10].id
+        assert moved.data_id == source.data_id
+        assert moved[:10].data_id == source[:10].data_id
+        assert replace(source, origin_id="other")[:10].data_id != source[:10].data_id
 
     def test_the_whole_is_the_base(self, source):
         """A window over everything is the array; a prefix is not."""
-        assert source[:].id == source.id
+        assert source[:].data_id == source.data_id
         prefix = source[: source.shape[0] - 1]
-        assert prefix.id != source.id
+        assert prefix.data_id != source.data_id
         # A prefix is not mistaken for a smaller whole once it is all there is.
-        assert prefix[:].id == prefix.id != source.id
-        assert source.detach().id == source.id
+        assert prefix[:].data_id == prefix.data_id != source.data_id
+        assert source.detach().data_id == source.data_id
 
     def test_description_not_identity(self, source):
         """Shape and dtype follow from the rest, so they are not hashed."""
-        assert replace(source, dtype=np.dtype("int8")).id == source.id
+        assert replace(source, dtype=np.dtype("int8")).data_id == source.data_id
 
 
 class TestSerialize:
@@ -186,7 +194,7 @@ class TestSerialize:
         """The dict form is plain JSON and restores an equal source."""
         sub = source[1:9]
         out = ArraySource.from_dict(json.loads(json.dumps(sub.to_dict())))
-        assert out == sub and out.id == sub.id
+        assert out == sub and out.data_id == sub.data_id
         assert ArraySource.from_dict(ArraySource(key="a").to_dict()).key == "a"
 
     def test_pickle(self, source, patch):
@@ -249,15 +257,15 @@ class TestConstant:
 
     def test_id_is_the_contents(self, nans):
         """Value, dtype and shape say which array a constant is; nothing else."""
-        assert replace(nans, base_id="x", path="a.h5").id == nans.id
-        assert nans.id == ArraySource.full((2, 3), np.nan).id
-        assert nans[:1].id == ArraySource.full((1, 3), np.nan).id
+        assert replace(nans, origin_id="x", path="a.h5").data_id == nans.data_id
+        assert nans.data_id == ArraySource.full((2, 3), np.nan).data_id
+        assert nans[:1].data_id == ArraySource.full((1, 3), np.nan).data_id
         others = {
-            ArraySource.full((2, 3), 0.0).id,
-            ArraySource.full((2, 3), np.nan, dtype="float32").id,
-            ArraySource.full((3, 3), np.nan).id,
+            ArraySource.full((2, 3), 0.0).data_id,
+            ArraySource.full((2, 3), np.nan, dtype="float32").data_id,
+            ArraySource.full((3, 3), np.nan).data_id,
         }
-        assert len(others) == 3 and nans.id not in others
+        assert len(others) == 3 and nans.data_id not in others
 
     @pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf, 0])
     def test_json(self, value):
@@ -265,12 +273,12 @@ class TestConstant:
         source = ArraySource.full((2,), value)
         text = json.dumps(source.to_dict(), allow_nan=False)
         out = ArraySource.from_dict(json.loads(text))
-        assert out.to_dict() == source.to_dict() and out.id == source.id
+        assert out.to_dict() == source.to_dict() and out.data_id == source.data_id
 
     def test_pickle(self, nans):
         """Pickle keeps the value."""
         out = pickle.loads(pickle.dumps(nans))
-        assert out.id == nans.id and np.isnan(out.load()).all()
+        assert out.data_id == nans.data_id and np.isnan(out.load()).all()
 
     def test_dict_without_a_value(self, source):
         """A dict written before constants existed still reads back."""
@@ -281,7 +289,7 @@ class TestConstant:
     def test_the_flag_decides(self, source):
         """A value alone fills nothing; a table's default may equal a fill."""
         out = replace(source, value=0.0)
-        assert out.id == source.id and out[:2].id == source[:2].id
+        assert out.data_id == source.data_id and out[:2].data_id == source[:2].data_id
 
     def test_detach(self, nans):
         """Detaching drops the value: the array is no longer that constant."""
@@ -352,6 +360,10 @@ class TestCarry:
         origin = patch._source
         # Which stored array it came from, and no claim to load this one.
         expected = ArraySource(
-            origin.path, origin.format, origin.version, origin.key, base_id=origin.id
+            origin.path,
+            origin.format,
+            origin.version,
+            origin.key,
+            origin_id=origin.data_id,
         )
         assert func(patch)._source == expected

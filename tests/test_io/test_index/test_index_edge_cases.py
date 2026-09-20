@@ -553,7 +553,7 @@ class TestAdaptAndBackendBasics:
 
     def test_flatten_skips_absent_columns(self, backend):
         """attr_meta rows without a matching result column are skipped."""
-        df = backend._fetch_df("SELECT patch_id FROM patches LIMIT 2")
+        df = backend._fetch_df("SELECT patch_row FROM patches LIMIT 2")
         out = backend._flatten(df, backend._attr_meta())
         assert len(out) == 2
 
@@ -904,13 +904,14 @@ class TestIngestEdges:
         """
         An attr named for a structural column is skipped with a warning.
 
-        It used to be spelled with `patch_id` (now `origin_id`), which is now a field of
-        `PatchAttrs` in its own right -- a first-class id rather than a
-        user attr which happens to collide -- and is skipped silently.
-        `source_id` is still only a column, so it still warns.
+        It used to be spelled with `patch_id` (now `origin_id`), which is
+        now a field of `PatchAttrs` in its own right -- a first-class id
+        rather than a user attr which happens to collide -- and is skipped
+        silently.
+        `source_row` is still only a column, so it still warns.
         """
         summary = PatchSummary(
-            attrs={"source_id": 5, "tag": "x"},
+            attrs={"source_row": 5, "tag": "x"},
             coords={
                 "distance": {
                     "dtype": "float64",
@@ -929,7 +930,7 @@ class TestIngestEdges:
         )
         with pytest.warns(UserWarning, match="reserved attr name"):
             records = s2r([summary])
-        assert "source_id" not in records[0].patches[0].attrs
+        assert "source_row" not in records[0].patches[0].attrs
 
     @pytest.mark.parametrize("name", ["origin_id", "data_id"])
     def test_the_ids_are_indexed_silently(self, name):
@@ -992,7 +993,7 @@ class TestIngestEdges:
             dims = ("x",)
             len = 2
             units = None
-            fingerprint = None
+            physical_id = None
             min = 0
             max = 1
             step = None
@@ -1216,7 +1217,7 @@ class TestCoordDeduplication:
         assert len(defs) < len(links)
         # das1 and das2 share an identical distance coord: one def, two links
         dist_links = links[links["coord_name"] == "distance"]
-        das_defs = dist_links["coord_def_id"].value_counts()
+        das_defs = dist_links["coord_row"].value_counts()
         assert (das_defs >= 2).any()
         back.close()
 
@@ -1232,8 +1233,8 @@ class TestCoordDeduplication:
         assert n_defs_after == n_defs + 1
         back.close()
 
-    def test_fingerprint_backed_defs(self, tmp_path):
-        """Summaries from real patches carry fingerprints into defs."""
+    def test_physical_id_backed_defs(self, tmp_path):
+        """Summaries from real patches carry physical ids into defs."""
         summary = PatchSummary.from_patch(dc.get_example_patch())
         structured = summary.dump_structured()
         structured.update(
@@ -1245,8 +1246,8 @@ class TestCoordDeduplication:
         )
         back = get_backend(tmp_path / "fp.sqlite3")
         back.write_sources(summaries_to_records([PatchSummary(**structured)]))
-        defs = back._fetch_df("SELECT def_key, fingerprint FROM coord_defs")
-        assert defs["fingerprint"].notna().all()
+        defs = back._fetch_df("SELECT def_key, physical_id FROM coord_defs")
+        assert defs["physical_id"].notna().all()
         assert defs["def_key"].str.startswith("fp:").all()
         back.close()
 
@@ -1260,13 +1261,13 @@ class TestCoordDeduplication:
         summary = PatchSummary.from_patch(patch)
         record = _coord_record("distance", summary.coords["distance"])
         assert record is not None
-        assert record.coord_hash == patch.get_coord("distance").fingerprint()
+        assert record.physical_id == patch.get_coord("distance")._physical_id()
         assert record.def_key.startswith("fp:")
 
     def test_summary_key_stable_through_export(self, tmp_path):
         """A summary-keyed coord dedups against its own exported records."""
         # Without a step the coord is not range-like, so it has no
-        # fingerprint to key on and falls back to hashing its stored fields.
+        # physical id to key on and falls back to hashing its stored fields.
         summary = PatchSummary(
             attrs={"tag": "raw"},
             coords={"time": {**_time_coord("2024-01-01T00:00:00", 60), "step": None}},
@@ -1446,7 +1447,7 @@ class TestReservedAttrNames:
         [
             ("source_path", "user-path"),
             ("source_format", "attr-format"),
-            ("source_id", 42),
+            ("source_row", 42),
         ],
     )
     def test_reserved_attr_warns_and_skips(self, name, value):

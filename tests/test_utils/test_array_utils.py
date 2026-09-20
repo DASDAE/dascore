@@ -1073,7 +1073,7 @@ class TestHashArray:
 
     @pytest.mark.parametrize("dtype", ["int64", "float64", "datetime64[ns]"])
     def test_empty_multidimensional(self, dtype):
-        """Empty arrays have stable fingerprints that still distinguish shapes."""
+        """Empty arrays have stable hashes that still distinguish shapes."""
         first = np.empty((2, 0), dtype=dtype)
         assert hash_array(first) == hash_array(first.copy())
         assert hash_array(first) != hash_array(np.empty((0, 2), dtype=dtype))

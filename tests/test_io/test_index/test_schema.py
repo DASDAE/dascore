@@ -83,7 +83,7 @@ class TestSchemaValidation:
         # on the NOT NULL check, which would pass with no FK declared.
         with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
             backend._execute(
-                "INSERT INTO patches (patch_id, source_id, source_patch_key, dims) "
+                "INSERT INTO patches (patch_row, source_row, source_patch_key, dims) "
                 "VALUES (1, 999, '0', 'time')"
             )
         backend.close()
@@ -92,13 +92,13 @@ class TestSchemaValidation:
         """The column states an invariant every ingest path already keeps."""
         backend = get_backend(tmp_path / "index.sqlite3")
         backend._execute(
-            "INSERT INTO sources (source_id, base_uri, source_path, source_format, "
+            "INSERT INTO sources (source_row, base_uri, source_path, source_format, "
             "format_version, mtime_ns, size_bytes, path_attrs, last_indexed_ns, "
             "ordinal) VALUES (1, '', 'p', 'DASDAE', '1', 0, 0, NULL, 0, 0)"
         )
         with pytest.raises(sqlite3.IntegrityError, match="dims"):
             backend._execute(
-                "INSERT INTO patches (patch_id, source_id, source_patch_key, dims) "
+                "INSERT INTO patches (patch_row, source_row, source_patch_key, dims) "
                 "VALUES (1, 1, '0', NULL)"
             )
         backend.close()

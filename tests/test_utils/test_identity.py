@@ -36,7 +36,7 @@ from dascore.utils.identity import (
     try_operation_id,
     with_ids,
 )
-from dascore.utils.patch_registry import _as_key, _signature, fingerprint_call
+from dascore.utils.patch_registry import _as_key, _signature, call_operation_id
 from dascore.warnings import DASCoreWarning
 
 
@@ -452,12 +452,12 @@ class TestModelsAndFrames:
 class TestCoordIdentity:
     """A coordinate has one id wherever it appears."""
 
-    def test_fingerprint_is_physical(self):
-        """The same length in metres and centimetres is one fingerprint."""
+    def test_physical_id_ignores_unit_spelling(self):
+        """The same length in metres and centimetres is one physical id."""
         metres = dc.get_coord(start=0, stop=10, step=1, units="m")
         centimetres = dc.get_coord(start=0, stop=1000, step=100, units="cm")
-        assert metres.fingerprint() == centimetres.fingerprint()
-        assert len(metres.fingerprint()) == 32
+        assert metres._physical_id() == centimetres._physical_id()
+        assert len(metres._physical_id()) == 32
 
     def test_identity_is_exact(self):
         """As a parameter they are two: the same select cuts them differently."""
@@ -491,9 +491,9 @@ class TestOperationId:
     def test_a_restated_default_is_the_same_call(self):
         """So a parameter added later changes no id."""
         func = dc.proc.pass_filter
-        left_out = fingerprint_call(func, (), {"time": (1, 10)})
-        restated = fingerprint_call(func, (), {"time": (1, 10), "corners": 4})
-        changed = fingerprint_call(func, (), {"time": (1, 10), "corners": 5})
+        left_out = call_operation_id(func, (), {"time": (1, 10)})
+        restated = call_operation_id(func, (), {"time": (1, 10), "corners": 4})
+        changed = call_operation_id(func, (), {"time": (1, 10), "corners": 5})
         assert left_out == restated != changed
 
     def test_a_list_restates_a_tuple_default(self):
@@ -501,11 +501,11 @@ class TestOperationId:
         func = dc.proc.slope_mute
         slopes = {"slopes": (1.0, 2.0)}
         restated = slopes | {"dims": ["distance", "time"]}
-        assert fingerprint_call(func, (), slopes) == fingerprint_call(
+        assert call_operation_id(func, (), slopes) == call_operation_id(
             func, (), restated
         )
         other = slopes | {"dims": ["time", "distance"]}
-        assert fingerprint_call(func, (), slopes) != fingerprint_call(func, (), other)
+        assert call_operation_id(func, (), slopes) != call_operation_id(func, (), other)
 
     def test_a_tuple_restates_a_list_default(self):
         """Either way round."""
@@ -515,14 +515,14 @@ class TestOperationId:
             """Take a list default."""
             return patch.new(data=patch.data)
 
-        base = fingerprint_call(listed, (), {})
-        assert base == fingerprint_call(listed, (), {"names": ("a", "b")})
-        assert base != fingerprint_call(listed, (), {"names": ("b", "a")})
+        base = call_operation_id(listed, (), {})
+        assert base == call_operation_id(listed, (), {"names": ("a", "b")})
+        assert base != call_operation_id(listed, (), {"names": ("b", "a")})
 
     def test_none_is_not_the_default(self):
         """`filter_type=None` slices raw; leaving it out filters first."""
         func = dc.proc.decimate
-        assert fingerprint_call(func, (), {"time": 10}) != fingerprint_call(
+        assert call_operation_id(func, (), {"time": 10}) != call_operation_id(
             func, (), {"time": 10, "filter_type": None}
         )
 
@@ -534,8 +534,8 @@ class TestOperationId:
             """Shift nothing."""
             return patch.new(data=patch.data)
 
-        assert fingerprint_call(shifted, (), {}) == fingerprint_call(shifted, (0.0,))
-        assert fingerprint_call(shifted, (), {}) != fingerprint_call(shifted, (-0.0,))
+        assert call_operation_id(shifted, (), {}) == call_operation_id(shifted, (0.0,))
+        assert call_operation_id(shifted, (), {}) != call_operation_id(shifted, (-0.0,))
 
 
 class TestRegistryKeys:
@@ -972,7 +972,7 @@ class TestSeveralOutputs:
 
         same, first, second = halves(patch)
         assert same is patch
-        op = fingerprint_call(halves, (), {})
+        op = call_operation_id(halves, (), {})
         assert first.attrs.data_id == derive([patch.attrs.data_id], op, 1)
         assert second.attrs.data_id == derive([patch.attrs.data_id], op, 2)
 
@@ -986,7 +986,7 @@ class TestSeveralOutputs:
 
         out = as_spool(patch)
         assert isinstance(out, dc.BaseSpool)
-        op = fingerprint_call(as_spool, (), {})
+        op = call_operation_id(as_spool, (), {})
         expected = [derive([patch.attrs.data_id], op, x) for x in (0, 1)]
         assert [x.attrs.data_id for x in out] == expected
 

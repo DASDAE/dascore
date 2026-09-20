@@ -1,4 +1,4 @@
-"""Tests for naming, resolving and fingerprinting patch functions."""
+"""Tests for naming, resolving and identifying patch functions."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ from dascore.exceptions import ParameterError
 from dascore.units import get_quantity
 from dascore.utils.patch_registry import (
     _bind,
-    fingerprint_call,
+    call_operation_id,
     patch_function_tag,
     register_patch_function,
     resolve_patch_function,
@@ -268,8 +268,8 @@ class TestBinding:
         assert bound == {"first": 1, "rest": (2, 3), "flag": True}
 
 
-class TestFingerprintCall:
-    """The digest a call carries."""
+class TestCallOperationId:
+    """The operation id a call carries."""
 
     def test_an_argument_it_cannot_encode(self, random_patch):
         """An argument the encoder refuses costs a derived id, not the call."""
@@ -290,24 +290,24 @@ class TestFingerprintCall:
 
     def test_the_version_is_part_of_it(self, monkeypatch):
         """An operation at a new version is a new operation."""
-        before = fingerprint_call(registry_test_versioned, (), {})
+        before = call_operation_id(registry_test_versioned, (), {})
         monkeypatch.setattr(registry_test_versioned, "__version__", "2.0")
-        assert fingerprint_call(registry_test_versioned, (), {}) != before
+        assert call_operation_id(registry_test_versioned, (), {}) != before
 
     def test_the_name_is_part_of_it(self):
         """Two operations given the same arguments are still two."""
-        assert fingerprint_call(
+        assert call_operation_id(
             dc.proc.demean, (), {"dim": "time"}
-        ) != fingerprint_call(dc.proc.demedian, (), {"dim": "time"})
+        ) != call_operation_id(dc.proc.demedian, (), {"dim": "time"})
 
     def test_equal_quantities_are_two_calls(self):
         """Pint hashes 1 m and 100 cm alike; the cache must not merge them."""
         one_meter, hundred_cm = get_quantity("1 m"), get_quantity("100 cm")
         assert hash(one_meter) == hash(hundred_cm)
-        first = fingerprint_call(dc.proc.select, (), {"distance": one_meter})
-        second = fingerprint_call(dc.proc.select, (), {"distance": hundred_cm})
+        first = call_operation_id(dc.proc.select, (), {"distance": one_meter})
+        second = call_operation_id(dc.proc.select, (), {"distance": hundred_cm})
         assert first != second
-        assert fingerprint_call(dc.proc.select, (), {"distance": one_meter}) == first
+        assert call_operation_id(dc.proc.select, (), {"distance": one_meter}) == first
 
     @pytest.mark.parametrize(
         ("func", "args", "kwargs", "expected"),
@@ -323,5 +323,5 @@ class TestFingerprintCall:
         ],
     )
     def test_it_is_stable(self, func, args, kwargs, expected):
-        """A fingerprint written down last week names the same call today."""
-        assert fingerprint_call(getattr(dc.proc, func), args, kwargs) == expected
+        """An operation id written down last week names the same call today."""
+        assert call_operation_id(getattr(dc.proc, func), args, kwargs) == expected

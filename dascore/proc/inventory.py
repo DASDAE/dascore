@@ -53,14 +53,14 @@ from dascore.utils.time import to_datetime64
 
 def _get_acquisition_key(patch, acquisition_key) -> str:
     """Return the id to resolve, requiring the patch and caller to agree."""
-    patch_id = patch.attrs.acquisition_key
-    if acquisition_key and patch_id and acquisition_key != patch_id:
+    patch_key = patch.attrs.acquisition_key
+    if acquisition_key and patch_key and acquisition_key != patch_key:
         msg = (
-            f"The patch's acquisition_key {patch_id!r} and the requested "
+            f"The patch's acquisition_key {patch_key!r} and the requested "
             f"{acquisition_key!r} disagree; enrich resolves one data source."
         )
         raise PatchError(msg)
-    out = acquisition_key or patch_id
+    out = acquisition_key or patch_key
     if not out:
         msg = (
             "The patch has no acquisition_key, so it names no inventory entry. "

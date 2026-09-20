@@ -25,12 +25,12 @@ from tests.test_io.test_index.test_heterogeneity_stress import make_random_summa
 _LINK_VARIANTS = (
     "SELECT json_array(pc.coord_name, pc.dtype, cd.value_kind, cd.units, "
     "cd.is_relative) AS variant_key, count(*) AS patch_count "
-    "FROM patch_coords pc JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+    "FROM patch_coords pc JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
     "WHERE pc.run_index = 0 GROUP BY 1"
 )
 _LINK_COORD_META = (
     "SELECT DISTINCT pc.coord_name, cd.value_kind, cd.units, cd.is_relative "
-    "FROM patch_coords pc JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+    "FROM patch_coords pc JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
     "WHERE pc.run_index = 0"
 )
 
@@ -189,21 +189,21 @@ class TestMaintainedCounts:
     def test_writes_which_bypass_the_backend_are_counted(self, backend):
         """Rows written straight through SQL are counted like any other."""
         con = backend._con
-        (last,) = con.execute("SELECT max(patch_id) FROM patches").fetchone()
+        (last,) = con.execute("SELECT max(patch_row) FROM patches").fetchone()
         # a copy of the last patch and its links, then a whole source removed
         con.execute(
-            "INSERT INTO patches (patch_id, source_id, source_patch_key, dims) "
-            "SELECT ?, source_id, 'copy', dims FROM patches WHERE patch_id = ?",
+            "INSERT INTO patches (patch_row, source_row, source_patch_key, dims) "
+            "SELECT ?, source_row, 'copy', dims FROM patches WHERE patch_row = ?",
             (last + 1, last),
         )
         con.execute(
             "INSERT INTO patch_coords SELECT ?, coord_name, run_index, "
-            "coord_dims, coord_def_id, dtype FROM patch_coords WHERE patch_id = ?",
+            "coord_dims, coord_row, dtype FROM patch_coords WHERE patch_row = ?",
             (last + 1, last),
         )
         _assert_consistent(backend)
         assert backend.count() == 41
-        con.execute("DELETE FROM sources WHERE source_id = 1")
+        con.execute("DELETE FROM sources WHERE source_row = 1")
         _assert_consistent(backend)
 
     def test_mixed_kind_sorts_within_each_kind(self):
@@ -277,7 +277,7 @@ class TestWorkIsBounded:
         assert large < 2 * small
 
     @pytest.mark.parametrize(
-        "read", [lambda b: b.count(), lambda b: b.query(patch_ids=[1])]
+        "read", [lambda b: b.count(), lambda b: b.query(patch_rows=[1])]
     )
     def test_no_whole_table_count(self, sized_backends, read):
         """

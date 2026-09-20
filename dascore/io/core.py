@@ -1252,7 +1252,7 @@ def _stamp_source_ids(
             # and need no second validation of every scientific attribute.
             attrs = attrs.update(**ids) if stored else attrs.model_copy(update=ids)
             # The data array is the patch's origin, wherever it is kept.
-            origin = replace(origin, base_id=origin_id)
+            origin = replace(origin, origin_id=origin_id)
         if hasattr(attrs, STORED_ORIGIN_ID):
             attrs = attrs.drop(STORED_ORIGIN_ID)
         # Expose positional keys after deriving IDs with the original ordinal.

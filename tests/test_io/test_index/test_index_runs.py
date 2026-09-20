@@ -57,8 +57,8 @@ def crowded(gapped_patch):
     spool = dc.spool([gapped_patch, *others])
     back = spool._catalog.backend
     (gapped_id,) = back._fetch_df(
-        "SELECT DISTINCT patch_id FROM patch_coords WHERE run_index > 0"
-    )["patch_id"]
+        "SELECT DISTINCT patch_row FROM patch_coords WHERE run_index > 0"
+    )["patch_row"]
     return back, int(gapped_id)
 
 

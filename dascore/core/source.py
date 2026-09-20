@@ -47,7 +47,7 @@ class ArraySource:
         The shape of the array the windows select.
     dtype
         The dtype of the loaded array.
-    base_id
+    origin_id
         The id of the whole array, which a window's id builds on. The
         framework gives a patch's data array the patch's `origin_id`; a
         caller which knows better, such as a hash of the contents, gives
@@ -73,7 +73,7 @@ class ArraySource:
     >>> source = patch._source
     >>> # Slicing reads nothing and gives another source.
     >>> sub = source[10:20]
-    >>> assert sub.shape[0] == 10 and sub.id != source.id
+    >>> assert sub.shape[0] == 10 and sub.data_id != source.data_id
     >>> assert sub.load().shape == sub.shape
     >>>
     >>> # A constant source generates its array instead of reading one.
@@ -88,7 +88,7 @@ class ArraySource:
     windows: tuple[tuple[int, int], ...] = ()
     shape: tuple[int, ...] = ()
     dtype: Any = None
-    base_id: str = ""
+    origin_id: str = ""
     extent: tuple[int, ...] = ()
     filled: bool = False
     value: Any = None
@@ -146,11 +146,11 @@ class ArraySource:
         return None if self.dtype is None else np.dtype(self.dtype).str
 
     @property
-    def id(self) -> str:
+    def data_id(self) -> str:
         """
         The id of the array this selects; nothing is read to work it out.
 
-        The whole array's id is its `base_id`. A window's is derived from
+        The whole array's id is its `origin_id`. A window's is derived from
         the base and the absolute windows, so it does not depend on the
         slices which led to it, nor -- given a base -- on where the array
         is kept. A constant is its contents alone, so any two constant
@@ -160,11 +160,15 @@ class ArraySource:
             content = {"value": self.value, "dtype": self._dtype, "shape": self.shape}
             return H("constant", content)
         location = {name: getattr(self, name) for name in _LOCATION_FIELDS}
-        base = self.base_id or H("location", location)
+        base = self.origin_id or H("location", location)
         whole = tuple((0, size) for size in self.extent)
         if not self.windows or self.windows == whole:
             return base
         return H("window", [base, self.windows])
+
+    def _identity(self) -> tuple[str, str]:
+        """Return the id this source has as an operation's parameter."""
+        return "array", self.data_id
 
     def describe(self, shape, dtype) -> ArraySource:
         """Return a source for the whole of an array of this shape and dtype."""

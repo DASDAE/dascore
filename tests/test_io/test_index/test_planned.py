@@ -59,7 +59,7 @@ class TestHelpers:
         assert record.min_int == _ns(lo)
 
     def test_coord_record_without_values(self):
-        """A null envelope is a coordinate only with a fingerprinted identity."""
+        """A null envelope is a coordinate only with a physical id."""
         row = {"rank_min": None, "rank_max": None}
         assert _coord_record_from_row(row, "rank") is None
         row["_rank_def_key"] = "sum:abc"
@@ -67,7 +67,7 @@ class TestHelpers:
         row["_rank_def_key"] = "fp:" + "a" * 32
         record = _coord_record_from_row(row, "rank")
         assert record is not None
-        assert record.coord_hash == "a" * 32
+        assert record.physical_id == "a" * 32
         assert record.min_float is None and record.length is None
 
     def test_coord_record_half_null_timedelta(self):
@@ -109,12 +109,12 @@ class TestHelpers:
                 merge_kwargs={},
             )
 
-    def test_derived_catalog_adds_patch_ids(self, patches):
-        """source_rows without _patch_id get positional ids."""
+    def test_derived_catalog_adds_patch_rows(self, patches):
+        """source_rows without _patch_row get positional row numbers."""
         spool = dc.spool(patches)
-        rows = spool._df.drop(columns=["_patch_id"]).reset_index(drop=True)
+        rows = spool._df.drop(columns=["_patch_row"]).reset_index(drop=True)
         members = pd.DataFrame(
-            {"output_id": [0], "_patch_id": [0], "_modified": [False]}
+            {"output_id": [0], "_patch_row": [0], "_modified": [False]}
         )
         outputs = rows.iloc[:1].assign(output_id=0)
         plan = ChunkPlan(outputs, members, "time", None, {})
@@ -302,18 +302,18 @@ class TestAuxInfoEdges:
     def test_absent_envelope_columns_skipped(self):
         """A mapped coord with no envelope columns contributes nothing."""
         members = pd.DataFrame(
-            {"output_id": [0], "_patch_id": [1], "_modified": [False]}
+            {"output_id": [0], "_patch_row": [1], "_modified": [False]}
         )
-        sources = pd.DataFrame({"_patch_id": [1]})
+        sources = pd.DataFrame({"_patch_row": [1]})
         assert _aux_coord_info(sources, members, "time", {"ghost": "distance"}) == {}
 
     def test_all_null_group_skipped(self):
         """An output whose members carry no values for a coord is skipped."""
         members = pd.DataFrame(
-            {"output_id": [0], "_patch_id": [1], "_modified": [False]}
+            {"output_id": [0], "_patch_row": [1], "_modified": [False]}
         )
         sources = pd.DataFrame(
-            {"_patch_id": [1], "sensor_min": [np.nan], "sensor_max": [np.nan]}
+            {"_patch_row": [1], "sensor_min": [np.nan], "sensor_max": [np.nan]}
         )
         assert _aux_coord_info(sources, members, "time", {"sensor": "distance"}) == {}
 

@@ -93,7 +93,7 @@ class ChunkPlan:
         dims, structural def keys, conflict-policed attrs).
     members
         Instruction rows binding outputs to sources: `output_id`,
-        `_patch_id`, the exact `{dim}_min/max` trim for that member, and
+        `_patch_row`, the exact `{dim}_min/max` trim for that member, and
         `_modified` (False when the member loads whole).
     dim
         The chunked dimension.
@@ -122,17 +122,17 @@ def coalesce_runs(plan: ChunkPlan, working: pd.DataFrame) -> ChunkPlan:
     Merge each output's consecutive members cut from one patch's runs.
 
     A patch split into runs plans run by run (its rows share one
-    `_patch_id`), so a hole can end an output; the runs which land in
+    `_patch_row`), so a hole can end an output; the runs which land in
     one output are read from their patch once, as one member spanning
     them.
     """
     members = plan.members
-    ids = working["_patch_id"]
+    ids = working["_patch_row"]
     split = set(ids[ids.duplicated(keep=False)])
     if not split or members.empty:
         return plan
     lo, hi = f"{plan.dim}_min", f"{plan.dim}_max"
-    out, pid = members["output_id"], members["_patch_id"]
+    out, pid = members["output_id"], members["_patch_row"]
     same = (out == out.shift()) & (pid == pid.shift()) & pid.isin(split)
     if not same.any():
         return plan
@@ -416,11 +416,11 @@ def _drop_patch_local_empty(df: pd.DataFrame) -> pd.DataFrame:
     return df if empty is None else df[~empty]
 
 
-def _ensure_patch_id(df: pd.DataFrame) -> pd.DataFrame:
+def _ensure_patch_row(df: pd.DataFrame) -> pd.DataFrame:
     """Attach the positional identity fallback for plain dataframes."""
-    if "_patch_id" in df.columns:
+    if "_patch_row" in df.columns:
         return df
-    return df.assign(_patch_id=np.arange(len(df)))
+    return df.assign(_patch_row=np.arange(len(df)))
 
 
 def _dim_def_key_columns(df: pd.DataFrame, name: str) -> list[str]:
@@ -507,7 +507,7 @@ def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
     Envelope columns are stored in each coordinate's original units, so
     compatible spellings (metres beside feet) are not directly
     comparable. Rows sharing a dimensionality convert to the unit of
-    their first row — ordered by (envelope min in base units, patch id),
+    their first row — ordered by (envelope min in base units, patch row),
     the same deterministic order partitions present in — so continuity
     and instruction math stay valid and the plan speaks one unit per
     partition. The rewritten ``_{name}_units`` column tells assembly
@@ -549,7 +549,7 @@ def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
             idx = sub.index[sub[unit_col] == unit]
             values = sub.loc[idx, min_name].to_numpy(dtype=float)
             base_min.loc[idx] = convert_units(values, to_units=base, from_units=unit)
-        order = pd.DataFrame({"_min": base_min, "_pid": sub["_patch_id"]}).sort_values(
+        order = pd.DataFrame({"_min": base_min, "_pid": sub["_patch_row"]}).sort_values(
             ["_min", "_pid"], kind="stable"
         )
         target = str(df.at[order.index[0], unit_col])
@@ -596,7 +596,7 @@ def _prepare_relation(
     """
     Ready a flat relation for planning or reporting along ``name``.
 
-    Attaches patch ids, re-spells compatible units, then applies the
+    Attaches patch rows, re-spells compatible units, then applies the
     `missing_dim` policy. Missing envelopes, and patches carrying the
     name only as a non-dimensional coordinate (spec 7 / D2), both count
     as missing: envelope presence is not enough, because auxiliary
@@ -609,7 +609,7 @@ def _prepare_relation(
     """
     _validate_missing_dim(missing_dim)
     min_name, max_name = f"{name}_min", f"{name}_max"
-    df = _ensure_patch_id(df)
+    df = _ensure_patch_row(df)
     df = _normalize_chunk_units(df, name)
     null_rows = pd.isnull(df[min_name]) | pd.isnull(df[max_name])
     if "dims" in df.columns:
@@ -621,7 +621,7 @@ def _prepare_relation(
     if not unusable.any():
         return df
     if missing_dim == "raise":
-        bad = df.loc[unusable, "_patch_id"].tolist()
+        bad = df.loc[unusable, "_patch_row"].tolist()
         rides = int((not_a_dim & ~null_rows).sum())
         detail = (
             f" ({rides} of them carry {name!r} only as a non-dimensional "
@@ -631,7 +631,7 @@ def _prepare_relation(
         )
         msg = (
             f"{int(unusable.sum())} patch(es) lack the {dim_label} "
-            f"{name!r}{detail} (patch ids {bad[:5]}...). Pass "
+            f"{name!r}{detail} (patch rows {bad[:5]}...). Pass "
             "missing_dim='drop' to exclude them."
         )
         raise ChunkError(msg)
@@ -1053,22 +1053,22 @@ def _coord_owner(col: str, coord_names: set[str]) -> str | None:
 
 def _partition_frames(df: pd.DataFrame, labels: pd.Series, name: str):
     """
-    Order the relation by (partition, envelope min, patch id).
+    Order the relation by (partition, envelope min, patch row).
 
     Partition order follows spec 8: by (partition min, smallest member
-    patch id) — never by anything derived from input row order. Returns
+    patch row) — never by anything derived from input row order. Returns
     the sorted frame (fresh RangeIndex), each row's partition ordinal,
     the offsets where partitions begin, and the partition envelopes.
     """
     min_name, max_name = f"{name}_min", f"{name}_max"
     grouped = df.groupby(labels, sort=False)
     stats = grouped.agg(
-        _min=(min_name, "min"), _max=(max_name, "max"), _pid=("_patch_id", "min")
+        _min=(min_name, "min"), _max=(max_name, "max"), _pid=("_patch_row", "min")
     ).sort_values(["_min", "_pid"], kind="stable")
     rank = pd.Series(np.arange(len(stats)), index=stats.index)
     codes = labels.map(rank).to_numpy(dtype=np.intp)
     # last lexsort key is primary: partition, then envelope min, then id
-    order = np.lexsort((df["_patch_id"].to_numpy(), df[min_name].to_numpy(), codes))
+    order = np.lexsort((df["_patch_row"].to_numpy(), df[min_name].to_numpy(), codes))
     sorted_df = df.iloc[order].reset_index(drop=True)
     codes = codes[order]
     seg_starts = np.flatnonzero(np.r_[True, np.diff(codes) != 0])
@@ -1085,7 +1085,7 @@ def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str
     """
     Overlap-corrected source envelopes over the whole sorted relation.
 
-    Within each partition (rows ordered by start, patch id) an
+    Within each partition (rows ordered by start, patch row) an
     overlapping source's start moves to just past the furthest stop of
     the sources before it, so the earliest source owns the overlap (D3:
     complete overlaps keep the first member, deterministically). Returns
@@ -1333,7 +1333,7 @@ def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance):
     Yield `(cell rows, gaps in that cell)` for every cell in `df`.
 
     Cells come in envelope-min order, as partitions do (spec 8), and
-    ties break on what the cell states rather than on a patch id, which
+    ties break on what the cell states rather than on a patch row, which
     is positional — so a report never depends on the order the relation
     happened to arrive in. Each cell's ordinal rides on its gaps as
     `group_id`, which is the only thing that always tells two cells
@@ -1561,7 +1561,7 @@ def build_chunk_plan(
         msg = f"No patch in the spool has a {name!r} dimension to chunk."
         raise ChunkError(msg)
     empty_members = pd.DataFrame(
-        columns=["output_id", "_patch_id", min_name, max_name, "_modified"]
+        columns=["output_id", "_patch_row", min_name, max_name, "_modified"]
     )
     params = dict(
         overlap=overlap,
@@ -1616,7 +1616,7 @@ def build_chunk_plan(
     stop_all = sorted_df[max_name].to_numpy()
     src1, src2 = corrected[keep_row], stop_all[keep_row]
     korig_min, korig_max = start_all[keep_row], stop_all[keep_row]
-    kpids = sorted_df["_patch_id"].to_numpy()[keep_row]
+    kpids = sorted_df["_patch_row"].to_numpy()[keep_row]
     ksteps, kmod = step_all[keep_row], mod_after[keep_row]
     koffsets = np.r_[0, np.cumsum(np.bincount(codes[keep_row], minlength=n_parts))]
     has_dtype = "_dtype" in sorted_df.columns
@@ -1843,7 +1843,7 @@ def build_chunk_plan(
     members = pd.DataFrame(
         {
             "output_id": np.concatenate(m_out_ids),
-            "_patch_id": kpids[src_rows],
+            "_patch_row": kpids[src_rows],
             min_name: np.concatenate(m_lo),
             max_name: np.concatenate(m_hi),
             f"{name}_step": ksteps[src_rows],
@@ -1927,12 +1927,12 @@ def build_concat_plan(
         members = pd.DataFrame(
             {
                 "output_id": pd.Series(dtype=np.int64),
-                "_patch_id": pd.Series(dtype=object),
+                "_patch_row": pd.Series(dtype=object),
                 "_modified": pd.Series(dtype=bool),
             }
         )
         return ChunkPlan(outputs, members, name, value, params)
-    df = _ensure_patch_id(df).reset_index(drop=True)
+    df = _ensure_patch_row(df).reset_index(drop=True)
     # rows which carry the name as a dimension; the others (a non-dimensional
     # coordinate of that name, or none) gain a new dimension in its place
     along = _structural(df, name)
@@ -2109,7 +2109,7 @@ def build_concat_plan(
             # on it
             keys = list(data.get(key_col, pd.Series([None] * n_out, dtype=object)))
             keys = [
-                f"fp:{dc.core.coords.get_coord(shape=(int(s),)).fingerprint()}"
+                f"fp:{dc.core.coords.get_coord(shape=(int(s),))._physical_id()}"
                 if n
                 else k
                 for k, n, s in zip(keys, new_dim, sizes)
@@ -2119,7 +2119,7 @@ def build_concat_plan(
             # a dimension the members carry without values is resized too,
             # and the relation says nothing about how long it comes out;
             # what the members are is the best identity available, and it
-            # is not a fingerprint claim about values
+            # is not a physical id claim about values
             keys = list(data.get(key_col, pd.Series([None] * n_out, dtype=object)))
             member_keys = _member_key_digests(sorted_df, codes, name)
             keys = [
@@ -2152,7 +2152,7 @@ def build_concat_plan(
     # members load whole unless the rows are themselves trims (a re-plan
     # over a chunked view), whose ranges they then keep
     members = pd.DataFrame(
-        {"output_id": codes, "_patch_id": sorted_df["_patch_id"].to_numpy()}
+        {"output_id": codes, "_patch_row": sorted_df["_patch_row"].to_numpy()}
     )
     if has_envelope:
         for col in (min_name, max_name, step_name, unit_col):
@@ -2473,7 +2473,7 @@ def build_subdivision_plan(df: pd.DataFrame, pieces, name: str) -> ChunkPlan:
     # One entry per row, even where it is empty: a short sequence would
     # drop the rows past its end from the plan, and so from the spool.
     assert len(pieces) == len(df)
-    df = _ensure_patch_id(df).reset_index(drop=True)
+    df = _ensure_patch_row(df).reset_index(drop=True)
     positions, lows, highs, modified = [], [], [], []
     for position, row_pieces in enumerate(pieces):
         whole = (df.at[position, min_name], df.at[position, max_name])
@@ -2488,14 +2488,14 @@ def build_subdivision_plan(df: pd.DataFrame, pieces, name: str) -> ChunkPlan:
     # Outputs are not file rows: source bookkeeping stays on the members,
     # and the dimension's structural identity described the whole row.
     outputs = df.iloc[positions].drop(
-        columns=["_patch_id", f"_{name}_def_key", "_data_size", *_SOURCE_COLUMNS],
+        columns=["_patch_row", f"_{name}_def_key", "_data_size", *_SOURCE_COLUMNS],
         errors="ignore",
     )
     outputs = outputs.assign(**{min_name: lows, max_name: highs, "output_id": ids})
     members = pd.DataFrame(
         {
             "output_id": ids,
-            "_patch_id": df["_patch_id"].to_numpy()[positions],
+            "_patch_row": df["_patch_row"].to_numpy()[positions],
             min_name: lows,
             max_name: highs,
             step_name: df[step_name].to_numpy()[positions],

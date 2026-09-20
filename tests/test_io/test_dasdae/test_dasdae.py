@@ -1194,3 +1194,14 @@ class TestStringArrayHelpers:
             group = h5.create_group("waveforms")
             with pytest.raises(TypeError, match=r"Object dtype|object arrays"):
                 _save_array(data, "obj", group=group)
+
+
+class TestLegacyCoordFields:
+    """The flat coordinate keys an old file may hold are history."""
+
+    def test_the_list_does_not_follow_renames(self):
+        """A renamed summary field does not change which old keys are stripped."""
+        from dascore.io.dasdae._compat import _LEGACY_COORD_FIELDS  # noqa: PLC0415
+
+        assert "fingerprint" in _LEGACY_COORD_FIELDS
+        assert "physical_id" not in _LEGACY_COORD_FIELDS

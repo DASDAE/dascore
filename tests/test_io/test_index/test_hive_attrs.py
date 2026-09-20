@@ -294,7 +294,7 @@ class TestMoveDetection:
 
     def test_directory_rename_no_rescan(self, hive_spool, hive_dir, scan_calls):
         """Renaming a partition directory never re-reads file contents."""
-        ids_before = list(hive_spool._df["_patch_id"])
+        ids_before = list(hive_spool._df["_patch_row"])
         (hive_dir / "network=XX" / "station=A").rename(
             hive_dir / "network=XX" / "station=Q"
         )
@@ -304,7 +304,7 @@ class TestMoveDetection:
         assert df["station"].iloc[0] == "Q"
         assert df["source_path"].iloc[0].startswith("network=XX/station=Q/")
         # patch/coord rows survived: same patch identity
-        assert list(updated._df["_patch_id"]) == ids_before
+        assert list(updated._df["_patch_row"]) == ids_before
         assert updated[0].attrs.station == "Q"
 
     def test_added_key_is_a_pure_move(self, hive_spool, hive_dir, scan_calls):

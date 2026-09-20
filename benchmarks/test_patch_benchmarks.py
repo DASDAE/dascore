@@ -10,7 +10,7 @@ import dascore as dc
 from dascore.config import config_context
 from dascore.proc.basic import Normalize
 from dascore.utils.patch import get_start_stop_step
-from dascore.utils.patch_registry import _FINGERPRINTS
+from dascore.utils.patch_registry import _OPERATION_IDS
 
 
 @pytest.fixture(scope="module")
@@ -449,7 +449,7 @@ class TestIdentityOverhead:
     timed, because it is the cheap end which decides whether the
     `patch_provenance` knob is worth keeping.
 
-    Repeating one call is the cheap case: `fingerprint_call` memoizes, so
+    Repeating one call is the cheap case: `call_operation_id` memoizes, so
     the second identical call pays the lookup and not the digest. Real
     loops vary their arguments, so the uncached case is timed too.
     """
@@ -465,7 +465,7 @@ class TestIdentityOverhead:
 
     @pytest.fixture(scope="class")
     def big_mask(self, example_patch):
-        """A mask the fingerprint has to hash, being an array parameter."""
+        """A mask the operation id has to hash, being an array parameter."""
         return np.asarray(example_patch.data) > 0.5
 
     @pytest.fixture()
@@ -498,13 +498,13 @@ class TestIdentityOverhead:
         times the same call as the memoized benchmark above and the two
         differ by the digest alone.
         """
-        _FINGERPRINTS.clear()
+        _OPERATION_IDS.clear()
         tiny_patch.transpose()
 
     @pytest.mark.benchmark
     def test_identity_overhead_uncached_disabled(self, tiny_patch, ids_disabled):
         """The control for the uncached charge, clearing included."""
-        _FINGERPRINTS.clear()
+        _OPERATION_IDS.clear()
         tiny_patch.transpose()
 
     @pytest.mark.benchmark
@@ -530,6 +530,6 @@ class TestIdentityOverhead:
         example_patch.pass_filter(time=(10, 100))
 
     @pytest.mark.benchmark
-    def test_processor_fingerprint(self, example_patch):
+    def test_processor_operation_id(self, example_patch):
         """Building an operation and asking it what it is."""
-        Normalize(dim="time").fingerprint
+        Normalize(dim="time").operation_id

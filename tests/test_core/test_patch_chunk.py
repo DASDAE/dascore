@@ -2240,7 +2240,7 @@ class TestChunkFromIndex:
             def read(row):
                 return dc.read(tmp_path / row["source_path"])[0]
 
-            # Exercise the two-file assembly independently of fingerprint grouping.
+            # Exercise the two-file assembly independently of physical id grouping.
             assembler = PatchAssembler(
                 load_patch=read,
                 load_array=lambda row: read(row).data,

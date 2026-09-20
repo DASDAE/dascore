@@ -107,7 +107,7 @@ class TestMergePlan:
         assert out["time_max"] == random_flat["time_max"].max()
         # every source patch appears exactly once as a member
         assert len(plan.members) == len(random_flat)
-        assert set(plan.members["_patch_id"]) == set(random_flat["_patch_id"])
+        assert set(plan.members["_patch_row"]) == set(random_flat["_patch_row"])
 
     def test_diverse_partitions(self, diverse_flat):
         """The diverse spool partitions by identity attrs, never raising."""
@@ -115,8 +115,8 @@ class TestMergePlan:
         assert len(plan.outputs) > 1
         # every output's members share that output's group attr values
         merged = plan.members.merge(
-            diverse_flat[["_patch_id", "acquisition_key", "tag"]],
-            on="_patch_id",
+            diverse_flat[["_patch_row", "acquisition_key", "tag"]],
+            on="_patch_row",
         ).merge(
             plan.outputs[["output_id", "acquisition_key", "tag"]],
             on="output_id",
@@ -163,7 +163,7 @@ class TestSegmentPlan:
     def test_members_reference_real_patches(self, random_flat):
         """All members point at rows of the input relation."""
         plan = build_chunk_plan(random_flat, time=3)
-        assert set(plan.members["_patch_id"]) <= set(random_flat["_patch_id"])
+        assert set(plan.members["_patch_row"]) <= set(random_flat["_patch_row"])
         # member trims stay within their output's envelope
         joined = plan.members.merge(
             plan.outputs[["output_id", "time_min", "time_max"]],
@@ -228,8 +228,8 @@ class TestConflict:
         """keep_first carries the first member's value."""
         df = _flat(conflicted_patches)
         plan = build_chunk_plan(df, time=None, conflict="keep_first")
-        first_id = df.sort_values("time_min")["_patch_id"].iloc[0]
-        expected = df.loc[df["_patch_id"] == first_id, "data_type"].iloc[0]
+        first_id = df.sort_values("time_min")["_patch_row"].iloc[0]
+        expected = df.loc[df["_patch_row"] == first_id, "data_type"].iloc[0]
         assert plan.outputs["data_type"].iloc[0] == expected
 
     def test_keep_first_means_the_first_member(self, conflicted_patches):
@@ -390,7 +390,7 @@ class TestChunkPlanAccessor:
         # with the same tag, but a missing key is a kind of its own, so the
         # two sets partition apart and nothing is deduplicated as an overlap.
         assert len(plan.members) == len(spool)
-        assert set(plan.members["_patch_id"]) <= set(spool._df["_patch_id"])
+        assert set(plan.members["_patch_row"]) <= set(spool._df["_patch_row"])
         # The plan rows and the assembled patches agree on the key.
         out = spool.chunk(time=None)
         keys = out.get_contents()["acquisition_key"]
@@ -728,7 +728,7 @@ class TestSkippedPartitionPolicing:
                 "time_min": [0.0, 10.0, 100.0],
                 "time_max": [9.0, 19.0, 101.0],
                 "time_step": [1.0, 1.0, 1.0],
-                "_patch_id": [0, 1, 2],
+                "_patch_row": [0, 1, 2],
                 "dims": ["time"] * 3,
             }
         )
@@ -766,7 +766,7 @@ class TestSkippedPartitionPolicing:
                 "time_min": [0.0, 10.0],
                 "time_max": [9.0, 19.0],
                 "time_step": [1.0, 1.0],
-                "_patch_id": [0, 1],
+                "_patch_row": [0, 1],
                 "dims": ["time"] * 2,
             }
         )

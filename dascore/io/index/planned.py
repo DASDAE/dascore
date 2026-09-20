@@ -48,7 +48,7 @@ from dascore.units import get_quantity
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     _concatenated_steps,
-    _ensure_patch_id,
+    _ensure_patch_row,
     patch_local_adjusted_envelopes,
 )
 from dascore.utils.io import IOResourceManager
@@ -92,10 +92,10 @@ def _source_units_column(name: str) -> str:
     return f"_{name}_units_source"
 
 
-def _def_key_fingerprint(key) -> str | None:
-    """Recover the semantic fingerprint from a stored def key.
+def _def_key_physical_id(key) -> str | None:
+    """Recover the semantic physical id from a stored def key.
 
-    Fingerprinted keys are ``fp:{hash}`` with the unit spelling riding
+    Physical-id keys are ``fp:{hash}`` with the unit spelling riding
     after ``|`` (see CoordRecord.def_key); the spelling belongs to
     storage deduplication only, never to value identity.
     """
@@ -146,7 +146,7 @@ def _coord_record_from_row(
     Delegates to the ingest converter through a range CoordSummary so
     virtual outputs carry the same identities real patches would: a
     carried ``fp:`` def key survives for non-planned dims, and the
-    planned dim's range fingerprint is reconstructed exactly. ``dims``
+    planned dim's range physical id is reconstructed exactly. ``dims``
     names the dimensions the coordinate rides (itself by default).
     `name_is_held` says the members hold this coordinate, so a record is
     written even when nothing about its values can be stated: the patch
@@ -162,10 +162,10 @@ def _coord_record_from_row(
         # the same way, matching another output only when the members it
         # joined were the same.
         key = row.get(f"_{name}_def_key")
-        fingerprint = _def_key_fingerprint(key)
-        if fingerprint is None and isinstance(key, str) and key.startswith("cat:"):
-            fingerprint = key[4:]
-        if fingerprint is None and not name_is_held:
+        physical_id = _def_key_physical_id(key)
+        if physical_id is None and isinstance(key, str) and key.startswith("cat:"):
+            physical_id = key[4:]
+        if physical_id is None and not name_is_held:
             return None
         units = row.get(f"_{name}_units")
         if units == "" or (units is not None and pd.isnull(units)):
@@ -177,7 +177,7 @@ def _coord_record_from_row(
             coord_dims=",".join(dims),
             length=None,
             units=units,
-            coord_hash=fingerprint,
+            physical_id=physical_id,
         )
     step = row.get(f"{name}_step")
     step = None if step is None or pd.isnull(step) else step
@@ -185,7 +185,7 @@ def _coord_record_from_row(
         # string coords have no range representation; store the
         # lexicographic envelope directly
         key = row.get(f"_{name}_def_key")
-        fingerprint = _def_key_fingerprint(key)
+        physical_id = _def_key_physical_id(key)
         return CoordRecord(
             coord_name=name,
             value_kind="str",
@@ -195,7 +195,7 @@ def _coord_record_from_row(
             units=None,
             min_str=str(lo),
             max_str=None if hi is None or pd.isnull(hi) else str(hi),
-            coord_hash=fingerprint,
+            physical_id=physical_id,
         )
     # Only the str envelope above represents a missing max. Every producer
     # writes {name}_min and {name}_max together -- _output_records feeds
@@ -237,10 +237,10 @@ def _coord_record_from_row(
         span = (hi - lo) / step  # ty: ignore[unsupported-operator]
         length = round(abs(span)) + 1
     key = row.get(f"_{name}_def_key")
-    fingerprint = _def_key_fingerprint(key)
+    physical_id = _def_key_physical_id(key)
     # the grid is the source's; once the def key (value identity) is gone,
     # so are the values it described
-    grid = row.get(f"_{name}_grid") if fingerprint else None
+    grid = row.get(f"_{name}_grid") if physical_id else None
     exact = {}
     if isinstance(grid, tuple):
         *terms, length = grid
@@ -253,7 +253,7 @@ def _coord_record_from_row(
         units=units,
         dims=dims,
         len=length,
-        fingerprint=fingerprint,
+        physical_id=physical_id,
         **exact,
     )
     return _coord_record(name, summary)
@@ -291,7 +291,7 @@ def _aux_coord_info(
 
     Aggregated from the *member source rows* (authoritative, unlike the
     planner's carried columns). Structural identity (def key and step,
-    which permit fingerprint claims) is kept only when every member
+    which permit physical id claims) is kept only when every member
     shares one def key and the values provably survive assembly: a
     coordinate riding the planned dimension is trimmed/merged with it,
     so only a lone unmodified member keeps identity there. Envelopes
@@ -306,8 +306,8 @@ def _aux_coord_info(
     out: dict[int, dict[str, dict]] = {}
     if not len(members) or not coord_dims_map:
         return out
-    cols = [c for c in ("output_id", "_patch_id", "_modified") if c in members.columns]
-    joined = members[cols].merge(source_rows, on="_patch_id", how="left")
+    cols = [c for c in ("output_id", "_patch_row", "_modified") if c in members.columns]
+    joined = members[cols].merge(source_rows, on="_patch_row", how="left")
     grouped = joined.groupby("output_id", sort=True)
     output_ids = grouped.size().index.to_numpy()
     single = (grouped.size() == 1).to_numpy()
@@ -882,13 +882,14 @@ def _whole_member_sizes(trims: pd.DataFrame, sources: pd.DataFrame) -> dict[int,
     """
     if trims.empty or "_data_size" not in sources.columns:
         return {}
-    counts = trims.groupby("output_id")["_patch_id"].transform("size").to_numpy()
+    counts = trims.groupby("output_id")["_patch_row"].transform("size").to_numpy()
     modified = np.asarray(trims.get("_modified", False), dtype=bool)
     whole = trims[(counts == 1) & ~modified]
-    lookup = sources.drop_duplicates("_patch_id").set_index("_patch_id")["_data_size"]
+    lookup = sources.drop_duplicates("_patch_row").set_index("_patch_row")["_data_size"]
     out = {}
-    for output_id, patch_id in zip(whole["output_id"], whole["_patch_id"], strict=True):
-        size = lookup.get(patch_id)
+    whole_rows = zip(whole["output_id"], whole["_patch_row"], strict=True)
+    for output_id, patch_row in whole_rows:
+        size = lookup.get(patch_row)
         if not pd.isnull(size):
             out[int(output_id)] = int(size)
     return out
@@ -909,7 +910,7 @@ def derived_catalog(
     Materialize a plan into a fresh in-memory catalog.
 
     ``source_rows`` are the full member source rows (path/format/
-    identity plus envelopes and attrs) keyed by ``_patch_id`` matching
+    identity plus envelopes and attrs) keyed by ``_patch_row`` matching
     ``plan.members``; ``parent`` supplies the resolver (live registry,
     file root, nested plans) and the residual selections its view
     carried, which member loading re-applies.
@@ -917,10 +918,10 @@ def derived_catalog(
     token = secrets.token_hex(8)
     name = plan.dim
     trims = plan.members
-    trim_cols = [c for c in trims.columns if c not in ("_patch_id",)]
+    trim_cols = [c for c in trims.columns if c not in ("_patch_row",)]
     sources = source_rows.copy(deep=False)
-    if "_patch_id" not in sources.columns:
-        sources = _ensure_patch_id(sources)
+    if "_patch_row" not in sources.columns:
+        sources = _ensure_patch_row(sources)
     # Trim magnitudes are in the plan's (partition-normalized) unit; the
     # source's own spelling survives under a renamed column so member
     # loading can tell when a bare read hint would mean the wrong unit.
@@ -936,13 +937,13 @@ def derived_catalog(
             sources = sources.drop(columns=[unit_col])
         else:
             sources = sources.rename(columns={unit_col: source_unit_col})
-    member_rows = trims[["_patch_id", *[c for c in trim_cols]]].merge(
+    member_rows = trims[["_patch_row", *[c for c in trim_cols]]].merge(
         sources.drop(columns=[c for c in trim_cols if c in sources], errors="ignore"),
-        on="_patch_id",
+        on="_patch_row",
         how="left",
     )
     # the member's trimmed range replaces the source envelope for loading
-    member_rows = member_rows.drop(columns=["_patch_id"])
+    member_rows = member_rows.drop(columns=["_patch_row"])
     parent_residuals = () if parent is None else parent.residuals
     # resolve stored-relative paths once; the derived catalog is
     # root-independent afterwards
@@ -1043,15 +1044,16 @@ def _with_parent_runs(
     kept its identity, and so equals each member's; never along the
     dimension it merged, whose runs no single member states. A run in other units
     or of another kind than the output's coordinate is dropped. Members
-    find their runs through the parent's patch ids (``_index_id``); a
+    find their runs through the parent's patch rows (``_index_row``); a
     collapsed re-plan's members carry the id of the output holding them.
     """
-    if trims.empty or "_index_id" not in sources.columns:
+    if trims.empty or "_index_row" not in sources.columns:
         return records
-    index_ids = dict(zip(sources["_patch_id"], sources["_index_id"], strict=True))
+    index_ids = dict(zip(sources["_patch_row"], sources["_index_row"], strict=True))
     members: dict[str, list] = {}
-    for output_id, patch_id in zip(trims["output_id"], trims["_patch_id"], strict=True):
-        members.setdefault(str(int(output_id)), []).append(index_ids.get(patch_id))
+    trim_rows = zip(trims["output_id"], trims["_patch_row"], strict=True)
+    for output_id, patch_row in trim_rows:
+        members.setdefault(str(int(output_id)), []).append(index_ids.get(patch_row))
     known = {x for ids in members.values() for x in ids if pd.notna(x)}
     runs = parent_backend.patch_runs(known)
     if not runs:
@@ -1066,7 +1068,7 @@ def _with_parent_runs(
             for coord in patch.coords:
                 coords.append(coord)
                 merged = name in str(coord.coord_dims).split(",")
-                if len(ids) > 1 and (merged or not coord.coord_hash):
+                if len(ids) > 1 and (merged or not coord.physical_id):
                     continue
                 kind = (coord.coord_name, coord.value_kind, coord.is_relative)
                 coords.extend(
@@ -1126,7 +1128,7 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
     # that output's patch in this catalog (a stale one named the parent's)
     ids = catalog.backend.patch_ids_by_key()
     index_ids = [ids.get(str(int(x))) for x in members["output_id"]]
-    working = members.assign(_index_id=pd.array(index_ids, dtype="Int64"))
+    working = members.assign(_index_row=pd.array(index_ids, dtype="Int64"))
     working = working.drop(columns=["output_id"])
     working = patch_local_adjusted_envelopes(
         working, catalog.residuals, drop_empty=True

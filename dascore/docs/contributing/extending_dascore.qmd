@@ -95,7 +95,7 @@ class Patch(NamespaceOwner, PatchMeta):
 
 Either way, every field must appear among the method's parameters, with the same default, and a field the class refuses by position must be keyword-only, or the class is refused: the two are one declaration of the same parameters. The method may take more than the class stores, since a body may resolve something before building the instance. `-> Self` is what `run` promises for one of DASCore's own: metadata comes back metadata, and a `Patch` subclass comes back that subclass. The operation is documented once, with the class, and the method carries that docstring.
 
-Calling a processor checks the patch, runs it, and records history and lineage ids, exactly as a decorated patch function does. Its fingerprint digests the name, `__version__` and validated fields, so `Scale(3)` and `Scale(3.0)` are one operation.
+Calling a processor checks the patch, runs it, and records history and lineage ids, exactly as a decorated patch function does. Its operation id digests the name, `__version__` and validated fields, so `Scale(3)` and `Scale(3.0)` are one operation.
 
 An operation whose metadata changes, or whose kernel needs numbers read from the metadata, splits the work so that no array is touched until the kernel runs:
 

@@ -630,27 +630,27 @@ class TestNewAndRoundTrips:
 
 
 class TestIdentity:
-    """Equality and fingerprints compare the grid, never the class."""
+    """Equality and physical ids compare the grid, never the class."""
 
-    def test_legacy_fingerprint_parity(self):
-        """A whole-tick grid fingerprints as the legacy class does."""
+    def test_legacy_physical_id_parity(self):
+        """A whole-tick grid has the physical id of the legacy class."""
         legacy = CoordRange(start=T0, step=ONE_S, shape=(10,))
         exact = get_coord(start=T0, step=ONE_S, shape=(10,))
-        assert legacy.fingerprint() == exact.fingerprint()
+        assert legacy._physical_id() == exact._physical_id()
         legacy = CoordRange(start=0, stop=10, step=2, units="m")
         exact = get_coord(start=0, stop=10, step=2, units="m")
-        assert legacy.fingerprint() == exact.fingerprint()
+        assert legacy._physical_id() == exact._physical_id()
 
-    def test_fraction_grid_changes_fingerprint(self, hz_1024):
+    def test_fraction_grid_changes_physical_id(self, hz_1024):
         """A fractional grid is a different identity from its rounding."""
         rounded = get_coord(start=T0, step=hz_1024.step, shape=(len(hz_1024),))
-        assert rounded.fingerprint() != hz_1024.fingerprint()
-        assert hz_1024[1:].fingerprint() != hz_1024[:-1].fingerprint()
+        assert rounded._physical_id() != hz_1024._physical_id()
+        assert hz_1024[1:]._physical_id() != hz_1024[:-1]._physical_id()
 
-    def test_fingerprint_stable(self, hz_1024):
-        """The fingerprint survives a no-op slice and a summary round trip."""
-        assert hz_1024.fingerprint() == hz_1024[:].fingerprint()
-        assert hz_1024.fingerprint() == hz_1024.to_summary().to_coord().fingerprint()
+    def test_physical_id_stable(self, hz_1024):
+        """The physical id survives a no-op slice and a summary round trip."""
+        assert hz_1024._physical_id() == hz_1024[:]._physical_id()
+        assert hz_1024._physical_id() == hz_1024.to_summary().to_coord()._physical_id()
 
     def test_equality_is_field_equality(self):
         """== stays pydantic field equality; the grid fields are fields."""
@@ -681,9 +681,9 @@ class TestUnits:
             int_frac.convert_units("km")
         assert int_frac.set_units("ft").units == dc.get_quantity("ft")
 
-    def test_fraction_grid_fingerprints(self, int_frac):
-        """A fractional grid fingerprints without converting units."""
-        assert int_frac.fingerprint() == int_frac.set_units("m").fingerprint()
+    def test_fraction_grid_physical_ids(self, int_frac):
+        """A fractional grid keeps its physical id without converting units."""
+        assert int_frac._physical_id() == int_frac.set_units("m")._physical_id()
 
 
 class TestRepr:
