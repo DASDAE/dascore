@@ -214,6 +214,7 @@ class TestConstant:
     def test_dtype_and_value(self):
         """The dtype follows the value, and the value is a plain scalar."""
         ints = ArraySource.full(3, 0)
+        assert ArraySource.full(np.int64(3), 0) == ints
         assert ints.shape == (3,) and ints.load().dtype == np.dtype(int)
         assert ArraySource.full((3,), 0, dtype="float32").value == 0.0
         source = ArraySource.full((3,), np.float64(2), dtype="float32")
