@@ -469,10 +469,9 @@ def _forget_what_a_trim_invalidates(df: pd.DataFrame, residuals=()) -> pd.DataFr
 
     A trimmed row describes fewer samples than its source patch holds,
     and how many is known only once the trim is applied, so it states no
-    size rather than the source's. `data_id` goes the same way for
-    the same reason: a trim is an operation, the patch which comes back
-    carries the id that operation leads to, and the stored one names the
-    patch on disk. Attribute queries still match the stored source id;
+    size rather than the source's. `data_id` goes the same way: the
+    loaded patch names the window it read, and the stored id names the
+    whole patch on disk. Attribute queries still match the stored source id;
     clearing this presented value does not change SQL candidacy.
 
     `origin_id` stays. A trim does not change which stored data this came

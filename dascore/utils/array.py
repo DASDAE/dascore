@@ -278,8 +278,7 @@ def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
         },
     )
     attrs = stamp(patch.attrs, [patch.attrs], operation or None)
-    with operation_context():
-        return patch.new(data=out, attrs=attrs)
+    return patch.new(data=out, attrs=attrs)
 
 
 def _quantity(array, units):
@@ -770,8 +769,7 @@ def _apply_binary_ufunc(
         },
     )
     attrs = stamp(attrs, members, operation or None)
-    with operation_context():
-        return patch.new(data=new_data, coords=coords, attrs=attrs)
+    return patch.new(data=new_data, coords=coords, attrs=attrs)
 
 
 class _BoundPatchUFunc:
@@ -1064,8 +1062,7 @@ def _apply_array_func(func, *args, **kwargs):
     )
     attrs = stamp(patch.attrs, [x.attrs for x in patches], operation or None)
     if attrs is not patch.attrs:
-        with operation_context():
-            patch = patch.new(attrs=attrs)
+        patch = patch.new(attrs=attrs)
     return _clear_units_if_bool_dtype(patch)
 
 

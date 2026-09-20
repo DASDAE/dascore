@@ -328,7 +328,9 @@ class TestReviewFindings:
             out = bypass(patch, "time")
             assert out.equals(patch.normalize("time"))
             assert out.attrs.history == patch.attrs.history
-            assert out.attrs.data_id == patch.attrs.data_id
+            # Nothing was recorded, so nothing names the array it made.
+            assert out.attrs.origin_id == patch.attrs.origin_id
+            assert out.attrs.data_id not in ("", patch.attrs.data_id)
 
     def test_signature_carries_annotations(self):
         """The method's own annotations, which static tooling can read."""

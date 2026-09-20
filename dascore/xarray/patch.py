@@ -9,6 +9,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.coords import BaseCoord, get_coord
+from dascore.utils.identity import operation_context
 from dascore.utils.misc import optional_import
 
 
@@ -126,12 +127,17 @@ def xarray_to_patch(data_array) -> dc.Patch:
     # this cant work if xarray isn't installed. This ensures it is.
     _ = optional_import("xarray")
 
-    return dc.Patch(
-        coords={i: _coord_from(data_array, i, x) for i, x in data_array.coords.items()},
-        attrs=dict(data_array.attrs.items()),
-        dims=data_array.dims,
-        data=data_array.data,
-    )
+    # A conversion, not new data: the array comes with the attrs which
+    # describe it, as it does when a patch is built from a DataArray.
+    with operation_context():
+        return dc.Patch(
+            coords={
+                i: _coord_from(data_array, i, x) for i, x in data_array.coords.items()
+            },
+            attrs=dict(data_array.attrs.items()),
+            dims=data_array.dims,
+            data=data_array.data,
+        )
 
 
 def _coord_from(data_array, name, coord):

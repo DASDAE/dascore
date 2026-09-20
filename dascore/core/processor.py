@@ -56,10 +56,12 @@ from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel, model_values
 from dascore.utils.attrs import _values_equal
 from dascore.utils.identity import (
+    _without_ids,
     callable_name,
     extract_patches,
     ids_enabled,
     narrowed_data_id,
+    new_id,
     operation_context,
     result_ids,
     stamp,
@@ -363,7 +365,18 @@ class PatchProcessor(DascoreBaseModel):
         # The body is an operation, which names itself; the replacements it
         # makes on the way do not.
         with operation_context():
-            return self._run(patch, record=record)
+            out = self._run(patch, record=record)
+            return out if record else self._unrecorded(patch, out)
+
+    def _unrecorded(self, patch, out):
+        """Return the result of a bypass, which records neither history nor ids."""
+        # Nothing was written down, so nothing names the array; what it came
+        # from still stands. The patch itself, handed back, is what it was.
+        if out is patch or not isinstance(out, dc.Patch):
+            return out
+        if not ids_enabled():
+            return out.update(attrs=_without_ids(out.attrs))
+        return out.update(attrs=out.attrs.update(data_id=new_id()))
 
     def _run(self, patch: dc.PatchMeta, record: bool) -> dc.PatchMeta:
         """Run the operation; `record=False` writes no history or ids."""
@@ -436,7 +449,9 @@ class PatchProcessor(DascoreBaseModel):
         # something that source loads; such a narrowing names a window of
         # the same array rather than something derived from it.
         after = out._source if out._source is not patch._source else None
-        window = narrowed_data_id(patch.attrs, patch._source, after)
+        window = narrowed_data_id(
+            patch.attrs, patch._source, after, patch.coords, out.coords
+        )
         return attrs.update(**result_ids(members, operation, data_id=window))
 
 

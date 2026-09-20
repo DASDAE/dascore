@@ -58,6 +58,7 @@ from dascore.utils.gaps import GapTolerance
 from dascore.utils.identity import (
     _ID_FIELDS,
     ids_enabled,
+    merge_operation,
     operation_context,
     operation_id,
     stamp,
@@ -373,10 +374,7 @@ def record_call(
     hist_str = _get_history_str(patch, func, *args, _history=history, **kwargs)
     attrs = _maybe_add_history_str(out.attrs, hist_str)
     attrs = _stamp(patch, attrs, patch_func, args, kwargs, output)
-    # The call named itself just now; installing what it recorded is part
-    # of it, not another change to record.
-    with operation_context():
-        return out if attrs is out.attrs else out.update(attrs=attrs)
+    return out if attrs is out.attrs else out.update(attrs=attrs)
 
 
 def _record_members(out, patch, patch_func, args, kwargs):
@@ -756,7 +754,9 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     )
     warn_if_histories_differ(attrs, "Merging")
     new_attrs = combine_patch_attrs(attrs, **attr_kwargs, merge_params=merge_kwargs)
-    patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
+    # The fold named the result; building it is not another array.
+    with operation_context():
+        patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
     new_dict = {"patch": patch}
     return [new_dict]
 
@@ -1583,8 +1583,13 @@ def _merge_models(attrs1, attrs2):
     not `combine_patch_attrs`, which combines a collection and so treats
     a missing value as a value rather than as something to fill.
     """
-    if attrs1 == attrs2 or _same_but_for_ids(attrs1, attrs2):
+    if attrs1 == attrs2:
         return attrs1
+    if _same_but_for_ids(attrs1, attrs2):
+        # Short-circuited for the private attrs the fold drops, but the ids
+        # are the fold's: which arrays these were must not turn on whether
+        # some unrelated attr happened to differ as well.
+        return stamp(attrs1, [attrs1, attrs2], merge_operation())
     # keep_first gives the first patch's value for everything, folds the
     # ids, and keeps the history and the attrs subclass; the data units of
     # the output are decided by the operation from each operand's own, so
@@ -1868,7 +1873,8 @@ def _concatenate_group(
     warn_if_histories_differ([x.attrs for x in patches], "Concatenating")
     attrs = _maybe_add_history_str(attrs, "concatenate")
     attrs = stamp(attrs, [x.attrs for x in patches], operation)
-    return dc.Patch(data=data, attrs=attrs, coords=coords, dims=dims)
+    with operation_context():
+        return dc.Patch(data=data, attrs=attrs, coords=coords, dims=dims)
 
 
 def _joinable(coords, dim: str) -> list[np.ndarray]:
@@ -2076,7 +2082,8 @@ def stack_patches(
         coord_to_change = stack_coords.coord_map[dim_vary]
         new_dim = coord_to_change.update_limits(min=0)
         stack_coords = stack_coords.update_coords(**{dim_vary: new_dim})
-    return dc.Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
+    with operation_context():
+        return dc.Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
 
 
 def swap_kwargs_dim_to_axis(patch, kwargs):

@@ -44,7 +44,6 @@ from dascore.utils.identity import (
     ids_enabled,
     inside_operation,
     new_id,
-    operation_context,
     stamp,
     try_operation_id,
 )
@@ -102,28 +101,29 @@ def _as_float(data):
     return xp.astype(data, xp.float64)
 
 
-def _ids_given(patch, attrs) -> bool:
-    """Whether the caller installed ids of its own rather than the patch's."""
-    return any(
-        getattr(attrs, name, "") != getattr(patch.attrs, name, "")
-        for name in _ID_FIELDS
-    )
-
-
-def _ids_stated(params) -> bool:
-    """Whether a call named an id itself, which is the caller's to state."""
-    return any(name in params for name in _ID_FIELDS)
+def _data_id_given(patch, attrs) -> bool:
+    """Whether the caller installed a data id of its own rather than the patch's."""
+    return getattr(attrs, "data_id", "") != getattr(patch.attrs, "data_id", "")
 
 
 # What an id does not speak for: which data it is, and how it was reached.
+# Never a parameter of the change either: two routes to one array are one id.
 _UNSTAMPED = {**dict.fromkeys(_ID_FIELDS, ""), "history": ()}
 
 
-def _states_other_metadata(patch, attrs) -> bool:
-    """Whether attrs say anything about the patch beyond its ids and history."""
-    return attrs.model_copy(update=_UNSTAMPED) != patch.attrs.model_copy(
-        update=_UNSTAMPED
-    )
+def _same_coords(coords, other) -> bool:
+    """
+    Whether two coord managers hold the same coordinates, laid out alike.
+
+    `CoordManager.__eq__` compares values approximately and ignores the
+    order of the dims; which array a patch is can afford neither.
+    """
+    if coords is other:
+        return True
+    if coords.dims != other.dims or coords.dim_map != other.dim_map:
+        return False
+    first, second = coords.coord_map, other.coord_map
+    return all(first[name].data_id == second[name].data_id for name in first)
 
 
 def _named_mutation(patch, attrs, name: str, params: Mapping, changed: bool):
@@ -131,35 +131,45 @@ def _named_mutation(patch, attrs, name: str, params: Mapping, changed: bool):
     Return the ids a metadata change made outside an operation leaves behind.
 
     Inside one the operation stamps its own result, a call which changed
-    nothing keeps what it was given, and ids the caller stated are its own.
-    Metadata, which describes data it does not hold, is left to the routes
-    which build it (the readers and the index).
+    nothing keeps what it was given, and a data id the caller stated is its
+    own. Metadata, which describes data it does not hold, is left to the
+    routes which build it (the readers and the index).
     """
     if not changed or inside_operation() or not hasattr(patch, "_data"):
         return attrs
     if not ids_enabled():
         # A changed patch claims no id rather than the one it came from.
         return _without_ids(attrs)
-    if _ids_given(patch, attrs):
+    if _data_id_given(patch, attrs):
         return attrs
-    return stamp(attrs, [patch.attrs], try_operation_id(name, params))
+    # The attrs being installed, not the patch's, so an origin the call
+    # states is the result's origin.
+    return stamp(attrs, [attrs], try_operation_id(name, params))
 
 
 def _replacement_attrs(patch, data, coords, attrs, dtype):
     """Return the ids `update` leaves behind when it is not inside an operation."""
     if inside_operation() or not hasattr(patch, "_data"):
         return attrs
+    on = ids_enabled()
+    # A caller which named the array has said what this is. Checked before
+    # anything is compared: an operation stamps its result and installs it
+    # through here, and it has just worked out that very answer.
+    if on and _data_id_given(patch, attrs):
+        return attrs
     replaced_data = data is not None and data is not patch._data
     if replaced_data or (dtype is not None and dtype != patch.dtype):
-        if not ids_enabled():
+        if not on:
             return _without_ids(attrs)
         # An array nothing can be derived for; where it came from still stands.
-        return attrs if _ids_given(patch, attrs) else attrs.update(data_id=new_id())
+        return attrs.update(data_id=new_id())
     params = {}
-    if coords is not patch.coords and coords != patch.coords:
+    if not _same_coords(coords, patch.coords):
         params["coords"] = coords
-    if attrs is not patch.attrs and _states_other_metadata(patch, attrs):
-        params["attrs"] = attrs
+    if attrs is not patch.attrs:
+        stated = attrs.model_copy(update=_UNSTAMPED)
+        if stated != patch.attrs.model_copy(update=_UNSTAMPED):
+            params["attrs"] = stated
     return _named_mutation(patch, attrs, "update", params, bool(params))
 
 
@@ -190,8 +200,7 @@ def set_dims(self: PatchType, **kwargs: str) -> PatchType:
     """
     cm = self.coords.set_dims(**kwargs)
     attrs = _named_mutation(self, self.attrs, "set_dims", kwargs, cm is not self.coords)
-    with operation_context():
-        return self.new(coords=cm, attrs=attrs)
+    return self.new(coords=cm, attrs=attrs)
 
 
 def pipe(self: PatchType, func: Callable[..., PatchType], *args, **kwargs) -> PatchType:
@@ -252,19 +261,18 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     >>> with_custom = patch.update_attrs(processing_date="2024-01-01")
     """
     stated = self.attrs.model_dump(exclude_unset=True)
-    new_attrs = {**stated, **attrs}
-    out_attrs = PatchAttrs.from_dict(new_attrs)
+    out_attrs = PatchAttrs.from_dict({**stated, **attrs})
     if not inside_operation():
-        # What the caller wrote, rather than the models compared: the same
-        # values restated are the same attrs, and comparing them costs
-        # more than the call itself.
-        changed = not _ids_stated(attrs) and any(
-            key not in _UNSTAMPED and not values_equal(stated.get(key, _MISSING), value)
-            for key, value in new_attrs.items()
+        # Only the keys the caller wrote, each against what the patch says
+        # now: restating a value is not a change, and comparing whole
+        # models costs more than the call itself.
+        params = {key: value for key, value in attrs.items() if key not in _UNSTAMPED}
+        changed = any(
+            not values_equal(self.attrs.get(key, _MISSING), value)
+            for key, value in params.items()
         )
-        out_attrs = _named_mutation(self, out_attrs, "update_attrs", attrs, changed)
-    with operation_context():
-        return self.new(attrs=out_attrs)
+        out_attrs = _named_mutation(self, out_attrs, "update_attrs", params, changed)
+    return self.new(attrs=out_attrs)
 
 
 # Which data a patch is and what was done to it are not part of what it

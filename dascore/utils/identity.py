@@ -302,7 +302,11 @@ def origin_id_for(
 
 
 def narrowed_data_id(
-    attrs, before: ArraySource | None, after: ArraySource | None
+    attrs,
+    before: ArraySource | None,
+    after: ArraySource | None,
+    coords=None,
+    new_coords=None,
 ) -> str | None:
     """
     Return the id of a window of the array a patch already is, or None.
@@ -320,6 +324,10 @@ def narrowed_data_id(
         The source of that patch, if it has one.
     after
         The source the narrowed patch would load from, if any.
+    coords, new_coords
+        The coordinates before and after the narrowing. A source states a
+        dimensional window and nothing else, so without them, or when
+        anything outside that window moved, there is no window to name.
 
     Returns
     -------
@@ -332,7 +340,24 @@ def narrowed_data_id(
         return None
     if (getattr(attrs, "data_id", "") or "") != before.data_id:
         return None
+    if not _only_the_window_moved(coords, new_coords):
+        return None
     return after.data_id
+
+
+def _only_the_window_moved(coords, new_coords) -> bool:
+    """Whether two coord managers differ only where a source window can."""
+    if coords is None or new_coords is None:
+        return False
+    if coords.dims != new_coords.dims or coords.dim_map != new_coords.dim_map:
+        return False
+    first, second = coords.coord_map, new_coords.coord_map
+    # A coordinate riding a dimension is cut by the window; one riding none
+    # is not, so a change to it is something the window does not say.
+    return all(
+        dims or first[name].data_id == second[name].data_id
+        for name, dims in new_coords.dim_map.items()
+    )
 
 
 def read_operation_id(snap) -> str | None:
@@ -341,11 +366,13 @@ def read_operation_id(snap) -> str | None:
 
     `snap` changes which coordinates the same bytes decode to, so a
     non-default value makes a different array; the default reads the
-    stored thing itself and derives nothing. None means the reader was
-    left to its own default, which is the default.
+    stored thing itself and derives nothing. Which dimensions are named,
+    and how, is the same decode however it was spelled.
     """
-    if snap is True or snap is None:
+    if snap is True:
         return None
+    if snap is not False:
+        snap = sorted([snap] if isinstance(snap, str) else snap)
     return operation_id("Read", {"snap": snap})
 
 

@@ -63,13 +63,14 @@ from dascore.io.utils import selection_windows, slice_dataset, validate_windows
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.hdf5 import H5Reader, _ManagedH5pyFile
 from dascore.utils.identity import (
+    _without_ids,
     derive,
     ids_enabled,
     narrowed_data_id,
     operation_context,
     origin_id_for,
     read_operation_id,
-    stamp,
+    result_ids,
     warn_random_id,
 )
 from dascore.utils.io import (
@@ -896,11 +897,13 @@ class FiberIO:
                     )
                     raise InvalidFiberIOError(msg)
                 data = _apply_union_indexers(residual, data)
-                attrs = selected_read_attrs(
+                attrs = _selected_read_attrs(
                     patch.attrs,
                     patch._source,
                     source,
                     queries,
+                    coords=patch.coords,
+                    new_coords=coords,
                     relative=relative,
                     samples=samples,
                 )
@@ -1219,8 +1222,16 @@ def _load_array_source(source: ArraySource) -> np.ndarray:
     return out
 
 
-def selected_read_attrs(
-    attrs, before, after, queries, *, relative: bool = False, samples: bool = False
+def _selected_read_attrs(
+    attrs,
+    before,
+    after,
+    queries,
+    *,
+    coords=None,
+    new_coords=None,
+    relative: bool = False,
+    samples: bool = False,
 ):
     """
     Return the attrs of a patch a read trimmed as it loaded.
@@ -1237,28 +1248,33 @@ def selected_read_attrs(
         The sources of the whole and the trimmed arrays, if any.
     queries
         The coordinate selections the reader carried out.
+    coords, new_coords
+        The coordinates before and after the trim; see
+        [`narrowed_data_id`](`dascore.utils.identity.narrowed_data_id`).
     relative, samples
         How those selections were meant.
     """
+    window = narrowed_data_id(attrs, before, after, coords, new_coords)
+    if window is None and not queries:
+        return attrs
     if not ids_enabled():
-        return attrs
-    window = narrowed_data_id(attrs, before, after)
-    if window is not None:
-        return attrs.update(data_id=window)
-    if not queries:
-        return attrs
-    # Imported here rather than at module scope: the operations are built
-    # on top of the I/O framework this module holds.
-    from dascore.proc.coords import Select  # noqa: PLC0415
+        # A trimmed read claims no id rather than the whole file's.
+        return _without_ids(attrs)
+    operation = None
+    if window is None:
+        # Imported here rather than at module scope: the operations are
+        # built on top of the I/O framework this module holds.
+        from dascore.proc.coords import Select  # noqa: PLC0415
 
-    try:
-        operation = Select(**queries, relative=relative, samples=samples).operation_id
-    except Exception as error:
-        # A bound the encoder cannot spell still read the data it asked
-        # for; only its id is unknown, and never the whole file's.
-        warn_random_id("select", error)
-        operation = None
-    return stamp(attrs, [attrs], operation)
+        try:
+            operation = Select(
+                **queries, relative=relative, samples=samples
+            ).operation_id
+        except Exception as error:
+            # A bound the encoder cannot spell still read the data it asked
+            # for; only its id is unknown, and never the whole file's.
+            warn_random_id("select", error)
+    return attrs.update(**result_ids([attrs], operation, data_id=window))
 
 
 def _stamp_source_ids(

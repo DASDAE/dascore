@@ -28,7 +28,14 @@ from dascore.utils.display import (
     get_header_text,
     split_block,
 )
-from dascore.utils.identity import ids_enabled, inside_operation, new_id, with_ids
+from dascore.utils.identity import (
+    _without_ids,
+    ids_enabled,
+    inside_operation,
+    new_id,
+    operation_context,
+    with_ids,
+)
 from dascore.utils.patch import (
     check_patch_attrs,
     check_patch_coords,
@@ -331,7 +338,9 @@ class PatchMeta(NodeRepr):
         The inverse of [`drop_data`](`dascore.Patch.drop_data`): one takes
         a patch's data away and keeps what described them, this gives that
         description its data back. The patch is of the class the metadata
-        was dropped from, so a `Patch` subclass round-trips.
+        was dropped from, so a `Patch` subclass round-trips. Outside an
+        operation the result is a new array, so the round trip keeps
+        everything but `data_id`.
 
         Parameters
         ----------
@@ -352,10 +361,15 @@ class PatchMeta(NodeRepr):
         patch_class = self._patch_type or dc.Patch
         attrs = self.attrs
         # Outside an operation nothing says these are the data described, so
-        # they are an array of their own; where it came from still stands.
+        # they are an array of their own; where it came from still stands,
+        # unless nothing is being kept track of, when neither does.
         if not inside_operation() and getattr(attrs, "data_id", ""):
-            attrs = attrs.update(data_id=new_id() if ids_enabled() else "")
-        out = patch_class(data=data, coords=self.coords, attrs=attrs)
+            attrs = (
+                attrs.update(data_id=new_id()) if ids_enabled() else _without_ids(attrs)
+            )
+        # Named just above, so the constructor does not name it again.
+        with operation_context():
+            out = patch_class(data=data, coords=self.coords, attrs=attrs)
         # Whatever these data are, they are not known to be what the source loads.
         out._source = self._source and self._source.detach()
         return out

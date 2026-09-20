@@ -3,13 +3,15 @@
 from __future__ import annotations
 
 import shutil
+from decimal import Decimal
 
 import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.io.core import scan_payloads, selected_read_attrs
+from dascore.io.core import scan_payloads
 from dascore.utils.downloader import fetch
+from dascore.utils.identity import narrowed_data_id, read_operation_id
 from dascore.warnings import DASCoreWarning
 
 
@@ -53,6 +55,21 @@ def dasdae_dir(tmp_path_factory):
 def dasdae_path(dasdae_dir):
     """The DASDAE file inside the directory spool."""
     return dasdae_dir / "processed.h5"
+
+
+@pytest.fixture(scope="module")
+def aux_path(tmp_path_factory):
+    """A DASDAE file holding a coordinate attached to no dimension."""
+    path = tmp_path_factory.mktemp("aux_routes") / "aux.h5"
+    patch = dc.get_example_patch().update_coords(aux=((), np.arange(5.0)))
+    dc.write(patch, path, "dasdae")
+    return path
+
+
+@pytest.fixture(scope="module")
+def aux_patch(aux_path):
+    """The whole file, read back."""
+    return dc.read(aux_path)[0]
 
 
 class TestReadRouteParity:
@@ -106,6 +123,8 @@ class TestReadRouteParity:
             "directory_spool": dc.spool(dasdae_dir).update().select(time=window)[0],
             "memory_spool": dc.spool([patch]).select(time=window)[0],
         }
+        shapes = {name: value.shape for name, value in ids.items()}
+        assert len(set(shapes.values())) == 1, shapes
         found = {name: value.attrs.data_id for name, value in ids.items()}
         assert len(set(found.values())) == 1, found
 
@@ -213,16 +232,104 @@ class TestWindowComposition:
 class TestRefusedBound:
     """A bound with no faithful spelling still reads; only its id is unknown."""
 
-    def test_random_id_rather_than_the_whole_file(self, terra15_patch):
+    @staticmethod
+    def _refused_bound(patch, dim="distance"):
+        """Positions the reader can load and the encoder cannot spell."""
+        # Every other one, so the source cannot load the result either.
+        values = patch.get_array(dim)[:6:2]
+        return np.array([Decimal(float(x)) for x in values], dtype=object)
+
+    def test_random_id_rather_than_the_whole_file(self, terra15_path, terra15_patch):
         """A refused bound never leaves the trimmed patch stating the file's id."""
-        attrs = terra15_patch.attrs
-        queries = {"time": (0, object())}
+        bound = self._refused_bound(terra15_patch)
         with pytest.warns(DASCoreWarning, match="No id could be derived"):
-            first = selected_read_attrs(attrs, None, None, queries)
+            first = dc.read(terra15_path, distance=bound)[0]
         with pytest.warns(DASCoreWarning, match="No id could be derived"):
-            second = selected_read_attrs(attrs, None, None, queries)
-        assert first.data_id not in (attrs.data_id, second.data_id)
-        assert first.origin_id == second.origin_id == attrs.origin_id
+            second = dc.read(terra15_path, distance=bound)[0]
+        assert first.shape != terra15_patch.shape
+        # Nothing names the array, so the two reads are two arrays.
+        assert first.attrs.data_id not in ("", terra15_patch.attrs.data_id)
+        assert first.attrs.data_id != second.attrs.data_id
+        assert first.attrs.origin_id == terra15_patch.attrs.origin_id
+
+
+class TestUnattachedCoords:
+    """A coordinate riding no dimension is not part of any window."""
+
+    def test_select_derives(self, aux_patch):
+        """Trimming it changes the patch, so it changes the id."""
+        out = aux_patch.select(aux=(1, 2))
+        assert out.get_coord("aux").shape != aux_patch.get_coord("aux").shape
+        assert out.attrs.data_id != aux_patch.attrs.data_id
+        assert out.attrs.data_id == aux_patch.select(aux=(1, 2)).attrs.data_id
+        assert out.attrs.data_id != aux_patch.select(aux=(1, 3)).attrs.data_id
+
+    def test_read_bound_derives(self, aux_path, aux_patch):
+        """A read trimmed the same way names what the select names."""
+        out = dc.read(aux_path, aux=(1, 2))[0]
+        assert out.attrs.data_id != aux_patch.attrs.data_id
+        assert out.attrs.data_id == aux_patch.select(aux=(1, 2)).attrs.data_id
+
+    def test_with_a_dimensional_slice(self, aux_patch):
+        """A window says nothing about it, so the whole call is derived."""
+        window = {"time": (0, 100), "samples": True}
+        plain = aux_patch.select(**window)
+        first = aux_patch.select(aux=(1, 2), **window)
+        second = aux_patch.select(aux=(2, 3), **window)
+        assert first.attrs.data_id not in (plain.attrs.data_id, second.attrs.data_id)
+        assert (
+            first.attrs.data_id == aux_patch.select(aux=(1, 2), **window).attrs.data_id
+        )
+
+
+class TestWindowGuards:
+    """A window is named only where the source can say what it holds."""
+
+    @staticmethod
+    def _narrowed(patch):
+        """The source of the patch's first ten samples along its first dim."""
+        index = tuple(
+            slice(0, 10) if x == 0 else slice(None) for x in range(patch.ndim)
+        )
+        return patch._source.narrow(index)
+
+    def test_without_the_coordinates_there_is_no_window(self, terra15_patch):
+        """A caller which does not say what moved gets no shortcut."""
+        after = self._narrowed(terra15_patch)
+        args = (terra15_patch.attrs, terra15_patch._source, after)
+        coords = terra15_patch.coords
+        assert narrowed_data_id(*args, coords, coords) == after.data_id
+        assert narrowed_data_id(*args) is None
+
+    def test_relaid_dims_are_not_a_window(self, terra15_patch):
+        """A source window says which samples, not which way round they lie."""
+        after = self._narrowed(terra15_patch)
+        coords = terra15_patch.coords
+        flipped = coords.transpose(*terra15_patch.dims[::-1])
+        found = narrowed_data_id(
+            terra15_patch.attrs, terra15_patch._source, after, coords, flipped
+        )
+        assert found is None
+
+
+class TestDisabledProvenance:
+    """A read which trimmed carries no id rather than a stale one."""
+
+    def test_a_trimmed_read_clears_stored_ids(self, dasdae_path):
+        """A stored id names the whole patch on disk, never a window of it."""
+        with dc.config_context(patch_provenance="disabled"):
+            whole = dc.read(dasdae_path)[0]
+            trimmed = dc.read(dasdae_path, time=(0, 100), samples=True)[0]
+        # The file states them, so a whole read still reports what it read.
+        assert whole.attrs.data_id and whole.attrs.origin_id
+        assert trimmed.shape != whole.shape
+        assert trimmed.attrs.data_id == trimmed.attrs.origin_id == ""
+
+    def test_a_read_with_no_stored_ids(self, terra15_path):
+        """Nothing was derived while it was disabled, so nothing is claimed."""
+        with dc.config_context(patch_provenance="disabled"):
+            out = dc.read(terra15_path, time=(0, 100), samples=True)[0]
+        assert out.attrs.data_id == out.attrs.origin_id == ""
 
 
 class TestDecodeOptions:
@@ -253,6 +360,17 @@ class TestDecodeOptions:
         read = dc.read(terra15_path, snap=False)[0]
         assert scanned.attrs.data_id == read.attrs.data_id
         assert scanned.attrs.origin_id == read.attrs.origin_id
+
+    def test_the_dims_snapped_are_a_set(self, terra15_path):
+        """One decode, however the dimensions it names were spelled."""
+        one = read_operation_id("time")
+        assert one == read_operation_id(("time",)) == read_operation_id(["time"])
+        both = read_operation_id(("time", "distance"))
+        assert both == read_operation_id(("distance", "time"))
+        assert both != one
+        # The default decodes the stored thing itself and derives nothing.
+        assert read_operation_id(True) is None
+        assert read_operation_id(False) not in (None, one, both)
 
     def test_snapped_window_builds_on_the_decoded_id(self, terra15_path):
         """A window of an unsnapped read builds on the unsnapped id."""

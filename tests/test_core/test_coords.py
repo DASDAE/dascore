@@ -613,9 +613,11 @@ class TestCoordDataId:
 
     def test_range_unit_spelling_is_part_of_the_id(self):
         """One length spelled two ways is two ids: they select differently."""
+        # The same numbers throughout, so only the spelling can decide.
         coord_1 = get_coord(start=0, stop=10, step=1, units="m")
-        coord_2 = get_coord(start=0, stop=1000, step=100, units="cm")
-        assert coord_1.data_id != coord_2.data_id
+        coord_2 = get_coord(start=0, stop=10, step=1, units="km")
+        bare = get_coord(start=0, stop=10, step=1)
+        assert len({coord_1.data_id, coord_2.data_id, bare.data_id}) == 3
         same = get_coord(start=0, stop=10, step=1, units="m")
         assert coord_1.data_id == same.data_id
 
@@ -628,9 +630,11 @@ class TestCoordDataId:
 
     def test_array_unit_spelling_is_part_of_the_id(self):
         """Array coords are hashed in the units they are written in."""
-        coord_1 = get_coord(data=np.arange(5.0), units="m")
-        coord_2 = get_coord(data=np.arange(5.0) * 100, units="cm")
-        assert coord_1.data_id != coord_2.data_id
+        values = np.arange(5.0)
+        coord_1 = get_coord(data=values, units="m")
+        coord_2 = get_coord(data=values, units="km")
+        bare = get_coord(data=values)
+        assert len({coord_1.data_id, coord_2.data_id, bare.data_id}) == 3
 
     def test_approx_equal_float_array_coords_can_have_different_data_id(self):
         """Fingerprints can be stricter than equality for inexact float arrays."""
@@ -658,13 +662,11 @@ class TestCoordDataId:
 
     def test_partial_unit_spelling_is_part_of_the_id(self):
         """Partial coords are hashed in the units they state."""
-        coord_1 = CoordPartial(
-            shape=(3,), start=1.0, stop=4.0, step=1.0, units="m", dtype="float64"
-        )
-        coord_2 = CoordPartial(
-            shape=(3,), start=100.0, stop=400.0, step=100.0, units="cm", dtype="float64"
-        )
-        assert coord_1.data_id != coord_2.data_id
+        numbers = {"shape": (3,), "start": 1.0, "stop": 4.0, "step": 1.0}
+        coord_1 = CoordPartial(**numbers, units="m", dtype="float64")
+        coord_2 = CoordPartial(**numbers, units="km", dtype="float64")
+        bare = CoordPartial(**numbers, dtype="float64")
+        assert len({coord_1.data_id, coord_2.data_id, bare.data_id}) == 3
 
     def test_nearby_partial_coords_do_not_share_data_id(self):
         """Partial coords remain exact because equality for them is exact."""

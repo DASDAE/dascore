@@ -7,6 +7,7 @@ import os
 import pickle
 import subprocess
 import sys
+import warnings
 from enum import Enum
 from functools import partial
 from pathlib import PureWindowsPath
@@ -453,10 +454,11 @@ class TestCoordIdentity:
     """A coordinate has one id wherever it appears."""
 
     def test_unit_spelling_is_part_of_the_id(self):
-        """The same length in metres and centimetres is two ids."""
+        """The same numbers in another unit, or in none, are other coordinates."""
         metres = dc.get_coord(start=0, stop=10, step=1, units="m")
-        centimetres = dc.get_coord(start=0, stop=1000, step=100, units="cm")
-        assert metres.data_id != centimetres.data_id
+        feet = dc.get_coord(start=0, stop=10, step=1, units="ft")
+        bare = dc.get_coord(start=0, stop=10, step=1)
+        assert len({metres.data_id, feet.data_id, bare.data_id}) == 3
         assert len(metres.data_id) == 32
 
     def test_identity_is_exact(self):
@@ -929,18 +931,75 @@ class TestMutationBoundary:
         assert patch.new().attrs == patch.attrs
         assert patch.new(coords=patch.coords).attrs == patch.attrs
 
+    def test_a_restated_default_is_not_a_change(self, patch):
+        """An attr the patch never stated is the value it already has."""
+        assert "data_type" not in patch.attrs.model_dump(exclude_unset=True)
+        out = patch.update_attrs(data_type=patch.attrs.data_type)
+        assert out.attrs.data_id == patch.attrs.data_id
+
+    def test_a_constructor_given_another_patch_s_attrs(self, patch):
+        """Attrs handed to a constructor do not name the data handed with them."""
+        data = np.asarray(patch.data) * 3.0
+        out = dc.Patch(data=data, coords=patch.coords, attrs=patch.attrs)
+        assert out.attrs.data_id not in ("", patch.attrs.data_id)
+        assert out.attrs.origin_id == patch.attrs.origin_id
+        # A dumped attrs mapping is the same loophole.
+        dumped = dc.Patch(
+            data=data, coords=patch.coords, attrs=patch.attrs.model_dump()
+        )
+        assert dumped.attrs.data_id not in ("", patch.attrs.data_id)
+
+    def test_a_constructor_given_a_patch(self, patch):
+        """A patch rebuilt from a patch is the array it already was."""
+        assert dc.Patch(patch).attrs.data_id == patch.attrs.data_id
+
+    def test_transposed_coords_are_a_change(self, patch):
+        """Which way round the dims are is part of what a patch is."""
+        square = dc.Patch(
+            data=np.arange(9.0).reshape(3, 3),
+            coords={"x": np.arange(3.0), "y": np.arange(3.0)},
+            dims=("x", "y"),
+        )
+        out = square.new(coords=square.coords.transpose("y", "x"))
+        assert out.dims == ("y", "x")
+        assert out.attrs.data_id != square.attrs.data_id
+
     def test_history_is_not_which_data_it_is(self, patch):
         """How a patch was reached is not part of the array it holds."""
         out = patch.update_attrs(history=["hello"])
         assert out.attrs.data_id == patch.attrs.data_id
+        # Nor when something else changes in the same call.
+        first = patch.update_attrs(tag="one", history=["a"])
+        second = patch.update_attrs(tag="one", history=["b"])
+        assert first.attrs.data_id == second.attrs.data_id
+        assert first.attrs.data_id == patch.update_attrs(tag="one").attrs.data_id
 
-    def test_stated_ids_are_kept(self, patch):
-        """Naming an id is deliberate, whatever else the call changes."""
+    def test_installed_attrs_are_named_without_their_ids(self, patch):
+        """Two routes to one set of attrs are one array."""
+        first = patch.attrs.update(tag="one", history=["a"], origin_id="b" * 32)
+        second = patch.attrs.update(tag="one", history=["c"])
+        assert (
+            patch.new(attrs=first).attrs.data_id
+            == patch.new(attrs=second).attrs.data_id
+        )
+
+    def test_a_stated_data_id_is_kept(self, patch):
+        """Naming the array is deliberate, whatever else the call changes."""
         out = patch.update_attrs(tag="one", data_id="a" * 32)
         assert out.attrs.data_id == "a" * 32
-        # Restating the patch's own id keeps it, which a change would not.
+
+    def test_only_a_stated_data_id_is_kept(self, patch):
+        """Another id stated in the same call does not name the array."""
+        origin = "b" * 32
+        out = patch.update_attrs(tag="one", origin_id=origin)
+        assert out.attrs.tag == "one"
+        # The origin the call stated stands; the array is the changed one.
+        assert out.attrs.origin_id == origin
+        assert out.attrs.data_id != patch.attrs.data_id
+        assert out.attrs.data_id == patch.update_attrs(tag="one").attrs.data_id
+        # Restating the id the patch already has is not naming another array.
         kept = patch.update_attrs(tag="one", data_id=patch.attrs.data_id)
-        assert kept.attrs.data_id == patch.attrs.data_id
+        assert kept.attrs.data_id == out.attrs.data_id
 
     def test_attrs_stating_other_ids_are_kept(self, patch):
         """Attrs built elsewhere carry their own ids through `new`."""
@@ -965,6 +1024,32 @@ class TestMutationBoundary:
         first, second = rebuild(patch), rebuild(patch)
         assert first.attrs.data_id == second.attrs.data_id
 
+    def test_a_body_which_cannot_name_its_own_change(self, patch):
+        """The function names the result, so the body has nothing to warn about."""
+
+        @dc.patch_function()
+        def odd(patch):
+            """Set an attr no id can be derived for."""
+            return patch.update_attrs(odd=object())
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DASCoreWarning)
+            out = odd(patch)
+        assert out.attrs.data_id == odd(patch).attrs.data_id
+
+    def test_a_declared_data_type_is_not_a_second_change(self, patch):
+        """What the result is named after is the call, not the attrs it sets."""
+
+        @dc.patch_function(data_type="velocity")
+        def typed(patch):
+            """Make new data and declare what they are."""
+            return patch.new(data=np.asarray(patch.data) * 2)
+
+        out = typed(patch)
+        assert out.attrs.data_type == "velocity"
+        expected = derive([patch.attrs.data_id], call_operation_id(typed, (), {}))
+        assert out.attrs.data_id == expected
+
     def test_metadata_given_data(self, patch):
         """Nothing says an array handed to metadata is the one it described."""
         meta = patch.drop_data()
@@ -973,7 +1058,9 @@ class TestMutationBoundary:
         assert len(ids) == 4
         assert first.attrs.origin_id == patch.attrs.origin_id
         with config_context(patch_provenance="disabled"):
-            assert meta.to_patch(patch.data).attrs.data_id == ""
+            off = meta.to_patch(patch.data)
+            # Nothing is kept track of, so neither id is claimed.
+            assert off.attrs.data_id == off.attrs.origin_id == ""
         # Metadata alone describes data it does not hold, so its ids stand.
         assert meta.update_attrs(tag="one").attrs.data_id == patch.attrs.data_id
 
@@ -987,6 +1074,70 @@ class TestMutationBoundary:
                 else patch.update_attrs(tag="one")
             )
         assert out.attrs.data_id == out.attrs.origin_id == ""
+
+
+class TestBypassedOperations:
+    """`raw_function` records nothing, so nothing names what it returns."""
+
+    def test_changed_data_is_not_its_input(self, patch):
+        """Keeping the input's id for another array would be a false name."""
+        negative = patch.new(data=np.asarray(patch.data) - 0.5)
+        out = dc.Patch.abs.raw_function(negative)
+        assert not np.array_equal(out.data, negative.data)
+        assert out.attrs.data_id not in ("", negative.attrs.data_id)
+        assert out.attrs.origin_id == negative.attrs.origin_id
+        # Nothing was written down, so nothing tells two such calls apart.
+        assert out.attrs.history == negative.attrs.history
+        assert dc.Patch.abs.raw_function(negative).attrs.data_id != out.attrs.data_id
+
+    def test_an_untouched_input_keeps_its_ids(self, patch):
+        """A bypass which did nothing hands back what it was given."""
+        assert dc.Patch.select.raw_function(patch, time=...) is patch
+
+    def test_ids_off_leaves_nothing_behind(self, patch):
+        """With ids disabled the bypass claims none either."""
+        negative = patch.new(data=np.asarray(patch.data) - 0.5)
+        with config_context(patch_provenance="disabled"):
+            out = dc.Patch.abs.raw_function(negative)
+        assert out.attrs.data_id == out.attrs.origin_id == ""
+
+
+class TestInternalRoutes:
+    """Routes which reach the boundary themselves say what they did."""
+
+    def test_rolling_is_derived(self, patch):
+        """A reduction over a window is describable, so its result is named."""
+        rolled = patch.rolling(time=10, samples=True).mean()
+        assert rolled.attrs.origin_id == patch.attrs.origin_id
+        assert rolled.attrs.data_id != patch.attrs.data_id
+        same = patch.rolling(time=10, samples=True).mean()
+        assert rolled.attrs.data_id == same.attrs.data_id
+        wider = patch.rolling(time=11, samples=True).mean()
+        other = patch.rolling(time=10, samples=True).std()
+        assert rolled.attrs.data_id not in (wider.attrs.data_id, other.attrs.data_id)
+
+    def test_rolling_arguments_are_part_of_it(self, patch):
+        """One function applied two ways makes two arrays."""
+        first = patch.rolling(time=10, samples=True).apply(np.percentile, 80)
+        second = patch.rolling(time=10, samples=True).apply(np.percentile, 20)
+        again = patch.rolling(time=10, samples=True).apply(np.percentile, 80)
+        assert first.attrs.data_id == again.attrs.data_id
+        assert first.attrs.data_id != second.attrs.data_id
+
+    def test_a_padded_chunk_is_the_same_twice(self, patch):
+        """The fill which completes a chunk is part of the array it makes."""
+        members = [
+            patch.select(time=(0, 2), relative=True),
+            patch.select(time=(6, None), relative=True),
+        ]
+        chunked = dc.spool(members).chunk(
+            time=1, tolerance=dc.to_timedelta64(5), fill_value=np.nan
+        )
+        nans = [np.isnan(x.data) for x in chunked]
+        padded = [i for i, x in enumerate(nans) if x.any() and not x.all()]
+        assert padded, "no partially filled chunk to check"
+        for index in padded:
+            assert chunked[index].attrs.data_id == chunked[index].attrs.data_id
 
 
 class TestCombinations:
@@ -1058,6 +1209,19 @@ class TestCombinations:
         out = dc.utils.patch.stack_patches(same, dim_vary="time")
         assert out.attrs.origin_id == members[0].attrs.origin_id
         assert out.attrs.data_id not in {x.attrs.data_id for x in same}
+
+    def test_attrs_alike_but_for_their_ids(self, patch):
+        """Which arrays these were does not turn on some other attr."""
+        first = patch.update_attrs(origin_id="a" * 32, data_id="b" * 32)
+        second = patch.update_attrs(origin_id="c" * 32, data_id="d" * 32)
+        _, attrs = dc.utils.patch.merge_compatible_coords_attrs(first, second)
+        assert attrs.origin_id == fold_origin_ids(["a" * 32, "c" * 32])
+        assert attrs.data_id == derive(["b" * 32, "d" * 32], merge_operation())
+        # An unrelated difference is the same merge, so it is the same ids.
+        note = patch.update_attrs(some_note="odd")
+        other = note.update_attrs(origin_id="c" * 32, data_id="d" * 32)
+        _, folded = dc.utils.patch.merge_compatible_coords_attrs(first, other)
+        assert (folded.origin_id, folded.data_id) == (attrs.origin_id, attrs.data_id)
 
 
 class TestSeveralOutputs:

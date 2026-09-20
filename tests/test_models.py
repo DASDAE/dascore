@@ -156,6 +156,20 @@ class TestModelCopy:
         model.doubled()
         assert model.model_copy()._cache == model._cache
 
+    def test_the_old_cache_is_let_go_of(self):
+        """A shadowed cache is still held, which is what dropping it is for."""
+        model = self._Cached()
+        model.doubled()
+        held = dict(model._cache)
+        assert held
+        updated = model.model_copy(update={"number": 5})
+        # Nothing the copy holds, through pydantic or beside it, is the old one.
+        assert updated._cache == {}
+        assert updated.__pydantic_private__["_cache"] == {}
+        assert "_cache" not in updated.__dict__
+        # ... and clearing the copy's left the original's alone.
+        assert model._cache == held
+
 
 class TestModelHash:
     """Hashing agrees with equality, so models work as dict keys."""

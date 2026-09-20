@@ -35,7 +35,29 @@ from dascore.utils.display import (
     get_header_text,
     split_block,
 )
+from dascore.utils.identity import (
+    _ID_FIELDS,
+    ids_enabled,
+    inside_operation,
+    new_id,
+    operation_context,
+)
 from dascore.utils.namespace import NamespaceOwner
+
+
+def _handed_array_attrs(attrs):
+    """Return the attrs of an array a constructor was handed; see `__init__`."""
+    if attrs is None or inside_operation():
+        return attrs
+    # A mapping and a PatchAttrs both answer `get`; anything else is
+    # converted later and carries no id of its own.
+    get = getattr(attrs, "get", None)
+    if get is None or not get("data_id", ""):
+        return attrs
+    ids = {"data_id": new_id()} if ids_enabled() else dict.fromkeys(_ID_FIELDS, "")
+    if isinstance(attrs, PatchAttrs):
+        return attrs.model_copy(update=ids)
+    return {**attrs, **ids}
 
 
 class Patch(NamespaceOwner, PatchMeta):
@@ -115,6 +137,11 @@ class Patch(NamespaceOwner, PatchMeta):
                 "one. Use meta.to_patch(data) for the patch it describes."
             )
             raise ValueError(msg)
+        else:
+            # The attrs came from somewhere other than the data. Outside an
+            # operation nothing says the two belong together, so the array
+            # is one of its own; where it came from still stands.
+            attrs = _handed_array_attrs(attrs)
         if dims is None and isinstance(coords, CoordManager):
             dims = coords.dims
         # By this point, everything should be defined.
@@ -292,7 +319,10 @@ class Patch(NamespaceOwner, PatchMeta):
         # `__init__` need not take one, and the data already state theirs.
         extra = {} if dtype is None else {"dtype": dtype}
         data = self._data if data is None else data
-        return type(self)(data=data, coords=coords, attrs=attrs, **extra)
+        # The ids were settled before this; the constructor names an array
+        # nothing else has spoken for, which this is not.
+        with operation_context():
+            return type(self)(data=data, coords=coords, attrs=attrs, **extra)
 
     def _reattach(self, out: PatchMeta, attrs: PatchAttrs) -> Patch:
         """Return `out` under `attrs`, carrying this patch's unchanged data."""

@@ -161,7 +161,7 @@ Trimming a stored patch is not a route. While a patch is still exactly what its 
 
 When a file does not contain an `origin_id`, DASCore derives one from the format, version, path, patch key, file size, and modification time. Repeated reads and metadata scans therefore agree without hashing the data array. Copying the same bytes to another path produces a different derived ID, and overwriting a path also changes it. Formats that store the IDs (DASDAE) restore both when the file is read elsewhere, so a route continues across a save.
 
-In-memory patches receive process-local IDs. The low-level methods — `new`, `update`, `update_attrs` and `set_dims` — are how patch functions assemble their results, so inside an operation they add nothing: the operation names its own result. Called on their own they say what they did. Handing a patch an array nothing else names gives the result a random `data_id`, since no route describes it, while `origin_id` still says where the data came from:
+In-memory patches receive process-local IDs. The low-level methods — `new`, `update`, `update_attrs`, `set_dims` and `to_patch` — are how patch functions assemble their results, so inside an operation they add nothing: the operation names its own result. Called on their own they say what they did. Handing a patch an array nothing else names gives the result a random `data_id`, since no route describes it, while `origin_id` still says where the data came from:
 
 ```{python}
 doubled = patch.new(data=patch.data * 2)
