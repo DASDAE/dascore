@@ -250,18 +250,15 @@ def strong_data_id(patch) -> str:
     """
     Return the id of the content a patch holds.
 
-    A `data_id` is weak when it was derived without reading data, and
-    strong when it is a hash of what the patch holds: the data, the dims,
-    every coordinate's own id and which dims it rides, and the attributes
-    which describe them. Two patches built apart from one another share it,
-    at the cost of reading every byte.
+    A hash of what the patch holds: the data (and mask), the dims, every
+    coordinate's id and the dims it rides, and every attribute but the ids
+    and history. It costs a read of every byte.
 
     Parameters
     ----------
     patch
-        The patch to hash. Metadata holds no data and object data hold
-        python values rather than bytes, so both are refused rather than
-        named by something which is not their content.
+        The patch to hash. Metadata, object data and extended-precision
+        data are refused: none has bytes which are its content.
 
     Notes
     -----
@@ -280,9 +277,6 @@ def strong_data_id(patch) -> str:
     >>> renamed = patch.update_attrs(data_id="abc")
     >>> assert strong_data_id(patch) == strong_data_id(renamed)
     """
-    # hash_array lives in dascore.utils.array, which imports dascore itself.
-    from dascore.utils.array import hash_array  # noqa: PLC0415
-
     data = getattr(patch, "_data", None)
     if data is None:
         msg = (
@@ -290,38 +284,54 @@ def strong_data_id(patch) -> str:
             "no content to hash. Use the patch whose data it describes."
         )
         raise ParameterError(msg)
-    array = to_numpy(data) if is_foreign(data) else np.asarray(data)
-    if array.dtype == object:
-        msg = (
-            "Object data hold python values rather than bytes, so their "
-            "content cannot be hashed."
-        )
-        raise ParameterError(msg)
-    coords = patch.coords
     payload = {
-        # Normalized first, so that byte order and the unit times were
-        # written in are layout rather than content.
-        "data": hash_array(_normalize_array(array)),
-        "dims": list(patch.dims),
-        # Every coordinate, attached or not, with the dims it rides: the
-        # same values laid out differently are different content.
-        "coords": {
-            name: [list(coords.dim_map[name]), coord.data_id]
-            for name, coord in coords.coord_map.items()
+        "data": _content_hashes(data),
+        # The manager encodes its dims in order, which dims each coordinate
+        # rides, and every coordinate's own id.
+        "coords": patch.coords,
+        # Everything a later operation can read but the ids and history,
+        # which say how the patch was reached rather than what it holds.
+        "attrs": {
+            name: value
+            for name, value in model_values(patch.attrs).items()
+            if name not in _ID_FIELDS and name != "history"
         },
-        "attrs": _content_attrs(patch.attrs),
     }
     return H("content", payload)
 
 
-def _content_attrs(attrs) -> dict[str, Any]:
-    """Return the attrs which describe content rather than lineage."""
-    skip = {*_ID_FIELDS, "history"}
-    return {
-        name: value
-        for name, value in model_values(attrs).items()
-        if name not in skip and not name.startswith("_")
-    }
+def _content_hashes(data) -> list[str]:
+    """Return the hashes of an array's values and, if it has one, its mask."""
+    # hash_array lives in dascore.utils.array, which imports dascore itself.
+    from dascore.utils.array import hash_array  # noqa: PLC0415
+
+    mask = np.ma.getmaskarray(data) if np.ma.isMaskedArray(data) else None
+    array = to_numpy(data) if is_foreign(data) else np.asarray(data)
+    dtype = array.dtype
+    if dtype.hasobject:
+        why = "hold python values rather than bytes"
+    elif any(np.dtype(x).itemsize > 8 for x in _real_parts(dtype)):
+        # Extended precision stores padding bytes which differ run to run.
+        why = "are stored with padding which is not part of their values"
+    else:
+        why = ""
+    if why:
+        msg = f"Data of dtype {dtype} {why}, so their content cannot be hashed."
+        raise ParameterError(msg)
+    # Byte order is layout, fields included; the dtype itself -- a time's
+    # resolution too -- decides what arithmetic does, so it is content.
+    array = array.astype(dtype.newbyteorder("<"), copy=False)
+    out = [hash_array(array)]
+    return out if mask is None else [*out, hash_array(mask)]
+
+
+def _real_parts(dtype: np.dtype) -> list[np.dtype]:
+    """Return the real floating dtypes a dtype is made of."""
+    if dtype.names:
+        return [y for name in dtype.names for y in _real_parts(dtype[name])]
+    if dtype.kind == "c":
+        return [np.empty(0, dtype).real.dtype]
+    return [dtype] if dtype.kind == "f" else []
 
 
 def fold_origin_ids(origin_ids: Sequence[str]) -> str:

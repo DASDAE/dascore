@@ -187,7 +187,7 @@ assert pinned.attrs.data_id == dc.get_example_patch().pin_id().attrs.data_id
 assert pinned.pin_id().attrs.data_id == pinned.attrs.data_id
 ```
 
-Hashing a whole array costs about a second per gigabyte, so pinning is a checkpoint rather than something every operation does. See [Weak and strong `data_id`](../notes/identity.qmd#weak-and-strong-data_id) for what it hashes.
+Pinning is a checkpoint rather than something every operation does. See [Weak and strong `data_id`](../notes/identity.qmd#weak-and-strong-data_id) for what it hashes.
 
 ## Display and shortcuts
 

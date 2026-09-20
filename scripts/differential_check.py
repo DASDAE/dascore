@@ -49,11 +49,9 @@ _TIMING_PASSES = 3
 # Keys a dump carries which are not calls.
 _BOOKKEEPING = {"_timing", "_dascore_path"}
 
+
 # The fingerprint fields which say what a call answered, as opposed to what
 # it claims the answer is.
-_CONTENT_FIELDS = {"dtype", "shape", "dims", "data_hash", "coords", "attrs"}
-
-
 # Cover dtypes and edge values missed by example calls; this caught the
 # float32 promotion regression in #921.
 def make_arrays() -> dict:
@@ -425,7 +423,7 @@ def compare(before: dict, after: dict, fields: set[str] | None = None) -> list[s
             continue
         # Not `fields`, which says what is being compared for every call.
         differing = sorted(i for i in set(old) | set(new) if old.get(i) != new.get(i))
-        report.append(_headline(name, old, new, differing))
+        report.append(_headline(name, before[name], after[name], differing))
         report.extend(
             f"    {i}\n      before: {old.get(i)}\n      after:  {new.get(i)}"
             for i in differing
@@ -434,19 +432,20 @@ def compare(before: dict, after: dict, fields: set[str] | None = None) -> list[s
 
 
 def _headline(name: str, old: dict, new: dict, differing: list[str]) -> str:
-    """Return the line which says what kind of difference this is."""
-    # The leaves are pinned, so one data_id means one recipe. A recipe which
-    # answers differently is a changed operation which did not say so.
-    if _CONTENT_FIELDS.intersection(differing) and _same_data_id(old, new):
+    """
+    Return the line which says what kind of difference this is.
+
+    `old` and `new` are whole fingerprints: `--fields` may leave the ids out
+    of what is compared, and they still say whether this is one recipe.
+    """
+    before, after = old.get("ids") or {}, new.get("ids") or {}
+    data_id = before.get("data_id")
+    # A leaf's id is assigned rather than derived, so it names no recipe.
+    derived = bool(data_id) and data_id != before.get("origin_id")
+    if derived and data_id == after.get("data_id") and set(differing) - {"ids"}:
         gate = "same data_id, different content — raise the operation's version"
         return f"{name}: {gate}"
     return f"{name}: differs in {differing}"
-
-
-def _same_data_id(old: dict, new: dict) -> bool:
-    """Whether both sides claim to be the same array."""
-    before = (old.get("ids") or {}).get("data_id")
-    return bool(before) and before == (new.get("ids") or {}).get("data_id")
 
 
 def _select(fingerprint: dict | None, fields: set[str] | None) -> dict | None:

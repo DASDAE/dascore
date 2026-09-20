@@ -68,7 +68,7 @@ An ID is never knowingly false. When an operation's parameters cannot be describ
 
 ### Pinning
 
-A patch's weak ID becomes strong when someone computes one. [`pin_id`](`dascore.Patch.pin_id`) hashes the data, the dims, every coordinate's own ID together with the dims it rides, and the attributes which describe them — everything except the history and the two IDs, which is why pinning twice changes nothing.
+[`pin_id`](`dascore.Patch.pin_id`) replaces a weak ID with a strong one. It hashes the data (its dtype, a time's resolution included, and its mask), the dims, every coordinate's ID together with the dims it rides, and every attribute except the history and the two IDs — so pinning twice changes nothing.
 
 ```{python}
 pinned = patch.pin_id()
@@ -76,9 +76,9 @@ assert pinned.attrs.data_id != patch.attrs.data_id
 assert pinned.attrs.data_id == dc.get_example_patch().pin_id().attrs.data_id
 ```
 
-It reads the whole array, at roughly a gigabyte a second, so it is a checkpoint rather than a step in a pipeline: what the patch holds was verified at this point, and every ID derived afterwards commits to that. Any patch may be pinned, a derived one included — a pinned result is only a stronger name for the array it already was, and re-running the recipe gives the weak ID again. That is a false distinction, never a false identity.
+It reads the whole array, about a second per gigabyte, so it is a checkpoint rather than a step in a pipeline: every ID derived afterwards builds on content verified here. Any patch may be pinned, a derived one included; re-running the recipe gives the weak ID again, which is a false distinction, never a false identity.
 
-Nothing else moves: `origin_id`, the history and where the patch was read from are left alone, though a pinned patch is no longer the array its source loads, so narrowing it is an operation rather than a window. The ID the patch carried is the caller's to keep — read `patch.attrs.data_id` before pinning, or call [`strong_data_id`](`dascore.utils.identity.strong_data_id`) to learn that weak X is strong Y without pinning anything. Metadata holds no data and object arrays hold no bytes, so both are refused: this is an explicit request, and an answer which was not computed from content would not be one.
+`origin_id`, the history and the source are left alone, though narrowing a pinned patch is an operation rather than a window, since it is no longer the array its source loads. [`strong_data_id`](`dascore.utils.identity.strong_data_id`) gives the same ID without pinning, so a caller can record that the weak ID a patch carries names the same array. Object and extended-precision data are refused, because neither has bytes which are its content, and `PatchMeta`, which holds no data, has no `pin_id`.
 
 ## The mutation boundary
 

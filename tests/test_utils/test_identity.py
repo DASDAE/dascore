@@ -1443,20 +1443,53 @@ class TestStrongDataId:
         ids = {strong_data_id(x) for x in (patch, fortran, big_endian)}
         assert len(ids) == 1
 
-    def test_datetime_unit_is_not_content(self):
-        """A time written in seconds is the time written in nanoseconds."""
+    @staticmethod
+    def _small(data):
+        """A 2 by 4 patch around some data."""
+        coords = {"distance": np.arange(2.0), "time": np.arange(4.0)}
+        return dc.Patch(data=data.reshape(2, 4), coords=coords, dims=tuple(coords))
+
+    def test_a_time_s_resolution_is_content(self):
+        """`patch + 1` is a second or a nanosecond, so the two are not one."""
         start = np.datetime64("2020-01-01", "ns")
         nanoseconds = start + (np.arange(8) * 10**9).astype("timedelta64[ns]")
-        coords = {"distance": np.arange(2.0), "time": np.arange(4.0)}
-        dims = ("distance", "time")
+        first = self._small(nanoseconds)
+        second = self._small(nanoseconds.astype("datetime64[s]"))
+        assert strong_data_id(first) != strong_data_id(second)
+        # A time nanoseconds cannot hold is still content with bytes.
+        far = np.array(["3000-01-01"] * 8, dtype="datetime64[s]")
+        assert strong_data_id(self._small(far)) == strong_data_id(self._small(far))
 
-        def _patch(data):
-            return dc.Patch(data=data.reshape(2, 4), coords=coords, dims=dims)
+    def test_a_mask_is_content(self):
+        """Reductions read the mask, so what it hides is part of the patch."""
+        values = np.arange(8.0)
+        open_mask = np.ma.array(values, mask=[False] * 8)
+        one_hidden = np.ma.array(values, mask=[False] * 7 + [True])
+        ids = {strong_data_id(self._small(x)) for x in (values, open_mask, one_hidden)}
+        assert len(ids) == 3
+        again = np.ma.array(values, mask=[False] * 7 + [True])
+        assert strong_data_id(self._small(again)) in ids
 
-        first = _patch(nanoseconds)
-        second = _patch(nanoseconds.astype("datetime64[s]"))
-        assert first.dtype != second.dtype
-        assert strong_data_id(first) == strong_data_id(second)
+    def test_private_attrs_are_content(self, patch):
+        """A patch function can read them, so they are part of the patch."""
+        first = patch.update_attrs(_gain=1)
+        assert strong_data_id(first) != strong_data_id(patch.update_attrs(_gain=2))
+        assert strong_data_id(first) == strong_data_id(patch.update_attrs(_gain=1))
+
+    def test_byte_order_of_a_record_s_fields(self):
+        """Layout, inside a structured dtype too."""
+        little = np.zeros(8, dtype=[("value", "<f8"), ("count", "<i4")])
+        little["value"] = np.arange(8.0)
+        big = little.astype(little.dtype.newbyteorder(">"))
+        assert strong_data_id(self._small(little)) == strong_data_id(self._small(big))
+
+    @pytest.mark.parametrize("dtype", [np.longdouble, np.clongdouble])
+    def test_extended_precision_is_refused(self, dtype):
+        """Its padding bytes differ from run to run, so no id would hold."""
+        if np.dtype(dtype).itemsize <= (8 if np.dtype(dtype).kind == "f" else 16):
+            pytest.skip("This platform's long double is a double.")
+        with pytest.raises(ParameterError, match="padding"):
+            strong_data_id(self._small(np.arange(8).astype(dtype)))
 
     @pytest.mark.skipif(
         sys.platform == "emscripten", reason="emscripten does not support processes"
@@ -1486,7 +1519,7 @@ class TestStrongDataId:
         """Neither do python objects held in an array."""
         data = np.empty(patch.shape, dtype=object)
         data[:] = 1.0
-        with pytest.raises(ParameterError, match="Object data"):
+        with pytest.raises(ParameterError, match="python values"):
             strong_data_id(patch.new(data=data))
 
     def test_a_foreign_backend_pins_to_the_numpy_id(self, patch, to_backend):
