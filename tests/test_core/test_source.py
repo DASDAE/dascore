@@ -145,17 +145,34 @@ class TestIdentity:
         assert source[:10][2:5].id == source[2:5].id
         # Pinned: an id written down must still name the same array later.
         fixed = ArraySource("a.h5", "DASDAE", "1", "k", ((2, 5),), (3,), np.dtype("f8"))
-        assert fixed.id == "e8e8db85cb0fe4959a09d319082df3e4"
+        assert fixed.id == "c0e60b662c53454f69b039af7477d3ca"
 
     def test_different_arrays(self, source):
         """A selection, a key or a path is a different array."""
+        located = replace(source, base_id="")
         ids = {
-            source.id,
-            source[:10].id,
-            replace(source, key="b").id,
-            replace(source, path="elsewhere.h5").id,
+            located.id,
+            located[:10].id,
+            replace(located, key="b").id,
+            replace(located, path="elsewhere.h5").id,
         }
         assert len(ids) == 4
+
+    def test_a_base_id_names_the_array(self, source, patch):
+        """Given a base, where the array is kept is not part of which it is."""
+        assert source.base_id == source.id == patch.attrs.origin_id
+        moved = replace(source, path="elsewhere.h5")
+        assert moved.id == source.id and moved[:10].id == source[:10].id
+        assert replace(source, base_id="other")[:10].id != source[:10].id
+
+    def test_the_whole_is_the_base(self, source):
+        """A window over everything is the array; a prefix is not."""
+        assert source[:].id == source.id
+        prefix = source[: source.shape[0] - 1]
+        assert prefix.id != source.id
+        # A prefix is not mistaken for a smaller whole once it is all there is.
+        assert prefix[:].id == prefix.id != source.id
+        assert source.detach().id == source.id
 
     def test_description_not_identity(self, source):
         """Shape and dtype follow from the rest, so they are not hashed."""
@@ -240,5 +257,8 @@ class TestCarry:
     def test_detached(self, patch, func):
         """New values or a new layout keep the provenance and nothing else."""
         origin = patch._source
-        expected = ArraySource(origin.path, origin.format, origin.version, origin.key)
+        # Which stored array it came from, and no claim to load this one.
+        expected = ArraySource(
+            origin.path, origin.format, origin.version, origin.key, base_id=origin.id
+        )
         assert func(patch)._source == expected

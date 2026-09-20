@@ -12,8 +12,8 @@ import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.utils.identity import H
 
-# The fields which say which array this is; `shape` and `dtype` follow from them.
-_ID_FIELDS = ("path", "format", "version", "key", "windows")
+# Where an array is, which names it when nothing better does.
+_LOCATION_FIELDS = ("path", "format", "version", "key")
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +42,14 @@ class ArraySource:
         The shape of the array the windows select.
     dtype
         The dtype of the loaded array.
+    base_id
+        The id of the whole array, which a window's id builds on. The
+        framework gives a patch's data array the patch's `origin_id`; a
+        caller which knows better, such as a hash of the contents, gives
+        that. Empty means "by location": path, format, version and key.
+    extent
+        The shape of the whole array, which says when the windows select
+        all of it.
 
     Examples
     --------
@@ -63,6 +71,8 @@ class ArraySource:
     windows: tuple[tuple[int, int], ...] = ()
     shape: tuple[int, ...] = ()
     dtype: Any = None
+    base_id: str = ""
+    extent: tuple[int, ...] = ()
 
     @property
     def loadable(self) -> bool:
@@ -82,18 +92,31 @@ class ArraySource:
 
     @property
     def id(self) -> str:
-        """A digest of which array this is; equal sources share it."""
-        return H("window", {name: getattr(self, name) for name in _ID_FIELDS})
+        """
+        The id of the array this selects; nothing is read to work it out.
+
+        The whole array's id is its `base_id`. A window's is derived from
+        the base and the absolute windows, so it does not depend on the
+        slices which led to it, nor -- given a base -- on where the array
+        is kept.
+        """
+        location = {name: getattr(self, name) for name in _LOCATION_FIELDS}
+        base = self.base_id or H("location", location)
+        whole = tuple((0, size) for size in self.extent)
+        if not self.windows or self.windows == whole:
+            return base
+        return H("window", [base, self.windows])
 
     def describe(self, shape, dtype) -> ArraySource:
         """Return a source for the whole of an array of this shape and dtype."""
         shape = tuple(int(x) for x in shape)
         windows = tuple((0, x) for x in shape)
-        return replace(self, windows=windows, shape=shape, dtype=np.dtype(dtype))
+        dtype = np.dtype(dtype)
+        return replace(self, windows=windows, shape=shape, dtype=dtype, extent=shape)
 
     def detach(self) -> ArraySource:
         """Return the provenance alone, for an array this no longer loads."""
-        return replace(self, windows=(), shape=(), dtype=None)
+        return replace(self, windows=(), shape=(), dtype=None, extent=())
 
     def narrow(self, indexer) -> ArraySource:
         """Return the source `indexer` selects, detached if not contiguous."""
@@ -145,6 +168,7 @@ class ArraySource:
         """Return the source `to_dict` wrote."""
         out = dict(contents)
         out["shape"] = tuple(out.get("shape", ()))
+        out["extent"] = tuple(out.get("extent", ()))
         out["windows"] = tuple((a, b) for a, b in out.get("windows", ()))
         if out.get("dtype") is not None:
             out["dtype"] = np.dtype(out["dtype"])
