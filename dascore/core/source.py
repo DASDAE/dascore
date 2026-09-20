@@ -49,8 +49,9 @@ class ArraySource:
         The dtype of the loaded array.
     origin_id
         The id of the whole array, which a window's id builds on. The
-        framework gives a patch's data array the patch's `origin_id`; a
-        caller which knows better, such as a hash of the contents, gives
+        framework gives a patch's data array the `data_id` that patch has
+        as it is read, so a patch nothing has been done to is its source;
+        a caller which knows better, such as a hash of the contents, gives
         that. Empty means "by location": path, format, version and key.
     extent
         The shape of the whole array, which says when the windows select

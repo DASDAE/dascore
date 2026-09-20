@@ -427,7 +427,9 @@ class TestTDMSInterrogator:
         assert metadata.dtype == patch.dtype
         selected = dc.read(tdms_path, samples=True, time=(1, 4), distance=(2, 5))[0]
         np.testing.assert_array_equal(selected.data, patch.data[1:4, 2:5])
-        assert selected.attrs == patch.attrs
+        # A trim names a window of the file, so its data_id alone moves.
+        assert selected.attrs.data_id != patch.attrs.data_id
+        assert selected.attrs.update(data_id=patch.attrs.data_id) == patch.attrs
         assert patch._source == metadata._source
         # The selection keeps the same provenance and narrows the windows.
         assert selected._source.detach() == patch._source.detach()

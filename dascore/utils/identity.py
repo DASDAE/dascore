@@ -268,6 +268,54 @@ def origin_id_for(
     )
 
 
+def narrowed_data_id(
+    attrs, before: ArraySource | None, after: ArraySource | None
+) -> str | None:
+    """
+    Return the id of a window of the array a patch already is, or None.
+
+    A patch nothing has been done to *is* its source, so narrowing it to
+    something the source can still load names a window of the same array
+    rather than the result of an operation. Windows compose, so which
+    selections led there does not matter.
+
+    Parameters
+    ----------
+    attrs
+        The attrs of the patch being narrowed.
+    before
+        The source of that patch, if it has one.
+    after
+        The source the narrowed patch would load from, if any.
+
+    Returns
+    -------
+    The window's id, or None when the result must be derived as usual:
+    the patch is no longer what its source loads (anything was done to
+    it), or one of the two describes no array (a stepped, fancy or
+    non-contiguous selection detaches the source).
+    """
+    if before is None or after is None or not (before.loadable and after.loadable):
+        return None
+    if (getattr(attrs, "data_id", "") or "") != before.data_id:
+        return None
+    return after.data_id
+
+
+def read_operation_id(snap) -> str | None:
+    """
+    Return the id of decoding a resource under non-default options, or None.
+
+    `snap` changes which coordinates the same bytes decode to, so a
+    non-default value makes a different array; the default reads the
+    stored thing itself and derives nothing. None means the reader was
+    left to its own default, which is the default.
+    """
+    if snap is True or snap is None:
+        return None
+    return operation_id("Read", {"snap": snap})
+
+
 def with_ids(attrs):
     """
     Return attrs which name which data they belong to.
@@ -294,7 +342,13 @@ def merge_operation(params: Mapping[str, Any] | None = None) -> str:
     return operation_id("Merge", dict(params or {}))
 
 
-def result_ids(members, operation: str | None, output: int | None = None) -> dict:
+def result_ids(
+    members,
+    operation: str | None,
+    output: int | None = None,
+    *,
+    data_id: str | None = None,
+) -> dict:
     """
     Return the two ids of an operation's result.
 
@@ -309,13 +363,17 @@ def result_ids(members, operation: str | None, output: int | None = None) -> dic
     output
         The result's position among several; see
         [`derive`](`dascore.utils.identity.derive`).
+    data_id
+        The result's data id where it is known outright, such as a window
+        of an input's array; nothing is derived for it.
     """
     members = list(members)
-    parents = [getattr(x, "data_id", "") or "" for x in members]
-    # A parent which names no data cannot be derived from either: two such
-    # inputs would otherwise lead to one id.
-    derivable = operation and parents and all(parents)
-    data_id = derive(parents, operation, output) if derivable else new_id()
+    if data_id is None:
+        parents = [getattr(x, "data_id", "") or "" for x in members]
+        # A parent which names no data cannot be derived from either: two
+        # such inputs would otherwise lead to one id.
+        derivable = operation and parents and all(parents)
+        data_id = derive(parents, operation, output) if derivable else new_id()
     origin = fold_origin_ids([getattr(x, "origin_id", "") or "" for x in members])
     return {"origin_id": origin, "data_id": data_id}
 

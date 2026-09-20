@@ -63,8 +63,13 @@ from dascore.io.utils import selection_windows, slice_dataset, validate_windows
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.hdf5 import H5Reader, _ManagedH5pyFile
 from dascore.utils.identity import (
+    derive,
     ids_enabled,
+    narrowed_data_id,
     origin_id_for,
+    read_operation_id,
+    stamp,
+    warn_random_id,
 )
 from dascore.utils.io import (
     IOResourceManager,
@@ -828,6 +833,7 @@ class FiberIO:
                     self.version,
                     provenance_source,
                     describe=self.input_type != "directory",
+                    snap=snap,
                 )
             selected, requests = [], []
             for index, (patch, origin) in enumerate(zip(patches, origins, strict=True)):
@@ -872,9 +878,9 @@ class FiberIO:
                 source = replace(source, key=key).narrow(
                     tuple(indexers.get(x, slice(None)) for x in patch.dims)
                 )
-                selected.append((patch, coords, source, windows, residual))
+                selected.append((patch, coords, source, windows, residual, queries))
             for selection, data in zip(selected, load(requests), strict=True):
-                patch, coords, source, windows, residual = selection
+                patch, coords, source, windows, residual, queries = selection
                 expected = (
                     tuple(stop - start for start, stop in windows)
                     if patch.dims
@@ -889,7 +895,15 @@ class FiberIO:
                     )
                     raise InvalidFiberIOError(msg)
                 data = _apply_union_indexers(residual, data)
-                new = patch.update(coords=coords).to_patch(data)
+                attrs = selected_read_attrs(
+                    patch.attrs,
+                    patch._source,
+                    source,
+                    queries,
+                    relative=relative,
+                    samples=samples,
+                )
+                new = patch.update(coords=coords, attrs=attrs).to_patch(data)
                 new._source = source
                 out.append(new)
         return dc.spool(out)
@@ -1202,6 +1216,48 @@ def _load_array_source(source: ArraySource) -> np.ndarray:
     return out
 
 
+def selected_read_attrs(
+    attrs, before, after, queries, *, relative: bool = False, samples: bool = False
+):
+    """
+    Return the attrs of a patch a read trimmed as it loaded.
+
+    A selection pushed into the reader names what the same selection on
+    the loaded patch names: a window of the source while the source still
+    loads the result, and otherwise what `Patch.select` derives from it.
+
+    Parameters
+    ----------
+    attrs
+        The attrs of the whole patch the reader described.
+    before, after
+        The sources of the whole and the trimmed arrays, if any.
+    queries
+        The coordinate selections the reader carried out.
+    relative, samples
+        How those selections were meant.
+    """
+    if not ids_enabled():
+        return attrs
+    window = narrowed_data_id(attrs, before, after)
+    if window is not None:
+        return attrs.update(data_id=window)
+    if not queries:
+        return attrs
+    # Imported here rather than at module scope: the operations are built
+    # on top of the I/O framework this module holds.
+    from dascore.proc.coords import Select  # noqa: PLC0415
+
+    try:
+        operation = Select(**queries, relative=relative, samples=samples).operation_id
+    except Exception as error:
+        # A bound the encoder cannot spell still read the data it asked
+        # for; only its id is unknown, and never the whole file's.
+        warn_random_id("select", error)
+        operation = None
+    return stamp(attrs, [attrs], operation)
+
+
 def _stamp_source_ids(
     patches: list[dc.Patch],
     file_format: str,
@@ -1210,18 +1266,22 @@ def _stamp_source_ids(
     *,
     indices: Sequence[int] | None = None,
     describe: bool = False,
+    snap: snap_type = True,
 ) -> list[dc.Patch]:
     """
     Stamp selected patches, retaining their original source ordinals and keys.
 
     `describe` makes each source loadable; only for whole, unselected arrays
-    which `read_array` can find by key.
+    which `read_array` can find by key. `snap` is the decode option the
+    metadata were read under: a non-default one makes a different array of
+    the same bytes, so it is an operation on the stored thing.
     """
     indices = range(len(patches)) if indices is None else indices
     if not indices:
         return []
     path, size_bytes, mtime_ns = source_identity(source)
     reload_path = str(_get_reloadable_source_path(source) or "")
+    decode = read_operation_id(snap)
     out = []
     for index in indices:
         patch = patches[index]
@@ -1243,16 +1303,18 @@ def _stamp_source_ids(
                 ordinal=index,
             )
             # A freshly read patch is its origin, unless the file says what
-            # was done before it was written.
-            ids = {
-                "origin_id": origin_id,
-                "data_id": (attrs.data_id if stored else "") or origin_id,
-            }
+            # was done before it was written, or it was decoded some other
+            # way than the stored thing itself.
+            data_id = (attrs.data_id if stored else "") or origin_id
+            if decode is not None:
+                data_id = derive([data_id], decode)
+            ids = {"origin_id": origin_id, "data_id": data_id}
             # Validate IDs supplied by a reader; derived IDs are trusted strings
             # and need no second validation of every scientific attribute.
             attrs = attrs.update(**ids) if stored else attrs.model_copy(update=ids)
-            # The data array is the patch's origin, wherever it is kept.
-            origin = replace(origin, origin_id=origin_id)
+            # The array the source loads is the one the patch holds, so a
+            # window of it builds on that rather than on the whole file.
+            origin = replace(origin, origin_id=data_id)
         if hasattr(attrs, STORED_ORIGIN_ID):
             attrs = attrs.drop(STORED_ORIGIN_ID)
         # Expose positional keys after deriving IDs with the original ordinal.
@@ -1730,6 +1792,7 @@ def _iter_scan_results(
                         man.source,
                         indices=indices,
                         describe=fiber_io.input_type != "directory",
+                        snap=snap,
                     )
                     for result in patches:
                         output_count += 1

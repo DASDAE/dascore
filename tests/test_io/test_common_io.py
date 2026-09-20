@@ -605,7 +605,10 @@ class TestRead:
         assert selected.dtype == expected.dtype
         assert selected.attrs.origin_id == full.attrs.origin_id
         assert selected._source.key == full._source.key
-        assert selected.attrs.data_id == full.attrs.data_id
+        # A bound pushed into the reader names what selecting the loaded
+        # patch names, and not the whole file.
+        assert selected.attrs.data_id == expected.attrs.data_id
+        assert selected.attrs.data_id != full.attrs.data_id
         assert selected.attrs.history == full.attrs.history
 
     def test_read_array_matches_default(self, io_path_tuple):
@@ -767,12 +770,13 @@ class TestRead:
         spool = io.read(path, time=(end_time + one_second, ...))
         assert len(spool) == 0
 
-    def test_a_read_bound_records_nothing(self, io_path_tuple):
+    def test_a_read_bound_names_the_window(self, io_path_tuple):
         """
-        A patch read under a coordinate bound carries what a whole read carries.
+        A patch read under a coordinate bound names the window it read.
 
-        The bound is the read's business; a spool records the trim it
-        asked for, so a reader which recorded it too would record it twice.
+        The bound reaches the same samples as selecting the whole patch
+        would, so both routes name one array. `select` writes no history,
+        and neither does the read.
         """
         io, path = io_path_tuple
         # Through `dc.read`, which says which data a patch is; a patch a
@@ -786,9 +790,11 @@ class TestRead:
         values = patch.get_coord("time").values
         if len(values) < 6:
             pytest.skip("Test requires a time dimension with room to trim.")
-        bounded = dc.read(path, time=(values[2], values[-3]), **kwargs)
+        window = (values[2], values[-3])
+        bounded = dc.read(path, time=window, **kwargs)
         assert len(bounded) == 1
-        assert bounded[0].attrs.data_id == patch.attrs.data_id
+        assert bounded[0].attrs.data_id == patch.select(time=window).attrs.data_id
+        assert bounded[0].attrs.data_id != patch.attrs.data_id
         assert bounded[0].attrs.history == patch.attrs.history
 
     def test_slice_out_all_patches_distance(self, io_path_tuple):

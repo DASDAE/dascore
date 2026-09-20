@@ -73,16 +73,24 @@ class TestDerivedRead:
 
     def test_noncontiguous_both_axes(self, reader):
         """Compose associated constraints on the original grid, then trim residuals."""
-        out = reader.read(
-            "memory", distance=(1, 4), time=(2, 6), quality=(1, 1), receiver=(1, 1)
-        )[0]
+        whole = reader.metadata.to_patch(reader.data)
+        selection = {
+            "distance": (1, 4),
+            "time": (2, 6),
+            "quality": (1, 1),
+            "receiver": (1, 1),
+        }
+        out = reader.read("memory", **selection)[0]
         expected = reader.data[np.ix_([1, 3], [3, 5])]
         np.testing.assert_array_equal(out.data, expected)
         np.testing.assert_array_equal(out.get_coord("distance").values, [1, 3])
         np.testing.assert_array_equal(out.get_coord("time").values, [3, 5])
         assert reader.calls == [(((1, 4), (3, 6)), "part")]
         assert out.attrs.history == reader.metadata.attrs.history
-        assert out.attrs.data_id == reader.metadata.attrs.data_id
+        # The source cannot load these samples, so the id derives -- as the
+        # same selection made on the loaded patch does.
+        assert out.attrs.data_id == whole.select(**selection).attrs.data_id
+        assert out.attrs.data_id != reader.metadata.attrs.data_id
 
     def test_sample_selection(self, reader):
         """Half-open sample bounds are passed through as exact array windows."""
