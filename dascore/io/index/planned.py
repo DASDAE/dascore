@@ -1044,12 +1044,12 @@ def _with_parent_runs(
     kept its identity, and so equals each member's; never along the
     dimension it merged, whose runs no single member states. A run in other units
     or of another kind than the output's coordinate is dropped. Members
-    find their runs through the parent's patch rows (``_index_id``); a
+    find their runs through the parent's patch rows (``_index_row``); a
     collapsed re-plan's members carry the id of the output holding them.
     """
-    if trims.empty or "_index_id" not in sources.columns:
+    if trims.empty or "_index_row" not in sources.columns:
         return records
-    index_ids = dict(zip(sources["_patch_row"], sources["_index_id"], strict=True))
+    index_ids = dict(zip(sources["_patch_row"], sources["_index_row"], strict=True))
     members: dict[str, list] = {}
     trim_rows = zip(trims["output_id"], trims["_patch_row"], strict=True)
     for output_id, patch_row in trim_rows:
@@ -1128,7 +1128,7 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
     # that output's patch in this catalog (a stale one named the parent's)
     ids = catalog.backend.patch_ids_by_key()
     index_ids = [ids.get(str(int(x))) for x in members["output_id"]]
-    working = members.assign(_index_id=pd.array(index_ids, dtype="Int64"))
+    working = members.assign(_index_row=pd.array(index_ids, dtype="Int64"))
     working = working.drop(columns=["output_id"])
     working = patch_local_adjusted_envelopes(
         working, catalog.residuals, drop_empty=True

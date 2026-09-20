@@ -56,7 +56,7 @@ from dascore.utils.patch import record_call
 from dascore.utils.paths import is_memory_uri
 
 # Directory archives present in per-patch time order (source ordinals
-# alone cannot interleave multi-patch files); ordinal and patch id stay
+# alone cannot interleave multi-patch files); ordinal and patch row stay
 # the deterministic tiebreak inside the ORDER BY.
 _DIRECTORY_ORDER = ("coord", "time", True)
 
@@ -926,13 +926,13 @@ class PatchCatalog:
         if self._default_order is None:
             return False
         by_ordinal = tuple(
-            self.backend.query_ids(
+            self.backend.query_rows(
                 list(self._queries) or None,
                 order_by=None,
                 patch_rows=self._ids,
             )
         )
-        return tuple(self.ordered_ids()) != by_ordinal
+        return tuple(self.ordered_rows()) != by_ordinal
 
     @property
     def residuals(self) -> tuple[tuple[dict, bool, bool], ...]:
@@ -950,7 +950,7 @@ class PatchCatalog:
         """The directory syncer keeping this catalog current, or None."""
         return self._syncer
 
-    def ordered_ids(self) -> tuple[int, ...]:
+    def ordered_rows(self) -> tuple[int, ...]:
         """
         The view's patch ids in presentation order (ids only, cheap).
 
@@ -964,11 +964,11 @@ class PatchCatalog:
             if not self._queries:
                 return self._ids
             matched = set(
-                self.backend.query_ids(list(self._queries), patch_rows=self._ids)
+                self.backend.query_rows(list(self._queries), patch_rows=self._ids)
             )
             return tuple(x for x in self._ids if x in matched)
         return tuple(
-            self.backend.query_ids(
+            self.backend.query_rows(
                 list(self._queries) or None,
                 order_by=self._effective_order,
                 patch_rows=self._ids,
@@ -993,7 +993,7 @@ class PatchCatalog:
             and (stop is None or stop >= 0)
         ):
             start, stop, _ = item.indices(sys.maxsize)
-            ids = self.backend.query_ids(
+            ids = self.backend.query_rows(
                 list(self._queries) or None,
                 order_by=self._effective_order,
                 patch_rows=self._ids,
@@ -1001,7 +1001,7 @@ class PatchCatalog:
                 offset=start,
             )
         else:
-            ids = (self.ordered_ids() if ids is None else ids)[item]
+            ids = (self.ordered_rows() if ids is None else ids)[item]
         return self._view(self._queries, self._residuals, ids=tuple(ids))
 
     def restrict(self, indices, ids=None) -> PatchCatalog:
@@ -1013,7 +1013,7 @@ class PatchCatalog:
         one row, matching the spool's set semantics). ``ids`` is this
         view's presented ids, for a caller which has just read them.
         """
-        ids = np.asarray(self.ordered_ids() if ids is None else ids)
+        ids = np.asarray(self.ordered_rows() if ids is None else ids)
         picked = ids[np.asarray(indices)]
         deduped = tuple(dict.fromkeys(int(x) for x in picked))
         return self._view(self._queries, self._residuals, ids=deduped)

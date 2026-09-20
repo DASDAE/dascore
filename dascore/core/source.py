@@ -107,6 +107,10 @@ class ArraySource:
             return base
         return H("window", [base, self.windows])
 
+    def _identity(self) -> tuple[str, str]:
+        """Return the id this source has as an operation's parameter."""
+        return "window", self.data_id
+
     def describe(self, shape, dtype) -> ArraySource:
         """Return a source for the whole of an array of this shape and dtype."""
         shape = tuple(int(x) for x in shape)

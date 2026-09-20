@@ -671,7 +671,7 @@ class Spool(NodeRepr, NamespaceOwner):
         # The complement is taken against select itself rather than by
         # negating each predicate, so the two can never drift apart.
         if not query.channels:
-            removed = self.select(_attrs=stated)._catalog.ordered_ids()
+            removed = self.select(_attrs=stated)._catalog.ordered_rows()
             return self._restrict_to_rows(removed, keep=False)
         # With both, the complement is still one set: a patch keeps every
         # channel unless the attrs matched it, and the channels the fiber
@@ -681,7 +681,7 @@ class Spool(NodeRepr, NamespaceOwner):
         return self._select_channels(
             stated_channels(query.channels),
             complement=True,
-            applies_to=matched._catalog.ordered_ids(),
+            applies_to=matched._catalog.ordered_rows(),
         )
 
     def _classify_query(self, _attrs, _coords, kwargs) -> _InventoryQuery:
@@ -840,7 +840,7 @@ class Spool(NodeRepr, NamespaceOwner):
         unresolved by the inventory do not match. Selection uses the same projection
         and conflict rules as extraction.
         """
-        ids = np.asarray(self._catalog.ordered_ids(), dtype=np.int64)
+        ids = np.asarray(self._catalog.ordered_rows(), dtype=np.int64)
         if not len(ids):
             return self
         backend = self._catalog.backend
@@ -870,7 +870,7 @@ class Spool(NodeRepr, NamespaceOwner):
             # the verdict for the stated rows and False everywhere else.
             index_ids = (
                 np.asarray(
-                    self._catalog.select(_attrs={name: selector}).ordered_ids(),
+                    self._catalog.select(_attrs={name: selector}).ordered_rows(),
                     dtype=np.int64,
                 )
                 if name in known
@@ -1390,7 +1390,7 @@ class Spool(NodeRepr, NamespaceOwner):
         which rows a spool holds without saying anything about how they
         come out.
         """
-        ids = np.asarray(self._catalog.ordered_ids(), dtype=np.int64)
+        ids = np.asarray(self._catalog.ordered_rows(), dtype=np.int64)
         named = np.isin(ids, np.asarray(patch_rows, dtype=np.int64))
         mask = named if keep else ~named
         if mask.all():
@@ -1515,7 +1515,7 @@ class Spool(NodeRepr, NamespaceOwner):
             step = int(np.ceil(value))  # tolerate a non-integral size
         if not length:
             return
-        ids = self._catalog.ordered_ids()
+        ids = self._catalog.ordered_rows()
         length = len(ids)
         if count is not None:
             step = int(np.ceil(length / value))
@@ -1670,13 +1670,13 @@ class Spool(NodeRepr, NamespaceOwner):
             base = self._catalog.to_df().reset_index(drop=True)
             if "_patch_row" in base.columns:
                 # the index's own ids, which only rows read from it carry
-                base = base.assign(_index_id=base["_patch_row"])
+                base = base.assign(_index_row=base["_patch_row"])
         base = _ensure_patch_row(base)
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
         working = _drop_patch_local_empty(working)
         base = base[base["_patch_row"].isin(working["_patch_row"])]
         patch_local = any(s or r for _, s, r in self._catalog.residuals)
-        if runs and dim is not None and "_index_id" in base.columns:
+        if runs and dim is not None and "_index_row" in base.columns:
             # a sample or relative selection resolves against the whole
             # patch at load, so its runs cannot be planned apart
             if not patch_local:
@@ -1768,9 +1768,9 @@ class Spool(NodeRepr, NamespaceOwner):
             return none
         # a row with no envelope here is one neither report nor plan can
         # place (a relative time among absolute ones), and its runs no better
-        # rows name their patch in this spool's index by `_index_id` when
+        # rows name their patch in this spool's index by `_index_row` when
         # they are plan members, else by `_patch_row`
-        key = "_index_id" if "_index_id" in df.columns else "_patch_row"
+        key = "_index_row" if "_index_row" in df.columns else "_patch_row"
         placed = df[df[min_col].notna() & df[key].notna()]
         wanted = placed[key].astype("int64").unique()
         runs = self._catalog.backend.coord_runs(dim, wanted)
@@ -1811,7 +1811,7 @@ class Spool(NodeRepr, NamespaceOwner):
         split, ids = self._run_rows(df, dim)
         if not ids:
             return df
-        whole = df[~df["_patch_row"].isin(ids)]  # reports carry no `_index_id`
+        whole = df[~df["_patch_row"].isin(ids)]  # reports carry no `_index_row`
         return pd.concat([whole, split], ignore_index=True)
 
     def _runs_as_members(self, working: pd.DataFrame, dim: str) -> pd.DataFrame:
@@ -1827,7 +1827,7 @@ class Spool(NodeRepr, NamespaceOwner):
         split, ids = self._run_rows(working, dim)
         if not ids:
             return working
-        kept = working[~working["_index_id"].isin(ids)]
+        kept = working[~working["_index_row"].isin(ids)]
         working = pd.concat(
             [kept, split.assign(_modified=True)],
             ignore_index=True,

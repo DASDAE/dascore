@@ -77,7 +77,7 @@ class TestTimeQuery:
         pd.testing.assert_frame_equal(
             time_backend.query(direct), time_backend.query(general)
         )
-        assert time_backend.query_ids(direct) == time_backend.query_ids(general)
+        assert time_backend.query_rows(direct) == time_backend.query_rows(general)
         assert time_backend.count(direct) == time_backend.count(general)
 
     def test_sorted_membership(self, time_backend):
@@ -89,7 +89,7 @@ class TestTimeQuery:
             Query(attrs={"tag": "patch-*"}),
         ]
         options = {"order_by": ("coord", "time", False), "patch_rows": (1, 2, 3)}
-        assert time_backend.query_ids(direct, **options) == time_backend.query_ids(
+        assert time_backend.query_rows(direct, **options) == time_backend.query_rows(
             general, **options
         )
 
@@ -109,10 +109,10 @@ class TestTimeQuery:
     def test_existing_catalog(self, time_backend):
         """Old catalogs remain valid without rebuilding sources or adding schema."""
         query = Query(coords={"time": (np.datetime64("2024-01-01"), None)})
-        expected = time_backend.query_ids(query)
+        expected = time_backend.query_rows(query)
         reopened = get_backend(time_backend._path)
         try:
-            assert reopened.query_ids(query) == expected
+            assert reopened.query_rows(query) == expected
         finally:
             reopened.close()
 

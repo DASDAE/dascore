@@ -21,15 +21,27 @@ import pickle
 from collections.abc import Iterable
 
 from dascore.config import get_config
-from dascore.core.coords import CoordSummary
 from dascore.exceptions import InvalidFiberFileError, UnitError
 from dascore.io.utils import convert_attr_units
 from dascore.units import convert_units, get_quantity_str
 from dascore.utils.misc import unbyte
 
 # Every flat coord-summary key an old file may contain ({name}_{field}).
-_LEGACY_COORD_FIELDS = tuple(f for f in CoordSummary.model_fields if f != "runs")
-# The subset legacy writers actually flattened into attrs; dims/physical_id
+# Spelled out: the files are history, and do not follow a field's renaming.
+_LEGACY_COORD_FIELDS = (
+    "dtype",
+    "min",
+    "max",
+    "step",
+    "units",
+    "dims",
+    "len",
+    "fingerprint",
+    "step_numerator",
+    "step_denominator",
+    "origin_offset",
+)
+# The subset legacy writers actually flattened into attrs; dims/fingerprint
 # never appeared as flat keys, so translate re-emits only these while the
 # strip above removes the full (superset) field family.
 _LEGACY_FLAT_FIELDS = ("min", "max", "step", "units", "dtype", "len")

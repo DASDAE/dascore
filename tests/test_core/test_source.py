@@ -147,6 +147,13 @@ class TestIdentity:
         fixed = ArraySource("a.h5", "DASDAE", "1", "k", ((2, 5),), (3,), np.dtype("f8"))
         assert fixed.data_id == "c0e60b662c53454f69b039af7477d3ca"
 
+    def test_as_an_operation_parameter(self, source):
+        """It encodes as its id, so its field names are not part of any hash."""
+        from dascore.utils.identity import encode  # noqa: PLC0415
+
+        assert encode(source) == {"$id": ["window", source.data_id]}
+        assert encode(source[:10]) != encode(source)
+
     def test_different_arrays(self, source):
         """A selection, a key or a path is a different array."""
         located = replace(source, origin_id="")

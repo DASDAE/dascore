@@ -892,7 +892,6 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         """
         return self._identity()[1]
 
-    @cached_method
     def _identity(self) -> tuple[str, str]:
         """Return the id this coordinate has as a parameter or in a content id."""
         dtype = str(np.dtype(self.dtype)) if self.dtype else ""

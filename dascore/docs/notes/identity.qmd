@@ -7,10 +7,12 @@ DASCore names things three ways, and the suffix says which.
 | Suffix | What it is | Meaningful | Examples |
 |---|---|---|---|
 | `_id` | An identity: 32 hex characters, hashed or random | Everywhere | `origin_id`, `data_id`, `operation_id` |
-| `_key` | A native name inside a resource, given by a reader | Within that resource | `source_patch_key`, `ArraySource.key`, `acquisition_key` |
+| `_key` | A native name inside a resource, given by a reader | Within that resource | `source_patch_key`, `ArraySource.key` |
 | `_row` | A row number in a spool index | Within that database | `patch_row`, `source_row`, `coord_row` |
 
-Two indexes over the same files agree on every `_id` and `_key`, and on no `_row`. Inventory `resource_id` values are UUID labels for shareable objects and follow their own rules.
+Two indexes over the same files agree on every `_id` and `_key`, and on no `_row`. A key may be hashed into an ID; a row never is.
+
+Three names sit outside the table. Inventory `resource_id` values are UUID labels for shareable objects, and `acquisition_key` is the inventory identity which joins a patch to them. The frame columns `output_id` (chunk plans) and `group_id` (gap reports) predate the rule: they are ordinal numbers, not identities.
 
 ## The three identities
 

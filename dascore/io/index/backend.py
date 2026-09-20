@@ -926,7 +926,7 @@ class SQLiteIndexBackend:
         df = self._fetch_df(sql, params)
         df, attr_columns = self._flatten(df, attr_meta)
         df = self._pivot_coords(df)
-        # The row id goes private before the attrs land; residual queries
+        # The row number goes private before the attrs land; residual queries
         # and the catalog's ordering read it under that name.
         df = df.rename(columns=dict(SPOOL_EARLY_RENAMES))
         df = self._apply_attr_columns(df, attr_columns)
@@ -937,7 +937,7 @@ class SQLiteIndexBackend:
             df = apply_residuals(df, residuals, attr_columns)
         return df.reset_index(drop=True)
 
-    def query_ids(
+    def query_rows(
         self,
         query=None,
         order_by=None,
@@ -998,7 +998,7 @@ class SQLiteIndexBackend:
 
     def export_records(self, patch_rows=None) -> list:
         """
-        Reconstruct source records, filtering by patch id in SQL.
+        Reconstruct source records, filtering by patch row in SQL.
 
         With patch_rows given, only those patches (and the sources, attrs,
         coordinate links, and coordinate definitions they reference) are
@@ -1446,7 +1446,7 @@ class SQLiteIndexBackend:
 
     def patch_runs(self, patch_rows) -> dict[int, list[CoordRecord]]:
         """
-        The run records each of these patches links, in order, by patch id.
+        The run records each of these patches links, in order, by patch row.
 
         Patches without a segmented coordinate are absent; an index
         without any answers from the empty runs index.
