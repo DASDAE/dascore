@@ -199,7 +199,8 @@ def set_dims(self: PatchType, **kwargs: str) -> PatchType:
     >>> assert "my_coord" in out.dims
     """
     cm = self.coords.set_dims(**kwargs)
-    attrs = _named_mutation(self, self.attrs, "set_dims", kwargs, cm is not self.coords)
+    changed = not _same_coords(cm, self.coords)
+    attrs = _named_mutation(self, self.attrs, "set_dims", kwargs, changed)
     return self.new(coords=cm, attrs=attrs)
 
 
@@ -266,7 +267,10 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
         # Only the keys the caller wrote, each against what the patch says
         # now: restating a value is not a change, and comparing whole
         # models costs more than the call itself.
-        params = {key: value for key, value in attrs.items() if key not in _UNSTAMPED}
+        # As validated, so that "m" and a unit object are one spelling.
+        params = {
+            key: out_attrs.get(key, _MISSING) for key in attrs if key not in _UNSTAMPED
+        }
         changed = any(
             not values_equal(self.attrs.get(key, _MISSING), value)
             for key, value in params.items()

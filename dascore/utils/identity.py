@@ -371,9 +371,10 @@ def read_operation_id(snap) -> str | None:
     """
     if snap is True:
         return None
-    if snap is not False:
-        snap = sorted([snap] if isinstance(snap, str) else snap)
-    return operation_id("Read", {"snap": snap})
+    # No dimension named is snapping turned off, and a name given twice is
+    # given once.
+    names = () if snap is False else {snap} if isinstance(snap, str) else set(snap)
+    return operation_id("Read", {"snap": sorted(names) or False})
 
 
 def with_ids(attrs):

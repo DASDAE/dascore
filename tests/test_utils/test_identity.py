@@ -1319,3 +1319,29 @@ class TestStoredIds:
             spool = dc.spool(data, index_path=index).update()
             ids.append(spool.get_contents()["origin_id"].iloc[0])
         assert ids[0] == ids[1] == dc.read(data / "a.hdf5")[0].attrs.origin_id
+
+
+class TestEquivalentSpellings:
+    """One change, however it was spelled, is one id."""
+
+    def test_snap_selectors(self):
+        """No dimension is snapping off; a repeated name is one name."""
+        from dascore.utils.identity import read_operation_id  # noqa: PLC0415
+
+        assert read_operation_id(()) == read_operation_id(False)
+        assert read_operation_id(("time", "time")) == read_operation_id("time")
+        assert read_operation_id("time") != read_operation_id(False)
+        assert read_operation_id(True) is None
+
+    def test_set_dims_restating_a_dimension(self, patch):
+        """Naming a dimension as itself changes nothing, so neither do the ids."""
+        out = patch.set_dims(time="time")
+        assert out.attrs.data_id == patch.attrs.data_id
+
+    def test_attrs_are_compared_as_validated(self, patch):
+        """A unit given as text or as a unit is the same attr."""
+        metres = patch.update_attrs(data_units="m")
+        assert metres.update_attrs(data_units="m").attrs.data_id == metres.attrs.data_id
+        by_unit = patch.update_attrs(data_units=get_unit("m"))
+        assert by_unit.attrs.data_id == metres.attrs.data_id
+        assert patch.update_attrs(data_units="s").attrs.data_id != metres.attrs.data_id
