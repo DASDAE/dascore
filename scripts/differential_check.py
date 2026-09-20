@@ -462,10 +462,9 @@ def _same_recipe(old: dict, new: dict) -> bool:
     compared. A leaf's id is assigned rather than derived, so it names no
     recipe.
     """
-    before, after = old.get("ids") or {}, new.get("ids") or {}
-    data_id = before.get("data_id")
-    derived = bool(data_id) and data_id != before.get("origin_id")
-    return derived and data_id == after.get("data_id")
+    ids = [(x.get("ids") or {}).get("data_id") for x in (old, new)]
+    derived = not _is_leaf(old) and not _is_leaf(new)
+    return bool(ids[0]) and ids[0] == ids[1] and derived
 
 
 def _is_leaf(fingerprint: dict | None) -> bool:

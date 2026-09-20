@@ -112,6 +112,17 @@ class TestVersionGate:
         assert "abs: differs in ['data_hash']" in report
         assert self.GATE not in report
 
+    def test_a_leaf_on_either_side_names_no_recipe(self, before):
+        """One id on both sides is not one recipe when either is an input."""
+        ids = before["ids"]
+        after = {
+            **before,
+            "data_hash": "0" * 32,
+            "ids": {**ids, "origin_id": ids["data_id"]},
+        }
+        report = compare({"abs": before}, {"abs": after})
+        assert report[0].startswith("abs: differs in ")
+
     def test_fields_do_not_hide_the_ids(self, before):
         """Narrowing what is compared still knows whether the recipe held."""
         after = {**before, "data_hash": "0" * 32}
