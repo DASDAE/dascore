@@ -142,6 +142,25 @@ def H(domain: str, payload: Any, *, encoded: bool = False) -> str:  # noqa: N802
     return _hash_bytes(text.encode("ascii"))
 
 
+def dtype_description(dtype: Any) -> list | str:
+    """
+    Return the description a dtype is named by, fields and all.
+
+    The one spelling every id takes a dtype under: the field description of
+    a structured dtype, which its string flattens to a width, and the string
+    of any other. Equal dtypes have equal descriptions.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.utils.identity import dtype_description
+    >>> assert dtype_description(np.dtype("<i8")) == "<i8"
+    >>> assert dtype_description(np.dtype([("x", "i4")])) == [("x", "<i4")]
+    """
+    dtype = np.dtype(dtype)
+    return dtype.descr if dtype.names else dtype.str
+
+
 def encode(obj: Any) -> Any:
     """
     Return the canonical JSON-safe tree standing for an object.

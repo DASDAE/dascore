@@ -78,7 +78,6 @@ class TestTableBenchmarks:
         """Time naming an array whose members cannot be merged."""
         table = scattered.table
         table._ids.clear()
-        table._bases.clear()
         assert scattered.data_id
 
     @pytest.mark.benchmark

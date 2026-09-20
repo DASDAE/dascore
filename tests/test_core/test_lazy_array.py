@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import numpy as np
 import pytest
 
 import dascore as dc
 from dascore.core.lazy_array import (
     AXIS_FIELDS,
+    MEMBER_FIELDS,
     NEW_AXIS,
     LazyArray,
     LazyTable,
@@ -156,9 +159,31 @@ def random_boxes(rng, shape, splits):
 def tiling_array(boxes, shape):
     """Return the array whose constant members fill each box."""
     sources = [
-        ArraySource.full(tuple((high - low).tolist()), 1.0) for low, high in boxes
+        ArraySource.full(tuple((high - low).tolist()), float(index))
+        for index, (low, high) in enumerate(boxes)
     ]
     return placed(sources, [low.tolist() for low, _ in boxes], shape)
+
+
+def boxed(boxes, shape):
+    """Return the array whose constant members fill each corner pair."""
+    pairs = [(np.array(low), np.array(high)) for low, high in boxes]
+    return tiling_array(pairs, shape)
+
+
+def storage(table):
+    """Return every array a table holds."""
+    return [
+        table.member_offsets,
+        table.axis_offsets,
+        table.shape_offsets,
+        table.shapes,
+        table.concat_axes,
+        table.dtypes.codes,
+        table.members.filled,
+        *table.axes.values(),
+        *[getattr(table.members, x).codes for x in MEMBER_FIELDS],
+    ]
 
 
 class TestDescription:
@@ -307,6 +332,26 @@ class TestSlice:
         window = (slice(0, 2), slice(1, 4), slice(1, 3))
         assert np.array_equal(cube[window].load(), expected[window])
 
+    def test_staggered_tiling_keeps_its_order(self):
+        """Clipping can tie two corners, which must not leave them out of order."""
+        array = boxed([((0, 0), (1, 4)), ((0, 4), (2, 6)), ((1, 0), (2, 4))], (2, 6))
+        expected = array.load()
+        assert np.array_equal(array[1:2].load(), expected[1:2])
+
+    @pytest.mark.parametrize("shape", [(4, 5), (3, 4, 2)])
+    def test_random_windows_of_random_tilings(self, shape):
+        """Any window of a legal tiling loads the window numpy loads."""
+        rng = np.random.default_rng(2)
+        for _ in range(40):
+            boxes = random_boxes(rng, shape, int(rng.integers(1, 9)))
+            array = tiling_array(boxes, shape)
+            expected = array.load()
+            bounds = [sorted(rng.integers(0, size + 1, 2).tolist()) for size in shape]
+            window = tuple(slice(low, high) for low, high in bounds)
+            cut = array[window]
+            assert cut.validate() is cut
+            assert np.array_equal(cut.load(), expected[window])
+
 
 class TestCombine:
     """Arrays are joined in one pass, along old axes and new ones."""
@@ -341,19 +386,15 @@ class TestCombine:
         """An axis may be counted from the end."""
         assert concat(parts, axis=-1).shape == (2, 3, 12)
 
-    def test_promotes_dtype(self):
+    @pytest.mark.parametrize(
+        "combine,expected", [(concat, np.concatenate), (stack, np.stack)]
+    )
+    def test_promotes_dtype(self, combine, expected):
         """The output takes the dtype every member fits in."""
         parts = [constant((2, 2), 1, np.int32), constant((2, 2), 1.5, np.float32)]
-        joined = concat(parts, axis=0)
-        assert joined.dtype == np.result_type(np.int32, np.float32)
-        assert np.array_equal(joined.load(), np.concatenate([x.load() for x in parts]))
-
-    def test_stack_promotes_dtype(self):
-        """Stacking takes the dtype every member fits in as well."""
-        parts = [constant((2, 2), 1, np.int32), constant((2, 2), 1.5, np.float32)]
-        stacked = stack(parts, axis=0)
-        assert stacked.dtype == np.result_type(np.int32, np.float32)
-        assert np.array_equal(stacked.load(), np.stack([x.load() for x in parts]))
+        out = combine(parts, axis=0)
+        assert out.dtype == np.result_type(np.int32, np.float32)
+        assert np.array_equal(out.load(), expected([x.load() for x in parts]))
 
     def test_sources_promote_dtype(self):
         """A directory whose files differ in dtype loads at the wider one."""
@@ -684,6 +725,43 @@ class TestValidate:
         array = constant((2, 3), 1.0)
         assert stack([array, array], axis=0)[0:1].data_id == stack([array]).data_id
 
+    def test_a_wrong_stacking_hint_is_refused(self):
+        """An array which says it is stacked on an axis it is not is refused."""
+        source = ArraySource.full((2, 3), 1.0)
+        starts = np.array([[0, 0], [0, 3], [2, 0], [2, 3]])
+        grid = LazyArray.from_sources([source] * 4, starts=starts, shape=(4, 6))
+        assert grid.validate() is grid
+        bent_table = replace(grid.table, concat_axes=np.ones(1, np.int64))
+        with pytest.raises(ParameterError, match="stacked along axis 1"):
+            bent_table[0].validate()
+
+    @pytest.mark.parametrize("shape", [(0,), (0, 3), (2, 0, 4), (2, 3, 0, 5)])
+    def test_a_source_of_no_samples(self, shape):
+        """A source with an empty axis is the empty array it describes."""
+        array = LazyArray.from_source(ArraySource.full(shape, 1))
+        assert array.shape == shape and len(array) == 0
+        assert array.validate() is array
+        assert np.array_equal(array.load(), np.full(shape, 1))
+
+    def test_an_empty_source_among_others(self):
+        """A source of no samples is left out, and the rest still cover."""
+        sources = [
+            ArraySource.full((2, 3), 1.0),
+            ArraySource.full((0, 3), 1.0),
+            ArraySource.full((1, 3), 2.0),
+        ]
+        array = LazyArray.from_sources(sources)
+        assert array.shape == (3, 3) and len(array) == 2
+        expected = np.concatenate([x.load() for x in sources])
+        assert np.array_equal(array.validate().load(), expected)
+
+    def test_an_empty_stored_window(self):
+        """A stored window of no samples is left out as a constant one is."""
+        whole = stored((4, 3), path="/a/b.h5")
+        array = LazyArray.from_sources([whole[0:4], whole[2:2]])
+        assert array.shape == (4, 3) and len(array) == 1
+        assert array.validate().data_id == LazyArray.from_source(whole).data_id
+
 
 class TestIdentity:
     """The id says which array this is, and nothing about where it is."""
@@ -799,16 +877,7 @@ class TestIdentity:
         other = concat([constant((2, 3), 1.0), constant((2, 3), 3.0)], axis=0)
         assert pair.data_id != other.data_id
 
-    def test_unnamed_members(self):
-        """Members with no origin are named by where they are, as sources are."""
-        source = ArraySource(path="/a/b.h5", format="DASDAE", version="1")
-        source = source.describe((10, 3), np.float32)
-        array = LazyArray.from_source(source)
-        pair = concat([array[0:2], array[5:7]], axis=0)
-        assert pair.data_id == concat([array[0:2], array[5:7]], axis=0).data_id
-        assert pair.data_id != concat([array[0:2], array[6:8]], axis=0).data_id
-
-    @pytest.mark.parametrize("origin", ["a stored name", "abcd", "z" * 32])
+    @pytest.mark.parametrize("origin", ["", "a stored name", "abcd", "z" * 32])
     def test_folded_origin_ids(self, lazy, origin):
         """An origin which is not 32 hex characters still names its member."""
         frame = lazy.to_frame()
@@ -962,6 +1031,125 @@ class TestIdentity:
         same = placed([first[0:2], first[4:6]], starts, (4, 3))
         assert mixed.data_id != same.data_id
 
+    def test_a_member_is_named_by_its_whole_path(self):
+        """A member under a base uri is named as the whole path names it."""
+        source = stored((8, 3), path="/data/alpha/f.h5")
+        array = LazyArray.from_source(source, base_uri="/data/alpha/")
+        assert bytes(_member_ids(array._block())[0]) == _fold(source.data_id)
+
+    def test_keys_name_their_own_members(self):
+        """Members of one location with two keys are not one key twice."""
+        first = stored((8, 3), key="patch_0")
+        second = stored((8, 3), key="patch_1")
+        starts = [[0, 0], [2, 0]]
+        mixed = placed([first[0:2], second[4:6]], starts, (4, 3))
+        same = placed([first[0:2], first[4:6]], starts, (4, 3))
+        assert mixed.data_id != same.data_id
+
+    def test_merged_members_go_back_in_order(self):
+        """Members merged side by side are put back in placement order."""
+        whole = [stored((4, 4), path=f"/a/{x}.h5", origin_id=x * 32) for x in "abcd"]
+        a, b, c, d = whole
+        cut = [a[0:1, 0:2], b[0:1, 0:2], b[1:2, 0:2], c[0:1, 0:2], c[1:2, 0:2]]
+        starts = [[0, 0], [0, 2], [1, 2], [1, 0], [2, 0]]
+        pieces = placed([*cut, d[0:1, 0:2]], [*starts, [2, 2]], (3, 4))
+        merged = placed(
+            [a[0:1, 0:2], b[0:2, 0:2], c[0:2, 0:2], d[0:1, 0:2]],
+            [[0, 0], [0, 2], [1, 0], [2, 2]],
+            (3, 4),
+        )
+        assert len(_coalesce(pieces._block())) == len(merged)
+        assert pieces.validate().data_id == merged.validate().data_id
+
+    def test_odd_origins_are_folded_one_at_a_time(self, monkeypatch):
+        """Two odd origins side by side cannot be read as two others."""
+        pairs = [
+            ("a", "a" * 30),
+            ("b", "b" * 34),
+            ("c", "a" * 30 + "bb"),
+            ("d", "b" * 32),
+        ]
+        sources = [
+            ArraySource(path=path, format="TEST", origin_id=origin).describe((1,), "i8")
+            for path, origin in pairs
+        ]
+        values = {"a": 0, "b": 10, "c": 20, "d": 30}
+        first = LazyArray.from_sources(sources[:2])
+        second = LazyArray.from_sources(sources[2:])
+        monkeypatch.setattr(
+            io_core,
+            "_load_array_source",
+            lambda x: np.array([values[x.path]], "i8"),
+        )
+        assert first.load().tolist() == [0, 10]
+        assert second.load().tolist() == [20, 30]
+        assert first.data_id != second.data_id
+
+    def test_sharing_a_table_does_not_rename(self):
+        """An array is named by its own members, not by its neighbours'."""
+        odd = stored((1,), path="/a/odd.h5", origin_id="a" * 30)
+        other = stored((1,), path="/a/other.h5", origin_id="b" * 34)
+        array = LazyArray.from_sources([odd, other])
+        alone = LazyArray.from_source(other)
+        assert LazyTable.from_arrays([alone, array])[1].data_id == array.data_id
+
+    def test_record_dtypes_are_not_one_array(self):
+        """Two record layouts of one width are two arrays."""
+        frame = LazyArray.from_source(ArraySource.full((2,), 1)).to_frame()
+        first = LazyArray.from_frame(frame, (2,), [("x", "<i4"), ("y", "<i4")])
+        second = LazyArray.from_frame(frame, (2,), [("z", "<i8")])
+        assert first.load().dtype != second.load().dtype
+        assert first.data_id != second.data_id
+        assert first[0:0].data_id != second[0:0].data_id
+
+    def test_a_base_uri_does_not_stop_a_merge(self):
+        """Two windows of one file merge however their paths were split."""
+        source = stored((4, 3), path="/data/alpha/f.h5")
+        parts = [source[0:2], source[2:4]]
+        plain = concat([LazyArray.from_source(x) for x in parts], axis=0)
+        mixed = concat(
+            [
+                LazyArray.from_source(parts[0], base_uri="/data/alpha/"),
+                LazyArray.from_source(parts[1]),
+            ],
+            axis=0,
+        )
+        block = _coalesce(mixed._block())
+        assert len(block) == 1
+        assert bytes(_member_ids(block)[0]) == _fold(source.data_id)
+        assert mixed.data_id == plain.data_id == LazyArray.from_source(source).data_id
+
+    def test_equal_constants_are_named_once(self):
+        """Two equal constants which did not merge are still one array."""
+        parts = [constant((1, 2), float(x)) for x in (1, 2, 1)]
+        ids = [bytes(x) for x in _member_ids(concat(parts, axis=0)._block())]
+        assert ids[0] == ids[2] != ids[1]
+
+    def test_a_hand_placed_partition_may_be_renamed(self):
+        """
+        A known limit: five boxes with no mergeable pair are not the whole.
+
+        Slicing, concatenating and rechunking cut all the way across, so
+        none of them can build this; only hand placed starts can. The id
+        is a false distinction, never a false identity.
+        """
+        boxes = [
+            ((0, 0), (1, 2)),
+            ((0, 2), (2, 3)),
+            ((2, 1), (3, 3)),
+            ((1, 0), (3, 1)),
+            ((1, 1), (2, 2)),
+        ]
+        sources = [
+            ArraySource.full(tuple(b - a for a, b in zip(low, high)), 1.0)
+            for low, high in boxes
+        ]
+        pinwheel = placed(sources, [list(x) for x, _ in boxes], (3, 3))
+        whole = constant((3, 3), 1.0)
+        pinwheel.validate()
+        assert np.array_equal(pinwheel.load(), whole.load())
+        assert pinwheel.data_id != whole.data_id
+
 
 class TestPinnedIds:
     """The canonical bytes an id is taken over are a stored format."""
@@ -1033,11 +1221,6 @@ class TestLoad:
         loaded = array.load()
         assert loaded.shape == (4, 2, 3)
         assert np.array_equal(loaded, np.broadcast_to(loaded[0], (4, 2, 3)))
-
-    def test_transposed_member(self, lazy, patch):
-        """A member whose axes are swapped is put back the right way."""
-        moved = lazy.transpose()
-        assert np.array_equal(moved.load(), patch.data.T)
 
     def test_a_hole_is_never_loaded(self):
         """An array which does not cover itself is refused, not made up."""
@@ -1128,6 +1311,51 @@ class TestFrames:
         back = LazyArray.from_frame(array.to_frame(), array.shape, array.dtype)
         assert back.data_id == array.data_id
         assert np.array_equal(back.load(), array.load(), equal_nan=True)
+
+    def test_a_record_member_keeps_its_fields(self):
+        """A member of a record dtype is read back with every field."""
+        dtype = np.dtype([("x", "<i4"), ("y", "<f4")])
+        source = stored((3,), path="/a/record.h5", dtype=dtype)
+        array = LazyArray.from_source(source)
+        back = LazyArray.from_frame(array.to_frame(), array.shape, array.dtype)
+        assert array.dtype == back.dtype == dtype
+        assert array.source(0) == source
+        assert back.source(0) == source
+        assert back.data_id == array.data_id
+
+    def test_frame_edits_do_not_reach_the_array(self):
+        """The array holds its own copy of what the frame said."""
+        original = LazyArray.from_sources(
+            [ArraySource.full((2,), 1.0), ArraySource.full((2,), 2.0)]
+        )
+        frame = original.to_frame()
+        array = LazyArray.from_frame(frame, original.shape, original.dtype)
+        before = array.data_id
+        frame.loc[0, "out_stop"] = 1
+        frame.loc[0, "src_extent"] = 1
+        frame.loc[1, "out_start"] = 1
+        frame.loc[1, "src_extent"] = 3
+        assert np.array_equal(array.load(), original.load())
+        assert array._data_id() == before == original.data_id
+
+    def test_frame_edits_do_not_reach_a_table(self):
+        """Tables built from the array do not read the frame either."""
+        whole = stored((10,), path="/a/w.h5", dtype=np.int64)
+        array = LazyArray.from_source(whole[0:3])
+        frame = array.to_frame()
+        back = LazyArray.from_frame(frame, array.shape, array.dtype)
+        table = LazyTable.from_arrays([back])
+        frame.loc[0, "src_start"] = 4
+        assert back.source(0) == whole[0:3]
+        assert table[0].source(0) == whole[0:3]
+
+    def test_storage_is_read_only(self, joined):
+        """Nothing a table exposes can be written, so no view can be bent."""
+        table = LazyTable.from_arrays([joined, joined[0:10]])
+        assert not any(x.flags.writeable for x in storage(table))
+        assert not any(x.flags.writeable for x in table[0]._block().axes.values())
+        with pytest.raises(ValueError, match="read-only"):
+            table.axes["out_start"][0] = 5
 
 
 class TestRechunk:
