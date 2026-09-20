@@ -205,7 +205,7 @@ class TestConstant:
 
     def test_full(self, nans, reads):
         """A constant loads without a path, and gives what `np.full` would."""
-        assert nans.constant and nans.loadable and not nans.path
+        assert nans.filled and nans.loadable and not nans.path
         expected = np.full((2, 3), np.nan)
         assert np.array_equal(nans.load(), expected, equal_nan=True)
         assert np.asarray(nans).shape == (2, 3)
@@ -225,7 +225,7 @@ class TestConstant:
     def test_slice(self, nans, reads):
         """Slicing gives a smaller constant, still without reading."""
         sub = nans[1:, :2]
-        assert sub.constant and sub.load().shape == (1, 2)
+        assert sub.filled and sub.load().shape == (1, 2)
         assert np.isnan(sub.load()).all() and not reads
 
     @pytest.mark.parametrize(
@@ -275,8 +275,13 @@ class TestConstant:
     def test_dict_without_a_value(self, source):
         """A dict written before constants existed still reads back."""
         contents = source.to_dict()
-        del contents["value"]
+        del contents["value"], contents["filled"]
         assert ArraySource.from_dict(contents) == source
+
+    def test_the_flag_decides(self, source):
+        """A value alone fills nothing; a table's default may equal a fill."""
+        out = replace(source, value=0.0)
+        assert out.id == source.id and out[:2].id == source[:2].id
 
     def test_detach(self, nans):
         """Detaching drops the value: the array is no longer that constant."""

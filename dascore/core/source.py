@@ -55,10 +55,12 @@ class ArraySource:
     extent
         The shape of the whole array, which says when the windows select
         all of it.
+    filled
+        Whether the array is `value` throughout rather than stored. Its own
+        flag because a table cannot say so by the value: NaN stores as NULL.
     value
-        A constant which fills the array. Such a source has no path and
+        The constant of a `filled` array. Such a source has no path and
         reads nothing; see [`full`](`dascore.core.source.ArraySource.full`).
-        None means the array is stored rather than constant.
 
     Examples
     --------
@@ -88,6 +90,7 @@ class ArraySource:
     dtype: Any = None
     base_id: str = ""
     extent: tuple[int, ...] = ()
+    filled: bool = False
     value: Any = None
 
     @classmethod
@@ -119,18 +122,13 @@ class ArraySource:
             raise ParameterError(msg)
         value = _fill_scalar(value, dtype).item()
         shape = shape if isinstance(shape, tuple | list) else (shape,)
-        return cls(value=value).describe(shape, dtype)
-
-    @property
-    def constant(self) -> bool:
-        """Whether this generates its array rather than reading one."""
-        return self.value is not None
+        return cls(filled=True, value=value).describe(shape, dtype)
 
     @property
     def loadable(self) -> bool:
         """Whether this says enough to load the array."""
         described = self.dtype is not None and len(self.windows) == self.ndim
-        return bool((self.constant or (self.path and self.format)) and described)
+        return bool((self.filled or (self.path and self.format)) and described)
 
     @property
     def ndim(self) -> int:
@@ -158,7 +156,7 @@ class ArraySource:
         is kept. A constant is its contents alone, so any two constant
         blocks of the same value, dtype and shape are one array.
         """
-        if self.constant:
+        if self.filled:
             content = {"value": self.value, "dtype": self._dtype, "shape": self.shape}
             return H("constant", content)
         location = {name: getattr(self, name) for name in _LOCATION_FIELDS}
@@ -178,7 +176,9 @@ class ArraySource:
     def detach(self) -> ArraySource:
         """Return the provenance alone, for an array this no longer loads."""
         # A constant's value was the array, not its origin.
-        return replace(self, windows=(), shape=(), dtype=None, extent=(), value=None)
+        return replace(
+            self, windows=(), shape=(), dtype=None, extent=(), filled=False, value=None
+        )
 
     def narrow(self, indexer) -> ArraySource:
         """Return the source `indexer` selects, detached if not contiguous."""
@@ -212,7 +212,7 @@ class ArraySource:
         if not self.loadable:
             msg = f"{self} does not say enough to load an array."
             raise ParameterError(msg)
-        if self.constant:
+        if self.filled:
             return np.full(self.shape, self.value, dtype=self.dtype)
         return dc.io.core._load_array_source(self)
 
