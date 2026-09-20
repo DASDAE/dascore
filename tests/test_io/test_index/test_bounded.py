@@ -125,7 +125,7 @@ class TestBoundedMetadata:
         queries = [
             call.args
             for call in fetch.call_args_list
-            if call.args[0].startswith("SELECT p.patch_id ")
+            if call.args[0].startswith("SELECT p.patch_row ")
         ]
         assert len(queries) == 1
         assert "LIMIT ? OFFSET ?" in queries[0][0]

@@ -337,7 +337,7 @@ class TestReviewFindings:
         assert sig.return_annotation == "Self"
         assert "__signature__" not in vars(dc.proc.normalize)
 
-    def test_bypasses_fingerprint_apart(self):
+    def test_bypasses_are_distinct(self):
         """Two bypasses given as arguments are two callables."""
         abs_raw, imag_raw = dc.proc.abs.raw_function, dc.proc.imag.raw_function
         assert encode(abs_raw) != encode(imag_raw)
@@ -469,7 +469,7 @@ class TestReviewFindings:
         from dascore.utils.identity import encode as _encode  # noqa: PLC0415
 
         first, other = SeamScale(factor=2.0), SeamScale(factor=3.0)
-        assert _encode(first) == {"$id": ["operation", first.fingerprint]}
+        assert _encode(first) == {"$id": ["operation", first.operation_id]}
         assert _encode(first) != _encode(other)
 
         class Holder(SeamScale):
@@ -836,14 +836,14 @@ class TestTransposeMetadata:
         assert np.array_equal(out.data, np.asarray(patch.data).T)
 
 
-class TestFingerprint:
+class TestOperationId:
     """The identity of an operation is its validated fields."""
 
     def test_validated_fields(self):
         """An int and the float it validates to are one operation."""
-        assert SeamScale(4).fingerprint == SeamScale(4.0).fingerprint
-        assert SeamScale(4).fingerprint == SeamScale(factor=4).fingerprint
-        assert SeamScale(4).fingerprint != SeamScale(5).fingerprint
+        assert SeamScale(4).operation_id == SeamScale(4.0).operation_id
+        assert SeamScale(4).operation_id == SeamScale(factor=4).operation_id
+        assert SeamScale(4).operation_id != SeamScale(5).operation_id
 
     def test_equal_by_operation(self):
         """Positional and keyword spellings are one processor."""
@@ -864,13 +864,13 @@ class TestFingerprint:
             name = None
 
         assert Other() != SeamScale()
-        assert Other().fingerprint != SeamScale().fingerprint
+        assert Other().operation_id != SeamScale().operation_id
 
     def test_the_version_counts(self, monkeypatch):
         """A bump makes a new operation."""
-        before = SeamScale().fingerprint
+        before = SeamScale().operation_id
         monkeypatch.setattr(SeamScale, "__version__", "2.0")
-        assert SeamScale().fingerprint != before
+        assert SeamScale().operation_id != before
 
 
 class TestGeneratedFunction:

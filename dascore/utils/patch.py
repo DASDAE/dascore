@@ -474,7 +474,7 @@ def patch_function(
         Output ``data_type``. None preserves it; an empty string clears it.
     version
         Operation version. Bump it when the same arguments mean a different
-        result, keeping new fingerprints distinct from old ones.
+        result, keeping new operation ids distinct from old ones.
 
     Examples
     --------
@@ -1766,7 +1766,7 @@ def concatenate_patches(
 
     dim, val = _get_dim_and_value(kwargs)
     patches = get_compatible_patches(patches, dim, check_behavior)
-    fingerprint = operation_id(
+    operation = operation_id(
         "Concatenate",
         {"arguments": tuple(kwargs.items()), "check_behavior": check_behavior},
     )
@@ -1774,7 +1774,7 @@ def concatenate_patches(
     for patch_list in yield_sub_sequences(patches, val):
         # The members agree on kind and units, so the first states them.
         attrs = patch_list[0].attrs
-        out.append(_concatenate_group(patch_list, dim, attrs, fingerprint))
+        out.append(_concatenate_group(patch_list, dim, attrs, operation))
     return out
 
 
@@ -1782,7 +1782,7 @@ def _concatenate_group(
     patches: Sequence[dc.Patch],
     dim: str,
     attrs: dc.PatchAttrs,
-    fingerprint: str,
+    operation: str,
 ) -> dc.Patch:
     """
     Concatenate patches already known to fit, along `dim`.
@@ -1850,7 +1850,7 @@ def _concatenate_group(
             coords = coords.update(**riders)
     warn_if_histories_differ([x.attrs for x in patches], "Concatenating")
     attrs = _maybe_add_history_str(attrs, "concatenate")
-    attrs = stamp(attrs, [x.attrs for x in patches], fingerprint)
+    attrs = stamp(attrs, [x.attrs for x in patches], operation)
     return dc.Patch(data=data, attrs=attrs, coords=coords, dims=dims)
 
 
@@ -1986,10 +1986,10 @@ def concatenate_planned(
             for x in patches
         ]
         attrs = attrs.update(data_units=kept)
-    fingerprint = operation_id(
+    operation = operation_id(
         "Concatenate", {"arguments": ((dim, count),), "conflict": conflict}
     )
-    return _concatenate_group(patches, dim, attrs, fingerprint)
+    return _concatenate_group(patches, dim, attrs, operation)
 
 
 def stack_patches(

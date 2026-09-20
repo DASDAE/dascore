@@ -531,11 +531,11 @@ class TestSourceLifecycle:
 
     def test_delete_cascades(self, backend):
         """Delete cascades to patches, attrs, and coord links via the FK."""
-        before = backend._fetch_df("SELECT patch_id FROM patches")
+        before = backend._fetch_df("SELECT patch_row FROM patches")
         gone = backend._fetch_df(
-            "SELECT p.patch_id FROM patches p JOIN sources s "
-            "ON s.source_id = p.source_id WHERE s.source_path = 'das/file_1.h5'"
-        )["patch_id"].tolist()
+            "SELECT p.patch_row FROM patches p JOIN sources s "
+            "ON s.source_row = p.source_row WHERE s.source_path = 'das/file_1.h5'"
+        )["patch_row"].tolist()
         assert gone  # the source had patches to cascade-delete
         backend.delete_sources(["das/file_1.h5"])
         df = backend.query()
@@ -543,10 +543,10 @@ class TestSourceLifecycle:
         assert "das/file_1.h5" not in set(df["source_path"])
         # the deleted source's patches (and their dependents) are gone,
         # not merely filtered out of the query.
-        remaining = set(backend._fetch_df("SELECT patch_id FROM patches")["patch_id"])
-        assert remaining == set(before["patch_id"]) - set(gone)
+        remaining = set(backend._fetch_df("SELECT patch_row FROM patches")["patch_row"])
+        assert remaining == set(before["patch_row"]) - set(gone)
         for table in ("attrs", "patch_coords"):
-            ids = set(backend._fetch_df(f"SELECT patch_id FROM {table}")["patch_id"])
+            ids = set(backend._fetch_df(f"SELECT patch_row FROM {table}")["patch_row"])
             assert not (ids & set(gone))
 
     def test_reopen_persists(self, backend, tmp_path):
@@ -632,9 +632,9 @@ class TestLineageIds:
     def test_the_two_ids_are_different_columns(self, written_spool):
         """The row's id is private; the patch's owns the public name."""
         df = written_spool._df
-        assert {"_patch_id", "origin_id"}.issubset(df.columns)
-        assert df["_patch_id"].tolist() != df["origin_id"].tolist()
-        assert "_patch_id" not in written_spool.get_contents().columns
+        assert {"_patch_row", "origin_id"}.issubset(df.columns)
+        assert df["_patch_row"].tolist() != df["origin_id"].tolist()
+        assert "_patch_row" not in written_spool.get_contents().columns
 
     def test_scanning_and_reading_agree(self, tmp_path):
         """Or an id found in the index would not name the patch it loads."""
@@ -989,11 +989,11 @@ class TestLineageIds:
         patch = dc.get_example_patch().abs()
         patch.io.write(tmp_path / "source.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
-        source_id = spool[0].attrs.data_id
-        trimmed = spool.select(distance=(10, 20)).select(data_id=source_id)
+        source_data_id = spool[0].attrs.data_id
+        trimmed = spool.select(distance=(10, 20)).select(data_id=source_data_id)
         assert len(trimmed) == 1
         assert trimmed.get_contents()["data_id"].isnull().all()
-        assert trimmed[0].attrs.data_id != source_id
+        assert trimmed[0].attrs.data_id != source_data_id
         assert np.array_equal(trimmed[0].data, spool[0].select(distance=(10, 20)).data)
 
     def test_a_trimmed_row_states_no_processing_id(self, tmp_path):
@@ -1136,7 +1136,7 @@ class TestCoordDefinitionDedup:
         """The def keys stored for one coordinate name."""
         sql = (
             "SELECT cd.def_key FROM patch_coords pc "
-            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+            "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
             "WHERE pc.coord_name = ?"
         )
         frame = spool._catalog.backend._fetch_df(sql, [name])

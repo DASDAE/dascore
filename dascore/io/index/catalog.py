@@ -321,7 +321,7 @@ def _live_records(registry: Mapping[str, dc.Patch]):
     """Build source records for live patches keyed by their identity."""
     records = []
     for path, patch in registry.items():
-        # patch.summary is a cached_property: reuse fingerprints and
+        # patch.summary is a cached_property: reuse ids and
         # summaries the patch already computed instead of rebuilding.
         record = patch_record(patch.summary)
         records.append(
@@ -724,10 +724,10 @@ class PatchCatalog:
         for catalog in catalogs:
             # a view transfers only the rows it presents; a root transfers
             # all of them, which lets the whole table move as-is
-            patch_ids = (
-                catalog.to_df()["_patch_id"].tolist() if catalog.is_view else None
+            patch_rows = (
+                catalog.to_df()["_patch_row"].tolist() if catalog.is_view else None
             )
-            records = catalog.backend.export_records(patch_ids=patch_ids)
+            records = catalog.backend.export_records(patch_rows=patch_rows)
             root = getattr(catalog.resolver, "_root", None)
             if root is not None:
                 records = [_absolutize_record(x, root) for x in records]
@@ -844,9 +844,9 @@ class PatchCatalog:
             and not isinstance(self.resolver, LiveResolver)
         )
         if needs_records:
-            patch_ids = self._ids if rebuilt_membership else None
+            patch_rows = self._ids if rebuilt_membership else None
             state["_rebuild_records"] = tuple(
-                self._backend.export_records(patch_ids=patch_ids)
+                self._backend.export_records(patch_rows=patch_rows)
             )
         # A view shares the root's resolver, but must not drag the whole
         # live registry across the wire: keep only the entries its rows
@@ -929,7 +929,7 @@ class PatchCatalog:
             self.backend.query_ids(
                 list(self._queries) or None,
                 order_by=None,
-                patch_ids=self._ids,
+                patch_rows=self._ids,
             )
         )
         return tuple(self.ordered_ids()) != by_ordinal
@@ -964,14 +964,14 @@ class PatchCatalog:
             if not self._queries:
                 return self._ids
             matched = set(
-                self.backend.query_ids(list(self._queries), patch_ids=self._ids)
+                self.backend.query_ids(list(self._queries), patch_rows=self._ids)
             )
             return tuple(x for x in self._ids if x in matched)
         return tuple(
             self.backend.query_ids(
                 list(self._queries) or None,
                 order_by=self._effective_order,
-                patch_ids=self._ids,
+                patch_rows=self._ids,
             )
         )
 
@@ -996,7 +996,7 @@ class PatchCatalog:
             ids = self.backend.query_ids(
                 list(self._queries) or None,
                 order_by=self._effective_order,
-                patch_ids=self._ids,
+                patch_rows=self._ids,
                 limit=None if item.stop is None else max(0, stop - start),
                 offset=start,
             )
@@ -1137,7 +1137,7 @@ class PatchCatalog:
         """
         The spool-facing flat patch-row relation under the selection.
 
-        Unique-per-patch structural columns (patch_id and friends) are
+        Unique-per-patch structural columns (patch_row and friends) are
         hidden or renamed private so chunk merge-compatibility (which
         compares all non-private columns) is not spuriously blocked.
         """
@@ -1147,13 +1147,13 @@ class PatchCatalog:
             df = self.backend.query(
                 list(self._queries) or None,
                 order_by=self._effective_order,
-                patch_ids=self._ids,
+                patch_rows=self._ids,
             )
             if self._ids is not None and self._order is None:
                 # id membership presents in its own (window/array) order
                 position = {pid: i for i, pid in enumerate(self._ids)}
                 df = df.sort_values(
-                    "_patch_id", key=lambda s: s.map(position), kind="stable"
+                    "_patch_row", key=lambda s: s.map(position), kind="stable"
                 ).reset_index(drop=True)
             # The early ones are already done; see SPOOL_EARLY_RENAMES.
             df = df.rename(columns=dict(SPOOL_LATE_RENAMES))
@@ -1217,7 +1217,7 @@ class PatchCatalog:
                     return len(self.to_df())
             # Otherwise SQL candidacy already accounts for every drop, so the
             # count matches len(to_df()) without projecting or pivoting.
-            return self.backend.count(list(self._queries) or None, patch_ids=self._ids)
+            return self.backend.count(list(self._queries) or None, patch_rows=self._ids)
 
     def get_patch(self, index: int) -> dc.Patch:
         """Materialize one patch: resolve, then exact two-stage trim."""

@@ -1,7 +1,7 @@
 """
 Tests for the catalog ordering contract (source ordinals).
 
-Patch rows present in (ordinal, patch_id) order: live spools keep
+Patch rows present in (ordinal, patch_row) order: live spools keep
 construction order, unions concatenate (dedup keeps first-occurrence
 position), and directory archives present in time order (the syncer
 renumbers after each sync).

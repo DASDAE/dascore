@@ -30,7 +30,7 @@ Examples
 >>>
 >>> patch = dc.get_example_patch()
 >>> out = ScaleExample(3)(patch)
->>> assert ScaleExample(3).fingerprint == ScaleExample(3.0).fingerprint
+>>> assert ScaleExample(3).operation_id == ScaleExample(3.0).operation_id
 """
 
 from __future__ import annotations
@@ -71,7 +71,7 @@ from dascore.utils.patch import (
     check_patch_data,
 )
 from dascore.utils.patch_registry import (
-    _memoized_fingerprint,
+    _memoized_operation_id,
     _spell,
     is_default,
     patch_function_tag,
@@ -205,7 +205,7 @@ class PatchProcessor(DascoreBaseModel):
 
     @property
     def tag(self) -> str:
-        """Return the name this operation is fingerprinted under."""
+        """Return the name this operation is identified by."""
         cls = type(self)
         func = cls.patch_function
         if func is not None and (tag := patch_function_tag(func)) is not None:
@@ -234,11 +234,11 @@ class PatchProcessor(DascoreBaseModel):
     def _operation(self) -> tuple[str, list]:
         """Return this operation's id, and the patches among its fields."""
         params, patches = self._inputs()
-        found = _memoized_fingerprint(type(self), self.tag, params, self.__version__)
+        found = _memoized_operation_id(type(self), self.tag, params, self.__version__)
         return found, patches
 
     @property
-    def fingerprint(self) -> str:
+    def operation_id(self) -> str:
         """Return the id of the tag, version and non-default fields."""
         return self._operation()[0]
 
@@ -259,7 +259,7 @@ class PatchProcessor(DascoreBaseModel):
         if type(self) is not type(other):
             return False
         try:
-            return self.fingerprint == other.fingerprint
+            return self.operation_id == other.operation_id
         except Exception:
             # A field with no faithful spelling: only itself is surely equal.
             return self is other
@@ -267,7 +267,7 @@ class PatchProcessor(DascoreBaseModel):
     def __hash__(self) -> int:
         """Hash a processor the way it compares."""
         try:
-            return hash(self.fingerprint)
+            return hash(self.operation_id)
         except Exception:
             return object.__hash__(self)
 
@@ -782,7 +782,7 @@ def _make_bypass(func):
 
     # `wraps` marks a wrapper as a view of what it wraps, and two things
     # read that mark: `inspect.signature` to see the real parameters
-    # through it, which `fingerprint_call` needs, and the docs builder to
+    # through it, which `call_operation_id` needs, and the docs builder to
     # resolve a wrapper back to what it wraps. Left in place, the second
     # makes `select.raw_function` resolve to `select` and gives every
     # converted operation a page holding a table of itself. Written out
@@ -797,7 +797,7 @@ def _make_bypass(func):
     # The path which actually resolves, so a process pool can pickle it:
     # `functools.wraps` copied the method's, which names no attribute of
     # its own. Distinct per operation, so two bypasses given as arguments
-    # to another fingerprint as two callables rather than one closure.
+    # to another operation id as two callables rather than one closure.
     raw_function.__qualname__ = f"{func.__qualname__}.raw_function"
     return raw_function
 

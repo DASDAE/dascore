@@ -103,7 +103,7 @@ class TestConstruction:
             get_coord(data=np.array([0.0, 1.0, 2.0, 3.0, 4.0])),
         )
         assert a == b
-        assert a.fingerprint() == b.fingerprint()
+        assert a._physical_id() == b._physical_id()
 
     def test_out_of_order_inputs_sorted(self):
         """concat_coords orders inputs by their envelopes."""
@@ -694,7 +694,7 @@ class TestRoundTrips:
         assert summary.max == 24.0
         assert summary.step is None
         assert summary.len == 20
-        assert summary.fingerprint == float_gap_coord.fingerprint()
+        assert summary.physical_id == float_gap_coord._physical_id()
 
     def test_ns_precision_exact(self):
         """Nanosecond datetimes survive bit-exactly (no float pass)."""

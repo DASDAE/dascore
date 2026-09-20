@@ -573,10 +573,10 @@ class TestPatchSummary:
         summary = random_patch.summary
         assert summary.dim_tuple == summary.dims
 
-    def test_flat_dump_includes_coord_fingerprint(self, random_patch):
-        """Flattened summaries should preserve coord fingerprints."""
+    def test_flat_dump_includes_coord_physical_id(self, random_patch):
+        """Flattened summaries should preserve coord physical ids."""
         out = random_patch.summary.flat_dump()
-        assert out["time_fingerprint"] == random_patch.get_coord("time").fingerprint()
+        assert out["time_physical_id"] == random_patch.get_coord("time")._physical_id()
 
     def test_patch_summary_is_cached(self, random_patch):
         """Patch.summary should reuse the same summary instance."""

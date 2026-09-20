@@ -14,7 +14,7 @@ import dascore as dc
 spool = dc.get_example_spool("random_das")
 plan = spool.chunk_plan(time=3)
 assert len(plan.outputs) == len(spool.chunk(time=3))
-assert {"output_id", "_patch_id", "_modified"}.issubset(plan.members.columns)
+assert {"output_id", "_patch_row", "_modified"}.issubset(plan.members.columns)
 # Resolved parameters are recorded on the plan, never left in config.
 assert isinstance(plan.params["group"], tuple)
 assert plan.params["sampling_group_tolerance"] == dc.get_config().sampling_group_tolerance

@@ -639,7 +639,7 @@ class TestUnselect:
         kept = diverse_spool.select(tag="some_tag")
         dropped = diverse_spool.unselect(tag="some_tag")
         assert len(kept) + len(dropped) == len(diverse_spool)
-        assert not set(kept._df["_patch_id"]) & set(dropped._df["_patch_id"])
+        assert not set(kept._df["_patch_row"]) & set(dropped._df["_patch_row"])
 
     def test_removes_the_matches(self, diverse_spool):
         """What comes back is what the selection would not have kept."""

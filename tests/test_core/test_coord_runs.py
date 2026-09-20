@@ -406,13 +406,13 @@ class TestReviewFindings:
         coord = get_coord(start=T0, step=np.timedelta64(1, "s"), shape=(5,))
         assert coord.missing().positions().dtype == coord.dtype
 
-    def test_fingerprint_sees_the_declared_step(self):
+    def test_physical_id_sees_the_declared_step(self):
         """Declaring a grid changes what the coordinate is, its spelling does not."""
         plain = CoordMonotonicArray(values=np.array([0, 1, 5]))
         declared = CoordMonotonicArray(values=np.array([0, 1, 5]), step=1)
         as_float = CoordMonotonicArray(values=np.array([0, 1, 5]), step=1.0)
-        assert plain.fingerprint() != declared.fingerprint()
-        assert declared.fingerprint() == as_float.fingerprint()
+        assert plain._physical_id() != declared._physical_id()
+        assert declared._physical_id() == as_float._physical_id()
 
     def test_bare_absolute_excess_on_time(self):
         """A bare excess on a time dimension is seconds, as coordinates read it."""

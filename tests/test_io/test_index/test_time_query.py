@@ -88,7 +88,7 @@ class TestTimeQuery:
             Query(coords={"reference_time": bounds}),
             Query(attrs={"tag": "patch-*"}),
         ]
-        options = {"order_by": ("coord", "time", False), "patch_ids": (1, 2, 3)}
+        options = {"order_by": ("coord", "time", False), "patch_rows": (1, 2, 3)}
         assert time_backend.query_ids(direct, **options) == time_backend.query_ids(
             general, **options
         )

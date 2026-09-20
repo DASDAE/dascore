@@ -283,7 +283,7 @@ class TestEdgeInWindow:
         plan = build_chunk_plan(contiguous_three, time=4.5)
         self._check_members(plan)
         second = plan.members[plan.members["output_id"] == 1]
-        assert second["_patch_id"].tolist() == [1]
+        assert second["_patch_row"].tolist() == [1]
         assert second[["time_min", "time_max"]].to_numpy().tolist() == [[5.0, 8.0]]
 
     def test_stop_in_window_drops_trailing_source(self, contiguous_three):
@@ -291,14 +291,14 @@ class TestEdgeInWindow:
         plan = build_chunk_plan(contiguous_three, time=5.5)
         self._check_members(plan)
         first = plan.members[plan.members["output_id"] == 0]
-        assert first["_patch_id"].tolist() == [0]
+        assert first["_patch_row"].tolist() == [0]
         assert not first["_modified"].any()
 
     def test_output_spanning_window_keeps_both_sides(self, contiguous_three):
         """An output crossing the window draws from both its sources."""
         plan = build_chunk_plan(contiguous_three, time=4.5)
         third = plan.members[plan.members["output_id"] == 2]
-        assert third["_patch_id"].tolist() == [1, 2]
+        assert third["_patch_row"].tolist() == [1, 2]
         assert third[["time_min", "time_max"]].to_numpy().tolist() == [
             [9.0, 9.0],
             [10.0, 12.5],
@@ -309,7 +309,7 @@ class TestEdgeInWindow:
         plan = build_chunk_plan(sub_tolerance_gap, time=5)
         self._check_members(plan)
         third = plan.members[plan.members["output_id"] == 2]
-        assert third["_patch_id"].tolist() == [1]
+        assert third["_patch_row"].tolist() == [1]
         assert third["time_min"].tolist() == [10.4]
 
     def test_output_inside_gap_is_not_published(self, sub_tolerance_gap):
@@ -334,7 +334,7 @@ class TestEdgeInWindow:
         )
         plan = build_chunk_plan(df, time=35, keep_partial=True)
         self._check_members(plan)
-        assert plan.members["_patch_id"].unique().tolist() == [0]
+        assert plan.members["_patch_row"].unique().tolist() == [0]
         assert plan.members["time_max"].tolist() == [34.0, 69.0, 100.0]
 
     def test_mixed_dtypes_resolve_per_output(self, contiguous_three):
@@ -399,7 +399,7 @@ class TestPlanMembers:
         """Members reference real sources and outputs."""
         plan = build_chunk_plan(contiguous_df, overlap=0, time=10)
         members = plan.members
-        assert set(members["_patch_id"]).issubset(set(range(len(contiguous_df))))
+        assert set(members["_patch_row"]).issubset(set(range(len(contiguous_df))))
         assert set(members["output_id"]).issubset(set(plan.outputs["output_id"]))
 
     def test_different_group_columns(self, contiguous_df_two_stations):
@@ -409,8 +409,8 @@ class TestPlanMembers:
             df, overlap=0, time=10, group=("station",), keep_partial=True
         )
         joined = plan.members.merge(
-            df.assign(_patch_id=np.arange(len(df)))[["_patch_id", "station"]],
-            on="_patch_id",
+            df.assign(_patch_row=np.arange(len(df)))[["_patch_row", "station"]],
+            on="_patch_row",
         ).merge(
             plan.outputs[["output_id", "station"]],
             on="output_id",
@@ -456,7 +456,7 @@ class TestNormalizeChunkUnits:
                 ],
                 "time_step": [np.timedelta64(1, "s")] * 2,
                 "_time_units": ["s", "ms"],
-                "_patch_id": [1, 2],
+                "_patch_row": [1, 2],
             }
         )
         out = _normalize_chunk_units(df, "time")
@@ -625,7 +625,7 @@ def _one_row_df(start, step, samples, name="time"):
             f"{name}_min": [start],
             f"{name}_max": [start + step * (samples - 1)],
             f"{name}_step": [step],
-            "_patch_id": [0],
+            "_patch_row": [0],
         }
     )
 
@@ -640,7 +640,7 @@ class TestSubdivisionPieces:
 
     def test_uncut_rows_pass_through(self, contiguous_df):
         """A row with no cuts is one unmodified output of the same span."""
-        df = contiguous_df.assign(_patch_id=np.arange(len(contiguous_df)))
+        df = contiguous_df.assign(_patch_row=np.arange(len(contiguous_df)))
         plan = _cut_plan(df, [()] * len(df))
         assert len(plan.outputs) == len(df)
         assert not plan.members["_modified"].any()

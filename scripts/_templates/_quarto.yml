@@ -257,6 +257,9 @@ website:
         - text: Velocity to Strain Rate
           href: notes/velocity_to_strain_rate.qmd
 
+        - text: Keys, IDs and Rows
+          href: notes/identity.qmd
+
         - text: Spool Index
           href: notes/spool_index.qmd
 

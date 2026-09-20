@@ -79,7 +79,7 @@ from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
     _drop_patch_local_empty,
-    _ensure_patch_id,
+    _ensure_patch_row,
     _resolve_group_attrs,
     _structural,
     build_chunk_plan,
@@ -803,7 +803,7 @@ class Spool(NodeRepr, NamespaceOwner):
         if applies_to is not None:
             # A row the attrs did not match is a row the selection never
             # held, so it is left unjudged rather than judged and kept.
-            judged = np.isin(working["_patch_id"].to_numpy(), np.asarray(applies_to))
+            judged = np.isin(working["_patch_row"].to_numpy(), np.asarray(applies_to))
             contexts[~judged] = None
         name, pieces, reasons = resolve_channel_pieces(
             self._resolved_inventory(),
@@ -827,7 +827,7 @@ class Spool(NodeRepr, NamespaceOwner):
         if all(keep or not row for keep, row in zip(whole, pieces, strict=True)):
             # Every patch is kept whole or dropped, so this is a filter and
             # the relation it presents need not be rebuilt.
-            kept = working["_patch_id"].to_numpy()[[bool(x) for x in pieces]]
+            kept = working["_patch_row"].to_numpy()[[bool(x) for x in pieces]]
             return self._restrict_to_rows(kept)
         return self._subdivided(source_rows, working, pieces, name)
 
@@ -862,7 +862,7 @@ class Spool(NodeRepr, NamespaceOwner):
             # Which rows state the name is asked of the index rather than
             # read off the relation, so a spool whose headers state it
             # everywhere is realized only when enrichment will rewrite it.
-            stated = np.isin(ids, list(backend.attr_stated_ids(name, patch_ids=ids)))
+            stated = np.isin(ids, list(backend.attr_stated_ids(name, patch_rows=ids)))
             # A name no patch states is asked about rather than tried: the
             # index rejects it and the inventory answers for every row, and
             # catching that rejection would catch a malformed selector with
@@ -935,10 +935,10 @@ class Spool(NodeRepr, NamespaceOwner):
         by a route of its own and need not present every row the id list
         does, and a row it leaves out is one nothing was resolved for.
         """
-        by_id = dict(zip(df["_patch_id"].to_numpy(), values, strict=True))
+        by_id = dict(zip(df["_patch_row"].to_numpy(), values, strict=True))
         out = np.full(len(ids), None, dtype=object)
-        for position, patch_id in enumerate(ids):
-            out[position] = by_id.get(patch_id)
+        for position, patch_row in enumerate(ids):
+            out[position] = by_id.get(patch_row)
         return out
 
     def attach_inventory(self, inventory=None) -> Self:
@@ -1295,7 +1295,7 @@ class Spool(NodeRepr, NamespaceOwner):
         # The two frames are one relation split by column, so a row of
         # either is the same patch as the row beside it; the messages
         # below name files from one while judging the other.
-        assert (source_rows["_patch_id"].to_numpy() == working["_patch_id"]).all()
+        assert (source_rows["_patch_row"].to_numpy() == working["_patch_row"]).all()
         columns = resolution_columns(working, new._enrich_kwargs)
         epochs = (
             [NO_EPOCHS] * len(working)
@@ -1314,7 +1314,7 @@ class Spool(NodeRepr, NamespaceOwner):
         kept = working[described].reset_index(drop=True)
         cuts = [x.cuts for x, keep in zip(epochs, described, strict=True) if keep]
         if not any(cuts):  # nothing to subdivide: a filter is the whole job
-            return new._restrict_to_rows(kept["_patch_id"].to_numpy())
+            return new._restrict_to_rows(kept["_patch_row"].to_numpy())
         sources = source_rows[described].reset_index(drop=True)
         refuse_rows(
             sources,
@@ -1382,7 +1382,7 @@ class Spool(NodeRepr, NamespaceOwner):
             )
             raise ParameterError(msg)
 
-    def _restrict_to_rows(self, patch_ids, keep: bool = True) -> Self:
+    def _restrict_to_rows(self, patch_rows, keep: bool = True) -> Self:
         """
         Return the view holding the named rows, or all but them.
 
@@ -1391,7 +1391,7 @@ class Spool(NodeRepr, NamespaceOwner):
         come out.
         """
         ids = np.asarray(self._catalog.ordered_ids(), dtype=np.int64)
-        named = np.isin(ids, np.asarray(patch_ids, dtype=np.int64))
+        named = np.isin(ids, np.asarray(patch_rows, dtype=np.int64))
         mask = named if keep else ~named
         if mask.all():
             return self
@@ -1622,12 +1622,12 @@ class Spool(NodeRepr, NamespaceOwner):
         # outputs are not file rows: source bookkeeping stays on the
         # members (where loading needs it), never on the derived rows
         outputs = working.drop(
-            columns=["_patch_id", *_SOURCE_COLUMNS], errors="ignore"
+            columns=["_patch_row", *_SOURCE_COLUMNS], errors="ignore"
         ).assign(output_id=ids)
         members = pd.DataFrame(
             {
                 "output_id": ids,
-                "_patch_id": working.get("_patch_id", pd.Series(dtype=object)).values,
+                "_patch_row": working.get("_patch_row", pd.Series(dtype=object)).values,
                 "_modified": False,
             }
         )
@@ -1668,20 +1668,20 @@ class Spool(NodeRepr, NamespaceOwner):
         base = collapse_working_df(self._catalog) if same_dim else None
         if base is None:
             base = self._catalog.to_df().reset_index(drop=True)
-            if "_patch_id" in base.columns:
+            if "_patch_row" in base.columns:
                 # the index's own ids, which only rows read from it carry
-                base = base.assign(_index_id=base["_patch_id"])
-        base = _ensure_patch_id(base)
+                base = base.assign(_index_id=base["_patch_row"])
+        base = _ensure_patch_row(base)
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
         working = _drop_patch_local_empty(working)
-        base = base[base["_patch_id"].isin(working["_patch_id"])]
+        base = base[base["_patch_row"].isin(working["_patch_row"])]
         patch_local = any(s or r for _, s, r in self._catalog.residuals)
         if runs and dim is not None and "_index_id" in base.columns:
             # a sample or relative selection resolves against the whole
             # patch at load, so its runs cannot be planned apart
             if not patch_local:
                 working = self._runs_as_members(working, dim)
-                base = base[base["_patch_id"].isin(working["_patch_id"])]
+                base = base[base["_patch_row"].isin(working["_patch_row"])]
         return base.reset_index(drop=True), working.reset_index(drop=True)
 
     def chunk_plan(
@@ -1745,7 +1745,7 @@ class Spool(NodeRepr, NamespaceOwner):
         selections into those envelopes. No dimension is needed: the whole
         relation is returned and the caller picks its columns.
         """
-        base = _ensure_patch_id(self._df.reset_index(drop=True))
+        base = _ensure_patch_row(self._df.reset_index(drop=True))
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
         return _drop_patch_local_empty(working)
 
@@ -1769,19 +1769,19 @@ class Spool(NodeRepr, NamespaceOwner):
         # a row with no envelope here is one neither report nor plan can
         # place (a relative time among absolute ones), and its runs no better
         # rows name their patch in this spool's index by `_index_id` when
-        # they are plan members, else by `_patch_id`
-        key = "_index_id" if "_index_id" in df.columns else "_patch_id"
+        # they are plan members, else by `_patch_row`
+        key = "_index_id" if "_index_id" in df.columns else "_patch_row"
         placed = df[df[min_col].notna() & df[key].notna()]
         wanted = placed[key].astype("int64").unique()
         runs = self._catalog.backend.coord_runs(dim, wanted)
         if runs.empty:
             return none
-        by_patch = runs.groupby("patch_id")["_env_step"]
-        unstepped = runs["_env_step"].isna().groupby(runs["patch_id"]).transform("sum")
+        by_patch = runs.groupby("patch_row")["_env_step"]
+        unstepped = runs["_env_step"].isna().groupby(runs["patch_row"]).transform("sum")
         runs = runs[(unstepped == 0) & (by_patch.transform("nunique") == 1)]
         if runs.empty:
             return none
-        runs = runs.rename(columns={"patch_id": key})
+        runs = runs.rename(columns={"patch_row": key})
         placed = placed.astype({key: "int64"})
         split = placed.merge(runs, on=key, how="inner")
         for run_col, col in zip(
@@ -1811,7 +1811,7 @@ class Spool(NodeRepr, NamespaceOwner):
         split, ids = self._run_rows(df, dim)
         if not ids:
             return df
-        whole = df[~df["_patch_id"].isin(ids)]  # reports carry no `_index_id`
+        whole = df[~df["_patch_row"].isin(ids)]  # reports carry no `_index_id`
         return pd.concat([whole, split], ignore_index=True)
 
     def _runs_as_members(self, working: pd.DataFrame, dim: str) -> pd.DataFrame:
@@ -2494,11 +2494,11 @@ class Spool(NodeRepr, NamespaceOwner):
             # materialization over a column neither describes it by.
             # Coordinate def keys are representation artifacts too: a
             # residual-trimmed
-            # view cannot know its trimmed fingerprint without loading,
+            # view cannot know its trimmed physical id without loading,
             # and data values are never compared here anyway.
             drop = [
                 "source_path",
-                "_patch_id",
+                "_patch_row",
                 "origin_id",
                 "data_id",
                 "source_patch_key",

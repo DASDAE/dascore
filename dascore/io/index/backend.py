@@ -522,30 +522,27 @@ class SQLiteIndexBackend:
         Ensure unique coord definitions exist; return def_key -> id.
 
         Coord summaries are deduplicated across patches: identical values
-        (by fingerprint, or by summary content when no fingerprint is
-        available) share one coord_defs row. Only fingerprint-backed rows
+        (by physical id, or by summary content when no physical id is
+        available) share one coord_defs row. Only physical-id-backed rows
         are exposed as exact coordinate identity to merge planning.
         """
         keys = list(defs_needed)
         mapping: dict[str, int] = {}
         for chunk, marks in self._iter_in_batches(keys):
             found = self._fetch_df(
-                f"SELECT def_key, coord_def_id FROM coord_defs "
-                f"WHERE def_key IN ({marks})",
+                f"SELECT def_key, coord_row FROM coord_defs WHERE def_key IN ({marks})",
                 chunk,
             )
-            mapping.update(
-                zip(found["def_key"], (int(x) for x in found["coord_def_id"]))
-            )
+            mapping.update(zip(found["def_key"], (int(x) for x in found["coord_row"])))
         new_keys = [k for k in keys if k not in mapping]
-        next_id = self._next_id("coord_defs", "coord_def_id")
+        next_id = self._next_id("coord_defs", "coord_row")
         def_rows = []
-        # CoordRecord names every def column after id, key, and fingerprint
+        # CoordRecord names every def column after id, key, and physical id
         columns = CoordDefRow._fields[3:]
         for key in new_keys:
             c = defs_needed[key]
             values = (getattr(c, name) for name in columns)
-            def_rows.append((next_id, key, c.coord_hash, *values))
+            def_rows.append((next_id, key, c.physical_id, *values))
             mapping[key] = next_id
             next_id += 1
         self._bulk_insert("coord_defs", CoordDefRow._fields, def_rows)
@@ -592,8 +589,8 @@ class SQLiteIndexBackend:
             for base_uri, paths in by_base.items():
                 self._delete_by_paths(paths, base_uri=base_uri)
             column_map, skip_units = self._ensure_attr_columns(records)
-            source_id = self._next_id("sources", "source_id")
-            patch_id = self._next_id("patches", "patch_id")
+            source_row = self._next_id("sources", "source_row")
+            patch_row = self._next_id("patches", "patch_row")
             now = time.time_ns()
             source_rows, patch_rows, link_rows = [], [], []
             defs_needed: dict[str, object] = {}
@@ -606,7 +603,7 @@ class SQLiteIndexBackend:
                     next_ordinal += 1
                 source_rows.append(
                     (
-                        source_id,
+                        source_row,
                         record.base_uri or "",
                         record.source_path,
                         record.source_format,
@@ -626,8 +623,8 @@ class SQLiteIndexBackend:
                     )
                     patch_rows.append(
                         (
-                            patch_id,
-                            source_id,
+                            patch_row,
+                            source_row,
                             patch.source_patch_key,
                             patch.dims,
                             patch.dtype,
@@ -653,14 +650,14 @@ class SQLiteIndexBackend:
                         column_map[(name, tv.kind)] for name, tv in attrs.items()
                     )
                     attr_groups.setdefault(columns, []).append(
-                        [patch_id, *(tv.value for tv in attrs.values())]
+                        [patch_row, *(tv.value for tv in attrs.values())]
                     )
                     for c in patch.coords:
                         key = c.def_key
                         defs_needed.setdefault(key, c)
                         link_rows.append(
                             (
-                                patch_id,
+                                patch_row,
                                 c.coord_name,
                                 c.run_index,
                                 c.coord_dims,
@@ -668,12 +665,12 @@ class SQLiteIndexBackend:
                                 c.dtype,
                             )
                         )
-                    patch_id += 1
-                source_id += 1
+                    patch_row += 1
+                source_row += 1
             self._bulk_insert("sources", SourceRow._fields, source_rows)
             self._bulk_insert("patches", PatchRow._fields, patch_rows)
             for columns, rows in attr_groups.items():
-                self._bulk_insert("attrs", ("patch_id", *columns), rows)
+                self._bulk_insert("attrs", ("patch_row", *columns), rows)
             def_ids = self._ensure_coord_defs(defs_needed)
             self._bulk_insert(
                 "patch_coords",
@@ -742,18 +739,18 @@ class SQLiteIndexBackend:
             # one row instead of churning the whole table through WAL
             self._execute(
                 "WITH ranked AS ("
-                " SELECT s2.source_id AS sid, ROW_NUMBER() OVER ("
+                " SELECT s2.source_row AS sid, ROW_NUMBER() OVER ("
                 "  ORDER BY t.min_time IS NULL, t.min_time, s2.source_path"
                 " ) - 1 AS rn"
                 " FROM sources s2 LEFT JOIN ("
-                "  SELECT source_id, MIN(time_min) AS min_time"
-                "  FROM patches GROUP BY source_id"
-                " ) t ON t.source_id = s2.source_id"
+                "  SELECT source_row, MIN(time_min) AS min_time"
+                "  FROM patches GROUP BY source_row"
+                " ) t ON t.source_row = s2.source_row"
                 ")"
                 "UPDATE sources SET ordinal = ("
-                " SELECT rn FROM ranked WHERE sid = sources.source_id"
+                " SELECT rn FROM ranked WHERE sid = sources.source_row"
                 ") WHERE ordinal IS NOT ("
-                " SELECT rn FROM ranked WHERE sid = sources.source_id"
+                " SELECT rn FROM ranked WHERE sid = sources.source_row"
                 ")"
             )
 
@@ -814,11 +811,11 @@ class SQLiteIndexBackend:
             ids: dict[str, int] = {}
             for chunk, marks in self._iter_in_batches(list(moves)):
                 df = self._fetch_df(
-                    f"SELECT source_id, source_path FROM sources "
+                    f"SELECT source_row, source_path FROM sources "
                     f"WHERE source_path IN ({marks}) AND base_uri = ?",
                     [*chunk, base_uri],
                 )
-                ids.update(zip(df["source_path"], (int(x) for x in df["source_id"])))
+                ids.update(zip(df["source_path"], (int(x) for x in df["source_row"])))
             source_rows = [
                 (
                     new,
@@ -831,7 +828,7 @@ class SQLiteIndexBackend:
             ]
             self._executemany(
                 "UPDATE sources SET source_path = ?, path_attrs = ?, "
-                "last_indexed_ns = ? WHERE source_id = ?",
+                "last_indexed_ns = ? WHERE source_row = ?",
                 source_rows,
             )
             # hive wins: set the str column and clear any other-kind columns
@@ -853,19 +850,19 @@ class SQLiteIndexBackend:
                         if kind != typed.kind
                     )
                 groups.setdefault(tuple(sorted(sig)), []).append(ids[old])
-            for sig, source_ids in groups.items():
+            for sig, source_rows in groups.items():
                 assignments = ", ".join(f"{quote(col)} = ?" for col, _ in sig)
                 values = [value for _, value in sig]
-                for chunk, marks in self._iter_in_batches(source_ids):
+                for chunk, marks in self._iter_in_batches(source_rows):
                     self._execute(
-                        f"UPDATE attrs SET {assignments} WHERE patch_id IN "
-                        f"(SELECT patch_id FROM patches "
-                        f"WHERE source_id IN ({marks}))",
+                        f"UPDATE attrs SET {assignments} WHERE patch_row IN "
+                        f"(SELECT patch_row FROM patches "
+                        f"WHERE source_row IN ({marks}))",
                         (*values, *chunk),
                     )
             self._forget_lineage(list(ids.values()))
 
-    def _forget_lineage(self, source_ids: list[int]) -> None:
+    def _forget_lineage(self, source_rows: list[int]) -> None:
         """
         Clear the indexed ids of sources which have moved.
 
@@ -881,13 +878,13 @@ class SQLiteIndexBackend:
         columns = [
             column for name in _LINEAGE_ATTRS for _, column in self._attr_kinds(name)
         ]
-        if not columns or not source_ids:
+        if not columns or not source_rows:
             return
         assignments = ", ".join(f"{quote(col)} = NULL" for col in columns)
-        for chunk, marks in self._iter_in_batches(source_ids):
+        for chunk, marks in self._iter_in_batches(source_rows):
             self._execute(
-                f"UPDATE attrs SET {assignments} WHERE patch_id IN "
-                f"(SELECT patch_id FROM patches WHERE source_id IN ({marks}))",
+                f"UPDATE attrs SET {assignments} WHERE patch_row IN "
+                f"(SELECT patch_row FROM patches WHERE source_row IN ({marks}))",
                 chunk,
             )
 
@@ -916,7 +913,7 @@ class SQLiteIndexBackend:
         coord_meta = self.coord_meta(coord_names) if coord_names else pd.DataFrame()
         return queries, attr_meta, coord_meta
 
-    def query(self, query=None, order_by=None, patch_ids=None) -> pd.DataFrame:
+    def query(self, query=None, order_by=None, patch_rows=None) -> pd.DataFrame:
         """Return the flat patch-row relation for a query (or several)."""
         queries, attr_meta, coord_meta = self._query_context(query, order_by=order_by)
         sql, params, residuals = build_sql(
@@ -924,7 +921,7 @@ class SQLiteIndexBackend:
             attr_meta,
             coord_meta,
             order_by=order_by,
-            patch_ids=patch_ids,
+            patch_rows=patch_rows,
         )
         df = self._fetch_df(sql, params)
         df, attr_columns = self._flatten(df, attr_meta)
@@ -944,7 +941,7 @@ class SQLiteIndexBackend:
         self,
         query=None,
         order_by=None,
-        patch_ids=None,
+        patch_rows=None,
         *,
         limit: int | None = None,
         offset: int = 0,
@@ -956,23 +953,23 @@ class SQLiteIndexBackend:
             attr_meta,
             coord_meta,
             order_by=order_by,
-            patch_ids=patch_ids,
+            patch_rows=patch_rows,
             ids_only=True,
         )
         if residuals:
             # regex residuals need string values; realize the relation
-            df = self.query(queries, order_by=order_by, patch_ids=patch_ids)
+            df = self.query(queries, order_by=order_by, patch_rows=patch_rows)
             stop = None if limit is None else offset + limit
-            return [int(x) for x in df["_patch_id"].iloc[offset:stop]]
+            return [int(x) for x in df["_patch_row"].iloc[offset:stop]]
         if limit is not None or offset:
             sql += " LIMIT ? OFFSET ?"
             params.extend((-1 if limit is None else limit, offset))
-        return [int(x) for x in self._fetch_df(sql, params)["patch_id"]]
+        return [int(x) for x in self._fetch_df(sql, params)["patch_row"]]
 
-    def count(self, query=None, patch_ids=None) -> int:
+    def count(self, query=None, patch_rows=None) -> int:
         """Count matching patches without projecting or pivoting rows."""
         queries = _as_query_list(query if query is not None else Query())
-        if patch_ids is None and not any(q.attrs or q.coords for q in queries):
+        if patch_rows is None and not any(q.attrs or q.coords for q in queries):
             return self._patch_count()
         queries, attr_meta, coord_meta = self._query_context(queries)
         sql, params, residuals = build_sql(
@@ -980,13 +977,13 @@ class SQLiteIndexBackend:
             attr_meta,
             coord_meta,
             count=True,
-            patch_ids=patch_ids,
+            patch_rows=patch_rows,
         )
         if not residuals:
             return int(self._fetch_df(sql, params)["n"].iloc[0])
         # A regex residual must inspect string values, so a database count
         # cannot resolve it; the full relation already applies the residual.
-        return len(self.query(queries, patch_ids=patch_ids))
+        return len(self.query(queries, patch_rows=patch_rows))
 
     def _fetch_in(self, base_sql: str, column: str, ids: list) -> pd.DataFrame:
         """Fetch ``{base_sql} WHERE {column} IN ids``, batching large sets."""
@@ -999,36 +996,34 @@ class SQLiteIndexBackend:
             )
         return pd.concat(frames, ignore_index=True)
 
-    def export_records(self, patch_ids=None) -> list:
+    def export_records(self, patch_rows=None) -> list:
         """
         Reconstruct source records, filtering by patch id in SQL.
 
-        With patch_ids given, only those patches (and the sources, attrs,
+        With patch_rows given, only those patches (and the sources, attrs,
         coordinate links, and coordinate definitions they reference) are
         fetched — O(selected membership), not O(total archive). The frames
         are assembled into the backend-independent transfer format.
         """
-        if patch_ids is None:
+        if patch_rows is None:
             sources = self._fetch_df("SELECT * FROM sources")
             patches = self._fetch_df("SELECT * FROM patches")
             attrs = self._fetch_df("SELECT * FROM attrs")
             links = self._fetch_df("SELECT * FROM patch_coords")
             defs = self._fetch_df("SELECT * FROM coord_defs")
         else:
-            ids = [int(x) for x in patch_ids]
-            patches = self._fetch_in("SELECT * FROM patches", "patch_id", ids)
+            ids = [int(x) for x in patch_rows]
+            patches = self._fetch_in("SELECT * FROM patches", "patch_row", ids)
             if patches.empty:
                 return []
-            source_ids = [int(x) for x in patches["source_id"].unique()]
-            sources = self._fetch_in("SELECT * FROM sources", "source_id", source_ids)
-            attrs = self._fetch_in("SELECT * FROM attrs", "patch_id", ids)
-            links = self._fetch_in("SELECT * FROM patch_coords", "patch_id", ids)
+            source_rows = [int(x) for x in patches["source_row"].unique()]
+            sources = self._fetch_in("SELECT * FROM sources", "source_row", source_rows)
+            attrs = self._fetch_in("SELECT * FROM attrs", "patch_row", ids)
+            links = self._fetch_in("SELECT * FROM patch_coords", "patch_row", ids)
             def_ids = (
-                [int(x) for x in links["coord_def_id"].unique()]
-                if not links.empty
-                else []
+                [int(x) for x in links["coord_row"].unique()] if not links.empty else []
             )
-            defs = self._fetch_in("SELECT * FROM coord_defs", "coord_def_id", def_ids)
+            defs = self._fetch_in("SELECT * FROM coord_defs", "coord_row", def_ids)
         return assemble_source_records(
             sources, patches, attrs, links, defs, self._attr_meta()
         )
@@ -1109,7 +1104,7 @@ class SQLiteIndexBackend:
                 + out.loc[has_base, "source_path"]
             )
             out = out.drop(columns=["base_uri"])
-        return out.drop(columns=["source_id"], errors="ignore"), new_columns
+        return out.drop(columns=["source_row"], errors="ignore"), new_columns
 
     def _apply_attr_columns(
         self, out: pd.DataFrame, new_columns: dict[str, pd.Series]
@@ -1205,7 +1200,7 @@ class SQLiteIndexBackend:
             coords[out_col] = pd.Series(values, index=coords.index, dtype=object)
         # Summary-only definitions are useful for indexing/dedup but cannot
         # prove coordinate value identity for merge grouping.
-        coords["_key"] = coords["def_key"].where(coords["fingerprint"].notna(), None)
+        coords["_key"] = coords["def_key"].where(coords["physical_id"].notna(), None)
         return coords
 
     def _grids(self, def_keys=None) -> dict[str, tuple[int, ...]]:
@@ -1246,17 +1241,17 @@ class SQLiteIndexBackend:
         uses (private so it does not yet participate in merge
         compatibility comparisons).
         """
-        if out.empty or "patch_id" not in out.columns:
+        if out.empty or "patch_row" not in out.columns:
             return out
-        ids = out["patch_id"].tolist()
+        ids = out["patch_row"].tolist()
         link_sql = (
-            "SELECT pc.patch_id, pc.coord_name, cd.def_key, cd.fingerprint, "
+            "SELECT pc.patch_row, pc.coord_name, cd.def_key, cd.physical_id, "
             "cd.value_kind, pc.dtype, cd.is_relative, cd.units, "
             "cd.min_float, cd.max_float, cd.step_float, "
             "cd.min_int, cd.max_int, cd.step_int, cd.min_str, cd.max_str "
             "FROM patch_coords pc "
             # the whole coordinate only: one envelope per patch and name
-            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+            "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
             "AND pc.run_index = 0"
         )
         most = len(ids) * 4 >= self._patch_count()
@@ -1264,9 +1259,9 @@ class SQLiteIndexBackend:
             # Most patches selected: one scan plus a pandas filter beats
             # many batched IN queries and their frame concatenation.
             coords = self._fetch_df(link_sql)
-            coords = coords[coords["patch_id"].isin(set(ids))].reset_index(drop=True)
+            coords = coords[coords["patch_row"].isin(set(ids))].reset_index(drop=True)
         else:
-            coords = self._fetch_in(link_sql, "pc.patch_id", ids)
+            coords = self._fetch_in(link_sql, "pc.patch_row", ids)
         if coords.empty:
             return out
         coords = self._add_envelope_objects(coords)
@@ -1283,7 +1278,7 @@ class SQLiteIndexBackend:
                 # index does state keeps its columns even when its values
                 # are all null, which the concat plan relies on.
                 continue
-            pids = group["patch_id"]
+            pids = group["patch_row"]
             # last row wins for duplicate patch ids, like the mapping loop
             # this replaces.
             keys = dict(zip(pids, group["_key"]))
@@ -1292,23 +1287,23 @@ class SQLiteIndexBackend:
             steps = dict(zip(pids, group["_env_step"]))
             units = dict(zip(pids, group["units"]))
             dtypes = dict(zip(pids, group["dtype"]))
-            out[f"_{name}_def_key"] = out["patch_id"].map(keys)
+            out[f"_{name}_def_key"] = out["patch_row"].map(keys)
             # the exact grid and length, for rebuilding the row's range;
             # most coordinates state none, and skip the mapping
             grids = group["_grid"]
             out[f"_{name}_grid"] = (
-                out["patch_id"].map(dict(zip(pids, grids)))
+                out["patch_row"].map(dict(zip(pids, grids)))
                 if grids.notna().any()
                 else None
             )
             # the stored dtype: an envelope alone cannot say whether 0.0
             # to 299.0 by 1.0 labels integers, and a member rebuilt from
             # the row must match the patch the file would give
-            out[f"_{name}_coord_dtype"] = out["patch_id"].map(dtypes)
+            out[f"_{name}_coord_dtype"] = out["patch_row"].map(dtypes)
             # the ORIGINAL unit spelling, matching the native envelope
             # values; chunk partitioning normalizes compatible spellings
             # to one unit per dimensionality before using this
-            out[f"_{name}_units"] = out["patch_id"].map(units)
+            out[f"_{name}_units"] = out["patch_row"].map(units)
             kinds = set(group["value_kind"])
             # time/distance envelopes already live on patches...
             if name in ("time", "distance"):
@@ -1317,13 +1312,13 @@ class SQLiteIndexBackend:
                 # when the whole result is relative, serve timedelta
                 # envelopes so chunking on relative time works (#553).
                 if col in out.columns and out[col].isnull().all() and mins:
-                    out[f"{name}_min"] = out["patch_id"].map(mins)
-                    out[f"{name}_max"] = out["patch_id"].map(maxs)
-                    out[f"{name}_step"] = out["patch_id"].map(steps)
+                    out[f"{name}_min"] = out["patch_row"].map(mins)
+                    out[f"{name}_max"] = out["patch_row"].map(maxs)
+                    out[f"{name}_step"] = out["patch_row"].map(steps)
                 continue
-            out[f"{name}_min"] = out["patch_id"].map(mins)
-            out[f"{name}_max"] = out["patch_id"].map(maxs)
-            out[f"{name}_step"] = out["patch_id"].map(steps)
+            out[f"{name}_min"] = out["patch_row"].map(mins)
+            out[f"{name}_max"] = out["patch_row"].map(maxs)
+            out[f"{name}_step"] = out["patch_row"].map(steps)
             if kinds == {"num"}:  # object-None -> float NaN for sorting
                 for suffix in ("_min", "_max", "_step"):
                     out[f"{name}{suffix}"] = pd.to_numeric(out[f"{name}{suffix}"])
@@ -1370,7 +1365,7 @@ class SQLiteIndexBackend:
             for kind, unit in zip(rows["value_kind"], rows["units"], strict=True)
         }
 
-    def attr_stated_ids(self, name: str, patch_ids=None) -> set[int]:
+    def attr_stated_ids(self, name: str, patch_rows=None) -> set[int]:
         """
         Return the ids of the patches which state a value for one attr.
 
@@ -1384,12 +1379,12 @@ class SQLiteIndexBackend:
         if not len(columns):
             return set()
         stated = " OR ".join(f"{quote(x)} IS NOT NULL" for x in columns)
-        sql = f"SELECT patch_id FROM attrs WHERE ({stated})"
+        sql = f"SELECT patch_row FROM attrs WHERE ({stated})"
         params: list = []
-        if patch_ids is not None:
-            sql += " AND patch_id IN (SELECT value FROM json_each(?))"
-            params.append(json.dumps([int(x) for x in patch_ids]))
-        return {int(x) for x in self._fetch_df(sql, params)["patch_id"]}
+        if patch_rows is not None:
+            sql += " AND patch_row IN (SELECT value FROM json_each(?))"
+            params.append(json.dumps([int(x) for x in patch_rows]))
+        return {int(x) for x in self._fetch_df(sql, params)["patch_row"]}
 
     def associated_coord_names(self) -> set[str]:
         """Return every coord name some patch holds on a dimension not its own.
@@ -1407,49 +1402,49 @@ class SQLiteIndexBackend:
 
     def patch_ids_by_key(self) -> dict[str, int]:
         """Each patch's id, by its source patch key (a plan's output id)."""
-        df = self._fetch_df("SELECT patch_id, source_patch_key FROM patches")
+        df = self._fetch_df("SELECT patch_row, source_patch_key FROM patches")
         keys = df["source_patch_key"].astype(str)
-        return dict(zip(keys, df["patch_id"].astype(int), strict=True))
+        return dict(zip(keys, df["patch_row"].astype(int), strict=True))
 
-    def coord_runs(self, name: str, patch_ids) -> pd.DataFrame:
+    def coord_runs(self, name: str, patch_rows) -> pd.DataFrame:
         """
         The runs one coordinate is stored as, per patch, as envelope objects.
 
         Only a segmented coordinate is linked to runs (``run_index`` past
         0), and a partial index holds just those links, so an archive of
         contiguous patches answers from an empty index. Columns are
-        ``patch_id``, ``run_index`` and ``_env_min``/``_env_max``/
+        ``patch_row``, ``run_index`` and ``_env_min``/``_env_max``/
         ``_env_step``; no row for a patch means it states no runs.
         """
         sql = (
-            "SELECT pc.patch_id, pc.run_index, cd.def_key, cd.fingerprint, "
+            "SELECT pc.patch_row, pc.run_index, cd.def_key, cd.physical_id, "
             "cd.value_kind, cd.is_relative, "
             "cd.min_float, cd.max_float, cd.step_float, "
             "cd.min_int, cd.max_int, cd.step_int, cd.min_str, cd.max_str "
             "FROM patch_coords pc "
-            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+            "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
             "WHERE pc.coord_name = ? AND pc.run_index > 0"
         )
         # an archive with no run links answers from the partial index
         # before the ids are so much as read
         probe = "SELECT 1 FROM patch_coords WHERE coord_name = ? AND run_index > 0"
         if self._fetch_df(probe + " LIMIT 1", [name]).empty:
-            return pd.DataFrame(columns=["patch_id", "run_index", *_ENVELOPE_COLUMNS])
-        ids = [int(x) for x in patch_ids]
+            return pd.DataFrame(columns=["patch_row", "run_index", *_ENVELOPE_COLUMNS])
+        ids = [int(x) for x in patch_rows]
         if len(ids) * 4 >= self._patch_count():
             # most patches asked for: read the run links whole and filter
             runs = self._fetch_df(sql, [name])
-            runs = runs[runs["patch_id"].isin(set(ids))]
+            runs = runs[runs["patch_row"].isin(set(ids))]
         else:
             # a few: let the engine drive from the ids through the key
-            sql += " AND pc.patch_id IN (SELECT value FROM json_each(?))"
+            sql += " AND pc.patch_row IN (SELECT value FROM json_each(?))"
             runs = self._fetch_df(sql, [name, json.dumps(ids)])
         if runs.empty:
             return runs
         runs = self._add_envelope_objects(runs.reset_index(drop=True))
-        return runs[["patch_id", "run_index", *_ENVELOPE_COLUMNS]]
+        return runs[["patch_row", "run_index", *_ENVELOPE_COLUMNS]]
 
-    def patch_runs(self, patch_ids) -> dict[int, list[CoordRecord]]:
+    def patch_runs(self, patch_rows) -> dict[int, list[CoordRecord]]:
         """
         The run records each of these patches links, in order, by patch id.
 
@@ -1462,25 +1457,25 @@ class SQLiteIndexBackend:
         )
         fields = ", ".join(f"cd.{f}" for f in _COORD_DEF_FIELDS if f != "dtype")
         sql = (
-            "SELECT pc.patch_id, pc.coord_name, pc.coord_dims, pc.run_index, "
-            f"pc.dtype, cd.fingerprint, {fields} FROM patch_coords pc "
-            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+            "SELECT pc.patch_row, pc.coord_name, pc.coord_dims, pc.run_index, "
+            f"pc.dtype, cd.physical_id, {fields} FROM patch_coords pc "
+            "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
             "WHERE pc.run_index > 0 "
-            "AND pc.patch_id IN (SELECT value FROM json_each(?)) "
-            "ORDER BY pc.patch_id, pc.coord_name, pc.run_index"
+            "AND pc.patch_row IN (SELECT value FROM json_each(?)) "
+            "ORDER BY pc.patch_row, pc.coord_name, pc.run_index"
         )
         with self._lock:
             if self._con.execute(probe).fetchone() is None:
                 return {}
             # plain rows: the engine's integers are exact, and a frame
             # would cost more than the lookup
-            cursor = self._con.execute(sql, [json.dumps([int(x) for x in patch_ids])])
+            cursor = self._con.execute(sql, [json.dumps([int(x) for x in patch_rows])])
             names = [x[0] for x in cursor.description]
             rows = cursor.fetchall()
         out: dict[int, list[CoordRecord]] = {}
         for values in rows:
             row = SimpleNamespace(**dict(zip(names, values, strict=True)))
-            out.setdefault(row.patch_id, []).append(coord_record(row, row))
+            out.setdefault(row.patch_row, []).append(coord_record(row, row))
         return out
 
     def coord_dims_map(self) -> dict[str, str]:
