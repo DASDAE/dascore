@@ -11,6 +11,9 @@ import numpy as np
 import pandas as pd
 import pint
 from pint import DimensionalityError, Quantity, UndefinedUnitError, Unit
+
+# Re-exported so dascore code can catch any error raised by pint.
+from pint.errors import PintError  # noqa: F401
 from platformdirs import user_cache_path
 
 import dascore as dc
