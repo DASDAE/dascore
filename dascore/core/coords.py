@@ -7,9 +7,7 @@ current coord-family and string-coordinate design notes.
 from __future__ import annotations
 
 import abc
-import hashlib
 import itertools
-import json
 import math
 import re
 from collections.abc import Mapping, Sequence, Sized
@@ -65,6 +63,7 @@ from dascore.utils.display import (
 )
 from dascore.utils.docs import compose_docstring, get_docstring
 from dascore.utils.gaps import GapTolerance
+from dascore.utils.identity import H
 from dascore.utils.misc import (
     _get_nullish,
     _maybe_array_to_slice,
@@ -879,8 +878,20 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             coord.unit_str,
             *coord._fingerprint_components(),
         )
-        encoded = json.dumps(payload, separators=(",", ":")).encode()
-        return hashlib.sha256(encoded).hexdigest()
+        # Built from strings and None alone, so it is its own encoding.
+        return H("coord", payload, encoded=True)
+
+    def _identity(self) -> tuple[str, str]:
+        """
+        Return the id this coordinate has as a parameter or in a content id.
+
+        Stricter than `fingerprint`, which says two coordinates hold the
+        same physical values: the same range in metres and in centimetres
+        select differently, so the units and dtype it is written in count.
+        """
+        dtype = str(np.dtype(self.dtype)) if self.dtype else ""
+        exact = [self.fingerprint(), self.unit_str, dtype]
+        return "coord", H("coord", exact)
 
     @cached_method
     def min(self):

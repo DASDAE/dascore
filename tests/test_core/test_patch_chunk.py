@@ -2027,7 +2027,7 @@ class TestChunkFromIndex:
             assert coord.units == other.units, name
         # the lineage ids are folded from the members, so they have to
         # come back from the row rather than at their defaults
-        assert fast.attrs.patch_id
+        assert fast.attrs.origin_id
 
     @pytest.mark.parametrize(
         "value", [np.datetime64("2021-01-01"), np.timedelta64(5, "s")]
@@ -2104,10 +2104,10 @@ class TestChunkFromIndex:
             if dict(fast.attrs).get(k) != dict(slow.attrs).get(k)
         }
         assert differs == {"history"}
-        # processing_id is indexed, so the fold sees what the members
+        # data_id is indexed, so the fold sees what the members
         # carried rather than a default
-        assert fast.attrs.processing_id == slow.attrs.processing_id
-        assert fast.attrs.processing_id
+        assert fast.attrs.data_id == slow.attrs.data_id
+        assert fast.attrs.data_id
 
     def test_unstateable_coord_loads_patch(self, tmp_path_factory, calls):
         """A coordinate the index cannot describe is still known to exist.
@@ -2215,11 +2215,11 @@ class TestChunkFromIndex:
         dc.spool(path).update()
         (path / "p0.h5").rename(path / "q0.h5")
         moved = dc.spool(path).update()
-        assert (moved.get_contents()["patch_id"] == "").any()
+        assert (moved.get_contents()["origin_id"] == "").any()
         fast = moved.chunk(time=None)[0]
         assert calls == {"patch": 2, "array": 0}
         read = dc.spool([dc.read(p)[0] for p in sorted(path.glob("*.h5"))])
-        assert fast.attrs.patch_id == read.chunk(time=None)[0].attrs.patch_id
+        assert fast.attrs.origin_id == read.chunk(time=None)[0].attrs.origin_id
 
     def test_extended_float_coordinate_survives_merge(self, tmp_path, permanent_config):
         """File coordinate precision survives merging, including extended floats."""
@@ -2349,12 +2349,12 @@ class TestChunkFromIndex:
             "time_min": np.datetime64("2020-01-01"),
             "time_max": np.datetime64("2020-01-01T00:00:03"),
             "time_step": np.timedelta64(1, "s"),
-            "patch_id": "abc",
+            "origin_id": "abc",
             "_attrs_complete": 1,
         }
         assert assembler._meta_from_index(row) is not None
-        assert assembler._meta_from_index(row | {"patch_id": ""}) is None
-        assert assembler._meta_from_index(row | {"patch_id": None}) is None
+        assert assembler._meta_from_index(row | {"origin_id": ""}) is None
+        assert assembler._meta_from_index(row | {"origin_id": None}) is None
         assert assembler._meta_from_index(row | {"_attrs_complete": 0}) is None
 
     def test_row_without_range_loads_patch(self):
@@ -2514,7 +2514,7 @@ class TestChunkFromIndex:
             "source_format": "DASDAE",
             "source_version": "1",
             "source_patch_key": "DAS__x",
-            "patch_id": "abc",
+            "origin_id": "abc",
             "tag": "raw",
             "vendor_thing": 5,
             "blank": np.nan,
@@ -2522,7 +2522,7 @@ class TestChunkFromIndex:
         attrs = assembly_module._attrs_from_row(row, ("distance", "time"))
         assert attrs.tag == "raw"
         assert attrs["vendor_thing"] == 5
-        assert attrs.patch_id == "abc"
+        assert attrs.origin_id == "abc"
         assert "_source_patch_key" not in attrs
         assert row["source_patch_key"] == "DAS__x"
         for name in ("output_id", "source_path", "time_min", "blank", "_modified"):

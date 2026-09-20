@@ -83,20 +83,20 @@ class PatchAttrs(DascoreBaseModel):
         default_factory=tuple,
         description="A list of processing performed on the patch.",
     )
-    patch_id: str = Field(
+    origin_id: str = Field(
         default="",
         description=(
-            "Identifies which data this is. It survives every operation "
-            "which does not change what the data is of, and changes only "
-            "when data from more than one source is combined."
+            "Identifies which stored data this came from. It survives every "
+            "operation, and changes only when data from more than one "
+            "origin is combined."
         ),
     )
-    processing_id: str = Field(
+    data_id: str = Field(
         default="",
         description=(
-            "Identifies what was done to the data. It advances on every "
-            "operation, so two patches which took the same route from the "
-            "same source carry the same value and two which did not, do not."
+            "Identifies which array this is: its origin's id until an "
+            "operation runs, then an id derived from the inputs' ids and "
+            "the operation, so equal ids mean the same route from the same data."
         ),
     )
 
@@ -111,6 +111,10 @@ class PatchAttrs(DascoreBaseModel):
             msg = "PatchAttrs no longer accepts coordinate metadata. Received: coords."
             raise ValueError(msg)
         data.pop("dims", None)
+        # What the two ids were called before they were renamed.
+        for old, new in (("patch_id", "origin_id"), ("processing_id", "data_id")):
+            if value := data.pop(old, None):
+                data.setdefault(new, value)
         return data
 
     def __getitem__(self, item):

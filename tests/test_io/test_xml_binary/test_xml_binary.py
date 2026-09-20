@@ -184,7 +184,7 @@ class TestScanContents:
             )
             assert len(result) == 1
             patch = result[0]
-            assert patch.attrs.patch_id == summary.attrs.patch_id
+            assert patch.attrs.origin_id == summary.attrs.origin_id
             assert patch.summary.coords == summary.coords
             np.testing.assert_array_equal(
                 patch.data, np.arange(10_000, dtype="uint16").reshape(1000, 10)
@@ -220,16 +220,16 @@ class TestScanContents:
             pytest.fail("Scanning directory metadata must not read sample arrays")
 
         derived_ordinals = []
-        source_patch_id = io_core.source_patch_id
+        origin_id_for = io_core.origin_id_for
 
         def record_derivation(*args, **kwargs):
             derived_ordinals.append(kwargs["ordinal"])
-            return source_patch_id(*args, **kwargs)
+            return origin_id_for(*args, **kwargs)
 
         with monkeypatch.context() as context:
             context.setattr(XMLBinaryV1, "read_array", no_samples)
             full = dc.scan(tmp_path)
-            context.setattr(io_core, "source_patch_id", record_derivation)
+            context.setattr(io_core, "origin_id_for", record_derivation)
             selected = dc.scan(tmp_path, timestamp=timestamp)
             payloads = dc.scan_payloads(tmp_path, timestamp=timestamp)
             direct = XMLBinaryV1().scan(tmp_path, timestamp=timestamp)
@@ -240,8 +240,8 @@ class TestScanContents:
         assert [item.source_patch_key for item in selected] == [
             item.source_patch_key for item in original
         ]
-        assert [item.attrs.patch_id for item in selected] == [
-            item.attrs.patch_id for item in original
+        assert [item.attrs.origin_id for item in selected] == [
+            item.attrs.origin_id for item in original
         ]
         assert [item.summary for item in payloads] == selected
         for summary in selected:
@@ -250,7 +250,7 @@ class TestScanContents:
             )
             assert len(patches) == 1
             patch = patches[0]
-            assert patch.attrs.patch_id == summary.attrs.patch_id
+            assert patch.attrs.origin_id == summary.attrs.origin_id
             assert patch.summary.coords == summary.coords
             np.testing.assert_array_equal(
                 patch.data, expected[summary.coords["time"].min]
@@ -383,7 +383,7 @@ class TestRead:
         bounds = (time.min() + 10 * time.step, time.min() + 20 * time.step)
         expected = source.select(time=bounds)
         out = spool.select(time=bounds)[0]
-        assert out.attrs.processing_id == expected.attrs.processing_id
+        assert out.attrs.data_id == expected.attrs.data_id
         assert out.attrs.history == expected.attrs.history
         assert np.array_equal(out.data, expected.data)
         assert out.coords == expected.coords

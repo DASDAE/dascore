@@ -318,3 +318,15 @@ class TimeRangedModel(InventoryModel):
         first_starts_before = pd.isnull(e2) or pd.isnull(s1) or s1 < e2
         second_starts_before = pd.isnull(e1) or pd.isnull(s2) or s2 < e1
         return bool(first_starts_before and second_starts_before)
+
+
+def model_values(model: DascoreBaseModel) -> dict[str, Any]:
+    """
+    Return a model's fields and extras, as the objects they are.
+
+    Not model_dump: a dump turns a nested model into a plain mapping, losing
+    which class it was, and its json mode adds a key which is not a field.
+    """
+    out = {name: getattr(model, name) for name in type(model).model_fields}
+    out.update(model.__pydantic_extra__ or {})
+    return out

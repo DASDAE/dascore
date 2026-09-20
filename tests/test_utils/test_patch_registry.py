@@ -212,9 +212,15 @@ class TestBinding:
 
     def test_positional_and_keyword(self):
         """Which is what binding against the signature is for."""
-        expected = {"dim": "time", "norm": "l2", "window": None, "samples": False}
+        expected = {"dim": "time"}
         assert _bind(dc.proc.normalize, ("time",), {}) == expected
         assert _bind(dc.proc.normalize, (), {"dim": "time"}) == expected
+
+    def test_a_restated_default_is_left_out(self):
+        """Passing a default is the call which leaves it out."""
+        bound = _bind(dc.proc.normalize, ("time",), {"norm": "l2", "samples": False})
+        assert bound == {"dim": "time"}
+        assert _bind(dc.proc.normalize, ("time",), {"norm": "l1"})["norm"] == "l1"
 
     def test_a_star_args_group(self):
         """A `*args` group is one entry holding the tuple it is."""
@@ -225,17 +231,30 @@ class TestBinding:
     def test_an_extra_is_kept_by_name(self):
         """A dimension the signature does not name is bound under its own."""
         bound = _bind(dc.proc.pass_filter, (), {"time": (10, 100)})
-        assert bound["time"] == (10, 100)
-        assert bound["corners"] == 4
+        assert bound == {"time": (10, 100)}
 
     def test_a_field_default(self):
         """A default spelled as a pydantic Field is the value it holds."""
-        assert _bind(registry_test_field_default, (), {}) == {"value": 7}
+        assert _bind(registry_test_field_default, (), {}) == {}
+        assert _bind(registry_test_field_default, (), {"value": 7}) == {}
+        assert _bind(registry_test_field_default, (), {"value": 8}) == {"value": 8}
 
     def test_an_extra_which_collides_with_a_parameter(self):
         """`append_dims(patch, *empty_dims, **kwargs)` given `empty_dims=3`."""
         with pytest.raises(ParameterError, match="both as a parameter"):
             _bind(dc.proc.append_dims, ("a",), {"empty_dims": 3})
+
+    def test_an_extra_named_for_an_omitted_positional(self):
+        """`f(p, 2)` and `f(p, factor=2)` are two calls, not one mapping."""
+
+        @dc.patch_function()
+        def transform(patch, factor=1, /, **kwargs):
+            """Scale, and add an extra which shares the scale's name."""
+            return patch.new(data=patch.data * factor + kwargs.get("factor", 0))
+
+        assert _bind(transform, (2,), {}) == {"factor": 2}
+        with pytest.raises(ParameterError, match="both as a parameter"):
+            _bind(transform, (), {"factor": 2})
 
     def test_an_argument_the_signature_rejects(self):
         """An argument the function does not take is refused."""
@@ -253,7 +272,7 @@ class TestFingerprintCall:
     """The digest a call carries."""
 
     def test_an_argument_it_cannot_encode(self, random_patch):
-        """An argument the serializer cannot encode never fails the call."""
+        """An argument the encoder refuses costs a derived id, not the call."""
         deep = {}
         deep["self"] = deep
 
@@ -263,7 +282,11 @@ class TestFingerprintCall:
             return patch.new(data=patch.data)
 
         out = takes_anything(random_patch, thing=deep)
-        assert out.attrs.processing_id == random_patch.attrs.processing_id
+        # New data never keeps its input's id, and no two runs share one.
+        assert out.attrs.data_id not in ("", random_patch.attrs.data_id)
+        again = takes_anything(random_patch, thing=deep)
+        assert again.attrs.data_id != out.attrs.data_id
+        assert out.attrs.origin_id == random_patch.attrs.origin_id
 
     def test_the_version_is_part_of_it(self, monkeypatch):
         """An operation at a new version is a new operation."""
@@ -289,9 +312,14 @@ class TestFingerprintCall:
     @pytest.mark.parametrize(
         ("func", "args", "kwargs", "expected"),
         [
-            ("abs", (), {}, "19d28ce8e2762604"),
-            ("pass_filter", (), {"time": (10, 100)}, "760edca6e6e15fc1"),
-            ("transpose", ("time", "distance"), {}, "97c847a8ef484a40"),
+            ("abs", (), {}, "e892afd399ab1b60b387f1c28ce7e5e5"),
+            (
+                "pass_filter",
+                (),
+                {"time": (10, 100)},
+                "2e8622d6737c4ad372bbd74a352f56e7",
+            ),
+            ("transpose", ("time", "distance"), {}, "b4413ada5fe424cf0f227062c5e1f6b1"),
         ],
     )
     def test_it_is_stable(self, func, args, kwargs, expected):

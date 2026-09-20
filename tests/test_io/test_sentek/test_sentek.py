@@ -78,7 +78,7 @@ class TestStoredLayout:
             np.testing.assert_array_equal(full.get_coord("time").values, time)
         metadata = dc.scan_payloads(path, snap=snap)[0]
         assert metadata.coords == full.coords
-        assert metadata.attrs.patch_id == full.attrs.patch_id
+        assert metadata.attrs.origin_id == full.attrs.origin_id
         assert metadata.dtype == data.dtype
 
     def test_default_scan_reads_only_endpoints(self, stored_file):

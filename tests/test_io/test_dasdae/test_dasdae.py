@@ -397,7 +397,7 @@ class TestSpoolReadHints:
         assert read_shapes == [expected.shape]
         assert selected.data.size < source.data.size / 8
         assert np.array_equal(selected.data, expected.data)
-        assert selected.attrs.processing_id == expected.attrs.processing_id
+        assert selected.attrs.data_id == expected.attrs.data_id
         assert selected.attrs.history == expected.attrs.history
 
 
@@ -411,7 +411,7 @@ class TestScanDASDAE:
         # History is excluded because writing is not an operation; the
         # ids are not, because a file carries them and that is the point.
         common_keys = set(info1) & set(info2) - {"history"}
-        assert info1["patch_id"] == info2["patch_id"]
+        assert info1["origin_id"] == info2["origin_id"]
         for key in common_keys:
             assert info1[key] == info2[key]
 

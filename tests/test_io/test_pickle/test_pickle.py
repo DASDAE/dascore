@@ -151,9 +151,9 @@ class TestSerializedSourceKeys:
             expected = patches[index].select(time=(1, 4), samples=True)
             np.testing.assert_array_equal(selected.data, expected.data)
             assert (
-                loaded.attrs.patch_id
-                == selected.attrs.patch_id
-                == summaries[index].attrs.patch_id
+                loaded.attrs.origin_id
+                == selected.attrs.origin_id
+                == summaries[index].attrs.origin_id
             )
             assert "_source_patch_key" not in loaded.attrs.model_dump()
             np.testing.assert_array_equal(
@@ -173,7 +173,7 @@ class TestSerializedSourceKeys:
         indexed = dc.spool(path)
         assert len(loaded) == len(indexed) == 2
         assert [p._source.key for p in loaded] == ["0", "1"]
-        assert loaded[0].attrs.patch_id != loaded[1].attrs.patch_id
+        assert loaded[0].attrs.origin_id != loaded[1].attrs.origin_id
         for index, expected in enumerate([patch, other]):
             np.testing.assert_array_equal(loaded[index].data, expected.data)
             np.testing.assert_array_equal(indexed[index].data, expected.data)

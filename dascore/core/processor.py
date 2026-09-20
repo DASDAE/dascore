@@ -53,13 +53,18 @@ import dascore as dc
 from dascore.config import get_config
 from dascore.constants import PatchMetaType, PatchType
 from dascore.exceptions import ParameterError
-from dascore.models.base import DascoreBaseModel
+from dascore.models.base import DascoreBaseModel, model_values
 from dascore.utils.attrs import _values_equal
-from dascore.utils.identity import ids_enabled
+from dascore.utils.identity import (
+    callable_name,
+    extract_patches,
+    ids_enabled,
+    stamp,
+    warn_random_id,
+)
 from dascore.utils.patch import (
     _call_str,
     _maybe_add_history_str,
-    _stamp_ids,
     attr_type,
     check_patch_attrs,
     check_patch_coords,
@@ -68,11 +73,10 @@ from dascore.utils.patch import (
 from dascore.utils.patch_registry import (
     _memoized_fingerprint,
     _spell,
-    _without_patches,
+    is_default,
     patch_function_tag,
     register_patch_function,
 )
-from dascore.utils.serialize import model_values
 
 if TYPE_CHECKING:
     from dascore.core.attrs import PatchAttrs
@@ -206,26 +210,66 @@ class PatchProcessor(DascoreBaseModel):
         func = cls.patch_function
         if func is not None and (tag := patch_function_tag(func)) is not None:
             return tag
-        # Unregistered or defined inside a call: named by where it was
-        # written and which class it is, which is honestly process-local.
-        return f"{_spell(cls)}#{id(cls):x}"
+        # Unregistered or defined inside a call: named by its source, or --
+        # one with no source to read -- by which class object it is.
+        try:
+            return callable_name(cls)
+        except ParameterError:
+            return f"{_spell(cls)}#{id(cls):x}"
+
+    def _inputs(self) -> tuple[dict, list]:
+        """Return the non-default fields, and the patches found among them."""
+        fields = type(self).model_fields
+        # A field which only restates its default is left out, so a field
+        # added later does not change the id of every operation before it.
+        given = {
+            name: value
+            for name, value in self.kwargs.items()
+            if name not in fields
+            or fields[name].is_required()
+            or not is_default(value, fields[name])
+        }
+        return extract_patches(given)
+
+    def _operation(self) -> tuple[str, list]:
+        """Return this operation's id, and the patches among its fields."""
+        params, patches = self._inputs()
+        found = _memoized_fingerprint(type(self), self.tag, params, self.__version__)
+        return found, patches
 
     @property
     def fingerprint(self) -> str:
-        """Return the digest of the tag, version and validated fields."""
-        return _memoized_fingerprint(
-            type(self), self.tag, _without_patches(self.kwargs), self.__version__
-        )
+        """Return the id of the tag, version and non-default fields."""
+        return self._operation()[0]
+
+    def _identity(self) -> tuple[str, str]:
+        """Return the id this operation has as another's parameter."""
+        found, patches = self._operation()
+        if patches:
+            # Its id does not say which patches it holds, so an operation
+            # given it could not tell two of them apart.
+            msg = f"{type(self).__name__} holds a patch, so it has no id of its own."
+            raise ParameterError(msg)
+        return "operation", found
 
     def __eq__(self, other) -> bool:
         """Two processors are equal if they are the same operation."""
         if not isinstance(other, PatchProcessor):
             return NotImplemented
-        return type(self) is type(other) and self.fingerprint == other.fingerprint
+        if type(self) is not type(other):
+            return False
+        try:
+            return self.fingerprint == other.fingerprint
+        except Exception:
+            # A field with no faithful spelling: only itself is surely equal.
+            return self is other
 
     def __hash__(self) -> int:
         """Hash a processor the way it compares."""
-        return hash(self.fingerprint)
+        try:
+            return hash(self.fingerprint)
+        except Exception:
+            return object.__hash__(self)
 
     @overload
     def __call__(self, patch: PatchType) -> PatchType: ...
@@ -371,15 +415,17 @@ class PatchProcessor(DascoreBaseModel):
             spelled = _call_str(name, self.kwargs) if self.history == "full" else name
             attrs = _maybe_add_history_str(attrs, spelled)
         if not ids_enabled():
-            return attrs
+            return stamp(attrs, (), None)
         try:
-            fingerprint = self.fingerprint
-        except Exception:
-            # As for a patch function: a field the serializer cannot encode
-            # means no ids for this call, never a failed call.
-            return attrs
-        others = [x for x in self.kwargs.values() if isinstance(x, dc.Patch)]
-        return _stamp_ids(patch, attrs, fingerprint, others)
+            operation, others = self._operation()
+        except Exception as error:
+            # As for a patch function: a field the encoder refuses still
+            # made new data, so the result gets a random id.
+            warn_random_id(type(self).__name__, error)
+            # The patches it holds still say where the data came from.
+            operation, others = None, self._inputs()[1]
+        members = [patch.attrs, *(x.attrs for x in others)]
+        return stamp(attrs, members, operation)
 
 
 # Names a subclass field may not take: the base's own settings and methods.

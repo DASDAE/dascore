@@ -47,9 +47,9 @@ _SANITIZE_RE = re.compile(r"[^a-z0-9_]+")
 # Attrs handled structurally rather than indexed: history is a list, so
 # never a scalar column, and dims and coords are structure.
 #
-# Neither lineage id is here. `patch_id` is indexed so a spool can find a
+# Neither id is here. `origin_id` is indexed so a spool can find a
 # patch by the id it carries rather than by loading every patch to look;
-# `processing_id` because a provenance query needs to reach it. Both are
+# `data_id` because a provenance query needs to reach it. Both are
 # lineage rather than describing attrs, so the planner keeps them out of
 # merge conflicts (see `_SOURCE_COLUMNS`).
 _SKIPPED_ATTRS = frozenset({"history", "dims", "coords"})
@@ -131,9 +131,7 @@ class CoordRecord:
         spelling's row lie for the second.
         """
         if self.coord_hash:
-            # truncated: 128 bits is ample and key size shows up in the
-            # def_key index for archives with mostly-unique time coords
-            key = f"fp:{self.coord_hash[:32]}"
+            key = f"fp:{self.coord_hash}"
             return f"{key}|{self.units}" if self.units else key
         fields = tuple(getattr(self, f) for f in _COORD_DEF_FIELDS)
         digest = hashlib.sha256(repr(fields).encode()).hexdigest()[:32]
@@ -307,9 +305,7 @@ def _extract_attrs(
                 complete = False
             continue
         # An empty identity means no recorded operations, not a missing field.
-        typed = (
-            TypedValue("str", value) if name == "processing_id" else typed_value(value)
-        )
+        typed = TypedValue("str", value) if name == "data_id" else typed_value(value)
         if typed is not None:
             out[name] = typed
             if typed.units is not None:
@@ -331,9 +327,9 @@ def _extract_attrs(
 
 # What a directory name may never claim to be. A path says where data is
 # kept, which is how renaming a directory corrects metadata; it does not
-# get to say which data it is, or a directory called `patch_id=x` would
-# rewrite the lineage of everything under it.
-_UNCLAIMABLE_BY_PATH = frozenset({"patch_id", "processing_id"})
+# get to say which data it is, or a directory called `origin_id=x` would
+# rewrite the identity of everything under it.
+_UNCLAIMABLE_BY_PATH = frozenset({"origin_id", "data_id"})
 
 
 def hive_path_attrs(rel_posix: str, warn: bool = True) -> dict[str, str]:

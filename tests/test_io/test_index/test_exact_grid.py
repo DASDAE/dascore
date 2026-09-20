@@ -128,7 +128,7 @@ class TestFlatRelation:
             hz_1024_patch.select(time=window),
         )
         assert out == expected
-        assert out.attrs.processing_id == expected.attrs.processing_id
+        assert out.attrs.data_id == expected.attrs.data_id
 
     def test_merge_through_index(self, hz_1024_patch, tmp_path):
         """Two files merged by their rows alone keep the grid.

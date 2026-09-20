@@ -59,7 +59,8 @@ def _assert_patch_round_trip_equal(expected: dc.Patch, observed: dc.Patch) -> No
     # read from a file names its source, one built in memory does not.
     for attrs in (expected_attrs, observed_attrs):
         attrs.pop("_source_patch_key", None)
-        attrs.pop("patch_id", None)
+        attrs.pop("origin_id", None)
+        attrs.pop("data_id", None)
     assert expected_attrs == observed_attrs
 
 

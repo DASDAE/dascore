@@ -69,7 +69,7 @@ class TestDerivedRead:
         assert out.dtype == reader.metadata.dtype
         assert out._source == reader.metadata._source
         assert out.attrs.history == reader.metadata.attrs.history
-        assert out.attrs.processing_id == reader.metadata.attrs.processing_id
+        assert out.attrs.data_id == reader.metadata.attrs.data_id
 
     def test_noncontiguous_both_axes(self, reader):
         """Compose associated constraints on the original grid, then trim residuals."""
@@ -82,7 +82,7 @@ class TestDerivedRead:
         np.testing.assert_array_equal(out.get_coord("time").values, [3, 5])
         assert reader.calls == [(((1, 4), (3, 6)), "part")]
         assert out.attrs.history == reader.metadata.attrs.history
-        assert out.attrs.processing_id == reader.metadata.attrs.processing_id
+        assert out.attrs.data_id == reader.metadata.attrs.data_id
 
     def test_sample_selection(self, reader):
         """Half-open sample bounds are passed through as exact array windows."""
@@ -271,7 +271,7 @@ class TestNamedSnap:
             )
         np.testing.assert_array_equal(read.data, data)
         np.testing.assert_array_equal(bounded.data, data[1:3])
-        assert exact.attrs.patch_id == read.attrs.patch_id == bounded.attrs.patch_id
+        assert exact.attrs.origin_id == read.attrs.origin_id == bounded.attrs.origin_id
 
     @pytest.mark.parametrize("snap", [False, "distance"])
     @pytest.mark.parametrize("file_format", ["H5Simple", "DASDAE", "NeubrexRFS"])

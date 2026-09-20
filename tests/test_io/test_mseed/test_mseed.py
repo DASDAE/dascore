@@ -1017,7 +1017,7 @@ class TestDecodedArrayContract:
         np.testing.assert_array_equal(full.data[0], np.r_[np.arange(count), 101])
         tail = dc.read(path, time=(-1, None), samples=True)[0]
         np.testing.assert_array_equal(tail.data, [[101]])
-        assert full.attrs.patch_id == tail.attrs.patch_id
+        assert full.attrs.origin_id == tail.attrs.origin_id
 
     def test_overlapping_groups_same_source(self, tmp_path):
         """Overlapping records with different rates load only their logical group."""
@@ -1037,7 +1037,7 @@ class TestDecodedArrayContract:
         for index, summary in enumerate(summaries):
             patch = dc.read(path, source_patch_key=summary.source_patch_key)[0]
             np.testing.assert_array_equal(patch.data, [np.arange(10) + index * 100])
-            assert patch.attrs.patch_id == summary.attrs.patch_id
+            assert patch.attrs.origin_id == summary.attrs.origin_id
 
     def test_mixed_channel_dtypes(self, tmp_path):
         """A channel subset retains the dtype promoted across its source group."""
@@ -1073,7 +1073,9 @@ class TestDecodedArrayContract:
         assert summary.dtype == str(full.dtype) == str(selected.dtype) == "float64"
         np.testing.assert_array_equal(full.data, np.stack(rows))
         np.testing.assert_array_equal(selected.data, rows[1][None, :])
-        assert full.attrs.patch_id == selected.attrs.patch_id == summary.attrs.patch_id
+        assert (
+            full.attrs.origin_id == selected.attrs.origin_id == summary.attrs.origin_id
+        )
         assert full._source.key == selected._source.key == summary.source_patch_key
 
     @pytest.mark.parametrize("version", [2, 3])
@@ -1093,7 +1095,7 @@ class TestDecodedArrayContract:
         assert summary.attrs.sample_type == full.attrs.sample_type == "i"
         np.testing.assert_array_equal(full.data, expected)
         np.testing.assert_array_equal(selected.data, expected[:, 2:7])
-        assert full.attrs.patch_id == selected.attrs.patch_id
+        assert full.attrs.origin_id == selected.attrs.origin_id
 
     @pytest.mark.parametrize(
         "windows, shape",

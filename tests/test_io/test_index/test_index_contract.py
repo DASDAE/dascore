@@ -632,8 +632,8 @@ class TestLineageIds:
     def test_the_two_ids_are_different_columns(self, written_spool):
         """The row's id is private; the patch's owns the public name."""
         df = written_spool._df
-        assert {"_patch_id", "patch_id"}.issubset(df.columns)
-        assert df["_patch_id"].tolist() != df["patch_id"].tolist()
+        assert {"_patch_id", "origin_id"}.issubset(df.columns)
+        assert df["_patch_id"].tolist() != df["origin_id"].tolist()
         assert "_patch_id" not in written_spool.get_contents().columns
 
     def test_scanning_and_reading_agree(self, tmp_path):
@@ -641,18 +641,18 @@ class TestLineageIds:
         path = tmp_path / "one.h5"
         with config_context(patch_provenance="disabled"):
             dc.get_example_patch().io.write(path, "dasdae")
-        assert dc.scan(path)[0].attrs.patch_id == dc.read(path)[0].attrs.patch_id
+        assert dc.scan(path)[0].attrs.origin_id == dc.read(path)[0].attrs.origin_id
 
     def test_selecting_by_id_finds_that_patch(self, written_spool):
         """Which is what indexing the id is for."""
-        wanted = written_spool.get_contents()["patch_id"].iloc[1]
-        selected = written_spool.select(patch_id=wanted)
+        wanted = written_spool.get_contents()["origin_id"].iloc[1]
+        selected = written_spool.select(origin_id=wanted)
         assert len(selected) == 1
-        assert selected[0].attrs.patch_id == wanted
+        assert selected[0].attrs.origin_id == wanted
 
     def test_what_was_done_is_indexed(self, tmp_path):
         """
-        `processing_id` says what was done, which provenance asks about,
+        `data_id` says what was done, which provenance asks about,
         so it is recorded: the column states what the stored patch had.
         It is lineage rather than a describing attr, so merging never
         compares it (see `_SOURCE_COLUMNS`); it is folded from the
@@ -661,8 +661,8 @@ class TestLineageIds:
         patch = dc.get_example_patch().pass_filter(time=(1, 10))
         patch.io.write(tmp_path / "filtered.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
-        indexed = spool.get_contents()["processing_id"].iloc[0]
-        assert indexed == spool[0].attrs.processing_id
+        indexed = spool.get_contents()["data_id"].iloc[0]
+        assert indexed == spool[0].attrs.data_id
         assert indexed
 
     @pytest.mark.parametrize("samples", [False, True])
@@ -686,8 +686,8 @@ class TestLineageIds:
         through_spool = spool.select(time=window, samples=samples)[0]
         on_patch = whole.select(time=window, samples=samples)
         assert through_spool.shape == on_patch.shape != whole.shape
-        assert through_spool.attrs.processing_id == on_patch.attrs.processing_id
-        assert through_spool.attrs.processing_id != whole.attrs.processing_id
+        assert through_spool.attrs.data_id == on_patch.attrs.data_id
+        assert through_spool.attrs.data_id != whole.attrs.data_id
         assert through_spool.attrs.history == on_patch.attrs.history
 
     @pytest.mark.parametrize("upper", [False, True])
@@ -709,7 +709,7 @@ class TestLineageIds:
         selected = spool.select(distance=bounds)[0]
         assert expected.shape == source.shape
         assert np.array_equal(selected.data, source.data)
-        assert selected.attrs.processing_id == expected.attrs.processing_id
+        assert selected.attrs.data_id == expected.attrs.data_id
 
     def test_associated_selections_replay_in_call_order(self, tmp_path):
         """Trimming an axis can make a later associated-coordinate trim a no-op."""
@@ -723,7 +723,7 @@ class TestLineageIds:
             view = spool.select(distance=(2, None)).select(depth=(2, None))
             view.get_contents()
             out = view[0]
-            assert out.attrs.processing_id == expected.attrs.processing_id
+            assert out.attrs.data_id == expected.attrs.data_id
             assert out.coords == expected.coords
             assert np.array_equal(out.data, expected.data)
 
@@ -750,13 +750,13 @@ class TestLineageIds:
             view = spool.select(distance=bounds)
             view.get_contents()
             out = view[0]
-            assert out.attrs.processing_id == expected.attrs.processing_id
+            assert out.attrs.data_id == expected.attrs.data_id
             assert out.coords == expected.coords
             assert np.array_equal(out.data, expected.data)
             assert calls[-1].get("distance") == bounds
         expected = source.select(distance=(600.0, None)).select(distance=(650.0, None))
         out = spool.select(distance=(600.0, None)).select(distance=(650.0, None))[0]
-        assert out.attrs.processing_id == expected.attrs.processing_id
+        assert out.attrs.data_id == expected.attrs.data_id
         assert np.array_equal(out.data, expected.data)
 
     def test_other_grid_kinds_do_not_change_cached_selection_identity(self):
@@ -768,9 +768,9 @@ class TestLineageIds:
         uneven = base.update_coords(distance=values)
         view = dc.spool([regular, uneven]).select(distance=(1e-12, None))
         expected = regular.select(distance=(1e-12, None))
-        assert view[0].attrs.processing_id == expected.attrs.processing_id
+        assert view[0].attrs.data_id == expected.attrs.data_id
         view.get_contents()
-        assert view[0].attrs.processing_id == expected.attrs.processing_id
+        assert view[0].attrs.data_id == expected.attrs.data_id
         assert np.array_equal(view[0].data, expected.data)
 
     @pytest.fixture(scope="class")
@@ -832,7 +832,7 @@ class TestLineageIds:
             on_patch = on_patch.select(**{name: bounds})
         assert view[0].shape == on_patch.shape
         assert (view[0].shape != whole.shape) is cuts
-        assert view[0].attrs.processing_id == on_patch.attrs.processing_id
+        assert view[0].attrs.data_id == on_patch.attrs.data_id
         assert view[0].attrs.history == on_patch.attrs.history
 
     @pytest.mark.parametrize(
@@ -859,7 +859,7 @@ class TestLineageIds:
         view = spool.select(**{dim: bounds[0]}).select(**{dim: bounds[1]})
         direct = whole.select(**{dim: bounds[0]}).select(**{dim: bounds[1]})
         assert np.array_equal(view[0].data, direct.data)
-        assert view[0].attrs.processing_id == direct.attrs.processing_id
+        assert view[0].attrs.data_id == direct.attrs.data_id
         assert view[0].attrs.history == direct.attrs.history
 
     @pytest.mark.parametrize("repeats", [2, 64])
@@ -883,7 +883,7 @@ class TestLineageIds:
             view = view.select(distance=(1.5, None))
             direct = direct.select(distance=(1.5, None))
         assert np.array_equal(view[0].data, direct.data)
-        assert view[0].attrs.processing_id == direct.attrs.processing_id
+        assert view[0].attrs.data_id == direct.attrs.data_id
         assert view[0].attrs.history == direct.attrs.history
 
     def test_two_bounds_on_an_uneven_coordinate_replay_on_the_patch(self, tmp_path):
@@ -908,7 +908,7 @@ class TestLineageIds:
             direct = direct.select(distance=(bound, None))
         assert direct.shape != source.shape
         assert np.array_equal(view[0].data, direct.data)
-        assert view[0].attrs.processing_id == direct.attrs.processing_id
+        assert view[0].attrs.data_id == direct.attrs.data_id
         assert view[0].attrs.history == direct.attrs.history
 
     @pytest.mark.parametrize("dim", ["distance", "time"])
@@ -918,9 +918,9 @@ class TestLineageIds:
         dc.get_example_patch().abs().io.write(tmp_path / "source.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
         view = spool.select(**{dim: bounds}, relative=True)
-        columns = ["_data_size", "processing_id"]
+        columns = ["_data_size", "data_id"]
         assert view._df[columns].equals(spool._df[columns])
-        assert view[0].attrs.processing_id == spool[0].attrs.processing_id
+        assert view[0].attrs.data_id == spool[0].attrs.data_id
         assert np.array_equal(view[0].data, spool[0].data)
 
     @pytest.mark.parametrize("percent_bound", [False, True])
@@ -941,21 +941,21 @@ class TestLineageIds:
         )
         view = spool.select(distance=(0, bound), relative=True)
         noop = spool.select(distance=(0, None), relative=True)
-        columns = ["_data_size", "processing_id"]
+        columns = ["_data_size", "data_id"]
         for index, (source, selected) in enumerate(zip(spool, view, strict=True)):
             direct = source.select(distance=(0, bound), relative=True)
             assert np.array_equal(selected.data, direct.data)
-            assert selected.attrs.processing_id == direct.attrs.processing_id
+            assert selected.attrs.data_id == direct.attrs.data_id
             row = view._df.iloc[index]
             noop_row = noop._df.iloc[index][columns]
-            assert noop[index].attrs.processing_id == source.attrs.processing_id
+            assert noop[index].attrs.data_id == source.attrs.data_id
             if source.get_coord("distance").dtype == np.dtype("float32"):
                 assert pd.isna(row["_data_size"])
-                assert pd.isna(row["processing_id"])
+                assert pd.isna(row["data_id"])
                 assert noop_row.isna().all()
             else:
                 assert row["_data_size"] == selected.data.size
-                assert row["processing_id"] == selected.attrs.processing_id
+                assert row["data_id"] == selected.attrs.data_id
                 assert noop_row.equals(spool._df.iloc[index][columns])
                 assert selected.shape == source.shape
             if percent_bound and source.get_coord("distance").dtype == np.dtype(
@@ -973,7 +973,7 @@ class TestLineageIds:
         view = spool.select(distance=(0, 10), relative=True)
         whole = spool._df["distance_max"] <= 10
         assert whole.any() and not whole.all()
-        for column in ("_data_size", "processing_id"):
+        for column in ("_data_size", "data_id"):
             assert view._df.loc[~whole, column].isna().all()
             assert (
                 view._df.loc[whole, column].to_numpy()
@@ -981,7 +981,7 @@ class TestLineageIds:
             ).all()
         for original, selected in zip(spool, view, strict=True):
             direct = original.select(distance=(0, 10), relative=True)
-            assert selected.attrs.processing_id == direct.attrs.processing_id
+            assert selected.attrs.data_id == direct.attrs.data_id
             assert np.array_equal(selected.data, direct.data)
 
     def test_processing_id_queries_source_metadata(self, tmp_path):
@@ -989,18 +989,18 @@ class TestLineageIds:
         patch = dc.get_example_patch().abs()
         patch.io.write(tmp_path / "source.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
-        source_id = spool[0].attrs.processing_id
-        trimmed = spool.select(distance=(10, 20)).select(processing_id=source_id)
+        source_id = spool[0].attrs.data_id
+        trimmed = spool.select(distance=(10, 20)).select(data_id=source_id)
         assert len(trimmed) == 1
-        assert trimmed.get_contents()["processing_id"].isnull().all()
-        assert trimmed[0].attrs.processing_id != source_id
+        assert trimmed.get_contents()["data_id"].isnull().all()
+        assert trimmed[0].attrs.data_id != source_id
         assert np.array_equal(trimmed[0].data, spool[0].select(distance=(10, 20)).data)
 
     def test_a_trimmed_row_states_no_processing_id(self, tmp_path):
         """What the source had was undone by the trim, so the row states none.
 
         Stating it would let a provenance query compare the row against
-        an id the patch it resolves to does not carry. `patch_id` is
+        an id the patch it resolves to does not carry. `origin_id` is
         untouched: a trim does not change which data this is.
         """
         patch = dc.get_example_patch().pass_filter(time=(1, 10))
@@ -1009,8 +1009,8 @@ class TestLineageIds:
         time = spool[0].get_coord("time")
         view = spool.select(time=(time.min(), time.min() + 10 * time.step))
         contents = view.get_contents()
-        assert contents["processing_id"].isnull().all()
-        assert contents["patch_id"].iloc[0] == view[0].attrs.patch_id
+        assert contents["data_id"].isnull().all()
+        assert contents["origin_id"].iloc[0] == view[0].attrs.origin_id
 
     def test_a_row_a_view_leaves_whole_still_states_its_id(self, tmp_path):
         """A view which trims one patch has not trimmed the others."""
@@ -1023,39 +1023,51 @@ class TestLineageIds:
         view = spool.select(
             time=(contents["time_min"].min() + span / 6, contents["time_max"].max())
         )
-        stated = view.get_contents()["processing_id"]
+        stated = view.get_contents()["data_id"]
         assert stated.notna().any() and stated.isnull().any()
         for index, value in stated.items():
             if pd.notna(value):
-                assert view[index].attrs.processing_id == value
+                assert view[index].attrs.data_id == value
 
     def test_a_trim_keeps_the_id_it_says_it_keeps(self, written_spool):
         """The index and the patch which loads must not disagree."""
         trimmed = written_spool.select(time=(10, 20), samples=True)
-        indexed = trimmed.get_contents()["patch_id"].iloc[0]
-        assert trimmed[0].attrs.patch_id == indexed
+        indexed = trimmed.get_contents()["origin_id"].iloc[0]
+        assert trimmed[0].attrs.origin_id == indexed
 
-    def test_empty_processing_identity_is_queryable(self, tmp_path):
-        """Sources with no recorded operations share the empty processing ID."""
+    def test_unprocessed_data_id_is_queryable(self, tmp_path):
+        """A patch nothing was done to is found by the id its origin gave it."""
         patch = dc.get_example_patch()
-        assert patch.attrs.processing_id == ""
+        wanted = patch.attrs.data_id
+        assert wanted == patch.attrs.origin_id
         patch.io.write(tmp_path / "source.h5", "dasdae")
         for spool in (dc.spool([patch]), dc.spool(tmp_path).update()):
-            selected = spool.select(processing_id="")
+            selected = spool.select(data_id=wanted)
             assert len(selected) == 1
-            assert selected.get_contents()["processing_id"].iloc[0] == ""
-            assert selected[0].attrs.processing_id == ""
+            assert selected.get_contents()["data_id"].iloc[0] == wanted
+            assert selected[0].attrs.data_id == wanted
+
+    def test_an_empty_string_is_a_query(self, written_spool):
+        """Selecting `tag=""` asks for the patches which state no tag."""
+        spool = written_spool.update()
+        tags = spool.get_contents()["tag"]
+        assert len(spool.select(tag="")) == int((tags == "").sum())
+
+    def test_nothing_to_forget(self, written_spool):
+        """Forgetting the ids of no sources is not an error."""
+        backend = written_spool.update()._catalog.backend
+        assert backend._forget_lineage([]) is None
 
     def test_a_memory_spool_too(self):
         """A summary carries the ids, so a patch never written is findable."""
         patches = list(dc.get_example_spool("random_das"))
         spool = dc.spool(patches)
-        wanted = patches[1].attrs.patch_id
-        assert spool.select(patch_id=wanted)[0].attrs.patch_id == wanted
+        wanted = patches[1].attrs.origin_id
+        assert spool.select(origin_id=wanted)[0].attrs.origin_id == wanted
 
     def test_an_id_no_patch_carries(self, written_spool):
         """An id which names nothing selects nothing, rather than raising."""
-        assert len(written_spool.select(patch_id="0" * 16)) == 0
+        assert len(written_spool.select(origin_id="0" * 32)) == 0
 
     def test_a_renamed_source_forgets_its_id(self, tmp_path):
         """
@@ -1069,24 +1081,27 @@ class TestLineageIds:
         with config_context(patch_provenance="disabled"):
             dc.get_example_patch().io.write(tmp_path / "x.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
-        stale = spool.get_contents()["patch_id"].iloc[0]
+        stale = spool.get_contents()["origin_id"].iloc[0]
         assert stale
         (tmp_path / "x.h5").rename(tmp_path / "tag=renamed.h5")
         moved = dc.spool(tmp_path).update()
-        assert moved.get_contents()["patch_id"].iloc[0] == ""
-        assert len(moved.select(patch_id=stale)) == 0
+        assert moved.get_contents()["origin_id"].iloc[0] == ""
+        # A fresh patch's data id is its origin's, so it is as stale.
+        assert moved.get_contents()["data_id"].iloc[0] == ""
+        assert len(moved.select(origin_id=stale)) == 0
+        assert len(moved.select(data_id=stale)) == 0
         # The patch itself still says which data it is; only the index
         # stopped claiming to know without looking.
-        assert moved[0].attrs.patch_id
+        assert moved[0].attrs.origin_id
 
-    @pytest.mark.parametrize("name", ["patch_id", "processing_id"])
+    @pytest.mark.parametrize("name", ["origin_id", "data_id"])
     def test_a_path_may_not_claim_the_lineage(self, tmp_path, name):
         """
         A directory name says where data is kept, not which data it is.
 
         Hive-style path keys become ordinary attrs and override what a
         file states, which is how a rename corrects metadata. Letting one
-        claim `patch_id` would rewrite the lineage of everything beneath
+        claim `origin_id` would rewrite the lineage of everything beneath
         it -- on the loaded patch, not merely in the index.
         """
         directory = tmp_path / f"{name}=bogus"
@@ -1103,14 +1118,14 @@ class TestLineageIds:
         with config_context(patch_provenance="disabled"):
             dc.get_example_patch().io.write(tmp_path / "x.h5", "dasdae")
             spool = dc.spool(tmp_path).update()
-            assert "patch_id" not in spool.get_contents().columns
+            assert "origin_id" not in spool.get_contents().columns
             (tmp_path / "x.h5").rename(tmp_path / "tag=renamed.h5")
             moved = dc.spool(tmp_path).update()
         assert len(moved) == 1
 
     def test_chunk_still_merges_across_ids(self, written_spool):
         """Every patch states a different id; none of them blocks a merge."""
-        assert len(set(written_spool.get_contents()["patch_id"])) == 3
+        assert len(set(written_spool.get_contents()["origin_id"])) == 3
         assert len(written_spool.chunk(time=None)) == 1
 
 

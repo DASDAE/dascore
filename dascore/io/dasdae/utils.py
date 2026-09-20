@@ -24,7 +24,7 @@ from dascore.core.coords import (
 from dascore.core.source import ArraySource
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import InvalidFiberFileError, PatchAttributeError
-from dascore.io.core import STORED_PATCH_ID
+from dascore.io.core import STORED_ORIGIN_ID
 from dascore.io.dasdae._compat import (
     NOT_DECODED,
     decode_pytables_attr,
@@ -110,8 +110,7 @@ def _save_attrs_and_dims(patch, patch_group):
     # The ids are written. An older DASCore reads them as ordinary attrs
     # and then refuses to merge two patches whose ids differ -- which is
     # every pair -- so chunking such a spool there needs conflict="drop".
-    # Worth it: a stored id is the only one which survives a move, and
-    # everything else DASCore does with a patch already folds them.
+    # Worth it: a stored id is the only one which survives a move.
     for i, v in attr_dict.items():
         encoded, attr_type = _encode_attr_value(i, v)
         patch_group.attrs[f"{_ATTR_PREFIX}{i}"] = encoded
@@ -475,8 +474,8 @@ def _get_metadata_from_group(group, legacy: bool = True, snap=True):
     # Marked here as it is when the patch is read: an id the file carries
     # is the one which survived the round trip, and `scan` prefers it to
     # the one it would derive only when a format says it stored one.
-    if stored := attr_info.get("patch_id", ""):
-        attr_info[STORED_PATCH_ID] = stored
+    if stored := attr_info.get("origin_id", ""):
+        attr_info[STORED_ORIGIN_ID] = stored
     # Data shape/dtype come from the stored data node without loading the array.
     data_node = group.get("data")
     if data_node is None or coords.shape != data_node.shape:

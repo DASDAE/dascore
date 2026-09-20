@@ -67,6 +67,9 @@ _SOURCE_COLUMNS = (
     "source_format",
     "source_version",
     "source_patch_key",
+    "origin_id",
+    "data_id",
+    # The ids' former names, which attrs pickled before the rename hold.
     "patch_id",
     "processing_id",
 )
@@ -2106,7 +2109,7 @@ def build_concat_plan(
             # on it
             keys = list(data.get(key_col, pd.Series([None] * n_out, dtype=object)))
             keys = [
-                f"fp:{dc.core.coords.get_coord(shape=(int(s),)).fingerprint()[:32]}"
+                f"fp:{dc.core.coords.get_coord(shape=(int(s),)).fingerprint()}"
                 if n
                 else k
                 for k, n, s in zip(keys, new_dim, sizes)

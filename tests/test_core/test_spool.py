@@ -2002,7 +2002,7 @@ class TestConcatenatePartitions:
         b = other.update_attrs(foo="b")
         kept = dc.spool([a, b]).concatenate(time=None, conflict="keep_first")[0]
         dropped = dc.spool([a, b]).concatenate(time=None, conflict="drop")[0]
-        assert kept.attrs.processing_id != dropped.attrs.processing_id
+        assert kept.attrs.data_id != dropped.attrs.data_id
 
     def test_new_dimension(self, pair):
         """A dimension no patch has is added, one sample per patch."""

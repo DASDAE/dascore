@@ -131,37 +131,43 @@ Two attributes track identity:
 
 | Attribute | Meaning | Changes when |
 |---|---|---|
-| `patch_id` | Which source data this is | Multiple sources are combined |
-| `processing_id` | Which operations produced it | A patch function changes the patch |
+| `origin_id` | Which stored data this came from | Data from more than one origin is combined |
+| `data_id` | Which array this is | An operation changes the patch |
+
+A patch nothing has been done to carries its origin's ID as its `data_id`. An operation's result takes an ID derived from the `data_id` of every patch it was given, in order, and from the operation's name, version, and parameters, so one ID commits to the whole route which led to it:
 
 ```{python}
+assert patch.attrs.data_id == patch.attrs.origin_id
+
 filtered = patch.pass_filter(time=(1, 10))
-assert filtered.attrs.patch_id == patch.attrs.patch_id
-assert filtered.attrs.processing_id != patch.attrs.processing_id
+assert filtered.attrs.origin_id == patch.attrs.origin_id
+assert filtered.attrs.data_id != patch.attrs.data_id
 ```
 
-The processing route matters. Repeating the same operations produces the same `processing_id`, while changing their order does not:
+The route matters. Repeating the same operations produces the same `data_id`, while changing their order does not:
 
 ```{python}
 first = patch.pass_filter(time=(1, 10)).decimate(time=2)
 same = patch.pass_filter(time=(1, 10)).decimate(time=2)
 other = patch.decimate(time=2).pass_filter(time=(1, 10))
 
-assert first.attrs.processing_id == same.attrs.processing_id
-assert first.attrs.processing_id != other.attrs.processing_id
+assert first.attrs.data_id == same.attrs.data_id
+assert first.attrs.data_id != other.attrs.data_id
 ```
 
-When a file does not contain a `patch_id`, DASCore derives one from the format, version, path, patch key, file size, and modification time. Repeated reads and metadata scans therefore agree without hashing the data array. Copying the same bytes to another path produces a different derived ID, and overwriting a path also changes it. Formats that support stored lineage IDs restore those values when the file is read elsewhere.
+A parameter left at its default is the same call as one which passes that default, so adding a defaulted parameter to an operation changes no ID; changing what a default *does* requires raising the operation's version. An ID is never knowingly false: when a parameter cannot be described faithfully (a closure, an object of an unknown type), or an input carries no ID, the result receives a random `data_id` instead of a derived one.
+
+When a file does not contain an `origin_id`, DASCore derives one from the format, version, path, patch key, file size, and modification time. Repeated reads and metadata scans therefore agree without hashing the data array. Copying the same bytes to another path produces a different derived ID, and overwriting a path also changes it. Formats that store the IDs (DASDAE) restore both when the file is read elsewhere, so a route continues across a save.
 
 In-memory patches receive process-local IDs. Direct calls to `new`, `update`, and `update_attrs` preserve both IDs because patch functions use them to assemble results. Changing data through these low-level methods does not describe a processing step:
 
 ```{python}
 doubled = patch.new(data=patch.data * 2)
-assert doubled.attrs.patch_id == patch.attrs.patch_id
-assert doubled.attrs.processing_id == patch.attrs.processing_id
+assert doubled.attrs.origin_id == patch.attrs.origin_id
+assert doubled.attrs.data_id == patch.attrs.data_id
 ```
 
-Use patch functions when processing should advance provenance. A function that returns the input unchanged advances neither ID, and IDs do not participate in `Patch.equals`. Set `patch_provenance="disabled"` only when IDs are not needed. See [Finding a patch by its ID](spool.qmd#finding-a-patch-by-id) for lookup.
+Use patch functions when processing should change the `data_id`. A function that returns the input unchanged changes neither ID, and IDs do not participate in `Patch.equals`. Set `patch_provenance="disabled"` only when IDs are not needed; a patch changed while it is disabled carries no IDs rather than stale ones. See [Finding a patch by its ID](spool.qmd#finding-a-patch-by-id) for lookup.
 
 ## Display and shortcuts
 
