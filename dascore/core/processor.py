@@ -60,6 +60,7 @@ from dascore.utils.identity import (
     extract_patches,
     ids_enabled,
     narrowed_data_id,
+    operation_context,
     result_ids,
     stamp,
     warn_random_id,
@@ -359,7 +360,10 @@ class PatchProcessor(DascoreBaseModel):
             # Spent on this one call, which is the one a bypass wrapped: an
             # operation running another inside itself records that one.
             _RECORD.set(True)
-        return self._run(patch, record=record)
+        # The body is an operation, which names itself; the replacements it
+        # makes on the way do not.
+        with operation_context():
+            return self._run(patch, record=record)
 
     def _run(self, patch: dc.PatchMeta, record: bool) -> dc.PatchMeta:
         """Run the operation; `record=False` writes no history or ids."""

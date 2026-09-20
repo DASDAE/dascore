@@ -176,6 +176,15 @@ class DascoreBaseModel(BaseModel):
         out.update(kwargs)
         return self.__class__(**out)
 
+    def model_copy(self, *, update=None, deep: bool = False) -> Self:
+        """Copy the model, dropping cached values the update invalidates."""
+        out = super().model_copy(update=update, deep=deep)
+        if update:
+            # cached_method stores on _cache, which the copy shares by
+            # reference; its values describe the fields as they were.
+            object.__setattr__(out, "_cache", {})
+        return out
+
     @classmethod
     def get_summary_df(cls):
         """Get dataframe of attributes and descriptions for display."""

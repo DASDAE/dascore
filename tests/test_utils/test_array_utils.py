@@ -1143,7 +1143,11 @@ class TestArrayBackends:
     def int_numpy_patch(self, random_patch) -> dc.Patch:
         """A patch with integer data."""
         data = (np.asarray(random_patch.data) * 10).astype("int32")
-        return random_patch.new(data=data)
+        # The two routes under comparison start from one patch, so the
+        # random id `new(data=...)` gives this one is stated here instead.
+        out = random_patch.new(data=data)
+        ids = ("origin_id", "data_id")
+        return out.update_attrs(**{x: getattr(random_patch.attrs, x) for x in ids})
 
     @pytest.fixture(scope="class")
     def int_patch(self, int_numpy_patch, to_backend) -> dc.Patch:
@@ -1157,7 +1161,12 @@ class TestArrayBackends:
         assert array.dtype == expected.data.dtype
         assert out.dims == expected.dims
         assert out.coords == expected.coords
-        assert out.attrs == expected.attrs
+        # Not which data each is: the two sides are built by separate
+        # `new(data=...)` calls, and each such array is its own.
+        ids = {"origin_id", "data_id"}
+        assert out.attrs.model_dump(exclude=ids) == expected.attrs.model_dump(
+            exclude=ids
+        )
         assert np.allclose(array, np.asarray(expected.data), equal_nan=True)
 
     def test_scalar_operand(self, backend_patch, random_patch, backend):

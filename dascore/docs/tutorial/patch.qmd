@@ -161,15 +161,23 @@ Trimming a stored patch is not a route. While a patch is still exactly what its 
 
 When a file does not contain an `origin_id`, DASCore derives one from the format, version, path, patch key, file size, and modification time. Repeated reads and metadata scans therefore agree without hashing the data array. Copying the same bytes to another path produces a different derived ID, and overwriting a path also changes it. Formats that store the IDs (DASDAE) restore both when the file is read elsewhere, so a route continues across a save.
 
-In-memory patches receive process-local IDs. Direct calls to `new`, `update`, and `update_attrs` preserve both IDs because patch functions use them to assemble results. Changing data through these low-level methods does not describe a processing step:
+In-memory patches receive process-local IDs. The low-level methods — `new`, `update`, `update_attrs` and `set_dims` — are how patch functions assemble their results, so inside an operation they add nothing: the operation names its own result. Called on their own they say what they did. Handing a patch an array nothing else names gives the result a random `data_id`, since no route describes it, while `origin_id` still says where the data came from:
 
 ```{python}
 doubled = patch.new(data=patch.data * 2)
 assert doubled.attrs.origin_id == patch.attrs.origin_id
-assert doubled.attrs.data_id == patch.attrs.data_id
+assert doubled.attrs.data_id != patch.attrs.data_id
 ```
 
-Use patch functions when processing should change the `data_id`. A function that returns the input unchanged changes neither ID, and IDs do not participate in `Patch.equals`. Set `patch_provenance="disabled"` only when IDs are not needed; a patch changed while it is disabled carries no IDs rather than stale ones. See [Finding a patch by its ID](spool.qmd#finding-a-patch-by-id) for lookup.
+Replacing metadata instead is a describable change, so the result's ID is derived from the call and can be arrived at twice:
+
+```{python}
+tagged = patch.update_attrs(tag="cleaned")
+assert tagged.attrs.data_id == patch.update_attrs(tag="cleaned").attrs.data_id
+assert tagged.attrs.data_id != patch.attrs.data_id
+```
+
+A call which changes nothing returns the patch's own IDs, and stating `origin_id` or `data_id` in the call keeps what was stated — which is how a patch rebuilt by hand is given the identity it should carry. Use patch functions when processing should change the `data_id`; a function that returns the input unchanged changes neither ID, and IDs do not participate in `Patch.equals`. Set `patch_provenance="disabled"` only when IDs are not needed; a patch changed while it is disabled carries no IDs rather than stale ones. See [Finding a patch by its ID](spool.qmd#finding-a-patch-by-id) for lookup.
 
 ## Display and shortcuts
 

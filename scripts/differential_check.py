@@ -182,11 +182,15 @@ def get_calls() -> dict:
     patch = _pinned(dc.get_example_patch(), "example")
     null_patch = _pinned(dc.get_example_patch("patch_with_null"), "null")
     dft_patch = patch.dft("time")
-    int_patch = patch.new(data=(np.asarray(patch.data) * 10).astype("int32"))
-    bool_patch = patch.new(data=np.asarray(patch.data) > 0.5)
+    # Pinned like the patches above: replacing a patch's data outside an
+    # operation gives the result a random id, which no two runs share.
+    int_patch = _pinned(
+        patch.new(data=(np.asarray(patch.data) * 10).astype("int32")), "int"
+    )
+    bool_patch = _pinned(patch.new(data=np.asarray(patch.data) > 0.5), "bool")
     collapsed = patch.mean("time")
     # Use a nonempty data_type so failures to clear it are visible.
-    typed = patch.update_attrs(data_type="strain_rate")
+    typed = _pinned(patch.update_attrs(data_type="strain_rate"), "typed")
     with_nondim = patch.update_coords(
         quality=("distance", np.arange(patch.shape[0], dtype="float64"))
     )

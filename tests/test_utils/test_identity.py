@@ -452,12 +452,12 @@ class TestModelsAndFrames:
 class TestCoordIdentity:
     """A coordinate has one id wherever it appears."""
 
-    def test_physical_id_ignores_unit_spelling(self):
-        """The same length in metres and centimetres is one physical id."""
+    def test_unit_spelling_is_part_of_the_id(self):
+        """The same length in metres and centimetres is two ids."""
         metres = dc.get_coord(start=0, stop=10, step=1, units="m")
         centimetres = dc.get_coord(start=0, stop=1000, step=100, units="cm")
-        assert metres._physical_id() == centimetres._physical_id()
-        assert len(metres._physical_id()) == 32
+        assert metres.data_id != centimetres.data_id
+        assert len(metres.data_id) == 32
 
     def test_identity_is_exact(self):
         """As a parameter they are two: the same select cuts them differently."""
@@ -886,6 +886,101 @@ class TestPatchRules:
             del attrs.__dict__[name]
         out = with_ids(attrs)
         assert out.origin_id == out.data_id and len(out.origin_id) == 32
+
+
+class TestMutationBoundary:
+    """Replacing a patch's state outside an operation says so."""
+
+    def test_new_data_is_new_data(self, patch):
+        """Nothing can be derived for an array the patch was handed."""
+        out = patch.new(data=np.asarray(patch.data) * 2)
+        assert out.attrs.origin_id == patch.attrs.origin_id
+        assert out.attrs.data_id not in ("", patch.attrs.data_id)
+        # Nothing names the array, so two such calls are two arrays.
+        again = patch.new(data=np.asarray(patch.data) * 2)
+        assert again.attrs.data_id != out.attrs.data_id
+
+    def test_a_metadata_change_is_derived(self, patch):
+        """The same change twice is the same patch."""
+        out = patch.update_attrs(tag="one")
+        assert out.attrs.origin_id == patch.attrs.origin_id
+        assert out.attrs.data_id != patch.attrs.data_id
+        assert out.attrs.data_id == patch.update_attrs(tag="one").attrs.data_id
+        assert out.attrs.data_id != patch.update_attrs(tag="two").attrs.data_id
+
+    def test_set_dims_is_derived(self, patch):
+        """Which coordinate is a dimension is part of what a patch is."""
+        values = np.arange(patch.shape[patch.get_axis("time")], dtype="float64")
+        held = patch.update_coords(other=("time", values))
+        out = held.set_dims(time="other")
+        assert out.attrs.data_id != held.attrs.data_id
+        assert out.attrs.data_id == held.set_dims(time="other").attrs.data_id
+
+    def test_installed_coords_are_derived(self, patch):
+        """`new(coords=...)` names the coordinates it installed."""
+        coords = patch.coords.update(distance=patch.get_array("distance") + 1)
+        out = patch.new(coords=coords)
+        assert out.attrs.data_id != patch.attrs.data_id
+        assert out.attrs.data_id == patch.new(coords=coords).attrs.data_id
+
+    def test_a_call_which_changes_nothing_keeps_its_ids(self, patch):
+        """The same values restated are the same patch."""
+        assert patch.update_attrs(tag=patch.attrs.tag).attrs == patch.attrs
+        assert patch.new().attrs == patch.attrs
+        assert patch.new(coords=patch.coords).attrs == patch.attrs
+
+    def test_history_is_not_which_data_it_is(self, patch):
+        """How a patch was reached is not part of the array it holds."""
+        out = patch.update_attrs(history=["hello"])
+        assert out.attrs.data_id == patch.attrs.data_id
+
+    def test_stated_ids_are_kept(self, patch):
+        """Naming an id is deliberate, whatever else the call changes."""
+        out = patch.update_attrs(tag="one", data_id="a" * 32)
+        assert out.attrs.data_id == "a" * 32
+        # Restating the patch's own id keeps it, which a change would not.
+        kept = patch.update_attrs(tag="one", data_id=patch.attrs.data_id)
+        assert kept.attrs.data_id == patch.attrs.data_id
+
+    def test_attrs_stating_other_ids_are_kept(self, patch):
+        """Attrs built elsewhere carry their own ids through `new`."""
+        other = patch.abs()
+        out = patch.new(attrs=other.attrs)
+        assert out.attrs.data_id == other.attrs.data_id
+
+    def test_a_refused_parameter_warns_and_randomizes(self, patch):
+        """The call still works; its result is simply not named."""
+        with pytest.warns(DASCoreWarning, match="No id could be derived"):
+            out = patch.update_attrs(odd=object())
+        assert out.attrs.data_id not in ("", patch.attrs.data_id)
+
+    def test_an_operation_stamps_its_own_result(self, patch):
+        """The replacements a patch function makes do not name themselves."""
+
+        @dc.patch_function()
+        def rebuild(patch):
+            """Replace the data and the attrs, as many functions do."""
+            return patch.new(data=np.asarray(patch.data) * 2).update_attrs(tag="in")
+
+        first, second = rebuild(patch), rebuild(patch)
+        assert first.attrs.data_id == second.attrs.data_id
+
+    def test_metadata_is_left_to_the_routes_which_build_it(self, patch):
+        """A `PatchMeta` describes data it does not hold; see the report."""
+        meta = patch.drop_data()
+        assert meta.update_attrs(tag="one").attrs.data_id == patch.attrs.data_id
+        assert meta.to_patch(patch.data).attrs.data_id == patch.attrs.data_id
+
+    @pytest.mark.parametrize("kind", ["data", "metadata"])
+    def test_ids_off_leaves_nothing_behind(self, patch, kind):
+        """With ids disabled a changed patch claims none."""
+        with config_context(patch_provenance="disabled"):
+            out = (
+                patch.new(data=np.asarray(patch.data) * 2)
+                if kind == "data"
+                else patch.update_attrs(tag="one")
+            )
+        assert out.attrs.data_id == out.attrs.origin_id == ""
 
 
 class TestCombinations:

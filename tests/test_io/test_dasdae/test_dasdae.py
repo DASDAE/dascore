@@ -1204,4 +1204,4 @@ class TestLegacyCoordFields:
         from dascore.io.dasdae._compat import _LEGACY_COORD_FIELDS  # noqa: PLC0415
 
         assert "fingerprint" in _LEGACY_COORD_FIELDS
-        assert "physical_id" not in _LEGACY_COORD_FIELDS
+        assert "data_id" not in _LEGACY_COORD_FIELDS
