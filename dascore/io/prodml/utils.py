@@ -129,8 +129,10 @@ def _get_root_attrs(attrs):
     """Return normalized attributes from an Acquisition group."""
     out = maybe_get_items(attrs, _ROOT_ATTRS)
     if "facility_id" in out:
-        values = tuple(unbyte(x) for x in np.atleast_1d(out["facility_id"]))
-        out["facility_id"] = values[0] if len(values) == 1 else values
+        # A file may name several facilities; an attr is one value, so
+        # they are one comma separated name, as the units attrs are.
+        values = [str(unbyte(x)) for x in np.atleast_1d(out["facility_id"])]
+        out["facility_id"] = ",".join(values)
     # ProdML's schema defaults match the units attrs use, so a measure
     # whose uom is missing or unreadable is taken as already canonical.
     for name, target in _MEASURE_UNITS.items():

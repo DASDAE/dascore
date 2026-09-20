@@ -761,10 +761,14 @@ class TestSignatureDrift:
         class Windowed(PatchProcessor):
             """Default a window the same way on both sides."""
 
-            window: ArrayLike = np.ones(3)
+            # A NaN equals nothing, itself included, so an array of them
+            # agrees with another only where nulls are compared as nulls.
+            window: ArrayLike = np.array([np.nan, 1.0])
 
             @staticmethod
-            def windowed(patch: PatchMetaType, /, window=np.ones(3)) -> PatchMetaType:
+            def windowed(
+                patch: PatchMetaType, /, window=np.array([np.nan, 1.0])
+            ) -> PatchMetaType:
                 """Take the window the class stores."""
                 return Windowed(window=window).run(patch)
 

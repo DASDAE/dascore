@@ -671,6 +671,19 @@ class TestMaybeGetItems:
 
         np.testing.assert_array_equal(out["array"], array)
 
+    def test_one_value_is_that_value(self):
+        """HDF5 spells a scalar as a length-1 array; a mapped attr is one."""
+        data = {
+            "length_one": np.array([10.0]),
+            "zero_dim": np.array(4326),
+            "text": np.array([b"XYZ123"]),
+        }
+        out = maybe_get_items(data, attr_map={x: x for x in data})
+        assert out["length_one"] == 10.0
+        assert not isinstance(out["length_one"], np.ndarray)
+        assert out["zero_dim"] == 4326
+        assert out["text"] == "XYZ123"
+
 
 class TestWarnOrRaise:
     """Ensure warn or raise works."""

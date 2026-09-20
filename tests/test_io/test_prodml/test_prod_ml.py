@@ -5,13 +5,14 @@ from __future__ import annotations
 import shutil
 
 import h5py
+import numpy as np
 import pandas as pd
 import pytest
 
 import dascore as dc
 from dascore.core.coords import get_coord
 from dascore.io.core import read
-from dascore.io.prodml.utils import _get_prodml_version_str
+from dascore.io.prodml.utils import _get_prodml_version_str, _get_root_attrs
 from dascore.utils.downloader import fetch
 
 
@@ -130,3 +131,23 @@ class TestVersionDetection:
             file.create_group("Acquisition").attrs["unrelated"] = "x"
         with h5py.File(path, "r") as file:
             assert _get_prodml_version_str(file) == ""
+
+
+class TestRootAttrs:
+    """An acquisition group names one value per attr."""
+
+    def test_one_facility(self):
+        """The usual spelling is a length-1 array holding the name."""
+        out = _get_root_attrs({"FacilityId": np.array([b"well_a"])})
+        assert out["facility_id"] == "well_a"
+
+    def test_several_facilities(self):
+        """Several names are one comma separated name, not a tuple."""
+        out = _get_root_attrs({"FacilityId": np.array([b"well_a", b"well_b"])})
+        assert out["facility_id"] == "well_a,well_b"
+
+    def test_other_attrs_are_unwrapped(self):
+        """Every mapped attribute names one value, however it is stored."""
+        out = _get_root_attrs({"AcquisitionId": np.array([b"one"]), "PulseRate": 1.0})
+        assert out["acquisition_id"] == "one"
+        assert out["pulse_rate"] == 1.0

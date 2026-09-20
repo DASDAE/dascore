@@ -9,7 +9,7 @@ import numpy as np
 import dascore as dc
 from dascore.core import get_coord
 from dascore.io.utils import get_exact_coord, should_snap
-from dascore.utils.misc import unbyte
+from dascore.utils.misc import maybe_get_items
 
 # --- Getting format/version
 
@@ -17,7 +17,7 @@ _REQUIRED_GROUPS = frozenset({"channel", "trace", "das", "t", "x", "y", "z"})
 _COORD_GROUPS = ("channel", "trace", "t", "x", "y", "z")
 
 
-# maps attributes on DAS group to attrs stored in patch.
+# maps a stored attribute's name onto the patch attr it becomes.
 _ROOT_ATTR_MAPPING = {"project": "project"}
 _DAS_ATTR_MAPPING = {"long_name": "data_type"}
 _CRS_MAPPING = {"epsg_code": "epsg_code"}
@@ -101,12 +101,11 @@ def _get_cf_attrs(hdf_fi, coords=None, extras=None):
     """Get attributes for CF file."""
     out = {}
     out.update(extras or {})
-    for n1, n2 in _ROOT_ATTR_MAPPING.items():
-        out[n1] = hdf_fi.attrs.get(n2)
-    for source, target in _DAS_ATTR_MAPPING.items():
-        value = getattr(hdf_fi.get("das", {}), "attrs", {}).get(source)
-        if value is not None:
-            out[target] = unbyte(value)
-    for n1, n2 in _CRS_MAPPING.items():
-        out[n1] = getattr(hdf_fi.get("crs", {}), "attrs", {}).get(n2)
+    # These files spell a scalar attribute as a length-1 array, so
+    # `project` is a name and `epsg_code` a number, not arrays of one.
+    out.update(maybe_get_items(hdf_fi.attrs, _ROOT_ATTR_MAPPING))
+    das_attrs = getattr(hdf_fi.get("das", {}), "attrs", {})
+    out.update(maybe_get_items(das_attrs, _DAS_ATTR_MAPPING))
+    crs_attrs = getattr(hdf_fi.get("crs", {}), "attrs", {})
+    out.update(maybe_get_items(crs_attrs, _CRS_MAPPING))
     return dc.PatchAttrs.from_dict(out)

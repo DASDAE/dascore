@@ -1222,13 +1222,13 @@ class TestStoredNonScalarAttrs:
 
     def test_read_warns_and_drops(self, path_with_array_attr, random_patch):
         """The array goes, the patch stays, and the warning names it."""
-        with pytest.warns(UserWarning, match=r"not scalars: \['gauge'\]"):
+        with pytest.warns(UserWarning, match=r"'gauge' \(ndarray\)"):
             patch = dc.read(path_with_array_attr)[0]
         assert "gauge" not in dict(patch.attrs)
         assert np.array_equal(patch.data, random_patch.data)
 
     def test_scan_warns_and_drops(self, path_with_array_attr):
         """Scanning reads the same attrs, so it answers the same way."""
-        with pytest.warns(UserWarning, match="not scalars"):
+        with pytest.warns(UserWarning, match="Attrs hold scalars"):
             summary = dc.scan(path_with_array_attr)[0]
         assert "gauge" not in dict(summary.attrs)

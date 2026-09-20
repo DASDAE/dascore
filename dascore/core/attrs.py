@@ -3,12 +3,11 @@
 from __future__ import annotations
 
 import datetime
-import warnings
-from collections.abc import Mapping, Sequence, Set
-from typing import Annotated, Any, NoReturn, Self, cast
+from collections.abc import Iterator, Mapping, Sequence, Set
+from functools import cache
+from typing import Annotated, Any, Self, cast
 
 import numpy as np
-import pandas as pd
 from pydantic import (
     AfterValidator,
     BaseModel,
@@ -19,74 +18,128 @@ from pydantic import (
 )
 
 from dascore.constants import (
+    WARN_LEVELS,
     DataCategory,
     DataType,
     max_lens,
 )
+from dascore.exceptions import PatchAttributeError
 from dascore.models import DascoreBaseModel, UnitQuantity
 from dascore.utils.misc import (
     to_str,
+    unbyte,
     validate_acquisition_key,
+    validate_warn_level,
+    warn_or_raise,
 )
 
 str_validator = PlainValidator(to_str)
 
-# What an attr value may be. str and bytes come first because they are
-# also Sequences, which the refused tuple below covers.
+# What an attr value may be; checked before the collections below, which
+# also cover str and bytes.
 _SCALAR_TYPES = (
     str,
     bytes,
-    bool,
     int,
     float,
     complex,
-    np.generic,
-    datetime.datetime,
+    np.number,
+    np.bool_,
+    np.datetime64,
+    np.timedelta64,
     datetime.date,
     datetime.timedelta,
     type(None),
 )
 
-# What it may not be: anything holding more than one value.
-_COLLECTION_TYPES = (
-    BaseModel,
-    Mapping,
-    Sequence,
-    Set,
-    pd.Series,
-    pd.DataFrame,
-    pd.Index,
-)
+# What it may not be: anything holding more than one value. A record
+# scalar has fields, and an iterator is spent by reading it.
+_COLLECTION_TYPES = (BaseModel, Mapping, Sequence, Set, Iterator, np.void)
+
+# What goes in place of an attr holding more than one value.
+_NOT_SCALAR = object()
+
+# What no attr is called, because they say how a patch is built.
+_STRUCTURAL = frozenset({"dims", "coords"})
+
+# How a value is read: one value whatever it holds, a container to be
+# counted, many values whatever it holds, or something to ask.
+_ONE, _SIZED, _MANY, _ASK = range(4)
 
 
-def _scalar_attr(name: str, value: Any) -> Any:
+@cache
+def _kind(cls: type) -> int:
+    """How a value of a type is read; every value runs through this."""
+    if issubclass(cls, _SCALAR_TYPES):
+        return _ONE
+    if issubclass(cls, np.ndarray | list | tuple):
+        return _SIZED
+    if issubclass(cls, _COLLECTION_TYPES):
+        return _MANY
+    return _ASK
+
+
+def _scalar_attr(value: Any) -> Any:
     """
-    Return the scalar an attr value is, raising for anything with a shape.
+    Return the one value an attr holds, or `_NOT_SCALAR` for more.
 
-    A 0-d array is the scalar it wraps; anything else with a shape, and
-    any collection, belongs on the patch as a coordinate.
+    A 0-d array is the scalar it wraps, and so is anything else holding
+    exactly one value: that is how HDF5 and netCDF spell a scalar.
     """
-    if isinstance(value, _SCALAR_TYPES):
+    kind = _kind(type(value))
+    if kind is _ONE:
         return value
-    if isinstance(value, np.ndarray):
-        if value.ndim == 0:
-            return value[()]
-        _raise_not_scalar(name, value)
-    if isinstance(value, _COLLECTION_TYPES) or np.ndim(value) != 0:
-        _raise_not_scalar(name, value)
-    return value
+    if kind is _SIZED:
+        if isinstance(value, np.ndarray):
+            if value.ndim == 0:
+                return _unwrapped(value[()])
+            return _unwrapped(value.reshape(())[()]) if value.size == 1 else _NOT_SCALAR
+        return _unwrapped(value[0]) if len(value) == 1 else _NOT_SCALAR
+    if kind is _MANY:
+        return _NOT_SCALAR
+    # Anything else is one value unless it says otherwise: a quantity
+    # says so through its magnitude, another library's array by its shape.
+    magnitude = getattr(value, "magnitude", None)
+    if magnitude is not None:
+        return value if _kind(type(magnitude)) is _ONE else _NOT_SCALAR
+    return value if getattr(value, "ndim", 0) == 0 else _NOT_SCALAR
 
 
-def _raise_not_scalar(name: str, value: Any) -> NoReturn:
-    """Say that an attr holds no arrays, and where an array goes instead."""
+def _unwrapped(value: Any) -> Any:
+    """The scalar a one-value container held; its bytes read as text."""
+    return unbyte(value) if isinstance(value, bytes) else _scalar_attr(value)
+
+
+@cache
+def _declared(attr_class: type[PatchAttrs]) -> frozenset[str]:
+    """What an attrs class names itself; `model_fields` builds a dict."""
+    return frozenset(attr_class.model_fields) | _STRUCTURAL
+
+
+def _scalar_pass(data: dict, on_non_scalar: WARN_LEVELS, declared) -> None:
+    """Reduce each extra in place to the one value it holds."""
+    skipped = []
+    for name, value in data.items():
+        if name in declared:
+            continue
+        got = _scalar_attr(value)
+        if got is _NOT_SCALAR:
+            skipped.append(name)
+        else:
+            data[name] = got
+    if not skipped:
+        return
+    kinds = ", ".join(f"{x!r} ({type(data[x]).__name__})" for x in skipped)
     msg = (
-        f"Attrs hold scalars, so {name!r} cannot be a "
-        f"{type(value).__name__}. An array belongs on the patch as a "
-        f"coordinate: patch.update_coords({name}=(dims, array)), or "
-        f"patch.update_coords({name}=(None, array)) for one which rides "
-        "no dimension."
+        f"Attrs hold scalars, so these hold more than one value: {kinds}. "
+        "An array belongs on the patch as a coordinate: "
+        f"patch.update_coords({skipped[0]}=(dims, array)), or "
+        f"patch.update_coords({skipped[0]}=(None, array)) for one which "
+        "rides no dimension."
     )
-    raise ValueError(msg)
+    warn_or_raise(msg, exception=PatchAttributeError, behavior=on_non_scalar)
+    for name in skipped:
+        data.pop(name)
 
 
 class PatchAttrs(DascoreBaseModel):
@@ -179,12 +232,9 @@ class PatchAttrs(DascoreBaseModel):
                 data.setdefault(new, value)
         # Declared fields are whatever their annotations allow; the rest
         # are scalars, so that an array is a coordinate and nothing else.
-        # Value first: this runs on every patch, and almost every value
-        # is already a scalar.
-        for name, value in data.items():
-            if isinstance(value, _SCALAR_TYPES) or name in cls.model_fields:
-                continue
-            data[name] = _scalar_attr(name, value)
+        # Warning rather than refusing is what keeps every reader, plugins
+        # included, able to read a file which stored one.
+        _scalar_pass(data, "warn", _declared(cls))
         return data
 
     def __getitem__(self, item):
@@ -208,6 +258,7 @@ class PatchAttrs(DascoreBaseModel):
     def from_dict(
         cls,
         attr_map: Mapping | PatchAttrs | None,
+        on_non_scalar: WARN_LEVELS = "warn",
     ) -> Self:
         """
         Get a new instance of the PatchAttrs.
@@ -217,6 +268,21 @@ class PatchAttrs(DascoreBaseModel):
         attr_map
             Anything convertible to a dict that contains attr info. `dims`
             entries are ignored during normalization.
+        on_non_scalar
+            What to do with an extra attr holding more than one value:
+            "warn" (the default) skips it and says so, "raise" refuses it
+            naming the coordinate it should be, and "ignore" skips it
+            silently. A value holding exactly one thing becomes that thing
+            in every mode.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> import dascore as dc
+        >>>
+        >>> foreign = {"project": np.array(["survey"]), "epsg_code": [4326]}
+        >>> attrs = dc.PatchAttrs.from_dict(foreign, on_non_scalar="ignore")
+        >>> assert attrs.project == "survey" and attrs.epsg_code == 4326
         """
         if isinstance(attr_map, cls):
             return attr_map
@@ -229,6 +295,9 @@ class PatchAttrs(DascoreBaseModel):
         if isinstance(out, Mapping):
             out = dict(out)
             out.pop("dims", None)
+            # Said here so the constructor's own default never sees one.
+            if on_non_scalar != "warn":
+                out = scalar_attrs(out, on_non_scalar, cls)
         # Anything else may still be unpackable -- a pandas Series, say --
         # and the constructor has always been what rejects the rest.
         return cls(**cast("Mapping[str, Any]", out))
@@ -257,41 +326,41 @@ class PatchAttrs(DascoreBaseModel):
         return self.model_dump(exclude=exclude)
 
 
-def drop_non_scalar_attrs(
-    attrs: Mapping[str, Any], attr_class: type[PatchAttrs] = PatchAttrs
+def scalar_attrs(
+    attrs: Mapping[str, Any],
+    on_non_scalar: WARN_LEVELS = "warn",
+    attr_class: type[PatchAttrs] = PatchAttrs,
 ) -> dict[str, Any]:
     """
-    Return stored attrs without the values a patch attr cannot hold.
+    Return stored attrs as the scalars a patch attr may hold.
 
-    A file written before attrs were required to be scalars may carry
-    arrays or collections in its attr namespace. Dropping them, with one
-    warning naming the lot, keeps such a file readable. Declared fields
-    are left alone, as they are during validation.
+    A value holding exactly one thing — a 0-d array, a length-1 array or
+    sequence, which is how HDF5 and netCDF spell a scalar — becomes that
+    thing, bytes read as text. Anything holding more belongs on the patch
+    as a coordinate, and is handled per `on_non_scalar`. Declared fields
+    of `attr_class` are whatever their annotations allow, `history`
+    included, and `dims` and `coords` are structural rather than attrs.
 
     Parameters
     ----------
     attrs
-        The attr names and values a file stored.
+        The attr names and values, as a file or another library wrote them.
+    on_non_scalar
+        "warn" (the default) to skip such a value and say so once, naming
+        the lot; "raise" to refuse it; "ignore" to skip it silently.
     attr_class
         The class the values are destined for, which decides which names
         are declared fields.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> from dascore.core.attrs import scalar_attrs
+    >>>
+    >>> stored = {"project": np.array(["survey"]), "gauge": np.array([1.0, 2.0])}
+    >>> assert scalar_attrs(stored, "ignore") == {"project": "survey"}
     """
-    fields = attr_class.model_fields
-    out: dict[str, Any] = {}
-    dropped = []
-    for name, value in attrs.items():
-        if name in fields:
-            out[name] = value
-            continue
-        try:
-            out[name] = _scalar_attr(name, value)
-        except ValueError:
-            dropped.append(name)
-    if dropped:
-        msg = (
-            f"Dropping stored attrs which are not scalars: {sorted(dropped)}. "
-            "Attrs hold scalars; such values belong on the patch as "
-            "coordinates."
-        )
-        warnings.warn(msg, UserWarning, stacklevel=2)
+    validate_warn_level(on_non_scalar, "on_non_scalar")
+    out = dict(attrs)
+    _scalar_pass(out, on_non_scalar, _declared(attr_class))
     return out

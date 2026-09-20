@@ -213,7 +213,7 @@ def _get_febus_attrs(feb: _FebusSlice) -> dict:
         "PulseWidth": "pulse_length",
         "Version": "folog_a1_software_version",
     }
-    out = maybe_get_items(zone_attrs, attr_mapping, unpack_names=set(attr_mapping))
+    out = maybe_get_items(zone_attrs, attr_mapping)
     out["group"] = feb.group_name
     # Hostname states the interrogator host; the top-level group is named
     # for it but is a container key, which a rewrite can rename. Format

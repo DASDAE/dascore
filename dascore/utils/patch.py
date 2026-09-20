@@ -46,6 +46,7 @@ from dascore.utils.array_api import (
     warn_numpy_fallback,
 )
 from dascore.utils.attrs import (
+    _attr_values_equal,
     _is_missing,
     combine_patch_attrs,
     warn_if_histories_differ,
@@ -538,9 +539,6 @@ def patch_function(
             # itself; the replacements it makes on the way do not.
             with operation_context():
                 out = func(patch, *args, **kwargs)
-                attr_updates = {}
-                if data_type is not None:
-                    attr_updates["data_type"] = data_type
                 # Only when something new came back: an operation which
                 # handed the patch straight through did nothing, and nothing
                 # is what it records.
@@ -548,8 +546,8 @@ def patch_function(
                     out = record_call(out, patch, patch_func, args, kwargs)
                 elif isinstance(out, dc.BaseSpool | list | tuple):
                     out = _record_members(out, patch, patch_func, args, kwargs)
-                if attr_updates and hasattr(out, "attrs"):
-                    out = out.update_attrs(**attr_updates)
+                if data_type is not None and hasattr(out, "attrs"):
+                    out = out.update_attrs(data_type=data_type)
             return out
 
         # Attach original function. Although we want to encourage raw_function
@@ -1390,8 +1388,7 @@ def check_kind(
         """A missing value is a wildcard unless the caller is strict."""
         if not strict and (value1 is None or value2 is None):
             return True
-        # Missing values are None by here, and an attr is a scalar.
-        return bool(value1 == value2)
+        return _attr_values_equal(value1, value2)
 
     diffs = {x: (kind1[x], kind2[x]) for x in kind1 if not _equal(kind1[x], kind2[x])}
     if not diffs:

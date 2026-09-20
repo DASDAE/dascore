@@ -154,7 +154,7 @@ def _get_g1_coords_and_attrs(resource):
 def _get_g1_h5_mapped_attrs(resource, mapping):
     """Return mapped G1 HDF5 attrs, unpacking scalar arrays and decoding bytes."""
     attrs = dict(resource.attrs)
-    out = maybe_get_items(attrs, mapping, unpack_names=set(mapping))
+    out = maybe_get_items(attrs, mapping)
     return {key: unbyte(value) for key, value in out.items()}
 
 

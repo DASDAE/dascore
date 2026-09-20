@@ -30,7 +30,9 @@ def _get_attrs_coords_and_data(h5, snap):
     # only scan used to drop them, so scan and read disagreed.
     skip = DEFAULT_ATTRS | FILE_FORMAT_ATTR_NAMES | set(STORAGE_PROVENANCE_ATTRS)
     attr_names = set(attrs) - skip
-    attr_dict = {x: unbyte(attrs[x]) for x in attr_names}
+    # HDF5's usual spelling of a scalar attribute is a length-1 array, so
+    # one is the value it holds rather than an array of one.
+    attr_dict = {x: unbyte(_maybe_unpack(attrs[x])) for x in attr_names}
     cm, data = _get_cm_and_data(h5, snap, dims=attr_dict.get("dims"))
     attr_dict.pop("dims", None)
     return attr_dict, cm, data

@@ -9,7 +9,6 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type, windows_type
-from dascore.core.attrs import drop_non_scalar_attrs
 from dascore.core.source import ArraySource
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
@@ -78,10 +77,24 @@ def _open_xarray_dataset(resource: H5Reader):
 
 
 def _int_for_bool(attrs: dict) -> dict:
-    """Return attrs with booleans as the integer flags netCDF can store."""
+    """Return attrs with booleans as the integer flags netCDF can store.
+
+    An extra attr is a scalar, but a declared field may hold booleans in
+    an array or a sequence, and those hit the same netCDF limit.
+    """
 
     def convert(value):
-        return int(value) if isinstance(value, bool | np.bool_) else value
+        if isinstance(value, bool | np.bool_):
+            return int(value)
+        if isinstance(value, np.ndarray) and value.dtype == bool:
+            return value.astype(int)
+        if isinstance(value, list | tuple) and any(
+            isinstance(x, bool | np.bool_) for x in value
+        ):
+            return type(value)(
+                int(x) if isinstance(x, bool | np.bool_) else x for x in value
+            )
+        return value
 
     return {i: convert(v) for i, v in attrs.items()}
 
@@ -194,8 +207,7 @@ class NetCDFCFV18(FiberIO):
                 )
                 for name, coord in data_array.coords.items()
             }
-            # A netCDF attr may be an array; a patch attr may not.
-            attrs = drop_non_scalar_attrs(data_array.attrs)
+            attrs = dict(data_array.attrs)
             dims = data_array.dims
             shape = data_array.shape
             dtype = str(data_array.dtype)

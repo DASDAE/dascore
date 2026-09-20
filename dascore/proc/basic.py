@@ -12,7 +12,7 @@ from scipy.fft import next_fast_len
 from scipy.ndimage import correlate1d
 
 from dascore.compat import array
-from dascore.constants import PatchType, samples_arg_description
+from dascore.constants import WARN_LEVELS, PatchType, samples_arg_description
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import (
     CoordManager,
@@ -241,18 +241,28 @@ def pipe(self: PatchType, func: Callable[..., PatchType], *args, **kwargs) -> Pa
     return func(self, *args, **kwargs)
 
 
-def update_attrs(self: PatchType, **attrs) -> PatchType:
+def update_attrs(
+    self: PatchType, *, on_non_scalar: WARN_LEVELS = "warn", **attrs
+) -> PatchType:
     """
     Update patch attrs and return a new Patch.
 
     Parameters
     ----------
+    on_non_scalar
+        What to do with an attr holding more than one value: "warn" (the
+        default) skips it and says so, "raise" refuses it naming the
+        coordinate it should be, and "ignore" skips it silently. A value
+        holding exactly one thing becomes that thing in every mode.
+        `on_non_scalar` names this switch, so it cannot name an attr; one
+        a file stored under that name is left as it is.
     **attrs
         Attrs to add/update. Nested `coords` payloads are not accepted here;
         use `patch.update_coords(...)` for coordinate changes.
 
     Examples
     --------
+    >>> import numpy as np
     >>> import dascore as dc
     >>> patch = dc.get_example_patch()
     >>>
@@ -261,9 +271,15 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     >>>
     >>> # Add new custom attributes
     >>> with_custom = patch.update_attrs(processing_date="2024-01-01")
+    >>>
+    >>> # Foreign metadata: one value is that value.
+    >>> foreign = patch.update_attrs(epsg_code=np.array([4326]))
+    >>> assert foreign.attrs.epsg_code == 4326
     """
     stated = self.attrs.model_dump(exclude_unset=True)
-    out_attrs = PatchAttrs.from_dict({**stated, **attrs})
+    # The patch's own class, so a reader's declared fields are still
+    # declared after an unrelated attr changes.
+    out_attrs = self.attrs.from_dict({**stated, **attrs}, on_non_scalar)
     if not inside_operation():
         # Only the keys the caller wrote, each against what the patch says
         # now: restating a value is not a change, and comparing whole

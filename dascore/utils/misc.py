@@ -694,11 +694,13 @@ def yield_sub_sequences(sequence, length=None):
         yield sequence[i : i + length]
 
 
-def maybe_get_items(
-    obj, attr_map: Mapping[str, str], unpack_names: set[str] | None = None
-):
+def maybe_get_items(obj, attr_map: Mapping[str, str]):
     """
     Maybe get items from a mapping (if they exist).
+
+    A mapped attribute names one value, so a container holding exactly one
+    -- HDF5's usual spelling of a scalar -- is collapsed to it, and bytes
+    are read as text. A value holding more comes back as it is.
 
     Parameters
     ----------
@@ -706,16 +708,12 @@ def maybe_get_items(
         Any map like object.
     attr_map
         A mapping of {current_name: output_name}
-    unpack_names
-        A set of names which should be unpacked (ie collapse 0d arrays).
     """
-    unpack_names = set() if unpack_names is None else unpack_names
     out = {}
     for old_name, new_name in attr_map.items():
         if (value := obj.get(old_name, None)) is None:
             continue
-        val = unbyte(value)
-        out[new_name] = _maybe_unpack(val) if old_name in unpack_names else val
+        out[new_name] = unbyte(_maybe_unpack(value))
     return out
 
 

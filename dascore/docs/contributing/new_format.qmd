@@ -82,6 +82,8 @@ Declare vendor fields on a format-specific `PatchAttrs` subclass when they need 
 
 Optional numeric vendor attrs should not default to NaN or infinity.
 
+An attr is one value, so a reader states one: [`maybe_get_items`](`dascore.utils.misc.maybe_get_items`) and [`extract_h5_attrs`](`dascore.utils.hdf5.extract_h5_attrs`) collapse the length-1 array HDF5 usually spells a scalar with and read bytes as text. Where a file genuinely names several things, say them as one value — ProdML joins several facility names with commas — or put them on the patch as a coordinate. A value which still holds more than one reaches `PatchAttrs`, which skips it with a warning rather than failing the read; see [PatchAttrs](`dascore/docs/notes/patch_attrs.qmd`).
+
 ## Read array windows
 
 [`FiberIO.read_array`](`dascore.io.core.FiberIO.read_array`) accepts sample indices on the resource's original grid. The shared reader resolves coordinate selections first and calls this hook with a contiguous bounding window. It then applies any residual noncontiguous selection to the returned array.

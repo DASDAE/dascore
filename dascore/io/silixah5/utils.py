@@ -222,9 +222,7 @@ def _get_carina_distance_coord(attrs_dict, resource, n_columns):
 
 def _get_carina_attrs_and_coords(resource):
     """Get the attr dict and coordinates for a Carina-variant file."""
-    attrs_dict = maybe_get_items(
-        resource.attrs, _CARINA_ATTR_MAP, unpack_names=set(_CARINA_ATTR_MAP)
-    )
+    attrs_dict = maybe_get_items(resource.attrs, _CARINA_ATTR_MAP)
     drop_blank_attrs(attrs_dict, _BLANKABLE_ATTRS)
     convert_attr_units(attrs_dict, "pulse_width", "s", from_units=_PULSE_WIDTH_UNITS)
     n_time, n_columns = resource[_CARINA_DATA_NAME].shape

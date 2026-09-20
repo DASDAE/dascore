@@ -20,6 +20,7 @@ from dascore.io.netcdf.utils import (
     get_cf_version,
     is_netcdf4_file,
 )
+from dascore.models import ArrayLike
 from dascore.utils.remote_io import (
     clear_remote_file_cache,
     get_remote_cache_path,
@@ -780,6 +781,32 @@ class TestNetCDFBoolAttrs:
         path = dc.write(patch, tmp_path / "flag.nc", "netcdf_cf")
         back = dc.read(path, file_format="netcdf_cf")[0]
         assert back.attrs.get("closed_fiber_loop") == 1
+
+    @pytest.mark.parametrize("held", ["tuple", "array"])
+    def test_bool_collections_are_written(self, random_patch, tmp_path, held):
+        """A declared field may hold bools, which hit the same netCDF limit."""
+        engine = _require_xarray_netcdf_engine()
+        xr = pytest.importorskip("xarray")
+
+        class _Tuple(dc.PatchAttrs):
+            """Attrs whose flags are declared as a tuple of bools."""
+
+            flags: tuple[bool, ...] = ()
+
+        class _Array(dc.PatchAttrs):
+            """Attrs whose flags are declared as an array."""
+
+            flags: ArrayLike = ()
+
+        cls = _Tuple if held == "tuple" else _Array
+        dumped = random_patch.attrs.model_dump(exclude_unset=True)
+        attrs = cls(**{**dumped, "flags": (True, False)})
+        path = dc.write(
+            random_patch.new(attrs=attrs), tmp_path / f"{held}.nc", "netcdf_cf"
+        )
+        with xr.open_dataset(path, engine=engine) as dataset:
+            stored = dataset[next(iter(dataset.data_vars))].attrs["flags"]
+        assert list(stored) == [1, 0]
 
     def test_writing_does_not_mutate_the_patch(self, random_patch, tmp_path):
         """The coercion is for the file, not for the patch in hand."""

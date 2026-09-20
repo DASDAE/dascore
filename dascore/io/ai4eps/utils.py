@@ -94,9 +94,7 @@ def _get_attrs_dict(dataset) -> dict:
         "data_category": "DAS",
         "data_units": _safe_units(unbyte(_maybe_unpack(attrs["unit"]))),
     }
-    out.update(
-        maybe_get_items(attrs, _EVENT_ATTR_MAP, unpack_names=set(_EVENT_ATTR_MAP))
-    )
+    out.update(maybe_get_items(attrs, _EVENT_ATTR_MAP))
     if "event_id" in out:
         out["event_id"] = str(out["event_id"])
     if "event_time" in attrs:

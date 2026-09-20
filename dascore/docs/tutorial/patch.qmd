@@ -107,17 +107,17 @@ print(row["time_min"], row["distance_step"])
 
 `Patch.summary` is read-only. `flat_dump()` is intended for tabular rows and produces the same coordinate-summary column names used by spool indexes, including `time_min`, `time_max`, and `distance_step`. The optional `data_type` attribute is a display hint; interpret data through its units, coordinates, and history.
 
-An attribute is a single value: a number, a string, a time, a duration, a quantity. Anything holding more than one value is refused, and belongs on the patch as a coordinate instead:
+An attribute is a single value: a number, a string, a time, a duration, a quantity. Anything holding more than one value is skipped, with a warning, and belongs on the patch as a coordinate instead:
 
 ```{python}
 import numpy as np
 
-per_channel = np.arange(patch.shape[0], dtype=float)
+per_channel = np.arange(len(patch.get_coord("distance")), dtype=float)
 located = patch.update_coords(gauge_length=("distance", per_channel))
 print(located.get_coord("gauge_length").shape)
 ```
 
-A value riding no dimension is spelled `(None, values)`. See [PatchAttrs](../notes/patch_attrs.qmd) for the rule and what a reader does with a file which stored something else.
+Pass `on_non_scalar="raise"` to `update_attrs` to be told rather than warned, or `"ignore"` to say nothing. A value riding no dimension is spelled `(None, values)`. See [PatchAttrs](../notes/patch_attrs.qmd) for the rule and what a reader does with a file which stored something else.
 
 A preview of the validated attribute schema is available programmatically:
 

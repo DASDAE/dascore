@@ -20,6 +20,7 @@ from dascore.exceptions import (
     PatchAttributeError,
     PatchCoordinateError,
 )
+from dascore.models import ArrayLike
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import (
     _force_patch_merge,
@@ -613,9 +614,21 @@ class TestCheckKind:
         assert check_kind(legacy, random_patch, strict=True)
 
     def test_array_valued_kind_attr(self, random_patch):
-        """A kind attr is a scalar; an array never becomes one."""
-        with pytest.raises(pydantic.ValidationError, match="Attrs hold scalars"):
-            random_patch.update_attrs(foo=np.array([1, 2]))
+        """A declared field may hold an array, which compares as a whole."""
+
+        class _Attrs(dc.PatchAttrs):
+            """Attrs whose kind attr is declared as an array."""
+
+            foo: ArrayLike = ()
+
+        def _kinded(values):
+            dumped = random_patch.attrs.model_dump(exclude_unset=True)
+            return random_patch.new(attrs=_Attrs(**{**dumped, "foo": values}))
+
+        pa1, pa2, pa3 = (_kinded(x) for x in ([1, 2], [1, 2], [1, 3]))
+        with config_context(patch_kind_attrs=("foo",)):
+            assert check_kind(pa1, pa2)
+            assert not check_kind(pa1, pa3, check_behavior="ignore")
 
     def test_retired_check_behavior_raises(self, random_patch):
         """The behavior argument is validated up front."""

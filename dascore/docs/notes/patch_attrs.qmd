@@ -14,10 +14,25 @@ This note explains how DASCore interprets a few important attributes, and its in
 
 ## Attrs hold scalars
 
-An attr is one value. Strings, bytes, booleans, numbers, `None`, numpy scalars (`datetime64` and `timedelta64` included), datetimes, timedeltas, enums and pint quantities and units with a scalar magnitude are attrs; a 0-d array is the scalar it wraps. Anything holding more than one value — an array with a shape, a list, a tuple, a set, a mapping, a dataframe or series, another model — is refused:
+An attr is one value. Strings, bytes, booleans, numbers, `None`, numpy scalars (`datetime64` and `timedelta64` included), datetimes, timedeltas, enums, and pint quantities and units with a scalar magnitude are attrs. A value holding exactly one thing *is* that thing: a 0-d array, and the length-1 array HDF5 and netCDF usually spell a scalar with, are unwrapped silently, bytes read as text.
 
-```python
-patch.update_attrs(gauge_length=np.array([1.0, 2.0]))  # raises
+A value holding more than one — an array with a shape, a list, a tuple, a set, a mapping, a dataframe or series, another model, a generator — is not an attr. By default it is skipped, with one warning naming the lot, so that reading a file never fails over metadata DASCore cannot hold:
+
+```{python}
+import numpy as np
+import dascore as dc
+
+patch = dc.get_example_patch()
+skipped = patch.update_attrs(gauge_length=np.array([1.0, 2.0]))
+print("gauge_length" in dict(skipped.attrs))
+```
+
+`on_non_scalar` says what should happen instead, spelled the way every other warn level in DASCore is: `"warn"` (the default), `"raise"` to refuse the value naming the coordinate it should be, or `"ignore"` to skip it silently. `PatchAttrs.from_dict(mapping, on_non_scalar=...)` and [`scalar_attrs`](`dascore.core.attrs.scalar_attrs`) take the same word, so a caller building a patch from foreign metadata can choose:
+
+```{python}
+foreign = {"project": np.array(["survey"]), "valid_range": [0.0, 1.0]}
+attrs = dc.PatchAttrs.from_dict(foreign, on_non_scalar="ignore")
+print(attrs.project)
 ```
 
 Arrays are coordinates, which is where such a value belongs. A coordinate is checked against the shape it claims, travels through selection and chunking with the data it describes, and is what the index and the spool can query:
@@ -29,7 +44,7 @@ patch.update_coords(reference=(None, array))  # rides no dimension
 
 `history` is a declared field, and stays a tuple of strings. Declared fields of a format-specific subclass are whatever their annotations say; only extras are held to the rule.
 
-A file written before this rule may store an array in its attr namespace. Reading one still works: the reader drops the values a patch attr cannot hold and warns once, naming them. The refusal is for a patch built in memory, where the caller can put the value where it belongs.
+Readers state the right scalar themselves — an attribute a file stores as a length-1 array arrives as a number or a name, and ProdML's several facility names arrive as one comma-separated name. The default above is the safety net under every reader, plugins included, and under the conversion from an xarray DataArray, where CF spells `valid_range` and `flag_values` as arrays.
 
 ## `data_type`
 

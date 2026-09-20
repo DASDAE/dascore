@@ -12,7 +12,7 @@ import pytest
 
 import dascore as dc
 from dascore.io.terra15.core import Terra15FormatterV4
-from dascore.io.terra15.utils import _get_version_data_node
+from dascore.io.terra15.utils import _get_default_attrs, _get_version_data_node
 from dascore.utils.time import to_datetime64
 
 
@@ -190,3 +190,21 @@ class TestReadArray:
         Terra15FormatterV4().read_array(terra15_v6_path, ((2, 6),))
         assert len(seen) == 1
         assert seen[0][0] == slice(2, 6)
+
+
+class TestDefaultAttrs:
+    """A root attribute names one value, however the file stores it."""
+
+    def test_length_one_arrays_are_their_values(self):
+        """HDF5 spells a scalar as a length-1 array; the reader reads one."""
+        out = _get_default_attrs(
+            {
+                "gauge_length": np.array([10.0]),
+                "serial_number": np.array([b"XYZ123"]),
+                "pulse_rate": 1000.0,
+            }
+        )
+        assert out["gauge_length"] == 10.0
+        assert not isinstance(out["gauge_length"], np.ndarray)
+        assert out["interrogator.serial_number"] == "XYZ123"
+        assert out["pulse_rate"] == 1000.0

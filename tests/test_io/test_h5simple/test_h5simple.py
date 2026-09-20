@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import copy
 import shutil
+import warnings
 from functools import wraps
 
 import h5py
@@ -14,6 +15,7 @@ import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io.h5simple.core import H5Simple
+from dascore.io.h5simple.utils import _get_attrs_coords_and_data
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import H5Reader
 
@@ -197,14 +199,33 @@ class TestH5Simple:
             dc.get_format(path)
 
     def test_array_root_attr_is_dropped(self, h5simple_path, tmp_path):
-        """An h5 attr may be an array; a patch attr may not, so it goes."""
+        """An h5 attr may hold many values; a patch attr may not, so it goes."""
         path = tmp_path / "array_attr.h5"
         shutil.copy(h5simple_path, path)
         with h5py.File(path, "r+") as h5:
             h5.attrs["gauge"] = np.array([1.0, 2.0])
-        with pytest.warns(UserWarning, match=r"not scalars: \['gauge'\]"):
+        with pytest.warns(UserWarning, match=r"'gauge' \(ndarray\)"):
             patch = dc.read(path)[0]
         assert "gauge" not in dict(patch.attrs)
+
+    def test_length_one_root_attr_is_its_value(self, h5simple_path, tmp_path):
+        """HDF5 spells a scalar as a length-1 array; the reader reads one."""
+        path = tmp_path / "one_value_attrs.h5"
+        shutil.copy(h5simple_path, path)
+        with h5py.File(path, "r+") as h5:
+            h5.attrs["gauge_length"] = np.array([10.0])
+            h5.attrs["serial"] = np.array([b"XYZ123"])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            patch = dc.read(path)[0]
+            # The reader states the scalar itself rather than leaving it
+            # to validation, so what it extracts is checked here as well.
+            with h5py.File(path, "r") as h5:
+                extracted = _get_attrs_coords_and_data(h5, snap=True)[0]
+        assert patch.attrs.gauge_length == 10.0
+        assert patch.attrs.serial == "XYZ123"
+        assert extracted["gauge_length"] == 10.0
+        assert extracted["serial"] == "XYZ123"
 
 
 class TestSingletonCoordinates:

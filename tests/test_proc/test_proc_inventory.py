@@ -27,6 +27,7 @@ from dascore.exceptions import (
     UnitError,
     UnresolvedPatchError,
 )
+from dascore.models import ArrayLike
 
 
 @pytest.fixture(scope="module")
@@ -706,10 +707,19 @@ class TestEdgeCases:
         with pytest.raises(PatchError, match="spans a change of optical path"):
             patch.enrich(split, coords=False)
 
-    def test_an_array_attr_never_reaches_enrich(self, patch, inventory):
-        """Attrs are scalars, so enrich never meets one it cannot compare."""
-        with pytest.raises(ValidationError, match="Attrs hold scalars"):
-            patch.update_attrs(gauge_length=np.array([1.0, 2.0]))
+    def test_incomparable_attr_is_a_conflict(self, patch, inventory):
+        """A declared field may hold an array, which has not been shown to agree."""
+
+        class _Attrs(dc.PatchAttrs):
+            """Attrs whose gauge length is declared as an array."""
+
+            gauge_length: ArrayLike = ()
+
+        dumped = patch.attrs.model_dump(exclude_unset=True)
+        attrs = _Attrs(**{**dumped, "gauge_length": np.array([1.0, 2.0])})
+        odd = patch.new(attrs=attrs)
+        with pytest.raises(PatchError, match="inventory says"):
+            odd.enrich(inventory, coords=False, conflict="raise")
 
     def test_multidimensional_channel_coord_raises(self, patch, inventory):
         """One channel coordinate maps to one dimension of the patch."""

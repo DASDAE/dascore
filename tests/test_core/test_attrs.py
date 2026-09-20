@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+import uuid
 import warnings
+from decimal import Decimal
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -11,10 +14,14 @@ from pydantic import ValidationError
 
 import dascore as dc
 from dascore.constants import INVENTORY_ATTRS, VALID_DATA_TYPES, max_lens
-from dascore.core.attrs import PatchAttrs, drop_non_scalar_attrs
+from dascore.core.attrs import PatchAttrs, scalar_attrs
 from dascore.core.coords import get_coord
 from dascore.core.inventory import Acquisition, Interrogator
-from dascore.exceptions import InvalidInventoryError
+from dascore.exceptions import (
+    InvalidInventoryError,
+    ParameterError,
+    PatchAttributeError,
+)
 from dascore.units import get_quantity
 from dascore.utils.misc import validate_acquisition_key
 
@@ -354,16 +361,18 @@ class TestInventoryAttrs:
 class TestScalarAttrs:
     """Attrs hold scalars; an array belongs on the patch as a coordinate."""
 
-    refused = (
+    non_scalar = (
         np.array([1.0, 2.0]),
         [1, 2],
         (1, 2),
         {1, 2},
         {"a": 1},
-        pd.Series([1.0]),
-        pd.DataFrame({"a": [1.0]}),
+        pd.Series([1.0, 2.0]),
+        pd.DataFrame({"a": [1.0, 2.0]}),
         get_quantity("m") * np.array([1.0, 2.0]),
         PatchAttrs(),
+        (x for x in range(3)),
+        np.array([(1, 2.0)], dtype=[("a", "i4"), ("b", "f8")])[0],
     )
 
     accepted = (
@@ -380,13 +389,24 @@ class TestScalarAttrs:
         pd.Timestamp("2020-01-01"),
         get_quantity("10 m"),
         get_quantity("m").units,
+        Path("a_file"),
+        uuid.uuid4(),
+        Decimal("1.5"),
+        object(),
     )
 
-    @pytest.mark.parametrize("value", refused)
-    def test_refused(self, value):
-        """Anything holding more than one value is not an attr."""
-        with pytest.raises(ValidationError, match="Attrs hold scalars"):
-            PatchAttrs(gauge=value)
+    @pytest.mark.parametrize("value", non_scalar)
+    def test_skipped_with_a_warning(self, value):
+        """By default an attr holding more than one value is dropped."""
+        with pytest.warns(UserWarning, match="Attrs hold scalars"):
+            out = PatchAttrs(gauge=value)
+        assert "gauge" not in dict(out)
+
+    @pytest.mark.parametrize("value", non_scalar)
+    def test_refused_on_raise(self, value):
+        """Asking for a refusal gets one, naming the attr and its type."""
+        with pytest.raises(PatchAttributeError, match="Attrs hold scalars"):
+            PatchAttrs.from_dict({"gauge": value}, "raise")
 
     @pytest.mark.parametrize("value", accepted)
     def test_accepted(self, value):
@@ -395,46 +415,58 @@ class TestScalarAttrs:
 
     def test_message_names_the_coordinate_alternative(self):
         """The error says where an array goes instead."""
-        with pytest.raises(ValidationError, match=r"update_coords\(gauge="):
-            PatchAttrs(gauge=np.array([1.0, 2.0]))
+        with pytest.raises(PatchAttributeError, match=r"update_coords\(gauge="):
+            PatchAttrs.from_dict({"gauge": np.array([1.0, 2.0])}, "raise")
 
-    def test_zero_dim_array_becomes_its_scalar(self):
-        """A 0-d array has one value, so it is that value."""
-        out = PatchAttrs(gauge=np.array(5.0))
-        assert out.gauge == 5.0
-        assert not isinstance(out.gauge, np.ndarray)
+    def test_one_warning_names_them_all(self):
+        """A file with several such attrs is one warning, not a stream."""
+        stored = {"tag": "x", "gauge": np.array([1.0, 2.0]), "pair": (1, 2)}
+        with pytest.warns(UserWarning, match="'gauge'.*'pair'") as record:
+            out = PatchAttrs(**stored)
+        assert len(record) == 1
+        assert out.tag == "x"
+
+    def test_ignore_is_silent(self):
+        """The third mode drops the value without saying anything."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = PatchAttrs.from_dict({"gauge": np.array([1.0, 2.0])}, "ignore")
+        assert "gauge" not in dict(out)
+
+    def test_retired_mode_raises(self):
+        """The mode is spelled the way every other warn level is."""
+        with pytest.raises(ParameterError, match="on_non_scalar"):
+            PatchAttrs.from_dict({"tag": "x"}, "drop")
+
+    @pytest.mark.parametrize("mode", ["warn", "raise", "ignore"])
+    def test_one_value_is_that_value(self, mode):
+        """HDF5 spells a scalar as a length-1 array; it is one, silently."""
+        stored = {
+            "project": np.array(["survey"]),
+            "epsg_code": np.array([4326]),
+            "serial": np.array([b"XYZ123"]),
+            "solo": ("only",),
+            "wrapped": np.array(5.0),
+        }
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = PatchAttrs.from_dict(stored, mode)
+        assert out.project == "survey"
+        assert out.epsg_code == 4326
+        assert out.serial == "XYZ123"
+        assert out.solo == "only"
+        assert out.wrapped == 5.0 and not isinstance(out.wrapped, np.ndarray)
+
+    def test_zero_dim_object_array_does_not_smuggle(self):
+        """The unwrapped value is itself held to the rule."""
+        wrapped = np.empty((), dtype=object)
+        wrapped[()] = [1, 2]
+        with pytest.raises(PatchAttributeError, match="Attrs hold scalars"):
+            PatchAttrs.from_dict({"gauge": wrapped}, "raise")
 
     def test_history_is_still_a_tuple(self):
         """History is a declared field, and its annotation allows one."""
         assert PatchAttrs(history=["a", "b"]).history == ("a", "b")
-
-    def test_update_attrs_refuses(self, random_patch):
-        """A user adding an array to a patch is told where it goes."""
-        with pytest.raises(ValidationError, match="Attrs hold scalars"):
-            random_patch.update_attrs(gauge=np.array([1.0, 2.0]))
-
-
-class TestDropNonScalarAttrs:
-    """What a reader does with stored attrs a patch cannot hold."""
-
-    def test_non_scalars_dropped_with_one_warning(self):
-        """One warning names all of them; the scalars come through."""
-        stored = {"tag": "x", "gauge": np.array([1.0, 2.0]), "pair": (1, 2)}
-        with pytest.warns(UserWarning, match=r"\['gauge', 'pair'\]") as record:
-            out = drop_non_scalar_attrs(stored)
-        assert len(record) == 1
-        assert out == {"tag": "x"}
-
-    def test_scalars_pass_without_warning(self):
-        """Nothing to drop is nothing to say."""
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
-            assert drop_non_scalar_attrs({"tag": "x"}) == {"tag": "x"}
-
-    def test_declared_fields_are_left_alone(self):
-        """History is a tuple by declaration, not a stray collection."""
-        out = drop_non_scalar_attrs({"history": ["a", "b"]})
-        assert out == {"history": ["a", "b"]}
 
     def test_a_subclass_keeps_its_own_fields(self):
         """The class the values are destined for decides what is declared."""
@@ -444,6 +476,53 @@ class TestDropNonScalarAttrs:
 
             notes: tuple[str, ...] = ()
 
-        assert drop_non_scalar_attrs({"notes": ("a",)}, _Attrs) == {"notes": ("a",)}
-        with pytest.warns(UserWarning, match="not scalars"):
-            assert drop_non_scalar_attrs({"notes": ("a",)}) == {}
+        assert _Attrs(notes=("a", "b")).notes == ("a", "b")
+        assert scalar_attrs({"notes": ("a", "b")}, "raise", _Attrs)["notes"]
+        with pytest.raises(PatchAttributeError, match="Attrs hold scalars"):
+            scalar_attrs({"notes": ("a", "b")}, "raise")
+
+    def test_structural_keys_are_not_attrs(self):
+        """`dims` and `coords` say how a patch is built, so they pass."""
+        stored = {"dims": ("time", "distance"), "coords": {"time": 1}}
+        assert scalar_attrs(stored, "raise") == stored
+
+    def test_update_attrs_modes(self, random_patch):
+        """The patch-level switch is the same word, keyword-only."""
+        with pytest.warns(UserWarning, match="Attrs hold scalars"):
+            warned = random_patch.update_attrs(gauge=np.array([1.0, 2.0]))
+        assert "gauge" not in dict(warned.attrs)
+        with pytest.raises(PatchAttributeError, match="Attrs hold scalars"):
+            random_patch.update_attrs(gauge=[1, 2], on_non_scalar="raise")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            quiet = random_patch.update_attrs(gauge=[1, 2], on_non_scalar="ignore")
+        assert "gauge" not in dict(quiet.attrs)
+
+    def test_update_attrs_keeps_the_attrs_class(self, random_patch):
+        """An unrelated edit leaves a reader's declared fields declared."""
+
+        class _Attrs(PatchAttrs):
+            """Attrs with a declared collection."""
+
+            flags: tuple[bool, ...] = ()
+
+        attrs = _Attrs(flags=(True, False))
+        patch = random_patch.new(attrs=attrs)
+        out = patch.update_attrs(tag="new")
+        assert isinstance(out.attrs, _Attrs)
+        assert out.attrs.flags == (True, False)
+        assert out.attrs.tag == "new"
+
+    def test_the_switch_is_not_an_attr(self, random_patch):
+        """A stored attr of that name survives; the keyword is the switch."""
+        patch = random_patch.update_attrs(on_non_scalar="ignore", tag="x")
+        assert "on_non_scalar" not in dict(patch.attrs)
+        stored = PatchAttrs(on_non_scalar="a stored value")
+        assert stored.on_non_scalar == "a stored value"
+
+    def test_the_switch_is_not_in_the_operation(self, random_patch):
+        """The mode is how attrs were read, not what the patch became."""
+        one = random_patch.update_attrs(tag="x")
+        two = random_patch.update_attrs(tag="x", on_non_scalar="ignore")
+        assert one.attrs.data_id == two.attrs.data_id
+        assert one.attrs.history == two.attrs.history

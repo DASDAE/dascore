@@ -42,9 +42,7 @@ def _is_odh4(resource) -> bool:
 def _read_attrs(resource) -> dict:
     """Read the required root attrs in one pass (unbyte + unpack 0-d)."""
     identity_map = {name: name for name in _REQUIRED_ATTRS}
-    return maybe_get_items(
-        resource.attrs, identity_map, unpack_names=set(_REQUIRED_ATTRS)
-    )
+    return maybe_get_items(resource.attrs, identity_map)
 
 
 def _safe_units(raw_units):

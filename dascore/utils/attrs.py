@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Mapping, Sequence
+from contextlib import suppress
 from typing import Any, Literal
 
 import numpy as np
@@ -114,7 +115,7 @@ def combine_patch_attrs(
                 for value in (x.get(key) for x in mod_dict_list)
             ]
             first = values[0]
-            agree = all(first == x for x in values[1:])
+            agree = all(_attr_values_equal(first, x) for x in values[1:])
             if agree or conflict == "keep_first":
                 if first is not None:
                     out[key] = first
@@ -178,10 +179,19 @@ def _attr_values_equal(one, two) -> bool:
     """
     Whether two attr values say the same thing, two nulls included.
 
-    Attrs are scalars, so equality is the comparison; a NaN equals
-    nothing, itself included, yet two of them agree on being nothing.
+    An extra is a scalar, but a declared field, an unpickled model or one
+    built by `model_construct` can hold an array, and an array compares as
+    a whole rather than elementwise. A NaN equals nothing, itself
+    included, yet two of them agree on being nothing.
     """
-    return bool(one == two) or bool(pd.isnull(one) and pd.isnull(two))
+    if isinstance(one, np.ndarray) or isinstance(two, np.ndarray):
+        return np.array_equal(one, two)
+    if bool(one == two):
+        return True
+    # A list answers `isnull` elementwise, which is not the question here.
+    with suppress(TypeError, ValueError):
+        return bool(pd.isnull(one) and pd.isnull(two))
+    return False
 
 
 def warn_if_histories_differ(attrs_list: Sequence[dc.PatchAttrs], operation: str):

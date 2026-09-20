@@ -76,3 +76,43 @@ class TestSnap:
             else:
                 attrs["long_name"] = long_name
         assert reader(path)[0].attrs.data_type == expected
+
+
+class TestRootAndCrsAttrs:
+    """`project` and `epsg_code` name one value, or nothing at all."""
+
+    @pytest.fixture(scope="class")
+    def cf_path(self, tmp_path_factory):
+        """A minimal DASHDF5 file, with no project or crs group."""
+        path = tmp_path_factory.mktemp("dashdf5_attrs") / "plain.h5"
+        with h5py.File(path, "w") as h5:
+            h5.attrs["Conventions"] = np.array(
+                ["CF-1.7", "DAS-HDF5-1.0"], dtype=h5py.string_dtype()
+            )
+            h5["channel"] = np.arange(4)
+            h5["trace"] = np.arange(20)
+            h5["t"] = np.arange(20) * 0.001 + 1e9
+            for name in "xyz":
+                h5[name] = np.arange(4, dtype=float)
+                h5[name].attrs["units"] = "m"
+            h5["das"] = np.zeros((4, 20), dtype="float32")
+            h5["das"].attrs["long_name"] = "strain_rate"
+        return path
+
+    def test_one_value_attrs(self, cf_path, tmp_path):
+        """These files spell a scalar attribute as a length-1 array."""
+        path = tmp_path / "one_value.h5"
+        shutil.copyfile(cf_path, path)
+        with h5py.File(path, "r+") as h5:
+            h5.attrs["project"] = np.array(["survey"], dtype=h5py.string_dtype())
+            h5["crs"] = 0
+            h5["crs"].attrs["epsg_code"] = np.array([4326])
+        patch = dc.read(path)[0]
+        assert patch.attrs.project == "survey"
+        assert patch.attrs.epsg_code == 4326
+
+    def test_unstated_attrs_are_absent(self, cf_path):
+        """A file which names no project carries no project attr."""
+        attrs = dict(dc.read(cf_path)[0].attrs)
+        assert "project" not in attrs
+        assert "epsg_code" not in attrs

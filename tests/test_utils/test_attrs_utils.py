@@ -9,7 +9,7 @@ import pytest
 
 from dascore import PatchAttrs
 from dascore.exceptions import ParameterError
-from dascore.utils.attrs import combine_patch_attrs
+from dascore.utils.attrs import _attr_values_equal, combine_patch_attrs
 
 
 class TestMergeAttrs:
@@ -144,3 +144,23 @@ class TestMergeAttrs:
         attrs2 = random_patch.attrs.update(_source_patch_key="two")
         out = combine_patch_attrs([attrs1, attrs2])
         assert "_source_patch_key" not in out.model_dump()
+
+
+class TestAttrValuesEqual:
+    """An extra is a scalar, but a declared field need not be."""
+
+    def test_arrays_compare_as_a_whole(self):
+        """An array answers `==` elementwise, which is not the question."""
+        assert _attr_values_equal(np.arange(3), np.arange(3))
+        assert not _attr_values_equal(np.arange(3), np.arange(4))
+        assert not _attr_values_equal("a", np.arange(3))
+
+    def test_two_nulls_agree(self):
+        """A NaN equals nothing, itself included, yet two agree."""
+        assert _attr_values_equal(float("nan"), float("nan"))
+        assert not _attr_values_equal(float("nan"), 1.0)
+
+    def test_unequal_lists(self):
+        """`pd.isnull` answers a list elementwise, so it cannot decide."""
+        assert not _attr_values_equal(["a", "b"], ["c", "d"])
+        assert _attr_values_equal(["a", "b"], ["a", "b"])
