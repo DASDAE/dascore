@@ -37,6 +37,8 @@ assert filtered.attrs.data_id != patch.attrs.data_id
 assert filtered.attrs.data_id == patch.pass_filter(time=(1, 10)).attrs.data_id
 ```
 
+Development versions briefly called the two patch IDs `patch_id` and `processing_id`. Attributes read under those names are taken as `origin_id` and `data_id`; only the current names are written.
+
 ## Weak and strong `data_id`
 
 A `data_id` is the best name available for an object, and there are two grades.
