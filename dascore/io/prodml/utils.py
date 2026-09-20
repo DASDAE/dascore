@@ -505,12 +505,12 @@ def _get_node_dims(node_info) -> tuple[str, ...]:
 
 
 def _get_data_node(h5, source_patch_key=""):
-    """Return the (dataset, dims) the key names, keyed as `scan` keys them."""
+    """Return the dataset the key names, keyed as `scan` keys them."""
     # pairs, not a mapping: a file may name two nodes alike, and the
     # default read refuses such a key rather than picking one
     nodes = [(info.name, info) for info in _yield_data_nodes(h5)]
     info = resolve_keyed_source(nodes, source_patch_key, where=str(h5.filename))
-    return _NODE_DATA_PROCESSORS[info.patch_type](info), _get_node_dims(info)
+    return _NODE_DATA_PROCESSORS[info.patch_type](info)
 
 
 @register_func(_NODE_ATTRS_PROCESSORS, key="raw")

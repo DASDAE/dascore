@@ -5,14 +5,14 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import (
     _get_attrs_coords_and_data,
-    _get_dims_and_data,
+    _get_nodes,
     _is_h5simple,
 )
 
@@ -31,26 +31,23 @@ class H5Simple(FiberIO):
         return None
 
     def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
+        self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """
         Slice the data node directly.
 
-        The dimensions come from the file's ``dims`` attribute, or from
-        which node's length matches each axis, exactly as `read` resolves
-        them. No coordinate values are read either way, and the axis no
-        node accounts for is named without building its index.
+        The node is found by name; no coordinate values are read.
         """
-        dims, data_node = _get_dims_and_data(resource)
-        return slice_dataset(data_node, dims, windows)
+        data_node, _, _ = _get_nodes(resource)
+        return slice_dataset(data_node, windows)
 
     def _prepare_read(self, manager, snap):
-        """Reuse the data node and dimensions found while reading metadata."""
+        """Reuse the data node found while reading metadata."""
         patches, data = self._metadata_and_data(manager.get_resource(H5Reader), snap)
 
         def load(requests):
             for windows, key in requests:
-                yield slice_dataset(data, patches[0].dims, windows)
+                yield slice_dataset(data, windows)
 
         return patches, load
 

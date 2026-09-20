@@ -36,7 +36,7 @@ from dataclasses import dataclass
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io import FiberIO
 from dascore.io.utils import resolve_keyed_source, windows_to_slices
@@ -119,7 +119,10 @@ class MSeedV2(FiberIO):
         return _metadata_from_summaries(summaries), load
 
     def read_array(
-        self, resource: LocalPath, windows: dict[str, tuple[int, int]], key: str = ""
+        self,
+        resource: LocalPath,
+        windows: windows_type = (),
+        key: str = "",
     ) -> np.ndarray:
         """Decode one compatible MiniSEED group in channel/time order."""
         pymseed = optional_import("pymseed")
@@ -140,7 +143,7 @@ class MSeedV2(FiberIO):
             )
             dtype = np.result_type(*[item.dtype for item in summaries])
             shape = (len(summaries), summaries[0].sample_count)
-            channels, time = windows_to_slices(windows, ("channel", "time"), shape)
+            channels, time = windows_to_slices(windows, shape)
             selected = summaries[channels]
             array = np.empty((len(selected), time.stop - time.start), dtype=dtype)
             arrays.append(array)

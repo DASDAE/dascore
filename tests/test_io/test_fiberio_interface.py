@@ -50,7 +50,7 @@ class _ArrayReader(FiberIO):
     def read_array(self, resource, windows, key="") -> np.ndarray:
         """Record the requested bounding window and return its cells."""
         self.calls.append((windows, key))
-        return slice_dataset(self.data, self.metadata.dims, windows)
+        return slice_dataset(self.data, windows)
 
 
 class TestDerivedRead:
@@ -80,7 +80,7 @@ class TestDerivedRead:
         np.testing.assert_array_equal(out.data, expected)
         np.testing.assert_array_equal(out.get_coord("distance").values, [1, 3])
         np.testing.assert_array_equal(out.get_coord("time").values, [3, 5])
-        assert reader.calls == [({"distance": (1, 4), "time": (3, 6)}, "part")]
+        assert reader.calls == [(((1, 4), (3, 6)), "part")]
         assert out.attrs.history == reader.metadata.attrs.history
         assert out.attrs.data_id == reader.metadata.attrs.data_id
 
@@ -88,7 +88,7 @@ class TestDerivedRead:
         """Half-open sample bounds are passed through as exact array windows."""
         out = reader.read("memory", distance=(2, 5), time=(1, 7), samples=True)[0]
         np.testing.assert_array_equal(out.data, reader.data[2:5, 1:7])
-        assert reader.calls == [({"distance": (2, 5), "time": (1, 7)}, "part")]
+        assert reader.calls == [(((2, 5), (1, 7)), "part")]
 
     @pytest.mark.parametrize(
         "selection",

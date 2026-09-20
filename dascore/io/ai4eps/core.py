@@ -6,8 +6,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import ArraySource, FiberIO
-from dascore.io.utils import slice_dataset
+from dascore.io import ArraySource, FiberIO, H5ArrayMixin
 from dascore.models import DateTime64, OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
 
@@ -26,7 +25,7 @@ class AI4EPSPatchAttrs(dc.PatchAttrs):
     event_depth_km: OptionalFiniteFloat = None
 
 
-class AI4EPSV1(FiberIO):
+class AI4EPSV1(H5ArrayMixin, FiberIO):
     """
     Support for the AI4EPS event HDF5 format.
 
@@ -61,9 +60,3 @@ class AI4EPSV1(FiberIO):
                 attrs=attrs, coords=coords, dtype=str(dataset.dtype), source=source
             )
         ]
-
-    def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
-    ) -> np.ndarray:
-        """Slice the ``data`` dataset directly."""
-        return slice_dataset(resource["data"], ("distance", "time"), windows)

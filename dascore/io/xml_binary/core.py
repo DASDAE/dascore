@@ -8,7 +8,7 @@ import numpy as np
 from pydantic import ValidationError
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io import FiberIO
 from dascore.io.utils import resolve_keyed_source, slice_dataset
@@ -57,9 +57,9 @@ class XMLBinaryV1(FiberIO):
         return _paths_to_scan_patches(paths, metadata, attr_cls=BinaryPatchAttrs)
 
     def read_array(
-        self, resource, windows: dict[str, tuple[int, int]], key: str = ""
+        self, resource, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
-        """Memory-map one raw file and select in its declared dimension order."""
+        """Memory-map one raw file and select its positional windows."""
         resource = coerce_to_upath(resource)
         base = self._get_base_path(resource)
         metadata = _read_xml_metadata(base / self._metadata_name)
@@ -76,9 +76,6 @@ class XMLBinaryV1(FiberIO):
                 {str(i): path for i, path in enumerate(paths)}, key
             )
         )
-        dims = (
-            ("distance", "time") if metadata.transposed_data else ("time", "distance")
-        )
         shape = (metadata.number_of_frames, len(_make_distance_coord(metadata)))
         shape = shape[::-1] if metadata.transposed_data else shape
         local_path = ensure_local_file(path)
@@ -87,7 +84,7 @@ class XMLBinaryV1(FiberIO):
             msg = f"XMLBinary file {path} must contain exactly {expected_bytes} bytes."
             raise InvalidFiberFileError(msg)
         data = np.memmap(local_path, dtype=metadata.data_type, mode="r", shape=shape)
-        return slice_dataset(data, dims, windows)
+        return slice_dataset(data, windows)
 
     def get_version(self, resource, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""

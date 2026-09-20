@@ -27,7 +27,7 @@ import dascore as dc
 from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
 from dascore.exceptions import UnknownFiberFormatError
-from dascore.io.core import FiberIO, _required_resource_type
+from dascore.io.core import FiberIO, _read_open_resource, _required_resource_type
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import (
     CompositeResolver,
@@ -654,8 +654,9 @@ class PlanResolver(PatchResolver):
 
         ``windows`` maps dimension name to a half-open ``(start, stop)``
         sample window on the member source's own grid; absent dimensions
-        load whole. The array comes back in the source's stated dimension
-        order, untransposed and uncast.
+        load whole, and a window naming a dimension the row does not
+        state takes the fallback. The array comes back in the source's
+        stated dimension order, untransposed and uncast.
 
         The caller must anchor the windows on the raw file grid — a
         window computed against a trimmed or residual-adjusted envelope
@@ -678,7 +679,12 @@ class PlanResolver(PatchResolver):
         if info is None:
             return None
         loader, path, fiber_io, key = info
-        kwargs = {"key": key} if key else {}
+        # The reader takes its windows by position, in the source's order,
+        # so a window the row cannot place must take the exact fallback.
+        dims = [x for x in str(row.get("dims") or "").split(",") if x]
+        if set(windows) - set(dims):
+            return None
+        positional = tuple(windows.get(dim) for dim in dims)
         # The resource manager resolves remote paths and opens the handle
         # type the override's annotation asks for, exactly as dc.read
         # provisions its reader; _pre_cast says the work is already done.
@@ -686,9 +692,7 @@ class PlanResolver(PatchResolver):
             resource = manager.get_resource(
                 _required_resource_type(fiber_io.read_array)
             )
-            return fiber_io.read_array(
-                resource, dict(windows), _pre_cast=True, **kwargs
-            )
+            return _read_open_resource(fiber_io, resource, positional, key)
 
     def can_read_array(self, row: Mapping) -> bool:
         """

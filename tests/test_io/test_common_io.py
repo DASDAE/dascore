@@ -615,19 +615,20 @@ class TestRead:
             payload = dc.scan(path)[0]
         key = payload.source_patch_key
         kwargs = {"key": key} if key else {}
-        sized = [
-            (dim, size)
-            for dim, size in zip(payload.dims, payload.shape, strict=True)
-            if size > 2
-        ]
-        every = {dim: (1, size - 1) for dim, size in sized}
-        # the partial and empty cases pin the other half of the contract:
-        # a dimension absent from windows comes back whole
-        for windows in (every, {sized[0][0]: every[sized[0][0]]}, {}):
+        every = tuple((1, size - 1) if size > 2 else None for size in payload.shape)
+        first = next(i for i, x in enumerate(every) if x is not None)
+        # the partial and empty cases pin the other half of the contract: an
+        # axis given None, and one left off the end, both come back whole
+        for windows in (every, every[: first + 1], ()):
             out = io.read_array(path, windows, **kwargs)
+            select = {
+                dim: window
+                for dim, window in zip(payload.dims, windows, strict=False)
+                if window is not None
+            }
             expected = (
                 dc.read(path, source_patch_key=key)[0]
-                .select(samples=True, **windows)
+                .select(samples=True, **select)
                 .data
             )
             assert out.dtype == expected.dtype
@@ -652,7 +653,7 @@ class TestRead:
         key = payloads[True]._source.key
         kwargs = {"key": key} if key else {}
         for snap, payload in payloads.items():
-            out = io.read_array(path, {}, **kwargs)
+            out = io.read_array(path, (), **kwargs)
             assert out.shape == tuple(payload.shape), snap
 
     def test_hdf5_read_array_never_reads_the_array_whole(
@@ -669,12 +670,10 @@ class TestRead:
         kwargs = {"key": key} if key else {}
         # a small window, so reading the array whole is never mistaken
         # for reading what was asked for
-        windows = {
-            dim: (1, min(size - 1, 4))
-            for dim, size in zip(payload.dims, payload.shape, strict=True)
-            if size > 2
-        }
-        assert windows, "no dimension long enough to window"
+        windows = tuple(
+            (1, min(size - 1, 4)) if size > 2 else None for size in payload.shape
+        )
+        assert any(x is not None for x in windows), "no axis long enough to window"
         reads = []
         original = h5py.Dataset.__getitem__
 
@@ -696,8 +695,8 @@ class TestRead:
             # the plain case: one read, sliced on every windowed axis
             assert len(reads) == 1, reads
             wanted = tuple(
-                (1, min(size - 1, 4)) if dim in windows else (0, size)
-                for dim, size in zip(payload.dims, payload.shape, strict=True)
+                window if window is not None else (0, size)
+                for window, size in zip(windows, payload.shape, strict=True)
             )
             index = reads[0][2]
             assert isinstance(index, tuple) and len(index) == len(wanted), index
@@ -707,6 +706,27 @@ class TestRead:
             # a cube of blocks reads more than the window, never all of it
             for shape, got, _ in reads:
                 assert got != shape, (shape, got)
+
+    def test_read_array_function_matches_read(self, io_path_tuple):
+        """`dc.read_array` gives each key's array, whole or windowed."""
+        _io, path = io_path_tuple
+        with skip_missing():
+            payloads = dc.scan(path)
+        for payload in payloads:
+            key = payload.source_patch_key
+            expected = dc.read(path, source_patch_key=key)[0].data
+            out = dc.read_array(path, key=key)
+            nan = np.issubdtype(out.dtype, np.inexact)
+            assert np.array_equal(out, expected, equal_nan=nan), key
+            # the windowed and strided reads run through the same route
+            windows = tuple(
+                (1, size - 1) if size > 2 else None for size in payload.shape
+            )
+            index = tuple(slice(*x) if x is not None else slice(None) for x in windows)
+            windowed = dc.read_array(path, windows, key=key)
+            assert np.array_equal(windowed, expected[index], equal_nan=nan), key
+            strided = dc.read_array(path, slice(0, payload.shape[0], 2), key=key)
+            assert np.array_equal(strided, expected[::2], equal_nan=nan), key
 
     def test_slice_single_dim_both_ends(self, io_path_tuple):
         """

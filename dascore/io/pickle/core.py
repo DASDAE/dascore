@@ -8,7 +8,7 @@ import numpy as np
 
 import dascore
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.core.summary import normalize_source_patch_key
 from dascore.io import ArraySource, BinaryReader, BinaryWriter, FiberIO
 from dascore.io.utils import resolve_keyed_source, slice_dataset
@@ -98,7 +98,7 @@ class PickleIO(FiberIO):
     def read_array(
         self,
         resource: _PickleReader,
-        windows: dict[str, tuple[int, int]],
+        windows: windows_type = (),
         key: str = "",
     ) -> np.ndarray:
         """Slice one logical patch from the entries decoded for this operation."""
@@ -106,7 +106,7 @@ class PickleIO(FiberIO):
             [(native or str(i), p) for i, (p, native) in enumerate(resource.patches)],
             key,
         )
-        return slice_dataset(patch.data, patch.dims, windows)
+        return slice_dataset(patch.data, windows)
 
     def write(self, spool, resource: BinaryWriter, **kwargs):
         """Write a Patch/Spool to disk."""

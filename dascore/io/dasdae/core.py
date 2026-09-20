@@ -7,7 +7,7 @@ import contextlib
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.utils.hdf5 import H5Reader, H5Writer
@@ -16,7 +16,6 @@ from dascore.utils.patch import get_patch_names
 
 from .utils import (
     _get_contents_from_patch_groups_generic,
-    _get_dims,
     _get_patch_group,
     _save_patch,
     _write_meta,
@@ -97,19 +96,19 @@ class DASDAEV1(FiberIO):
         return version
 
     def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
+        self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """
         Slice one patch's data dataset directly.
 
-        Only the group's ``_dims`` attribute and the requested hyperslab
-        leave the file; patch attrs and coordinates are never parsed. See
+        Only the requested hyperslab leaves the file; the group's
+        ``_dims``, patch attrs, and coordinates are never read. See
         `FiberIO.read_array` for the window contract. ``source_patch_key``
         is the waveform group name `scan` reports; a positional index is
         not accepted, because DASDAE never synthesizes one.
         """
         group = _get_patch_group(resource, key)
-        return slice_dataset(group["data"], _get_dims(group), windows)
+        return slice_dataset(group["data"], windows)
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True

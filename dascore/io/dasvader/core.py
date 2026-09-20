@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
 from dascore.io.utils import resolve_keyed_source, slice_dataset
 from dascore.utils.hdf5 import H5Reader
@@ -66,7 +66,7 @@ class DASVaderV1(FiberIO):
         return [dc.PatchMeta(attrs=attrs, coords=cm, dtype=dtype)]
 
     def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
+        self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """
         Slice the data reference's dataset directly.
@@ -75,7 +75,7 @@ class DASVaderV1(FiberIO):
         besides the requested block. A file holds one patch, so the key
         `scan` reports is empty; any other is refused.
         """
-        dataset, dims = _get_data_and_dims(resource)
+        dataset, _ = _get_data_and_dims(resource)
         where = str(getattr(resource, "filename", "the resource"))
         resolve_keyed_source({"": dataset}, key, where=where)
-        return slice_dataset(dataset, dims, windows)
+        return slice_dataset(dataset, windows)

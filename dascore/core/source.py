@@ -13,7 +13,7 @@ from dascore.exceptions import ParameterError
 from dascore.utils.identity import H
 
 # The fields which say which array this is; `shape` and `dtype` follow from them.
-_ID_FIELDS = ("path", "format", "version", "key", "dims", "windows")
+_ID_FIELDS = ("path", "format", "version", "key", "windows")
 
 
 @dataclass(frozen=True, slots=True)
@@ -36,8 +36,6 @@ class ArraySource:
         Which array in the resource: the logical patch of a multi-patch
         resource, or an absolute path ("/...") to any stored array, such as
         a dense coordinate.
-    dims
-        The stored order of the array's dimensions.
     windows
         A half-open `(start, stop)` sample range for each axis.
     shape
@@ -62,7 +60,6 @@ class ArraySource:
     format: str = ""
     version: str = ""
     key: str = ""
-    dims: tuple[str, ...] = ()
     windows: tuple[tuple[int, int], ...] = ()
     shape: tuple[int, ...] = ()
     dtype: Any = None
@@ -70,9 +67,8 @@ class ArraySource:
     @property
     def loadable(self) -> bool:
         """Whether this says enough to load the array."""
-        # `read_array` takes its windows by dimension name.
-        described = len(self.windows) == len(self.dims) == self.ndim
-        return bool(self.path and self.format and described and self.dtype is not None)
+        described = self.dtype is not None and len(self.windows) == self.ndim
+        return bool(self.path and self.format and described)
 
     @property
     def ndim(self) -> int:
@@ -89,20 +85,15 @@ class ArraySource:
         """A digest of which array this is; equal sources share it."""
         return H("window", {name: getattr(self, name) for name in _ID_FIELDS})
 
-    def describe(self, shape, dtype, dims=()) -> ArraySource:
+    def describe(self, shape, dtype) -> ArraySource:
         """Return a source for the whole of an array of this shape and dtype."""
         shape = tuple(int(x) for x in shape)
-        return replace(
-            self,
-            dims=tuple(dims),
-            windows=tuple((0, x) for x in shape),
-            shape=shape,
-            dtype=np.dtype(dtype),
-        )
+        windows = tuple((0, x) for x in shape)
+        return replace(self, windows=windows, shape=shape, dtype=np.dtype(dtype))
 
     def detach(self) -> ArraySource:
         """Return the provenance alone, for an array this no longer loads."""
-        return replace(self, dims=(), windows=(), shape=(), dtype=None)
+        return replace(self, windows=(), shape=(), dtype=None)
 
     def narrow(self, indexer) -> ArraySource:
         """Return the source `indexer` selects, detached if not contiguous."""
@@ -153,7 +144,6 @@ class ArraySource:
     def from_dict(cls, contents: dict[str, Any]) -> ArraySource:
         """Return the source `to_dict` wrote."""
         out = dict(contents)
-        out["dims"] = tuple(out.get("dims", ()))
         out["shape"] = tuple(out.get("shape", ()))
         out["windows"] = tuple((a, b) for a, b in out.get("windows", ()))
         if out.get("dtype") is not None:

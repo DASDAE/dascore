@@ -278,11 +278,10 @@ class TestReadArray:
     def test_matches_default(self, written_dascore_v1_random, random_patch):
         """The override returns exactly what the read-and-trim default does."""
         io = DASDAEV1()
-        windows = {"time": (3, 11), "distance": (2, 5)}
-        out = io.read_array(written_dascore_v1_random, windows)
+        out = io.read_array(written_dascore_v1_random, ((2, 5), (3, 11)))
         expected = (
             io.read(written_dascore_v1_random, source_patch_key="")[0]
-            .select(samples=True, **windows)
+            .select(samples=True, distance=(2, 5), time=(3, 11))
             .data
         )
         assert np.array_equal(out, expected)
@@ -291,7 +290,7 @@ class TestReadArray:
 
     def test_whole_array(self, written_dascore_v1_random, random_patch):
         """No windows returns the whole array."""
-        out = DASDAEV1().read_array(written_dascore_v1_random, {})
+        out = DASDAEV1().read_array(written_dascore_v1_random, ())
         assert np.array_equal(out, random_patch.data)
 
     def test_keyed_patch(self, multi_patch_path):
@@ -302,13 +301,13 @@ class TestReadArray:
         for payload in payloads:
             key = payload.source_patch_key
             patch = dc.read(multi_patch_path, source_patch_key=key)[0]
-            out = io.read_array(multi_patch_path, {"time": (1, 4)}, key=key)
+            out = io.read_array(multi_patch_path, (None, (1, 4)), key=key)
             assert np.array_equal(out, patch.data[:, 1:4])
 
     def test_null_key_resolves_single_patch(self, written_dascore_v1_random):
         """A NaN key (an index row with no stored key) means the lone patch."""
-        out = DASDAEV1().read_array(written_dascore_v1_random, {}, key=np.nan)
-        expected = DASDAEV1().read_array(written_dascore_v1_random, {})
+        out = DASDAEV1().read_array(written_dascore_v1_random, (), key=np.nan)
+        expected = DASDAEV1().read_array(written_dascore_v1_random, ())
         assert np.array_equal(out, expected)
 
     def test_path_like_key_raises(self, multi_patch_path):
@@ -316,32 +315,32 @@ class TestReadArray:
         name = dc.scan(multi_patch_path)[0].source_patch_key
         for key in ("/waveforms", f"{name}/data", f"./{name}"):
             with pytest.raises(PatchAttributeError, match="No patch named"):
-                DASDAEV1().read_array(multi_patch_path, {}, key=key)
+                DASDAEV1().read_array(multi_patch_path, (), key=key)
 
     def test_keyless_multi_patch_raises(self, multi_patch_path):
         """Several patches and no key cannot be resolved."""
         with pytest.raises(PatchAttributeError, match="pass an explicit key"):
-            DASDAEV1().read_array(multi_patch_path, {})
+            DASDAEV1().read_array(multi_patch_path, ())
 
     def test_unknown_key_raises(self, multi_patch_path):
         """A key naming no patch group raises."""
         with pytest.raises(PatchAttributeError, match="No patch named"):
-            DASDAEV1().read_array(multi_patch_path, {}, key="nope")
+            DASDAEV1().read_array(multi_patch_path, (), key="nope")
 
     def test_no_patches_raises(self, generic_hdf5):
         """A file without a waveform group has nothing to read."""
         with pytest.raises(MissingPatchError, match="No patches"):
-            DASDAEV1().read_array(generic_hdf5, {})
+            DASDAEV1().read_array(generic_hdf5, ())
 
-    def test_unknown_dimension_raises(self, written_dascore_v1_random):
-        """A window on a dimension the patch lacks raises."""
-        with pytest.raises(ParameterError, match="not among patch dims"):
-            DASDAEV1().read_array(written_dascore_v1_random, {"bob": (0, 1)})
+    def test_more_windows_than_axes_raises(self, written_dascore_v1_random):
+        """A window past the patch's last axis has nothing to index."""
+        with pytest.raises(ParameterError, match="one positional range per axis"):
+            DASDAEV1().read_array(written_dascore_v1_random, ((0, 1),) * 3)
 
     def test_load_filters_refused(self, written_dascore_v1_random):
         """Value filters are not part of the window contract."""
         with pytest.raises(TypeError, match="unexpected keyword"):
-            DASDAEV1().read_array(written_dascore_v1_random, {}, time_min=1)
+            DASDAEV1().read_array(written_dascore_v1_random, (), time_min=1)
 
     def test_reads_only_the_window(
         self, written_dascore_v1_random, random_patch, monkeypatch
@@ -355,7 +354,7 @@ class TestReadArray:
             return original(self, index)
 
         monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
-        DASDAEV1().read_array(written_dascore_v1_random, {"time": (2, 6)})
+        DASDAEV1().read_array(written_dascore_v1_random, (None, (2, 6)))
         assert seen == [(slice(0, random_patch.shape[0]), slice(2, 6))]
 
 

@@ -119,14 +119,6 @@ def _get_nodes(h5):
     )
 
 
-def _get_dims_and_data(h5):
-    """Return the data node's dims and the node itself, reading no values."""
-    dims_attr = unbyte(h5.attrs["dims"]) if "dims" in h5.attrs else None
-    data_node, time_node, other_nodes = _get_nodes(h5)
-    dims, _ = _get_dims(data_node, time_node, other_nodes, dims_attr)
-    return dims, data_node
-
-
 def _get_cm_and_data(h5, snap=False, dims=None):
     """Extract coordinate manager and data node."""
     data_node, time_node, other_nodes = _get_nodes(h5)

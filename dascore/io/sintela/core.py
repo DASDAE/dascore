@@ -9,7 +9,7 @@ from collections.abc import Iterable
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
 from dascore.io.core import _stamp_source_ids
 from dascore.io.utils import slice_dataset, windows_to_slices
@@ -24,7 +24,6 @@ from dascore.utils.io import (
 from .protobuf_utils import get_supported_family_tag, read_payload, scan_payload
 from .utils import (
     _HEADER_SIZES,
-    DIMS,
     SYNC_WORD,
     _get_attrs_coords_header,
     _get_complete_header,
@@ -73,7 +72,7 @@ class SintelaBinaryV3(FiberIO):
     def read_array(
         self,
         resource: LocalBinaryReader,
-        windows: dict[str, tuple[int, int]],
+        windows: windows_type = (),
         key: str = "",
     ) -> np.ndarray:
         """
@@ -84,7 +83,7 @@ class SintelaBinaryV3(FiberIO):
         """
         header = _get_complete_header(resource)
         shape = _get_data_shape(header)
-        time_slice, dist_slice = windows_to_slices(windows, DIMS, shape)
+        time_slice, dist_slice = windows_to_slices(windows, shape)
         data = _read_sample_range(resource, header, time_slice.start, time_slice.stop)
         return np.asarray(data[:, dist_slice])
 
@@ -112,11 +111,14 @@ class SintelaProtobufV1(FiberIO):
         return scan_payload(resource, snap=snap)
 
     def read_array(
-        self, resource: BinaryReader, windows: dict[str, tuple[int, int]], key: str = ""
+        self,
+        resource: BinaryReader,
+        windows: windows_type = (),
+        key: str = "",
     ) -> np.ndarray:
-        """Decode protobuf samples and select in the declared dimension order."""
-        data, coords, _ = read_payload(resource)
-        return slice_dataset(data, coords.dims, windows)
+        """Decode protobuf samples and select the positional window."""
+        data, _, _ = read_payload(resource)
+        return slice_dataset(data, windows)
 
     def read(
         self,

@@ -2,12 +2,9 @@
 
 from __future__ import annotations
 
-import numpy as np
-
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import ArraySource, FiberIO
-from dascore.io.utils import slice_dataset
+from dascore.io import ArraySource, FiberIO, H5ArrayMixin
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
 
@@ -22,7 +19,7 @@ class UptechPatchAttrs(dc.PatchAttrs):
     spatial_resolution: OptionalFiniteFloat = None
 
 
-class UptechH5V1(FiberIO):
+class UptechH5V1(H5ArrayMixin, FiberIO):
     """Support Uptech Sensing AS1000 HDF5 exports."""
 
     name = "Uptech_H5"
@@ -46,9 +43,3 @@ class UptechH5V1(FiberIO):
                 source=ArraySource(key=resource[_DATASET].name),
             )
         ]
-
-    def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
-    ) -> np.ndarray:
-        """Slice the ``Acquisition/StrainRate`` dataset directly."""
-        return slice_dataset(resource[_DATASET], ("time", "distance"), windows)

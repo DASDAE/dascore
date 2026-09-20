@@ -2,23 +2,19 @@
 
 from __future__ import annotations
 
-import numpy as np
-
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import ArraySource, FiberIO
-from dascore.io.utils import slice_dataset
+from dascore.io import ArraySource, FiberIO, H5ArrayMixin
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import (
     _get_cf_attrs,
     _get_cf_coords,
-    _get_cf_dims,
     _get_cf_version_str,
 )
 
 
-class DASHDF5(FiberIO):
+class DASHDF5(H5ArrayMixin, FiberIO):
     """IO Support for DASHDF5 which uses CF version 1.7."""
 
     name = "DASHDF5"
@@ -46,14 +42,3 @@ class DASHDF5(FiberIO):
                 source=ArraySource(key=resource["das"].name),
             )
         ]
-
-    def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
-    ) -> np.ndarray:
-        """
-        Slice the ``das`` dataset directly.
-
-        The dimension order is the one the dataset's shape implies, which
-        is what `scan` reports.
-        """
-        return slice_dataset(resource["das"], _get_cf_dims(resource), windows)
