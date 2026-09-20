@@ -27,7 +27,7 @@ from dascore.utils.downloader import fetch
 COORD_SHAPED_NAMES = (
     "channel_step",
     "pulse_len",
-    "sensor_physical_id",
+    "sensor_data_id",
     "gain_max",
     "noise_min",
     "probe_dims",

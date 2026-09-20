@@ -2494,7 +2494,7 @@ class Spool(NodeRepr, NamespaceOwner):
             # materialization over a column neither describes it by.
             # Coordinate def keys are representation artifacts too: a
             # residual-trimmed
-            # view cannot know its trimmed physical id without loading,
+            # view cannot know its trimmed `data_id` without loading,
             # and data values are never compared here anyway.
             drop = [
                 "source_path",

@@ -75,7 +75,7 @@ class _CommonCoordFields(TypedDict):
     coord_dims: str
     length: int | None
     units: str | None
-    physical_id: str | None
+    data_id: str | None
 
 
 class _ExactFields(TypedDict):
@@ -110,7 +110,7 @@ class CoordRecord:
     step_numerator: int | None = None
     step_denominator: int | None = None
     origin_offset: int | None = None
-    physical_id: str | None = None
+    data_id: str | None = None
     # 0 for the coordinate as a whole, n for its nth run (a link field)
     run_index: int = 0
 
@@ -119,20 +119,15 @@ class CoordRecord:
         """
         Deduplication key for the coord definition.
 
-        The CoordSummary physical id when available ("fp:" prefix; exact
-        value identity), otherwise a hash of the stored summary fields
-        ("sum:" prefix; lossless for the index but too weak for
-        value-identity claims). Name and dims are patch-level and
-        excluded. The unit spelling rides after "|" on the fp form:
-        physical ids simplify units before hashing, so one physical
-        coordinate spelled in metres and in feet hashes identically —
-        but the stored def rows carry spelling-dependent units and
-        envelopes, so deduplicating them together would let the first
-        spelling's row lie for the second.
+        The coordinate's data_id when available ("fp:" prefix; exact
+        value identity, which counts the unit spelling the patch wrote,
+        as the stored envelopes do), otherwise a hash of the stored
+        summary fields ("sum:" prefix; lossless for the index but too
+        weak for value-identity claims). Name and dims are patch-level
+        and excluded.
         """
-        if self.physical_id:
-            key = f"fp:{self.physical_id}"
-            return f"{key}|{self.units}" if self.units else key
+        if self.data_id:
+            return f"fp:{self.data_id}"
         fields = tuple(getattr(self, f) for f in _COORD_DEF_FIELDS)
         digest = hashlib.sha256(repr(fields).encode()).hexdigest()[:32]
         return f"sum:{digest}"
@@ -432,11 +427,11 @@ def coord_dtype_is_stateable(dtype: str | np.dtype | None) -> bool:
 
 def _coord_record(name: str, summary) -> CoordRecord | None:
     """Convert one CoordSummary into a CoordRecord."""
-    physical_id = getattr(summary, "physical_id", None)
-    if physical_id is None and getattr(summary, "is_range_like", False):
+    data_id = getattr(summary, "data_id", None)
+    if data_id is None and getattr(summary, "is_range_like", False):
         # A range summary contains its complete representation, so recover the
         # same exact identity a loaded CoordRange would have produced.
-        physical_id = summary.to_coord()._physical_id()
+        data_id = summary.to_coord().data_id
     # Stringify the pint Quantity once (a Quantity-keyed cache is unsafe —
     # 1 m == 100 cm with equal hashes but different strings). This is the
     # ORIGINAL unit, cleanly spelled: get_quantity_str drops the "1 " a
@@ -449,7 +444,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
         coord_dims=",".join(summary.dims),
         length=summary.len,
         units=units_str,
-        physical_id=physical_id,
+        data_id=data_id,
     )
     dtype = np.dtype(summary.dtype) if summary.dtype else None
     if dtype is None:
@@ -652,12 +647,12 @@ def summaries_to_records(
 # Record fields read straight off an index row of the same name. The
 # remaining fields need per-field handling: a coord's name/dims are
 # patch-level (they come from the link row, not the shared definition),
-# its hash is stored as "physical_id", and a patch's id/dims get
+# its hash is stored as "data_id", and a patch's id/dims get
 # normalized below.
 _COORD_DEF_FIELDS = tuple(
     f.name
     for f in fields(CoordRecord)
-    if f.name not in ("coord_name", "coord_dims", "physical_id", "run_index")
+    if f.name not in ("coord_name", "coord_dims", "data_id", "run_index")
 )
 _PATCH_ROW_FIELDS = tuple(
     f.name
@@ -700,7 +695,7 @@ def coord_record(link, cdef) -> CoordRecord:
         coord_name=link.coord_name,
         coord_dims=link.coord_dims,
         run_index=int(link.run_index),
-        physical_id=_py_scalar(cdef.physical_id),
+        data_id=_py_scalar(cdef.data_id),
         dtype=link.dtype,
         **{
             f: _py_scalar(getattr(cdef, f), f in _COORD_DEF_BOOLS)

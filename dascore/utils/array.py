@@ -30,6 +30,7 @@ from dascore.utils.identity import (
     DIGEST_SIZE,
     PatchMarker,
     ids_enabled,
+    operation_context,
     stamp,
     try_operation_id,
 )
@@ -98,7 +99,10 @@ def _clear_units_if_bool_dtype(patch):
     # Every ufunc and array function path reassembles a patch first.
     assert hasattr(patch, "dtype"), "can only clear the units of a patch"
     if array_namespace(patch.data).isdtype(patch.dtype, "bool"):
-        return patch.update_attrs(data_units=None)
+        # Part of the operation which made the booleans, which has already
+        # said what its result is.
+        with operation_context():
+            return patch.update_attrs(data_units=None)
     return patch
 
 
@@ -765,8 +769,7 @@ def _apply_binary_ufunc(
         },
     )
     attrs = stamp(attrs, members, operation or None)
-    new = patch.new(data=new_data, coords=coords, attrs=attrs)
-    return new
+    return patch.new(data=new_data, coords=coords, attrs=attrs)
 
 
 class _BoundPatchUFunc:
@@ -1058,7 +1061,8 @@ def _apply_array_func(func, *args, **kwargs):
         },
     )
     attrs = stamp(patch.attrs, [x.attrs for x in patches], operation or None)
-    patch = patch if attrs is patch.attrs else patch.new(attrs=attrs)
+    if attrs is not patch.attrs:
+        patch = patch.new(attrs=attrs)
     return _clear_units_if_bool_dtype(patch)
 
 

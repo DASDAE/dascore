@@ -522,9 +522,9 @@ class SQLiteIndexBackend:
         Ensure unique coord definitions exist; return def_key -> id.
 
         Coord summaries are deduplicated across patches: identical values
-        (by physical id, or by summary content when no physical id is
-        available) share one coord_defs row. Only physical-id-backed rows
-        are exposed as exact coordinate identity to merge planning.
+        (by data_id, or by summary content when no data_id is available)
+        share one coord_defs row. Only data_id-backed rows are exposed as
+        exact coordinate identity to merge planning.
         """
         keys = list(defs_needed)
         mapping: dict[str, int] = {}
@@ -537,12 +537,12 @@ class SQLiteIndexBackend:
         new_keys = [k for k in keys if k not in mapping]
         next_id = self._next_id("coord_defs", "coord_row")
         def_rows = []
-        # CoordRecord names every def column after id, key, and physical id
+        # CoordRecord names every def column after id, key, and data_id
         columns = CoordDefRow._fields[3:]
         for key in new_keys:
             c = defs_needed[key]
             values = (getattr(c, name) for name in columns)
-            def_rows.append((next_id, key, c.physical_id, *values))
+            def_rows.append((next_id, key, c.data_id, *values))
             mapping[key] = next_id
             next_id += 1
         self._bulk_insert("coord_defs", CoordDefRow._fields, def_rows)
@@ -1200,7 +1200,7 @@ class SQLiteIndexBackend:
             coords[out_col] = pd.Series(values, index=coords.index, dtype=object)
         # Summary-only definitions are useful for indexing/dedup but cannot
         # prove coordinate value identity for merge grouping.
-        coords["_key"] = coords["def_key"].where(coords["physical_id"].notna(), None)
+        coords["_key"] = coords["def_key"].where(coords["data_id"].notna(), None)
         return coords
 
     def _grids(self, def_keys=None) -> dict[str, tuple[int, ...]]:
@@ -1245,7 +1245,7 @@ class SQLiteIndexBackend:
             return out
         ids = out["patch_row"].tolist()
         link_sql = (
-            "SELECT pc.patch_row, pc.coord_name, cd.def_key, cd.physical_id, "
+            "SELECT pc.patch_row, pc.coord_name, cd.def_key, cd.data_id, "
             "cd.value_kind, pc.dtype, cd.is_relative, cd.units, "
             "cd.min_float, cd.max_float, cd.step_float, "
             "cd.min_int, cd.max_int, cd.step_int, cd.min_str, cd.max_str "
@@ -1417,7 +1417,7 @@ class SQLiteIndexBackend:
         ``_env_step``; no row for a patch means it states no runs.
         """
         sql = (
-            "SELECT pc.patch_row, pc.run_index, cd.def_key, cd.physical_id, "
+            "SELECT pc.patch_row, pc.run_index, cd.def_key, cd.data_id, "
             "cd.value_kind, cd.is_relative, "
             "cd.min_float, cd.max_float, cd.step_float, "
             "cd.min_int, cd.max_int, cd.step_int, cd.min_str, cd.max_str "
@@ -1458,7 +1458,7 @@ class SQLiteIndexBackend:
         fields = ", ".join(f"cd.{f}" for f in _COORD_DEF_FIELDS if f != "dtype")
         sql = (
             "SELECT pc.patch_row, pc.coord_name, pc.coord_dims, pc.run_index, "
-            f"pc.dtype, cd.physical_id, {fields} FROM patch_coords pc "
+            f"pc.dtype, cd.data_id, {fields} FROM patch_coords pc "
             "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
             "WHERE pc.run_index > 0 "
             "AND pc.patch_row IN (SELECT value FROM json_each(?)) "

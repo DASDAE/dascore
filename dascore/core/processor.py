@@ -56,9 +56,14 @@ from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel, model_values
 from dascore.utils.attrs import _values_equal
 from dascore.utils.identity import (
+    _without_ids,
     callable_name,
     extract_patches,
     ids_enabled,
+    narrowed_data_id,
+    new_id,
+    operation_context,
+    result_ids,
     stamp,
     warn_random_id,
 )
@@ -357,7 +362,21 @@ class PatchProcessor(DascoreBaseModel):
             # Spent on this one call, which is the one a bypass wrapped: an
             # operation running another inside itself records that one.
             _RECORD.set(True)
-        return self._run(patch, record=record)
+        # The body is an operation, which names itself; the replacements it
+        # makes on the way do not.
+        with operation_context():
+            out = self._run(patch, record=record)
+            return out if record else self._unrecorded(patch, out)
+
+    def _unrecorded(self, patch, out):
+        """Return the result of a bypass, which records neither history nor ids."""
+        # Nothing was written down, so nothing names the array; what it came
+        # from still stands. The patch itself, handed back, is what it was.
+        if out is patch or not isinstance(out, dc.Patch):
+            return out
+        if not ids_enabled():
+            return out.update(attrs=_without_ids(out.attrs))
+        return out.update(attrs=out.attrs.update(data_id=new_id()))
 
     def _run(self, patch: dc.PatchMeta, record: bool) -> dc.PatchMeta:
         """Run the operation; `record=False` writes no history or ids."""
@@ -376,7 +395,7 @@ class PatchProcessor(DascoreBaseModel):
             # metadata has none to show.
             unchanged = patch._data if isinstance(patch, dc.Patch) else None
             out = self.reconcile(unchanged, out)
-            attrs = out.attrs if not record else self._record(patch, out.attrs)
+            attrs = out.attrs if not record else self._record(patch, out)
             # The data are whatever they were: a patch puts its own back,
             # and metadata has none to put.
             return patch._reattach(out, attrs)
@@ -391,7 +410,7 @@ class PatchProcessor(DascoreBaseModel):
             return self._unchanged(patch, record)
         out = self.reconcile(result, out)
         if record:
-            out = out.update(attrs=self._record(patch, out.attrs))
+            out = out.update(attrs=self._record(patch, out))
         new = out.to_patch(result)
         # Only an operation which set a source of its own says it loads the result.
         if out._source is not meta._source:
@@ -406,8 +425,9 @@ class PatchProcessor(DascoreBaseModel):
             return patch
         return patch.update_attrs(data_type=self.data_type)
 
-    def _record(self, patch: dc.PatchMeta, attrs: PatchAttrs) -> PatchAttrs:
+    def _record(self, patch: dc.PatchMeta, out: dc.PatchMeta) -> PatchAttrs:
         """Return attrs carrying the data_type, history and ids of this call."""
+        attrs = out.attrs
         if self.data_type is not None:
             attrs = attrs.update(data_type=self.data_type)
         name = self.name or type(self).__name__
@@ -425,7 +445,14 @@ class PatchProcessor(DascoreBaseModel):
             # The patches it holds still say where the data came from.
             operation, others = None, self._inputs()[1]
         members = [patch.attrs, *(x.attrs for x in others)]
-        return stamp(attrs, members, operation)
+        # Only a source the operation set itself says the result is still
+        # something that source loads; such a narrowing names a window of
+        # the same array rather than something derived from it.
+        after = out._source if out._source is not patch._source else None
+        window = narrowed_data_id(
+            patch.attrs, patch._source, after, patch.coords, out.coords
+        )
+        return attrs.update(**result_ids(members, operation, data_id=window))
 
 
 # Names a subclass field may not take: the base's own settings and methods.

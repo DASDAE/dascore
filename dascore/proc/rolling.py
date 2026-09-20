@@ -12,6 +12,7 @@ import dascore as dc
 from dascore.constants import samples_arg_description
 from dascore.exceptions import ParameterError
 from dascore.utils.docs import compose_docstring
+from dascore.utils.identity import operation_context, stamp, try_operation_id
 from dascore.utils.patch import (
     _maybe_add_history_str,
 )
@@ -80,11 +81,25 @@ class _PatchRollerInfo:
             hist_str = f"{self.roll_hist}.{func_or_str}()"
         return _maybe_add_history_str(self.patch.attrs, hist_str)
 
-    def _new_patch(self, data, func_or_str):
+    def _new_patch(self, data, func_or_str, args=(), kwargs=None):
         """Create the output patch from rolled data."""
         coords = self.get_coords()
         attrs = self._get_attrs_with_apply_history(func_or_str)
-        return self.patch.update(data=data, coords=coords, attrs=attrs)
+        # The call says what it did -- its history string is written right
+        # beside it -- so the result is named rather than left to the
+        # mutation boundary, which would mint a random id for it.
+        params = {
+            "dim": self.dim,
+            "window": self.window,
+            "step": self.step,
+            "center": self.center,
+            "function": func_or_str,
+            "args": list(args),
+            "kwargs": dict(kwargs or {}),
+        }
+        attrs = stamp(attrs, [self.patch.attrs], try_operation_id("Rolling", params))
+        with operation_context():
+            return self.patch.update(data=data, coords=coords, attrs=attrs)
 
 
 class _NumpyPatchRoller(_PatchRollerInfo):
@@ -148,7 +163,7 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         trimmed_slide_view = slide_view[tuple(step_slice)]
         raw = function(trimmed_slide_view, *args, axis=-1, **kwargs)
         out = self._pad_roll_array(np.asarray(raw, dtype=np.float64))
-        return self._new_patch(out, function)
+        return self._new_patch(out, function, args, kwargs)
 
     def mean(self):
         """Apply mean to moving window."""
@@ -198,19 +213,19 @@ class _PandasPatchRoller(_PatchRollerInfo):
         )
         return roll
 
-    def _repack_patch(self, df, func_or_str):
+    def _repack_patch(self, df, func_or_str, args=(), kwargs=None):
         """Repack patch into dataframe."""
         data = df.values if not self.axis else df.T.values
         # get rid of extra dims if original data doesn't have them.
         if len(data.shape) != len(self.patch.data.shape):
             data = np.squeeze(data)
-        return self._new_patch(data, func_or_str)
+        return self._new_patch(data, func_or_str, args, kwargs)
 
     def _call_rolling_func(self, name, *args, **kwargs):
         """Helper function for calling a rolling function."""
         rolling = self._get_rolling()
         df = getattr(rolling, name)(*args, **kwargs)
-        return self._repack_patch(df, name)
+        return self._repack_patch(df, name, args, kwargs)
 
     @compose_docstring(apply_description=rolling_apply_description)
     def apply(self, function, *args, **kwargs):
@@ -218,7 +233,7 @@ class _PandasPatchRoller(_PatchRollerInfo):
         {apply_description}
         """
         df = self._get_rolling().apply(function, args=args, kwargs=kwargs)
-        return self._repack_patch(df, function)
+        return self._repack_patch(df, function, args, kwargs)
 
     def mean(self):
         """Apply mean."""

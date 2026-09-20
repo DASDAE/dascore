@@ -11,7 +11,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
-from dascore.io.core import _stamp_source_ids
+from dascore.io.core import _selected_read_attrs, _stamp_source_ids
 from dascore.io.utils import slice_dataset, windows_to_slices
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.io import (
@@ -160,5 +160,19 @@ class SintelaProtobufV1(FiberIO):
                 return dc.spool([])
             patches = [dc.Patch(data=data, coords=coords, attrs=attrs)]
             if (source := kwargs.get("_provenance_source")) is not None:
-                patches = _stamp_source_ids(patches, self.name, self.version, source)
+                patches = _stamp_source_ids(
+                    patches, self.name, self.version, source, snap=snap
+                )
+                if selectors:
+                    # This reader never describes a loadable source, so a
+                    # trim here names what the same select would derive.
+                    attrs = _selected_read_attrs(
+                        patches[0].attrs,
+                        None,
+                        None,
+                        selectors,
+                        relative=kwargs.get("relative", False),
+                        samples=samples,
+                    )
+                    patches = [patches[0].update(attrs=attrs)]
             return dc.spool(patches)

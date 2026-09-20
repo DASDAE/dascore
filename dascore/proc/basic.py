@@ -24,6 +24,7 @@ from dascore.core.processor import PatchProcessor
 from dascore.core.source import ArraySource
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
+from dascore.models.base import values_equal
 from dascore.units import get_quantity
 from dascore.utils.array import _apply_binary_ufunc
 from dascore.utils.array_api import (
@@ -37,6 +38,15 @@ from dascore.utils.array_api import (
     warn_numpy_fallback,
 )
 from dascore.utils.docs import compose_docstring
+from dascore.utils.identity import (
+    _ID_FIELDS,
+    _without_ids,
+    ids_enabled,
+    inside_operation,
+    new_id,
+    stamp,
+    try_operation_id,
+)
 from dascore.utils.misc import _get_nullish
 from dascore.utils.moving import move_max
 from dascore.utils.patch import (
@@ -46,6 +56,9 @@ from dascore.utils.patch import (
 )
 from dascore.utils.time import dtype_time_like
 from dascore.utils.window import resolve_window
+
+# An attr a patch does not state at all, which no value can equal.
+_MISSING = object()
 
 # The dtypes which promise, without the values being looked at, that there
 # is no imaginary part: bool, signed and unsigned integers, and floats.
@@ -88,6 +101,78 @@ def _as_float(data):
     return xp.astype(data, xp.float64)
 
 
+def _data_id_given(patch, attrs) -> bool:
+    """Whether the caller installed a data id of its own rather than the patch's."""
+    return getattr(attrs, "data_id", "") != getattr(patch.attrs, "data_id", "")
+
+
+# What an id does not speak for: which data it is, and how it was reached.
+# Never a parameter of the change either: two routes to one array are one id.
+_UNSTAMPED = {**dict.fromkeys(_ID_FIELDS, ""), "history": ()}
+
+
+def _same_coords(coords, other) -> bool:
+    """
+    Whether two coord managers hold the same coordinates, laid out alike.
+
+    `CoordManager.__eq__` compares values approximately and ignores the
+    order of the dims; which array a patch is can afford neither.
+    """
+    if coords is other:
+        return True
+    if coords.dims != other.dims or coords.dim_map != other.dim_map:
+        return False
+    first, second = coords.coord_map, other.coord_map
+    return all(first[name].data_id == second[name].data_id for name in first)
+
+
+def _named_mutation(patch, attrs, name: str, params: Mapping, changed: bool):
+    """
+    Return the ids a metadata change made outside an operation leaves behind.
+
+    Inside one the operation stamps its own result, a call which changed
+    nothing keeps what it was given, and a data id the caller stated is its
+    own. Metadata, which describes data it does not hold, is left to the
+    routes which build it (the readers and the index).
+    """
+    if not changed or inside_operation() or not hasattr(patch, "_data"):
+        return attrs
+    if not ids_enabled():
+        # A changed patch claims no id rather than the one it came from.
+        return _without_ids(attrs)
+    if _data_id_given(patch, attrs):
+        return attrs
+    # The attrs being installed, not the patch's, so an origin the call
+    # states is the result's origin.
+    return stamp(attrs, [attrs], try_operation_id(name, params))
+
+
+def _replacement_attrs(patch, data, coords, attrs, dtype):
+    """Return the ids `update` leaves behind when it is not inside an operation."""
+    if inside_operation() or not hasattr(patch, "_data"):
+        return attrs
+    on = ids_enabled()
+    # A caller which named the array has said what this is. Checked before
+    # anything is compared: an operation stamps its result and installs it
+    # through here, and it has just worked out that very answer.
+    if on and _data_id_given(patch, attrs):
+        return attrs
+    replaced_data = data is not None and data is not patch._data
+    if replaced_data or (dtype is not None and dtype != patch.dtype):
+        if not on:
+            return _without_ids(attrs)
+        # An array nothing can be derived for; where it came from still stands.
+        return attrs.update(data_id=new_id())
+    params = {}
+    if not _same_coords(coords, patch.coords):
+        params["coords"] = coords
+    if attrs is not patch.attrs:
+        stated = attrs.model_copy(update=_UNSTAMPED)
+        if stated != patch.attrs.model_copy(update=_UNSTAMPED):
+            params["attrs"] = stated
+    return _named_mutation(patch, attrs, "update", params, bool(params))
+
+
 def set_dims(self: PatchType, **kwargs: str) -> PatchType:
     """
     Set dimension to non-dimensional coordinate.
@@ -114,7 +199,9 @@ def set_dims(self: PatchType, **kwargs: str) -> PatchType:
     >>> assert "my_coord" in out.dims
     """
     cm = self.coords.set_dims(**kwargs)
-    return self.new(coords=cm)
+    changed = not _same_coords(cm, self.coords)
+    attrs = _named_mutation(self, self.attrs, "set_dims", kwargs, changed)
+    return self.new(coords=cm, attrs=attrs)
 
 
 def pipe(self: PatchType, func: Callable[..., PatchType], *args, **kwargs) -> PatchType:
@@ -174,9 +261,22 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     >>> # Add new custom attributes
     >>> with_custom = patch.update_attrs(processing_date="2024-01-01")
     """
-    new_attrs = self.attrs.model_dump(exclude_unset=True)
-    new_attrs.update(attrs)
-    return self.new(attrs=PatchAttrs.from_dict(new_attrs))
+    stated = self.attrs.model_dump(exclude_unset=True)
+    out_attrs = PatchAttrs.from_dict({**stated, **attrs})
+    if not inside_operation():
+        # Only the keys the caller wrote, each against what the patch says
+        # now: restating a value is not a change, and comparing whole
+        # models costs more than the call itself.
+        # As validated, so that "m" and a unit object are one spelling.
+        params = {
+            key: out_attrs.get(key, _MISSING) for key in attrs if key not in _UNSTAMPED
+        }
+        changed = any(
+            not values_equal(self.attrs.get(key, _MISSING), value)
+            for key, value in params.items()
+        )
+        out_attrs = _named_mutation(self, out_attrs, "update_attrs", params, changed)
+    return self.new(attrs=out_attrs)
 
 
 # Which data a patch is and what was done to it are not part of what it
@@ -292,6 +392,7 @@ def update(
         attrs = PatchAttrs.from_dict(attrs)
     else:
         attrs = self.attrs
+    attrs = _replacement_attrs(self, data, coords, attrs, dtype)
     # Each kind keeps what it is: `drop_data` and `to_patch`, not a
     # keyword here, are how data come and go.
     out = self._new_like(data, coords, attrs, dtype)

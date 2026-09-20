@@ -30,6 +30,7 @@ from dascore.models import (
 )
 from dascore.units import Quantity
 from dascore.utils import models as models_shim
+from dascore.utils.misc import cached_method
 
 
 class _TestModel(DascoreBaseModel):
@@ -125,6 +126,49 @@ class _NullModel(DascoreBaseModel):
     duration: TimeDelta64 = np.timedelta64("NaT", "ns")
     number: float = np.nan
     mapping: FrozenDictType[str, float] = Field(default_factory=dict)
+
+
+class TestModelCopy:
+    """A copy must not answer for the model it was copied from."""
+
+    class _Cached(DascoreBaseModel):
+        """A model with one cached method."""
+
+        number: int = 1
+
+        @cached_method
+        def doubled(self) -> int:
+            """Return twice the number."""
+            return self.number * 2
+
+    def test_update_drops_cached_values(self):
+        """An updated field makes every cached value wrong."""
+        model = self._Cached()
+        assert model.doubled() == 2
+        updated = model.model_copy(update={"number": 5})
+        assert updated.doubled() == 10
+        # ... and the original keeps its own.
+        assert model.doubled() == 2
+
+    def test_plain_copy_keeps_its_cache(self):
+        """Nothing changed, so nothing cached is stale."""
+        model = self._Cached()
+        model.doubled()
+        assert model.model_copy()._cache == model._cache
+
+    def test_the_old_cache_is_let_go_of(self):
+        """A shadowed cache is still held, which is what dropping it is for."""
+        model = self._Cached()
+        model.doubled()
+        held = dict(model._cache)
+        assert held
+        updated = model.model_copy(update={"number": 5})
+        # Nothing the copy holds, through pydantic or beside it, is the old one.
+        assert updated._cache == {}
+        assert updated.__pydantic_private__["_cache"] == {}
+        assert "_cache" not in updated.__dict__
+        # ... and clearing the copy's left the original's alone.
+        assert model._cache == held
 
 
 class TestModelHash:

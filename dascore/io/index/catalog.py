@@ -52,7 +52,6 @@ from dascore.utils.misc import (
     express_range_for_coord,
     is_range,
 )
-from dascore.utils.patch import record_call
 from dascore.utils.paths import is_memory_uri
 
 # Directory archives present in per-patch time order (source ordinals
@@ -111,22 +110,18 @@ def _row_source_patch_key(row: Mapping) -> str:
     return normalize_source_patch_key(row.get("source_patch_key"))
 
 
-def apply_exact_residuals(patch: dc.Patch, residuals, hinted=()) -> dc.Patch:
+def apply_exact_residuals(patch: dc.Patch, residuals) -> dc.Patch:
     """
     Apply a view's exact residual selections to a loaded patch.
 
     Shared by catalog row resolution and plan-member loading so the
     two-stage select contract has exactly one implementation.
 
-    ``hinted`` runs parallel to ``residuals``, naming per residual the
-    coordinates whose bounds went to the reader and cut this row. Such a
-    selection leaves its `select` nothing to do, and a call which
-    changes nothing records nothing, so it is recorded here instead and
-    a trimmed patch does not state the untrimmed patch's id. A shorter
-    sequence records nothing for the residuals past its end, which is
-    what a caller reading no hints out of the row wants.
+    A bound pushed into the reader leaves its `select` here nothing to
+    do, and nothing to record: the reader already gave the loaded patch
+    the id of the window it read.
     """
-    for index, (coords, samples, relative) in enumerate(residuals):
+    for coords, samples, relative in residuals:
         coord_map = patch.coords.coord_map
         usable = {
             k: express_range_for_coord(v, coord_map[k])
@@ -139,11 +134,7 @@ def apply_exact_residuals(patch: dc.Patch, residuals, hinted=()) -> dc.Patch:
                 called["samples"] = True
             if relative:
                 called["relative"] = True
-            out = patch.select(**called)
-            cut = hinted[index] if index < len(hinted) else ()
-            if out is patch and any(name in cut for name in usable):
-                out = record_call(out, patch, dc.Patch.select, (), called)
-            patch = out
+            patch = patch.select(**called)
     return patch
 
 
@@ -478,10 +469,9 @@ def _forget_what_a_trim_invalidates(df: pd.DataFrame, residuals=()) -> pd.DataFr
 
     A trimmed row describes fewer samples than its source patch holds,
     and how many is known only once the trim is applied, so it states no
-    size rather than the source's. `data_id` goes the same way for
-    the same reason: a trim is an operation, the patch which comes back
-    carries the id that operation leads to, and the stored one names the
-    patch on disk. Attribute queries still match the stored source id;
+    size rather than the source's. `data_id` goes the same way: the
+    loaded patch names the window it read, and the stored id names the
+    whole patch on disk. Attribute queries still match the stored source id;
     clearing this presented value does not change SQL candidacy.
 
     `origin_id` stays. A trim does not change which stored data this came
@@ -1277,11 +1267,10 @@ class PatchCatalog:
         coords = self._source_coords(row, set(trim_hint))
         if self._residuals:
             # A coordinate the row cannot describe cannot say what a
-            # reader did to it; it replays on the patch, which records it.
+            # reader did to it; it replays on the loaded patch instead.
             trim_hint = {k: v for k, v in trim_hint.items() if k in coords}
         patch = self.resolver.resolve(row, **trim_hint)
-        hinted = self._hinted_per_residual(coords)
-        return apply_exact_residuals(patch, self._residuals, hinted=hinted)
+        return apply_exact_residuals(patch, self._residuals)
 
     def _source_coords(self, row: Mapping, names: set[str]) -> dict:
         """Rebuild each hintable coordinate as the row had it untrimmed."""
@@ -1296,34 +1285,6 @@ class PatchCatalog:
             if coord is not None:
                 out[name] = coord
         return out
-
-    def _hinted_per_residual(self, coords: dict):
-        """
-        Per residual, which of its coordinates the reader already cut.
-
-        ``coords`` holds each hinted coordinate as it was before
-        anything trimmed it, so the selections are replayed on the
-        coordinate itself: whichever shortens it is one the reader
-        carried out, which the `select` on the patch will not record.
-        Running the coordinate's own `select` is what makes this agree
-        with the patch about every edge -- a bound between two samples,
-        a coordinate stored at lower precision -- rather than being a
-        second implementation of the same arithmetic.
-        """
-        if not self._residuals:
-            return ()
-        out = []
-        for selection, samples, relative in self._residuals:
-            names = set()
-            for name, value in selection.items():
-                if (coord := coords.get(name)) is None:
-                    continue
-                new, _ = coord.select(value, samples=samples, relative=relative)
-                if len(new) != len(coord):
-                    names.add(name)
-                coords[name] = new
-            out.append(names)
-        return tuple(out)
 
     def __iter__(self):
         """

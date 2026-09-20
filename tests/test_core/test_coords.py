@@ -417,7 +417,7 @@ class TestCoordSummary:
         """Ensure all coords can be converted to a summary."""
         out = coord.to_summary()
         assert isinstance(out, CoordSummary)
-        assert out.physical_id == coord._physical_id()
+        assert out.data_id == coord.data_id
 
     def test_coord_range_round_trip(self, coord):
         """Coord ranges should round-trip to summaries and back."""
@@ -489,13 +489,11 @@ class TestCoordSummary:
 
     def test_json_dump(self):
         """JSON dumps should preserve coord summary fields."""
-        summary = CoordSummary(
-            min=1.0, max=2.0, step=0.5, units="m", physical_id="abc123"
-        )
+        summary = CoordSummary(min=1.0, max=2.0, step=0.5, units="m", data_id="abc123")
         dumped = summary.model_dump(mode="json")
         assert dumped["units"] == "m"
         assert dumped["min"] == 1.0
-        assert dumped["physical_id"] == "abc123"
+        assert dumped["data_id"] == "abc123"
 
 
 class TestGetSliceTuple:
@@ -546,8 +544,8 @@ class TestGetSliceTuple:
         assert out_sli == (None, None) or out_sli == (0, len(coord))
 
 
-class TestCoordPhysicalId:
-    """Tests for coordinate physical ids."""
+class TestCoordDataId:
+    """Tests for coordinate data ids."""
 
     def test_hash_scalar_none(self):
         """The helper should preserve an explicit None sentinel."""
@@ -555,11 +553,11 @@ class TestCoordPhysicalId:
         assert coord._hash_scalar(None) == ("none", None)
 
     def test_spelling_of_a_scalar_is_not_its_identity(self):
-        """Equal coordinates share a physical id however they were written."""
+        """Equal coordinates share an id however they were written."""
         as_ints = get_coord(start=0, stop=10, step=1.0)
         as_floats = get_coord(start=0.0, stop=10.0, step=1.0)
         assert as_ints == as_floats
-        assert as_ints._physical_id() == as_floats._physical_id()
+        assert as_ints.data_id == as_floats.data_id
 
     def test_time_precision_is_not_its_identity(self):
         """A step of four milliseconds is four million nanoseconds."""
@@ -575,7 +573,7 @@ class TestCoordPhysicalId:
             step=np.timedelta64(4_000_000, "ns"),
         )
         assert coarse == fine
-        assert coarse._physical_id() == fine._physical_id()
+        assert coarse.data_id == fine.data_id
 
     def test_a_summary_round_trip_keeps_the_identity(self):
         """Describing a coordinate and rebuilding it is the same coordinate."""
@@ -585,7 +583,7 @@ class TestCoordPhysicalId:
             stop=t0 + np.timedelta64(400, "ms"),
             step=np.timedelta64(4, "ms"),
         )
-        assert coord.to_summary().to_coord()._physical_id() == coord._physical_id()
+        assert coord.to_summary().to_coord().data_id == coord.data_id
 
     def test_metadata_which_does_not_fit_its_dtype_still_differs(self):
         """Conforming is a change of spelling, never a loss of value."""
@@ -594,7 +592,7 @@ class TestCoordPhysicalId:
             shape=(10,), dtype="int64", start=1.2, stop=11.2, step=1.0
         )
         assert first != second
-        assert first._physical_id() != second._physical_id()
+        assert first.data_id != second.data_id
 
     def test_finer_precision_than_nanoseconds_still_differs(self):
         """Conforming a scalar must not round away what a coordinate keeps."""
@@ -604,58 +602,55 @@ class TestCoordPhysicalId:
         apart = start + np.timedelta64(1, "ps")
         second = get_coord(start=apart, stop=apart + step * 100, step=step)
         assert first != second
-        assert first._physical_id() != second._physical_id()
+        assert first.data_id != second.data_id
 
     def test_different_values_still_differ(self):
         """Canonicalizing the spelling does not blur real differences."""
         first = get_coord(start=0.0, stop=10.0, step=1.0)
-        assert (
-            first._physical_id()
-            != get_coord(start=0.0, stop=20.0, step=1.0)._physical_id()
-        )
-        assert (
-            first._physical_id()
-            != get_coord(start=1.0, stop=11.0, step=1.0)._physical_id()
-        )
-        assert (
-            first._physical_id()
-            != get_coord(start=0.0, stop=10.0, step=0.5)._physical_id()
-        )
+        assert first.data_id != get_coord(start=0.0, stop=20.0, step=1.0).data_id
+        assert first.data_id != get_coord(start=1.0, stop=11.0, step=1.0).data_id
+        assert first.data_id != get_coord(start=0.0, stop=10.0, step=0.5).data_id
 
-    def test_range_equivalent_units_same_physical_id(self):
-        """Equivalent range coords share a physical id after normalization."""
+    def test_range_unit_spelling_is_part_of_the_id(self):
+        """One length spelled two ways is two ids: they select differently."""
+        # The same numbers throughout, so only the spelling can decide.
         coord_1 = get_coord(start=0, stop=10, step=1, units="m")
-        coord_2 = get_coord(start=0, stop=1000, step=100, units="cm")
-        assert coord_1._physical_id() == coord_2._physical_id()
+        coord_2 = get_coord(start=0, stop=10, step=1, units="km")
+        bare = get_coord(start=0, stop=10, step=1)
+        assert len({coord_1.data_id, coord_2.data_id, bare.data_id}) == 3
+        same = get_coord(start=0, stop=10, step=1, units="m")
+        assert coord_1.data_id == same.data_id
 
-    def test_nearby_range_coords_do_not_share_physical_id(self):
+    def test_nearby_range_coords_do_not_share_data_id(self):
         """Range-like coords remain exact because equality for them is exact."""
         coord_1 = get_coord(start=0.0, stop=10.0, step=1.0, units="m")
         coord_2 = get_coord(start=1e-10, stop=10.0 + 1e-10, step=1.0, units="m")
         assert coord_1 != coord_2
-        assert coord_1._physical_id() != coord_2._physical_id()
+        assert coord_1.data_id != coord_2.data_id
 
-    def test_array_equivalent_units_same_physical_id(self):
-        """Equivalent array coords share a physical id after normalization."""
-        coord_1 = get_coord(data=np.arange(5.0), units="m")
-        coord_2 = get_coord(data=np.arange(5.0) * 100, units="cm")
-        assert coord_1._physical_id() == coord_2._physical_id()
+    def test_array_unit_spelling_is_part_of_the_id(self):
+        """Array coords are hashed in the units they are written in."""
+        values = np.arange(5.0)
+        coord_1 = get_coord(data=values, units="m")
+        coord_2 = get_coord(data=values, units="km")
+        bare = get_coord(data=values)
+        assert len({coord_1.data_id, coord_2.data_id, bare.data_id}) == 3
 
-    def test_approx_equal_float_array_coords_can_have_different_physical_id(self):
+    def test_approx_equal_float_array_coords_can_have_different_data_id(self):
         """Fingerprints can be stricter than equality for inexact float arrays."""
         coord_1 = get_coord(data=np.array([1.0, 2.0, 4.0]))
         coord_2 = get_coord(data=np.array([1.0, 2.0 + 1e-10, 4.0]))
         assert coord_1 == coord_2
-        assert coord_1._physical_id() != coord_2._physical_id()
+        assert coord_1.data_id != coord_2.data_id
 
-    def test_string_coord_physical_id_equal(self, string_coord):
-        """Equal string coords should share a physical id."""
+    def test_string_coord_data_id_equal(self, string_coord):
+        """Equal string coords should share an id."""
         other = get_coord(data=string_coord.values.copy())
         assert other == string_coord
-        assert other._physical_id() == string_coord._physical_id()
+        assert other.data_id == string_coord.data_id
 
-    def test_partial_coord_physical_id_respects_metadata(self):
-        """Partial coord physical ids must include scalar metadata."""
+    def test_partial_coord_data_id_respects_metadata(self):
+        """Partial coord ids must include scalar metadata."""
         coord_1 = CoordPartial(
             shape=(3,), start=1, stop=4, step=1, dtype=np.dtype("int64")
         )
@@ -663,19 +658,17 @@ class TestCoordPhysicalId:
             shape=(3,), start=2, stop=5, step=1, dtype=np.dtype("int64")
         )
         assert coord_1 != coord_2
-        assert coord_1._physical_id() != coord_2._physical_id()
+        assert coord_1.data_id != coord_2.data_id
 
-    def test_partial_equivalent_units_same_physical_id(self):
-        """Equivalent partial coords share a physical id after normalization."""
-        coord_1 = CoordPartial(
-            shape=(3,), start=1.0, stop=4.0, step=1.0, units="m", dtype="float64"
-        )
-        coord_2 = CoordPartial(
-            shape=(3,), start=100.0, stop=400.0, step=100.0, units="cm", dtype="float64"
-        )
-        assert coord_1._physical_id() == coord_2._physical_id()
+    def test_partial_unit_spelling_is_part_of_the_id(self):
+        """Partial coords are hashed in the units they state."""
+        numbers = {"shape": (3,), "start": 1.0, "stop": 4.0, "step": 1.0}
+        coord_1 = CoordPartial(**numbers, units="m", dtype="float64")
+        coord_2 = CoordPartial(**numbers, units="km", dtype="float64")
+        bare = CoordPartial(**numbers, dtype="float64")
+        assert len({coord_1.data_id, coord_2.data_id, bare.data_id}) == 3
 
-    def test_nearby_partial_coords_do_not_share_physical_id(self):
+    def test_nearby_partial_coords_do_not_share_data_id(self):
         """Partial coords remain exact because equality for them is exact."""
         coord_1 = CoordPartial(
             shape=(3,), start=1.0, stop=4.0, step=1.0, units="m", dtype="float64"
@@ -689,7 +682,7 @@ class TestCoordPhysicalId:
             dtype="float64",
         )
         assert coord_1 != coord_2
-        assert coord_1._physical_id() != coord_2._physical_id()
+        assert coord_1.data_id != coord_2.data_id
 
     def test_partial_convert_units_preserves_null_scalars(self):
         """Null partial metadata should not be passed through conversion."""
@@ -732,15 +725,22 @@ class TestCoordPhysicalId:
         assert out.stop == pytest.approx(0.004)
         assert out.step == pytest.approx(0.001)
 
-    def test_equal_coords_share_physical_id(self, coord):
-        """Reconstructed equal coords should share a physical id."""
+    def test_a_copy_does_not_keep_the_id_it_came_from(self):
+        """model_copy skips validation, so a cached id must not survive it."""
+        coord = get_coord(start=0, stop=10, step=1, units="m")
+        assert len(coord.data_id) == 32
+        copied = coord.model_copy(update={"units": get_quantity("ft")})
+        assert copied.data_id == get_coord(start=0, stop=10, step=1, units="ft").data_id
+
+    def test_equal_coords_share_data_id(self, coord):
+        """Reconstructed equal coords should share an id."""
         payload = coord.model_dump()
         if "values" in payload:
             payload["values"] = coord.values.copy()
         other = get_coord(**payload)
         assert other is not coord
         assert other == coord
-        assert other._physical_id() == coord._physical_id()
+        assert other.data_id == coord.data_id
 
     def test_coords_are_explicitly_unhashable(self, coord):
         """Coords should not expose Python hash semantics for identity/content."""

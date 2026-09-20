@@ -2109,9 +2109,7 @@ def build_concat_plan(
             # on it
             keys = list(data.get(key_col, pd.Series([None] * n_out, dtype=object)))
             keys = [
-                f"fp:{dc.core.coords.get_coord(shape=(int(s),))._physical_id()}"
-                if n
-                else k
+                f"fp:{dc.core.coords.get_coord(shape=(int(s),)).data_id}" if n else k
                 for k, n, s in zip(keys, new_dim, sizes)
             ]
             data[key_col] = pd.Series(keys, dtype=object)
@@ -2119,7 +2117,7 @@ def build_concat_plan(
             # a dimension the members carry without values is resized too,
             # and the relation says nothing about how long it comes out;
             # what the members are is the best identity available, and it
-            # is not a physical id claim about values
+            # is not a claim about values
             keys = list(data.get(key_col, pd.Series([None] * n_out, dtype=object)))
             member_keys = _member_key_digests(sorted_df, codes, name)
             keys = [

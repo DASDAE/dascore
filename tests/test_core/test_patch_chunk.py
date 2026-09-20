@@ -1037,6 +1037,41 @@ class TestMixedUnitChunk:
         assert str(out[0].get_coord("distance").units) == "1 m"
 
 
+class TestMixedUnitSpellings:
+    """One length spelled two ways is two coordinates to the planner."""
+
+    @pytest.fixture(scope="class")
+    def mixed_patches(self, random_patch):
+        """Two time-contiguous patches, distance in metres and in cm."""
+        coord = random_patch.get_coord("time")
+        later = random_patch.update_coords(time_min=coord.max() + coord.step)
+        distance = random_patch.get_coord("distance")
+        metres = random_patch.update_coords(distance=distance.set_units("m"))
+        centimetres = later.update_coords(
+            distance=dc.get_coord(
+                start=distance.min() * 100,
+                step=distance.step * 100,
+                shape=distance.shape,
+                units="cm",
+            )
+        )
+        return metres, centimetres
+
+    def test_memory_spool_does_not_merge(self, mixed_patches):
+        """Merging them would give one of the two spellings for both."""
+        out = dc.spool(list(mixed_patches)).chunk(time=None)
+        assert len(out) == 2
+
+    def test_indexed_spool_does_not_merge(self, mixed_patches, tmp_path_factory):
+        """The stored def keys keep the spellings apart, as the envelopes are."""
+        path = tmp_path_factory.mktemp("mixed_units")
+        for num, patch in enumerate(mixed_patches):
+            dc.write(patch, path / f"{num}.h5", "dasdae")
+        spool = dc.spool(path).update()
+        assert spool._catalog.to_df()["_distance_def_key"].nunique() == 2
+        assert len(spool.chunk(time=None)) == 2
+
+
 class TestNonSIUnitTrim:
     """Plan trims speak the coordinate's own units."""
 
@@ -2240,7 +2275,7 @@ class TestChunkFromIndex:
             def read(row):
                 return dc.read(tmp_path / row["source_path"])[0]
 
-            # Exercise the two-file assembly independently of physical id grouping.
+            # Exercise the two-file assembly independently of coordinate-id grouping.
             assembler = PatchAssembler(
                 load_patch=read,
                 load_array=lambda row: read(row).data,

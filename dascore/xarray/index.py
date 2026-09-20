@@ -90,7 +90,7 @@ def _same_labels(first: BaseCoord, second: BaseCoord) -> bool:
         # xarray states units as an attribute beside the labels, so an
         # index compares labels only, as a materialized index does
         first, second = first.set_units(None), second.set_units(None)
-    return first._physical_id() == second._physical_id()
+    return first.data_id == second.data_id
 
 
 def _chained(coords: list[BaseCoord]) -> BaseCoord | None:

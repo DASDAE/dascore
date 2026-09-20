@@ -30,7 +30,12 @@ from dascore.units import get_quantity
 from dascore.utils.array_api import to_numpy
 from dascore.utils.attrs import combine_patch_attrs, warn_if_histories_differ
 from dascore.utils.chunk_plan import _SOURCE_COLUMNS
-from dascore.utils.identity import ids_enabled
+from dascore.utils.identity import (
+    ids_enabled,
+    operation_context,
+    stamp,
+    try_operation_id,
+)
 from dascore.utils.misc import broadcast_for_index, is_range
 from dascore.utils.patch import (
     _force_patch_merge,
@@ -495,7 +500,14 @@ def fill_to_row(
     blocks = ((0, data.shape[axis], before),)
     data = _place_blocks(data, axis, len(target), blocks, fill)
     coords = drop_associated_coords(patch.coords, dim, "Filling the gaps along")
-    return patch.new(data=data, coords=coords._update_grid(dim, **{dim: target}))
+    # What the padding is and where it went, so the same chunk loaded twice
+    # is the same array rather than two random ids.
+    params = {"dim": dim, "value": fill_value, "before": before, "after": after}
+    attrs = stamp(patch.attrs, [patch.attrs], try_operation_id("Fill", params))
+    with operation_context():
+        return patch.new(
+            data=data, coords=coords._update_grid(dim, **{dim: target}), attrs=attrs
+        )
 
 
 @dataclass
@@ -673,7 +685,11 @@ class PatchAssembler:
         new_attrs = combine_patch_attrs(
             attrs, **attr_kwargs, merge_params=self.merge_kwargs
         )
-        return dc.Patch(data=buffer, coords=new_coord, attrs=new_attrs, dims=list(dims))
+        # The fold named the result; building it is not another array.
+        with operation_context():
+            return dc.Patch(
+                data=buffer, coords=new_coord, attrs=new_attrs, dims=list(dims)
+            )
 
     def _member_meta_from_index(self, rows) -> list[_MemberMeta] | None:
         """What the rows state about every member, or None if any is silent.
