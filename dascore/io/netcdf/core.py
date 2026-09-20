@@ -8,7 +8,7 @@ from pathlib import Path
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.core.source import ArraySource
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
@@ -121,7 +121,7 @@ class NetCDFCFV18(FiberIO):
         return None
 
     def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
+        self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """
         Slice the payload variable through xarray.
@@ -138,7 +138,7 @@ class NetCDFCFV18(FiberIO):
                 where=str(getattr(resource, "filename", "the resource")),
             )
             data_array = dataset[data_var_name]
-            slices = windows_to_slices(windows, data_array.dims, data_array.shape)
+            slices = windows_to_slices(windows, data_array.shape)
             return data_array[slices].to_numpy()
 
     def _get_write_encoding(self, **kwargs):

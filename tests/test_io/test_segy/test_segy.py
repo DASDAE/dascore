@@ -62,7 +62,7 @@ class TestSegyWrite:
 
     def test_empty_channel_window(self, channel_patch_path, channel_patch):
         """An empty channel window preserves time length and the decoded dtype."""
-        out = SegyV1_0().read_array(channel_patch_path, {"channel": (0, 0)})
+        out = SegyV1_0().read_array(channel_patch_path, (None, (0, 0)))
         assert out.shape == (len(channel_patch.get_coord("time")), 0)
         assert out.dtype == dc.scan(channel_patch_path)[0].dtype
 

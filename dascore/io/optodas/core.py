@@ -5,12 +5,11 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.utils.hdf5 import H5Reader
-from dascore.utils.misc import unbyte
 
 from .utils import (
     _apply_data_scale,
@@ -54,11 +53,10 @@ class OptoDASV8(FiberIO):
         ]
 
     def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
+        self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
-        """Slice the ``data`` dataset directly, in the header's dimension order."""
-        dims = tuple(unbyte(x) for x in resource["header"]["dimensionNames"])
-        data = slice_dataset(resource["data"], dims, windows)
+        """Slice the ``data`` dataset directly, then apply the stored scale."""
+        data = slice_dataset(resource["data"], windows)
         return _apply_data_scale(resource, data)
 
 

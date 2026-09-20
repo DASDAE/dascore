@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.utils.hdf5 import H5Reader
@@ -41,7 +41,7 @@ class Terra15FormatterV4(FiberIO):
         return _scan_terra15(resource, data_node, snap=snap)
 
     def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
+        self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """
         Slice the data node directly.
@@ -57,7 +57,7 @@ class Terra15FormatterV4(FiberIO):
         data = data_node["data"]
         _, _, time_len, _ = _get_scanned_time_info(data_node)
         shape = (time_len, len(_get_distance_coord(resource)))
-        return slice_dataset(data, ("time", "distance"), windows, shape)
+        return slice_dataset(data, windows, shape)
 
 
 class Terra15FormatterV5(Terra15FormatterV4):

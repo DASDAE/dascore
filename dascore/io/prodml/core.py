@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.core.source import ArraySource
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
@@ -53,7 +53,7 @@ class ProdMLV2_0(FiberIO):  # noqa
         return out
 
     def read_array(
-        self, resource: H5Reader, windows: dict[str, tuple[int, int]], key: str = ""
+        self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """
         Slice one acquisition node's data array directly.
@@ -62,8 +62,8 @@ class ProdMLV2_0(FiberIO):  # noqa
         ``Raw[0]`` or ``FbeData[0]``); a file holding several nodes needs
         one.
         """
-        dataset, dims = _get_data_node(resource, key)
-        return slice_dataset(dataset, dims, windows)
+        dataset = _get_data_node(resource, key)
+        return slice_dataset(dataset, windows)
 
 
 class ProdMLV2_1(ProdMLV2_0):  # noqa

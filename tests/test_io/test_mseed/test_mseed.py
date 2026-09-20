@@ -207,7 +207,7 @@ class TestReadWork:
         monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
         reader = MSeedV3()
         if array_only:
-            data = reader.read_array("unused", {"time": (4, 7)})
+            data = reader.read_array("unused", (None, (4, 7)))
         else:
             data = reader.read("unused", samples=True, time=(4, 7))[0].data
         np.testing.assert_array_equal(data, np.arange(4, 7)[None, :])
@@ -1098,8 +1098,8 @@ class TestDecodedArrayContract:
     @pytest.mark.parametrize(
         "windows, shape",
         [
-            ({"channel": (0, 0)}, (0, 10)),
-            ({"time": (3, 3)}, (3, 0)),
+            (((0, 0),), (0, 10)),
+            ((None, (3, 3)), (3, 0)),
         ],
     )
     def test_empty_windows(self, mseed_v3_path, windows, shape):

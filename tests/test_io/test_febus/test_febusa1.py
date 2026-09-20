@@ -121,11 +121,10 @@ class TestFebus:
         # would pass on arithmetic it never exercised
         assert len(cases) > 1, cases
         for start, stop in cases:
-            windows = {"time": (start, stop)}
-            out = io.read_array(febus_path, windows, key=key)
+            out = io.read_array(febus_path, ((start, stop),), key=key)
             expected = (
                 io.read(febus_path, source_patch_key=key)[0]
-                .select(samples=True, **windows)
+                .select(samples=True, time=(start, stop))
                 .data
             )
             assert out.shape == expected.shape == (stop - start, payload.shape[1])
@@ -136,9 +135,9 @@ class TestFebus:
         io = Febus2()
         payload = dc.scan(febus_path)[0]
         key = payload.source_patch_key
-        out = io.read_array(febus_path, {"time": (5, 5)}, key=key)
+        out = io.read_array(febus_path, ((5, 5),), key=key)
         assert out.shape == (0, payload.shape[1])
-        out = io.read_array(febus_path, {"distance": (4, 2)}, key=key)
+        out = io.read_array(febus_path, (None, (4, 2)), key=key)
         assert out.shape == (payload.shape[0], 0)
 
     @pytest.fixture(scope="class")
@@ -160,7 +159,7 @@ class TestFebus:
         payloads = dc.scan(two_zone_path)
         assert len(payloads) == 2
         arrays = [
-            io.read_array(two_zone_path, {}, key=x.source_patch_key) for x in payloads
+            io.read_array(two_zone_path, (), key=x.source_patch_key) for x in payloads
         ]
         # the copy holds the negated data, so a wrong zone is visible
         assert np.allclose(arrays[0], -arrays[1], equal_nan=True)
@@ -180,7 +179,7 @@ class TestFebus:
     def test_read_array_without_key_raises(self, two_zone_path):
         """A file holding several zones cannot resolve a keyless read."""
         with pytest.raises(PatchAttributeError, match="pass an explicit key"):
-            Febus2().read_array(two_zone_path, {})
+            Febus2().read_array(two_zone_path, ())
 
     def test_read_array_reads_only_touched_blocks(self, febus_path, monkeypatch):
         """A one-block window decodes one block, not the whole cube."""
@@ -200,14 +199,14 @@ class TestFebus:
             return original(self, index)
 
         monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
-        io.read_array(febus_path, {"time": (rows, rows + 2)}, key=key)
+        io.read_array(febus_path, ((rows, rows + 2),), key=key)
         assert reads == [slice(1, 2)], reads
 
     def test_read_array_refuses_a_stepped_window(self, febus_path):
         """A window is a contiguous range; a stride is not part of it."""
         key = dc.scan(febus_path)[0].source_patch_key
         with pytest.raises(ParameterError, match="contiguous"):
-            Febus2().read_array(febus_path, {"time": slice(0, 10, 2)}, key=key)
+            Febus2().read_array(febus_path, (slice(0, 10, 2),), key=key)
 
 
 class TestFebusA1Interrogator:

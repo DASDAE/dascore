@@ -54,10 +54,9 @@ class TestDescription:
     """The source describes the array without reading it."""
 
     def test_matches_patch(self, source, patch):
-        """Shape, dtype and dims are the patch's own."""
+        """Shape and dtype are the patch's own."""
         assert source.loadable
         assert (source.shape, source.dtype) == (patch.shape, patch.dtype)
-        assert source.dims == patch.dims
         assert (source.ndim, source.size) == (patch.data.ndim, patch.data.size)
 
     def test_reader_source_not_loadable(self):
@@ -69,9 +68,9 @@ class TestDescription:
         with pytest.raises(IndexError, match="describes no array"):
             source[:1]
 
-    def test_needs_dims(self, source):
-        """Windows are given to the reader by dimension name."""
-        assert not replace(source, dims=()).loadable
+    def test_needs_a_window_per_axis(self, source):
+        """The reader is given one positional window for each axis."""
+        assert not replace(source, windows=source.windows[:1]).loadable
 
 
 class TestLoad:
@@ -95,7 +94,7 @@ class TestLoad:
             name = next(f"{x.name}/_coord_time" for x in fi["waveforms"].values())
             shape, dtype, expected = fi[name].shape, fi[name].dtype, fi[name][3:9]
         assert name.startswith("/")
-        coord = replace(source, key=name).describe(shape, dtype, dims=("time",))
+        coord = replace(source, key=name).describe(shape, dtype)
         assert np.array_equal(coord[3:9].load(), expected)
 
     def test_stored_array_needs_hdf5(self, random_patch, tmp_path):
@@ -145,10 +144,8 @@ class TestIdentity:
         assert other.id == source.id
         assert source[:10][2:5].id == source[2:5].id
         # Pinned: an id written down must still name the same array later.
-        fixed = ArraySource(
-            "a.h5", "DASDAE", "1", "k", ("time",), ((2, 5),), (3,), np.dtype("f8")
-        )
-        assert fixed.id == "335d4c1b2b99c9ec"
+        fixed = ArraySource("a.h5", "DASDAE", "1", "k", ((2, 5),), (3,), np.dtype("f8"))
+        assert fixed.id == "ec1b33ac496675a2"
 
     def test_different_arrays(self, source):
         """A selection, a key or a path is a different array."""

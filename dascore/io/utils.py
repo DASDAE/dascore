@@ -23,7 +23,7 @@ from dascore.exceptions import (
 )
 from dascore.models import ArrayLike
 from dascore.units import convert_units, get_quantity_str
-from dascore.utils.misc import _to_slice, _validate_sample_values, iterate, unbyte
+from dascore.utils.misc import _to_slice, iterate, unbyte
 from dascore.utils.time import to_exact_fraction
 
 
@@ -112,40 +112,79 @@ def drop_blank_attrs(attrs: dict, names: Iterable[str]) -> dict:
     return attrs
 
 
+_WINDOW_BOUNDS = (int, np.integer, type(None), type(Ellipsis))
+
+
+def validate_windows(windows: Sequence[Any]) -> tuple[Any, ...]:
+    """
+    Return `FiberIO.read_array` windows, refusing a spelling which is not one.
+
+    A window is ``None`` (the whole axis), a slice, or a ``(start, stop)``
+    pair of sample indices; ``windows`` holds one per axis, in order. A
+    bare integer is not a window, so no spelling is read two ways.
+    """
+    if not isinstance(windows, Sequence) or isinstance(windows, str):
+        msg = (
+            f"Windows are one positional window per axis; got {windows!r}. "
+            f"Use ((0, 10),) or slice(0, 10) to window the first axis."
+        )
+        raise ParameterError(msg)
+    for window in windows:
+        if window is None or isinstance(window, slice):
+            continue
+        pair = isinstance(window, Sequence) and not isinstance(window, str)
+        if not (
+            pair
+            and len(window) == 2
+            and all(isinstance(x, _WINDOW_BOUNDS) for x in window)
+        ):
+            msg = (
+                f"Each window is None, a slice, or a (start, stop) pair of "
+                f"sample indices; got {window!r} in {windows!r}. Use "
+                f"((0, 10),) or slice(0, 10) to window the first axis."
+            )
+            raise ParameterError(msg)
+    return tuple(windows)
+
+
 def windows_to_slices(
-    windows: Mapping[str, Any], dims: Sequence[str], shape: Sequence[int]
+    windows: Sequence[Any], shape: Sequence[int]
 ) -> tuple[slice, ...]:
     """
-    Turn `FiberIO.read_array` windows into one slice per dimension.
+    Turn `FiberIO.read_array` windows into one slice per axis.
 
-    Each window is validated as `Patch.select` validates ``samples=True``
-    values and resolved against its dimension's length, so every slice
-    comes back with explicit non-negative bounds and ``start <= stop`` (a
-    reversed window is empty); a dimension without a window is taken whole.
+    Each window is checked by `validate_windows` and resolved against its
+    axis's length, so every slice comes back with explicit non-negative
+    bounds and ``start <= stop`` (a reversed window is empty); an axis
+    without a window is taken whole.
 
     Parameters
     ----------
     windows
-        Dimension name to ``(start, stop)`` half-open sample indices.
-    dims
-        The dimensions in the array's stored order.
+        A ``(start, stop)`` half-open sample range, a slice, or ``None``
+        for a whole axis, one per axis in order. Trailing axes may be
+        left out.
     shape
-        The array's shape, in the same order.
+        The array's shape.
     """
-    if unknown := sorted(set(windows) - set(dims)):
-        msg = f"Window dimensions {unknown} are not among patch dims {tuple(dims)}."
+    windows = validate_windows(windows)
+    if len(windows) > len(shape):
+        msg = (
+            f"Windows are one positional range per axis of {tuple(shape)}; "
+            f"got {windows!r}."
+        )
         raise ParameterError(msg)
-    if not dims and tuple(shape) == (0,):
-        return (slice(0, 0),)  # Legacy empty Patch has no dims and one empty axis.
     out = []
-    for dim, size in zip(dims, shape, strict=True):
-        if dim not in windows:
+    for axis, size in enumerate(shape):
+        if axis >= len(windows) or windows[axis] is None:
             out.append(slice(0, size))
             continue
-        _validate_sample_values(windows[dim])
-        window = _to_slice(windows[dim])
+        window = _to_slice(windows[axis])
         if window.step not in (None, 1):
-            msg = f"A window is a contiguous range; {dim!r} asked for {windows[dim]!r}."
+            msg = (
+                f"A window is a contiguous range; "
+                f"axis {axis} asked for {windows[axis]!r}."
+            )
             raise ParameterError(msg)
         span = range(size)[window]
         out.append(slice(span.start, max(span.stop, span.start)))
@@ -203,19 +242,18 @@ def resolve_keyed_source(
 
 def slice_dataset(
     dataset: ArrayLike,
-    dims: Sequence[str],
-    windows: Mapping[str, Any],
+    windows: Sequence[Any] = (),
     shape: Sequence[int] | None = None,
 ) -> np.ndarray:
     """
-    Read the sample windows of an array stored in ``dims`` order.
+    Read the positional sample windows of a stored array.
 
     ``shape`` defaults to the dataset's own; pass it when an axis of the
     grid `scan` reports is shorter than the stored one, as it is for a
     Terra15 file whose trailing rows were never written.
     """
     shape = dataset.shape if shape is None else shape
-    return dataset[windows_to_slices(windows, dims, shape)]
+    return dataset[windows_to_slices(windows, shape)]
 
 
 def get_gridded_coord(values, units=None) -> BaseCoord:
@@ -298,17 +336,17 @@ def step_from_interval(seconds) -> Fraction | np.timedelta64:
 
 def selection_windows(
     coords: CoordManager, indexers: Mapping[str, int | slice | np.ndarray]
-) -> tuple[dict[str, tuple[int, int]], tuple[slice | np.ndarray, ...]]:
+) -> tuple[tuple[tuple[int, int], ...], tuple[slice | np.ndarray, ...]]:
     """Return bounding array windows and residual coordinate indexers."""
-    windows, residual = {}, []
+    windows, residual = [], []
     if not coords.dims:
-        return windows, ()
+        return (), ()
     for dim, size in zip(coords.dims, coords.shape, strict=True):
         indexer = indexers.get(dim, slice(None))
         if isinstance(indexer, slice):
             span = range(size)[indexer]
             if not span:
-                windows[dim] = (0, 0)
+                windows.append((0, 0))
                 residual.append(slice(None))
                 continue
             start, stop = min(span[0], span[-1]), max(span[0], span[-1]) + 1
@@ -322,11 +360,11 @@ def selection_windows(
         else:
             indices = np.atleast_1d(indexer)
             if not len(indices):
-                windows[dim] = (0, 0)
+                windows.append((0, 0))
                 residual.append(slice(None))
                 continue
             start, stop = int(indices.min()), int(indices.max()) + 1
             leftover = indices - start
-        windows[dim] = (start, stop)
+        windows.append((start, stop))
         residual.append(leftover)
-    return windows, tuple(residual)
+    return tuple(windows), tuple(residual)

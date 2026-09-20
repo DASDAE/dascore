@@ -47,6 +47,6 @@ class TestSelectionWindows:
         data = np.arange(8) * 13 + 5
         coords = get_coord_manager(coords={"time": np.arange(8)}, dims=("time",))
         windows, residual = selection_windows(coords, {"time": indexer})
-        assert windows == {"time": expected_window}
-        bounded = data[slice(*windows["time"])]
+        assert windows == (expected_window,)
+        bounded = data[slice(*windows[0])]
         np.testing.assert_array_equal(bounded[residual], np.atleast_1d(data[indexer]))

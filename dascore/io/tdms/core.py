@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
-from dascore.constants import INVENTORY_ATTRS, snap_type
+from dascore.constants import INVENTORY_ATTRS, snap_type, windows_type
 from dascore.io import FiberIO
 from dascore.io.utils import get_attr_names, windows_to_slices
 from dascore.utils.io import BinaryReader, LocalBinaryReader
@@ -72,7 +72,7 @@ class TDMSFormatterV4713(FiberIO):
     def read_array(
         self,
         resource: LocalBinaryReader,
-        windows: dict[str, tuple[int, int]],
+        windows: windows_type = (),
         key: str = "",
     ) -> np.ndarray:
         """
@@ -88,6 +88,6 @@ class TDMSFormatterV4713(FiberIO):
     @staticmethod
     def _read_array(resource, fileinfo, shape, windows):
         """Decode a window using an already parsed header."""
-        time_slice, dist_slice = windows_to_slices(windows, ("time", "distance"), shape)
+        time_slice, dist_slice = windows_to_slices(windows, shape)
         data = _read_sample_range(resource, fileinfo, time_slice.start, time_slice.stop)
         return data[:, dist_slice]

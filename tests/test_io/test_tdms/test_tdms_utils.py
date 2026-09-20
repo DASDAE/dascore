@@ -319,11 +319,10 @@ class TestReadArray:
     def test_matches_default_across_segments(self, two_segment_path):
         """A window spanning the segment boundary matches the default."""
         io = TDMSFormatterV4713()
-        windows = {"time": (990, 1010), "distance": (5, 9)}
-        out = io.read_array(two_segment_path, windows)
+        out = io.read_array(two_segment_path, ((990, 1010), (5, 9)))
         expected = (
             io.read(two_segment_path, source_patch_key="")[0]
-            .select(samples=True, **windows)
+            .select(samples=True, time=(990, 1010), distance=(5, 9))
             .data
         )
         assert out.dtype == expected.dtype
@@ -359,7 +358,7 @@ class TestReadArray:
         }
         for (start, stop), expected in cases.items():
             decoded.clear()
-            out = io.read_array(two_segment_path, {"time": (start, stop)})
+            out = io.read_array(two_segment_path, ((start, stop),))
             assert decoded == expected, (start, stop)
             # both segments hold the example's samples
             rows = np.concatenate([single.data, single.data])[start:stop]
@@ -368,14 +367,9 @@ class TestReadArray:
     def test_empty_window(self, two_segment_path):
         """A window past the end is empty with the right width and dtype."""
         io = TDMSFormatterV4713()
-        out = io.read_array(two_segment_path, {"time": (5000, 6000)})
+        out = io.read_array(two_segment_path, ((5000, 6000),))
         assert out.shape == (0, 1152)
-        assert (
-            out.dtype
-            == io.read(two_segment_path, source_patch_key="")[0]
-            .select(samples=True, **{})
-            .data.dtype
-        )
+        assert out.dtype == io.read(two_segment_path, source_patch_key="")[0].dtype
 
 
 class TestTDMSInterrogator:

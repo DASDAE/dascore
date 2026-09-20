@@ -7,7 +7,7 @@ from __future__ import annotations
 import numpy as np
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.io import BinaryReader, FiberIO
 from dascore.io.utils import slice_dataset
 
@@ -37,9 +37,12 @@ class SR4731V200(FiberIO):
         return [attrs]
 
     def read_array(
-        self, resource: BinaryReader, windows: dict[str, tuple[int, int]], key: str = ""
+        self,
+        resource: BinaryReader,
+        windows: windows_type = (),
+        key: str = "",
     ) -> np.ndarray:
         """Decode the trace and select its time/distance sample window."""
         parsed = _parse_sor(resource, load_samples=True)
         data = parsed["data_points"]["samples"][np.newaxis, :]
-        return slice_dataset(data, ("time", "distance"), windows)
+        return slice_dataset(data, windows)

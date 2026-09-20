@@ -489,7 +489,18 @@ class TestLoadMemberArray:
         assert out.dtype == expected.dtype
         # the row's own patch key rides along so multi-patch files resolve
         expected_kwargs = {"key": row["source_patch_key"]}
-        assert override == [({"time": (2, 9)}, expected_kwargs)]
+        # the reader takes its windows by position, in the row's stored order
+        positional = tuple(
+            (2, 9) if dim == "time" else None for dim in row["dims"].split(",")
+        )
+        assert override == [(positional, expected_kwargs)]
+
+    def test_unplaceable_window_returns_none(self, resolver, row, override):
+        """A window the row's dims cannot place has no position to take."""
+        assert resolver._load_member_array(row, {"nope": (0, 5)}) is None
+        blank = dict(row, dims="")
+        assert resolver._load_member_array(blank, {"time": (0, 5)}) is None
+        assert override == []
 
     def test_digit_key_returns_none(self, resolver, row, override):
         """A synthesized positional key only binds against a full read."""
