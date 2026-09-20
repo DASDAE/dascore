@@ -179,6 +179,16 @@ assert tagged.attrs.data_id != patch.attrs.data_id
 
 A call which changes nothing returns the patch's own IDs, and stating `origin_id` or `data_id` in the call keeps what was stated — which is how a patch rebuilt by hand is given the identity it should carry. Use patch functions when processing should change the `data_id`; a function that returns the input unchanged changes neither ID, and IDs do not participate in `Patch.equals`. Set `patch_provenance="disabled"` only when IDs are not needed; a patch changed while it is disabled carries no IDs rather than stale ones. See [Finding a patch by its ID](spool.qmd#finding-a-patch-by-id) for lookup.
 
+Those IDs are derived without reading anything. [`pin_id`](`dascore.Patch.pin_id`) reads the array instead and states a `data_id` hashed from the patch's content, so patches which arrived by different routes share one ID and everything derived afterwards builds on data checked here:
+
+```{python}
+pinned = patch.pin_id()
+assert pinned.attrs.data_id == dc.get_example_patch().pin_id().attrs.data_id
+assert pinned.pin_id().attrs.data_id == pinned.attrs.data_id
+```
+
+Pinning is a checkpoint rather than something every operation does. See [Weak and strong `data_id`](../notes/identity.qmd#weak-and-strong-data_id) for what it hashes.
+
 ## Display and shortcuts
 
 Displaying a patch summarizes its data, coordinates, attributes, and history. HTML displays use collapsible sections; [`display_html`](configuration.qmd) selects the text representation instead.

@@ -45,6 +45,7 @@ from dascore.utils.identity import (
     inside_operation,
     new_id,
     stamp,
+    strong_data_id,
     try_operation_id,
 )
 from dascore.utils.misc import _get_nullish
@@ -277,6 +278,38 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
         )
         out_attrs = _named_mutation(self, out_attrs, "update_attrs", params, changed)
     return self.new(attrs=out_attrs)
+
+
+def pin_id(self: PatchType) -> PatchType:
+    """
+    Return the patch with a `data_id` hashed from the data it holds.
+
+    Pinning replaces a weak `data_id` (derived without reading anything)
+    with a strong one, so every id derived afterwards builds on content
+    verified here. Any patch can be pinned, and pinning again changes
+    nothing. `origin_id`, history and the source are left alone. It reads
+    the whole array, about a second per gigabyte.
+
+    [`strong_data_id`](`dascore.utils.identity.strong_data_id`) gives the
+    same id without pinning, so a caller can record that the weak id a
+    patch carries names the same array. Inside a patch function the
+    function's own stamp replaces the pin, so pin its result instead.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> pinned = patch.pin_id()
+    >>> # Equal patches built apart from one another share the id.
+    >>> assert pinned.attrs.data_id == dc.get_example_patch().pin_id().attrs.data_id
+    >>> assert pinned.pin_id().attrs.data_id == pinned.attrs.data_id
+    """
+    strong = strong_data_id(self)
+    if getattr(self.attrs, "data_id", "") == strong:
+        return self
+    # Copied, not revalidated: the id describes the attrs as they are.
+    return self.new(attrs=self.attrs.model_copy(update={"data_id": strong}))
 
 
 # Which data a patch is and what was done to it are not part of what it

@@ -246,6 +246,86 @@ def derive(inputs: Sequence[str], operation: str, output: int | None = None) -> 
     return H("derived", payload)
 
 
+def strong_data_id(patch) -> str:
+    """
+    Return the id of the content a patch holds.
+
+    A hash of what the patch holds: the data (and mask), the dims, every
+    coordinate's id and the dims it rides, and every attribute but the ids
+    and history. It costs a read of every byte.
+
+    Parameters
+    ----------
+    patch
+        The patch to hash. Metadata, and object, record and
+        extended-precision data are refused: none has bytes which are
+        exactly its content.
+
+    Notes
+    -----
+    Nothing is written to the patch;
+    [`pin_id`](`dascore.Patch.pin_id`) does that. Called on its own this
+    tells a caller that the weak id a patch carries now names the same
+    array as this strong one.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.utils.identity import strong_data_id
+    >>>
+    >>> patch = dc.get_example_patch()
+    >>> # The content, and only the content: an id is not part of its own hash.
+    >>> renamed = patch.update_attrs(data_id="abc")
+    >>> assert strong_data_id(patch) == strong_data_id(renamed)
+    """
+    data = getattr(patch, "_data", None)
+    if data is None:
+        msg = (
+            "A PatchMeta describes data rather than holding any, so there is "
+            "no content to hash. Use the patch whose data it describes."
+        )
+        raise ParameterError(msg)
+    payload = {
+        "data": _content_hashes(data),
+        # The manager encodes its dims in order, which dims each coordinate
+        # rides, and every coordinate's own id.
+        "coords": patch.coords,
+        # Everything a later operation can read but the ids and history,
+        # which say how the patch was reached rather than what it holds.
+        "attrs": {
+            name: value
+            for name, value in model_values(patch.attrs).items()
+            if name not in _ID_FIELDS and name != "history"
+        },
+    }
+    return H("content", payload)
+
+
+def _content_hashes(data) -> list[str]:
+    """Return the hashes of an array's values and, if it has one, its mask."""
+    # hash_array lives in dascore.utils.array, which imports dascore itself.
+    from dascore.utils.array import hash_array  # noqa: PLC0415
+
+    mask = np.ma.getmaskarray(data) if np.ma.isMaskedArray(data) else None
+    array = to_numpy(data) if is_foreign(data) else np.asarray(data)
+    dtype = array.dtype
+    why = ""
+    if dtype.hasobject:
+        why = "hold python values rather than bytes"
+    elif dtype.names or dtype.itemsize > {"f": 8, "c": 16}.get(dtype.kind, 64):
+        # Records and extended precision store padding between their values,
+        # which differs from run to run.
+        why = "are stored with padding which is not part of their values"
+    if why:
+        msg = f"Data of dtype {dtype} {why}, so their content cannot be hashed."
+        raise ParameterError(msg)
+    # Byte order is layout; the dtype itself -- a time's resolution too --
+    # decides what arithmetic does, so it is content.
+    array = array.astype(dtype.newbyteorder("<"), copy=False)
+    out = [hash_array(array)]
+    return out if mask is None else [*out, hash_array(mask)]
+
+
 def fold_origin_ids(origin_ids: Sequence[str]) -> str:
     """
     Return the origin id of a patch combined from several.

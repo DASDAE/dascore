@@ -34,6 +34,7 @@ from dascore.utils.identity import (
     origin_id_for,
     result_ids,
     stamp,
+    strong_data_id,
     try_operation_id,
     with_ids,
 )
@@ -1345,3 +1346,264 @@ class TestEquivalentSpellings:
         by_unit = patch.update_attrs(data_units=get_unit("m"))
         assert by_unit.attrs.data_id == metres.attrs.data_id
         assert patch.update_attrs(data_units="s").attrs.data_id != metres.attrs.data_id
+
+
+@pytest.fixture()
+def square_patch():
+    """A patch whose dims are the same length, so a coord can ride either."""
+    rng = np.random.default_rng(7)
+    coords = {"distance": np.arange(4.0), "time": np.arange(4.0) * 0.1}
+    data = rng.normal(size=(4, 4))
+    return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+
+class TestStrongDataId:
+    """A data id hashed from the content a patch holds."""
+
+    def test_equal_patches_agree(self, patch):
+        """Built apart from one another, and still the same content."""
+        other = dc.get_example_patch()
+        assert other.attrs.data_id != patch.attrs.data_id
+        assert strong_data_id(other) == strong_data_id(patch)
+        assert len(strong_data_id(patch)) == 32
+
+    def test_data_change(self, patch):
+        """A sample too small to see is still different content."""
+        other = patch.new(data=np.asarray(patch.data) + 1e-12)
+        assert strong_data_id(other) != strong_data_id(patch)
+
+    def test_dtype_change(self, patch):
+        """The same numbers held to a different precision."""
+        other = patch.new(data=np.asarray(patch.data).astype("float32"))
+        assert strong_data_id(other) != strong_data_id(patch)
+
+    def test_shape_change(self, patch):
+        """Fewer samples, other content."""
+        other = patch.select(time=(0, 100), samples=True)
+        assert strong_data_id(other) != strong_data_id(patch)
+
+    def test_dims_order(self):
+        """Symmetric data under equal coords: only the layout moved."""
+        data = np.array([[1.0, 2.0], [2.0, 3.0]])
+        coords = {"distance": np.array([0.0, 1.0]), "time": np.array([0.0, 1.0])}
+        upright = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+        flipped = upright.transpose()
+        assert np.array_equal(np.asarray(flipped.data), data)
+        assert flipped.dims != upright.dims
+        assert strong_data_id(flipped) != strong_data_id(upright)
+
+    def test_coord_values(self, patch):
+        """Which samples these are is part of what they are."""
+        other = patch.update_coords(distance=patch.get_array("distance") + 1)
+        assert strong_data_id(other) != strong_data_id(patch)
+
+    def test_coord_units(self, square_patch):
+        """A coordinate is what it selects with, so the spelling counts."""
+        metres = square_patch.set_units(distance="m")
+        centimetres = square_patch.set_units(distance="cm")
+        ids = {strong_data_id(x) for x in (square_patch, metres, centimetres)}
+        assert len(ids) == 3
+
+    def test_which_dim_an_aux_coord_rides(self, square_patch):
+        """The same values attached elsewhere describe other data."""
+        values = np.arange(4.0)
+        on_time = square_patch.update_coords(aux=("time", values))
+        on_distance = square_patch.update_coords(aux=("distance", values))
+        ids = {strong_data_id(x) for x in (square_patch, on_time, on_distance)}
+        assert len(ids) == 3
+
+    def test_a_coord_riding_no_dimension(self, square_patch):
+        """A coordinate attached to nothing still describes the patch."""
+        first = square_patch.update_coords(aux=((), np.array([1.0])))
+        second = square_patch.update_coords(aux=((), np.array([2.0])))
+        assert strong_data_id(first) != strong_data_id(second)
+
+    def test_attrs_change(self, patch):
+        """An attribute describes the data, so it is part of them."""
+        tagged = patch.update_attrs(tag="cleaned")
+        assert strong_data_id(tagged) != strong_data_id(patch)
+
+    def test_history_is_not_content(self, patch):
+        """What was done to the data is not what they are."""
+        recorded = patch.update_attrs(history=["hello"])
+        assert strong_data_id(recorded) == strong_data_id(patch)
+
+    def test_ids_are_not_content(self, patch):
+        """Neither is either id, which is what makes pinning idempotent."""
+        other = patch.update_attrs(origin_id=new_id(), data_id=new_id())
+        assert strong_data_id(other) == strong_data_id(patch)
+
+    def test_memory_layout_is_not_content(self, patch):
+        """The same values, stored another way round."""
+        data = np.asarray(patch.data)
+        fortran = patch.new(data=np.asfortranarray(data))
+        big_endian = patch.new(data=data.astype(data.dtype.newbyteorder(">")))
+        assert not fortran.data.flags.c_contiguous
+        assert big_endian.dtype.byteorder == ">"
+        ids = {strong_data_id(x) for x in (patch, fortran, big_endian)}
+        assert len(ids) == 1
+
+    @staticmethod
+    def _small(data):
+        """A 2 by 4 patch around some data."""
+        coords = {"distance": np.arange(2.0), "time": np.arange(4.0)}
+        return dc.Patch(data=data.reshape(2, 4), coords=coords, dims=tuple(coords))
+
+    def test_a_time_s_resolution_is_content(self):
+        """`patch + 1` is a second or a nanosecond, so the two are not one."""
+        start = np.datetime64("2020-01-01", "ns")
+        nanoseconds = start + (np.arange(8) * 10**9).astype("timedelta64[ns]")
+        first = self._small(nanoseconds)
+        second = self._small(nanoseconds.astype("datetime64[s]"))
+        assert strong_data_id(first) != strong_data_id(second)
+        # A time nanoseconds cannot hold is still content with bytes.
+        far = np.array(["3000-01-01"] * 8, dtype="datetime64[s]")
+        assert strong_data_id(self._small(far)) == strong_data_id(self._small(far))
+
+    def test_a_mask_is_content(self):
+        """Reductions read the mask, so what it hides is part of the patch."""
+        values = np.arange(8.0)
+        open_mask = np.ma.array(values, mask=[False] * 8)
+        one_hidden = np.ma.array(values, mask=[False] * 7 + [True])
+        ids = {strong_data_id(self._small(x)) for x in (values, open_mask, one_hidden)}
+        assert len(ids) == 3
+        again = np.ma.array(values, mask=[False] * 7 + [True])
+        assert strong_data_id(self._small(again)) in ids
+
+    def test_private_attrs_are_content(self, patch):
+        """A patch function can read them, so they are part of the patch."""
+        first = patch.update_attrs(_gain=1)
+        assert strong_data_id(first) != strong_data_id(patch.update_attrs(_gain=2))
+        assert strong_data_id(first) == strong_data_id(patch.update_attrs(_gain=1))
+
+    def test_byte_order_is_layout(self):
+        """The same values stored the other way round are the same content."""
+        little = np.arange(8.0)
+        big = little.astype(">f8")
+        assert strong_data_id(self._small(little)) == strong_data_id(self._small(big))
+
+    def test_records_are_refused(self):
+        """Padding sits between a record's fields, so its bytes are not its values."""
+        records = np.zeros(8, dtype=[("value", "<f8"), ("count", "<i4")])
+        with pytest.raises(ParameterError, match="padding"):
+            strong_data_id(self._small(records))
+
+    @pytest.mark.parametrize("dtype", [np.longdouble, np.clongdouble])
+    def test_extended_precision_is_refused(self, dtype):
+        """Its padding bytes differ from run to run, so no id would hold."""
+        if np.dtype(dtype).itemsize <= (8 if np.dtype(dtype).kind == "f" else 16):
+            pytest.skip("This platform's long double is a double.")
+        with pytest.raises(ParameterError, match="padding"):
+            strong_data_id(self._small(np.arange(8).astype(dtype)))
+
+    @pytest.mark.skipif(
+        sys.platform == "emscripten", reason="emscripten does not support processes"
+    )
+    def test_same_in_another_process(self, patch):
+        """An id written down today names the same content tomorrow."""
+        code = (
+            "import dascore as dc;"
+            "from dascore.utils.identity import strong_data_id;"
+            "print(strong_data_id(dc.get_example_patch()))"
+        )
+        out = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            check=True,
+            env=os.environ,
+        )
+        assert out.stdout.strip() == strong_data_id(patch)
+
+    def test_metadata_is_refused(self, patch):
+        """Metadata holds no content to hash."""
+        with pytest.raises(ParameterError, match="no content to hash"):
+            strong_data_id(patch.drop_data())
+
+    def test_object_data_is_refused(self, patch):
+        """Neither do python objects held in an array."""
+        data = np.empty(patch.shape, dtype=object)
+        data[:] = 1.0
+        with pytest.raises(ParameterError, match="python values"):
+            strong_data_id(patch.new(data=data))
+
+    def test_a_foreign_backend_pins_to_the_numpy_id(self, patch, to_backend):
+        """The same values held by another backend are the same content."""
+        assert strong_data_id(to_backend(patch)) == strong_data_id(patch)
+
+
+class TestPinId:
+    """Stating the strong id a patch has."""
+
+    def test_pins(self, patch):
+        """The weak id is replaced by the content's own."""
+        pinned = patch.pin_id()
+        assert pinned.attrs.data_id == strong_data_id(patch)
+        assert pinned.attrs.data_id != patch.attrs.data_id
+
+    def test_nothing_else_moves(self, patch):
+        """Where the data came from, and what was done to them, stand."""
+        done = patch.pass_filter(time=(1, 10))
+        pinned = done.pin_id()
+        assert pinned.attrs.origin_id == done.attrs.origin_id
+        assert pinned.attrs.history == done.attrs.history
+        assert pinned.equals(done)
+
+    def test_an_attr_holding_a_model(self, patch):
+        """The id describes the attrs as they are, so they are not rewritten."""
+        summary = patch.coords.coord_map["time"].to_summary()
+        with_model = dc.Patch(
+            data=patch.data,
+            coords=patch.coords,
+            dims=patch.dims,
+            attrs={"probe": summary},
+        )
+        pinned = with_model.pin_id()
+        assert isinstance(pinned.attrs.probe, type(summary))
+        assert pinned.attrs.data_id == strong_data_id(pinned)
+
+    def test_metadata_has_no_pin(self, patch):
+        """Metadata holds no data, so there is nothing to pin."""
+        assert not hasattr(patch.drop_data(), "pin_id")
+
+    def test_is_not_an_operation(self, patch):
+        """Pinning says what the patch is, not that something happened."""
+        pinned = patch.pin_id()
+        assert len(pinned.attrs.history) == len(patch.attrs.history)
+
+    def test_idempotent(self, patch):
+        """An id is not part of its own hash, so pinning again does nothing."""
+        pinned = patch.pin_id()
+        assert pinned.pin_id() is pinned
+        assert pinned.pin_id().pin_id().attrs.data_id == pinned.attrs.data_id
+
+    def test_equal_patches_pin_alike(self, patch):
+        """Two patches built apart from one another land on one id."""
+        other = dc.get_example_patch().pin_id()
+        assert patch.pin_id().attrs.data_id == other.attrs.data_id
+
+    def test_a_derived_patch_pins(self, patch):
+        """Pinning a result only strengthens the name of the array it is."""
+        done = patch.pass_filter(time=(1, 10))
+        pinned = done.pin_id()
+        assert pinned.attrs.data_id == strong_data_id(done)
+        assert pinned.attrs.data_id != done.attrs.data_id
+
+    def test_downstream_builds_on_the_pin(self, patch):
+        """Everything derived afterwards commits to verified content."""
+        pinned = patch.pin_id()
+        first, second = pinned.abs(), pinned.abs()
+        assert first.attrs.data_id == second.attrs.data_id
+        assert first.attrs.data_id != patch.abs().attrs.data_id
+
+    def test_disabled_provenance_still_pins(self, patch):
+        """An explicit request is answered however ids are configured."""
+        with config_context(patch_provenance="disabled"):
+            pinned = patch.pin_id()
+        assert pinned.attrs.data_id == strong_data_id(patch)
+
+    def test_the_weak_id_is_the_callers_to_keep(self, patch):
+        """The alias is available without anything being pinned."""
+        weak = patch.attrs.data_id
+        assert strong_data_id(patch) == patch.pin_id().attrs.data_id
+        assert patch.attrs.data_id == weak

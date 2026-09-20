@@ -50,6 +50,8 @@ _TIMING_PASSES = 3
 _BOOKKEEPING = {"_timing", "_dascore_path"}
 
 
+# The fingerprint fields which say what a call answered, as opposed to what
+# it claims the answer is.
 # Cover dtypes and edge values missed by example calls; this caught the
 # float32 promotion regression in #921.
 def make_arrays() -> dict:
@@ -412,20 +414,63 @@ def compare(before: dict, after: dict, fields: set[str] | None = None) -> list[s
     report = []
     # Timing is not a result; it is reported on its own and never compared.
     names = (set(before) | set(after)) - _BOOKKEEPING
+    # An input which changed explains every result downstream of it, so no
+    # operation is told to raise its version.
+    picked = _picked(before, after, names, fields)
+    changed_input = any(
+        _is_leaf(before.get(name)) and old != new for name, (old, new) in picked.items()
+    )
     for name in sorted(names):
-        old, new = _select(before.get(name), fields), _select(after.get(name), fields)
+        old, new = picked[name]
         if old == new:
             continue
         if old is None or new is None:
             report.append(f"{name}: only in {'after' if old is None else 'before'}")
             continue
-        fields = sorted(i for i in set(old) | set(new) if old.get(i) != new.get(i))
-        report.append(f"{name}: differs in {fields}")
+        # Not `fields`, which says what is being compared for every call.
+        differing = sorted(i for i in set(old) | set(new) if old.get(i) != new.get(i))
+        gated = not changed_input and _same_recipe(before[name], after[name])
+        report.append(_headline(name, differing, gated))
         report.extend(
             f"    {i}\n      before: {old.get(i)}\n      after:  {new.get(i)}"
-            for i in fields
+            for i in differing
         )
     return report
+
+
+def _headline(name: str, differing: list[str], gated: bool) -> str:
+    """Return the line which says what kind of difference this is."""
+    if gated and set(differing) - {"ids"}:
+        gate = "same data_id, different content — raise the operation's version"
+        return f"{name}: {gate}"
+    return f"{name}: differs in {differing}"
+
+
+def _picked(before: dict, after: dict, names, fields) -> dict:
+    """Return each call's two fingerprints, narrowed to what is compared."""
+    return {
+        name: (_select(before.get(name), fields), _select(after.get(name), fields))
+        for name in names
+    }
+
+
+def _same_recipe(old: dict, new: dict) -> bool:
+    """
+    Whether both sides are the result of one derivation.
+
+    Whole fingerprints: `--fields` may leave the ids out of what is
+    compared. A leaf's id is assigned rather than derived, so it names no
+    recipe.
+    """
+    ids = [(x.get("ids") or {}).get("data_id") for x in (old, new)]
+    derived = not _is_leaf(old) and not _is_leaf(new)
+    return bool(ids[0]) and ids[0] == ids[1] and derived
+
+
+def _is_leaf(fingerprint: dict | None) -> bool:
+    """Whether a fingerprint is of an input, whose two ids are one."""
+    ids = (fingerprint or {}).get("ids") or {}
+    return bool(ids.get("data_id")) and ids.get("data_id") == ids.get("origin_id")
 
 
 def _select(fingerprint: dict | None, fields: set[str] | None) -> dict | None:
