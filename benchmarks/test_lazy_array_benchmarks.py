@@ -31,8 +31,16 @@ def array(sources):
 
 
 @pytest.fixture(scope="module")
+def scattered(sources):
+    """One array of many members whose windows never join up."""
+    spread = sources[::2]
+    part = LazyArray.from_sources(spread)
+    return concat([part] * (MEMBERS // len(spread)), axis=0)
+
+
+@pytest.fixture(scope="module")
 def constants():
-    """Many small arrays, each one constant block."""
+    """Many small arrays, each one constant member."""
     return [LazyArray.from_source(ArraySource.full((ROWS, WIDTH), 1.0))] * 1_000
 
 
@@ -66,9 +74,12 @@ class TestTableBenchmarks:
         stack(constants, axis=0)
 
     @pytest.mark.benchmark
-    def test_data_id(self, array):
-        """Time naming an array of many members."""
-        LazyArray(array.table, array.row).data_id
+    def test_data_id(self, scattered):
+        """Time naming an array whose members cannot be merged."""
+        table = scattered.table
+        table._ids.clear()
+        table._bases.clear()
+        assert scattered.data_id
 
     @pytest.mark.benchmark
     def test_validate(self, array):
