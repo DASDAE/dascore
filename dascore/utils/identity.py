@@ -257,8 +257,9 @@ def strong_data_id(patch) -> str:
     Parameters
     ----------
     patch
-        The patch to hash. Metadata, object data and extended-precision
-        data are refused: none has bytes which are its content.
+        The patch to hash. Metadata, and object, record and
+        extended-precision data are refused: none has bytes which are
+        exactly its content.
 
     Notes
     -----
@@ -308,30 +309,21 @@ def _content_hashes(data) -> list[str]:
     mask = np.ma.getmaskarray(data) if np.ma.isMaskedArray(data) else None
     array = to_numpy(data) if is_foreign(data) else np.asarray(data)
     dtype = array.dtype
+    why = ""
     if dtype.hasobject:
         why = "hold python values rather than bytes"
-    elif any(np.dtype(x).itemsize > 8 for x in _real_parts(dtype)):
-        # Extended precision stores padding bytes which differ run to run.
+    elif dtype.names or dtype.itemsize > {"f": 8, "c": 16}.get(dtype.kind, 64):
+        # Records and extended precision store padding between their values,
+        # which differs from run to run.
         why = "are stored with padding which is not part of their values"
-    else:
-        why = ""
     if why:
         msg = f"Data of dtype {dtype} {why}, so their content cannot be hashed."
         raise ParameterError(msg)
-    # Byte order is layout, fields included; the dtype itself -- a time's
-    # resolution too -- decides what arithmetic does, so it is content.
+    # Byte order is layout; the dtype itself -- a time's resolution too --
+    # decides what arithmetic does, so it is content.
     array = array.astype(dtype.newbyteorder("<"), copy=False)
     out = [hash_array(array)]
     return out if mask is None else [*out, hash_array(mask)]
-
-
-def _real_parts(dtype: np.dtype) -> list[np.dtype]:
-    """Return the real floating dtypes a dtype is made of."""
-    if dtype.names:
-        return [y for name in dtype.names for y in _real_parts(dtype[name])]
-    if dtype.kind == "c":
-        return [np.empty(0, dtype).real.dtype]
-    return [dtype] if dtype.kind == "f" else []
 
 
 def fold_origin_ids(origin_ids: Sequence[str]) -> str:

@@ -414,8 +414,14 @@ def compare(before: dict, after: dict, fields: set[str] | None = None) -> list[s
     report = []
     # Timing is not a result; it is reported on its own and never compared.
     names = (set(before) | set(after)) - _BOOKKEEPING
+    # An input which changed explains every result downstream of it, so no
+    # operation is told to raise its version.
+    picked = _picked(before, after, names, fields)
+    changed_input = any(
+        _is_leaf(before.get(name)) and old != new for name, (old, new) in picked.items()
+    )
     for name in sorted(names):
-        old, new = _select(before.get(name), fields), _select(after.get(name), fields)
+        old, new = picked[name]
         if old == new:
             continue
         if old is None or new is None:
@@ -423,7 +429,8 @@ def compare(before: dict, after: dict, fields: set[str] | None = None) -> list[s
             continue
         # Not `fields`, which says what is being compared for every call.
         differing = sorted(i for i in set(old) | set(new) if old.get(i) != new.get(i))
-        report.append(_headline(name, before[name], after[name], differing))
+        gated = not changed_input and _same_recipe(before[name], after[name])
+        report.append(_headline(name, differing, gated))
         report.extend(
             f"    {i}\n      before: {old.get(i)}\n      after:  {new.get(i)}"
             for i in differing
@@ -431,21 +438,40 @@ def compare(before: dict, after: dict, fields: set[str] | None = None) -> list[s
     return report
 
 
-def _headline(name: str, old: dict, new: dict, differing: list[str]) -> str:
-    """
-    Return the line which says what kind of difference this is.
-
-    `old` and `new` are whole fingerprints: `--fields` may leave the ids out
-    of what is compared, and they still say whether this is one recipe.
-    """
-    before, after = old.get("ids") or {}, new.get("ids") or {}
-    data_id = before.get("data_id")
-    # A leaf's id is assigned rather than derived, so it names no recipe.
-    derived = bool(data_id) and data_id != before.get("origin_id")
-    if derived and data_id == after.get("data_id") and set(differing) - {"ids"}:
+def _headline(name: str, differing: list[str], gated: bool) -> str:
+    """Return the line which says what kind of difference this is."""
+    if gated and set(differing) - {"ids"}:
         gate = "same data_id, different content — raise the operation's version"
         return f"{name}: {gate}"
     return f"{name}: differs in {differing}"
+
+
+def _picked(before: dict, after: dict, names, fields) -> dict:
+    """Return each call's two fingerprints, narrowed to what is compared."""
+    return {
+        name: (_select(before.get(name), fields), _select(after.get(name), fields))
+        for name in names
+    }
+
+
+def _same_recipe(old: dict, new: dict) -> bool:
+    """
+    Whether both sides are the result of one derivation.
+
+    Whole fingerprints: `--fields` may leave the ids out of what is
+    compared. A leaf's id is assigned rather than derived, so it names no
+    recipe.
+    """
+    before, after = old.get("ids") or {}, new.get("ids") or {}
+    data_id = before.get("data_id")
+    derived = bool(data_id) and data_id != before.get("origin_id")
+    return derived and data_id == after.get("data_id")
+
+
+def _is_leaf(fingerprint: dict | None) -> bool:
+    """Whether a fingerprint is of an input, whose two ids are one."""
+    ids = (fingerprint or {}).get("ids") or {}
+    return bool(ids.get("data_id")) and ids.get("data_id") == ids.get("origin_id")
 
 
 def _select(fingerprint: dict | None, fields: set[str] | None) -> dict | None:

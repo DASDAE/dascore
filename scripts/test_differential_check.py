@@ -103,6 +103,15 @@ class TestVersionGate:
         report = compare({"input": before}, {"input": after})
         assert report[0] == "input: differs in ['data_hash']"
 
+    def test_a_changed_input_excuses_what_follows(self, patch, before):
+        """The fixture moved, not the operation."""
+        leaf = digest(patch)
+        moved = {**leaf, "data_hash": "1" * 32}
+        after = {**before, "data_hash": "0" * 32}
+        report = compare({"input": leaf, "abs": before}, {"input": moved, "abs": after})
+        assert "abs: differs in ['data_hash']" in report
+        assert self.GATE not in report
+
     def test_fields_do_not_hide_the_ids(self, before):
         """Narrowing what is compared still knows whether the recipe held."""
         after = {**before, "data_hash": "0" * 32}

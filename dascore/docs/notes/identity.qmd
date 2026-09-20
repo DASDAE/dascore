@@ -78,7 +78,7 @@ assert pinned.attrs.data_id == dc.get_example_patch().pin_id().attrs.data_id
 
 It reads the whole array, about a second per gigabyte, so it is a checkpoint rather than a step in a pipeline: every ID derived afterwards builds on content verified here. Any patch may be pinned, a derived one included; re-running the recipe gives the weak ID again, which is a false distinction, never a false identity.
 
-`origin_id`, the history and the source are left alone, though narrowing a pinned patch is an operation rather than a window, since it is no longer the array its source loads. [`strong_data_id`](`dascore.utils.identity.strong_data_id`) gives the same ID without pinning, so a caller can record that the weak ID a patch carries names the same array. Object and extended-precision data are refused, because neither has bytes which are its content, and `PatchMeta`, which holds no data, has no `pin_id`.
+`origin_id`, the history and the source are left alone, though narrowing a pinned patch is an operation rather than a window, since it is no longer the array its source loads. [`strong_data_id`](`dascore.utils.identity.strong_data_id`) gives the same ID without pinning, so a caller can record that the weak ID a patch carries names the same array. Object, record and extended-precision data are refused, because none has bytes which are exactly its content, and `PatchMeta`, which holds no data, has no `pin_id`.
 
 ## The mutation boundary
 

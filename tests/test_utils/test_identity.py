@@ -1476,12 +1476,17 @@ class TestStrongDataId:
         assert strong_data_id(first) != strong_data_id(patch.update_attrs(_gain=2))
         assert strong_data_id(first) == strong_data_id(patch.update_attrs(_gain=1))
 
-    def test_byte_order_of_a_record_s_fields(self):
-        """Layout, inside a structured dtype too."""
-        little = np.zeros(8, dtype=[("value", "<f8"), ("count", "<i4")])
-        little["value"] = np.arange(8.0)
-        big = little.astype(little.dtype.newbyteorder(">"))
+    def test_byte_order_is_layout(self):
+        """The same values stored the other way round are the same content."""
+        little = np.arange(8.0)
+        big = little.astype(">f8")
         assert strong_data_id(self._small(little)) == strong_data_id(self._small(big))
+
+    def test_records_are_refused(self):
+        """Padding sits between a record's fields, so its bytes are not its values."""
+        records = np.zeros(8, dtype=[("value", "<f8"), ("count", "<i4")])
+        with pytest.raises(ParameterError, match="padding"):
+            strong_data_id(self._small(records))
 
     @pytest.mark.parametrize("dtype", [np.longdouble, np.clongdouble])
     def test_extended_precision_is_refused(self, dtype):
