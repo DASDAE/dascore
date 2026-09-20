@@ -92,16 +92,15 @@ def _source_units_column(name: str) -> str:
     return f"_{name}_units_source"
 
 
-def _def_key_physical_id(key) -> str | None:
-    """Recover the semantic physical id from a stored def key.
+def _def_key_data_id(key) -> str | None:
+    """Recover the coordinate's data_id from a stored def key.
 
-    Physical-id keys are ``fp:{hash}`` with the unit spelling riding
-    after ``|`` (see CoordRecord.def_key); the spelling belongs to
-    storage deduplication only, never to value identity.
+    Value-identity keys are ``fp:{data_id}`` (see CoordRecord.def_key);
+    any other prefix names a summary, not the values.
     """
     if not (isinstance(key, str) and key.startswith("fp:")):
         return None
-    return key[3:].split("|", maxsplit=1)[0]
+    return key[3:]
 
 
 def _ns(value) -> int | None:
@@ -146,7 +145,7 @@ def _coord_record_from_row(
     Delegates to the ingest converter through a range CoordSummary so
     virtual outputs carry the same identities real patches would: a
     carried ``fp:`` def key survives for non-planned dims, and the
-    planned dim's range physical id is reconstructed exactly. ``dims``
+    planned dim's range data_id is reconstructed exactly. ``dims``
     names the dimensions the coordinate rides (itself by default).
     `name_is_held` says the members hold this coordinate, so a record is
     written even when nothing about its values can be stated: the patch
@@ -162,10 +161,10 @@ def _coord_record_from_row(
         # the same way, matching another output only when the members it
         # joined were the same.
         key = row.get(f"_{name}_def_key")
-        physical_id = _def_key_physical_id(key)
-        if physical_id is None and isinstance(key, str) and key.startswith("cat:"):
-            physical_id = key[4:]
-        if physical_id is None and not name_is_held:
+        data_id = _def_key_data_id(key)
+        if data_id is None and isinstance(key, str) and key.startswith("cat:"):
+            data_id = key[4:]
+        if data_id is None and not name_is_held:
             return None
         units = row.get(f"_{name}_units")
         if units == "" or (units is not None and pd.isnull(units)):
@@ -177,7 +176,7 @@ def _coord_record_from_row(
             coord_dims=",".join(dims),
             length=None,
             units=units,
-            physical_id=physical_id,
+            data_id=data_id,
         )
     step = row.get(f"{name}_step")
     step = None if step is None or pd.isnull(step) else step
@@ -185,7 +184,7 @@ def _coord_record_from_row(
         # string coords have no range representation; store the
         # lexicographic envelope directly
         key = row.get(f"_{name}_def_key")
-        physical_id = _def_key_physical_id(key)
+        data_id = _def_key_data_id(key)
         return CoordRecord(
             coord_name=name,
             value_kind="str",
@@ -195,7 +194,7 @@ def _coord_record_from_row(
             units=None,
             min_str=str(lo),
             max_str=None if hi is None or pd.isnull(hi) else str(hi),
-            physical_id=physical_id,
+            data_id=data_id,
         )
     # Only the str envelope above represents a missing max. Every producer
     # writes {name}_min and {name}_max together -- _output_records feeds
@@ -237,10 +236,10 @@ def _coord_record_from_row(
         span = (hi - lo) / step  # ty: ignore[unsupported-operator]
         length = round(abs(span)) + 1
     key = row.get(f"_{name}_def_key")
-    physical_id = _def_key_physical_id(key)
+    data_id = _def_key_data_id(key)
     # the grid is the source's; once the def key (value identity) is gone,
     # so are the values it described
-    grid = row.get(f"_{name}_grid") if physical_id else None
+    grid = row.get(f"_{name}_grid") if data_id else None
     exact = {}
     if isinstance(grid, tuple):
         *terms, length = grid
@@ -253,7 +252,7 @@ def _coord_record_from_row(
         units=units,
         dims=dims,
         len=length,
-        physical_id=physical_id,
+        data_id=data_id,
         **exact,
     )
     return _coord_record(name, summary)
@@ -291,7 +290,7 @@ def _aux_coord_info(
 
     Aggregated from the *member source rows* (authoritative, unlike the
     planner's carried columns). Structural identity (def key and step,
-    which permit physical id claims) is kept only when every member
+    which permit value-identity claims) is kept only when every member
     shares one def key and the values provably survive assembly: a
     coordinate riding the planned dimension is trimmed/merged with it,
     so only a lone unmodified member keeps identity there. Envelopes
@@ -1068,7 +1067,7 @@ def _with_parent_runs(
             for coord in patch.coords:
                 coords.append(coord)
                 merged = name in str(coord.coord_dims).split(",")
-                if len(ids) > 1 and (merged or not coord.physical_id):
+                if len(ids) > 1 and (merged or not coord.data_id):
                     continue
                 kind = (coord.coord_name, coord.value_kind, coord.is_relative)
                 coords.extend(

@@ -58,6 +58,7 @@ from dascore.utils.gaps import GapTolerance
 from dascore.utils.identity import (
     _ID_FIELDS,
     ids_enabled,
+    operation_context,
     operation_id,
     stamp,
     warn_random_id,
@@ -372,7 +373,10 @@ def record_call(
     hist_str = _get_history_str(patch, func, *args, _history=history, **kwargs)
     attrs = _maybe_add_history_str(out.attrs, hist_str)
     attrs = _stamp(patch, attrs, patch_func, args, kwargs, output)
-    return out if attrs is out.attrs else out.update(attrs=attrs)
+    # The call named itself just now; installing what it recorded is part
+    # of it, not another change to record.
+    with operation_context():
+        return out if attrs is out.attrs else out.update(attrs=attrs)
 
 
 def _record_members(out, patch, patch_func, args, kwargs):
@@ -431,12 +435,16 @@ def numpy_fallback(name, data, func, args=(), kwargs=None, stacklevel=4):
         The stack level, as understood by warnings.warn, of the caller.
     """
     warn_numpy_fallback(name, backend_name(data), stacklevel=stacklevel + 1)
-    converted = tuple(_to_numpy_arg(x) for x in args)
-    kwargs = {i: _to_numpy_arg(v) for i, v in (kwargs or {}).items()}
-    out = func(*converted, **kwargs)
-    # Only patches carry data back to the original backend.
-    if isinstance(out, dc.Patch):
-        out = out.new(data=asarray_like(out.data, data))
+    # Crossing the backend boundary is part of the operation being applied,
+    # not data replacement: the same values are the same data, and what
+    # `func` records still stands.
+    with operation_context():
+        converted = tuple(_to_numpy_arg(x) for x in args)
+        kwargs = {i: _to_numpy_arg(v) for i, v in (kwargs or {}).items()}
+        out = func(*converted, **kwargs)
+        # Only patches carry data back to the original backend.
+        if isinstance(out, dc.Patch):
+            out = out.new(data=asarray_like(out.data, data))
     return out
 
 
@@ -529,19 +537,22 @@ def patch_function(
                 coords=required_coords,
             )
             check_patch_attrs(patch, required_attrs)
-            out = func(patch, *args, **kwargs)
-            attr_updates = {}
-            if data_type is not None:
-                attr_updates["data_type"] = data_type
-            # Only when something new came back: an operation which
-            # handed the patch straight through did nothing, and nothing
-            # is what it records.
-            if out is not patch and hasattr(out, "attrs"):
-                out = record_call(out, patch, patch_func, args, kwargs)
-            elif isinstance(out, dc.BaseSpool | list | tuple):
-                out = _record_members(out, patch, patch_func, args, kwargs)
-            if attr_updates and hasattr(out, "attrs"):
-                out = out.update_attrs(**attr_updates)
+            # The body and what it records are one operation, which names
+            # itself; the replacements it makes on the way do not.
+            with operation_context():
+                out = func(patch, *args, **kwargs)
+                attr_updates = {}
+                if data_type is not None:
+                    attr_updates["data_type"] = data_type
+                # Only when something new came back: an operation which
+                # handed the patch straight through did nothing, and nothing
+                # is what it records.
+                if out is not patch and hasattr(out, "attrs"):
+                    out = record_call(out, patch, patch_func, args, kwargs)
+                elif isinstance(out, dc.BaseSpool | list | tuple):
+                    out = _record_members(out, patch, patch_func, args, kwargs)
+                if attr_updates and hasattr(out, "attrs"):
+                    out = out.update_attrs(**attr_updates)
             return out
 
         # Attach original function. Although we want to encourage raw_function
@@ -1556,6 +1567,12 @@ def _merge_aligned_coords(cm1, cm2):
     return cm1.update(**out)
 
 
+def _same_but_for_ids(attrs1, attrs2) -> bool:
+    """Whether two attrs agree on everything but which data they name."""
+    blank = dict.fromkeys(_ID_FIELDS, "")
+    return attrs1.model_copy(update=blank) == attrs2.model_copy(update=blank)
+
+
 def _merge_models(attrs1, attrs2):
     """
     Fold the attrs of two same-kind patches: the first wins, the second adds.
@@ -1566,7 +1583,7 @@ def _merge_models(attrs1, attrs2):
     not `combine_patch_attrs`, which combines a collection and so treats
     a missing value as a value rather than as something to fill.
     """
-    if attrs1 == attrs2:
+    if attrs1 == attrs2 or _same_but_for_ids(attrs1, attrs2):
         return attrs1
     # keep_first gives the first patch's value for everything, folds the
     # ids, and keeps the history and the attrs subclass; the data units of

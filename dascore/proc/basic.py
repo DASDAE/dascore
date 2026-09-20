@@ -24,6 +24,7 @@ from dascore.core.processor import PatchProcessor
 from dascore.core.source import ArraySource
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
+from dascore.models.base import values_equal
 from dascore.units import get_quantity
 from dascore.utils.array import _apply_binary_ufunc
 from dascore.utils.array_api import (
@@ -37,6 +38,16 @@ from dascore.utils.array_api import (
     warn_numpy_fallback,
 )
 from dascore.utils.docs import compose_docstring
+from dascore.utils.identity import (
+    _ID_FIELDS,
+    _without_ids,
+    ids_enabled,
+    inside_operation,
+    new_id,
+    operation_context,
+    stamp,
+    try_operation_id,
+)
 from dascore.utils.misc import _get_nullish
 from dascore.utils.moving import move_max
 from dascore.utils.patch import (
@@ -46,6 +57,9 @@ from dascore.utils.patch import (
 )
 from dascore.utils.time import dtype_time_like
 from dascore.utils.window import resolve_window
+
+# An attr a patch does not state at all, which no value can equal.
+_MISSING = object()
 
 # The dtypes which promise, without the values being looked at, that there
 # is no imaginary part: bool, signed and unsigned integers, and floats.
@@ -88,6 +102,67 @@ def _as_float(data):
     return xp.astype(data, xp.float64)
 
 
+def _ids_given(patch, attrs) -> bool:
+    """Whether the caller installed ids of its own rather than the patch's."""
+    return any(
+        getattr(attrs, name, "") != getattr(patch.attrs, name, "")
+        for name in _ID_FIELDS
+    )
+
+
+def _ids_stated(params) -> bool:
+    """Whether a call named an id itself, which is the caller's to state."""
+    return any(name in params for name in _ID_FIELDS)
+
+
+# What an id does not speak for: which data it is, and how it was reached.
+_UNSTAMPED = {**dict.fromkeys(_ID_FIELDS, ""), "history": ()}
+
+
+def _states_other_metadata(patch, attrs) -> bool:
+    """Whether attrs say anything about the patch beyond its ids and history."""
+    return attrs.model_copy(update=_UNSTAMPED) != patch.attrs.model_copy(
+        update=_UNSTAMPED
+    )
+
+
+def _named_mutation(patch, attrs, name: str, params: Mapping, changed: bool):
+    """
+    Return the ids a metadata change made outside an operation leaves behind.
+
+    Inside one the operation stamps its own result, a call which changed
+    nothing keeps what it was given, and ids the caller stated are its own.
+    Metadata, which describes data it does not hold, is left to the routes
+    which build it (the readers and the index).
+    """
+    if not changed or inside_operation() or not hasattr(patch, "_data"):
+        return attrs
+    if not ids_enabled():
+        # A changed patch claims no id rather than the one it came from.
+        return _without_ids(attrs)
+    if _ids_given(patch, attrs):
+        return attrs
+    return stamp(attrs, [patch.attrs], try_operation_id(name, params))
+
+
+def _replacement_attrs(patch, data, coords, attrs, dtype):
+    """Return the ids `update` leaves behind when it is not inside an operation."""
+    if inside_operation() or not hasattr(patch, "_data"):
+        return attrs
+    replaced_data = data is not None and data is not patch._data
+    if replaced_data or (dtype is not None and dtype != patch.dtype):
+        if not ids_enabled():
+            return _without_ids(attrs)
+        # An array nothing can be derived for; where it came from still stands.
+        return attrs if _ids_given(patch, attrs) else attrs.update(data_id=new_id())
+    params = {}
+    if coords is not patch.coords and coords != patch.coords:
+        params["coords"] = coords
+    if attrs is not patch.attrs and _states_other_metadata(patch, attrs):
+        params["attrs"] = attrs
+    return _named_mutation(patch, attrs, "update", params, bool(params))
+
+
 def set_dims(self: PatchType, **kwargs: str) -> PatchType:
     """
     Set dimension to non-dimensional coordinate.
@@ -114,7 +189,9 @@ def set_dims(self: PatchType, **kwargs: str) -> PatchType:
     >>> assert "my_coord" in out.dims
     """
     cm = self.coords.set_dims(**kwargs)
-    return self.new(coords=cm)
+    attrs = _named_mutation(self, self.attrs, "set_dims", kwargs, cm is not self.coords)
+    with operation_context():
+        return self.new(coords=cm, attrs=attrs)
 
 
 def pipe(self: PatchType, func: Callable[..., PatchType], *args, **kwargs) -> PatchType:
@@ -174,9 +251,20 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     >>> # Add new custom attributes
     >>> with_custom = patch.update_attrs(processing_date="2024-01-01")
     """
-    new_attrs = self.attrs.model_dump(exclude_unset=True)
-    new_attrs.update(attrs)
-    return self.new(attrs=PatchAttrs.from_dict(new_attrs))
+    stated = self.attrs.model_dump(exclude_unset=True)
+    new_attrs = {**stated, **attrs}
+    out_attrs = PatchAttrs.from_dict(new_attrs)
+    if not inside_operation():
+        # What the caller wrote, rather than the models compared: the same
+        # values restated are the same attrs, and comparing them costs
+        # more than the call itself.
+        changed = not _ids_stated(attrs) and any(
+            key not in _UNSTAMPED and not values_equal(stated.get(key, _MISSING), value)
+            for key, value in new_attrs.items()
+        )
+        out_attrs = _named_mutation(self, out_attrs, "update_attrs", attrs, changed)
+    with operation_context():
+        return self.new(attrs=out_attrs)
 
 
 # Which data a patch is and what was done to it are not part of what it
@@ -292,6 +380,7 @@ def update(
         attrs = PatchAttrs.from_dict(attrs)
     else:
         attrs = self.attrs
+    attrs = _replacement_attrs(self, data, coords, attrs, dtype)
     # Each kind keeps what it is: `drop_data` and `to_patch`, not a
     # keyword here, are how data come and go.
     out = self._new_like(data, coords, attrs, dtype)

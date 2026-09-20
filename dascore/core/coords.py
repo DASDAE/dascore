@@ -247,7 +247,7 @@ class CoordSummary(DascoreBaseModel):
     units: UnitQuantity | None = None
     dims: tuple[str, ...] = ()
     len: int | None = None
-    physical_id: str | None = None
+    data_id: str | None = None
     # The exact grid of a CoordRange, in ticks; None for other coords.
     step_numerator: int | None = None
     step_denominator: int | None = None
@@ -820,28 +820,15 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         msg = "Coordinates are not hashable; use `data_id` for stable IDs."
         raise TypeError(msg)
 
-    def _get_physical_coord(self) -> Self:
-        """Return a coordinate normalized for a stable physical id."""
-        if self.units is None or dtype_time_like(self.dtype):
-            return self
-        # The unguarded conversion, deliberately. A coord already in base
-        # units matches the guard and would come back with whatever dtype
-        # it happens to have, while one which is not converts to floats --
-        # so an integer range in metres and the same range in centimetres
-        # would get different physical ids. Converting both is what puts them
-        # in one numeric form.
-        _, units = get_factor_and_unit(self.units, simplify=True)
-        return self._convert_units(units)
-
     def _hash_scalar(self, value, name: str = "start") -> tuple[str, str | None]:
         """
         Return a dtype-aware scalar hash token.
 
         The value is first conformed to the coordinate's own dtype, since
-        a physical id identifies *values*, not how they were spelled: a
-        range whose start was given as `0` holds the same coordinate as
-        one given `0.0`, and a step of four milliseconds is the step of
-        four million nanoseconds. Without this they would be stored under
+        an id names *values*, not how they were spelled: a range whose
+        start was given as `0` holds the same coordinate as one given
+        `0.0`, and a step of four milliseconds is the step of four
+        million nanoseconds. Without this they would be stored under
         different identities and never deduplicate.
         """
         if value is None:
@@ -851,52 +838,41 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             value = _conformed(value, _scalar_dtype(dtype, name))
         return ("scalar", hash_array(np.asarray([value])))
 
-    @staticmethod
-    def _coord_identity(coord: BaseCoord) -> str:
-        """Return a stable identifier for one coordinate class."""
-        cls = coord.__class__
+    def _class_identity(self) -> str:
+        """Return a stable identifier for this coordinate's class."""
+        cls = self.__class__
         return f"{cls.__module__}.{cls.__qualname__}"
 
     @abc.abstractmethod
     def _id_components(self) -> tuple[Any, ...]:
         """Return subclass-specific id components."""
 
-    @cached_method
-    def _physical_id(self) -> str:
-        """
-        Return a stable id whose matches imply coord equality.
-
-        Notes
-        -----
-        Physical ids are designed for stable identifiers, not tolerant
-        comparison. As a result, coordinates that are approximately equal can
-        still have different physical ids.
-        """
-        coord = self._get_physical_coord()
-        payload = (
-            self._coord_identity(coord),
-            coord.unit_str,
-            *coord._id_components(),
-        )
-        # Built from strings and None alone, so it is its own encoding.
-        return H("coord", payload, encoded=True)
-
     @property
+    @cached_method
     def data_id(self) -> str:
         """
         Return the id of the values this coordinate holds.
 
-        Stricter than `_physical_id`, which says two coordinates hold the
-        same physical values: the same range in metres and in centimetres
-        select differently, so the units and dtype it is written in count.
+        Exact: the class, the units as written, and the values in the
+        coordinate's own units and dtype. The same range in metres and in
+        centimetres selects differently, so they are two ids.
+
+        Notes
+        -----
+        Ids are stable identifiers, not tolerant comparison, so
+        coordinates which are approximately equal can have different ids.
         """
-        return self._identity()[1]
+        payload = (
+            self._class_identity(),
+            self.unit_str,
+            *self._id_components(),
+        )
+        # Built from strings, numbers and None alone, so it is its own encoding.
+        return H("coord", payload, encoded=True)
 
     def _identity(self) -> tuple[str, str]:
         """Return the id this coordinate has as a parameter or in a content id."""
-        dtype = str(np.dtype(self.dtype)) if self.dtype else ""
-        exact = [self._physical_id(), self.unit_str, dtype]
-        return "coord", H("coord", exact)
+        return "coord", self.data_id
 
     @cached_method
     def min(self):
@@ -1362,7 +1338,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             units=self.units,
             dims=dims,
             len=self.shape[0] if self.ndim else 1,
-            physical_id=self._physical_id(),
+            data_id=self.data_id,
         )
 
     def update(self, **kwargs):
@@ -1539,7 +1515,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         Return True if the coordinates are approximately equal.
 
         This is a tolerant comparison helper. It is intentionally distinct
-        from `_physical_id()`, which is stricter and intended for stable IDs.
+        from `data_id`, which is stricter and intended for stable ids.
 
         Parameters
         ----------
@@ -1767,7 +1743,7 @@ class CoordPartial(BaseCoord):
             dtype=self.dtype,
             units=None,
             dims=dims,
-            physical_id=self._physical_id(),
+            data_id=self.data_id,
         )
 
     def _id_components(self) -> tuple[Any, ...]:
@@ -2297,11 +2273,6 @@ class CoordRange(BaseCoord):
         if self._exact and self.step_denominator != 1:
             return (*components, self._grid_terms)
         return components
-
-    def _get_physical_coord(self) -> Self:
-        if self._exact and self.step_denominator != 1:
-            return self  # units cannot convert; see _convert_units
-        return super()._get_physical_coord()
 
     def _repr_fields(self) -> tuple[tuple[str, Text, bool], ...]:
         fields = super()._repr_fields()
@@ -3111,7 +3082,7 @@ class CoordSegmented(BaseCoord):
       inputs fuse into one segment.
     - Normalization promotes exactly evenly sampled array segments to ranges
       and fuses segments that continue exactly, so equal-valued segmented
-      coordinates compare equal and share a physical id regardless of how
+      coordinates compare equal and share a `data_id` regardless of how
       they were assembled.
     - `step` is always None; use
       [`simplify`](`dascore.core.coords.BaseCoord.simplify`) to obtain an
@@ -3273,7 +3244,7 @@ class CoordSegmented(BaseCoord):
 
     def _id_components(self) -> tuple[Any, ...]:
         """Return the payload identifying segmented coords."""
-        return (("segments", tuple(x._physical_id() for x in self.segments)),)
+        return (("segments", tuple(x.data_id for x in self.segments)),)
 
     def new(self, **kwargs):
         """Update coordinate."""
@@ -4083,7 +4054,7 @@ class CoordString(BaseCoord):
             units=None,
             dims=dims,
             len=self.shape[0] if self.ndim else 1,
-            physical_id=self._physical_id(),
+            data_id=self.data_id,
         )
 
     def _id_components(self) -> tuple[Any, ...]:

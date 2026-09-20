@@ -993,7 +993,7 @@ class TestIngestEdges:
             dims = ("x",)
             len = 2
             units = None
-            physical_id = None
+            data_id = None
             min = 0
             max = 1
             step = None
@@ -1233,8 +1233,8 @@ class TestCoordDeduplication:
         assert n_defs_after == n_defs + 1
         back.close()
 
-    def test_physical_id_backed_defs(self, tmp_path):
-        """Summaries from real patches carry physical ids into defs."""
+    def test_data_id_backed_defs(self, tmp_path):
+        """Summaries from real patches carry coordinate ids into defs."""
         summary = PatchSummary.from_patch(dc.get_example_patch())
         structured = summary.dump_structured()
         structured.update(
@@ -1246,8 +1246,8 @@ class TestCoordDeduplication:
         )
         back = get_backend(tmp_path / "fp.sqlite3")
         back.write_sources(summaries_to_records([PatchSummary(**structured)]))
-        defs = back._fetch_df("SELECT def_key, physical_id FROM coord_defs")
-        assert defs["physical_id"].notna().all()
+        defs = back._fetch_df("SELECT def_key, data_id FROM coord_defs")
+        assert defs["data_id"].notna().all()
         assert defs["def_key"].str.startswith("fp:").all()
         back.close()
 
@@ -1261,13 +1261,13 @@ class TestCoordDeduplication:
         summary = PatchSummary.from_patch(patch)
         record = _coord_record("distance", summary.coords["distance"])
         assert record is not None
-        assert record.physical_id == patch.get_coord("distance")._physical_id()
+        assert record.data_id == patch.get_coord("distance").data_id
         assert record.def_key.startswith("fp:")
 
     def test_summary_key_stable_through_export(self, tmp_path):
         """A summary-keyed coord dedups against its own exported records."""
         # Without a step the coord is not range-like, so it has no
-        # physical id to key on and falls back to hashing its stored fields.
+        # data_id to key on and falls back to hashing its stored fields.
         summary = PatchSummary(
             attrs={"tag": "raw"},
             coords={"time": {**_time_coord("2024-01-01T00:00:00", 60), "step": None}},
@@ -1539,20 +1539,26 @@ class TestWhatARowCannotState:
         assert not row["_attrs_complete"]
 
     def test_source_dtypes_survive_shared_coordinate_definitions(self):
-        """Equal coordinate values share an identity while retaining source types."""
+        """Identical coordinates share a definition; a dtype is part of one."""
         base = dc.get_example_patch()
+        dtypes = (np.int32, np.float64, np.float64)
         patches = [
             base.update_coords(
                 distance=get_coord(values=np.arange(300, dtype=dtype), units="m")
             )
-            for dtype in (np.int32, np.float64)
+            for dtype in dtypes
         ]
         spool = dc.spool(patches)
         copies = (spool, spool + dc.spool([]), pickle.loads(pickle.dumps(spool)))
         for copied in copies:
             rows = copied._df
-            assert list(rows["_distance_coord_dtype"]) == ["int32", "float64"]
-            assert rows["_distance_def_key"].nunique() == 1
+            assert list(rows["_distance_coord_dtype"]) == [
+                "int32",
+                "float64",
+                "float64",
+            ]
+            keys = list(rows["_distance_def_key"])
+            assert keys[1] == keys[2] != keys[0]
 
     def test_flat_attribute_collision_requires_loading(self):
         """Queryable attrs omitted from flat rows cannot be reconstructed there."""

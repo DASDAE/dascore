@@ -363,7 +363,11 @@ class TestNew:
         """If attrs is not passed to new, old attrs should remain."""
         pa = random_patch.update_attrs(network="bob", tag="2", station="10")
         new_1 = pa.update(data=pa.data * 10)
-        assert new_1.attrs == pa.attrs
+        # Which data it is cannot survive the data being replaced.
+        assert new_1.attrs.model_dump(exclude={"data_id"}) == pa.attrs.model_dump(
+            exclude={"data_id"}
+        )
+        assert new_1.attrs.data_id != pa.attrs.data_id
 
     def test_new_dims_renames_dims(self, random_patch):
         """Ensure new can rename dimensions."""
@@ -573,10 +577,10 @@ class TestPatchSummary:
         summary = random_patch.summary
         assert summary.dim_tuple == summary.dims
 
-    def test_flat_dump_includes_coord_physical_id(self, random_patch):
-        """Flattened summaries should preserve coord physical ids."""
+    def test_flat_dump_includes_coord_data_id(self, random_patch):
+        """Flattened summaries should preserve coord ids."""
         out = random_patch.summary.flat_dump()
-        assert out["time_physical_id"] == random_patch.get_coord("time")._physical_id()
+        assert out["time_data_id"] == random_patch.get_coord("time").data_id
 
     def test_patch_summary_is_cached(self, random_patch):
         """Patch.summary should reuse the same summary instance."""

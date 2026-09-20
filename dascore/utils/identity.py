@@ -39,6 +39,7 @@ import re
 import sys
 import warnings
 from collections.abc import Callable, Mapping, Sequence, Set
+from contextvars import ContextVar
 from dataclasses import dataclass
 from enum import Enum
 from functools import partial
@@ -171,6 +172,38 @@ def ids_enabled() -> bool:
     from dascore import get_config  # noqa: PLC0415
 
     return get_config().patch_provenance != "disabled"
+
+
+# Whether the code running is the body of an operation, which stamps its
+# own result. The low-level replacements (`Patch.update` and friends) then
+# leave the ids alone rather than each naming itself.
+_IN_OPERATION: ContextVar[bool] = ContextVar("dascore_in_operation", default=False)
+
+
+def inside_operation() -> bool:
+    """Whether an operation is running, and will stamp its own result."""
+    return _IN_OPERATION.get()
+
+
+class operation_context:  # noqa: N801
+    """
+    Run a block as the body of an operation.
+
+    A class rather than a generator: every patch function enters one, and
+    `contextlib.contextmanager` costs about half a microsecond more.
+    """
+
+    __slots__ = ("_token",)
+
+    def __enter__(self):
+        """Say that an operation is running."""
+        self._token = _IN_OPERATION.set(True)
+        return self
+
+    def __exit__(self, *exception):
+        """Say what was running before."""
+        _IN_OPERATION.reset(self._token)
+        return False
 
 
 def operation_id(name: str, params: Mapping[str, Any], version: str = "1.0") -> str:

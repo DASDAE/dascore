@@ -171,7 +171,7 @@ class TestVersion2Files:
         (scanned,) = dc.scan(path)
         summary = scanned.coords["time"]
         assert summary.step is None
-        assert summary.physical_id == gapped_patch.get_coord("time")._physical_id()
+        assert summary.data_id == gapped_patch.get_coord("time").data_id
 
     def test_split_still_honored(self, gapped_patch, tmp_path):
         """An explicit split writes each run as its own patch."""

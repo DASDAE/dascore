@@ -33,16 +33,18 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 21 names row numbers
-# `_row`; version 20 renamed the two id attrs and rehashed coordinate
-# keys; version 19 keys a single-patch HDF5 source by its dataset path;
+# changes, not only when a column does. Version 22 hashes a coordinate in
+# the units it was written in, so the key names one spelling; version 21
+# names row numbers `_row`; version 20 renamed the two id attrs and
+# rehashed coordinate keys;
+# version 19 keys a single-patch HDF5 source by its dataset path;
 # version 18 counts patches and coordinate variants; version 17 links a
 # segmented coordinate to each of its runs; version 16 stored each range
 # coordinate's exact grid and named the envelope columns by storage type;
 # version 15 stored source coordinate and numeric attribute dtypes.
 # Earlier indexes lack the metadata required for reconstruction and are
 # rebuilt when opened.
-INDEX_VERSION = 21
+INDEX_VERSION = 22
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -160,9 +162,9 @@ class CoordDefRow(NamedTuple):
     A row of the coord_defs table.
 
     Unique coordinate summaries, deduplicated across patches. Range
-    coordinates use a semantic physical id supplied by the scan or
+    coordinates use the coordinate's data_id, supplied by the scan or
     reconstructed exactly from the range summary. Non-range coordinates
-    without a physical id use a summary hash for storage deduplication,
+    without a data_id use a summary hash for storage deduplication,
     but it is not exposed as value identity.
 
     The envelope columns are named by storage type: `_int` holds epoch
@@ -172,7 +174,7 @@ class CoordDefRow(NamedTuple):
 
     coord_row: int
     def_key: str
-    physical_id: str | None  # semantic hash from CoordSummary
+    data_id: str | None  # value identity from CoordSummary
     value_kind: str  # num | time | str
     dtype: str
     length: int | None
