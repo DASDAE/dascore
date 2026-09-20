@@ -24,7 +24,6 @@ from dascore.core.processor import PatchProcessor
 from dascore.core.source import ArraySource
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
-from dascore.models.base import values_equal
 from dascore.units import get_quantity
 from dascore.utils.array import _apply_binary_ufunc
 from dascore.utils.array_api import (
@@ -37,6 +36,7 @@ from dascore.utils.array_api import (
     to_numpy,
     warn_numpy_fallback,
 )
+from dascore.utils.attrs import _attr_values_equal
 from dascore.utils.docs import compose_docstring
 from dascore.utils.identity import (
     _ID_FIELDS,
@@ -273,7 +273,7 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
             key: out_attrs.get(key, _MISSING) for key in attrs if key not in _UNSTAMPED
         }
         changed = any(
-            not values_equal(self.attrs.get(key, _MISSING), value)
+            not _attr_values_equal(self.attrs.get(key, _MISSING), value)
             for key, value in params.items()
         )
         out_attrs = _named_mutation(self, out_attrs, "update_attrs", params, changed)

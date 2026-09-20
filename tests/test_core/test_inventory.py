@@ -1685,9 +1685,7 @@ class TestCodexReviewRegressions:
 
     def test_nested_null_not_equal_to_value(self):
         """A nested null array is not equal to a non-null one."""
-        a = dc.PatchAttrs(foo={"x": np.array([np.nan])})
-        b = dc.PatchAttrs(foo={"x": np.array([1.0])})
-        assert a != b
+        assert not values_equal({"x": np.array([np.nan])}, {"x": np.array([1.0])})
 
     def test_nonfinite_interval_values_raise(self):
         """Nonfinite interval values raise."""
@@ -1847,9 +1845,7 @@ class TestCoverageCompleteness:
 
     def test_equality_array_shape_mismatch(self):
         """Nested arrays of different shapes compare unequal."""
-        a = dc.PatchAttrs(foo={"x": np.array([1.0, 2.0])})
-        b = dc.PatchAttrs(foo={"x": np.array([1.0])})
-        assert a != b
+        assert not values_equal({"x": np.array([1.0, 2.0])}, {"x": np.array([1.0])})
 
     def test_equality_sequence_length_mismatch(self):
         """Nested sequences of different lengths compare unequal."""

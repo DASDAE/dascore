@@ -1205,3 +1205,30 @@ class TestLegacyCoordFields:
 
         assert "fingerprint" in _LEGACY_COORD_FIELDS
         assert "data_id" not in _LEGACY_COORD_FIELDS
+
+
+class TestStoredNonScalarAttrs:
+    """A file written before attrs were required to be scalars still reads."""
+
+    @pytest.fixture
+    def path_with_array_attr(self, random_patch, tmp_path):
+        """A DASDAE file whose patch group stores an array attr."""
+        path = tmp_path / "array_attr.h5"
+        random_patch.io.write(path, "dasdae")
+        with h5py.File(path, "a") as h5:
+            group = h5["waveforms"][next(iter(h5["waveforms"]))]
+            group.attrs["_attrs_gauge"] = np.array([1.0, 2.0])
+        return path
+
+    def test_read_warns_and_drops(self, path_with_array_attr, random_patch):
+        """The array goes, the patch stays, and the warning names it."""
+        with pytest.warns(UserWarning, match=r"not scalars: \['gauge'\]"):
+            patch = dc.read(path_with_array_attr)[0]
+        assert "gauge" not in dict(patch.attrs)
+        assert np.array_equal(patch.data, random_patch.data)
+
+    def test_scan_warns_and_drops(self, path_with_array_attr):
+        """Scanning reads the same attrs, so it answers the same way."""
+        with pytest.warns(UserWarning, match="not scalars"):
+            summary = dc.scan(path_with_array_attr)[0]
+        assert "gauge" not in dict(summary.attrs)

@@ -613,13 +613,9 @@ class TestCheckKind:
         assert check_kind(legacy, random_patch, strict=True)
 
     def test_array_valued_kind_attr(self, random_patch):
-        """Array-valued kind attrs compare as a whole rather than raising."""
-        pa1 = random_patch.update_attrs(foo=np.array([1, 2]))
-        pa2 = random_patch.update_attrs(foo=np.array([1, 2]))
-        pa3 = random_patch.update_attrs(foo=np.array([1, 3]))
-        with config_context(patch_kind_attrs=("foo",)):
-            assert check_kind(pa1, pa2)
-            assert not check_kind(pa1, pa3, check_behavior="ignore")
+        """A kind attr is a scalar; an array never becomes one."""
+        with pytest.raises(pydantic.ValidationError, match="Attrs hold scalars"):
+            random_patch.update_attrs(foo=np.array([1, 2]))
 
     def test_retired_check_behavior_raises(self, random_patch):
         """The behavior argument is validated up front."""

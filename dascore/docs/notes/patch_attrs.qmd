@@ -12,6 +12,25 @@ This note explains how DASCore interprets a few important attributes, and its in
 
 `PatchAttrs` rejects nested coordinate payloads and does not own `dims` or coordinate-summary fields such as `time_min` and `distance_step`. Keeping these values out of attrs prevents coordinate edits from leaving stale duplicated metadata. Use coordinate APIs for structural changes and `Patch.summary.get_coord_summary(...)` or `PatchSummary.flat_dump(...)` for summary/index views.
 
+## Attrs hold scalars
+
+An attr is one value. Strings, bytes, booleans, numbers, `None`, numpy scalars (`datetime64` and `timedelta64` included), datetimes, timedeltas, enums and pint quantities and units with a scalar magnitude are attrs; a 0-d array is the scalar it wraps. Anything holding more than one value — an array with a shape, a list, a tuple, a set, a mapping, a dataframe or series, another model — is refused:
+
+```python
+patch.update_attrs(gauge_length=np.array([1.0, 2.0]))  # raises
+```
+
+Arrays are coordinates, which is where such a value belongs. A coordinate is checked against the shape it claims, travels through selection and chunking with the data it describes, and is what the index and the spool can query:
+
+```python
+patch.update_coords(gauge_length=("distance", array))
+patch.update_coords(reference=(None, array))  # rides no dimension
+```
+
+`history` is a declared field, and stays a tuple of strings. Declared fields of a format-specific subclass are whatever their annotations say; only extras are held to the rule.
+
+A file written before this rule may store an array in its attr namespace. Reading one still works: the reader drops the values a patch attr cannot hold and warns once, naming them. The refusal is for a patch built in memory, where the caller can put the value where it belongs.
+
 ## `data_type`
 
 `data_type` is an optional label for the kind of data contained in a patch. It is useful for display defaults, plotting choices, grouping, and quick inspection, but it is not the canonical source of physical meaning, rather the data and coordinate units, as well as the patch history serve this purpose.

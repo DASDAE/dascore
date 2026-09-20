@@ -114,7 +114,7 @@ def combine_patch_attrs(
                 for value in (x.get(key) for x in mod_dict_list)
             ]
             first = values[0]
-            agree = all(_values_equal(first, x) for x in values[1:])
+            agree = all(first == x for x in values[1:])
             if agree or conflict == "keep_first":
                 if first is not None:
                     out[key] = first
@@ -174,11 +174,14 @@ def known_only(values: pd.DataFrame | pd.Series) -> pd.DataFrame | pd.Series:
     return values.where(values.notna() & (values != ""))
 
 
-def _values_equal(value1, value2) -> bool:
-    """Compare two attr values; arrays compare as a whole."""
-    if isinstance(value1, np.ndarray) or isinstance(value2, np.ndarray):
-        return np.array_equal(value1, value2)
-    return bool(value1 == value2)
+def _attr_values_equal(one, two) -> bool:
+    """
+    Whether two attr values say the same thing, two nulls included.
+
+    Attrs are scalars, so equality is the comparison; a NaN equals
+    nothing, itself included, yet two of them agree on being nothing.
+    """
+    return bool(one == two) or bool(pd.isnull(one) and pd.isnull(two))
 
 
 def warn_if_histories_differ(attrs_list: Sequence[dc.PatchAttrs], operation: str):

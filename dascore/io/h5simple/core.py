@@ -6,6 +6,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type, windows_type
+from dascore.core.attrs import drop_non_scalar_attrs
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.utils.hdf5 import H5Reader
@@ -61,5 +62,6 @@ class H5Simple(FiberIO):
     def _metadata_and_data(resource, snap):
         """Parse metadata and retain its data node for a subsequent read."""
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
-        attrs = dc.PatchAttrs.from_dict(attrs)
+        # An h5 attr may be an array; a patch attr may not.
+        attrs = dc.PatchAttrs.from_dict(drop_non_scalar_attrs(attrs))
         return [dc.PatchMeta(attrs=attrs, coords=cm, dtype=str(data.dtype))], data

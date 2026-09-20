@@ -11,7 +11,7 @@ import json
 import numpy as np
 
 import dascore as dc
-from dascore.core.attrs import PatchAttrs
+from dascore.core.attrs import PatchAttrs, drop_non_scalar_attrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import (
     _EXACT_GRID_FIELDS,
@@ -471,6 +471,10 @@ def _get_metadata_from_group(group, legacy: bool = True, snap=True):
     else:
         coords = _get_coords(group, dims, {}, snap=snap)
         attr_info = out
+    # A file written before attrs were required to be scalars may store
+    # an array or a collection; it stays readable without them.
+    attrs_class = _get_attrs_class(group)
+    attr_info = drop_non_scalar_attrs(attr_info, attrs_class)
     # Marked here as it is when the patch is read: an id the file carries
     # is the one which survived the round trip, and `scan` prefers it to
     # the one it would derive only when a format says it stored one.
@@ -484,7 +488,7 @@ def _get_metadata_from_group(group, legacy: bool = True, snap=True):
         )
     dtype = str(data_node.dtype)
     return dc.PatchMeta(
-        attrs=_get_attrs_class(group).from_dict(attr_info),
+        attrs=attrs_class.from_dict(attr_info),
         coords=coords,
         dims=dims,
         dtype=dtype,

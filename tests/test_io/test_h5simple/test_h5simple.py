@@ -196,6 +196,16 @@ class TestH5Simple:
         with pytest.raises(UnknownFiberFormatError):
             dc.get_format(path)
 
+    def test_array_root_attr_is_dropped(self, h5simple_path, tmp_path):
+        """An h5 attr may be an array; a patch attr may not, so it goes."""
+        path = tmp_path / "array_attr.h5"
+        shutil.copy(h5simple_path, path)
+        with h5py.File(path, "r+") as h5:
+            h5.attrs["gauge"] = np.array([1.0, 2.0])
+        with pytest.warns(UserWarning, match=r"not scalars: \['gauge'\]"):
+            patch = dc.read(path)[0]
+        assert "gauge" not in dict(patch.attrs)
+
 
 class TestSingletonCoordinates:
     """A one-sample axis has a known position but no inferable interval."""

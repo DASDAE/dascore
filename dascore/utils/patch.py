@@ -47,7 +47,6 @@ from dascore.utils.array_api import (
 )
 from dascore.utils.attrs import (
     _is_missing,
-    _values_equal,
     combine_patch_attrs,
     warn_if_histories_differ,
 )
@@ -1391,7 +1390,8 @@ def check_kind(
         """A missing value is a wildcard unless the caller is strict."""
         if not strict and (value1 is None or value2 is None):
             return True
-        return _values_equal(value1, value2)
+        # Missing values are None by here, and an attr is a scalar.
+        return bool(value1 == value2)
 
     diffs = {x: (kind1[x], kind2[x]) for x in kind1 if not _equal(kind1[x], kind2[x])}
     if not diffs:

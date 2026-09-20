@@ -25,6 +25,7 @@ from dascore.exceptions import (
     PatchCoordinateError,
     PatchDataError,
 )
+from dascore.models import ArrayLike
 from dascore.proc.basic import Abs, Normalize, _known_real
 from dascore.utils.docs import compose_docstring
 from dascore.utils.identity import encode
@@ -753,6 +754,34 @@ class TestSignatureDrift:
                 ) -> PatchMetaType:
                     """Default the factor to something else."""
                     return Disagreeing(factor=factor).run(patch)
+
+    def test_an_array_default(self, patch):
+        """A default may be an array, which compares as a whole."""
+
+        class Windowed(PatchProcessor):
+            """Default a window the same way on both sides."""
+
+            window: ArrayLike = np.ones(3)
+
+            @staticmethod
+            def windowed(patch: PatchMetaType, /, window=np.ones(3)) -> PatchMetaType:
+                """Take the window the class stores."""
+                return Windowed(window=window).run(patch)
+
+        assert Windowed.windowed(patch) is not None
+        with pytest.raises(ParameterError, match="must agree on what unset"):
+
+            class Mismatched(PatchProcessor):
+                """Default the window two ways."""
+
+                window: ArrayLike = np.ones(3)
+
+                @staticmethod
+                def mismatched(
+                    patch: PatchMetaType, /, window=np.zeros(3)
+                ) -> PatchMetaType:
+                    """Default the window to something else."""
+                    return Mismatched(window=window).run(patch)
 
 
 class TestPlan:

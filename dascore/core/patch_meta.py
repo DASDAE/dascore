@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Mapping, Sequence
-from contextlib import suppress
 from functools import cached_property
 from typing import Any, Self
 from uuid import uuid4
@@ -19,7 +18,7 @@ from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.source import ArraySource
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import ParameterError
-from dascore.utils.attrs import _values_equal
+from dascore.utils.attrs import _attr_values_equal
 from dascore.utils.display import (
     NodeRepr,
     Repr,
@@ -46,17 +45,6 @@ from dascore.utils.time import to_float
 # The lineage fields an equality check leaves out, shared with the patch's
 # own `equals` so the two cannot drift apart.
 _LINEAGE = dascore.proc.basic._LINEAGE
-
-
-def _attr_values_equal(one, two) -> bool:
-    """Whether two attr values say the same thing, two nulls included."""
-    if _values_equal(one, two):
-        return True
-    # A NaN equals nothing, itself included, but two of them agree. An
-    # array answers `isnull` elementwise, which is not the question here.
-    with suppress(TypeError, ValueError):
-        return bool(pd.isnull(one) and pd.isnull(two))
-    return False
 
 
 def _as_dtype(dtype):

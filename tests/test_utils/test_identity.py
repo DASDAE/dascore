@@ -1549,17 +1549,17 @@ class TestPinId:
         assert pinned.attrs.history == done.attrs.history
         assert pinned.equals(done)
 
-    def test_an_attr_holding_a_model(self, patch):
+    def test_an_attr_json_cannot_spell(self, patch):
         """The id describes the attrs as they are, so they are not rewritten."""
-        summary = patch.coords.coord_map["time"].to_summary()
-        with_model = dc.Patch(
+        probe = dc.units.get_quantity("10 m")
+        with_quantity = dc.Patch(
             data=patch.data,
             coords=patch.coords,
             dims=patch.dims,
-            attrs={"probe": summary},
+            attrs={"probe": probe},
         )
-        pinned = with_model.pin_id()
-        assert isinstance(pinned.attrs.probe, type(summary))
+        pinned = with_quantity.pin_id()
+        assert pinned.attrs.probe == probe
         assert pinned.attrs.data_id == strong_data_id(pinned)
 
     def test_metadata_has_no_pin(self, patch):

@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Annotated, Any, Self, cast
+import datetime
+import warnings
+from collections.abc import Mapping, Sequence, Set
+from typing import Annotated, Any, NoReturn, Self, cast
 
+import numpy as np
+import pandas as pd
 from pydantic import (
     AfterValidator,
+    BaseModel,
     ConfigDict,
     Field,
     PlainValidator,
@@ -25,6 +30,63 @@ from dascore.utils.misc import (
 )
 
 str_validator = PlainValidator(to_str)
+
+# What an attr value may be. str and bytes come first because they are
+# also Sequences, which the refused tuple below covers.
+_SCALAR_TYPES = (
+    str,
+    bytes,
+    bool,
+    int,
+    float,
+    complex,
+    np.generic,
+    datetime.datetime,
+    datetime.date,
+    datetime.timedelta,
+    type(None),
+)
+
+# What it may not be: anything holding more than one value.
+_COLLECTION_TYPES = (
+    BaseModel,
+    Mapping,
+    Sequence,
+    Set,
+    pd.Series,
+    pd.DataFrame,
+    pd.Index,
+)
+
+
+def _scalar_attr(name: str, value: Any) -> Any:
+    """
+    Return the scalar an attr value is, raising for anything with a shape.
+
+    A 0-d array is the scalar it wraps; anything else with a shape, and
+    any collection, belongs on the patch as a coordinate.
+    """
+    if isinstance(value, _SCALAR_TYPES):
+        return value
+    if isinstance(value, np.ndarray):
+        if value.ndim == 0:
+            return value[()]
+        _raise_not_scalar(name, value)
+    if isinstance(value, _COLLECTION_TYPES) or np.ndim(value) != 0:
+        _raise_not_scalar(name, value)
+    return value
+
+
+def _raise_not_scalar(name: str, value: Any) -> NoReturn:
+    """Say that an attr holds no arrays, and where an array goes instead."""
+    msg = (
+        f"Attrs hold scalars, so {name!r} cannot be a "
+        f"{type(value).__name__}. An array belongs on the patch as a "
+        f"coordinate: patch.update_coords({name}=(dims, array)), or "
+        f"patch.update_coords({name}=(None, array)) for one which rides "
+        "no dimension."
+    )
+    raise ValueError(msg)
 
 
 class PatchAttrs(DascoreBaseModel):
@@ -103,7 +165,7 @@ class PatchAttrs(DascoreBaseModel):
     @model_validator(mode="before")
     @classmethod
     def reject_coordinate_attributes(cls, data: Any) -> Any:
-        """Reject nested coord payloads and ignore structural dims input."""
+        """Reject coord payloads and non-scalars; ignore structural dims."""
         if not isinstance(data, Mapping):
             return data
         data = dict(data)
@@ -115,6 +177,14 @@ class PatchAttrs(DascoreBaseModel):
         for old, new in (("patch_id", "origin_id"), ("processing_id", "data_id")):
             if value := data.pop(old, None):
                 data.setdefault(new, value)
+        # Declared fields are whatever their annotations allow; the rest
+        # are scalars, so that an array is a coordinate and nothing else.
+        # Value first: this runs on every patch, and almost every value
+        # is already a scalar.
+        for name, value in data.items():
+            if isinstance(value, _SCALAR_TYPES) or name in cls.model_fields:
+                continue
+            data[name] = _scalar_attr(name, value)
         return data
 
     def __getitem__(self, item):
@@ -185,3 +255,43 @@ class PatchAttrs(DascoreBaseModel):
     def flat_dump(self, exclude=None) -> dict:
         """Dump attrs to a flat dict."""
         return self.model_dump(exclude=exclude)
+
+
+def drop_non_scalar_attrs(
+    attrs: Mapping[str, Any], attr_class: type[PatchAttrs] = PatchAttrs
+) -> dict[str, Any]:
+    """
+    Return stored attrs without the values a patch attr cannot hold.
+
+    A file written before attrs were required to be scalars may carry
+    arrays or collections in its attr namespace. Dropping them, with one
+    warning naming the lot, keeps such a file readable. Declared fields
+    are left alone, as they are during validation.
+
+    Parameters
+    ----------
+    attrs
+        The attr names and values a file stored.
+    attr_class
+        The class the values are destined for, which decides which names
+        are declared fields.
+    """
+    fields = attr_class.model_fields
+    out: dict[str, Any] = {}
+    dropped = []
+    for name, value in attrs.items():
+        if name in fields:
+            out[name] = value
+            continue
+        try:
+            out[name] = _scalar_attr(name, value)
+        except ValueError:
+            dropped.append(name)
+    if dropped:
+        msg = (
+            f"Dropping stored attrs which are not scalars: {sorted(dropped)}. "
+            "Attrs hold scalars; such values belong on the patch as "
+            "coordinates."
+        )
+        warnings.warn(msg, UserWarning, stacklevel=2)
+    return out

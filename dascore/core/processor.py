@@ -54,7 +54,6 @@ from dascore.config import get_config
 from dascore.constants import PatchMetaType, PatchType
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel, model_values
-from dascore.utils.attrs import _values_equal
 from dascore.utils.identity import (
     _without_ids,
     callable_name,
@@ -472,6 +471,13 @@ _UNCHECKED: list[type[PatchProcessor]] = []
 _HOSTS: list[type] = []
 
 
+def _defaults_equal(value1, value2) -> bool:
+    """Compare two declared defaults; an array default compares as a whole."""
+    if isinstance(value1, np.ndarray) or isinstance(value2, np.ndarray):
+        return np.array_equal(value1, value2)
+    return bool(value1 == value2)
+
+
 def _has_kernel(cls: type[PatchProcessor]) -> bool:
     """Whether anything in the MRO computes data; see `kernel_for`."""
     return any(
@@ -730,7 +736,7 @@ def _check_signature(cls: type[PatchProcessor], func) -> None:
             if field.is_required()
             else field.get_default(call_default_factory=True)
         )
-        if not _values_equal(parameter.default, default):
+        if not _defaults_equal(parameter.default, default):
             msg = (
                 f"{cls.name} defaults {name} to {parameter.default!r} where "
                 f"{cls.__name__} defaults it to {default!r}; the two must "

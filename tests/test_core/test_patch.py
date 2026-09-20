@@ -904,11 +904,11 @@ class TestDataless:
 
     def test_equals_agrees_with_the_patch_it_describes(self, source):
         """The two read one comparison, so odd attrs cannot split them."""
-        odd = {"nan": float("nan"), "arr": np.arange(3)}
+        odd = {"nan": float("nan"), "count": 3}
         one, two = source.update_attrs(**odd), source.update_attrs(**odd)
         assert one.equals(two, only_required_attrs=False)
         assert one.drop_data().equals(two.drop_data(), only_required_attrs=False)
-        other = source.update_attrs(nan=float("nan"), arr=np.arange(4))
+        other = source.update_attrs(nan=float("nan"), count=4)
         assert not one.equals(other, only_required_attrs=False)
         assert not one.drop_data().equals(other.drop_data(), only_required_attrs=False)
 
