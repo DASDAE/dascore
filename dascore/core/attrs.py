@@ -101,7 +101,8 @@ def _scalar_attr(value: Any) -> Any:
     # says so through its magnitude, another library's array by its shape.
     magnitude = getattr(value, "magnitude", None)
     if magnitude is not None:
-        return value if _kind(type(magnitude)) is _ONE else _NOT_SCALAR
+        one = _kind(type(magnitude)) is _ONE or getattr(magnitude, "size", 0) == 1
+        return value if one else _NOT_SCALAR
     return value if getattr(value, "ndim", 0) == 0 else _NOT_SCALAR
 
 

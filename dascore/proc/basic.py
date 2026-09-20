@@ -59,7 +59,6 @@ from dascore.utils.time import dtype_time_like
 from dascore.utils.window import resolve_window
 
 # An attr a patch does not state at all, which no value can equal.
-_MISSING = object()
 
 # The dtypes which promise, without the values being looked at, that there
 # is no imaginary part: bool, signed and unsigned integers, and floats.
@@ -285,11 +284,10 @@ def update_attrs(
         # now: restating a value is not a change, and comparing whole
         # models costs more than the call itself.
         # As validated, so that "m" and a unit object are one spelling.
-        params = {
-            key: out_attrs.get(key, _MISSING) for key in attrs if key not in _UNSTAMPED
-        }
+        # A key the scalar pass skipped reads as None: removed, and encodable.
+        params = {key: out_attrs.get(key) for key in attrs if key not in _UNSTAMPED}
         changed = any(
-            not _attr_values_equal(self.attrs.get(key, _MISSING), value)
+            not _attr_values_equal(self.attrs.get(key), value)
             for key, value in params.items()
         )
         out_attrs = _named_mutation(self, out_attrs, "update_attrs", params, changed)

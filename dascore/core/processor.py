@@ -53,7 +53,8 @@ import dascore as dc
 from dascore.config import get_config
 from dascore.constants import PatchMetaType, PatchType
 from dascore.exceptions import ParameterError
-from dascore.models.base import DascoreBaseModel, model_values, values_equal
+from dascore.models.base import DascoreBaseModel, model_values
+from dascore.utils.attrs import _attr_values_equal
 from dascore.utils.identity import (
     _without_ids,
     callable_name,
@@ -729,7 +730,8 @@ def _check_signature(cls: type[PatchProcessor], func) -> None:
             if field.is_required()
             else field.get_default(call_default_factory=True)
         )
-        if not values_equal(parameter.default, default):
+        # Exactly: a default which drifted by a rounding error still drifted.
+        if not _attr_values_equal(parameter.default, default):
             msg = (
                 f"{cls.name} defaults {name} to {parameter.default!r} where "
                 f"{cls.__name__} defaults it to {default!r}; the two must "

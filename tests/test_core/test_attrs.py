@@ -554,3 +554,24 @@ class TestReviewThreads:
         assert _attr_values_equal(one, one.copy())
         assert not _attr_values_equal(one, np.array([1.0, 2.0]))
         assert _attr_values_equal(np.array(["a"]), np.array(["a"]))
+
+    def test_a_quantity_whose_magnitude_is_one_value(self):
+        """A 0-d or length-1 magnitude is still one quantity."""
+        from dascore.units import get_quantity  # noqa: PLC0415
+
+        unit = get_quantity("m")
+        for magnitude in (np.array(5.0), np.array([5.0])):
+            attrs = dc.PatchAttrs(length=magnitude * unit)
+            assert "length" in attrs.model_dump()
+        with pytest.warns(UserWarning, match="length"):
+            assert (
+                "length" not in dc.PatchAttrs(length=np.arange(3) * unit).model_dump()
+            )
+
+    def test_an_attr_the_pass_removed_still_derives(self):
+        """Replacing an attr with a skipped value is a nameable change."""
+        patch = dc.get_example_patch().update_attrs(gauge=1)
+        first = patch.update_attrs(gauge=[1, 2], on_non_scalar="ignore")
+        second = patch.update_attrs(gauge=[1, 2], on_non_scalar="ignore")
+        assert "gauge" not in first.attrs.model_dump()
+        assert first.attrs.data_id == second.attrs.data_id != patch.attrs.data_id
