@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
-from math import prod
+from math import isfinite, isnan, prod
 from typing import Any
 
 import numpy as np
@@ -14,6 +14,9 @@ from dascore.utils.identity import H
 
 # Where an array is, which names it when nothing better does.
 _LOCATION_FIELDS = ("path", "format", "version", "key")
+
+# The dtype kinds a constant may take: bool, int, uint and float.
+_REAL_KINDS = frozenset("buif")
 
 
 @dataclass(frozen=True, slots=True)
@@ -50,10 +53,16 @@ class ArraySource:
     extent
         The shape of the whole array, which says when the windows select
         all of it.
+    value
+        A constant which fills the array. Such a source has no path and
+        reads nothing; see [`full`](`dascore.core.source.ArraySource.full`).
+        None means the array is stored rather than constant.
 
     Examples
     --------
+    >>> import numpy as np
     >>> import dascore as dc
+    >>> from dascore.core.source import ArraySource
     >>> from dascore.utils.downloader import fetch
     >>>
     >>> patch = dc.read(fetch("example_dasdae_event_1.h5"))[0]
@@ -62,6 +71,10 @@ class ArraySource:
     >>> sub = source[10:20]
     >>> assert sub.shape[0] == 10 and sub.id != source.id
     >>> assert sub.load().shape == sub.shape
+    >>>
+    >>> # A constant source generates its array instead of reading one.
+    >>> constant = ArraySource.full((2, 3), np.nan)
+    >>> assert np.isnan(constant.load()).all()
     """
 
     path: str = ""
@@ -73,12 +86,52 @@ class ArraySource:
     dtype: Any = None
     base_id: str = ""
     extent: tuple[int, ...] = ()
+    value: Any = None
+
+    @classmethod
+    def full(cls, shape, value, dtype=None) -> ArraySource:
+        """
+        Return a source for a constant array, as `np.full` would build one.
+
+        Parameters
+        ----------
+        shape
+            The shape of the array.
+        value
+            The real scalar which fills it.
+        dtype
+            The dtype of the array; the value's own when not given.
+
+        Examples
+        --------
+        >>> import numpy as np
+        >>> from dascore.core.source import ArraySource
+        >>> assert ArraySource.full((3,), 0).load().dtype.kind == "i"
+        """
+        array = np.asarray(value)
+        dtype = array.dtype if dtype is None else np.dtype(dtype)
+        if array.ndim or not {array.dtype.kind, dtype.kind} <= _REAL_KINDS:
+            msg = f"A constant source takes a real scalar, not {value!r} of {dtype}."
+            raise ParameterError(msg)
+        # Cast the python scalar, not the array: numpy refuses a value the
+        # dtype cannot hold rather than casting it to something else.
+        try:
+            value = np.asarray(array.item(), dtype=dtype).item()
+        except (ValueError, OverflowError) as error:
+            msg = f"A constant of {value!r} does not fit in dtype {dtype}."
+            raise ParameterError(msg) from error
+        return cls(value=value).describe(shape, dtype)
+
+    @property
+    def constant(self) -> bool:
+        """Whether this generates its array rather than reading one."""
+        return self.value is not None
 
     @property
     def loadable(self) -> bool:
         """Whether this says enough to load the array."""
         described = self.dtype is not None and len(self.windows) == self.ndim
-        return bool(self.path and self.format and described)
+        return bool((self.constant or (self.path and self.format)) and described)
 
     @property
     def ndim(self) -> int:
@@ -91,6 +144,11 @@ class ArraySource:
         return prod(self.shape)
 
     @property
+    def _dtype(self) -> str | None:
+        """The canonical spelling of the dtype, if there is one."""
+        return None if self.dtype is None else np.dtype(self.dtype).str
+
+    @property
     def id(self) -> str:
         """
         The id of the array this selects; nothing is read to work it out.
@@ -98,8 +156,12 @@ class ArraySource:
         The whole array's id is its `base_id`. A window's is derived from
         the base and the absolute windows, so it does not depend on the
         slices which led to it, nor -- given a base -- on where the array
-        is kept.
+        is kept. A constant with no base is its contents alone, so any two
+        constant blocks of the same value, dtype and shape are one array.
         """
+        if self.constant and not self.base_id:
+            content = {"value": self.value, "dtype": self._dtype, "shape": self.shape}
+            return H("constant", content)
         location = {name: getattr(self, name) for name in _LOCATION_FIELDS}
         base = self.base_id or H("location", location)
         whole = tuple((0, size) for size in self.extent)
@@ -116,7 +178,8 @@ class ArraySource:
 
     def detach(self) -> ArraySource:
         """Return the provenance alone, for an array this no longer loads."""
-        return replace(self, windows=(), shape=(), dtype=None, extent=())
+        # A constant keeps nothing: its value was the array, not its origin.
+        return replace(self, windows=(), shape=(), dtype=None, extent=(), value=None)
 
     def narrow(self, indexer) -> ArraySource:
         """Return the source `indexer` selects, detached if not contiguous."""
@@ -150,6 +213,8 @@ class ArraySource:
         if not self.loadable:
             msg = f"{self} does not say enough to load an array."
             raise ParameterError(msg)
+        if self.constant:
+            return np.full(self.shape, self.value, dtype=self.dtype)
         return dc.io.core._load_array_source(self)
 
     def __array__(self, dtype=None, copy=None) -> np.ndarray:
@@ -160,7 +225,11 @@ class ArraySource:
     def to_dict(self) -> dict[str, Any]:
         """Return a JSON-compatible dict which `from_dict` reads back."""
         out = asdict(self)
-        out["dtype"] = None if self.dtype is None else np.dtype(self.dtype).str
+        out["dtype"] = self._dtype
+        # JSON spells no nan or inf, so a constant which is one is named.
+        value = self.value
+        if isinstance(value, float) and not isfinite(value):
+            out["value"] = "nan" if isnan(value) else ("inf" if value > 0 else "-inf")
         return out
 
     @classmethod
@@ -172,4 +241,6 @@ class ArraySource:
         out["windows"] = tuple((a, b) for a, b in out.get("windows", ()))
         if out.get("dtype") is not None:
             out["dtype"] = np.dtype(out["dtype"])
+        if isinstance(out.get("value"), str):
+            out["value"] = float(out["value"])
         return cls(**out)

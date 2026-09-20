@@ -195,6 +195,81 @@ class TestSerialize:
         assert np.array_equal(out.load(), patch.data[:4])
 
 
+class TestConstant:
+    """A source holding a value generates its array and reads nothing."""
+
+    @pytest.fixture()
+    def nans(self):
+        """A two dimensional block of NaN."""
+        return ArraySource.full((2, 3), np.nan)
+
+    def test_full(self, nans, reads):
+        """A constant loads without a path, and gives what `np.full` would."""
+        assert nans.constant and nans.loadable and not nans.path
+        expected = np.full((2, 3), np.nan)
+        assert np.array_equal(nans.load(), expected, equal_nan=True)
+        assert np.asarray(nans).shape == (2, 3)
+        assert not reads
+
+    def test_dtype_and_value(self):
+        """The dtype follows the value, and the value is a plain scalar."""
+        assert ArraySource.full((3,), 0).load().dtype == np.dtype(int)
+        source = ArraySource.full((3,), np.float64(2), dtype="float32")
+        assert source.load().dtype == np.dtype("float32")
+        assert type(source.value) is float
+        assert source == ArraySource.full((3,), 2.0, dtype="float32")
+
+    def test_slice(self, nans, reads):
+        """Slicing gives a smaller constant, still without reading."""
+        sub = nans[1:, :2]
+        assert sub.constant and sub.load().shape == (1, 2)
+        assert np.isnan(sub.load()).all() and not reads
+
+    @pytest.mark.parametrize(
+        ("value", "dtype"), [([1, 2], None), (None, None), (1j, None), (np.nan, "i8")]
+    )
+    def test_refused(self, value, dtype):
+        """Only a real scalar the dtype can hold makes a constant."""
+        with pytest.raises(ParameterError):
+            ArraySource.full((2,), value, dtype=dtype)
+
+    def test_id_is_the_contents(self, nans):
+        """Value, dtype and shape say which array a constant is; nothing else."""
+        assert nans.id == ArraySource.full((2, 3), np.nan).id
+        assert nans[:1].id == ArraySource.full((1, 3), np.nan).id
+        others = {
+            ArraySource.full((2, 3), 0.0).id,
+            ArraySource.full((2, 3), np.nan, dtype="float32").id,
+            ArraySource.full((3, 3), np.nan).id,
+        }
+        assert len(others) == 3 and nans.id not in others
+        assert replace(nans, base_id="x").id == "x"
+
+    @pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf, 0])
+    def test_json(self, value):
+        """A constant survives strict JSON, the non-finite floats included."""
+        source = ArraySource.full((2,), value)
+        text = json.dumps(source.to_dict(), allow_nan=False)
+        out = ArraySource.from_dict(json.loads(text))
+        assert out.to_dict() == source.to_dict() and out.id == source.id
+
+    def test_pickle(self, nans):
+        """Pickle keeps the value."""
+        out = pickle.loads(pickle.dumps(nans))
+        assert out.id == nans.id and np.isnan(out.load()).all()
+
+    def test_dict_without_a_value(self, source):
+        """A dict written before constants existed still reads back."""
+        contents = source.to_dict()
+        del contents["value"]
+        assert ArraySource.from_dict(contents) == source
+
+    def test_detach(self, nans):
+        """Detaching drops the value: the array is no longer that constant."""
+        assert not nans.detach().constant
+        assert not nans.detach().loadable
+
+
 class TestCarry:
     """Which operations keep a source which still loads their data."""
 
