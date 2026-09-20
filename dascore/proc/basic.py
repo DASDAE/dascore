@@ -181,7 +181,8 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
 
 # Which data a patch is and what was done to it are not part of what it
 # *is*: two patches holding the same data are equal however they were made.
-_LINEAGE = {"origin_id", "data_id"}
+# The ids, and what attrs pickled before they were renamed call them.
+_LINEAGE = {"origin_id", "data_id", "patch_id", "processing_id"}
 
 
 def equals(self: PatchType, other: Any, only_required_attrs=True, close=False) -> bool:

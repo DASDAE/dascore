@@ -677,10 +677,11 @@ def callable_name(func: Any) -> str:
     path = f"{module}:{qualname}"
     if _resolves(func, module, qualname):
         return path
-    # A builtin's `__self__` is its module; a classmethod's, its class.
+    # A builtin's `__self__` is its module. Anything else it is bound to --
+    # an instance, or the class an inherited classmethod reads -- is state.
     bound = getattr(func, "__self__", None)
-    if bound is not None and not isinstance(bound, type | ModuleType):
-        _refuse(func, "is a method bound to an instance")
+    if bound is not None and not isinstance(bound, ModuleType):
+        _refuse(func, "is a method bound to an object")
     if getattr(func, "__closure__", None):
         _refuse(func, "closes over values its source does not show")
     if "<lambda>" in qualname:

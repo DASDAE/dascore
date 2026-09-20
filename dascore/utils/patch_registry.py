@@ -250,9 +250,14 @@ def fingerprint_call(func, args: tuple = (), kwargs: dict | None = None) -> str:
 
 def call_operation(func, args: tuple, kwargs: dict) -> tuple[str, list]:
     """Return the id of a call, and the patches among its arguments."""
+    params, patches = call_inputs(func, args, kwargs)
     version = getattr(func, "__version__", "1.0")
-    params, patches = extract_patches(_bind(func, args, kwargs))
     return _memoized_fingerprint(func, _call_name(func), params, version), patches
+
+
+def call_inputs(func, args: tuple, kwargs: dict) -> tuple[dict, list]:
+    """Return a call's parameters, and the patches found anywhere in them."""
+    return extract_patches(_bind(func, args, kwargs))
 
 
 def _memoized_fingerprint(owner, name: str, params: dict, version: str) -> str:
@@ -447,7 +452,9 @@ def is_default(value: Any, default: Any) -> bool:
     if value is default:
         return True
     # Keyed rather than compared: `0.0 == -0.0` and `1 == True`, and each
-    # pair is two calls.
+    # pair is two calls. A list restates a tuple, as the encoder reads them.
+    if isinstance(value, list) and isinstance(default, list | tuple):
+        value, default = tuple(value), tuple(default)
     try:
         return _as_key(value) == _as_key(default)
     except TypeError:

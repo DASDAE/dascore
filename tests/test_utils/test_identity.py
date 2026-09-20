@@ -364,6 +364,22 @@ class TestRefusals:
         with pytest.raises(ParameterError, match="bound"):
             digest([1, 2].count)
 
+    def test_an_inherited_classmethod(self):
+        """Its path names the parent's; which class it reads is state."""
+
+        class Parent:
+            factor = 1
+
+            @classmethod
+            def scale(cls, x):
+                return x * cls.factor
+
+        class Child(Parent):
+            factor = 2
+
+        with pytest.raises(ParameterError, match="bound"):
+            digest(Child.scale)
+
     def test_self_reference(self):
         """A value which contains itself has no finite spelling."""
         deep: dict = {}
@@ -479,6 +495,17 @@ class TestOperationId:
         restated = fingerprint_call(func, (), {"time": (1, 10), "corners": 4})
         changed = fingerprint_call(func, (), {"time": (1, 10), "corners": 5})
         assert left_out == restated != changed
+
+    def test_a_list_restates_a_tuple_default(self):
+        """The encoder reads them alike, so the default check does too."""
+        func = dc.proc.slope_mute
+        slopes = {"slopes": (1.0, 2.0)}
+        restated = slopes | {"dims": ["distance", "time"]}
+        assert fingerprint_call(func, (), slopes) == fingerprint_call(
+            func, (), restated
+        )
+        other = slopes | {"dims": ["time", "distance"]}
+        assert fingerprint_call(func, (), slopes) != fingerprint_call(func, (), other)
 
     def test_none_is_not_the_default(self):
         """`filter_type=None` slices raw; leaving it out filters first."""
@@ -732,6 +759,26 @@ class TestPatchRules:
         )
         assert out.attrs.data_id not in ("", patch.attrs.data_id)
 
+    def test_a_refused_call_keeps_nested_origins(self, patch):
+        """A patch in a list still says where the data came from."""
+        other = dc.get_example_patch()
+
+        @dc.patch_function()
+        def combine(patch, items=None, odd=None):
+            """Add the patches in a list."""
+            return patch.new(data=patch.data + items[0].data)
+
+        out = combine(patch, items=[other], odd=object())
+        assert out.attrs.origin_id == fold_origin_ids(
+            [patch.attrs.origin_id, other.attrs.origin_id]
+        )
+
+    def test_former_names_are_not_part_of_equality(self, patch):
+        """Left on unvalidated attrs, they do not make equal patches unequal."""
+        stale = patch.attrs.model_copy()
+        stale.__pydantic_extra__ = dict(stale.__pydantic_extra__ or {}, patch_id="abc")
+        assert patch.new(attrs=stale).equals(patch, only_required_attrs=False)
+
     def test_a_factory_made_patch_function(self, patch):
         """Closures over different values never share an id."""
 
@@ -882,7 +929,8 @@ class TestCombinations:
         old = []
         for index, member in enumerate(members):
             stale = member.attrs.model_copy()
-            stale.__pydantic_extra__ = {"patch_id": str(index)}
+            extra = dict(stale.__pydantic_extra__ or {}, patch_id=str(index))
+            stale.__pydantic_extra__ = extra
             old.append(member.new(attrs=stale))
         assert len(dc.spool(old).chunk(time=None)) == 1
 

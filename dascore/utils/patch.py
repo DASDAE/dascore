@@ -73,7 +73,11 @@ from dascore.utils.misc import (
     warn_or_raise,
     yield_sub_sequences,
 )
-from dascore.utils.patch_registry import call_operation, register_patch_function
+from dascore.utils.patch_registry import (
+    call_inputs,
+    call_operation,
+    register_patch_function,
+)
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.time import to_float
 from dascore.warnings import DASCoreWarning
@@ -328,10 +332,18 @@ def _stamp(patch, attrs, patch_func, args, kwargs, output=None):
         operation, others = call_operation(patch_func, args, kwargs)
     except Exception as error:
         warn_random_id(getattr(patch_func, "__name__", "a patch function"), error)
-        # The patches it was plainly given still say where the data came from.
-        given = (*args, *kwargs.values())
-        operation, others = None, [x for x in given if isinstance(x, dc.Patch)]
+        # The patches it was given still say where the data came from.
+        operation, others = None, _given_patches(patch_func, args, kwargs)
     return stamp(attrs, [patch.attrs, *(x.attrs for x in others)], operation, output)
+
+
+def _given_patches(patch_func, args, kwargs) -> list:
+    """Return the patches among a call's arguments, however deep."""
+    try:
+        return call_inputs(patch_func, args, kwargs)[1]
+    except Exception:  # a call which does not bind; the plain ones, then
+        given = (*args, *kwargs.values())
+        return [x for x in given if isinstance(x, dc.Patch)]
 
 
 def record_call(
