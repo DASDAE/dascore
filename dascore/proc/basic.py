@@ -45,6 +45,7 @@ from dascore.utils.identity import (
     inside_operation,
     new_id,
     stamp,
+    strong_data_id,
     try_operation_id,
 )
 from dascore.utils.misc import _get_nullish
@@ -277,6 +278,47 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
         )
         out_attrs = _named_mutation(self, out_attrs, "update_attrs", params, changed)
     return self.new(attrs=out_attrs)
+
+
+def pin_id(self: PatchType) -> PatchType:
+    """
+    Return the patch with a `data_id` hashed from the data it holds.
+
+    A `data_id` is usually weak: derived from where the data came from and
+    what was done to them, without anything being read. Pinning replaces it
+    with a strong one, a hash of the content, so every id derived
+    afterwards builds on data which were verified at this point. Any patch
+    can be pinned; pinning a derived one only strengthens the name of the
+    array it already is.
+
+    Nothing else moves: `origin_id`, the history and where the patch was
+    read from are left as they were, and pinning again changes nothing,
+    since an id is not part of its own hash. It costs a read of the whole
+    array, roughly a second per gigabyte.
+
+    The weak id the patch carried is `patch.attrs.data_id` before the call,
+    and [`strong_data_id`](`dascore.utils.identity.strong_data_id`) gives
+    the strong one without pinning, so a store can record that weak X is
+    strong Y either way.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> pinned = patch.pin_id()
+    >>> # Equal patches built apart from one another share the id.
+    >>> assert pinned.attrs.data_id == dc.get_example_patch().pin_id().attrs.data_id
+    >>> assert pinned.pin_id().attrs.data_id == pinned.attrs.data_id
+    """
+    strong = strong_data_id(self)
+    if getattr(self.attrs, "data_id", "") == strong:
+        return self
+    # Copied rather than restated through `update_attrs`, which dumps and
+    # revalidates: that would rewrite an attr holding a model, and the id
+    # being installed describes the attrs as they are. The boundary keeps a
+    # stated data id as given.
+    return self.new(attrs=self.attrs.model_copy(update={"data_id": strong}))
 
 
 # Which data a patch is and what was done to it are not part of what it

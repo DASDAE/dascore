@@ -246,6 +246,84 @@ def derive(inputs: Sequence[str], operation: str, output: int | None = None) -> 
     return H("derived", payload)
 
 
+def strong_data_id(patch) -> str:
+    """
+    Return the id of the content a patch holds.
+
+    A `data_id` is weak when it was derived without reading data, and
+    strong when it is a hash of what the patch holds: the data, the dims,
+    every coordinate's own id and which dims it rides, and the attributes
+    which describe them. Two patches built apart from one another share it,
+    at the cost of reading every byte.
+
+    Parameters
+    ----------
+    patch
+        The patch to hash. Metadata holds no data and object data hold
+        python values rather than bytes, so both are refused rather than
+        named by something which is not their content.
+
+    Notes
+    -----
+    Nothing is written to the patch;
+    [`pin_id`](`dascore.Patch.pin_id`) does that. Called on its own this
+    tells a caller that the weak id a patch carries now names the same
+    array as this strong one.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.utils.identity import strong_data_id
+    >>>
+    >>> patch = dc.get_example_patch()
+    >>> # The content, and only the content: an id is not part of its own hash.
+    >>> renamed = patch.update_attrs(data_id="abc")
+    >>> assert strong_data_id(patch) == strong_data_id(renamed)
+    """
+    # hash_array lives in dascore.utils.array, which imports dascore itself.
+    from dascore.utils.array import hash_array  # noqa: PLC0415
+
+    data = getattr(patch, "_data", None)
+    if data is None:
+        msg = (
+            "A PatchMeta describes data rather than holding any, so there is "
+            "no content to hash. Use the patch whose data it describes."
+        )
+        raise ParameterError(msg)
+    array = to_numpy(data) if is_foreign(data) else np.asarray(data)
+    if array.dtype == object:
+        msg = (
+            "Object data hold python values rather than bytes, so their "
+            "content cannot be hashed."
+        )
+        raise ParameterError(msg)
+    coords = patch.coords
+    payload = {
+        # Normalized first, so that byte order and the unit times were
+        # written in are layout rather than content.
+        "data": hash_array(_normalize_array(array)),
+        "dims": list(patch.dims),
+        # Every coordinate, attached or not, with the dims it rides: the
+        # same values laid out differently are different content.
+        "coords": {
+            name: [list(coords.dim_map[name]), coord.data_id]
+            for name, coord in coords.coord_map.items()
+        },
+        "attrs": _content_attrs(patch.attrs),
+    }
+    return H("content", payload)
+
+
+def _content_attrs(attrs) -> dict[str, Any]:
+    """Return the attrs which describe content rather than lineage."""
+    skip = {*_ID_FIELDS, "history"}
+    return {
+        name: value
+        for name, value in model_values(attrs).items()
+        if name not in skip and not name.startswith("_")
+    }
+
+
 def fold_origin_ids(origin_ids: Sequence[str]) -> str:
     """
     Return the origin id of a patch combined from several.

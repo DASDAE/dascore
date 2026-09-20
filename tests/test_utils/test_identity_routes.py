@@ -402,3 +402,32 @@ class TestMemoryPatchesUnchanged:
         out = patch.select(distance=(0, 5), samples=True)
         assert out.attrs.data_id != patch.attrs.data_id
         assert np.allclose(out.data, patch.data[0:5])
+
+
+class TestPinnedSources:
+    """A pinned patch is no longer the array its source loads."""
+
+    def test_the_source_is_kept(self, terra15_patch):
+        """Pinning states an id; it does not detach the file behind it."""
+        pinned = terra15_patch.pin_id()
+        assert terra15_patch._source is not None
+        assert pinned._source is terra15_patch._source
+
+    def test_select_derives(self, terra15_patch):
+        """So narrowing it is an operation rather than a window."""
+        window = {"time": (0, 100), "samples": True}
+        windowed = terra15_patch.select(**window)
+        assert windowed.attrs.data_id == terra15_patch._source[0:100].data_id
+        pinned = terra15_patch.pin_id()
+        out = pinned.select(**window)
+        assert out.attrs.data_id not in (windowed.attrs.data_id, pinned.attrs.data_id)
+        assert out.attrs.data_id == pinned.select(**window).attrs.data_id
+
+    def test_dasdae_round_trip(self, dasdae_path, tmp_path):
+        """A pinned id is stored and read back like any other."""
+        pinned = dc.read(dasdae_path)[0].pin_id()
+        path = tmp_path / "pinned.h5"
+        dc.write(pinned, path, "dasdae")
+        out = dc.read(path)[0]
+        assert out.attrs.data_id == pinned.attrs.data_id
+        assert out.attrs.origin_id == pinned.attrs.origin_id

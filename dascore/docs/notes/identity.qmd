@@ -66,6 +66,20 @@ Equal IDs mean the same array under either grade. Unequal IDs promise nothing: t
 
 An ID is never knowingly false. When an operation's parameters cannot be described faithfully (a closure, a lambda, an object of an unknown type), or an input carries no ID, the call still succeeds and its result receives a random `data_id` with a `DASCoreWarning`.
 
+### Pinning
+
+A patch's weak ID becomes strong when someone computes one. [`pin_id`](`dascore.Patch.pin_id`) hashes the data, the dims, every coordinate's own ID together with the dims it rides, and the attributes which describe them — everything except the history and the two IDs, which is why pinning twice changes nothing.
+
+```{python}
+pinned = patch.pin_id()
+assert pinned.attrs.data_id != patch.attrs.data_id
+assert pinned.attrs.data_id == dc.get_example_patch().pin_id().attrs.data_id
+```
+
+It reads the whole array, at roughly a gigabyte a second, so it is a checkpoint rather than a step in a pipeline: what the patch holds was verified at this point, and every ID derived afterwards commits to that. Any patch may be pinned, a derived one included — a pinned result is only a stronger name for the array it already was, and re-running the recipe gives the weak ID again. That is a false distinction, never a false identity.
+
+Nothing else moves: `origin_id`, the history and where the patch was read from are left alone, though a pinned patch is no longer the array its source loads, so narrowing it is an operation rather than a window. The ID the patch carried is the caller's to keep — read `patch.attrs.data_id` before pinning, or call [`strong_data_id`](`dascore.utils.identity.strong_data_id`) to learn that weak X is strong Y without pinning anything. Metadata holds no data and object arrays hold no bytes, so both are refused: this is an explicit request, and an answer which was not computed from content would not be one.
+
 ## The mutation boundary
 
 `new`, `update`, `update_attrs`, `set_dims` and the `Patch` constructor replace what a patch is made of. Inside an operation — the body of a patch function or a `PatchProcessor`, and the routes which combine patches — they add nothing, because the operation stamps its own result. Called outside one they say what happened: an array the patch was handed gets a random `data_id` (nothing names it) with `origin_id` kept, while replaced coordinates or attributes are a describable change and get a derived one. Coordinates count as replaced unless the dims, in order, and every coordinate's own ID are the ones the patch already had. A call which changes nothing, and a call which states a `data_id` of its own, keep the IDs they were given; stating any other ID in the same call does not say which array the result is. `PatchMeta` holds no data, so replacing its metadata names nothing; giving it data with `to_patch` outside an operation makes an array of its own, with a random `data_id`.

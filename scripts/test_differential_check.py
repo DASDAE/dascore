@@ -66,6 +66,36 @@ class TestCompare:
         assert compare({"a": digest(patch)}, {}) == ["a: only in before"]
 
 
+class TestVersionGate:
+    """Two sides which claim one array and answer differently."""
+
+    def test_same_id_different_content(self, patch):
+        """A changed answer under an unchanged recipe names the cure."""
+        before = digest(patch)
+        # What a rewritten operation gives when nobody raised its version.
+        after = {**before, "data_hash": "0" * 32}
+        report = compare({"abs": before}, {"abs": after})
+        assert report[0] == (
+            "abs: same data_id, different content — raise the operation's version"
+        )
+
+    def test_bumped_version_is_an_ordinary_difference(self, patch):
+        """A raised version moves the id, so the gate has nothing to say."""
+        before = digest(patch)
+        after = {**before, "data_hash": "0" * 32}
+        after["ids"] = {**after["ids"], "data_id": "1" * 32}
+        report = compare({"abs": before}, {"abs": after})
+        assert report[0].startswith("abs: differs in ")
+        assert "same data_id" not in report[0]
+
+    def test_an_id_beside_the_data_id(self, patch):
+        """The content agrees, so no operation is owed a version."""
+        before = digest(patch)
+        after = {**before, "ids": {**before["ids"], "origin_id": "1" * 32}}
+        report = compare({"abs": before}, {"abs": after})
+        assert report[0] == "abs: differs in ['ids']"
+
+
 # dump() records the error instead of the fingerprint when a call raises,
 # so the comparison covers what each version says about a bad argument --
 # the class included, since it names the error it writes. Naming them here

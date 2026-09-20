@@ -359,6 +359,7 @@ class Patch(NamespaceOwner, PatchMeta):
 
     equals = dascore.proc.equals
     get_array = dascore.proc.get_array
+    pin_id = dascore.proc.pin_id
     split_gaps = dascore.proc.coords.split_gaps
     fill_gaps = dascore.proc.coords.fill_gaps
     add_distance_to = dascore.proc.coords.add_distance_to
