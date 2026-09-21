@@ -14,3 +14,9 @@ out_str = FiberIO.get_supported_io_table().replace(True, value='✅').replace(Fa
 out_str += '\n: {.striped}'
 print(out_str)
 ```
+
+## Sintela protobuf selections
+
+For standard TS05 timeseries recordings, selecting a time range in coordinate values with `dascore.read(path, time=(start, stop))` or `dascore.spool(path).select(time=(start, stop))` decodes sample payloads only from overlapping packets. The output array contains only the requested time and distance window; temporary sample storage is bounded by one packet. Small unselected packet tails are streamed past to avoid costly seeks on hard drives; large tails are skipped with seeks. This bounds memory use even when reading the file sequentially is faster. Full-file reads still return the complete waveform.
+
+Selected reads check all packet headers and collect metadata throughout the recording, but validate sample payloads only in the selected packets. Unusual packet layouts and other protobuf packet families retain the full-decoder fallback. Spool selections expressed with `samples=True` or `relative=True` may still load the full patch before applying their bounds; use absolute time values for bounded spool reads.
