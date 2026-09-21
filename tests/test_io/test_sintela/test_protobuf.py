@@ -1927,3 +1927,112 @@ class TestNamedPacketSnap:
         )[0]
         assert bounded.shape[0] == 1
         np.testing.assert_array_equal(bounded.data, patch.data[:1])
+
+
+class TestPackedTimeseriesSamples:
+    """Packed wire samples avoid scalar conversion without changing reads."""
+
+    @pytest.mark.parametrize(
+        "encoding",
+        ["packed", "split", "mixed", "packed_first", "empty", "unpacked", "group"],
+    )
+    @pytest.mark.parametrize("samples_first", [False, True])
+    def test_read_encodings(self, tmp_path, encoding, samples_first):
+        """All legal encodings retain sample order, coordinates, and metadata."""
+        records = _build_ts_payloads(n_packets=4)
+        reference_path = tmp_path / "reference.pb"
+        _write_records(reference_path, records)
+        reference = dc.read(reference_path)[0]
+        converted = []
+        cls = _get_test_proto_messages()["TimeseriesPacket"]
+        for index, (tag, payload) in enumerate(records):
+            # Keep endpoints conventional so every encoding reaches decode_stream.
+            if index in (0, len(records) - 1):
+                converted.append((tag, payload))
+                continue
+            msg = cls()
+            msg.ParseFromString(payload)
+            values = np.asarray(msg.samples, dtype="<f4")
+            msg.ClearField("samples")
+            header = msg.SerializeToString()
+            packed = b"\x1a\x18" + values.tobytes()
+            if encoding == "split":
+                packed = (
+                    b"\x1a\x0c"
+                    + values[:3].tobytes()
+                    + b"\x1a\x0c"
+                    + values[3:].tobytes()
+                )
+            elif encoding == "mixed":
+                packed = (
+                    b"\x1d" + values[:1].tobytes() + b"\x1a\x14" + values[1:].tobytes()
+                )
+            elif encoding == "packed_first":
+                packed = (
+                    b"\x1a\x14" + values[:5].tobytes() + b"\x1d" + values[5:].tobytes()
+                )
+            elif encoding == "empty":
+                packed = b"\x1a\x00" + packed
+            elif encoding == "unpacked":
+                packed = b"".join(b"\x1d" + value.tobytes() for value in values)
+            elif encoding == "group":
+                packed += b"\x2b\x08\x01\x2c"
+            # Unknown fields cover varint, fixed64, length-delimited, fixed32.
+            unknown = b"\x28\x01\x31" + bytes(8) + b"\x3a\x01x\x45" + bytes(4)
+            payload = packed + header if samples_first else header + packed
+            converted.append((tag, unknown + payload))
+        path = tmp_path / "encoded.pb"
+        _write_records(path, converted)
+        actual = dc.read(path)[0]
+        assert actual.equals(reference)
+
+    def test_packed_samples_share_wire_buffer(self):
+        """The fast path must view wire bytes instead of boxing each sample."""
+        values = np.array([-1.5, 0.0, np.inf, -np.inf, np.nan, 42], dtype="<f4")
+        payload = b"\x1a\x18" + values.tobytes()
+        packet = sintela_utils._packed_ts_samples(payload)
+        assert packet is not None
+        assert packet.base is payload
+        np.testing.assert_array_equal(packet, values)
+
+    def test_stream_uses_packed_view(self, tmp_path, monkeypatch):
+        """A read must pass wire payloads through the bulk conversion path."""
+        records = []
+        cls = _get_test_proto_messages()["TimeseriesPacket"]
+        for tag, payload in _build_ts_payloads():
+            msg = cls()
+            msg.ParseFromString(payload)
+            values = np.asarray(msg.samples, dtype="<f4")
+            msg.ClearField("samples")
+            records.append(
+                (tag, msg.SerializeToString() + b"\x1a\x18" + values.tobytes())
+            )
+        path = tmp_path / "packed.pb"
+        _write_records(path, records)
+        original = sintela_utils._packed_ts_samples
+        views = []
+
+        def track(payload):
+            out = original(payload)
+            assert out is not None and out.base is payload
+            views.append(out)
+            return out
+
+        monkeypatch.setattr(sintela_utils, "_packed_ts_samples", track)
+        patch = dc.read(path)[0]
+        np.testing.assert_array_equal(patch.data, np.arange(12).reshape(6, 2))
+        assert len(views) == 2
+
+    @pytest.mark.parametrize("samples", [b"\x1a\x01x", b"\x1a\x18" + bytes(4)])
+    def test_malformed_packed_field(self, tmp_path, samples):
+        """The protobuf parser must still reject invalid packed lengths."""
+        records = _build_ts_payloads(n_packets=3)
+        cls = _get_test_proto_messages()["TimeseriesPacket"]
+        msg = cls()
+        msg.ParseFromString(records[1][1])
+        msg.ClearField("samples")
+        records[1] = ("TS05", msg.SerializeToString() + samples)
+        path = tmp_path / "malformed.pb"
+        _write_records(path, records)
+        with pytest.raises(InvalidFiberFileError):
+            dc.read(path)
