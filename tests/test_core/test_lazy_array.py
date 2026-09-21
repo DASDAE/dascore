@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from itertools import pairwise
 
@@ -1491,25 +1492,63 @@ class TestPartitions:
         assert by_hand.data_id == stacked.data_id
 
 
+class TestOriginNames:
+    """An origin id is taken as written, whatever it looks like."""
+
+    @staticmethod
+    def beside_a_constant(origin):
+        """One named source beside a constant, so the digest is what names it."""
+        source = ArraySource(path="a", format="TEST", origin_id=origin)
+        source = source.describe((2,), "i8")
+        blocks = [LazyArray.from_source(source)]
+        blocks.append(LazyArray.from_source(ArraySource.full((1,), 0)))
+        return concat(blocks)
+
+    def test_case_is_kept(self):
+        """Two ids differing only in case are two sources."""
+        lower, upper = (
+            self.beside_a_constant("a" * 32),
+            self.beside_a_constant("A" * 32),
+        )
+        assert lower.data_id != upper.data_id
+
+    def test_a_name_is_not_its_own_hash(self):
+        """A name and the hex of its hash are two sources."""
+        name = "source-name"
+        hexed = hashlib.blake2b(name.encode(), digest_size=16).hexdigest()
+        assert (
+            self.beside_a_constant(name).data_id
+            != self.beside_a_constant(hexed).data_id
+        )
+
+    def test_record_constants(self):
+        """Two record layouts of one width are two constants."""
+        ids = set()
+        for dtype in ([("x", "<i4"), ("y", "<i4")], [("z", "<i8")]):
+            source = ArraySource(filled=True, value=1).describe((2,), dtype)
+            ids.add(LazyArray.from_source(source).data_id)
+        assert len(ids) == 2
+
+
 class TestPinnedIds:
     """The canonical bytes an id is taken over are a stored format."""
 
     def test_constant_members(self):
         """Two constants in one array hash to a known digest."""
         array = concat([constant((1, 2), 1.0), constant((1, 2), 2.0)], axis=0)
-        assert array.data_id == "3d2e21d12a2fe4d65d22183f77f02627"
+        assert array.data_id == "4d8fbc3ea34c500fe40ca19b858a03a1"
 
     def test_window_members(self):
         """Two windows of an unnamed file hash to a known digest."""
         source = stored((4, 4), path="/a/b.h5")
         array = placed([source[0:1], source[2:3]], [[0, 0], [1, 0]], (2, 4))
-        assert array.data_id == "b90e98cdf9c01505e7db8a1c5aa9f6d6"
+        assert array.data_id == "7fc74c972c2046dc86b955e28b7b3c68"
 
     def test_a_transposed_window(self):
         """A member read the other way up hashes to a known digest."""
         source = stored((4, 4), path="/a/b.h5", origin_id="a" * 32)
         array = LazyArray.from_source(source[0:2, 0:4]).transpose()
-        assert array.data_id == "6f6b008f25810388c4e4bf4f0d2d0b36"
+        assert array.data_id == "ad9a20c5356cf5f68f3d76e48537a72d"
 
 
 class TestSources:

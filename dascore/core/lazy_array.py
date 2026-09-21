@@ -1525,12 +1525,7 @@ def _whole_source_id(block: _Block, signature: _Signature) -> str | None:
 
 
 def _fold(value: str) -> bytes:
-    """Return the 16 bytes of one id, hashing one which is not 32 hex."""
-    if len(value) == 32:
-        try:
-            return bytes.fromhex(value)
-        except ValueError:
-            pass
+    """Return 16 bytes for one id, hashed as written so no two ids fold alike."""
     return hashlib.blake2b(value.encode(), digest_size=DIGEST_SIZE).digest()
 
 

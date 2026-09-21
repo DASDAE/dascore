@@ -11,7 +11,7 @@ import numpy as np
 import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.proc.coords import _fill_scalar
-from dascore.utils.identity import H
+from dascore.utils.identity import H, dtype_description
 
 # Where an array is, which names it when nothing better does.
 _LOCATION_FIELDS = ("path", "format", "version", "key")
@@ -158,7 +158,8 @@ class ArraySource:
         blocks of the same value, dtype and shape are one array.
         """
         if self.filled:
-            content = {"value": self.value, "dtype": self._dtype, "shape": self.shape}
+            dtype = dtype_description(self.dtype)
+            content = {"value": self.value, "dtype": dtype, "shape": self.shape}
             return H("constant", content)
         location = {name: getattr(self, name) for name in _LOCATION_FIELDS}
         base = self.origin_id or H("location", location)
