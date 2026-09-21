@@ -138,6 +138,7 @@ class TestExplicitSelect:
         with pytest.raises(ParameterError, match="Only one coordinate"):
             spool.select(distance=windows, time=windows)
 
+    @pytest.mark.concurrency
     def test_concurrent_add_keeps_a_coherent_parent_snapshot(self, monkeypatch):
         """An update during realization keeps source and candidates coherent."""
         source = dc.spool(_patch(np.arange(10)))

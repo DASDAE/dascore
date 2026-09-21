@@ -1709,6 +1709,18 @@ def build_chunk_plan(
                 size_diagnostics.append({"first_output_id": next_id, **diag})
         if explicit is not None:
             unit = _partition_unit(sorted_df, name, seg_starts[part])
+            # Source coordinates are invariant across requests in this partition.
+            part_coords = (
+                [
+                    _exact_coords[row_id]
+                    for row_id in sorted_df["_patch_row"].iloc[
+                        seg_starts[part] : seg_ends[part]
+                    ]
+                    if _exact_coords.get(row_id) is not None
+                ]
+                if _exact_coords and not pd.isnull(part_step) and part_step != 0
+                else []
+            )
             starts_list, stops_list, requests_p = [], [], []
             for request, bounds in enumerate(explicit.rows):
                 low, high = _explicit_bounds_for_partition(bounds, g_starts[part], unit)
@@ -1716,14 +1728,9 @@ def build_chunk_plan(
                     continue
                 low, high = max(low, g_starts[part]), min(high, g_stops[part])
                 if not pd.isnull(part_step) and part_step != 0:
-                    part_sources = sorted_df.iloc[seg_starts[part] : seg_ends[part]]
                     selected = [
-                        exact_coordinate_bounds(
-                            _exact_coords[row["_patch_row"]], (low, high), unit
-                        )
-                        for _, row in part_sources.iterrows()
-                        if _exact_coords
-                        and _exact_coords.get(row["_patch_row"]) is not None
+                        exact_coordinate_bounds(coord, (low, high), unit)
+                        for coord in part_coords
                     ]
                     selected = [x for x in selected if x is not None]
                     if selected and fill_value is None:

@@ -49,9 +49,11 @@ class ExplicitSelectCatalog:
 
     @property
     def _revision(self):
+        """Share the parent's revision token for live view invalidation."""
         return self.parent._revision
 
     def _materialized(self):
+        """Cache coherent source pieces and replay deferred view operations."""
         # Match PatchCatalog snapshot locking across every candidate query.
         with self.parent._revision.lock:
             revision = self.parent._revision.value
@@ -125,6 +127,7 @@ class ExplicitSelectCatalog:
         return self._materialized().get_patch(index)
 
     def _defer(self, method, *args, **kwargs):
+        """Return a view with one more operation queued for realization."""
         return replace(self, operations=(*self.operations, (method, args, kwargs)))
 
     def select(self, **kwargs):
