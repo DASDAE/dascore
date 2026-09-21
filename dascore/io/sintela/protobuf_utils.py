@@ -212,6 +212,40 @@ def _read_varint(buf: bytes, pos: int) -> tuple[int | None, int]:
     return None, pos
 
 
+def _packed_ts_samples(payload: bytes) -> np.ndarray | None:
+    """View a single packed samples field in an already validated TS packet.
+
+    Protobuf's repeated scalar container boxes every float during NumPy
+    conversion. A view of the little-endian wire bytes avoids that cost.
+    Unpacked, split, or grouped encodings use the protobuf container instead.
+    """
+    pos = 0
+    packet = None
+    while pos < len(payload):
+        key, pos = _read_varint(payload, pos)
+        assert key is not None  # The protobuf parser validated this payload.
+        field, wire = key >> 3, key & 7
+        if field == 3 and (wire != 2 or packet is not None):
+            return None
+        if wire == 0:
+            _, pos = _read_varint(payload, pos)
+        elif wire == 1:
+            pos += 8
+        elif wire == 2:
+            size, pos = _read_varint(payload, pos)
+            assert size is not None
+            if field == 3:
+                packet = np.frombuffer(
+                    payload, dtype="<f4", count=size // 4, offset=pos
+                )
+            pos += size
+        elif wire == 5:
+            pos += 4
+        else:
+            return None
+    return packet
+
+
 def _leading_header_bytes(payload_prefix: bytes) -> bytes | None:
     """
     Return the serialized ``header`` submessage from the front of a payload.
@@ -1032,9 +1066,11 @@ class TimeseriesMetadata(_PacketMetadata):
             attrs=attrs,
         )
 
-    def _fill_packet(self, data, index: int, tag: str, msg) -> int:
+    def _fill_packet(self, data, index: int, tag: str, msg, payload=None) -> int:
         """Copy one packet's samples into ``data`` at ``index``, return its rows."""
-        packet = np.asarray(msg.samples, dtype=np.float32)
+        packet = _packed_ts_samples(payload) if payload is not None else None
+        if packet is None:
+            packet = np.asarray(msg.samples, dtype=np.float32)
         rows = int(msg.header.num_samples)
         expected = rows * self.num_channels
         if not packet.size and msg.raw_frames:
@@ -1104,7 +1140,7 @@ class TimeseriesMetadata(_PacketMetadata):
                 raise InvalidFiberFileError(
                     "Non-contiguous Sintela protobuf sample counts."
                 )
-            index += self._fill_packet(data, index, record.tag, msg)
+            index += self._fill_packet(data, index, record.tag, msg, record.payload)
             light = header_messages[_TAG_TO_PACKET[record.tag]]()
             # Round-tripped rather than copied: the sample-bearing and
             # header-only classes come from separate descriptor pools, so
