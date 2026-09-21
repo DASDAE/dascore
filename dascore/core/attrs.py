@@ -58,12 +58,14 @@ def _scalar_attr(value: Any) -> Any:
     Anything holding exactly one value is that value: a 0-d or length-1
     array is how HDF5 and netCDF spell a scalar.
     """
-    if type(value) in _PLAIN or isinstance(value, str | bytes):
+    if type(value) in _PLAIN or isinstance(value, str):
         return value
+    if isinstance(value, bytes):
+        return unbyte(value)
     if isinstance(value, np.ndarray):
-        return _unwrapped(value.reshape(-1)[0]) if value.size == 1 else _NOT_SCALAR
+        return _scalar_attr(value.reshape(-1)[0]) if value.size == 1 else _NOT_SCALAR
     if isinstance(value, list | tuple):
-        return _unwrapped(value[0]) if len(value) == 1 else _NOT_SCALAR
+        return _scalar_attr(value[0]) if len(value) == 1 else _NOT_SCALAR
     # A quantity says how much it holds through its magnitude. Asked before
     # the abstract classes below, which are slow to rule out.
     held = getattr(value, "magnitude", None)
@@ -73,11 +75,6 @@ def _scalar_attr(value: Any) -> Any:
     # Another library's array says so through its shape.
     many = isinstance(value, _MANY) or getattr(value, "ndim", 0) > 0
     return _NOT_SCALAR if many else value
-
-
-def _unwrapped(value: Any) -> Any:
-    """The scalar a one-value container held; its bytes read as text."""
-    return unbyte(value) if isinstance(value, bytes) else _scalar_attr(value)
 
 
 @cache

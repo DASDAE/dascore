@@ -410,8 +410,10 @@ class TestScalarAttrs:
 
     @pytest.mark.parametrize("value", accepted)
     def test_accepted(self, value):
-        """A scalar of any kind is kept as it was given."""
-        assert PatchAttrs(gauge=value).gauge is value
+        """A scalar of any kind is kept as it was given; bytes read as text."""
+        expected = "bytes" if isinstance(value, bytes) else value
+        got = PatchAttrs(gauge=value).gauge
+        assert got == expected if isinstance(value, bytes) else got is value
 
     def test_message_names_the_coordinate_alternative(self):
         """The error says where an array goes instead."""
