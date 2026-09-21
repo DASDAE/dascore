@@ -130,7 +130,7 @@ def _get_root_attrs(attrs):
     out = maybe_get_items(attrs, _ROOT_ATTRS)
     if "facility_id" in out:
         values = tuple(unbyte(x) for x in np.atleast_1d(out["facility_id"]))
-        out["facility_id"] = values[0] if len(values) == 1 else values
+        out["facility_id"] = ",".join(values)  # one attr, one value
     # ProdML's schema defaults match the units attrs use, so a measure
     # whose uom is missing or unreadable is taken as already canonical.
     for name, target in _MEASURE_UNITS.items():

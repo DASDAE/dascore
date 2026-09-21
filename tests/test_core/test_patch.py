@@ -1706,3 +1706,14 @@ class TestArraySource:
         del random_patch._source
         assert random_patch._source is None
         assert random_patch.new()._source is None
+
+
+class TestAttrValuesEqual:
+    """Attrs an unvalidated model still holds compare without raising."""
+
+    def test_unequal_arrays(self):
+        """An array reaches here through a pickle or `model_construct`."""
+        from dascore.core.patch_meta import _attr_values_equal  # noqa: PLC0415
+
+        assert not _attr_values_equal(np.arange(3), np.arange(4))
+        assert _attr_values_equal(np.arange(3), np.arange(3))
