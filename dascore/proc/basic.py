@@ -263,7 +263,7 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     >>> with_custom = patch.update_attrs(processing_date="2024-01-01")
     """
     stated = self.attrs.model_dump(exclude_unset=True)
-    out_attrs = PatchAttrs.from_dict({**stated, **attrs})
+    out_attrs = self.attrs.from_dict({**stated, **attrs})
     if not inside_operation():
         # Only the keys the caller wrote, each against what the patch says
         # now: restating a value is not a change, and comparing whole
