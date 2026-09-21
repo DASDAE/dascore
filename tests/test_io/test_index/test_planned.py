@@ -131,6 +131,50 @@ class TestHelpers:
 class TestDerivedComposition:
     """Operation-order coverage over derived catalogs."""
 
+    @pytest.mark.parametrize("dim", ["data_id", "origin_id"])
+    def test_lineage_named_dimension(self, tmp_path, dim):
+        """Coordinate trims must not become lineage attribute filters."""
+        patch = dc.get_example_patch(shape=(20, 100)).rename_coords(distance=dim)
+        path = tmp_path / "patch.h5"
+        patch.io.write(path, "dasdae")
+        actual = dc.spool(path).chunk(**{dim: 5})[0]
+        expected = patch.select(**{dim: (0, 5)}, samples=True)
+        assert actual.coords == expected.coords
+        np.testing.assert_array_equal(actual.data, expected.data)
+
+    @pytest.mark.parametrize("units", ["ft", "cm"])
+    @pytest.mark.parametrize("other_first", [False, True])
+    def test_chunk_files_with_different_units(self, tmp_path, units, other_first):
+        """Read hints must use the source file's coordinate units."""
+        # Leave a partial tail so the file extent is not a chunk boundary.
+        patch = dc.get_example_patch(shape=(21, 100)).set_units(distance="m")
+        shifted = patch.update_coords(
+            time=patch.get_coord("time").values + np.timedelta64(1, "D")
+        )
+        converted = shifted.convert_units(distance=units)
+        first, second = (converted, patch) if other_first else (patch, converted)
+        first.io.write(tmp_path / "first.h5", "dasdae")
+        spool = dc.spool(tmp_path).update(progress=None)
+        try:
+            # Index each file separately to exercise both choices of plan units.
+            second.io.write(tmp_path / "second.h5", "dasdae")
+            spool = spool.update(progress=None)
+            actual = spool.chunk(distance=5 * m).sort("time")
+            expected = dc.spool([patch, shifted]).chunk(distance=5 * m).sort("time")
+            assert len(actual) == len(expected) == 8
+            for index in range(len(expected)):
+                loaded = actual[index].convert_units(distance="m")
+                wanted = expected[index]
+                assert loaded.shape == wanted.shape == (5, 100)
+                np.testing.assert_allclose(
+                    loaded.get_coord("distance").values,
+                    wanted.get_coord("distance").values,
+                )
+                assert loaded.get_coord("time") == wanted.get_coord("time")
+                np.testing.assert_array_equal(loaded.data, wanted.data)
+        finally:
+            spool.indexer.close()
+
     def test_collapse_with_value_residual(self, patches):
         """Chunk of a selected chunked spool re-plans from trimmed members."""
         t0 = patches[0].get_coord("time").min()

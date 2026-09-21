@@ -20,7 +20,7 @@ import pytest
 
 import dascore as dc
 from dascore.core.spool import Spool
-from dascore.examples import spool_to_directory
+from dascore.examples import inventory_patch_pair, spool_to_directory
 from dascore.io.index import ingest
 from dascore.io.index.schema import INDEX_VERSION
 from dascore.utils.paths import parse_hive_path_attrs
@@ -266,6 +266,43 @@ class TestPatchStamping:
         try:
             merged = spool.chunk(time=None)
             assert merged[0].attrs.network == "XX"
+        finally:
+            spool.indexer.close()
+
+    @pytest.mark.parametrize("dim, size", [("time", 2), ("distance", 100)])
+    def test_trimmed_chunk(self, hive_spool, dim, size):
+        """Read hints must not filter file attrs using the path's overrides."""
+        original = hive_spool[0]
+        chunked = hive_spool.select(tag="raw").chunk(**{dim: size})
+        contents = chunked.get_contents()
+        assert len(chunked) > 1
+        for index, row in contents.iterrows():
+            patch = chunked[index]
+            expected = original.select(**{dim: (row[f"{dim}_min"], row[f"{dim}_max"])})
+            assert patch.coords == expected.coords
+            np.testing.assert_array_equal(patch.data, expected.data)
+            assert patch.attrs.tag == "raw"
+            assert patch.attrs.network == "XX"
+            assert patch.attrs.station == "A"
+
+    def test_inventory_selection(self, tmp_path):
+        """Inventory channel selection loads a path-identified acquisition."""
+        patch, inventory = inventory_patch_pair()
+        sub = tmp_path / f"acquisition_key={patch.attrs.acquisition_key}"
+        sub.mkdir()
+        patch.update_attrs(acquisition_key="").io.write(sub / "patch.h5", "dasdae")
+        spool = dc.spool(tmp_path).update(progress=None).attach_inventory(inventory)
+        try:
+            selected = spool.select(zone="north")
+            expected = (
+                dc.spool(patch).attach_inventory(inventory).select(zone="north")[0]
+            )
+            assert len(selected) == 1
+            actual = selected[0]
+            assert actual.shape != patch.shape
+            assert actual.coords == expected.coords
+            np.testing.assert_array_equal(actual.data, expected.data)
+            assert actual.attrs.acquisition_key == patch.attrs.acquisition_key
         finally:
             spool.indexer.close()
 
