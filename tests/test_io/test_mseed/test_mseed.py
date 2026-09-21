@@ -1058,7 +1058,7 @@ class TestDecodedArrayContract:
                 data_samples=data,
                 sample_type=sample_type,
                 sample_rate=10.0,
-                starttime=pymseed.timestr2nstime("2024-01-01T00:00:00Z"),
+                start_time=pymseed.timestr2nstime("2024-01-01T00:00:00Z"),
             )
             part = tmp_path / f"{index}.mseed"
             traces.to_file(
