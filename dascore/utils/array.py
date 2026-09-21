@@ -29,6 +29,7 @@ from dascore.utils.array_api import (
 from dascore.utils.identity import (
     DIGEST_SIZE,
     PatchMarker,
+    dtype_description,
     ids_enabled,
     operation_context,
     stamp,
@@ -1288,8 +1289,8 @@ def hash_array(arr: np.ndarray) -> str:
 
     # A length-prefixed header of the dtype and shape, so that the shape's
     # bytes cannot read as data, nor two record layouts of one width alike.
-    dtype = arr.dtype.descr if arr.dtype.names else arr.dtype.str
-    header = json.dumps([dtype, list(arr.shape)]).encode("ascii")
+    header = json.dumps([dtype_description(arr.dtype), list(arr.shape)])
+    header = header.encode("ascii")
     h.update(len(header).to_bytes(8, "little"))
     h.update(header)
     if not arr.size:
