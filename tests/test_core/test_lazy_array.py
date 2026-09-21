@@ -891,7 +891,8 @@ class TestIdentity:
 
     def test_paths_are_not_in_the_id(self, source, path):
         """The same members under another base uri are the same array."""
-        base = str(path.parent) + "/"
+        # A base is a literal prefix, so it ends as this platform's paths do.
+        base = source.path[: -len(path.name)]
         under = LazyArray.from_source(source, base_uri=base)
         assert under.data_id == LazyArray.from_source(source).data_id
         assert under.to_frame()["base_uri"].iloc[0] == base
@@ -1561,7 +1562,8 @@ class TestSources:
 
     def test_base_uri_is_joined(self, source, path):
         """A path stored in two parts is resolved as it is read out."""
-        base = str(path.parent) + "/"
+        # A base is a literal prefix, so it ends as this platform's paths do.
+        base = source.path[: -len(path.name)]
         array = LazyArray.from_source(source, base_uri=base)
         assert array.source(0).path == source.path
 

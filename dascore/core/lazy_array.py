@@ -986,7 +986,8 @@ def _join(blocks: Sequence[_Block], axis: int) -> _Block:
     axes = {
         name: np.concatenate([x.axes[name] for x in blocks]) for name in AXIS_FIELDS
     }
-    counts = np.array([len(x) for x in blocks], np.int64)
+    # Repeat counts are intp; a 32-bit platform will not take int64 for them.
+    counts = np.array([len(x) for x in blocks], np.intp)
     shift = np.repeat(_offsets(lengths)[:-1], counts)
     axes["out_start"][:, axis] += shift
     axes["out_stop"][:, axis] += shift
@@ -1476,7 +1477,8 @@ def _signature(block: _Block) -> _Signature:
     keys.append(code)
     order, starts = _grouped(keys)
     groups = len(starts)
-    owner = np.repeat(np.arange(groups), np.diff(np.append(starts, count)))
+    sizes = np.diff(np.append(starts, count)).astype(np.intp)
+    owner = np.repeat(np.arange(groups), sizes)
     maker = _slab_corners if _is_slab(block) else _all_corners
     corners, signs, holder = maker(block, order, owner)
     rows = order[starts]
