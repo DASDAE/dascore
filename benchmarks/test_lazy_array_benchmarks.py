@@ -39,6 +39,15 @@ def scattered(sources):
 
 
 @pytest.fixture(scope="module")
+def grid(sources):
+    """One array whose members tile a grid rather than stacking up."""
+    spread = sources[::2]
+    part = LazyArray.from_sources(spread)
+    column = concat([part] * (MEMBERS // 2 // len(spread)), axis=0)
+    return concat([column, column], axis=1)
+
+
+@pytest.fixture(scope="module")
 def constants():
     """Many small arrays, each one constant member."""
     return [LazyArray.from_source(ArraySource.full((ROWS, WIDTH), 1.0))] * 1_000
@@ -79,6 +88,12 @@ class TestTableBenchmarks:
         table = scattered.table
         table._ids.clear()
         assert scattered.data_id
+
+    @pytest.mark.benchmark
+    def test_data_id_grid(self, grid):
+        """Time naming an array whose members are not one stack of slabs."""
+        grid.table._ids.clear()
+        assert grid.data_id
 
     @pytest.mark.benchmark
     def test_validate(self, array):

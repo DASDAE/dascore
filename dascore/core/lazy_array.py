@@ -27,6 +27,7 @@ Examples
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
 import math
 import struct
@@ -40,7 +41,7 @@ import pandas as pd
 
 from dascore.core.source import ArraySource
 from dascore.exceptions import ParameterError
-from dascore.utils.identity import DIGEST_SIZE, SCHEME, H, dtype_description
+from dascore.utils.identity import DIGEST_SIZE, H, dtype_description
 
 # The src_axis of an output axis which no stored axis feeds.
 NEW_AXIS = -1
@@ -56,7 +57,7 @@ MEMBER_FIELDS = ("source", "key", "origin_id", "dtype", "value")
 
 # The version of the byte layout the data_id digest is taken over. Bump it
 # when the layout changes, so ids from two layouts cannot meet.
-DIGEST_LAYOUT = 1
+DIGEST_LAYOUT = 2
 
 # The bytes the digest starts with, so no other payload can read alike.
 _DIGEST_TAG = b"dascore-lazy-blocks\0"
@@ -726,14 +727,12 @@ class LazyArray:
         """
         The id of the array the members make; nothing is read to work it out.
 
-        Derived from a canonical form, in which members which are abutting
-        windows of one source are one member, so the cuts slicing, joining
-        and rechunking make cannot reach the id. A partition placed by hand
-        may hold no mergeable pair and then takes an id of its own, which is
-        a false distinction and never a false identity. Each member is named
-        exactly as its source is, and the digest is taken over the placement
-        matrices and those names, so how the paths are split under a base
-        uri does not reach it.
+        It says which samples of which sources fill which region of the
+        output, and nothing else: an array cut into members any way at all
+        keeps the id of the array it tiles. Each source is named exactly as
+        an [`ArraySource`](`dascore.core.source.ArraySource`) of it is, so
+        how the paths are split under a base uri does not reach the id
+        either, and a member is cast once, so the array's own dtype does.
 
         Examples
         --------
@@ -755,12 +754,13 @@ class LazyArray:
 
     def _data_id(self) -> str:
         """Work out the id of the array the members make."""
-        block = _coalesce(self._block())
-        if len(block) == 1 and _is_identity(block):
-            return _member_source(block, 0).data_id
-        ids = _member_ids(block)
+        block = self._block()
+        signature = _signature(block)
+        out = _whole_source_id(block, signature)
+        if out is not None:
+            return out
         header = [list(self.shape), _dtype_text(self.dtype)]
-        return H("blocks", [*header, _digest(block, ids)])
+        return H("blocks", [*header, _digest(block, signature)])
 
     def to_frame(self) -> pd.DataFrame:
         """
@@ -1228,175 +1228,24 @@ def _chains(low: np.ndarray, high: np.ndarray, size: int) -> bool:
     return bool(low[0] == 0 and high[-1] == size and np.array_equal(low[1:], high[:-1]))
 
 
-def _resolved(block: _Block) -> _Block:
-    """Return the block with each member under its resolved location."""
-    column = block.members.source
-    if not any(x[0] for x in column.values):
-        return block
-    whole = [("", base + path, *rest) for base, path, *rest in column.values]
-    source = _Column.of(whole).take(column.codes)
-    return replace(block, members=replace(block.members, source=source))
-
-
-def _coalesce(block: _Block) -> _Block:
-    """Return the block with abutting windows of one source merged."""
-    # Where a path was split cannot say whether two members are one.
-    block = _resolved(block)
-    while True:
-        # A merge on one axis can open one on another, so sweep until none.
-        count = len(block)
-        for axis in range(block.ndim - 1, -1, -1):
-            block = _merge_along(block, axis)
-        if len(block) == count:
-            return block
-
-
-def _merge_along(block: _Block, axis: int) -> _Block:
-    """Merge members which abut on one axis and agree on the rest."""
-    if len(block) < 2:
-        return block
-    ordered = _merge_order(block, axis)
-    merged = _merge_runs(ordered, axis)
-    if merged is None:
-        return block
-    return merged if ordered is block else _canonical(merged)
-
-
-def _merge_order(block: _Block, axis: int) -> _Block:
-    """Return the block with members which differ on one axis side by side."""
-    if axis == block.ndim - 1:
-        return block
-    others = [x for x in range(block.ndim) if x != axis]
-    start = block.axes["out_start"]
-    rest = start[:, others[0]] if len(others) == 1 else start[:, others]
-    # Members which agree away from the axis are already side by side.
-    if bool((rest == rest[0]).all()):
-        return block
-    keys = start[:, [*others, axis]]
-    if _is_canonical(keys):
-        return block
-    return block.take(np.lexsort(keys.T[::-1]))
-
-
-def _merge_runs(block: _Block, axis: int) -> _Block | None:
-    """Merge each run of members which abut on one axis, or return None."""
-    count = len(block)
-    members, axes = block.members, block.axes
-    # Ordered by cost: most arrays hold nothing to merge and stop here.
-    same = axes["out_stop"][:-1, axis] == axes["out_start"][1:, axis]
-    if not same.any():
-        return None
-    for name in MEMBER_FIELDS:
-        codes = getattr(members, name).codes
-        same &= codes[1:] == codes[:-1]
-        if not same.any():
-            return None
-    same &= members.filled[1:] == members.filled[:-1]
-    others = [x for x in range(block.ndim) if x != axis]
-    constant = members.filled[1:] & members.filled[:-1]
-    lengths = axes["out_stop"][:-1, axis] - axes["out_start"][:-1, axis]
-    steps = np.where(axes["src_axis"][:-1, axis] >= 0, lengths, 0)
-    abuts = axes["src_start"][1:, axis] == axes["src_start"][:-1, axis] + steps
-    same &= constant | abuts
-    # A constant's extent is its box, which the merge grows.
-    extent = axes["src_extent"][:, axis]
-    same &= constant | (extent[1:] == extent[:-1])
-    if not same.any():
-        return None
-    for name in AXIS_FIELDS:
-        matrix = axes[name]
-        # The merged axis is checked above; the rest must match outright.
-        if name != "src_axis":
-            matrix = matrix[:, others]
-        same &= np.all(matrix[1:] == matrix[:-1], axis=1)
-    if not same.any():
-        return None
-    first = np.concatenate([[0], np.flatnonzero(~same) + 1])
-    last = np.concatenate([first[1:], [count]]) - 1
-    merged = block.take(first)
-    merged.axes["out_stop"][:, axis] = axes["out_stop"][last, axis]
-    _flatten_constants(merged.axes, merged.members.filled)
-    return merged
-
-
-def _is_identity(block: _Block) -> bool:
-    """Whether one member is the whole array, as it is stored and read."""
-    shape = np.asarray(block.shape, np.int64)
-    axes = block.axes
-    return bool(
-        not axes["out_start"].any()
-        and np.array_equal(axes["out_stop"][0], shape)
-        and np.array_equal(axes["src_axis"][0], np.arange(block.ndim))
-        and block.dtype == _dtype_of(block.members.dtype[0])
-    )
-
-
-def _member_ids(block: _Block) -> np.ndarray:
+@dataclass(frozen=True, eq=False)
+class _Signature:
     """
-    Return the 16 bytes which name each member.
+    What an array is, whatever the cuts which made it.
 
-    Every id is the one the member's `ArraySource` carries, worked out once
-    per distinct description rather than once per row.
+    `names` is the kind and id of each distinct source and `name_code` says
+    which one each group reads. The rest hold one row per group, in
+    canonical order: a member of it, the rest of its key, how many corners
+    it kept, and those corners, lexicographic within the group.
     """
-    count = len(block)
-    out = np.zeros((count, 16), np.uint8)
-    if not count:
-        return out
-    members = block.members
-    lengths = block.axes["out_stop"] - block.axes["out_start"]
-    filled = np.flatnonzero(members.filled)
-    if len(filled):
-        out[filled] = _constant_ids(block, lengths, filled)
-    rows = np.flatnonzero(~members.filled)
-    if not len(rows):
-        return out
-    bases, base_code = _base_ids(block, rows)
-    stored = block.axes["src_axis"][rows] >= 0
-    window = block.axes["src_start"][rows]
-    whole = np.all(
-        ~stored | ((window == 0) & (lengths[rows] == block.axes["src_extent"][rows])),
-        axis=1,
-    )
-    raw = _id_bytes(bases)
-    out[rows[whole]] = raw[base_code[whole]]
-    left = np.flatnonzero(~whole)
-    if not len(left):
-        return out
-    quoted = [json.dumps(x, ensure_ascii=True) for x in bases]
-    counts = stored.sum(axis=1)
-    for size in np.unique(counts[left]).tolist():
-        group = left[counts[left] == size]
-        texts = _window_texts(
-            [quoted[x] for x in base_code[group].tolist()],
-            block.axes["src_axis"][rows[group]],
-            window[group],
-            lengths[rows[group]],
-            size,
-        )
-        digests = b"".join(
-            hashlib.blake2b(x.encode("ascii"), digest_size=DIGEST_SIZE).digest()
-            for x in texts
-        )
-        out[rows[group]] = np.frombuffer(digests, np.uint8).reshape(len(group), 16)
-    return out
 
-
-def _window_texts(
-    bases: list[str],
-    src_axis: np.ndarray,
-    src_start: np.ndarray,
-    lengths: np.ndarray,
-    size: int,
-) -> map:
-    """Return the canonical text of the id of each window, in source order."""
-    rows, out_axes = np.nonzero(src_axis >= 0)
-    stored = src_axis[rows, out_axes]
-    windows = np.zeros((len(bases), 2 * size), np.int64)
-    windows[rows, 2 * stored] = src_start[rows, out_axes]
-    windows[rows, 2 * stored + 1] = src_start[rows, out_axes] + lengths[rows, out_axes]
-    boxes = ",".join(["[%d,%d]"] * size)
-    template = f'[{SCHEME},"window",[%s,[{boxes}]]]'
-    return map(template.__mod__, zip(bases, *windows.T.tolist()))
+    names: list[tuple[int, str]]
+    name_code: np.ndarray
+    rows: np.ndarray
+    fields: np.ndarray
+    counts: np.ndarray
+    corners: np.ndarray
+    signs: np.ndarray
 
 
 def _group_codes(columns: Sequence[_Column], rows: np.ndarray) -> np.ndarray | None:
@@ -1416,18 +1265,22 @@ def _group_codes(columns: Sequence[_Column], rows: np.ndarray) -> np.ndarray | N
     return out
 
 
-def _base_ids(block: _Block, rows: np.ndarray) -> tuple[list[str], np.ndarray]:
-    """Return the id each member builds on, and which one each row uses."""
-    members = block.members
-    columns = (members.key, members.source, members.origin_id)
+def _distinct(columns: Sequence[_Column], rows: np.ndarray) -> tuple[np.ndarray, ...]:
+    """Return one row of each distinct combination, and which one each row is."""
     keys = _group_codes(columns, rows)
     if keys is None:
-        index = np.zeros(1, np.int64)
-        inverse = np.zeros(len(rows), np.int64)
-    else:
-        _, index, inverse = np.unique(keys, return_index=True, return_inverse=True)
+        return np.zeros(1, np.int64), np.zeros(len(rows), np.int64)
+    _, index, inverse = np.unique(keys, return_index=True, return_inverse=True)
+    return index, inverse.reshape(-1)
+
+
+def _base_ids(block: _Block, rows: np.ndarray) -> tuple[list[str], np.ndarray]:
+    """Return the id each stored member builds on, and which one it uses."""
+    members = block.members
+    columns = (members.key, members.source, members.origin_id)
+    index, inverse = _distinct(columns, rows)
     # One row per distinct source, key and origin, so none is worked twice.
-    bases = []
+    out = []
     for row in rows[index].tolist():
         origin = members.origin_id[row]
         if not origin:
@@ -1439,46 +1292,236 @@ def _base_ids(block: _Block, rows: np.ndarray) -> tuple[list[str], np.ndarray]:
                 "key": members.key[row],
             }
             origin = H("location", location)
-        bases.append(origin)
-    return bases, inverse.reshape(-1)
+        out.append(origin)
+    return out, inverse
 
 
-def _constant_ids(block: _Block, lengths: np.ndarray, rows: np.ndarray) -> np.ndarray:
-    """Return the id of each constant member; equal members are one array."""
+def _constant_ids(block: _Block, rows: np.ndarray) -> tuple[list[str], np.ndarray]:
+    """Return the id of each distinct constant, and which one each row is."""
     members = block.members
-    # The rows are not deduplicated, so equal constants are named once here.
-    cache: dict = {}
-    ids = []
-    for row in rows.tolist():
-        shape = tuple(lengths[row].tolist())
-        key = (
-            "constant",
-            int(members.value.codes[row]),
-            int(members.dtype.codes[row]),
-            shape,
+    index, inverse = _distinct((members.value, members.dtype), rows)
+    out = []
+    for row in rows[index].tolist():
+        # The shape is the region, which the corners hold, so it is not here.
+        content = {"value": members.value[row], "dtype": members.dtype[row]}
+        out.append(H("constant", content))
+    return out, inverse
+
+
+def _group_names(block: _Block) -> tuple[list[tuple[int, str]], np.ndarray]:
+    """Return the id of each distinct source, and which one each member reads."""
+    members = block.members
+    code = np.zeros(len(block), np.int64)
+    names: list[tuple[int, str]] = []
+    rows = np.flatnonzero(~members.filled)
+    if len(rows):
+        found, inverse = _base_ids(block, rows)
+        code[rows] = inverse
+        names += [(0, x) for x in found]
+    rows = np.flatnonzero(members.filled)
+    if len(rows):
+        found, inverse = _constant_ids(block, rows)
+        code[rows] = inverse + len(names)
+        names += [(1, x) for x in found]
+    # One id reached two ways is one source, and the order is the ids' own.
+    ranks = {name: rank for rank, name in enumerate(sorted(set(names)))}
+    lookup = np.array([ranks[x] for x in names], np.int64)
+    return list(ranks), lookup[code]
+
+
+def _placement(block: _Block) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return the axis map, offset and extent each member is laid by."""
+    axes = block.axes
+    # A constant is its value, however it is laid; a broadcast axis reads
+    # nothing, so where it sits in the output says nothing either.
+    reads = (axes["src_axis"] >= 0) & ~block.members.filled[:, None]
+    src_axis = np.where(reads, axes["src_axis"], NEW_AXIS)
+    offset = np.where(reads, axes["out_start"] - axes["src_start"], 0)
+    extent = np.where(reads, axes["src_extent"], 0)
+    return src_axis, offset, extent
+
+
+def _grouped(keys: Sequence[np.ndarray]) -> tuple[np.ndarray, np.ndarray]:
+    """Return the rows in key order, and where each run of equal keys starts."""
+    count = len(keys[-1])
+    # A key which is one value throughout can neither sort nor split.
+    active = [x for x in keys if x.max() != x.min()]
+    if not active:
+        return np.arange(count), np.zeros(1, np.int64)
+    order = np.lexsort(active)
+    new = np.zeros(count, bool)
+    new[0] = True
+    for key in active:
+        values = key[order]
+        new[1:] |= values[1:] != values[:-1]
+    return order, np.flatnonzero(new)
+
+
+def _is_slab(block: _Block) -> bool:
+    """Whether the members are full width slabs stacked along the first axis."""
+    if block.concat_axis != 0:
+        return False
+    start, stop = block.axes["out_start"], block.axes["out_stop"]
+    for axis in range(1, block.ndim):
+        size = block.shape[axis]
+        if not size or start[:, axis].any() or (stop[:, axis] != size).any():
+            return False
+    return bool(np.all(start[1:, 0] >= stop[:-1, 0]))
+
+
+def _slab_corners(block: _Block, order: np.ndarray, owner: np.ndarray) -> tuple:
+    """
+    Return the corners of a stack of slabs, which are in order already.
+
+    The boxes of one group run up the first axis and are full width on the
+    rest, so their corners meet only where the first axis bounds do, and
+    each surviving bound stands for the corners of every other axis. That
+    gives the corners sorting them all would, in the order it would.
+    """
+    axes = block.axes
+    count = len(order)
+    points = np.empty(2 * count, np.int64)
+    points[0::2] = axes["out_start"][order, 0]
+    points[1::2] = axes["out_stop"][order, 0]
+    signs = np.empty(2 * count, np.int64)
+    signs[0::2] = 1
+    signs[1::2] = -1
+    group = np.repeat(owner, 2)
+    new = np.ones(2 * count, bool)
+    new[1:] = (points[1:] != points[:-1]) | (group[1:] != group[:-1])
+    index = np.flatnonzero(new)
+    total = np.add.reduceat(signs, index)
+    keep = total != 0
+    points, group, total = points[index][keep], group[index][keep], total[keep]
+    ndim = block.ndim
+    rest = _patterns(ndim - 1)
+    width = len(rest)
+    corners = np.empty((len(points) * width, ndim), np.int64)
+    corners[:, 0] = np.repeat(points, width)
+    corners[:, 1:] = np.tile(
+        rest * np.asarray(block.shape[1:], np.int64), (len(points), 1)
+    )
+    signs = np.repeat(total, width) * np.tile(_corner_signs(rest), len(points))
+    return corners, signs, np.repeat(group, width)
+
+
+def _all_corners(block: _Block, order: np.ndarray, owner: np.ndarray) -> tuple:
+    """Return every box's corners, summed where they meet, in sorted order."""
+    ndim = block.ndim
+    low = block.axes["out_start"][order]
+    high = block.axes["out_stop"][order]
+    count = len(order)
+    corners = np.empty((count << ndim, ndim), np.int64)
+    signs = np.empty(count << ndim, np.int64)
+    for index, bits in enumerate(itertools.product((0, 1), repeat=ndim)):
+        piece = slice(index * count, (index + 1) * count)
+        for axis, bit in enumerate(bits):
+            corners[piece, axis] = high[:, axis] if bit else low[:, axis]
+        signs[piece] = -1 if sum(bits) % 2 else 1
+    group = np.tile(owner, 1 << ndim)
+    place = np.lexsort([*[corners[:, x] for x in reversed(range(ndim))], group])
+    corners, signs, group = corners[place], signs[place], group[place]
+    new = np.ones(len(group), bool)
+    new[1:] = (corners[1:] != corners[:-1]).any(axis=1) | (group[1:] != group[:-1])
+    index = np.flatnonzero(new)
+    total = np.add.reduceat(signs, index)
+    keep = total != 0
+    return corners[index][keep], total[keep], group[index][keep]
+
+
+def _patterns(count: int) -> np.ndarray:
+    """Return every choice of a lower or an upper bound, in order."""
+    return np.array(list(itertools.product((0, 1), repeat=count)), np.int64)
+
+
+def _corner_signs(bits: np.ndarray) -> np.ndarray:
+    """Return the sign of each corner: minus one for every upper bound."""
+    return np.where(bits.sum(axis=1) % 2, -1, 1)
+
+
+def _signature(block: _Block) -> _Signature:
+    """
+    Return what an array is, whatever the cuts which made it.
+
+    Members are grouped by everything except the region they cover: which
+    source they read, how its axes lie on the output, how far the output is
+    from the source on each of them, and how long the whole source is. Two
+    members of one group read one sample wherever their boxes meet one
+    output sample, so the region alone says what a group holds.
+
+    A region is named by the signed corners of its boxes: each box gives
+    each of its `2 ** ndim` corners the sign `(-1) ** upper bounds`, the
+    signs of corners which fall together are summed, and a corner which
+    sums to zero drops out. That is the mixed difference of how often the
+    boxes cover each sample, and summing it back gives the region, so the
+    corners say what is covered and never how it was cut up.
+    """
+    ndim = block.ndim
+    count = len(block)
+    if not count:
+        return _Signature(
+            names=[],
+            name_code=np.zeros(0, np.int64),
+            rows=np.zeros(0, np.int64),
+            fields=np.zeros((0, 3 * ndim + 1), np.int64),
+            counts=np.zeros(0, np.int64),
+            corners=np.zeros((0, ndim), np.int64),
+            signs=np.zeros(0, np.int64),
         )
-        out = cache.get(key)
-        if out is None:
-            content = {
-                "value": members.value[row],
-                "dtype": members.dtype[row],
-                "shape": shape,
-            }
-            cache[key] = out = H("constant", content)
-        ids.append(out)
-    return _id_bytes(ids)
+    names, code = _group_names(block)
+    src_axis, offset, extent = _placement(block)
+    keys = [extent[:, x] for x in reversed(range(ndim))]
+    keys += [offset[:, x] for x in reversed(range(ndim))]
+    keys += [src_axis[:, x] for x in reversed(range(ndim))]
+    keys.append(code)
+    order, starts = _grouped(keys)
+    groups = len(starts)
+    owner = np.repeat(np.arange(groups), np.diff(np.append(starts, count)))
+    maker = _slab_corners if _is_slab(block) else _all_corners
+    corners, signs, holder = maker(block, order, owner)
+    rows = order[starts]
+    name_code = code[rows]
+    kinds = np.array([x[0] for x in names], np.int64)[name_code]
+    fields = np.concatenate(
+        [kinds[:, None], src_axis[rows], offset[rows], extent[rows]], axis=1
+    )
+    return _Signature(
+        names=names,
+        name_code=name_code,
+        rows=rows,
+        fields=fields,
+        counts=np.bincount(holder, minlength=groups),
+        corners=corners,
+        signs=signs,
+    )
 
 
-def _id_bytes(ids: Sequence[str]) -> np.ndarray:
-    """Return the 16 bytes of each id, folding any which is not 32 hex."""
-    try:
-        # Each id must be 32 hex on its own; their total length says nothing.
-        if any(len(x) != 32 for x in ids):
-            raise ValueError
-        raw = bytes.fromhex("".join(ids))
-    except ValueError:
-        raw = b"".join(_fold(x) for x in ids)
-    return np.frombuffer(raw, np.uint8).reshape(len(ids), 16)
+def _whole_source_id(block: _Block, signature: _Signature) -> str | None:
+    """Return the id of the one source an array is, if that is what it is."""
+    if len(signature.counts) != 1 or signature.counts[0] != 1 << block.ndim:
+        return None
+    shape = np.asarray(block.shape, np.int64)
+    bits = _patterns(block.ndim)
+    # The signs say how often the boxes cover a sample, which must be once.
+    if not np.array_equal(signature.corners, bits * shape) or not np.array_equal(
+        signature.signs, _corner_signs(bits)
+    ):
+        return None
+    row = int(signature.rows[0])
+    if block.dtype != _dtype_of(block.members.dtype[row]):
+        return None
+    kind, name = signature.names[int(signature.name_code[0])]
+    if kind:
+        # A constant which fills the array is the array of its value.
+        value = block.members.value[row]
+        source = ArraySource(filled=True, value=value)
+        return source.describe(block.shape, block.dtype).data_id
+    src_axis, offset, extent = signature.fields[0, 1:].reshape(3, block.ndim)
+    if not np.array_equal(src_axis, np.arange(block.ndim)):
+        return None
+    windows = tuple((-int(x), -int(x) + int(y)) for x, y in zip(offset, shape))
+    whole = tuple((0, int(x)) for x in extent)
+    return name if windows == whole else H("window", [name, windows])
 
 
 def _fold(value: str) -> bytes:
@@ -1491,24 +1534,35 @@ def _fold(value: str) -> bytes:
     return hashlib.blake2b(value.encode(), digest_size=DIGEST_SIZE).digest()
 
 
-def _digest(block: _Block, ids: np.ndarray) -> str:
+def _digest(block: _Block, signature: _Signature) -> str:
     r"""
-    Return the digest of a canonical block.
+    Return the digest of what an array is.
 
     The bytes hashed are, in order: the tag `dascore-lazy-blocks\0`; the
-    layout version, the number of members and the ndim, as three
-    little-endian int64; the `out_start`, `out_stop`, `src_axis`,
-    `src_start` and `src_extent` matrices, each `n_members` by `ndim`
-    little-endian int64 in row-major order; and the 16 bytes of each
-    member's id. Paths never appear in these bytes; a member's id may be
-    derived from one.
+    layout version, the ndim, the number of groups and the number of
+    corners, as four little-endian int64; then five tables, each in
+    canonical group order, which the four counts above give the length of.
+    The 16 bytes naming each group's source; the rest of each group's key,
+    as `3 * ndim + 1` little-endian int64, which are its kind and then the
+    `src_axis`, the offset and the `src_extent` of each output axis; how
+    many corners each group kept; every corner, `ndim` int64 each; and the
+    sign of every corner. Paths never appear in these bytes; a group's name
+    may be derived from one.
     """
     out = hashlib.blake2b(digest_size=DIGEST_SIZE)
     out.update(_DIGEST_TAG)
-    out.update(struct.pack("<3q", DIGEST_LAYOUT, len(block), block.ndim))
-    for name in AXIS_FIELDS:
-        out.update(np.ascontiguousarray(block.axes[name], dtype="<i8"))
-    out.update(np.ascontiguousarray(ids))
+    groups, corners = len(signature.counts), len(signature.signs)
+    out.update(struct.pack("<4q", DIGEST_LAYOUT, block.ndim, groups, corners))
+    raw = b"".join(_fold(x) for _, x in signature.names)
+    ids = np.frombuffer(raw, np.uint8).reshape(len(signature.names), 16)
+    out.update(np.ascontiguousarray(ids[signature.name_code]))
+    for table in (
+        signature.fields,
+        signature.counts,
+        signature.corners,
+        signature.signs,
+    ):
+        out.update(np.ascontiguousarray(table, dtype="<i8"))
     return out.hexdigest()
 
 
