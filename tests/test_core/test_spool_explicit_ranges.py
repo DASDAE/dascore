@@ -11,7 +11,7 @@ from dascore.examples import inventory_patch_pair
 from dascore.exceptions import ChunkError, MissingPatchError, ParameterError, UnitError
 from dascore.io.dasdae.core import DASDAEV1, DASDAEV2
 from dascore.io.index.catalog import PatchCatalog
-from dascore.units import m, s
+from dascore.units import get_quantity, m, s
 
 
 def _patch(values):
@@ -124,8 +124,11 @@ class TestExplicitSelect:
         """Backend operations beyond schema names describe the selected view."""
         selected = dc.spool(_patch(np.arange(10))).select(distance=np.array([[2, 4]]))
         backend = selected._catalog.backend
-        assert backend.coord_dims_map() == selected._catalog.backend.coord_dims_map()
-        assert len(selected) == 1
+        assert backend.coord_dims_map() == {"distance": "distance"}
+        assert selected.get_contents()[
+            ["distance_min", "distance_max"]
+        ].to_numpy().tolist() == [[2, 4]]
+        assert selected[0].coords["distance"].values.tolist() == [2, 3, 4]
 
     def test_two_array_coordinates_raise(self):
         """One call cannot define two independent window dimensions."""
@@ -232,6 +235,53 @@ class TestExplicitChunk:
             len(spool.chunk(distance=np.array([[4.0, 5.0]]), on_incomplete="ignore"))
             == 0
         )
+
+    @pytest.mark.parametrize("keep_partial", [False, True])
+    def test_uneven_fill_reports_actual_samples(self, keep_partial):
+        """A fill value cannot invent an uneven grid or its requested edges."""
+        spool = dc.spool(_patch([0.0, 1.0, 3.0, 4.0, 6.0]))
+        windows = np.array([[1.2, 3.8]])
+        plan = spool.chunk_plan(
+            distance=windows,
+            fill_value=-1,
+            tolerance=10,
+            keep_partial=keep_partial,
+        )
+        out = spool.chunk(
+            distance=windows,
+            fill_value=-1,
+            tolerance=10,
+            keep_partial=keep_partial,
+        )
+        assert plan.outputs[["distance_min", "distance_max"]].to_numpy().tolist() == [
+            [3.0, 3.0]
+        ]
+        assert out.get_contents()[
+            ["distance_min", "distance_max"]
+        ].to_numpy().tolist() == [[3.0, 3.0]]
+        assert out[0].coords["distance"].values.tolist() == [3.0]
+        assert out[0].data.tolist() == [2]
+
+    @pytest.mark.parametrize("keep_partial", [False, True])
+    def test_uneven_fill_empty_request_follows_policy(self, keep_partial):
+        """A requested interval with no uneven samples fails during planning."""
+        spool = dc.spool(_patch([0.0, 1.0, 3.0, 4.0, 6.0]))
+        windows = np.array([[2.0, 2.5]])
+        kwargs = dict(distance=windows, fill_value=-1, tolerance=10)
+        with pytest.raises(ChunkError, match="contains no source samples"):
+            spool.chunk_plan(keep_partial=keep_partial, **kwargs)
+        with pytest.raises(ChunkError, match="contains no source samples"):
+            spool.chunk(keep_partial=keep_partial, **kwargs)
+        with pytest.warns(UserWarning, match="contains no source samples"):
+            warned = spool.chunk_plan(
+                keep_partial=keep_partial, on_incomplete="warn", **kwargs
+            )
+        assert warned.outputs.empty
+        ignored = spool.chunk(
+            keep_partial=keep_partial, on_incomplete="ignore", **kwargs
+        )
+        assert len(ignored) == 0
+        assert ignored.get_contents().empty
 
     def test_tolerated_gap_needs_requested_edge_or_fill(self):
         """Tolerance bridges internal gaps but cannot invent an edge sample."""
@@ -615,6 +665,29 @@ class TestExplicitMetadataSources:
             selected[0].coords["distance"].min(),
             selected[0].coords["distance"].max(),
         ) == (1, 5)
+
+    @pytest.mark.parametrize(
+        "unit,low,high", [("degC", 2, 4), ("kelvin", 275.15, 277.15)]
+    )
+    def test_affine_quantity_bounds_match_samples(self, unit, low, high):
+        """Celsius coordinates accept equivalent absolute temperature points."""
+        patch = _patch(np.arange(10)).set_units(distance="degC")
+        spool = dc.spool(patch)
+        quantity = get_quantity(unit)
+        windows = np.array([[low * quantity, high * quantity]], dtype=object)
+        selected = spool.select(distance=windows)
+        chunked = spool.chunk(distance=windows)
+        plan = spool.chunk_plan(distance=windows)
+        for out in (selected, chunked):
+            assert len(out) == 1
+            assert out.get_contents()[
+                ["distance_min", "distance_max"]
+            ].to_numpy().tolist() == [[2.0, 4.0]]
+            assert out[0].coords["distance"].values.tolist() == [2, 3, 4]
+            assert out[0].data.tolist() == [2, 3, 4]
+        assert plan.outputs[["distance_min", "distance_max"]].to_numpy().tolist() == [
+            [2.0, 4.0]
+        ]
 
     def test_quantity_points_across_compatible_units(self):
         """An absolute metre window keeps its physical bounds in mixed units."""

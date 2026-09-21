@@ -2710,7 +2710,9 @@ def _finish_explicit_plan(
     members = members.loc[retained].copy()
     for index, output in outputs.iterrows():
         fed = members[members["output_id"] == output["output_id"]]
-        if fed.empty or fill_value is not None:
+        # Without a sample grid, fill cannot add positions. Even a filled
+        # request must state the member samples it can actually return.
+        if fed.empty or (fill_value is not None and not pd.isnull(output[step_name])):
             continue
         outputs.at[index, min_name] = fed[min_name].min()
         outputs.at[index, max_name] = fed[max_name].max()
@@ -2738,13 +2740,14 @@ def _finish_explicit_plan(
             applicable = True
             step = get_middle_value(sub[step_name].to_numpy())
             known = sub["_patch_row"].isin(exact_coords)
-            if pd.isnull(step) and not known.all():
+            no_grid = pd.isnull(step) or step == 0
+            if no_grid and not known.all():
                 failures.append(
                     (request, bounds, label, "exact source coordinates are unavailable")
                 )
                 continue
             exact = None
-            if pd.isnull(step) and fill_value is None and known.all():
+            if no_grid and known.all():
                 selected = [
                     exact_coordinate_bounds(
                         exact_coords[row["_patch_row"]], (low, high), unit or None
@@ -2761,7 +2764,7 @@ def _finish_explicit_plan(
                     continue
             if exact is not None:
                 low, high = exact
-            elif not pd.isnull(step) and step != 0:
+            elif not no_grid:
                 snap_low, snap_high, grid = _grid_snapped(
                     np.asarray([low]), np.asarray([high]), start, abs(step)
                 )
@@ -2791,7 +2794,7 @@ def _finish_explicit_plan(
             requested_low, requested_high = _explicit_bounds_for_partition(
                 bounds, start, unit
             )
-            if pd.isnull(step) and (requested_low < start or requested_high > stop):
+            if no_grid and (requested_low < start or requested_high > stop):
                 complete = complete.iloc[0:0]
             if len(complete) == 1:
                 accepted.add(int(complete["output_id"].iloc[0]))
@@ -2855,7 +2858,11 @@ def exact_coordinate_bounds(coord, bounds, plan_unit=None):
     """Select a known coordinate alone, returning its actual inclusive bounds."""
     native_unit = getattr(coord, "units", None)
     in_native = bounds
-    if plan_unit and native_unit and str(native_unit) != str(plan_unit):
+    if (
+        plan_unit is not None
+        and native_unit is not None
+        and str(native_unit) != str(plan_unit)
+    ):
         in_native = tuple(
             convert_units(x, to_units=native_unit, from_units=plan_unit) for x in bounds
         )
@@ -2873,7 +2880,11 @@ def exact_coordinate_bounds(coord, bounds, plan_unit=None):
     if not len(selected):
         return None
     low, high = selected.min(), selected.max()
-    if plan_unit and native_unit and str(native_unit) != str(plan_unit):
+    if (
+        plan_unit is not None
+        and native_unit is not None
+        and str(native_unit) != str(plan_unit)
+    ):
         low, high = (
             convert_units(x, to_units=plan_unit, from_units=native_unit)
             for x in (low, high)
