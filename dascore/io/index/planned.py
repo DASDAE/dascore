@@ -60,6 +60,7 @@ from dascore.utils.chunk_plan import (
     patch_local_adjusted_envelopes,
 )
 from dascore.utils.io import IOResourceManager
+from dascore.utils.misc import is_range
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import (
     SOURCE_RANGE_ENDS,
@@ -620,10 +621,12 @@ class PlanResolver(PatchResolver):
             return False
         if row.get("_modified"):
             # A trim is a window of the source, which is only placeable
-            # when the row keeps the source's own range beside it. That
-            # range is only kept where the window is the whole story --
-            # `_with_source_range` withholds it under a residual, which
-            # re-selects what the window already read.
+            # when the row keeps the source's own range beside it, and
+            # when the load does that window and nothing more.
+            if self.parent_residuals and not _value_residuals_on(
+                self.parent_residuals, self.dim
+            ):
+                return False
             if _is_missing(row.get(source_range_column(self.dim, "low"))):
                 return False
         else:
@@ -976,6 +979,30 @@ def _whole_member_sizes(trims: pd.DataFrame, sources: pd.DataFrame) -> dict[int,
     return out
 
 
+def _value_residuals_on(residuals, name: str) -> bool:
+    """
+    Whether every residual is one plain value range on ``name``.
+
+    Such a selection is projected onto the relation's envelopes before
+    anything is planned, so a row it narrows says so (`_modified`) and a
+    row it leaves whole still states its source's own range. Nothing
+    else can: a sample or relative selection resolves against the loaded
+    patch, one naming another coordinate trims an axis the row still
+    describes whole, one which is not a range never reached the
+    envelopes at all, and a unit-bearing one is clipped by a different
+    conversion than the patch itself makes.
+    """
+    for coords, samples, relative in residuals:
+        if samples or relative or set(coords) - {name}:
+            return False
+        value = coords.get(name)
+        if getattr(value, "magnitudes", None) is not None or not is_range(value):
+            return False
+        if any(hasattr(bound, "units") for bound in value):
+            return False
+    return True
+
+
 def _with_source_range(sources: pd.DataFrame, name: str, residuals) -> pd.DataFrame:
     """
     Keep each source's own range on the plan dimension beside its trim.
@@ -985,14 +1012,15 @@ def _with_source_range(sources: pd.DataFrame, name: str, residuals) -> pd.DataFr
     itself spans. Only a row which describes the whole of its source
     states one: a row a residual selection already trimmed no longer
     does, and neither does one which arrived trimmed for a reason this
-    plan cannot name.
+    plan cannot name. A residual selection a window cannot stand for
+    takes the range from every row, cut or not.
     """
     columns = [source_range_column(name, x) for x in SOURCE_RANGE_ENDS]
-    if residuals:
-        # What a residual left is not the file's own range, and the
-        # residual runs again on whatever the member load returns; a row
-        # with no source range is the one thing which keeps a trim off
-        # the recipe, so withholding it here is what refuses them.
+    if residuals and not _value_residuals_on(residuals, name):
+        # What such a residual leaves is not what its row states, and it
+        # runs again on whatever the member load returns; a row with no
+        # source range is the one thing which keeps a trim off the
+        # recipe, so withholding it here is what refuses them.
         return sources.drop(columns=columns, errors="ignore")
     if set(columns).issubset(sources.columns):
         # already carried: these rows are the members of a plan on this

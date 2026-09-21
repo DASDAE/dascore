@@ -3395,20 +3395,6 @@ class TestTrimmedRecipeMerge:
             assert one.coords == other.coords
             assert dict(one.attrs) == dict(other.attrs)
 
-    def test_a_residual_keeps_a_trim_on_the_patch_path(self, tmp_path):
-        """A selection left to the patch re-trims what a window already read."""
-        spool = self._spool(tmp_path)
-        coord = spool.chunk(time=None)[0].get_coord("time")
-        selected = spool.select(time=(coord.values[3], coord.values[-4]))
-        chunked = selected.chunk(time=to_timedelta64(0.12))
-        assert list(chunked)
-        resolver = chunked._catalog.resolver
-        assert resolver.parent_residuals
-        rows = resolver.member_rows
-        trimmed = rows[rows["_modified"]].to_dict("records")
-        assert trimmed
-        assert not any(resolver._can_load_member_from_index(x) for x in trimmed)
-
     def test_a_member_in_another_unit_keeps_the_patch_path(self, tmp_path, calls):
         """A trim in the plan's unit is not a window on the file's grid."""
         first = dc.get_example_patch().set_units(distance="m")
@@ -3630,3 +3616,272 @@ class TestTrimmedRecipeMerge:
         )
         with pytest.raises(ValueError, match="axes"):
             spool.chunk(time=None)[0]
+
+
+class TestSelectedRecipeMerge:
+    """A value selection on the planned dimension still windows its members."""
+
+    step = np.timedelta64(10_000_000, "ns")
+    samples = 7
+    count = 5
+
+    def _write(self, directory, dim, dtype):
+        """Adjacent single-patch files which chunk along ``dim``."""
+        for num in range(self.count):
+            rng = np.random.default_rng(num)
+            if dim == "time":
+                start = np.datetime64("2020-01-01") + self.step * self.samples * num
+                plan = dc.core.get_coord(
+                    start=start, step=self.step, shape=(self.samples,)
+                )
+                other = dc.core.get_coord(start=0.0, step=1.0, shape=(4,))
+            else:
+                plan = dc.core.get_coord(
+                    start=2.0 * self.samples * num, step=2.0, shape=(self.samples,)
+                )
+                other = dc.core.get_coord(
+                    start=np.datetime64("2020-01-01"), step=self.step, shape=(4,)
+                )
+            values = rng.normal(size=(self.samples, 4)) * 100
+            data = values.astype("int16" if dtype == "int16" else "float32")
+            patch = dc.Patch(
+                data=data, coords={dim: plan, "other": other}, dims=(dim, "other")
+            )
+            patch.io.write(directory / f"m{num}.h5", "dasdae")
+        return dc.spool(directory).update()
+
+    @pytest.fixture(scope="class")
+    def spools(self, tmp_path_factory):
+        """One spool per planned dimension and data dtype."""
+        out = {}
+        for dim in ("time", "distance"):
+            for dtype in ("float32", "int16"):
+                path = tmp_path_factory.mktemp(f"selected_{dim}_{dtype}")
+                out[dim, dtype] = self._write(path, dim, dtype)
+        return out
+
+    def _labels(self, spool, dim):
+        """Every sample label the spool holds along ``dim``."""
+        return spool.chunk(**{dim: None})[0].get_coord(dim).values
+
+    def _members(self, chunked):
+        """The resolver, the member rows the plan trimmed, and the rest."""
+        resolver = chunked._catalog.resolver
+        rows = resolver.member_rows
+        modified = rows["_modified"].to_numpy(dtype=bool)
+        trimmed = rows[modified].to_dict("records")
+        return resolver, trimmed, rows[~modified].to_dict("records")
+
+    def _recipe_merges(self, monkeypatch) -> list[bool]:
+        """Record, from here on, whether each merge came from the index."""
+        merged = []
+        merge_from_index = PatchAssembler._merge_from_index
+
+        def counted(assembler, *args, **kwargs):
+            out = merge_from_index(assembler, *args, **kwargs)
+            merged.append(out is not None)
+            return out
+
+        monkeypatch.setattr(PatchAssembler, "_merge_from_index", counted)
+        return merged
+
+    def _assert_the_patch_path_is_kept(self, selected, monkeypatch, **kwargs):
+        """No member is windowed here, and the patches are the loaded ones."""
+        with suppress_warnings(UserWarning):
+            chunked = selected.chunk(**kwargs)
+            fast = list(chunked)
+        resolver, trimmed, whole = self._members(chunked)
+        assert resolver.parent_residuals
+        assert trimmed, "a plan which trims nothing tests nothing"
+        rows = trimmed + whole
+        assert not any(resolver._can_load_member_from_index(x) for x in rows)
+        with monkeypatch.context() as context, suppress_warnings(UserWarning):
+            _force_patch_path(context)
+            slow = list(selected.chunk(**kwargs))
+        assert len(fast) == len(slow)
+        for one, other in zip(fast, slow, strict=True):
+            assert np.array_equal(one.data, other.data)
+            assert one.coords == other.coords
+            assert dict(one.attrs) == dict(other.attrs)
+
+    def test_the_interior_of_a_selection_is_windowed(self, spools, monkeypatch):
+        """A member the selection leaves whole is still a window of its file."""
+        spool = spools["time", "float32"]
+        labels = self._labels(spool, "time")
+        # only what the selected chunking does is counted; reading the
+        # labels merged the whole spool, from the index, already
+        merged = self._recipe_merges(monkeypatch)
+        selected = spool.select(time=(labels[3], labels[-4]))
+        chunked = selected.chunk(time=self.step * 10)
+        assert list(chunked)
+        assert any(merged), "the selected merge was assembled from the index"
+        resolver, trimmed, _ = self._members(chunked)
+        assert any(resolver._can_load_member_from_index(x) for x in trimmed)
+
+    def test_a_row_the_selection_cut_falls_back(self, spools):
+        """A row a selection narrowed no longer states its source's range."""
+        spool = spools["time", "float32"]
+        labels = self._labels(spool, "time")
+        selected = spool.select(time=(labels[3], labels[-4]))
+        chunked = selected.chunk(time=self.step * 10)
+        resolver, trimmed, _ = self._members(chunked)
+        column = assembly_module.source_range_column("time", "low")
+        refused = [x for x in trimmed if not resolver._can_load_member_from_index(x)]
+        assert refused, "the selection cut the first and last file"
+        assert all(pd.isnull(x[column]) for x in refused)
+
+    def _chunk_kwargs(self, bridged: bool = False) -> dict:
+        """A chunking every file overhangs, so every member is a trim.
+
+        ``bridged`` also merges over the holes a patch-local selection
+        opens; a member wrongly read as a window only shows in an output
+        assembled from more than one.
+        """
+        kwargs = {"distance": 9.0, "keep_partial": True}
+        return {**kwargs, "tolerance": np.inf} if bridged else kwargs
+
+    def test_a_sample_selection_keeps_the_patch_path(self, spools, monkeypatch):
+        """Sample indices trim a row which still claims to be whole."""
+        spool = spools["distance", "float32"]
+        selected = spool.select(distance=(1, -1), samples=True)
+        self._assert_the_patch_path_is_kept(
+            selected, monkeypatch, **self._chunk_kwargs(bridged=True)
+        )
+
+    def test_a_relative_selection_keeps_the_patch_path(self, spools, monkeypatch):
+        """Relative bounds resolve against the patch, not against the plan."""
+        spool = spools["distance", "float32"]
+        selected = spool.select(distance=(2.0, -2.0), relative=True)
+        self._assert_the_patch_path_is_kept(
+            selected, monkeypatch, **self._chunk_kwargs(bridged=True)
+        )
+
+    def test_a_selection_chain_is_admitted_only_as_a_whole(self, spools, monkeypatch):
+        """One patch-local selection in a chain takes the chain out."""
+        spool = spools["distance", "float32"]
+        selected = spool.select(distance=(1, -1), samples=True)
+        selected = selected.select(distance=(10.0, 60.0))
+        self._assert_the_patch_path_is_kept(
+            selected, monkeypatch, **self._chunk_kwargs(bridged=True)
+        )
+
+    @pytest.mark.parametrize("both", [False, True])
+    def test_a_selection_on_another_dimension_keeps_the_patch_path(
+        self, spools, monkeypatch, both
+    ):
+        """A selection cuts an axis the row still describes whole."""
+        spool = spools["distance", "float32"]
+        start = np.datetime64("2020-01-01")
+        kwargs = {"other": (start, start + self.step * 2)}
+        if both:  # one selection naming the planned dimension as well
+            kwargs["distance"] = (10.0, 60.0)
+        selected = spool.select(**kwargs)
+        self._assert_the_patch_path_is_kept(
+            selected, monkeypatch, **self._chunk_kwargs()
+        )
+
+    def test_a_rechunk_lends_no_range_to_another_axis(self, spools, monkeypatch):
+        """Re-chunked rows keep their source range; another axis may not use it."""
+        spool = spools["distance", "float32"]
+        start = np.datetime64("2020-01-01") + self.step
+        chunked = spool.chunk(distance=17.0, keep_partial=True)
+        # one selection over both axes: the planned one alone would be a
+        # window, and the rule is what keeps the other from riding along
+        selected = chunked.select(
+            distance=(10.0, 60.0), other=(start, start + self.step * 2)
+        )
+        self._assert_the_patch_path_is_kept(
+            selected, monkeypatch, distance=23.0, keep_partial=True
+        )
+
+    def test_a_unit_bearing_selection_keeps_a_trim_on_the_patch_path(
+        self, spools, monkeypatch
+    ):
+        """A quantity is clipped by a different conversion than the patch makes."""
+        spool = spools["distance", "float32"]
+        metre = get_quantity("m")
+        selected = spool.select(distance=(10 * metre, 60 * metre))
+        self._assert_the_patch_path_is_kept(
+            selected, monkeypatch, **self._chunk_kwargs()
+        )
+
+    def test_which_selections_a_window_can_stand_for(self):
+        """The rule a windowed trim rests on, kind by kind."""
+        plain = ({"time": (1, 2)}, False, False)
+        assert planned._value_residuals_on((plain,), "time")
+        assert planned._value_residuals_on((plain, plain), "time")
+        refused = [
+            ({"time": (1, 2)}, True, False),  # sample indices
+            ({"time": (1, 2)}, False, True),  # bounds relative to each patch
+            ({"distance": (1, 2)}, False, False),  # another dimension
+            ({"time": (1, 2), "distance": (1, 2)}, False, False),  # and this one
+            ({"latitude": (1, 2)}, False, False),  # nobody's dimension
+            ({"time": {"a", "b"}}, False, False),  # not a range at all
+            ({"time": (1 * get_quantity("m"), 2)}, False, False),  # unit bearing
+        ]
+        for residual in refused:
+            assert not planned._value_residuals_on((residual,), "time")
+            # one such selection anywhere in a chain refuses the chain
+            assert not planned._value_residuals_on((plain, residual), "time")
+            assert not planned._value_residuals_on((residual, plain), "time")
+
+    def test_every_selection_matches_the_patch_path(self, spools, monkeypatch):
+        """Random selections and chunkings read the same samples either way.
+
+        The recipe places a window of each source; the patch path loads
+        each source, re-selects it and trims it. Wherever the selection's
+        bounds fall -- on a sample, half a sample past one, on a file
+        edge, outside the data, or nowhere at all -- and however the
+        chunks are laid over what is left, the two must agree in every
+        part of the patch.
+        """
+        rng = random.Random(20260921)
+        # every label first: reading them merges each spool unselected,
+        # which the count below must not mistake for a selected merge
+        labels_by_key = {key: self._labels(x, key[0]) for key, x in spools.items()}
+        merged = self._recipe_merges(monkeypatch)
+        compared = 0
+        for key, spool in spools.items():
+            dim, labels = key[0], labels_by_key[key]
+            step = labels[1] - labels[0]
+            span = step * self.samples
+            half = step / 2 if dim == "distance" else step // 2
+            bounds = [
+                (labels[3], labels[-4]),  # inside the first and last file
+                (labels[2] + half, labels[9] - half),  # half a sample off
+                (labels[self.samples], labels[2 * self.samples - 1]),  # file edges
+                (labels[0] - span, labels[-1] + span),  # wider than the data
+                (labels[4], None),  # open ended
+                (..., labels[-5]),
+                (labels[-1] + span, labels[-1] + 2 * span),  # nothing at all
+            ]
+            lengths = (span * 2 + half, span - half)
+            for index, (low, high) in enumerate(bounds):
+                selected = spool.select(**{dim: (low, high)})
+                if rng.random() < 0.5 and len(selected):
+                    selected = selected.select(**{dim: (labels[5], labels[-6])})
+                kwargs = {dim: lengths[index % 2], "keep_partial": rng.random() < 0.5}
+                if rng.random() < 0.5:
+                    kwargs["overlap"] = step * 2
+                try:
+                    fast = list(selected.chunk(**kwargs))
+                except ChunkError:
+                    continue
+                with monkeypatch.context() as context:
+                    _force_patch_path(context)
+                    slow = list(selected.chunk(**kwargs))
+                assert len(fast) == len(slow), kwargs
+                for one, other in zip(fast, slow, strict=True):
+                    compared += 1
+                    assert one.dims == other.dims, kwargs
+                    assert one.data.dtype == other.data.dtype, kwargs
+                    assert np.array_equal(one.data, other.data), kwargs
+                    assert one.coords == other.coords, kwargs
+                    assert dict(one.attrs) == dict(other.attrs), kwargs
+                    for name, coord in one.coords.coord_map.items():
+                        mate = other.coords.coord_map[name]
+                        assert coord.dtype == mate.dtype, (kwargs, name)
+                        assert coord.units == mate.units, (kwargs, name)
+                        assert coord.step == mate.step, (kwargs, name)
+        assert compared > 30
+        assert any(merged), "a selected spool merged from the index"
