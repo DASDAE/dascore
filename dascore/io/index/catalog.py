@@ -19,6 +19,7 @@ from __future__ import annotations
 import abc
 import json
 import operator
+import os
 import re
 import sys
 import warnings
@@ -194,6 +195,22 @@ class LiveResolver(PatchResolver):
             raise MissingPatchError(msg) from None
 
 
+def resolve_against_root(path: str | Path, root: Path | None) -> str | Path:
+    """
+    Resolve a stored source path against a catalog root.
+
+    Relative paths resolve against the root; URIs and absolute paths
+    pass through untouched. This is the one rule for turning a stored
+    spelling into one a reader can open. `os.path.isabs` rather than
+    `Path.is_absolute`: it answers the same question per platform
+    without building a path object for every row of an index.
+    """
+    text = str(path)
+    if root is None or "://" in text or os.path.isabs(text):
+        return path
+    return root / path
+
+
 def _patch_path(patch: dc.Patch) -> str:
     """Return the synthetic source path identifying a live patch."""
     return f"memorypatch://{patch._instance_id}"
@@ -223,16 +240,8 @@ class FileResolver(PatchResolver):
         return dc.read(**kwargs, **id_kwargs, **trim)
 
     def resolve_path(self, path: str | Path) -> str | Path:
-        """
-        Resolve a row's source path against the catalog root.
-
-        Relative paths resolve against the root; URIs and absolute paths
-        pass through untouched.
-        """
-        if self._root is not None and "://" not in str(path):
-            if not Path(path).is_absolute():
-                return self._root / path
-        return path
+        """Resolve a row's source path against the catalog root."""
+        return resolve_against_root(path, self._root)
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Read the patch, passing range trims down as read hints."""

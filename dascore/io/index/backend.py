@@ -1330,9 +1330,18 @@ class SQLiteIndexBackend:
         """Return the sources table."""
         return self._fetch_df("SELECT * FROM sources")
 
-    def source_stats(self) -> pd.DataFrame:
-        """Return only the columns incremental change detection needs."""
-        return self._fetch_df("SELECT source_path, mtime_ns, size_bytes FROM sources")
+    def source_stats(self, paths=None) -> pd.DataFrame:
+        """
+        Return only the columns incremental change detection needs.
+
+        With ``paths``, only those stored spellings are fetched, which is
+        what a reader checking the few sources it is about to read wants;
+        without them, the whole table, which is what a full update wants.
+        """
+        sql = "SELECT source_path, mtime_ns, size_bytes FROM sources"
+        if paths is None:
+            return self._fetch_df(sql)
+        return self._fetch_in(sql, "source_path", [str(x) for x in paths])
 
     def get_metadata(self) -> dict:
         """Return index-level metadata."""

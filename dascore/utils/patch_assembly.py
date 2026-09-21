@@ -5,19 +5,21 @@ This is the consumer of the members (instruction) table that
 `dascore.utils.chunk_plan` produces and every spool view carries: it
 joins member rows to their source rows, loads each source patch through
 a caller-supplied loader, applies exact trims, and merges multi-member
-outputs. A merge whose members the rows fully describe becomes a
-[`LazyArray`](`dascore.core.lazy_array.LazyArray`) recipe, which names
-the window of a stored array each member is and reads them all into one
-output; every other merge streams loaded patches into a pre-allocated
-buffer. The spool owns *what* rows exist; this module owns *how* a row
-becomes a Patch.
+outputs. When the output size is known, a merge whose members the rows
+fully describe becomes a
+[`LazyArray`](`dascore.core.lazy_array.LazyArray`) recipe -- the window
+of a stored array each member is, read into one output -- and any other
+such merge streams loaded patches into a pre-allocated buffer; the rest
+concatenate. The spool owns *what* rows exist; this module owns *how* a
+row becomes a Patch.
 """
 
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -349,16 +351,37 @@ def _row_values(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
     return kind(lo), kind(hi), kind(step)
 
 
+def _row_bounds(row: Mapping, dim: str) -> tuple[Any, Any] | None:
+    """
+    A dimension's (min, max) bounds exactly as the row states them, or None.
+
+    Never cast to the coordinate's dtype: these are the window the plan
+    drew, which falls where it likes between samples, and rounding one
+    onto the stored grid would take in a sample the plan left out. What
+    the bounds mean is decided by the coordinate they select.
+    """
+    values = []
+    for name in ("min", "max"):
+        value = row.get(f"{dim}_{name}")
+        if value is None or _is_null(value):
+            return None
+        if isinstance(value, pd.Timestamp):
+            value = value.to_datetime64()
+        elif isinstance(value, pd.Timedelta):
+            value = value.to_timedelta64()
+        values.append(value)
+    return values[0], values[1]
+
+
 def _units_converted(row: Mapping, dim: str) -> bool:
     """Whether the row's envelope was converted from the file's own units."""
     source_units = row.get(f"_{dim}_units_source")
     return not _is_null(source_units) and source_units != row.get(f"_{dim}_units")
 
 
-# What a source's own range is called beside a member's trim of it. The
-# ends are not spelled min/max/step: a `<x>_min`/`<x>_max`/`<x>_step`
-# triple reads as a dimension's envelope wherever a frame is scanned for
-# one, and these describe a dimension already named by such a triple.
+# What a source's own range is called beside a member's trim of it. Not
+# min/max/step: code scanning a frame for `<x>_min`/`<x>_max`/`<x>_step`
+# triples would read these as a dimension named `<dim>_src`.
 SOURCE_RANGE_ENDS = ("low", "high", "step")
 
 
@@ -407,21 +430,72 @@ def coord_from_row(row: Mapping, dim: str, units=None):
     if isinstance(grid, tuple) and ticks and not _units_converted(row, dim):
         *terms, length = grid
         start = hi if terms[0] < 0 else lo
-        coord = CoordRange(
+        return CoordRange(
             start=start,
             shape=(length,),
             units=units,
             **dict(zip(_EXACT_GRID_FIELDS, terms)),
         )
-        # The grid counts the source's samples; a row whose envelope is a
-        # *window* of that source would take its own bounds and the
-        # source's length. Only a grid which restates the envelope beside
-        # it describes the same samples.
-        if coord.min() == lo and coord.max() == hi:
-            return coord
     if step < np.zeros((), dtype=np.asarray(step).dtype):
         return None
     return get_coord(start=lo, stop=hi + step, step=step, units=units)
+
+
+# The units a stored datetime or timedelta coordinate can count in,
+# finest first.
+_TIME_UNITS = ("ns", "us", "ms", "s", "m", "h", "D")
+
+
+def _at_unit(coord, unit: str):
+    """The same evenly sampled coordinate counted in ``unit``, or None."""
+    name = "datetime64" if np.asarray(coord.start).dtype.kind == "M" else "timedelta64"
+    start = np.asarray(coord.start).astype(f"{name}[{unit}]")
+    step = np.asarray(coord.step).astype(f"timedelta64[{unit}]")
+    if step == np.zeros((), dtype=step.dtype):
+        return None  # a unit this coarse cannot count this step
+    return get_coord(start=start, step=step, shape=coord.shape, units=coord.units)
+
+
+def _only_nanoseconds(coord) -> bool:
+    """Whether the coordinate's ticks count in nothing coarser than ns."""
+    ticks = [
+        abs(int(np.asarray(x).astype("int64")))
+        for x in (coord.start, coord.stop, coord.step)
+    ]
+    return math.gcd(*ticks) % 1000 != 0
+
+
+def coord_at_stored_unit(coord, row: Mapping, dim: str, found: dict):
+    """
+    ``coord`` counted as the file counts it, or None when nothing says.
+
+    A row holds datetimes in nanoseconds however its file stores them,
+    and the dtype it records ("datetime64") leaves the unit out. The
+    coordinate's own id counts it, and the row carries that id as a
+    definition key, so the unit whose rebuild has that id is the file's.
+    ``found`` remembers the last unit which answered, since an archive
+    is written in one. A coordinate no unit accounts for is left to the
+    patch path, which reads the dtype rather than deducing it.
+    """
+    if coord is None or np.asarray(coord.min()).dtype.kind not in "mM":
+        return coord
+    # A coordinate no coarser unit can count is the nanosecond one the
+    # row already built, and costs nothing to place.
+    if _only_nanoseconds(coord):
+        return coord
+    key = row.get(f"_{dim}_def_key")
+    if not isinstance(key, str) or not key.startswith("fp:"):
+        return None
+    stated = key[3:]
+    if coord.data_id == stated:
+        return coord
+    last = found.get(dim)
+    for unit in (last, *_TIME_UNITS) if last else _TIME_UNITS:
+        candidate = _at_unit(coord, unit)
+        if candidate is not None and candidate.data_id == stated:
+            found[dim] = unit
+            return candidate
+    return None
 
 
 def patch_from_fill(
@@ -578,15 +652,18 @@ class PatchAssembler:
     load_patch: Callable[[Mapping], dc.Patch]
     merge_kwargs: Mapping
     plan_dim: str
-    # Names the whole stored array a member is part of, or None when the
-    # member must be loaded as a patch; the index then stands in for
-    # the member's coordinates and attrs. Nothing is read to name it.
+    # Names the whole stored array a member is part of, reading nothing;
+    # the index then stands in for its coordinates and attrs. None sends
+    # the member down the patch path.
     array_source: Callable[[Mapping, tuple[int, ...]], ArraySource | None] | None = None
-    can_load_array: Callable[[Mapping], bool] | None = None
+    # Whether the rows alone can describe this member; nothing is read.
+    can_use_index: Callable[[Mapping], bool] | None = None
     # Whether every member source still is what the index recorded. A
     # recipe reads the window the index promised rather than the whole
     # array, so a file rewritten since would otherwise pass unnoticed.
     sources_unchanged: Callable[[Iterable[Mapping]], bool] | None = None
+    # The unit each dimension's last rebuilt coordinate was counted in.
+    stored_units: dict[str, str] = field(default_factory=dict)
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
@@ -643,8 +720,9 @@ class PatchAssembler:
         carry what the index cannot hold (an array attr, a coordinate it
         could not represent), and the merge would then see it on some
         members and not others, refusing what it accepts whole. The rows
-        decide that before anything is read; an array whose shape the row
-        did not predict is only found once it is loaded, and abandons the
+        decide that before anything is read, and a source the index no
+        longer matches is refused there too; a shape the row did not
+        predict is only found once it is loaded, and abandons the
         attempt. Returning from that attempt releases its output before
         the retry reloads the source coordinates, attrs, and arrays.
         """
@@ -668,7 +746,7 @@ class PatchAssembler:
         """
         dims = metas[0].dims
         axis = dims.index(merge_dim)
-        recipe = self._recipe(df_dict_list, metas, dims, axis, merge_dim)
+        recipe = self._recipe(df_dict_list, metas, dims, axis)
         if recipe is None:
             return None
         if self.sources_unchanged is not None and not self.sources_unchanged(
@@ -686,18 +764,19 @@ class PatchAssembler:
         summaries = [x._get_dim_summary() for x in coords]
         return self._assemble(data, dims, merge_dim, coords, attrs, summaries)
 
-    def _recipe(self, rows, metas, dims, axis, merge_dim) -> LazyArray | None:
+    def _recipe(self, rows, metas, dims, axis) -> LazyArray | None:
         """
         The lazy array the members make, or None when one cannot be named.
 
         Nothing is read here: every member is a window of a stored array
         whose shape its row states, so the members are laid end to end
         along the merged axis by arithmetic alone. A member holding its
-        axes in another order than the first takes the patch path
-        instead, which transposes each one as it is loaded.
+        axes in another order than the first, or disagreeing off the
+        merged axis, takes the patch path instead, which transposes each
+        one as it is loaded and says what cannot be merged.
         """
         assert self.array_source is not None, "the caller checks for a source"
-        sources, shape, rest = [], None, None
+        sources, rest = [], None
         for row, meta in zip(rows, metas, strict=True):
             if meta.dims != dims:
                 return None
@@ -712,19 +791,12 @@ class PatchAssembler:
                 # that window's id rather than the whole array's
                 meta.attrs = meta.attrs.update(data_id=source.data_id)
             others = placed[:axis] + placed[axis + 1 :]
-            if shape is None:
-                shape, rest = list(placed), others
+            if rest is None:
+                rest = others
             elif others != rest:
-                msg = (
-                    f"Cannot merge patches; their shapes are incompatible "
-                    f"along the dimensions not being merged ({merge_dim})."
-                )
-                raise CoordMergeError(msg)
-            else:
-                shape[axis] += placed[axis]
+                return None
             sources.append(source)
-        assert shape is not None, "an output always has at least one member"
-        return LazyArray.from_sources(sources, axis=axis, shape=tuple(shape))
+        return LazyArray.from_sources(sources, axis=axis)
 
     def _stream(self, joined, df_dict_list, merge_dim, samples):
         """
@@ -823,8 +895,8 @@ class PatchAssembler:
         """
         if self.array_source is None:
             return None
-        if self.can_load_array is not None and not all(
-            self.can_load_array(row) for row in rows
+        if self.can_use_index is not None and not all(
+            self.can_use_index(row) for row in rows
         ):
             return None
         metas = []
@@ -876,7 +948,14 @@ class PatchAssembler:
                     return None
                 coord, span, length = placed
             else:
-                coord = coord_from_row(row, dim, units=units)
+                # The plan narrows its own dimension and no other, so
+                # every envelope here is its source's own.
+                coord = coord_at_stored_unit(
+                    coord_from_row(row, dim, units=units),
+                    row,
+                    dim,
+                    self.stored_units,
+                )
                 if coord is None:
                     return None
                 span, length = slice(0, len(coord)), len(coord)
@@ -895,19 +974,21 @@ class PatchAssembler:
         The window comes from selecting the source's own coordinate to
         the member's range, so the samples a recipe reads are the ones
         `Patch.select` would have kept, and the coordinate it presents is
-        that selection's own. A trim the coordinate answers with anything
-        but a contiguous forward run of samples is left to the patch.
+        that selection's own. An evenly sampled coordinate can only
+        answer with a contiguous forward run, so the one refusal here is
+        a trim naming no sample of the source.
         """
         # A converted envelope is not on the grid the source's own units
         # count, so the two cannot be compared sample for sample.
         if _units_converted(row, dim):
             return None
-        source = source_coord_from_row(row, dim, units=units)
-        values = _row_values(row, dim)
-        if source is None or values is None:
+        source = coord_at_stored_unit(
+            source_coord_from_row(row, dim, units=units), row, dim, self.stored_units
+        )
+        bounds = _row_bounds(row, dim)
+        if source is None or bounds is None:
             return None
-        lo, hi, _ = values
-        coord, indexer = source.select((lo, hi))
+        coord, indexer = source.select(bounds)
         # an evenly sampled coordinate answers a range with a forward run
         assert isinstance(indexer, slice), indexer
         start, stop, step = indexer.indices(len(source))
