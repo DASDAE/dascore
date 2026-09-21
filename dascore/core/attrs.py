@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime
 from collections.abc import Iterator, Mapping, Sequence, Set
 from functools import cache
 from typing import Annotated, Any, Self, cast
@@ -35,26 +34,15 @@ from dascore.utils.misc import (
 
 str_validator = PlainValidator(to_str)
 
-# What an attr value may be; checked before the collections below, which
-# also cover str and bytes.
-_SCALAR_TYPES = (
-    str,
-    bytes,
-    int,
-    float,
-    complex,
-    np.number,
-    np.bool_,
-    np.datetime64,
-    np.timedelta64,
-    datetime.date,
-    datetime.timedelta,
-    type(None),
+# The exact types nearly every attr has; anything else gets a closer look.
+_PLAIN = frozenset(
+    {str, int, float, bool, type(None), np.str_, np.float64, np.float32}
+    | {np.int64, np.int32, np.bool_, np.datetime64, np.timedelta64}
 )
 
-# What it may not be: anything holding more than one value. A record
-# scalar has fields, and an iterator is spent by reading it.
-_COLLECTION_TYPES = (BaseModel, Mapping, Sequence, Set, Iterator, np.void)
+# What holds more than one value whatever its length. A record scalar has
+# fields, and an iterator is spent by reading it.
+_MANY = (BaseModel, Mapping, Sequence, Set, Iterator, np.void)
 
 # What goes in place of an attr holding more than one value.
 _NOT_SCALAR = object()
@@ -62,48 +50,29 @@ _NOT_SCALAR = object()
 # What no attr is called, because they say how a patch is built.
 _STRUCTURAL = frozenset({"dims", "coords"})
 
-# How a value is read: one value whatever it holds, a container to be
-# counted, many values whatever it holds, or something to ask.
-_ONE, _SIZED, _MANY, _ASK = range(4)
-
-
-@cache
-def _kind(cls: type) -> int:
-    """How a value of a type is read; every value runs through this."""
-    if issubclass(cls, _SCALAR_TYPES):
-        return _ONE
-    if issubclass(cls, np.ndarray | list | tuple):
-        return _SIZED
-    if issubclass(cls, _COLLECTION_TYPES):
-        return _MANY
-    return _ASK
-
 
 def _scalar_attr(value: Any) -> Any:
     """
     Return the one value an attr holds, or `_NOT_SCALAR` for more.
 
-    A 0-d array is the scalar it wraps, and so is anything else holding
-    exactly one value: that is how HDF5 and netCDF spell a scalar.
+    Anything holding exactly one value is that value: a 0-d or length-1
+    array is how HDF5 and netCDF spell a scalar.
     """
-    kind = _kind(type(value))
-    if kind is _ONE:
+    if type(value) in _PLAIN or isinstance(value, str | bytes):
         return value
-    if kind is _SIZED:
-        if isinstance(value, np.ndarray):
-            if value.ndim == 0:
-                return _unwrapped(value[()])
-            return _unwrapped(value.reshape(())[()]) if value.size == 1 else _NOT_SCALAR
+    if isinstance(value, np.ndarray):
+        return _unwrapped(value.reshape(-1)[0]) if value.size == 1 else _NOT_SCALAR
+    if isinstance(value, list | tuple):
         return _unwrapped(value[0]) if len(value) == 1 else _NOT_SCALAR
-    if kind is _MANY:
-        return _NOT_SCALAR
-    # Anything else is one value unless it says otherwise: a quantity
-    # says so through its magnitude, another library's array by its shape.
-    magnitude = getattr(value, "magnitude", None)
-    if magnitude is not None:
-        one = _kind(type(magnitude)) is _ONE or getattr(magnitude, "size", 0) == 1
+    # A quantity says how much it holds through its magnitude. Asked before
+    # the abstract classes below, which are slow to rule out.
+    held = getattr(value, "magnitude", None)
+    if held is not None:
+        one = held.size == 1 if isinstance(held, np.ndarray) else True
         return value if one else _NOT_SCALAR
-    return value if getattr(value, "ndim", 0) == 0 else _NOT_SCALAR
+    # Another library's array says so through its shape.
+    many = isinstance(value, _MANY) or getattr(value, "ndim", 0) > 0
+    return _NOT_SCALAR if many else value
 
 
 def _unwrapped(value: Any) -> Any:
@@ -121,18 +90,17 @@ def _scalar_pass(data: dict, on_non_scalar: WARN_LEVELS, declared) -> None:
     """Reduce each extra in place to the one value it holds."""
     skipped = []
     for name, value in data.items():
-        if name in declared:
-            # Left to its annotation, but for the one-value array a file
-            # spells a scalar with: a string validator would store its repr.
-            one = isinstance(value, np.ndarray) and value.size == 1
-            if one and (got := _scalar_attr(value)) is not _NOT_SCALAR:
-                data[name] = got
+        if type(value) in _PLAIN:
+            continue
+        # A declared field is left to its annotation, but for the one-value
+        # array a file spells a scalar with.
+        if name in declared and not (type(value) is np.ndarray and value.size == 1):
             continue
         got = _scalar_attr(value)
-        if got is _NOT_SCALAR:
-            skipped.append(name)
-        else:
+        if got is not _NOT_SCALAR:
             data[name] = got
+        elif name not in declared:
+            skipped.append(name)
     if not skipped:
         return
     kinds = ", ".join(f"{x!r} ({type(data[x]).__name__})" for x in skipped)
@@ -240,7 +208,9 @@ class PatchAttrs(DascoreBaseModel):
         # are scalars, so that an array is a coordinate and nothing else.
         # Warning rather than refusing is what keeps every reader, plugins
         # included, able to read a file which stored one.
-        _scalar_pass(data, "warn", _declared(cls))
+        # Checked in C first: only a value of another type is looked at.
+        if not _PLAIN.issuperset(map(type, data.values())):
+            _scalar_pass(data, "warn", _declared(cls))
         return data
 
     def __getitem__(self, item):
