@@ -12,6 +12,8 @@ This note explains how DASCore interprets a few important attributes, and its in
 
 `PatchAttrs` rejects nested coordinate payloads and does not own `dims` or coordinate-summary fields such as `time_min` and `distance_step`. Keeping these values out of attrs prevents coordinate edits from leaving stale duplicated metadata. Use coordinate APIs for structural changes and `Patch.summary.get_coord_summary(...)` or `PatchSummary.flat_dump(...)` for summary/index views.
 
+An extra attr holds one value. A one-value array, list or tuple, which is how HDF5 and netCDF store a scalar, is read as that scalar; one holding several values is skipped with a warning, because an array belongs on the patch as a coordinate: `patch.update_coords(name=(dims, array))`, or `(None, array)` for one which rides no dimension.
+
 ## `data_type`
 
 `data_type` is an optional label for the kind of data contained in a patch. It is useful for display defaults, plotting choices, grouping, and quick inspection, but it is not the canonical source of physical meaning, rather the data and coordinate units, as well as the patch history serve this purpose.
