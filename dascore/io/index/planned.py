@@ -612,10 +612,15 @@ class PlanResolver(PatchResolver):
         """Load one member source patch, applying parent residuals."""
         trim = {}
         if kwargs.get("_modified"):
+            # The index already selected the source row. Only coordinate
+            # ranges are read hints: attrs may have been overridden by the
+            # path and would reject the file before those overrides apply.
+            dims = set(str(kwargs.get("dims", "")).split(","))
             trim = {
                 k: v
                 for k, v in kwargs.items()
-                if not str(k).startswith("_")
+                if k in dims
+                and not str(k).startswith("_")
                 and k not in _SOURCE_COLUMNS
                 and k not in _READ_KWARGS
             }
@@ -629,8 +634,7 @@ class PlanResolver(PatchResolver):
                 kwargs.get(_source_units_column(self.dim), plan_units)
             )
             if plan_units is not None and source_units != plan_units:
-                for suffix in ("_min", "_max", "_step"):
-                    trim.pop(f"{self.dim}{suffix}", None)
+                trim.pop(self.dim, None)
         patch_local = any(s or r for _, s, r in self.parent_residuals)
         if trim and patch_local:
             # A patch-local residual resolves against the source patch, so
