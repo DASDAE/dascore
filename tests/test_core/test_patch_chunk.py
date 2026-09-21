@@ -20,8 +20,16 @@ import dascore as dc
 import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
 from dascore.core.coords import CoordRange, CoordSegmented
-from dascore.exceptions import ChunkError, CoordMergeError, ParameterError, UnitError
+from dascore.core.source import ArraySource
+from dascore.exceptions import (
+    ChunkError,
+    CoordMergeError,
+    InvalidFiberIOError,
+    ParameterError,
+    UnitError,
+)
 from dascore.io.febus.core import FebusPatchAttrs
+from dascore.io.index import planned
 from dascore.units import get_quantity
 from dascore.utils.gaps import GapTolerance
 from dascore.utils.misc import get_middle_value, suppress_warnings
@@ -1993,6 +2001,33 @@ class TestChunkWithAssociatedCoords:
                 assert set(np.unique(other.get_array("label"))) == labels
 
 
+@pytest.fixture
+def calls(monkeypatch):
+    """Count patch loads and named member arrays through the plan resolver."""
+    counts = {"patch": 0, "array": 0}
+    load_patch = planned.PlanResolver._load_member
+    array_source = planned.PlanResolver._member_array_source
+
+    def count_patch(self, kwargs):
+        counts["patch"] += 1
+        return load_patch(self, kwargs)
+
+    def count_array(self, row, shape):
+        counts["array"] += 1
+        return array_source(self, row, shape)
+
+    monkeypatch.setattr(planned.PlanResolver, "_load_member", count_patch)
+    monkeypatch.setattr(planned.PlanResolver, "_member_array_source", count_array)
+    return counts
+
+
+def _force_patch_path(monkeypatch):
+    """Make every member load as a patch, as a format without read_array would."""
+    monkeypatch.setattr(
+        planned.PlanResolver, "_member_array_source", lambda self, row, shape: None
+    )
+
+
 class TestChunkFromIndex:
     """
     Untrimmed members use index metadata and read_array; incomplete rows fall back to
@@ -2011,43 +2046,11 @@ class TestChunkFromIndex:
             patch.io.write(path / f"p{num}.h5", "dasdae")
         return dc.spool(path).update()
 
-    @pytest.fixture
-    def calls(self, monkeypatch):
-        """Count patch and array loads through the plan resolver."""
-        from dascore.io.index import planned  # noqa: PLC0415
-
-        counts = {"patch": 0, "array": 0}
-        load_patch, load_array = (
-            planned.PlanResolver._load_member,
-            planned.PlanResolver._load_member_array,
-        )
-
-        def count_patch(self, kwargs):
-            counts["patch"] += 1
-            return load_patch(self, kwargs)
-
-        def count_array(self, row, windows, **kwargs):
-            counts["array"] += 1
-            return load_array(self, row, windows, **kwargs)
-
-        monkeypatch.setattr(planned.PlanResolver, "_load_member", count_patch)
-        monkeypatch.setattr(planned.PlanResolver, "_load_member_array", count_array)
-        return counts
-
-    @staticmethod
-    def _force_patch_path(monkeypatch):
-        """Make every member load as a patch, as a format without read_array would."""
-        from dascore.io.index import planned  # noqa: PLC0415
-
-        monkeypatch.setattr(
-            planned.PlanResolver, "_load_member_array", lambda self, row, w, **k: None
-        )
-
     def test_matches_patch_path(self, dasdae_directory_spool, calls, monkeypatch):
         """The index-built merge equals the patch-built one in every part."""
         fast = dasdae_directory_spool.chunk(time=None)[0]
         assert calls == {"patch": 0, "array": len(dasdae_directory_spool)}
-        self._force_patch_path(monkeypatch)
+        _force_patch_path(monkeypatch)
         slow = dasdae_directory_spool.chunk(time=None)[0]
         assert fast.dims == slow.dims
         assert np.array_equal(fast.data, slow.data)
@@ -2080,7 +2083,7 @@ class TestChunkFromIndex:
         spool = spool + dc.spool([])
         fast = spool.chunk(time=None)[0]
         assert calls == {"patch": 0, "array": 2}
-        self._force_patch_path(monkeypatch)
+        _force_patch_path(monkeypatch)
         slow = spool.chunk(time=None)[0]
         for name in ("event_value", "n_ch"):
             assert type(fast.attrs[name]) is type(slow.attrs[name])
@@ -2129,7 +2132,7 @@ class TestChunkFromIndex:
         fast = file_spool.chunk(time=None)[0]
         assert calls["array"] == 3
         assert fast.attrs.history == ()
-        self._force_patch_path(monkeypatch)
+        _force_patch_path(monkeypatch)
         slow = file_spool.chunk(time=None)[0]
         assert slow.attrs.history
         # and history is the only thing the two paths disagree on
@@ -2184,7 +2187,7 @@ class TestChunkFromIndex:
         assert calls["array"] == 0
         assert calls["patch"] == len(dasdae_directory_spool) - 1
         # and the mix of paths assembles what the patch path alone would
-        self._force_patch_path(monkeypatch)
+        _force_patch_path(monkeypatch)
         slow = narrowed.chunk(time=None)[0]
         assert np.array_equal(out.data, slow.data)
         assert out.coords == slow.coords
@@ -2278,7 +2281,7 @@ class TestChunkFromIndex:
             # Exercise the two-file assembly independently of coordinate-id grouping.
             assembler = PatchAssembler(
                 load_patch=read,
-                load_array=lambda row: read(row).data,
+                array_source=lambda row, shape: read(row)._source,
                 merge_kwargs={},
                 plan_dim="time",
             )
@@ -2343,7 +2346,7 @@ class TestChunkFromIndex:
             indexed = dc.spool(tmp_path).update()
             out = indexed.chunk(time=None)[0]
         assert calls == {"patch": 2, "array": 0}
-        self._force_patch_path(monkeypatch)
+        _force_patch_path(monkeypatch)
         with suppress_warnings(UserWarning):
             expected = indexed.chunk(time=None)[0]
         assert type(out.attrs) is type(expected.attrs)
@@ -2374,7 +2377,7 @@ class TestChunkFromIndex:
             load_patch=lambda kwargs: None,
             merge_kwargs={},
             plan_dim="time",
-            load_array=lambda row: np.zeros((3, 4)),
+            array_source=lambda row, shape: ArraySource.full(shape, 0.0),
         )
         row = {
             "dims": "distance,time",
@@ -2398,7 +2401,7 @@ class TestChunkFromIndex:
             load_patch=lambda kwargs: None,
             merge_kwargs={},
             plan_dim="time",
-            load_array=lambda row: np.zeros((3, 4)),
+            array_source=lambda row, shape: ArraySource.full(shape, 0.0),
         )
         row = {
             "dims": "distance,time",
@@ -2408,8 +2411,8 @@ class TestChunkFromIndex:
         }
         assert assembler._meta_from_index(row) is None
 
-    def test_unpredicted_shape_loads_patch(self):
-        """An array the row did not predict is not trusted."""
+    def test_unnameable_member_loads_patch(self):
+        """A member no source can name sends the whole merge to the patches."""
         row = {
             "dims": "distance,time",
             "distance_min": 0,
@@ -2423,29 +2426,40 @@ class TestChunkFromIndex:
             load_patch=lambda kwargs: None,
             merge_kwargs={},
             plan_dim="time",
-            load_array=lambda row: np.zeros((3, 4)),
+            array_source=lambda row, shape: ArraySource.full(shape, 0.0),
         )
         meta = good._meta_from_index(row)
         assert meta is not None
-        member = good._member_from_meta(row, meta)
-        assert member is not None
-        assert member.dims == ("distance", "time")
-        assert member.coords.shape == (3, 4)
-        bad = PatchAssembler(
+        assert meta.dims == ("distance", "time")
+        assert meta.coords.shape == (3, 4)
+        recipe = good._recipe([row], [meta], meta.dims, 1, "time")
+        assert recipe is not None
+        assert recipe.shape == (3, 4)
+        silent = PatchAssembler(
             load_patch=lambda kwargs: None,
             merge_kwargs={},
             plan_dim="time",
-            load_array=lambda row: np.zeros((3, 5)),
+            array_source=lambda row, shape: None,
         )
-        assert bad._member_from_meta(row, meta) is None
-        # a rank the row's dims do not match is refused too
-        rank = PatchAssembler(
-            load_patch=lambda kwargs: None,
-            merge_kwargs={},
-            plan_dim="time",
-            load_array=lambda row: np.zeros(12),
-        )
-        assert rank._member_from_meta(row, meta) is None
+        assert silent._recipe([row], [meta], meta.dims, 1, "time") is None
+
+    def test_file_which_changed_shape_loads_patch(
+        self, dasdae_directory_spool, calls, monkeypatch
+    ):
+        """A file which no longer holds the array its row states is not trusted."""
+        from dascore.io import core as io_core  # noqa: PLC0415
+
+        expected = dasdae_directory_spool.chunk(time=None)[0]
+
+        def changed(source):
+            msg = f"{source.path} gave a different array than it declared."
+            raise InvalidFiberIOError(msg)
+
+        monkeypatch.setattr(io_core, "_load_array_source", changed)
+        calls.update(patch=0, array=0)
+        out = dasdae_directory_spool.chunk(time=None)[0]
+        assert calls["patch"] == len(dasdae_directory_spool)
+        assert out.equals(expected)
 
     def test_whole_member_skips_a_residual_it_lies_inside(
         self, dasdae_directory_spool, calls, monkeypatch
@@ -2461,7 +2475,7 @@ class TestChunkFromIndex:
         selected = dasdae_directory_spool.select(time=span)
         fast = selected.chunk(time=None)[0]
         assert calls == {"patch": 0, "array": len(dasdae_directory_spool)}
-        self._force_patch_path(monkeypatch)
+        _force_patch_path(monkeypatch)
         slow = selected.chunk(time=None)[0]
         assert fast == slow
 
@@ -2498,7 +2512,9 @@ class TestChunkFromIndex:
             load_patch=lambda kwargs: None,
             merge_kwargs={},
             plan_dim="time",
-            load_array=lambda row: reads.append(row) or np.zeros((3, 4)),
+            array_source=lambda row, shape: (
+                reads.append(row) or ArraySource.full(shape, 0.0)
+            ),
         )
         stateable = {
             "dims": "distance,time",
@@ -2562,6 +2578,253 @@ class TestChunkFromIndex:
         assert row["source_patch_key"] == "DAS__x"
         for name in ("output_id", "source_path", "time_min", "blank", "_modified"):
             assert name not in dict(attrs)
+
+
+class TestRecipeMerge:
+    """A merge the rows describe is read as one recipe over its members."""
+
+    step = np.timedelta64(10_000_000, "ns")
+
+    def _write(self, directory, patches):
+        """Write one file per patch and return the indexed spool."""
+        for num, patch in enumerate(patches):
+            patch.io.write(directory / f"m{num}.h5", "dasdae")
+        return dc.spool(directory).update()
+
+    def _patch(self, start, samples, channels=4, dtype="float32", dims=None, seed=0):
+        """A patch on the shared grid, with its own data."""
+        rng = np.random.default_rng(seed)
+        data = rng.random((samples, channels))
+        time = dc.core.get_coord(start=start, step=self.step, shape=(samples,))
+        distance = dc.core.get_coord(start=0.0, step=1.0, shape=(channels,))
+        patch = dc.Patch(
+            data=data.astype(dtype),
+            coords={"time": time, "distance": distance},
+            dims=("time", "distance"),
+        )
+        return patch if dims is None else patch.transpose(*dims)
+
+    def _grid(self, count, samples):
+        """The start of each of `count` patches laid end to end."""
+        origin = np.datetime64("2020-01-01")
+        return [origin + self.step * samples * num for num in range(count)]
+
+    def test_even_files_match_numpy(self, tmp_path, calls):
+        """Files of different lengths merge into the array numpy makes."""
+        starts, patches, lengths = [np.datetime64("2020-01-01")], [], (5, 9, 4)
+        for num, samples in enumerate(lengths):
+            patches.append(self._patch(starts[-1], samples, seed=num))
+            starts.append(starts[-1] + self.step * samples)
+        spool = self._write(tmp_path, patches)
+        out = spool.chunk(time=None)[0]
+        assert calls == {"patch": 0, "array": len(lengths)}
+        expected = np.concatenate([x.data for x in patches], axis=0)
+        assert np.array_equal(out.data, expected)
+        assert out.data.dtype == expected.dtype
+        assert out.shape == expected.shape
+        assert out.dims == ("time", "distance")
+        assert out.get_coord("time").step == self.step
+        assert len(out.get_coord("time")) == sum(lengths)
+
+    def test_mixed_dtypes_promote(self, tmp_path, calls):
+        """Members stored at different dtypes promote as numpy does."""
+        starts = self._grid(3, 6)
+        dtypes = ("float32", "int16", "float64")
+        patches = [
+            self._patch(start, 6, dtype=dtype, seed=num)
+            for num, (start, dtype) in enumerate(zip(starts, dtypes))
+        ]
+        spool = self._write(tmp_path, patches)
+        out = spool.chunk(time=None)[0]
+        assert calls == {"patch": 0, "array": 3}
+        expected = np.concatenate([x.data for x in patches], axis=0)
+        assert out.data.dtype == np.result_type(*[np.dtype(x) for x in dtypes])
+        assert out.data.dtype == expected.dtype
+        assert np.array_equal(out.data, expected)
+
+    def test_members_stored_the_other_way_round(self, tmp_path, calls):
+        """Dimension order partitions the plan, so each order merges alone."""
+        starts = self._grid(4, 7)
+        orders = (None, None, ("distance", "time"), ("distance", "time"))
+        patches = [
+            self._patch(start, 7, dims=dims, seed=num)
+            for num, (start, dims) in enumerate(zip(starts, orders))
+        ]
+        spool = self._write(tmp_path, patches)
+        merged = spool.chunk(time=None)
+        assert len(merged) == 2
+        for out, pair in zip(merged, (patches[:2], patches[2:])):
+            axis = out.dims.index("time")
+            assert out.dims == pair[0].dims
+            expected = np.concatenate([x.data for x in pair], axis=axis)
+            assert np.array_equal(out.data, expected)
+        assert calls == {"patch": 0, "array": 4}
+
+    def test_a_member_in_another_order_takes_the_patch_path(self):
+        """A recipe places whole arrays, so it refuses one stored transposed."""
+        rows = [{"dims": "time,distance"}, {"dims": "distance,time"}]
+        metas = [
+            assembly_module._MemberMeta(
+                dims=dims,
+                coords=dc.core.coordmanager.get_coord_manager(
+                    {
+                        "time": dc.core.get_coord(start=0.0, step=1.0, shape=(3,)),
+                        "distance": dc.core.get_coord(start=0.0, step=1.0, shape=(2,)),
+                    },
+                    dims=dims,
+                ),
+                attrs=dc.PatchAttrs(),
+            )
+            for dims in (("time", "distance"), ("distance", "time"))
+        ]
+        assembler = PatchAssembler(
+            load_patch=lambda kwargs: None,
+            merge_kwargs={},
+            plan_dim="time",
+            array_source=lambda row, shape: ArraySource.full(shape, 1.0),
+        )
+        assert assembler._recipe(rows[:1], metas[:1], metas[0].dims, 0, "time")
+        assert assembler._recipe(rows, metas, metas[0].dims, 0, "time") is None
+
+    def test_incompatible_shapes_refuse_the_merge(self):
+        """Members which disagree off the merged axis cannot be laid together."""
+        metas = []
+        for channels in (2, 3):
+            coords = {
+                "time": dc.core.get_coord(start=0.0, step=1.0, shape=(3,)),
+                "distance": dc.core.get_coord(start=0.0, step=1.0, shape=(channels,)),
+            }
+            metas.append(
+                assembly_module._MemberMeta(
+                    dims=("time", "distance"),
+                    coords=dc.core.coordmanager.get_coord_manager(
+                        coords, dims=("time", "distance")
+                    ),
+                    attrs=dc.PatchAttrs(),
+                )
+            )
+        assembler = PatchAssembler(
+            load_patch=lambda kwargs: None,
+            merge_kwargs={},
+            plan_dim="time",
+            array_source=lambda row, shape: ArraySource.full(shape, 1.0),
+        )
+        rows = [{"dims": "time,distance"}] * 2
+        with pytest.raises(CoordMergeError, match="not being merged"):
+            assembler._recipe(rows, metas, metas[0].dims, 0, "time")
+
+    def test_three_dimensional_members(self, tmp_path, calls):
+        """A cube merges along its planned dimension and no other."""
+        rng = np.random.default_rng(3)
+        patches, starts = [], self._grid(3, 5)
+        for num, start in enumerate(starts):
+            data = rng.random((5, 4, 2)).astype(np.float32)
+            coords = {
+                "time": dc.core.get_coord(start=start, step=self.step, shape=(5,)),
+                "distance": dc.core.get_coord(start=0.0, step=1.0, shape=(4,)),
+                "depth": dc.core.get_coord(start=0.0, step=2.0, shape=(2,)),
+            }
+            patches.append(
+                dc.Patch(data=data, coords=coords, dims=("time", "distance", "depth"))
+            )
+        spool = self._write(tmp_path, patches)
+        out = spool.chunk(time=None)[0]
+        assert calls == {"patch": 0, "array": 3}
+        assert out.shape == (15, 4, 2)
+        assert np.array_equal(out.data, np.concatenate([x.data for x in patches], 0))
+
+    def test_multi_patch_file(self, tmp_path, calls):
+        """Several members of one file each read their own array."""
+        starts = self._grid(6, 5)
+        patches = [self._patch(x, 5, seed=n) for n, x in enumerate(starts)]
+        dc.write(dc.spool(patches[:3]), tmp_path / "a.h5", "dasdae")
+        dc.write(dc.spool(patches[3:]), tmp_path / "b.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        out = spool.chunk(time=None)[0]
+        assert calls == {"patch": 0, "array": 6}
+        assert np.array_equal(out.data, np.concatenate([x.data for x in patches], 0))
+
+    def test_trimmed_overlap_keeps_the_patch_path(self, tmp_path, calls):
+        """Overlapping members are trimmed, which no row can state."""
+        first = self._patch(np.datetime64("2020-01-01"), 10, seed=1)
+        second = self._patch(np.datetime64("2020-01-01") + self.step * 6, 10, seed=2)
+        spool = self._write(tmp_path, [first, second])
+        out = spool.chunk(time=None)[0]
+        assert calls["patch"] == 2, "a trimmed member cannot be named by its row"
+        # the second patch starts 6 samples in, so its first 4 are the overlap
+        kept = second.data[4:]
+        assert out.shape[0] == 16
+        assert np.array_equal(out.data, np.concatenate([first.data, kept], axis=0))
+
+    @pytest.mark.parametrize("conflict", ["drop", "keep_first"])
+    def test_conflicting_attrs(self, tmp_path, calls, conflict):
+        """Every conflict policy reaches the same patch either way."""
+        starts = self._grid(3, 6)
+        patches = [
+            self._patch(start, 6, seed=num).update_attrs(instrument_id=f"i{num}")
+            for num, start in enumerate(starts)
+        ]
+        spool = self._write(tmp_path, patches)
+        out = spool.chunk(time=None, conflict=conflict)[0]
+        assert calls == {"patch": 0, "array": 3}
+        expected = np.concatenate([x.data for x in patches], axis=0)
+        assert np.array_equal(out.data, expected)
+        if conflict == "keep_first":
+            assert out.attrs.instrument_id == "i0"
+        else:
+            assert "instrument_id" not in dict(out.attrs)
+
+    @pytest.mark.parametrize("fill", [None, 0.0])
+    def test_gap_between_members(self, tmp_path, calls, fill):
+        """A bridged hole holds the fill value and nothing else moves."""
+        gap = 3
+        first = self._patch(np.datetime64("2020-01-01"), 8, seed=1)
+        start = np.datetime64("2020-01-01") + self.step * (8 + gap)
+        second = self._patch(start, 8, seed=2)
+        spool = self._write(tmp_path, [first, second])
+        kwargs = {} if fill is None else {"fill_value": fill}
+        merged = spool.chunk(time=None, tolerance=10, **kwargs)
+        assert len(merged) == 1
+        out = merged[0]
+        assert calls == {"patch": 0, "array": 2}
+        if fill is None:
+            joined = np.concatenate([first.data, second.data], axis=0)
+            assert np.array_equal(out.data, joined)
+        else:
+            hole = np.full((gap, first.shape[1]), fill, dtype=first.data.dtype)
+            joined = np.concatenate([first.data, hole, second.data], axis=0)
+            assert np.array_equal(out.data, joined)
+
+    def test_every_case_matches_the_patch_path(self, tmp_path_factory, monkeypatch):
+        """The recipe merge and the patch merge agree in every part."""
+        cases = {
+            "even": [(0, 5, 4, "float32", None), (5, 9, 4, "float32", None)],
+            "dtypes": [(0, 6, 4, "float32", None), (6, 6, 4, "int16", None)],
+            "transposed": [
+                (0, 7, 4, "float32", None),
+                (7, 7, 4, "float32", ("distance", "time")),
+            ],
+        }
+        for name, spec in cases.items():
+            path = tmp_path_factory.mktemp(f"recipe_{name}")
+            origin = np.datetime64("2020-01-01")
+            patches = [
+                self._patch(
+                    origin + self.step * offset, samples, channels, dtype, dims, seed
+                )
+                for seed, (offset, samples, channels, dtype, dims) in enumerate(spec)
+            ]
+            spool = self._write(path, patches)
+            fast = spool.chunk(time=None)[0]
+            with monkeypatch.context() as patcher:
+                _force_patch_path(patcher)
+                slow = spool.chunk(time=None)[0]
+            assert fast.dims == slow.dims
+            assert fast.data.dtype == slow.data.dtype
+            assert np.array_equal(fast.data, slow.data)
+            assert fast.coords == slow.coords
+            assert dict(fast.attrs) == dict(slow.attrs)
+            assert fast.attrs.history == slow.attrs.history
 
 
 class TestChunkFillValue:

@@ -5,9 +5,11 @@ This is the consumer of the members (instruction) table that
 `dascore.utils.chunk_plan` produces and every spool view carries: it
 joins member rows to their source rows, loads each source patch through
 a caller-supplied loader, applies exact trims, and merges multi-member
-outputs (streaming into a pre-allocated buffer when the output size is
-known). The spool owns *what* rows exist; this module owns *how* a row
-becomes a Patch.
+outputs. A merge whose members the rows fully describe becomes a
+[`LazyArray`](`dascore.core.lazy_array.LazyArray`) recipe, which names
+every member's stored array and reads them into one output; every other
+merge streams loaded patches into a pre-allocated buffer. The spool owns
+*what* rows exist; this module owns *how* a row becomes a Patch.
 """
 
 from __future__ import annotations
@@ -23,7 +25,14 @@ import pandas as pd
 import dascore as dc
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import _EXACT_GRID_FIELDS, CoordRange, get_coord
-from dascore.exceptions import ChunkError, CoordMergeError, UnitError
+from dascore.core.lazy_array import LazyArray
+from dascore.core.source import ArraySource
+from dascore.exceptions import (
+    ChunkError,
+    CoordMergeError,
+    InvalidFiberIOError,
+    UnitError,
+)
 from dascore.io.index.ingest import _is_missing
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
 from dascore.units import get_quantity
@@ -525,11 +534,13 @@ class PatchAssembler:
     load_patch: Callable[[Mapping], dc.Patch]
     merge_kwargs: Mapping
     plan_dim: str
-    # Hands back an untrimmed member's whole array, or None when the
+    # Names an untrimmed member's whole stored array, or None when the
     # member must be loaded as a patch; the index then stands in for
-    # the member's coordinates and attrs.
-    load_array: Callable[[Mapping], np.ndarray | None] | None = None
+    # the member's coordinates and attrs. Nothing is read to name it.
+    array_source: Callable[[Mapping, tuple[int, ...]], ArraySource | None] | None = None
     can_load_array: Callable[[Mapping], bool] | None = None
+    # A prefix the member paths are stored relative to in the recipe.
+    array_base_uri: str = ""
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
@@ -588,39 +599,91 @@ class PatchAssembler:
         members and not others, refusing what it accepts whole. The rows
         decide that before anything is read; an array whose shape the row
         did not predict is only found once it is loaded, and abandons the
-        attempt. Returning from that attempt releases its buffer before
+        attempt. Returning from that attempt releases its output before
         the retry reloads the source coordinates, attrs, and arrays.
         """
         metas = self._member_meta_from_index(df_dict_list)
         if metas is not None:
-            out = self._stream(joined, df_dict_list, merge_dim, samples, metas)
+            out = self._merge_from_index(df_dict_list, merge_dim, metas)
             if out is not None:
                 return out
-        return self._stream(joined, df_dict_list, merge_dim, samples, None)
+        return self._stream(joined, df_dict_list, merge_dim, samples)
 
-    def _stream(self, joined, df_dict_list, merge_dim, samples, metas):
+    def _merge_from_index(self, df_dict_list, merge_dim, metas):
+        """
+        Merge members the rows describe, as one recipe read in one pass.
+
+        Every member is its source's whole stored array, so the output's
+        shape and dtype are known before a file is opened and the members
+        need never be patches. Returns None when a member cannot be named
+        without reading it, or when a file did not deliver the array its
+        row predicted, so the caller can start over on the patch path.
+        """
+        dims = metas[0].dims
+        axis = dims.index(merge_dim)
+        recipe = self._recipe(df_dict_list, metas, dims, axis, merge_dim)
+        if recipe is None:
+            return None
+        try:
+            data = recipe.load()
+        except InvalidFiberIOError:
+            return None
+        coords = [meta.coords for meta in metas]
+        attrs = [meta.attrs for meta in metas]
+        summaries = [x._get_dim_summary() for x in coords]
+        return self._assemble(data, dims, merge_dim, coords, attrs, summaries)
+
+    def _recipe(self, rows, metas, dims, axis, merge_dim) -> LazyArray | None:
+        """
+        The lazy array the members make, or None when one cannot be named.
+
+        Nothing is read here: every member is a whole stored array whose
+        shape its row states, so the members are laid end to end along
+        the merged axis by arithmetic alone. A member holding its axes in
+        another order than the first takes the patch path instead, which
+        transposes each one as it is loaded.
+        """
+        assert self.array_source is not None, "the caller checks for a source"
+        sources, shape, rest = [], None, None
+        for row, meta in zip(rows, metas, strict=True):
+            if meta.dims != dims:
+                return None
+            source = self.array_source(row, meta.coords.shape)
+            if source is None:
+                return None
+            placed = meta.coords.shape
+            others = placed[:axis] + placed[axis + 1 :]
+            if shape is None:
+                shape, rest = list(placed), others
+            elif others != rest:
+                msg = (
+                    f"Cannot merge patches; their shapes are incompatible "
+                    f"along the dimensions not being merged ({merge_dim})."
+                )
+                raise CoordMergeError(msg)
+            else:
+                shape[axis] += placed[axis]
+            sources.append(source)
+        assert shape is not None, "an output always has at least one member"
+        return LazyArray.from_sources(
+            sources, axis=axis, shape=tuple(shape), base_uri=self.array_base_uri
+        )
+
+    def _stream(self, joined, df_dict_list, merge_dim, samples):
         """
         Copy each member into the output buffer as it is loaded.
 
         A member is released once copied; this avoids holding all source
         patches and the merged output in memory at the same time, as
-        concatenating would. Returns None when ``metas`` promised an
-        array shape the file did not deliver, so the caller can start
-        over on the patch path.
+        concatenating would.
         """
         buffer, offset, axis, dims = None, 0, None, None
         coords, attrs, summaries = [], [], []
         target_units = None
-        for num, patch_kwargs in enumerate(df_dict_list):
-            member = None
-            if metas is not None:
-                member = self._member_from_meta(patch_kwargs, metas[num])
-                if member is None:
-                    return None
-            if member is None:
-                patch = self._load_trimmed_patch(patch_kwargs, joined)
-                patch, target_units = _match_merge_units(patch, merge_dim, target_units)
-                member = _Member(patch.dims, patch.data, patch.coords, patch.attrs)
+        for patch_kwargs in df_dict_list:
+            patch = self._load_trimmed_patch(patch_kwargs, joined)
+            patch, target_units = _match_merge_units(patch, merge_dim, target_units)
+            member = _Member(patch.dims, patch.data, patch.coords, patch.attrs)
             if dims is None:
                 dims = member.dims
                 axis = dims.index(merge_dim)
@@ -665,6 +728,10 @@ class PatchAssembler:
         assert dims is not None
         if offset != buffer.shape[axis]:  # over-estimated; trim excess.
             buffer = buffer[broadcast_for_index(buffer.ndim, axis, slice(0, offset))]
+        return self._assemble(buffer, dims, merge_dim, coords, attrs, summaries)
+
+    def _assemble(self, data, dims, merge_dim, coords, attrs, summaries):
+        """Build the merged patch from the members' data, coords and attrs."""
         # Ensure the loaded patches only vary along the expected dimension,
         # the same requirement _force_patch_merge enforces.
         summary_df = pd.DataFrame(summaries)
@@ -688,7 +755,7 @@ class PatchAssembler:
         # The fold named the result; building it is not another array.
         with operation_context():
             return dc.Patch(
-                data=buffer, coords=new_coord, attrs=new_attrs, dims=list(dims)
+                data=data, coords=new_coord, attrs=new_attrs, dims=list(dims)
             )
 
     def _member_meta_from_index(self, rows) -> list[_MemberMeta] | None:
@@ -697,7 +764,7 @@ class PatchAssembler:
         Metadata only: nothing is read here, so a merge the index cannot
         describe costs no array reads before it falls back.
         """
-        if self.load_array is None:
+        if self.array_source is None:
             return None
         if self.can_load_array is not None and not all(
             self.can_load_array(row) for row in rows
@@ -747,19 +814,6 @@ class PatchAssembler:
             coord_map[dim] = coord
         coords = get_coord_manager(coord_map, dims=dims)
         return _MemberMeta(dims, coords, _attrs_from_row(row, dims))
-
-    def _member_from_meta(self, row: Mapping, meta: _MemberMeta) -> _Member | None:
-        """
-        The member a row describes, with its array read.
-
-        Returns None when the file did not deliver the shape the row
-        predicted, which the caller can only discover here.
-        """
-        assert self.load_array is not None, "the caller checks for a loader"
-        data = self.load_array(row)
-        if data is None or data.shape != meta.coords.shape:
-            return None
-        return _Member(meta.dims, data, meta.coords, meta.attrs)
 
     def _df_to_dict_list(self, df):
         """

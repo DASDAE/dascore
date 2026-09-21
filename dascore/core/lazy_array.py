@@ -600,8 +600,7 @@ class LazyArray:
     @property
     def sources(self) -> tuple[ArraySource, ...]:
         """The source each member reads, in placement order."""
-        block = self._block()
-        return tuple(_member_source(block, x) for x in range(len(block)))
+        return tuple(_sources_of(self._block()))
 
     def __getitem__(self, index) -> LazyArray:
         """
@@ -707,13 +706,14 @@ class LazyArray:
         block = self._block()
         _validate(block)
         out = np.empty(self.shape, self.dtype)
-        start, stop = block.axes["out_start"], block.axes["out_stop"]
-        src_axis = block.axes["src_axis"]
-        for row in range(len(block)):
-            data = _member_source(block, row).load()
-            data = _to_output(data, src_axis[row])
-            box = tuple(map(slice, start[row].tolist(), stop[row].tolist()))
-            out[box] = data
+        # The placement is taken apart once rather than a row at a time,
+        # which numpy charges for however few samples a member holds.
+        start = block.axes["out_start"].tolist()
+        stop = block.axes["out_stop"].tolist()
+        src_axis = block.axes["src_axis"].tolist()
+        for row, source in enumerate(_sources_of(block)):
+            data = _to_output(source.load(), src_axis[row])
+            out[tuple(map(slice, start[row], stop[row]))] = data
         return out
 
     def __array__(self, dtype=None, copy=None) -> np.ndarray:
@@ -915,40 +915,52 @@ def _split_path(path: str, base_uri: str) -> tuple[str, str]:
     return "", path
 
 
+def _sources_of(block: _Block) -> list[ArraySource]:
+    """Return the source each member of a block reads, in placement order."""
+    members = block.members
+    src_axis = block.axes["src_axis"].tolist()
+    src_start = block.axes["src_start"].tolist()
+    lengths = (block.axes["out_stop"] - block.axes["out_start"]).tolist()
+    extent = block.axes["src_extent"].tolist()
+    filled = members.filled.tolist()
+    out = []
+    for member in range(len(block)):
+        base_uri, path, format_, version = members.source[member]
+        axes, starts = src_axis[member], src_start[member]
+        spans, sizes = lengths[member], extent[member]
+        windows: list = [()] * sum(1 for axis in axes if axis >= 0)
+        stored: list = [0] * len(windows)
+        for out_axis, axis in enumerate(axes):
+            if axis < 0:
+                continue
+            start = starts[out_axis]
+            windows[axis] = (start, start + spans[out_axis])
+            stored[axis] = sizes[out_axis]
+        out.append(
+            ArraySource(
+                path=base_uri + path,
+                format=format_,
+                version=version,
+                key=members.key[member],
+                windows=tuple(windows),
+                shape=tuple(stop - start for start, stop in windows),
+                dtype=_dtype_of(members.dtype[member]),
+                origin_id=members.origin_id[member],
+                extent=tuple(stored),
+                filled=filled[member],
+                value=members.value[member],
+            )
+        )
+    return out
+
+
 def _member_source(block: _Block, member: int) -> ArraySource:
     """Return the source one member of a block reads."""
-    members = block.members
-    base_uri, path, format_, version = members.source[member]
-    src_axis = block.axes["src_axis"][member]
-    src_start = block.axes["src_start"][member]
-    lengths = block.axes["out_stop"][member] - block.axes["out_start"][member]
-    extent = block.axes["src_extent"][member]
-    stored = np.flatnonzero(src_axis >= 0)
-    windows: list = [()] * len(stored)
-    sizes: list = [0] * len(stored)
-    for out_axis in stored.tolist():
-        axis = int(src_axis[out_axis])
-        start = int(src_start[out_axis])
-        windows[axis] = (start, start + int(lengths[out_axis]))
-        sizes[axis] = int(extent[out_axis])
-    return ArraySource(
-        path=base_uri + path,
-        format=format_,
-        version=version,
-        key=members.key[member],
-        windows=tuple(windows),
-        shape=tuple(stop - start for start, stop in windows),
-        dtype=_dtype_of(members.dtype[member]),
-        origin_id=members.origin_id[member],
-        extent=tuple(sizes),
-        filled=bool(members.filled[member]),
-        value=members.value[member],
-    )
+    return _sources_of(block.take([member]))[0]
 
 
-def _to_output(data: np.ndarray, src_axis: np.ndarray) -> np.ndarray:
+def _to_output(data: np.ndarray, axes: list[int]) -> np.ndarray:
     """Return a member's array with its stored axes on the output's."""
-    axes = src_axis.tolist()
     order = [x for x in axes if x >= 0]
     if order != sorted(order):
         data = np.transpose(data, order)

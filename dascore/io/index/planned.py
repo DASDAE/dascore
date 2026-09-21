@@ -26,6 +26,7 @@ import pandas as pd
 import dascore as dc
 from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
+from dascore.core.source import ArraySource
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io.core import FiberIO, _read_open_resource, _required_resource_type
 from dascore.io.index.backend import get_backend
@@ -589,9 +590,22 @@ class PlanResolver(PatchResolver):
             load_patch=self._load_member,
             merge_kwargs=self.merge_kwargs,
             plan_dim=self.dim,
-            load_array=self._load_member_whole,
+            array_source=self._member_array_source,
             can_load_array=self._can_load_member_whole,
+            array_base_uri=self._array_base_uri(),
         )
+
+    def _file_loader(self) -> FileResolver | None:
+        """The file leg of this plan's loader, if it has one."""
+        loader = self.loader
+        if not isinstance(loader, FileResolver):
+            loader = getattr(loader, "file", None)
+        return loader if isinstance(loader, FileResolver) else None
+
+    def _array_base_uri(self) -> str:
+        """The root a file-backed member's path is stored relative to."""
+        root = getattr(self._file_loader(), "_root", None)
+        return "" if root is None else str(root)
 
     def _can_load_member_whole(self, row: Mapping) -> bool:
         """Check every row-only fast-path condition before any array is read."""
@@ -604,9 +618,30 @@ class PlanResolver(PatchResolver):
                 return False
         return self._array_read_info(row) is not None
 
-    def _load_member_whole(self, row: Mapping) -> np.ndarray | None:
-        """Read a whole member after all rows pass the metadata preflight."""
-        return self._load_member_array(row, {}, ignore_residuals=True)
+    def _member_array_source(self, row: Mapping, shape) -> ArraySource | None:
+        """
+        Name the whole stored array of one member; nothing is read.
+
+        The row states the shape its caller passes and the dtype the
+        array comes back as, so a source which names the whole of it is
+        enough to read the member later. A row which states no dtype
+        cannot be named and sends the merge down the patch path.
+        """
+        info = self._array_read_info(row)
+        assert info is not None, "the preflight resolved every member's reader"
+        loader, path, _, key = info
+        dtype = row.get("_dtype")
+        if not isinstance(dtype, str) or not dtype:
+            return None
+        origin = row.get("origin_id")
+        source = ArraySource(
+            path=str(loader.resolve_path(path)),
+            format=_row_str(row.get("source_format")),
+            version=_row_str(row.get("source_version")),
+            key=key,
+            origin_id="" if origin is None or pd.isnull(origin) else str(origin),
+        )
+        return source.describe(shape, dtype)
 
     def _load_member(self, kwargs: Mapping) -> dc.Patch:
         """Load one member source patch, applying parent residuals."""
@@ -649,9 +684,7 @@ class PlanResolver(PatchResolver):
             patch = apply_exact_residuals(patch, self.parent_residuals)
         return self._in_plan_units(patch, kwargs)
 
-    def _load_member_array(
-        self, row: Mapping, windows: Mapping, *, ignore_residuals: bool = False
-    ) -> np.ndarray | None:
+    def _load_member_array(self, row: Mapping, windows: Mapping) -> np.ndarray | None:
         """
         Load one member's raw array through the format's `read_array`.
 
@@ -673,10 +706,9 @@ class PlanResolver(PatchResolver):
         parent residuals — a residual re-trims the loaded patch, and a
         data-only read would skip that trim. The fast path trusts the
         index about the grid itself: the caller's shape guard catches a
-        resized file, not a shifted one. ``ignore_residuals`` is for a
-        caller which has established the residuals cannot touch this row.
+        resized file, not a shifted one.
         """
-        if self.parent_residuals and not ignore_residuals:
+        if self.parent_residuals:
             return None
         info = self._array_read_info(row)
         if info is None:
@@ -719,10 +751,8 @@ class PlanResolver(PatchResolver):
         version = _row_str(row.get("source_version"))
         if not fmt or not version:
             return None
-        loader = self.loader
-        if not isinstance(loader, FileResolver):
-            loader = getattr(loader, "file", None)
-        if not isinstance(loader, FileResolver):
+        loader = self._file_loader()
+        if loader is None:
             return None
         try:
             # An exact version is required: without one the manager hands
