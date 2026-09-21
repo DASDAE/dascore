@@ -7,6 +7,7 @@ extensive.
 
 from __future__ import annotations
 
+import os
 import random
 import warnings
 from datetime import timedelta
@@ -2674,6 +2675,10 @@ class TestRecipeMerge:
                     dims=dims,
                 ),
                 attrs=dc.PatchAttrs(),
+                extent=(3, 2) if dims[0] == "time" else (2, 3),
+                window=(slice(0, 3), slice(0, 2))
+                if dims[0] == "time"
+                else (slice(0, 2), slice(0, 3)),
             )
             for dims in (("time", "distance"), ("distance", "time"))
         ]
@@ -2701,6 +2706,8 @@ class TestRecipeMerge:
                         coords, dims=("time", "distance")
                     ),
                     attrs=dc.PatchAttrs(),
+                    extent=(3, channels),
+                    window=(slice(0, 3), slice(0, channels)),
                 )
             )
         assembler = PatchAssembler(
@@ -2744,13 +2751,13 @@ class TestRecipeMerge:
         assert calls == {"patch": 0, "array": 6}
         assert np.array_equal(out.data, np.concatenate([x.data for x in patches], 0))
 
-    def test_trimmed_overlap_keeps_the_patch_path(self, tmp_path, calls):
-        """Overlapping members are trimmed, which no row can state."""
+    def test_trimmed_overlap_takes_the_recipe_path(self, tmp_path, calls):
+        """An overlap trims the second member to a window of its source."""
         first = self._patch(np.datetime64("2020-01-01"), 10, seed=1)
         second = self._patch(np.datetime64("2020-01-01") + self.step * 6, 10, seed=2)
         spool = self._write(tmp_path, [first, second])
         out = spool.chunk(time=None)[0]
-        assert calls["patch"] == 2, "a trimmed member cannot be named by its row"
+        assert calls == {"patch": 0, "array": 2}
         # the second patch starts 6 samples in, so its first 4 are the overlap
         kept = second.data[4:]
         assert out.shape[0] == 16
@@ -3195,3 +3202,431 @@ class TestChunkFillWindows:
             merged = chunked.chunk(time=None)[0]
         assert len(merged.get_coord("time")) == 2000
         assert len(chunked.select(latitude=...)) == len(chunked)
+
+
+def _rewrite_dasdae(path, patch, group=None):
+    """Rewrite a single-patch DASDAE file, keeping its waveform group name."""
+    import h5py  # noqa: PLC0415
+
+    from dascore.io.dasdae.utils import _save_patch  # noqa: PLC0415
+
+    with h5py.File(path, "a") as handle:
+        waveforms = handle["waveforms"]
+        name = group or next(iter(waveforms))
+        _save_patch(patch, waveforms, name)
+    return name
+
+
+class TestStaleSourceCheck:
+    """A recipe reads a promised window, so a changed file leaves the route."""
+
+    step = np.timedelta64(10_000_000, "ns")
+
+    def _patch(self, start, samples, channels=4, seed=0):
+        """A patch on the shared grid with its own data."""
+        rng = np.random.default_rng(seed)
+        time = dc.core.get_coord(start=start, step=self.step, shape=(samples,))
+        distance = dc.core.get_coord(start=0.0, step=1.0, shape=(channels,))
+        return dc.Patch(
+            data=rng.random((samples, channels)).astype("float32"),
+            coords={"time": time, "distance": distance},
+            dims=("time", "distance"),
+        )
+
+    @pytest.fixture
+    def spool_and_paths(self, tmp_path):
+        """Two adjacent single-patch files and the spool indexing them."""
+        start = np.datetime64("2020-01-01")
+        paths = []
+        for num in range(2):
+            patch = self._patch(start + self.step * 8 * num, 8, seed=num)
+            path = tmp_path / f"m{num}.h5"
+            patch.io.write(path, "dasdae")
+            paths.append(path)
+        return dc.spool(tmp_path).update(), paths
+
+    def test_unchanged_sources_stay_on_the_recipe(self, spool_and_paths, calls):
+        """Nothing changed, so nothing is loaded as a patch."""
+        spool, _ = spool_and_paths
+        out = spool.chunk(time=None)[0]
+        assert calls == {"patch": 0, "array": 2}
+        assert out.shape[0] == 16
+
+    def test_longer_rewrite_takes_the_patch_path(self, spool_and_paths, calls):
+        """A file grown under the same key must not give its first n samples."""
+        spool, paths = spool_and_paths
+        start = np.datetime64("2020-01-01")
+        grown = self._patch(start, 12, seed=7)
+        _rewrite_dasdae(paths[0], grown)
+        out = spool.chunk(time=None)[0]
+        assert calls["patch"] == 2, "the changed file abandons the recipe"
+        assert np.array_equal(out.data[:12], grown.data)
+
+    def test_same_shape_rewrite_takes_the_patch_path(self, spool_and_paths, calls):
+        """Identical shape, different values: the shape check cannot see it."""
+        spool, paths = spool_and_paths
+        start = np.datetime64("2020-01-01")
+        replaced = self._patch(start, 8, seed=99)
+        _rewrite_dasdae(paths[0], replaced)
+        # a filesystem which does not move mtime on its own is still a
+        # filesystem whose file changed, so it is moved here
+        moved = paths[0].stat().st_mtime_ns + 10**9
+        os.utime(paths[0], ns=(moved, moved))
+        out = spool.chunk(time=None)[0]
+        assert calls["patch"] == 2
+        assert np.array_equal(out.data[:8], replaced.data)
+
+    def test_a_stat_which_will_not_answer_is_ignored(
+        self, spool_and_paths, calls, monkeypatch
+    ):
+        """A source with no size and no mtime says nothing about itself."""
+        spool, _ = spool_and_paths
+        monkeypatch.setattr(planned, "_source_stats", lambda path: (None, None))
+        assert spool.chunk(time=None)[0].shape[0] == 16
+        assert calls == {"patch": 0, "array": 2}
+
+    def test_one_stat_per_file(self, tmp_path, monkeypatch):
+        """A multi-patch file is stat-ed once, not once per member."""
+        start = np.datetime64("2020-01-01")
+        patches = [self._patch(start + self.step * 8 * n, 8, seed=n) for n in range(3)]
+        dc.write(dc.spool(patches[:2]), tmp_path / "a.h5", "dasdae")
+        patches[2].io.write(tmp_path / "b.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        stats = []
+        original = planned._source_stats
+        monkeypatch.setattr(
+            planned,
+            "_source_stats",
+            lambda path: (stats.append(str(path)), original(path))[1],
+        )
+        assert spool.chunk(time=None)[0].shape[0] == 24
+        assert len(stats) == len(set(stats)) == 2, "three members, two files"
+
+    def test_a_remote_source_is_never_stat_ed(self, spool_and_paths, monkeypatch):
+        """A store which charges for metadata is left alone."""
+        spool, _ = spool_and_paths
+        stats = []
+        monkeypatch.setattr(
+            planned,
+            "_source_stats",
+            lambda path: (stats.append(str(path)), (None, None))[1],
+        )
+        monkeypatch.setattr(planned, "is_local_path", lambda path: False)
+        chunked = spool.chunk(time=None)
+        resolver = chunked._catalog.resolver
+        rows = resolver.member_rows.to_dict("records")
+        assert resolver._sources_unchanged(rows)
+        assert not stats
+
+    @pytest.mark.parametrize(
+        ("size_delta", "mtime_delta", "unchanged"),
+        [(0, 0, True), (1, 0, False), (0, 1, False), (1, 1, False)],
+    )
+    def test_both_size_and_mtime_decide(
+        self, spool_and_paths, monkeypatch, size_delta, mtime_delta, unchanged
+    ):
+        """Either field moving on its own says the file is not what it was."""
+        spool, _ = spool_and_paths
+        resolver = spool.chunk(time=None)._catalog.resolver
+        rows = resolver.member_rows.to_dict("records")
+        mtime, size = resolver.source_stats[rows[0]["source_path"]]
+        monkeypatch.setattr(
+            planned,
+            "_source_stats",
+            lambda path: (size + size_delta, mtime + mtime_delta),
+        )
+        assert resolver._sources_unchanged(rows[:1]) is unchanged
+
+    def test_a_source_the_index_never_stat_ed_is_ignored(self, spool_and_paths):
+        """An index which recorded neither size nor mtime refuses nothing."""
+        spool, _ = spool_and_paths
+        resolver = spool.chunk(time=None)._catalog.resolver
+        rows = resolver.member_rows.to_dict("records")
+        assert resolver.source_stats
+        resolver.source_stats = {}
+        assert resolver._sources_unchanged(rows)
+
+    def test_a_rechunk_keeps_what_the_index_recorded(self, spool_and_paths, calls):
+        """The stats come from the index, which a derived catalog is not."""
+        spool, paths = spool_and_paths
+        chunked = spool.chunk(time=None)
+        assert chunked.chunk(time=None)._catalog.resolver.source_stats
+        grown = self._patch(np.datetime64("2020-01-01"), 12, seed=7)
+        _rewrite_dasdae(paths[0], grown)
+        assert list(chunked.chunk(time=None))
+        assert calls["patch"] > 0
+
+
+class TestTrimmedRecipeMerge:
+    """A member the plan trims is a window of its source in the recipe."""
+
+    step = np.timedelta64(10_000_000, "ns")
+
+    def _spool(self, directory, count=5, samples=8, channels=3):
+        """`count` adjacent single-patch files and their indexed spool."""
+        start = np.datetime64("2020-01-01")
+        for num in range(count):
+            rng = np.random.default_rng(num)
+            time = dc.core.get_coord(
+                start=start + self.step * samples * num,
+                step=self.step,
+                shape=(samples,),
+            )
+            distance = dc.core.get_coord(start=0.0, step=1.0, shape=(channels,))
+            patch = dc.Patch(
+                data=rng.random((samples, channels)).astype("float32"),
+                coords={"time": time, "distance": distance},
+                dims=("time", "distance"),
+            )
+            patch.io.write(directory / f"m{num}.h5", "dasdae")
+        return dc.spool(directory).update()
+
+    def test_a_trim_reads_only_its_window(self, tmp_path, calls, monkeypatch):
+        """Chunk boundaries inside files stay on the recipe and stay exact."""
+        spool = self._spool(tmp_path)
+        chunked = spool.chunk(time=to_timedelta64(0.12))
+        fast = list(chunked)
+        assert calls["patch"] == 0
+        _force_patch_path(monkeypatch)
+        slow = list(spool.chunk(time=to_timedelta64(0.12)))
+        assert len(fast) == len(slow) > 1
+        for one, other in zip(fast, slow, strict=True):
+            assert np.array_equal(one.data, other.data)
+            assert one.coords == other.coords
+            assert dict(one.attrs) == dict(other.attrs)
+
+    def test_a_residual_keeps_a_trim_on_the_patch_path(self, tmp_path):
+        """A selection left to the patch re-trims what a window already read."""
+        spool = self._spool(tmp_path)
+        coord = spool.chunk(time=None)[0].get_coord("time")
+        selected = spool.select(time=(coord.values[3], coord.values[-4]))
+        chunked = selected.chunk(time=to_timedelta64(0.12))
+        assert list(chunked)
+        resolver = chunked._catalog.resolver
+        assert resolver.parent_residuals
+        rows = resolver.member_rows
+        trimmed = rows[rows["_modified"]].to_dict("records")
+        assert trimmed
+        assert not any(resolver._can_load_member_from_index(x) for x in trimmed)
+
+    def test_a_member_in_another_unit_keeps_the_patch_path(self, tmp_path, calls):
+        """A trim in the plan's unit is not a window on the file's grid."""
+        first = dc.get_example_patch().set_units(distance="m")
+        coord = first.get_coord("distance")
+        span = float(coord.max() - coord.min() + coord.step)
+        second = first.update_coords(distance=(coord.data + span) / 0.3048)
+        second = second.set_units(distance="ft")
+        for num, patch in enumerate((first, second)):
+            patch.io.write(tmp_path / f"u{num}.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        kwargs = {"distance": 200, "keep_partial": True, "conflict": "keep_first"}
+        out = list(spool.chunk(**kwargs))
+        assert calls["patch"] > 0, "a feet member is not windowed in metres"
+        assert sum(x.shape[x.get_axis("distance")] for x in out) == 2 * len(coord)
+
+    def test_an_uneven_source_keeps_the_patch_path(self, tmp_path, calls):
+        """A source the index states no step for has no grid to window."""
+        start = np.datetime64("2020-01-01")
+        values = np.concatenate(
+            [start + self.step * np.arange(4), start + self.step * np.arange(10, 14)]
+        )
+        distance = dc.core.get_coord(start=0.0, step=1.0, shape=(3,))
+        gappy = dc.Patch(
+            data=np.random.default_rng(0).random((8, 3)).astype("float32"),
+            coords={"time": dc.core.get_coord(values=values), "distance": distance},
+            dims=("time", "distance"),
+        )
+        gappy.io.write(tmp_path / "g.h5", "dasdae")
+        even = dc.core.get_coord(
+            start=start + self.step * 14, step=self.step, shape=(8,)
+        )
+        dc.Patch(
+            data=np.random.default_rng(1).random((8, 3)).astype("float32"),
+            coords={"time": even, "distance": distance},
+            dims=("time", "distance"),
+        ).io.write(tmp_path / "e.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        with suppress_warnings(UserWarning):
+            out = spool.chunk(time=None, tolerance=np.inf)
+        assert list(out)
+        assert calls["patch"] > 0
+
+    def test_a_trimmed_member_states_its_window_id(self, tmp_path):
+        """A trim carries the id of the window, not of the whole array."""
+        spool = self._spool(tmp_path)
+        chunked = spool.chunk(time=to_timedelta64(0.12))
+        ids = [patch.attrs.data_id for patch in chunked]
+        assert len(set(ids)) == len(ids)
+
+    def test_a_grid_which_does_not_restate_its_envelope_is_refused(self):
+        """A trimmed row's grid counts the source's samples, not its own."""
+        source = dc.core.get_coord(
+            start=np.datetime64("2020-01-01T00:00:00.000000000"),
+            step=(1, 3),
+            shape=(9,),
+        )
+        grid = (source.step_numerator, source.step_denominator, 0, len(source))
+        row = {
+            "time_min": source.min(),
+            "time_max": source.max(),
+            "time_step": source.step,
+            "_time_coord_dtype": "datetime64",
+            "_time_grid": grid,
+        }
+        assert assembly_module.coord_from_row(row, "time") == source
+        # the window the plan trimmed to, beside the source's own grid
+        trim = source.select((source.values[2], source.values[5]))[0]
+        row = {**row, "time_min": trim.min(), "time_max": trim.max()}
+        rebuilt = assembly_module.coord_from_row(row, "time")
+        assert len(rebuilt) == len(trim), "the envelope, not the source's length"
+
+    @pytest.fixture(scope="class")
+    def grids(self, tmp_path_factory):
+        """A time-chunked and a distance-chunked spool of adjacent files."""
+        out = {}
+        for name, kind in (("time", "datetime"), ("distance", "number")):
+            directory = tmp_path_factory.mktemp(f"trim_{name}")
+            for num in range(5):
+                rng = np.random.default_rng(num)
+                if kind == "datetime":
+                    plan = dc.core.get_coord(
+                        start=np.datetime64("2020-01-01") + self.step * 7 * num,
+                        step=self.step,
+                        shape=(7,),
+                    )
+                    other = dc.core.get_coord(start=0.0, step=1.0, shape=(4,))
+                else:
+                    plan = dc.core.get_coord(start=14.0 * num, step=2.0, shape=(7,))
+                    other = dc.core.get_coord(
+                        start=np.datetime64("2020-01-01"), step=self.step, shape=(4,)
+                    )
+                coords = {name: plan, "other": other}
+                dims = (name, "other")
+                patch = dc.Patch(
+                    data=(rng.normal(size=(7, 4)) * 100).astype("int16"),
+                    coords=coords,
+                    dims=dims,
+                )
+                patch.io.write(directory / f"m{num}.h5", "dasdae")
+            out[name] = dc.spool(directory).update()
+        return out
+
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_every_chunking_matches_the_patch_path(self, grids, dim, monkeypatch):
+        """Random chunk lengths, overlaps and edges read the same samples.
+
+        The recipe places a window of each source; the patch path loads
+        each source and selects it. Whatever the boundaries do -- land on
+        a sample, half a sample past one, on a file edge, or outside the
+        spool -- the two must agree in every part of the patch.
+        """
+        spool = grids[dim]
+        step = 2.0 if dim == "distance" else float(to_int(self.step))
+        span = 7 * step
+        rng = random.Random(20260921)
+        lengths = [
+            span * 0.5,
+            span,
+            span * 2 + step / 2,
+            span - step / 2,
+            *[rng.uniform(step * 2, span * 3) for _ in range(4)],
+        ]
+        routes = 0
+        for index, length in enumerate(lengths):
+            for keep_partial in (True, False):
+                for overlap in (0.0, (step * 2, length / 4)[index % 2]):
+                    kwargs = {dim: length, "keep_partial": keep_partial}
+                    if overlap:
+                        kwargs["overlap"] = overlap
+                    if dim == "time":
+                        kwargs[dim] = to_timedelta64(length / 1e9)
+                        if overlap:
+                            kwargs["overlap"] = to_timedelta64(overlap / 1e9)
+                    fast = list(spool.chunk(**kwargs))
+                    with monkeypatch.context() as context:
+                        _force_patch_path(context)
+                        slow = list(spool.chunk(**kwargs))
+                    assert len(fast) == len(slow), kwargs
+                    routes += sum(x.shape[0] > 7 for x in fast)
+                    for one, other in zip(fast, slow, strict=True):
+                        assert one.dims == other.dims, kwargs
+                        assert one.data.dtype == other.data.dtype, kwargs
+                        assert np.array_equal(one.data, other.data), kwargs
+                        assert one.coords == other.coords, kwargs
+                        assert dict(one.attrs) == dict(other.attrs), kwargs
+                        for cname, coord in one.coords.coord_map.items():
+                            mate = other.coords.coord_map[cname]
+                            assert coord.dtype == mate.dtype, (kwargs, cname)
+                            assert coord.units == mate.units, (kwargs, cname)
+                            assert coord.step == mate.step, (kwargs, cname)
+        assert routes, "some outputs merged more than one file"
+
+    @pytest.fixture
+    def trimmed_row(self, tmp_path):
+        """One member row a plan trimmed, and the assembler which reads it."""
+        spool = self._spool(tmp_path)
+        chunked = spool.chunk(time=to_timedelta64(0.12))
+        resolver = chunked._catalog.resolver
+        rows = resolver.member_rows
+        trimmed = rows[rows["_modified"]].iloc[0].to_dict()
+        return resolver._assembler(), trimmed
+
+    def test_a_row_missing_one_source_bound_is_refused(self, trimmed_row):
+        """All three of the source's low, high and step, or none of them."""
+        assembler, row = trimmed_row
+        assert assembler._trim_window(row, "time", None) is not None
+        for end in assembly_module.SOURCE_RANGE_ENDS:
+            column = assembly_module.source_range_column("time", end)
+            assert assembler._trim_window({**row, column: None}, "time", None) is None
+
+    def test_a_converted_envelope_is_refused(self, trimmed_row):
+        """A trim in the plan's unit is not a window on the file's grid."""
+        assembler, row = trimmed_row
+        other = {**row, "_time_units_source": "ms"}
+        assert assembler._trim_window(other, "time", None) is None
+
+    def test_a_window_naming_no_sample_is_refused(self, trimmed_row):
+        """A trim outside its source names nothing to read."""
+        assembler, row = trimmed_row
+        past = row["_time_src_high"] + row["_time_src_step"] * 100
+        row = {**row, "time_min": past, "time_max": past + row["_time_src_step"]}
+        assert assembler._trim_window(row, "time", None) is None
+
+    def test_a_trim_which_does_not_name_its_array_is_refused(self, trimmed_row):
+        """A window's id builds on the whole array's, which the row states."""
+        assembler, row = trimmed_row
+        assert assembler._meta_from_index(row) is not None
+        assert assembler._meta_from_index({**row, "data_id": None}) is None
+
+    def test_a_row_without_its_source_range_falls_back(self, tmp_path, calls):
+        """Without the source's own range a trim cannot be placed."""
+        spool = self._spool(tmp_path)
+        chunked = spool.chunk(time=to_timedelta64(0.12))
+        resolver = chunked._catalog.resolver
+        columns = [
+            assembly_module.source_range_column("time", end)
+            for end in assembly_module.SOURCE_RANGE_ENDS
+        ]
+        resolver.member_rows = resolver.member_rows.drop(columns=columns)
+        assert list(chunked)
+        assert calls["patch"] > 0
+
+    def test_a_resource_of_another_rank_abandons_the_recipe(
+        self, tmp_path, monkeypatch
+    ):
+        """Windows name one range per axis, so fewer axes leave the route."""
+        spool = self._spool(tmp_path, count=2)
+        path = tmp_path / "m0.h5"
+        time = dc.core.get_coord(
+            start=np.datetime64("2020-01-01"), step=self.step, shape=(8,)
+        )
+        flat = dc.Patch(
+            data=np.arange(8, dtype="float32"), coords={"time": time}, dims=("time",)
+        )
+        _rewrite_dasdae(path, flat)
+        # the stat check would catch this first; the fallback is what is tested
+        monkeypatch.setattr(
+            planned.PlanResolver, "_sources_unchanged", lambda self, rows: True
+        )
+        with pytest.raises(ValueError, match="axes"):
+            spool.chunk(time=None)[0]

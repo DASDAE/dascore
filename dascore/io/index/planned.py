@@ -19,6 +19,7 @@ from __future__ import annotations
 import secrets
 from collections.abc import Mapping
 from dataclasses import replace
+from types import MappingProxyType
 
 import numpy as np
 import pandas as pd
@@ -28,7 +29,12 @@ from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
 from dascore.core.source import ArraySource
 from dascore.exceptions import UnknownFiberFormatError
-from dascore.io.core import FiberIO, _read_open_resource, _required_resource_type
+from dascore.io.core import (
+    FiberIO,
+    _read_open_resource,
+    _required_resource_type,
+    _source_stats,
+)
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import (
     CompositeResolver,
@@ -43,6 +49,7 @@ from dascore.io.index.ingest import (
     PatchRecord,
     SourceRecord,
     _coord_record,
+    _is_missing,
     typed_value,
 )
 from dascore.units import get_quantity
@@ -55,11 +62,13 @@ from dascore.utils.chunk_plan import (
 from dascore.utils.io import IOResourceManager
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import (
+    SOURCE_RANGE_ENDS,
     PatchAssembler,
     fill_to_row,
     patch_from_fill,
+    source_range_column,
 )
-from dascore.utils.paths import is_memory_uri
+from dascore.utils.paths import is_local_path, is_memory_uri
 
 # Row columns which name dc.read's own keyword arguments; passing one along
 # as a trim hint would collide with the value the loader already supplies.
@@ -541,6 +550,7 @@ class PlanResolver(PatchResolver):
         stamped: tuple[str, ...] = (),
         lossy: bool = False,
         output_rows: pd.DataFrame | None = None,
+        source_stats: Mapping[str, tuple[int, int]] = MappingProxyType({}),
     ):
         if "output_id" not in member_rows.columns:
             msg = "member_rows must carry an output_id column."
@@ -549,6 +559,8 @@ class PlanResolver(PatchResolver):
         self.token = token
         self.dim = dim
         self.member_rows = member_rows.reset_index(drop=True)
+        # (mtime_ns, size_bytes) per source file, as the index recorded it
+        self.source_stats = source_stats
         self.loader = loader
         self.aux_coords = frozenset(aux_coords)
         self.merge_kwargs = dict(merge_kwargs)
@@ -591,8 +603,8 @@ class PlanResolver(PatchResolver):
             merge_kwargs=self.merge_kwargs,
             plan_dim=self.dim,
             array_source=self._member_array_source,
-            can_load_array=self._can_load_member_whole,
-            array_base_uri=self._array_base_uri(),
+            can_load_array=self._can_load_member_from_index,
+            sources_unchanged=self._sources_unchanged,
         )
 
     def _file_loader(self) -> FileResolver | None:
@@ -602,30 +614,66 @@ class PlanResolver(PatchResolver):
             loader = getattr(loader, "file", None)
         return loader if isinstance(loader, FileResolver) else None
 
-    def _array_base_uri(self) -> str:
-        """The root a file-backed member's path is stored relative to."""
-        root = getattr(self._file_loader(), "_root", None)
-        return "" if root is None else str(root)
-
-    def _can_load_member_whole(self, row: Mapping) -> bool:
+    def _can_load_member_from_index(self, row: Mapping) -> bool:
         """Check every row-only fast-path condition before any array is read."""
-        if row.get("_modified") or self.aux_coords:
+        if self.aux_coords:
             return False
-        # An unmodified row lies wholly inside any value selection on the
-        # plan's dimension; other residuals still need the loaded patch.
-        for coords, samples, relative in self.parent_residuals:
-            if samples or relative or set(coords) - {self.dim}:
+        if row.get("_modified"):
+            # A trim is a window of the source, which is only placeable
+            # when the row keeps the source's own range beside it. That
+            # range is only kept where the window is the whole story --
+            # `_with_source_range` withholds it under a residual, which
+            # re-selects what the window already read.
+            if _is_missing(row.get(source_range_column(self.dim, "low"))):
                 return False
+        else:
+            # An unmodified row lies wholly inside any value selection on
+            # the plan's dimension; other residuals need the loaded patch.
+            for coords, samples, relative in self.parent_residuals:
+                if samples or relative or set(coords) - {self.dim}:
+                    return False
         return self._array_read_info(row) is not None
+
+    def _sources_unchanged(self, rows) -> bool:
+        """
+        Whether every local member source still is what the index recorded.
+
+        A recipe reads the window the index promised rather than the whole
+        array, so a file rewritten longer under the same key would come
+        back the shape its row predicted and go unnoticed. Each distinct
+        local file is stat-ed once and compared exactly as the indexer
+        decides a source changed. A remote store is never stat-ed, and a
+        stat which will not answer -- or a row which recorded no size and
+        mtime -- says nothing rather than refusing the route.
+        """
+        seen = set()
+        for row in rows:
+            path = _row_str(row.get("source_path"))
+            if not path or path in seen or not is_local_path(path):
+                continue
+            seen.add(path)
+            stated = self.source_stats.get(path)
+            if stated is None:
+                continue
+            stat_size, stat_mtime = _source_stats(path)
+            if stat_mtime is None or stat_size is None:
+                continue
+            if (stat_mtime, stat_size) != stated:
+                return False
+        return True
 
     def _member_array_source(self, row: Mapping, shape) -> ArraySource | None:
         """
-        Name the whole stored array of one member; nothing is read.
+        Name the whole stored array a member is part of; nothing is read.
 
         The row states the shape its caller passes and the dtype the
         array comes back as, so a source which names the whole of it is
-        enough to read the member later. A row which states no dtype
-        cannot be named and sends the merge down the patch path.
+        enough to window the member out of it later. A row which states
+        no dtype cannot be named and sends the merge down the patch path.
+
+        A source's origin is the id of the array itself, which is the
+        patch's `data_id` -- not the lineage `origin_id` beside it, which
+        a processed patch keeps from what it was made of.
         """
         info = self._array_read_info(row)
         assert info is not None, "the preflight resolved every member's reader"
@@ -633,7 +681,7 @@ class PlanResolver(PatchResolver):
         dtype = row.get("_dtype")
         if not isinstance(dtype, str) or not dtype:
             return None
-        origin = row.get("origin_id")
+        origin = row.get("data_id")
         source = ArraySource(
             path=str(loader.resolve_path(path)),
             format=_row_str(row.get("source_format")),
@@ -928,6 +976,73 @@ def _whole_member_sizes(trims: pd.DataFrame, sources: pd.DataFrame) -> dict[int,
     return out
 
 
+def _with_source_range(sources: pd.DataFrame, name: str, residuals) -> pd.DataFrame:
+    """
+    Keep each source's own range on the plan dimension beside its trim.
+
+    A member the plan cuts states the window it was cut to, and placing
+    that window back on the file's samples takes the range the file
+    itself spans. Only a row which describes the whole of its source
+    states one: a row a residual selection already trimmed no longer
+    does, and neither does one which arrived trimmed for a reason this
+    plan cannot name.
+    """
+    columns = [source_range_column(name, x) for x in SOURCE_RANGE_ENDS]
+    if residuals:
+        # What a residual left is not the file's own range, and the
+        # residual runs again on whatever the member load returns; a row
+        # with no source range is the one thing which keeps a trim off
+        # the recipe, so withholding it here is what refuses them.
+        return sources.drop(columns=columns, errors="ignore")
+    if set(columns).issubset(sources.columns):
+        # already carried: these rows are the members of a plan on this
+        # same dimension, and the range beside them is still the file's
+        return sources
+    envelope = [f"{name}_{x}" for x in ("min", "max", "step")]
+    if not set(envelope).issubset(sources.columns):
+        return sources
+    modified = sources.get("_modified", pd.Series(False, index=sources.index))
+    whole = pd.Series(~np.asarray(modified, dtype=bool), index=sources.index)
+    values = {
+        column: sources[source].where(whole)
+        for column, source in zip(columns, envelope, strict=True)
+    }
+    return sources.assign(**values)
+
+
+def _resolved_source_path(path, root) -> str:
+    """A stored source path as the catalog will open it."""
+    path = str(path)
+    if root is None or "://" in path or path.startswith("/"):
+        return path
+    return str(root / path)
+
+
+def _source_stat_map(sources: pd.DataFrame, parent, root) -> dict:
+    """
+    What the index last saw of each member source's file, by path.
+
+    The size and modification time live on the sources table rather than
+    on the patch relation, so they are looked up once here and kept per
+    file rather than per member -- there is one of each however many
+    patches a file holds. A derived parent has them already, from the
+    index the members really come from; its own rows name plans. A path
+    the table names twice (two roots, one spelling) names neither.
+    """
+    if inherited := getattr(parent.resolver, "source_stats", None):
+        return inherited
+    stats = parent.backend.source_stats().dropna(subset=["mtime_ns", "size_bytes"])
+    stats = stats.drop_duplicates("source_path", keep=False)
+    wanted = set(sources.get("source_path", pd.Series(dtype=str)).astype(str))
+    return {
+        _resolved_source_path(path, root): (int(mtime), int(size))
+        for path, mtime, size in zip(
+            stats["source_path"], stats["mtime_ns"], stats["size_bytes"], strict=True
+        )
+        if path in wanted
+    }
+
+
 def derived_catalog(
     *,
     source_rows: pd.DataFrame,
@@ -970,6 +1085,11 @@ def derived_catalog(
             sources = sources.drop(columns=[unit_col])
         else:
             sources = sources.rename(columns={unit_col: source_unit_col})
+    parent_residuals = () if parent is None else parent.residuals
+    sources = _with_source_range(sources, name, parent_residuals)
+    root = getattr(parent.resolver, "_root", None) if parent is not None else None
+    # a spool with no parent has no index to have recorded them
+    stats = {} if parent is None else _source_stat_map(sources, parent, root)
     member_rows = trims[["_patch_row", *[c for c in trim_cols]]].merge(
         sources.drop(columns=[c for c in trim_cols if c in sources], errors="ignore"),
         on="_patch_row",
@@ -977,17 +1097,12 @@ def derived_catalog(
     )
     # the member's trimmed range replaces the source envelope for loading
     member_rows = member_rows.drop(columns=["_patch_row"])
-    parent_residuals = () if parent is None else parent.residuals
     # resolve stored-relative paths once; the derived catalog is
     # root-independent afterwards
-    root = getattr(parent.resolver, "_root", None) if parent is not None else None
     if root is not None and "source_path" in member_rows.columns:
         member_rows = member_rows.assign(
             source_path=[
-                str(p)
-                if "://" in str(p) or str(p).startswith("/")
-                else str(root / str(p))
-                for p in member_rows["source_path"]
+                _resolved_source_path(p, root) for p in member_rows["source_path"]
             ]
         )
     loader = CompositeResolver()
@@ -1015,6 +1130,7 @@ def derived_catalog(
         stamped=stamped,
         lossy=lossy,
         output_rows=plan.outputs,
+        source_stats=stats,
     )
     backend = get_backend(":memory:")
     # residual selections trim at load; identity claims (def keys) for
