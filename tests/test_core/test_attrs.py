@@ -346,3 +346,32 @@ class TestInventoryAttrs:
         """
         assert not set(INVENTORY_ATTRS) & {"data_type", "data_units"}
         assert "data_category" in INVENTORY_ATTRS
+
+
+class TestExtrasHoldOneValue:
+    """An extra attr holds one value; an array belongs on a coordinate."""
+
+    def test_one_value_in_a_container(self):
+        """How HDF5 and netCDF spell a scalar: read as the scalar, bytes as text."""
+        attrs = dc.PatchAttrs(project=np.array([b"survey"]), epsg_code=[4326])
+        assert attrs.project == "survey"
+        assert attrs.epsg_code == 4326
+
+    @pytest.mark.parametrize("value", [np.arange(3), [1, 2], (1.0, 2.0)])
+    def test_several_values_are_skipped(self, value):
+        """With a warning which says where an array goes instead."""
+        with pytest.warns(UserWarning, match="belongs on a coordinate"):
+            attrs = dc.PatchAttrs(gauge=value, tag="kept")
+        assert "gauge" not in attrs.model_dump()
+        assert attrs.tag == "kept"
+
+    def test_declared_fields_are_left_alone(self):
+        """History is a tuple, and says so itself."""
+        assert dc.PatchAttrs(history=("a", "b")).history == ("a", "b")
+
+    def test_update_attrs(self):
+        """The same rule through a patch."""
+        patch = dc.get_example_patch()
+        with pytest.warns(UserWarning, match="belongs on a coordinate"):
+            out = patch.update_attrs(gauge=np.arange(3))
+        assert "gauge" not in out.attrs.model_dump()

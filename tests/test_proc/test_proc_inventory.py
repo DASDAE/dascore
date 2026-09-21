@@ -27,6 +27,7 @@ from dascore.exceptions import (
     UnitError,
     UnresolvedPatchError,
 )
+from dascore.models import ArrayLike
 
 
 @pytest.fixture(scope="module")
@@ -707,8 +708,16 @@ class TestEdgeCases:
             patch.enrich(split, coords=False)
 
     def test_incomparable_attr_is_a_conflict(self, patch, inventory):
-        """An attr which cannot be compared has not been shown to agree."""
-        odd = patch.update_attrs(gauge_length=np.array([1.0, 2.0]))
+        """A declared field may hold an array, which has not been shown to agree."""
+
+        class _Attrs(dc.PatchAttrs):
+            """Attrs whose gauge length is declared as an array."""
+
+            gauge_length: ArrayLike = ()
+
+        dumped = patch.attrs.model_dump(exclude_unset=True)
+        attrs = _Attrs(**{**dumped, "gauge_length": np.array([1.0, 2.0])})
+        odd = patch.new(attrs=attrs)
         with pytest.raises(PatchError, match="inventory says"):
             odd.enrich(inventory, coords=False, conflict="raise")
 
