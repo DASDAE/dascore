@@ -51,7 +51,9 @@ from dascore.utils.chunk_plan import (
     _ensure_patch_row,
     patch_local_adjusted_envelopes,
 )
+from dascore.utils.explicit_ranges import file_source_coords
 from dascore.utils.io import IOResourceManager
+from dascore.utils.misc import express_range_for_coord
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import (
     PatchAssembler,
@@ -540,6 +542,7 @@ class PlanResolver(PatchResolver):
         stamped: tuple[str, ...] = (),
         lossy: bool = False,
         output_rows: pd.DataFrame | None = None,
+        anchor_rows: pd.DataFrame | None = None,
     ):
         if "output_id" not in member_rows.columns:
             msg = "member_rows must carry an output_id column."
@@ -569,6 +572,11 @@ class PlanResolver(PatchResolver):
         self._output_rows: dict[int, Mapping] = {}
         # a sibling's coordinates per output which has none of its own
         self._fill_coords: dict[int, CoordManager] = {}
+        self._anchor_rows = (
+            {}
+            if anchor_rows is None
+            else {row["_patch_row"]: row for row in anchor_rows.to_dict("records")}
+        )
         if merge_kwargs.get("fill_value") is not None and output_rows is not None:
             self._output_rows = {
                 int(row["output_id"]): row for row in output_rows.to_dict("records")
@@ -808,6 +816,27 @@ class PlanResolver(PatchResolver):
                 )
         return self._stamp(patch, row)
 
+    def _anchor_metadata_coords(self, row: Mapping) -> CoordManager | None:
+        """Get an anchor's full coordinates without reading measurement data."""
+        path = _row_str(row.get("source_path"))
+        live = self.loader.live_entries().get(path)
+        coords = (
+            live.coords if live is not None else file_source_coords(self.loader, row)
+        )
+        if coords is None:
+            return None
+        for selectors, samples, relative in self.parent_residuals:
+            usable = {
+                name: express_range_for_coord(value, coords.coord_map[name])
+                for name, value in selectors.items()
+                if name in coords.coord_map
+            }
+            if usable:
+                coords, _ = coords.select(samples=samples, relative=relative, **usable)
+        # The anchor is the first row of its partition, whose coordinate
+        # spelling establishes the plan unit. No conversion is needed here.
+        return coords
+
     def _sibling_coords(self, output_id: int):
         """
         The coordinates of the nearest output a source actually feeds.
@@ -818,9 +847,21 @@ class PlanResolver(PatchResolver):
         those; an envelope cannot restate an arbitrary array, and the
         frame holds every numeric one as float. Outputs are numbered in
         order, so the nearest fed one is a neighbour in the same
-        partition. One member is read per hole and its coordinates kept,
-        never its data.
+        partition. A file or live anchor supplies coordinate metadata only;
+        a nested plan falls back to its own loader for full structure.
         """
+        output = self._output_rows.get(output_id, {})
+        anchor_id = output.get("_anchor_patch_row")
+        if anchor_id is not None and anchor_id in self._anchor_rows:
+            if output_id not in self._fill_coords:
+                anchor = self._anchor_rows[anchor_id]
+                coords = self._anchor_metadata_coords(anchor)
+                if coords is None:
+                    # A nested plan has no file payload to scan directly.
+                    # Its loader remains the source of truth for its structure.
+                    coords = self._load_member({**anchor, "_modified": False}).coords
+                self._fill_coords[output_id] = coords
+            return self._fill_coords[output_id]
         ids = self.member_rows["output_id"].to_numpy()
         assert len(ids), "a fill plan with no members anywhere has no structure"
         nearest = int(ids[np.argmin(np.abs(ids - output_id))])
@@ -965,6 +1006,12 @@ def derived_catalog(
         member_paths = set(
             member_rows.get("source_path", pd.Series(dtype=str)).astype(str)
         )
+        if "_anchor_patch_row" in plan.outputs:
+            anchor_ids = set(plan.outputs["_anchor_patch_row"])
+            anchor_sources = sources[sources["_patch_row"].isin(anchor_ids)]
+            member_paths.update(
+                anchor_sources.get("source_path", pd.Series(dtype=str)).astype(str)
+            )
         loader.absorb(parent.resolver, paths=member_paths)
     coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()
     # a coordinate riding a dimension it is not named for, on any member,
@@ -972,6 +1019,16 @@ def derived_catalog(
     aux_coords = frozenset(
         () if parent is None else parent.backend.associated_coord_names()
     )
+    anchors = sources
+    if root is not None and "source_path" in anchors.columns:
+        anchors = anchors.assign(
+            source_path=[
+                str(p)
+                if "://" in str(p) or str(p).startswith("/")
+                else str(root / str(p))
+                for p in anchors["source_path"]
+            ]
+        )
     resolver = PlanResolver(
         token=token,
         dim=name,
@@ -985,6 +1042,7 @@ def derived_catalog(
         stamped=stamped,
         lossy=lossy,
         output_rows=plan.outputs,
+        anchor_rows=anchors if "_anchor_patch_row" in plan.outputs else None,
     )
     backend = get_backend(":memory:")
     # residual selections trim at load; identity claims (def keys) for
