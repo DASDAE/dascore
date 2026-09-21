@@ -51,9 +51,8 @@ from dascore.utils.chunk_plan import (
     _ensure_patch_row,
     patch_local_adjusted_envelopes,
 )
-from dascore.utils.explicit_ranges import file_source_coords
+from dascore.utils.explicit_ranges import _select_manager, file_source_coords
 from dascore.utils.io import IOResourceManager
-from dascore.utils.misc import express_range_for_coord
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import (
     PatchAssembler,
@@ -592,10 +591,19 @@ class PlanResolver(PatchResolver):
         nested[f"{PLAN_SCHEME}{self.token}/"] = self
         return nested
 
-    def _assembler(self):
+    def _assembler(self, *, fill=True):
+        merge_kwargs = (
+            self.merge_kwargs
+            if fill
+            else {
+                key: value
+                for key, value in self.merge_kwargs.items()
+                if key != "fill_value"
+            }
+        )
         return PatchAssembler(
             load_patch=self._load_member,
-            merge_kwargs=self.merge_kwargs,
+            merge_kwargs=merge_kwargs,
             plan_dim=self.dim,
             load_array=self._load_member_whole,
             can_load_array=self._can_load_member_whole,
@@ -780,6 +788,10 @@ class PlanResolver(PatchResolver):
         members = self.member_rows[self.member_rows["output_id"] == output_id]
         fill_value = self.merge_kwargs.get("fill_value")
         fill_row = self._output_rows.get(output_id) if fill_value is not None else None
+        can_fill = fill_row is not None and (
+            "_request_row" not in fill_row
+            or not pd.isnull(fill_row.get(f"{self.dim}_step"))
+        )
         if not len(members):
             # only a fill plan publishes an output no source feeds
             assert fill_row is not None, "no plan members found for output row"
@@ -803,10 +815,12 @@ class PlanResolver(PatchResolver):
             )
         else:
             joined = members.assign(current_index=output_id)
-            assembled = self._assembler()._patch_from_instruction_df(joined)
+            assembled = self._assembler(fill=can_fill)._patch_from_instruction_df(
+                joined
+            )
             assert len(assembled) == 1
             patch = assembled[0]
-            if fill_row is not None:
+            if can_fill:
                 patch = fill_to_row(
                     patch,
                     self.dim,
@@ -825,14 +839,7 @@ class PlanResolver(PatchResolver):
         )
         if coords is None:
             return None
-        for selectors, samples, relative in self.parent_residuals:
-            usable = {
-                name: express_range_for_coord(value, coords.coord_map[name])
-                for name, value in selectors.items()
-                if name in coords.coord_map
-            }
-            if usable:
-                coords, _ = coords.select(samples=samples, relative=relative, **usable)
+        coords = _select_manager(coords, self.parent_residuals)
         # The anchor is the first row of its partition, whose coordinate
         # spelling establishes the plan unit. No conversion is needed here.
         return coords
@@ -1056,7 +1063,9 @@ def derived_catalog(
         sources, trims, name, coord_dims_map, trimmed_dims, concat=mode == "concat"
     )
     if merge_kwargs.get("fill_value") is not None:
-        aux_info = _aux_info_for_unfed(aux_info, outputs)
+        aux_info = _aux_info_for_unfed(
+            aux_info, outputs, sources, name, coord_dims_map, trimmed_dims
+        )
     records = _output_records(
         outputs,
         token,
@@ -1069,27 +1078,38 @@ def derived_catalog(
     return PatchCatalog(backend=backend, resolver=resolver)
 
 
-def _aux_info_for_unfed(aux_info: Mapping, outputs: pd.DataFrame) -> dict:
-    """
-    Lend each output no source feeds its nearest sibling's auxiliary coords.
-
-    Auxiliary coordinates ride a dimension this plan did not chunk, so
-    every output of a partition describes them identically; one built
-    from fill alone has no member to read them off, and a row silently
-    missing them would conflict with its siblings' the moment the filled
-    spool was merged again.
-    """
-    # A pending sample or relative selection keeps the planner from
-    # describing the members at all, so there is nothing to lend.
-    if not aux_info:
-        return {}
-    known = np.array(sorted(aux_info))
+def _aux_info_for_unfed(
+    aux_info: Mapping,
+    outputs: pd.DataFrame,
+    sources: pd.DataFrame,
+    plan_dim: str,
+    coord_dims_map: Mapping[str, str],
+    trimmed_dims: frozenset[str],
+) -> dict:
+    """Describe fill-only outputs from a sibling or their metadata anchor."""
     out = dict(aux_info)
-    for value in outputs["output_id"]:
-        output_id = int(value)
+    known = np.array(sorted(aux_info))
+    by_id = sources.set_index("_patch_row", drop=False)
+    for row in outputs.to_dict("records"):
+        output_id = int(row["output_id"])
         if output_id in out:
             continue
-        out[output_id] = aux_info[int(known[np.argmin(np.abs(known - output_id))])]
+        anchor_id = row.get("_anchor_patch_row")
+        if anchor_id in by_id.index:
+            anchor = by_id.loc[[anchor_id]].reset_index(drop=True)
+            pseudo = pd.DataFrame([{"output_id": output_id, "_patch_row": anchor_id}])
+            info = _aux_coord_info(
+                anchor, pseudo, plan_dim, coord_dims_map, trimmed_dims
+            )
+            if info:
+                out[output_id] = {
+                    name: value
+                    for name, value in info[output_id].items()
+                    if plan_dim not in value["dims"]
+                }
+                continue
+        if len(known):
+            out[output_id] = aux_info[int(known[np.argmin(np.abs(known - output_id))])]
     return out
 
 

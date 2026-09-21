@@ -24,6 +24,8 @@ class ExplicitRanges:
 def explicit_ranges(value) -> ExplicitRanges | None:
     """Return validated window rows, or None for an existing input form."""
     if isinstance(value, np.ndarray):
+        if value.ndim == 0:
+            return None
         if value.ndim == 1:
             msg = "Explicit ranges must have shape (n, 2), not a 1D array."
             raise ParameterError(msg)
@@ -134,15 +136,142 @@ def file_source_coords(resolver, row, files=None):
     return None if payload is None else payload.coords
 
 
+def _select_manager(coords, residuals):
+    """Replay coordinate selectors on metadata, including shared dimensions."""
+    for selectors, samples, relative in residuals:
+        usable = {
+            name: express_range_for_coord(value, coords.coord_map[name])
+            for name, value in selectors.items()
+            if name in coords.coord_map
+        }
+        if usable:
+            coords, _ = coords.select(samples=samples, relative=relative, **usable)
+    return coords
+
+
+def _source_manager(resolver, row, files=None):
+    """Recover all source coordinates without loading measurement arrays."""
+    path = str(row.get("source_path") or "")
+    live = resolver.live_entries().get(path)
+    if live is not None:
+        return live.coords
+    if path.startswith("plan://"):
+        plans = getattr(resolver, "plans", {})
+        plan = next(
+            (item for prefix, item in plans.items() if path.startswith(prefix)), None
+        )
+        if plan is None and hasattr(resolver, "member_rows"):
+            plan = resolver
+        assert plan is not None, "plan source has no resolver"
+        return _planned_manager(plan, row, files)
+    return file_source_coords(resolver, row, files)
+
+
+def _planned_manager(plan, row, files=None):
+    """Rebuild a derived output's coordinates from its member metadata."""
+    key = str(row.get("source_patch_key") or "")
+    assert key.isdigit(), "plan source key is not an output ordinal"
+    members = plan.member_rows[plan.member_rows["output_id"] == int(key)]
+    recovered = []
+    for member in members.to_dict("records"):
+        coords = _source_manager(plan.loader, member, files)
+        if coords is None:
+            return None
+        coords = _select_manager(coords, plan.parent_residuals)
+        if member.get("_modified"):
+            dim = plan.dim
+            low, high = member.get(f"{dim}_min"), member.get(f"{dim}_max")
+            native = coords.coord_map[dim].units
+            unit = member.get(f"_{dim}_units")
+            if native is not None and unit is not None and not pd.isnull(unit):
+                if str(native) != str(unit):
+                    low, high = (
+                        convert_units(x, to_units=native, from_units=unit)
+                        for x in (low, high)
+                    )
+            coords, _ = coords.select(**{dim: (low, high)})
+        unit = member.get(f"_{plan.dim}_units")
+        native = coords.coord_map[plan.dim].units
+        if native is not None and unit is not None and not pd.isnull(unit):
+            if str(native) != str(unit):
+                coords = coords.convert_units(**{plan.dim: unit})
+        recovered.append(coords)
+    if not recovered:
+        anchor_id = plan._output_rows[int(key)].get("_anchor_patch_row")
+        anchor = plan._anchor_rows.get(anchor_id)
+        coords = None if anchor is None else plan._anchor_metadata_coords(anchor)
+    elif len(recovered) == 1:
+        coords = recovered[0]
+    else:
+        # Patch utilities import spool/chunk planning; defer until plans are read.
+        from dascore.utils.patch import _get_merged_coord  # noqa: PLC0415
+
+        merge_dim = recovered[0].dim_map[plan.dim][0]
+        coords = _get_merged_coord(
+            pd.DataFrame(),
+            merge_dim,
+            recovered,
+            snap_coords=plan.merge_kwargs.get("snap_coords", True),
+            tolerance=plan.merge_kwargs.get("tolerance", 1.5),
+        )
+    if coords is None:
+        return None
+    if plan.merge_kwargs.get("fill_value") is None or plan.dim not in coords.dims:
+        return coords
+    # A fill-only row takes its grid from the output, not its anchor.
+    from dascore.utils.patch_assembly import coord_from_row  # noqa: PLC0415
+
+    unit = row.get(f"_{plan.dim}_units")
+    unit = None if unit is None or pd.isnull(unit) else str(unit)
+    filled = coord_from_row(row, plan.dim, unit)
+    current = coords.coord_map[plan.dim]
+    if filled is None or (
+        filled.shape == current.shape
+        and filled.min() == current.min()
+        and filled.max() == current.max()
+        and filled.step == current.step
+        and str(filled.units) == str(current.units)
+    ):
+        # Index rows commonly store float envelopes for an integer range;
+        # equal sample positions must retain their associated coordinates.
+        return coords
+    riding = [
+        name
+        for name, dims in coords.dim_map.items()
+        if name != plan.dim and plan.dim in dims
+    ]
+    coords, _ = coords.drop_coords(*riding)
+    return coords._update_grid(plan.dim, **{plan.dim: filled})
+
+
 def known_coordinates(catalog, rows, name: str) -> dict:
-    """Find source coordinates from memory or metadata-only file scans."""
+    """Find exact coordinates, replaying shared-dimension residuals in metadata."""
     live = catalog.resolver.live_entries()
     out = {}
     files = {}
     resolver = catalog.resolver
+    residuals = getattr(catalog, "residuals", ())
+    dims_map = catalog.backend.coord_dims_map() if residuals else {}
+    target_dims = set(str(dims_map.get(name, name)).split(","))
+    shared = any(
+        target_dims & set(str(dims_map.get(selector, selector)).split(","))
+        for selectors, _, _ in residuals
+        for selector in selectors
+    )
     for row in rows.to_dict("records"):
         patch_row = row["_patch_row"]
         path = str(row.get("source_path") or "")
+        if shared:
+            coords = _source_manager(resolver, row, files)
+            if coords is None:
+                # Planning must distinguish unavailable shared-dimension
+                # metadata from a reconstructable regular source grid.
+                out[patch_row] = None
+            else:
+                coords = _select_manager(coords, residuals)
+                if name in coords.coord_map:
+                    out[patch_row] = coords.coord_map[name]
+            continue
         patch = live.get(path)
         if patch is not None:
             if name in patch.coords.coord_map:
@@ -155,18 +284,15 @@ def known_coordinates(catalog, rows, name: str) -> dict:
             continue
         if not path or path.startswith("memorypatch://"):
             continue
-        if not any(
-            name in selectors for selectors, _, _ in getattr(catalog, "residuals", ())
-        ):
-            # patch_assembly imports chunk planning, which imports this module.
-            from dascore.utils.patch_assembly import coord_from_row  # noqa: PLC0415
+        # A reconstructable range avoids scanning a file payload.
+        from dascore.utils.patch_assembly import coord_from_row  # noqa: PLC0415
 
-            unit = row.get(f"_{name}_units")
-            unit = None if unit is None or pd.isnull(unit) else str(unit)
-            coord = coord_from_row(row, name, unit)
-            if coord is not None:
-                out[patch_row] = coord
-                continue
+        unit = row.get(f"_{name}_units")
+        unit = None if unit is None or pd.isnull(unit) else str(unit)
+        coord = coord_from_row(row, name, unit)
+        if coord is not None:
+            out[patch_row] = coord
+            continue
         coords = file_source_coords(resolver, row, files)
         if coords is not None and name in coords.coord_map:
             out[patch_row] = coords.coord_map[name]
@@ -185,6 +311,12 @@ def _planned_coordinate(resolver, row, name):
     assert plan is not None and hasattr(plan, "member_rows"), (
         "plan source has no resolver"
     )
+    if plan.dim != name or any(
+        any(selector != name for selector in selectors)
+        for selectors, _, _ in plan.parent_residuals
+    ):
+        coords = _planned_manager(plan, row)
+        return None if coords is None else coords.coord_map.get(name)
     if plan.merge_kwargs.get("fill_value") is not None:
         # patch_assembly imports chunk planning, which imports this module.
         from dascore.utils.patch_assembly import coord_from_row  # noqa: PLC0415

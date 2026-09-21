@@ -16,7 +16,6 @@ from dascore.utils.chunk_plan import (
     exact_coordinate_bounds,
 )
 from dascore.utils.explicit_ranges import ExplicitRanges, known_coordinates
-from dascore.utils.misc import express_range_for_coord
 
 
 class _SchemaBackend:
@@ -79,14 +78,6 @@ class ExplicitSelectCatalog:
                     row = by_id.loc[projected["_patch_row"]]
                     coord = known.get(row["_patch_row"])
                     if coord is not None:
-                        for selectors, samples, relative in self.parent.residuals:
-                            if self.name in selectors:
-                                value = express_range_for_coord(
-                                    selectors[self.name], coord
-                                )
-                                coord, _ = coord.select(
-                                    value, samples=samples, relative=relative
-                                )
                         actual = exact_coordinate_bounds(coord, bounds)
                         if actual is None:
                             continue

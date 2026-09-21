@@ -1716,15 +1716,29 @@ def build_chunk_plan(
                     continue
                 low, high = max(low, g_starts[part]), min(high, g_stops[part])
                 if not pd.isnull(part_step) and part_step != 0:
-                    snapped_low, snapped_high, present = _grid_snapped(
-                        np.asarray([low]),
-                        np.asarray([high]),
-                        g_starts[part],
-                        abs(part_step),
-                    )
-                    if not present[0]:
-                        continue
-                    low, high = snapped_low[0], snapped_high[0]
+                    part_sources = sorted_df.iloc[seg_starts[part] : seg_ends[part]]
+                    selected = [
+                        exact_coordinate_bounds(
+                            _exact_coords[row["_patch_row"]], (low, high), unit
+                        )
+                        for _, row in part_sources.iterrows()
+                        if _exact_coords
+                        and _exact_coords.get(row["_patch_row"]) is not None
+                    ]
+                    selected = [x for x in selected if x is not None]
+                    if selected and fill_value is None:
+                        low = min(x[0] for x in selected)
+                        high = max(x[1] for x in selected)
+                    else:
+                        snapped_low, snapped_high, present = _grid_snapped(
+                            np.asarray([low]),
+                            np.asarray([high]),
+                            g_starts[part],
+                            abs(part_step),
+                        )
+                        if not present[0]:
+                            continue
+                        low, high = snapped_low[0], snapped_high[0]
                 starts_list.append(low)
                 stops_list.append(high)
                 requests_p.append(request)
@@ -2739,46 +2753,94 @@ def _finish_explicit_plan(
                 continue
             applicable = True
             step = get_middle_value(sub[step_name].to_numpy())
-            known = sub["_patch_row"].isin(exact_coords)
+            missing_required = any(
+                row_id in exact_coords and exact_coords[row_id] is None
+                for row_id in sub["_patch_row"]
+            )
+            if missing_required:
+                failures.append(
+                    (request, bounds, label, "exact source coordinates are unavailable")
+                )
+                continue
+            known = sub["_patch_row"].isin(
+                row_id for row_id, coord in exact_coords.items() if coord is not None
+            )
             no_grid = pd.isnull(step) or step == 0
             if no_grid and not known.all():
                 failures.append(
                     (request, bounds, label, "exact source coordinates are unavailable")
                 )
                 continue
-            exact = None
-            if no_grid and known.all():
-                selected = [
-                    exact_coordinate_bounds(
-                        exact_coords[row["_patch_row"]], (low, high), unit or None
-                    )
-                    for _, row in sub.iterrows()
-                ]
-                selected = [item for item in selected if item is not None]
-                if selected:
-                    exact = (min(x[0] for x in selected), max(x[1] for x in selected))
-                else:
+            requested_low, requested_high = low, high
+            candidates = outputs[
+                (outputs["_request_row"] == request)
+                & (outputs["_compat_group"] == label)
+            ]
+            selected = [
+                exact_coordinate_bounds(
+                    exact_coords[row["_patch_row"]], (low, high), unit or None
+                )
+                for _, row in sub.iterrows()
+                if row["_patch_row"] in exact_coords
+            ]
+            selected = [item for item in selected if item is not None]
+            if no_grid:
+                if not selected:
                     failures.append(
                         (request, bounds, label, "contains no source samples")
                     )
                     continue
-            if exact is not None:
-                low, high = exact
-            elif not no_grid:
-                snap_low, snap_high, grid = _grid_snapped(
-                    np.asarray([low]), np.asarray([high]), start, abs(step)
+                low = min(x[0] for x in selected)
+                high = max(x[1] for x in selected)
+            elif known.all() and selected and fill_value is None:
+                # Exact member labels obey the existing snap/assembly rules.
+                # Another partition in the group may have a shifted origin,
+                # and a joined source may have sub-sample jitter.
+                low = min(x[0] for x in selected)
+                high = max(x[1] for x in selected)
+                expected_low, _, _ = _grid_snapped(
+                    np.asarray([requested_low]),
+                    np.asarray([requested_high]),
+                    low,
+                    abs(step),
                 )
-                if grid[0]:
-                    low, high = snap_low[0], snap_high[0]
+                _, expected_high, _ = _grid_snapped(
+                    np.asarray([requested_low]),
+                    np.asarray([requested_high]),
+                    high,
+                    abs(step),
+                )
+                if expected_low[0] < low or expected_high[0] > high:
+                    if not keep_partial:
+                        failures.append(
+                            (request, bounds, label, "sampled bounds are incomplete")
+                        )
+                        continue
+            else:
+                # Without exact arrays, use each candidate's own partition
+                # origin, not a possibly disconnected compatibility group.
+                origins = [
+                    sources.iloc[seg_starts[int(part)]][min_name]
+                    for part in candidates["_partition"]
+                ]
+                if origins:
+                    snapped = [
+                        _grid_snapped(
+                            np.asarray([low]), np.asarray([high]), origin, abs(step)
+                        )
+                        for origin in origins
+                    ]
+                    valid = [(lo[0], hi[0]) for lo, hi, mask in snapped if mask[0]]
+                else:
+                    valid = []
+                if valid:
+                    low = min(x[0] for x in valid)
+                    high = max(x[1] for x in valid)
                 else:
                     failures.append(
                         (request, bounds, label, "contains no sampled position")
                     )
                     continue
-            candidates = outputs[
-                (outputs["_request_row"] == request)
-                & (outputs["_compat_group"] == label)
-            ]
             if keep_partial and len(candidates):
                 accepted.update(candidates["output_id"])
                 continue
@@ -2791,9 +2853,6 @@ def _finish_explicit_plan(
                 (candidates[min_name] <= low + margin)
                 & (candidates[max_name] >= high - margin)
             ]
-            requested_low, requested_high = _explicit_bounds_for_partition(
-                bounds, start, unit
-            )
             if no_grid and (requested_low < start or requested_high > stop):
                 complete = complete.iloc[0:0]
             if len(complete) == 1:
