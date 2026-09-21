@@ -123,7 +123,10 @@ class PatchAttrs(DascoreBaseModel):
         for name in [k for k, v in data.items() if type(v) in _ARRAYS]:
             if name in cls.model_fields:
                 continue
-            value = np.asarray(data.pop(name))
+            # As objects, so a ragged list counts rather than raising and a
+            # python scalar stays one.
+            value = data.pop(name)
+            value = np.asarray(value, None if type(value) is np.ndarray else object)
             if value.size == 1:  # how HDF5 and netCDF spell a scalar
                 data[name] = unbyte(value.reshape(-1)[0])
             else:

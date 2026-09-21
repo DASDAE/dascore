@@ -375,3 +375,31 @@ class TestExtrasHoldOneValue:
         with pytest.warns(UserWarning, match="belongs on a coordinate"):
             out = patch.update_attrs(gauge=np.arange(3))
         assert "gauge" not in out.attrs.model_dump()
+
+    def test_a_ragged_list_is_skipped_not_raised(self):
+        """Counting its values must not need a rectangular array."""
+        with pytest.warns(UserWarning, match="belongs on a coordinate"):
+            attrs = dc.PatchAttrs(odd=[[1], [2, 3]])
+        assert "odd" not in attrs.model_dump()
+
+    def test_a_python_scalar_stays_one(self):
+        """One value in a list is that value, so the attrs still dump to JSON."""
+        attrs = dc.PatchAttrs(epsg_code=[4326], flag=(True,))
+        assert type(attrs.epsg_code) is int and attrs.flag is True
+        assert "4326" in attrs.model_dump_json()
+
+    def test_update_attrs_keeps_the_attrs_class(self):
+        """So a subclass's declared collection is not mistaken for an extra."""
+
+        class Flagged(dc.PatchAttrs):
+            """Declare a collection, as a plugin's format may."""
+
+            flags: tuple[bool, ...] = ()
+
+        patch = dc.get_example_patch()
+        patch = patch.new(
+            attrs=Flagged(**patch.attrs.model_dump(), flags=(True, False))
+        )
+        out = patch.update_attrs(tag="new")
+        assert isinstance(out.attrs, Flagged)
+        assert out.attrs.flags == (True, False)
