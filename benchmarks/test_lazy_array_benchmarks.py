@@ -48,6 +48,15 @@ def grid(sources):
 
 
 @pytest.fixture(scope="module")
+def deep():
+    """One array of many members along one axis of a twelve axis source."""
+    whole = ArraySource(
+        path="/data/deep.h5", format="DASDAE", version="1", origin_id="b" * 32
+    ).describe((1000, *[2] * 11), np.float32)
+    return LazyArray.from_sources([whole[x : x + 1] for x in range(1000)])
+
+
+@pytest.fixture(scope="module")
 def constants():
     """Many small arrays, each one constant member."""
     return [LazyArray.from_source(ArraySource.full((ROWS, WIDTH), 1.0))] * 1_000
@@ -94,6 +103,12 @@ class TestTableBenchmarks:
         """Time naming an array whose members are not one stack of slabs."""
         grid.table._ids.clear()
         assert grid.data_id
+
+    @pytest.mark.benchmark
+    def test_data_id_many_dimensions(self, deep):
+        """Time naming an array of twelve axes, one of which was cut."""
+        deep.table._ids.clear()
+        assert deep.data_id
 
     @pytest.mark.benchmark
     def test_validate(self, array):

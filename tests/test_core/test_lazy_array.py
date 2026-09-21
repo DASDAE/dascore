@@ -4,14 +4,16 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import replace
-from itertools import pairwise
+from itertools import pairwise, product
 
 import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.core import lazy_array as lazy_module
 from dascore.core.lazy_array import (
     AXIS_FIELDS,
+    MAX_CUT_AXES,
     MEMBER_FIELDS,
     NEW_AXIS,
     LazyArray,
@@ -87,6 +89,26 @@ def reads(monkeypatch):
         io_core, "_load_array_source", lambda x: calls.append(x) or original(x)
     )
     return calls
+
+
+@pytest.fixture()
+def expanded(monkeypatch):
+    """Record the axes a signature expands, and cap what it may ask for."""
+    asked = []
+    patterns, check = lazy_module._patterns, lazy_module._check_cuts
+
+    def counted(cut, ndim):
+        asked.append(cut)
+        assert cut <= 4, f"the signature expanded {cut} axes"
+        check(cut, ndim)
+
+    def capped(count):
+        assert count <= 4, f"the signature asked for {2**count} patterns"
+        return patterns(count)
+
+    monkeypatch.setattr(lazy_module, "_patterns", capped)
+    monkeypatch.setattr(lazy_module, "_check_cuts", counted)
+    return asked
 
 
 @pytest.fixture(scope="module")
@@ -229,6 +251,24 @@ def refine(regions, boxes):
             if np.all(hi > lo):
                 out.append((lo, hi, filler))
     return out
+
+
+def grid(shape, edges):
+    """Return the boxes of a grid cut at the given edges of each axis."""
+    spans = [list(pairwise(sorted({0, *x, shape[a]}))) for a, x in enumerate(edges)]
+    return [
+        (np.array([a for a, _ in corner]), np.array([b for _, b in corner]))
+        for corner in product(*spans)
+    ]
+
+
+def described(array):
+    """Return the interval of each axis and the corner count of each group."""
+    out = lazy_module._signature(array._block())
+    return [
+        (list(zip(a, b)), n)
+        for a, b, n in zip(out.starts.tolist(), out.stops.tolist(), out.counts.tolist())
+    ]
 
 
 def layouts(shape):
@@ -1083,6 +1123,15 @@ class TestIdentity:
         expected = np.concatenate([big.load(), other.load()])
         assert np.array_equal(mixed.load(), expected)
 
+    def test_a_cast_member_is_not_its_source(self):
+        """A stored array laid at another dtype is not the source's array."""
+        source = stored((4, 3), origin_id="a" * 32)
+        frame = LazyArray.from_source(source).to_frame()
+        cast = LazyArray.from_frame(frame, (4, 3), np.float64)
+        assert cast.dtype == np.float64
+        assert cast.data_id != source.data_id
+        assert LazyArray.from_source(source).data_id == source.data_id
+
     @pytest.mark.parametrize(
         "boxes",
         [
@@ -1402,10 +1451,166 @@ class TestIdentity:
         assert joined.data_id == array.data_id
 
 
+class TestCutAxes:
+    """An id costs what the cuts did, not how many axes the array has."""
+
+    def test_a_high_dimensional_constant(self, expanded):
+        """A constant of thirty axes is named without expanding one."""
+        source = ArraySource.full((1,) * 30, 1)
+        assert LazyArray.from_source(source).data_id == source.data_id
+        assert max(expanded) == 0
+
+    def test_a_high_dimensional_stored_source(self, expanded):
+        """A stored array of thirty axes is named without expanding one."""
+        source = stored((1,) * 30, path="/a/b.h5")
+        array = LazyArray.from_source(source)
+        assert array.data_id == source.data_id
+        assert array[0:1].data_id == source[0:1].data_id
+        assert max(expanded) == 0
+
+    def test_a_long_concatenation(self, expanded):
+        """A thousand members of a twelve axis array expand one axis."""
+        whole = stored((1000, *[1] * 11), origin_id="a" * 32)
+        parts = [whole[x : x + 1] for x in range(1000)]
+        array = LazyArray.from_sources(parts)
+        assert len(array) == 1000
+        assert array.data_id == LazyArray.from_source(whole).data_id
+        assert max(expanded) == 1
+
+    def test_too_many_cut_axes(self):
+        """An array cut on more axes than the bound is refused."""
+        ndim = MAX_CUT_AXES + 1
+        source = ArraySource.full((1,) * ndim, 1.0)
+        array = placed([source, source], [[0] * ndim, [1] * ndim], (2,) * ndim)
+        with pytest.raises(ParameterError, match=f"cut on {ndim} axes"):
+            array.data_id
+
+    @pytest.mark.parametrize(
+        ("shape", "cuts"),
+        [
+            ((4, 6), [[[], []], [[1, 3], []], [[1, 3], [2]], [[], [2, 4]]]),
+            ((2, 3, 4), [[[], [], []], [[1], [], []], [[1], [2], [1, 3]]]),
+        ],
+    )
+    def test_cutting_a_product_axis(self, shape, cuts):
+        """Cutting an axis a region spans whole does not rename it."""
+        source = stored(shape, origin_id="a" * 32)
+        low = np.zeros(len(shape), np.int64)
+        middle, start = np.array(shape), low.copy()
+        middle[0] = start[0] = shape[0] // 2
+        layout = [(low, middle, source), (start, np.array(shape), 3.0)]
+        whole = region_array(layout, shape)
+        for edges in cuts:
+            array = region_array(refine(layout, grid(shape, edges)), shape)
+            assert array.validate().data_id == whole.validate().data_id
+
+    def test_groups_cut_on_different_axes(self):
+        """Two sources cut on axes of their own are the array they fill."""
+        shape = (4, 4)
+        first = stored(shape, path="/a/one.h5", origin_id="a" * 32)
+        second = stored(shape, path="/a/two.h5", origin_id="b" * 32)
+        layout = [
+            (np.array([0, 0]), np.array([2, 4]), first),
+            (np.array([2, 0]), np.array([4, 4]), second),
+        ]
+        whole = region_array(layout, shape)
+        mixed = refine(layout[:1], grid(shape, [[1], []]))
+        mixed += refine(layout[1:], grid(shape, [[], [2]]))
+        both = refine(layout, grid(shape, [[1], [2]]))
+        for regions in (mixed, both):
+            array = region_array(regions, shape)
+            assert array.validate().data_id == whole.validate().data_id
+
+    def test_a_region_which_is_not_a_product(self):
+        """An L keeps both axes in its core, and is its own array."""
+        shape = (3, 3)
+        source = stored(shape, origin_id="a" * 32)
+        ell = [((0, 0), (2, 1)), ((0, 1), (1, 3))]
+        turned = [((0, 2), (2, 3)), ((0, 0), (1, 3))]
+        box = [((0, 0), (2, 3))]
+        arrays = []
+        for boxes in (ell, turned, box):
+            regions = [(np.array(a), np.array(b), source) for a, b in boxes]
+            arrays.append(region_array(regions, shape))
+        # Neither L spans an axis whole, so both keep both in their corners.
+        assert described(arrays[0]) == [([(-1, -1), (-1, -1)], 6)]
+        assert described(arrays[1]) == [([(-1, -1), (-1, -1)], 7)]
+        assert described(arrays[2]) == [([(0, 2), (0, 3)], 1)]
+        assert len({x.data_id for x in arrays}) == 3
+
+    def test_a_staircase_is_not_the_box_it_spans(self):
+        """Boxes offset on both axes keep both, and are not their span."""
+        shape = (2, 2)
+        source = stored(shape, origin_id="a" * 32)
+        boxes = [((0, 0), (1, 1)), ((1, 1), (2, 2))]
+        regions = [(np.array(a), np.array(b), source) for a, b in boxes]
+        steps = region_array(regions, shape)
+        # Two coordinates on an axis would factor; a staircase has three.
+        assert described(steps) == [([(-1, -1), (-1, -1)], 7)]
+        assert steps.data_id != LazyArray.from_source(source).data_id
+
+    def test_a_band_of_a_square_knows_its_axis(self):
+        """A row band and a column band of one square are two arrays."""
+        whole = stored((4, 4), origin_id="a" * 32)
+        arrays = [
+            LazyArray.from_sources(
+                [window], starts=np.zeros((1, 2), np.int64), shape=(4, 4)
+            )
+            for window in (whole[0:2, 0:4], whole[0:4, 0:2])
+        ]
+        assert described(arrays[0]) == [([(0, 2), (0, 4)], 1)]
+        assert described(arrays[1]) == [([(0, 4), (0, 2)], 1)]
+        assert arrays[0].data_id != arrays[1].data_id
+
+    def test_a_region_short_of_the_origin(self):
+        """A box which reaches the far corner but not the origin is its own."""
+        whole = stored((4, 4), origin_id="a" * 32)
+        array = LazyArray.from_sources(
+            [whole[1:4]], starts=np.array([[1, 0]]), shape=(4, 4)
+        )
+        assert described(array) == [([(1, 4), (0, 4)], 1)]
+        assert array.data_id != LazyArray.from_source(whole).data_id
+
+    def test_an_empty_region_cut_along_an_axis(self):
+        """Boxes of no samples cover nothing, however they were cut up."""
+        ids = []
+        for pieces in (1, 2):
+            array = concat([constant((2 // pieces, 1), 1.0)] * pieces, axis=0)
+            frame = array.to_frame()
+            frame.loc[frame["out_axis"] == 1, "out_stop"] = 0
+            flat = LazyArray.from_frame(frame, (2, 0), array.dtype)
+            assert described(flat) == [([(-1, -1), (-1, -1)], 0)]
+            ids.append(flat.data_id)
+        assert ids[0] == ids[1]
+
+    def test_a_hole_keeps_its_axes(self):
+        """A ring around another source keeps both axes in its core."""
+        shape = (3, 3)
+        source = stored(shape, origin_id="a" * 32)
+        ring = [
+            ((0, 0), (3, 1)),
+            ((0, 1), (1, 2)),
+            ((2, 1), (3, 2)),
+            ((0, 2), (3, 3)),
+        ]
+        regions = [(np.array(a), np.array(b), source) for a, b in ring]
+        regions += [(np.array([1, 1]), np.array([2, 2]), 4.0)]
+        array = region_array(regions, shape)
+        assert described(array) == [([(-1, -1), (-1, -1)], 8), ([(1, 2), (1, 2)], 1)]
+        assert array.validate().data_id != LazyArray.from_source(source).data_id
+
+
 class TestPartitions:
     """How an array was cut up never reaches its id."""
 
-    shapes = ((7,), (4, 5), (3, 4, 2), (2, 3, 2, 2))
+    shapes = (
+        (7,),
+        (4, 5),
+        (3, 4, 2),
+        (2, 3, 2, 2),
+        (2, 2, 3, 2, 2),
+        (2, 2, 2, 2, 2, 2),
+    )
 
     @pytest.mark.parametrize("shape", shapes)
     def test_guillotine_partitions(self, shape):
@@ -1433,6 +1638,19 @@ class TestPartitions:
         # Most tilings can be cut out; the id must hold for the rest as well.
         assert staggered > 20
 
+    @pytest.mark.parametrize("shape", shapes)
+    def test_cuts_along_product_axes(self, shape):
+        """Cutting the axes a layout spans whole never renames it."""
+        rng = np.random.default_rng(11)
+        for layout in layouts(shape):
+            whole = region_array(layout, shape)
+            for _ in range(10):
+                edges = [
+                    [x for x in range(1, size) if rng.random() < 0.5] for size in shape
+                ]
+                array = region_array(refine(layout, grid(shape, edges)), shape)
+                assert array.validate().data_id == whole.data_id
+
     def test_a_region_with_a_hole(self):
         """A ring of one source around a constant is one region, however cut."""
         source = stored((3, 3), origin_id="a" * 32)
@@ -1450,6 +1668,14 @@ class TestPartitions:
             boxes = random_tiling(rng, (3, 3))
             array = region_array(refine(regions, boxes), (3, 3))
             assert array.validate().data_id == whole.validate().data_id
+
+    def test_boxes_which_overlap_alike(self):
+        """Two lists of overlapping boxes which cover alike are one array."""
+        whole = stored((4, 3), origin_id="a" * 32)
+        first = placed([whole[0:3], whole[2:4]], [[0, 0], [2, 0]], (4, 3))
+        second = placed([whole[0:4], whole[2:3]], [[0, 0], [2, 0]], (4, 3))
+        assert len(first) == len(second) == 2
+        assert first.data_id == second.data_id
 
     def test_rechunk_and_join_again(self, joined):
         """Cutting an array into pieces and joining them gives it back."""
@@ -1537,19 +1763,19 @@ class TestPinnedIds:
     def test_constant_members(self):
         """Two constants in one array hash to a known digest."""
         array = concat([constant((1, 2), 1.0), constant((1, 2), 2.0)], axis=0)
-        assert array.data_id == "4d8fbc3ea34c500fe40ca19b858a03a1"
+        assert array.data_id == "c29da8cfe43731e1bd827f0973925b77"
 
     def test_window_members(self):
         """Two windows of an unnamed file hash to a known digest."""
         source = stored((4, 4), path="/a/b.h5")
         array = placed([source[0:1], source[2:3]], [[0, 0], [1, 0]], (2, 4))
-        assert array.data_id == "7fc74c972c2046dc86b955e28b7b3c68"
+        assert array.data_id == "b250a3cc6ad346d3769967572f69f349"
 
     def test_a_transposed_window(self):
         """A member read the other way up hashes to a known digest."""
         source = stored((4, 4), path="/a/b.h5", origin_id="a" * 32)
         array = LazyArray.from_source(source[0:2, 0:4]).transpose()
-        assert array.data_id == "ad9a20c5356cf5f68f3d76e48537a72d"
+        assert array.data_id == "af96513603df1a85c7d3d6b35f0996e4"
 
 
 class TestSources:
