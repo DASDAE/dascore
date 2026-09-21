@@ -143,22 +143,28 @@ class TestDerivedComposition:
         np.testing.assert_array_equal(actual.data, expected.data)
 
     @pytest.mark.parametrize("units", ["ft", "cm"])
-    def test_chunk_files_with_different_units(self, tmp_path, units):
+    @pytest.mark.parametrize("other_first", [False, True])
+    def test_chunk_files_with_different_units(self, tmp_path, units, other_first):
         """Read hints must use the source file's coordinate units."""
         # Leave a partial tail so the file extent is not a chunk boundary.
         patch = dc.get_example_patch(shape=(21, 100)).set_units(distance="m")
         shifted = patch.update_coords(
             time=patch.get_coord("time").values + np.timedelta64(1, "D")
         )
-        patch.io.write(tmp_path / "a.h5", "dasdae")
-        shifted.convert_units(distance=units).io.write(tmp_path / "b.h5", "dasdae")
+        converted = shifted.convert_units(distance=units)
+        first, second = (converted, patch) if other_first else (patch, converted)
+        first.io.write(tmp_path / "first.h5", "dasdae")
         spool = dc.spool(tmp_path).update(progress=None)
         try:
-            actual = spool.chunk(distance=5)
-            expected = dc.spool([patch, shifted]).chunk(distance=5)
+            # Index each file separately to exercise both choices of plan units.
+            second.io.write(tmp_path / "second.h5", "dasdae")
+            spool = spool.update(progress=None)
+            actual = spool.chunk(distance=5 * m).sort("time")
+            expected = dc.spool([patch, shifted]).chunk(distance=5 * m).sort("time")
             assert len(actual) == len(expected) == 8
             for index in range(len(expected)):
-                loaded, wanted = actual[index], expected[index]
+                loaded = actual[index].convert_units(distance="m")
+                wanted = expected[index]
                 assert loaded.shape == wanted.shape == (5, 100)
                 np.testing.assert_allclose(
                     loaded.get_coord("distance").values,
