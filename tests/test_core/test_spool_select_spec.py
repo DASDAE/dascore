@@ -16,14 +16,13 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import (
-    ChunkError,
     InvalidSpoolQueryError,
     ParameterError,
     UnitError,
 )
 from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.planned import PlanResolver
-from dascore.units import get_quantity, m
+from dascore.units import get_quantity, m, percent, s
 
 
 @pytest.fixture(
@@ -230,7 +229,7 @@ class TestSamples:
             assert coord.max() == row.time_max
 
     def test_union_keeps_emptied_members(self, spool):
-        """An emptied sample window keeps members, as a relative one does."""
+        """An emptied sample window keeps its members."""
         out = spool.select(time=(5000, 6000), samples=True)
         assert len(out + dc.spool([])) == len(out) == len(spool)
 
@@ -309,30 +308,21 @@ class TestRelative:
     def test_open_bound_past_the_patch_selects_nothing(self, spool, selection):
         """A one-sided window off the end keeps nothing, and reports that."""
         out = spool.select(time=selection, relative=True)
-        assert len(out) == len(spool)
-        for source, selected in zip(spool, out, strict=True):
-            self._assert_patch_local(source, selected, selection)
-        # The open side is the envelope extreme already. If it stood in for
-        # the closed bound the row would present a one-instant window, and
-        # the plans below would describe data no patch actually has.
-        contents = out.get_contents()
-        assert contents["time_min"].isna().all()
-        assert contents["time_max"].isna().all()
+        assert len(out) == 0
+        assert out.get_contents().empty
+        assert list(out) == []
         assert not len(out.get_gaps())
         assert not len(out.chunk(time=None))
 
     def test_emptied_view_survives_union(self, spool):
-        """Union keeps emptied members and says why they cannot be chunked."""
+        """Union does not restore members removed by relative selection."""
         empt = spool.select(time=(1000, 2000), relative=True)
         other = dc.get_example_spool("random_das", length=2)
         union = empt + other
-        assert len(union) == len(empt) + len(other)
-        # Baking the view writes through the index schema, which cannot
-        # carry the emptied marker, so these arrive with a null envelope
-        # and the error reports them as missing the dimension.
-        with pytest.raises(ChunkError, match="lack the"):
-            union.chunk(time=None)
-        assert len(union.chunk(time=None, missing_dim="drop")) >= 1
+        assert len(empt) == 0
+        assert len(union) == len(other)
+        assert union == other
+        assert len(union.chunk(time=None)) >= 1
 
     def test_chunk_keeps_the_whole_selected_window(self, spool):
         """Chunking a relative view windows the selection, not each chunk."""
@@ -383,14 +373,176 @@ class TestRelative:
         out = dc.spool([strings, numbers]).select(label=(0, 1), relative=True)
         assert len(out) == len(out.get_contents()) == len(list(out)) == 1
 
-    def test_bounds_resolving_out_of_order_are_ordered(self, spool):
-        """A window whose ends resolve reversed is presented in order."""
-        selection = (-2, 2)
+    @pytest.mark.parametrize(
+        "selection", [(-2, 2), (6 * s, -6 * s), (75 * percent, -75 * percent)]
+    )
+    def test_crossed_bounds_drop_members(self, spool, selection):
+        """A window whose resolved lower limit exceeds its upper limit is empty."""
         out = spool.select(time=selection, relative=True)
+        assert len(out) == 0
+        assert out.get_contents().empty
+        assert list(out) == []
+        assert len(out.chunk(time=None)) == 0
+
+    @pytest.mark.parametrize("selection", [(5 * s, -1 * s), (5 * s, ...)])
+    def test_short_patch_is_removed(self, spool, selection):
+        """Trimming past the end of a three-second patch removes its entry."""
+        short = spool.select(time=(0, 3), relative=True)
+        out = short.select(time=selection, relative=True)
+        assert len(out) == 0
+        assert out.get_contents().empty
+        assert list(out) == []
+
+    def test_mixed_lengths_and_positions(self, spool):
+        """Counts and positional views use surviving rows before and after caching."""
+        short = spool[:1].select(time=(0, 3), relative=True)
+        mixed = short + spool[1:]
+        expected = [p.select(time=(5, -1), relative=True) for p in spool[1:]]
+        # Slicing and array selection must also work on an unrealized view.
+        assert mixed.select(time=(5, -1), relative=True)[:1][0].equals(expected[0])
+        assert mixed.select(time=(5, -1), relative=True)[[0]][0].equals(expected[0])
+        out = mixed.select(time=(5 * s, -1 * s), relative=True)
+        assert len(out) == len(expected)
+        assert out[0].equals(expected[0])
+        assert out[-1].equals(expected[-1])
+        assert out[:1][0].equals(expected[0])
+        assert out[[0]][0].equals(expected[0])
+        assert out[np.ones(len(out), dtype=bool)] == out
+        assert out[out.get_contents()["time_min"].notna()] == out
+        assert len(out.get_contents()) == len(out) == len(list(out))
+        for selected, wanted in zip(out, expected, strict=True):
+            assert selected.equals(wanted)
+
+    def test_equal_bounds_keep_one_sample(self, spool):
+        """A six-second patch trimmed by five and one seconds retains the endpoint."""
+        six_seconds = spool.select(time=(0, 6), relative=True)
+        out = six_seconds.select(time=(5 * s, -1 * s), relative=True)
+        assert len(out) == len(spool)
+        for patch in out:
+            assert len(patch.get_coord("time")) == 1
         contents = out.get_contents()
-        assert (contents["time_min"] <= contents["time_max"]).all()
+        assert (contents["time_min"] == contents["time_max"]).all()
+
+    def test_relative_drops_emptied_sample_window(self, spool):
+        """A relative selection cannot restore samples an earlier selection removed."""
+        samples = spool.select(time=(0, 0), samples=True)
+        assert len(samples) == len(spool)
+        samples = samples.select(time=(0, 1), samples=True)
+        out = samples.select(time=(0, 1), relative=True)
+        assert len(out) == len(list(out)) == 0
+        assert out.get_contents().empty
+
+    def test_independent_relative_dimensions(self, spool):
+        """Trimming time does not change the origin of a distance selection."""
+        out = spool.select(time=(0, 2), relative=True).select(
+            distance=(5, 10), relative=True
+        )
+        assert len(out) == len(spool)
         for source, selected in zip(spool, out, strict=True):
-            self._assert_patch_local(source, selected, selection)
+            expected = source.select(time=(0, 2), relative=True).select(
+                distance=(5, 10), relative=True
+            )
+            assert selected.equals(expected)
+
+    @pytest.mark.parametrize("first_relative", [False, True])
+    def test_relative_drops_off_sample_window(self, first_relative):
+        """A later relative trim drops a regular window that fell between samples."""
+        coord = dc.get_coord(data=np.arange(4), units="m")
+        patch = dc.Patch(
+            data=np.arange(4), coords={"distance": coord}, dims=("distance",)
+        )
+        out = (
+            dc.spool([patch])
+            .select(distance=(0.1, 0.2), relative=first_relative)
+            .select(distance=(0, None), relative=True)
+        )
+        assert len(out) == len(list(out)) == 0
+        assert out.get_contents().empty
+
+    def test_existing_empty_patch_is_dropped(self):
+        """An indexed zero sample count is sufficient to remove an empty patch."""
+        patch = dc.get_example_patch().select(time=(100, None), relative=True)
+        assert patch.size == 0
+        out = dc.spool([patch]).select(time=(0, None), relative=True)
+        assert len(out) == len(list(out)) == 0
+        assert out.get_contents().empty
+
+    @pytest.mark.parametrize("dtype", ["float16", "float32"])
+    @pytest.mark.parametrize("units", [False, True])
+    def test_rounded_bounds_keep_sample(self, dtype, units):
+        """Metadata must not drop bounds that round to one low-precision sample."""
+        coord = dc.get_coord(data=np.array([0, 0.5, 1], dtype=dtype), units="m")
+        patch = dc.Patch(
+            data=np.ones(3), coords={"distance": coord}, dims=("distance",)
+        )
+        selection = (0.50000001, -0.5)
+        if units:
+            selection = tuple(x * m for x in selection)
+        out = dc.spool([patch]).select(distance=selection, relative=True)
+        expected = patch.select(distance=selection, relative=True)
+        assert expected.size == 1
+        assert len(out) == 1
+        assert out[0].equals(expected)
+        contents = out.get_contents()
+        assert contents["distance_min"].iloc[0] == 0.5
+        assert contents["distance_max"].iloc[0] == 0.5
+
+    @pytest.mark.parametrize("values", [[0, 1, 2, 3], [0, 1, 2, 4]])
+    @pytest.mark.parametrize("first_coord", ["distance", "label"])
+    def test_chained_bounds_use_selected_samples(self, values, first_coord):
+        """A bound between samples must not move the origin of the next trim."""
+        coord = dc.get_coord(data=np.array(values), units="m")
+        patch = dc.Patch(
+            data=np.arange(4), coords={"distance": coord}, dims=("distance",)
+        )
+        patch = patch.update_coords(label=("distance", np.array(values)))
+        bounds = (2 - max(values), 1)
+        first = {first_coord: (0.1, None)}
+        expected = patch.select(**first, relative=True).select(
+            distance=bounds, relative=True
+        )
+        assert expected.get_array("distance").tolist() == [2]
+        out = (
+            dc.spool([patch])
+            .select(**first, relative=True)
+            .select(distance=bounds, relative=True)
+        )
+        assert len(out) == 1
+        assert out[0].equals(expected)
+
+    @pytest.mark.parametrize("temporal", [False, True])
+    @pytest.mark.parametrize("bounds", [(2, 1), (-1, -2)])
+    def test_crossed_offsets_after_associated_trim(self, temporal, bounds):
+        """A shared unknown origin cannot rescue crossed fixed offsets."""
+        values = dc.to_datetime64(np.arange(4)) if temporal else np.arange(4)
+        patch = dc.Patch(data=np.arange(4), coords={"x": values}, dims=("x",))
+        patch = patch.update_coords(label=("x", np.arange(4)))
+        out = (
+            dc.spool([patch])
+            .select(label=(0.1, None), relative=True)
+            .select(x=bounds, relative=True)
+        )
+        assert len(out) == len(list(out)) == 0
+        assert out.get_contents().empty
+
+    @pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+    def test_uncertain_offsets_can_round_equal(self, dtype):
+        """Offsets crossing at the source minimum may coincide after a trim."""
+        values = np.array([0, 0.5, 1], dtype=dtype)
+        patch = dc.Patch(data=np.arange(3), coords={"x": values}, dims=("x",))
+        patch = patch.update_coords(label=("x", np.arange(3)))
+        bounds = (np.nextafter(dtype(0.5), dtype(1)).item(), 0.5)
+        expected = patch.select(label=(1, None), relative=True).select(
+            x=bounds, relative=True
+        )
+        assert expected.get_array("x").tolist() == [1]
+        out = (
+            dc.spool([patch])
+            .select(label=(1, None), relative=True)
+            .select(x=bounds, relative=True)
+        )
+        assert len(out) == 1
+        assert out[0].equals(expected)
 
     def test_window_wider_than_the_patch_is_clipped(self, spool):
         """A window past the end reports the patch, not the window."""
