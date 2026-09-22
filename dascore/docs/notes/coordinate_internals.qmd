@@ -2,24 +2,27 @@
 title: Coordinate Internals
 ---
 
-This note explains the current internal coordinate model in DASCore, with particular attention to exact values, segmented coordinates, summaries, and scan payloads.
+This note covers coordinate storage, exact labels, gaps, summaries, and scan payloads.
 
 ## Coordinate families
 
-[`get_coord(...)`](`dascore.core.coords.get_coord`) returns the simplest coordinate type that fits the supplied inputs:
+[`get_coord(...)`](`dascore.core.coords.get_coord`) selects among three coordinate types:
 
 | Type | Purpose |
 |---|---|
 | `CoordPartial` | Shape and optional range metadata when coordinate values are unknown, empty, or entirely missing. |
-| `CoordRange` | A monotonic, evenly sampled coordinate represented by start, stop, and step. Nanosecond time and integer ranges also hold their exact grid (`step_numerator`, `step_denominator`, `origin_offset` in ticks), so a fractional step such as 1/1024 s never drifts and `step_exact` reports it; `step` stays the nearest whole-tick spacing. Float ranges, time in coarser or finer units, and integer spans that do not divide by their count (`get_coord(start=0, stop=10, shape=3)` is float) keep a scalar step and linear spacing, with the grid fields None. |
-| `CoordMonotonicArray` | A strictly increasing or decreasing array that is not evenly sampled. |
-| `CoordSegmented` | An ordered composition of non-overlapping monotonic segments whose concatenated values are preserved exactly. |
-| `CoordArray` | Arbitrary numeric, datetime, or timedelta values, including non-monotonic arrays. |
+| `NumericND` | Numeric labels stored as grid runs or explicit arrays, including temporal and multidimensional coordinates. |
 | `CoordString` | String or categorical labels. |
 
-Array construction through `get_coord(data=...)` deliberately uses tolerant uniformity inference. Differences within a relative tolerance of about 0.1% may be represented by a `CoordRange`, which is convenient for ordinary patch operations but can move interior coordinate values. Code that promises exact stored values must not rely on that inference.
+`NumericND` replaces `CoordRange`, `CoordSegmented`, `CoordMonotonicArray`, and `CoordArray`. Construct it with `get_coord` or a `NumericND.from_*` method. Inspect `evenly_sampled`, `runs_count`, and `holes` for its structure; `coord.runs["den"] == 0` identifies stored runs. Empty selections retain `NumericND`, while empty constructor inputs produce `CoordPartial`.
 
-For a strictly monotonic one-dimensional array, [`CoordSegmented.from_array(...)`](`dascore.core.coords.CoordSegmented.from_array`) is the truth-preserving constructor. It returns a `CoordRange` when the values are exactly uniform, a `CoordSegmented` when repeated uniform runs are separated by sampling changes, or a `CoordMonotonicArray` when there are no useful uniform runs. It rejects missing, duplicate, non-monotonic, and multidimensional values; scan implementations use a shared fallback to an ordinary array coordinate for those cases.
+Two private kernels in `dascore.core._run_kernels` interpret the fields `start`, `length`, `num`, `den`, and `offset`. Integer and temporal runs use exact rational tick arithmetic. Float runs encode the float64 step's bits in `num`, the stride in `den` (negative for division), and the initial grid index in `offset`; `float_terms` decodes them. Their `start` is the grid origin, which can differ from the first label. Slicing and reversal update the grid indices and preserve labels exactly. The index and DASDAE persist the float origin and grid terms.
+
+`NumericND.from_array(...)` preserves supplied labels exactly. Automatic detection recognizes constant whole-tick spacing and a small set of float multiplication grids, accepting a candidate only if it reproduces every label. Float candidates use the first or endpoint spacing, anchored at the first label or zero; a known neighboring grid can also be reused. Detection does not search decimal approximations, reciprocal rates, time scales, or rational timestamp cadences. Unrecognized stretches remain stored and may have no inferred `step`, even when their source was a uniform grid.
+
+`get_coord(data=...)` adds one step on top of that, which it has always done: a one-dimensional monotonic array whose spacings all sit within about 0.1% of their median is read as the grid it restates, which may move a label by a fraction of a step. Code which promises exact stored values calls `NumericND.from_array` instead. The fit is only tried for whole-tick and float64 labels, since a narrower or wider float is not what a run counts in.
+
+Producers with known sampling should pass `start`, `step`, and `shape`, including a fractional `step` for exact temporal grids. Supplying `step` alongside labels requires one-dimensional, monotonic values on that grid; it does not permit moving labels. Temporal values normalize to nanoseconds and must fit that range. `step_exact` reports a tick grid's rational spacing and is `None` for floats.
 
 ## Cell convention
 
@@ -27,16 +30,20 @@ Labels conventionally centre half-open cells one step wide; this is a recommenda
 
 ## Segmented coordinates
 
-`CoordSegmented` represents coordinate values as normal monotonic segments rather than flattening them into a single array or idealizing them as one range. Exact continuation points fuse automatically, while real sampling changes remain segment boundaries. The composite coordinate reports a `step` only when every run declares the same one (its labels then follow one grid with positions missing between the runs) and `None` when its runs disagree; it is never `evenly_sampled`, and its summary carries no step, since a summary with a step rebuilds a range.
+A coordinate can hold several runs. Exact continuations on the same grid and phase merge during construction, concatenation, and slicing; gaps and rate changes remain boundaries. A multi-run coordinate reports `step` only when its runs share a grid. `evenly_sampled` requires one nonempty grid run.
+
+`holes` detects missing samples between runs. A rate change at the next expected sample creates a boundary without a hole. For stored runs, the declared or median spacing supplies the expected cadence. `runs_count` counts all runs.
 
 There are two primary construction paths:
 
 - [`concat_coords(...)`](`dascore.core.coords.concat_coords`) combines already-known coordinate blocks, normalizes their ordering, and records non-contiguous boundaries.
-- `CoordSegmented.from_array(...)` detects uniform runs in one stored monotonic array. A difference belongs to a run when it equals a neighboring difference; isolated differences become seams. With `step` declared (as `get_coord(data=..., step=...)` does at every length), every spacing must be a whole number of steps or construction raises, each run of consecutive positions is a range of the step, and `missing()` counts the positions between runs. Past a thousand samples an array whose runs would outnumber a tenth of them keeps its values as one `CoordMonotonicArray` carrying the declared step, so `missing()` answers the same on both sides of that guard.
+- `NumericND.from_array(...)` detects uniform stretches and stores the remaining labels. A declared `step` requires spacings of whole steps; `missing()` counts unoccupied grid positions. Highly fragmented arrays stay stored, retaining any declared step.
 
-[`get_discontinuities(...)`](`dascore.core.coords.BaseCoord.get_discontinuities`) reports segment boundaries without materializing the full coordinate, and for a monotonic array every spacing that is not its declared step (its median spacing when it declares none). `kind="all"` returns every boundary and `kind="gaps"` keeps only the ones the tolerance calls gaps. The tolerance is a `GapTolerance` (`dascore.utils.gaps`): a bare number or quantity is an absolute excess over one step, `GapTolerance.samples(k)` counts steps. `Spool.chunk`, `get_gaps`, `get_coverage`, and `waterfall(gap_factor=)` apply the same predicate, so a `GapTolerance` gets one verdict wherever it is asked; only the bare-number spelling differs, a sample count to the spool methods and an absolute excess to a coordinate's `get_discontinuities`.
+[`get_discontinuities(...)`](`dascore.core.coords.BaseCoord.get_discontinuities`) reports run boundaries without materializing the full coordinate, and inside a stored run every spacing that is not its declared step (its median spacing when it declares none). `kind="all"` returns every boundary and `kind="gaps"` keeps only the ones the tolerance calls gaps. The tolerance is a `GapTolerance` (`dascore.utils.gaps`): a bare number or quantity is an absolute excess over one step, `GapTolerance.samples(k)` counts steps. `Spool.chunk`, `get_gaps`, `get_coverage`, and `waterfall(gap_factor=)` apply the same predicate, so a `GapTolerance` gets one verdict wherever it is asked; only the bare-number spelling differs, a sample count to the spool methods and an absolute excess to a coordinate's `get_discontinuities`.
 
-[`simplify(...)`](`dascore.core.coords.BaseCoord.simplify`) and [`snap(...)`](`dascore.core.coords.BaseCoord.snap`) make different promises. `simplify` may refit segments only when no value moves more than the supplied tolerance; `snap` forces one uniform range and has no bound on interior movement. With `tolerance=None` or `0`, `simplify` performs lossless simplification only.
+[`fuse(...)`](`dascore.core.coords.BaseCoord.fuse`) refits neighboring runs within a tolerance, preserving wider seams; `None` or `0` allows only exact merges. [`snap(...)`](`dascore.core.coords.BaseCoord.snap`) fits one uniform grid to the whole coordinate, with no bound on how far an interior label moves.
+
+A reader's `snap` option chooses between the two array factories: `snap=True` (or a name the option lists) reads labels with `get_coord(data=...)`, which fits a grid they nearly restate, and `snap=False` reads them with `NumericND.from_array`, which keeps every one. Terra15, GDR, H5Simple and NEUBREX RFS time, and Febus distance can instead derive an instrument-defined grid from endpoint metadata.
 
 A patch may carry segmented dimensional coordinates in memory. Most file formats require contiguous coordinates, so [`write(...)`](`dascore.write`) rejects such patches by default. Use `patch.split_gaps()` explicitly, or `write(..., split=True)` with a multi-patch format, before persistence.
 
@@ -52,13 +59,13 @@ Plain string selectors reserve `*` and `?` for wildcard behavior. Compiled `re.P
 
 `select` and `order` retain dimensions; scalar `sel`/`isel` indexers reduce them. Label queries on compact ranges verify the existing coordinate lookup estimates, with batched binary searches as a fallback and a pandas index containing only candidate labels when needed for compatibility. Exact numeric label arrays resolve positions directly without constructing that index. Neither small nor bulk queries expand the input range: lookup memory is proportional to the number of requested labels, and search rounds grow logarithmically with axis length. Grids below floating-point resolution may contain repeated labels; array or nearest lookup rejects ambiguous long grids instead of scanning or materializing them to establish global uniqueness. Positional indexing remains available.
 
-Slice results remain compact for integer, temporal, and floating coordinates, following existing `select` behavior. Floating range slices may therefore differ from xarray by floating-point rounding relative to the source range's magnitude; bit-for-bit label preservation does not take priority over bounded memory. Scalar and array indexers in `sel`/`isel` evaluate only the requested output labels. These bounds apply to the new indexing methods; legacy array-based `select`/`order` paths can still materialize ranges. String label slices and exact matching in `sel` follow pandas' rules, while coordinate-level `select` retains DASCore's wildcard and range behavior.
+Slice results remain compact for integer, temporal, and floating coordinates, following existing `select` behavior. A slice holds exactly the labels of the coordinate it was cut from, floating ones included, so it matches xarray bit for bit. Scalar and array indexers in `sel`/`isel` evaluate only the requested output labels. These bounds apply to the new indexing methods; legacy array-based `select`/`order` paths can still materialize ranges. String label slices and exact matching in `sel` follow pandas' rules, while coordinate-level `select` retains DASCore's wildcard and range behavior.
 
-## Summaries are envelopes, not full coordinates
+## Summaries: an envelope and a run per run
 
-[`CoordSummary`](`dascore.core.coords.CoordSummary`) contains `min`, `max`, `step`, `dtype`, `units`, associated `dims`, length, and the coordinate's exact `data_id`. The canonical construction path is `coord.to_summary()`, which starts from a live coordinate; build one with `get_coord(...)` first when starting from a raw value array.
+[`CoordSummary`](`dascore.core.coords.CoordSummary`) contains `min`, `max`, `step`, `dtype`, `units`, associated `dims`, length, and the coordinate's exact `data_id`, beside the grid fields described below. The canonical construction path is `coord.to_summary()`, which starts from a live coordinate; build one with `get_coord(...)` first when starting from a raw value array.
 
-The summary itself is intentionally lossy. A uniform `CoordRange` has a non-null `step` and can be reconstructed with `summary.to_coord()`; an exact grid also carries `step_numerator`, `step_denominator`, and `origin_offset`, so a fractional step rebuilds exactly, and the spool index stores these fields with the summary. Irregular, string, and segmented coordinates use `step=None`; their envelopes and ids can support indexing and change detection, but neither field reconstructs their full values. A segmented coordinate's summary also carries a summary of each run (`runs`; None past 256 runs), which the spool index stores so gap reports see holes inside a patch; flat dumps omit it.
+A coordinate of one whole-tick grid run states that grid beside its envelope, as `step_numerator`, `step_denominator` and `origin_offset` in ticks, so a fractional step rebuilds exactly. A coordinate of several runs instead carries a summary of each of them in `runs` (None past 256 runs), and `to_coord()` concatenates what they rebuild, holes and all. A float run's stride and origin have no field of their own, so a float coordinate travels as the envelope and step every summary carries and rebuilds only approximately. Stored labels remain in the source file; their envelopes and ids support indexing but cannot recover the labels. Flat dumps omit `runs`.
 
 [`PatchSummary`](`dascore.PatchSummary`) keeps non-coordinate `PatchAttrs`, a mapping of coordinate summaries, patch dimensions/shape/dtype, and reload provenance. [`PatchSummary.flat_dump(...)`](`dascore.PatchSummary.flat_dump`) produces fields such as `time_min`, `time_max`, `time_step`, and `time_data_id` for dataframes and indexes. Those flattened fields are output records, not supported input for synthesizing a new structured `PatchSummary` or live coordinate.
 
@@ -74,7 +81,7 @@ This separation keeps directory indexing compact while allowing targeted callers
 
 ## DASDAE coordinate storage and scanning
 
-DASDAE stores coordinates separately from patch data. Format version 2, the default when writing, stores each coordinate as it is described: a `CoordRange` as its start, extent, and step (the exact grid where the coordinate holds one, so a fractional sampling rate rebuilds the same labels) at the cost of a few numbers however long it is; a `CoordSegmented` as a group of its segments; and only irregular coordinates as arrays of values. Gapped patches are therefore written whole rather than split. Version 1 files, and `file_version="1"` writes, store every coordinate as an array beside a whole-tick step, so version 1 refuses a fractional step rather than rounding it. Releases before version 2 existed cannot read a version 2 file; write with `file_version="1"` for them.
+DASDAE stores coordinates separately from patch data. Version 2, the default, writes grid metadata, groups of runs, or explicit labels according to the coordinate's representation. It retains the previous node tags and layout, so older v2 readers remain compatible. Float rows also carry `grid_terms` and `grid_origin`; older readers ignore these and can produce differently rounded labels. Gapped patches are written whole. Version 1 stores label arrays with whole-tick steps and rejects fractional steps. Use `file_version="1"` for releases predating v2 support.
 
 Full reads rebuild those descriptions into a `CoordManager`. Scans also construct a real `CoordManager`, but avoid loading the data array itself; for stored arrays, `snap=False` uses the exact construction path, while explicit stored start/step metadata remains a range fast path.
 
@@ -85,8 +92,8 @@ String-array serialization is separate from coordinate semantics. HDF5 backends 
 When changing coordinate or scan internals:
 
 - choose tolerant `get_coord(data=...)` only when idealizing small jitter is acceptable
-- use truth-preserving construction for any `snap=False` or exact-value contract
-- keep segment boundaries in live coordinates; `CoordSummary.runs` is the one structural field, a summary per run (none past 256 runs) that the index stores for gap reports and plans, never an input for rebuilding the coordinate
+- use `NumericND.from_array(...)` for any `snap=False` or exact-value contract
+- preserve run boundaries through summaries and the index; reconstruct exact coordinates only when all labels are known
 - treat flat coordinate-summary fields as persisted output, not coordinate reconstruction input
 - keep string-coordinate rules explicit instead of routing them through generic numeric logic
 - put shared exact-construction behavior in coordinate or IO helpers instead of duplicating it across formats

@@ -34,7 +34,7 @@ Patches may only combine when they agree on all of:
 1. **Kind** — the config option `patch_kind_attrs` by default (conventional categorical identity: acquisition key, data category, and tag; see [Patch Compatibility](patch_compatibility.qmd)), overridden per call with `group=`. Differing values are never an error; the patches simply land in separate outputs. A missing value is a value: patches which never recorded an attribute partition together, and apart from those which did. Explicitly passed names must exist somewhere in the spool; config names are best-effort.
 2. **Structure** — the dimensions tuple, the coordinate identity of every non-chunked dimension, and the chunked dimension's units (a metre patch can never plan into one output with a seconds patch, or a unitful with a unitless one; compatible spellings such as metres and feet are normalized to one unit per dimensionality before partitioning, so they plan together, and assembly converts each member to the first member's units).
 3. **Sampling** — step magnitudes within the relative tolerance `config.sampling_group_tolerance` (default 5%) of the group's smallest member, with matching orientation (ascending never merges with descending; contiguous descending patches merge with each other).
-4. **Continuity** — patches within `tolerance` samples of each other, evaluated within each group so unrelated patches can never bridge a gap. Each run of a patch whose coordinate is segmented into runs of one step (up to 256) plans as a trimmed member of its own, so a hole inside a patch is judged like a gap between patches; consecutive runs landing in one output are read back as one member. `tolerance` may also be a quantity (`1 * s`, `2 * m`) or a timedelta, which bounds the excess over one step in the coordinate's own units rather than counting steps: a spacing is a gap when it exceeds `step + tolerance`, so adjacent patches stay contiguous under any tolerance and a zero excess admits exactly one step. Since it needs no sampling interval, an absolute tolerance also measures gaps between patches whose step is unknown (there the step counts as nothing) — patches a sample-count tolerance has nothing to scale, and so never splits. Both spellings are one object, [`GapTolerance`](`dascore.utils.gaps.GapTolerance`), and its one predicate is what coordinates' `get_discontinuities` and the waterfall's `gap_factor` use, so the three agree on every spacing given the same object; a bare number to `get_discontinuities` is an absolute excess, not a count.
+4. **Continuity** — patches within `tolerance` samples of each other, evaluated within each group so unrelated patches can never bridge a gap. Each run of a patch whose coordinate is segmented into runs of one step plans as a trimmed member of its own, however many runs it holds, so a hole inside a patch is judged like a gap between patches; consecutive runs landing in one output are read back as one member. `tolerance` may also be a quantity (`1 * s`, `2 * m`) or a timedelta, which bounds the excess over one step in the coordinate's own units rather than counting steps: a spacing is a gap when it exceeds `step + tolerance`, so adjacent patches stay contiguous under any tolerance and a zero excess admits exactly one step. Since it needs no sampling interval, an absolute tolerance also measures gaps between patches whose step is unknown (there the step counts as nothing) — patches a sample-count tolerance has nothing to scale, and so never splits. Both spellings are one object, [`GapTolerance`](`dascore.utils.gaps.GapTolerance`), and its one predicate is what coordinates' `get_discontinuities` and the waterfall's `gap_factor` use, so the three agree on every spacing given the same object; a bare number to `get_discontinuities` is an absolute excess, not a count.
 
 [`Spool.get_gaps`](`dascore.core.spool.Spool.get_gaps`) and [`Spool.get_coverage`](`dascore.core.spool.Spool.get_coverage`) read this same partition: a `get_coverage` row is one cell of criteria 1-3, and a `get_gaps` row is a boundary criterion 4 declines to close. So on a spool of unplanned patches the counts tie — merging yields one patch per coverage row plus one per gap reported. The reports read the rows a spool presents rather than a plan's members, so a spool that has already been chunked reports on the patches it now holds, and re-chunking it need not reproduce those counts.
 
@@ -133,14 +133,12 @@ A size measures the data array alone; coordinates, attrs, and copies made by lat
 
 ## Merged coordinates
 
-Assembly builds the chunked dimension's coordinate by exact concatenation of the member coordinates: contiguous members fuse to a plain evenly sampled range, and every real seam is recorded. When `snap_coords=True` (default) the result is then simplified with **bounded error** — no coordinate value moves more than `tolerance * step`, or more than the tolerance itself when it states the limit in the coordinate's own units — and never at the cost of the sampling step. Simplification therefore absorbs the sub-sample jitter of labels rounded on their way to a file, but a gap the tolerance was wide enough to merge across stays segmented: its samples are missing, which is not the same as a slower sampling rate. `fill_value` is what writes those samples, and its output is a plain range.
+Assembly builds the chunked dimension's coordinate by exact concatenation of the member coordinates: contiguous members fuse to one evenly sampled run, and every real seam is recorded. When `snap_coords=True` (default) the result is then fused with **bounded error** — no coordinate value moves more than `tolerance * step`, or more than the tolerance itself when it states the limit in the coordinate's own units — and never at the cost of the sampling step. Fusing therefore absorbs the sub-sample jitter of labels rounded on their way to a file, but a gap the tolerance was wide enough to merge across keeps its hole: its samples are missing, which is not the same as a slower sampling rate. `fill_value` is what writes those samples, and its output is a single run.
 
 ```{python}
-from dascore.core.coords import CoordRange, CoordSegmented
-
 # Contiguous members: exact fuse to a range.
 patch = dc.spool([p1, p2]).chunk(time=None)[0]
-assert isinstance(patch.get_coord("time"), CoordRange)
+assert patch.get_coord("time").evenly_sampled
 
 # A gap forced together by a loose tolerance warns, and the output keeps
 # the exact segmented coordinate: those samples are absent either way.
@@ -149,7 +147,7 @@ p_gap = dc.get_example_patch(time_min=gap_start, acquisition_key="XX1.R2D1..RAW"
 with pytest.warns(UserWarning, match="force merging"):
     forced = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5)[0]
 coord = forced.get_coord("time")
-assert isinstance(coord, CoordSegmented)
+assert coord.runs_count == 2 and coord.holes
 assert len(coord.get_discontinuities("gaps")) == 1
 
 # snap_coords only ever absorbs sub-sample jitter, so here it changes
@@ -166,14 +164,14 @@ with pytest.warns(UserWarning, match="force merging"):
     absolute = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5 * time.step)[0]
 assert absolute.get_coord("time") == coord
 
-# fill_value writes the missing samples, so the merge comes back evenly
-# sampled rather than segmented.
+# fill_value writes the missing samples, so the merge comes back as one
+# evenly sampled run rather than keeping the hole.
 filled = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5, fill_value=np.nan)[0]
-assert isinstance(filled.get_coord("time"), CoordRange)
+assert filled.get_coord("time").evenly_sampled
 assert np.isnan(filled.data).any()
 ```
 
-Segmented coordinates are an in-memory representation only: a written patch must be contiguous, so saving raises unless `split=True` (or `patch.split_gaps()` is used first) to write each contiguous section as its own patch.
+A coordinate with holes is an in-memory representation only: a written patch must be contiguous, so saving raises unless `split=True` (or `patch.split_gaps()` is used first) to write each contiguous section as its own patch.
 
 ## Union spools
 

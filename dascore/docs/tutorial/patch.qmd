@@ -302,11 +302,13 @@ The supported subset covers dimension names and scalar, slice, and unlabelled 1D
 
 ## Unselect and order
 
-[`Patch.unselect`](`dascore.Patch.unselect`) removes what `select` would keep. Removing an interior range creates a segmented coordinate.
+[`Patch.unselect`](`dascore.Patch.unselect`) removes what `select` would keep. Removing an interior range leaves a hole in the coordinate, which `get_discontinuities` reports as a seam.
 
 ```{python}
 outside = patch.unselect(distance=(50, 200))
-assert outside.get_coord("distance").step is None
+assert outside.get_coord("distance").step == patch.get_coord("distance").step
+assert outside.get_coord("distance").holes
+assert not outside.get_coord("distance").evenly_sampled
 ```
 
 Each named coordinate is complemented independently. At spool level, patch coordinates cannot be unselected because removing an interior interval could turn one patch into two; use `Patch.unselect` when subdivision is intended.
