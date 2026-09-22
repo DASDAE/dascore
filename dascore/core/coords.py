@@ -2076,6 +2076,43 @@ def _store(sources: dict, values) -> Labels:
     return Labels(key, values.shape[0] if values.ndim else 1)
 
 
+def _union_sources(stores) -> dict:
+    """
+    Merge label stores, refusing an id two unlike arrays answer to.
+
+    Sources are trusted by their id, so a tampered dump is only ever
+    visible here, where it meets the labels it claims to be.
+    """
+    out: dict = {}
+    for store in stores:
+        for key, values in store.items():
+            held = out.setdefault(key, values)
+            alike = held.shape == values.shape and held.dtype == values.dtype
+            if held is not values and not (alike and np.array_equal(held, values)):
+                msg = f"Two different arrays of labels are named {key!r}."
+                raise CoordError(msg)
+    return out
+
+
+def _check_window(run: Labels, values) -> None:
+    """Ensure a window reads only samples its stored array holds."""
+    length = values.shape[0] if values.ndim else 1
+    last = run.offset + (run.count - 1) * run.stride
+    inside = 0 <= min(run.offset, last) and max(run.offset, last) < length
+    if run.count < 0 or run.stride == 0 or (run.count and not inside):
+        msg = (
+            f"A window of {run.count} samples from {run.offset} by {run.stride} "
+            f"reads outside its {length} stored labels."
+        )
+        raise CoordError(msg)
+
+
+def _seal_sources(sources) -> None:
+    """Mark stored arrays read-only; an id names labels which cannot change."""
+    for values in sources.values():
+        values.flags.writeable = False
+
+
 def _source(sources, run: Labels, dtype=None) -> np.ndarray:
     """The labels a window holds; the one place a stored array is read."""
     out = sources[run.id]
@@ -2088,7 +2125,7 @@ def _source(sources, run: Labels, dtype=None) -> np.ndarray:
 def _check_grid(grid: Grid, dtype) -> None:
     """Ensure an exact grid's labels fit its dtype, in value and in arithmetic."""
     dtype = np.dtype(dtype)
-    info = np.iinfo(np.int64 if dtype.kind in "mM" else cast("Any", dtype))
+    info = np.iinfo(cast("Any", dtype) if dtype.kind in "iu" else np.int64)
     num, den, count = grid.step_num, grid.step_den, grid.count
     offset = grid.phase + grid.k0 * num
     first = grid.origin + offset // den
@@ -2221,9 +2258,11 @@ def _coerce_run(run, sources: dict) -> Grid | Labels:
     elif not isinstance(run, Grid | Labels):
         msg = f"Runs must be a Grid or Labels, got {type(run)}."
         raise CoordError(msg)
-    if isinstance(run, Labels) and run.id not in sources:
-        msg = f"A run names labels no source holds: {run.id!r}."
-        raise CoordError(msg)
+    if isinstance(run, Labels):
+        if run.id not in sources:
+            msg = f"A run names labels no source holds: {run.id!r}."
+            raise CoordError(msg)
+        _check_window(run, sources[run.id])
     return run
 
 
@@ -2327,7 +2366,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
 
     runs: tuple[Grid | Labels, ...]
     # The arrays the stored runs window, each under the id it was hashed
-    # with; a window is only ever a view of one of them.
+    # with; a window is only ever a view of one of them. An id is never
+    # recomputed, so supplied sources are trusted to be the labels they
+    # are keyed by; a dump is a contract, not input to validate.
     sources: FrozenDictType[str, ArrayLike] = FrozenDict()
     # A default no dtype equals: ``np.dtype(None)`` is float64, so the
     # inherited None makes exclude_defaults drop a float coord's dtype.
@@ -2345,6 +2386,17 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     # __eq__ and not __hash__ is unhashable by a rule of python's, which
     # would replace the error the base class raises with a duller one.
     __hash__ = BaseCoord.__hash__
+
+    def __deepcopy__(self, memo=None) -> Self:
+        """Copy the coordinate, keeping its sources sealed."""
+        out = super().__deepcopy__(memo)
+        _seal_sources(out.sources)
+        return out
+
+    def __setstate__(self, state) -> None:
+        """Restore a pickled coordinate, keeping its sources sealed."""
+        super().__setstate__(state)
+        _seal_sources(self.sources)
 
     def _label_fields(self) -> dict:
         """
@@ -2408,6 +2460,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         if len(runs) == 1 and isinstance(runs[0], Labels):
             data["shape"] = _source(sources, runs[0]).shape
         else:
+            if any(sources[x.id].ndim > 1 for x in stored):
+                msg = "An N-dimensional coordinate holds exactly one run."
+                raise CoordError(msg)
             data["shape"] = (sum(len(x) for x in runs),)
         data["step"] = _runs_step(runs, data.get("step"), dtype, sources)
         return data
@@ -2647,6 +2702,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         run = _promoted(self._run_labels(window), self.dtype)
         if run is None:
             return window
+        if run.exact:
+            try:  # labels at the dtype's ceiling name a grid ending past it
+                _check_grid(run, self.dtype)
+            except CoordError:
+                return window
         if not _is_null(step := self.step):
             # a grid on another spacing would restate the step and swallow
             # the positions the declared one says are missing
@@ -3479,7 +3539,7 @@ def concat_coords(*coords, units=None) -> BaseCoord:
     step = flat[0].step
     dtype = np.result_type(*[x.dtype for x in flat])
     steps = {_maybe_unpack(x.step) for x in flat}
-    sources = {k: v for x in flat for k, v in x.sources.items()}
+    sources = _union_sources(x.sources for x in flat)
     # Runs, not whole coordinates, are what may not overlap: an input can
     # hold samples which belong inside another's gap.
     # Sort on native values; float conversion would collapse ns datetimes.
@@ -3989,7 +4049,9 @@ def get_coord(
         the coordinate holds, normally from a dumped coordinate.
     sources
         The arrays the stored runs window, keyed by id; they accompany
-        ``runs`` in a dumped coordinate.
+        ``runs`` in a dumped coordinate. An id is taken on trust rather
+        than recomputed, so a dump is a contract: pass back the arrays it
+        named, not arrays of your own under its keys.
     snap
         If True (default), nearly evenly sampled data is read as one grid.
         If False, the data is read exactly: each evenly sampled stretch

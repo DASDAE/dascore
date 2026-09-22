@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import copy
+import pickle
 from fractions import Fraction
 
 import h5py
 import numpy as np
 import pandas as pd
 import pytest
+from pydantic import ValidationError
 
 import dascore as dc
 from dascore.core.coords import (
@@ -757,3 +760,79 @@ class TestReviewRoundFour:
         )
         assert coord.step is None
         assert coord.segments[0].missing().complete
+
+
+class TestReviewRoundFive:
+    """Findings from the fifth adversarial pass over the run model."""
+
+    @pytest.fixture
+    def stored(self):
+        """A coordinate holding three labels as one stored run."""
+        return NumericCoord.from_labels(np.array([0.0, 2.0, 5.0]))
+
+    def test_a_tampered_dump_cannot_join_its_original(self, stored):
+        """One id may not name two different arrays of labels."""
+        dump = stored.model_dump()
+        key = stored.runs[0].id
+        dump["sources"] = {key: np.array([10.0, 12.0, 15.0])}
+        with pytest.raises(CoordError, match="Two different arrays"):
+            concat_coords(stored, get_coord(**dump))
+
+    def test_equal_arrays_under_one_id_still_join(self, stored):
+        """The same labels reached twice are the same labels."""
+        other = NumericCoord.from_labels(np.array([0.0, 2.0, 5.0]) + 10)
+        out = concat_coords(stored, other)
+        np.testing.assert_array_equal(out.values, [0, 2, 5, 10, 12, 15])
+
+    @pytest.mark.parametrize("protocol", [2, 5])
+    def test_pickled_sources_stay_sealed(self, stored, protocol):
+        """Unpickling must not hand back a writable array under a kept id."""
+        out = pickle.loads(pickle.dumps(stored, protocol=protocol))
+        assert all(not x.flags.writeable for x in out.sources.values())
+
+    @pytest.mark.parametrize(
+        "copier", [copy.deepcopy, lambda x: x.model_copy(deep=True)]
+    )
+    def test_copied_sources_stay_sealed(self, stored, copier):
+        """Deep copies must not hand back a writable array under a kept id."""
+        assert all(not x.flags.writeable for x in copier(stored).sources.values())
+
+    def test_a_window_may_not_overrun_its_source(self, stored):
+        """A count larger than the stored array would lie about the shape."""
+        key = stored.runs[0].id
+        with pytest.raises(ValidationError, match="reads outside"):
+            NumericCoord(
+                runs=(Labels(key, 20),), sources=stored.sources, dtype="float64"
+            )
+
+    def test_a_window_may_not_start_before_its_source(self, stored):
+        """A negative offset read backwards would quietly return everything."""
+        key = stored.runs[0].id
+        with pytest.raises(ValidationError, match="reads outside"):
+            NumericCoord(
+                runs=(Labels(key, 2, -1, -1),), sources=stored.sources, dtype="float64"
+            )
+
+    def test_a_reversed_window_is_still_valid(self, stored):
+        """The whole array read backwards stays inside it."""
+        np.testing.assert_array_equal(stored[::-1].values, [5, 2, 0])
+
+    def test_a_partial_fit_promotes_its_kept_grids(self):
+        """A fit which needs floats does not fail on the runs it left alone."""
+        out = get_coord(data=[0, 1, 2, 10, 11, 13], snap=False).fuse(0.6)
+        assert out.dtype == np.dtype("float64")
+        np.testing.assert_allclose(out.values, [0, 1, 2, 10, 11.5, 13])
+
+    @pytest.mark.parametrize("dtype", ["uint8", "int16", "int64"])
+    def test_labels_at_the_dtype_ceiling_stay_stored(self, dtype):
+        """A grid ending one past the top does not reject labels which fit."""
+        top = np.iinfo(dtype).max
+        values = np.array([0, top - 2, top - 1, top], dtype=dtype)
+        out = NumericCoord.from_labels(values)[1:]
+        np.testing.assert_array_equal(out.values, values[1:])
+
+    def test_only_one_run_may_be_n_dimensional(self):
+        """Several N-D runs would report a shape their labels contradict."""
+        runs = (np.arange(6).reshape(2, 3), np.arange(6).reshape(2, 3) + 6)
+        with pytest.raises(ValidationError, match="exactly one run"):
+            NumericCoord(runs=runs)
