@@ -369,11 +369,6 @@ def _membership_resolver(
     return out
 
 
-def _source_stats_of(record) -> tuple:
-    """What a record states its source was when it was scanned."""
-    return (record.mtime_ns, record.size_bytes)
-
-
 def _merge_source_records(existing, new):
     """
     Merge two partial records for the same source.
@@ -393,7 +388,7 @@ def _merge_source_records(existing, new):
     """
     if existing is None:
         return new
-    if _source_stats_of(existing) != _source_stats_of(new):
+    if (existing.mtime_ns, existing.size_bytes) != (new.mtime_ns, new.size_bytes):
         return new
     patches = {p.source_patch_key: p for p in existing.patches}
     patches.update({p.source_patch_key: p for p in new.patches})

@@ -1922,21 +1922,19 @@ class TestCastVia:
         straight = LazyArray.from_sources(self._sources(), axis=0)
         assert straight.data_id != self._via().data_id
 
-    def test_a_constant_states_its_cast_too(self):
-        """A constant put through another dtype is another constant."""
-        source = ArraySource.full((2, 3), self._value, "int32")
-        whole = LazyArray.from_sources([source], dtype="float64")
-        via = LazyArray.from_sources([source], dtype="float64", cast_via=["float32"])
-        assert whole.data_id != via.data_id
-        assert via.load()[0, 0] == np.float64(np.float32(self._value))
+    @pytest.mark.parametrize(("shape", "dtype"), [((2, 3), "float64"), ((3,), None)])
+    def test_a_constant_states_its_cast_too(self, shape, dtype):
+        """A constant put through another dtype is another constant.
 
-    def test_a_whole_constant_states_its_cast_too(self):
-        """A constant which is the whole array, at its own dtype, too."""
-        source = ArraySource.full((3,), self._value, "int32")
-        whole = LazyArray.from_sources([source])
-        via = LazyArray.from_sources([source], cast_via=["float32"])
-        assert not np.array_equal(whole.load(), via.load())
+        The whole-array shortcut names one at its own dtype as well.
+        """
+        source = ArraySource.full(shape, self._value, "int32")
+        kwargs = {} if dtype is None else {"dtype": dtype}
+        whole = LazyArray.from_sources([source], **kwargs)
+        via = LazyArray.from_sources([source], cast_via=["float32"], **kwargs)
         assert whole.data_id != via.data_id
+        assert not np.array_equal(whole.load(), via.load())
+        assert np.ravel(via.load())[0] == np.float64(np.float32(self._value))
 
     def test_a_whole_constant_keeps_its_cast_through_a_round_trip(self):
         """The cast rides with the members, so the id does not move."""
@@ -1946,20 +1944,14 @@ class TestCastVia:
         assert back.data_id == via.data_id
         assert LazyTable.from_arrays([via])[0].data_id == via.data_id
 
-    def test_a_whole_stored_member_states_its_cast_too(self):
-        """The same for one whole file, which the shortcut also names."""
-        source = stored((4, 4), path="/a/one.h5")
-        whole = LazyArray.from_sources([source])
-        via = LazyArray.from_sources([source], cast_via=["float16"])
-        assert whole.data_id != via.data_id
-
-    def test_a_stored_member_states_its_cast_too(self):
-        """A window of a file put through another dtype is another array."""
-        sources = [stored((4, 4), path="/a/one.h5"), stored((4, 4), path="/a/two.h5")]
-        whole = LazyArray.from_sources(sources, dtype="float64")
-        via = LazyArray.from_sources(
-            sources, dtype="float64", cast_via=["float16", None]
-        )
+    @pytest.mark.parametrize(("count", "dtype"), [(1, None), (2, "float64")])
+    def test_a_stored_member_states_its_cast_too(self, count, dtype):
+        """A whole stored file put through another dtype is another array."""
+        sources = [stored((4, 4), path=f"/a/{num}.h5") for num in range(count)]
+        kwargs = {} if dtype is None else {"dtype": dtype}
+        whole = LazyArray.from_sources(sources, **kwargs)
+        casts = ["float16", *[None] * (count - 1)]
+        via = LazyArray.from_sources(sources, cast_via=casts, **kwargs)
         assert whole.data_id != via.data_id
 
     def test_a_frame_round_trip_keeps_it(self):

@@ -222,26 +222,6 @@ class _MemberMeta:
     window: tuple[slice, ...]
 
 
-@dataclass
-class _Member:
-    """What the streaming merge takes from one member, however it was loaded."""
-
-    dims: tuple[str, ...]
-    data: np.ndarray
-    coords: CoordManager
-    attrs: dc.PatchAttrs
-
-    def transpose(self, dims: tuple[str, ...]) -> _Member:
-        """The same member with its axes in ``dims`` order."""
-        order = [self.dims.index(d) for d in dims]
-        return _Member(
-            dims,
-            np.transpose(self.data, order),
-            self.coords.transpose(*dims),
-            self.attrs,
-        )
-
-
 def _attrs_from_row(
     row: Mapping, dims: tuple[str, ...], coord_names: Iterable[str] | None = None
 ) -> dc.PatchAttrs:
@@ -295,20 +275,6 @@ def _attrs_from_row(
 def _is_null(value) -> bool:
     """True for a missing scalar; an array is a value."""
     return np.ndim(value) == 0 and pd.isnull(value)
-
-
-def _row_range(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
-    """
-    A dimension's evenly sampled range as the row states it, or None.
-
-    The envelope orders values, not samples: a descending coordinate's
-    start is its maximum, which the row does not say, so only an
-    ascending range is stated.
-    """
-    values = _row_values(row, dim)
-    if values is None or values[2] < np.zeros((), dtype=np.asarray(values[2]).dtype):
-        return None
-    return values
 
 
 def _row_values(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
@@ -750,8 +716,7 @@ class PatchAssembler:
             return None
         coords = [meta.coords for meta in metas]
         attrs = [meta.attrs for meta in metas]
-        summaries = [x._get_dim_summary() for x in coords]
-        return self._assemble(data, dims, merge_dim, coords, attrs, summaries)
+        return self._assemble(data, dims, merge_dim, coords, attrs)
 
     def _recipe(self, rows, metas, dims, axis) -> LazyArray | None:
         """
@@ -807,19 +772,20 @@ class PatchAssembler:
         concatenating would.
         """
         buffer, offset, axis, dims = None, 0, None, None
-        coords, attrs, summaries = [], [], []
+        coords, attrs = [], []
         target_units = None
         for patch_kwargs in df_dict_list:
             patch = self._load_trimmed_patch(patch_kwargs, joined)
             patch, target_units = _match_merge_units(patch, merge_dim, target_units)
-            member = _Member(patch.dims, patch.data, patch.coords, patch.attrs)
+            data, coord = patch.data, patch.coords
             if dims is None:
-                dims = member.dims
+                dims = patch.dims
                 axis = dims.index(merge_dim)
-            elif member.dims != dims:
-                member = member.transpose(dims)
+            elif patch.dims != dims:
+                # the same member with its axes in the merge's order
+                data = np.transpose(data, [patch.dims.index(x) for x in dims])
+                coord = coord.transpose(*dims)
             assert axis is not None  # set on the first pass through the loop
-            data = member.data
             if buffer is None:
                 shape = list(data.shape)
                 shape[axis] = samples
@@ -848,22 +814,21 @@ class PatchAssembler:
                 )
                 raise CoordMergeError(msg) from e
             offset = end
-            coords.append(member.coords)
-            attrs.append(member.attrs)
-            summaries.append(member.coords._get_dim_summary())
+            coords.append(coord)
+            attrs.append(patch.attrs)
         # All set on the first pass of the loop, which always runs.
         assert buffer is not None
         assert axis is not None
         assert dims is not None
         if offset != buffer.shape[axis]:  # over-estimated; trim excess.
             buffer = buffer[broadcast_for_index(buffer.ndim, axis, slice(0, offset))]
-        return self._assemble(buffer, dims, merge_dim, coords, attrs, summaries)
+        return self._assemble(buffer, dims, merge_dim, coords, attrs)
 
-    def _assemble(self, data, dims, merge_dim, coords, attrs, summaries):
+    def _assemble(self, data, dims, merge_dim, coords, attrs):
         """Build the merged patch from the members' data, coords and attrs."""
         # Ensure the loaded patches only vary along the expected dimension,
         # the same requirement _force_patch_merge enforces.
-        summary_df = pd.DataFrame(summaries)
+        summary_df = pd.DataFrame([coord._get_dim_summary() for coord in coords])
         found_dim = _get_merge_dim(summary_df)
         if found_dim != merge_dim:
             msg = (
@@ -988,13 +953,9 @@ class PatchAssembler:
         if source is None or bounds is None:
             return None
         coord, indexer = source.select(bounds)
-        # an evenly sampled coordinate answers a range with a forward run
-        assert isinstance(indexer, slice), indexer
-        start, stop, step = indexer.indices(len(source))
-        assert step == 1 and stop - start == len(coord), indexer
-        if start == stop:  # the trim names no sample of this source
+        if not len(coord):
             return None
-        return coord, slice(start, stop), len(source)
+        return coord, indexer, len(source)
 
     def _df_to_dict_list(self, df):
         """
