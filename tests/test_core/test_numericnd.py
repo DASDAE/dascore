@@ -2312,3 +2312,45 @@ class TestFourthReviewFindings:
                 behind += [k for k in window if labels[k] == anchor]
                 assert TickKernel.index_of(row, anchor, True) == min(ahead)
                 assert TickKernel.index_of(row, anchor, False) == max(behind)
+
+    def test_abutting_windows_of_two_arrays_are_two_runs(self):
+        """Stored runs fuse only when they read on through the same array."""
+        first = NumericND.from_array(np.arange(9.0), detect=False)
+        second = NumericND.from_array(np.arange(9.0) + 10, detect=False)
+        coord = concat_coords(first[:3], second[3:])
+        assert coord.runs_count == 2
+        expected = np.concatenate([np.arange(3.0), np.arange(3.0, 9.0) + 10])
+        np.testing.assert_array_equal(coord.values, expected)
+
+    def test_runs_off_each_other_s_grid_share_no_step(self):
+        """A common spacing is the coordinate's step only where the runs meet on it."""
+        first = get_coord(data=[0, 2, 4], step=2)
+        assert concat_coords(first, get_coord(data=[9, 11, 13], step=2)).step is None
+        on_grid = concat_coords(first, get_coord(data=[8, 10, 12], step=2))
+        assert on_grid.runs_count == 2 and on_grid.step == 2
+
+    @pytest.mark.parametrize("window", [slice(None, None, 3), slice(1, None, 4)])
+    def test_a_stride_moves_a_stored_run_s_window(self, window):
+        """Striding a stored run strides its window into the source array."""
+        values = np.asarray([0.0, 1, 3, 4, 7, 9, 10, 12, 15, 16, 20, 21])
+        coord = NumericND.from_array(values, detect=False)
+        np.testing.assert_array_equal(coord[window].values, values[window])
+        np.testing.assert_array_equal(coord[::-2].values, values[::-2])
+
+    @pytest.mark.parametrize(
+        ("step", "ticks"), [(Fraction(1, 7), 142857143), (Fraction(2, 3), 666666667)]
+    )
+    def test_a_fractional_step_rounds_to_its_nearest_tick(self, step, ticks):
+        """The scalar step is the whole tick a fraction rounds to, not its floor."""
+        coord = NumericND.from_run(T0, step, 10)
+        assert coord.step == np.timedelta64(ticks, "ns")
+
+    def test_a_value_between_narrow_labels_keeps_every_sample_past_it(self):
+        """Labels which round together in float32 need more than one refinement."""
+        rows = float_rows("f4", [1e9], [100], [0.1], [-1], [-371])
+        coord = NumericND.from_rows(rows, dtype="f4")
+        value = 999997247.0000027  # between the float32 labels 92 and 93
+        wide = np.asarray(coord.values, "f8")
+        out, index = coord.select((value, None))
+        assert index.start == int(np.flatnonzero(wide >= value)[0])
+        np.testing.assert_array_equal(out.values, coord.values[wide >= value])

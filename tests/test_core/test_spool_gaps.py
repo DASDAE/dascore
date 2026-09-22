@@ -121,16 +121,21 @@ class TestGetGaps:
             spool_with_non_coords.get_gaps(missing_dim="raise")
 
     def test_plan_backed_spool(self, gappy_spool):
-        """A report describes the patches the spool holds, not their sources."""
+        """A plan answers from the index, a realized patch from its coordinate.
+
+        Concatenating leaves one planned patch spanning every hole. The
+        plan reads the index, which holds one envelope per patch and no
+        runs, so it reports no boundary; assembling the patch builds a
+        coordinate whose runs do state the holes. The two therefore
+        disagree, and will keep disagreeing until the index holds runs too.
+        """
         merged = gappy_spool.concatenate(time=None)
         assert len(merged) == 1
-        # concatenate ignores the coordinate values, so the plan has no
-        # boundary left to report
+        realized = dc.spool(list(merged))
         assert merged.get_gaps().empty
+        assert len(realized.get_gaps()) == len(gappy_spool) - 1
         assert merged.get_coverage()["coverage"].iloc[0] == 1
-        # The assembled patch does hold the holes, which its coordinate's
-        # runs state; the plan alone cannot see inside it.
-        assert len(dc.spool(list(merged)).get_gaps()) == len(gappy_spool) - 1
+        assert realized.get_coverage()["coverage"].iloc[0] < 1
 
     def test_chunk_keeps_the_gaps_it_cannot_close(self, gappy_spool):
         """Merging does not close a real hole, so the report still sees it."""

@@ -67,7 +67,6 @@ class TestConstruction:
 
     def test_concat_returns_segmented(self, float_gap_coord):
         """Two non-contiguous blocks make a segmented coord."""
-        assert float_gap_coord.runs_count > 1
         assert float_gap_coord.runs_count == 2
         assert len(float_gap_coord) == 20
 
@@ -760,7 +759,6 @@ class TestEdgeCases:
         b = NumericND.from_array(np.array([10.0, 11.0, 12.0, 13.5]), detect=False)
         coord = concat_coords(a, b)
         assert coord.runs_count == 2
-        assert coord.runs_count == 2
         out = coord[0:13]
         assert out.runs_count == 2
         assert np.array_equal(out.values, np.arange(13.0))
@@ -1149,7 +1147,6 @@ class TestFromArray:
         """Uniform runs separated by a gap become two range segments."""
         values = np.array([0.0, 1, 2, 3, 10, 11, 12, 13])
         coord = NumericND.from_array(values)
-        assert coord.runs_count > 1
         assert coord.runs_count == 2
         assert all(x.evenly_sampled for x in coord.segments)
         assert np.array_equal(coord.values, values)
@@ -1175,7 +1172,6 @@ class TestFromArray:
         """A lone sample between gaps becomes its own segment."""
         values = np.array([0.0, 1, 2, 10, 20, 21, 22])
         coord = NumericND.from_array(values)
-        assert coord.runs_count > 1
         assert coord.runs_count == 3
         assert np.array_equal(coord.values, values)
         assert len(coord.get_discontinuities()) == 2
@@ -1188,7 +1184,6 @@ class TestFromArray:
             [t0 + np.arange(5) * one_s, t0 + (np.arange(5) + 8) * one_s]
         )
         coord = NumericND.from_array(values)
-        assert coord.runs_count > 1
         assert coord.runs_count == 2
         assert np.array_equal(coord.values, values)
         assert len(coord.get_discontinuities("gaps")) == 1
@@ -1204,7 +1199,6 @@ class TestFromArray:
         """Reverse-sorted arrays segment correctly."""
         values = np.array([13.0, 12, 11, 10, 3, 2, 1, 0])
         coord = NumericND.from_array(values)
-        assert coord.runs_count > 1
         assert coord.runs_count == 2
         assert coord.reverse_sorted
         assert np.array_equal(coord.values, values)

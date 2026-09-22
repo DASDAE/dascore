@@ -948,23 +948,25 @@ class TestLineageIds:
             assert selected.attrs.data_id == direct.attrs.data_id
             row = view._df.iloc[index]
             noop_row = noop._df.iloc[index][columns]
+            coord = source.get_coord("distance")
             assert noop[index].attrs.data_id == source.attrs.data_id
-            if source.get_coord("distance").dtype == np.dtype("float32"):
+            if coord.dtype == np.dtype("float32"):
                 assert pd.isna(row["_data_size"])
                 assert pd.isna(row["data_id"])
                 assert noop_row.isna().all()
+                # a narrow axis states no grid, so every label is the one written
+                assert np.array_equal(coord.values, values)
             else:
                 assert row["_data_size"] == selected.data.size
                 assert row["data_id"] == selected.attrs.data_id
                 assert noop_row.equals(spool._df.iloc[index][columns])
                 assert selected.shape == source.shape
-            if percent_bound:
                 # A stored float64 axis which merely restates a grid is read
-                # as that grid, moving a label by a fraction of a step; the
-                # whole relative range still includes every sample.
-                np.testing.assert_allclose(
-                    source.get_coord("distance").values, values, rtol=1e-5
-                )
+                # as that grid, moving each label by a fraction of a step.
+                drift = np.abs(coord.values - values.astype(np.float64))
+                assert 0 < drift.max() < 0.5 * abs(float(coord.step))
+            if percent_bound:
+                # the whole relative range still includes every sample
                 assert selected.shape == source.shape
 
     def test_relative_metadata_tracks_each_row(self, tmp_path):
