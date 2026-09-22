@@ -511,15 +511,53 @@ class TestRelative:
         assert out[0].equals(expected)
 
     @pytest.mark.parametrize("temporal", [False, True])
-    @pytest.mark.parametrize("bounds", [(2, 1), (-1, -2)])
+    @pytest.mark.parametrize("bounds", [(2, 1), (-1, -2), (2, -2)])
     def test_crossed_offsets_after_associated_trim(self, temporal, bounds):
-        """A shared unknown origin cannot rescue crossed fixed offsets."""
+        """Uncertain endpoints cannot rescue definitively crossed fixed offsets."""
         values = dc.to_datetime64(np.arange(4)) if temporal else np.arange(4)
         patch = dc.Patch(data=np.arange(4), coords={"x": values}, dims=("x",))
         patch = patch.update_coords(label=("x", np.arange(4)))
         out = (
             dc.spool([patch])
             .select(label=(0.1, None), relative=True)
+            .select(x=bounds, relative=True)
+        )
+        assert len(out) == len(list(out)) == 0
+        assert out.get_contents().empty
+
+    @pytest.mark.parametrize("temporal", [False, True])
+    def test_uncertain_percent_bounds_keep_singleton(self, temporal):
+        """Crossed percentage bounds can coincide after an associated trim."""
+        values = dc.to_datetime64(np.arange(4)) if temporal else np.arange(4)
+        patch = dc.Patch(data=np.arange(4), coords={"x": values}, dims=("x",))
+        patch = patch.update_coords(label=("x", np.arange(4)))
+        bounds = (75 * percent, -75 * percent)
+        expected = patch.select(label=(3, None), relative=True).select(
+            x=bounds, relative=True
+        )
+        assert expected.size == 1
+        out = (
+            dc.spool([patch])
+            .select(label=(3, None), relative=True)
+            .select(x=bounds, relative=True)
+        )
+        assert len(out) == 1
+        assert out[0].equals(expected)
+
+    @pytest.mark.parametrize("dtype", [np.float16, np.float32, np.float64])
+    def test_crossed_float_bounds_after_associated_noop(self, dtype):
+        """A known no-op preserves the origin when resolving nearby bounds."""
+        values = np.array([0, 0.5, 1], dtype=dtype)
+        patch = dc.Patch(data=np.arange(3), coords={"x": values}, dims=("x",))
+        patch = patch.update_coords(label=("x", np.arange(3)))
+        bounds = (np.nextafter(dtype(0.5), dtype(1)).item(), 0.5)
+        expected = patch.select(label=(0, None), relative=True).select(
+            x=bounds, relative=True
+        )
+        assert expected.size == 0
+        out = (
+            dc.spool([patch])
+            .select(label=(0, None), relative=True)
             .select(x=bounds, relative=True)
         )
         assert len(out) == len(list(out)) == 0

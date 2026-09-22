@@ -265,6 +265,11 @@ def _relative_endpoints(df, source, previous, names):
     previous_names = {name for coords, _, _ in previous for name in coords}
     if not previous_names:
         return df, uncertain
+    # Relative projections flag every trim or unresolved window. Rows known
+    # to load whole still use their source origins, including associated axes.
+    whole = set()
+    if "_modified" in df and all(r and not s for _, s, r in previous):
+        whole = set(df.index[~df["_modified"]])
     for name in names:
         selections = [(c[name], s, r) for c, s, r in previous if name in c]
         cols = [f"{name}_min", f"{name}_max"]
@@ -272,6 +277,8 @@ def _relative_endpoints(df, source, previous, names):
             continue
         unknown = set()
         for index in df.index:
+            if index in whole:
+                continue
             row = source.loc[index]
             dims = set(str(row.get("dims", "")).split(","))
             if "dims" in row and (name not in dims or previous_names - dims):
@@ -350,11 +357,12 @@ def _adjust_relative_envelopes(df, coords, uncertain):
             if left_unresolved or right_unresolved:
                 unresolved |= True
             # Fixed offsets from the same endpoint can cross even when an
-            # earlier trim left that endpoint unknown. Floating-point offsets
-            # must be separated enough that rounding cannot make them equal.
-            crossed = (left > right) & (
-                left_origin is not None and left_origin == right_origin
-            )
+            # earlier trim left that endpoint unknown. Shrinking an envelope
+            # also cannot rescue a crossed minimum-to-maximum fixed window.
+            # Floating-point offsets must remain distinct after rounding.
+            same_origin = left_origin is not None and left_origin == right_origin
+            min_to_max = left_origin == "min" and right_origin == "max"
+            crossed = (left > right) & (same_origin or min_to_max)
             if pd.api.types.is_float_dtype(left):
                 extent = np.maximum(left.abs(), right.abs()) + (maxs - mins).abs()
                 roundoff = 4 * np.finfo(left.dtype).eps * extent
