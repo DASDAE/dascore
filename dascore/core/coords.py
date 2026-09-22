@@ -336,7 +336,8 @@ class CoordSummary(DascoreBaseModel):
                 np.asarray(start).astype(dtype)[()],
                 np.asarray(stop).astype(dtype)[()],
             )
-            step = np.asarray(step).astype(f"m8[{np.datetime_data(dtype)[0]}]")[()]
+            unit, count = np.datetime_data(dtype)
+            step = np.asarray(step).astype(f"m8[{count}{unit}]")[()]
         return CoordRange(start=start, stop=stop, step=step, units=self.units)
 
 

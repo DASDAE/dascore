@@ -3125,6 +3125,17 @@ class TestSummaryRoundTripUnit:
         assert np.array_equal(back.values, coord.values)
         assert back.data_id == coord.data_id
 
+    def test_a_counted_unit_keeps_its_count(self):
+        """A dtype such as datetime64[10ms] keeps the count, not only the unit."""
+        values = np.datetime64("2020-01-01", "ms") + np.arange(5) * np.timedelta64(
+            10, "ms"
+        )
+        coord = dc.get_coord(values=values.astype("datetime64[10ms]"))
+        back = coord.to_summary().to_coord()
+        assert back.dtype == coord.dtype
+        assert np.array_equal(back.values, coord.values)
+        assert back.data_id == coord.data_id
+
     def test_timedelta_keeps_its_unit(self):
         """A timedelta coordinate too."""
         coord = dc.get_coord(
