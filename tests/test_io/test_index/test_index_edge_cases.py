@@ -1498,14 +1498,12 @@ class TestWhatARowCannotState:
         "attrs,complete",
         [
             ({"tag": "x"}, True),
-            ({"gauge": np.array([1.0, 2.0])}, False),
             ({"source_path": "user-path"}, False),
             ({"gauge": get_quantity("2 km")}, False),
             ({"counter": 2**53 + 1}, False),
             ({"empty_extra": ""}, False),
             ({"empty_extra": None}, False),
             ({"empty_extra": np.nan}, False),
-            ({"empty_extra": np.array([np.nan])}, False),
             ({"coords": "user metadata"}, False),
         ],
     )

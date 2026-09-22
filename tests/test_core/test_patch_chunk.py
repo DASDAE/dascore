@@ -2516,21 +2516,24 @@ class TestChunkFromIndex:
         assert out.coords == expected.coords
 
     def test_an_attr_the_index_cannot_hold_loads_patch(self, tmp_path_factory, route):
-        """An array attr is on the patch and in no column, so no row stands in."""
-        path = tmp_path_factory.mktemp("chunk_array_attr")
+        """An attr no column holds is on the patch, so no row stands in."""
+        path = tmp_path_factory.mktemp("chunk_wide_attr")
         spool = ex.get_example_spool(
             "random_das", length=3, time_gap=np.timedelta64(0, "s")
         )
+        # An integer wider than a float mantissa is a value no index kind
+        # holds exactly; it stays on the patch instead.
+        wide = 2**53 + 1
         for num, patch in enumerate(spool):
-            patch = patch.update_attrs(gauge=np.array([1.0, 2.0]))
+            patch = patch.update_attrs(counter=wide)
             patch.io.write(path / f"p{num}.h5", "dasdae")
         merged = dc.spool(path).update().chunk(time=None)
         out = merged[0]
-        assert np.array_equal(out.attrs["gauge"], [1.0, 2.0])
+        assert out.attrs["counter"] == wide
         assert route.counts == {"patch": 3, "array": 0}
         # A plan on another dimension consumes the derived rows.
         nested = merged.chunk(distance=100)
-        assert all(np.array_equal(p.attrs["gauge"], [1.0, 2.0]) for p in nested)
+        assert all(p.attrs["counter"] == wide for p in nested)
 
     def test_row_the_index_could_not_fully_describe_loads_patch(self):
         """A cleared id or an attr the index could not hold means the patch path."""

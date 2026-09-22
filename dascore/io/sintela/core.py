@@ -12,7 +12,7 @@ import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
 from dascore.io.core import _selected_read_attrs, _stamp_source_ids
-from dascore.io.utils import slice_dataset, windows_to_slices
+from dascore.io.utils import selection_windows, windows_to_slices
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.io import (
     BinaryReader,
@@ -21,7 +21,12 @@ from dascore.utils.io import (
     _normalize_source_patch_keys,
 )
 
-from .protobuf_utils import get_supported_family_tag, read_payload, scan_payload
+from .protobuf_utils import (
+    _get_endpoint_metadata,
+    get_supported_family_tag,
+    read_payload,
+    scan_payload,
+)
 from .utils import (
     _HEADER_SIZES,
     SYNC_WORD,
@@ -116,9 +121,9 @@ class SintelaProtobufV1(FiberIO):
         windows: windows_type = (),
         key: str = "",
     ) -> np.ndarray:
-        """Decode protobuf samples and select the positional window."""
-        data, _, _ = read_payload(resource)
-        return slice_dataset(data, windows)
+        """Decode the requested TS window without allocating the full recording."""
+        data, _, _ = read_payload(resource, windows=windows)
+        return data
 
     def read(
         self,
@@ -143,19 +148,38 @@ class SintelaProtobufV1(FiberIO):
         with IOResourceManager(resource) as manager:
             stream = manager.get_resource(BinaryReader)
             stream.seek(0)
-            data, coords, attrs = read_payload(stream, snap=snap)
             selectors = {
                 name: kwargs[name]
-                for name in coords.dims
+                for name in ("time", "distance", "band", "frequency")
                 if name in kwargs and kwargs[name] is not None
             }
-            if selectors:
-                coords, data = coords.select(
-                    data,
-                    samples=samples,
-                    relative=kwargs.get("relative", False),
-                    **selectors,
+            endpoints = _get_endpoint_metadata(stream) if selectors else None
+            if endpoints is not None:
+                metadata, meta = endpoints
+                source_coords = metadata.coords
+                selectors = {
+                    k: v for k, v in selectors.items() if k in source_coords.dims
+                }
+                _, indexers = source_coords.select_indexers(
+                    samples=samples, relative=kwargs.get("relative", False), **selectors
                 )
+                windows, residual = selection_windows(source_coords, indexers)
+                data, coords, attrs = metadata.decode_stream(stream, meta, windows)
+                coords, data = coords.isel(
+                    dict(zip(coords.dims, residual, strict=True)), array=data
+                )
+            else:
+                # BAND/FFT and unusual TS layouts already need a full decode.
+                # A preliminary metadata walk would double their sample IO.
+                data, coords, attrs = read_payload(stream, snap=snap)
+                selectors = {k: v for k, v in selectors.items() if k in coords.dims}
+                if selectors:
+                    coords, data = coords.select(
+                        data,
+                        samples=samples,
+                        relative=kwargs.get("relative", False),
+                        **selectors,
+                    )
             if not np.size(data):
                 return dc.spool([])
             patches = [dc.Patch(data=data, coords=coords, attrs=attrs)]

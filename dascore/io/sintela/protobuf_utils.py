@@ -43,7 +43,7 @@ Building descriptors at runtime through the lower-level, more stable
 from __future__ import annotations
 
 import struct
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from functools import cache
 from typing import Any
 
@@ -51,12 +51,12 @@ import numpy as np
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 import dascore as dc
-from dascore.constants import snap_type
+from dascore.constants import snap_type, windows_type
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.utils import get_exact_coord, should_snap
+from dascore.io.utils import get_exact_coord, should_snap, windows_to_slices
 from dascore.models import OptionalFiniteFloat, PositiveFiniteFloat, PositiveInt
 from dascore.utils.misc import optional_import, suppress_warnings
 
@@ -82,6 +82,8 @@ _SAMPLE_COUNT_MODULUS = 2**32
 # Bytes of a payload pulled by metadata-only paths, where protobuf puts the
 # `header` submessage; ample for any header, a fraction of a typical packet.
 _HEADER_PREFIX_SIZE = 1 << 16
+# A small prefix avoids rereading sample bytes before loading a selected packet.
+_WINDOW_HEADER_PREFIX_SIZE = 512
 # Protobuf wire key for field 1, wire type 2 (length-delimited): `header`.
 _HEADER_FIELD_KEY = 0x0A
 # A seek skips a payload's transfer but costs a platter rotation (~18 ms
@@ -212,6 +214,40 @@ def _read_varint(buf: bytes, pos: int) -> tuple[int | None, int]:
     return None, pos
 
 
+def _packed_ts_samples(payload: bytes) -> np.ndarray | None:
+    """View a single packed samples field in an already validated TS packet.
+
+    Protobuf's repeated scalar container boxes every float during NumPy
+    conversion. A view of the little-endian wire bytes avoids that cost.
+    Unpacked, split, or grouped encodings use the protobuf container instead.
+    """
+    pos = 0
+    packet = None
+    while pos < len(payload):
+        key, pos = _read_varint(payload, pos)
+        assert key is not None  # The protobuf parser validated this payload.
+        field, wire = key >> 3, key & 7
+        if field == 3 and (wire != 2 or packet is not None):
+            return None
+        if wire == 0:
+            _, pos = _read_varint(payload, pos)
+        elif wire == 1:
+            pos += 8
+        elif wire == 2:
+            size, pos = _read_varint(payload, pos)
+            assert size is not None
+            if field == 3:
+                packet = np.frombuffer(
+                    payload, dtype="<f4", count=size // 4, offset=pos
+                )
+            pos += size
+        elif wire == 5:
+            pos += 4
+        else:
+            return None
+    return packet
+
+
 def _leading_header_bytes(payload_prefix: bytes) -> bytes | None:
     """
     Return the serialized ``header`` submessage from the front of a payload.
@@ -241,7 +277,11 @@ def _stream_size(resource) -> int:
 
 
 def _iter_envelope_records(
-    resource, *, strict: bool, headers_only: bool = False
+    resource,
+    *,
+    strict: bool,
+    headers_only: bool = False,
+    payload_filter: Callable[[str, bytes], bool] | None = None,
 ) -> Iterator[EnvelopeRecord]:
     """
     Read all MTLV envelope records from a binary stream.
@@ -250,6 +290,8 @@ def _iter_envelope_records(
     ``header`` submessage and the samples behind it skipped, so a metadata-only
     pass never holds them. A payload whose header cannot be recovered from the
     prefix is re-read whole, so a yielded payload always parses on its own.
+    ``payload_filter`` sees each data packet's header and requests its full
+    payload by returning True; otherwise only the header is yielded.
     META and unrecognized records are never truncated: field 1 of a META
     payload is an ordinary string, not a header.
     """
@@ -280,8 +322,18 @@ def _iter_envelope_records(
     def _read_header_payload(offset, size):
         """Return just the header submessage of the payload at `offset`."""
         nonlocal pending
-        prefix = resource.read(min(size, _HEADER_PREFIX_SIZE))
+        limit = _WINDOW_HEADER_PREFIX_SIZE if payload_filter else _HEADER_PREFIX_SIZE
+        prefix = resource.read(min(size, limit))
         header = _leading_header_bytes(prefix)
+        if (
+            header is None
+            and payload_filter is not None
+            and prefix
+            and prefix[0] == _HEADER_FIELD_KEY
+        ):
+            # A larger header still need not pull in the whole sample payload.
+            prefix += resource.read(min(size, _HEADER_PREFIX_SIZE) - len(prefix))
+            header = _leading_header_bytes(prefix)
         if header is None:
             resource.seek(offset)
             return resource.read(size)
@@ -319,8 +371,12 @@ def _iter_envelope_records(
             "Truncated Sintela protobuf payload."
         ):
             return
-        if headers_only and tag in _TAG_TO_PACKET:
+        if (headers_only or payload_filter is not None) and tag in _TAG_TO_PACKET:
             payload = _read_header_payload(payload_start, size)
+            if payload_filter is not None and payload_filter(tag, payload):
+                resource.seek(payload_start)
+                payload = resource.read(size)
+                pending = 0
         else:
             payload = resource.read(size)
         yield EnvelopeRecord(tag=tag, payload=payload)
@@ -1032,9 +1088,21 @@ class TimeseriesMetadata(_PacketMetadata):
             attrs=attrs,
         )
 
-    def _fill_packet(self, data, index: int, tag: str, msg) -> int:
+    def _fill_packet(
+        self,
+        data,
+        index: int,
+        tag: str,
+        msg,
+        payload=None,
+        *,
+        time_slice=None,
+        distance_slice=slice(None),
+    ) -> int:
         """Copy one packet's samples into ``data`` at ``index``, return its rows."""
-        packet = np.asarray(msg.samples, dtype=np.float32)
+        packet = _packed_ts_samples(payload) if payload is not None else None
+        if packet is None:
+            packet = np.asarray(msg.samples, dtype=np.float32)
         rows = int(msg.header.num_samples)
         expected = rows * self.num_channels
         if not packet.size and msg.raw_frames:
@@ -1051,7 +1119,11 @@ class TimeseriesMetadata(_PacketMetadata):
             raise InvalidFiberFileError(
                 "Unexpected Sintela protobuf TS sample payload size."
             )
-        data[index : index + rows] = packet.reshape(rows, self.num_channels)
+        time_slice = time_slice or slice(0, self.shape[0])
+        start, stop = max(index, time_slice.start), min(index + rows, time_slice.stop)
+        data[start - time_slice.start : stop - time_slice.start] = packet.reshape(
+            rows, self.num_channels
+        )[start - index : stop - index, distance_slice]
         return rows
 
     def decode(self, parsed: list[tuple[str, Any]]):
@@ -1062,9 +1134,13 @@ class TimeseriesMetadata(_PacketMetadata):
             index += self._fill_packet(data, index, tag, msg)
         return data, self.coords, self.attrs
 
-    def decode_stream(self, resource, meta: ParsedMeta):
+    def decode_stream(self, resource, meta: ParsedMeta, windows: windows_type = ()):
         """
-        Fill the patch array packet by packet straight from the stream.
+        Fill the requested array window packet by packet from the stream.
+
+        Bounded reads visit all headers and META records, but discard or seek
+        past sample payloads outside the window. Only selected payloads are decoded and
+        validated; cross-packet header validation still covers the whole file.
 
         The endpoint shortcut already established the shape, so samples go
         straight to their final home and each decoded packet is released at
@@ -1081,10 +1157,33 @@ class TimeseriesMetadata(_PacketMetadata):
         messages = _get_proto_messages(include_sample_fields=True)
         header_messages = _get_proto_messages(include_sample_fields=False)
         decode_error = _get_protobuf_decode_error()
-        data = np.empty(self.shape, dtype=self.dtype)
+        time_slice, distance_slice = windows_to_slices(windows, self.shape)
+        shape = tuple(x.stop - x.start for x in (time_slice, distance_slice))
+        data = np.empty(shape, dtype=self.dtype)
         parsed: list[tuple[str, Any]] = []
         index = 0
-        for record in _iter_envelope_records(resource, strict=True):
+
+        def overlaps(rows):
+            """Return whether this packet intersects the requested window."""
+            return (
+                bool(data.size)
+                and index < time_slice.stop
+                and index + rows > time_slice.start
+            )
+
+        def needs_payload(tag, payload):
+            """Use the packet header to decide whether its samples are needed."""
+            header = _parse_packet(tag, payload, header_messages, decode_error)
+            return tag in TS_TAGS and overlaps(int(header.header.num_samples))
+
+        records = _iter_envelope_records(
+            resource,
+            strict=True,
+            payload_filter=needs_payload
+            if (time_slice.start or time_slice.stop != self.shape[0] or not data.size)
+            else None,
+        )
+        for record in records:
             if record.tag == META_TAG:
                 # Every record is visited here, so META is picked up wherever
                 # it sits, matching the read-everything path. The endpoint
@@ -1104,7 +1203,18 @@ class TimeseriesMetadata(_PacketMetadata):
                 raise InvalidFiberFileError(
                     "Non-contiguous Sintela protobuf sample counts."
                 )
-            index += self._fill_packet(data, index, record.tag, msg)
+            rows = int(msg.header.num_samples)
+            if overlaps(rows):
+                self._fill_packet(
+                    data,
+                    index,
+                    record.tag,
+                    msg,
+                    record.payload,
+                    time_slice=time_slice,
+                    distance_slice=distance_slice,
+                )
+            index += rows
             light = header_messages[_TAG_TO_PACKET[record.tag]]()
             # Round-tripped rather than copied: the sample-bearing and
             # header-only classes come from separate descriptor pools, so
@@ -1121,7 +1231,12 @@ class TimeseriesMetadata(_PacketMetadata):
             raise InvalidFiberFileError(
                 "Sintela protobuf packets do not fill the expected sample count."
             )
-        return data, metadata.coords, metadata.attrs
+        coords, _ = metadata.coords.select(
+            samples=True,
+            time=(time_slice.start, time_slice.stop),
+            distance=(distance_slice.start, distance_slice.stop),
+        )
+        return data, coords, metadata.attrs
 
 
 class BandMetadata(_PacketMetadata):
@@ -1483,15 +1598,18 @@ def _get_endpoint_metadata(resource):
     return metadata, meta
 
 
-def read_payload(resource, *, snap: snap_type = True):
+def read_payload(resource, *, snap: snap_type = True, windows: windows_type = ()):
     """Decode a Sintela protobuf file into data, coords, and attrs."""
     endpoints = _get_endpoint_metadata(resource)
     if endpoints is not None:
         metadata, meta = endpoints
-        return metadata.decode_stream(resource, meta)
+        return metadata.decode_stream(resource, meta, windows=windows)
     records = _iter_envelope_records(resource, strict=True)
     parsed, meta = _parse_records(records, scan_mode=False)
-    return _decode_family(parsed, meta, snap=snap)
+    data, coords, attrs = _decode_family(parsed, meta, snap=snap)
+    slices = windows_to_slices(windows, data.shape)
+    coords, data = coords.isel(dict(zip(coords.dims, slices, strict=True)), array=data)
+    return data, coords, attrs
 
 
 def scan_payload(resource, *, snap: snap_type = True) -> list[dc.PatchMeta]:
