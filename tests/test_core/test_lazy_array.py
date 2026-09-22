@@ -1881,6 +1881,68 @@ class TestStatedDtype:
         assert np.array_equal(back.load(), array.load())
 
 
+class TestCastVia:
+    """A member may be told to pass through another dtype on the way."""
+
+    # the integer a float32 rounds and a float64 keeps
+    _value = 2**24 + 1
+
+    def _sources(self):
+        """An integer beside a float it promotes with."""
+        return [
+            ArraySource.full((2, 3), self._value, "int32"),
+            ArraySource.full((2, 3), 2.0, "float64"),
+        ]
+
+    def _via(self):
+        """The same two, the first told to pass through float32."""
+        return LazyArray.from_sources(
+            self._sources(), axis=0, cast_via=["float32", None]
+        )
+
+    def test_the_member_rounds_where_it_is_told_to(self):
+        """The stated intermediate is what the samples come back through."""
+        straight = LazyArray.from_sources(self._sources(), axis=0)
+        via = self._via()
+        assert straight.load()[0, 0] == np.float64(self._value)
+        assert via.load()[0, 0] == np.float64(np.float32(self._value))
+        assert via.dtype == straight.dtype == np.dtype("float64")
+
+    def test_the_cast_is_part_of_the_id(self):
+        """Two arrays whose samples differ are not the same array."""
+        straight = LazyArray.from_sources(self._sources(), axis=0)
+        assert straight.data_id != self._via().data_id
+
+    def test_a_constant_states_its_cast_too(self):
+        """A constant put through another dtype is another constant."""
+        source = ArraySource.full((2, 3), self._value, "int32")
+        whole = LazyArray.from_sources([source], dtype="float64")
+        via = LazyArray.from_sources([source], dtype="float64", cast_via=["float32"])
+        assert whole.data_id != via.data_id
+        assert via.load()[0, 0] == np.float64(np.float32(self._value))
+
+    def test_a_stored_member_states_its_cast_too(self):
+        """A window of a file put through another dtype is another array."""
+        sources = [stored((4, 4), path="/a/one.h5"), stored((4, 4), path="/a/two.h5")]
+        whole = LazyArray.from_sources(sources, dtype="float64")
+        via = LazyArray.from_sources(
+            sources, dtype="float64", cast_via=["float16", None]
+        )
+        assert whole.data_id != via.data_id
+
+    def test_a_frame_round_trip_keeps_it(self):
+        """The cast rides in the member frame with everything else."""
+        array = self._via()
+        back = LazyArray.from_frame(array.to_frame(), array.shape, array.dtype)
+        assert back.data_id == array.data_id
+        assert np.array_equal(back.load(), array.load())
+
+    def test_one_cast_per_source(self):
+        """A cast for some of the members says nothing about the rest."""
+        with pytest.raises(ParameterError, match="every source"):
+            LazyArray.from_sources(self._sources(), axis=0, cast_via=["float32"])
+
+
 class TestTable:
     """One table holds many arrays and owns all the storage."""
 

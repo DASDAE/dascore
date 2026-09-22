@@ -14,7 +14,7 @@ import threading
 import warnings
 from concurrent.futures import ProcessPoolExecutor
 from datetime import timedelta
-from itertools import pairwise
+from itertools import accumulate, pairwise
 from unittest import mock
 
 import numpy as np
@@ -36,13 +36,17 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.febus.core import FebusPatchAttrs
-from dascore.io.index import planned
+from dascore.io.index import catalog, planned
 from dascore.io.index.schema import SOURCE_STAT_COLUMNS
 from dascore.units import get_quantity
 from dascore.utils.gaps import GapTolerance
 from dascore.utils.misc import get_middle_value, suppress_warnings
 from dascore.utils.patch import _get_merged_coord
-from dascore.utils.patch_assembly import PatchAssembler, _match_merge_units
+from dascore.utils.patch_assembly import (
+    PatchAssembler,
+    _cast_via,
+    _match_merge_units,
+)
 from dascore.utils.time import to_int, to_timedelta64
 
 
@@ -3390,6 +3394,109 @@ def _rewrite_dasdae(path, patch, group=None):
     return name
 
 
+class TestSingleFileStats:
+    """A spool over one file records what a directory index records."""
+
+    @pytest.fixture
+    def paths(self, tmp_path):
+        """Two adjacent single-patch files, unindexed."""
+        out = []
+        for num in range(2):
+            patch = _grid_patch(ORIGIN + STEP * 8 * num, 8, seed=num)
+            path = tmp_path / f"m{num}.h5"
+            patch.io.write(path, "dasdae")
+            out.append(path)
+        return out
+
+    def test_a_single_file_states_its_stats(self, paths):
+        """What the file is, measured the way the indexer measures it."""
+        row = dc.spool(paths[0])._df.iloc[0]
+        status = paths[0].stat()
+        stated = tuple(int(row[name]) for name in SOURCE_STAT_COLUMNS)
+        assert stated == (status.st_mtime_ns, status.st_size)
+
+    def test_a_union_of_two_files_merges_from_the_index(self, paths, calls):
+        """Both members state stats, so the recipe stands."""
+        out = (dc.spool(paths[0]) + dc.spool(paths[1])).chunk(time=None)[0]
+        assert calls == {"patch": 0, "array": 2}
+        assert out.shape[0] == 16
+
+    def test_a_grown_file_leaves_the_recipe(self, paths, calls):
+        """A file grown under its key must not give back its old window."""
+        chunked = (dc.spool(paths[0]) + dc.spool(paths[1])).chunk(time=None)
+        grown = _grid_patch(ORIGIN, 12, seed=7)
+        _rewrite_dasdae(paths[0], grown)
+        out = chunked[0]
+        assert calls["patch"] == 2, "the changed file abandons the recipe"
+        assert out.shape[0] == 20
+        assert np.array_equal(out.data[:12], grown.data)
+
+
+class TestUnionRevision:
+    """A union keeps the rows and the stats of one revision of a file."""
+
+    @pytest.fixture
+    def two_indexes(self, tmp_path):
+        """Two indexes of one two-patch file, taken either side of a rewrite."""
+        data = tmp_path / "data"
+        data.mkdir()
+        path = data / "two.h5"
+        patches = [
+            _grid_patch(ORIGIN + STEP * 8 * num, 8, seed=num) for num in range(2)
+        ]
+        dc.write(dc.spool(patches), path, "dasdae")
+        old = dc.spool(data, index_path=tmp_path / "old.sqlite").update()
+        key = str(old._df.iloc[0]["source_patch_key"]).split("/")[-1]
+        # the grown patch runs into the one beside it, which the planner
+        # windows away once the rows say so
+        grown = _grid_patch(ORIGIN, 12, seed=7)
+        _rewrite_dasdae(path, grown, group=key)
+        new = dc.spool(data, index_path=tmp_path / "new.sqlite").update()
+        return old, new, grown
+
+    def test_a_stale_row_never_meets_the_new_stats(self, two_indexes):
+        """The old revision's row does not survive beside the new file."""
+        old, new, _ = two_indexes
+        combined = old[:1] + new[1:]
+        assert len(combined) == 1, "the later revision is the whole answer"
+        out = combined.chunk(time=None)[0]
+        assert out.shape[0] == 8
+        assert np.array_equal(out.data, new[1].data)
+
+    def test_the_union_describes_the_file_on_disk(self, two_indexes, calls):
+        """Both revisions of the whole file union to the later one's rows."""
+        old, new, grown = two_indexes
+        combined = old + new
+        assert len(combined) == 2
+        out = combined.chunk(time=None)[0]
+        assert calls["patch"] == 0
+        assert np.array_equal(out.data[:12], grown.data)
+
+    def test_two_views_of_one_revision_still_union(self, two_indexes, calls):
+        """Equal stats mean one revision, whose rows union as before."""
+        _, new, _ = two_indexes
+        combined = new[:1] + new[1:]
+        assert len(combined) == 2
+        assert combined.chunk(time=None)[0].shape[0] == 16
+        assert calls["patch"] == 0
+
+    def test_a_patch_the_later_revision_dropped_is_gone(self, tmp_path):
+        """The later record replaces the earlier whole, rows and stats."""
+        data = tmp_path / "data"
+        data.mkdir()
+        path = data / "two.h5"
+        patches = [
+            _grid_patch(ORIGIN + STEP * 8 * num, 8, seed=num) for num in range(2)
+        ]
+        dc.write(dc.spool(patches), path, "dasdae")
+        old = dc.spool(data, index_path=tmp_path / "old.sqlite").update()
+        path.unlink()
+        dc.write(dc.spool(patches[:1]), path, "dasdae")
+        new = dc.spool(data, index_path=tmp_path / "new.sqlite").update()
+        assert len(old) == 2 and len(new) == 1
+        assert len(old + new) == 1
+
+
 class TestStaleSourceCheck:
     """A recipe reads a promised window, so a changed file leaves the route."""
 
@@ -3438,14 +3545,37 @@ class TestStaleSourceCheck:
         assert calls["patch"] == 2
         assert np.array_equal(out.data[:8], replaced.data)
 
-    def test_a_stat_which_will_not_answer_is_ignored(
+    def test_a_stat_which_will_not_answer_refuses(
         self, spool_and_paths, calls, monkeypatch
     ):
-        """A source with no size and no mtime says nothing about itself."""
+        """A source which will not say what it is cannot be read blind."""
         spool, _ = spool_and_paths
         monkeypatch.setattr(planned, "scan_unit_stats", lambda path: (None, None))
-        assert spool.chunk(time=None)[0].shape[0] == 16
-        assert calls == {"patch": 0, "array": 2}
+        out = spool.chunk(time=None)[0]
+        assert calls["patch"] == 2
+        assert out.shape[0] == 16
+
+    def test_an_index_which_recorded_no_stats_refuses(self, tmp_path, calls):
+        """A row with nothing measured beside it is no promise."""
+        patches = [_grid_patch(ORIGIN + STEP * 8 * n, 8, seed=n) for n in range(2)]
+        paths = []
+        for num, patch in enumerate(patches):
+            path = tmp_path / f"m{num}.h5"
+            patch.io.write(path, "dasdae")
+            paths.append(path)
+        with mock.patch.object(catalog, "scan_unit_stats", lambda path: (None, None)):
+            spool = dc.spool(paths[0]) + dc.spool(paths[1])
+        out = spool.chunk(time=None)[0]
+        assert calls["patch"] == 2
+        assert np.array_equal(out.data, np.concatenate([x.data for x in patches]))
+
+    def test_an_in_memory_patch_mixed_in_still_merges(self, spool_and_paths):
+        """A live member has no file to measure, and merges all the same."""
+        spool, _ = spool_and_paths
+        extra = self._patch(ORIGIN + STEP * 16, 8, seed=3)
+        out = (spool + dc.spool([extra])).chunk(time=None)[0]
+        assert out.shape[0] == 24
+        assert np.array_equal(out.data[16:], extra.data)
 
     def test_one_stat_per_file(self, tmp_path, monkeypatch):
         """A multi-patch file is measured once, not once per member."""
@@ -3459,13 +3589,13 @@ class TestStaleSourceCheck:
         assert len(stats) == len(set(stats)) == 2, "three members, two files"
 
     def test_a_remote_source_is_never_stat_ed(self, spool_and_paths, monkeypatch):
-        """A store which charges for metadata is left alone."""
+        """A store which charges for metadata is left alone, and read as patches."""
         spool, _ = spool_and_paths
         stats = _stat_recorder(monkeypatch)
         monkeypatch.setattr(planned, "is_local_path", lambda path: False)
         chunked = spool.chunk(time=None)
         resolver = chunked._catalog.resolver
-        assert resolver._sources_unchanged(resolver.member_rows)
+        assert not resolver._sources_unchanged(resolver.member_rows)
         assert not stats
 
     def test_an_unknown_scheme_is_not_local(self, spool_and_paths, monkeypatch):
@@ -3474,7 +3604,7 @@ class TestStaleSourceCheck:
         resolver = spool.chunk(time=None)._catalog.resolver
         rows = resolver.member_rows.assign(source_path="nosuchthing://a/b")
         stats = _stat_recorder(monkeypatch)
-        assert resolver._sources_unchanged(rows)
+        assert not resolver._sources_unchanged(rows)
         assert not stats
 
     @pytest.mark.parametrize(
@@ -3497,22 +3627,22 @@ class TestStaleSourceCheck:
         rows = resolver.member_rows
         assert resolver._sources_unchanged(rows.iloc[:1]) is unchanged
 
-    def test_a_source_the_index_never_stat_ed_is_ignored(self, spool_and_paths):
-        """An index which recorded neither size nor mtime refuses nothing."""
+    def test_a_source_the_index_never_stat_ed_refuses(self, spool_and_paths):
+        """An index which recorded neither size nor mtime promises nothing."""
         spool, _ = spool_and_paths
         resolver = spool.chunk(time=None)._catalog.resolver
         stats = resolver._source_stats
-        assert all(pd.notna(stats[name]).all() for name in SOURCE_STAT_COLUMNS)
+        assert all(stats[name].min() != planned.NO_STAT for name in SOURCE_STAT_COLUMNS)
         for name in SOURCE_STAT_COLUMNS:
-            stats[name] = np.full(len(stats[name]), None, dtype=object)
-        assert resolver._sources_unchanged(resolver.member_rows)
+            stats[name] = np.full(len(stats[name]), planned.NO_STAT, dtype=np.int64)
+        assert not resolver._sources_unchanged(resolver.member_rows)
 
-    def test_rows_with_no_stats_refuse_nothing(self, spool_and_paths):
-        """A relation which never carried the stats says nothing about them."""
+    def test_rows_with_no_stats_refuse_everything(self, spool_and_paths):
+        """A relation which never carried the stats cannot vouch for a row."""
         spool, _ = spool_and_paths
         resolver = spool.chunk(time=None)._catalog.resolver
         resolver._source_stats = {}
-        assert resolver._sources_unchanged(resolver.member_rows)
+        assert not resolver._sources_unchanged(resolver.member_rows)
 
     def test_a_rechunk_keeps_what_the_index_recorded(self, spool_and_paths, calls):
         """The stats ride the members, which a derived catalog re-plans."""
@@ -3662,6 +3792,133 @@ class TestStaleSourceCheck:
         stats = _stat_recorder(monkeypatch)
         assert chunked[0].shape[0] == 16
         assert sorted(stats) == [str(tmp_path / f"m{n}.h5") for n in range(2)]
+
+
+def _extreme_values(dtype: np.dtype) -> np.ndarray:
+    """Values of a dtype which another dtype is most likely to round."""
+    if dtype.kind == "b":
+        return np.array([True, False], dtype)
+    if dtype.kind in "iu":
+        info = np.iinfo(dtype)
+        return np.array([info.min, info.max, 1, info.max // 3], dtype)
+    return np.array([2**24 + 1, 2**53 + 1, 1.0], dtype)
+
+
+class TestPromotionChain:
+    """The recipe rounds a member wherever the streaming buffer rounds it."""
+
+    def _write(self, directory, specs, samples=6, channels=4):
+        """One file per (dtype, value), laid end to end on the grid."""
+        for num, (dtype, value) in enumerate(specs):
+            time = dc.core.get_coord(
+                start=ORIGIN + STEP * samples * num, step=STEP, shape=(samples,)
+            )
+            distance = dc.core.get_coord(start=0.0, step=1.0, shape=(channels,))
+            patch = dc.Patch(
+                data=np.full((samples, channels), value, dtype=dtype),
+                coords={"time": time, "distance": distance},
+                dims=("time", "distance"),
+            )
+            patch.io.write(directory / f"m{num}.h5", "dasdae")
+        return dc.spool(directory).update()
+
+    @pytest.mark.parametrize(
+        "specs",
+        [
+            (("int64", 2**53 + 1), ("float64", 1), ("longdouble", 2)),
+            (("int32", 2**24 + 1), ("float32", 1), ("float64", 2)),
+            (("float32", 1.5), ("float64", 2.5), ("longdouble", 3.5)),
+        ],
+    )
+    def test_both_routes_give_one_array(self, tmp_path, specs, monkeypatch):
+        """Promotion a member at a time is what the recipe must reproduce."""
+        spool = self._write(tmp_path, specs)
+        fast = spool.chunk(time=None)[0]
+        _force_patch_path(monkeypatch)
+        slow = spool.chunk(time=None)[0]
+        assert fast.data.dtype == slow.data.dtype
+        assert np.array_equal(fast.data, slow.data)
+
+    @pytest.mark.parametrize(
+        "dtypes",
+        [
+            ("int64", "float64", "longdouble"),
+            ("uint64", "int64", "longdouble"),
+            ("bool", "int8", "float16", "float64"),
+            ("float32", "int64", "complex128"),
+            ("int32", "int64", "float32"),
+        ],
+    )
+    def test_one_intermediate_states_the_whole_chain(self, dtypes):
+        """Casting through what `_cast_via` names is casting along the chain."""
+        chain = list(accumulate([np.dtype(x) for x in dtypes], np.result_type))
+        for num, name in enumerate(dtypes):
+            dtype = np.dtype(name)
+            data = _extreme_values(dtype)
+            buffered = data.copy()
+            for target in chain[num:]:  # what the buffer holds at each promotion
+                buffered = buffered.astype(target)
+            via = _cast_via(dtype, chain[num:])
+            recipe = data if via is None else data.astype(via)
+            assert np.array_equal(buffered, recipe.astype(chain[-1]), equal_nan=True)
+
+    def test_a_member_rounds_where_the_buffer_rounded_it(self, tmp_path, calls):
+        """An integer the buffer put through float64 cannot come back whole."""
+        specs = (("int64", 2**53 + 1), ("float64", 1), ("longdouble", 2))
+        out = self._write(tmp_path, specs).chunk(time=None)[0]
+        assert calls == {"patch": 0, "array": 3}
+        assert out.data.dtype == np.dtype(np.longdouble)
+        assert out.data[0, 0] == np.longdouble(2**53)
+
+
+class TestStatPrecision:
+    """A stat is an integer, whatever a column holding a NULL stores it as."""
+
+    # exact in nanoseconds, and no float64 holds it
+    _mtime = 1_700_000_000_000_000_001
+
+    @pytest.fixture
+    def mixed(self, tmp_path):
+        """Three files at an exact mtime, beside a patch held in memory."""
+        patches = [_grid_patch(ORIGIN + STEP * 8 * n, 8, seed=n) for n in range(3)]
+        _write_spool(tmp_path, patches)
+        paths = [tmp_path / f"m{n}.h5" for n in range(3)]
+        # only the first file is stamped at the nanosecond a float loses;
+        # the others sit on one float64 holds, so they say nothing here
+        for num, path in enumerate(paths):
+            stamp = self._mtime if num == 0 else self._mtime - 1
+            os.utime(path, ns=(path.stat().st_atime_ns, stamp))
+            if path.stat().st_mtime_ns != stamp:
+                pytest.skip("this filesystem keeps no exact nanosecond mtime")
+        spool = dc.spool(tmp_path).update()
+        live = _grid_patch(ORIGIN + STEP * 24, 8, seed=3)
+        return spool + dc.spool([live]), paths
+
+    def test_the_recorded_stats_are_integers(self, mixed):
+        """A column with a NULL in it still states what it measured."""
+        spool, _ = mixed
+        resolver = spool.chunk(time=None)._catalog.resolver
+        mtimes = resolver._source_stats[SOURCE_STAT_COLUMNS[0]]
+        assert mtimes.dtype == np.int64
+        assert sorted(set(mtimes.tolist()))[-1] == self._mtime
+
+    def test_unchanged_files_keep_the_recipe(self, mixed, calls):
+        """The file-backed outputs of a mixed spool are read as recipes."""
+        spool, _ = mixed
+        out = spool.chunk(time=to_timedelta64(0.16))[0]
+        assert calls == {"patch": 0, "array": 2}
+        assert out.shape[0] == 16
+
+    def test_a_nanosecond_of_change_is_noticed(self, mixed, calls):
+        """A file whose mtime moved by one nanosecond is not the file indexed."""
+        spool, paths = mixed
+        chunked = spool.chunk(time=to_timedelta64(0.16))
+        moved = self._mtime - 1
+        os.utime(paths[0], ns=(paths[0].stat().st_atime_ns, moved))
+        assert paths[0].stat().st_mtime_ns == moved
+        out = chunked[0]
+        assert calls["patch"] == 2, "the moved file abandons the recipe"
+        assert out.shape[0] == 16
 
 
 class TestStoredDatetimeUnit:

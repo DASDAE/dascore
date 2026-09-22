@@ -140,11 +140,19 @@ def _is_local(path: str) -> bool:
         return False
 
 
-def _stat_pair(mtime, size) -> tuple[int, int] | None:
-    """The (mtime_ns, size_bytes) a row states, or None where it states none."""
-    if pd.isnull(mtime) or pd.isnull(size):
-        return None
-    return int(mtime), int(size)
+# What a stat column holds where the index recorded none. No file's mtime
+# or size can be it, and it is a value rather than a null because the
+# column must be read as exact int64; a nullable integer column (the
+# planned Arrow move) would hold the null itself and drop the sentinel.
+NO_STAT = np.iinfo(np.int64).min
+
+
+def _stat_column(series: pd.Series) -> np.ndarray:
+    """One stat column as exact int64, with what it never measured as NO_STAT."""
+    # Never through float64: a nanosecond mtime does not survive it.
+    if series.dtype == np.dtype(np.int64):
+        return series.to_numpy()
+    return series.fillna(NO_STAT).to_numpy(np.int64)
 
 
 def _row_str(value) -> str:
@@ -581,7 +589,7 @@ class PlanResolver(PatchResolver):
         # and a column is charged for at every slice. Row number is the
         # key, which the slices keep.
         self._source_stats = {
-            name: rows[name].to_numpy()
+            name: _stat_column(rows[name])
             for name in SOURCE_STAT_COLUMNS
             if name in rows.columns
         }
@@ -653,7 +661,7 @@ class PlanResolver(PatchResolver):
 
     def _sources_unchanged(self, rows: pd.DataFrame) -> bool:
         """
-        Whether every local member source still is what the index recorded.
+        Whether every member source still is what the index recorded.
 
         A recipe reads the window the index promised rather than the whole
         array, so a file rewritten longer under the same key would come
@@ -661,16 +669,19 @@ class PlanResolver(PatchResolver):
         measured of each source came from the same join as the member
         rows and is held under their row numbers, so the two describe
         one revision of the index however long ago it was planned and
-        nothing is asked of the index here. Each distinct local source
-        is measured once, by the same function the indexer records -- a
-        file by its own stat, a directory-format unit by its manifest. A
-        remote store is never touched, and a source which will not
-        answer -- or one the index recorded no stats for -- says nothing
-        rather than refusing the route.
+        nothing is asked of the index here. Each distinct source is
+        measured once, by the same function the indexer records -- a file
+        by its own stat, a directory-format unit by its manifest.
+
+        Only a source measured now and found to be what was recorded
+        keeps the recipe. A remote store is never touched, and so is
+        never read blind: a path this process cannot stat, one the index
+        recorded nothing for, and one which will not answer all refuse
+        the recipe and send the merge down the patch path.
         """
         stats = self._source_stats
         if len(stats) != len(SOURCE_STAT_COLUMNS) or "source_path" not in rows.columns:
-            return True
+            return False
         # the row numbers this slice kept, which is what the stats are under
         taken = rows.index.to_numpy()
         paths = rows["source_path"].to_numpy()
@@ -679,16 +690,14 @@ class PlanResolver(PatchResolver):
         seen = set()
         for path, mtime, size in zip(paths, mtimes, sizes, strict=True):
             path = _row_str(path)
-            if not path or path in seen or not _is_local(path):
+            if path in seen:
                 continue
             seen.add(path)
-            stated = _stat_pair(mtime, size)
-            if stated is None:
-                continue
-            live = scan_unit_stats(path)
-            if live[0] is None or live[1] is None:
-                continue
-            if live != stated:
+            if not path or not _is_local(path):
+                return False
+            if mtime == NO_STAT or size == NO_STAT:
+                return False
+            if scan_unit_stats(path) != (int(mtime), int(size)):
                 return False
         return True
 

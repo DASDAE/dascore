@@ -53,7 +53,7 @@ AXIS_FIELDS = ("out_start", "out_stop", "src_axis", "src_start", "src_extent")
 SOURCE_FIELDS = ("base_uri", "path", "format", "version")
 
 # The dictionary encoded member columns; `filled` is a plain bool array.
-MEMBER_FIELDS = ("source", "key", "origin_id", "dtype", "value")
+MEMBER_FIELDS = ("source", "key", "origin_id", "dtype", "cast", "value")
 
 # The version of the byte layout the data_id digest is taken over. Bump it
 # when the layout changes, so ids from two layouts cannot meet.
@@ -172,6 +172,7 @@ class _Members:
     key: _Column
     origin_id: _Column
     dtype: _Column
+    cast: _Column
     filled: np.ndarray
     value: _Column
 
@@ -398,7 +399,9 @@ class LazyArray:
     rule, on demand.
 
     A member is cast once, from the dtype it is stored at to the array's, so
-    a chain of joins does not round at each step as numpy would.
+    a chain of joins does not round at each step as numpy would. A caller
+    reproducing a buffer which did round states where, per member, with
+    `cast_via`.
 
     Examples
     --------
@@ -442,6 +445,7 @@ class LazyArray:
         shape: tuple[int, ...] | None = None,
         base_uri: str = "",
         dtype=None,
+        cast_via: Sequence | None = None,
     ) -> LazyArray:
         """
         Return an array which reads one member from each source.
@@ -468,12 +472,17 @@ class LazyArray:
             default the one they all promote to together. Promotion is
             not associative, so a caller which must match another
             order's result states it.
+        cast_via
+            A dtype per source which its samples pass through on the way
+            to the array's, or None for a member cast straight there. A
+            caller reproducing a buffer which promoted a member at a time
+            states where that buffer rounded each of them.
         """
         sources = list(sources)
         if not sources:
             msg = "A lazy array takes at least one source."
             raise ParameterError(msg)
-        block = _block_of_sources(sources, base_uri)
+        block = _block_of_sources(sources, base_uri, cast_via or ())
         if dtype is not None:
             block = replace(block, dtype=np.dtype(dtype))
         ndim = block.ndim
@@ -719,8 +728,11 @@ class LazyArray:
         start = block.axes["out_start"].tolist()
         stop = block.axes["out_stop"].tolist()
         src_axis = block.axes["src_axis"].tolist()
+        casts = block.members.cast
         for row, source in enumerate(_sources_of(block)):
             data = _to_output(source.load(), src_axis[row])
+            if via := casts[row]:
+                data = data.astype(_dtype_of(via), copy=False)
             out[tuple(map(slice, start[row], stop[row]))] = data
         return out
 
@@ -743,7 +755,8 @@ class LazyArray:
         keeps the id of the array it tiles. Each source is named exactly as
         an [`ArraySource`](`dascore.core.source.ArraySource`) of it is, so
         how the paths are split under a base uri does not reach the id
-        either, and a member is cast once, so the array's own dtype does.
+        either. A member is cast once, so the array's own dtype reaches it,
+        as does an intermediate dtype a member is stated to pass through.
 
         Naming costs what the cuts did: an axis every member spans alike is
         an interval rather than a pair of corners, so an array of any
@@ -797,7 +810,7 @@ class LazyArray:
         source = members.source
         for index, name in enumerate(SOURCE_FIELDS):
             out[name] = _spread(source, [x[index] for x in source.values], ndim)
-        for name in ("key", "origin_id", "dtype"):
+        for name in ("key", "origin_id", "dtype", "cast"):
             column = getattr(members, name)
             out[name] = _spread(column, column.values, ndim)
         out["filled"] = np.repeat(members.filled, ndim)
@@ -867,7 +880,9 @@ def _candidates(block: _Block, starts: np.ndarray, stops: np.ndarray) -> slice:
     return slice(int(first), int(max(first, last)))
 
 
-def _block_of_sources(sources: Sequence[ArraySource], base_uri: str = "") -> _Block:
+def _block_of_sources(
+    sources: Sequence[ArraySource], base_uri: str = "", casts: Sequence = ()
+) -> _Block:
     """Return a block which reads each source whole, placed at the origin."""
     ndim = sources[0].ndim
     count = len(sources)
@@ -898,12 +913,23 @@ def _block_of_sources(sources: Sequence[ArraySource], base_uri: str = "") -> _Bl
         key=_Column.of([x.key for x in sources]),
         origin_id=_Column.of([x.origin_id for x in sources]),
         dtype=_Column.of([_dtype_text(np.dtype(x.dtype)) for x in sources]),
+        cast=_Column.of(_cast_texts(casts, count)),
         filled=np.array([x.filled for x in sources], bool),
         value=_Column.of([x.value for x in sources]),
     )
     _flatten_constants(axes, members.filled)
     dtype = np.result_type(*[np.dtype(x.dtype) for x in sources])
     return _Block((0,) * ndim, dtype, NEW_AXIS, members, axes)
+
+
+def _cast_texts(casts: Sequence, count: int) -> list[str]:
+    """The text each member's intermediate dtype is stored as, "" for none."""
+    if not len(casts):
+        return [""] * count
+    if len(casts) != count:
+        msg = "A cast must be given for every source, or for none."
+        raise ParameterError(msg)
+    return ["" if x is None else _dtype_text(np.dtype(x)) for x in casts]
 
 
 def _flatten_constants(axes: dict[str, np.ndarray], filled: np.ndarray) -> None:
@@ -1311,7 +1337,7 @@ def _distinct(columns: Sequence[_Column], rows: np.ndarray) -> tuple[np.ndarray,
 def _base_ids(block: _Block, rows: np.ndarray) -> tuple[list[str], np.ndarray]:
     """Return the id each stored member builds on, and which one it uses."""
     members = block.members
-    columns = (members.key, members.source, members.origin_id)
+    columns = (members.key, members.source, members.origin_id, members.cast)
     index, inverse = _distinct(columns, rows)
     # One row per distinct source, key and origin, so none is worked twice.
     out = []
@@ -1326,6 +1352,9 @@ def _base_ids(block: _Block, rows: np.ndarray) -> tuple[list[str], np.ndarray]:
                 "key": members.key[row],
             }
             origin = H("location", location)
+        # samples put through another dtype on the way are other samples
+        if via := members.cast[row]:
+            origin = H("cast", [origin, via])
         out.append(origin)
     return out, inverse
 
@@ -1333,12 +1362,15 @@ def _base_ids(block: _Block, rows: np.ndarray) -> tuple[list[str], np.ndarray]:
 def _constant_ids(block: _Block, rows: np.ndarray) -> tuple[list[str], np.ndarray]:
     """Return the id of each distinct constant, and which one each row is."""
     members = block.members
-    index, inverse = _distinct((members.value, members.dtype), rows)
+    index, inverse = _distinct((members.value, members.dtype, members.cast), rows)
     out = []
     for row in rows[index].tolist():
         # The shape is the region, which the corners hold, so it is not here.
         content = {"value": members.value[row], "dtype": members.dtype[row]}
-        out.append(H("constant", content))
+        name = H("constant", content)
+        if via := members.cast[row]:
+            name = H("cast", [name, via])
+        out.append(name)
     return out, inverse
 
 

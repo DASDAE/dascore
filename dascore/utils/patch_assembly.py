@@ -17,8 +17,9 @@ row becomes a Patch.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import accumulate
 from typing import Any
 
 import numpy as np
@@ -611,6 +612,22 @@ def fill_to_row(
         )
 
 
+def _cast_via(dtype: np.dtype, chain: Sequence[np.dtype]) -> np.dtype | None:
+    """
+    The dtype a member's samples first round at along a promotion chain.
+
+    The streaming buffer casts everything it holds at every promotion, so
+    a member placed early passes through each buffer dtype after it. Only
+    an integer reaching a float rounds, and a promotion chain leaves the
+    integers once, so one dtype states what the whole chain does. None
+    means nothing rounds before the dtype the array casts to anyway.
+    """
+    if dtype.kind not in "bui":
+        return None
+    via = next((x for x in chain if x.kind not in "bui"), None)
+    return None if via is None or via == chain[-1] else via
+
+
 @dataclass
 class PatchAssembler:
     """
@@ -636,6 +653,7 @@ class PatchAssembler:
     # recipe reads the window the index promised rather than the whole
     # array, so a file rewritten since would otherwise pass unnoticed.
     # Takes the joined member frame; the caller keeps what was recorded.
+    # Only a source measured now and found unchanged keeps the recipe.
     sources_unchanged: Callable[[pd.DataFrame], bool] | None = None
 
     def _patch_from_instruction_df(self, joined):
@@ -748,10 +766,12 @@ class PatchAssembler:
 
         The dtype is promoted a member at a time, in placement order, as
         the streaming merge promotes its buffer: promotion is not
-        associative, and the two routes must give one answer.
+        associative, and the two routes must give one answer. The buffer
+        casts what it already holds at every promotion, so each member is
+        also told where that chain first rounded it.
         """
         assert self.array_source is not None, "the caller checks for a source"
-        sources, rest, dtype = [], None, None
+        sources, rest = [], None
         for row, meta in zip(rows, metas, strict=True):
             if meta.dims != dims:
                 return None
@@ -771,10 +791,12 @@ class PatchAssembler:
             elif others != rest:
                 return None
             sources.append(source)
-            dtype = (
-                source.dtype if dtype is None else np.result_type(dtype, source.dtype)
-            )
-        return LazyArray.from_sources(sources, axis=axis, dtype=dtype)
+        dtypes = [np.dtype(x.dtype) for x in sources]
+        chain = list(accumulate(dtypes, np.result_type))
+        casts = [_cast_via(x, chain[num:]) for num, x in enumerate(dtypes)]
+        return LazyArray.from_sources(
+            sources, axis=axis, dtype=chain[-1], cast_via=casts
+        )
 
     def _stream(self, joined, df_dict_list, merge_dim, samples):
         """

@@ -39,7 +39,7 @@ from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import MissingPatchError
 from dascore.io.core import _resolve_read_spool
 from dascore.io.index.backend import get_backend
-from dascore.io.index.indexer import DBDirectoryIndexer
+from dascore.io.index.indexer import DBDirectoryIndexer, scan_unit_stats
 from dascore.io.index.ingest import SourceRecord, patch_record, summaries_to_records
 from dascore.io.index.query import (
     CoordExists,
@@ -369,19 +369,31 @@ def _membership_resolver(
     return out
 
 
+def _source_stats_of(record) -> tuple:
+    """What a record states its source was when it was scanned."""
+    return (record.mtime_ns, record.size_bytes)
+
+
 def _merge_source_records(existing, new):
     """
     Merge two partial records for the same source.
 
     Union members export only their selected patches, so two members can
-    hold disjoint (or overlapping) slices of one multi-patch file. The
-    merged record unions the patch lists by source_patch_key: a patch
-    keeps its first-occurrence position, a duplicate identity takes the
-    last occurrence's metadata (dict-merge semantics, matching the
-    ordering contract), and the source-level metadata (mtime, size)
-    comes from the last record.
+    hold disjoint (or overlapping) slices of one multi-patch file. Two
+    records which measured the same source alike describe one revision of
+    it, so their patch lists union by source_patch_key: a patch keeps its
+    first-occurrence position, a duplicate identity takes the last
+    occurrence's metadata (dict-merge semantics, matching the ordering
+    contract). Two records which measured it differently describe two
+    revisions, and the later one replaces the earlier whole -- rows and
+    stats together, since a row of one revision beside the stats of
+    another says a file is what it is not. Records of two revisions
+    which measured alike cannot arise: the measurement is what makes a
+    revision one.
     """
     if existing is None:
+        return new
+    if _source_stats_of(existing) != _source_stats_of(new):
         return new
     patches = {p.source_patch_key: p for p in existing.patches}
     patches.update({p.source_patch_key: p for p in new.patches})
@@ -758,7 +770,19 @@ class PatchCatalog:
         summaries = dc.scan(
             path, file_format=file_format, file_version=file_version, progress=None
         )
-        records = summaries_to_records(summaries)
+        # Measured the way the directory indexer measures it, so a row
+        # from either carries the same promise about its source; a store
+        # which will not answer is left unmeasured, which refuses the
+        # recipe rather than promising a window of it.
+        mtimes, sizes = {}, {}
+        for summary in summaries:
+            source = str(summary.source_path)
+            if source in mtimes:
+                continue
+            mtime, size = scan_unit_stats(source)
+            if mtime is not None and size is not None:
+                mtimes[source], sizes[source] = mtime, size
+        records = summaries_to_records(summaries, mtimes_ns=mtimes, sizes_bytes=sizes)
         out = cls(resolver=FileResolver())
         out.backend.write_sources(records)
         out._invalidate()
