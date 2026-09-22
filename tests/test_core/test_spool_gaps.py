@@ -124,12 +124,13 @@ class TestGetGaps:
         """A report describes the patches the spool holds, not their sources."""
         merged = gappy_spool.concatenate(time=None)
         assert len(merged) == 1
-        # concatenate ignores the coordinate values, so the holes are
-        # inside the one patch it made and no boundary is left to report
+        # concatenate ignores the coordinate values, so the plan has no
+        # boundary left to report
         assert merged.get_gaps().empty
         assert merged.get_coverage()["coverage"].iloc[0] == 1
-        # and the report agrees with rebuilding the spool from its patches
-        assert merged.get_gaps().equals(dc.spool(list(merged)).get_gaps())
+        # The assembled patch does hold the holes, which its coordinate's
+        # runs state; the plan alone cannot see inside it.
+        assert len(dc.spool(list(merged)).get_gaps()) == len(gappy_spool) - 1
 
     def test_chunk_keeps_the_gaps_it_cannot_close(self, gappy_spool):
         """Merging does not close a real hole, so the report still sees it."""

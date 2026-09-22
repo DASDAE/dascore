@@ -54,9 +54,9 @@ import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
-from dascore.core.coords import get_coord
+from dascore.core.coords import NumericND, get_coord
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.utils import get_exact_coord, should_snap, windows_to_slices
+from dascore.io.utils import should_snap, windows_to_slices
 from dascore.models import OptionalFiniteFloat, PositiveFiniteFloat, PositiveInt
 from dascore.utils.misc import optional_import, suppress_warnings
 
@@ -806,9 +806,9 @@ def _get_times(times: list[np.datetime64 | None], snap: snap_type = True):
     supported input.
     """
     values = np.asarray(times, dtype="datetime64[ns]")
-    return (
-        get_coord(data=values) if should_snap(snap, "time") else get_exact_coord(values)
-    )
+    if should_snap(snap, "time"):
+        return get_coord(data=values)
+    return NumericND.from_array(values)
 
 
 def _assert_float_equal(name: str, values: list[float], *, rtol: float = 1e-6):

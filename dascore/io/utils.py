@@ -12,10 +12,9 @@ import numpy as np
 import dascore as dc
 from dascore.constants import INVENTORY_ATTRS, snap_type
 from dascore.core.coordmanager import CoordManager
-from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
+from dascore.core.coords import BaseCoord, get_coord
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import (
-    CoordError,
     MissingPatchError,
     ParameterError,
     PatchAttributeError,
@@ -23,13 +22,12 @@ from dascore.exceptions import (
 )
 from dascore.models import ArrayLike
 from dascore.units import convert_units, get_quantity_str
-from dascore.utils.misc import _to_slice, iterate, unbyte
+from dascore.utils.misc import (
+    _to_slice,
+    iterate,
+    unbyte,
+)
 from dascore.utils.time import to_exact_fraction
-
-
-def should_snap(snap: snap_type, name: str) -> bool:
-    """Return whether the all/none or named-coordinate option enables snapping."""
-    return snap if isinstance(snap, bool) else name in iterate(snap)
 
 
 def get_attr_names(attr_cls) -> set[str]:
@@ -262,8 +260,8 @@ def get_gridded_coord(values, units=None) -> BaseCoord:
 
     For axes the instrument samples on a fixed grid, where the stored values
     only restate that grid and any departure from it is representation noise.
-    Such an array can jitter past the tolerance `get_coord` uses to recognize
-    an even coordinate and leave a monotonic coord with no step.
+    Such an array can contain representation jitter. The generic array
+    factory preserves that jitter; this helper explicitly fits a grid.
 
     Parameters
     ----------
@@ -287,21 +285,9 @@ def get_gridded_coord(values, units=None) -> BaseCoord:
     return coord.snap() if len(coord) > 1 else coord
 
 
-def get_exact_coord(values, units=None) -> BaseCoord:
-    """
-    Return an exact coordinate, including for non-monotonic values.
-
-    Monotonic values keep their runs (`CoordSegmented.from_array`, whose
-    dense-array guard keeps a jittery array as one monotonic coordinate);
-    anything else keeps its values as an array.
-    """
-    # atleast_1d matches get_coord(values=...): a squeezed single-sample
-    # array (0-d) becomes a length-1 coordinate rather than a scalar.
-    values = np.atleast_1d(np.asarray(values))
-    try:
-        return CoordSegmented.from_array(values, tolerance=0, units=units)
-    except CoordError:
-        return get_coord(data=values, units=units)
+def should_snap(snap: snap_type, name: str) -> bool:
+    """Return whether the all/none or named-coordinate option enables snapping."""
+    return snap if isinstance(snap, bool) else name in iterate(snap)
 
 
 def step_from_rate(rate) -> Fraction | np.timedelta64:

@@ -55,10 +55,8 @@ from rich.text import Text
 from dascore.constants import dascore_styles, select_values_description
 from dascore.core.coords import (
     BaseCoord,
-    CoordArray,
-    CoordPartial,
-    CoordRange,
     CoordSummary,
+    NumericND,
     get_coord,
 )
 from dascore.exceptions import (
@@ -186,7 +184,7 @@ def _shift_cell_edge(edge, delta):
             limits.min <= int(edge.min()) + delta
             and int(edge.max()) + delta <= limits.max
         )
-        if isinstance(edge, CoordRange) and delta == int(delta) and in_range:
+        if isinstance(edge, NumericND) and delta == int(delta) and in_range:
             return edge._translated(int(delta))
         values = np.asarray([value.item() + delta for value in edge.values])
         return get_coord(data=values, units=edge.units)
@@ -803,18 +801,17 @@ class CoordManager(RichRepr, DascoreBaseModel):
             if name in selected or not set(old_dims) & set(indices):
                 coords[name] = (old_dims, selected.get(name, coord))
                 continue
-            if (drop or coord._partial) and old_dims and not new_dims:
+            if (drop or not coord.has_values) and old_dims and not new_dims:
                 continue
             key = tuple(indices.get(dim, slice(None)) for dim in old_dims)
-            # Keep slice results compact, including floating grids, as select does.
-            if isinstance(coord, CoordRange) and isinstance(key[0], slice):
+            # Keep slice results compact, including floating grids, as select
+            # does. Labels the coordinate holds are re-read instead: a slice of
+            # them may state a grid the whole did not.
+            table = isinstance(coord, NumericND) and coord.ndim == 1
+            compact = table and not coord._stored_labels
+            if compact and isinstance(key[0], slice):
                 new_coord = coord[key[0]]
-                if not new_coord.size:
-                    new_coord = CoordArray(
-                        values=np.empty(new_coord.shape, dtype=coord.dtype),
-                        units=coord.units,
-                    )
-            elif isinstance(coord, CoordPartial) and new_dims:
+            elif not coord.has_values and new_dims:
                 shape = tuple(
                     len(range(*ind.indices(size)))
                     if isinstance(ind, slice)
@@ -826,16 +823,16 @@ class CoordManager(RichRepr, DascoreBaseModel):
             else:
                 values = (
                     coord._get_index_values(key[0])
-                    if isinstance(coord, CoordRange)
+                    if table and not isinstance(key[0], slice)
                     else np.asarray(_apply_union_indexers(key, coord.values))
                 )
-                new_coord = get_coord(data=values, units=coord.units)
-                if values.dtype.kind not in "US":
-                    original = CoordArray(values=values, units=coord.units)
-                    if new_coord._partial or _canonicalization_moved_values(
-                        original, new_coord
-                    ):
-                        new_coord = original
+                if values.dtype.kind in "US":
+                    new_coord = get_coord(data=values, units=coord.units)
+                else:
+                    # These labels come from a coordinate which already
+                    # holds them, so they are re-read rather than fitted to
+                    # a grid; no label of an existing coordinate moves here.
+                    new_coord = NumericND.from_array(values, units=coord.units)
             coords[name] = (new_dims, new_coord)
         dims = tuple(dim for dim in self.dims if dim not in reduced)
         out = self.__class__(
@@ -901,7 +898,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
             name = dims[ind]
             coord = self.get_coord(name)
             # We can just scale up the coord
-            if coord._partial or drop_coords:
+            if not coord.has_values or drop_coords:
                 new_coords[name] = get_coord(shape=max(current, new))
             else:
                 msg = f"Cannot broadcast non-empty coord {name} to shape {new}."
@@ -1482,53 +1479,30 @@ def get_coord_manager(
     return out
 
 
-def _canonicalization_moved_values(original, out) -> bool:
-    """
-    Return True if canonicalizing `original` to `out` changed any value.
-
-    Collapsing an array coord to a CoordRange is meant to be a change of
-    representation, but the evenness test behind it is tolerant, so a
-    coordinate carrying small real irregularity (measured positions, timing
-    jitter) would be replaced by an idealized ramp. Only the exact case is a
-    canonicalization; the rest is data loss.
-    """
-    # Only collapsing to a range can move values, and only a coord we were
-    # handed can be kept, so everything else skips the comparison. A CoordRange
-    # cannot reach here; the caller returns it before this is consulted.
-    if original is None or not isinstance(out, CoordRange):
-        return False
-    # A CoordPartial is a placeholder whose values are all NaN, so it has
-    # nothing to lose; canonicalizing it is the whole point.
-    if isinstance(original, CoordPartial):
-        return False
-    # Canonicalization re-labels a coordinate, it never resamples one.
-    assert original.shape == out.shape
-    return not np.array_equal(original.values, out.values)
-
-
 def _get_coord_dim_map(coords, dims):
     """Get coord_map, dim_map, and new dims from coord input."""
 
     def _get_coord(coord):
         """Get a coordinate from various inputs."""
-        # A CoordRange is already canonical (it is the evenly-sampled
-        # representation), so re-parsing it via model_dump -> get_coord is pure
-        # overhead; return it directly. Other coord types are NOT short-circuited:
-        # array coords (CoordArray/CoordMonotonicArray) can be left non-canonical
-        # by slicing (e.g. an evenly spaced subset that should collapse to a
-        # CoordRange), and a fully-specified CoordPartial should canonicalize to a
-        # CoordRange -- get_coord performs that inference.
-        if isinstance(coord, CoordRange):
-            return coord
-        original = coord if isinstance(coord, BaseCoord) else None
+        # A table of grid runs is already canonical: they are fused,
+        # reduced and in lowest terms however it was built, so re-parsing
+        # it is pure overhead. One holding its own labels is not: slicing
+        # can leave labels which are evenly sampled after all, and those
+        # should say so. A fully-specified CoordPartial canonicalizes too.
+        if isinstance(coord, NumericND):
+            labels = coord._stored_labels and coord.runs_count == 1
+            if not (labels and coord.ndim == 1):
+                return coord
+            # Reading labels never moves one, so a grid which comes back is
+            # only another way of stating what the coordinate already holds.
+            out = NumericND.from_array(coord.values, units=coord.units, step=coord.step)
+            return out if out.evenly_sampled else coord
         if hasattr(coord, "model_dump"):
             coord = coord.model_dump(exclude_defaults=True)
         if isinstance(coord, Mapping):  # input is a dict
             out = get_coord(**coord)
         else:
             out = get_coord(data=coord)
-        if _canonicalization_moved_values(original, out):
-            return original
         return out
 
     def _coord_from_simple(name, coord):

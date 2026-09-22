@@ -6,8 +6,8 @@ import numpy as np
 
 import dascore as dc
 import dascore.core
-from dascore.core.coords import get_coord
-from dascore.io.utils import get_exact_coord, should_snap
+from dascore.core.coords import NumericND, get_coord
+from dascore.io.utils import should_snap
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
@@ -54,11 +54,19 @@ def _get_coord_manager(fi, snap=True):
             coord = get_coord(min=start, max=stop, step=step, units=unit)
         else:  # and distance
             # The channels are ints so we multiply by step to get distance.
-            distance = fi["/header/channels"][:] * step
-            if should_snap(snap, dim):
-                coord = get_coord(data=distance, units=unit)
+            # signed, so a descending channel map does not wrap its stride
+            channels = np.asarray(fi["/header/channels"][:]).astype("int64")
+            strides = np.diff(channels)
+            even = len(strides) and np.all(strides == strides[0]) and strides[0]
+            if should_snap(snap, dim) and even:
+                coord = get_coord(
+                    start=channels[0] * step,
+                    step=int(strides[0]) * step,
+                    shape=channels.shape,
+                    units=unit,
+                )
             else:
-                coord = get_exact_coord(distance, units=unit)
+                coord = NumericND.from_array(channels * step, units=unit)
         coords[dim] = coord
     out = dascore.core.get_coord_manager(coords=coords, dims=dims)
     return out

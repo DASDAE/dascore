@@ -7,6 +7,7 @@ import pytest
 
 import dascore as dc
 from dascore.config import config_context
+from dascore.core.coords import get_coord
 from dascore.exceptions import PatchConversionError
 from dascore.io.index.planned import PlanResolver
 
@@ -274,7 +275,7 @@ class TestSpoolToXarray:
         assert len(self._leaves(tree)) == 1
 
     def test_quantity_tolerance(self, diverse_spool):
-        """A unit-bearing tolerance is handed to simplify as it stands."""
+        """A unit-bearing tolerance is handed to fuse as it stands."""
         sub = diverse_spool.select(tag="big_gaps")
         default = len(self._leaves(sub.io.to_xarray()))
         loose = len(self._leaves(sub.io.to_xarray(tolerance=dc.get_quantity("1 hour"))))
@@ -493,7 +494,8 @@ class TestToXarrayReadArray:
         metres = dc.get_example_patch().set_units(distance="m")
         dist = metres.get_coord("distance")
         span = float(dist.max() - dist.min() + dist.step)
-        feet = metres.update_coords(distance=(dist.data + span) / 0.3048)
+        # converted labels, as a user's own arithmetic leaves them
+        feet = metres.update_coords(distance=(dist.values + span) / 0.3048)
         feet = feet.set_units(distance="ft")
         dc.write(metres, tmp_path / "m.h5", "dasdae")
         dc.write(feet, tmp_path / "ft.h5", "dasdae")
@@ -686,7 +688,8 @@ class TestToXarrayLazyCoords:
         metres = dc.get_example_patch().set_units(distance="m")
         dist = metres.get_coord("distance")
         span = float(dist.max() - dist.min() + dist.step)
-        feet = metres.update_coords(distance=(dist.data + span) / 0.3048)
+        # converted labels, as a user's own arithmetic leaves them
+        feet = metres.update_coords(distance=(dist.values + span) / 0.3048)
         feet = feet.set_units(distance="ft")
         dc.write(metres, tmp_path / "m.h5", "dasdae")
         dc.write(feet, tmp_path / "ft.h5", "dasdae")
@@ -738,7 +741,6 @@ class TestToXarrayLazyCoords:
 
     def test_segmented_time_stays_lazy(self, random_patch):
         """A jittered merge is not one range; it is served as its segments."""
-        from dascore.core.coords import CoordSegmented  # noqa: PLC0415
         from dascore.xarray.index import CoordIndex  # noqa: PLC0415
 
         coord = random_patch.get_coord("time")
@@ -750,7 +752,9 @@ class TestToXarrayLazyCoords:
         data = self._leaf(spool.io.to_xarray())["data"]
         index = data.xindexes["time"]
         assert isinstance(index, CoordIndex)
-        assert isinstance(index.coordinate, CoordSegmented)
+        # the two patches' runs, described rather than spelled out
+        assert index.coordinate.runs_count == 2
+        assert index.coordinate.sources is None
         merged = spool.chunk(time=None)[0]
         np.testing.assert_array_equal(
             data["time"].values, merged.get_coord("time").values
@@ -1120,3 +1124,32 @@ class TestBlockPieces:
 
         assert _samples_per_block(0, np.dtype("float64"), {"t": 5}, "t") is None
         assert _samples_per_block(None, np.dtype("float64"), {"t": 5}, "t") is None
+
+
+class TestEnvelopeCoord:
+    """Sizing a lazy array from a row which carries no run table."""
+
+    @staticmethod
+    def _coord(row):
+        """Call the sizer with dascore's own get_coord."""
+        from dascore.xarray.spool import _envelope_coord  # noqa: PLC0415
+
+        return _envelope_coord(row, "x", get_coord)
+
+    def test_one_sample_needs_no_step(self):
+        """A row whose ends meet is that one label, step or no step."""
+        coord = self._coord({"x_min": 3.0, "x_max": 3.0, "x_step": None})
+        np.testing.assert_array_equal(coord.values, [3.0])
+
+    def test_a_span_without_a_step_cannot_be_sized(self):
+        """How many samples lie between the two ends is exactly what is missing."""
+        with pytest.raises(PatchConversionError, match="no sampling step"):
+            self._coord({"x_min": 0.0, "x_max": 9.0, "x_step": None})
+
+    def test_a_step_sizes_the_span_either_way(self):
+        """A row with no run table is sized by its ends and its step."""
+        up = self._coord({"x_min": 0.0, "x_max": 9.0, "x_step": 1.0})
+        np.testing.assert_array_equal(up.values, np.arange(10.0))
+        # a descending coordinate starts at its max, and stop is exclusive
+        down = self._coord({"x_min": 0.0, "x_max": 9.0, "x_step": -1.0})
+        np.testing.assert_array_equal(down.values, np.arange(9.0, -1.0, -1.0))

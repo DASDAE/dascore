@@ -7,7 +7,8 @@ import numpy as np
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.core import get_coord
-from dascore.io.utils import get_exact_coord, should_snap
+from dascore.core.coords import NumericND
+from dascore.io.utils import should_snap
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
@@ -38,6 +39,8 @@ def _get_attrs_coords_and_data(h5, snap):
 
 def _get_coord(v, snap, name):
     """Get the coord values from a node."""
+    if isinstance(v, dc.core.coords.BaseCoord):
+        return v
     length = len(v)
     if should_snap(snap, name) and length > 1:
         start = v[0] if name != "time" else dc.to_datetime64(v[0])
@@ -48,7 +51,7 @@ def _get_coord(v, snap, name):
         assert len(coord) == length
     else:
         values = v[:] if name != "time" else dc.to_datetime64(v[:])
-        coord = get_exact_coord(values)
+        coord = NumericND.from_array(np.atleast_1d(values))
     return coord
 
 
@@ -96,7 +99,7 @@ def _get_coords_and_dims(data_node, time_node, other_nodes, snap=True, dims=None
     # the filled axis is named but not built: only coordinates need it
     if "channel" in dims and "channel" not in other_nodes:
         length = data_node.shape[dims.index("channel")]
-        other_nodes["channel"] = np.arange(length)
+        other_nodes["channel"] = get_coord(start=0, step=1, shape=(length,))
     coords = {i: _get_coord(v, snap=snap, name=i) for i, v in other_nodes.items()}
     return dims, coords
 

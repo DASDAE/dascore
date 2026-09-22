@@ -1,7 +1,10 @@
 """Utilities functions for Neubrex IO support"""
 
+import numpy as np
+
 import dascore as dc
-from dascore.io.utils import get_exact_coord, should_snap
+from dascore.core.coords import NumericND, get_coord
+from dascore.io.utils import should_snap
 from dascore.utils.misc import maybe_get_items
 
 
@@ -24,20 +27,17 @@ def _get_coord_manager(h5fi, snap=True):
         """Get the time coordinate."""
         # Unix stamps are in us for test files, not sure if always true.
         unix_stamps = dc.to_datetime64(h5fi["stamps_unix"][:] / 1_000_000)
+        stamps = np.atleast_1d(unix_stamps)
         if should_snap(snap, "time"):
-            time_coord = dc.get_coord(data=unix_stamps).snap()
-        else:
-            time_coord = get_exact_coord(unix_stamps)
-        return time_coord
+            return get_coord(data=stamps)
+        return NumericND.from_array(stamps)
 
     def _get_dist_coord(h5fi):
         """Get the distance (depth) coordinate."""
-        depth = h5fi["depth"][:]
-        return (
-            dc.get_coord(data=depth)
-            if should_snap(snap, "distance")
-            else get_exact_coord(depth)
-        )
+        depth = np.atleast_1d(h5fi["depth"][:])
+        if should_snap(snap, "distance"):
+            return get_coord(data=depth)
+        return NumericND.from_array(depth)
 
     coords = {
         "time": _get_time_coord(h5fi, snap=snap),

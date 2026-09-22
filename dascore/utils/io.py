@@ -453,6 +453,9 @@ def obspy_to_patch(stream, dim="distance") -> dc.Patch:
     _check_stream(stream)
     data = []
     new_dim = []
+    # dascore.io imports this module, so the rate reader is imported here
+    from dascore.io.utils import step_from_rate  # noqa: PLC0415
+
     for tr in stream:
         data.append(tr.data)
         new_dim.append(tr.stats[dim])
@@ -460,7 +463,16 @@ def obspy_to_patch(stream, dim="distance") -> dc.Patch:
     dims = (dim, "time")
     coords = {
         dim: ((dim,), np.asarray(new_dim)),
-        "time": (("time",), dc.to_datetime64(tr.times("timestamp"))),
+        "time": (
+            ("time",),
+            dc.get_coord(
+                # the stamp itself, which keeps nanoseconds a string drops
+                start=dc.to_datetime64(tr.stats.starttime.datetime)
+                + np.timedelta64(tr.stats.starttime.ns % 1000, "ns"),
+                step=step_from_rate(tr.stats.sampling_rate),
+                shape=(tr.stats.npts,),
+            ),
+        ),
     }
     attrs = _get_attrs(tr)
     patch = dc.Patch(

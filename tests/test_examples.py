@@ -32,6 +32,14 @@ class TestGetExamplePatch:
         patch = dc.get_example_patch("dispersion_event.h5")
         assert isinstance(patch, dc.Patch)
 
+    def test_processed_event_keeps_relative_time_grid(self):
+        """The processed event declares its known cadence in relative seconds."""
+        source = dc.get_example_patch("example_event_1").get_coord("time")
+        processed = dc.get_example_patch("example_event_2").get_coord("time")
+        assert processed.evenly_sampled and processed.min() == 0.0
+        assert processed.step == pytest.approx(float(source.step_exact))
+        assert str(processed.units) == "1 s"
+
     @pytest.mark.parametrize("name", EXAMPLE_PATCHES)
     def test_load_example_patch(self, name):
         """Ensure the registered example patches can all be loaded."""

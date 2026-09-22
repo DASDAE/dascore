@@ -1141,7 +1141,12 @@ class TestConcatenate:
         blank = patch.max("time")
         with suppress_warnings(UserWarning):
             out = dc.spool([blank, patch]).concatenate(time=None)[0]
-        assert out.get_coord("time").dtype == time.dtype
+        # Every time is held on the nanosecond grid, so what must survive
+        # is the instants, not the unit they happened to be spelled in.
+        coord = out.get_coord("time")
+        assert np.dtype(coord.dtype).kind == "M"
+        assert np.isnat(coord.values[0])
+        assert np.array_equal(coord.values[1:], time.astype("datetime64[ns]"))
 
 
 class TestStackPatches:

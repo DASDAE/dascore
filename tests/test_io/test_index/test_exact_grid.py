@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.core.coords import CoordRange, get_coord
+from dascore.core.coords import get_coord
 from dascore.core.summary import PatchSummary
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import _coord_from_envelope
@@ -97,7 +97,7 @@ class TestFlatRelation:
         """A row rebuilds the exact coordinate, not the rounded one."""
         row = indexed._catalog.to_df().iloc[0].to_dict()
         coord = coord_from_row(row, "time", units="s")
-        assert isinstance(coord, CoordRange)
+        assert coord.evenly_sampled
         assert coord == hz_1024_patch.get_coord("time")
         distance = coord_from_row(row, "distance", units="m")
         assert distance == hz_1024_patch.get_coord("distance")
@@ -178,10 +178,11 @@ class TestFlatRelation:
         """A descending grid rebuilds from its maximum, which the row states."""
         row = indexed._catalog.to_df().iloc[0].to_dict()
         reversed_time = hz_1024_patch.get_coord("time")[::-1]
+        (row_terms,) = reversed_time.runs
         num, den, offset = (
-            reversed_time.step_numerator,
-            reversed_time.step_denominator,
-            reversed_time.origin_offset,
+            int(row_terms["num"]),
+            int(row_terms["den"]),
+            int(row_terms["offset"]),
         )
         row["time_step"] = -row["time_step"]
         row["_time_grid"] = (num, den, offset, len(reversed_time))
@@ -196,7 +197,7 @@ class TestFlatRelation:
         coord = coord_from_row(row, "x")
         assert coord is not None
         assert coord.dtype == np.dtype("float64")
-        assert coord.step_numerator is None
+        assert not coord.to_summary().is_exact_grid
 
 
 class TestPlannedRows:

@@ -18,7 +18,7 @@ from rich.text import Text
 import dascore as dc
 from dascore.compat import random_state
 from dascore.core import Patch, PatchMeta
-from dascore.core.coords import BaseCoord, CoordRange
+from dascore.core.coords import BaseCoord
 from dascore.core.source import ArraySource
 from dascore.core.summary import PatchSummary
 from dascore.exceptions import (
@@ -244,10 +244,10 @@ class TestInit:
             Patch(coords=coords, dims=("time", "distance"))
 
     def test_coords_from_1_element_array(self):
-        """Ensure CoordRange is still returned despite 1D array in time."""
+        """Ensure an evenly sampled coord is still returned despite 1D array in time."""
         patch = dc.get_example_patch("random_das", shape=(100, 1))
         time_coord = patch.get_coord("time")
-        assert isinstance(time_coord, CoordRange)
+        assert time_coord.evenly_sampled
 
     def test_sin_wave_patch(self):
         """Ensure the sin wave patch is consistent with its coord dims."""
@@ -1266,7 +1266,7 @@ class TestCoords:
         new = patch.select(time=(time.min(), time.min()))
         assert 1 in new.shape
         new_coords = new.coords.coord_map
-        assert isinstance(new_coords["time"], CoordRange)
+        assert new_coords["time"].evenly_sampled
 
     def test_seconds(self, random_patch_with_lat):
         """Ensure we can get number of seconds in the patch."""

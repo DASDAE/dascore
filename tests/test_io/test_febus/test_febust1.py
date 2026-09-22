@@ -10,7 +10,6 @@ import pytest
 from numpy.testing import assert_allclose
 
 import dascore as dc
-from dascore.core.coords import CoordMonotonicArray, CoordRange
 from dascore.io.febus import FebusT1V1
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import unbyte
@@ -65,7 +64,7 @@ class TestFebusT1:
     def test_distance_range(self, t1_patch):
         """Distance should span roughly 0-90 m on an even grid."""
         dist = t1_patch.get_coord("distance")
-        assert isinstance(dist, CoordRange)
+        assert dist.evenly_sampled
         assert dist.min() >= 0
         assert_allclose(dist.max(), 89.9, rtol=1e-3)
         assert_allclose(dist.step, 0.0816, rtol=1e-3)
@@ -79,7 +78,7 @@ class TestFebusT1:
         """Single-reading files should parse without error."""
         assert t1_single_reading_patch.data.shape[0] == 1
         time = t1_single_reading_patch.get_coord("time")
-        assert isinstance(time, CoordMonotonicArray)
+        assert not time.evenly_sampled and (time.sorted or time.reverse_sorted)
         assert time.min() == time.max()
 
 
@@ -162,7 +161,7 @@ class TestFebusT1DistanceGrid:
     def test_fixture_is_uneven_on_its_own(self, quantized_distance):
         """The array must actually defeat get_coord, or the next test is moot."""
         coord = dc.get_coord(values=quantized_distance, units="m")
-        assert isinstance(coord, CoordMonotonicArray)
+        assert not coord.evenly_sampled and (coord.sorted or coord.reverse_sorted)
         assert coord.step is None
 
     def test_quantized_distance_is_snapped(self, t1_path, tmp_path, quantized_distance):
@@ -173,7 +172,7 @@ class TestFebusT1DistanceGrid:
             del fi["Data/Distance"]
             fi.create_dataset("Data/Distance", data=quantized_distance)
         dist = self.parser.read(path)[0].get_coord("distance")
-        assert isinstance(dist, CoordRange)
+        assert dist.evenly_sampled
         assert_allclose(dist.step, 0.1, rtol=1e-3)
         assert dist.min() == quantized_distance[0]
         assert dist.max() == quantized_distance[-1]

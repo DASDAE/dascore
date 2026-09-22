@@ -716,9 +716,16 @@ def stft(
         *dims,
     )
     coord_map = stack.coords.get_coord_tuple_map()
-    for dim, ft_dim, values, coord in zip(dims, ft_dims, freqs, coords):
+    for dim, ft_dim, values, coord, nfft, step in zip(
+        dims, ft_dims, freqs, coords, nffts, steps
+    ):
         coord_map.pop(f"{dim}_offset")
-        freq_coord = get_coord(data=values, units=invert_quantity(coord.units))
+        freq_coord = get_coord(
+            start=values[0],
+            step=1 / (nfft * step),
+            shape=values.shape,
+            units=invert_quantity(coord.units),
+        )
         coord_map[ft_dim] = ((ft_dim,), freq_coord)
     cm = get_coord_manager(coords=coord_map, dims=new_dims)
     attrs = stack.attrs.update(
@@ -817,7 +824,7 @@ def istft(patch) -> dc.Patch:
         if set(cdims) & set(ft_dims):
             coord_map.pop(name)
     for offset, size in zip(offsets, sizes):
-        coord_map[offset] = ((offset,), get_coord(data=np.arange(size)))
+        coord_map[offset] = ((offset,), get_coord(start=0, step=1, shape=(size,)))
     renamed = (dims[ft_dims.index(d)] if d in ft_dims else d for d in base_dims)
     stack_dims = (*renamed, *offsets)
     data_type = patch.attrs.get("_pre_stft_data_type")

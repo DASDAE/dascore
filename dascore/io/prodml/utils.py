@@ -12,11 +12,10 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import VALID_DATA_TYPES
-from dascore.core.coords import get_coord
+from dascore.core.coords import NumericND, get_coord
 from dascore.exceptions import InvalidSpoolError, PatchError
 from dascore.io.utils import (
     convert_attr_units,
-    get_exact_coord,
     resolve_keyed_source,
     should_snap,
 )
@@ -166,7 +165,7 @@ def _get_time_coord(node, snap=True):
     assert array_len > 0, "Missing time array in ProdML file."
     if not should_snap(snap, "time"):
         values = time_array[:].astype("datetime64[us]")
-        return get_exact_coord(values, units="s")
+        return NumericND.from_array(np.atleast_1d(values), units="s")
     time_attrs = time_array.attrs
     start_str = unbyte(time_attrs["PartStartTime"]).split("+")[0]
     start = dc.to_datetime64(start_str.rstrip("Z"))
@@ -291,14 +290,9 @@ def _round_times_to_microseconds(coord):
         microseconds = microsecond_values.astype(np.int64)
         remainder = np.zeros_like(microseconds)
     else:
-        nanosecond_values = values.astype("datetime64[ns]")
-        if not np.array_equal(nanosecond_values.astype(values.dtype), values):
-            msg = (
-                "ProdML time coordinates must fit the microsecond range or have "
-                "nanosecond precision."
-            )
-            raise PatchError(msg)
-        nanoseconds = nanosecond_values.astype(np.int64)
+        # a time coordinate is counted in nanoseconds, whatever it was given in
+        assert values.dtype == np.dtype("datetime64[ns]")
+        nanoseconds = values.astype(np.int64)
         quotient, remainder = np.divmod(nanoseconds, 1_000)
         increment = np.where(nanoseconds >= 0, remainder >= 500, remainder > 500)
         microseconds = quotient + increment

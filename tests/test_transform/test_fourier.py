@@ -101,7 +101,7 @@ class TestDiscreteFourierTransform:
         real = dims[-1] if real is True else real
         full = patch.dft(dim=dims, real=False, pad=False, output=output)
         real_axis = full.get_axis(f"ft_{real}")
-        nonnegative = full.get_coord(f"ft_{real}").data >= 0
+        nonnegative = full.get_coord(f"ft_{real}").values >= 0
         full_ft_axes = tuple(full.get_axis(f"ft_{dim}") for dim in dims)
         out_ft_axes = tuple(out.get_axis(f"ft_{dim}") for dim in dims)
         expected = np.sum(
@@ -119,7 +119,7 @@ class TestDiscreteFourierTransform:
         freq_dim = patch.get_axis("ft_time")
         ar = np.argmax(np.abs(patch.data), freq_dim)
         assert np.allclose(ar, ar[0])
-        freqs = patch.get_coord("ft_time").data
+        freqs = patch.get_coord("ft_time").values
         max_freq = np.abs(freqs[ar[0]])
         assert np.isclose(max_freq, F_0, rtol=0.01)
 
@@ -162,7 +162,7 @@ class TestDiscreteFourierTransform:
         assert coord.min() == 0
         ar = np.argmax(np.abs(out.data), axis=freq_ax)
         assert np.allclose(ar, ar[0])
-        max_freq = np.abs(coord.data[ar[0]])
+        max_freq = np.abs(coord.values[ar[0]])
         assert np.isclose(max_freq, F_0, rtol=0.01)
         # data shape should be less than before (since real fft)
         ft_shape = out.coord_shapes["ft_time"][0]

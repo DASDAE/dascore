@@ -29,43 +29,29 @@ from xarray.indexes import CoordinateTransform, CoordinateTransformIndex, Pandas
 
 from dascore.core.coords import (
     BaseCoord,
-    CoordArray,
-    CoordMonotonicArray,
-    CoordRange,
-    CoordSegmented,
+    NumericND,
     concat_coords,
     get_coord,
 )
 from dascore.exceptions import CoordError
 from dascore.utils.indexing import label_indexer, positional_indexer
-from dascore.utils.misc import is_strictly_monotonic
 from dascore.utils.time import dtype_time_like
 
 
 def is_servable(coord) -> bool:
     """Whether `CoordIndex` can serve a coordinate's labels."""
-    if isinstance(coord, CoordSegmented):
-        return True
-    # a zero step repeats one label, which no index can look up
-    return isinstance(coord, CoordRange) and bool(coord.step)
-
-
-def _relabels_exactly(coord) -> bool:
-    """Whether slices of a coordinate keep exactly the labels they select."""
-    # a float range recomputes a slice's labels from its new start, which
-    # can move them in the last bits, and then they no longer align
-    if isinstance(coord, CoordSegmented):
-        return all(_relabels_exactly(x) for x in coord.segments)
-    return not isinstance(coord, CoordRange) or coord._exact
+    if not isinstance(coord, NumericND):
+        return False
+    return (coord.runs_count > 1 and (coord.sorted or coord.reverse_sorted)) or (
+        coord.evenly_sampled and bool(coord.step)
+    )
 
 
 def _array_coord(labels, units) -> BaseCoord:
     """Labels held as they are, never re-inferred as a range."""
     if np.asarray(labels).dtype.kind in "USO":
         return get_coord(data=labels, units=units)  # text keeps its own class
-    monotonic = len(labels) > 1 and is_strictly_monotonic(labels)
-    cls = CoordMonotonicArray if monotonic else CoordArray
-    return cls(values=labels, units=units)
+    return NumericND.from_array(labels, units=units, detect=False)
 
 
 def _as_pandas(index) -> PandasIndex:
@@ -90,7 +76,11 @@ def _same_labels(first: BaseCoord, second: BaseCoord) -> bool:
         # xarray states units as an attribute beside the labels, so an
         # index compares labels only, as a materialized index does
         first, second = first.set_units(None), second.set_units(None)
-    return first.data_id == second.data_id
+    # The coordinate's own equality, which takes the data ids as the cheap
+    # answer and then compares labels: two rational tick grids can state
+    # one set of labels in more than one way, and an alignment asking
+    # whether the labels match must not be told they differ.
+    return first == second
 
 
 def _chained(coords: list[BaseCoord]) -> BaseCoord | None:
@@ -102,7 +92,7 @@ def _chained(coords: list[BaseCoord]) -> BaseCoord | None:
     # concat_coords orders its inputs; xarray's order is the data's
     starts = [x.min() if out.sorted else x.max() for x in coords]
     ordered = all((a < b) if out.sorted else (a > b) for a, b in pairwise(starts))
-    return out if ordered and is_servable(out) and _relabels_exactly(out) else None
+    return out if ordered and is_servable(out) else None
 
 
 class CoordTransform(CoordinateTransform):
@@ -190,10 +180,8 @@ class CoordIndex(CoordinateTransformIndex):
             raise ValueError(msg)
         values = np.asarray(variable.values)
         units = variable.attrs.get("units")
+        # reading labels never moves one, so whatever grid comes back is theirs
         coord = get_coord(data=values)
-        # a range is kept only where it reproduces the labels exactly
-        if not np.array_equal(coord._get_index_values(np.arange(len(coord))), values):
-            coord = _array_coord(values, None)
         if units is not None and not dtype_time_like(coord.dtype):
             coord = coord.set_units(units)
         return cls(CoordTransform(name, coord, variable.dims[0]))
@@ -254,8 +242,9 @@ class CoordIndex(CoordinateTransformIndex):
             start, stop, stride = idx.indices(len(coord))
             positions = range(start, stop, stride)
             # a strided segmented coordinate is an array of its labels
-            lazy = isinstance(coord, CoordRange) or stride == 1
-            if len(positions) and lazy and _relabels_exactly(coord):
+            lazy = coord.evenly_sampled or stride == 1
+            # a slice of a run table holds exactly the labels it selects
+            if len(positions) and lazy:
                 return self._with(coord[idx])
             return self._picked(np.asarray(positions, dtype=np.int64))
         if getattr(idx, "dims", (self.dim,)) != (self.dim,):

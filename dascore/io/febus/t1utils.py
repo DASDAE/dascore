@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 import dascore as dc
 from dascore import get_coord_manager
+from dascore.core.coords import NumericND, get_coord
 from dascore.io.utils import (
     drop_blank_attrs,
-    get_exact_coord,
     get_gridded_coord,
     should_snap,
 )
@@ -33,16 +35,16 @@ def _get_distance_coord(fi, snap=True):
     dist = fi["Data/Distance"][()]
     if should_snap(snap, "distance"):
         return get_gridded_coord(dist, units="m")
-    return get_exact_coord(dist, units="m")
+    return NumericND.from_array(np.atleast_1d(dist), units="m")
 
 
 def _get_time_coord(fi, snap=True):
     """Get the times from the T1 file"""
     ts = fi["Data/Time"][()].squeeze()
-    times = (ts * 1e9).astype("datetime64[ns]")
+    times = np.atleast_1d((ts * 1e9).astype("datetime64[ns]"))
     if should_snap(snap, "time"):
-        return dc.get_coord(values=times, units="s")
-    return get_exact_coord(times, units="s")
+        return get_coord(data=times, units="s")
+    return NumericND.from_array(times, units="s")
 
 
 def _get_coords(fi, snap=True) -> dc.CoordManager:

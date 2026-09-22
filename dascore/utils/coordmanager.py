@@ -31,7 +31,7 @@ def merge_coord_managers(
     dim
         The dimension along which to merge.
     snap_tolerance
-        The tolerance for snapping CoordRanges together. E.G, allows
+        The tolerance for snapping ranges together. E.G, allows
         coord ranges that have snap_tolerances differences from their
         start/end to be joined together. If they don't meet this requirement
         an [CoordMergeError](`dascore.exceptions.CoordMergeError`) is raised.
@@ -131,8 +131,8 @@ def merge_coord_managers(
             # snapped; coords merely associated with dim just follow along.
             if coord_name == dim:
                 merge_coords = _snap_coords(merge_coords)
-            data = [x.data for x in merge_coords]
             dims = managers[0].dim_map[coord_name]
+            data = [x.values for x in merge_coords]
             new_data = np.concatenate(data, axis=axis)
             # raw value concatenation loses the coord's units; reattach
             # the (verified common) units so the merge stays unit-true

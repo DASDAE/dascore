@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.core.coords import CoordMonotonicArray
+from dascore.core.coords import NumericND
 from dascore.core.source import ArraySource
 from dascore.exceptions import InvalidFiberFileError, InvalidFiberIOError
 from dascore.io import FiberIO, H5Reader
@@ -231,11 +231,11 @@ class TestNamedSnap:
                 )
         elif file_format != "H5Simple":
             exact = dc.read(path, file_format="H5Simple", snap=False)[0]
-            # Store explicit value arrays; a serialized segmented coordinate
-            # correctly preserves its declared segments independently of snap.
+            # Store explicit value arrays; a serialized multi-run coordinate
+            # correctly preserves its declared runs independently of snap.
             exact = exact.new(
                 coords={
-                    name: CoordMonotonicArray(values=coord.values)
+                    name: NumericND.from_array(coord.values, detect=False)
                     for name, coord in exact.coords.coord_map.items()
                 }
             )

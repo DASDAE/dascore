@@ -7,13 +7,10 @@ from fractions import Fraction
 
 import numpy as np
 import pytest
-from pydantic import ValidationError
 
 import dascore as dc
 from dascore.core.coords import (
     CoordPartial,
-    CoordRange,
-    CoordSegmented,
     CoordSummary,
     concat_coords,
     get_coord,
@@ -55,7 +52,7 @@ class TestDispatch:
         """A timedelta step on a datetime start makes a whole-tick exact grid."""
         coord = get_coord(start=T0, step=ONE_S, shape=(10,))
         assert coord._exact
-        assert coord.step_denominator == 1
+        assert coord._grid_terms[1] == 1
         assert coord.step == ONE_S
 
     def test_timedelta(self):
@@ -95,23 +92,54 @@ class TestDispatch:
         with pytest.raises(CoordError, match="fraction step"):
             get_coord(start=0.0, step=(1, 3), shape=(3,))
 
-    def test_sub_nanosecond_stays_range(self):
-        """Finer than nanosecond time keeps the legacy class."""
-        start = np.datetime64("2020-01-01T00:00:00.000000000001")
+    def test_whole_nanoseconds_in_a_finer_unit_convert(self):
+        """Picoseconds which are whole nanoseconds are held on the tick."""
+        start = np.datetime64("1970-01-01T00:00:01.000000000", "ps")
         step = np.timedelta64(1000, "ps")
         coord = get_coord(start=start, stop=start + step * 10, step=step)
-        assert not coord._exact
+        assert coord._exact and coord.dtype == np.dtype("datetime64[ns]")
+        assert coord.step == np.timedelta64(1, "ns")
 
-    def test_coarse_units_stay_legacy(self):
-        """Only nanosecond time is exact; coarser units keep the legacy class."""
-        start = np.datetime64("2500-01-01T00:00:00", "us")
+    def test_a_null_time_in_a_finer_unit_converts(self):
+        """NaT is not a label off the tick; it is no label at all."""
+        values = np.array([0, "NaT"], dtype="m8[ps]")
+        coord = get_coord(data=values)
+        assert coord.dtype == np.dtype("timedelta64[ns]")
+        assert np.isnat(coord.values[1])
+
+    def test_part_of_a_nanosecond_is_refused(self):
+        """An instant between two ticks is named, not rounded onto one."""
+        start = np.datetime64("1970-01-01T00:00:01.000000000", "ps")
+        step = np.timedelta64(1000, "ps")
+        apart = start + np.timedelta64(1, "ps")
+        with pytest.raises(CoordError, match="whole number of nanoseconds"):
+            get_coord(start=apart, stop=apart + step * 10, step=step)
+        with pytest.raises(CoordError, match="whole number of nanoseconds"):
+            get_coord(data=apart + np.arange(3) * step)
+        # and a step finer than the tick, beside a shape, is refused too
+        with pytest.raises(CoordError, match="whole number of nanoseconds"):
+            get_coord(start=start, step=np.timedelta64(1, "ps"), shape=(3,))
+
+    def test_coarse_units_resolve_to_nanoseconds(self):
+        """Time stated in any unit is held on the nanosecond grid."""
+        start = np.datetime64("2100-01-01T00:00:00", "us")
         coord = get_coord(start=start, step=np.timedelta64(2, "us"), shape=(5,))
-        assert not coord._exact
-        assert coord.dtype == np.dtype("datetime64[us]")
+        assert coord._exact and coord.dtype == np.dtype("datetime64[ns]")
         assert coord.values[-1] == start + np.timedelta64(8, "us")
         assert coord.step_exact == Fraction(2, 10**6)
         day = get_coord(start=np.datetime64("2020-01-01"), step=ONE_S, shape=(3,))
-        assert not day._exact and day.dtype == np.dtype("datetime64[s]")
+        assert day._exact and day.dtype == np.dtype("datetime64[ns]")
+
+    def test_time_past_the_nanosecond_range_is_refused(self):
+        """A date the nanosecond tick cannot count is named, not wrapped."""
+        start = np.datetime64("2500-01-01T00:00:00", "us")
+        step = np.timedelta64(2, "us")
+        # A date no tick can count is not a range this cannot describe;
+        # it is refused by name rather than made a partial coordinate.
+        with pytest.raises(CoordError, match="nanosecond"):
+            get_coord(start=start, step=step, shape=(5,))
+        with pytest.raises(CoordError, match="nanosecond"):
+            get_coord(data=start + np.arange(3) * step)
 
     def test_nanosecond_step_resolves_exact(self):
         """A nanosecond step makes a coarse start resolve to nanoseconds."""
@@ -127,12 +155,6 @@ class TestDispatch:
         coord = get_coord(start=day, step=(1, 1024), shape=(4,))
         assert coord.dtype == np.dtype("datetime64[ns]")
         assert coord.step_exact == Fraction(1, 1024)
-
-    def test_direct_construction_is_exact_too(self):
-        """CoordRange built directly resolves the same grid as get_coord."""
-        coord = CoordRange(start=T0, step=ONE_S, shape=(10,))
-        assert coord._exact
-        assert coord == get_coord(start=T0, step=ONE_S, shape=(10,))
 
     def test_data_path(self):
         """Evenly spaced integer and time arrays become exact grids."""
@@ -175,7 +197,7 @@ class TestConstruction:
         """Start is the floor of the ideal origin count steps before stop."""
         coord = get_coord(stop=10, step=(3, 2), shape=(4,))
         # ideal origin = 10 - 4 * 1.5 = 4
-        assert coord.start == 4 and coord.origin_offset == 0
+        assert coord.start == 4 and coord._grid_terms[2] == 0
         assert np.array_equal(coord.values, [4, 5, 7, 8])
         coord = get_coord(stop=11, step=(3, 2), shape=(4,))
         # ideal origin 5; labels 5, 6.5->6, 8, 9.5->9
@@ -196,14 +218,14 @@ class TestConstruction:
 
     def test_below_one_tick_raises(self):
         """A step below one tick would repeat labels."""
-        with pytest.raises(ValidationError, match="smaller than one tick"):
+        with pytest.raises(CoordError, match="smaller than one tick"):
             get_coord(start=0, step=(1, 3), shape=(3,))
-        with pytest.raises(ValidationError, match="smaller than one tick"):
+        with pytest.raises(CoordError, match="smaller than one tick"):
             get_coord(start=0, stop=10, step=(1, 3))
 
     def test_bad_sign_raises(self):
         """The step sign must match the span."""
-        with pytest.raises(ValidationError, match="Sign of step"):
+        with pytest.raises(CoordError, match="Sign of step"):
             get_coord(start=0, stop=10, step=-1)
 
     def test_zero_count_is_partial(self):
@@ -213,10 +235,10 @@ class TestConstruction:
 
     @pytest.mark.parametrize("ms", [10_020, 10_060, 9_990])
     def test_stop_rounding_parity(self, ms):
-        """A stop stated a hair off a sample counts as CoordRange always has."""
-        legacy = CoordRange(start=0.0, stop=ms / 1000, step=1.0)
+        """A stop stated a hair off a sample counts as a float range does."""
+        floats = get_coord(start=0.0, stop=ms / 1000, step=1.0)
         exact = get_coord(start=T0, stop=T0 + np.timedelta64(ms, "ms"), step=ONE_S)
-        assert len(exact) == len(legacy)
+        assert len(exact) == len(floats)
 
     def test_start_equals_stop(self):
         """Equal start and stop give one sample, as before."""
@@ -228,33 +250,32 @@ class TestConstruction:
         coord = get_coord(start=5, stop=5, step=0)
         assert np.array_equal(coord.values, [5])
         assert np.array_equal(coord.select((4, 6))[0].values, [5])
-        assert isinstance(coord.select((6, 7))[0], CoordPartial)
+        assert not len(coord.select((6, 7))[0])
 
     def test_overflow_raises(self):
         """A grid past its dtype's range is refused at construction."""
-        with pytest.raises(ValidationError, match="int64 range"):
+        with pytest.raises(CoordError, match="int64 range"):
             get_coord(start=2**62, step=2**40, shape=(2**30,))
-        with pytest.raises(ValidationError, match="int8 range"):
+        with pytest.raises(CoordError, match="int8 range"):
             get_coord(start=np.int8(120), step=np.int8(2), shape=(10,))
         small = get_coord(start=np.int8(120), step=np.int8(2), shape=(3,))
         assert small.dtype == np.dtype("int8") and small.max() == 124
 
-    def test_grid_normalized_jointly(self):
-        """(6, 2, 1) must not reduce to (3, 1, 0): that moves the origin."""
+    def test_grid_reduced_to_lowest_terms(self):
+        """The grid reduces by gcd(num, den); the labels never move."""
+        # The offset's remainder under that divisor cannot carry a floor
+        # over a tick, so (6, 2, 1) and (3, 1, 0) are the same labels and
+        # only one of them is the form they are held in.
         coord = get_coord(start=0, step=(3, 2), shape=(20,))[1::2]
-        assert (coord.step_numerator, coord.step_denominator) == (6, 2)
-        assert coord.origin_offset == 1
+        assert (coord._grid_terms[0], coord._grid_terms[1]) == (3, 1)
+        assert coord._grid_terms[2] == 0
         assert np.array_equal(coord.values, [1, 4, 7, 10, 13, 16, 19, 22, 25, 28])
         strided = get_coord(start=0, step=(3, 2), shape=(20,))[::2]
-        assert (strided.step_numerator, strided.step_denominator) == (3, 1)
+        assert (strided._grid_terms[0], strided._grid_terms[1]) == (3, 1)
         odd_origin = get_coord(start=0, step=(3, 2), shape=(20,))[1:]
-        assert (odd_origin.step_numerator, odd_origin.step_denominator) == (3, 2)
-        assert odd_origin.origin_offset == 1
-        assert (odd_origin[::2].step_numerator, odd_origin[::2].step_denominator) == (
-            6,
-            2,
-        )
-        assert odd_origin[::2].origin_offset == 1
+        assert (odd_origin._grid_terms[0], odd_origin._grid_terms[1]) == (3, 2)
+        assert odd_origin._grid_terms[2] == 1
+        assert np.array_equal(odd_origin[::2].values, coord.values)
 
 
 class TestLabels:
@@ -340,7 +361,7 @@ class TestSlicing:
     def test_ideal_positions_survive(self, hz_1024):
         """The origin offset of a slice is compared, not only its labels."""
         sub = hz_1024[1:]
-        assert sub.origin_offset == 1 and sub.step_denominator == 2
+        assert sub._grid_terms[2] == 1 and sub._grid_terms[1] == 2
         assert sub._ideal_origin == hz_1024._ideal_origin + Fraction(1953125, 2)
 
     def test_random_nested_slices_against_oracle(self):
@@ -354,7 +375,7 @@ class TestSlicing:
             offset = int(rng.integers(0, den))
             count = int(rng.integers(1, 60))
             start = int(rng.integers(-1000, 1000))
-            coord = CoordRange(
+            coord = get_coord(
                 start=start,
                 shape=(count,),
                 step_numerator=num,
@@ -385,10 +406,10 @@ class TestSlicing:
         assert rev.max() == coord.max()
         assert coord.max() == T0 + np.timedelta64((10**9 - 1) * 1953125 // 2, "ns")
 
-    def test_empty_slice_is_partial(self, hz_1024):
-        """An empty slice is a typed partial coordinate."""
+    def test_empty_slice_keeps_its_type(self, hz_1024):
+        """An empty slice is a coordinate of no samples, still typed."""
         out = hz_1024[5:5]
-        assert isinstance(out, CoordPartial)
+        assert not len(out) and (not (out.ndim and out.size))
         assert out.dtype == hz_1024.dtype
 
     def test_array_getitem(self, int_frac):
@@ -408,7 +429,7 @@ class TestSlicing:
         """Changing the length keeps the grid and offset."""
         longer = hz_1024.change_length(len(hz_1024) + 10)
         assert np.array_equal(longer.values[: len(hz_1024)], hz_1024.values)
-        assert hz_1024[1:].change_length(5).origin_offset == 1
+        assert hz_1024[1:].change_length(5)._grid_terms[2] == 1
 
 
 class TestSelect:
@@ -461,7 +482,7 @@ class TestSelect:
         """A window past the coordinate is degenerate."""
         sub, sl = int_frac.select((1000, 2000))
         assert sl == slice(0, 0)
-        assert isinstance(sub, CoordPartial)
+        assert not len(sub)
 
     def test_open_ended(self, hz_1024):
         """None and Ellipsis open a side."""
@@ -486,8 +507,7 @@ class TestSelect:
         for forward in (True, False):
             arr = int_frac._get_index(probes, forward=forward)
             for probe, got in zip(probes, arr):
-                scalar = int_frac._index_of(int(probe), forward)
-                assert got == scalar
+                assert got == int_frac._index_one(int(probe), forward)
 
     def test_get_next_index(self, hz_1024):
         """The next index past a value between samples."""
@@ -574,7 +594,7 @@ class TestNewAndRoundTrips:
         """New with a shifted start and stop keeps the grid."""
         sub = hz_1024[1:]
         out = sub.new(start=sub.start + ONE_S, stop=sub.stop + ONE_S)
-        assert out.origin_offset == 1 and out.step_exact == sub.step_exact
+        assert out._grid_terms[2] == 1 and out.step_exact == sub.step_exact
         assert len(out) == len(sub)
 
     def test_new_stop_changes_count(self, hz_1024):
@@ -585,7 +605,7 @@ class TestNewAndRoundTrips:
     def test_new_step_replaces_grid(self, hz_1024):
         """New with a step drops the old grid."""
         out = hz_1024[1:].new(step=ONE_S)
-        assert out.step_denominator == 1 and out.origin_offset == 0
+        assert out._grid_terms[1] == 1 and out._grid_terms[2] == 0
         assert out.step == ONE_S
 
     def test_new_units(self, int_frac):
@@ -597,9 +617,12 @@ class TestNewAndRoundTrips:
         """The summary carries the grid and rebuilds the coordinate."""
         summary = hz_1024[1:].to_summary(dims=("time",))
         assert summary.is_exact_grid
-        assert summary.step_numerator == 1953125
-        assert summary.step_denominator == 2
-        assert summary.origin_offset == 1
+        terms = (
+            summary.step_numerator,
+            summary.step_denominator,
+            summary.origin_offset,
+        )
+        assert terms == (1953125, 2, 1)
         assert summary.to_coord() == hz_1024[1:]
 
     def test_summary_descending(self, hz_1024):
@@ -632,15 +655,6 @@ class TestNewAndRoundTrips:
 class TestIdentity:
     """Equality and ids compare the grid, never the class."""
 
-    def test_legacy_data_id_parity(self):
-        """A whole-tick grid has the data_id of the legacy class."""
-        legacy = CoordRange(start=T0, step=ONE_S, shape=(10,))
-        exact = get_coord(start=T0, step=ONE_S, shape=(10,))
-        assert legacy.data_id == exact.data_id
-        legacy = CoordRange(start=0, stop=10, step=2, units="m")
-        exact = get_coord(start=0, stop=10, step=2, units="m")
-        assert legacy.data_id == exact.data_id
-
     def test_fraction_grid_changes_data_id(self, hz_1024):
         """A fractional grid is a different identity from its rounding."""
         rounded = get_coord(start=T0, step=hz_1024.step, shape=(len(hz_1024),))
@@ -656,7 +670,7 @@ class TestIdentity:
         """== stays pydantic field equality; the grid fields are fields."""
         exact = get_coord(start=0, stop=10, step=2)
         assert exact == get_coord(data=np.arange(0, 10, 2))
-        assert exact == CoordRange(start=0, stop=10, step=2)
+        assert exact == get_coord(runs=exact.runs, dtype=exact.dtype)
         assert exact != get_coord(start=0, step=(3, 2), shape=(5,))
 
 
@@ -689,17 +703,11 @@ class TestUnits:
 class TestRepr:
     """The class split does not leak into text."""
 
-    def test_header_is_coord_range(self, hz_1024):
-        """The repr header reads CoordRange and states the exact step."""
+    def test_header_names_the_class(self, hz_1024):
+        """The repr header names the coordinate class and its exact step."""
         text = str(hz_1024)
-        assert text.startswith("CoordRange(")
+        assert text.startswith("NumericND(")
         assert "1/1024 s" in text and "1024 Hz" in text
-
-    def test_whole_tick_repr_unchanged(self):
-        """A whole-tick grid prints as the legacy class does."""
-        legacy = CoordRange(start=T0, step=ONE_S, shape=(10,))
-        exact = get_coord(start=T0, step=ONE_S, shape=(10,))
-        assert str(legacy) == str(exact)
 
     def test_int_fraction_repr(self, int_frac):
         """An integer fraction step is stated with its units."""
@@ -714,11 +722,12 @@ class TestRepr:
 class TestStepExact:
     """step_exact on every coordinate kind."""
 
-    def test_legacy_range(self):
+    def test_whole_tick_range(self):
         """Timedelta and integer steps are exact; float steps are not."""
-        assert CoordRange(start=T0, step=ONE_S, shape=(3,)).step_exact == 1
-        assert CoordRange(start=0, stop=10, step=2).step_exact == 2
-        assert CoordRange(start=0.0, stop=1.0, step=0.1).step_exact is None
+        assert get_coord(start=T0, step=ONE_S, shape=(3,)).step_exact == 1
+        assert get_coord(start=0, stop=10, step=2).step_exact == 2
+        # A float step is the double it is, which has no exact form.
+        assert get_coord(start=0.0, stop=1.0, step=0.1).step_exact is None
 
     def test_partial_and_array(self):
         """Coordinates without a step have no exact step."""
@@ -747,7 +756,7 @@ class TestSegments:
         a = hz_1024[:1000]
         b = hz_1024[1000:2000].update_limits(min=a.stop + np.timedelta64(1, "ns"))
         out = concat_coords(a, b)
-        assert isinstance(out, CoordSegmented)
+        assert out.runs_count > 1
 
     def test_same_labels_different_origin_do_not_fuse(self):
         """Labels can align while the ideal origins do not."""
@@ -755,16 +764,16 @@ class TestSegments:
         b = get_coord(start=6, step=(3, 2), shape=(4,))[:]
         fused = concat_coords(a, b)
         assert fused._exact
-        shifted = CoordRange(
+        shifted = get_coord(
             start=6, shape=(4,), step_numerator=3, step_denominator=2, origin_offset=1
         )
         out = concat_coords(a, shifted)
-        assert isinstance(out, CoordSegmented)
+        assert out.runs_count > 1
 
     def test_segment_dump_round_trip(self, hz_1024):
         """Segments rebuild onto the exact class."""
         seg = concat_coords(hz_1024[:10], hz_1024[20:30])
-        assert isinstance(seg, CoordSegmented)
+        assert seg.runs_count > 1
         rebuilt = get_coord(**seg.model_dump())
         assert rebuilt == seg
         assert all(s._exact for s in rebuilt.segments)
@@ -805,16 +814,27 @@ class TestPersistenceGuards:
 class TestValidationErrors:
     """Every refusal of the exact class states why."""
 
-    def test_summary_needs_length(self, hz_1024):
-        """An exact summary without a length cannot rebuild."""
+    def test_runs_carry_their_own_length(self, hz_1024):
+        """Each run states its length, so the summary's own is not needed."""
         summary = hz_1024.to_summary().model_copy(update=dict(len=None))
-        with pytest.raises(CoordError, match="length"):
+        assert summary.to_coord() == hz_1024
+
+    def test_summary_without_runs_or_step(self, hz_1024):
+        """An envelope stating no spacing rebuilds nothing."""
+        blank = dict(
+            step=None,
+            step_numerator=None,
+            step_denominator=None,
+            origin_offset=None,
+        )
+        summary = hz_1024.to_summary().model_copy(update=blank)
+        with pytest.raises(CoordError, match="not evenly sampled"):
             summary.to_coord()
 
     def test_non_time_value_on_time_grid(self):
         """A value that is not a time at all is refused."""
-        with pytest.raises(ValidationError, match="not an integer or time"):
-            CoordRange(start=T0, stop="tomorrow", step=(1, 2))
+        with pytest.raises(CoordError, match="not an integer or time"):
+            get_coord(start=T0, stop="tomorrow", step=(1, 2))
 
     def test_non_integer_float(self):
         """A non-integer float cannot be a tick of an integer grid."""
@@ -830,30 +850,33 @@ class TestValidationErrors:
         exact = get_coord(start=start, step=(1, 2), shape=(3,))
         assert exact.dtype == np.dtype("datetime64[ns]")
 
-    def test_direct_construction_errors(self):
-        """The class itself refuses what get_coord would turn into a partial."""
-        with pytest.raises(ValidationError, match="Three of"):
-            CoordRange(step=1, shape=(3,))
-        with pytest.raises(ValidationError, match="1D"):
-            CoordRange(start=0, step=1, shape=(2, 3))
-        with pytest.raises(ValidationError, match="at least one sample"):
-            CoordRange(start=0, step=1, shape=(0,))
-        with pytest.raises(ValidationError, match="Three of"):
-            CoordRange(start=0, shape=(3,))
-        with pytest.raises(ValidationError, match="are needed"):
-            CoordRange(start=0, step=1)
-        with pytest.raises(ValidationError, match="positive"):
-            CoordRange(start=0, shape=(3,), step_numerator=1, step_denominator=-2)
-        with pytest.raises(ValidationError, match="origin_offset"):
-            CoordRange(
+    def test_too_little_for_a_range_is_a_partial(self):
+        """What states less than a grid is a partial coord, not an error."""
+        cases = [
+            dict(step=1, shape=(3,)),
+            dict(start=0, step=1, shape=(2, 3)),
+            dict(start=0, step=1, shape=(0,)),
+            dict(start=0, shape=(3,)),
+        ]
+        for kwargs in cases:
+            assert isinstance(get_coord(**kwargs), CoordPartial)
+
+    def test_grid_construction_errors(self):
+        """A grid stated wrongly is refused by name."""
+        with pytest.raises(CoordError, match="start, stop, and step must be"):
+            get_coord(start=0, step=1)
+        with pytest.raises(CoordError, match="positive"):
+            get_coord(start=0, shape=(3,), step_numerator=1, step_denominator=-2)
+        with pytest.raises(CoordError, match="origin_offset"):
+            get_coord(
                 start=0,
                 shape=(3,),
                 step_numerator=3,
                 step_denominator=2,
                 origin_offset=2,
             )
-        coarse = CoordRange(start=np.datetime64("2020-01-01"), step=ONE_S, shape=(3,))
-        assert not coarse._exact
+        coarse = get_coord(start=np.datetime64("2020-01-01"), step=ONE_S, shape=(3,))
+        assert coarse._exact and coarse.dtype == np.dtype("datetime64[ns]")
 
     def test_update_limits_step_below_tick(self, int_frac):
         """A new step below one tick is refused."""
@@ -866,12 +889,12 @@ class TestValidationErrors:
         probes = np.array([11, 10, 8, 7, 1, 0])
         for forward in (True, False):
             got = coord._get_index(probes, forward=forward)
-            expected = [coord._index_of(int(p), forward) for p in probes]
+            expected = [coord._index_one(int(p), forward) for p in probes]
             assert got.tolist() == expected
 
     def test_integral_float_is_a_tick(self):
         """A float that is a whole number sits on an integer grid."""
-        coord = CoordRange(start=0, stop=10.0, step=2)
+        coord = get_coord(start=0, stop=10.0, step=2)
         assert np.array_equal(coord.values, [0, 2, 4, 6, 8])
 
     def test_time_units_do_not_convert(self, hz_1024):
@@ -901,38 +924,38 @@ class TestFloatRepresentation:
     def coarse_time(self):
         """A one-second time range held as a float-style range."""
         start = np.datetime64("2020-01-01T00:00:00", "s")
-        coord = CoordRange(
+        coord = get_coord(
             start=start,
             stop=start + np.timedelta64(10, "s"),
             step=np.timedelta64(1, "s"),
         )
-        assert not coord._exact
+        # Every time is a nanosecond grid now, whatever unit stated it.
+        assert coord._exact
         return coord
 
     @pytest.fixture(scope="class")
     def floats(self):
         """A float range."""
-        return CoordRange(start=0.0, stop=10.0, step=1.0)
+        return get_coord(start=0.0, stop=10.0, step=1.0)
 
     def test_one_element_arrays_unbox(self):
         """One-element arrays are accepted as scalars."""
-        coord = CoordRange(
+        coord = get_coord(
             start=np.array([0.0]), stop=np.array([10.0]), step=np.array([2.0])
         )
         assert len(coord) == 5
 
     def test_needs_three_values(self):
         """Fewer than three of start, stop, step, shape is an error."""
-        with pytest.raises(ValidationError, match="Three of"):
-            CoordRange(start=0.0, step=1.0)
-        with pytest.raises(ValidationError, match="1D"):
-            CoordRange(start=0.0, step=1.0, shape=(2, 3))
-        from_stop = CoordRange(stop=10.0, step=1.0, shape=(10,))
+        with pytest.raises(CoordError, match="start, stop, and step must be"):
+            get_coord(start=0.0, step=1.0)
+        assert isinstance(get_coord(start=0.0, step=1.0, shape=(2, 3)), CoordPartial)
+        from_stop = get_coord(stop=10.0, step=1.0, shape=(10,))
         assert from_stop.start == 0.0
 
     def test_zero_step(self):
         """A zero float step is a single repeated label."""
-        coord = CoordRange(start=5.0, stop=5.0, step=0.0)
+        coord = get_coord(start=5.0, stop=5.0, step=0.0)
         assert np.array_equal(coord.select((4.0, 6.0))[0].values, [5.0])
 
     def test_float_limit_on_integer_grid(self):
@@ -1037,7 +1060,7 @@ class TestReviewFindings:
             step=np.timedelta64(1, "ms"),
             shape=(4,),
         )
-        assert not legacy._exact
+        assert legacy._exact and legacy.dtype == np.dtype("datetime64[ns]")
         exact = get_coord(start=T0, step=np.timedelta64(1, "ms"), shape=(4,))
         finer = exact.update_limits(step=np.timedelta64(500, "us"))
         assert finer.step_exact == Fraction(1, 2000) and len(finer) == 4
@@ -1093,9 +1116,9 @@ class TestSecondReviewRound:
         """Bounds past the int64 range select the whole coordinate or nothing."""
         coord = get_coord(start=0, stop=10, step=1)
         sub, _ = coord.select((np.uint64(2**63 + 1), None))
-        assert isinstance(sub, CoordPartial)
+        assert not len(sub)
         sub, _ = coord.select((2**70, None))
-        assert isinstance(sub, CoordPartial)
+        assert not len(sub)
         sub, _ = coord.select((-(2**70), 2**70))
         assert sub == coord
 

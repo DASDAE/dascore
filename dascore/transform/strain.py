@@ -185,8 +185,12 @@ def velocity_to_strain_rate_edgeless(
     strain_rate = (data_1 - data_2) / gauge_length
 
     # Need to get distance values between current ones.
-    dists = patch.get_array("distance")
-    new_dist = (dists[step_multiple:] + dists[:-step_multiple]) / 2
+    new_dist = dc.get_coord(
+        start=coord[0] + gauge_length / 2,
+        step=distance_step,
+        shape=(len(coord) - step_multiple,),
+        units=coord.units,
+    )
     new_coords = patch.coords.update(distance=new_dist)
 
     # Handle unit conversions.

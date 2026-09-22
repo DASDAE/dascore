@@ -9,7 +9,6 @@ import pytest
 import dascore as dc
 from dascore.core.coords import (
     _MAX_SUMMARY_RUNS,
-    CoordSegmented,
     concat_coords,
     get_coord,
 )
@@ -31,7 +30,7 @@ def gapped_patch():
     first = patch.select(time=(None, t0 + 1000 * MS))
     second = patch.select(time=(t0 + 1012 * MS, None))
     (out,) = dc.spool([first, second]).chunk(time=None, tolerance=5, snap_coords=False)
-    assert isinstance(out.get_coord("time"), CoordSegmented)
+    assert out.get_coord("time").runs_count > 1
     return out
 
 
@@ -69,7 +68,7 @@ class TestSummaries:
         """Each run is summarized, first to last."""
         coord = gapped_patch.get_coord("time")
         summary = coord.to_summary(dims=("time",))
-        assert len(summary.runs) == coord.segment_count
+        assert len(summary.runs) == coord.runs_count
         assert summary.runs[0].min == coord.min()
         assert summary.runs[-1].max == coord.max()
         assert all(run.step == coord.segments[0].step for run in summary.runs)
@@ -84,7 +83,7 @@ class TestSummaries:
         """Up to the cap every run is summarized; past it, none is."""
         runs = [get_coord(start=20.0 * i, step=1.0, shape=(10,)) for i in range(count)]
         coord = concat_coords(*runs)
-        assert isinstance(coord, CoordSegmented)
+        assert coord.runs_count == count
         summary = coord.to_summary()
         expected = count if count <= _MAX_SUMMARY_RUNS else 0
         assert len(summary.runs or ()) == expected
@@ -211,7 +210,7 @@ class TestReports:
             get_coord(data=np.array([10.0, 10.5, 12.0])),
             get_coord(start=13.0, step=1.0, shape=(10,)),
         )
-        assert isinstance(coord, CoordSegmented)
+        assert coord.runs_count > 1
         patch = dc.Patch(
             data=np.zeros((len(coord), 3)),
             coords={"distance": coord, "x": np.arange(3)},
@@ -229,7 +228,7 @@ class TestReports:
             for x in time.segments
         ]
         relative = gapped_patch.update_coords(time=concat_coords(*runs))
-        assert isinstance(relative.get_coord("time"), CoordSegmented)
+        assert relative.get_coord("time").runs_count > 1
         spool = dc.spool([gapped_patch, relative])
         assert spool.get_gaps()["gap_size"].tolist() == [HOLE]
         assert spool.get_coverage()["gap_total"].tolist() == [HOLE]
@@ -395,7 +394,7 @@ class TestChunkPlansRuns:
         """No window holds samples from both sides of the hole."""
         chunked = dc.spool([gapped_patch]).chunk(time=1)
         assert len(chunked) == 7
-        assert not any(isinstance(p.get_coord("time"), CoordSegmented) for p in chunked)
+        assert not any(p.get_coord("time").runs_count > 1 for p in chunked)
 
     def test_plan_members_are_runs(self, gapped_patch, halves):
         """Each run is a trimmed member; runs in one output are read once."""
@@ -482,4 +481,4 @@ class TestChunkPlansRuns:
         assert len(bridged) == 1
         assert len(bridged.chunk(time=None)) == 2
         windows = bridged.chunk(time=1)
-        assert not any(isinstance(p.get_coord("time"), CoordSegmented) for p in windows)
+        assert not any(p.get_coord("time").runs_count > 1 for p in windows)

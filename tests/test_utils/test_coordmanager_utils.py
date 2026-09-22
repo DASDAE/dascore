@@ -8,7 +8,6 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.core.coords import CoordArray, CoordMonotonicArray, CoordRange
 from dascore.exceptions import CoordMergeError
 from dascore.utils.coordmanager import merge_coord_managers
 
@@ -47,7 +46,7 @@ class TestMergeCoordManagers:
         cm2 = self._get_offset_coord_manager(cm1, time=time.step)
         out = merge_coord_managers([cm1, cm2], dim="time")
         new_time = out.coord_map["time"]
-        assert isinstance(new_time, CoordRange)
+        assert new_time.evenly_sampled
         assert new_time.min() == time.min()
         assert new_time.max() == cm2.coord_map["time"].max()
 
@@ -79,11 +78,15 @@ class TestMergeCoordManagers:
         # try a little more than dt
         cm2 = self._get_offset_coord_manager(cm1, time=dt * 1.1)
         out = merge_coord_managers([cm1, cm2], dim="time")
-        assert isinstance(out.coord_map["time"], CoordMonotonicArray)
+        assert not out.coord_map["time"].evenly_sampled and (
+            out.coord_map["time"].sorted or out.coord_map["time"].reverse_sorted
+        )
         # try a little less
         cm2 = self._get_offset_coord_manager(cm1, time=dt * 0.9)
         out = merge_coord_managers([cm1, cm2], dim="time")
-        assert isinstance(out.coord_map["time"], CoordMonotonicArray)
+        assert not out.coord_map["time"].evenly_sampled and (
+            out.coord_map["time"].sorted or out.coord_map["time"].reverse_sorted
+        )
 
     def test_merge_offset_overlap(self, cm_basic):
         """Ensure coordinates that have overlap produce Coord Array."""
@@ -91,7 +94,9 @@ class TestMergeCoordManagers:
         dt = cm1.coord_map["time"].step
         cm2 = self._get_offset_coord_manager(cm1, time=-dt * 1.1)
         out = merge_coord_managers([cm1, cm2], dim="time")
-        assert isinstance(out.coord_map["time"], CoordArray)
+        assert not (
+            out.coord_map["time"].sorted or out.coord_map["time"].reverse_sorted
+        )
 
     def test_merge_snap_but_not_needed(self, cm_basic):
         """Specifying a snap tolerance even if coords line up should work."""
@@ -100,7 +105,7 @@ class TestMergeCoordManagers:
         cm2 = self._get_offset_coord_manager(cm1, time=time.step)
         out = merge_coord_managers([cm1, cm2], dim="time", snap_tolerance=1.3)
         new_time = out.coord_map["time"]
-        assert isinstance(new_time, CoordRange)
+        assert new_time.evenly_sampled
         assert new_time.min() == time.min()
         assert new_time.max() == cm2.coord_map["time"].max()
 
@@ -113,7 +118,7 @@ class TestMergeCoordManagers:
         cm2 = self._get_offset_coord_manager(cm1, time=nt)
         out = merge_coord_managers([cm1, cm2], dim="time", snap_tolerance=1.3)
         new_time = out.coord_map["time"]
-        assert isinstance(new_time, CoordRange)
+        assert new_time.evenly_sampled
         assert new_time.min() == time.min()
         new_dim_len = out.shape[out.get_axis("time")]
         expected_end = time.min() + (new_dim_len - 1) * time.step
@@ -197,7 +202,7 @@ class TestRawMergeKeepsUnits:
         p1 = dc.get_example_patch().set_units(distance="m")
         d = p1.get_coord("distance")
         # non-uniform values force the raw concatenation path
-        values = np.sort(np.random.default_rng(0).uniform(400, 500, len(d.data)))
+        values = np.sort(np.random.default_rng(0).uniform(400, 500, len(d.values)))
         p2 = p1.update_coords(distance=values).set_units(distance="m")
         merged = merge_coord_managers([p1.coords, p2.coords], dim="distance")
         assert str(merged.coord_map["distance"].units) == "1 m"

@@ -1889,7 +1889,7 @@ class Spool(NodeRepr, NamespaceOwner):
         not the previous row. A patch whose coordinate is segmented into
         runs of one step (such as a gapped patch merged in memory, or read
         whole from a file) is read run by run, so the holes inside it are
-        reported too; one with more than 256 runs is read whole.
+        reported too.
 
         A sample-count tolerance scales the step, so patches whose step
         is unknown report no gaps. An absolute tolerance needs no step
@@ -1969,7 +1969,7 @@ class Spool(NodeRepr, NamespaceOwner):
 
         Coverage is measured from the envelopes the index records: of
         each patch, or of each run of a patch whose coordinate is
-        segmented into runs of one step (up to 256), so a hole inside such
+        segmented into runs of one step, so a hole inside such
         a patch counts like one between patches. A hole is not visible in a
         group whose step is unknown: a sample-count tolerance has nothing
         to scale there, so the group reports no gaps and counts as fully
@@ -2043,7 +2043,7 @@ class Spool(NodeRepr, NamespaceOwner):
             plus a second), which also works for patches whose sampling
             interval is unknown. Either way a boundary of one sample is
             contiguous. A hole inside a patch whose coordinate is segmented
-            into runs of one step (up to 256) is a gap like any other, so
+            into runs of one step is a gap like any other, so
             each run can end an output or join a neighbouring patch. See
             `dascore.utils.gaps.GapTolerance`.
         conflict
@@ -2513,6 +2513,7 @@ class Spool(NodeRepr, NamespaceOwner):
                 "_data_size",
                 *[c for c in df.columns if _private(c, "_def_key")],
                 *[c for c in df.columns if _private(c, "_grid")],
+                *[c for c in df.columns if _private(c, "_runs")],
                 # a plan's outputs state a placeholder coordinate dtype
                 # for the same reason they state no def key
                 *[c for c in df.columns if _private(c, "_coord_dtype")],
