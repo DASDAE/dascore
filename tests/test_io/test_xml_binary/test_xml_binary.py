@@ -480,6 +480,10 @@ class TestDirectoryUnitStaleCheck:
         """An indexed spool over a copy of the archive, and the copy."""
         unit = tmp_path / "root" / "xb"
         shutil.copytree(binary_xml_directory, unit)
+        # Members copied within one clock tick would swap to the same manifest.
+        for num, path in enumerate(sorted(unit.glob("*.raw"))):
+            moved = path.stat().st_mtime_ns + num * 10**9
+            os.utime(path, ns=(moved, moved))
         return dc.spool(tmp_path / "root").update(), unit
 
     def _resolver(self, spool):
