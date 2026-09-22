@@ -1869,6 +1869,11 @@ class TestPartialCoord:
         """A partial coord coerces an int shape like every other coord."""
         assert CoordPartial(shape=5, dtype="float64").shape == (5,)
 
+    def test_time_start_overrides_declared_units(self):
+        """A time-like start is in seconds, whatever units were declared."""
+        coord = CoordPartial(shape=(3,), start=np.datetime64("2020-01-01"), units="m")
+        assert coord.units == get_quantity("s")
+
     @pytest.mark.parametrize("unit", ["us", "ms", "s"])
     @pytest.mark.parametrize("kind", ["datetime64", "timedelta64"])
     def test_values_keep_the_declared_resolution(self, kind, unit):
@@ -3109,6 +3114,15 @@ class TestIndexCoordinate:
         assert out.units == coord.units
         assert out.dtype == coord.dtype
         np.testing.assert_array_equal(out.values, np.array([np.nan], dtype="float32"))
+
+    @pytest.mark.parametrize("indexer", [2, np.int64(-1), (2,)])
+    def test_run_table_scalar_index(self, indexer):
+        """A run table answers a scalar position with a one-sample coord."""
+        coord = NumericND.from_run(0.0, 1.0, 5, units="m")
+        out = coord.index(indexer)
+        assert out.shape == (1,) and len(out) == 1
+        assert out.units == coord.units
+        np.testing.assert_array_equal(out.values, [coord.values[indexer]])
 
     def test_partial_decimation_metadata(self):
         """Sample decimation preserves a partial coordinate's units and dtype."""

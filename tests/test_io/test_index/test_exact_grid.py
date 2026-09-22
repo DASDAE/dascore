@@ -199,6 +199,20 @@ class TestFlatRelation:
         assert coord.dtype == np.dtype("float64")
         assert not coord.to_summary().is_exact_grid
 
+    @pytest.mark.skipif(
+        np.dtype(np.longdouble).itemsize <= 8,
+        reason="platform longdouble is a double",
+    )
+    def test_extended_float_row_states_no_coordinate(self):
+        """A float64 envelope cannot hold labels wider than a double."""
+        row = {
+            "x_min": 0.0,
+            "x_max": 9.0,
+            "x_step": 1.0,
+            "_x_coord_dtype": np.dtype(np.longdouble).str,
+        }
+        assert coord_from_row(row, "x") is None
+
 
 class TestPlannedRows:
     """Plan outputs keep the grid only while the coordinate's identity holds."""

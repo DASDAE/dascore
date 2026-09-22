@@ -932,6 +932,18 @@ class TestFromExisting:
         )
         assert rebuilt == coord
 
+    def test_from_rows_needs_a_stored_run_s_labels(self):
+        """A stored row is nothing but its labels, so a bare table cannot say it."""
+        with pytest.raises(CoordError, match="cannot be rebuilt without its labels"):
+            NumericND.from_rows([(0, 3, 0, 0, 0)], dtype="int64")
+
+    def test_from_rows_takes_the_layout_of_its_labels(self):
+        """N-D labels with no declared shape lay the samples out as they are."""
+        labels = np.arange(6.0).reshape(2, 3)
+        coord = NumericND.from_rows([(0, 6, 0, 0, 0)], labels=labels, dtype="float64")
+        assert coord.shape == (2, 3)
+        np.testing.assert_array_equal(coord.values, labels)
+
     def test_get_coord_rebuilds_from_runs(self, mixed):
         """`get_coord(runs=...)`, the constructor an index row hands back."""
         out = get_coord(
@@ -2068,10 +2080,16 @@ class TestOtherCoordsAnswerTheSameQuestions:
         coord = CoordPartial(shape=(3, 4), units="m")
         assert not coord.has_values and get_coord(data=[1, 2]).has_values
         assert coord.set_units("m") is coord and coord.fuse(1) is coord
+        assert coord.snap() is coord
         assert coord.empty(axes=0).shape == (0, 4)
         with pytest.raises(CoordError, match="evenly sampled"):
             coord.coord_range()
         assert pd.isnull(coord.coord_range(extend=False))
+
+    def test_a_partial_is_no_coordinate_s_approximate_equal(self):
+        """Unknown labels cannot be approximately anything, matching shape or not."""
+        coord = NumericND.from_array(np.arange(12.0).reshape(3, 4), units="m")
+        assert not coord.approx_equal(CoordPartial(shape=(3, 4), units="m"))
 
     def test_string(self):
         """Text has no runs, so no seams and no holes."""

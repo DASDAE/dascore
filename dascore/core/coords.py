@@ -42,7 +42,6 @@ import dascore as dc
 from dascore.compat import array, is_array
 from dascore.constants import _AGG_FUNCS, DIM_REDUCE_DOCS, dascore_styles
 from dascore.core._run_kernels import (
-    _FLOAT_INDEX_MAX,
     _INT64_MAX,
     SOURCE_ID,
     FloatKernel,
@@ -1935,13 +1934,6 @@ def _on_grid(deltas, step) -> np.ndarray:
     return counts.astype(np.int64)
 
 
-def _past_float_counting(values: np.ndarray) -> bool:
-    """Whether these are integer labels a float64 cannot count one by one."""
-    if not np.issubdtype(values.dtype, np.integer) or not values.size:
-        return False
-    return bool(np.max(np.abs(values.astype(np.float64))) > _FLOAT_INDEX_MAX)
-
-
 def _keeps_step(segments, ascending: bool) -> bool:
     """
     Whether any seam between `segments` skips a position of their grid.
@@ -2149,34 +2141,6 @@ def runs_from_rows(rows, dtype) -> np.ndarray:
     width = len(record.names or ())
     padded = [(*tuple(row), b"")[:width] for row in rows]
     return np.asarray(padded, record)
-
-
-def _grid_run_stops(runs: np.ndarray, dtype) -> np.ndarray:
-    """
-    Each grid run's last label, in the spelling its start is stated in.
-
-    A stored run's last label is in its own labels, which a bare table does
-    not carry, so such a row states its start instead.
-    """
-    rows = np.asarray(runs)
-    return get_kernel(dtype).labels(rows, slice(None), rows["length"] - 1)
-
-
-def run_heads(runs: np.ndarray, dtype) -> np.ndarray:
-    """
-    Each run's first label, as a tick or a float.
-
-    A tick row states it as its ``start``; a float row's ``start`` is the
-    origin of its grid, so its first label has to be worked out.
-    """
-    return get_kernel(dtype).heads(np.asarray(runs))
-
-
-def run_step(row, dtype):
-    """One run's spacing as the envelope's scalar, or None for a stored run."""
-    if not row["den"]:
-        return None
-    return get_kernel(dtype).step_of(row.item())
 
 
 def _step_terms(step, dtype) -> tuple[int, int]:
@@ -3213,25 +3177,6 @@ class NumericND(BaseCoord):
         return _ticked(self.dtype)
 
     @property
-    def _foreign(self) -> tuple | None:
-        """
-        How another library stated these same labels, or None.
-
-        A converter or reader leaves a ``(kind, *payload)`` note here, such
-        as the tie points an XDAS file interpolates between, so that handing
-        the coordinate straight back gives that library exactly what it
-        gave. It is a note on this one object: no operation carries it to
-        the coordinate it returns, and it is no part of a dump, of equality,
-        or of an id. The labels are always the run table's.
-        """
-        return self._cache.get("foreign")
-
-    def _note_foreign(self, kind: str, *payload) -> Self:
-        """Leave a note of how another library stated these labels."""
-        self._cache["foreign"] = (kind, *payload)
-        return self
-
-    @property
     def _kernel(self) -> type[TickKernel] | type[FloatKernel]:
         """The arithmetic the rows are read with; see `dascore.core._run_kernels`."""
         return get_kernel(self.dtype)
@@ -3724,9 +3669,10 @@ class NumericND(BaseCoord):
         out = self[indexer]
         if isinstance(out, BaseCoord):
             return out
+        # One label is still a coordinate, as it is for every other coord.
         # The labels picked are labels this coordinate already held, so
         # they are re-read rather than fitted to a grid.
-        return self.from_array(np.asarray(out), units=self.units)
+        return self.from_array(np.atleast_1d(out), units=self.units)
 
     def sort(self, reverse=False) -> tuple[BaseCoord, slice | np.ndarray]:
         """Sort the labels; return the sorted coordinate and the index to apply."""
