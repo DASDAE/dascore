@@ -1934,7 +1934,12 @@ class Grid:
         for name in ("step_den", "count", "k0", "phase"):
             if type(value := getattr(self, name)) is not int:
                 object.__setattr__(self, name, int(value))
+        if self.count < 0:
+            msg = f"A run cannot hold {self.count} samples."
+            raise CoordError(msg)
         if not self.exact:  # a float run states its start outright
+            object.__setattr__(self, "origin", self.origin + self.k0 * self.step_num)
+            object.__setattr__(self, "k0", 0)
             return
         num = int(self.step_num)
         whole, phase = divmod(self.phase + self.k0 * num, self.step_den)
@@ -1960,14 +1965,13 @@ class Grid:
     @property
     def ideal_origin(self) -> Fraction:
         """The ideal position of the first sample, in ticks."""
-        num, den = self.step_num, self.step_den
-        return Fraction(self.origin * den + self.phase + self.k0 * num, den)
+        return Fraction(self.origin * self.step_den + self.phase, self.step_den)
 
     def labels(self, indices, dtype) -> np.ndarray:
         """The labels at these indices, which may lie outside the run."""
         indices = np.asarray(indices)
         if self.exact:
-            offset = self.phase + self.k0 * self.step_num
+            offset = self.phase
             ticks = (offset + indices.astype(np.int64) * self.step_num) // self.step_den
             return np.asarray(self.origin + ticks).astype(dtype)
         start, step, num = self.origin, self.step_num, self.count
@@ -1986,7 +1990,7 @@ class Grid:
         """The run of the samples first, first + stride, ... (count of them)."""
         if not self.exact:
             step = self.step_num
-            return Grid(self.origin + (self.k0 + first) * step, step * stride, 0, count)
+            return Grid(self.origin + first * step, step * stride, 0, count)
         if stride == 1:
             return Grid(
                 self.origin,
@@ -2017,8 +2021,7 @@ class Grid:
         and a tick is an integer; Python integers, so no overflow.
         """
         num, den = self.step_num, self.step_den
-        offset = self.phase + self.k0 * num
-        rel = (np.asarray(ticks, dtype=object) - self.origin) * den - offset
+        rel = (np.asarray(ticks, dtype=object) - self.origin) * den - self.phase
         if forward == (num > 0):  # label >= tick  <=>  ideal >= tick
             return -((-rel) // num) if num > 0 else rel // num
         # label <= tick  <=>  ideal < tick + 1
@@ -2137,7 +2140,7 @@ def _check_grid(grid: Grid, dtype) -> None:
     dtype = np.dtype(dtype)
     info = np.iinfo(cast("Any", dtype) if dtype.kind in "iu" else np.int64)
     num, den, count = grid.step_num, grid.step_den, grid.count
-    offset = grid.phase + grid.k0 * num
+    offset = grid.phase
     first = grid.origin + offset // den
     last = grid.origin + (offset + max(count - 1, 0) * num) // den
     wraps = min(first, last) < info.min or max(first, last) > info.max
@@ -2158,7 +2161,7 @@ def _exact_run(values, dtype: np.dtype) -> Grid:
     shape = values.get("shape")
     start_tick = None if start is None else _to_tick(start)
     stop_tick = None if stop is None else _to_tick(stop)
-    # get_coord screens out a shape which is not one positive length
+    # get_coord screens out a shape which is not one nonzero length
     count = None if shape is None else int(next(iter(iterate(shape))))
     # The grid: a fraction step wins, then explicit grid fields, then a
     # scalar step, then the span divided by the count.
@@ -2910,7 +2913,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
 
     def _get_float_index(self, grid: Grid, value, forward=True):
         """Get the index corresponding to a value of a float range."""
-        start, step = grid.origin + grid.k0 * grid.step_num, grid.step_num
+        start, step = grid.origin, grid.step_num
         if isinstance(value, Sized):
             func = np.ceil if forward else np.floor
             # Due to float weirdness we need a little bit of a fudge factor here.
@@ -3297,12 +3300,12 @@ get_coord(start=0.0, stop=20.0, step=1.0)
                 "integer grid."
             )
             raise CoordError(msg)
-        ends = [
-            convert_units(run.labels(x, self.dtype)[()], units, self.units)
-            for x in (0, run.count)
-        ]
-        spec = dict(start=ends[0], stop=ends[1], step=(ends[1] - ends[0]) / run.count)
-        return _range_run(spec)
+        # Never the endpoint past the last label: it wraps at a dtype limit.
+        step = run.step(self.dtype)
+        anchor = convert_units(step * 0, units, self.units)  # an affine offset
+        start = convert_units(run.labels(0, self.dtype)[()], units, self.units)
+        step = convert_units(step, units, self.units) - anchor
+        return _range_run(dict(start=start, step=step, shape=(run.count,)))
 
     # --- discontinuities
 
@@ -3783,8 +3786,7 @@ def _fill_position(coord: NumericCoord, anchor: Grid, piece: Grid) -> int:
     """The position on the anchor's grid nearest the piece's first label."""
     label = coord._run_labels(piece, [0])[0]
     if not anchor.exact:
-        start = anchor.origin + anchor.k0 * anchor.step_num
-        return int(np.round((label - start) / anchor.step_num))
+        return int(np.round((label - anchor.origin) / anchor.step_num))
     tick = _to_tick(label)
     after = int(anchor.index_of([tick], forward=True)[0])
     # the labels either side as the integer ticks the grid casts to dtype,
@@ -4266,7 +4268,8 @@ def get_coord(
         )
     if isinstance(data, BaseCoord):  # just return coordinate
         return data
-    if not isinstance(data, np.ndarray):
+    # An exact read takes a squeezed sample as one label, as readers did
+    if not isinstance(data, np.ndarray) or not (snap or data.ndim):
         data = np.atleast_1d(data)
     kind = _get_coord_kind(data)
     if kind == "string":

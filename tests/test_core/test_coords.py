@@ -2589,6 +2589,13 @@ class TestIssues:
         assert isinstance(coord, BaseCoord)
         assert len(coord) == 1
 
+    def test_squeezed_single_sample(self):
+        """An exact read takes a squeezed array as one sample, not as none."""
+        for data in (np.datetime64("2020-01-01"), np.asarray(np.float64(1.0))):
+            assert get_coord(data=data, snap=False).shape == (1,)
+        # a snapped read still makes the dimensionless coordinate it always has
+        assert get_coord(data=np.asarray(np.float64(1.0))).shape == ()
+
     def test_update_degenerate_from_attrs(self, degenerate_time_coord):
         """Ensure updating dt on degenerate time coord doesn't fail."""
         # before this would cause infinite recursion.

@@ -44,6 +44,14 @@ class TestRunsHoldTheLabels:
         assert isinstance(coord.runs[0], Grid)
         assert coord.evenly_sampled
 
+    def test_a_float_run_folds_its_offset(self):
+        """A float run's index offset moves its origin, as an exact one's does."""
+        coord = get_coord(runs=(Grid(0.0, 1.0, 0, 3, k0=5),), dtype=np.dtype("float64"))
+        assert np.array_equal(coord.values, [5.0, 6.0, 7.0])
+        assert np.array_equal(coord.select((5.0, 6.0))[0].values, [5.0, 6.0])
+        assert coord.runs[0].canonical() == (5.0, 1.0, 0, 3)
+        assert coord.data_id != get_coord(start=0.0, step=1.0, shape=(3,)).data_id
+
     def test_stored_labels_are_one_run(self):
         """Labels no grid describes are held as they are."""
         coord = NumericCoord.from_labels(np.array([0.0, 1.0, 3.5]))

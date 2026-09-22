@@ -228,6 +228,12 @@ class TestConstruction:
         coord = get_coord(start=0, step=1, shape=(0,))
         assert isinstance(coord, CoordPartial)
 
+    def test_negative_count_raises(self):
+        """A negative length is no grid; zero stays a partial coordinate."""
+        with pytest.raises(CoordError, match="cannot hold"):
+            get_coord(start=0, step=1, shape=(-1,))
+        assert isinstance(get_coord(shape=(0,)), CoordPartial)
+
     @pytest.mark.parametrize("ms", [10_020, 10_060, 9_990])
     def test_stop_rounding_parity(self, ms):
         """A stop stated a hair off a sample counts as a float range always has."""
@@ -699,6 +705,17 @@ class TestUnits:
         out = coord.convert_units("km")
         assert not _is_exact(out)
         assert np.allclose(out.values, coord.values / 1000)
+
+    def test_conversion_at_the_dtype_limit(self):
+        """The last label, not the endpoint past it, scales the new grid."""
+        top = get_coord(start=np.uint8(252), step=np.uint8(1), shape=(4,), units="m")
+        assert np.allclose(top.convert_units("cm").values, [25200, 25300, 25400, 25500])
+        # float64 cannot separate labels this large, so the grid is refused
+        # rather than rebuilt backwards from a wrapped endpoint.
+        big = np.iinfo(np.int64).max
+        wide = get_coord(start=big - 3, step=1, shape=(4,), units="m")
+        with pytest.raises(CoordError, match="Sign of step"):
+            wide.convert_units("cm")
 
     def test_fraction_grid_refuses(self, int_frac):
         """A fractional integer grid refuses conversion but accepts set_units."""
