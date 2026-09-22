@@ -571,8 +571,9 @@ def summaries_to_records(
         but the root itself is *not* persisted (local directory spools
         resolve against their current root, per the design doc).
     mtimes_ns, sizes_bytes
-        Optional maps of source_path -> stat values. When omitted the
-        caller is responsible for change detection.
+        Optional maps of source_path -> stat values. A source with no
+        value recorded is one nothing can be promised about, so a merge
+        reading its windows from the index refuses to.
     """
     # Group by the original (OS-native) source path so the mtimes_ns /
     # sizes_bytes maps, which the caller keys by that same path, still

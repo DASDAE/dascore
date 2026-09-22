@@ -745,7 +745,8 @@ def build_sql(
     )
     sql = (
         "SELECT s.source_path, s.base_uri, s.source_format, s.format_version, "
-        f"s.path_attrs, p.*{attr_cols} "
+        "s.path_attrs, s.mtime_ns, s.size_bytes, "
+        f"p.*{attr_cols} "
         f"{_FROM}"
         f"WHERE {where.sql} "
         f"{order}"

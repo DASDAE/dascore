@@ -33,10 +33,12 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 23 identifies a coordinate
-# by its runs, so a dev-era index states other ids for the same labels;
-# version 22 hashes a coordinate in the units it was written in, so the
-# key names one spelling; version 21
+# changes, not only when a column does. Version 24 identifies a
+# coordinate by its runs, so a dev-era index states other ids for the
+# same labels; version 23 records a coordinate's dtype with the unit it
+# counts in, so a row rebuilds the coordinate the file holds rather than
+# one in nanoseconds; version 22 hashes a coordinate in the units it was
+# written in, so the key names one spelling; version 21
 # names row numbers `_row`; version 20 renamed the two id attrs and
 # rehashed coordinate keys;
 # version 19 keys a single-patch HDF5 source by its dataset path;
@@ -46,7 +48,7 @@ from typing import NamedTuple, get_args, get_type_hints
 # version 15 stored source coordinate and numeric attribute dtypes.
 # Earlier indexes lack the metadata required for reconstruction and are
 # rebuilt when opened.
-INDEX_VERSION = 23
+INDEX_VERSION = 24
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -395,6 +397,11 @@ RESERVED_ATTR_COLUMNS = frozenset(
 # `patch_row`, the row number, is renamed in the backend before attr columns
 # land: residual queries and the catalog's ordering read `_patch_row`. The
 # rest are renamed where the spool relation is built.
+
+# What the index last measured of each member's source, projected beside
+# the member's own row so the two describe one revision of the index.
+SOURCE_STAT_COLUMNS = ("_mtime_ns", "_size_bytes")
+
 SPOOL_EARLY_RENAMES = MappingProxyType({"patch_row": "_patch_row"})
 SPOOL_LATE_RENAMES = MappingProxyType(
     {
@@ -402,6 +409,8 @@ SPOOL_LATE_RENAMES = MappingProxyType(
         "data_size": "_data_size",
         "attrs_complete": "_attrs_complete",
         "attr_dtypes": "_attr_dtypes",
+        "mtime_ns": SOURCE_STAT_COLUMNS[0],
+        "size_bytes": SOURCE_STAT_COLUMNS[1],
     }
 )
 

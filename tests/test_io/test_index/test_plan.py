@@ -583,8 +583,7 @@ class TestRelativeAdjustedEnvelopes:
         df = pd.DataFrame({"time_min": [0.0], "time_max": [9.0]})
         residuals = (({"time": bounds}, False, True),)
         out = patch_local_adjusted_envelopes(df, residuals, drop_empty=False)
-        assert out["_patch_local_empty"].all()
-        assert out["time_min"].isna().all()
+        assert out.empty
 
     def test_non_finite_time_bound_is_open(self):
         """A datetime coordinate cannot offset by infinity, so it loads whole."""
@@ -610,7 +609,10 @@ class TestRelativeAdjustedEnvelopes:
     def test_missing_envelope_columns_pass_through(self):
         """An absent envelope cannot claim that the source loads whole."""
         df = pd.DataFrame({"time_min": [0.0], "time_max": [9.0]})
-        residuals = (({"depth": (1, -1)}, False, True),)
+        residuals = (
+            ({"depth": (1, -1)}, False, True),
+            ({"depth": (1, -1)}, False, True),
+        )
         out = patch_local_adjusted_envelopes(df, residuals)
         assert out[df.columns].equals(df)
         assert out["_modified"].all()
@@ -672,9 +674,9 @@ class TestRelativeAdjustedEnvelopes:
             assert patch.equals(source.select(time=window, relative=True))
 
     def test_empty_windows_produce_empty_plan(self, short_spool):
-        """Selected empty patches remain members but contribute no plan outputs."""
+        """Empty relative windows contribute neither members nor plan outputs."""
         selected = short_spool.select(time=(100, 101), relative=True)
-        assert len(selected) == len(short_spool)
+        assert len(selected) == 0
         assert len(selected.chunk_plan(time=None).outputs) == 0
         assert len(selected.chunk(time=None)) == 0
 

@@ -14,6 +14,7 @@ import hashlib
 import json
 import math
 import os
+import stat
 import tempfile
 from contextlib import suppress
 from functools import partial
@@ -41,6 +42,53 @@ from dascore.utils.paths import (
     requires_local_directory,
 )
 from dascore.utils.progress import track, validate_progress_level
+
+
+def _directory_signature(path: Path) -> tuple[int, int]:
+    """Return a stable 128-bit manifest signature as two SQLite ints."""
+    members = sorted(
+        (
+            sub
+            for sub in path.rglob("*")
+            if sub.is_file() and not sub.name.startswith(".")
+        ),
+        key=lambda sub: sub.relative_to(path).as_posix(),
+    )
+    digest = hashlib.sha256()
+    for member in members:
+        status = member.stat()
+        relative = member.relative_to(path).as_posix().encode()
+        digest.update(len(relative).to_bytes(8, "big"))
+        digest.update(relative)
+        digest.update(status.st_mtime_ns.to_bytes(8, "big", signed=True))
+        digest.update(status.st_size.to_bytes(8, "big"))
+    fingerprint = digest.digest()
+    return (
+        int.from_bytes(fingerprint[:8], "big", signed=True),
+        int.from_bytes(fingerprint[8:16], "big", signed=True),
+    )
+
+
+def scan_unit_stats(path) -> tuple[int | None, int | None]:
+    """
+    Return the (mtime_ns, size_bytes) the index records for one scan unit.
+
+    This is the one definition of "has this source changed": the index
+    stores what this returns, and a reader checking a source it is about
+    to trust calls the same function, so the two cannot disagree. A file
+    answers with its own stat; a directory-format unit, which is one
+    source made of many files, answers with its manifest fingerprint,
+    since its own stat moves for neither a rewritten nor a resized
+    member. A source the filesystem will not answer for states nothing.
+    """
+    try:
+        status = os.stat(path)
+        if stat.S_ISDIR(status.st_mode):
+            # A member removed between the listing and its stat is a change.
+            return _directory_signature(Path(path))
+    except OSError:
+        return None, None
+    return status.st_mtime_ns, status.st_size
 
 
 def _scan_batch(paths, config):
@@ -271,31 +319,6 @@ class DBDirectoryIndexer:
         """Return True when a directory is itself one FiberIO scan unit."""
         return is_directory_format(path)
 
-    @staticmethod
-    def _directory_signature(path: Path) -> tuple[int, int]:
-        """Return a stable 128-bit manifest signature as two SQLite ints."""
-        members = sorted(
-            (
-                sub
-                for sub in path.rglob("*")
-                if sub.is_file() and not sub.name.startswith(".")
-            ),
-            key=lambda sub: sub.relative_to(path).as_posix(),
-        )
-        digest = hashlib.sha256()
-        for member in members:
-            stat = member.stat()
-            relative = member.relative_to(path).as_posix().encode()
-            digest.update(len(relative).to_bytes(8, "big"))
-            digest.update(relative)
-            digest.update(stat.st_mtime_ns.to_bytes(8, "big", signed=True))
-            digest.update(stat.st_size.to_bytes(8, "big"))
-        fingerprint = digest.digest()
-        return (
-            int.from_bytes(fingerprint[:8], "big", signed=True),
-            int.from_bytes(fingerprint[8:16], "big", signed=True),
-        )
-
     def _walk(self) -> dict[str, tuple[int, int, Path]]:
         """
         Walk the spool directory, honoring directory-format scan units.
@@ -323,20 +346,18 @@ class DBDirectoryIndexer:
             # Not Path(candidate): the generator's yield type includes UPath,
             # which is not os.PathLike unless it resolved to a local path.
             path = coerce_to_local_path(candidate)
-            if path.is_dir():
-                if self._directory_format(path):
-                    signal = "skip"
-                    signature = self._directory_signature(path)
-                    files[self._rel(path)] = (*signature, path)
+            directory = path.is_dir()
+            if directory and not self._directory_format(path):
                 continue
-            try:
-                stat = path.stat()
-            except OSError:
-                # The file vanished between the walk yielding it and this
-                # stat (a concurrent deletion); skip it rather than
+            if directory:
+                signal = "skip"
+            mtime, size = scan_unit_stats(path)
+            if mtime is None or size is None:
+                # The source vanished between the walk yielding it and
+                # this stat (a concurrent deletion); skip it rather than
                 # crashing the whole index update.
                 continue
-            files[self._rel(path)] = (stat.st_mtime_ns, stat.st_size, path)
+            files[self._rel(path)] = (mtime, size, path)
         return files
 
     def _detect_moves(

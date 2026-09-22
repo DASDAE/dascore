@@ -606,6 +606,23 @@ class TestLoadMemberArray:
         assert resolver._load_member_array(row, {"time": (0, 5)}) is None
         assert override == []
 
+    def test_member_source_names_the_whole_array(self, resolver, row):
+        """The source a member row names reads exactly the member's array."""
+        expected = resolver._load_member(row).data
+        source = resolver._member_array_source(row, expected.shape)
+        assert source.shape == expected.shape
+        assert np.dtype(source.dtype) == expected.dtype
+        assert source.windows == tuple((0, x) for x in expected.shape)
+        assert source.extent == expected.shape
+        assert np.array_equal(source.load(), expected)
+
+    def test_member_source_without_a_dtype_returns_none(self, resolver, row):
+        """A row which does not say what the array is cannot name it."""
+        shape = resolver._load_member(row).shape
+        for value in ("", None, float("nan")):
+            blank = dict(row, _dtype=value)
+            assert resolver._member_array_source(blank, shape) is None
+
     def test_override_gets_annotated_handle(self, resolver, row, swap_read_array):
         """The override receives the handle type it declares, like read.
 

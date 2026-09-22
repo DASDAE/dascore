@@ -5,16 +5,21 @@ This is the consumer of the members (instruction) table that
 `dascore.utils.chunk_plan` produces and every spool view carries: it
 joins member rows to their source rows, loads each source patch through
 a caller-supplied loader, applies exact trims, and merges multi-member
-outputs (streaming into a pre-allocated buffer when the output size is
-known). The spool owns *what* rows exist; this module owns *how* a row
-becomes a Patch.
+outputs. When the output size is known, a merge whose members the rows
+fully describe becomes a
+[`LazyArray`](`dascore.core.lazy_array.LazyArray`) recipe -- the window
+of a stored array each member is, read into one output -- and any other
+such merge streams loaded patches into a pre-allocated buffer; the rest
+concatenate. The spool owns *what* rows exist; this module owns *how* a
+row becomes a Patch.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import accumulate
 from typing import Any
 
 import numpy as np
@@ -23,7 +28,15 @@ import pandas as pd
 import dascore as dc
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import _EXACT_GRID_FIELDS, get_coord
-from dascore.exceptions import ChunkError, CoordMergeError, UnitError
+from dascore.core.lazy_array import LazyArray
+from dascore.core.source import ArraySource
+from dascore.exceptions import (
+    ChunkError,
+    CoordMergeError,
+    InvalidFiberIOError,
+    ParameterError,
+    UnitError,
+)
 from dascore.io.index.ingest import _is_missing
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
 from dascore.units import get_quantity
@@ -203,26 +216,10 @@ class _MemberMeta:
     dims: tuple[str, ...]
     coords: CoordManager
     attrs: dc.PatchAttrs
-
-
-@dataclass
-class _Member:
-    """What the streaming merge takes from one member, however it was loaded."""
-
-    dims: tuple[str, ...]
-    data: np.ndarray
-    coords: CoordManager
-    attrs: dc.PatchAttrs
-
-    def transpose(self, dims: tuple[str, ...]) -> _Member:
-        """The same member with its axes in ``dims`` order."""
-        order = [self.dims.index(d) for d in dims]
-        return _Member(
-            dims,
-            np.transpose(self.data, order),
-            self.coords.transpose(*dims),
-            self.attrs,
-        )
+    # The shape of the whole stored array and the part of it this member
+    # is; the coords' shape and all of it when the plan trims nothing.
+    extent: tuple[int, ...]
+    window: tuple[slice, ...]
 
 
 def _attrs_from_row(
@@ -280,20 +277,6 @@ def _is_null(value) -> bool:
     return np.ndim(value) == 0 and pd.isnull(value)
 
 
-def _row_range(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
-    """
-    A dimension's evenly sampled range as the row states it, or None.
-
-    The envelope orders values, not samples: a descending coordinate's
-    start is its maximum, which the row does not say, so only an
-    ascending range is stated.
-    """
-    values = _row_values(row, dim)
-    if values is None or values[2] < np.zeros((), dtype=np.asarray(values[2]).dtype):
-        return None
-    return values
-
-
 def _row_values(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
     """
     A dimension's (min, max, step) envelope in the file's dtype, or None.
@@ -334,10 +317,63 @@ def _row_values(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
     return kind(lo), kind(hi), kind(step)
 
 
+def _row_bounds(row: Mapping, dim: str) -> tuple[Any, Any] | None:
+    """
+    A dimension's (min, max) bounds exactly as the row states them, or None.
+
+    Never cast to the coordinate's dtype: these are the window the plan
+    drew, which falls where it likes between samples, and rounding one
+    onto the stored grid would take in a sample the plan left out. What
+    the bounds mean is decided by the coordinate they select.
+    """
+    values = []
+    for name in ("min", "max"):
+        value = row.get(f"{dim}_{name}")
+        if value is None or _is_null(value):
+            return None
+        if isinstance(value, pd.Timestamp):
+            value = value.to_datetime64()
+        elif isinstance(value, pd.Timedelta):
+            value = value.to_timedelta64()
+        values.append(value)
+    return values[0], values[1]
+
+
 def _units_converted(row: Mapping, dim: str) -> bool:
     """Whether the row's envelope was converted from the file's own units."""
     source_units = row.get(f"_{dim}_units_source")
     return not _is_null(source_units) and source_units != row.get(f"_{dim}_units")
+
+
+# What a source's own range is called beside a member's trim of it. Not
+# min/max/step: code scanning a frame for `<x>_min`/`<x>_max`/`<x>_step`
+# triples would read these as a dimension named `<dim>_src`.
+SOURCE_RANGE_ENDS = ("low", "high", "step")
+
+
+def source_range_column(dim: str, end: str) -> str:
+    """The private column holding a member source's own envelope value."""
+    return f"_{dim}_src_{end}"
+
+
+def source_coord_from_row(row: Mapping, dim: str, units=None):
+    """
+    The evenly sampled coordinate a member's *source* states, or None.
+
+    A member row's envelope is the window the plan trimmed it to; the
+    source's own stays beside it under `source_range_column`, and with
+    the grid, dtype and units — which describe the file either way —
+    rebuilds the coordinate the file holds.
+    """
+    envelope = {}
+    for end, name in zip(SOURCE_RANGE_ENDS, ("min", "max", "step"), strict=True):
+        value = row.get(source_range_column(dim, end))
+        if value is None or _is_null(value):
+            return None
+        envelope[f"{dim}_{name}"] = value
+    for suffix in ("_grid", "_coord_dtype", "_units", "_units_source"):
+        envelope[f"_{dim}{suffix}"] = row.get(f"_{dim}{suffix}")
+    return coord_from_row(envelope, dim, units=units)
 
 
 def coord_from_row(row: Mapping, dim: str, units=None):
@@ -369,6 +405,39 @@ def coord_from_row(row: Mapping, dim: str, units=None):
     if step < np.zeros((), dtype=np.asarray(step).dtype):
         return None
     return get_coord(start=lo, stop=hi + step, step=step, units=units)
+
+
+def _at_unit(coord, unit: str):
+    """The same evenly sampled coordinate counted in ``unit``, or None."""
+    first = coord.max() if coord.reverse_sorted else coord.min()
+    name = "datetime64" if np.asarray(first).dtype.kind == "M" else "timedelta64"
+    start = np.asarray(first).astype(f"{name}[{unit}]")
+    step = np.asarray(coord.step).astype(f"timedelta64[{unit}]")
+    if step == np.zeros((), dtype=step.dtype):
+        return None  # a unit this coarse cannot count this step
+    return get_coord(start=start, step=step, shape=coord.shape, units=coord.units)
+
+
+def coord_at_stored_unit(coord, row: Mapping, dim: str):
+    """
+    ``coord`` counted as the file counts it, or None when nothing says.
+
+    A row holds datetimes in nanoseconds however its file stores them,
+    and the dtype it records names the unit they are counted in, so the
+    coordinate is cast to it. A row whose dtype names no unit is left to
+    the patch path, which reads the file's own.
+    """
+    if coord is None or np.asarray(coord.min()).dtype.kind not in "mM":
+        return coord
+    stored = row.get(f"_{dim}_coord_dtype")
+    if not isinstance(stored, str) or not stored:
+        return None
+    if np.dtype(stored).kind not in "mM":
+        return None
+    unit, count = np.datetime_data(stored)
+    if unit == "generic" or count != 1:
+        return None
+    return coord if unit == "ns" else _at_unit(coord, unit)
 
 
 def patch_from_fill(
@@ -510,6 +579,22 @@ def fill_to_row(
         )
 
 
+def _cast_via(dtype: np.dtype, chain: Sequence[np.dtype]) -> np.dtype | None:
+    """
+    The dtype a member's samples first round at along a promotion chain.
+
+    The streaming buffer casts everything it holds at every promotion, so
+    a member placed early passes through each buffer dtype after it. Only
+    an integer reaching a float rounds, and a promotion chain leaves the
+    integers once, so one dtype states what the whole chain does. None
+    means nothing rounds before the dtype the array casts to anyway.
+    """
+    if dtype.kind not in "bui":
+        return None
+    via = next((x for x in chain if x.kind not in "bui"), None)
+    return None if via is None or via == chain[-1] else via
+
+
 @dataclass
 class PatchAssembler:
     """
@@ -525,11 +610,18 @@ class PatchAssembler:
     load_patch: Callable[[Mapping], dc.Patch]
     merge_kwargs: Mapping
     plan_dim: str
-    # Hands back an untrimmed member's whole array, or None when the
-    # member must be loaded as a patch; the index then stands in for
-    # the member's coordinates and attrs.
-    load_array: Callable[[Mapping], np.ndarray | None] | None = None
-    can_load_array: Callable[[Mapping], bool] | None = None
+    # Names the whole stored array a member is part of, reading nothing;
+    # the index then stands in for its coordinates and attrs. None sends
+    # the member down the patch path.
+    array_source: Callable[[Mapping, tuple[int, ...]], ArraySource | None] | None = None
+    # Whether the rows alone can describe this member; nothing is read.
+    can_use_index: Callable[[Mapping], bool] | None = None
+    # Whether every member source still is what the index recorded. A
+    # recipe reads the window the index promised rather than the whole
+    # array, so a file rewritten since would otherwise pass unnoticed.
+    # Takes the joined member frame; the caller keeps what was recorded.
+    # Only a source measured now and found unchanged keeps the recipe.
+    sources_unchanged: Callable[[pd.DataFrame], bool] | None = None
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
@@ -586,53 +678,120 @@ class PatchAssembler:
         carry what the index cannot hold (an array attr, a coordinate it
         could not represent), and the merge would then see it on some
         members and not others, refusing what it accepts whole. The rows
-        decide that before anything is read; an array whose shape the row
-        did not predict is only found once it is loaded, and abandons the
-        attempt. Returning from that attempt releases its buffer before
+        decide that before anything is read, and a source the index no
+        longer matches is refused there too; a shape the row did not
+        predict is only found once it is loaded, and abandons the
+        attempt. Returning from that attempt releases its output before
         the retry reloads the source coordinates, attrs, and arrays.
         """
         metas = self._member_meta_from_index(df_dict_list)
         if metas is not None:
-            out = self._stream(joined, df_dict_list, merge_dim, samples, metas)
+            out = self._merge_from_index(joined, df_dict_list, merge_dim, metas)
             if out is not None:
                 return out
-        return self._stream(joined, df_dict_list, merge_dim, samples, None)
+        return self._stream(joined, df_dict_list, merge_dim, samples)
 
-    def _stream(self, joined, df_dict_list, merge_dim, samples, metas):
+    def _merge_from_index(self, joined, df_dict_list, merge_dim, metas):
+        """
+        Merge members the rows describe, as one recipe read in one pass.
+
+        Every member is a window of its source's stored array, so the
+        output's shape and dtype are known before a file is opened and
+        the members need never be patches. Returns None when a member
+        cannot be named without reading it, when a source is no longer
+        what the index recorded, or when a file did not deliver the array
+        its row predicted, so the caller can start over on the patch path.
+        """
+        dims = metas[0].dims
+        axis = dims.index(merge_dim)
+        recipe = self._recipe(df_dict_list, metas, dims, axis)
+        if recipe is None:
+            return None
+        if self.sources_unchanged is not None and not self.sources_unchanged(joined):
+            return None
+        try:
+            data = recipe.load()
+        except (InvalidFiberIOError, ParameterError):
+            # the resource did not hold the array its row described: a
+            # different shape, or fewer axes than the windows name
+            return None
+        coords = [meta.coords for meta in metas]
+        attrs = [meta.attrs for meta in metas]
+        return self._assemble(data, dims, merge_dim, coords, attrs)
+
+    def _recipe(self, rows, metas, dims, axis) -> LazyArray | None:
+        """
+        The lazy array the members make, or None when one cannot be named.
+
+        Nothing is read here: every member is a window of a stored array
+        whose shape its row states, so the members are laid end to end
+        along the merged axis by arithmetic alone. A member holding its
+        axes in another order than the first, or disagreeing off the
+        merged axis, takes the patch path instead, which transposes each
+        one as it is loaded and says what cannot be merged.
+
+        The dtype is promoted a member at a time, in placement order, as
+        the streaming merge promotes its buffer: promotion is not
+        associative, and the two routes must give one answer. The buffer
+        casts what it already holds at every promotion, so each member is
+        also told where that chain first rounded it.
+        """
+        assert self.array_source is not None, "the caller checks for a source"
+        sources, rest = [], None
+        for row, meta in zip(rows, metas, strict=True):
+            if meta.dims != dims:
+                return None
+            source = self.array_source(row, meta.extent)
+            if source is None:
+                return None
+            source = source[meta.window]
+            placed = meta.coords.shape
+            assert source.shape == placed, "the window is the member's own samples"
+            if source.shape != source.extent:
+                # a trim is a window of the array its row names, and holds
+                # that window's id rather than the whole array's
+                meta.attrs = meta.attrs.update(data_id=source.data_id)
+            others = placed[:axis] + placed[axis + 1 :]
+            if rest is None:
+                rest = others
+            elif others != rest:
+                return None
+            sources.append(source)
+        dtypes = [np.dtype(x.dtype) for x in sources]
+        chain = list(accumulate(dtypes, np.result_type))
+        casts = [_cast_via(x, chain[num:]) for num, x in enumerate(dtypes)]
+        return LazyArray.from_sources(
+            sources, axis=axis, dtype=chain[-1], cast_via=casts
+        )
+
+    def _stream(self, joined, df_dict_list, merge_dim, samples):
         """
         Copy each member into the output buffer as it is loaded.
 
         A member is released once copied; this avoids holding all source
         patches and the merged output in memory at the same time, as
-        concatenating would. Returns None when ``metas`` promised an
-        array shape the file did not deliver, so the caller can start
-        over on the patch path.
+        concatenating would.
         """
         buffer, offset, axis, dims = None, 0, None, None
-        coords, attrs, summaries = [], [], []
+        coords, attrs = [], []
         target_units = None
-        for num, patch_kwargs in enumerate(df_dict_list):
-            member = None
-            if metas is not None:
-                member = self._member_from_meta(patch_kwargs, metas[num])
-                if member is None:
-                    return None
-            if member is None:
-                patch = self._load_trimmed_patch(patch_kwargs, joined)
-                patch, target_units = _match_merge_units(patch, merge_dim, target_units)
-                member = _Member(patch.dims, patch.data, patch.coords, patch.attrs)
+        for patch_kwargs in df_dict_list:
+            patch = self._load_trimmed_patch(patch_kwargs, joined)
+            patch, target_units = _match_merge_units(patch, merge_dim, target_units)
+            data, coord = patch.data, patch.coords
             if dims is None:
-                dims = member.dims
+                dims = patch.dims
                 axis = dims.index(merge_dim)
-            elif member.dims != dims:
-                member = member.transpose(dims)
+            elif patch.dims != dims:
+                # the same member with its axes in the merge's order
+                data = np.transpose(data, [patch.dims.index(x) for x in dims])
+                coord = coord.transpose(*dims)
             assert axis is not None  # set on the first pass through the loop
-            data = member.data
             if buffer is None:
                 shape = list(data.shape)
                 shape[axis] = samples
                 buffer = np.empty(shape, dtype=data.dtype)
-            # Mixed dtypes upcast, mirroring np.concatenate behavior.
+            # Mixed dtypes upcast, a member at a time and so in order.
             dtype = np.result_type(buffer.dtype, data.dtype)
             if dtype != buffer.dtype:
                 buffer = buffer.astype(dtype)
@@ -656,18 +815,21 @@ class PatchAssembler:
                 )
                 raise CoordMergeError(msg) from e
             offset = end
-            coords.append(member.coords)
-            attrs.append(member.attrs)
-            summaries.append(member.coords._get_dim_summary())
+            coords.append(coord)
+            attrs.append(patch.attrs)
         # All set on the first pass of the loop, which always runs.
         assert buffer is not None
         assert axis is not None
         assert dims is not None
         if offset != buffer.shape[axis]:  # over-estimated; trim excess.
             buffer = buffer[broadcast_for_index(buffer.ndim, axis, slice(0, offset))]
+        return self._assemble(buffer, dims, merge_dim, coords, attrs)
+
+    def _assemble(self, data, dims, merge_dim, coords, attrs):
+        """Build the merged patch from the members' data, coords and attrs."""
         # Ensure the loaded patches only vary along the expected dimension,
         # the same requirement _force_patch_merge enforces.
-        summary_df = pd.DataFrame(summaries)
+        summary_df = pd.DataFrame([coord._get_dim_summary() for coord in coords])
         found_dim = _get_merge_dim(summary_df)
         if found_dim != merge_dim:
             msg = (
@@ -688,7 +850,7 @@ class PatchAssembler:
         # The fold named the result; building it is not another array.
         with operation_context():
             return dc.Patch(
-                data=buffer, coords=new_coord, attrs=new_attrs, dims=list(dims)
+                data=data, coords=new_coord, attrs=new_attrs, dims=list(dims)
             )
 
     def _member_meta_from_index(self, rows) -> list[_MemberMeta] | None:
@@ -697,10 +859,10 @@ class PatchAssembler:
         Metadata only: nothing is read here, so a merge the index cannot
         describe costs no array reads before it falls back.
         """
-        if self.load_array is None:
+        if self.array_source is None:
             return None
-        if self.can_load_array is not None and not all(
-            self.can_load_array(row) for row in rows
+        if self.can_use_index is not None and not all(
+            self.can_use_index(row) for row in rows
         ):
             return None
         metas = []
@@ -717,10 +879,10 @@ class PatchAssembler:
 
         The row states each dimension's evenly sampled range in the
         plan's units and every attr the file defined, which is what the
-        merge needs from a member whose plan trims nothing; the patch,
-        its coordinate parsing and its attr decoding are skipped.
-        Anything the row cannot state -- a dimension without a range --
-        sends the whole merge down the patch path instead.
+        merge needs from a member; the patch, its coordinate parsing and
+        its attr decoding are skipped. Anything the row cannot state --
+        a dimension without a range, a trim whose source grid is not
+        beside it -- sends the whole merge down the patch path instead.
 
         The index holds no history, a list rather than a column, so a
         member built here states none and the merged patch carries none.
@@ -730,36 +892,71 @@ class PatchAssembler:
         # A moved source has its id cleared until it is read again, and
         # folding no id is not folding the one the patch carries; an attr
         # the index could not hold is on the patch and would be lost here.
-        if ids_enabled() and "origin_id" in row and _is_missing(row["origin_id"]):
+        # A column no row carries states no id either: the patch path
+        # would give the loaded patches' own, which the rows cannot.
+        if ids_enabled() and _is_missing(row.get("origin_id")):
             return None
         if not _is_null(complete := row.get("_attrs_complete")) and not complete:
             return None
         dims = tuple(str(row["dims"]).split(","))
-        coord_map = {}
+        trimmed = bool(row.get("_modified"))
+        coord_map, extent, window = {}, [], []
         for dim in dims:
             # a coordinate with no units is NaN in a frame, not None,
             # and NaN would build a dimensionless quantity the patch
             # path does not have.
             units = None if _is_null(u := row.get(f"_{dim}_units")) else u
-            coord = coord_from_row(row, dim, units=units)
-            if coord is None:
-                return None
+            if trimmed and dim == self.plan_dim:
+                # a window's id builds on the whole array's, so a row
+                # which does not name the array cannot name the window
+                if ids_enabled() and _is_missing(row.get("data_id")):
+                    return None
+                placed = self._trim_window(row, dim, units)
+                if placed is None:
+                    return None
+                coord, span, length = placed
+            else:
+                # The plan narrows its own dimension and no other, so
+                # every envelope here is its source's own.
+                coord = coord_at_stored_unit(
+                    coord_from_row(row, dim, units=units), row, dim
+                )
+                if coord is None:
+                    return None
+                span, length = slice(0, len(coord)), len(coord)
             coord_map[dim] = coord
+            extent.append(length)
+            window.append(span)
         coords = get_coord_manager(coord_map, dims=dims)
-        return _MemberMeta(dims, coords, _attrs_from_row(row, dims))
+        return _MemberMeta(
+            dims, coords, _attrs_from_row(row, dims), tuple(extent), tuple(window)
+        )
 
-    def _member_from_meta(self, row: Mapping, meta: _MemberMeta) -> _Member | None:
+    def _trim_window(self, row: Mapping, dim: str, units):
         """
-        The member a row describes, with its array read.
+        The source samples a trimmed member is, or None if it cannot say.
 
-        Returns None when the file did not deliver the shape the row
-        predicted, which the caller can only discover here.
+        The window comes from selecting the source's own coordinate to
+        the member's range, so the samples a recipe reads are the ones
+        `Patch.select` would have kept, and the coordinate it presents is
+        that selection's own. An evenly sampled coordinate can only
+        answer with a contiguous forward run, so the one refusal here is
+        a trim naming no sample of the source.
         """
-        assert self.load_array is not None, "the caller checks for a loader"
-        data = self.load_array(row)
-        if data is None or data.shape != meta.coords.shape:
+        # A converted envelope is not on the grid the source's own units
+        # count, so the two cannot be compared sample for sample.
+        if _units_converted(row, dim):
             return None
-        return _Member(meta.dims, data, meta.coords, meta.attrs)
+        source = coord_at_stored_unit(
+            source_coord_from_row(row, dim, units=units), row, dim
+        )
+        bounds = _row_bounds(row, dim)
+        if source is None or bounds is None:
+            return None
+        coord, indexer = source.select(bounds)
+        if not len(coord):
+            return None
+        return coord, indexer, len(source)
 
     def _df_to_dict_list(self, df):
         """
@@ -770,5 +967,4 @@ class PatchAssembler:
         relative paths pass through unchanged — the catalog's resolver
         owns resolving them against the spool root.
         """
-        df = df.copy(deep=False).replace("", None)
-        return df.to_dict("records")
+        return df.replace("", None).to_dict("records")

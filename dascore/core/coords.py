@@ -282,7 +282,7 @@ class CoordSummary(DascoreBaseModel):
             data = dict(data)
             min_val = data["min"]
             dtype = _get_dtype(min_val, data.get("dtype"))
-            data["dtype"] = str(dtype).split("[")[0]
+            data["dtype"] = str(dtype)
             for name in ["min", "max", "step"]:
                 val = data.get(name)
                 data[name] = ensure_consistent_dtype(val, name, dtype)
@@ -307,7 +307,7 @@ class CoordSummary(DascoreBaseModel):
             for name in ("min", "max", "step"):
                 value = ensure_consistent_dtype(getattr(self, name), name, dtype)
                 object.__setattr__(self, name, value)
-            object.__setattr__(self, "dtype", str(dtype).split("[")[0])
+            object.__setattr__(self, "dtype", str(dtype))
         return self
 
     def to_coord(self) -> BaseCoord:
@@ -334,6 +334,14 @@ class CoordSummary(DascoreBaseModel):
             start, stop = self.max, self.min + step
         else:
             start, stop = self.min, self.max + step
+        # The scalars are kept at nanoseconds; the coord takes the recorded unit.
+        if self.dtype and (dtype := np.dtype(self.dtype)).kind in "mM":
+            start, stop = (
+                np.asarray(start).astype(dtype)[()],
+                np.asarray(stop).astype(dtype)[()],
+            )
+            unit, count = np.datetime_data(dtype)
+            step = np.asarray(step).astype(f"m8[{count}{unit}]")[()]
         return get_coord(start=start, stop=stop, step=step, units=self.units)
 
 
@@ -1228,10 +1236,9 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         p1, p2 = (
             self._get_compatible_value(x, relative=relative) for x in select_tuple
         )
-        # reverse order if needed to ensure p1 < p2. This needs to be
-        # after the compatible value conversion in case pre-converted
-        # values are different types.
-        if p1 is not None and p2 is not None and p2 < p1:
+        # Absolute bounds describe an unordered interval. Relative bounds
+        # constrain its lower and upper ends; crossing them selects nothing.
+        if not relative and p1 is not None and p2 is not None and p2 < p1:
             p1, p2 = p2, p1
         return p1, p2
 
@@ -2739,6 +2746,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         if not self._direction():
             return self._select_by_mask(args, relative)
         value_1, value_2 = self._get_slice_tuple(args, relative=relative)
+        if value_1 is not None and value_2 is not None and value_1 > value_2:
+            # crossed relative bounds name no interval at all
+            return self.empty(), slice(0, 0)
         if self._grid is not None:
             start = self._get_index(value_1, forward=self.sorted)
             stop = self._get_index(value_2, forward=self.reverse_sorted)

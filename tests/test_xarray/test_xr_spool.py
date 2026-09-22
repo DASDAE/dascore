@@ -117,9 +117,9 @@ class TestSpoolToXarray:
             calls.append("patch")
             return original(self, kwargs)
 
-        def _counting_array(self, row, windows, **kwargs):
+        def _counting_array(self, row, windows):
             calls.append("array")
-            return original_array(self, row, windows, **kwargs)
+            return original_array(self, row, windows)
 
         monkeypatch.setattr(PlanResolver, "_load_member", _counting)
         monkeypatch.setattr(PlanResolver, "_load_member_array", _counting_array)
@@ -471,8 +471,8 @@ class TestToXarrayReadArray:
         calls = []
         original = PlanResolver._load_member_array
 
-        def load(resolver, row, windows, **kwargs):
-            out = original(resolver, row, windows, **kwargs)
+        def load(resolver, row, windows):
+            out = original(resolver, row, windows)
             if out is not None:
                 calls.append(windows)
             return out
@@ -910,9 +910,7 @@ class TestToXarrayBlockSize:
             patcher.setattr(
                 PlanResolver,
                 "_load_member_array",
-                lambda self, row, w, **k: (
-                    reads.append(w) or original(self, row, w, **k)
-                ),
+                lambda self, row, w: reads.append(w) or original(self, row, w),
             )
             out = data.isel(time=slice(0, 0)).compute()
         assert out.sizes["time"] == 0
@@ -928,7 +926,7 @@ class TestToXarrayBlockSize:
         merged = file_spool.chunk(time=None)[0]
         whole = merged.transpose(*data.dims).data
         monkeypatch.setattr(
-            PlanResolver, "_load_member_array", lambda self, row, w, **k: None
+            PlanResolver, "_load_member_array", lambda self, row, w: None
         )
         got = data.isel(distance=slice(0, 4), time=slice(0, 6)).compute().values
         assert np.array_equal(got, whole[:4, :6])
@@ -1001,7 +999,7 @@ class TestToXarrayBlockSize:
         data = self._leaf(file_spool.io.to_xarray(block_size=quarter))
         merged = file_spool.chunk(time=None)[0]
         monkeypatch.setattr(
-            PlanResolver, "_load_member_array", lambda self, row, w, **k: None
+            PlanResolver, "_load_member_array", lambda self, row, w: None
         )
         assert np.array_equal(data.compute().values, merged.transpose(*data.dims).data)
 
@@ -1119,3 +1117,39 @@ class TestBlockPieces:
 
         assert _samples_per_block(0, np.dtype("float64"), {"t": 5}, "t") is None
         assert _samples_per_block(None, np.dtype("float64"), {"t": 5}, "t") is None
+
+
+class TestToXarrayExactGrid:
+    """A spool whose coordinates carry an exact grid converts like any other."""
+
+    @pytest.fixture(autouse=True)
+    def _require_libs(self):
+        """These tests need both optional libraries."""
+        pytest.importorskip("xarray")
+        pytest.importorskip("dask")
+
+    @pytest.fixture(scope="class")
+    def third_second_spool(self, tmp_path_factory):
+        """Five adjacent files sampled on an exact one third second grid."""
+        path = tmp_path_factory.mktemp("exact_grid_tree")
+        start = np.datetime64("2020-01-01")
+        for num in range(5):
+            time = dc.core.get_coord(start=start, step=(1, 3), shape=(20,))
+            distance = dc.core.get_coord(start=0.0, step=1.0, shape=(4,))
+            patch = dc.Patch(
+                data=np.random.default_rng(num).random((20, 4)),
+                coords={"time": time, "distance": distance},
+                dims=("time", "distance"),
+            )
+            patch.io.write(path / f"g{num}.h5", "dasdae")
+            start = time.max() + time.step
+        return dc.spool(path).update()
+
+    def test_a_sample_selection_converts(self, third_second_spool):
+        """A window of an exact grid sizes its blocks as it reads them."""
+        tree = third_second_spool.select(time=(1, -1), samples=True).io.to_xarray()
+        leaves = [x for x in tree.subtree if "data" in x.dataset]
+        assert len(leaves) == 5
+        for leaf in leaves:
+            array = leaf.dataset["data"]
+            assert np.asarray(array.values).shape == array.shape

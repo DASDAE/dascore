@@ -627,7 +627,9 @@ class Select(_Query):
         Copy the result so it does not retain the original data array.
     relative
         If True, select ranges are relative to the start of coordinate, if
-        positive, or the end of the coordinate, if negative.
+        positive, or the end of the coordinate, if negative. The first bound
+        remains the lower limit and the second the upper limit; if they
+        cross after resolving the offsets, the selected patch is empty.
     samples
         If True, the query meaning is in samples.
     **kwargs
