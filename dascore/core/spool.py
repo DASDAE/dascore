@@ -110,6 +110,7 @@ from dascore.utils.explicit_ranges import (
     ExplicitRanges,
     explicit_ranges,
     known_coordinates,
+    looks_explicit,
 )
 from dascore.utils.misc import (
     _spool_map,
@@ -556,16 +557,11 @@ class Spool(NodeRepr, NamespaceOwner):
         coord_names = self._catalog.backend.coord_names()
         attr_names = self._catalog.backend.attr_names()
         tagged = selector_spec_names(_coords)
+        # Avoid classifying ordinary selectors before the uncommon window path.
         possible = any(
             (name in tagged or (name in coord_names and name not in attr_names))
-            and (
-                (isinstance(value, np.ndarray) and value.ndim != 1)
-                or (
-                    isinstance(value, list | tuple)
-                    and bool(value)
-                    and isinstance(value[0], list | tuple | np.ndarray)
-                )
-            )
+            and looks_explicit(value)
+            and (not isinstance(value, list | tuple) or bool(value))
             for name, value in raw.items()
         )
         explicit = []
@@ -1754,11 +1750,15 @@ class Spool(NodeRepr, NamespaceOwner):
                 base = base[base["_patch_row"].isin(working["_patch_row"])]
         return base.reset_index(drop=True), working.reset_index(drop=True)
 
-    def _known_chunk_coords(self, source_rows, name: str | None, value) -> dict:
-        """Get exact coordinate metadata for an explicit request only."""
-        if name is None or explicit_ranges(value) is None:
-            return {}
-        return known_coordinates(self._catalog, source_rows, name)
+    def _build_chunk_plan(self, dim_kwargs, **params):
+        """Build and coalesce one plan from this spool's current source rows."""
+        name = next(iter(dim_kwargs), None)
+        source_rows, working = self._plan_frames(name, runs=True)
+        exact = {}
+        if name is not None and explicit_ranges(dim_kwargs[name]) is not None:
+            exact = known_coordinates(self._catalog, source_rows, name)
+        plan = build_chunk_plan(working, _exact_coords=exact, **params, **dim_kwargs)
+        return source_rows, coalesce_runs(plan, working)
 
     def chunk_plan(
         self,
@@ -1799,10 +1799,8 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> members = plan.members
         >>> first = members[members["output_id"] == 0]
         """
-        name = next(iter(kwargs), None)
-        source_rows, working = self._plan_frames(name, runs=True)
-        plan = build_chunk_plan(
-            working,
+        _, plan = self._build_chunk_plan(
+            kwargs,
             overlap=overlap,
             keep_partial=keep_partial,
             snap_coords=snap_coords,
@@ -1812,10 +1810,8 @@ class Spool(NodeRepr, NamespaceOwner):
             missing_dim=missing_dim,
             fill_value=fill_value,
             on_incomplete=on_incomplete,
-            _exact_coords=self._known_chunk_coords(source_rows, name, kwargs.get(name)),
-            **kwargs,
         )
-        return coalesce_runs(plan, working)
+        return plan
 
     def _report_relation(self) -> pd.DataFrame:
         """
@@ -2225,10 +2221,8 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
 
-        name = next(iter(kwargs), None)
-        source_rows, working = self._plan_frames(name, runs=True)
-        plan = build_chunk_plan(
-            working,
+        source_rows, plan = self._build_chunk_plan(
+            kwargs,
             overlap=overlap,
             keep_partial=keep_partial,
             snap_coords=snap_coords,
@@ -2238,10 +2232,7 @@ class Spool(NodeRepr, NamespaceOwner):
             missing_dim=missing_dim,
             fill_value=fill_value,
             on_incomplete=on_incomplete,
-            _exact_coords=self._known_chunk_coords(source_rows, name, kwargs.get(name)),
-            **kwargs,
         )
-        plan = coalesce_runs(plan, working)
         merge_kwargs = {
             "conflict": conflict,
             "snap_coords": snap_coords,

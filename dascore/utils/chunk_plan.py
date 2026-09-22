@@ -1595,20 +1595,10 @@ def build_chunk_plan(
         sampling_group_tolerance=dc.get_config().sampling_group_tolerance,
         on_incomplete=on_incomplete,
     )
+    if not df.empty:
+        df = _prepare_relation(df, name, missing_dim)
     if df.empty:
-        if explicit is not None and explicit.rows:
-            _report_incomplete(
-                [
-                    (i, bounds, "no applicable group", "source is empty")
-                    for i, bounds in enumerate(explicit.rows)
-                ],
-                on_incomplete,
-            )
-        outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
-        return ChunkPlan(outputs, empty_members, name, value, params)
-    df = _prepare_relation(df, name, missing_dim)
-    if df.empty:
-        if explicit is not None and explicit.rows:
+        if explicit is not None:
             _report_incomplete(
                 [
                     (i, bounds, "no applicable group", "source is empty")
@@ -1728,14 +1718,9 @@ def build_chunk_plan(
                     continue
                 low, high = max(low, g_starts[part]), min(high, g_stops[part])
                 if not pd.isnull(part_step) and part_step != 0:
-                    selected = [
-                        exact_coordinate_bounds(coord, (low, high), unit)
-                        for coord in part_coords
-                    ]
-                    selected = [x for x in selected if x is not None]
-                    if selected and fill_value is None:
-                        low = min(x[0] for x in selected)
-                        high = max(x[1] for x in selected)
+                    envelope = _exact_envelope(part_coords, (low, high), unit)
+                    if envelope is not None and fill_value is None:
+                        low, high = envelope
                     else:
                         snapped_low, snapped_high, present = _grid_snapped(
                             np.asarray([low]),
@@ -1900,17 +1885,17 @@ def build_chunk_plan(
             ]
         )
         outputs, empty_members = _finish_explicit_plan(
-            outputs,
-            empty_members,
-            sorted_df,
-            seg_starts,
-            name,
-            explicit,
-            keep_partial,
-            conflict,
-            on_incomplete,
-            _exact_coords,
-            fill_value,
+            outputs=outputs,
+            members=empty_members,
+            sources=sorted_df,
+            seg_starts=seg_starts,
+            name=name,
+            requests=explicit,
+            keep_partial=keep_partial,
+            conflict=conflict,
+            on_incomplete=on_incomplete,
+            exact_coords=_exact_coords,
+            fill_value=fill_value,
         )
         return ChunkPlan(outputs, empty_members, name, value, params)
     if not fed_counts.sum():
@@ -1989,17 +1974,17 @@ def build_chunk_plan(
         members[unit_col] = first_units.take(member_parts).reset_index(drop=True)
     if explicit is not None:
         outputs, members = _finish_explicit_plan(
-            outputs,
-            members,
-            sorted_df,
-            seg_starts,
-            name,
-            explicit,
-            keep_partial,
-            conflict,
-            on_incomplete,
-            _exact_coords,
-            fill_value,
+            outputs=outputs,
+            members=members,
+            sources=sorted_df,
+            seg_starts=seg_starts,
+            name=name,
+            requests=explicit,
+            keep_partial=keep_partial,
+            conflict=conflict,
+            on_incomplete=on_incomplete,
+            exact_coords=_exact_coords,
+            fill_value=fill_value,
         )
     return ChunkPlan(outputs, members, name, value, params)
 
@@ -2742,41 +2727,52 @@ def _finish_explicit_plan(
         outputs.loc[update, column] = actual.loc[update, column]
     if fill_value is None:
         outputs = outputs[outputs["output_id"].isin(members["output_id"])].copy()
-    cells = sources.groupby("_explicit_cell", sort=False)
+    raw_groups = [
+        (label, sub[min_name].min(), sub[max_name].max(), sub)
+        for label, sub in sources.groupby("_explicit_cell", sort=False)
+    ]
+    raw_groups.sort(key=lambda item: (item[1], str(item[0])))
     groups = []
-    for label, sub in cells:
-        groups.append((label, sub[min_name].min(), sub[max_name].max(), sub))
-    groups.sort(key=lambda item: (item[1], str(item[0])))
-    rank = {label: pos for pos, (label, *_rest) in enumerate(groups)}
+    for label, start, stop, sub in raw_groups:
+        if is_datetime64(start):
+            start, stop = np.datetime64(start), np.datetime64(stop)
+        elif is_timedelta64(start):
+            start, stop = np.timedelta64(start), np.timedelta64(stop)
+        ids = sub["_patch_row"]
+        coords = [exact_coords[row_id] for row_id in ids if row_id in exact_coords]
+        groups.append(
+            dict(
+                label=label,
+                start=start,
+                stop=stop,
+                unit=_partition_unit(sub, name, 0),
+                step=get_middle_value(sub[step_name].to_numpy()),
+                missing_required=any(coord is None for coord in coords),
+                all_known=len(coords) == len(sub)
+                and all(x is not None for x in coords),
+                coords=[coord for coord in coords if coord is not None],
+            )
+        )
+    rank = {item["label"]: pos for pos, item in enumerate(groups)}
     accepted = set()
     failures = []
     for request, bounds in enumerate(requests.rows):
         applicable = False
-        for label, start, stop, sub in groups:
-            unit = _partition_unit(sub, name, 0)
-            if is_datetime64(start):
-                start, stop = np.datetime64(start), np.datetime64(stop)
-            elif is_timedelta64(start):
-                start, stop = np.timedelta64(start), np.timedelta64(stop)
+        for group in groups:
+            label, start, stop = group["label"], group["start"], group["stop"]
+            unit = group["unit"]
+            step: Any = group["step"]
             low, high = _explicit_bounds_for_partition(bounds, start, unit)
             if high < start or low > stop:
                 continue
             applicable = True
-            step = get_middle_value(sub[step_name].to_numpy())
-            missing_required = any(
-                row_id in exact_coords and exact_coords[row_id] is None
-                for row_id in sub["_patch_row"]
-            )
-            if missing_required:
+            if group["missing_required"]:
                 failures.append(
                     (request, bounds, label, "exact source coordinates are unavailable")
                 )
                 continue
-            known = sub["_patch_row"].isin(
-                row_id for row_id, coord in exact_coords.items() if coord is not None
-            )
             no_grid = pd.isnull(step) or step == 0
-            if no_grid and not known.all():
+            if no_grid and not group["all_known"]:
                 failures.append(
                     (request, bounds, label, "exact source coordinates are unavailable")
                 )
@@ -2786,41 +2782,26 @@ def _finish_explicit_plan(
                 (outputs["_request_row"] == request)
                 & (outputs["_compat_group"] == label)
             ]
-            selected = [
-                exact_coordinate_bounds(
-                    exact_coords[row["_patch_row"]], (low, high), unit or None
-                )
-                for _, row in sub.iterrows()
-                if row["_patch_row"] in exact_coords
-            ]
-            selected = [item for item in selected if item is not None]
+            envelope = _exact_envelope(group["coords"], (low, high), unit or None)
             if no_grid:
-                if not selected:
+                if envelope is None:
                     failures.append(
                         (request, bounds, label, "contains no source samples")
                     )
                     continue
-                low = min(x[0] for x in selected)
-                high = max(x[1] for x in selected)
-            elif known.all() and selected and fill_value is None:
+                low, high = envelope
+            elif group["all_known"] and envelope is not None and fill_value is None:
                 # Exact member labels obey the existing snap/assembly rules.
                 # Another partition in the group may have a shifted origin,
                 # and a joined source may have sub-sample jitter.
-                low = min(x[0] for x in selected)
-                high = max(x[1] for x in selected)
-                expected_low, _, _ = _grid_snapped(
-                    np.asarray([requested_low]),
-                    np.asarray([requested_high]),
-                    low,
+                low, high = envelope
+                expected_low, expected_high, _ = _grid_snapped(
+                    np.repeat(np.asarray([requested_low]), 2),
+                    np.repeat(np.asarray([requested_high]), 2),
+                    np.asarray([low, high]),
                     abs(step),
                 )
-                _, expected_high, _ = _grid_snapped(
-                    np.asarray([requested_low]),
-                    np.asarray([requested_high]),
-                    high,
-                    abs(step),
-                )
-                if expected_low[0] < low or expected_high[0] > high:
+                if expected_low[0] < low or expected_high[1] > high:
                     if not keep_partial:
                         failures.append(
                             (request, bounds, label, "sampled bounds are incomplete")
@@ -2935,6 +2916,15 @@ def _finish_explicit_plan(
         .reset_index(drop=True)
     )
     return outputs, members.reset_index(drop=True)
+
+
+def _exact_envelope(coords, bounds, unit=None):
+    """Return the outer selected sample labels across known coordinates."""
+    selected = [exact_coordinate_bounds(coord, bounds, unit) for coord in coords]
+    selected = [item for item in selected if item is not None]
+    return (
+        (min(x[0] for x in selected), max(x[1] for x in selected)) if selected else None
+    )
 
 
 def exact_coordinate_bounds(coord, bounds, plan_unit=None):

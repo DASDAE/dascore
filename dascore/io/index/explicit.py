@@ -79,17 +79,16 @@ class ExplicitSelectCatalog:
                 for _, projected in candidate.iterrows():
                     row = by_id.loc[projected["_patch_row"]]
                     coord = known.get(row["_patch_row"])
-                    if coord is not None:
-                        actual = exact_coordinate_bounds(coord, bounds)
-                        if actual is None:
-                            continue
-                    else:
+                    if coord is None:
                         msg = (
                             f"Cannot verify samples for {self.name!r} in source "
                             f"{row.get('source_path')!r}: coordinate metadata "
                             "is unavailable."
                         )
                         raise MissingPatchError(msg)
+                    actual = exact_coordinate_bounds(coord, bounds)
+                    if actual is None:
+                        continue
                     rows.append(row)
                     requests.append(request)
                     pieces.append([actual])
@@ -99,7 +98,7 @@ class ExplicitSelectCatalog:
                 # Identity is bookkeeping, never a patch attribute.
                 plan.outputs["_request_row"] = requests
             catalog = derived_catalog(
-                source_rows=source.drop_duplicates("_patch_row"),
+                source_rows=source,
                 plan=plan,
                 parent=self.parent,
                 merge_kwargs={},
@@ -109,6 +108,7 @@ class ExplicitSelectCatalog:
             for method, args, kwargs in self.operations:
                 catalog = getattr(catalog, method)(*args, **kwargs)
             self._cached = catalog
+            # Realizing the backend may invalidate the parent under this lock.
             self._source_revision = self.parent._revision.value
             return self._cached
 

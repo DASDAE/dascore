@@ -8,7 +8,7 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 
-from dascore.exceptions import ParameterError
+from dascore.exceptions import ChunkError, ParameterError
 from dascore.units import Quantity, convert_units
 from dascore.utils.misc import express_range_for_coord
 
@@ -20,21 +20,27 @@ class ExplicitRanges:
     rows: tuple[tuple[object, object], ...]
 
 
+def looks_explicit(value) -> bool:
+    """Flag shapes needing explicit validation before ordinary query parsing."""
+    return (isinstance(value, np.ndarray) and value.ndim != 1) or (
+        isinstance(value, list | tuple)
+        and (not value or isinstance(value[0], list | tuple | np.ndarray))
+    )
+
+
 def explicit_ranges(value) -> ExplicitRanges | None:
     """Return validated window rows, or None for an existing input form."""
+    if not looks_explicit(value):
+        if isinstance(value, np.ndarray) and value.ndim == 1:
+            msg = "Explicit ranges must have shape (n, 2), not a 1D array."
+            raise ParameterError(msg)
+        return None
     if isinstance(value, np.ndarray):
         if value.ndim == 0:
             return None
-        if value.ndim == 1:
-            msg = "Explicit ranges must have shape (n, 2), not a 1D array."
-            raise ParameterError(msg)
         candidate = value
-    elif isinstance(value, list | tuple) and (
-        not value or isinstance(value[0], list | tuple | np.ndarray)
-    ):
-        candidate = np.asarray(value, dtype=object)
     else:
-        return None
+        candidate = np.asarray(value, dtype=object)
     if candidate.ndim != 2 or candidate.shape[1] != 2:
         msg = f"Explicit ranges must have shape (n, 2), got {candidate.shape}."
         raise ParameterError(msg)
@@ -48,12 +54,13 @@ def explicit_ranges(value) -> ExplicitRanges | None:
             if bound is None or bound is Ellipsis:
                 msg = f"Explicit range row {index} needs two closed bounds."
                 raise ParameterError(msg)
-            value = bound.magnitude if isinstance(bound, Quantity) else bound
-            if isinstance(value, bool | np.bool_) or np.ndim(value):
+            magnitude = bound.magnitude if isinstance(bound, Quantity) else bound
+            if isinstance(magnitude, bool | np.bool_) or np.ndim(magnitude):
                 msg = f"Explicit range row {index} has a non-scalar bound."
                 raise ParameterError(msg)
-            invalid = bool(pd.isna(value)) or (
-                isinstance(value, (int, float, np.number)) and not np.isfinite(value)
+            invalid = bool(pd.isna(magnitude)) or (
+                isinstance(magnitude, (int, float, np.number))
+                and not np.isfinite(magnitude)
             )
             if invalid:
                 msg = f"Explicit range row {index} has a missing or nonfinite bound."
@@ -217,11 +224,11 @@ def _planned_manager(plan, row, files=None, projection=None):
         if coords is None:
             return None
         coords = _select_manager(coords, plan.parent_residuals)
+        dim = plan.dim
+        native = coords.coord_map[dim].units
+        unit = member.get(f"_{dim}_units")
         if member.get("_modified"):
-            dim = plan.dim
             low, high = member.get(f"{dim}_min"), member.get(f"{dim}_max")
-            native = coords.coord_map[dim].units
-            unit = member.get(f"_{dim}_units")
             if native is not None and unit is not None and not pd.isnull(unit):
                 if str(native) != str(unit):
                     low, high = (
@@ -229,14 +236,13 @@ def _planned_manager(plan, row, files=None, projection=None):
                         for x in (low, high)
                     )
             coords, _ = coords.select(**{dim: (low, high)})
-        unit = member.get(f"_{plan.dim}_units")
-        native = coords.coord_map[plan.dim].units
         if native is not None and unit is not None and not pd.isnull(unit):
             if str(native) != str(unit):
                 coords = coords.convert_units(**{plan.dim: unit})
         recovered.append(coords)
     if not recovered:
-        assert not projected, "plan output has no members or reconstructable grid"
+        if projected:
+            raise ChunkError("plan output has no members or reconstructable grid")
         anchor_id = plan._output_rows[int(key)].get("_anchor_patch_row")
         anchor = plan._anchor_rows.get(anchor_id)
         coords = (

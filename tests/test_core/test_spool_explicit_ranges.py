@@ -353,9 +353,9 @@ class TestExplicitChunk:
             distance=np.array([[5, 6]]), tolerance=4, fill_value=-1
         )
         assert filled[0].coords["distance"].values.tolist() == [6.0, 5.0]
-        with pytest.raises(AssertionError, match="no members or reconstructable grid"):
+        with pytest.raises(ChunkError, match="no members or reconstructable grid"):
             filled.select(distance=np.array([[5, 6]])).get_contents()
-        with pytest.raises(AssertionError, match="no members or reconstructable grid"):
+        with pytest.raises(ChunkError, match="no members or reconstructable grid"):
             filled.chunk_plan(distance=np.array([[5, 6]]))
 
     def test_tolerated_gap_needs_requested_edge_or_fill(self):
