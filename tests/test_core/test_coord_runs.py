@@ -11,6 +11,7 @@ import pytest
 
 import dascore as dc
 from dascore.core.coords import (
+    Grid,
     Labels,
     Missing,
     NumericCoord,
@@ -573,3 +574,129 @@ class TestReviewRoundTwo:
         expected = np.array([T0 - half, T0 + half], dtype="datetime64[ns]")
         np.testing.assert_array_equal(edges, expected)
         assert not [w for w in recwarn if "Singleton" in str(w.message)]
+
+
+class TestReviewRoundThree:
+    """Cases the third review round found."""
+
+    def test_uneven_block_keeps_its_labels(self):
+        """Neighbouring spacings that differ do not become one grid."""
+        values = np.array([0, 1, 2, 4, 6])
+        assert np.array_equal(get_coord(data=values, snap=False).values, values)
+        floats = np.array([0.0, 0.1, 0.2])
+        assert np.array_equal(get_coord(data=floats, snap=False).values, floats)
+
+    def test_full_slice_keeps_the_declared_step(self):
+        """Slicing everything changes nothing, runs and step included."""
+        coord = concat_coords(
+            NumericCoord.from_labels(np.array([0, 2, 4]), step=1),
+            NumericCoord.from_labels(np.array([6, 8, 10]), step=1),
+        )
+        out = coord[:]
+        assert out.step == coord.step == 1
+        assert out.missing().count == coord.missing().count == 5
+
+    def test_integer_index_of_nd_labels(self):
+        """An integer index of an N-D coordinate returns a coordinate."""
+        coord = get_coord(data=np.arange(12).reshape(3, 4), units="m")
+        row = coord[0]
+        assert isinstance(row, NumericCoord)
+        assert row == coord[0, :]
+        assert np.array_equal(row.values, np.arange(4))
+
+    def test_new_shape_extends_the_grid(self):
+        """A new length keeps the step rather than re-deriving one."""
+        coord = get_coord(start=0, step=1, shape=(5,))
+        out = coord.new(shape=(10,))
+        assert out.step == 1
+        assert np.array_equal(out.values, np.arange(10))
+
+    def test_strided_multi_run_fractional_grids(self):
+        """A stride across fractional grids gives what numpy indexing gives."""
+        coord = concat_coords(
+            get_coord(start=0, step=Fraction(3, 2), shape=(5,)),
+            get_coord(start=10, step=Fraction(3, 2), shape=(5,)),
+        )
+        values = coord.values
+        for stride in (2, 3, -3):
+            assert np.array_equal(coord[::stride].values, values[::stride])
+
+    def test_labels_copy_a_read_only_view(self):
+        """A read-only view cannot change the labels under their cached id."""
+        base = np.array([1.0, 2.0, 3.0])
+        view = base[:]
+        view.flags.writeable = False
+        labels = Labels(view)
+        before = labels.identity()
+        base[0] = 99.0
+        assert labels.values[0] == 1.0
+        assert labels.identity() == before
+
+    def test_unsorted_run_is_not_sorted(self):
+        """A coordinate never assumes its runs ascend."""
+        coord = NumericCoord(
+            runs=(Labels(np.array([3.0, 1.0, 2.0])), Grid(10.0, 1.0, 0, 4)),
+            dtype="float64",
+        )
+        assert not coord.sorted and not coord.reverse_sorted
+        assert len(coord.select((1.0, 2.0))[0]) == 2
+
+    def test_empty_runs_are_dropped(self):
+        """An empty run states nothing, so it is not kept."""
+        coord = NumericCoord(
+            runs=(Labels(np.array([], dtype="float64")), Grid(10.0, 1.0, 0, 4)),
+            dtype="float64",
+        )
+        assert coord.runs_count == 1 and coord.sorted
+
+    def test_descending_single_sample_segments(self, tmp_path):
+        """Segments of one sample keep the order they were written in."""
+        coord = get_coord(data=np.array([9, 7, 4]), step=1)
+        base = dc.get_example_patch().select(distance=(0, 3), samples=True)
+        patch = base.update_coords(distance=coord)
+        back = dc.read(dc.write(patch, tmp_path / "down.h5", "dasdae"))[0]
+        assert np.array_equal(back.get_coord("distance").values, [9, 7, 4])
+        assert np.array_equal(back.data, patch.data)
+
+    def test_unit_conversion_keeps_the_seam(self):
+        """Converting units scales each run rather than re-reading the labels."""
+        coord = concat_coords(
+            get_coord(start=0.0, step=1.0, shape=(10,), units="m"),
+            get_coord(start=10.0001, step=1.0, shape=(10,), units="m"),
+        )
+        out = coord.convert_units("cm")
+        assert out.runs_count == coord.runs_count
+        assert np.allclose(out.values, coord.values * 100, rtol=0, atol=1e-6)
+        assert out.values[10] != out.values[9] + 100
+
+    def test_a_trim_keeps_labels_the_step_contradicts(self):
+        """A trimmed run on another spacing is not the declared grid."""
+        coord = NumericCoord.from_labels(np.array([0.0, 2.0, 4.0, 6.0, 9.0]), step=1.0)
+        out = coord[0:3]
+        assert out.step == 1.0 and out.missing().count == 2
+
+    def test_constant_labels_keep_their_count(self):
+        """Labels which never change are not one sample repeated."""
+        coord = get_coord(data=np.zeros(5, dtype="float32"), snap=False)
+        assert len(coord[1:3]) == 2
+
+    def test_unit_conversion_keeps_declared_holes(self):
+        """A declared step's missing positions survive a change of units."""
+        coord = concat_coords(
+            NumericCoord.from_labels(np.array([0.0, 2.0, 4.0]), step=1.0, units="m"),
+            NumericCoord.from_labels(np.array([10.0, 12.0, 14.0]), step=1.0, units="m"),
+        )
+        out = coord.convert_units("cm")
+        assert out.step == 100.0
+        assert out.missing().count == coord.missing().count
+
+    def test_metadata_updates_do_not_materialize(self, monkeypatch):
+        """A step or unit change on a huge grid stays arithmetic."""
+
+        def _boom(self):
+            raise AssertionError("the labels were materialized")
+
+        monkeypatch.setattr(NumericCoord, "values", property(_boom))
+        coord = get_coord(start=0, step=1, shape=(10**9,), units="m")
+        assert coord.update_limits(step=2).step == 2
+        assert get_quantity(coord.convert_units("cm").units) == get_quantity("cm")

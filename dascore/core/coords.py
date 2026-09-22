@@ -2053,10 +2053,10 @@ class Labels:
     id: Annotated[str, Field(exclude=True)] = ""
 
     def __post_init__(self):
-        values = np.asarray(self.values)
-        if values.flags.writeable:
-            values = values.copy()
-            values.flags.writeable = False
+        # Always copied: a read-only view of a writable array would
+        # otherwise change under the id hashed from it.
+        values = np.array(self.values, copy=True)
+        values.flags.writeable = False
         object.__setattr__(self, "values", values)
 
     def identity(self) -> str:
@@ -2217,10 +2217,12 @@ def _promoted(run: Grid | Labels, dtype) -> Grid | Labels:
     if len(np.unique(diffs)) != 1:
         return run
     grid, _ = _range_run(dict(start=values[0], step=diffs[0], shape=(len(values),)))
-    # Unlike get_coord's inference, a run may never change a label, so the
-    # grid is kept only where it reproduces them exactly.
+    # Unlike get_coord's inference, a run may never change a label or drop
+    # one, so the grid is kept only where it holds them all, exactly.
     labels = grid.labels(np.arange(len(values)), dtype)
-    return grid if np.array_equal(labels, values) else run
+    if len(grid) != len(values) or not np.array_equal(labels, values):
+        return run
+    return grid
 
 
 def _fuse_runs(runs: tuple[Grid | Labels, ...]) -> tuple[Grid | Labels, ...]:
@@ -2317,6 +2319,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         if not runs:
             msg = "A numeric coordinate needs at least one run."
             raise CoordError(msg)
+        if len(runs) > 1:  # an empty run states nothing, not even a seam
+            runs = tuple(x for x in runs if len(x)) or runs[:1]
         stored = [x for x in runs if isinstance(x, Labels)]
         dtype = data.get("dtype")
         if _is_null(dtype) or dtype == "":
@@ -2391,12 +2395,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
 
     def _with_runs(self, runs) -> Self:
         """A coordinate holding these runs, fused, with this one's metadata."""
-        runs = tuple(runs)
-        if len(runs) > 1:
-            # A slice can leave a stored run evenly sampled, and a run
-            # held apart states a break it may no longer have.
-            runs = tuple(_promoted(x, self.dtype) for x in runs)
-        runs = _fuse_runs(runs)
+        runs = _fuse_runs(tuple(runs))
         grid = runs[0] if len(runs) == 1 and isinstance(runs[0], Grid) else None
         step = None if grid is not None else self.step
         return self.__class__(runs=runs, units=self.units, dtype=self.dtype, step=step)
@@ -2456,11 +2455,21 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     def _direction(self) -> int:
         """1 for ascending labels, -1 for descending, 0 for neither."""
         runs = self.runs
-        if len(runs) > 1:
-            first = self._run_labels(runs[0], [0])[0]
-            last = self._run_labels(runs[-1], [0])[0]
-            return 1 if first < last else -1
-        run = runs[0]
+        if len(runs) == 1:
+            return self._run_direction(runs[0])
+        # Runs are never assumed to chain: each must run one way and every
+        # seam must continue it.
+        edges = np.concatenate([_run_edges(x, self.dtype) for x in runs])
+        ascending = edges[0] < edges[-1]
+        ends, starts = edges[1::2][:-1], edges[::2][1:]
+        chained = np.all(starts > ends) if ascending else np.all(starts < ends)
+        inner = {self._run_direction(x) for x in runs if len(x) > 1}
+        if not chained or inner - {1 if ascending else -1}:
+            return 0
+        return 1 if ascending else -1
+
+    def _run_direction(self, run) -> int:
+        """1 if one run ascends, -1 if it descends, 0 if it does neither."""
         if isinstance(run, Grid):
             zero = _TD64_ZERO if is_timedelta64(run.step_num) else 0
             return -1 if run.step_num < zero else 1
@@ -2498,7 +2507,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     # --- indexing and selection
 
     def __getitem__(self, item):
-        if isinstance(item, int | np.integer):
+        if isinstance(item, int | np.integer) and self.ndim == 1:
             if item >= len(self) or item < -len(self):
                 raise IndexError(f"{item} exceeds coord length of {self}")
             return self._get_index_values(item)[()]
@@ -2523,12 +2532,13 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             # A grid states no label the arithmetic cannot restate, so the
             # result may be read back as one.
             return get_coord(data=out, units=self.units)
-        # Stored labels are held exactly, and reordering can invalidate a
-        # declared grid while a monotonic result still sits on it.
+        # Stored labels are held exactly, and a stride or a reorder can
+        # take the result off the declared grid, which then states nothing.
         step = self.step
-        if step is not None and not (np.ndim(out) == 1 and is_strictly_monotonic(out)):
-            step = None
-        return get_coord(data=out, units=self.units, step=step, snap=False)
+        if step is not None and np.ndim(out) == 1 and is_strictly_monotonic(out):
+            with suppress(CoordError, ValidationError):
+                return get_coord(data=out, units=self.units, step=step, snap=False)
+        return get_coord(data=out, units=self.units, snap=False)
 
     def _slice_runs(self, start: int, stop: int) -> BaseCoord:
         """The coordinate holding samples [start, stop) of a 1D coordinate."""
@@ -2542,8 +2552,21 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             elif isinstance(run, Grid):
                 out.append(run.sliced(low, 1, high - low))
             else:
-                out.append(Labels(run.values[low:high]))
+                # Only a trimmed run may have become evenly sampled; an
+                # untouched one still states the break it was held apart by.
+                out.append(self._promoted_labels(run.values[low:high]))
         return self._with_runs(out)
+
+    def _promoted_labels(self, values) -> Grid | Labels:
+        """Trimmed labels as the grid they are, unless it contradicts the step."""
+        labels = Labels(values)
+        run = _promoted(labels, self.dtype)
+        if isinstance(run, Grid) and not _is_null(step := self.step):
+            # a grid on another spacing would restate the step and swallow
+            # the positions the declared one says are missing
+            spacing = abs(_maybe_unpack(run.step(self.dtype)))
+            return run if spacing == abs(_maybe_unpack(step)) else labels
+        return run
 
     def _reversed(self) -> Self:
         """The same labels in the opposite order, runs kept."""
@@ -2996,27 +3019,18 @@ get_coord(start=0.0, stop=20.0, step=1.0)
 
     def _with_step(self, grid: Grid, step) -> NumericCoord:
         """The same start and count on a new cadence."""
-        if (frac := _fraction_step(step)) is None:
+        if _fraction_step(step) is None:
             step = get_compatible_values(step, type(self.step))
-        whole_tick = frac is None and (_is_int(step) or is_timedelta64(step))
-        if not grid.exact or not (frac is not None or whole_tick):
-            # Re-resolve: the inputs pick the representation the step needs.
-            out = get_coord(
-                start=self.values[0], step=step, shape=self.shape, units=self.units
-            )
-            assert isinstance(out, NumericCoord)
-            return out
-        if frac is not None:
-            num, den = (
-                frac * (_NS_PER_S if dtype_time_like(self.dtype) else 1)
-            ).as_integer_ratio()
-        else:
-            num, den = _to_tick(step), 1
-        if 0 < abs(num) < den:
-            msg = "A step smaller than one tick would repeat labels."
-            raise CoordError(msg)
-        start = _to_tick(self.values[0])
-        return self._with_runs((Grid(start, num, den, len(self)),))
+        # Re-resolve: the inputs pick the representation the step needs,
+        # and the start comes from the grid rather than from every label.
+        out = get_coord(
+            start=grid.labels(0, self.dtype)[()],
+            step=step,
+            shape=self.shape,
+            units=self.units,
+        )
+        assert isinstance(out, NumericCoord)
+        return out
 
     def _shifted(self, delta) -> Self:
         """Every label moved by delta; the runs move with them."""
@@ -3060,6 +3074,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             return get_coord(**{**info, **kwargs})
         info["start"] = np.asarray(grid.origin).astype(self.dtype)[()]
         info["stop"] = grid.labels(len(self), self.dtype)[()]
+        # the step is always stated, since without one a new length would
+        # re-derive the spacing from the span and move every label
+        info["step"] = self.step
         if grid.exact and "step" not in kwargs:
             # the rounded step would move every label of a fractional grid
             info.update(
@@ -3067,8 +3084,6 @@ get_coord(start=0.0, stop=20.0, step=1.0)
                 step_denominator=grid.step_den,
                 origin_offset=grid.phase,
             )
-        else:
-            info["step"] = self.step
         if "stop" not in kwargs and "step" not in kwargs:
             # a new stop or step re-derives the count, as a range always has
             info["shape"] = self.shape
@@ -3090,29 +3105,36 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             return self
         if self.units is None:
             return self.set_units(units)
-        if (grid := self._grid) is not None:
-            if grid.exact and grid.step_den != 1:
-                msg = (
-                    "Cannot convert the units of an integer coordinate with a "
-                    f"fractional step ({self.step_exact}); the result is not an "
-                    "integer grid."
-                )
-                raise CoordError(msg)
-            start = convert_units(self.values[0], units, self.units)
-            end = convert_units(
-                grid.labels(len(self), self.dtype)[()], units, self.units
-            )
-            new = get_coord(
-                start=start, stop=end, step=(end - start) / len(self), units=units
-            )
-            return cast("Self", new)
-        values = convert_units(self.values, units, self.units)
+        # Each run converts in the form it is held in: re-reading the
+        # converted labels would snap within a tolerance and erase a seam.
+        pieces = [self._converted_run(x, units) for x in self.runs]
+        dtype = np.result_type(*[x for _, x in pieces])
         step = self.step
         if step is not None:
             # a step is a difference, so an affine unit's offset cancels
             anchor = convert_units(step * 0, units, self.units)
             step = convert_units(step, units, self.units) - anchor
-        return cast("Self", get_coord(data=values, units=units, step=step))
+        runs = tuple(x for x, _ in pieces)
+        return self.__class__(runs=runs, units=units, dtype=dtype, step=step)
+
+    def _converted_run(self, run, units) -> tuple[Grid | Labels, np.dtype]:
+        """One run's labels in new units, and the dtype they take."""
+        if isinstance(run, Labels):
+            values = convert_units(run.values, units, self.units)
+            return Labels(values), values.dtype
+        if run.exact and run.step_den != 1:
+            msg = (
+                "Cannot convert the units of an integer coordinate with a "
+                f"fractional step ({self.step_exact}); the result is not an "
+                "integer grid."
+            )
+            raise CoordError(msg)
+        ends = [
+            convert_units(run.labels(x, self.dtype)[()], units, self.units)
+            for x in (0, run.count)
+        ]
+        spec = dict(start=ends[0], stop=ends[1], step=(ends[1] - ends[0]) / run.count)
+        return _range_run(spec)
 
     # --- discontinuities
 
@@ -3311,8 +3333,9 @@ def concat_coords(*coords, units=None) -> BaseCoord:
     ----------
     *coords
         Coordinates to concatenate. Each must be numeric and monotonic.
-        Inputs are ordered by their envelopes; they must share dtype kind,
-        units, and sort direction, and must not overlap.
+        Inputs are ordered by their envelopes, or, where every input holds
+        one sample, by the order they are given in; they must share dtype
+        kind, units, and sort direction, and must not overlap.
     units
         If provided, set (not convert) these units on the output.
 
@@ -3346,7 +3369,10 @@ def concat_coords(*coords, units=None) -> BaseCoord:
         raise CoordError(msg)
     _check_concat(flat)
     multi = [x for x in flat if len(x) > 1]
-    ascending = multi[0].sorted if multi else True
+    # Single-sample inputs state no direction of their own, so the order
+    # they were given in states it.
+    bounds = [x.min() for x in flat]
+    ascending = multi[0].sorted if multi else len(flat) < 2 or bounds[-1] > bounds[0]
     # Sort on native values; float conversion would collapse ns datetimes.
     flat.sort(key=lambda x: x.min(), reverse=not ascending)
     _check_chain(flat, ascending)
@@ -3433,11 +3459,12 @@ def _labels_to_runs(values, step) -> tuple[tuple[Grid | Labels, ...], np.dtype]:
     runs: list[Grid | Labels] = []
     dtypes = [values.dtype]
     for block in np.split(values, splits):
-        if len(block) < 2 and _is_null(step):
-            runs.append(Labels(block))
+        if _is_null(step):
+            # A block's spacings may still differ, so it becomes a grid
+            # only where one reproduces every label exactly.
+            runs.append(_promoted(Labels(block), values.dtype))
             continue
-        spacing = signed if not _is_null(step) else block[1] - block[0]
-        spec = dict(start=block[0], step=spacing, shape=(len(block),))
+        spec = dict(start=block[0], step=signed, shape=(len(block),))
         grid, dtype = _range_run(spec)
         runs.append(grid)
         dtypes.append(dtype)
