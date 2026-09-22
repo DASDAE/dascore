@@ -178,6 +178,14 @@ class TestCanonical:
         coord = NumericND.from_run(0, (3, 2), 4, origin_offset=5)
         np.testing.assert_array_equal(coord.values, [2, 4, 5, 7])
 
+    def test_every_row_of_a_table_is_reduced(self):
+        """Reduction is row-wise, so a many-run table is not left in high terms."""
+        coord = NumericND.from_rows([(0, 4, 2, 4, 1), (10, 4, 6, 4, 2)], dtype="int64")
+        lowest = NumericND.from_rows([(0, 4, 1, 2, 0), (10, 4, 3, 2, 1)], dtype="int64")
+        assert table(coord) == table(lowest)
+        np.testing.assert_array_equal(coord.values, [0, 0, 1, 1, 10, 12, 13, 15])
+        assert coord.data_id == lowest.data_id
+
 
 class TestOneRowArithmetic:
     """One run is canonicalised in python; it must answer as the table does."""
@@ -211,6 +219,18 @@ class TestOneRowArithmetic:
             return True
         return False
 
+    # The cases above whose last label leaves the dtype, and so must be
+    # refused by both the one-row check and the vectorised one.
+    REFUSED: ClassVar = {
+        ("datetime64[ns]", 0, 2**62, 8, 1, 0),
+        ("datetime64[ns]", 2**62, 2**62, 4, 1, 0),
+        ("datetime64[ns]", -(2**62), 10, -(2**60), 1, 0),
+        ("int8", 100, 100, 1, 1, 0),
+        ("int8", -100, 100, -1, 1, 0),
+        ("uint8", 200, 100, 1, 1, 0),
+        ("uint64", 2**63 - 10, 20, 1, 1, 0),
+    }
+
     @pytest.mark.parametrize("case", CASES)
     def test_one_row_check_matches_the_vectorised_one(self, case):
         """A few rows are checked one at a time; a long table answers the same."""
@@ -221,6 +241,8 @@ class TestOneRowArithmetic:
         scalar = self._raised(lambda: kernel.check_range(rows, dtype))
         vector = self._raised(lambda: kernel.check_range(np.repeat(rows, 20), dtype))
         assert scalar == vector
+        # Which answer it is, not only that the two branches agree.
+        assert scalar == (tuple(case) in self.REFUSED)
 
     @pytest.mark.parametrize("length", [0, -1])
     def test_a_run_of_no_samples_is_dropped(self, length):
@@ -1234,11 +1256,13 @@ class TestNarrowDtypes:
             NumericND.from_run(np.int8(100), np.int8(2), (50,))
 
     def test_from_coord_keeps_a_narrow_range(self):
-        """Converting a narrow range does not widen it."""
+        """Reading a narrow range's labels back into a table does not widen it."""
         reference = get_coord(start=np.int8(0), stop=np.int8(100), step=np.int8(2))
-        coord = reference
-        assert coord.dtype == reference.dtype
+        coord = NumericND.from_array(reference.values)
+        assert coord.dtype == np.dtype("int8")
+        assert coord.values.dtype == np.dtype("int8")
         np.testing.assert_array_equal(coord.values, reference.values)
+        assert coord == reference
 
 
 class TestGaps:
@@ -2354,3 +2378,65 @@ class TestFourthReviewFindings:
         out, index = coord.select((value, None))
         assert index.start == int(np.flatnonzero(wide >= value)[0])
         np.testing.assert_array_equal(out.values, coord.values[wide >= value])
+
+
+class TestFifthReviewFindings:
+    """What the fifth review found, each pinned by what it broke."""
+
+    def test_stored_labels_are_the_coordinate_s_own(self):
+        """A caller's array cannot change labels the id already stands for."""
+        values = np.array([0.0, 1.3, 4.0])
+        coord = NumericND.from_array(values, detect=False)
+        before = coord.data_id
+        values[1] = 99.0
+        np.testing.assert_array_equal(coord.values, [0.0, 1.3, 4.0])
+        assert coord.data_id == before
+        assert coord == NumericND.from_array(np.array([0.0, 1.3, 4.0]), detect=False)
+
+    def test_a_dumped_table_keeps_its_shape(self):
+        """An N-D coordinate rebuilds with the layout it was dumped with."""
+        coord = NumericND.from_array(np.arange(6).reshape(2, 3))
+        out = get_coord(**coord.model_dump())
+        assert out.shape == coord.shape
+        np.testing.assert_array_equal(out.values, coord.values)
+
+    def test_a_summary_rebuilds_its_runs_in_order(self):
+        """Runs are stated in sample order, which need not be value order."""
+        values = np.array([0, 1, 2, 10, 11, 12, 5, 6, 7])
+        coord = NumericND.from_array(values)
+        assert coord.runs_count == 3
+        np.testing.assert_array_equal(coord.to_summary().to_coord().values, values)
+
+    @pytest.mark.skipif(
+        np.finfo(np.longdouble).eps == np.finfo(np.float64).eps,
+        reason="platform longdouble is a double",
+    )
+    def test_extended_precision_labels_are_gathered_whole(self):
+        """A label wider than a double does not pass through the float kernel."""
+        values = np.array([1, 2, 4], dtype=np.longdouble) + np.longdouble("1e-18")
+        coord = NumericND.from_array(values, detect=False)
+        np.testing.assert_array_equal(coord.values, values)
+        assert coord[0] == values[0]
+        np.testing.assert_array_equal(coord._labels([0, 2]), values[[0, 2]])
+
+    def test_an_emptied_object_coordinate_still_has_an_id(self):
+        """A run of no samples makes no labels, so none are hashed for it."""
+        labels = np.array([(1,), (2,), (3,)], dtype=object)
+        coord = NumericND.from_array(labels).empty()
+        assert coord.data_id
+        assert coord == coord
+        assert coord.to_summary().len == 0
+
+    def test_re_spacing_an_empty_coordinate_is_refused(self):
+        """No labels means no grid to move onto a new cadence."""
+        coord = NumericND.from_array(np.array([], dtype=float))
+        with pytest.raises(CoordError, match="single grid run"):
+            coord.update_limits(step=1)
+
+    def test_units_are_part_of_being_approximately_equal(self):
+        """The same magnitudes in another unit are another coordinate."""
+        metres = NumericND.from_run(0.0, 1.0, 10, units="m")
+        feet = metres.set_units("ft")
+        assert not metres.approx_equal(feet)
+        assert not feet.approx_equal(metres)
+        assert metres.approx_equal(metres.set_units("m"))

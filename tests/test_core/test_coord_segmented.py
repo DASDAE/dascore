@@ -1131,6 +1131,30 @@ class TestSplitGapsAndWrite:
         path = dc.write(patch, tmp_path / "normal.h5", "dasdae", split=True)
         assert path.exists()
 
+    def test_write_rate_change_raises(self, tmp_path):
+        """Runs of different rates state no step, which a writer needs."""
+        t0 = np.datetime64("2020-01-01")
+        first = get_coord(start=t0, step=np.timedelta64(10, "ms"), shape=(10,))
+        second = get_coord(
+            start=first.max() + np.timedelta64(10, "ms"),
+            step=np.timedelta64(5, "ms"),
+            shape=(10,),
+        )
+        time = concat_coords(first, second)
+        assert not time.holes and time.step is None
+        patch = dc.Patch(
+            data=np.zeros((3, 20)),
+            dims=("distance", "time"),
+            coords={
+                "distance": get_coord(start=0.0, step=1.0, shape=(3,)),
+                "time": time,
+            },
+        )
+        with pytest.raises(ParameterError, match="split=True"):
+            dc.write(patch, tmp_path / "rate.wav", "wav")
+        with pytest.raises(ParameterError, match="no single step"):
+            dc.write(patch, tmp_path / "rate2.wav", "wav", split=True)
+
     def test_write_file_backed_spool_unaffected(self, tmp_path):
         """Non-memory spools skip the gap inspection (never gapped)."""
         path1 = dc.write(dc.get_example_patch(), tmp_path / "a.h5", "dasdae")

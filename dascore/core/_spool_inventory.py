@@ -1277,14 +1277,13 @@ def _placed_rows(contexts, placements, frame, name: str):
     # resolve to one shared context object, and `__eq__` on an inventory
     # model dumps the whole subtree. A miss only recomputes.
     cache: dict[tuple, tuple] = {}
-    runs = frame.get(f"_{name}_runs", [None] * len(frame))
-    for context, (dim, axis), (low, high), step, unit, table in zip(
-        contexts, placements, bounds, steps, units, runs, strict=True
+    for context, (dim, axis), (low, high), step, unit in zip(
+        contexts, placements, bounds, steps, units, strict=True
     ):
         if context is None or dim is None:
             yield PlacedRow(context, low, high, None, None, None)
             continue
-        if pd.isnull(step) or not step or (isinstance(table, tuple) and len(table) > 1):
+        if pd.isnull(step) or not step:
             # Which channels are which is decided on the sample grid, and
             # the step is its only description. Guessing would trim the
             # wrong channels silently, which is worse than saying so.

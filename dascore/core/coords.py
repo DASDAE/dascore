@@ -376,13 +376,16 @@ class CoordSummary(DascoreBaseModel):
         """
         Rebuild the coordinate the summary states.
 
-        A summary carrying a run per run rebuilds them all, holes and all,
+        A summary carrying a summary per run rebuilds them all, holes and all,
         so long as each states a grid: labels no grid states stay in the
         file the summary came from. Otherwise only the envelope is known,
         and only an evenly sampled one rebuilds a range.
         """
         if (runs := self.runs) is not None and len(runs) > 1:
-            return concat_coords(*(x.to_coord() for x in runs), units=self.units)
+            # Joined end to end, not sorted: the runs are stated in the
+            # order their samples are, which need not be value order.
+            tables = [cast("NumericND", x.to_coord()) for x in runs]
+            return concat_tables(*tables)
         fields = {
             "min": self.min,
             "max": self.max,
@@ -1108,7 +1111,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             coordinates this is a timedelta (numeric values interpreted as
             seconds). None or 0 permit only exact (lossless) simplifications.
         keep_step
-            If True, only re-fit at the segments' own step, so missing
+            If True, only re-fit at the runs' own step, so missing
             samples stay missing however large the tolerance. Merging uses
             this: a hole is data that is absent, not a slower sampling rate.
 
@@ -1128,7 +1131,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         Parameters
         ----------
         kind
-            Either "all" (every segment boundary) or "gaps" (boundaries whose
+            Either "all" (every run boundary) or "gaps" (boundaries whose
             spacing exceeds the local sampling interval by more than
             `tolerance`).
         tolerance
@@ -1143,12 +1146,11 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         `delta` (after - before) and `excess` (delta minus the expected local
         sampling interval, NaN when no sampling interval is defined).
 
-        A monotonic array reports every spacing which is not its declared
-        step (or its median spacing when it declares none); a segmented
-        coordinate reports the seams between its runs; every other
-        coordinate (a range, an unordered array, a partial or string
-        coordinate) returns an empty dataframe. ``tolerance`` may also be a
-        `dascore.utils.gaps.GapTolerance`.
+        A coordinate of several runs reports the seams between them; one
+        stored run reports every spacing which is not its declared step (or
+        its median spacing when it declares none); a grid run, unordered
+        labels, a partial or a string coordinate return an empty dataframe.
+        ``tolerance`` may also be a `dascore.utils.gaps.GapTolerance`.
         """
         if kind not in ("all", "gaps"):
             msg = f"kind must be 'all' or 'gaps', got {kind!r}"
@@ -1592,8 +1594,10 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         """
         Return True if the coordinates are approximately equal.
 
-        This is a tolerant comparison helper. It is intentionally distinct
-        from `data_id`, which is stricter and intended for stable ids.
+        Labels are compared closely, units exactly: this is the gate patches
+        are merged and stacked through, so metres and feet are never one
+        coordinate however alike their magnitudes. It is intentionally
+        distinct from `data_id`, which is stricter and intended for stable ids.
 
         Parameters
         ----------
@@ -1602,7 +1606,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         """
         if self is other:
             return True
-        if self.shape != other.shape:
+        if self.shape != other.shape or self.units != other.units:
             return False
         non_coords = [self._partial, other._partial]
         if all(non_coords):
@@ -2885,13 +2889,15 @@ class NumericND(BaseCoord):
 
         The one place an array id is computed: every later coordinate --
         a slice, a reversal, a concatenation -- carries the id it is given
-        here rather than hashing the labels again.
+        here rather than hashing the labels again. The labels are copied and
+        frozen, so the caller's array cannot change what the id stands for.
         """
         rows = np.asarray(rows).copy()
         stored = rows["den"] == 0
         if not np.any(stored):
             return cls._build(dtype, rows, None, units, step, shape)
-        values = np.asarray(labels)
+        values = np.array(labels, copy=True)
+        values.flags.writeable = False
         key = _array_id(values).encode("ascii")
         rows[SOURCE_ID][stored] = key
         # Each stored row's window into the labels, in table order, which is
@@ -2903,7 +2909,14 @@ class NumericND(BaseCoord):
 
     @classmethod
     def from_rows(
-        cls, runs, labels=None, dtype=None, units=None, step=None, sources=None
+        cls,
+        runs,
+        labels=None,
+        dtype=None,
+        units=None,
+        step=None,
+        sources=None,
+        shape=None,
     ) -> Self:
         """
         Build from a run table.
@@ -2924,6 +2937,9 @@ class NumericND(BaseCoord):
         sources
             The source arrays the rows already name, by id, for a table
             whose stored runs carry their ``source_id``.
+        shape
+            The shape of the labels, for a table whose samples are laid out
+            in more than one dimension.
         """
         dtype = _as_dtype(labels) if dtype is None else _coord_dtype(dtype)
         rows = _as_record(runs, dtype)
@@ -2935,9 +2951,10 @@ class NumericND(BaseCoord):
             raise CoordError(msg)
         if labels is not None:
             values = np.asarray(labels).astype(dtype)
-            shape = None if values.ndim == 1 else values.shape
+            if shape is None and values.ndim != 1:
+                shape = values.shape
             return cls._from_labels(dtype, rows, values, units, step, shape)
-        return cls._build(dtype, rows, sources, units, step)
+        return cls._build(dtype, rows, sources, units, step, shape)
 
     @classmethod
     def from_run(
@@ -3303,6 +3320,18 @@ class NumericND(BaseCoord):
         last, k = np.asarray([len(rows) - 1]), np.asarray([int(row["length"])])
         return self._from_anchor(self._kernel.labels(rows, last, k))[0][()]
 
+    def _anchors(self, anchor) -> np.ndarray:
+        """
+        Kernel output in the width a stored label is gathered into it at.
+
+        A tick is an int64 whatever the labels are, but a float kernel
+        counts in doubles; a wider float's own labels would lose their
+        extra bits on the way through one.
+        """
+        if self._ticks or np.dtype(self.dtype).itemsize <= 8:
+            return anchor
+        return anchor.astype(self.dtype, copy=False)
+
     def _from_anchor(self, anchor) -> np.ndarray:
         """Anchors (ticks or floats) as labels of the coordinate dtype."""
         anchor = np.ascontiguousarray(anchor)
@@ -3448,7 +3477,7 @@ class NumericND(BaseCoord):
             # own; the float64 the kernel counts in cannot hold them.
             out = np.empty(k.shape, dtype=self.dtype)
         else:
-            out = self._kernel.labels(rows, run, k)
+            out = self._anchors(self._kernel.labels(rows, run, k))
         if self._stored_labels:
             stored = rows["den"][run] == 0
             if np.any(stored):
@@ -3481,7 +3510,7 @@ class NumericND(BaseCoord):
         )
         run = np.repeat(np.arange(len(rows)), counts)
         if _counted(self.dtype):
-            out = kernel.labels(rows, run, k, reach=int(lengths.max()))
+            out = self._anchors(kernel.labels(rows, run, k, reach=int(lengths.max())))
         else:
             out = np.empty(total, dtype=self.dtype)
         if self._stored_labels:
@@ -3884,7 +3913,10 @@ class NumericND(BaseCoord):
             str(np.dtype(self.dtype)),
             self.shape,
         )
-        if not self._ticks and np.any(made := (rows["den"] != 0) & ~single):
+        # A run of no samples makes no labels to stand for it, which the
+        # empty table of any dtype is; object labels have no digest at all.
+        made = (rows["den"] != 0) & ~single & (rows["length"] > 0)
+        if not self._ticks and np.any(made):
             # A float row is not canonical -- one set of doubles can be
             # counted from more than one origin, and a slice keeps its
             # parent's -- so the labels it makes are its identity, and the
@@ -3938,10 +3970,10 @@ class NumericND(BaseCoord):
     __hash__ = BaseCoord.__hash__
 
     def approx_equal(self, other: BaseCoord) -> bool:
-        """Whether two coordinates hold approximately the same labels."""
+        """Whether two coordinates hold approximately the same labels in one unit."""
         if self is other:
             return True
-        if self.shape != other.shape:
+        if self.shape != other.shape or self.units != other.units:
             return False
         if other._partial:
             return False
@@ -3984,7 +4016,11 @@ class NumericND(BaseCoord):
 
     def _with_step(self, step) -> Self:
         """The same start and sample count on a new cadence."""
-        assert self.evenly_sampled, "update_limits re-spaces only a single grid run"
+        if not self.evenly_sampled:
+            # Reachable from an empty coordinate, which update_limits lets
+            # through because it has no labels to snap onto a grid first.
+            msg = "Only a single grid run of at least one sample can be re-spaced."
+            raise CoordError(msg)
         frac = _fraction_step(step)
         if frac is None:
             # A number beside a time coordinate is a duration in its units.
@@ -4368,24 +4404,10 @@ class NumericND(BaseCoord):
             self.min(), self.max(), len(self), self.reverse_sorted, self.units, one
         )
 
+    @compose_docstring(doc=get_docstring(BaseCoord.fuse))
     def fuse(self, tolerance=None, keep_step: bool = False) -> BaseCoord:
         """
-        Return the simplest coordinate representing the same values.
-
-        Runs are greedily re-fit as evenly sampled grids; a fit is accepted
-        only when no value moves by more than `tolerance`. With a
-        sufficient tolerance a fully contiguous table collapses to one run.
-
-        Parameters
-        ----------
-        tolerance
-            The maximum amount any coordinate value may change. For
-            time-like coordinates this is a timedelta (numeric values
-            interpreted as seconds). None or 0 permit only exact
-            simplifications.
-        keep_step
-            If True, a re-fit may not change the runs' declared step, so a
-            hole stays a hole however large the tolerance.
+        {doc}
         """
         if len(self.runs) < 2:
             # One run is already the simplest thing its labels can be: a
@@ -5252,7 +5274,13 @@ def get_coord(
             msg = "runs cannot be combined with other coordinate value inputs."
             raise CoordError(msg)
         return NumericND.from_rows(
-            runs, labels=labels, dtype=dtype, units=units, step=step, sources=sources
+            runs,
+            labels=labels,
+            dtype=dtype,
+            units=units,
+            step=step,
+            sources=sources,
+            shape=_get_shape(shape),
         )
     if segments is not None:
         # shape/dtype/step are derived fields of a coordinate, so they

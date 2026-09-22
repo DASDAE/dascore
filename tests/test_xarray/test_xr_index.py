@@ -600,6 +600,13 @@ class TestFromVariables:
         joined = xr.concat([picked, out.isel(x=[2])], "x")
         np.testing.assert_array_equal(joined["x"].values, ["a", "b", "c"])
 
+    def test_jittered_labels_are_not_moved_onto_a_grid(self):
+        """Installing an index must not relabel the variable it indexes."""
+        values = np.array([0.0, 1.0, 2.00001, 3.0])
+        jittered = xr.DataArray(np.zeros(4), dims="x", coords={"x": values})
+        out = jittered.drop_indexes("x").set_xindex("x", CoordIndex)
+        np.testing.assert_array_equal(out["x"].values, values)
+
     def test_units_and_refusals(self):
         """Units come from the variable; several or 2-d variables are refused."""
         distance = xr.DataArray(

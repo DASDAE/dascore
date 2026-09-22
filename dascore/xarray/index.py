@@ -180,8 +180,12 @@ class CoordIndex(CoordinateTransformIndex):
             raise ValueError(msg)
         values = np.asarray(variable.values)
         units = variable.attrs.get("units")
-        # reading labels never moves one, so whatever grid comes back is theirs
+        # `get_coord` fits nearly even labels onto an ideal grid, which would
+        # relabel the variable as a side effect of installing an index, so a
+        # fit which moved anything is dropped for the labels themselves.
         coord = get_coord(data=values)
+        if not np.array_equal(coord._get_index_values(np.arange(len(coord))), values):
+            coord = _array_coord(values, None)
         if units is not None and not dtype_time_like(coord.dtype):
             coord = coord.set_units(units)
         return cls(CoordTransform(name, coord, variable.dims[0]))

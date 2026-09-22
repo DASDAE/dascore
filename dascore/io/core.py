@@ -2035,9 +2035,16 @@ def _maybe_split_gapped_patches(spool, fiber_io, split):
     if (fiber_io.segmented_write and not split) or not _may_hold_gaps(spool):
         return spool
 
+    def _gapped(coord):
+        """Whether a coordinate is more than the one grid a writer can state."""
+        if not isinstance(coord, NumericND) or coord.runs_count < 2:
+            return False
+        # A hole splits; runs which merely change rate do not, but they
+        # still leave no single step for the writer to work from.
+        return bool(coord.holes) or pd.isnull(coord.step)
+
     def _has_gaps(patch):
-        coords = (patch.get_coord(x) for x in patch.dims)
-        return any(isinstance(x, NumericND) and x.holes for x in coords)
+        return any(_gapped(patch.get_coord(x)) for x in patch.dims)
 
     # Materialize once (cheap; patches are in memory) so gap detection and
     # splitting see the same patch sequence.
@@ -2057,6 +2064,14 @@ def _maybe_split_gapped_patches(spool, fiber_io, split):
     patches = []
     for patch, has_gaps in zip(contents, gapped, strict=True):
         patches.extend(patch.split_gaps() if has_gaps else [patch])
+    if any(_has_gaps(x) for x in patches):
+        # A change of rate is not a hole, so splitting never removes one.
+        msg = (
+            f"Format {fiber_io.name} cannot write patches whose dimensional "
+            "coordinates state no single step; splitting on gaps does not "
+            "give one. Resample or snap the coordinate first."
+        )
+        raise ParameterError(msg)
     if len(patches) > 1 and not fiber_io.multi_patch_write:
         msg = (
             f"Format {fiber_io.name} writes a single patch per file, so "

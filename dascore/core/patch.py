@@ -128,7 +128,13 @@ class Patch(NamespaceOwner, PatchMeta):
         if isinstance(data, Patch):
             data, attrs, coords = data._data, data.attrs, data.coords
         elif isinstance(data, DataArray):
-            data, attrs, coords = data.data, data.attrs, data.coords
+            # Imported here because dascore.xarray imports dascore. A
+            # coordinate's units live in its variable's attrs, which the
+            # raw coordinate mapping does not carry.
+            from dascore.xarray.patch import _coord_from  # noqa: PLC0415
+
+            coords = {i: _coord_from(data, i, x) for i, x in data.coords.items()}
+            data, attrs = data.data, data.attrs
         elif isinstance(data, PatchMeta):
             # Metadata describes data; it is not data, and no patch can be
             # made of it without an array to go with it.

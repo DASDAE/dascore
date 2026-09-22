@@ -1233,9 +1233,17 @@ class TestApproxEqual:
     def test_close_values_equal(self, evenly_sampled_float_coord_with_units):
         """Ensure very close value coords are equal."""
         coord = evenly_sampled_float_coord_with_units
-        out = coord.update(data=coord.values * 0.99999999999)
+        out = coord.new(values=coord.values * 0.99999999999)
         assert not np.all(out.values == coord.values)
         assert out.approx_equal(coord)
+
+    def test_different_units_ne(self, evenly_sampled_float_coord_with_units):
+        """The same magnitudes in another unit are another coordinate."""
+        coord = evenly_sampled_float_coord_with_units
+        out = coord.set_units("ft")
+        assert np.all(out.values == coord.values)
+        assert not out.approx_equal(coord)
+        assert not coord.approx_equal(out)
 
 
 class TestReduceCoord:
@@ -2603,7 +2611,12 @@ class TestIssues:
         dates = evenly_sampled_date_coord.values
         data = np.stack([dates, dates], axis=-1)
         coord = get_coord(data=data)
-        assert not (coord.sorted or coord.reverse_sorted)
+        # Stacked dates are labels, not a grid: they keep their shape and
+        # every one of their values.
+        assert coord.shape == data.shape
+        assert coord.dtype == data.dtype
+        assert coord.has_values and coord._stored_labels
+        np.testing.assert_array_equal(coord.values, data)
 
 
 class TestStringCoords:
@@ -2878,7 +2891,11 @@ class TestStringCoordUtilities:
             dtype=object,
         )
         out = get_coord(data=data)
-        assert not (out.sorted or out.reverse_sorted)
+        # Objects which only compare state no grid, so they are held as the
+        # labels they are and handed back unchanged.
+        assert out.dtype == np.dtype(object)
+        assert out._stored_labels and out.step is None
+        assert list(out.values) == list(data)
 
     def test_detect_string_like_array(self):
         """The helper should recognize string arrays only."""

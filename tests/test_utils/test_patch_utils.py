@@ -675,6 +675,13 @@ class TestMergeCompatibleCoordsAttrs:
         with pytest.raises(IncompatiblePatchError, match=match):
             merge_compatible_coords_attrs(new, random_patch)
 
+    def test_incompatible_units(self, random_patch):
+        """The same magnitudes in another unit are not the same coordinate."""
+        new = random_patch.set_units(distance="ft")
+        match = "coordinates are not equal"
+        with pytest.raises(IncompatiblePatchError, match=match):
+            merge_compatible_coords_attrs(random_patch.set_units(distance="m"), new)
+
     def test_incompatible_attrs(self, random_patch):
         """A conflicting kind attr raises."""
         new = random_patch.update_attrs(tag="other")
