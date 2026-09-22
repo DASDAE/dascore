@@ -17,6 +17,7 @@ from dascore.core.coords import (
     _EXACT_GRID_FIELDS,
     NumericND,
     _scalar_dtype,
+    _to_tick,
     concat_tables,
     get_coord,
     runs_from_rows,
@@ -258,10 +259,12 @@ def _save_coord(coord, name, group, compact: bool):
         # first value, so only a range may state one there; version 2
         # reads it as the grid an array declares -- which only monotonic
         # labels can be read against, so an unsorted coordinate states
-        # none and is read back as the values it is.
+        # none and is read back as the values it is. A partial holds no
+        # labels at all, so its declared step is all there is to keep.
         step = coord.step
-        monotonic = coord.ndim == 1 and (coord.sorted or coord.reverse_sorted)
-        if step is not None and (_is_range(coord) or (compact and monotonic)):
+        ordered = coord.ndim == 1 and (coord.sorted or coord.reverse_sorted)
+        declares = ordered or not coord.has_values
+        if step is not None and (_is_range(coord) or (compact and declares)):
             is_td = np.issubdtype(np.asarray(step).dtype, np.timedelta64)
             node.attrs["step"] = to_int(step) if is_td else step
             node.attrs["step_is_timedelta64"] = is_td
@@ -376,15 +379,12 @@ def _read_range(node, units):
     start = np.asarray(attrs["start"]).astype(dtype)[()]
     shape = (int(attrs["length"]),)
     if "step_numerator" in attrs:
-        num, den, offset = (int(attrs[name]) for name in _EXACT_GRID_FIELDS)
-        return get_coord(
-            start=start,
-            shape=shape,
-            units=units,
-            step_numerator=num,
-            step_denominator=den,
-            origin_offset=offset,
-        )
+        # Read back as the row it was written from, not through `get_coord`,
+        # which screens grids the writer never held to -- a step of less than
+        # a tick among them.
+        terms = (int(attrs[name]) for name in _EXACT_GRID_FIELDS)
+        rows = runs_from_rows([(_to_tick(start), shape[0], *terms)], dtype)
+        return NumericND.from_rows(rows, dtype=dtype, units=units)
     if _FLOAT_GRID in attrs:
         terms = (int(x) for x in attrs[_FLOAT_GRID])
         rows = runs_from_rows([(float(attrs[_FLOAT_ORIGIN]), shape[0], *terms)], dtype)
@@ -423,7 +423,7 @@ def _read_segment(node):
 
 
 def _read_coord(node, name, attrs2, snap):
-    """Rebuild one coordinate from its node; only a dimension is snapped."""
+    """Rebuild one coordinate from its node."""
     node_attrs = node.attrs
     units = node_attrs.get("units", None) or attrs2.get(f"{name}_units", None)
     object_type = unbyte(node_attrs.get(_OBJECT_TYPE, ""))
@@ -445,6 +445,15 @@ def _read_coord(node, name, attrs2, snap):
         # grid it declares, never a range to rebuild
         array = _read_array(node)
         if node_step is not None:
+            if object_type == "CoordPartial":
+                # A partial holds placeholders, not labels, so its shape and
+                # declared step are the whole of what the node states.
+                return get_coord(
+                    shape=np.shape(array),
+                    step=node_step,
+                    units=units,
+                    dtype=np.asarray(array).dtype,
+                )
             # The runs were settled when the node was written, so a step
             # beside the values is the grid they declare, never a licence
             # to read runs out of them again.
@@ -490,9 +499,7 @@ def _get_coords(patch_group, dims, attrs2, snap=True):
         if not name.startswith("_coord_"):
             continue
         name = name.removeprefix("_coord_")
-        # a coordinate which is not a dimension holds measurements
-        coord_snap = snap if name in dims else False
-        coord_dict[name] = _read_coord(node, name, attrs2, coord_snap)
+        coord_dict[name] = _read_coord(node, name, attrs2, snap)
     # associates coordinates with dimensions
     group_attrs = patch_group.attrs
     c_dims = [x for x in group_attrs if x.startswith("_cdims")]

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+from fractions import Fraction
 
 import h5py
 import numpy as np
@@ -400,3 +401,72 @@ class TestRangeNodesFromEarlierWriters:
             coord = _read_coord(node, "time", {}, snap=True)
         expected = get_coord(start=T0, step=np.timedelta64(4, "ms"), shape=(10,))
         assert coord == expected
+
+
+class TestPartialCoords:
+    """A coordinate of no labels still states the step it declares."""
+
+    @pytest.fixture(scope="class")
+    def partial(self):
+        """A partial coordinate along the example patch's distance axis."""
+        return get_coord(shape=(300,), step=2.0)
+
+    @pytest.mark.parametrize("dimensional", [True, False])
+    def test_step_survives_the_round_trip(self, partial, tmp_path, dimensional):
+        """Its declared step comes back, as a dimension or riding one."""
+        patch = dc.get_example_patch()
+        kwargs = (
+            {"distance": partial} if dimensional else {"depth": ("distance", partial)}
+        )
+        patch = patch.update_coords(**kwargs)
+        path = tmp_path / f"partial_{dimensional}.h5"
+        patch.io.write(path, "dasdae")
+        back = dc.read(path)[0]
+        coord = back.coords.coord_map["distance" if dimensional else "depth"]
+        assert not coord.has_values
+        assert coord.step == partial.step
+        assert coord.shape == partial.shape
+
+
+class TestSubTickGrids:
+    """A grid finer than one tick is read back by the builder which wrote it."""
+
+    def test_fractional_int_step_round_trips(self, tmp_path):
+        """An int64 run stepping by a quarter is not lost to the scanner."""
+        coord = NumericND.from_run(0, Fraction(1, 4), 12, dtype="int64")
+        patch = dc.Patch(
+            data=np.zeros((12, 3)),
+            coords={
+                "distance": coord,
+                "time": get_coord(start=T0, step=(1, 8), shape=(3,)),
+            },
+            dims=("distance", "time"),
+        )
+        path = tmp_path / "subtick.h5"
+        patch.io.write(path, "dasdae")
+        spool = dc.spool(path)
+        assert len(spool) == 1
+        back = spool[0].get_coord("distance")
+        np.testing.assert_array_equal(back.values, coord.values)
+
+
+class TestNonDimensionalSnap:
+    """`snap` names coordinates, dimension or not."""
+
+    @pytest.fixture(scope="class")
+    def path(self, tmp_path_factory):
+        """A file whose rider coordinate holds jittered labels."""
+        values = np.array([0.0, 1.000001, 2.0, 3.0, 4.0])
+        jitter = NumericND.from_array(values, detect=False)
+        patch = dc.get_example_patch().select(distance=(0, 5), samples=True)
+        patch = patch.update_coords(jitter=("distance", jitter))
+        out = tmp_path_factory.mktemp("snap") / "jitter.h5"
+        patch.io.write(out, "dasdae")
+        return out
+
+    def test_named_rider_is_snapped(self, path):
+        """Naming the rider fits it; leaving it out keeps its labels."""
+        snapped = dc.read(path, snap=("jitter",))[0].get_coord("jitter")
+        exact = dc.read(path, snap=False)[0].get_coord("jitter")
+        assert snapped.evenly_sampled
+        assert not np.array_equal(snapped.values, exact.values)
