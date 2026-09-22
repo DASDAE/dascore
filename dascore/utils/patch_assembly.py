@@ -22,7 +22,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.core.coordmanager import CoordManager, get_coord_manager
-from dascore.core.coords import _EXACT_GRID_FIELDS, CoordRange, get_coord
+from dascore.core.coords import _EXACT_GRID_FIELDS, get_coord
 from dascore.exceptions import ChunkError, CoordMergeError, UnitError
 from dascore.io.index.ingest import _is_missing
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
@@ -360,7 +360,7 @@ def coord_from_row(row: Mapping, dim: str, units=None):
     if isinstance(grid, tuple) and ticks and not _units_converted(row, dim):
         *terms, length = grid
         start = hi if terms[0] < 0 else lo
-        return CoordRange(
+        return get_coord(
             start=start,
             shape=(length,),
             units=units,

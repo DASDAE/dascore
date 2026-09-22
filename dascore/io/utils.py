@@ -12,10 +12,9 @@ import numpy as np
 import dascore as dc
 from dascore.constants import INVENTORY_ATTRS, snap_type
 from dascore.core.coordmanager import CoordManager
-from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
+from dascore.core.coords import BaseCoord, get_coord
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import (
-    CoordError,
     MissingPatchError,
     ParameterError,
     PatchAttributeError,
@@ -285,23 +284,6 @@ def get_gridded_coord(values, units=None) -> BaseCoord:
     coord = get_coord(data=np.atleast_1d(np.asarray(values)), units=units)
     # A lone sample states no spacing, and snap would invent a step of 1.
     return coord.snap() if len(coord) > 1 else coord
-
-
-def get_exact_coord(values, units=None) -> BaseCoord:
-    """
-    Return an exact coordinate, including for non-monotonic values.
-
-    Monotonic values keep their runs (`CoordSegmented.from_array`, whose
-    dense-array guard keeps a jittery array as one monotonic coordinate);
-    anything else keeps its values as an array.
-    """
-    # atleast_1d matches get_coord(values=...): a squeezed single-sample
-    # array (0-d) becomes a length-1 coordinate rather than a scalar.
-    values = np.atleast_1d(np.asarray(values))
-    try:
-        return CoordSegmented.from_array(values, tolerance=0, units=units)
-    except CoordError:
-        return get_coord(data=values, units=units)
 
 
 def step_from_rate(rate) -> Fraction | np.timedelta64:

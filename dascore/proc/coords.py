@@ -13,7 +13,7 @@ from scipy.interpolate import interp1d
 
 import dascore as dc
 from dascore.constants import PatchType, select_values_description
-from dascore.core.coords import BaseCoord, CoordSegmented, _fill_layout
+from dascore.core.coords import BaseCoord, NumericCoord, _fill_layout
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import (
     CoordError,
@@ -276,7 +276,7 @@ def get_array(
         require_sorted=require_sorted,
         require_evenly_sampled=require_evenly_sampled,
     )
-    return coord.data
+    return coord.values
 
 
 class RenameCoords(PatchProcessor):
@@ -1313,11 +1313,10 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
     """
     Split the patch into contiguous patches at coordinate gaps.
 
-    Dimensional coordinates that are segmented
-    ([`CoordSegmented`](`dascore.core.coords.CoordSegmented`), e.g. produced
-    by concatenating nearly-contiguous data) mark where the patch is not
-    contiguous. This splits the patch at every segment boundary so each
-    output patch has a plain, contiguous coordinate.
+    A dimensional coordinate holding more than one run (e.g. produced by
+    concatenating nearly-contiguous data) marks where the patch is not
+    contiguous. This splits the patch at every run boundary so each output
+    patch has a plain, contiguous coordinate.
 
     Parameters
     ----------
@@ -1358,7 +1357,7 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
         out: list[dc.Patch] = []
         for patch in patches:
             coord = patch.get_coord(dname)
-            if not isinstance(coord, CoordSegmented):
+            if not isinstance(coord, NumericCoord) or coord.runs_count < 2:
                 out.append(patch)
                 continue
             offset = 0

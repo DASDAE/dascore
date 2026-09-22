@@ -1,7 +1,8 @@
 """Utilities functions for Neubrex IO support"""
 
 import dascore as dc
-from dascore.io.utils import get_exact_coord, should_snap
+from dascore.core.coords import get_coord
+from dascore.io.utils import should_snap
 from dascore.utils.misc import maybe_get_items
 
 
@@ -27,7 +28,7 @@ def _get_coord_manager(h5fi, snap=True):
         if should_snap(snap, "time"):
             time_coord = dc.get_coord(data=unix_stamps).snap()
         else:
-            time_coord = get_exact_coord(unix_stamps)
+            time_coord = get_coord(data=unix_stamps, snap=False)
         return time_coord
 
     def _get_dist_coord(h5fi):
@@ -36,7 +37,7 @@ def _get_coord_manager(h5fi, snap=True):
         return (
             dc.get_coord(data=depth)
             if should_snap(snap, "distance")
-            else get_exact_coord(depth)
+            else get_coord(data=depth, snap=False)
         )
 
     coords = {

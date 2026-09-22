@@ -13,7 +13,6 @@ from dascore.core.source import ArraySource
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
 from dascore.io.utils import (
-    get_exact_coord,
     resolve_keyed_source,
     should_snap,
     windows_to_slices,
@@ -234,7 +233,7 @@ class NetCDFCFV18(FiberIO):
         units = coord.attrs.get("units")
         if snap:
             return dc.core.get_coord(data=values, units=units)
-        return get_exact_coord(values, units=units)
+        return dc.core.get_coord(data=values, units=units, snap=False)
 
     def _get_source_patch_key(self, data_var_name):
         """Normalize the selected xarray payload name to a patch id."""

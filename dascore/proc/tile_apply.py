@@ -64,17 +64,15 @@ def _offset_values(coord, offsets: np.ndarray):
     down from where it starts. Only a range has a step, so only a range
     gets here.
     """
+    grid = coord.runs[0]
     if coord.dtype.kind in "iu":
         # Evaluate the exact grid in Python integers so padded positions can
         # promote beyond the source dtype instead of wrapping at its limits.
-        num, den, offset = coord._grid_terms
+        origin, num, den, phase = grid.canonical()
         return np.asarray(
-            [
-                coord._start_tick + (offset + int(index) * num) // den
-                for index in offsets
-            ]
+            [origin + (phase + int(index) * num) // den for index in offsets]
         )
-    return coord._labels(offsets)
+    return grid.labels(offsets, coord.dtype)
 
 
 def _engine_for(engine: str, func) -> str:
