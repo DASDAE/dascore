@@ -2729,14 +2729,17 @@ def _finish_explicit_plan(
         members.at[index, min_name], members.at[index, max_name] = actual
         retained.append(index)
     members = members.loc[retained].copy()
-    for index, output in outputs.iterrows():
-        fed = members[members["output_id"] == output["output_id"]]
-        # Without a sample grid, fill cannot add positions. Even a filled
-        # request must state the member samples it can actually return.
-        if fed.empty or (fill_value is not None and not pd.isnull(output[step_name])):
-            continue
-        outputs.at[index, min_name] = fed[min_name].min()
-        outputs.at[index, max_name] = fed[max_name].max()
+    # Aggregate actual member envelopes once. A regular filled output
+    # keeps its requested grid because fill supplies the missing samples.
+    fed_bounds = members.groupby("output_id")[[min_name, max_name]].agg(
+        {min_name: "min", max_name: "max"}
+    )
+    actual = fed_bounds.reindex(outputs["output_id"]).set_axis(outputs.index)
+    update = outputs["output_id"].isin(fed_bounds.index)
+    if fill_value is not None and len(outputs):
+        update &= outputs[step_name].isna()
+    for column in (min_name, max_name):
+        outputs.loc[update, column] = actual.loc[update, column]
     if fill_value is None:
         outputs = outputs[outputs["output_id"].isin(members["output_id"])].copy()
     cells = sources.groupby("_explicit_cell", sort=False)
@@ -2882,33 +2885,47 @@ def _finish_explicit_plan(
     members = members[members["output_id"].isin(accepted)].copy()
     if outputs.empty:
         return outputs.reset_index(drop=True), members.reset_index(drop=True)
-    # Attribute conflicts are scoped to members of this output. A source
-    # outside its window cannot veto it or contribute carried metadata.
-    by_source = sources.set_index("_patch_row", drop=False)
-    carried_rows = []
-    for _, output in outputs.iterrows():
-        output_id = int(output["output_id"])
-        ids = members.loc[members["output_id"] == output_id, "_patch_row"]
-        if len(ids):
-            subset = by_source.loc[list(ids)]
-        else:
-            part = int(output["_partition"])
-            subset = sources.iloc[seg_starts[part] : seg_starts[part] + 1]
-        subset = subset.reset_index(drop=True)
-        values = _carried_columns(
-            subset,
-            np.zeros(len(subset), dtype=np.intp),
-            np.array([0]),
-            name,
-            conflict,
-            np.array([True]),
+    # Resolve all accepted outputs' contributors together, preserving
+    # member order and multiplicity; fill-only outputs use their anchor.
+    contributors = (
+        members[["output_id", "_patch_row"]]
+        .rename(columns={"output_id": "_contributor_output"})
+        .merge(sources, on="_patch_row", how="left", sort=False)
+    )
+    unfed = outputs[~outputs["output_id"].isin(members["output_id"])][
+        ["output_id", "_partition"]
+    ].rename(columns={"output_id": "_contributor_output"})
+    if len(unfed):
+        unfed["_patch_row"] = (
+            sources["_patch_row"]
+            .iloc[seg_starts[unfed["_partition"].to_numpy(dtype=np.intp)]]
+            .to_numpy()
         )
-        carried_rows.append(
-            {column: series.iloc[0] for column, series in values.items()}
+        anchors = unfed[["_contributor_output", "_patch_row"]].merge(
+            sources, on="_patch_row", how="left", sort=False
         )
-    carried = pd.DataFrame(carried_rows, index=outputs.index)
-    for column in carried:
-        outputs[column] = carried[column]
+        contributors = pd.concat((contributors, anchors), ignore_index=True)
+    order = {output_id: index for index, output_id in enumerate(outputs["output_id"])}
+    contributors["_output_order"] = contributors["_contributor_output"].map(order)
+    contributors = contributors.sort_values("_output_order", kind="stable")
+    codes = contributors["_output_order"].to_numpy(dtype=np.intp)
+    starts = np.r_[0, np.flatnonzero(np.diff(codes)) + 1]
+    assert len(starts) == len(outputs), "every output needs a contributor"
+    carried = _carried_columns(
+        contributors.drop(columns=["_contributor_output", "_output_order"]),
+        codes,
+        starts,
+        name,
+        conflict,
+        np.ones(len(outputs), dtype=bool),
+    )
+    carried_rows = [
+        {column: values.iloc[index] for column, values in carried.items()}
+        for index in range(len(outputs))
+    ]
+    carried_frame = pd.DataFrame(carried_rows, index=outputs.index)
+    for column in carried_frame:
+        outputs[column] = carried_frame[column]
     outputs["_group_order"] = outputs["_compat_group"].map(rank)
     outputs = (
         outputs.sort_values(

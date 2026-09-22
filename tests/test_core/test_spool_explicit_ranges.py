@@ -2,6 +2,7 @@
 
 import pickle
 import threading
+from dataclasses import replace
 
 import numpy as np
 import pytest
@@ -22,6 +23,40 @@ def _patch(values):
         coords={"distance": np.asarray(values)},
         dims=("distance",),
     )
+
+
+@pytest.fixture
+def filled_2d_gap():
+    """A fresh all-fill output with an unchunked associated time coordinate."""
+    time = np.arange(3).astype("datetime64[s]")
+
+    def make(values):
+        return dc.Patch(
+            data=np.ones((len(values), 3)),
+            coords={
+                "distance": values,
+                "time": time,
+                "reference_time": ("time", time),
+            },
+            dims=("distance", "time"),
+        )
+
+    source = dc.spool([make(np.arange(5)), make(np.arange(7, 12))])
+    filled = source.chunk(distance=np.array([[5, 6]]), tolerance=4, fill_value=-1)
+    return filled, time
+
+
+def _assert_window_matches_plan(source, bounds, expected):
+    """Assert that a planned window, its catalog, and its data agree."""
+    windows = np.array([bounds])
+    plan = source.chunk_plan(distance=windows)
+    chunked = source.chunk(distance=windows)
+    assert len(plan.outputs) == len(chunked) == 1
+    assert chunked[0].coords["distance"].values.tolist() == expected
+    assert plan.outputs.iloc[0]["distance_min"] == expected[0]
+    assert plan.outputs.iloc[0]["distance_max"] == expected[-1]
+    assert chunked.get_contents().iloc[0]["distance_min"] == expected[0]
+    assert chunked.get_contents().iloc[0]["distance_max"] == expected[-1]
 
 
 class TestExplicitSelect:
@@ -285,6 +320,44 @@ class TestExplicitChunk:
         assert len(ignored) == 0
         assert ignored.get_contents().empty
 
+    @pytest.mark.parametrize(
+        ("bounds", "reason"),
+        [
+            ([20.0, 30.0], "outside source coverage"),
+            ([1.1, 1.9], "contains no sampled position"),
+        ],
+    )
+    @pytest.mark.parametrize("method", ["chunk", "chunk_plan"])
+    def test_empty_filled_window_follows_incomplete_policy(
+        self, bounds, reason, method
+    ):
+        """Fill cannot make a request outside coverage or without grid samples."""
+        spool = dc.spool(_patch(np.arange(10)))
+        kwargs = {"distance": np.array([bounds]), "fill_value": -1}
+        call = getattr(spool, method)
+        with pytest.raises(ChunkError, match=reason):
+            call(**kwargs)
+        with pytest.warns(UserWarning, match=reason):
+            warned = call(on_incomplete="warn", **kwargs)
+        ignored = call(on_incomplete="ignore", **kwargs)
+        for result in (warned, ignored):
+            assert len(result.outputs if method == "chunk_plan" else result) == 0
+
+    def test_descending_fill_only_projection_fails_loudly(self):
+        """An unreconstructable derived fill grid cannot borrow its anchor."""
+
+        def descending(start):
+            return _patch(np.arange(start, start + 5, dtype=float)[::-1])
+
+        filled = dc.spool([descending(0), descending(7)]).chunk(
+            distance=np.array([[5, 6]]), tolerance=4, fill_value=-1
+        )
+        assert filled[0].coords["distance"].values.tolist() == [6.0, 5.0]
+        with pytest.raises(AssertionError, match="no members or reconstructable grid"):
+            filled.select(distance=np.array([[5, 6]])).get_contents()
+        with pytest.raises(AssertionError, match="no members or reconstructable grid"):
+            filled.chunk_plan(distance=np.array([[5, 6]]))
+
     def test_tolerated_gap_needs_requested_edge_or_fill(self):
         """Tolerance bridges internal gaps but cannot invent an edge sample."""
         patch = _patch(np.arange(10))
@@ -451,6 +524,29 @@ class TestExplicitChunk:
 class TestExplicitMetadataSources:
     """File and in-memory sources report the same exact windows."""
 
+    def test_regular_file_derived_window_uses_indexed_grid(self, tmp_path, monkeypatch):
+        """A nested regular file window needs no payload coordinate scan."""
+        path = tmp_path / "regular.h5"
+        dc.write(_patch(np.arange(10)), path, file_format="DASDAE")
+        source = dc.spool(path)
+        derived = source.chunk(distance=np.array([[2, 8]]))
+        scanner = dc.scan_payloads
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError("regular indexed grid scanned its file payload")
+
+        monkeypatch.setattr(dc, "scan_payloads", forbidden)
+        selected = derived.select(distance=np.array([[3, 5]]))
+        plan = derived.chunk_plan(distance=np.array([[3, 5]]))
+        assert selected.get_contents()[
+            ["distance_min", "distance_max"]
+        ].to_numpy().tolist() == [[3, 5]]
+        assert plan.outputs[["distance_min", "distance_max"]].to_numpy().tolist() == [
+            [3, 5]
+        ]
+        monkeypatch.setattr(dc, "scan_payloads", scanner)
+        assert selected[0].coords["distance"].values.tolist() == [3, 4, 5]
+
     @pytest.mark.parametrize("directory", [False, True])
     def test_file_uneven_coordinates_without_array_reads(
         self, tmp_path, monkeypatch, directory
@@ -532,6 +628,47 @@ class TestExplicitMetadataSources:
             10_000,
             10_008,
         )
+
+    def test_fill_only_legacy_blank_key_loads_anchor(self, tmp_path):
+        """A persisted blank key can load a sole patch despite a native scan key."""
+        time = np.arange(3).astype("datetime64[s]")
+        for index, values in enumerate((np.arange(5), np.arange(7, 12))):
+            patch = dc.Patch(
+                data=np.ones((5, 3)),
+                coords={
+                    "distance": values,
+                    "time": time,
+                    "reference_time": ("time", time),
+                },
+                dims=("distance", "time"),
+            )
+            dc.write(patch, tmp_path / f"{index}.h5", file_format="DASDAE")
+        source = dc.spool(tmp_path).update(progress=None)
+        records = source._catalog.backend.export_records()
+        assert all(record.patches[0].source_patch_key for record in records)
+        legacy = [
+            replace(
+                record,
+                patches=tuple(
+                    replace(patch, source_patch_key="") for patch in record.patches
+                ),
+            )
+            for record in records
+        ]
+        source._catalog.backend.write_sources(legacy)
+        source._catalog._invalidate()
+        filled = source.chunk(distance=np.array([[5, 6]]), tolerance=4, fill_value=-1)
+        contents = filled.get_contents()
+        assert len(contents) == 1
+        assert (contents.iloc[0]["distance_min"], contents.iloc[0]["distance_max"]) == (
+            5,
+            6,
+        )
+        patch = filled[0]
+        assert patch.shape == (2, 3)
+        assert np.all(patch.data == -1)
+        assert patch.coords["distance"].values.tolist() == [5.0, 6.0]
+        assert np.array_equal(patch.coords["reference_time"].values, time)
 
     def test_nested_plan_fill_only_anchor(self):
         """A derived source still supplies structure to an all-fill window."""
@@ -616,6 +753,10 @@ class TestExplicitMetadataSources:
         regular = dc.spool(_patch(np.arange(10)))
         regular.get_contents()
         regular._catalog.resolver._registry.clear()
+        with pytest.raises(
+            MissingPatchError, match="coordinate metadata is unavailable"
+        ):
+            regular.select(distance=np.array([[0, 3]])).get_contents()
         # A regular indexed grid still states its sample positions without
         # the live payload; planning may proceed even though loading cannot.
         assert len(regular.chunk_plan(distance=np.array([[0, 3]])).outputs) == 1
@@ -795,15 +936,7 @@ class TestReviewRegressions:
             ([11, 14], [11.5, 12.5, 13.5]),
             ([10.5, 10.5], [10.5]),
         ):
-            windows = np.array([bounds])
-            plan = source.chunk_plan(distance=windows)
-            chunked = source.chunk(distance=windows)
-            assert len(plan.outputs) == len(chunked) == 1
-            assert chunked[0].coords["distance"].values.tolist() == expected
-            assert plan.outputs.iloc[0]["distance_min"] == expected[0]
-            assert plan.outputs.iloc[0]["distance_max"] == expected[-1]
-            assert chunked.get_contents().iloc[0]["distance_min"] == expected[0]
-            assert chunked.get_contents().iloc[0]["distance_max"] == expected[-1]
+            _assert_window_matches_plan(source, bounds, expected)
 
     @pytest.mark.parametrize("file_backed", [False, True])
     def test_associated_selector_replays_on_shared_dimension(
@@ -845,23 +978,11 @@ class TestReviewRegressions:
         rechunked = derived.chunk(distance=np.array([[2, 3]]))
         assert rechunked[0].coords["distance"].values.tolist() == [2, 3]
 
-    def test_fill_only_output_advertises_unchunked_associated_coord(self):
+    def test_fill_only_output_advertises_unchunked_associated_coord(
+        self, filled_2d_gap
+    ):
         """An all-fill view remains selectable by an anchor's rider."""
-        time = np.arange(3).astype("datetime64[s]")
-
-        def make(values):
-            return dc.Patch(
-                data=np.ones((len(values), 3)),
-                coords={
-                    "distance": values,
-                    "time": time,
-                    "reference_time": ("time", time),
-                },
-                dims=("distance", "time"),
-            )
-
-        source = dc.spool([make(np.arange(5)), make(np.arange(7, 12))])
-        filled = source.chunk(distance=np.array([[5, 6]]), tolerance=4, fill_value=-1)
+        filled, time = filled_2d_gap
         assert "reference_time" in filled._catalog.backend.coord_names()
         filtered = filled.select(reference_time=(time[0], time[1]))
         assert len(filtered) == 1
@@ -879,15 +1000,7 @@ class TestReviewRegressions:
     def test_snap_joined_jitter_keeps_exact_window(self, bounds, expected):
         """Joined patches can begin a fraction of a sample off-grid."""
         source = dc.spool([_patch(np.arange(5.0)), _patch(np.arange(5.25, 10.25))])
-        windows = np.array([bounds])
-        plan = source.chunk_plan(distance=windows)
-        chunked = source.chunk(distance=windows)
-        assert len(plan.outputs) == len(chunked) == 1
-        assert chunked[0].coords["distance"].values.tolist() == expected
-        assert plan.outputs.iloc[0]["distance_min"] == expected[0]
-        assert plan.outputs.iloc[0]["distance_max"] == expected[-1]
-        assert chunked.get_contents().iloc[0]["distance_min"] == expected[0]
-        assert chunked.get_contents().iloc[0]["distance_max"] == expected[-1]
+        _assert_window_matches_plan(source, bounds, expected)
 
     def test_uneven_three_samples_with_fill_load_without_grid(self):
         """A fill option does not force an uneven but complete piece to fill."""
@@ -1025,23 +1138,9 @@ class TestReviewRegressions:
         with pytest.warns(UserWarning, match="histories differ"):
             assert out[0].coords["distance"].values.tolist() == [5, 6, 7, 8]
 
-    def test_filled_plan_recovery_uses_output_grid_and_rider(self):
+    def test_filled_plan_recovery_uses_output_grid_and_rider(self, filled_2d_gap):
         """A fill-only derived source keeps its own grid and time rider."""
-        time = np.arange(3).astype("datetime64[s]")
-
-        def make(values):
-            return dc.Patch(
-                data=np.ones((len(values), 3)),
-                coords={
-                    "distance": values,
-                    "time": time,
-                    "reference_time": ("time", time),
-                },
-                dims=("distance", "time"),
-            )
-
-        source = dc.spool([make(np.arange(5)), make(np.arange(7, 12))])
-        filled = source.chunk(distance=np.array([[5, 6]]), tolerance=4, fill_value=-1)
+        filled, time = filled_2d_gap
         selected = filled.select(reference_time=(time[0], time[1]))
         windows = np.array([[time[0], time[1]]])
         plan = selected.chunk_plan(time=windows)
@@ -1099,23 +1198,9 @@ class TestReviewRegressions:
         ].to_numpy().tolist() == [[3, 3]]
         assert partial[0].coords["depth"].values.tolist() == [6]
 
-    def test_missing_fill_anchor_metadata_obeys_policy(self):
+    def test_missing_fill_anchor_metadata_obeys_policy(self, filled_2d_gap):
         """An unresolvable all-fill anchor cannot prove a chained window."""
-        time = np.arange(3).astype("datetime64[s]")
-
-        def make(values):
-            return dc.Patch(
-                data=np.ones((len(values), 3)),
-                coords={
-                    "distance": values,
-                    "time": time,
-                    "reference_time": ("time", time),
-                },
-                dims=("distance", "time"),
-            )
-
-        source = dc.spool([make(np.arange(5)), make(np.arange(7, 12))])
-        filled = source.chunk(distance=np.array([[5, 6]]), tolerance=4, fill_value=-1)
+        filled, time = filled_2d_gap
         filled._catalog.resolver.loader.live._registry.clear()
         selected = filled.select(reference_time=(time[0], time[1]))
         windows = np.array([[time[0], time[1]]])

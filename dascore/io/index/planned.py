@@ -51,7 +51,7 @@ from dascore.utils.chunk_plan import (
     _ensure_patch_row,
     patch_local_adjusted_envelopes,
 )
-from dascore.utils.explicit_ranges import _select_manager, file_source_coords
+from dascore.utils.explicit_ranges import _select_manager, _source_manager
 from dascore.utils.io import IOResourceManager
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import (
@@ -830,20 +830,6 @@ class PlanResolver(PatchResolver):
                 )
         return self._stamp(patch, row)
 
-    def _anchor_metadata_coords(self, row: Mapping) -> CoordManager | None:
-        """Get an anchor's full coordinates without reading measurement data."""
-        path = _row_str(row.get("source_path"))
-        live = self.loader.live_entries().get(path)
-        coords = (
-            live.coords if live is not None else file_source_coords(self.loader, row)
-        )
-        if coords is None:
-            return None
-        coords = _select_manager(coords, self.parent_residuals)
-        # The anchor is the first row of its partition, whose coordinate
-        # spelling establishes the plan unit. No conversion is needed here.
-        return coords
-
     def _sibling_coords(self, output_id: int):
         """
         The coordinates of the nearest output a source actually feeds.
@@ -854,18 +840,19 @@ class PlanResolver(PatchResolver):
         those; an envelope cannot restate an arbitrary array, and the
         frame holds every numeric one as float. Outputs are numbered in
         order, so the nearest fed one is a neighbour in the same
-        partition. A file or live anchor supplies coordinate metadata only;
-        a nested plan falls back to its own loader for full structure.
+        partition. File, live, and nested-plan anchors supply coordinate
+        metadata; unsupported sources use the loader as a fallback.
         """
         output = self._output_rows.get(output_id, {})
         anchor_id = output.get("_anchor_patch_row")
         if anchor_id is not None and anchor_id in self._anchor_rows:
             if output_id not in self._fill_coords:
                 anchor = self._anchor_rows[anchor_id]
-                coords = self._anchor_metadata_coords(anchor)
+                coords = _source_manager(self.loader, anchor)
+                if coords is not None:
+                    coords = _select_manager(coords, self.parent_residuals)
                 if coords is None:
-                    # A nested plan has no file payload to scan directly.
-                    # Its loader remains the source of truth for its structure.
+                    # Unsupported metadata sources still have a patch loader.
                     coords = self._load_member({**anchor, "_modified": False}).coords
                 self._fill_coords[output_id] = coords
             return self._fill_coords[output_id]
@@ -988,6 +975,15 @@ def derived_catalog(
             sources = sources.drop(columns=[unit_col])
         else:
             sources = sources.rename(columns={unit_col: source_unit_col})
+    # Resolve source paths once before deriving both members and fill anchors.
+    root = getattr(parent.resolver, "_root", None) if parent is not None else None
+    if root is not None and "source_path" in sources.columns:
+        file_resolver = FileResolver(root)
+        sources = sources.assign(
+            source_path=[
+                str(file_resolver.resolve_path(path)) for path in sources["source_path"]
+            ]
+        )
     member_rows = trims[["_patch_row", *[c for c in trim_cols]]].merge(
         sources.drop(columns=[c for c in trim_cols if c in sources], errors="ignore"),
         on="_patch_row",
@@ -996,18 +992,6 @@ def derived_catalog(
     # the member's trimmed range replaces the source envelope for loading
     member_rows = member_rows.drop(columns=["_patch_row"])
     parent_residuals = () if parent is None else parent.residuals
-    # resolve stored-relative paths once; the derived catalog is
-    # root-independent afterwards
-    root = getattr(parent.resolver, "_root", None) if parent is not None else None
-    if root is not None and "source_path" in member_rows.columns:
-        member_rows = member_rows.assign(
-            source_path=[
-                str(p)
-                if "://" in str(p) or str(p).startswith("/")
-                else str(root / str(p))
-                for p in member_rows["source_path"]
-            ]
-        )
     loader = CompositeResolver()
     if parent is not None:
         member_paths = set(
@@ -1027,15 +1011,6 @@ def derived_catalog(
         () if parent is None else parent.backend.associated_coord_names()
     )
     anchors = sources
-    if root is not None and "source_path" in anchors.columns:
-        anchors = anchors.assign(
-            source_path=[
-                str(p)
-                if "://" in str(p) or str(p).startswith("/")
-                else str(root / str(p))
-                for p in anchors["source_path"]
-            ]
-        )
     resolver = PlanResolver(
         token=token,
         dim=name,
