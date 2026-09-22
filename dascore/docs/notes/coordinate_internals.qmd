@@ -61,7 +61,7 @@ Plain string selectors reserve `*` and `?` for wildcard behavior. Compiled `re.P
 
 Slice results remain compact for integer, temporal, and floating coordinates, following existing `select` behavior. A slice holds exactly the labels of the coordinate it was cut from, floating ones included, so it matches xarray bit for bit. Scalar and array indexers in `sel`/`isel` evaluate only the requested output labels. These bounds apply to the new indexing methods; legacy array-based `select`/`order` paths can still materialize ranges. String label slices and exact matching in `sel` follow pandas' rules, while coordinate-level `select` retains DASCore's wildcard and range behavior.
 
-## Summaries: an envelope and a run per run
+## Summaries: an envelope, and a summary per run
 
 [`CoordSummary`](`dascore.core.coords.CoordSummary`) contains `min`, `max`, `step`, `dtype`, `units`, associated `dims`, length, and the coordinate's exact `data_id`, beside the grid fields described below. The canonical construction path is `coord.to_summary()`, which starts from a live coordinate; build one with `get_coord(...)` first when starting from a raw value array.
 

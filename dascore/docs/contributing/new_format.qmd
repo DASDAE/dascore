@@ -57,7 +57,7 @@ The metadata hook accepts one option, `snap`:
 - `snap=False` preserves stored coordinate values exactly.
 - `snap="time"` or `snap=("time", "distance")` enables snapping only for the named coordinates. Use [`should_snap`](`dascore.io.utils.should_snap`) in coordinate builders rather than testing the truthiness of `snap`.
 
-[`get_coord(data=values)`](`dascore.core.coords.get_coord`) reads labels which nearly restate one grid as that grid, which is the snapped path; [`NumericND.from_array`](`dascore.core.coords.NumericND.from_array`) keeps every label it is given and is the exact one. Declare header-defined grids with `get_coord(start=..., step=..., shape=...)`; those axes may treat `snap=False` as a no-op. Snapping changes coordinate labels, not the number of written samples. Both modes must trim unwritten storage rows.
+[`get_coord(data=values)`](`dascore.core.coords.get_coord`) reads labels which nearly restate one grid as that grid, which is the snapped path; [`NumericND.from_array`](`dascore.core.coords.NumericND.from_array`) keeps every label it is given and is the exact one; it also takes the array as given, so pass `np.atleast_1d(values)` where a stored scalar would otherwise become a zero-dimensional coordinate. Declare header-defined grids with `get_coord(start=..., step=..., shape=...)`; those axes may treat `snap=False` as a no-op. Snapping changes coordinate labels, not the number of written samples. Both modes must trim unwritten storage rows.
 
 Unrecognized grids remain stored as arrays, so exact metadata can retain large coordinate arrays; request it for targeted files rather than whole directories. Formats such as Pickle may need to deserialize sample data to obtain metadata, but must return patches that do not retain those arrays.
 
