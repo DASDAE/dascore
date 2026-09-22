@@ -3108,3 +3108,26 @@ class TestIndexCoordinate:
         expected = values[1:3, :] if axis == 0 else values[:, 1:3]
         np.testing.assert_array_equal(actual.values, expected)
         assert actual.units == coord.units
+
+
+class TestSummaryRoundTripUnit:
+    """A summary rebuilds a time coordinate at the unit it records."""
+
+    @pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])
+    def test_datetime_keeps_its_unit(self, unit):
+        """The values, the dtype and the id all survive to_summary().to_coord()."""
+        values = np.datetime64("2020-01-01", unit) + np.arange(5) * np.timedelta64(
+            1, unit
+        )
+        coord = dc.get_coord(values=values.astype(f"datetime64[{unit}]"))
+        back = coord.to_summary().to_coord()
+        assert back.dtype == coord.dtype
+        assert np.array_equal(back.values, coord.values)
+        assert back.data_id == coord.data_id
+
+    def test_timedelta_keeps_its_unit(self):
+        """A timedelta coordinate too."""
+        coord = dc.get_coord(
+            values=(np.arange(4) * np.timedelta64(10, "ms")).astype("m8[ms]")
+        )
+        assert coord.to_summary().to_coord().dtype == coord.dtype

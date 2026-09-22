@@ -348,7 +348,11 @@ class LazyTable:
 
 def _members_of(frame: pd.DataFrame) -> _Members:
     """Return the members one array's rows of a member frame describe."""
-    columns = {x: _Column.of(list(frame[x])) for x in MEMBER_FIELDS[1:]}
+    # A frame written before members stated a cast has none.
+    columns = {
+        x: _Column.of(list(frame[x]) if x in frame else [""] * len(frame))
+        for x in MEMBER_FIELDS[1:]
+    }
     source = zip(*[frame[x].astype(str) for x in SOURCE_FIELDS])
     columns["source"] = _Column.of(list(source))
     return _Members(filled=frame["filled"].to_numpy(bool, copy=True), **columns)

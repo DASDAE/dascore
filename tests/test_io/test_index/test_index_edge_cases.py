@@ -12,6 +12,7 @@ import datetime
 import gc
 import json
 import os
+import pathlib
 import pickle
 import re
 import sqlite3
@@ -1649,3 +1650,19 @@ class TestScanUnitStats:
         path.write_text("hello")
         status = path.stat()
         assert scan_unit_stats(path) == (status.st_mtime_ns, status.st_size)
+
+    def test_a_member_lost_during_the_walk_states_nothing(self, tmp_path, monkeypatch):
+        """A directory whose member vanishes mid-signature has no stats."""
+        unit = tmp_path / "unit"
+        unit.mkdir()
+        (unit / "a.raw").write_bytes(b"1")
+        (unit / "b.raw").write_bytes(b"2")
+        real = pathlib.Path.stat
+
+        def gone(self, *args, **kwargs):
+            if self.name == "b.raw":
+                raise FileNotFoundError(self)
+            return real(self, *args, **kwargs)
+
+        monkeypatch.setattr(pathlib.Path, "stat", gone)
+        assert scan_unit_stats(unit) == (None, None)

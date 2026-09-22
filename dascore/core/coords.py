@@ -330,6 +330,13 @@ class CoordSummary(DascoreBaseModel):
             start, stop = self.max, self.min + step
         else:
             start, stop = self.min, self.max + step
+        # The scalars are kept at nanoseconds; the coord takes the recorded unit.
+        if self.dtype and (dtype := np.dtype(self.dtype)).kind in "mM":
+            start, stop = (
+                np.asarray(start).astype(dtype)[()],
+                np.asarray(stop).astype(dtype)[()],
+            )
+            step = np.asarray(step).astype(f"m8[{np.datetime_data(dtype)[0]}]")[()]
         return CoordRange(start=start, stop=stop, step=step, units=self.units)
 
 

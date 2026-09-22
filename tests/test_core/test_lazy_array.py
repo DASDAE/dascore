@@ -1884,6 +1884,15 @@ class TestStatedDtype:
 class TestCastVia:
     """A member may be told to pass through another dtype on the way."""
 
+    def test_a_frame_with_no_cast_column_reads_back(self):
+        """A frame written before casts existed rebuilds with none."""
+        source = ArraySource.full((3,), 1.5)
+        array = LazyArray.from_source(source)
+        frame = array.to_frame().drop(columns=["cast"])
+        back = LazyArray.from_frame(frame, array.shape, array.dtype)
+        assert back.data_id == array.data_id
+        assert np.array_equal(back.load(), array.load())
+
     # the integer a float32 rounds and a float64 keeps
     _value = 2**24 + 1
 

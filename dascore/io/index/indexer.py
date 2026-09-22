@@ -83,10 +83,11 @@ def scan_unit_stats(path) -> tuple[int | None, int | None]:
     """
     try:
         status = os.stat(path)
+        if stat.S_ISDIR(status.st_mode):
+            # A member removed between the listing and its stat is a change.
+            return _directory_signature(Path(path))
     except OSError:
         return None, None
-    if stat.S_ISDIR(status.st_mode):
-        return _directory_signature(Path(path))
     return status.st_mtime_ns, status.st_size
 
 
