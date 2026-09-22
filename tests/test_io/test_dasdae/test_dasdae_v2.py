@@ -236,3 +236,19 @@ class TestVersion2Files:
         leaf = next(node for node in tree.subtree if "data" in node.dataset)
         assert leaf["data"].shape == data.shape
         assert leaf["data"].data.compute().shape == data.shape
+
+    @pytest.mark.parametrize(
+        "runs",
+        [
+            (np.array([10.0, 12.0, 15.0]), np.array([0.0, 2.0, 5.0])),
+            (np.array([0.0, 5.0, 2.0]), np.array([10.0, 12.0, 15.0])),
+        ],
+    )
+    def test_runs_read_back_in_written_order(self, runs, tmp_path):
+        """Labels may not be reordered, since the data they name does not move."""
+        coord = NumericCoord(runs=runs)
+        data = np.arange(float(len(coord)))
+        patch = dc.Patch(data=data, coords={"x": coord}, dims=("x",))
+        (back,) = dc.spool(dc.write(patch, tmp_path / "runs.h5", "dasdae"))
+        np.testing.assert_array_equal(back.get_coord("x").values, coord.values)
+        np.testing.assert_array_equal(back.data, data)

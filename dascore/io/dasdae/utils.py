@@ -18,7 +18,6 @@ from dascore.core.coords import (
     Grid,
     NumericCoord,
     _scalar_dtype,
-    concat_coords,
     get_coord,
 )
 from dascore.core.source import ArraySource
@@ -378,6 +377,12 @@ def _read_segment(node):
     return NumericCoord.from_labels(values, units=units, step=_node_step(node.attrs))
 
 
+def _shared_step(segments):
+    """The one step every segment sits on, or None."""
+    steps = {x.step for x in segments}
+    return steps.pop() if len(steps) == 1 else None
+
+
 def _read_coord(node, name, attrs2, snap):
     """Rebuild one coordinate from its node."""
     node_attrs = node.attrs
@@ -385,7 +390,15 @@ def _read_coord(node, name, attrs2, snap):
     object_type = unbyte(node_attrs.get(_OBJECT_TYPE, ""))
     if object_type == _SEGMENTED:
         segments = [_read_segment(node[str(i)]) for i in range(len(node))]
-        return concat_coords(*segments, units=units)
+        # The runs are rebuilt in the order they were written, which is the
+        # order the data sits in; concat_coords would sort them by value.
+        return NumericCoord(
+            runs=tuple(run for x in segments for run in x.runs),
+            sources={k: v for x in segments for k, v in x.sources.items()},
+            dtype=np.result_type(*[x.dtype for x in segments]),
+            units=units or segments[0].units,
+            step=_shared_step(segments),
+        )
     if object_type == _RANGE and "start" in node_attrs:
         return _read_range(node, units)
     # any other class, a range too wide to describe, and every version 1
