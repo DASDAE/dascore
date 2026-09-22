@@ -171,7 +171,7 @@ assert filled.get_coord("time").evenly_sampled
 assert np.isnan(filled.data).any()
 ```
 
-A coordinate with holes is an in-memory representation only: a written patch must be contiguous, so saving raises unless `split=True` (or `patch.split_gaps()` is used first) to write each contiguous section as its own patch.
+A format whose `FiberIO` declares `segmented_write` (DASDAE version 2 does) stores the runs as they are, so a patch with holes is written whole. Every other writer needs contiguous patches, and saving one with holes raises unless `split=True` (or `patch.split_gaps()` is used first) writes each contiguous section as its own patch.
 
 ## Union spools
 

@@ -183,7 +183,7 @@ selected_in_feet, _ = regular.select((3 * ft, 20 * ft))
 
 `sort` permutes existing values and returns the matching permutation. `snap` changes values, while `fuse(tolerance=...)` chooses a simpler representation only within the requested displacement bound. The distinction is important whenever coordinate values are measurements rather than ideal labels.
 
-`snap()` returns only a coordinate because it replaces values rather than permuting them. Use `CoordManager.snap` or `Patch.snap_coords` when data must be sorted with the coordinate before snapping. Snapping places no bound on how far an interior label moves; `fuse(tolerance=...)` re-fits one run at a time within one instead.
+`snap()` returns only a coordinate because it replaces values rather than permuting them. Use `CoordManager.snap` or `Patch.snap_coords` when data must be sorted with the coordinate before snapping. Snapping places no bound on how far an interior label moves; `fuse(tolerance=...)` re-fits one run at a time within the displacement bound it is given instead.
 
 ## String coordinates
 
