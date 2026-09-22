@@ -2465,13 +2465,14 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             indices = np.arange(run.count)
         return run.labels(indices, self.dtype)
 
-    def _with_runs(self, runs, dtype=None) -> Self:
+    def _with_runs(self, runs, dtype=None, step: Any = ...) -> Self:
         """A coordinate holding these runs, with this one's metadata."""
         return self.__class__(
             runs=tuple(runs),
             units=self.units,
             dtype=self.dtype if dtype is None else dtype,
-            step=self.step,
+            # a step passed here is a caller saying what the runs now sit on
+            step=self.step if step is ... else step,
             sources=self.sources,
         )
 
@@ -2592,10 +2593,14 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             indices = range(len(self))[slice(start, stop, item.step)]
             if not len(indices):
                 return get_coord(data=np.empty(0, dtype=self.dtype), units=self.units)
-            # A stride across several grids is read from the labels: a
-            # float grid restates a strided slice from its own start, which
-            # can move it in the last bits.
-            if abs(indices.step) == 1 or self.runs_count == 1:
+            # Only a float grid beside another run is read from the
+            # labels: it restates a strided slice from its own start,
+            # which can move it in the last bits, and the runs either
+            # side then no longer meet where the labels say they do.
+            drifts = self.runs_count > 1 and any(
+                isinstance(x, Grid) and not x.exact for x in self.runs
+            )
+            if abs(indices.step) == 1 or not drifts:
                 return self._slice_runs(indices)
         out = self.values[item]
         if not np.ndim(out):
@@ -2614,22 +2619,28 @@ get_coord(start=0.0, stop=20.0, step=1.0)
 
     def _slice_runs(self, indices: range) -> BaseCoord:
         """The coordinate holding the samples a range of positions names."""
-        step = indices.step
+        stride = indices.step
         out = []
         for run, offset in zip(self.runs, self._run_offsets()):
             first, count = _run_span(indices, int(offset), len(run))
             if not count:
                 continue
-            if (first, step, count) == (0, 1, len(run)):
+            if (first, stride, count) == (0, 1, len(run)):
                 # Only a trimmed run may have become evenly sampled; an
                 # untouched one still states the break it was held apart by.
                 out.append(run)
             elif isinstance(run, Grid):
-                out.append(run.sliced(first, step, count))
+                out.append(run.sliced(first, stride, count))
             else:
-                out.append(self._promoted_labels(run.window(first, step, count)))
+                out.append(self._promoted_labels(run.window(first, stride, count)))
         # a backwards range reads the runs from the last one
-        return self._with_runs(out if step > 0 else out[::-1])
+        runs = out if stride > 0 else out[::-1]
+        # A stride multiplies every spacing, so a step declared over the
+        # samples it skips is kept only where the ones it keeps still sit
+        # on it; a widened seam says they do not.
+        with suppress(CoordError, ValidationError):
+            return self._with_runs(runs)
+        return self._with_runs(runs, step=None)
 
     def _promoted_labels(self, window: Labels) -> Grid | Labels:
         """A trimmed window as the grid it is, unless it contradicts the step."""

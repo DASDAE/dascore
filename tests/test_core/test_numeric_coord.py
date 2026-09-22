@@ -245,6 +245,26 @@ class TestLabelsAreHeldOnce:
             assert isinstance(sliced.runs[0], Labels)
             assert np.array_equal(sliced.values, values[item])
 
+    def test_striding_never_hashes(self, stored, monkeypatch):
+        """A stride is window arithmetic, inside a run and across a seam."""
+        second = NumericCoord.from_labels(np.array([30.0, 31.5, 34.0, 37.2, 40.0]))
+        joined = concat_coords(stored, second)
+        ids = {stored.runs[0].id, second.runs[0].id}
+        values = joined.values
+        monkeypatch.setattr(coords_module, "hash_array", _no_hashing)
+        # wholly inside the first run, forwards and backwards
+        assert joined[1:6:2].runs == (Labels(stored.runs[0].id, 3, 1, 2),)
+        assert joined[5:0:-2].runs == (Labels(stored.runs[0].id, 3, 5, -2),)
+        for item in (
+            slice(1, 6, 2),
+            slice(5, 0, -2),
+            *(slice(None, None, x) for x in (2, -2)),
+        ):
+            out = joined[item]
+            windows = [x for x in out.runs if isinstance(x, Labels)]
+            assert windows and {x.id for x in windows} <= ids
+            assert np.array_equal(out.values, values[item])
+
     def test_slicing_at_run_bounds_never_hashes(self, gappy, monkeypatch):
         """A run a slice keeps whole is the run it already was."""
         monkeypatch.setattr(coords_module, "hash_array", _no_hashing)
