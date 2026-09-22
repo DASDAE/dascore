@@ -9,6 +9,7 @@ from io import BufferedReader, BufferedWriter, BytesIO, StringIO, TextIOBase
 from pathlib import Path
 
 import h5py
+import numpy as np
 import pytest
 from fsspec.asyn import AsyncFileSystem
 from upath import UPath
@@ -1335,6 +1336,17 @@ class TestObsPy:
         # attrs dict this should raise.
         with pytest.raises(PatchConversionError):
             dc.io.obspy_to_patch(st)
+
+    @pytest.mark.parametrize("ns", [-1, 1])
+    def test_nanosecond_start_is_the_stamp_itself(self, ns):
+        """A start a microsecond cannot state is read from its own nanoseconds."""
+        obspy = pytest.importorskip("obspy")
+        trace = obspy.Trace(data=np.arange(4, dtype="float64"))
+        trace.stats.starttime = obspy.UTCDateTime(ns=ns)
+        trace.stats.sampling_rate = 1.0
+        trace.stats.distance = 0.0
+        patch = dc.io.obspy_to_patch(obspy.Stream([trace]))
+        assert patch.get_coord("time").min() == np.datetime64(ns, "ns")
 
     def test_empty_stream(self):
         """An empty Stream should return an empty Patch."""

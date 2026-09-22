@@ -2188,6 +2188,19 @@ def _counted(dtype) -> bool:
     return np.dtype(dtype).kind in "iufMm"
 
 
+@cache
+def _row_anchored(dtype) -> bool:
+    """
+    Whether a row's start field holds a label of this dtype exactly.
+
+    A row anchors on an int64 or a float64. Labels which are neither --
+    objects, or floats wider than eight bytes -- are stated by the source
+    alone, and the row holds a placeholder the kernel counts in.
+    """
+    nd = np.dtype(dtype)
+    return _counted(nd) and nd.itemsize <= 8
+
+
 def _continues(rows: np.ndarray, dtype) -> np.ndarray:
     """Whether each run begins where the run before would put its next sample."""
     before, after = rows[:-1], rows[1:]
@@ -2205,6 +2218,12 @@ def _continues(rows: np.ndarray, dtype) -> np.ndarray:
 def _canonical(rows: np.ndarray, dtype) -> np.ndarray:
     """Reduce grids, validate their range, and fuse exact continuations."""
     kernel = get_kernel(dtype)
+    if np.any(rows["length"] < 0):
+        # Dropped with the empty runs below, a corrupt row would read as a
+        # coordinate of fewer samples rather than as the mistake it is.
+        fewest = int(rows["length"].min())
+        msg = f"A run cannot hold a negative number of samples, got {fewest}."
+        raise CoordError(msg)
     if len(rows) != 1:  # one row is already the table it states
         rows = rows[rows["length"] > 0]
     if len(rows) == 1:
@@ -2244,6 +2263,22 @@ def _array_id(values: np.ndarray) -> str:
     return hash_array(values)
 
 
+def _frozen(source):
+    """
+    One source array the coordinate holds alone, which no caller can change.
+
+    A source a caller still holds a reference to would let the labels move
+    out from under the id the table names them by, so an array which can be
+    written to is copied and the copy is sealed. Anything else -- a source
+    which only reads as an array -- is taken as it is.
+    """
+    if not isinstance(source, np.ndarray) or not source.flags.writeable:
+        return source
+    out = source.copy()
+    out.flags.writeable = False
+    return out
+
+
 def _kept_sources(rows: np.ndarray, sources) -> Mapping[str, Any] | None:
     """
     The source arrays these rows still read, frozen against change.
@@ -2254,11 +2289,13 @@ def _kept_sources(rows: np.ndarray, sources) -> Mapping[str, Any] | None:
     if not sources:
         return None
     used = set(np.unique(rows[SOURCE_ID][rows["den"] == 0]).tolist())
-    kept = {k: v for k, v in sources.items() if k in used}
+    kept = {k: _frozen(v) for k, v in sources.items() if k in used}
     if not kept:
         return None
-    if isinstance(sources, MappingProxyType) and len(kept) == len(sources):
-        return sources
+    if isinstance(sources, MappingProxyType) and all(
+        kept.get(key) is value for key, value in sources.items()
+    ):
+        return sources  # this coordinate's own mapping, carried through
     return MappingProxyType(kept)
 
 
@@ -3249,10 +3286,31 @@ class NumericND(BaseCoord):
         flat = parts[0] if len(parts) == 1 else np.concatenate(parts)
         return _as_ticks(flat, self.dtype) if self._ticks else flat
 
+    def _reads_its_labels(self, index: int) -> bool:
+        """Whether a run's endpoints are only in its labels, not in its row."""
+        if _row_anchored(self.dtype):
+            return False
+        row = self.runs[index]
+        return bool(row["den"] == 0 and row["length"] > 0)
+
+    @property
+    def _first_label(self):
+        """The first label, read from its source where a row cannot hold it."""
+        if self._reads_its_labels(0):
+            return self._run_labels(0)[0]
+        return self._from_anchor(self._run_heads[:1])[0][()]
+
+    @property
+    def _last_label(self):
+        """The last label, read from its source where a row cannot hold it."""
+        if self._reads_its_labels(-1):
+            return self._run_labels(-1)[-1]
+        return self._from_anchor(self._run_ends[-1:])[0][()]
+
     @property
     def start(self):
         """The first label."""
-        return self._from_anchor(self._run_heads[:1])[0][()]
+        return self._first_label
 
     @property
     def stop(self):
@@ -3260,8 +3318,7 @@ class NumericND(BaseCoord):
         rows = self.runs
         row = rows[-1]
         if row["den"] == 0:
-            last = self._run_ends[-1]
-            return self._from_anchor(np.asarray([last]))[0][()]
+            return self._last_label
         last, k = np.asarray([len(rows) - 1]), np.asarray([int(row["length"])])
         return self._from_anchor(self._kernel.labels(rows, last, k))[0][()]
 
@@ -3529,7 +3586,7 @@ class NumericND(BaseCoord):
         if not self.size:
             return _get_nullish(self.dtype)
         if self.reverse_sorted:
-            return self._from_anchor(self._run_ends[-1:])[0][()]
+            return self._last_label
         # Labels in no order are read out; a missing one is not the
         # smallest label, it is no label at all.
         return self.start if self.sorted else np.nanmin(self.values)
@@ -3540,7 +3597,7 @@ class NumericND(BaseCoord):
         if self.reverse_sorted:
             return self.start
         if self.sorted:
-            return self._from_anchor(self._run_ends[-1:])[0][()]
+            return self._last_label
         return np.nanmax(self.values)
 
     def empty(self, axes=None) -> Self:
@@ -3850,10 +3907,11 @@ class NumericND(BaseCoord):
             table["num"][single] = 0
             table["den"][single] = 1
             table["offset"][single] = 0
-            if _counted(self.dtype):
-                # The head is the label, so where it was read from is no
-                # part of the run. Labels with no arithmetic have no head,
-                # and their source id is all that names them.
+            if _ticked(self.dtype):
+                # A tick row holds its label outright, so where it was read
+                # from is no part of the run. A float head is computed, and
+                # the computing loses the sign of a zero and the bits of a
+                # wider float, so a float run keeps the id of its source.
                 table[SOURCE_ID][single] = b""
         components: tuple[Any, ...] = (
             str(np.dtype(self.dtype)),

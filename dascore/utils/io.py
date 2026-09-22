@@ -466,9 +466,8 @@ def obspy_to_patch(stream, dim="distance") -> dc.Patch:
         "time": (
             ("time",),
             dc.get_coord(
-                # the stamp itself, which keeps nanoseconds a string drops
-                start=dc.to_datetime64(tr.stats.starttime.datetime)
-                + np.timedelta64(tr.stats.starttime.ns % 1000, "ns"),
+                # the stamp's own nanoseconds, which a datetime rounds off
+                start=np.datetime64(tr.stats.starttime.ns, "ns"),
                 step=step_from_rate(tr.stats.sampling_rate),
                 shape=(tr.stats.npts,),
             ),

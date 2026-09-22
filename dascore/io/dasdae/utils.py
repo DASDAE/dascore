@@ -476,9 +476,10 @@ def _read_coord(node, name, attrs2, snap):
     array = _read_array(node)
     # A stored nominal step is a grid claim the values must meet, which a
     # legacy file's jittered values need not; it names the spacing only for
-    # a single sample, where the values cannot.
+    # a single sample, where the values cannot. One value moves nowhere, so
+    # the stored step stands whether or not the coordinate is snapped.
     single = np.ndim(array) == 1 and len(array) == 1
-    if single and step is not None and should_snap(snap, name):
+    if single and step is not None:
         return get_coord(data=array, units=units, step=step)
     return _coord_from_values(array, units, snap, name)
 

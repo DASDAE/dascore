@@ -110,7 +110,7 @@ def _rows(dtype, start, length, num, den, offset, source_id=b"") -> np.ndarray:
         # falls through to the assignments, which cast it instead.
         with suppress(OverflowError, ValueError):
             return np.array([tuple(_one(x) for x in columns)], record)
-    out = np.empty(len(length), record)
+    out = np.empty(_row_count(length), record)
     for name, column in zip(_COLUMNS, columns):
         out[name] = column
     return out

@@ -402,14 +402,23 @@ class TestRangeNodesFromEarlierWriters:
         expected = get_coord(start=T0, step=np.timedelta64(4, "ms"), shape=(10,))
         assert coord == expected
 
+    @pytest.mark.parametrize("snap", [True, False])
+    def test_a_lone_value_keeps_the_step_stored_beside_it(self, snap):
+        """One label states no spacing, so the file's step stands whatever snap says."""
+        with h5py.File(io.BytesIO(), "w") as h5:
+            node = h5.create_dataset("_coord_distance", data=np.array([3.0]))
+            coord = _read_coord(node, "distance", {"distance_step": 0.5}, snap=snap)
+        assert coord.step == 0.5
+        np.testing.assert_array_equal(coord.values, [3.0])
+
 
 class TestPartialCoords:
     """A coordinate of no labels still states the step it declares."""
 
-    @pytest.fixture(scope="class")
-    def partial(self):
+    @pytest.fixture(scope="class", params=[2.0, None])
+    def partial(self, request):
         """A partial coordinate along the example patch's distance axis."""
-        return get_coord(shape=(300,), step=2.0)
+        return get_coord(shape=(300,), step=request.param)
 
     @pytest.mark.parametrize("dimensional", [True, False])
     def test_step_survives_the_round_trip(self, partial, tmp_path, dimensional):
@@ -424,7 +433,8 @@ class TestPartialCoords:
         back = dc.read(path)[0]
         coord = back.coords.coord_map["distance" if dimensional else "depth"]
         assert not coord.has_values
-        assert coord.step == partial.step
+        # a stepless partial declares nan, which is not equal to itself
+        np.testing.assert_array_equal(coord.step, partial.step)
         assert coord.shape == partial.shape
 
 

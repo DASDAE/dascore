@@ -244,10 +244,9 @@ class TestOneRowArithmetic:
         # Which answer it is, not only that the two branches agree.
         assert scalar == (tuple(case) in self.REFUSED)
 
-    @pytest.mark.parametrize("length", [0, -1])
-    def test_a_run_of_no_samples_is_dropped(self, length):
+    def test_a_run_of_no_samples_is_dropped(self):
         """A run holding nothing leaves an empty coordinate, not a bad shape."""
-        coord = NumericND.from_run(0, 1, (length,))
+        coord = NumericND.from_run(0, 1, (0,))
         assert coord.shape == (0,) and len(coord) == 0
 
     def test_a_derived_table_is_already_canonical(self):
@@ -1778,10 +1777,12 @@ class TestTableIntegrity:
     def test_raw_constructor_refuses_a_non_canonical_table(self):
         """An unreduced step handed straight to the class is not a coordinate."""
         good = NumericND.from_run(0, Fraction(1, 2), 4, dtype="int64")
-        for row in [(0, 4, 2, 4, 0), (0, 4, 1, 2, 5), (0, -1, 1, 2, 0)]:
+        cases = {(0, 4, 2, 4, 0): "canonical", (0, 4, 1, 2, 5): "canonical"}
+        cases[(0, -1, 1, 2, 0)] = "negative"
+        for row, match in cases.items():
             runs = np.asarray([(*row, b"")], good.runs.dtype)
             # pydantic reports a validator's error as its own ValueError
-            with pytest.raises(ValueError, match="canonical"):
+            with pytest.raises(ValueError, match=match):
                 NumericND(runs=runs, dtype=good.dtype, shape=(4,))
         again = NumericND(runs=good.runs, dtype=good.dtype, shape=good.shape)
         assert again == good
@@ -2458,3 +2459,87 @@ class TestFifthReviewFindings:
         assert not metres.approx_equal(feet)
         assert not feet.approx_equal(metres)
         assert metres.approx_equal(metres.set_units("m"))
+
+
+WIDE_FLOATS = pytest.mark.skipif(
+    np.finfo(np.longdouble).eps == np.finfo(np.float64).eps,
+    reason="platform longdouble is a double",
+)
+
+
+def wide_labels():
+    """Three longdouble labels a float64 row cannot hold apart."""
+    return np.array([1, 2, 5], dtype=np.longdouble) + np.longdouble(2) ** -60
+
+
+class TestSixthReviewFindings:
+    """What the sixth review found, each pinned by what it broke."""
+
+    def test_supplied_sources_are_frozen(self):
+        """A source handed to `from_rows` cannot change the labels it named."""
+        values = np.array([0.0, 1.3, 4.0])
+        coord = NumericND.from_array(values, detect=False)
+        again = NumericND.from_rows(
+            coord.runs, dtype=coord.dtype, sources=dict(coord.sources)
+        )
+        loose = np.array([9.0, 9.0, 9.0])
+        third = NumericND.from_rows(
+            coord.runs, dtype=coord.dtype, sources={coord.runs[0]["source_id"]: loose}
+        )
+        loose[0] = -1.0
+        np.testing.assert_array_equal(again.values, values)
+        np.testing.assert_array_equal(third.values, [9.0, 9.0, 9.0])
+
+    @WIDE_FLOATS
+    def test_wide_labels_state_their_own_ends(self):
+        """A label wider than a double is not the double its row anchors on."""
+        labels = wide_labels()
+        coord = NumericND.from_array(labels, detect=False)
+        assert coord.start == labels[0]
+        assert coord.stop == labels[-1]
+        assert coord.min() == labels[0]
+        assert coord.max() == labels[-1]
+        back = NumericND.from_array(labels[::-1].copy(), detect=False)
+        assert back.start == labels[-1]
+        assert back.min() == labels[0]
+        assert back.max() == labels[-1]
+
+    def test_object_labels_state_their_own_ends(self):
+        """Labels numpy cannot count in still answer for the coordinate's ends."""
+        coord = object_coord([(1,), (2,), (5,)])
+        assert coord.start == (1,)
+        assert coord.stop == (5,)
+
+    def test_a_lone_float_keeps_the_label_it_holds(self):
+        """A one-sample float run names its labels, whose head is not them."""
+        negative = NumericND.from_array(np.array([-0.0]))
+        positive = NumericND.from_array(np.array([0.0]))
+        assert negative.data_id != positive.data_id
+        assert negative != positive
+
+    @WIDE_FLOATS
+    def test_a_lone_wide_float_keeps_the_label_it_holds(self):
+        """Two labels which share a double are still two coordinates."""
+        one = NumericND.from_array(wide_labels()[:1])
+        two = NumericND.from_array(np.array([1.0], dtype=np.longdouble))
+        assert one.data_id != two.data_id
+        assert one != two
+
+    @pytest.mark.parametrize("length", [-1, -5])
+    def test_a_negative_run_length_is_refused(self, length):
+        """Fewer than no samples is a corrupt run, not an empty coordinate."""
+        with pytest.raises(CoordError, match="negative"):
+            NumericND.from_run(0, 1, length)
+        with pytest.raises(CoordError, match="negative"):
+            NumericND.from_rows([(0, length, 1, 1, 0), (0, 3, 1, 1, 0)], dtype="int64")
+
+    def test_a_lone_row_falls_back_on_a_scalar_length(self):
+        """A column the row spelling cannot take is assigned, length and all.
+
+        The fallback sizes itself from the length column, which one run may
+        state as the number it is rather than as a column of one.
+        """
+        with np.errstate(invalid="ignore"):
+            rows = _rows("int64", np.asarray([np.nan]), 1, 1, 1, 0)
+        assert len(rows) == 1
+        assert rows["length"][0] == 1
