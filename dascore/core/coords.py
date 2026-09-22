@@ -18,7 +18,6 @@ from functools import cache
 from types import EllipsisType
 from typing import (
     TYPE_CHECKING,
-    Annotated,
     Any,
     Literal,
     NoReturn,
@@ -26,6 +25,7 @@ from typing import (
     cast,
     overload,
 )
+from uuid import uuid4
 
 import numpy as np
 import pandas as pd
@@ -44,7 +44,9 @@ from dascore.exceptions import CoordError, ParameterError
 from dascore.models import (
     ArrayLike,
     DascoreBaseModel,
+    FrozenDictType,
     UnitQuantity,
+    sensible_model_equals,
 )
 from dascore.units import (
     Quantity,
@@ -71,6 +73,7 @@ from dascore.utils.display import (
 from dascore.utils.docs import compose_docstring, get_docstring
 from dascore.utils.gaps import GapTolerance
 from dascore.utils.identity import H
+from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _get_nullish,
     _maybe_array_to_slice,
@@ -2039,34 +2042,49 @@ class Grid:
 @dataclass(frozen=True, slots=True)
 class Labels:
     """
-    One stored run of labels, held read-only and hashed once.
+    One window into a stored array of labels.
 
-    The id names the values, so a run which moves between coordinates -- a
-    slice at its own bounds, a concatenation, a change of units on another
-    run -- is never hashed again.
+    The array itself lives in its coordinate's ``sources``, under the id it
+    was hashed with on the way in. A slice, a stride, a reversal or a move
+    to another coordinate only moves the window, so however far the labels
+    travel they are copied once and hashed once.
     """
 
-    values: np.ndarray
-    # Left out of every dump: it is the values said another way, and two
-    # runs which hold the same labels must not differ by whether one of
-    # them has been asked for its id yet.
-    id: Annotated[str, Field(exclude=True)] = ""
-
-    def __post_init__(self):
-        # Always copied: a read-only view of a writable array would
-        # otherwise change under the id hashed from it.
-        values = np.array(self.values, copy=True)
-        values.flags.writeable = False
-        object.__setattr__(self, "values", values)
-
-    def identity(self) -> str:
-        """The id of these labels, hashed on first asking and never again."""
-        if not self.id:
-            object.__setattr__(self, "id", hash_array(self.values))
-        return self.id
+    id: str
+    count: int
+    offset: int = 0
+    # negative where the window reads the stored array backwards
+    stride: int = 1
 
     def __len__(self) -> int:
-        return len(self.values)
+        return self.count
+
+    def window(self, first: int, stride: int, count: int) -> Labels:
+        """The window of the samples first, first + stride, ... within this one."""
+        offset = self.offset + first * self.stride
+        return Labels(self.id, count, offset, self.stride * stride)
+
+
+def _store(sources: dict, values) -> Labels:
+    """Add an array of labels to a store; the window names all of it."""
+    # Always copied: a read-only view of a writable array would otherwise
+    # change under the id hashed from it.
+    values = np.array(values, copy=True)
+    values.flags.writeable = False
+    # An object array has no hash, so it is named by identity: two of them
+    # share neither a store entry nor an id, however alike they look.
+    key = uuid4().hex if values.dtype.hasobject else hash_array(values)
+    sources.setdefault(key, values)
+    return Labels(key, values.shape[0] if values.ndim else 1)
+
+
+def _source(sources, run: Labels, dtype=None) -> np.ndarray:
+    """The labels a window holds; the one place a stored array is read."""
+    out = sources[run.id]
+    if out.ndim:  # a lone label is held as the scalar array it came as
+        stop = run.offset + run.count * run.stride
+        out = out[run.offset : stop if stop >= 0 else None : run.stride]
+    return out if dtype is None else out.astype(dtype, copy=False)
 
 
 def _check_grid(grid: Grid, dtype) -> None:
@@ -2196,50 +2214,69 @@ def _range_run(values) -> tuple[Grid, np.dtype]:
     return _exact_run(values, dtype), dtype
 
 
-def _coerce_run(run) -> Grid | Labels:
-    """Coerce a run input (a run or a dumped mapping) to a run."""
-    if isinstance(run, Grid | Labels):
-        return run
+def _coerce_run(run, sources: dict) -> Grid | Labels:
+    """Coerce a run input (a run, an array of labels, or a dump) to a run."""
+    if isinstance(run, np.ndarray):
+        return _store(sources, run)
     if isinstance(run, Mapping):
-        if "values" in run:
-            return Labels(**run)
-        return Grid(**run)
-    msg = f"Runs must be a Grid or Labels, got {type(run)}."
-    raise CoordError(msg)
+        run = Labels(**run) if "id" in run else Grid(**run)
+    elif not isinstance(run, Grid | Labels):
+        msg = f"Runs must be a Grid or Labels, got {type(run)}."
+        raise CoordError(msg)
+    if isinstance(run, Labels) and run.id not in sources:
+        msg = f"A run names labels no source holds: {run.id!r}."
+        raise CoordError(msg)
+    return run
 
 
-def _promoted(run: Grid | Labels, dtype) -> Grid | Labels:
-    """A stored run which is exactly evenly sampled, as the grid it is."""
-    if isinstance(run, Grid) or run.values.ndim != 1 or len(run.values) < 2:
-        return run
-    values = run.values
+def _promoted(values, dtype) -> Grid | None:
+    """The grid these labels are exactly, or None where no grid is."""
+    if values.ndim != 1 or len(values) < 2:
+        return None
     diffs = _diffs(values)
     if len(np.unique(diffs)) != 1:
-        return run
+        return None
     grid, _ = _range_run(dict(start=values[0], step=diffs[0], shape=(len(values),)))
-    # Unlike get_coord's inference, a run may never change a label or drop
-    # one, so the grid is kept only where it holds them all, exactly.
+    return grid if _grid_holds(grid, values, dtype) else None
+
+
+def _grid_holds(grid: Grid, values, dtype) -> bool:
+    """
+    Whether a grid restates these labels exactly.
+
+    Unlike get_coord's inference a run may never change a label or drop
+    one, so a grid stands in for stored labels only where it holds all of
+    them.
+    """
     labels = grid.labels(np.arange(len(values)), dtype)
-    if len(grid) != len(values) or not np.array_equal(labels, values):
-        return run
-    return grid
+    return len(grid) == len(values) and bool(np.array_equal(labels, values))
 
 
 def _fuse_runs(runs: tuple[Grid | Labels, ...]) -> tuple[Grid | Labels, ...]:
     """
-    Fuse each grid which is exactly the next samples of its predecessor.
+    Fuse each run which is exactly the next samples of its predecessor.
 
-    Two stored runs never fuse: concatenating their labels would cost a copy
-    and lose both ids, and the seam between them is a fact about the data.
+    Two grids fuse where the second continues the first's arithmetic; two
+    windows only where the second reads on through the same stored array,
+    which costs no copy and keeps the id.
     """
     out = [runs[0]]
     for run in runs[1:]:
         prev = out[-1]
         if isinstance(prev, Grid) and isinstance(run, Grid) and _continues(prev, run):
             out[-1] = prev.sliced(0, 1, prev.count + run.count)
-            continue
-        out.append(run)
+        elif isinstance(prev, Labels) and isinstance(run, Labels) and _abuts(prev, run):
+            out[-1] = Labels(prev.id, prev.count + run.count, prev.offset, prev.stride)
+        else:
+            out.append(run)
     return tuple(out)
+
+
+def _abuts(prev: Labels, run: Labels) -> bool:
+    """Whether a window reads on from where its predecessor stopped."""
+    return (prev.id, prev.stride) == (run.id, run.stride) and (
+        run.offset == prev.offset + prev.count * prev.stride
+    )
 
 
 def _continues(prev: Grid, run: Grid) -> bool:
@@ -2289,9 +2326,38 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     """
 
     runs: tuple[Grid | Labels, ...]
+    # The arrays the stored runs window, each under the id it was hashed
+    # with; a window is only ever a view of one of them.
+    sources: FrozenDictType[str, ArrayLike] = FrozenDict()
     # A default no dtype equals: ``np.dtype(None)`` is float64, so the
     # inherited None makes exclude_defaults drop a float coord's dtype.
     dtype: Any = ""
+
+    def __eq__(self, other) -> bool:
+        """Whether two coordinates hold the same labels and say the same of them."""
+        first, second = (
+            x._label_fields() if isinstance(x, NumericCoord) else x
+            for x in (self, other)
+        )
+        return sensible_model_equals(first, second)
+
+    # Defined together, as the base class defines them: a class which states
+    # __eq__ and not __hash__ is unhashable by a rule of python's, which
+    # would replace the error the base class raises with a duller one.
+    __hash__ = BaseCoord.__hash__
+
+    def _label_fields(self) -> dict:
+        """
+        The fields equality compares, stored runs spelled out as labels.
+
+        An id names an array exactly, and equality has always been tolerant
+        of a float's last bits, so the labels stand in for the ids.
+        """
+        out = self.model_dump(exclude={"runs", "sources"})
+        out["runs"] = tuple(
+            x if isinstance(x, Grid) else self._run_labels(x) for x in self.runs
+        )
+        return out
 
     @property
     def _rich_style(self) -> str:
@@ -2311,23 +2377,28 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     @model_validator(mode="before")
     @classmethod
     def _validate_runs(cls, data: Any) -> Any:
-        """Coerce the runs and derive the fields they imply."""
+        """Store any bare labels, coerce the runs, and derive what they imply."""
         if not isinstance(data, Mapping):
             return data
         data = dict(data)
-        runs = tuple(_coerce_run(x) for x in iterate(data.get("runs")))
+        sources = dict(data.get("sources") or {})
+        runs = tuple(_coerce_run(x, sources) for x in iterate(data.get("runs")))
         if not runs:
             msg = "A numeric coordinate needs at least one run."
             raise CoordError(msg)
         if len(runs) > 1:  # an empty run states nothing, not even a seam
             runs = tuple(x for x in runs if len(x)) or runs[:1]
+        runs = _fuse_runs(runs)
         stored = [x for x in runs if isinstance(x, Labels)]
+        # An entry no window reads is let go of, so the store never
+        # outgrows the coordinate carrying it.
+        data["sources"] = {x.id: sources[x.id] for x in stored}
         dtype = data.get("dtype")
         if _is_null(dtype) or dtype == "":
             if not stored:
                 msg = "A coordinate built only from grids must state its dtype."
                 raise CoordError(msg)
-            dtype = np.result_type(*[x.values.dtype for x in stored])
+            dtype = np.result_type(*[sources[x.id].dtype for x in stored])
         dtype = np.dtype(dtype)
         for run in runs:
             if isinstance(run, Grid) and run.exact:
@@ -2335,10 +2406,10 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         data["runs"] = runs
         data["dtype"] = dtype
         if len(runs) == 1 and isinstance(runs[0], Labels):
-            data["shape"] = runs[0].values.shape
+            data["shape"] = _source(sources, runs[0]).shape
         else:
             data["shape"] = (sum(len(x) for x in runs),)
-        data["step"] = _runs_step(runs, data.get("step"), dtype)
+        data["step"] = _runs_step(runs, data.get("step"), dtype, sources)
         return data
 
     @classmethod
@@ -2357,7 +2428,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             Units for the coordinate.
         """
         values = np.asarray(values)
-        return cls(runs=(Labels(values),), step=step, units=units, dtype=values.dtype)
+        return cls(runs=(values,), step=step, units=units, dtype=values.dtype)
 
     # --- runs
 
@@ -2388,17 +2459,21 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     def _run_labels(self, run, indices=None) -> np.ndarray:
         """The labels of one run, at these indices or all of them."""
         if isinstance(run, Labels):
-            return run.values if indices is None else run.values[indices]
+            values = _source(self.sources, run, self.dtype)
+            return values if indices is None else values[indices]
         if indices is None:
             indices = np.arange(run.count)
         return run.labels(indices, self.dtype)
 
     def _with_runs(self, runs) -> Self:
-        """A coordinate holding these runs, fused, with this one's metadata."""
-        runs = _fuse_runs(tuple(runs))
-        grid = runs[0] if len(runs) == 1 and isinstance(runs[0], Grid) else None
-        step = None if grid is not None else self.step
-        return self.__class__(runs=runs, units=self.units, dtype=self.dtype, step=step)
+        """A coordinate holding these runs, with this one's metadata."""
+        return self.__class__(
+            runs=tuple(runs),
+            units=self.units,
+            dtype=self.dtype,
+            step=self.step,
+            sources=self.sources,
+        )
 
     # --- evaluation
 
@@ -2407,8 +2482,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     def values(self) -> ArrayLike:
         """Return the labels of the coordinate as an array."""
         runs = self.runs
-        if len(runs) == 1 and isinstance(runs[0], Labels):
-            return runs[0].values
+        if len(runs) == 1:
+            return array(self._run_labels(runs[0]))
         out = np.concatenate([self._run_labels(x) for x in runs])
         return array(out.astype(self.dtype, copy=False))
 
@@ -2437,8 +2512,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         for run in self.runs:
             if isinstance(run, Grid):
                 out.append(run.labels([0, run.count - 1], self.dtype))
-            elif run.values.size:
-                out.append(np.asarray([np.nanmin(run.values), np.nanmax(run.values)]))
+            elif (values := self._run_labels(run)).size:
+                out.append(np.asarray([np.nanmin(values), np.nanmax(values)]))
         return np.concatenate(out) if out else np.empty(0, dtype=self.dtype)
 
     def _min(self):
@@ -2459,7 +2534,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             return self._run_direction(runs[0])
         # Runs are never assumed to chain: each must run one way and every
         # seam must continue it.
-        edges = np.concatenate([_run_edges(x, self.dtype) for x in runs])
+        edges = np.concatenate([_run_edges(x, self.dtype, self.sources) for x in runs])
         ascending = edges[0] < edges[-1]
         ends, starts = edges[1::2][:-1], edges[::2][1:]
         chained = np.all(starts > ends) if ascending else np.all(starts < ends)
@@ -2473,7 +2548,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         if isinstance(run, Grid):
             zero = _TD64_ZERO if is_timedelta64(run.step_num) else 0
             return -1 if run.step_num < zero else 1
-        values = run.values
+        values = self._run_labels(run)
         if values.ndim != 1 or not values.size:
             return 0
         if len(values) == 1:
@@ -2517,18 +2592,15 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             indices = range(len(self))[slice(start, stop, item.step)]
             if not len(indices):
                 return get_coord(data=np.empty(0, dtype=self.dtype), units=self.units)
-            if indices.step == 1:
-                return self._slice_runs(indices.start, indices.stop)
-            if (grid := self._grid) is not None:
-                return self._with_runs(
-                    (grid.sliced(indices.start, indices.step, len(indices)),)
-                )
-            if indices.step == -1 and len(indices) == len(self):
-                return self._reversed()
+            # A stride across several grids is read from the labels: a
+            # float grid restates a strided slice from its own start, which
+            # can move it in the last bits.
+            if abs(indices.step) == 1 or self.runs_count == 1:
+                return self._slice_runs(indices)
         out = self.values[item]
         if not np.ndim(out):
             return out
-        if (grid := self._grid) is not None:
+        if self._grid is not None:
             # A grid states no label the arithmetic cannot restate, so the
             # result may be read back as one.
             return get_coord(data=out, units=self.units)
@@ -2540,43 +2612,37 @@ get_coord(start=0.0, stop=20.0, step=1.0)
                 return get_coord(data=out, units=self.units, step=step, snap=False)
         return get_coord(data=out, units=self.units, snap=False)
 
-    def _slice_runs(self, start: int, stop: int) -> BaseCoord:
-        """The coordinate holding samples [start, stop) of a 1D coordinate."""
+    def _slice_runs(self, indices: range) -> BaseCoord:
+        """The coordinate holding the samples a range of positions names."""
+        step = indices.step
         out = []
         for run, offset in zip(self.runs, self._run_offsets()):
-            low, high = max(start - offset, 0), min(stop - offset, len(run))
-            if high <= low:
+            first, count = _run_span(indices, int(offset), len(run))
+            if not count:
                 continue
-            if low == 0 and high == len(run):
-                out.append(run)
-            elif isinstance(run, Grid):
-                out.append(run.sliced(low, 1, high - low))
-            else:
+            if (first, step, count) == (0, 1, len(run)):
                 # Only a trimmed run may have become evenly sampled; an
                 # untouched one still states the break it was held apart by.
-                out.append(self._promoted_labels(run.values[low:high]))
-        return self._with_runs(out)
+                out.append(run)
+            elif isinstance(run, Grid):
+                out.append(run.sliced(first, step, count))
+            else:
+                out.append(self._promoted_labels(run.window(first, step, count)))
+        # a backwards range reads the runs from the last one
+        return self._with_runs(out if step > 0 else out[::-1])
 
-    def _promoted_labels(self, values) -> Grid | Labels:
-        """Trimmed labels as the grid they are, unless it contradicts the step."""
-        labels = Labels(values)
-        run = _promoted(labels, self.dtype)
-        if isinstance(run, Grid) and not _is_null(step := self.step):
+    def _promoted_labels(self, window: Labels) -> Grid | Labels:
+        """A trimmed window as the grid it is, unless it contradicts the step."""
+        run = _promoted(self._run_labels(window), self.dtype)
+        if run is None:
+            return window
+        if not _is_null(step := self.step):
             # a grid on another spacing would restate the step and swallow
             # the positions the declared one says are missing
             spacing = abs(_maybe_unpack(run.step(self.dtype)))
-            return run if spacing == abs(_maybe_unpack(step)) else labels
+            if spacing != abs(_maybe_unpack(step)):
+                return window
         return run
-
-    def _reversed(self) -> Self:
-        """The same labels in the opposite order, runs kept."""
-        runs = []
-        for run in reversed(self.runs):
-            if isinstance(run, Grid):
-                runs.append(run.sliced(run.count - 1, -1, run.count))
-            else:
-                runs.append(Labels(run.values[::-1]))
-        return self._with_runs(runs)
 
     def index(self, indexer, axis: int | None = None) -> BaseCoord:
         """Index the coordinate; a slice keeps the runs, as ``coord[slice]`` does."""
@@ -2636,7 +2702,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """
         low, high = None, None
         for run, offset in zip(self.runs, self._run_offsets()):
-            edges = _run_edges(run, self.dtype)
+            edges = _run_edges(run, self.dtype, self.sources)
             near, far = (edges[0], edges[-1]) if self.sorted else (edges[-1], edges[0])
             outside = (value_2 is not None and near > value_2) or (
                 value_1 is not None and far < value_1
@@ -2812,7 +2878,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         if direction:
             if (direction < 0) == reverse:
                 return self, slice(None)
-            return self._reversed(), slice(None, None, -1)
+            return self[::-1], slice(None, None, -1)
         argsort: ArrayLike = np.argsort(self.values)[:: -1 if reverse else 1]
         new = get_coord(data=self.values[argsort], units=self.units)
         return new, argsort
@@ -3037,7 +3103,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         runs = []
         for run in self.runs:
             if isinstance(run, Labels):
-                runs.append(Labels(run.values + delta))
+                runs.append(self._run_labels(run) + delta)
             elif run.exact:
                 runs.append(
                     Grid(
@@ -3096,7 +3162,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         if units_match(self.units, units):
             return self
         return self.__class__(
-            runs=self.runs, units=units, dtype=self.dtype, step=self.step
+            runs=self.runs,
+            units=units,
+            dtype=self.dtype,
+            step=self.step,
+            sources=self.sources,
         )
 
     def _convert_units(self, units) -> Self:
@@ -3120,8 +3190,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     def _converted_run(self, run, units) -> tuple[Grid | Labels, np.dtype]:
         """One run's labels in new units, and the dtype they take."""
         if isinstance(run, Labels):
-            values = convert_units(run.values, units, self.units)
-            return Labels(values), values.dtype
+            # a genuinely new array: it enters a store of its own, hashed once
+            values = convert_units(self._run_labels(run), units, self.units)
+            return values, values.dtype
         if run.exact and run.step_den != 1:
             msg = (
                 "Cannot convert the units of an integer coordinate with a "
@@ -3177,8 +3248,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         if not _is_null(self.step):
             return self.step
         if len(run) > 1:
-            values = run.values
-            return values[-1] - values[-2]
+            values = self._run_labels(run, [-2, -1])
+            return values[-1] - values[0]
         return None
 
     def _holes(self) -> list[tuple]:
@@ -3196,7 +3267,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """The grid positions a stored run skips between its neighbours."""
         if isinstance(run, Grid) or len(run) < 2:
             return []
-        values = run.values
+        values = self._run_labels(run)
         counts = _on_grid(_diffs(values), step)
         return [
             _hole(values[i], step, int(counts[i]) - 1)
@@ -3208,7 +3279,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     def _run_identity(self, run) -> tuple:
         """The payload naming one run's labels."""
         if isinstance(run, Labels):
-            return ("labels", run.identity())
+            return ("labels", run.id, run.count, run.offset, run.stride)
         origin, num, den, extra = run.canonical()
         if not run.exact:
             return (
@@ -3265,7 +3336,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         )
 
 
-def _runs_step(runs, declared, dtype):
+def _runs_step(runs, declared, dtype, sources):
     """
     The grid every label of a coordinate sits on, or None.
 
@@ -3283,25 +3354,25 @@ def _runs_step(runs, declared, dtype):
         if len(steps) != len(runs) or len({_maybe_unpack(x) for x in steps}) != 1:
             return None
         step = steps[0]
-    stored = [x for x in runs if isinstance(x, Labels)]
-    if strict and any(x.values.ndim != 1 for x in stored):
+    stored = [(x, _source(sources, x, dtype)) for x in runs if isinstance(x, Labels)]
+    if strict and any(x.ndim != 1 for _, x in stored):
         msg = "A declared step needs one-dimensional, monotonic values."
         raise CoordError(msg)
     # a declared step is the grid the labels sit on, not their spacing; its
     # sign follows the labels, as a grid's does
     magnitude = np.abs(np.asarray(step))[()]
     edges = np.concatenate(
-        [_run_edges(x, dtype) for x in runs if len(x)] or [np.empty(0)]
+        [_run_edges(x, dtype, sources) for x in runs if len(x)] or [np.empty(0)]
     )
     ascending = len(edges) < 2 or edges[-1] > edges[0]
     step = magnitude if ascending else -magnitude
     try:
-        for run in stored:
+        for run, values in stored:
             if len(run) > 1:
-                if not is_strictly_monotonic(run.values):
+                if not is_strictly_monotonic(values):
                     msg = "A declared step needs one-dimensional, monotonic values."
                     raise CoordError(msg)
-                _on_grid(_diffs(run.values), step)
+                _on_grid(_diffs(values), step)
         for num in range(1, len(runs)):
             seam = edges[2 * num] - edges[2 * num - 1]
             _on_grid(np.asarray([seam]), step)
@@ -3312,12 +3383,25 @@ def _runs_step(runs, declared, dtype):
     return step
 
 
-def _run_edges(run, dtype) -> np.ndarray:
+def _run_edges(run, dtype, sources) -> np.ndarray:
     """The first and last label of a run."""
     if isinstance(run, Labels):
-        values = run.values.reshape(-1)
-        return np.asarray([values[0], values[-1]])
+        values = _source(sources, run, dtype)
+        flat = values if values.ndim == 1 else values.reshape(-1)
+        return np.asarray([flat[0], flat[-1]])
     return run.labels([0, run.count - 1], dtype)
+
+
+def _run_span(indices: range, offset: int, length: int) -> tuple[int, int]:
+    """The first sample and the count a range of positions takes from one run."""
+    step = indices.step
+    low, high = offset - indices.start, offset + length - indices.start
+    if step > 0:
+        first, stop = -((-low) // step), -((-high) // step)
+    else:  # a backwards range reaches the run's far edge first
+        first, stop = high // step + 1, low // step + 1
+    first, stop = max(first, 0), min(stop, len(indices))
+    return indices.start + first * step - offset, max(stop - first, 0)
 
 
 def concat_coords(*coords, units=None) -> BaseCoord:
@@ -3373,18 +3457,22 @@ def concat_coords(*coords, units=None) -> BaseCoord:
     # they were given in states it.
     bounds = [x.min() for x in flat]
     ascending = multi[0].sorted if multi else len(flat) < 2 or bounds[-1] > bounds[0]
+    step = flat[0].step
+    dtype = np.result_type(*[x.dtype for x in flat])
+    steps = {_maybe_unpack(x.step) for x in flat}
+    sources = {k: v for x in flat for k, v in x.sources.items()}
     # Sort on native values; float conversion would collapse ns datetimes.
     flat.sort(key=lambda x: x.min(), reverse=not ascending)
     _check_chain(flat, ascending)
-    runs = _fuse_runs(tuple(itertools.chain.from_iterable(x.runs for x in flat)))
-    dtype = np.result_type(*[x.dtype for x in flat])
-    out = NumericCoord(runs=runs, units=flat[0].units, dtype=dtype)
-    steps = {_maybe_unpack(x.step) for x in flat}
-    if out.step is None and len(steps) == 1 and not _is_null(step := flat[0].step):
+    runs = tuple(itertools.chain.from_iterable(x.runs for x in flat))
+    out = NumericCoord(runs=runs, sources=sources, dtype=dtype, units=flat[0].units)
+    if out.step is None and len(steps) == 1 and not _is_null(step):
         # stored runs carry no step of their own, so the one they shared is
         # restated here; it is refused if the seams do not meet it
         with suppress(CoordError, ValidationError):
-            out = NumericCoord(runs=runs, units=out.units, dtype=dtype, step=step)
+            out = NumericCoord(
+                runs=runs, sources=sources, dtype=dtype, units=out.units, step=step
+            )
     return out
 
 
@@ -3424,7 +3512,7 @@ def _check_chain(coords, ascending: bool) -> None:
             raise CoordError(msg)
 
 
-def _labels_to_runs(values, step) -> tuple[tuple[Grid | Labels, ...], np.dtype]:
+def _labels_to_runs(values, step) -> tuple[tuple, np.dtype]:
     """
     The runs a monotonic array of labels states, read exactly.
 
@@ -3434,7 +3522,7 @@ def _labels_to_runs(values, step) -> tuple[tuple[Grid | Labels, ...], np.dtype]:
     build, smaller, and no less exact.
     """
     if len(values) < (3 if _is_null(step) else 2):
-        return (Labels(values),), values.dtype
+        return (values,), values.dtype
     diffs = _diffs(values)
     signed = step
     if _is_null(step):
@@ -3446,7 +3534,7 @@ def _labels_to_runs(values, step) -> tuple[tuple[Grid | Labels, ...], np.dtype]:
         in_run[:-1] |= eq_next
         splits = np.flatnonzero(~in_run) + 1
         if not np.any(in_run):
-            return (Labels(values),), values.dtype
+            return (values,), values.dtype
     else:
         # every spacing is a whole number of steps; more than one step
         # between neighbours is a seam with positions missing
@@ -3455,20 +3543,20 @@ def _labels_to_runs(values, step) -> tuple[tuple[Grid | Labels, ...], np.dtype]:
         splits = np.flatnonzero(_on_grid(diffs, signed) != 1) + 1
     dense = len(values) >= _MIN_RUN_GUARD_SIZE
     if dense and len(splits) + 1 > _MAX_RUN_FRACTION * len(values):
-        return (Labels(values),), values.dtype
-    runs: list[Grid | Labels] = []
+        return (values,), values.dtype
+    runs: list[Any] = []
     dtypes = [values.dtype]
     for block in np.split(values, splits):
         if _is_null(step):
             # A block's spacings may still differ, so it becomes a grid
             # only where one reproduces every label exactly.
-            runs.append(_promoted(Labels(block), values.dtype))
+            runs.append(_promoted(block, values.dtype) or block)
             continue
         spec = dict(start=block[0], step=signed, shape=(len(block),))
         grid, dtype = _range_run(spec)
         runs.append(grid)
         dtypes.append(dtype)
-    return _fuse_runs(tuple(runs)), np.result_type(*dtypes)
+    return tuple(runs), np.result_type(*dtypes)
 
 
 def _fill_layout(
@@ -3521,7 +3609,7 @@ def _fill_layout(
     runs, out, offset = [], [], 0
     for anchor, length, blocks in groups:
         if len(blocks) == 1:  # untouched: keep the labels as they are
-            kept = coord._slice_runs(blocks[0][0], blocks[0][1])
+            kept = coord._slice_runs(range(blocks[0][0], blocks[0][1]))
             assert isinstance(kept, NumericCoord)
             runs.extend(kept.runs)
         else:
@@ -3548,7 +3636,7 @@ def _fill_pieces(coord: NumericCoord) -> list[tuple[int, Grid]]:
                 "has none. Use snap_coords or resample to put it on a grid first."
             )
             raise CoordError(msg)
-        values = run.values
+        values = coord._run_labels(run)
         counts = _on_grid(_diffs(values), step)
         edges = np.flatnonzero(counts != 1) + 1
         for first, stop in itertools.pairwise([0, *edges.tolist(), len(values)]):
@@ -3829,6 +3917,7 @@ def get_coord(
     dtype: str | np.dtype | None = None,
     segments: tuple[BaseCoord, ...] | list[BaseCoord] | None = None,
     runs: tuple[Grid | Labels, ...] | None = None,
+    sources: Mapping[str, np.ndarray] | None = None,
     snap: bool = True,
     step_numerator: int | None = None,
     step_denominator: int | None = None,
@@ -3868,6 +3957,9 @@ def get_coord(
     runs
         The runs (see [`NumericCoord`](`dascore.core.coords.NumericCoord`))
         the coordinate holds, normally from a dumped coordinate.
+    sources
+        The arrays the stored runs window, keyed by id; they accompany
+        ``runs`` in a dumped coordinate.
     snap
         If True (default), nearly evenly sampled data is read as one grid.
         If False, the data is read exactly: each evenly sampled stretch
@@ -4004,7 +4096,9 @@ def get_coord(
             raise CoordError(msg)
         return out
     if runs is not None:
-        return NumericCoord(runs=runs, units=units, dtype=dtype, step=step)
+        return NumericCoord(
+            runs=runs, sources=sources or {}, units=units, dtype=dtype, step=step
+        )
 
     data = _get_array(data, values)
     shape = _get_shape(shape)

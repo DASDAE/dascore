@@ -622,20 +622,19 @@ class TestReviewRoundThree:
             assert np.array_equal(coord[::stride].values, values[::stride])
 
     def test_labels_copy_a_read_only_view(self):
-        """A read-only view cannot change the labels under their cached id."""
+        """A read-only view cannot change the labels under their stored id."""
         base = np.array([1.0, 2.0, 3.0])
         view = base[:]
         view.flags.writeable = False
-        labels = Labels(view)
-        before = labels.identity()
+        coord = NumericCoord.from_labels(view)
+        before = coord.data_id
         base[0] = 99.0
-        assert labels.values[0] == 1.0
-        assert labels.identity() == before
+        assert coord.values[0] == 1.0 and coord.data_id == before
 
     def test_unsorted_run_is_not_sorted(self):
         """A coordinate never assumes its runs ascend."""
         coord = NumericCoord(
-            runs=(Labels(np.array([3.0, 1.0, 2.0])), Grid(10.0, 1.0, 0, 4)),
+            runs=(np.array([3.0, 1.0, 2.0]), Grid(10.0, 1.0, 0, 4)),
             dtype="float64",
         )
         assert not coord.sorted and not coord.reverse_sorted
@@ -644,7 +643,7 @@ class TestReviewRoundThree:
     def test_empty_runs_are_dropped(self):
         """An empty run states nothing, so it is not kept."""
         coord = NumericCoord(
-            runs=(Labels(np.array([], dtype="float64")), Grid(10.0, 1.0, 0, 4)),
+            runs=(np.array([], dtype="float64"), Grid(10.0, 1.0, 0, 4)),
             dtype="float64",
         )
         assert coord.runs_count == 1 and coord.sorted

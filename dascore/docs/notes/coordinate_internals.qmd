@@ -19,7 +19,7 @@ A `NumericCoord` holds its labels as an ordered tuple of *runs*, each either a [
 | Run | Purpose |
 |---|---|
 | `Grid` | An evenly sampled stretch described by numbers rather than stored. Nanosecond time and integer grids are exact: the labels are `origin + (phase + k * step_num) // step_den` ticks, so a fractional step such as 1/1024 s never drifts and `step_exact` reports it, while `step` stays the nearest whole-tick spacing. A float grid (`step_den` of zero) keeps a scalar step and linear spacing, which is also what time in coarser or finer units and an integer span that does not divide by its count (`get_coord(start=0, stop=10, shape=3)` is float) fall back to. |
-| `Labels` | Labels held as they are, read-only, of any shape, and hashed once on first asking. |
+| `Labels` | A window -- offset, count and (possibly negative) stride -- into one array of labels held as it is, read-only, of any shape. The array itself lives in the coordinate's `sources` mapping under the id it was hashed with on the way in, so a slice, a stride, a reversal or a move to another coordinate only moves the window and the labels are copied and hashed once however far they travel. Converting units scales a window's labels into a new entry, which is a genuinely new array. |
 
 One grid is the evenly sampled coordinate (`evenly_sampled` is True); one stored run is an arbitrary or N-dimensional array; several runs are a coordinate with holes in it, where each boundary records a break in sampling without changing any label. `runs_count` says how many there are and `segments` hands each back as a coordinate of its own.
 
@@ -33,7 +33,7 @@ Labels conventionally centre half-open cells one step wide; this is a recommenda
 
 ## Segmented coordinates
 
-Holding labels as runs keeps sampling breaks rather than flattening them into a single array or idealizing them as one grid. A grid which is exactly the next samples of its predecessor fuses automatically; two stored runs never fuse, since concatenating their labels would cost a copy and lose both ids. A coordinate of several runs reports a `step` only when every run sits on the same one (its labels then follow one grid with positions missing between the runs) and `None` when they disagree; it is never `evenly_sampled`, and its summary carries no step, since a summary with a step rebuilds an evenly sampled coordinate.
+Holding labels as runs keeps sampling breaks rather than flattening them into a single array or idealizing them as one grid. A grid which is exactly the next samples of its predecessor fuses automatically, and so do two windows which read on through one stored array; windows into different arrays never fuse, since concatenating their labels would cost a copy and lose both ids. Concatenation unions the stores, and an entry no window reads is dropped. A coordinate of several runs reports a `step` only when every run sits on the same one (its labels then follow one grid with positions missing between the runs) and `None` when they disagree; it is never `evenly_sampled`, and its summary carries no step, since a summary with a step rebuilds an evenly sampled coordinate.
 
 There are two primary construction paths:
 

@@ -729,9 +729,9 @@ class TestEdgeCases:
         assert np.array_equal(out.values, np.arange(13.0))
 
     def test_unsupported_run_input_raises(self):
-        """Raw arrays are not runs."""
+        """A run is a grid, a window, or the labels one is made from."""
         with pytest.raises(ValidationError, match="must be a Grid or Labels"):
-            NumericCoord(runs=(np.arange(3),), dtype=np.float64)
+            NumericCoord(runs=("not a run",), dtype=np.float64)
 
     def test_no_runs_raises(self):
         """An empty run tuple is rejected."""

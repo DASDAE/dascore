@@ -62,7 +62,7 @@ class TestRunsHoldTheLabels:
 
     def test_dtype_comes_from_stored_runs(self):
         """A coordinate of stored labels need not be told its dtype."""
-        coord = NumericCoord(runs=(Labels(np.arange(4.0)),))
+        coord = NumericCoord(runs=(np.arange(4.0),))
         assert np.dtype(coord.dtype) == np.dtype("float64")
 
     def test_grids_alone_must_state_their_dtype(self):
@@ -220,49 +220,82 @@ class TestHoles:
 
 
 class TestLabelsAreHeldOnce:
-    """A stored run is frozen, copied, and hashed at most once."""
+    """A stored array is frozen, copied, and hashed once, on the way in."""
 
-    def test_values_are_read_only(self):
-        """Nothing may write through a run's labels."""
-        run = Labels(np.arange(5.0))
+    @pytest.fixture
+    def stored(self):
+        """A coordinate holding labels no grid describes."""
+        return NumericCoord.from_labels(np.array([0.0, 1.5, 4.0, 7.0, 9.5, 20.0]))
+
+    def test_sources_are_read_only(self, stored):
+        """Nothing may write through a stored array."""
         with pytest.raises(ValueError, match="read-only"):
-            run.values[0] = 1.0
+            next(iter(stored.sources.values()))[0] = 1.0
 
-    def test_values_are_copied(self):
-        """A later write to the source array cannot reach the run."""
+    def test_sources_are_copied(self):
+        """A later write to the array a coordinate was given cannot reach it."""
         source = np.arange(5.0)
-        run = Labels(source)
+        coord = NumericCoord.from_labels(source)
         source[0] = 99.0
-        assert run.values[0] == 0.0
+        assert coord.values[0] == 0.0
 
-    def test_identity_is_hashed_once(self, monkeypatch):
-        """The second asking returns the id the first one computed."""
-        run = Labels(np.arange(5.0))
-        first = run.identity()
+    def test_windowing_never_hashes(self, stored, monkeypatch):
+        """A slice, a stride and a reversal only move the window."""
+        values = stored.values
         monkeypatch.setattr(coords_module, "hash_array", _no_hashing)
-        assert run.identity() == first
+        for item in (slice(1, None), slice(None, None, 2), slice(None, None, -1)):
+            sliced = stored[item]
+            assert isinstance(sliced.runs[0], Labels)
+            assert np.array_equal(sliced.values, values[item])
 
     def test_slicing_at_run_bounds_never_hashes(self, gappy, monkeypatch):
         """A run a slice keeps whole is the run it already was."""
         monkeypatch.setattr(coords_module, "hash_array", _no_hashing)
         assert gappy[5:].runs_count == 1
 
-    def test_concatenating_never_hashes(self, monkeypatch):
-        """Runs move between coordinates without being read again."""
-        first = NumericCoord.from_labels(np.array([0.0, 1.5, 3.0]))
-        second = NumericCoord.from_labels(np.array([4.0, 5.5, 7.0]))
+    def test_moving_between_coordinates_never_hashes(self, stored, monkeypatch):
+        """Concatenation, fusion and metadata leave the store alone."""
+        second = NumericCoord.from_labels(np.array([30.0, 31.5, 33.0]))
         monkeypatch.setattr(coords_module, "hash_array", _no_hashing)
-        assert concat_coords(first, second).runs_count == 2
+        joined = concat_coords(stored, second)
+        assert joined.runs_count == 2 and len(joined.sources) == 2
+        assert joined.fuse(0.0).runs_count == 2
+        assert joined.set_units("m").units is not None
 
-    def test_setting_units_never_hashes(self, monkeypatch):
-        """Units are a fact about the coordinate, not about its labels."""
-        coord = NumericCoord.from_labels(np.array([0.0, 1.5, 3.0]))
+    def test_abutting_windows_fuse(self, stored, monkeypatch):
+        """Two windows reading on through one array become one window."""
         monkeypatch.setattr(coords_module, "hash_array", _no_hashing)
-        assert coord.set_units("m").units is not None
+        joined = concat_coords(stored[:3], stored[3:])
+        assert joined.runs_count == 1 and joined == stored
+
+    def test_unused_entries_are_dropped(self, stored):
+        """A store never outgrows the coordinate that carries it."""
+        joined = concat_coords(stored, NumericCoord.from_labels(np.array([30.0])))
+        assert len(joined.sources) == 2 and len(joined[:3].sources) == 1
+
+    def test_a_run_needs_its_source(self, stored):
+        """A window naming labels no source holds is refused."""
+        with pytest.raises(ValidationError, match="no source holds"):
+            NumericCoord(runs=stored.runs, dtype=stored.dtype)
+
+    def test_converting_units_hashes_once(self, monkeypatch):
+        """Scaled labels are a new array, so they enter a store of their own."""
+        coord = NumericCoord.from_labels(np.array([0.0, 1.5, 3.0]), units="m")
+        calls = []
+        monkeypatch.setattr(
+            coords_module,
+            "hash_array",
+            lambda values: calls.append(values) or "converted",
+        )
+        out = coord.convert_units("cm")
+        assert len(calls) == 1 and np.allclose(out.values, coord.values * 100)
+        assert coord.convert_units("m") is coord and len(calls) == 1
 
     def test_the_id_names_the_labels(self):
-        """Two runs holding the same labels share an id."""
-        assert Labels(np.arange(5.0)).identity() == Labels(np.arange(5.0)).identity()
+        """Two coordinates holding the same labels store them under one id."""
+        labels = np.array([0.0, 1.5, 3.0])
+        first, second = (NumericCoord.from_labels(labels) for _ in range(2))
+        assert set(first.sources) == set(second.sources)
 
 
 def _no_hashing(_):

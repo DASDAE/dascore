@@ -273,6 +273,13 @@ class TestConstruction:
         )
         assert _grid(odd_origin[::2]).phase == 1
 
+    def test_numpy_counts_become_python_ints(self):
+        """A numpy integer would otherwise leak into every id and every dump."""
+        grid = Grid(0, 1, np.int64(1), np.int64(4), np.int64(0), np.int64(0))
+        assert all(
+            type(getattr(grid, x)) is int for x in ("step_den", "count", "k0", "phase")
+        )
+
 
 class TestLabels:
     """Labels come from the ideal grid, quantized once."""
