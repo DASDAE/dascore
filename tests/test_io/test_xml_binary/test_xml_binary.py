@@ -513,9 +513,13 @@ class TestDirectoryUnitStaleCheck:
         first, second = sorted(unit.glob("*.raw"))
         spare = unit / "spare.raw"
         # a swap: every member keeps its size and its modification time
+        stats = [os.stat(x) for x in (first, second)]
         first.rename(spare)
         second.rename(first)
         spare.rename(second)
+        # A rename need not keep an mtime everywhere; put the swapped ones back.
+        for path, status in zip((second, first), stats):
+            os.utime(path, ns=(status.st_atime_ns, status.st_mtime_ns))
         assert not resolver._sources_unchanged(rows)
 
     def test_a_merge_reads_the_same_patch(self, indexed_unit):

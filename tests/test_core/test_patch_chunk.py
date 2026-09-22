@@ -3730,6 +3730,7 @@ class TestStaleSourceCheck:
         assert out.shape[0] == 20
         assert np.array_equal(out.data[:12], grown.data)
 
+    @pytest.mark.concurrency
     def test_a_paused_check_leaks_nothing_to_another_thread(self, spool_and_paths):
         """Two threads merging at once each measure the files themselves."""
         spool, paths = spool_and_paths
@@ -3800,6 +3801,7 @@ class TestStaleSourceCheck:
         index.parent.rmdir()
         assert pickle.loads(blob)[0].shape[0] == 16
 
+    @pytest.mark.concurrency
     def test_a_process_pool_sees_the_changed_file(self, plan_and_index):
         """A plan sent to another process carries what the check needs."""
         chunked, paths, index = plan_and_index
