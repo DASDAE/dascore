@@ -3431,6 +3431,43 @@ class TestSingleFileStats:
         assert out.shape[0] == 20
         assert np.array_equal(out.data[:12], grown.data)
 
+    def test_a_file_rewritten_mid_scan_leaves_the_recipe(self, paths, calls):
+        """Rows and stats taken either side of a rewrite promise nothing."""
+        first = dc.spool(paths[0])
+        grown = _grid_patch(ORIGIN + STEP * 8, 12, seed=1)
+        original = dc.scan
+
+        def scan_then_rewrite(*args, **kwargs):
+            out = original(*args, **kwargs)
+            _rewrite_dasdae(paths[1], grown)
+            return out
+
+        with mock.patch.object(dc, "scan", scan_then_rewrite):
+            second = dc.spool(paths[1])
+        out = (first + second).chunk(time=None)[0]
+        assert calls["patch"] == 2, "the moved file abandons the recipe"
+        assert out.shape[0] == 20
+        assert np.array_equal(out.data[8:], grown.data)
+
+    def test_the_scan_is_bracketed_by_two_measurements(self, paths):
+        """One before and one after; a single reading certifies nothing."""
+        seen = []
+        original = catalog.scan_unit_stats
+
+        def recorded(path):
+            seen.append(str(path))
+            return original(path)
+
+        with mock.patch.object(catalog, "scan_unit_stats", recorded):
+            spool = dc.spool(paths[0])
+            assert len(seen) == 2
+        row = spool._df.iloc[0]
+        status = paths[0].stat()
+        assert tuple(int(row[x]) for x in SOURCE_STAT_COLUMNS) == (
+            status.st_mtime_ns,
+            status.st_size,
+        )
+
 
 class TestUnionRevision:
     """A union keeps the rows and the stats of one revision of a file."""

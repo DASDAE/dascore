@@ -53,7 +53,7 @@ from dascore.utils.misc import (
     express_range_for_coord,
     is_range,
 )
-from dascore.utils.paths import is_memory_uri
+from dascore.utils.paths import coerce_to_local_path, is_memory_uri
 
 # Directory archives present in per-patch time order (source ordinals
 # alone cannot interleave multi-patch files); ordinal and patch row stay
@@ -767,21 +767,21 @@ class PatchCatalog:
         in-memory backend; patches load through the file resolver on
         demand. There is no syncer — a changed file needs a new catalog.
         """
+        # Measured the way the directory indexer measures it, so a row
+        # from either carries the same promise about its source. The scan
+        # is bracketed because a reading taken only afterwards can belong
+        # to the file which replaced the one the rows describe; a source
+        # which moved between the two, or which the filesystem will not
+        # answer for, is left unmeasured, which refuses the recipe rather
+        # than promising a window of it.
+        source = coerce_to_local_path(path)
+        mtime, size = scan_unit_stats(source)
         summaries = dc.scan(
             path, file_format=file_format, file_version=file_version, progress=None
         )
-        # Measured the way the directory indexer measures it, so a row
-        # from either carries the same promise about its source; a store
-        # which will not answer is left unmeasured, which refuses the
-        # recipe rather than promising a window of it.
         mtimes, sizes = {}, {}
-        for summary in summaries:
-            source = str(summary.source_path)
-            if source in mtimes:
-                continue
-            mtime, size = scan_unit_stats(source)
-            if mtime is not None and size is not None:
-                mtimes[source], sizes[source] = mtime, size
+        if mtime is not None and scan_unit_stats(source) == (mtime, size):
+            mtimes[str(source)], sizes[str(source)] = mtime, size
         records = summaries_to_records(summaries, mtimes_ns=mtimes, sizes_bytes=sizes)
         out = cls(resolver=FileResolver())
         out.backend.write_sources(records)

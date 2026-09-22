@@ -1645,7 +1645,9 @@ def _whole_source_id(block: _Block, signature: _Signature) -> str | None:
         return None
     kind, name = signature.names[int(signature.name_code[0])]
     if kind:
-        # A constant which fills the array is the array of its value.
+        # A constant is the array of its value, and a cast makes it another.
+        if block.members.cast[row]:
+            return None
         value = block.members.value[row]
         source = ArraySource(filled=True, value=value)
         return source.describe(block.shape, block.dtype).data_id
