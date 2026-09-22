@@ -1274,10 +1274,9 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         p1, p2 = (
             self._get_compatible_value(x, relative=relative) for x in select_tuple
         )
-        # reverse order if needed to ensure p1 < p2. This needs to be
-        # after the compatible value conversion in case pre-converted
-        # values are different types.
-        if p1 is not None and p2 is not None and p2 < p1:
+        # Absolute bounds describe an unordered interval. Relative bounds
+        # constrain its lower and upper ends; crossing them selects nothing.
+        if not relative and p1 is not None and p2 is not None and p2 < p1:
             p1, p2 = p2, p1
         return p1, p2
 
@@ -2396,6 +2395,8 @@ class CoordRange(BaseCoord):
         elif samples:
             return self._select_by_samples(args)
         args = self.get_slice_tuple(args, relative=relative)
+        if args[0] is not None and args[1] is not None and args[0] > args[1]:
+            return self.empty(), slice(0, 0)
         start = self._get_index(args[0], forward=self.sorted)
         stop = self._get_index(args[1], forward=self.reverse_sorted)
         if self.reverse_sorted:
@@ -2856,6 +2857,8 @@ class CoordMonotonicArray(CoordArray):
             return self._select_by_samples(args)
 
         v1, v2 = self.get_slice_tuple(args, relative=relative)
+        if v1 is not None and v2 is not None and v1 > v2:
+            return self.empty(), slice(0, 0)
         # reverse order if reverse monotonic. This is done so when we mult
         # by -1 in _get_index the inverted range is used.
         if self.reverse_sorted:
@@ -3356,6 +3359,8 @@ class CoordSegmented(BaseCoord):
         # run of samples, and range segments answer in O(1), so selection
         # stays O(segments) and never materializes the concatenated values.
         v1, v2 = self.get_slice_tuple(args, relative=relative)
+        if v1 is not None and v2 is not None and v1 > v2:
+            return self.empty(), slice(0, 0)
         kept, lo, hi = [], None, None
         for seg, off in zip(self.segments, self._segment_offsets()):
             seg_min, seg_max = seg.min(), seg.max()

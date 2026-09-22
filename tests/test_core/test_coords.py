@@ -915,6 +915,37 @@ class TestSelect:
         else:
             assert ind_1 == ind_2
 
+    @pytest.mark.parametrize("bounds", [(0.75, -0.75), (-0.25, 0.25), (1.5, -0.25)])
+    def test_crossed_relative_bounds(self, coord, bounds):
+        """Crossed relative limits select no values, even inside the coordinate."""
+        span = coord.max() - coord.min()
+        selected, indexer = coord.select(
+            tuple(span * bound for bound in bounds), relative=True
+        )
+        assert len(selected) == 0
+        assert coord.values[indexer].size == 0
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_crossed_segmented_relative_bounds(self, reverse):
+        """A segment must not reorder relative bounds resolved by its parent."""
+        coord = CoordSegmented.from_array(np.array([0, 1, 2, 3, 4, 8, 9]))
+        assert isinstance(coord, CoordSegmented)
+        if reverse:
+            coord = coord.sort(reverse=True)[0]
+        selected, indexer = coord.select((3, -7), relative=True)
+        assert len(selected) == 0
+        assert coord.values[indexer].size == 0
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_equal_relative_bounds(self, reverse):
+        """An inclusive relative window can contain exactly one sample."""
+        coord = get_coord(data=np.arange(7))
+        if reverse:
+            coord = coord.sort(reverse=True)[0]
+        selected, indexer = coord.select((5, -1), relative=True)
+        np.testing.assert_array_equal(selected.values, [5])
+        np.testing.assert_array_equal(coord.values[indexer], [5])
+
     def test_select_relative_numeric_offset_timedelta(self):
         """
         A numeric relative offset into a timedelta64 coordinate should be
