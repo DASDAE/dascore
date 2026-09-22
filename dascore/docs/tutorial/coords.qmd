@@ -56,8 +56,9 @@ time = get_coord(start=t0, step=(1, 1024), shape=(3_686_400,))
 
 assert time.step_exact == Fraction(1, 1024)
 assert time[::2].step_exact == Fraction(1, 512)
-assert time.max() + time.step == t0 + np.timedelta64(1, "h")
 assert time.step == np.timedelta64(976562, "ns")
+# the rounded step would have drifted 1.8 ms by the end of the hour
+assert time.max() - (t0 + time.step * (len(time) - 1)) == np.timedelta64(1843199, "ns")
 ```
 
 Float coordinates have no tick to be exact against, so a fraction step on one raises and their `step_exact` is `None`.

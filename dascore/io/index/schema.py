@@ -33,8 +33,10 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 22 hashes a coordinate in
-# the units it was written in, so the key names one spelling; version 21
+# changes, not only when a column does. Version 23 identifies a coordinate
+# by its runs, so a dev-era index states other ids for the same labels;
+# version 22 hashes a coordinate in the units it was written in, so the
+# key names one spelling; version 21
 # names row numbers `_row`; version 20 renamed the two id attrs and
 # rehashed coordinate keys;
 # version 19 keys a single-patch HDF5 source by its dataset path;
@@ -44,7 +46,7 @@ from typing import NamedTuple, get_args, get_type_hints
 # version 15 stored source coordinate and numeric attribute dtypes.
 # Earlier indexes lack the metadata required for reconstruction and are
 # rebuilt when opened.
-INDEX_VERSION = 22
+INDEX_VERSION = 23
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 

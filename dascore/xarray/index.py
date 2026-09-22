@@ -51,7 +51,7 @@ def _relabels_exactly(coord) -> bool:
     """Whether slices of a coordinate keep exactly the labels they select."""
     # a float run recomputes a slice's labels from its new start, which
     # can move them in the last bits, and then they no longer align
-    return all(not isinstance(x, Grid) or x.exact for x in coord.runs)
+    return all(not isinstance(x, Grid) or x.exact for x in getattr(coord, "runs", ()))
 
 
 def _array_coord(labels, units) -> BaseCoord:

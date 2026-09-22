@@ -390,6 +390,13 @@ class TestEligibility:
         with pytest.raises(AssertionError, match="not servable"):
             CoordIndex.from_coord("x", get_coord(data=np.array([0.0, 1.0, 5.0])))
 
+    def test_string_coordinate_still_slices(self):
+        """A text index falls back to pandas rather than asking for runs."""
+        array = xr.DataArray(np.arange(3), dims="x", coords={"x": ["a", "b", "c"]})
+        array = array.drop_indexes("x").set_xindex("x", CoordIndex)
+        out = array.isel(x=slice(0, 2))
+        np.testing.assert_array_equal(out.coords["x"].values, ["a", "b"])
+
 
 class TestRename:
     """Renaming keeps the lazy index working under the new name."""
