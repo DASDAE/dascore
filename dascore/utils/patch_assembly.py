@@ -17,9 +17,8 @@ row becomes a Patch.
 from __future__ import annotations
 
 import json
-import math
 from collections.abc import Callable, Iterable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -441,11 +440,6 @@ def coord_from_row(row: Mapping, dim: str, units=None):
     return get_coord(start=lo, stop=hi + step, step=step, units=units)
 
 
-# The units a stored datetime or timedelta coordinate can count in,
-# finest first.
-_TIME_UNITS = ("ns", "us", "ms", "s", "m", "h", "D")
-
-
 def _at_unit(coord, unit: str):
     """The same evenly sampled coordinate counted in ``unit``, or None."""
     name = "datetime64" if np.asarray(coord.start).dtype.kind == "M" else "timedelta64"
@@ -456,46 +450,26 @@ def _at_unit(coord, unit: str):
     return get_coord(start=start, step=step, shape=coord.shape, units=coord.units)
 
 
-def _only_nanoseconds(coord) -> bool:
-    """Whether the coordinate's ticks count in nothing coarser than ns."""
-    ticks = [
-        abs(int(np.asarray(x).astype("int64")))
-        for x in (coord.start, coord.stop, coord.step)
-    ]
-    return math.gcd(*ticks) % 1000 != 0
-
-
-def coord_at_stored_unit(coord, row: Mapping, dim: str, found: dict):
+def coord_at_stored_unit(coord, row: Mapping, dim: str):
     """
     ``coord`` counted as the file counts it, or None when nothing says.
 
     A row holds datetimes in nanoseconds however its file stores them,
-    and the dtype it records ("datetime64") leaves the unit out. The
-    coordinate's own id counts it, and the row carries that id as a
-    definition key, so the unit whose rebuild has that id is the file's.
-    ``found`` remembers the last unit which answered, since an archive
-    is written in one. A coordinate no unit accounts for is left to the
-    patch path, which reads the dtype rather than deducing it.
+    and the dtype it records names the unit they are counted in, so the
+    coordinate is cast to it. A row whose dtype names no unit is left to
+    the patch path, which reads the file's own.
     """
     if coord is None or np.asarray(coord.min()).dtype.kind not in "mM":
         return coord
-    # A coordinate no coarser unit can count is the nanosecond one the
-    # row already built, and costs nothing to place.
-    if _only_nanoseconds(coord):
-        return coord
-    key = row.get(f"_{dim}_def_key")
-    if not isinstance(key, str) or not key.startswith("fp:"):
+    stored = row.get(f"_{dim}_coord_dtype")
+    if not isinstance(stored, str) or not stored:
         return None
-    stated = key[3:]
-    if coord.data_id == stated:
-        return coord
-    last = found.get(dim)
-    for unit in (last, *_TIME_UNITS) if last else _TIME_UNITS:
-        candidate = _at_unit(coord, unit)
-        if candidate is not None and candidate.data_id == stated:
-            found[dim] = unit
-            return candidate
-    return None
+    if np.dtype(stored).kind not in "mM":
+        return None
+    unit, count = np.datetime_data(stored)
+    if unit == "generic" or count != 1:
+        return None
+    return coord if unit == "ns" else _at_unit(coord, unit)
 
 
 def patch_from_fill(
@@ -661,9 +635,8 @@ class PatchAssembler:
     # Whether every member source still is what the index recorded. A
     # recipe reads the window the index promised rather than the whole
     # array, so a file rewritten since would otherwise pass unnoticed.
-    sources_unchanged: Callable[[Iterable[Mapping]], bool] | None = None
-    # The unit each dimension's last rebuilt coordinate was counted in.
-    stored_units: dict[str, str] = field(default_factory=dict)
+    # Takes the joined member frame; the caller keeps what was recorded.
+    sources_unchanged: Callable[[pd.DataFrame], bool] | None = None
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
@@ -728,12 +701,12 @@ class PatchAssembler:
         """
         metas = self._member_meta_from_index(df_dict_list)
         if metas is not None:
-            out = self._merge_from_index(df_dict_list, merge_dim, metas)
+            out = self._merge_from_index(joined, df_dict_list, merge_dim, metas)
             if out is not None:
                 return out
         return self._stream(joined, df_dict_list, merge_dim, samples)
 
-    def _merge_from_index(self, df_dict_list, merge_dim, metas):
+    def _merge_from_index(self, joined, df_dict_list, merge_dim, metas):
         """
         Merge members the rows describe, as one recipe read in one pass.
 
@@ -749,9 +722,7 @@ class PatchAssembler:
         recipe = self._recipe(df_dict_list, metas, dims, axis)
         if recipe is None:
             return None
-        if self.sources_unchanged is not None and not self.sources_unchanged(
-            df_dict_list
-        ):
+        if self.sources_unchanged is not None and not self.sources_unchanged(joined):
             return None
         try:
             data = recipe.load()
@@ -774,9 +745,13 @@ class PatchAssembler:
         axes in another order than the first, or disagreeing off the
         merged axis, takes the patch path instead, which transposes each
         one as it is loaded and says what cannot be merged.
+
+        The dtype is promoted a member at a time, in placement order, as
+        the streaming merge promotes its buffer: promotion is not
+        associative, and the two routes must give one answer.
         """
         assert self.array_source is not None, "the caller checks for a source"
-        sources, rest = [], None
+        sources, rest, dtype = [], None, None
         for row, meta in zip(rows, metas, strict=True):
             if meta.dims != dims:
                 return None
@@ -796,7 +771,10 @@ class PatchAssembler:
             elif others != rest:
                 return None
             sources.append(source)
-        return LazyArray.from_sources(sources, axis=axis)
+            dtype = (
+                source.dtype if dtype is None else np.result_type(dtype, source.dtype)
+            )
+        return LazyArray.from_sources(sources, axis=axis, dtype=dtype)
 
     def _stream(self, joined, df_dict_list, merge_dim, samples):
         """
@@ -824,7 +802,7 @@ class PatchAssembler:
                 shape = list(data.shape)
                 shape[axis] = samples
                 buffer = np.empty(shape, dtype=data.dtype)
-            # Mixed dtypes upcast, mirroring np.concatenate behavior.
+            # Mixed dtypes upcast, a member at a time and so in order.
             dtype = np.result_type(buffer.dtype, data.dtype)
             if dtype != buffer.dtype:
                 buffer = buffer.astype(dtype)
@@ -926,7 +904,9 @@ class PatchAssembler:
         # A moved source has its id cleared until it is read again, and
         # folding no id is not folding the one the patch carries; an attr
         # the index could not hold is on the patch and would be lost here.
-        if ids_enabled() and "origin_id" in row and _is_missing(row["origin_id"]):
+        # A column no row carries states no id either: the patch path
+        # would give the loaded patches' own, which the rows cannot.
+        if ids_enabled() and _is_missing(row.get("origin_id")):
             return None
         if not _is_null(complete := row.get("_attrs_complete")) and not complete:
             return None
@@ -951,10 +931,7 @@ class PatchAssembler:
                 # The plan narrows its own dimension and no other, so
                 # every envelope here is its source's own.
                 coord = coord_at_stored_unit(
-                    coord_from_row(row, dim, units=units),
-                    row,
-                    dim,
-                    self.stored_units,
+                    coord_from_row(row, dim, units=units), row, dim
                 )
                 if coord is None:
                     return None
@@ -983,7 +960,7 @@ class PatchAssembler:
         if _units_converted(row, dim):
             return None
         source = coord_at_stored_unit(
-            source_coord_from_row(row, dim, units=units), row, dim, self.stored_units
+            source_coord_from_row(row, dim, units=units), row, dim
         )
         bounds = _row_bounds(row, dim)
         if source is None or bounds is None:
@@ -1006,5 +983,4 @@ class PatchAssembler:
         relative paths pass through unchanged — the catalog's resolver
         owns resolving them against the spool root.
         """
-        df = df.copy(deep=False).replace("", None)
-        return df.to_dict("records")
+        return df.replace("", None).to_dict("records")

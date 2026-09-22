@@ -19,7 +19,6 @@ from __future__ import annotations
 import secrets
 from collections.abc import Mapping
 from dataclasses import replace
-from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -53,6 +52,7 @@ from dascore.io.index.ingest import (
     _is_missing,
     typed_value,
 )
+from dascore.io.index.schema import SOURCE_STAT_COLUMNS
 from dascore.units import get_quantity
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
@@ -138,6 +138,13 @@ def _is_local(path: str) -> bool:
     except ValueError:
         # a scheme no filesystem here claims is not a local file
         return False
+
+
+def _stat_pair(mtime, size) -> tuple[int, int] | None:
+    """The (mtime_ns, size_bytes) a row states, or None where it states none."""
+    if pd.isnull(mtime) or pd.isnull(size):
+        return None
+    return int(mtime), int(size)
 
 
 def _row_str(value) -> str:
@@ -561,7 +568,6 @@ class PlanResolver(PatchResolver):
         stamped: tuple[str, ...] = (),
         lossy: bool = False,
         output_rows: pd.DataFrame | None = None,
-        source_stats: SourceStats | None = None,
     ):
         if "output_id" not in member_rows.columns:
             msg = "member_rows must carry an output_id column."
@@ -569,12 +575,17 @@ class PlanResolver(PatchResolver):
         # plan invariant: outputs without members must never be published
         self.token = token
         self.dim = dim
-        self.member_rows = member_rows.reset_index(drop=True)
-        # what the index recorded of each source file, fetched when read
-        self.source_stats = SourceStats() if source_stats is None else source_stats
-        # the unit each dimension's rebuilt coordinates were last counted
-        # in, shared by every output this view assembles
-        self._stored_units: dict[str, str] = {}
+        rows = member_rows.reset_index(drop=True)
+        # What the index measured of each member's source, held beside
+        # the rows rather than in them: every output slices this frame,
+        # and a column is charged for at every slice. Row number is the
+        # key, which the slices keep.
+        self._source_stats = {
+            name: rows[name].to_numpy()
+            for name in SOURCE_STAT_COLUMNS
+            if name in rows.columns
+        }
+        self.member_rows = rows.drop(columns=list(self._source_stats))
         self.loader = loader
         self.aux_coords = frozenset(aux_coords)
         self.merge_kwargs = dict(merge_kwargs)
@@ -619,7 +630,6 @@ class PlanResolver(PatchResolver):
             array_source=self._member_array_source,
             can_use_index=self._can_load_member_from_index,
             sources_unchanged=self._sources_unchanged,
-            stored_units=self._stored_units,
         )
 
     def _can_load_member_from_index(self, row: Mapping) -> bool:
@@ -641,29 +651,38 @@ class PlanResolver(PatchResolver):
                     return False
         return self._array_read_info(row) is not None
 
-    def _sources_unchanged(self, rows) -> bool:
+    def _sources_unchanged(self, rows: pd.DataFrame) -> bool:
         """
         Whether every local member source still is what the index recorded.
 
         A recipe reads the window the index promised rather than the whole
         array, so a file rewritten longer under the same key would come
-        back the shape its row predicted and go unnoticed. Each distinct
-        local source of this merge is measured once, by the same function
-        the indexer records -- a file by its own stat, a directory-format
-        unit by its manifest. A remote store is never touched, and a
-        source which will not answer -- or one the index recorded no
-        stats for -- says nothing rather than refusing the route.
+        back the shape its row predicted and go unnoticed. What the index
+        measured of each source came from the same join as the member
+        rows and is held under their row numbers, so the two describe
+        one revision of the index however long ago it was planned and
+        nothing is asked of the index here. Each distinct local source
+        is measured once, by the same function the indexer records -- a
+        file by its own stat, a directory-format unit by its manifest. A
+        remote store is never touched, and a source which will not
+        answer -- or one the index recorded no stats for -- says nothing
+        rather than refusing the route.
         """
-        paths, seen = [], set()
-        for row in rows:
-            path = _row_str(row.get("source_path"))
+        stats = self._source_stats
+        if len(stats) != len(SOURCE_STAT_COLUMNS) or "source_path" not in rows.columns:
+            return True
+        # the row numbers this slice kept, which is what the stats are under
+        taken = rows.index.to_numpy()
+        paths = rows["source_path"].to_numpy()
+        mtimes = stats[SOURCE_STAT_COLUMNS[0]][taken]
+        sizes = stats[SOURCE_STAT_COLUMNS[1]][taken]
+        seen = set()
+        for path, mtime, size in zip(paths, mtimes, sizes, strict=True):
+            path = _row_str(path)
             if not path or path in seen or not _is_local(path):
                 continue
             seen.add(path)
-            paths.append(path)
-        recorded = self.source_stats.recorded(paths)
-        for path in paths:
-            stated = recorded.get(path)
+            stated = _stat_pair(mtime, size)
             if stated is None:
                 continue
             live = scan_unit_stats(path)
@@ -672,6 +691,11 @@ class PlanResolver(PatchResolver):
             if live != stated:
                 return False
         return True
+
+    def source_stats_of(self, rows: pd.DataFrame) -> pd.DataFrame:
+        """Put what the index measured back beside these member rows."""
+        taken = rows.index.to_numpy()
+        return rows.assign(**{k: v[taken] for k, v in self._source_stats.items()})
 
     def _member_array_source(self, row: Mapping, shape) -> ArraySource | None:
         """
@@ -1047,86 +1071,6 @@ def _with_source_range(sources: pd.DataFrame, name: str, residuals) -> pd.DataFr
     return sources.assign(**values)
 
 
-# Above this many paths a keyed query costs more than reading the table.
-_WHOLE_TABLE = 5000
-
-
-class SourceStats:
-    """
-    What the index last recorded of a member source, looked up when read.
-
-    Nothing is fetched while a plan is built: a chunking which is never
-    iterated, or one which only splits, asks no question of the index.
-    The first merge which is about to read asks about its own files --
-    one keyed query, one entry per file however many patches it holds --
-    and what comes back is kept, so re-reading the same outputs asks
-    again only about files it has not seen. A path the table names twice
-    (two roots, one spelling) names neither.
-    """
-
-    def __init__(self, backend=None, root=None):
-        self._backend = backend
-        self._root = root
-        # resolved path -> the recorded stats, or None for "not stated"
-        self.known: dict[str, tuple[int, int] | None] = {}
-
-    def __getstate__(self) -> dict:
-        """
-        Pickle what was learned, and the index only if it has a file.
-
-        A backend over a database file reopens it in the receiving
-        process, which keeps the check alive there; an in-memory one has
-        nothing to reopen, so what it already stated is all that travels.
-        """
-        backend = self._backend
-        if getattr(backend, "_path", ":memory:") == ":memory:":
-            backend = None
-        return {"_backend": backend, "_root": self._root, "known": dict(self.known)}
-
-    def recorded(self, paths) -> dict[str, tuple[int, int] | None]:
-        """Return the recorded (mtime_ns, size_bytes) of each path."""
-        missing = [x for x in paths if x not in self.known]
-        backend = self._backend
-        if missing and backend is not None:
-            self._fetch(missing, backend)
-        return {path: self.known.get(path) for path in paths}
-
-    def _fetch(self, paths, backend) -> None:
-        """Ask the index about these paths and keep what it says."""
-        # The table stores whatever spelling the index was built with,
-        # which a root makes relative; both are asked for and the answer
-        # is kept under the spelling the member rows carry.
-        stored = {}
-        for path in paths:
-            self.known[path] = None
-            for spelling in _stored_spellings(path, self._root):
-                stored.setdefault(spelling, path)
-        # A merge of nearly the whole archive is cheaper to answer with
-        # one scan than with a keyed query per batch of paths.
-        wanted = list(stored)
-        frame = backend.source_stats(None if len(wanted) > _WHOLE_TABLE else wanted)
-        frame = frame.dropna(subset=["mtime_ns", "size_bytes"])
-        frame = frame.drop_duplicates("source_path", keep=False)
-        for spelling, mtime, size in zip(
-            frame["source_path"], frame["mtime_ns"], frame["size_bytes"], strict=True
-        ):
-            if (path := stored.get(str(spelling))) is not None:
-                self.known[path] = (int(mtime), int(size))
-
-
-def _stored_spellings(path: str, root) -> tuple[str, ...]:
-    """The spellings the sources table may hold a resolved path under."""
-    if root is None:
-        return (path,)
-    candidate = Path(path)
-    if not candidate.is_absolute():
-        return (path,)
-    try:
-        return (path, candidate.relative_to(root).as_posix())
-    except ValueError:
-        return (path,)
-
-
 def derived_catalog(
     *,
     source_rows: pd.DataFrame,
@@ -1172,17 +1116,6 @@ def derived_catalog(
     parent_residuals = () if parent is None else parent.residuals
     sources = _with_source_range(sources, name, parent_residuals)
     root = getattr(parent.resolver, "_root", None) if parent is not None else None
-    # A spool with no parent has no index to have recorded anything. A
-    # derived parent asks the index its own members came from, since its
-    # rows name plans rather than files.
-    stats = SourceStats()
-    if parent is not None:
-        inherited = getattr(parent.resolver, "source_stats", None)
-        stats = (
-            inherited
-            if isinstance(inherited, SourceStats)
-            else SourceStats(parent.backend, root)
-        )
     member_rows = trims[["_patch_row", *[c for c in trim_cols]]].merge(
         sources.drop(columns=[c for c in trim_cols if c in sources], errors="ignore"),
         on="_patch_row",
@@ -1223,7 +1156,6 @@ def derived_catalog(
         stamped=stamped,
         lossy=lossy,
         output_rows=plan.outputs,
-        source_stats=stats,
     )
     backend = get_backend(":memory:")
     # residual selections trim at load; identity claims (def keys) for
@@ -1370,6 +1302,9 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
     # that output's patch in this catalog (a stale one named the parent's)
     ids = catalog.backend.patch_ids_by_key()
     index_ids = [ids.get(str(int(x))) for x in members["output_id"]]
+    # the re-plan builds new member rows from these, so what the index
+    # measured of each source has to travel with them
+    members = resolver.source_stats_of(members)
     working = members.assign(_index_row=pd.array(index_ids, dtype="Int64"))
     working = working.drop(columns=["output_id"])
     working = patch_local_adjusted_envelopes(

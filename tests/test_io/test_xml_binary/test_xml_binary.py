@@ -490,15 +490,15 @@ class TestDirectoryUnitStaleCheck:
         """Its manifest, not its members' sizes, is what the index holds."""
         spool, unit = indexed_unit
         resolver = self._resolver(spool)
-        rows = resolver.member_rows.to_dict("records")
-        assert {x["source_path"] for x in rows} == {str(unit)}
+        rows = resolver.member_rows
+        assert set(rows["source_path"]) == {str(unit)}
         assert resolver._sources_unchanged(rows)
 
     def test_a_changed_member_abandons_the_recipe(self, indexed_unit):
         """A member rewritten in place changes the unit's manifest."""
         spool, unit = indexed_unit
         resolver = self._resolver(spool)
-        rows = resolver.member_rows.to_dict("records")
+        rows = resolver.member_rows
         path = sorted(unit.glob("*.raw"))[0]
         (np.arange(1000 * 10, dtype="uint16") + 1).tofile(path)
         moved = path.stat().st_mtime_ns + 10**9
@@ -509,7 +509,7 @@ class TestDirectoryUnitStaleCheck:
         """Which file holds which samples is part of what was recorded."""
         spool, unit = indexed_unit
         resolver = self._resolver(spool)
-        rows = resolver.member_rows.to_dict("records")
+        rows = resolver.member_rows
         first, second = sorted(unit.glob("*.raw"))
         spare = unit / "spare.raw"
         # a swap: every member keeps its size and its modification time

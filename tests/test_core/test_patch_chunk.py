@@ -8,12 +8,14 @@ extensive.
 from __future__ import annotations
 
 import os
-import pathlib
 import pickle
 import random
+import threading
 import warnings
+from concurrent.futures import ProcessPoolExecutor
 from datetime import timedelta
 from itertools import pairwise
+from unittest import mock
 
 import numpy as np
 import pandas as pd
@@ -22,6 +24,7 @@ import pytest
 import dascore as dc
 import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
+from dascore.config import config_context
 from dascore.core.coords import CoordRange, CoordSegmented
 from dascore.core.lazy_array import LazyArray
 from dascore.core.source import ArraySource
@@ -33,8 +36,8 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.febus.core import FebusPatchAttrs
-from dascore.io.index import backend as backend_module
 from dascore.io.index import planned
+from dascore.io.index.schema import SOURCE_STAT_COLUMNS
 from dascore.units import get_quantity
 from dascore.utils.gaps import GapTolerance
 from dascore.utils.misc import get_middle_value, suppress_warnings
@@ -2104,6 +2107,8 @@ def _plan_coord(kind, num, samples):
         start = ORIGIN + STEP * samples * num
         return dc.core.get_coord(start=start, step=STEP, shape=(samples,))
     if kind == "float":
+        # float64: selecting a float32 coordinate is not idempotent, and
+        # the patch path this is compared against selects twice
         return dc.core.get_coord(start=2.0 * samples * num, step=2.0, shape=(samples,))
     # An integer channel numbering, which a fractional chunk length cuts
     # between samples; the int32 one also runs through zero.
@@ -2526,10 +2531,14 @@ class TestChunkFromIndex:
             "time_max": np.datetime64("2020-01-01T00:00:03"),
             "time_step": np.timedelta64(1, "s"),
             "_time_def_key": SECONDS_KEY,
+            "_time_coord_dtype": "datetime64[s]",
             "origin_id": "abc",
             "_attrs_complete": 1,
         }
         assert assembler._meta_from_index(row) is not None
+        # a column no row carries states no id either
+        without = {k: v for k, v in row.items() if k != "origin_id"}
+        assert assembler._meta_from_index(without) is None
         assert assembler._meta_from_index(row | {"origin_id": ""}) is None
         assert assembler._meta_from_index(row | {"origin_id": None}) is None
         assert assembler._meta_from_index(row | {"_attrs_complete": 0}) is None
@@ -2561,6 +2570,8 @@ class TestChunkFromIndex:
             "time_max": np.datetime64("2020-01-01T00:00:03"),
             "time_step": np.timedelta64(1, "s"),
             "_time_def_key": SECONDS_KEY,
+            "_time_coord_dtype": "datetime64[s]",
+            "origin_id": "abc",
         }
         good = PatchAssembler(
             load_patch=lambda kwargs: None,
@@ -2665,6 +2676,7 @@ class TestChunkFromIndex:
             "time_max": np.datetime64("2020-01-01T00:00:03"),
             "time_step": np.timedelta64(1, "s"),
             "_time_def_key": SECONDS_KEY,
+            "_time_coord_dtype": "datetime64[s]",
         }
         silent = dict(stateable, time_step=np.timedelta64("NaT", "s"))
         assert assembler._member_meta_from_index([stateable, silent]) is None
@@ -2774,6 +2786,29 @@ class TestRecipeMerge:
         assert out.data.dtype == np.result_type(*[np.dtype(x) for x in dtypes])
         assert out.data.dtype == expected.dtype
         assert np.array_equal(out.data, expected)
+
+    @pytest.mark.parametrize(
+        "dtypes",
+        [
+            ("int16", "uint16", "float32"),
+            ("float32", "int64"),
+            ("uint8", "int8", "float16"),
+        ],
+    )
+    def test_promotion_follows_placement_order(self, tmp_path, calls, dtypes):
+        """Promotion is not associative, so the order the members are in wins."""
+        starts = self._grid(len(dtypes), 6)
+        patches = [
+            self._patch(start, 6, dtype=dtype, seed=num)
+            for num, (start, dtype) in enumerate(zip(starts, dtypes))
+        ]
+        expected = np.result_type(np.dtype(dtypes[0]), np.dtype(dtypes[1]))
+        for dtype in dtypes[2:]:
+            expected = np.result_type(expected, np.dtype(dtype))
+        out = self._write(tmp_path, patches).chunk(time=None)[0]
+        assert calls == {"patch": 0, "array": len(dtypes)}
+        assert out.data.dtype == expected
+        assert dc.spool(patches).chunk(time=None)[0].data.dtype == expected
 
     def test_members_stored_the_other_way_round(self, tmp_path, calls):
         """Dimension order partitions the plan, so each order merges alone."""
@@ -3324,17 +3359,22 @@ def _stat_recorder(monkeypatch) -> list[str]:
     return seen
 
 
-def _stat_queries(monkeypatch) -> list:
-    """Record every source-stat query the index is asked, from here on."""
+def _index_reads(monkeypatch, backend) -> list[str]:
+    """Record every statement one index is asked to run, from here on."""
     asked = []
-    original = backend_module.SQLiteIndexBackend.source_stats
+    original = backend._fetch_df
 
-    def counted(self, paths=None):
-        asked.append(paths)
-        return original(self, paths)
+    def counted(sql, params=()):
+        asked.append(sql)
+        return original(sql, params)
 
-    monkeypatch.setattr(backend_module.SQLiteIndexBackend, "source_stats", counted)
+    monkeypatch.setattr(backend, "_fetch_df", counted)
     return asked
+
+
+def _patch_shape(patch):
+    """The shape of a patch, as a process pool can call it."""
+    return patch.shape
 
 
 def _rewrite_dasdae(path, patch, group=None):
@@ -3425,16 +3465,16 @@ class TestStaleSourceCheck:
         monkeypatch.setattr(planned, "is_local_path", lambda path: False)
         chunked = spool.chunk(time=None)
         resolver = chunked._catalog.resolver
-        rows = resolver.member_rows.to_dict("records")
-        assert resolver._sources_unchanged(rows)
+        assert resolver._sources_unchanged(resolver.member_rows)
         assert not stats
 
     def test_an_unknown_scheme_is_not_local(self, spool_and_paths, monkeypatch):
         """A scheme no filesystem here claims is not a local file."""
         spool, _ = spool_and_paths
         resolver = spool.chunk(time=None)._catalog.resolver
+        rows = resolver.member_rows.assign(source_path="nosuchthing://a/b")
         stats = _stat_recorder(monkeypatch)
-        assert resolver._sources_unchanged([{"source_path": "nosuchthing://a/b"}])
+        assert resolver._sources_unchanged(rows)
         assert not stats
 
     @pytest.mark.parametrize(
@@ -3447,98 +3487,171 @@ class TestStaleSourceCheck:
         """Either field moving on its own says the file is not what it was."""
         spool, _ = spool_and_paths
         resolver = spool.chunk(time=None)._catalog.resolver
-        rows = resolver.member_rows.to_dict("records")
-        path = rows[0]["source_path"]
-        mtime, size = resolver.source_stats.recorded([path])[path]
+        stats = resolver._source_stats
+        mtime, size = (stats[name][0] for name in SOURCE_STAT_COLUMNS)
         monkeypatch.setattr(
             planned,
             "scan_unit_stats",
-            lambda path: (mtime + mtime_delta, size + size_delta),
+            lambda path: (int(mtime) + mtime_delta, int(size) + size_delta),
         )
-        assert resolver._sources_unchanged(rows[:1]) is unchanged
+        rows = resolver.member_rows
+        assert resolver._sources_unchanged(rows.iloc[:1]) is unchanged
 
     def test_a_source_the_index_never_stat_ed_is_ignored(self, spool_and_paths):
         """An index which recorded neither size nor mtime refuses nothing."""
         spool, _ = spool_and_paths
         resolver = spool.chunk(time=None)._catalog.resolver
-        rows = resolver.member_rows.to_dict("records")
-        paths = [x["source_path"] for x in rows]
-        assert all(resolver.source_stats.recorded(paths).values())
-        resolver.source_stats = planned.SourceStats()
-        assert resolver._sources_unchanged(rows)
+        stats = resolver._source_stats
+        assert all(pd.notna(stats[name]).all() for name in SOURCE_STAT_COLUMNS)
+        for name in SOURCE_STAT_COLUMNS:
+            stats[name] = np.full(len(stats[name]), None, dtype=object)
+        assert resolver._sources_unchanged(resolver.member_rows)
+
+    def test_rows_with_no_stats_refuse_nothing(self, spool_and_paths):
+        """A relation which never carried the stats says nothing about them."""
+        spool, _ = spool_and_paths
+        resolver = spool.chunk(time=None)._catalog.resolver
+        resolver._source_stats = {}
+        assert resolver._sources_unchanged(resolver.member_rows)
 
     def test_a_rechunk_keeps_what_the_index_recorded(self, spool_and_paths, calls):
-        """The stats come from the index, which a derived catalog is not."""
+        """The stats ride the members, which a derived catalog re-plans."""
         spool, paths = spool_and_paths
         chunked = spool.chunk(time=None)
-        rechunked = chunked.chunk(time=None)
-        stats = rechunked._catalog.resolver.source_stats
-        assert all(stats.recorded([str(x) for x in paths]).values())
+        stats = chunked.chunk(time=None)._catalog.resolver._source_stats
+        assert set(stats) == set(SOURCE_STAT_COLUMNS)
+        assert all(pd.notna(stats[name]).all() for name in SOURCE_STAT_COLUMNS)
         grown = self._patch(np.datetime64("2020-01-01"), 12, seed=7)
         _rewrite_dasdae(paths[0], grown)
         assert list(chunked.chunk(time=None))
         assert calls["patch"] > 0
 
-    def test_a_pickled_plan_still_checks_its_sources(self, spool_and_paths):
-        """A database file reopens in the process which unpickles it."""
+    def test_a_pickled_plan_carries_what_it_needs(self, spool_and_paths):
+        """The stats travel in the rows, so no index is reopened."""
         spool, paths = spool_and_paths
         chunked = pickle.loads(pickle.dumps(spool.chunk(time=None)))
         resolver = chunked._catalog.resolver
-        rows = resolver.member_rows.to_dict("records")
-        assert resolver._sources_unchanged(rows)
+        assert resolver._sources_unchanged(resolver.member_rows)
         grown = self._patch(np.datetime64("2020-01-01"), 12, seed=7)
         _rewrite_dasdae(paths[0], grown)
-        assert not resolver._sources_unchanged(rows)
+        assert not resolver._sources_unchanged(resolver.member_rows)
 
-    def test_an_index_with_no_file_states_what_it_learned(self, spool_and_paths):
-        """An in-memory index cannot be reopened, so only its answers travel."""
+    def test_a_plan_read_after_an_update_describes_what_it_planned(
+        self, spool_and_paths, calls
+    ):
+        """A plan made before an update still checks against its own rows."""
+        spool, paths = spool_and_paths
+        chunked = spool.chunk(time=None)
+        grown = self._patch(np.datetime64("2020-01-01"), 12, seed=7)
+        _rewrite_dasdae(paths[0], grown)
+        spool.update()
+        out = chunked[0]
+        assert calls["patch"] == 2, "the plan's rows describe the old file"
+        assert out.shape[0] == 20, "twelve grown samples and the eight beside them"
+        assert np.array_equal(out.data[:12], grown.data)
+
+    def test_a_plan_read_before_and_after_an_update(self, spool_and_paths, calls):
+        """Reading a plan first does not change what a later read gives."""
+        spool, paths = spool_and_paths
+        chunked = spool.chunk(time=None)
+        assert chunked[0].shape[0] == 16
+        grown = self._patch(np.datetime64("2020-01-01"), 12, seed=7)
+        _rewrite_dasdae(paths[0], grown)
+        spool.update()
+        out = chunked[0]
+        assert calls["patch"] == 2
+        assert out.shape[0] == 20
+        assert np.array_equal(out.data[:12], grown.data)
+
+    def test_a_paused_check_leaks_nothing_to_another_thread(self, spool_and_paths):
+        """Two threads merging at once each measure the files themselves."""
+        spool, paths = spool_and_paths
+        chunked = spool.chunk(time=None)
+        _rewrite_dasdae(paths[0], self._patch(np.datetime64("2020-01-01"), 12, seed=7))
+        entered, release = threading.Event(), threading.Event()
+        original = planned.scan_unit_stats
+        first_in = []
+
+        def paused(path):
+            if not first_in:
+                first_in.append(path)
+                entered.set()
+                assert release.wait(30)
+            return original(path)
+
+        shapes: dict[str, tuple] = {}
+        with mock.patch.object(planned, "scan_unit_stats", paused):
+            worker = threading.Thread(
+                target=lambda: shapes.setdefault("first", chunked[0].shape)
+            )
+            worker.start()
+            assert entered.wait(30)
+            shapes["second"] = chunked[0].shape
+            release.set()
+            worker.join(30)
+        assert shapes == {"first": (20, 4), "second": (20, 4)}
+
+    def test_a_merge_asks_the_index_nothing(self, spool_and_paths, monkeypatch):
+        """The rows already say what was recorded, so nothing is looked up."""
         spool, _ = spool_and_paths
-        resolver = spool.chunk(time=None)._catalog.resolver
-        stats = planned.SourceStats(None, None)
-        stats.known.update(resolver.source_stats.recorded(["a", "b"]))
-        back = pickle.loads(pickle.dumps(stats))
-        assert back.known == stats.known
-        assert back.recorded(["c"]) == {"c": None}
+        chunked = spool.chunk(time=None)
+        statements = _index_reads(monkeypatch, spool._catalog.backend)
+        assert chunked[0].shape[0] == 16
+        assert not statements, statements
 
-    def test_a_path_outside_the_root_is_asked_for_as_it_stands(self, spool_and_paths):
-        """Only a path under the root has a stored relative spelling."""
-        _, paths = spool_and_paths
-        root = pathlib.Path(paths[0]).parent
-        assert planned._stored_spellings("/elsewhere/m0.h5", root) == (
-            "/elsewhere/m0.h5",
-        )
-        assert planned._stored_spellings("m0.h5", root) == ("m0.h5",)
-        assert planned._stored_spellings(str(paths[0]), None) == (str(paths[0]),)
-        assert planned._stored_spellings(str(paths[0]), root) == (
-            str(paths[0]),
-            "m0.h5",
-        )
+    @pytest.fixture
+    def plan_and_index(self, tmp_path):
+        """A chunked plan whose index file sits outside the data directory."""
+        data, cache = tmp_path / "data", tmp_path / "cache"
+        data.mkdir()
+        cache.mkdir()
+        paths = []
+        for num in range(2):
+            patch = self._patch(ORIGIN + STEP * 8 * num, 8, seed=num)
+            path = data / f"m{num}.h5"
+            patch.io.write(path, "dasdae")
+            paths.append(path)
+        index = cache / "index.sqlite"
+        spool = dc.spool(data, index_path=index).update()
+        return spool.chunk(time=None), paths, index
 
-    def test_planning_asks_the_index_nothing(self, spool_and_paths, monkeypatch):
-        """A plan which is never read stats nothing and keeps no map."""
+    def test_a_plan_outlives_the_index_it_was_made_from(self, plan_and_index, calls):
+        """The rows carry the check, so a deleted index takes nothing away."""
+        chunked, paths, index = plan_and_index
+        blob = pickle.dumps(chunked)
+        index.unlink()
+        _rewrite_dasdae(paths[0], self._patch(ORIGIN, 12, seed=7))
+        out = pickle.loads(blob)[0]
+        assert calls["patch"] == 2, "the changed file abandons the recipe"
+        assert out.shape[0] == 20
+
+    def test_a_plan_unpickles_with_the_index_directory_gone(self, plan_and_index):
+        """Nothing reopens the index, so its parent need not exist."""
+        chunked, _, index = plan_and_index
+        blob = pickle.dumps(chunked)
+        index.unlink()
+        index.parent.rmdir()
+        assert pickle.loads(blob)[0].shape[0] == 16
+
+    def test_a_process_pool_sees_the_changed_file(self, plan_and_index):
+        """A plan sent to another process carries what the check needs."""
+        chunked, paths, index = plan_and_index
+        index.unlink()
+        _rewrite_dasdae(paths[0], self._patch(ORIGIN, 12, seed=7))
+        with ProcessPoolExecutor(max_workers=2) as pool:
+            shapes = chunked.map(_patch_shape, client=pool, progress=None)
+        assert list(shapes) == [(20, 4)]
+
+    def test_planning_stats_nothing(self, spool_and_paths, monkeypatch):
+        """A plan which is never read touches no file."""
         spool, _ = spool_and_paths
-        queries, stats = _stat_queries(monkeypatch), _stat_recorder(monkeypatch)
+        stats = _stat_recorder(monkeypatch)
         for length in (to_timedelta64(0.05), None):
             chunked = spool.chunk(time=length)
             assert len(chunked) and len(chunked.get_contents())
-            assert not queries, "planning asked the index for source stats"
             assert not stats
-            assert not chunked._catalog.resolver.source_stats.known
-        # reading a merge is what asks, and only about its own files
         assert chunked[0].shape[0] == 16
-        assert len(queries) == 1
-
-    def test_a_merge_of_the_whole_archive_reads_the_table_once(
-        self, spool_and_paths, monkeypatch
-    ):
-        """More paths than a keyed query is worth are answered by one scan."""
-        spool, _ = spool_and_paths
-        monkeypatch.setattr(planned, "_WHOLE_TABLE", 1)
-        queries = _stat_queries(monkeypatch)
-        resolver = spool.chunk(time=None)._catalog.resolver
-        rows = resolver.member_rows.to_dict("records")
-        assert resolver._sources_unchanged(rows)
-        assert queries == [None], "one scan, not a query per batch of paths"
+        assert len(stats) == 2
 
     def test_a_merge_stats_only_its_own_files(self, tmp_path, monkeypatch):
         """Each output measures the files it reads, and no others."""
@@ -3622,31 +3735,47 @@ class TestStoredDatetimeUnit:
         for one, other in zip(fast, stale, strict=True):
             assert_same_patch(one, other, per_coord=True)
 
-    def test_a_unit_which_cannot_count_the_step_is_passed_over(self):
-        """No unit answers for a key no rebuild has, and none raises."""
-        coord = dc.core.get_coord(start=ORIGIN, step=STEP, shape=(5,))
-        row = {"_time_def_key": "fp:" + "0" * 32}
-        assert assembly_module.coord_at_stored_unit(coord, row, "time", {}) is None
+    def test_a_unit_the_step_cannot_count_is_passed_over(self):
+        """A step no coarser unit can hold leaves nothing to rebuild."""
+        coord = dc.core.get_coord(
+            start=ORIGIN, step=np.timedelta64(1, "ns"), shape=(5,)
+        )
+        row = {"_time_coord_dtype": "datetime64[D]"}
+        assert assembly_module.coord_at_stored_unit(coord, row, "time") is None
 
-    def test_a_nanosecond_coordinate_needs_no_definition_key(self):
-        """No coarser unit counts these ticks, so the row's rebuild stands."""
-        start = ORIGIN + np.timedelta64(1, "ns")
-        coord = dc.core.get_coord(start=start, step=STEP, shape=(5,))
-        assert assembly_module.coord_at_stored_unit(coord, {}, "time", {}) is coord
+    @pytest.mark.parametrize("stored", ["", "datetime64", "float32", None])
+    def test_a_dtype_naming_no_unit_is_refused(self, stored):
+        """A row which does not say what the file counts in says nothing."""
+        coord = dc.core.get_coord(start=ORIGIN, step=STEP, shape=(5,))
+        row = {"_time_coord_dtype": stored}
+        assert assembly_module.coord_at_stored_unit(coord, row, "time") is None
+
+    def test_a_nanosecond_coordinate_is_taken_as_it_stands(self):
+        """The row already built it in nanoseconds; nothing is cast."""
+        coord = dc.core.get_coord(start=ORIGIN, step=STEP, shape=(5,))
+        row = {"_time_coord_dtype": "datetime64[ns]"}
+        assert assembly_module.coord_at_stored_unit(coord, row, "time") is coord
 
     def test_a_numeric_coordinate_is_taken_as_it_stands(self):
         """Only a datetime or a duration leaves its unit off a row."""
         coord = dc.core.get_coord(start=0.0, step=1.0, shape=(5,))
-        assert assembly_module.coord_at_stored_unit(coord, {}, "distance", {}) is coord
+        assert assembly_module.coord_at_stored_unit(coord, {}, "distance") is coord
 
-    def test_a_row_which_names_no_coordinate_falls_back(self, tmp_path, calls):
-        """Without a definition key nothing says what the file counts in."""
+    def test_a_row_which_names_no_dtype_falls_back(self, tmp_path, calls):
+        """Without a dtype nothing says what the file counts in."""
         spool = self._spool(tmp_path, "ms")
         chunked = spool.chunk(time=None)
         resolver = chunked._catalog.resolver
-        resolver.member_rows = resolver.member_rows.drop(columns=["_time_def_key"])
+        rows = resolver.member_rows
+        resolver.member_rows = rows.drop(columns=["_time_coord_dtype"])
         assert list(chunked)
         assert calls["patch"] > 0
+
+    def test_the_index_records_the_unit(self, tmp_path):
+        """The stored dtype names the unit, so no rebuild is searched for."""
+        spool = self._spool(tmp_path, "ms")
+        rows = spool.chunk(time=None)._catalog.resolver.member_rows
+        assert set(rows["_time_coord_dtype"]) == {"datetime64[ms]"}
 
 
 class TestTrimmedRecipeMerge:
@@ -3685,6 +3814,50 @@ class TestTrimmedRecipeMerge:
         assert len(fast) == len(slow) > 1
         for one, other in zip(fast, slow, strict=True):
             assert_same_patch(one, other)
+
+    def test_an_archive_with_no_origins_takes_the_patch_path(self, tmp_path):
+        """A column no row carries is a missing id, not an absent check."""
+        with config_context(patch_provenance="disabled"):
+            for num in range(3):
+                patch = _grid_patch(ORIGIN + STEP * 8 * num, 8, 3, seed=num)
+                patch = patch.update_attrs(origin_id="", data_id=f"array{num}")
+                patch.io.write(tmp_path / f"m{num}.h5", "dasdae")
+            spool = dc.spool(tmp_path).update()
+        chunked = spool.chunk(time=to_timedelta64(0.12), keep_partial=True)
+        assert "origin_id" not in chunked._catalog.resolver.member_rows
+        fast = list(chunked)
+        with pytest.MonkeyPatch.context() as context:
+            _force_patch_path(context)
+            slow = list(spool.chunk(time=to_timedelta64(0.12), keep_partial=True))
+        assert len(fast) == len(slow) > 1
+        for one, other in zip(fast, slow, strict=True):
+            assert_same_patch(one, other)
+
+    def test_a_float32_coordinate_trims_as_one_selection(self, tmp_path):
+        """One selection of a float32 coordinate, which the patch path
+        makes twice and so drops the sample at 1.5 here.
+        """
+        patches, position = [], 0
+        for samples in (7, 9, 5, 8):
+            coord = dc.core.get_coord(
+                start=np.float32(position * 0.1),
+                step=np.float32(0.1),
+                shape=(samples,),
+            )
+            patches.append(
+                dc.Patch(
+                    data=np.arange(position, position + samples, dtype="int16"),
+                    coords={"distance": coord},
+                    dims=("distance",),
+                )
+            )
+            position += samples
+        kwargs = {"distance": float(np.float32(0.1)) * 11, "keep_partial": True}
+        out = list(_write_spool(tmp_path, patches).chunk(**kwargs))[1]
+        memory = list(dc.spool(patches).chunk(**kwargs))[1]
+        assert np.array_equal(out.data, memory.data)
+        assert out.coords == memory.coords
+        assert out.data.tolist() == list(range(12, 22))
 
     def test_an_integer_coordinate_trims_on_its_own_grid(self, tmp_path, monkeypatch):
         """A chunk edge between integer samples keeps only what it names."""
@@ -3894,6 +4067,14 @@ class TestTrimmedRecipeMerge:
         """A window's id builds on the whole array's, which the row states."""
         assembler, row = trimmed_row
         assert assembler._meta_from_index(row) is not None
+        # a column no row carries states no id either
+        assert assembler._meta_from_index({**row, "origin_id": None}) is None
+        assert (
+            assembler._meta_from_index(
+                {k: v for k, v in row.items() if k != "origin_id"}
+            )
+            is None
+        )
         assert assembler._meta_from_index({**row, "data_id": None}) is None
 
     def test_a_row_without_its_source_range_falls_back(self, tmp_path, calls):

@@ -441,6 +441,7 @@ class LazyArray:
         axis: int = 0,
         shape: tuple[int, ...] | None = None,
         base_uri: str = "",
+        dtype=None,
     ) -> LazyArray:
         """
         Return an array which reads one member from each source.
@@ -462,12 +463,19 @@ class LazyArray:
             A prefix the sources' paths are stored relative to. A path
             which does not start with it is stored whole, and a member's
             path is always the two joined.
+        dtype
+            The dtype the members are cast to and the array loads as; by
+            default the one they all promote to together. Promotion is
+            not associative, so a caller which must match another
+            order's result states it.
         """
         sources = list(sources)
         if not sources:
             msg = "A lazy array takes at least one source."
             raise ParameterError(msg)
         block = _block_of_sources(sources, base_uri)
+        if dtype is not None:
+            block = replace(block, dtype=np.dtype(dtype))
         ndim = block.ndim
         axis = _check_axis(axis, ndim)
         lengths = block.axes["out_stop"]

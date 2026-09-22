@@ -278,7 +278,7 @@ class CoordSummary(DascoreBaseModel):
             data = dict(data)
             min_val = data["min"]
             dtype = _get_dtype(min_val, data.get("dtype"))
-            data["dtype"] = str(dtype).split("[")[0]
+            data["dtype"] = str(dtype)
             for name in ["min", "max", "step"]:
                 val = data.get(name)
                 data[name] = ensure_consistent_dtype(val, name, dtype)
@@ -303,7 +303,7 @@ class CoordSummary(DascoreBaseModel):
             for name in ("min", "max", "step"):
                 value = ensure_consistent_dtype(getattr(self, name), name, dtype)
                 object.__setattr__(self, name, value)
-            object.__setattr__(self, "dtype", str(dtype).split("[")[0])
+            object.__setattr__(self, "dtype", str(dtype))
         return self
 
     def to_coord(self) -> CoordRange:

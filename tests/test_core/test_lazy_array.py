@@ -1838,6 +1838,49 @@ class TestLoad:
             array.load()
 
 
+class TestStatedDtype:
+    """A caller which must match another promotion order states the dtype."""
+
+    def _sources(self):
+        """Two sources whose dtypes promote to something else together."""
+        return [ArraySource.full((2, 3), np.int16(1)), ArraySource.full((2, 3), 2.0)]
+
+    def test_the_default_promotes_the_members(self):
+        """Without a dtype the members promote together, as before."""
+        array = LazyArray.from_sources(self._sources(), axis=0)
+        assert array.dtype == np.result_type(np.int16, np.float64)
+
+    def test_load_gives_the_stated_dtype(self):
+        """The array loads as what it says it loads as."""
+        array = LazyArray.from_sources(self._sources(), axis=0, dtype="float32")
+        assert array.dtype == np.dtype("float32")
+        loaded = array.load()
+        assert loaded.dtype == np.dtype("float32")
+        assert np.array_equal(loaded, np.asarray(array))
+
+    def test_the_stated_dtype_is_part_of_the_id(self):
+        """Two arrays loading different dtypes are not the same array."""
+        default = LazyArray.from_sources(self._sources(), axis=0)
+        stated = LazyArray.from_sources(self._sources(), axis=0, dtype="float32")
+        assert default.data_id != stated.data_id
+
+    def test_one_whole_source_keeps_the_stated_dtype_in_its_id(self):
+        """An array which is one source whole is not that source recast."""
+        source = ArraySource.full((2, 3), np.int16(1))
+        whole = LazyArray.from_source(source)
+        recast = LazyArray.from_sources([source], dtype="float32")
+        assert whole.data_id != recast.data_id
+        assert recast.load().dtype == np.dtype("float32")
+
+    def test_a_frame_round_trip_keeps_it(self):
+        """The frame plus the array's own shape and dtype rebuild it."""
+        array = LazyArray.from_sources(self._sources(), axis=0, dtype="float32")
+        back = LazyArray.from_frame(array.to_frame(), array.shape, array.dtype)
+        assert back.dtype == array.dtype
+        assert back.data_id == array.data_id
+        assert np.array_equal(back.load(), array.load())
+
+
 class TestTable:
     """One table holds many arrays and owns all the storage."""
 
