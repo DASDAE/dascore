@@ -46,6 +46,32 @@ def filled_2d_gap():
     return filled, time
 
 
+@pytest.fixture
+def legacy_residual_source(tmp_path):
+    """Make real files whose second persisted key lacks exact metadata."""
+
+    def make(second_start):
+        for index, start in enumerate((0, second_start)):
+            patch = _patch(np.arange(start, start + 5))
+            dc.write(patch, tmp_path / f"{index}.h5", file_format="DASDAE")
+        source = dc.spool(tmp_path).update(progress=None)
+        records = source._catalog.backend.export_records()
+        assert all(record.patches[0].source_patch_key for record in records)
+        legacy = replace(
+            records[1],
+            patches=tuple(
+                replace(patch, source_patch_key="") for patch in records[1].patches
+            ),
+        )
+        source._catalog.backend.write_sources([records[0], legacy])
+        source._catalog._invalidate()
+        # Replaying this shared-dimension residual requires source metadata:
+        # the native-key first file has it, the blank-key second file does not.
+        return source.select(distance=(0, second_start + 4))
+
+    return make
+
+
 def _assert_window_matches_plan(source, bounds, expected):
     """Assert that a planned window, its catalog, and its data agree."""
     windows = np.array([bounds])
@@ -669,6 +695,69 @@ class TestExplicitMetadataSources:
         assert np.all(patch.data == -1)
         assert patch.coords["distance"].values.tolist() == [5.0, 6.0]
         assert np.array_equal(patch.coords["reference_time"].values, time)
+
+    @pytest.mark.parametrize("policy", ["raise", "warn", "ignore"])
+    def test_distant_unavailable_partition_does_not_veto_window(
+        self, legacy_residual_source, policy
+    ):
+        """A disconnected legacy file cannot veto a known source's samples."""
+        source = legacy_residual_source(100)
+        window = np.array([[0, 3]])
+        plan = source.chunk_plan(distance=window, on_incomplete=policy)
+        chunked = source.chunk(distance=window, on_incomplete=policy)
+        assert len(plan.outputs) == len(chunked) == 1
+        assert plan.outputs.iloc[0]["distance_min"] == 0
+        assert plan.outputs.iloc[0]["distance_max"] == 3
+        assert chunked[0].coords["distance"].values.tolist() == [0, 1, 2, 3]
+        assert chunked.get_contents().iloc[0]["distance_max"] == 3
+        # The gap between these disconnected partitions supplies no sample.
+        assert not len(
+            source.chunk(distance=np.array([[5, 99]]), on_incomplete="ignore")
+        )
+
+    @pytest.mark.parametrize("method", ["chunk", "chunk_plan"])
+    def test_unavailable_partition_still_follows_policy(
+        self, legacy_residual_source, method
+    ):
+        """A request intersecting the blank-key partition stays incomplete."""
+        source = legacy_residual_source(100)
+        call = getattr(source, method)
+        window = np.array([[100, 103]])
+        with pytest.raises(
+            ChunkError, match="exact source coordinates are unavailable"
+        ):
+            call(distance=window)
+        with pytest.warns(
+            UserWarning, match="exact source coordinates are unavailable"
+        ):
+            warned = call(distance=window, on_incomplete="warn")
+        ignored = call(distance=window, on_incomplete="ignore")
+        for result in (warned, ignored):
+            assert len(result.outputs if method == "chunk_plan" else result) == 0
+
+    def test_fill_only_gap_checks_both_supporting_sources(self, legacy_residual_source):
+        """A bridged gap checks its unavailable supporting source."""
+        source = legacy_residual_source(7)
+        window = np.array([[5, 6]])
+        with pytest.raises(
+            ChunkError, match="exact source coordinates are unavailable"
+        ):
+            source.chunk_plan(distance=window, tolerance=4, fill_value=-1)
+        with pytest.warns(
+            UserWarning, match="exact source coordinates are unavailable"
+        ):
+            warned = source.chunk(
+                distance=window, tolerance=4, fill_value=-1, on_incomplete="warn"
+            )
+        assert len(warned) == 0
+        assert not len(
+            source.chunk(
+                distance=window,
+                tolerance=4,
+                fill_value=-1,
+                on_incomplete="ignore",
+            )
+        )
 
     def test_nested_plan_fill_only_anchor(self):
         """A derived source still supplies structure to an all-fill window."""

@@ -2727,19 +2727,35 @@ def _finish_explicit_plan(
         outputs.loc[update, column] = actual.loc[update, column]
     if fill_value is None:
         outputs = outputs[outputs["output_id"].isin(members["output_id"])].copy()
+    # A request needs every row in the continuity partitions it touches,
+    # including fill anchors and overlap-owned rows, but disconnected
+    # partitions of the same compatibility cell cannot affect its samples.
+    partitions: dict[Any, list[dict[str, Any]]] = {}
+    part_ends = np.r_[seg_starts[1:], len(sources)]
+    for begin, end in zip(seg_starts, part_ends):
+        sub = sources.iloc[begin:end]
+        label = sub["_explicit_cell"].iloc[0]
+        ids = sub["_patch_row"]
+        coords = [exact_coords[row_id] for row_id in ids if row_id in exact_coords]
+        partitions.setdefault(label, []).append(
+            dict(
+                start=sub[min_name].min(),
+                stop=sub[max_name].max(),
+                count=len(sub),
+                coords=coords,
+            )
+        )
     raw_groups = [
         (label, sub[min_name].min(), sub[max_name].max(), sub)
         for label, sub in sources.groupby("_explicit_cell", sort=False)
     ]
     raw_groups.sort(key=lambda item: (item[1], str(item[0])))
-    groups = []
+    groups: list[dict[str, Any]] = []
     for label, start, stop, sub in raw_groups:
         if is_datetime64(start):
             start, stop = np.datetime64(start), np.datetime64(stop)
         elif is_timedelta64(start):
             start, stop = np.timedelta64(start), np.timedelta64(stop)
-        ids = sub["_patch_row"]
-        coords = [exact_coords[row_id] for row_id in ids if row_id in exact_coords]
         groups.append(
             dict(
                 label=label,
@@ -2747,10 +2763,7 @@ def _finish_explicit_plan(
                 stop=stop,
                 unit=_partition_unit(sub, name, 0),
                 step=get_middle_value(sub[step_name].to_numpy()),
-                missing_required=any(coord is None for coord in coords),
-                all_known=len(coords) == len(sub)
-                and all(x is not None for x in coords),
-                coords=[coord for coord in coords if coord is not None],
+                partitions=partitions[label],
             )
         )
     rank = {item["label"]: pos for pos, item in enumerate(groups)}
@@ -2766,13 +2779,20 @@ def _finish_explicit_plan(
             if high < start or low > stop:
                 continue
             applicable = True
-            if group["missing_required"]:
+            relevant = [
+                part
+                for part in group["partitions"]
+                if part["start"] <= high and part["stop"] >= low
+            ]
+            coords = [coord for part in relevant for coord in part["coords"]]
+            if any(coord is None for coord in coords):
                 failures.append(
                     (request, bounds, label, "exact source coordinates are unavailable")
                 )
                 continue
+            all_known = len(coords) == sum(part["count"] for part in relevant)
             no_grid = pd.isnull(step) or step == 0
-            if no_grid and not group["all_known"]:
+            if no_grid and not all_known:
                 failures.append(
                     (request, bounds, label, "exact source coordinates are unavailable")
                 )
@@ -2782,7 +2802,7 @@ def _finish_explicit_plan(
                 (outputs["_request_row"] == request)
                 & (outputs["_compat_group"] == label)
             ]
-            envelope = _exact_envelope(group["coords"], (low, high), unit or None)
+            envelope = _exact_envelope(coords, (low, high), unit or None)
             if no_grid:
                 if envelope is None:
                     failures.append(
@@ -2790,7 +2810,7 @@ def _finish_explicit_plan(
                     )
                     continue
                 low, high = envelope
-            elif group["all_known"] and envelope is not None and fill_value is None:
+            elif all_known and envelope is not None and fill_value is None:
                 # Exact member labels obey the existing snap/assembly rules.
                 # Another partition in the group may have a shifted origin,
                 # and a joined source may have sub-sample jitter.
