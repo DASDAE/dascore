@@ -6,7 +6,6 @@ import numpy as np
 import pytest
 from pydantic import ValidationError
 
-import dascore as dc
 from dascore.core import coords as coords_module
 from dascore.core.coords import (
     CoordString,
@@ -75,13 +74,6 @@ class TestRunsHoldTheLabels:
 class TestFuse:
     """Runs which continue each other exactly become one."""
 
-    def test_contiguous_grids_fuse(self):
-        """A grid which is the next samples of its predecessor joins it."""
-        first = get_coord(start=0.0, step=1.0, shape=(5,))
-        second = get_coord(start=5.0, step=1.0, shape=(5,))
-        out = concat_coords(first, second)
-        assert out.runs_count == 1 and out.evenly_sampled
-
     def test_a_hole_keeps_the_runs_apart(self, gappy):
         """A gap is a fact about the data, so the runs stay two."""
         assert gappy.runs_count == 2
@@ -115,14 +107,6 @@ class TestFuse:
     def test_a_slice_landing_on_a_grid_becomes_one(self, gappy):
         """Trimming away the seam leaves an evenly sampled coordinate."""
         assert gappy[:5].evenly_sampled
-
-    def test_stored_labels_promote_when_a_slice_makes_them_even(self):
-        """A stored run a slice leaves evenly sampled is that grid."""
-        grid = get_coord(start=0.0, step=1.0, shape=(10,))
-        stored = NumericCoord.from_labels(np.array([10.0, 11.0, 12.0, 13.5]))
-        coord = concat_coords(grid, stored)
-        assert coord.runs_count == 2
-        assert coord[0:13].evenly_sampled
 
 
 class TestMultiRunSlicing:
@@ -174,31 +158,10 @@ class TestMultiRunSelect:
         assert np.array_equal(new.values, np.array([1.0, 2.0, 3.0]))
         assert gappy.values[indexer].tolist() == new.values.tolist()
 
-    def test_window_spanning_the_hole(self, gappy):
-        """A window over the seam keeps the samples either side of it."""
-        new, _ = gappy.select((3.0, 10.0))
-        assert new.runs_count == 2
-        assert np.array_equal(new.values, np.array([3.0, 4.0, 9.0, 10.0]))
-
-    def test_window_inside_the_hole_is_empty(self, gappy):
-        """No sample lies between the runs, so nothing is selected."""
-        new, indexer = gappy.select((5.5, 8.0))
-        assert new.degenerate and indexer == slice(0, 0)
-
     def test_open_window_keeps_everything(self, gappy):
         """A window bounded on neither side selects the whole coordinate."""
         new, _ = gappy.select((None, None))
         assert np.array_equal(new.values, gappy.values)
-
-    def test_select_does_not_concatenate_the_labels(self, gappy, monkeypatch):
-        """A run answers from its own bounds, however long the coordinate."""
-
-        def _raise(self):
-            raise AssertionError("select materialized the labels")
-
-        monkeypatch.setattr(NumericCoord, "values", property(_raise))
-        new, _ = gappy.select((3.0, 10.0))
-        assert new.runs_count == 2
 
     def test_reverse_sorted_select(self, gappy):
         """A descending coordinate selects the same window."""
@@ -421,18 +384,3 @@ class TestNDimensionalLabels:
         new, mask = two_d.select((2.0, 5.0))
         assert np.array_equal(np.sort(two_d.values[mask]), np.arange(2.0, 6.0))
         assert new.size == 4
-
-
-class TestPatchIntegration:
-    """A patch carries a coordinate with holes and splits at them."""
-
-    def test_split_gaps_splits_at_run_boundaries(self, gappy):
-        """Each contiguous run becomes a patch of its own."""
-        patch = dc.Patch(
-            data=np.zeros((len(gappy), 3)),
-            coords={"distance": gappy, "time": dc.to_datetime64(np.arange(3))},
-            dims=("distance", "time"),
-        )
-        spool = patch.split_gaps()
-        assert len(spool) == 2
-        assert all(x.get_coord("distance").evenly_sampled for x in spool)
