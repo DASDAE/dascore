@@ -1108,10 +1108,6 @@ class TestRoundTrips:
         # All of the patches should be equal.
         assert patch == patch2 == patch3
 
-    # Frustratingly, it doesn't seem pytables can store NaN values using
-    # create_array, even when specifying an Atom with dflt=np.nan. See
-    # https://github.com/PyTables/PyTables/issues/423
-    @pytest.mark.xfail(reason="Pytables issue 423")
     def test_roundtrip_len_1_non_coord(self, random_spool, tmp_path_factory):
         """Ensure we can round-trip Non-coords."""
         path = tmp_path_factory.mktemp("roundtrip_non_coord") / "out.h5"
