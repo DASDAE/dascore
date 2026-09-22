@@ -2088,7 +2088,10 @@ def _union_sources(stores) -> dict:
         for key, values in store.items():
             held = out.setdefault(key, values)
             alike = held.shape == values.shape and held.dtype == values.dtype
-            if held is not values and not (alike and np.array_equal(held, values)):
+            # An id names an array bit for bit, so its NaNs match too.
+            equal_nan = alike and held.dtype.kind in "fc"
+            same = alike and np.array_equal(held, values, equal_nan=equal_nan)
+            if held is not values and not same:
                 msg = f"Two different arrays of labels are named {key!r}."
                 raise CoordError(msg)
     return out
@@ -2129,8 +2132,8 @@ def _check_grid(grid: Grid, dtype) -> None:
     num, den, count = grid.step_num, grid.step_den, grid.count
     offset = grid.phase + grid.k0 * num
     first = grid.origin + offset // den
-    stop = grid.origin + (offset + count * num) // den
-    wraps = min(first, stop) < info.min or max(first, stop) > info.max
+    last = grid.origin + (offset + max(count - 1, 0) * num) // den
+    wraps = min(first, last) < info.min or max(first, last) > info.max
     if abs(count * num) + den >= 2**63 or wraps:
         msg = (
             f"A grid of {count} samples with step {num}/{den} ticks from "
@@ -2287,7 +2290,14 @@ def _grid_holds(grid: Grid, values, dtype) -> bool:
     one, so a grid stands in for stored labels only where it holds all of
     them.
     """
-    labels = grid.labels(np.arange(len(values)), dtype)
+    try:
+        labels = grid.labels(np.arange(len(values)), dtype)
+        if grid.exact:
+            _check_grid(grid, dtype)
+    except (CoordError, OverflowError):
+        # Labels at the edge of their dtype can name a grid which cannot be
+        # built, or whose arithmetic cannot reach them.
+        return False
     return len(grid) == len(values) and bool(np.array_equal(labels, values))
 
 
@@ -2390,6 +2400,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     def __deepcopy__(self, memo=None) -> Self:
         """Copy the coordinate, keeping its sources sealed."""
         out = super().__deepcopy__(memo)
+        # A copied cache holds writable arrays detached from these sources.
+        (out.__pydantic_private__ or {}).pop("_cache", None)
         _seal_sources(out.sources)
         return out
 
@@ -2702,11 +2714,6 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         run = _promoted(self._run_labels(window), self.dtype)
         if run is None:
             return window
-        if run.exact:
-            try:  # labels at the dtype's ceiling name a grid ending past it
-                _check_grid(run, self.dtype)
-            except CoordError:
-                return window
         if not _is_null(step := self.step):
             # a grid on another spacing would restate the step and swallow
             # the positions the declared one says are missing
@@ -2975,8 +2982,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         grid = self._grid
         if not extend or grid is None or not grid.exact:
             return super().coord_range(extend=extend)
-        first, end = grid.labels([0, len(self)], self.dtype)
-        return np.abs(end - first)
+        first, end = grid.labels([0, len(self)], np.int64)
+        span = np.abs(end - first)
+        return np.timedelta64(span, "ns") if dtype_time_like(self.dtype) else span
 
     def snap(self) -> BaseCoord:
         """
@@ -3569,10 +3577,12 @@ def _check_concat(coords) -> None:
             raise CoordError(msg)
     # Width promotion within one dtype kind is lossless (i4+i8, f4+f8,
     # M8[s]+M8[ns]); mixing kinds (e.g. int64 + float64) can silently alter
-    # values (ints above 2**53), so it is rejected outright.
+    # values (ints above 2**53), so it is rejected outright. A grid counts
+    # in nanosecond ticks, so a finer time unit beside one is refused too.
     kinds = {np.dtype(x.dtype).kind for x in coords}
-    if len(kinds) > 1:
-        dtypes = {np.dtype(x.dtype) for x in coords}
+    dtypes = {np.dtype(x.dtype) for x in coords}
+    nano = {x for x in dtypes if x.str.endswith("[ns]")}
+    if len(kinds) > 1 or (nano and nano != {np.result_type(*dtypes)}):
         msg = f"Concatenated coordinates must share compatible dtypes, got {dtypes}."
         raise CoordError(msg)
     if len({get_quantity(x.units) for x in coords}) > 1:

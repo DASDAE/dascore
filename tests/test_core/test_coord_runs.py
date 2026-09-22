@@ -836,3 +836,61 @@ class TestReviewRoundFive:
         runs = (np.arange(6).reshape(2, 3), np.arange(6).reshape(2, 3) + 6)
         with pytest.raises(ValidationError, match="exactly one run"):
             NumericCoord(runs=runs)
+
+
+class TestReviewRoundSix:
+    """Findings from the sixth adversarial pass over the run model."""
+
+    def test_identical_sources_holding_nan_still_join(self):
+        """An unused NaN in a shared source must not look like a collision."""
+        values = np.array([0.0, 1.5, 4.0, 7.0, 9.5, 20.0, np.nan])
+        coord = NumericCoord.from_labels(values)
+        out = concat_coords(coord[:3], copy.deepcopy(coord)[3:6])
+        np.testing.assert_array_equal(out.values, values[:6])
+
+    def test_a_copied_cache_stays_sealed(self):
+        """A copy of a materialized coordinate hands back sealed labels."""
+        coord = concat_coords(
+            NumericCoord.from_labels(np.array([0.0, 1.5, 4.0])),
+            NumericCoord.from_labels(np.array([7.0, 9.5, 20.0])),
+        )
+        assert not coord.values.flags.writeable
+        assert not copy.deepcopy(coord).values.flags.writeable
+
+    def test_a_reversed_unsigned_grid(self):
+        """Reversing a grid whose end is zero does not run past the dtype."""
+        out = get_coord(data=np.arange(5, dtype="uint8"), snap=False)[::-1]
+        np.testing.assert_array_equal(out.values, [4, 3, 2, 1, 0])
+        assert out.coord_range() == 5
+
+    def test_a_strided_slice_at_the_dtype_top(self):
+        """A stride whose next sample would wrap keeps the samples it has."""
+        values = np.array([250, 251, 252, 253, 254], dtype="uint8")
+        out = get_coord(data=values, snap=False)[::3]
+        np.testing.assert_array_equal(out.values, [250, 253])
+
+    def test_labels_at_the_dtype_top_are_kept(self):
+        """Labels ending on the top of their dtype are a coordinate."""
+        values = np.array([252, 253, 254, 255], dtype="uint8")
+        out = get_coord(data=values, snap=False)
+        np.testing.assert_array_equal(out.values, values)
+
+    def test_labels_past_int64_stay_stored(self):
+        """Unsigned labels above the signed range are never grid arithmetic."""
+        values = np.array([2**63 + 4, 2**63 + 5, 2**63 + 6], dtype="uint64")
+        out = NumericCoord.from_labels(values)[1:]
+        np.testing.assert_array_equal(out.values, values[1:])
+
+    @pytest.mark.parametrize("flip", [False, True])
+    def test_mixed_time_units_are_refused(self, flip):
+        """Promoting ns ticks to another time unit would restate them."""
+        step = np.timedelta64(10, "ns")
+        nano = get_coord(start=np.datetime64(1000, "ns"), step=step, shape=(3,))
+        pico = get_coord(
+            start=np.datetime64(2000000, "ps"),
+            step=np.timedelta64(10000, "ps"),
+            shape=(3,),
+        )
+        pair = (pico, nano) if flip else (nano, pico)
+        with pytest.raises(CoordError, match="compatible dtypes"):
+            concat_coords(*pair)
