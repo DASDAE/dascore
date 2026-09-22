@@ -1524,7 +1524,7 @@ def check_coords(
         cdims = cm1.dim_map[coord]
         if cdims != cm2.dim_map[coord]:
             not_equal_coords.append(coord)
-        elif coord1 == coord2:
+        elif coord1.approx_equal(coord2):
             # Straightforward case, coords are identical.
             continue
         elif coord == dim_to_ignore or (riders_vary and dim_to_ignore in cdims):

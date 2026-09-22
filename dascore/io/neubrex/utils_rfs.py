@@ -29,7 +29,7 @@ def _get_coord_manager(h5fi, snap=True):
         unix_stamps = dc.to_datetime64(h5fi["stamps_unix"][:] / 1_000_000)
         stamps = np.atleast_1d(unix_stamps)
         if should_snap(snap, "time"):
-            return get_coord(data=stamps)
+            return get_coord(data=stamps).snap()
         return NumericND.from_array(stamps)
 
     def _get_dist_coord(h5fi):

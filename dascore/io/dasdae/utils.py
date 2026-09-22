@@ -435,7 +435,7 @@ def _read_coord(node, name, attrs2, snap):
         segments = [_read_segment(node[str(i)]) for i in range(len(node))]
         coord = concat_tables(*segments)
         return coord if units is None else coord.set_units(units)
-    if object_type in ("CoordRange", "NumericND") and "start" in node_attrs:
+    if object_type == "CoordRange" and "start" in node_attrs:
         return _read_range(node, units)
     # any other class, a range too wide to describe, and every version 1
     # node hold their values

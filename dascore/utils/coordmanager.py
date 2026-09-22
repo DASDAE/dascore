@@ -71,7 +71,7 @@ def merge_coord_managers(
         out = {}
         for coord_name in non_merger_names:
             first = managers[0].coord_map[coord_name]
-            if all([first == x.coord_map[coord_name] for x in managers]):
+            if all(first.approx_equal(x.coord_map[coord_name]) for x in managers):
                 dims = managers[0].dim_map[coord_name]
                 out[coord_name] = (dims, first)
                 continue
