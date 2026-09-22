@@ -352,9 +352,10 @@ class TickKernel:
         """
         The sample index of one grid row a tick maps to, in python integers.
 
-        Forward: the first index whose label is at or past the tick; else
-        the last index whose label is at or before it. The index may lie
-        outside the run, which is how a caller reads an open bound.
+        Forward: the first index whose label has reached the tick; else the
+        last index whose label has not passed it, each in the run's own
+        direction of travel. The index may lie outside the run, which is how
+        a caller reads an open bound.
         """
         start, length, num, den, offset = row[:5]
         if not num:  # every label of a flat run is its start
@@ -362,9 +363,12 @@ class TickKernel:
                 return 0 if anchor <= start else length
             return length - 1 if anchor >= start else -1
         rel = (anchor - start) * den - offset
-        # label(k) >= tick  <=>  (offset + k num) / den >= tick - start
-        # label(k) <= tick  <=>  (offset + k num) / den <  tick - start + 1
-        return -((-rel) // num) if forward else -((-(rel + den)) // num) - 1
+        # A rising run reaches the tick where offset + k num >= rel, and has
+        # not passed it while offset + k num < rel + den; a falling run wants
+        # each the other way round, which turns every bound over with it.
+        if num > 0:
+            return -((-rel) // num) if forward else -((-(rel + den)) // num) - 1
+        return ((rel + den) // num) + 1 if forward else rel // num
 
     @staticmethod
     def step_of(row: tuple) -> int:

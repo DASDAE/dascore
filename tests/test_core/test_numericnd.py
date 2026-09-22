@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 import dascore as dc
 from dascore.core._run_kernels import (
+    TickKernel,
     _record_dtype,
     _rows,
     float_rows,
@@ -1757,28 +1758,33 @@ class TestTableIntegrity:
         assert other == coord and other.data_id == coord.data_id
 
     def test_one_label_is_one_coordinate(self):
-        """A run of one sample shows no step, so none is part of what it is."""
+        """A run of one sample shows no spacing or phase of its own.
+
+        Where it was cut from, and how its grid was spelled, are no part of
+        what it is. The grid itself still is: `step` answers for it, and a
+        lone label on a finer grid is another coordinate.
+        """
         parent = grid_1024(10)
+        label = parent.values[3]
         floats = get_coord(data=np.arange(10) * 0.1)
         families = (
             [
-                NumericND.from_run(T0, MS, 1),
-                NumericND.from_run(T0, 2 * MS, 1),
-                NumericND.from_array(np.asarray([T0])),
-                parent[0:1],
-                parent[0:3:3],
+                parent[3:4],
+                NumericND.from_run(label, Fraction(1, 1024), 1),
+                NumericND.from_array(np.asarray([label]), step=parent.step),
             ],
             [
                 NumericND.from_run(0.5, 0.1, 1),
-                NumericND.from_run(0.5, 2.0, 1),
-                NumericND.from_array(np.asarray([0.5])),
                 floats[5:6],
-                floats[5:9:7],
             ],
         )
         for spellings in families:
             assert len({x.data_id for x in spellings}) == 1
+            assert len({x.step for x in spellings}) == 1
             assert all(x == spellings[0] for x in spellings)
+        # the same label on another grid, or on none at all
+        assert parent[3:4].data_id != NumericND.from_run(label, MS, 1).data_id
+        assert parent[3:4].data_id != NumericND.from_array(np.asarray([label])).data_id
 
     @pytest.mark.parametrize("start", [np.datetime64("NaT"), np.nan])
     def test_a_run_needs_a_first_label(self, start):
@@ -2226,3 +2232,83 @@ class TestThirdReviewFindings:
         label = coord.values[1]
         assert coord.get_next_index(label) == 1
         np.testing.assert_array_equal(coord.select((label, label))[0].values, [label])
+
+
+def object_coord(values):
+    """A coordinate over labels numpy has no arithmetic for."""
+    out = np.empty(len(values), dtype=object)
+    for index, value in enumerate(values):
+        out[index] = value
+    return get_coord(data=out)
+
+
+class TestFourthReviewFindings:
+    """What the fourth review found, each pinned by what it broke."""
+
+    def test_a_hole_is_spelled_on_the_run_s_own_grid(self):
+        """A fractional step places a hole's labels; the whole ticks round it."""
+        grid = NumericND.from_run(0, (3, 2), 40, dtype="int64")
+        coord = concat_coords(grid[:5], grid[15:])
+        missing = coord.missing()
+        np.testing.assert_array_equal(missing.positions(), grid[5:15].values)
+        assert list(missing.iter_runs()) == [(grid.values[5], grid.values[14])]
+        assert missing.count == 10
+        assert f"[{grid.values[5]} … {grid.values[14]}]" in str(missing)
+
+    def test_a_long_hole_on_a_fine_grid_ends_where_it_should(self):
+        """At 1024 Hz the rounded step drifts a microsecond over one outage."""
+        grid = grid_1024(4096 * 3)
+        coord = concat_coords(grid[:4096], grid[8192:])
+        missing = coord.missing()
+        assert list(missing.iter_runs()) == [(grid.values[4096], grid.values[8191])]
+
+    def test_a_lone_label_keeps_the_step_it_declares(self):
+        """One label shows no spacing, so its declared grid is part of its id."""
+        fine = get_coord(data=np.array([1.0]), step=0.5)
+        coarse = get_coord(data=np.array([1.0]), step=2.0)
+        assert fine.step == 0.5 and coarse.step == 2.0
+        assert fine.data_id != coarse.data_id
+        one = get_coord(data=np.array([T0]), step=MS)
+        two = get_coord(data=np.array([T0]), step=2 * MS)
+        assert one.data_id != two.data_id
+
+    def test_one_label_with_no_arithmetic_is_named_by_its_source(self):
+        """An object label lives only in its source, which its id must name."""
+        first, second = object_coord([(1,)]), object_coord([(2,)])
+        assert first.data_id != second.data_id
+        assert first != second
+        assert first == object_coord([(1,)])
+
+    def test_object_labels_survive_an_end_probe(self):
+        """Comparing two object coordinates reads their labels, not a float."""
+        values = [(1,), (2,), (3,)]
+        assert object_coord(values) != object_coord([(1,), (2,), (4,)])
+        assert object_coord(values) == object_coord(values)
+
+    def test_object_labels_concatenate(self):
+        """Two runs of labels with no arithmetic still hand back their own."""
+        first, second = object_coord([(1,), (2,)]), object_coord([(3,), (4,)])
+        coord = concat_tables(first, second)
+        assert coord.runs_count == 2
+        assert list(coord.values) == [(1,), (2,), (3,), (4,)]
+        assert list(coord._labels([0, 3])) == [(1,), (4,)]
+
+    def test_index_of_reads_a_falling_grid(self):
+        """A run heading down maps a tick the same way one heading up does."""
+        assert TickKernel.index_of((-33, 2, -7, 1, 0), -83, False) == 7
+        rng = np.random.default_rng(0)
+        window = range(-40, 40)
+        for _ in range(300):
+            num = int(rng.integers(-9, 9))
+            num = num if num else 1
+            den = int(rng.integers(1, 6))
+            start, offset = int(rng.integers(-50, 50)), int(rng.integers(0, den))
+            row = (start, 12, num, den, offset)
+            labels = {k: start + (offset + k * num) // den for k in window}
+            reached = (lambda a, b: a >= b) if num > 0 else (lambda a, b: a <= b)
+            for anchor in range(min(labels.values()) + 1, max(labels.values())):
+                ahead = [k for k in window if reached(labels[k], anchor)]
+                behind = [k for k in window if not reached(labels[k], anchor)]
+                behind += [k for k in window if labels[k] == anchor]
+                assert TickKernel.index_of(row, anchor, True) == min(ahead)
+                assert TickKernel.index_of(row, anchor, False) == max(behind)

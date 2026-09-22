@@ -23,7 +23,7 @@ import math
 import re
 from collections.abc import Mapping, Sequence, Sized
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from fractions import Fraction
 from functools import cache
 from types import EllipsisType, MappingProxyType
@@ -483,6 +483,11 @@ class Missing:
     # each hole as (first missing label, last missing label, how many)
     runs: tuple[tuple[Any, Any, int], ...]
     dtype: Any = None
+    # For each hole, the run its positions carry on from and the sample
+    # index they start at, or None where the step is the only grid they
+    # have. A whole-tick step only rounds a fractional one, so a hole on a
+    # run's own grid is spelled by that run rather than by the step.
+    _grids: tuple[tuple[Any, int] | None, ...] = field(default=(), repr=False)
 
     @property
     def count(self) -> int:
@@ -514,9 +519,15 @@ class Missing:
             raise ParameterError(msg)
         if not self.runs:
             return np.array([], dtype=self.dtype)
-        return np.concatenate(
-            [first + np.arange(n) * self.step for first, _, n in self.runs]
-        )
+        grids = self._grids or (None,) * len(self.runs)
+        parts = []
+        for (first, _, n), grid in zip(self.runs, grids):
+            if grid is None:
+                parts.append(first + np.arange(n) * self.step)
+                continue
+            run, k0 = grid
+            parts.append(run._labels(np.arange(k0, k0 + n)))
+        return np.concatenate(parts)
 
     def __str__(self):
         holes = " | ".join(
@@ -529,7 +540,7 @@ class Missing:
 def _hole(before, step, count: int) -> tuple:
     """A hole of ``count`` positions after ``before``, both ends from one anchor."""
     first = before + step
-    return (first, first + (count - 1) * step, count)
+    return (first, first + (count - 1) * step, count, None)
 
 
 def _discontinuity_frame(rows, kind: str, tolerance) -> pd.DataFrame:
@@ -1211,10 +1222,16 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         if _is_null(self.step):
             msg = "missing needs a declared step; this coordinate has none."
             raise CoordError(msg)
-        return Missing(step=self.step, runs=tuple(self._holes()), dtype=self.dtype)
+        holes = self._holes()
+        return Missing(
+            step=self.step,
+            runs=tuple(hole[:3] for hole in holes),
+            dtype=self.dtype,
+            _grids=tuple(hole[3] for hole in holes),
+        )
 
     def _holes(self) -> list[tuple]:
-        """Each hole as ``(first missing label, last missing label, count)``."""
+        """Each hole as ``(first label, last label, count, grid)``; see `Missing`."""
         return []
 
     @abc.abstractmethod
@@ -2198,6 +2215,11 @@ def _counts(lengths) -> np.ndarray:
     return np.asarray(lengths).astype(np.intp, copy=False)
 
 
+def _counted(dtype) -> bool:
+    """Whether labels are numbers a kernel counts in, whole ticks or floats."""
+    return np.dtype(dtype).kind in "iufMm"
+
+
 def _continues(rows: np.ndarray, dtype) -> np.ndarray:
     """Whether each run begins where the run before would put its next sample."""
     before, after = rows[:-1], rows[1:]
@@ -3024,7 +3046,7 @@ class NumericND(BaseCoord):
             rows = _rows(dtype, 0, [0], 0, 1, 0)
             nd = None if values.ndim == 1 else values.shape
             return cls._build(dtype, rows, None, units, shape=nd)
-        if np.dtype(dtype).kind not in "iufMm":
+        if not _counted(dtype):
             # Labels the table has no arithmetic for are simply held; an
             # object which cannot be subtracted states no grid at all.
             rows = _rows(dtype, [0.0], [values.size], 0, 0, 0)
@@ -3421,7 +3443,12 @@ class NumericND(BaseCoord):
                 if np.any(reach >= _INT64_MAX):
                     msg = "A label that far outside the coordinate leaves int64."
                     raise CoordError(msg)
-        out = self._kernel.labels(rows, run, k)
+        if not _counted(self.dtype):
+            # Labels the kernels have no arithmetic for are every row's
+            # own; the float64 the kernel counts in cannot hold them.
+            out = np.empty(k.shape, dtype=self.dtype)
+        else:
+            out = self._kernel.labels(rows, run, k)
         if self._stored_labels:
             stored = rows["den"][run] == 0
             if np.any(stored):
@@ -3453,7 +3480,10 @@ class NumericND(BaseCoord):
             self._sample_starts[:-1], counts
         )
         run = np.repeat(np.arange(len(rows)), counts)
-        out = kernel.labels(rows, run, k, reach=int(lengths.max()))
+        if _counted(self.dtype):
+            out = kernel.labels(rows, run, k, reach=int(lengths.max()))
+        else:
+            out = np.empty(total, dtype=self.dtype)
         if self._stored_labels:
             out[np.repeat(rows["den"] == 0, counts)] = self._flat_labels
         return array(self._from_anchor(out))
@@ -3845,7 +3875,11 @@ class NumericND(BaseCoord):
             table["num"][single] = 0
             table["den"][single] = 1
             table["offset"][single] = 0
-            table[SOURCE_ID][single] = b""
+            if _counted(self.dtype):
+                # The head is the label, so where it was read from is no
+                # part of the run. Labels with no arithmetic have no head,
+                # and their source id is all that names them.
+                table[SOURCE_ID][single] = b""
         components: tuple[Any, ...] = (
             str(np.dtype(self.dtype)),
             self.shape,
@@ -3866,8 +3900,10 @@ class NumericND(BaseCoord):
         components += (hash_array(np.ascontiguousarray(table)),)
         # A grid the labels are declared to sit on, which they do not state
         # themselves, is part of what the coordinate is; how it was spelled
-        # is not, so it is hashed as the coordinate's own scalar.
-        if _scalar_step(self.runs, self.dtype) is None and not _is_null(self.step):
+        # is not, so it is hashed as the coordinate's own scalar. A run of
+        # one sample has had its spacing zeroed above, so it states none.
+        declares = np.any(single) or _scalar_step(self.runs, self.dtype) is None
+        if declares and not _is_null(self.step):
             components += (("step", self._hash_scalar(self.step, "step")),)
         return components
 
@@ -4269,7 +4305,7 @@ class NumericND(BaseCoord):
         return int(_on_grid(np.asarray([after - before]), self.step)[0])
 
     def _holes(self) -> list[tuple]:
-        """Each hole as ``(first missing label, last missing label, count)``."""
+        """Each hole as ``(first label, last label, count, grid)``; see `Missing`."""
         step = self.step
         assert not _is_null(step), "missing() asks only a coordinate with a step"
         rows = []
@@ -4277,12 +4313,13 @@ class NumericND(BaseCoord):
         # than rebuilt on every trip round the runs.
         ends = self._from_anchor(self._run_ends)
         starts = self._from_anchor(self._run_heads.copy())
-        for index, run in enumerate(self.segments):
+        segments = self.segments
+        for index, run in enumerate(segments):
             if index:
                 before, after = ends[index - 1], starts[index]
                 count = self._steps_between(index - 1, before, after) - 1
                 if count:
-                    rows.append(_hole(before, step, count))
+                    rows.append(self._gap_hole(segments[index - 1], before, count))
             if run.runs["den"][0] == 0 and len(run) > 1:
                 values = run.values
                 counts = _on_grid(_diffs(values), step)
@@ -4291,6 +4328,18 @@ class NumericND(BaseCoord):
                     for i in np.flatnonzero(counts > 1)
                 )
         return rows
+
+    def _gap_hole(self, prior: NumericND, before, count: int) -> tuple:
+        """The hole of ``count`` positions which follows the run ``prior``."""
+        if not prior.runs["den"][0]:
+            # Stored labels carry on no grid of their own, so the declared
+            # step is the only spacing the hole can be spelled with.
+            return _hole(before, self.step, count)
+        # The run's own terms place every position exactly, which the whole
+        # ticks of the step round.
+        k0 = len(prior)
+        first, last = prior._labels([k0, k0 + count - 1])
+        return (first, last, count, (prior, k0))
 
     @compose_docstring(doc=get_docstring(BaseCoord.snap))
     def snap(self) -> BaseCoord:
