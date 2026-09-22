@@ -11,7 +11,6 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.core.coords import CoordRange
 from dascore.io.index.catalog import CompositeResolver, PatchCatalog, _absolutize_record
 from dascore.io.index.ingest import SourceRecord
 
@@ -93,7 +92,7 @@ class TestMemoryUnion:
         assert len(merged) == 1
         patch = merged[0]
         time = patch.get_coord("time")
-        assert isinstance(time, CoordRange)
+        assert time.evenly_sampled
         assert time.min() == p1.get_coord("time").min()
         assert time.max() == p2.get_coord("time").max()
 

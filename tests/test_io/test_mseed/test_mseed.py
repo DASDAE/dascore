@@ -424,7 +424,7 @@ class TestMiniSeedRead:
         path = _write_mseed(tmp_path / "third.mseed", sample_rates=[3000.0] * 3)
         time = dc.read(path, file_format="MSEED", file_version="3")[0].get_coord("time")
         assert time.step_exact == Fraction(1, 3000)
-        assert time.stop == time.min() + np.timedelta64(10 * 10**9 // 3000, "ns")
+        assert time.coord_range() == np.timedelta64(10 * 10**9 // 3000, "ns")
 
     def test_trim_keeps_grid_and_boundary_sample(self, tmp_path):
         """Trimming at a whole second keeps that sample and the grid's phase."""

@@ -10,9 +10,8 @@ import pytest
 
 import dascore as dc
 from dascore.core.coords import (
-    CoordArray,
-    CoordRange,
-    CoordSegmented,
+    Labels,
+    NumericCoord,
     concat_coords,
     get_coord,
 )
@@ -195,7 +194,7 @@ class TestSelParity:
         def _refuse(self):
             raise AssertionError("the coordinate spelled out its labels")
 
-        monkeypatch.setattr(CoordRange, "values", property(_refuse))
+        monkeypatch.setattr(NumericCoord, "values", property(_refuse))
         values = MS._get_index_values(np.arange(len(MS)))
         assert lazy.sel(x=slice(values[3], values[9])).sizes["x"] == 7
         assert lazy.sel(x=values[5]).values == 5
@@ -222,12 +221,13 @@ class TestSelParity:
     def test_segmented_sel_keeps_no_labels(self, monkeypatch):
         """A segmented coordinate evaluates labels for a lookup, never keeps them."""
         lazy, _ = _pair(concat_coords(MS[:30], MS[50:]))
+        bounds = MS._get_index_values(np.array([20, 60]))
 
         def _refuse(self):
             raise AssertionError("the coordinate spelled out and cached its labels")
 
-        monkeypatch.setattr(CoordSegmented, "values", property(_refuse))
-        out = lazy.sel(x=slice(MS.values[20], MS.values[60]))
+        monkeypatch.setattr(NumericCoord, "values", property(_refuse))
+        out = lazy.sel(x=slice(bounds[0], bounds[1]))
         np.testing.assert_array_equal(out.values, np.r_[20:30, 30:41])
 
 
@@ -292,14 +292,14 @@ class TestIsel:
         lazy, _ = _pair(COORDS["segmented"])
         assert isinstance(lazy.isel(x=slice(10, 60)).xindexes["x"], CoordIndex)
         strided = lazy.isel(x=slice(10, 60, 2)).xindexes["x"]
-        assert isinstance(strided.coordinate, CoordArray)
+        assert isinstance(strided.coordinate.runs[0], Labels)
 
     def test_fancy_indexing_holds_its_picks(self):
         """Fancy indexing holds the picked labels, and still aligns with a slice."""
         lazy, eager = _pair(MS)
         index = lazy.isel(x=[1, 5]).xindexes["x"]
         assert isinstance(index, CoordIndex)
-        assert isinstance(index.coordinate, CoordArray)
+        assert isinstance(index.coordinate.runs[0], Labels)
         _assert_same(
             lambda: lazy.isel(x=[0, 1, 2]) + lazy.isel(x=slice(0, 3)),
             lambda: eager.isel(x=[0, 1, 2]) + eager.isel(x=slice(0, 3)),
@@ -420,7 +420,7 @@ class TestConcat:
         """A gap stays lazy as a segmented coordinate, labels unchanged."""
         out = xr.concat(self._parts(slice(0, 30), slice(60, 100)), dim="x")
         index = out.xindexes["x"]
-        assert isinstance(index.coordinate, CoordSegmented)
+        assert index.coordinate.runs_count > 1
         np.testing.assert_array_equal(
             out["x"].values, np.r_[MS.values[:30], MS.values[60:]]
         )
@@ -442,7 +442,7 @@ class TestConcat:
         """Parts which do not chain in order keep their labels, held as they are."""
         parts = self._parts(*pieces)
         out = xr.concat(parts, dim="x")
-        assert isinstance(out.xindexes["x"].coordinate, CoordArray)
+        assert isinstance(out.xindexes["x"].coordinate.runs[0], Labels)
         expected = np.concatenate([x["x"].values for x in parts])
         np.testing.assert_array_equal(out["x"].values, expected)
 
@@ -568,13 +568,13 @@ class TestFromVariables:
         """Equal labels align without evaluating the lazy side's labels."""
         lazy, eager = _pair(MS)
         converted = eager.drop_indexes("x").set_xindex("x", CoordIndex)
-        original = CoordRange._get_index_values
+        original = NumericCoord._get_index_values
 
         def _bounded(self, indices):
             assert np.size(indices) < 10, "the lazy labels were read"
             return original(self, indices)
 
-        monkeypatch.setattr(CoordRange, "_get_index_values", _bounded)
+        monkeypatch.setattr(NumericCoord, "_get_index_values", _bounded)
         out = lazy + converted
         assert isinstance(out.xindexes["x"], CoordIndex)
 
@@ -637,13 +637,13 @@ class TestScale:
             dims=("x",),
             coords=xr.Coordinates.from_xindex(index),
         )
-        original = CoordRange._get_index_values
+        original = NumericCoord._get_index_values
 
         def _bounded(self, indices):
             assert np.size(indices) < 1000, "the selection evaluated every label"
             return original(self, indices)
 
-        monkeypatch.setattr(CoordRange, "_get_index_values", _bounded)
+        monkeypatch.setattr(NumericCoord, "_get_index_values", _bounded)
         label = second.min() + 5 * ONE_MS
         assert int(lazy.sel(x=label)["x"].values == label)
         sub = lazy.sel(x=slice(first.max() - ONE_MS, label))
@@ -661,7 +661,7 @@ class TestScale:
             coords=xr.Coordinates.from_xindex(CoordIndex.from_coord("time", coord)),
         )
         sub = array.isel(time=slice(n - 2, n + 2))
-        assert isinstance(sub.xindexes["time"].coordinate, CoordSegmented)
+        assert sub.xindexes["time"].coordinate.runs_count > 1
         np.testing.assert_array_equal(
             sub["time"].values, coord._get_index_values(np.arange(n - 2, n + 2))
         )
@@ -682,7 +682,7 @@ class TestPandasBridge:
         """The index says which coordinate it serves."""
         lazy, _ = _pair(COORDS["segmented"])
         text = repr(lazy.xindexes["x"])
-        assert "CoordSegmented" in text
+        assert "NumericCoord" in text
         assert str(len(COORDS["segmented"])) in text
         assert "CoordIndex" in repr(lazy)
 

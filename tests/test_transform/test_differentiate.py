@@ -98,7 +98,7 @@ class TestDifferentiateOrder2:
         # why, but we don't want this to fail CI so skip test when that happens.
         if np.any(np.isnan(out.data)):
             pytest.skip("found NaN in output, not sure why this happens.")
-        spacing = to_float(out.get_coord("time").data)
+        spacing = to_float(out.get_coord("time").values)
         ax = patch.get_axis("time")
         expected = np.gradient(patch.data, spacing, axis=ax, edge_order=2)
         assert np.allclose(expected, out.data, rtol=0.01)

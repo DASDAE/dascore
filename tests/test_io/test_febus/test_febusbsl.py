@@ -10,7 +10,6 @@ import pytest
 from numpy.testing import assert_allclose
 
 import dascore as dc
-from dascore.core.coords import CoordMonotonicArray, CoordRange
 from dascore.io.febus import FebusBSLH5V1
 from dascore.io.febus.g1utils import _get_g1_h5_base_coords
 from dascore.utils.downloader import fetch
@@ -75,7 +74,7 @@ class TestFebusBSL:
     def test_distance_range(self, bsl_patch):
         """Distance should span 50-149 m on an even grid."""
         dist = bsl_patch.get_coord("distance")
-        assert isinstance(dist, CoordRange)
+        assert dist.evenly_sampled
         assert_allclose(dist.min(), 50.0)
         assert_allclose(dist.max(), 149.0)
         assert_allclose(dist.step, 1.0)
@@ -224,13 +223,13 @@ class TestG1DistanceGrid:
         snapping, or if that tolerance were ever loosened.
         """
         coord = dc.get_coord(data=_QUANTIZED_DISTANCE, units="m")
-        assert isinstance(coord, CoordMonotonicArray)
+        assert coord.sorted and not coord.evenly_sampled
         assert coord.step is None
 
     def test_quantized_distance_is_snapped(self):
         """A float32-quantized distance array still reads as an even grid."""
         coord = self._coords(_QUANTIZED_DISTANCE).coord_map["distance"]
-        assert isinstance(coord, CoordRange)
+        assert coord.evenly_sampled
         assert_allclose(coord.step, 0.1, rtol=1e-3)
         # Snapping moves interior values only; the ends are the stored ones.
         assert coord.min() == _QUANTIZED_DISTANCE[0]
@@ -241,7 +240,7 @@ class TestG1DistanceGrid:
         """Snapping a distance array that is already even is a no-op."""
         distances = np.arange(100, dtype=np.float64)
         coord = self._coords(distances).coord_map["distance"]
-        assert isinstance(coord, CoordRange)
+        assert coord.evenly_sampled
         assert coord.step == 1.0
         assert np.array_equal(coord.values, distances)
 
