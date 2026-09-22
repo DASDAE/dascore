@@ -2753,9 +2753,9 @@ def _finish_explicit_plan(
     groups: list[dict[str, Any]] = []
     for label, start, stop, sub in raw_groups:
         if is_datetime64(start):
-            start, stop = np.datetime64(start), np.datetime64(stop)
+            start, stop = to_datetime64(start), to_datetime64(stop)
         elif is_timedelta64(start):
-            start, stop = np.timedelta64(start), np.timedelta64(stop)
+            start, stop = to_timedelta64(start), to_timedelta64(stop)
         groups.append(
             dict(
                 label=label,

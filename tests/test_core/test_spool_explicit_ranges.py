@@ -448,6 +448,22 @@ class TestExplicitChunk:
             row = out.get_contents().iloc[0]
             assert (row["time_min"], row["time_max"]) == (values[2], values[4])
 
+    @pytest.mark.parametrize("kind", ["datetime64[ns]", "timedelta64[ns]"])
+    def test_time_family_final_nanosecond_sample(self, kind):
+        """A singleton window includes the final sample at nanosecond precision."""
+        values = (np.arange(5) * 1_000_000 + 123).astype(kind)
+        patch = dc.Patch(data=np.arange(5), coords={"time": values}, dims=("time",))
+        spool = dc.spool(patch)
+        requested = np.array([[values[-1], values[-1]]])
+        plan = spool.chunk_plan(time=requested)
+        assert len(plan.outputs) == 1
+        row = plan.outputs.iloc[0]
+        assert (row["time_min"], row["time_max"]) == (values[-1], values[-1])
+        chunked = spool.chunk(time=requested)
+        assert len(chunked) == 1
+        np.testing.assert_array_equal(chunked[0].coords["time"].values, values[-1:])
+        np.testing.assert_array_equal(chunked[0].data, [4])
+
     def test_missing_dimension_drop_and_between_sample_window(self):
         """A dropped dimension and a window between samples produce no output."""
         patch = dc.Patch(
