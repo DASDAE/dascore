@@ -19,7 +19,12 @@ from dascore.core.coords import (
 xr = pytest.importorskip("xarray")
 da = pytest.importorskip("dask.array")
 
-from dascore.xarray.index import CoordIndex, CoordTransform, is_servable  # noqa: E402
+from dascore.xarray.index import (  # noqa: E402
+    CoordIndex,
+    CoordTransform,
+    _same_labels,
+    is_servable,
+)
 from dascore.xarray.patch import patch_to_xarray, xarray_to_patch  # noqa: E402
 
 T0 = np.datetime64("2020-01-01", "ns")
@@ -514,6 +519,27 @@ class TestAlignment:
         other = lazy.isel(x=[0, 1, 3])
         with pytest.raises(xr.AlignmentError):
             xr.align(lazy.isel(x=slice(0, 3)), other, join="exact")
+
+    def test_partitioning_is_not_a_difference_in_labels(self):
+        """One set of labels held as different runs still joins exactly."""
+        values = np.array([0, 1, 3, 4, 6, 9])
+        first, second = (
+            NumericCoord(runs=(values[:cut], values[cut:]), dtype=values.dtype)
+            for cut in (2, 3)
+        )
+        assert first.data_id != second.data_id
+        out = xr.align(_pair(first)[0], _pair(second)[0], join="exact")
+        np.testing.assert_array_equal(out[0]["x"].values, values)
+
+    def test_unequal_grids_need_no_labels(self, monkeypatch):
+        """Two grids differ by their ids alone, without reading a label."""
+        descending = COORDS["descending"]
+        monkeypatch.setattr(
+            NumericCoord,
+            "_get_index_values",
+            lambda *_: pytest.fail("the labels were read"),
+        )
+        assert not _same_labels(MS, descending)
 
     def test_equal_labels_need_no_join(self):
         """Arrays whose coordinates label alike stay lazy."""

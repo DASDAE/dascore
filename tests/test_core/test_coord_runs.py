@@ -157,8 +157,7 @@ class TestDeclaredStep:
             get_coord(start=0.0, stop=5.0, step=1.0),
             get_coord(start=8.0, stop=13.0, step=0.5),
         )
-        with pytest.raises(CoordError, match="declared step"):
-            coord.missing()
+        assert coord.step is None and coord.missing().complete
 
 
 class TestFusion:
@@ -220,11 +219,10 @@ class TestMissing:
         with pytest.raises(ParameterError, match="exceed the limit"):
             design_case.missing().positions(limit=5)
 
-    def test_no_step_raises(self):
+    def test_no_step_misses_nothing(self):
         """Missing is relative to a grid nothing declared."""
         for coord in (get_coord(data=[1.0, 2.5, 7.0]), get_coord(shape=(5,))):
-            with pytest.raises(CoordError, match="declared step"):
-                coord.missing()
+            assert coord.missing().complete
 
     def test_array_holes(self):
         """A dense array with a step reports its holes from the spacings."""
@@ -699,3 +697,63 @@ class TestReviewRoundThree:
         coord = get_coord(start=0, step=1, shape=(10**9,), units="m")
         assert coord.update_limits(step=2).step == 2
         assert get_quantity(coord.convert_units("cm").units) == get_quantity("cm")
+
+
+class TestReviewRoundFour:
+    """Findings from the fourth adversarial pass over the run model."""
+
+    def test_a_fit_which_needs_floats_gets_them(self):
+        """Integer labels re-fit within a tolerance the integers cannot hold."""
+        coord = concat_coords(get_coord(data=[0, 1, 2]), get_coord(data=[4, 5, 6]))
+        out = coord.fuse(0.5)
+        assert out.evenly_sampled and out.dtype == np.dtype("float64")
+        assert np.max(np.abs(out.values - coord.values)) <= 0.5
+
+    def test_a_fit_which_needs_finer_time_gets_it(self):
+        """A fit spaced in nanoseconds is not read back as milliseconds."""
+        labels = T0.astype("datetime64[ms]") + np.array([0, 1, 3], dtype="m8[ms]")
+        coord = get_coord(data=labels, snap=False)
+        out = coord.fuse(np.timedelta64(1, "ms"))
+        assert out.evenly_sampled and out.min() == labels[0]
+        assert out.max() - out.min() == np.timedelta64(3, "ms")
+
+    def test_a_shift_which_needs_floats_gets_them(self):
+        """Labels moved half a step land off the integers they came from."""
+        out = get_coord(data=[0, 2, 5]).update(min=0.5)
+        assert out.dtype == np.dtype("float64")
+        assert out.to_summary().min == 0.5 and out.to_summary().max == 5.5
+
+    def test_repeated_labels_are_never_a_grid(self):
+        """One label repeated is not one sample answering for every position."""
+        coord = get_coord(data=[1, 1, 2], snap=False)[:2]
+        assert np.array_equal(coord.select((1, 1))[0].values, [1, 1])
+
+    def test_unordered_runs_look_every_label_up(self):
+        """Runs which do not chain have no order for a sparse search."""
+        coord = NumericCoord(
+            runs=(np.array([0, 1, 2, 50, 4, 5]), Grid(60, 1, 1, 4)), dtype="int64"
+        )
+        patch = dc.Patch(data=np.arange(10.0), coords={"x": coord}, dims=("x",))
+        assert patch.sel(x=50).data == 3
+
+    def test_a_declared_step_does_not_move_labels(self):
+        """A step says which grid the labels sit on, not that one restates them."""
+        values = np.array([0.0, 1.00000001, 2.0, 4.0])
+        coord = get_coord(data=values, step=1.0, snap=False)
+        assert coord.step == 1.0
+        np.testing.assert_array_equal(coord.values, values)
+
+    def test_an_input_may_fill_another_gap(self):
+        """Runs, not whole coordinates, are what may not overlap."""
+        first = concat_coords(get_coord(data=[0, 1, 2]), get_coord(data=[6, 7, 8]))
+        out = concat_coords(first, get_coord(data=[3, 4, 5]))
+        np.testing.assert_array_equal(out.values, np.arange(9))
+
+    def test_runs_which_share_no_step_miss_nothing(self):
+        """A segment of a stepless coordinate has no grid to be missing from."""
+        coord = concat_coords(
+            NumericCoord.from_labels(np.array([0.0, 1.0, 3.0]), step=1.0),
+            get_coord(start=10.0, step=2.0, shape=(3,)),
+        )
+        assert coord.step is None
+        assert coord.segments[0].missing().complete

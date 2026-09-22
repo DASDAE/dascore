@@ -1108,9 +1108,8 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
 
         Missing is relative to a declared step: labels ``[0, 2, 4]`` fill a
         step-2 grid and miss positions 1 and 3 of a step-1 grid. A
-        coordinate without a step cannot say and raises (an unordered array
-        never carries one); so does a segmented coordinate whose runs share
-        a step but meet off its grid.
+        coordinate with no step -- an unordered array, or runs which share
+        none -- names no grid to be missing from, so nothing is missing.
 
         Examples
         --------
@@ -1120,11 +1119,10 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         6
         >>> get_coord(start=0, stop=10, step=1).missing().complete
         True
+        >>> assert get_coord(data=[1.0, 2.5, 7.0]).missing().complete
         """
-        if _is_null(self.step):
-            msg = "missing needs a declared step; this coordinate has none."
-            raise CoordError(msg)
-        return Missing(step=self.step, runs=tuple(self._holes()), dtype=self.dtype)
+        holes = () if _is_null(self.step) else tuple(self._holes())
+        return Missing(step=self.step, runs=holes, dtype=self.dtype)
 
     def _holes(self) -> list[tuple]:
         """Each hole as ``(first missing label, last missing label, count)``."""
@@ -2234,7 +2232,9 @@ def _promoted(values, dtype) -> Grid | None:
     if values.ndim != 1 or len(values) < 2:
         return None
     diffs = _diffs(values)
-    if len(np.unique(diffs)) != 1:
+    # A zero step would make one label answer for every sample, which
+    # repeated labels do not; they stay as they are.
+    if len(np.unique(diffs)) != 1 or diffs[0] == diffs[0] * 0:
         return None
     grid, _ = _range_run(dict(start=values[0], step=diffs[0], shape=(len(values),)))
     return grid if _grid_holds(grid, values, dtype) else None
@@ -2465,12 +2465,12 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             indices = np.arange(run.count)
         return run.labels(indices, self.dtype)
 
-    def _with_runs(self, runs) -> Self:
+    def _with_runs(self, runs, dtype=None) -> Self:
         """A coordinate holding these runs, with this one's metadata."""
         return self.__class__(
             runs=tuple(runs),
             units=self.units,
-            dtype=self.dtype,
+            dtype=self.dtype if dtype is None else dtype,
             step=self.step,
             sources=self.sources,
         )
@@ -2952,10 +2952,13 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             if (new_fit := self._fit_run(trial, tol, keep_step)) is not None:
                 run, fit = trial, new_fit
             else:
-                result.append(fit if fit is not None else run[0])
+                result.append(fit or (run[0], self.dtype))
                 run, fit = [nxt], self._fit_run([nxt], tol, keep_step)
-        result.append(fit if fit is not None else run[0])
-        return self._with_runs(result)
+        result.append(fit or (run[0], self.dtype))
+        runs, dtypes = zip(*result)
+        # A re-fit spaces its labels evenly, which integers and coarse
+        # times cannot always hold; the fit says what dtype they need.
+        return self._with_runs(runs, dtype=np.result_type(*dtypes))
 
     def _fit_tolerance(self, tolerance):
         """
@@ -2971,10 +2974,10 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             tolerance = tolerance.count * get_middle_value(steps) if steps else 0
         return self._gap_tolerance(tolerance).excess
 
-    def _fit_run(self, runs, tol, keep_step: bool = False) -> Grid | None:
-        """Fit a stretch of runs to a single grid within tol, or None."""
+    def _fit_run(self, runs, tol, keep_step: bool = False) -> tuple | None:
+        """Fit a stretch of runs to one grid within tol, with its dtype."""
         if len(runs) == 1 and isinstance(runs[0], Grid):
-            return runs[0]
+            return runs[0], self.dtype
         count = sum(len(x) for x in runs)
         if count < 2:
             return None
@@ -3005,7 +3008,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             return None
         fit = candidate.runs[0]
         assert isinstance(fit, Grid)  # a re-fit is evenly sampled by construction
-        return fit
+        return fit, candidate.dtype
 
     def _keeps_step(self, runs, labels, ascending: bool) -> bool:
         """
@@ -3117,7 +3120,12 @@ get_coord(start=0.0, stop=20.0, step=1.0)
                 )
             else:
                 runs.append(Grid(run.origin + delta, run.step_num, 0, run.count))
-        return self._with_runs(runs)
+        # A shift off the coordinate's own dtype -- an integer moved half a
+        # step -- states the labels it lands on, not the ones it left. A
+        # tick grid has already refused a delta it cannot hold.
+        exact = any(isinstance(x, Grid) and x.exact for x in self.runs)
+        dtype = self.dtype if exact else np.asarray(self.min() + delta).dtype
+        return self._with_runs(runs, dtype=dtype)
 
     def new(self, **kwargs):
         """Update coordinate; the runs are kept unless the labels change."""
@@ -3461,10 +3469,16 @@ def concat_coords(*coords, units=None) -> BaseCoord:
     dtype = np.result_type(*[x.dtype for x in flat])
     steps = {_maybe_unpack(x.step) for x in flat}
     sources = {k: v for x in flat for k, v in x.sources.items()}
+    # Runs, not whole coordinates, are what may not overlap: an input can
+    # hold samples which belong inside another's gap.
     # Sort on native values; float conversion would collapse ns datetimes.
-    flat.sort(key=lambda x: x.min(), reverse=not ascending)
-    _check_chain(flat, ascending)
-    runs = tuple(itertools.chain.from_iterable(x.runs for x in flat))
+    parts = sorted(
+        (seg for x in flat for seg in x.segments),
+        key=lambda x: x.min(),
+        reverse=not ascending,
+    )
+    _check_chain(parts, ascending)
+    runs = tuple(itertools.chain.from_iterable(x.runs for x in parts))
     out = NumericCoord(runs=runs, sources=sources, dtype=dtype, units=flat[0].units)
     if out.step is None and len(steps) == 1 and not _is_null(step):
         # stored runs carry no step of their own, so the one they shared is
@@ -3554,6 +3568,11 @@ def _labels_to_runs(values, step) -> tuple[tuple, np.dtype]:
             continue
         spec = dict(start=block[0], step=signed, shape=(len(block),))
         grid, dtype = _range_run(spec)
+        # A declared step says which grid the labels sit on, not that one
+        # restates them; where it does not, they are kept as they are.
+        if not _grid_holds(grid, block, dtype):
+            runs.append(block)
+            continue
         runs.append(grid)
         dtypes.append(dtype)
     return tuple(runs), np.result_type(*dtypes)

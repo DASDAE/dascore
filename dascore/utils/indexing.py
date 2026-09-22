@@ -177,9 +177,12 @@ def _exact_range_indexer(coord, labels):
 
 def _label_index(coord, probes, require_unique=False):
     """Use stored labels or query-sized samples; never expand a compact grid."""
-    # a coordinate with holes is searched like a grid, run by run
-    stored = isinstance(coord, NumericCoord) and isinstance(coord.runs[0], Labels)
-    if not isinstance(coord, NumericCoord) or (stored and coord.runs_count == 1):
+    # A coordinate with holes is searched like a grid, run by run, but only
+    # where its runs chain: a sparse lookup needs an order to bisect, which
+    # one stored run and runs which disagree in direction do not have.
+    if not isinstance(coord, NumericCoord) or not coord._direction():
+        return pd.Index(coord.values), None
+    if coord.runs_count == 1 and isinstance(coord.runs[0], Labels):
         return pd.Index(coord.values), None
     size = len(coord)
     positions = np.unique([0, min(1, size - 1), max(0, size - 2), size - 1])

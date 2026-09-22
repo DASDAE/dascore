@@ -15,7 +15,6 @@ from dascore.core.coords import (
     concat_coords,
     get_coord,
 )
-from dascore.exceptions import CoordError
 
 T0 = np.datetime64("2020-01-01T00:00:00")
 
@@ -202,11 +201,9 @@ class TestHoles:
         coord = NumericCoord.from_labels(np.array([1, 3, 4]), step=1)
         assert coord.missing().count == 1
 
-    def test_a_coordinate_without_a_step_cannot_say(self, jittered):
+    def test_a_coordinate_without_a_step_misses_nothing(self, jittered):
         """Missing is relative to a grid, and these labels state none."""
-        assert jittered.step is None
-        with pytest.raises(CoordError, match="needs a declared step"):
-            jittered.missing()
+        assert jittered.step is None and jittered.missing().complete
 
     def test_seams_report_every_run_boundary(self, gappy):
         """Each boundary is one row of the discontinuity frame."""

@@ -74,16 +74,20 @@ def _same_labels(first: BaseCoord, second: BaseCoord) -> bool:
         return True
     if len(first) != len(second) or first.dtype != second.dtype:
         return False
-    if not (is_servable(first) and is_servable(second)):
-        # a side which holds its labels costs nothing more to compare
-        positions = np.arange(len(first))
-        labels = (x._get_index_values(positions) for x in (first, second))
-        return bool(np.array_equal(next(labels), next(labels)))
-    if first.units != second.units:
-        # xarray states units as an attribute beside the labels, so an
-        # index compares labels only, as a materialized index does
-        first, second = first.set_units(None), second.set_units(None)
-    return first.data_id == second.data_id
+    if is_servable(first) and is_servable(second):
+        if first.units != second.units:
+            # xarray states units as an attribute beside the labels, so an
+            # index compares labels only, as a materialized index does
+            first, second = first.set_units(None), second.set_units(None)
+        if first.data_id == second.data_id:
+            return True
+        if first.evenly_sampled and second.evenly_sampled:
+            return False  # one grid's id names its labels and nothing else
+    # An id names the runs a coordinate holds as well as the labels they
+    # spell, so two ways of partitioning one set of labels differ by it.
+    positions = np.arange(len(first))
+    labels = (x._get_index_values(positions) for x in (first, second))
+    return bool(np.array_equal(next(labels), next(labels)))
 
 
 def _chained(coords: list[BaseCoord]) -> BaseCoord | None:
