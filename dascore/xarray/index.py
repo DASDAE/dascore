@@ -48,9 +48,9 @@ def is_servable(coord) -> bool:
 
 
 def _relabels_exactly(coord) -> bool:
-    """Whether slices of a coordinate keep exactly the labels they select."""
-    # a float run recomputes a slice's labels from its new start, which
-    # can move them in the last bits, and then they no longer align
+    """Whether fused runs retain exactly the labels of their inputs."""
+    # Independently constructed float grids can change their last bits
+    # when fused, so concatenation still uses stored labels for them.
     return all(not isinstance(x, Grid) or x.exact for x in getattr(coord, "runs", ()))
 
 
@@ -152,9 +152,8 @@ class CoordIndex(CoordinateTransformIndex):
     pandas index answers: partial datetime strings name their periods,
     slices include both endpoints, and ``method`` and ``tolerance`` work
     as pandas has them. A slice ``isel`` or a concatenation whose parts
-    chain returns a new lazy index; fancy indexing, an empty slice, a
-    slice whose labels a coordinate would recompute (a float range, or a
-    stride over segments), or a concatenation which reorders or overlaps
+    chain returns a new lazy index; fancy indexing, an empty slice,
+    or a concatenation which reorders or overlaps
     holds just the labels concerned, still as a `CoordIndex`, so arrays
     derived from one another align. Aligning with a `CoordIndex` whose
     labels differ materializes both, costing what aligning materialized
@@ -250,9 +249,7 @@ class CoordIndex(CoordinateTransformIndex):
         if isinstance(idx, slice):
             start, stop, stride = idx.indices(len(coord))
             positions = range(start, stop, stride)
-            # a strided segmented coordinate is an array of its labels
-            lazy = coord.evenly_sampled or stride == 1
-            if len(positions) and lazy and _relabels_exactly(coord):
+            if len(positions):
                 return self._with(coord[idx])
             return self._picked(np.asarray(positions, dtype=np.int64))
         if getattr(idx, "dims", (self.dim,)) != (self.dim,):

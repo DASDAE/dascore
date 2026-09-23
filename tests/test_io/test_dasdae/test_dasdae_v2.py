@@ -126,6 +126,21 @@ class TestNodeCodec:
         first = back.segments[0]
         assert first.sorted and not first.evenly_sampled
 
+    @pytest.mark.parametrize(
+        "indexer",
+        [slice(3, 73), slice(2, None, 3), slice(None, None, -1), slice(-1, None)],
+    )
+    def test_float_slice_round_trip(self, h5, indexer):
+        """Compact storage retains the parent's rounding and the integer window."""
+        parent = get_coord(start=0.1, step=0.1, shape=(100,))
+        coord = parent[indexer]
+        name = f"slice_{indexer.start}_{indexer.stop}_{indexer.step}"
+        _save_coord(coord, name, h5, compact=True)
+        assert h5[name].shape == (0,)
+        back = _read_coord(h5[name], name, {}, snap=True)
+        assert back.values.tobytes() == parent.values[indexer].tobytes()
+        assert back.data_id == coord.data_id
+
     def test_float_step_keeps_its_precision(self, h5):
         """A float64 step on a float32 start counts the same samples back."""
         coord = get_coord(

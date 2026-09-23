@@ -10,6 +10,7 @@ import pytest
 
 import dascore as dc
 from dascore.core.coords import (
+    Grid,
     Labels,
     NumericCoord,
     concat_coords,
@@ -285,19 +286,23 @@ class TestIsel:
         assert index.coordinate == MS[indexer]
 
     def test_float_slices_keep_their_labels(self):
-        """A float range's slice is materialized, keeping the labels it selects."""
+        """A float range's slice stays compact and keeps the labels it selects."""
         coord = COORDS["float"]
         lazy, _ = _pair(coord)
         sub = lazy.isel(x=slice(3, 20))
+        assert sub.xindexes["x"].coordinate.evenly_sampled
+        assert sub["x"].values.tobytes() == coord.values[3:20].tobytes()
         assert sub.sel(x=coord.values[5]).values == 5
         assert (lazy + sub).sizes["x"] == 17
 
     def test_segmented_slice_stays_lazy(self):
         """A contiguous slice of a segmented coordinate is served lazily too."""
-        lazy, _ = _pair(COORDS["segmented"])
+        coord = COORDS["segmented"]
+        lazy, _ = _pair(coord)
         assert isinstance(lazy.isel(x=slice(10, 60)).xindexes["x"], CoordIndex)
         strided = lazy.isel(x=slice(10, 60, 2)).xindexes["x"]
-        assert isinstance(strided.coordinate.runs[0], Labels)
+        assert all(isinstance(run, Grid) for run in strided.coordinate.runs)
+        assert np.array_equal(strided.coordinate.values, coord.values[10:60:2])
 
     def test_fancy_indexing_holds_its_picks(self):
         """Fancy indexing holds the picked labels, and still aligns with a slice."""

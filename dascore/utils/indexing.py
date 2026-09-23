@@ -87,7 +87,7 @@ def _range_estimate(coord, bounds):
     return np.clip(coord._get_index(clipped), 0, len(coord) - 1)
 
 
-def _range_searchsorted(coord, bounds, side):
+def _range_searchsorted(coord, bounds, side, *, estimate=True):
     """Verify native range estimates, with bounded binary search as a fallback."""
     size = len(coord)
     low = np.zeros(len(bounds), dtype=np.intp)
@@ -100,7 +100,12 @@ def _range_searchsorted(coord, bounds, side):
             positions = size - 1 - positions
         return coord._get_index_values(positions)
 
-    if bounds.dtype.kind in "iufmM" and coord.evenly_sampled and coord.step:
+    if (
+        estimate
+        and bounds.dtype.kind in "iufmM"
+        and coord.evenly_sampled
+        and coord.step
+    ):
         # Reuse select's arithmetic lookup, but verify its bracket against
         # actual labels: grid rounding may move an estimate by a sample.
         estimate = _range_estimate(coord, bounds)

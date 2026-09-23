@@ -12,7 +12,7 @@ import math
 import re
 from collections.abc import Mapping, Sequence, Sized
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from fractions import Fraction
 from functools import cache
 from types import EllipsisType
@@ -1912,12 +1912,14 @@ class Grid:
     of its ideal position, so a 1024 Hz grid never drifts.
 
     A float run (``step_den`` of zero) keeps ``step_num`` as a scalar step
-    and spaces its labels linearly, as numpy does.
+    and spaces its labels linearly, as numpy does. A slice keeps the original
+    ``parent_count``, origin and step, and maps samples through the integer
+    offset ``k0`` and ``stride``. Evaluating the original expression keeps
+    every label bit-for-bit, including numpy's endpoint rounding.
 
-    A run states an index offset ``k0`` so a slice can be taken by
-    arithmetic alone; it is folded into the origin on construction, which
-    is exact and leaves grids holding the same labels holding the same
-    fields, so they compare and identify alike however they were reached.
+    An exact run folds ``k0`` into its origin and phase. A newly constructed
+    float run also folds an explicit offset into its origin; only slices
+    with ``parent_count`` retain their original grid.
     """
 
     origin: Any
@@ -1926,20 +1928,33 @@ class Grid:
     count: int
     k0: int = 0
     phase: int = 0
+    parent_count: int | None = None
+    stride: int = 1
 
     def __post_init__(self):
         """Normalize the run to the one form its labels have."""
         # Counts come from numpy offsets as often as from python, and a
         # numpy integer here would leak into every id and every dump.
-        for name in ("step_den", "count", "k0", "phase"):
+        for name in ("step_den", "count", "k0", "phase", "stride"):
             if type(value := getattr(self, name)) is not int:
                 object.__setattr__(self, name, int(value))
         if self.count < 0:
             msg = f"A run cannot hold {self.count} samples."
             raise CoordError(msg)
-        if not self.exact:  # a float run states its start outright
-            object.__setattr__(self, "origin", self.origin + self.k0 * self.step_num)
-            object.__setattr__(self, "k0", 0)
+        if not self.exact:
+            if self.parent_count is None:
+                object.__setattr__(
+                    self, "origin", self.origin + self.k0 * self.step_num
+                )
+                object.__setattr__(self, "k0", 0)
+            else:
+                object.__setattr__(self, "parent_count", int(self.parent_count))
+                if self.parent_count < 1 or not self.stride:
+                    raise CoordError(
+                        "A float slice needs a positive length and nonzero stride."
+                    )
+                if (self.k0, self.stride, self.count) == (0, 1, self.parent_count):
+                    object.__setattr__(self, "parent_count", None)
             return
         num = int(self.step_num)
         whole, phase = divmod(self.phase + self.k0 * num, self.step_den)
@@ -1974,7 +1989,9 @@ class Grid:
             offset = self.phase
             ticks = (offset + indices.astype(np.int64) * self.step_num) // self.step_den
             return np.asarray(self.origin + ticks).astype(dtype)
-        start, step, num = self.origin, self.step_num, self.count
+        indices = self.k0 + indices * self.stride
+        start, step = self.origin, self.step_num
+        num = self.count if self.parent_count is None else self.parent_count
         if num == 1 or np.dtype(dtype).kind in "mMO":
             return np.asarray(start + indices * step, dtype=dtype)
         # Match linspace's inferred floating dtype, rounding, and exact endpoint.
@@ -1989,8 +2006,18 @@ class Grid:
     def sliced(self, first: int, stride: int, count: int) -> Grid:
         """The run of the samples first, first + stride, ... (count of them)."""
         if not self.exact:
-            step = self.step_num
-            return Grid(self.origin + first * step, step * stride, 0, count)
+            if np.asarray(self.origin).dtype.kind in "mMO":
+                step = self.step_num
+                return Grid(self.origin + first * step, step * stride, 0, count)
+            return replace(
+                self,
+                count=count,
+                k0=self.k0 + first * self.stride,
+                stride=self.stride * stride,
+                parent_count=self.count
+                if self.parent_count is None
+                else self.parent_count,
+            )
         if stride == 1:
             return Grid(
                 self.origin,
@@ -2011,6 +2038,12 @@ class Grid:
             phase=phase,
         )
 
+    def resized(self, count: int, dtype) -> Grid:
+        """Restate a grid's extent, as an explicit resize or gap fill requests."""
+        if self.exact:
+            return self.sliced(0, 1, count)
+        return Grid(self.labels(0, dtype)[()], self.step(dtype), 0, count)
+
     def index_of(self, ticks, forward: bool):
         """
         The sample index each label tick maps to.
@@ -2030,7 +2063,7 @@ class Grid:
     def step(self, dtype):
         """The whole-tick (or float) spacing between neighbouring labels."""
         if not self.exact:
-            return self.step_num
+            return self.step_num * self.stride
         tick = round(Fraction(self.step_num, self.step_den))
         return np.timedelta64(tick, "ns") if np.dtype(dtype).kind in "mM" else tick
 
@@ -2043,7 +2076,10 @@ class Grid:
     def canonical(self) -> tuple:
         """The terms which name the run's labels: origin, step, and phase."""
         if not self.exact:
-            return (self.origin, self.step_num, 0, self.count)
+            terms = (self.origin, self.step_num, 0, self.count)
+            if self.parent_count is not None:
+                terms += (self.parent_count, self.k0, self.stride)
+            return terms
         return (self.origin, self.step_num, self.step_den, self.phase)
 
 
@@ -2323,7 +2359,15 @@ def _fuse_runs(runs: tuple[Grid | Labels, ...]) -> tuple[Grid | Labels, ...]:
     for run in runs[1:]:
         prev = out[-1]
         if isinstance(prev, Grid) and isinstance(run, Grid) and _continues(prev, run):
-            out[-1] = prev.sliced(0, 1, prev.count + run.count)
+            count = prev.count + run.count
+            if (
+                not prev.exact
+                and prev.parent_count is None
+                and run.parent_count is None
+            ):
+                out[-1] = replace(prev, count=count)
+            else:
+                out[-1] = prev.sliced(0, 1, count)
         elif isinstance(prev, Labels) and isinstance(run, Labels) and _abuts(prev, run):
             out[-1] = Labels(prev.id, prev.count + run.count, prev.offset, prev.stride)
         else:
@@ -2345,6 +2389,14 @@ def _continues(prev: Grid, run: Grid) -> bool:
     if (prev.step_num, prev.step_den) != (run.step_num, run.step_den):
         return False
     if not prev.exact:
+        if prev.parent_count is not None or run.parent_count is not None:
+            first_count = prev.count if prev.parent_count is None else prev.parent_count
+            next_count = run.count if run.parent_count is None else run.parent_count
+            return (prev.origin, first_count, prev.stride) == (
+                run.origin,
+                next_count,
+                run.stride,
+            ) and run.k0 == prev.k0 + prev.count * prev.stride
         return bool(prev.origin + prev.count * prev.step_num == run.origin)
     step = Fraction(prev.step_num, prev.step_den)
     return run.ideal_origin == prev.ideal_origin + prev.count * step
@@ -2624,8 +2676,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     def _run_direction(self, run) -> int:
         """1 if one run ascends, -1 if it descends, 0 if it does neither."""
         if isinstance(run, Grid):
-            zero = _TD64_ZERO if is_timedelta64(run.step_num) else 0
-            return -1 if run.step_num < zero else 1
+            step = run.step(self.dtype)
+            zero = _TD64_ZERO if is_timedelta64(step) else 0
+            return -1 if step < zero else 1
         values = self._run_labels(run)
         if values.ndim != 1 or not values.size:
             return 0
@@ -2670,15 +2723,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             indices = range(len(self))[slice(start, stop, item.step)]
             if not len(indices):
                 return get_coord(data=np.empty(0, dtype=self.dtype), units=self.units)
-            # Only a float grid beside another run is read from the
-            # labels: it restates a strided slice from its own start,
-            # which can move it in the last bits, and the runs either
-            # side then no longer meet where the labels say they do.
-            drifts = self.runs_count > 1 and any(
-                isinstance(x, Grid) and not x.exact for x in self.runs
-            )
-            if abs(indices.step) == 1 or not drifts:
-                return self._slice_runs(indices)
+            return self._slice_runs(indices)
         out = self.values[item]
         if not np.ndim(out):
             return out
@@ -2913,6 +2958,18 @@ get_coord(start=0.0, stop=20.0, step=1.0)
 
     def _get_float_index(self, grid: Grid, value, forward=True):
         """Get the index corresponding to a value of a float range."""
+        if grid.parent_count is not None:
+            # The indexing helpers import coordinates, so load this here.
+            from dascore.utils.indexing import _range_searchsorted  # noqa: PLC0415
+
+            side = "left" if forward == self.sorted else "right"
+            positions = _range_searchsorted(
+                self, np.atleast_1d(value), side, estimate=False
+            )
+            out = positions if side == "left" else positions - 1
+            if self.reverse_sorted:
+                out = len(self) - 1 - out
+            return out if isinstance(value, Sized) else int(out[0])
         start, step = grid.origin, grid.step_num
         if isinstance(value, Sized):
             func = np.ceil if forward else np.floor
@@ -2984,11 +3041,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         if (grid := self._grid) is None:
             return super().change_length(length)
         length = _validate_new_length(length)
-        return (
-            self
-            if len(self) == length
-            else self._with_runs((grid.sliced(0, 1, length),))
-        )
+        if len(self) == length:
+            return self
+        return self._with_runs((grid.resized(length, self.dtype),))
 
     def coord_range(self, extend: bool = True):
         """The span of the coordinate; extended, to its exclusive end."""
@@ -3211,7 +3266,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
                     )
                 )
             else:
-                runs.append(Grid(run.origin + delta, run.step_num, 0, run.count))
+                runs.append(replace(run, origin=run.origin + delta))
         # A shift off the coordinate's own dtype -- an integer moved half a
         # step -- states the labels it lands on, not the ones it left. A
         # tick grid has already refused a delta it cannot hold.
@@ -3238,7 +3293,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         if (grid := self._grid) is None:
             info.update(data=self.values, step=self.step)
             return get_coord(**{**info, **kwargs})
-        info["start"] = np.asarray(grid.origin).astype(self.dtype)[()]
+        info["start"] = grid.labels(0, self.dtype)[()]
         info["stop"] = grid.labels(len(self), self.dtype)[()]
         # the step is always stated, since without one a new length would
         # re-derive the spacing from the span and move every label
@@ -3380,13 +3435,14 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """The payload naming one run's labels."""
         if isinstance(run, Labels):
             return ("labels", run.id, run.count, run.offset, run.stride)
-        origin, num, den, extra = run.canonical()
+        origin, num, den, extra, *window = run.canonical()
         if not run.exact:
             return (
                 "float",
                 self._hash_scalar(origin, "start"),
                 self._hash_scalar(num, "step"),
                 int(extra),
+                *window,
             )
         return ("grid", origin, num, den, extra, int(run.count))
 
@@ -3726,7 +3782,7 @@ def _fill_layout(
             assert isinstance(kept, NumericCoord)
             runs.extend(kept.runs)
         else:
-            runs.append(anchor.sliced(0, 1, length))
+            runs.append(anchor.resized(length, coord.dtype))
         out.extend((start, stop, offset + pos) for start, stop, pos in blocks)
         offset += length
     return coord._with_runs(runs), tuple(out)
@@ -3786,7 +3842,8 @@ def _fill_position(coord: NumericCoord, anchor: Grid, piece: Grid) -> int:
     """The position on the anchor's grid nearest the piece's first label."""
     label = coord._run_labels(piece, [0])[0]
     if not anchor.exact:
-        return int(np.round((label - anchor.origin) / anchor.step_num))
+        start = anchor.labels(0, coord.dtype)[()]
+        return int(np.round((label - start) / anchor.step(coord.dtype)))
     tick = _to_tick(label)
     after = int(anchor.index_of([tick], forward=True)[0])
     # the labels either side as the integer ticks the grid casts to dtype,
