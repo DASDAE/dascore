@@ -278,7 +278,7 @@ class CoordSummary(DascoreBaseModel):
             data = dict(data)
             min_val = data["min"]
             dtype = _get_dtype(min_val, data.get("dtype"))
-            data["dtype"] = str(dtype).split("[")[0]
+            data["dtype"] = str(dtype)
             for name in ["min", "max", "step"]:
                 val = data.get(name)
                 data[name] = ensure_consistent_dtype(val, name, dtype)
@@ -303,7 +303,7 @@ class CoordSummary(DascoreBaseModel):
             for name in ("min", "max", "step"):
                 value = ensure_consistent_dtype(getattr(self, name), name, dtype)
                 object.__setattr__(self, name, value)
-            object.__setattr__(self, "dtype", str(dtype).split("[")[0])
+            object.__setattr__(self, "dtype", str(dtype))
         return self
 
     def to_coord(self) -> CoordRange:
@@ -330,6 +330,14 @@ class CoordSummary(DascoreBaseModel):
             start, stop = self.max, self.min + step
         else:
             start, stop = self.min, self.max + step
+        # The scalars are kept at nanoseconds; the coord takes the recorded unit.
+        if self.dtype and (dtype := np.dtype(self.dtype)).kind in "mM":
+            start, stop = (
+                np.asarray(start).astype(dtype)[()],
+                np.asarray(stop).astype(dtype)[()],
+            )
+            unit, count = np.datetime_data(dtype)
+            step = np.asarray(step).astype(f"m8[{count}{unit}]")[()]
         return CoordRange(start=start, stop=stop, step=step, units=self.units)
 
 

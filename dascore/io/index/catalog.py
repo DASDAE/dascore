@@ -19,6 +19,7 @@ from __future__ import annotations
 import abc
 import json
 import operator
+import os
 import re
 import sys
 import warnings
@@ -38,7 +39,7 @@ from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import MissingPatchError
 from dascore.io.core import _resolve_read_spool
 from dascore.io.index.backend import get_backend
-from dascore.io.index.indexer import DBDirectoryIndexer
+from dascore.io.index.indexer import DBDirectoryIndexer, scan_unit_stats
 from dascore.io.index.ingest import SourceRecord, patch_record, summaries_to_records
 from dascore.io.index.query import (
     CoordExists,
@@ -52,7 +53,7 @@ from dascore.utils.misc import (
     express_range_for_coord,
     is_range,
 )
-from dascore.utils.paths import is_memory_uri
+from dascore.utils.paths import coerce_to_local_path, is_memory_uri
 
 # Directory archives present in per-patch time order (source ordinals
 # alone cannot interleave multi-patch files); ordinal and patch row stay
@@ -194,6 +195,22 @@ class LiveResolver(PatchResolver):
             raise MissingPatchError(msg) from None
 
 
+def resolve_against_root(path: str | Path, root: Path | None) -> str | Path:
+    """
+    Resolve a stored source path against a catalog root.
+
+    Relative paths resolve against the root; URIs and absolute paths
+    pass through untouched. This is the one rule for turning a stored
+    spelling into one a reader can open. `os.path.isabs` rather than
+    `Path.is_absolute`: it answers the same question per platform
+    without building a path object for every row of an index.
+    """
+    text = str(path)
+    if root is None or "://" in text or os.path.isabs(text):
+        return path
+    return root / path
+
+
 def _patch_path(patch: dc.Patch) -> str:
     """Return the synthetic source path identifying a live patch."""
     return f"memorypatch://{patch._instance_id}"
@@ -223,16 +240,8 @@ class FileResolver(PatchResolver):
         return dc.read(**kwargs, **id_kwargs, **trim)
 
     def resolve_path(self, path: str | Path) -> str | Path:
-        """
-        Resolve a row's source path against the catalog root.
-
-        Relative paths resolve against the root; URIs and absolute paths
-        pass through untouched.
-        """
-        if self._root is not None and "://" not in str(path):
-            if not Path(path).is_absolute():
-                return self._root / path
-        return path
+        """Resolve a row's source path against the catalog root."""
+        return resolve_against_root(path, self._root)
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Read the patch, passing range trims down as read hints."""
@@ -365,14 +374,21 @@ def _merge_source_records(existing, new):
     Merge two partial records for the same source.
 
     Union members export only their selected patches, so two members can
-    hold disjoint (or overlapping) slices of one multi-patch file. The
-    merged record unions the patch lists by source_patch_key: a patch
-    keeps its first-occurrence position, a duplicate identity takes the
-    last occurrence's metadata (dict-merge semantics, matching the
-    ordering contract), and the source-level metadata (mtime, size)
-    comes from the last record.
+    hold disjoint (or overlapping) slices of one multi-patch file. Two
+    records which measured the same source alike describe one revision of
+    it, so their patch lists union by source_patch_key: a patch keeps its
+    first-occurrence position, a duplicate identity takes the last
+    occurrence's metadata (dict-merge semantics, matching the ordering
+    contract). Two records which measured it differently describe two
+    revisions, and the later one replaces the earlier whole -- rows and
+    stats together, since a row of one revision beside the stats of
+    another says a file is what it is not. Records of two revisions
+    which measured alike cannot arise: the measurement is what makes a
+    revision one.
     """
     if existing is None:
+        return new
+    if (existing.mtime_ns, existing.size_bytes) != (new.mtime_ns, new.size_bytes):
         return new
     patches = {p.source_patch_key: p for p in existing.patches}
     patches.update({p.source_patch_key: p for p in new.patches})
@@ -746,10 +762,22 @@ class PatchCatalog:
         in-memory backend; patches load through the file resolver on
         demand. There is no syncer — a changed file needs a new catalog.
         """
+        # Measured the way the directory indexer measures it, so a row
+        # from either carries the same promise about its source. The scan
+        # is bracketed because a reading taken only afterwards can belong
+        # to the file which replaced the one the rows describe; a source
+        # which moved between the two, or which the filesystem will not
+        # answer for, is left unmeasured, which refuses the recipe rather
+        # than promising a window of it.
+        source = coerce_to_local_path(path)
+        mtime, size = scan_unit_stats(source)
         summaries = dc.scan(
             path, file_format=file_format, file_version=file_version, progress=None
         )
-        records = summaries_to_records(summaries)
+        mtimes, sizes = {}, {}
+        if mtime is not None and scan_unit_stats(source) == (mtime, size):
+            mtimes[str(source)], sizes[str(source)] = mtime, size
+        records = summaries_to_records(summaries, mtimes_ns=mtimes, sizes_bytes=sizes)
         out = cls(resolver=FileResolver())
         out.backend.write_sources(records)
         out._invalidate()

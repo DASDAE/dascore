@@ -26,8 +26,13 @@ import pandas as pd
 import dascore as dc
 from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
+from dascore.core.source import ArraySource
 from dascore.exceptions import UnknownFiberFormatError
-from dascore.io.core import FiberIO, _read_open_resource, _required_resource_type
+from dascore.io.core import (
+    FiberIO,
+    _read_open_resource,
+    _required_resource_type,
+)
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import (
     CompositeResolver,
@@ -37,13 +42,16 @@ from dascore.io.index.catalog import (
     _row_source_patch_key,
     apply_exact_residuals,
 )
+from dascore.io.index.indexer import scan_unit_stats
 from dascore.io.index.ingest import (
     CoordRecord,
     PatchRecord,
     SourceRecord,
     _coord_record,
+    _is_missing,
     typed_value,
 )
+from dascore.io.index.schema import SOURCE_STAT_COLUMNS
 from dascore.units import get_quantity
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
@@ -53,13 +61,16 @@ from dascore.utils.chunk_plan import (
 )
 from dascore.utils.explicit_ranges import _select_manager, _source_manager
 from dascore.utils.io import IOResourceManager
+from dascore.utils.misc import is_range
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import (
+    SOURCE_RANGE_ENDS,
     PatchAssembler,
     fill_to_row,
     patch_from_fill,
+    source_range_column,
 )
-from dascore.utils.paths import is_memory_uri
+from dascore.utils.paths import is_local_path, is_memory_uri
 
 # Row columns which name dc.read's own keyword arguments; passing one along
 # as a trim hint would collide with the value the loader already supplies.
@@ -118,6 +129,30 @@ def _num(value) -> float | None:
     if value is None or pd.isnull(value):
         return None
     return float(value)
+
+
+def _is_local(path: str) -> bool:
+    """Whether a stored path names a local file this process can stat."""
+    try:
+        return is_local_path(path)
+    except ValueError:
+        # a scheme no filesystem here claims is not a local file
+        return False
+
+
+# What a stat column holds where the index recorded none. No file's mtime
+# or size can be it, and it is a value rather than a null because the
+# column must be read as exact int64; a nullable integer column (the
+# planned Arrow move) would hold the null itself and drop the sentinel.
+NO_STAT = np.iinfo(np.int64).min
+
+
+def _stat_column(series: pd.Series) -> np.ndarray:
+    """One stat column as exact int64, with what it never measured as NO_STAT."""
+    # Never through float64: a nanosecond mtime does not survive it.
+    if series.dtype == np.dtype(np.int64):
+        return series.to_numpy()
+    return series.fillna(NO_STAT).to_numpy(np.int64)
 
 
 def _row_str(value) -> str:
@@ -549,7 +584,17 @@ class PlanResolver(PatchResolver):
         # plan invariant: outputs without members must never be published
         self.token = token
         self.dim = dim
-        self.member_rows = member_rows.reset_index(drop=True)
+        rows = member_rows.reset_index(drop=True)
+        # What the index measured of each member's source, held beside
+        # the rows rather than in them: every output slices this frame,
+        # and a column is charged for at every slice. Row number is the
+        # key, which the slices keep.
+        self._source_stats = {
+            name: _stat_column(rows[name])
+            for name in SOURCE_STAT_COLUMNS
+            if name in rows.columns
+        }
+        self.member_rows = rows.drop(columns=list(self._source_stats))
         self.loader = loader
         self.aux_coords = frozenset(aux_coords)
         self.merge_kwargs = dict(merge_kwargs)
@@ -605,24 +650,105 @@ class PlanResolver(PatchResolver):
             load_patch=self._load_member,
             merge_kwargs=merge_kwargs,
             plan_dim=self.dim,
-            load_array=self._load_member_whole,
-            can_load_array=self._can_load_member_whole,
+            array_source=self._member_array_source,
+            can_use_index=self._can_load_member_from_index,
+            sources_unchanged=self._sources_unchanged,
         )
 
-    def _can_load_member_whole(self, row: Mapping) -> bool:
+    def _can_load_member_from_index(self, row: Mapping) -> bool:
         """Check every row-only fast-path condition before any array is read."""
-        if row.get("_modified") or self.aux_coords:
+        if self.aux_coords:
             return False
-        # An unmodified row lies wholly inside any value selection on the
-        # plan's dimension; other residuals still need the loaded patch.
-        for coords, samples, relative in self.parent_residuals:
-            if samples or relative or set(coords) - {self.dim}:
+        if row.get("_modified"):
+            # A trim is a window of the source, which is only placeable
+            # when the row keeps the source's own range beside it --
+            # which `_with_source_range` withholds from every row a
+            # residual this plan cannot stand for would trim again.
+            if _is_missing(row.get(source_range_column(self.dim, "low"))):
                 return False
+        else:
+            # An unmodified row lies wholly inside any value selection on
+            # the plan's dimension; other residuals need the loaded patch.
+            for coords, samples, relative in self.parent_residuals:
+                if samples or relative or set(coords) - {self.dim}:
+                    return False
         return self._array_read_info(row) is not None
 
-    def _load_member_whole(self, row: Mapping) -> np.ndarray | None:
-        """Read a whole member after all rows pass the metadata preflight."""
-        return self._load_member_array(row, {}, ignore_residuals=True)
+    def _sources_unchanged(self, rows: pd.DataFrame) -> bool:
+        """
+        Whether every member source still is what the index recorded.
+
+        A recipe reads the window the index promised rather than the whole
+        array, so a file rewritten longer under the same key would come
+        back the shape its row predicted and go unnoticed. What the index
+        measured of each source came from the same join as the member
+        rows and is held under their row numbers, so the two describe
+        one revision of the index however long ago it was planned and
+        nothing is asked of the index here. Each distinct source is
+        measured once, by the same function the indexer records -- a file
+        by its own stat, a directory-format unit by its manifest.
+
+        Only a source measured now and found to be what was recorded
+        keeps the recipe. A remote store is never touched, and so is
+        never read blind: a path this process cannot stat, one the index
+        recorded nothing for, and one which will not answer all refuse
+        the recipe and send the merge down the patch path.
+        """
+        stats = self._source_stats
+        if len(stats) != len(SOURCE_STAT_COLUMNS) or "source_path" not in rows.columns:
+            return False
+        # the row numbers this slice kept, which is what the stats are under
+        taken = rows.index.to_numpy()
+        paths = rows["source_path"].to_numpy()
+        mtimes = stats[SOURCE_STAT_COLUMNS[0]][taken]
+        sizes = stats[SOURCE_STAT_COLUMNS[1]][taken]
+        seen = set()
+        for path, mtime, size in zip(paths, mtimes, sizes, strict=True):
+            path = _row_str(path)
+            if path in seen:
+                continue
+            seen.add(path)
+            if not path or not _is_local(path):
+                return False
+            if mtime == NO_STAT or size == NO_STAT:
+                return False
+            if scan_unit_stats(path) != (int(mtime), int(size)):
+                return False
+        return True
+
+    def source_stats_of(self, rows: pd.DataFrame) -> pd.DataFrame:
+        """Put what the index measured back beside these member rows."""
+        taken = rows.index.to_numpy()
+        return rows.assign(**{k: v[taken] for k, v in self._source_stats.items()})
+
+    def _member_array_source(self, row: Mapping, shape) -> ArraySource | None:
+        """
+        Name the whole stored array a member is part of; nothing is read.
+
+        The row states the shape its caller passes and the dtype the
+        array comes back as, so a source which names the whole of it is
+        enough to window the member out of it later. A row which states
+        no dtype cannot be named and sends the merge down the patch path.
+
+        A source's origin is the id of the array itself, which is the
+        patch's `data_id` -- not the lineage `origin_id` beside it, which
+        a processed patch keeps from what it was made of.
+        """
+        info = self._array_read_info(row)
+        assert info is not None, "the preflight resolved every member's reader"
+        loader, path, _, key = info
+        dtype = row.get("_dtype")
+        if not isinstance(dtype, str) or not dtype:
+            return None
+        origin = row.get("data_id")
+        source = ArraySource(
+            path=str(loader.resolve_path(path)),
+            format=_row_str(row.get("source_format")),
+            version=_row_str(row.get("source_version")),
+            key=key,
+            origin_id="" if origin is None or pd.isnull(origin) else str(origin),
+        )
+        return source.describe(shape, dtype)
 
     def _load_member(self, kwargs: Mapping) -> dc.Patch:
         """Load one member source patch, applying parent residuals."""
@@ -665,9 +791,7 @@ class PlanResolver(PatchResolver):
             patch = apply_exact_residuals(patch, self.parent_residuals)
         return self._in_plan_units(patch, kwargs)
 
-    def _load_member_array(
-        self, row: Mapping, windows: Mapping, *, ignore_residuals: bool = False
-    ) -> np.ndarray | None:
+    def _load_member_array(self, row: Mapping, windows: Mapping) -> np.ndarray | None:
         """
         Load one member's raw array through the format's `read_array`.
 
@@ -689,10 +813,9 @@ class PlanResolver(PatchResolver):
         parent residuals — a residual re-trims the loaded patch, and a
         data-only read would skip that trim. The fast path trusts the
         index about the grid itself: the caller's shape guard catches a
-        resized file, not a shifted one. ``ignore_residuals`` is for a
-        caller which has established the residuals cannot touch this row.
+        resized file, not a shifted one.
         """
-        if self.parent_residuals and not ignore_residuals:
+        if self.parent_residuals:
             return None
         info = self._array_read_info(row)
         if info is None:
@@ -933,6 +1056,64 @@ def _whole_member_sizes(trims: pd.DataFrame, sources: pd.DataFrame) -> dict[int,
     return out
 
 
+def _value_residuals_on(residuals, name: str) -> bool:
+    """
+    Whether every residual is one plain value range on ``name``.
+
+    Such a selection is projected onto the relation's envelopes before
+    anything is planned, so a row it narrows says so (`_modified`) and a
+    row it leaves whole still states its source's own range. Nothing
+    else can: a sample or relative selection resolves against the loaded
+    patch, one naming another coordinate trims an axis the row still
+    describes whole, one which is not a range never reached the
+    envelopes at all, and a unit-bearing one is clipped by a different
+    conversion than the patch itself makes.
+    """
+    for coords, samples, relative in residuals:
+        if samples or relative or set(coords) - {name}:
+            return False
+        value = coords.get(name)
+        if getattr(value, "magnitudes", None) is not None or not is_range(value):
+            return False
+        if any(hasattr(bound, "units") for bound in value):
+            return False
+    return True
+
+
+def _with_source_range(sources: pd.DataFrame, name: str, residuals) -> pd.DataFrame:
+    """
+    Keep each source's own range on the plan dimension beside its trim.
+
+    A member the plan cuts states the window it was cut to, and placing
+    that window back on the file's samples takes the range the file
+    itself spans. Only a row which describes the whole of its source
+    states one: a row a residual selection already trimmed no longer
+    does, and neither does one which arrived trimmed for a reason this
+    plan cannot name. A residual selection a window cannot stand for
+    takes the range from every row, cut or not.
+    """
+    columns = [source_range_column(name, x) for x in SOURCE_RANGE_ENDS]
+    if residuals and not _value_residuals_on(residuals, name):
+        # Such a residual re-trims whatever the member load returns, so
+        # its trimmed rows must not take the recipe; dropping the range
+        # is what refuses them (`_can_load_member_from_index`).
+        return sources.drop(columns=columns, errors="ignore")
+    if set(columns).issubset(sources.columns):
+        # already carried: these rows are the members of a plan on this
+        # same dimension, and the range beside them is still the file's
+        return sources
+    envelope = [f"{name}_{x}" for x in ("min", "max", "step")]
+    if not set(envelope).issubset(sources.columns):
+        return sources
+    modified = sources.get("_modified", pd.Series(False, index=sources.index))
+    whole = pd.Series(~np.asarray(modified, dtype=bool), index=sources.index)
+    values = {
+        column: sources[source].where(whole)
+        for column, source in zip(columns, envelope, strict=True)
+    }
+    return sources.assign(**values)
+
+
 def derived_catalog(
     *,
     source_rows: pd.DataFrame,
@@ -975,6 +1156,8 @@ def derived_catalog(
             sources = sources.drop(columns=[unit_col])
         else:
             sources = sources.rename(columns={unit_col: source_unit_col})
+    parent_residuals = () if parent is None else parent.residuals
+    sources = _with_source_range(sources, name, parent_residuals)
     # Resolve source paths once before deriving both members and fill anchors.
     root = getattr(parent.resolver, "_root", None) if parent is not None else None
     if root is not None and "source_path" in sources.columns:
@@ -991,7 +1174,6 @@ def derived_catalog(
     )
     # the member's trimmed range replaces the source envelope for loading
     member_rows = member_rows.drop(columns=["_patch_row"])
-    parent_residuals = () if parent is None else parent.residuals
     loader = CompositeResolver()
     if parent is not None:
         member_paths = set(
@@ -1184,6 +1366,9 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
     # that output's patch in this catalog (a stale one named the parent's)
     ids = catalog.backend.patch_ids_by_key()
     index_ids = [ids.get(str(int(x))) for x in members["output_id"]]
+    # the re-plan builds new member rows from these, so what the index
+    # measured of each source has to travel with them
+    members = resolver.source_stats_of(members)
     working = members.assign(_index_row=pd.array(index_ids, dtype="Int64"))
     working = working.drop(columns=["output_id"])
     working = patch_local_adjusted_envelopes(

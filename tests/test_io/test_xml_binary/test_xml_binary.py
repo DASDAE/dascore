@@ -470,3 +470,65 @@ class TestDirectorySource:
         assert not source.loadable
         with pytest.raises(ParameterError, match="does not say enough"):
             source.load()
+
+
+class TestDirectoryUnitStaleCheck:
+    """A directory source is compared the way the index recorded it."""
+
+    @pytest.fixture
+    def indexed_unit(self, binary_xml_directory, tmp_path):
+        """An indexed spool over a copy of the archive, and the copy."""
+        unit = tmp_path / "root" / "xb"
+        shutil.copytree(binary_xml_directory, unit)
+        # Members copied within one clock tick would swap to the same manifest.
+        for num, path in enumerate(sorted(unit.glob("*.raw"))):
+            moved = path.stat().st_mtime_ns + num * 10**9
+            os.utime(path, ns=(moved, moved))
+        return dc.spool(tmp_path / "root").update(), unit
+
+    def _resolver(self, spool):
+        """The plan resolver of a whole-spool merge."""
+        return spool.chunk(time=None)._catalog.resolver
+
+    def test_an_untouched_unit_is_what_the_index_recorded(self, indexed_unit):
+        """Its manifest, not its members' sizes, is what the index holds."""
+        spool, unit = indexed_unit
+        resolver = self._resolver(spool)
+        rows = resolver.member_rows
+        assert set(rows["source_path"]) == {str(unit)}
+        assert resolver._sources_unchanged(rows)
+
+    def test_a_changed_member_abandons_the_recipe(self, indexed_unit):
+        """A member rewritten in place changes the unit's manifest."""
+        spool, unit = indexed_unit
+        resolver = self._resolver(spool)
+        rows = resolver.member_rows
+        path = sorted(unit.glob("*.raw"))[0]
+        (np.arange(1000 * 10, dtype="uint16") + 1).tofile(path)
+        moved = path.stat().st_mtime_ns + 10**9
+        os.utime(path, ns=(moved, moved))
+        assert not resolver._sources_unchanged(rows)
+
+    def test_a_renamed_member_abandons_the_recipe(self, indexed_unit):
+        """Which file holds which samples is part of what was recorded."""
+        spool, unit = indexed_unit
+        resolver = self._resolver(spool)
+        rows = resolver.member_rows
+        first, second = sorted(unit.glob("*.raw"))
+        spare = unit / "spare.raw"
+        # a swap: every member keeps its size and its modification time
+        stats = [os.stat(x) for x in (first, second)]
+        first.rename(spare)
+        second.rename(first)
+        spare.rename(second)
+        # A rename need not keep an mtime everywhere; put the swapped ones back.
+        for path, status in zip((second, first), stats):
+            os.utime(path, ns=(status.st_atime_ns, status.st_mtime_ns))
+        assert not resolver._sources_unchanged(rows)
+
+    def test_a_merge_reads_the_same_patch(self, indexed_unit):
+        """However the members load, the merged patch is the same one."""
+        spool, _ = indexed_unit
+        merged = spool.chunk(time=None)[0]
+        expected = np.concatenate([x.data for x in spool], axis=0)
+        assert np.array_equal(merged.data, expected)

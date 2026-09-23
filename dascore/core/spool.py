@@ -2578,6 +2578,7 @@ class Spool(NodeRepr, NamespaceOwner):
         new instance attributes cannot silently join equality.
         """
         from dascore.io.index.catalog import _SOURCE_SUFFIX  # noqa: PLC0415
+        from dascore.io.index.schema import SOURCE_STAT_COLUMNS  # noqa: PLC0415
 
         def _private(column, suffix) -> bool:
             # the generated `_<coord><suffix>` column, not an attr which
@@ -2626,6 +2627,9 @@ class Spool(NodeRepr, NamespaceOwner):
                 # what the index can state, not what the patch is
                 "_attrs_complete",
                 "_attr_dtypes",
+                # when a source was last written and how big it is says
+                # what backs the row, not what the row describes
+                *SOURCE_STAT_COLUMNS,
             ]
             out = df.drop(columns=drop, errors="ignore")
             return out[sorted(out.columns)]
