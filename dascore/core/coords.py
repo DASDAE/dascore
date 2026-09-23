@@ -2009,6 +2009,11 @@ class Grid:
             if np.asarray(self.origin).dtype.kind in "mMO":
                 step = self.step_num
                 return Grid(self.origin + first * step, step * stride, 0, count)
+            if self._float_arithmetic_exact():
+                start = self.origin + (self.k0 + first * self.stride) * self.step_num
+                flat = Grid(start, self.step_num * self.stride * stride, 0, count)
+                if flat._float_arithmetic_exact():
+                    return flat
             return replace(
                 self,
                 count=count,
@@ -2037,6 +2042,21 @@ class Grid:
             count,
             phase=phase,
         )
+
+    def _float_arithmetic_exact(self) -> bool:
+        """Whether the float expression needs no rounding on its binary grid."""
+        # All denominators are powers of two. Bound every intermediate in
+        # units of the finest one, at the narrowest operand's precision.
+        start, start_den = self.origin.as_integer_ratio()
+        step, step_den = self.step_num.as_integer_ratio()
+        den = max(start_den, step_den)
+        start, step = start * (den // start_den), step * (den // step_den)
+        count = self.count if self.parent_count is None else self.parent_count
+        bits = min(
+            np.finfo(np.result_type(value, 0.0)).nmant + 1
+            for value in (self.origin, self.step_num)
+        )
+        return max(abs(start), abs(step * count), abs(start + step * count)) <= 2**bits
 
     def resized(self, count: int, dtype) -> Grid:
         """Restate a grid's extent, as an explicit resize or gap fill requests."""
@@ -3266,7 +3286,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
                     )
                 )
             else:
-                runs.append(replace(run, origin=run.origin + delta))
+                start = run.labels(0, self.dtype)[()] + delta
+                runs.append(Grid(start, run.step(self.dtype), 0, run.count))
         # A shift off the coordinate's own dtype -- an integer moved half a
         # step -- states the labels it lands on, not the ones it left. A
         # tick grid has already refused a delta it cannot hold.

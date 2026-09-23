@@ -132,3 +132,26 @@ class TestFloatSlices:
         payload["runs"][0][field] = 0
         with pytest.raises(ValueError, match="positive length and nonzero stride"):
             get_coord(**payload)
+
+    @pytest.mark.parametrize(
+        "start,step", [(0.0, 1.0), (2.5, 0.125), (np.float32(100), np.float32(0.5))]
+    )
+    def test_exact_binary_grid_fuses(self, start, step):
+        """Exactly representable slices keep the same normal form as fresh grids."""
+        parent = get_coord(start=start, step=step, shape=(20,))
+        first = parent[:5]
+        second = get_coord(start=start + 5 * step, step=step, shape=(5,))
+        result = concat_coords(first, second)
+        assert result.evenly_sampled
+        assert result.values.tobytes() == parent.values[:10].tobytes()
+        direct = get_coord(start=start + 2 * step, step=step, shape=(3,))
+        assert parent[2:5] == direct
+        assert parent[2:5].data_id == direct.data_id
+
+    @pytest.mark.parametrize("start,step", [(1e9, 0.03), (np.float32(1e6), 0.1)])
+    def test_shift_honors_minimum(self, start, step):
+        """An explicit shift anchors the current first label, not its parent."""
+        coord = get_coord(start=start, step=step, shape=(100,))[73:93:2]
+        result = coord.update_limits(min=0)
+        assert result.min() == 0
+        assert len(result.select((0, 0))[0]) == 1

@@ -141,6 +141,17 @@ class TestNodeCodec:
         assert back.values.tobytes() == parent.values[indexer].tobytes()
         assert back.data_id == coord.data_id
 
+    @pytest.mark.parametrize("step", [0.1, np.float32(0.1), np.float64(0.1)])
+    def test_float_window_step_precision(self, h5, step):
+        """The scalar step's precision is part of the original expression."""
+        parent = get_coord(start=np.float64(0.1), step=step, shape=(100,))
+        coord = parent[89:2:-2]
+        name = f"window_{type(step).__name__}"
+        _save_coord(coord, name, h5, compact=True)
+        back = _read_coord(h5[name], name, {}, snap=True)
+        assert back.values.tobytes() == parent.values[89:2:-2].tobytes()
+        assert back.data_id == coord.data_id
+
     def test_float_step_keeps_its_precision(self, h5):
         """A float64 step on a float32 start counts the same samples back."""
         coord = get_coord(

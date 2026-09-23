@@ -221,6 +221,9 @@ def _save_coord(coord, name, group, compact: bool):
                 node.attrs["step"] = _raw(coord.step, coord.dtype)
                 node.attrs["grid_origin"] = _raw(grid.origin, coord.dtype)
                 node.attrs["grid_step"] = _raw(grid.step_num, coord.dtype)
+                node.attrs["grid_step_is_numpy"] = isinstance(
+                    grid.step_num, np.floating
+                )
                 node.attrs["parent_count"] = grid.parent_count
                 node.attrs["k0"] = grid.k0
                 node.attrs["stride"] = grid.stride
@@ -360,7 +363,7 @@ def _read_range(node, units):
     step = attrs.get("grid_step", attrs["step"])
     if dtype.kind in "mM":
         step = np.asarray(step).astype(_scalar_dtype(dtype, "step"))[()]
-    elif isinstance(step, np.floating):
+    elif isinstance(step, np.floating) and not attrs.get("grid_step_is_numpy", False):
         # as the python float it was written from: a numpy scalar would
         # promote a float32 range to float64
         step = step.item()

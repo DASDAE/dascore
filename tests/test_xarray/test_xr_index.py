@@ -525,6 +525,17 @@ class TestAlignment:
         with pytest.raises(xr.AlignmentError):
             xr.align(lazy.isel(x=slice(0, 3)), other, join="exact")
 
+    @pytest.mark.parametrize(
+        "start,step,indexer", [(0.0, 1.0, slice(5, 10)), (0.1, 0.1, slice(3, 4))]
+    )
+    def test_float_window_exact_alignment(self, start, step, indexer):
+        """Identical labels align even when only one grid retains a parent."""
+        sliced = get_coord(start=start, step=step, shape=(100,))[indexer]
+        direct = get_coord(start=sliced[0], step=step, shape=(len(sliced),))
+        assert np.array_equal(sliced.values, direct.values)
+        first, second = xr.align(_pair(sliced)[0], _pair(direct)[0], join="exact")
+        assert np.array_equal(first["x"].values, second["x"].values)
+
     def test_partitioning_is_not_a_difference_in_labels(self):
         """One set of labels held as different runs still joins exactly."""
         values = np.array([0, 1, 3, 4, 6, 9])
