@@ -198,7 +198,14 @@ def _source_manager(resolver, row, files=None, projection=None):
             return None
         if projection is not None:
             coord = _row_coordinate(row, projection)
-            if coord is not None:
+            dtype = row.get(f"_{projection}_coord_dtype")
+            # Float envelopes omit the expression that rounded each label.
+            # Only integer/tick grids can supply exact samples from the index.
+            if (
+                coord is not None
+                and isinstance(dtype, str)
+                and np.dtype(dtype).kind in "iuMm"
+            ):
                 return _one_coordinate(projection, coord)
         coords = file_source_coords(resolver, row, files)
     return None if coords is None else _project_manager(coords, projection)

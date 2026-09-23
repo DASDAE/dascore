@@ -566,6 +566,56 @@ class TestExplicitChunk:
 class TestExplicitMetadataSources:
     """File and in-memory sources report the same exact windows."""
 
+    @pytest.mark.parametrize("method", ["select", "chunk"])
+    @pytest.mark.parametrize("directory", [False, True])
+    @pytest.mark.parametrize(
+        "start,step,indices",
+        [
+            (0.1, 0.1, (44, 44)),
+            (-3.3, 1.0209, (3, 12)),
+            (1e9, 0.03, (44, 44)),
+            (np.float32(0.1), 0.1, (3, 12)),
+        ],
+    )
+    def test_file_float_window_preserves_labels(
+        self, tmp_path, method, directory, start, step, indices
+    ):
+        """An indexed float envelope cannot reconstruct a sliced grid's labels."""
+        coord = get_coord(start=start, step=step, shape=(100,))[3:93:2]
+        patch = dc.Patch(
+            data=np.arange(len(coord)),
+            coords={"distance": coord},
+            dims=("distance",),
+        )
+        path = tmp_path / "float.h5"
+        dc.write(patch, path, file_format="DASDAE")
+        source = (
+            dc.spool(tmp_path).update(progress=None) if directory else dc.spool(path)
+        )
+        bounds = tuple(coord.values[list(indices)])
+        expected = patch.select(distance=bounds)
+        windows = np.array([bounds])
+        result = getattr(source, method)(distance=windows)
+        assert len(result) == 1
+        contents = result.get_contents()
+        if method == "chunk":
+            plan = source.chunk_plan(distance=windows)
+            assert (
+                plan.outputs["distance_min"].iloc[0] == contents["distance_min"].iloc[0]
+            )
+            assert (
+                plan.outputs["distance_max"].iloc[0] == contents["distance_max"].iloc[0]
+            )
+        loaded = result[0]
+        expected_coord = expected.get_coord("distance")
+        assert (
+            loaded.get_coord("distance").values.tobytes()
+            == expected_coord.values.tobytes()
+        )
+        assert np.array_equal(loaded.data, expected.data)
+        assert contents["distance_min"].iloc[0] == expected_coord.min()
+        assert contents["distance_max"].iloc[0] == expected_coord.max()
+
     def test_regular_file_derived_window_uses_indexed_grid(self, tmp_path, monkeypatch):
         """A nested regular file window needs no payload coordinate scan."""
         path = tmp_path / "regular.h5"
