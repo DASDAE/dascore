@@ -198,7 +198,7 @@ def _save_coord(coord, name, group, compact: bool):
     elif compact and grid is not None and not _extended_float(coord):
         object_type = _RANGE
         node = group.create_dataset(name, shape=(0,), dtype="int64")
-        origin, num, den, phase = grid.canonical()
+        origin, num, den, phase = grid.canonical()[:4]
         node.attrs["dtype"] = str(coord.dtype)
         node.attrs["length"] = len(coord)
         if grid.exact:
@@ -212,6 +212,21 @@ def _save_coord(coord, name, group, compact: bool):
             node.attrs["start"] = _raw(origin, coord.dtype)
             node.attrs["stop"] = _raw(origin + num * grid.count, coord.dtype)
             node.attrs["step"] = _raw(num, coord.dtype)
+            if grid.parent_count is not None:
+                # Keep the ordinary range fields meaningful to older readers.
+                node.attrs["start"] = _raw(grid.labels(0, coord.dtype)[()], coord.dtype)
+                node.attrs["stop"] = _raw(
+                    grid.labels(grid.count, coord.dtype)[()], coord.dtype
+                )
+                node.attrs["step"] = _raw(coord.step, coord.dtype)
+                node.attrs["grid_origin"] = _raw(grid.origin, coord.dtype)
+                node.attrs["grid_step"] = _raw(grid.step_num, coord.dtype)
+                node.attrs["grid_step_is_numpy"] = isinstance(
+                    grid.step_num, np.floating
+                )
+                node.attrs["parent_count"] = grid.parent_count
+                node.attrs["k0"] = grid.k0
+                node.attrs["stride"] = grid.stride
     else:
         node = _save_array(coord.values, name, group)
         # Version 1 reads an array's step as a range to rebuild from its
@@ -343,16 +358,26 @@ def _read_range(node, units):
             step_denominator=den,
             origin_offset=phase,
         )
-    step = attrs["step"]
+    if "parent_count" in attrs:
+        start = np.asarray(attrs["grid_origin"]).astype(dtype)[()]
+    step = attrs.get("grid_step", attrs["step"])
     if dtype.kind in "mM":
         step = np.asarray(step).astype(_scalar_dtype(dtype, "step"))[()]
-    elif isinstance(step, np.floating):
+    elif isinstance(step, np.floating) and not attrs.get("grid_step_is_numpy", False):
         # as the python float it was written from: a numpy scalar would
         # promote a float32 range to float64
         step = step.item()
     # The stored fields are a validated range's own; deriving the count
     # from them again can move a float32 endpoint by a sample.
-    run = Grid(start, step, 0, shape[0])
+    run = Grid(
+        start,
+        step,
+        0,
+        shape[0],
+        k0=int(attrs.get("k0", 0)),
+        parent_count=attrs.get("parent_count"),
+        stride=int(attrs.get("stride", 1)),
+    )
     return get_coord(runs=(run,), dtype=dtype, units=units)
 
 

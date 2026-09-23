@@ -10,6 +10,7 @@ import pytest
 
 import dascore as dc
 from dascore.core.coords import (
+    Grid,
     Labels,
     NumericCoord,
     concat_coords,
@@ -285,19 +286,23 @@ class TestIsel:
         assert index.coordinate == MS[indexer]
 
     def test_float_slices_keep_their_labels(self):
-        """A float range's slice is materialized, keeping the labels it selects."""
+        """A float range's slice stays compact and keeps the labels it selects."""
         coord = COORDS["float"]
         lazy, _ = _pair(coord)
         sub = lazy.isel(x=slice(3, 20))
+        assert sub.xindexes["x"].coordinate.evenly_sampled
+        assert sub["x"].values.tobytes() == coord.values[3:20].tobytes()
         assert sub.sel(x=coord.values[5]).values == 5
         assert (lazy + sub).sizes["x"] == 17
 
     def test_segmented_slice_stays_lazy(self):
         """A contiguous slice of a segmented coordinate is served lazily too."""
-        lazy, _ = _pair(COORDS["segmented"])
+        coord = COORDS["segmented"]
+        lazy, _ = _pair(coord)
         assert isinstance(lazy.isel(x=slice(10, 60)).xindexes["x"], CoordIndex)
         strided = lazy.isel(x=slice(10, 60, 2)).xindexes["x"]
-        assert isinstance(strided.coordinate.runs[0], Labels)
+        assert all(isinstance(run, Grid) for run in strided.coordinate.runs)
+        assert np.array_equal(strided.coordinate.values, coord.values[10:60:2])
 
     def test_fancy_indexing_holds_its_picks(self):
         """Fancy indexing holds the picked labels, and still aligns with a slice."""
@@ -520,6 +525,17 @@ class TestAlignment:
         with pytest.raises(xr.AlignmentError):
             xr.align(lazy.isel(x=slice(0, 3)), other, join="exact")
 
+    @pytest.mark.parametrize(
+        "start,step,indexer", [(0.0, 1.0, slice(5, 10)), (0.1, 0.1, slice(3, 4))]
+    )
+    def test_float_window_exact_alignment(self, start, step, indexer):
+        """Identical labels align even when only one grid retains a parent."""
+        sliced = get_coord(start=start, step=step, shape=(100,))[indexer]
+        direct = get_coord(start=sliced[0], step=step, shape=(len(sliced),))
+        assert np.array_equal(sliced.values, direct.values)
+        first, second = xr.align(_pair(sliced)[0], _pair(direct)[0], join="exact")
+        assert np.array_equal(first["x"].values, second["x"].values)
+
     def test_partitioning_is_not_a_difference_in_labels(self):
         """One set of labels held as different runs still joins exactly."""
         values = np.array([0, 1, 3, 4, 6, 9])
@@ -540,6 +556,31 @@ class TestAlignment:
             lambda *_: pytest.fail("the labels were read"),
         )
         assert not _same_labels(MS, descending)
+
+    @pytest.mark.parametrize("start,step", [(0.2, 0.1), (0.1, 0.100001)])
+    def test_unequal_float_alignment_reads_few_labels(self, monkeypatch, start, step):
+        """Mismatched float axes are rejected without reading the full axis."""
+        coords = [
+            get_coord(start=0.1, step=0.1, shape=(100_000,)),
+            get_coord(start=start, step=step, shape=(100_000,)),
+        ]
+        arrays = [
+            xr.DataArray(
+                da.zeros(len(coord), chunks=10_000),
+                dims=("x",),
+                coords=xr.Coordinates.from_xindex(CoordIndex.from_coord("x", coord)),
+            )
+            for coord in coords
+        ]
+        original = NumericCoord._get_index_values
+
+        def _bounded(self, indices):
+            assert np.size(indices) <= 2, "alignment evaluated the full axis"
+            return original(self, indices)
+
+        monkeypatch.setattr(NumericCoord, "_get_index_values", _bounded)
+        with pytest.raises(xr.AlignmentError):
+            xr.align(*arrays, join="exact")
 
     def test_equal_labels_need_no_join(self):
         """Arrays whose coordinates label alike stay lazy."""
