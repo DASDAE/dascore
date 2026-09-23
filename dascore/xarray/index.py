@@ -86,6 +86,11 @@ def _same_labels(first: BaseCoord, second: BaseCoord) -> bool:
             if all(grid is not None and grid.exact for grid in grids):
                 return False  # exact grids have one canonical identity
             # Float windows can spell identical labels with different parents.
+            ends = [0, len(first) - 1]
+            if not np.array_equal(
+                first._get_index_values(ends), second._get_index_values(ends)
+            ):
+                return False
     # An id names the runs a coordinate holds as well as the labels they
     # spell, so two ways of partitioning one set of labels differ by it.
     positions = np.arange(len(first))

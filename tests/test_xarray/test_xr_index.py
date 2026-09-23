@@ -557,6 +557,31 @@ class TestAlignment:
         )
         assert not _same_labels(MS, descending)
 
+    @pytest.mark.parametrize("start,step", [(0.2, 0.1), (0.1, 0.100001)])
+    def test_unequal_float_alignment_reads_few_labels(self, monkeypatch, start, step):
+        """Mismatched float axes are rejected without reading the full axis."""
+        coords = [
+            get_coord(start=0.1, step=0.1, shape=(100_000,)),
+            get_coord(start=start, step=step, shape=(100_000,)),
+        ]
+        arrays = [
+            xr.DataArray(
+                da.zeros(len(coord), chunks=10_000),
+                dims=("x",),
+                coords=xr.Coordinates.from_xindex(CoordIndex.from_coord("x", coord)),
+            )
+            for coord in coords
+        ]
+        original = NumericCoord._get_index_values
+
+        def _bounded(self, indices):
+            assert np.size(indices) <= 2, "alignment evaluated the full axis"
+            return original(self, indices)
+
+        monkeypatch.setattr(NumericCoord, "_get_index_values", _bounded)
+        with pytest.raises(xr.AlignmentError):
+            xr.align(*arrays, join="exact")
+
     def test_equal_labels_need_no_join(self):
         """Arrays whose coordinates label alike stay lazy."""
         distance = get_coord(start=0.0, step=0.5, shape=(20,), units="m")
