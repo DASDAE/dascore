@@ -25,7 +25,7 @@ import dascore as dc
 import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
 from dascore.config import config_context
-from dascore.core.coords import CoordRange, CoordSegmented
+from dascore.core.coords import NumericCoord
 from dascore.core.lazy_array import LazyArray
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
@@ -48,6 +48,11 @@ from dascore.utils.patch_assembly import (
     _match_merge_units,
 )
 from dascore.utils.time import to_int, to_timedelta64
+
+
+def _is_segmented(coord) -> bool:
+    """True when the coordinate holds more than one run, as a gap makes it."""
+    return isinstance(coord, NumericCoord) and coord.runs_count > 1
 
 
 @pytest.fixture(scope="class")
@@ -890,7 +895,7 @@ class TestDescendingChunk:
         flipped = p.flip("time")
         t = p.get_coord("time")
         span = t.max() - t.min() + t.step
-        shifted = flipped.update_coords(time=flipped.get_coord("time").data + span)
+        shifted = flipped.update_coords(time=flipped.get_coord("time").values + span)
         merged = dc.spool([shifted, flipped]).chunk(time=None, conflict="drop")
         assert len(merged) == 1
         patch = merged[0]
@@ -909,7 +914,7 @@ class TestMixedUnitChunk:
         """The example patch shifted to be distance-contiguous, in units."""
         d = patch.get_coord("distance")
         span = d.max() - d.min() + d.step
-        values = d.data + span
+        values = d.values + span
         if units == "ft":
             values = values / 0.3048
         out = patch.update_coords(distance=values)
@@ -956,7 +961,7 @@ class TestMixedUnitChunk:
         pm = dc.get_example_patch().set_units(distance="m")
         d = pm.get_coord("distance")
         span = float(d.max() - d.min() + d.step)
-        values = (d.data + span) / 0.3048
+        values = (d.values + span) / 0.3048
         pf = pm.update_coords(distance=values).set_units(distance="ft")
         sp = dc.spool([pm, pf])
         out = sp.chunk(distance=200, conflict="keep_first", keep_partial=True)
@@ -970,7 +975,7 @@ class TestMixedUnitChunk:
         pm = dc.get_example_patch().set_units(distance="m")
         d = pm.get_coord("distance")
         span = float(d.max() - d.min() + d.step)
-        pf = pm.update_coords(distance=(d.data + span) / 0.3048)
+        pf = pm.update_coords(distance=(d.values + span) / 0.3048)
         return dc.spool([pm, pf.set_units(distance="ft")])
 
     def test_single_member_output_speaks_plan_units(self):
@@ -1024,7 +1029,7 @@ class TestMixedUnitChunk:
         pm = dc.get_example_patch().set_units(distance="m")
         d = pm.get_coord("distance")
         span = float(d.max() - d.min() + d.step)
-        pf = pm.update_coords(distance=(d.data + span) / 0.3048)
+        pf = pm.update_coords(distance=(d.values + span) / 0.3048)
         pf = pf.set_units(distance="ft")
         first = dc.spool([pm, pf]).chunk(distance=200, keep_partial=True)
         second = first.chunk(distance=None, conflict="keep_first")
@@ -1505,7 +1510,7 @@ class TestQuantityTolerance:
             assert len(merged) == 1
             # and the patch it advertises actually loads: an infinite
             # count is no bound on the snap, not a bound of NaT
-            assert isinstance(merged[0].get_coord("time"), CoordSegmented)
+            assert _is_segmented(merged[0].get_coord("time"))
 
     def test_exchanged_boundary_warns(self):
         """A forced merge warns even when the partition count is unchanged."""
@@ -1558,7 +1563,7 @@ class TestQuantityTolerance:
         snapped_coord, exact_coord = (x.get_coord("time") for x in (snapped, exact))
         # snapping the merge is now a no-op: the hole stays a seam and
         # every label keeps the value the source patch gave it
-        assert isinstance(snapped_coord, CoordSegmented)
+        assert _is_segmented(snapped_coord)
         assert snapped_coord.step == step
         assert np.array_equal(snapped_coord.values, exact_coord.values)
 
@@ -1573,8 +1578,8 @@ class TestQuantityTolerance:
         spool = dc.spool((base, after))
         snapped = spool.chunk(time=None)[0].get_coord("time")
         exact = spool.chunk(time=None, snap_coords=False)[0].get_coord("time")
-        assert isinstance(snapped, CoordRange)
-        assert isinstance(exact, CoordSegmented)
+        assert snapped.evenly_sampled
+        assert _is_segmented(exact)
         # no sample moved far enough to land on another grid position,
         # and none moved past the tolerance the merge was given either
         deviation = abs(snapped.values - exact.values).max()
@@ -3019,7 +3024,7 @@ class TestChunkFillValue:
         step = first.get_coord("time").step
         merged = gapped_spool.chunk(time=None, tolerance=10, fill_value=np.nan)[0]
         coord = merged.get_coord("time")
-        assert isinstance(coord, CoordRange)
+        assert coord.evenly_sampled
         assert coord.step == step
         # the fill belongs where the samples are missing, not at an end
         start = len(first.get_coord("time"))
@@ -3034,7 +3039,7 @@ class TestChunkFillValue:
         """Without one the merge is segmented, as it is with no tolerance to span."""
         with pytest.warns(UserWarning, match="fill_value"):
             merged = gapped_spool.chunk(time=None, tolerance=10)[0]
-        assert isinstance(merged.get_coord("time"), CoordSegmented)
+        assert _is_segmented(merged.get_coord("time"))
 
     def test_fill_value_does_not_widen_the_tolerance(self, gapped_spool):
         """A hole the tolerance does not span is still a boundary."""
@@ -3049,14 +3054,14 @@ class TestChunkFillValue:
     def test_nothing_to_fill_is_untouched(self, random_spool):
         """A contiguous spool merges as it would without a fill value."""
         merged = random_spool.chunk(time=None, fill_value=np.nan)[0]
-        assert isinstance(merged.get_coord("time"), CoordRange)
+        assert merged.get_coord("time").evenly_sampled
         assert not np.isnan(merged.data).any()
 
     def test_single_member_hole_fills_in_place(self, gapped_spool):
         """A lone member carrying its own hole is filled at the hole, not the end."""
         with pytest.warns(UserWarning, match="fill_value"):
             gapped = gapped_spool.chunk(time=None, tolerance=20)[0]
-        assert isinstance(gapped.get_coord("time"), CoordSegmented)
+        assert _is_segmented(gapped.get_coord("time"))
         # one source patch, so nothing is merged and only the fill reshapes it
         filled = dc.spool([gapped]).chunk(time=None, tolerance=20, fill_value=np.nan)[0]
         where = np.flatnonzero(np.isnan(filled.data).all(axis=0))
@@ -3088,7 +3093,7 @@ class TestChunkFillValue:
         with pytest.warns(UserWarning, match="fill_value"):
             merged = spool.chunk(time=None, tolerance=20)[0]
         merged_coord = merged.get_coord("time")
-        assert isinstance(merged_coord, CoordSegmented)
+        assert _is_segmented(merged_coord)
         # the pathology: one range whose step was stretched to cover the hole
         assert abs(merged_coord.segments[0].step - coord.step) < to_timedelta64(1e-8)
 
@@ -3111,7 +3116,7 @@ class TestChunkFillValue:
     def test_infinite_tolerance_fills_every_hole(self, gapped_spool):
         """No boundary is a gap, so no hole is too wide to fill."""
         merged = gapped_spool.chunk(time=None, tolerance=np.inf, fill_value=np.nan)[0]
-        assert isinstance(merged.get_coord("time"), CoordRange)
+        assert merged.get_coord("time").evenly_sampled
         assert len(self._fill_positions(merged)) == self.hole
 
     def test_absolute_tolerance_fills(self, gapped_spool, random_patch):
@@ -3212,7 +3217,7 @@ class TestChunkFillWindows:
         spool = dc.spool(path).update()
         merged = spool.chunk(time=None, tolerance=10, fill_value=np.nan)[0]
         coord = merged.get_coord("time")
-        assert isinstance(coord, CoordRange)
+        assert coord.evenly_sampled
         assert coord.step == random_patch.get_coord("time").step
         # placed at the hole the sources left, not appended at an end
         where = np.flatnonzero(np.isnan(merged.data).all(axis=0))
@@ -4175,7 +4180,7 @@ class TestTrimmedRecipeMerge:
         first = dc.get_example_patch().set_units(distance="m")
         coord = first.get_coord("distance")
         span = float(coord.max() - coord.min() + coord.step)
-        second = first.update_coords(distance=(coord.data + span) / 0.3048)
+        second = first.update_coords(distance=(coord.values + span) / 0.3048)
         second = second.set_units(distance="ft")
         for num, patch in enumerate((first, second)):
             patch.io.write(tmp_path / f"u{num}.h5", "dasdae")

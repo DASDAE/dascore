@@ -29,43 +29,36 @@ from xarray.indexes import CoordinateTransform, CoordinateTransformIndex, Pandas
 
 from dascore.core.coords import (
     BaseCoord,
-    CoordArray,
-    CoordMonotonicArray,
-    CoordRange,
-    CoordSegmented,
+    Grid,
+    NumericCoord,
     concat_coords,
     get_coord,
 )
 from dascore.exceptions import CoordError
 from dascore.utils.indexing import label_indexer, positional_indexer
-from dascore.utils.misc import is_strictly_monotonic
 from dascore.utils.time import dtype_time_like
 
 
 def is_servable(coord) -> bool:
     """Whether `CoordIndex` can serve a coordinate's labels."""
-    if isinstance(coord, CoordSegmented):
+    if isinstance(coord, NumericCoord) and coord.runs_count > 1:
         return True
     # a zero step repeats one label, which no index can look up
-    return isinstance(coord, CoordRange) and bool(coord.step)
+    return getattr(coord, "evenly_sampled", False) and bool(coord.step)
 
 
 def _relabels_exactly(coord) -> bool:
     """Whether slices of a coordinate keep exactly the labels they select."""
-    # a float range recomputes a slice's labels from its new start, which
+    # a float run recomputes a slice's labels from its new start, which
     # can move them in the last bits, and then they no longer align
-    if isinstance(coord, CoordSegmented):
-        return all(_relabels_exactly(x) for x in coord.segments)
-    return not isinstance(coord, CoordRange) or coord._exact
+    return all(not isinstance(x, Grid) or x.exact for x in getattr(coord, "runs", ()))
 
 
 def _array_coord(labels, units) -> BaseCoord:
     """Labels held as they are, never re-inferred as a range."""
     if np.asarray(labels).dtype.kind in "USO":
         return get_coord(data=labels, units=units)  # text keeps its own class
-    monotonic = len(labels) > 1 and is_strictly_monotonic(labels)
-    cls = CoordMonotonicArray if monotonic else CoordArray
-    return cls(values=labels, units=units)
+    return NumericCoord.from_labels(labels, units=units)
 
 
 def _as_pandas(index) -> PandasIndex:
@@ -81,16 +74,20 @@ def _same_labels(first: BaseCoord, second: BaseCoord) -> bool:
         return True
     if len(first) != len(second) or first.dtype != second.dtype:
         return False
-    if not (is_servable(first) and is_servable(second)):
-        # a side which holds its labels costs nothing more to compare
-        positions = np.arange(len(first))
-        labels = (x._get_index_values(positions) for x in (first, second))
-        return bool(np.array_equal(next(labels), next(labels)))
-    if first.units != second.units:
-        # xarray states units as an attribute beside the labels, so an
-        # index compares labels only, as a materialized index does
-        first, second = first.set_units(None), second.set_units(None)
-    return first.data_id == second.data_id
+    if is_servable(first) and is_servable(second):
+        if first.units != second.units:
+            # xarray states units as an attribute beside the labels, so an
+            # index compares labels only, as a materialized index does
+            first, second = first.set_units(None), second.set_units(None)
+        if first.data_id == second.data_id:
+            return True
+        if first.evenly_sampled and second.evenly_sampled:
+            return False  # one grid's id names its labels and nothing else
+    # An id names the runs a coordinate holds as well as the labels they
+    # spell, so two ways of partitioning one set of labels differ by it.
+    positions = np.arange(len(first))
+    labels = (x._get_index_values(positions) for x in (first, second))
+    return bool(np.array_equal(next(labels), next(labels)))
 
 
 def _chained(coords: list[BaseCoord]) -> BaseCoord | None:
@@ -254,7 +251,7 @@ class CoordIndex(CoordinateTransformIndex):
             start, stop, stride = idx.indices(len(coord))
             positions = range(start, stop, stride)
             # a strided segmented coordinate is an array of its labels
-            lazy = isinstance(coord, CoordRange) or stride == 1
+            lazy = coord.evenly_sampled or stride == 1
             if len(positions) and lazy and _relabels_exactly(coord):
                 return self._with(coord[idx])
             return self._picked(np.asarray(positions, dtype=np.int64))

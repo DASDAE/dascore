@@ -56,7 +56,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.utils import get_exact_coord, should_snap, windows_to_slices
+from dascore.io.utils import should_snap, windows_to_slices
 from dascore.models import OptionalFiniteFloat, PositiveFiniteFloat, PositiveInt
 from dascore.utils.misc import optional_import, suppress_warnings
 
@@ -807,7 +807,9 @@ def _get_times(times: list[np.datetime64 | None], snap: snap_type = True):
     """
     values = np.asarray(times, dtype="datetime64[ns]")
     return (
-        get_coord(data=values) if should_snap(snap, "time") else get_exact_coord(values)
+        get_coord(data=values)
+        if should_snap(snap, "time")
+        else get_coord(data=values, snap=False)
     )
 
 

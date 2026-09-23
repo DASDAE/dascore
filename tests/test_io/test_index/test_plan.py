@@ -691,7 +691,7 @@ class TestChunkOnlyOnDims:
         t = p.get_coord("time")
         base = p.mean("time").squeeze()
         n = base.shape[base.get_axis("distance")]
-        return base.update_coords(time=("distance", t.data[:n]))
+        return base.update_coords(time=("distance", t.values[:n]))
 
     def test_aux_only_raises_with_detail(self, aux_time_patch):
         """The default error explains the name rides as a coordinate."""

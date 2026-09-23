@@ -20,7 +20,7 @@ from upath import UPath
 
 import dascore as dc
 from dascore.config import config_context
-from dascore.core.coords import CoordSegmented, get_coord
+from dascore.core.coords import get_coord
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
     DependencyError,
@@ -52,7 +52,6 @@ from dascore.io.core import (
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.utils import (
     convert_attr_units,
-    get_exact_coord,
     resolve_keyed_source,
     slice_dataset,
     step_from_interval,
@@ -303,14 +302,14 @@ class _DependencyErrorFormatter(FiberIO):
         return None
 
 
-class TestGetExactCoord:
+class TestExactCoord:
     """Tests for constructing exact coordinates during scans."""
 
     def test_preserves_irregular_monotonic_values(self):
         """Irregular monotonic arrays should retain every stored value."""
         values = np.array([0.0, 1.0, 2.0, 5.0, 6.0])
 
-        coord = get_exact_coord(values, units="m")
+        coord = get_coord(data=values, units="m", snap=False)
 
         np.testing.assert_array_equal(coord.values, values)
         assert coord.units == dc.get_quantity("m")
@@ -319,7 +318,7 @@ class TestGetExactCoord:
         """Non-monotonic arrays should use the exact generic fallback."""
         values = np.array([0.0, 2.0, 1.0])
 
-        coord = get_exact_coord(values)
+        coord = get_coord(data=values, snap=False)
 
         np.testing.assert_array_equal(coord.values, values)
 
@@ -331,12 +330,12 @@ class TestGetExactCoord:
             np.arange(n) * 1000 + rng.integers(-3, 4, size=n)
         ).astype("datetime64[ns]")
 
-        coord = get_exact_coord(values)
+        coord = get_coord(data=values, snap=False)
 
         # Values are preserved exactly, but the degenerate segmented form is
         # avoided (it would hold roughly n / 2 short segments).
         np.testing.assert_array_equal(coord.values, values)
-        assert not isinstance(coord, CoordSegmented)
+        assert coord.runs_count == 1
 
     @pytest.mark.parametrize("length", [999, 1000, 2000])
     @pytest.mark.parametrize("reverse", [False, True])
@@ -346,10 +345,10 @@ class TestGetExactCoord:
         values += np.random.default_rng(4).uniform(-1e-5, 1e-5, length)
         values = values[::-1] if reverse else values
 
-        coord = get_exact_coord(values, units="m")
+        coord = get_coord(data=values, units="m", snap=False)
 
         np.testing.assert_array_equal(coord.values, values)
-        assert not isinstance(coord, CoordSegmented)
+        assert coord.runs_count == 1
         assert coord.units == dc.get_quantity("m")
         assert coord.reverse_sorted == reverse
 
@@ -357,7 +356,7 @@ class TestGetExactCoord:
     def test_unsigned_unsorted_selection(self, repeats):
         """Unsigned difference wraparound must not select a monotonic search path."""
         values = np.tile(np.array([0, 2, 1, 3], dtype=np.uint16), repeats)
-        coord = get_exact_coord(values)
+        coord = get_coord(data=values, snap=False)
 
         np.testing.assert_array_equal(coord.values, values)
         selected, indexer = coord.select((1, 1))
@@ -370,7 +369,7 @@ class TestGetExactCoord:
         rng = np.random.default_rng(1)
         values = rng.permutation(2_000).astype(float)
 
-        coord = get_exact_coord(values, units="m")
+        coord = get_coord(data=values, units="m", snap=False)
 
         np.testing.assert_array_equal(coord.values, values)
 
@@ -378,9 +377,9 @@ class TestGetExactCoord:
         """Genuinely piecewise-uniform arrays keep their queryable seams."""
         values = np.concatenate([np.arange(0.0, 2_000.0), np.arange(3_000.0, 5_000.0)])
 
-        coord = get_exact_coord(values, units="m")
+        coord = get_coord(data=values, units="m", snap=False)
 
-        assert isinstance(coord, CoordSegmented)
+        assert coord.runs_count > 1
         np.testing.assert_array_equal(coord.values, values)
         assert len(coord.get_discontinuities("gaps")) == 1
 
@@ -2293,4 +2292,4 @@ class TestStepFromRate:
         t0 = np.datetime64("2020-01-01T00:00:00", "ns")
         coord = get_coord(start=t0, step=step_from_rate(1024.0), shape=(1024,))
         assert coord.step_exact == Fraction(1, 1024)
-        assert coord.stop == t0 + np.timedelta64(1, "s")
+        assert coord.min() + coord.coord_range() == t0 + np.timedelta64(1, "s")

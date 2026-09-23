@@ -7,7 +7,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.core import get_coord
-from dascore.io.utils import get_exact_coord, should_snap
+from dascore.io.utils import should_snap
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
@@ -48,7 +48,7 @@ def _get_coord(v, snap, name):
         assert len(coord) == length
     else:
         values = v[:] if name != "time" else dc.to_datetime64(v[:])
-        coord = get_exact_coord(values)
+        coord = get_coord(data=values, snap=False)
     return coord
 
 

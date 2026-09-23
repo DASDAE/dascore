@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.core.coords import CoordMonotonicArray
+from dascore.core.coords import NumericCoord
 from dascore.core.source import ArraySource
 from dascore.exceptions import InvalidFiberFileError, InvalidFiberIOError
 from dascore.io import FiberIO, H5Reader
@@ -235,7 +235,7 @@ class TestNamedSnap:
             # correctly preserves its declared segments independently of snap.
             exact = exact.new(
                 coords={
-                    name: CoordMonotonicArray(values=coord.values)
+                    name: NumericCoord.from_labels(coord.values)
                     for name, coord in exact.coords.coord_map.items()
                 }
             )

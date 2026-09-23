@@ -693,7 +693,7 @@ class TestLineageIds:
     @pytest.mark.parametrize("upper", [False, True])
     @pytest.mark.parametrize("start,step", [(0.0, 1.0), (0.1, 0.1), (0.1, 0.001)])
     def test_single_range_keeps_grid_tolerance(self, tmp_path, upper, start, step):
-        """A bound within CoordRange's edge tolerance does not advance lineage."""
+        """A bound within an even grid's edge tolerance does not advance lineage."""
         patch = dc.get_example_patch().abs()
         values = start + np.arange(patch.shape[0]) * step
         patch.update_coords(distance=values).io.write(tmp_path / "source.h5", "dasdae")

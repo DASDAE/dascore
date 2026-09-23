@@ -7,7 +7,8 @@ from __future__ import annotations
 from pathlib import Path
 
 import dascore as dc
-from dascore.io.utils import get_exact_coord, get_gridded_coord, should_snap
+from dascore.core.coords import get_coord
+from dascore.io.utils import get_gridded_coord, should_snap
 from dascore.utils.misc import maybe_get_items, unbyte
 
 _G1_H5_BASE_DATASETS = frozenset(
@@ -175,7 +176,7 @@ def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
         """Return a tolerant or exact coordinate from stored values."""
         if should_snap(snap, name):
             return dc.get_coord(data=values, units=units)
-        return get_exact_coord(values, units=units)
+        return get_coord(data=values, units=units, snap=False)
 
     extra_coords = {} if extra_coords is None else extra_coords
     starts = resource["start_times"][...]
@@ -193,7 +194,7 @@ def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
     # slightly different steps, so subtracting the two built coords would turn
     # the jitter into a linear drift. Built exactly, and ignoring `snap`,
     # because that jitter is the signal.
-    sample_span = get_exact_coord(dc.to_timedelta64(ends - starts))
+    sample_span = get_coord(data=dc.to_timedelta64(ends - starts), snap=False)
     # The interrogator fixes the spatial sampling, so the stored distances
     # only restate a grid, quantized to float32. That quantization can exceed
     # the tolerance get_coord uses to recognize an even coordinate, leaving a
@@ -202,7 +203,7 @@ def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
     if should_snap(snap, "distance"):
         distance = get_gridded_coord(distances, units="m")
     else:
-        distance = get_exact_coord(distances, units="m")
+        distance = get_coord(data=distances, units="m", snap=False)
     temperature = _coord(resource["temperatures"][...], "temperature", units="°C")
     coords = {
         "time": time,

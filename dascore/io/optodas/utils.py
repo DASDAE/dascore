@@ -7,7 +7,7 @@ import numpy as np
 import dascore as dc
 import dascore.core
 from dascore.core.coords import get_coord
-from dascore.io.utils import get_exact_coord, should_snap
+from dascore.io.utils import should_snap
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
@@ -58,7 +58,7 @@ def _get_coord_manager(fi, snap=True):
             if should_snap(snap, dim):
                 coord = get_coord(data=distance, units=unit)
             else:
-                coord = get_exact_coord(distance, units=unit)
+                coord = get_coord(data=distance, units=unit, snap=False)
         coords[dim] = coord
     out = dascore.core.get_coord_manager(coords=coords, dims=dims)
     return out

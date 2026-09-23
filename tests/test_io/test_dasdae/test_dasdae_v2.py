@@ -10,10 +10,8 @@ import pytest
 
 import dascore as dc
 from dascore.core.coords import (
-    CoordMonotonicArray,
-    CoordRange,
-    CoordSegmented,
     CoordString,
+    NumericCoord,
     concat_coords,
     get_coord,
 )
@@ -40,7 +38,7 @@ def gapped_patch():
     second = patch.select(time=(t0 + np.timedelta64(1012, "ms"), None))
     spool = dc.spool([first, second]).chunk(time=None, tolerance=5, snap_coords=False)
     (out,) = spool
-    assert isinstance(out.get_coord("time"), CoordSegmented)
+    assert out.get_coord("time").runs_count > 1
     return out
 
 
@@ -99,7 +97,7 @@ class TestNodeCodec:
             _save_coord(CASES[name], f"typed_{name}", h5, compact=True)
         assert h5["typed_fraction"].attrs["object_type"] == "CoordRange"
         assert h5["typed_segmented"].attrs["object_type"] == "CoordSegmented"
-        assert h5["typed_array"].attrs["object_type"] == "CoordMonotonicArray"
+        assert h5["typed_array"].attrs["object_type"] == "NumericCoord"
         attrs = dict(h5["typed_fraction"].attrs)
         assert attrs["step_denominator"] == 2 and attrs["length"] == 4096
 
@@ -120,12 +118,13 @@ class TestNodeCodec:
 
     def test_array_segment_stays_exact(self, h5):
         """A near-uniform array segment is not snapped to a range on read."""
-        jitter = CoordMonotonicArray(values=np.array([0.0, 1.0, 2.0005, 3.0, 4.0]))
+        jitter = NumericCoord.from_labels(np.array([0.0, 1.0, 2.0005, 3.0, 4.0]))
         coord = concat_coords(jitter, get_coord(start=10.0, stop=15.0, step=1.0))
         _save_coord(coord, "jitter", h5, compact=True)
         back = _read_coord(h5["jitter"], "jitter", {}, snap=True)
         assert back == coord
-        assert isinstance(back.segments[0], CoordMonotonicArray)
+        first = back.segments[0]
+        assert first.sorted and not first.evenly_sampled
 
     def test_float_step_keeps_its_precision(self, h5):
         """A float64 step on a float32 start counts the same samples back."""
@@ -165,7 +164,7 @@ class TestVersion2Files:
         """A gapped patch is stored as one patch with its segments."""
         path = dc.write(gapped_patch, tmp_path / "gap.h5", "dasdae")
         (back,) = dc.read(path)
-        assert isinstance(back.get_coord("time"), CoordSegmented)
+        assert back.get_coord("time").runs_count > 1
         assert back.get_coord("time") == gapped_patch.get_coord("time")
         assert np.array_equal(back.data, gapped_patch.data)
         (scanned,) = dc.scan(path)
@@ -179,7 +178,7 @@ class TestVersion2Files:
         spool = dc.spool(path)
         assert len(spool) == 2
         for patch in spool:
-            assert isinstance(patch.get_coord("time"), CoordRange)
+            assert patch.get_coord("time").evenly_sampled
 
     def test_gapped_file_still_guarded(self, gapped_patch, tmp_path):
         """A gapped patch read from a file is guarded like one in memory."""
@@ -208,7 +207,8 @@ class TestVersion2Files:
         )
         path = dc.write(patch, tmp_path / "arr.h5", "dasdae")
         back = dc.read(path)[0]
-        assert isinstance(back.get_coord("distance"), CoordMonotonicArray)
+        distance = back.get_coord("distance")
+        assert distance.sorted and not distance.evenly_sampled
         assert isinstance(back.get_coord("tag"), CoordString)
         assert back == patch
 
@@ -220,7 +220,7 @@ class TestVersion2Files:
         path = dc.write(patch, tmp_path / "uneven.h5", "dasdae")
         (payload,) = dc.scan_payloads(path, snap=False)
         distance = payload.coords.coord_map["distance"]
-        assert isinstance(distance, CoordMonotonicArray)
+        assert distance.sorted and not distance.evenly_sampled
         np.testing.assert_array_equal(distance.values, uneven)
 
     def test_lazy_array_sizes_by_grid(self, tmp_path):
@@ -236,3 +236,19 @@ class TestVersion2Files:
         leaf = next(node for node in tree.subtree if "data" in node.dataset)
         assert leaf["data"].shape == data.shape
         assert leaf["data"].data.compute().shape == data.shape
+
+    @pytest.mark.parametrize(
+        "runs",
+        [
+            (np.array([10.0, 12.0, 15.0]), np.array([0.0, 2.0, 5.0])),
+            (np.array([0.0, 5.0, 2.0]), np.array([10.0, 12.0, 15.0])),
+        ],
+    )
+    def test_runs_read_back_in_written_order(self, runs, tmp_path):
+        """Labels may not be reordered, since the data they name does not move."""
+        coord = NumericCoord(runs=runs)
+        data = np.arange(float(len(coord)))
+        patch = dc.Patch(data=data, coords={"x": coord}, dims=("x",))
+        (back,) = dc.spool(dc.write(patch, tmp_path / "runs.h5", "dasdae"))
+        np.testing.assert_array_equal(back.get_coord("x").values, coord.values)
+        np.testing.assert_array_equal(back.data, data)

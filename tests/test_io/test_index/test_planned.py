@@ -413,7 +413,9 @@ class TestRePlanKeepsTheTrim:
         patch = dc.get_example_patch().set_units(distance="m")
         coord = patch.get_coord("distance")
         span = float(coord.max() - coord.min() + coord.step)
-        moved = patch.update_coords(distance=coord.data + span).set_units(distance="m")
+        moved = patch.update_coords(distance=coord.values + span).set_units(
+            distance="m"
+        )
         chunked = dc.spool([patch, moved]).chunk(
             distance=200, conflict="keep_first", keep_partial=True
         )
