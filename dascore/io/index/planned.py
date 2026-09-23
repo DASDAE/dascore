@@ -977,6 +977,11 @@ class PlanResolver(PatchResolver):
                 if coords is None:
                     # Unsupported metadata sources still have a patch loader.
                     coords = self._load_member({**anchor, "_modified": False}).coords
+                # Fill bounds use the plan's unit, while either anchor path
+                # can return coordinates in the source's native unit.
+                units = _stated_units(output.get(f"_{self.dim}_units"))
+                if units is not None:
+                    coords = coords.convert_units(**{self.dim: units})
                 self._fill_coords[output_id] = coords
             return self._fill_coords[output_id]
         ids = self.member_rows["output_id"].to_numpy()
@@ -1174,16 +1179,19 @@ def derived_catalog(
     )
     # the member's trimmed range replaces the source envelope for loading
     member_rows = member_rows.drop(columns=["_patch_row"])
+    anchors = (
+        sources[sources["_patch_row"].isin(plan.outputs["_anchor_patch_row"])]
+        if "_anchor_patch_row" in plan.outputs
+        else None
+    )
     loader = CompositeResolver()
     if parent is not None:
         member_paths = set(
             member_rows.get("source_path", pd.Series(dtype=str)).astype(str)
         )
-        if "_anchor_patch_row" in plan.outputs:
-            anchor_ids = set(plan.outputs["_anchor_patch_row"])
-            anchor_sources = sources[sources["_patch_row"].isin(anchor_ids)]
+        if anchors is not None:
             member_paths.update(
-                anchor_sources.get("source_path", pd.Series(dtype=str)).astype(str)
+                anchors.get("source_path", pd.Series(dtype=str)).astype(str)
             )
         loader.absorb(parent.resolver, paths=member_paths)
     coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()
@@ -1192,7 +1200,6 @@ def derived_catalog(
     aux_coords = frozenset(
         () if parent is None else parent.backend.associated_coord_names()
     )
-    anchors = sources
     resolver = PlanResolver(
         token=token,
         dim=name,
@@ -1206,7 +1213,7 @@ def derived_catalog(
         stamped=stamped,
         lossy=lossy,
         output_rows=plan.outputs,
-        anchor_rows=anchors if "_anchor_patch_row" in plan.outputs else None,
+        anchor_rows=anchors,
     )
     backend = get_backend(":memory:")
     # residual selections trim at load; identity claims (def keys) for

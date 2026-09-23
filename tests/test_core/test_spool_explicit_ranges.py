@@ -890,6 +890,94 @@ class TestExplicitMetadataSources:
         ):
             derived.select(distance=np.array([[0.0, 6.0]])).get_contents()
 
+    @pytest.mark.parametrize("backend", ["memory", "file", "legacy"])
+    def test_fill_partition_anchor_converts_units(self, tmp_path, backend):
+        """A later fill partition can start in units unlike the plan's unit."""
+        patches = [
+            _patch(np.arange(start, start + 5)).set_units(distance="m")
+            for start in (0, 10, 17)
+        ]
+        patches[1] = patches[1].convert_units(distance="ft")
+        source = dc.spool(patches)
+        if backend != "memory":
+            for index, patch in enumerate(patches):
+                dc.write(patch, tmp_path / f"{index}.h5", file_format="DASDAE")
+            source = dc.spool(tmp_path).update(progress=None)
+            if backend == "legacy":
+                records = source._catalog.backend.export_records()
+                source._catalog.backend.write_sources(
+                    [
+                        replace(
+                            record,
+                            patches=tuple(
+                                replace(patch, source_patch_key="")
+                                for patch in record.patches
+                            ),
+                        )
+                        for record in records
+                    ]
+                )
+                source._catalog._invalidate()
+        windows = np.array([[15 * m, 16 * m]], dtype=object)
+        result = source.chunk(distance=windows, tolerance=4, fill_value=-1)
+        assert np.allclose(
+            result.get_contents()[["distance_min", "distance_max"]].to_numpy(),
+            [[15, 16]],
+        )
+        loaded = result[0]
+        assert np.allclose(loaded.get_coord("distance").values, [15, 16])
+        assert loaded.get_coord("distance").units == m
+        assert loaded.data.tolist() == [-1, -1]
+
+    @pytest.mark.parametrize("values", [np.arange(10.0), [0.0, 1.0, 3.0, 6.0, 9.0]])
+    def test_collapsed_file_members_recover_coordinates(self, tmp_path, values):
+        """Re-planning file members reaches the plan's file loader."""
+        patch = _patch(values)
+        path = tmp_path / "source.h5"
+        dc.write(patch, path, file_format="DASDAE")
+        merged = dc.spool(path).chunk(distance=None)
+        windows = np.array([[1.0, 7.0]])
+        plan = merged.chunk_plan(distance=windows)
+        result = merged.chunk(distance=windows)
+        expected = patch.select(distance=(1, 7))
+        assert len(plan.outputs) == len(result) == 1
+        assert np.array_equal(result[0].data, expected.data)
+        assert np.array_equal(
+            result[0].get_coord("distance").values,
+            expected.get_coord("distance").values,
+        )
+        assert (
+            plan.outputs["distance_min"].iloc[0] == expected.get_coord("distance").min()
+        )
+        assert (
+            plan.outputs["distance_max"].iloc[0] == expected.get_coord("distance").max()
+        )
+
+    def test_collapsed_nested_members_use_owning_plan(self):
+        """A plan on a second dimension must recover its parent's full axis."""
+        time = dc.to_datetime64(np.arange(3))
+        patch = dc.Patch(
+            data=np.arange(27).reshape(9, 3),
+            coords={"distance": np.arange(9), "time": time},
+            dims=("distance", "time"),
+        )
+        first = dc.spool(patch).chunk(time=1, keep_partial=True)
+        expected = [part.select(distance=(1, 7)) for part in first]
+        nested = first.chunk(distance=3, keep_partial=True)
+        windows = np.array([[1, 7]])
+        plan = nested.chunk_plan(distance=windows)
+        result = nested.chunk(distance=windows)
+        assert len(plan.outputs) == len(result) == len(expected) > 1
+        assert plan.outputs[["distance_min", "distance_max"]].to_numpy().tolist() == [
+            [1, 7]
+        ] * len(expected)
+        for loaded, wanted in zip(result, expected, strict=True):
+            assert loaded.get_coord("distance").values.tolist() == list(range(1, 8))
+            assert np.array_equal(
+                loaded.get_coord("time").values, wanted.get_coord("time").values
+            )
+            assert np.array_equal(loaded.data, wanted.data)
+
     def test_missing_live_coordinate_metadata_is_not_assumed_complete(self):
         """A stale live index cannot advertise unverified uneven samples."""
         source = dc.spool(_patch([0.0, 1.0, 3.0, 6.0, 9.0]))

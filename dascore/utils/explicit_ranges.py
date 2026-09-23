@@ -185,12 +185,10 @@ def _source_manager(resolver, row, files=None, projection=None):
     if live is not None:
         coords = live.coords
     elif path.startswith("plan://"):
-        plans = getattr(resolver, "plans", {})
+        plans = getattr(resolver, "plan_entries", dict)()
         plan = next(
             (item for prefix, item in plans.items() if path.startswith(prefix)), None
         )
-        if plan is None and hasattr(resolver, "member_rows"):
-            plan = resolver
         assert plan is not None, "plan source has no resolver"
         return _planned_manager(plan, row, files, projection=projection)
     else:
@@ -207,7 +205,7 @@ def _source_manager(resolver, row, files=None, projection=None):
                 and np.dtype(dtype).kind in "iuMm"
             ):
                 return _one_coordinate(projection, coord)
-        coords = file_source_coords(resolver, row, files)
+        coords = file_source_coords(getattr(resolver, "loader", resolver), row, files)
     return None if coords is None else _project_manager(coords, projection)
 
 
