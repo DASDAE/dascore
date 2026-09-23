@@ -655,7 +655,7 @@ def spool_to_xarray(
                     # absorb the seams which are sub-sample jitter. A
                     # seam past tolerance, or a hole of whole missing
                     # samples, stays segmented here exactly as there.
-                    coord = concat_coords(*member_coords).simplify(
+                    coord = concat_coords(*member_coords).fuse(
                         GapTolerance.from_user(tolerance, dim), keep_step=True
                     )
                 else:

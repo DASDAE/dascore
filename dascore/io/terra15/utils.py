@@ -6,7 +6,7 @@ import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.io.utils import get_exact_coord, should_snap
+from dascore.io.utils import should_snap
 from dascore.utils.misc import maybe_get_items
 from dascore.utils.time import to_datetime64, to_timedelta64
 
@@ -104,7 +104,7 @@ def _get_raw_time_coord(data_node, time_len):
     """Read timestamps for the written samples without regularizing them."""
     time = _get_time_node(data_node)[:time_len]
     values = to_datetime64(time)
-    return get_exact_coord(values, units="s")
+    return get_coord(data=values, units="s", snap=False)
 
 
 def _get_default_attrs(root_node_attrs):

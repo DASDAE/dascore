@@ -15,9 +15,8 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import (
     _EXACT_GRID_FIELDS,
-    CoordMonotonicArray,
-    CoordRange,
-    CoordSegmented,
+    Grid,
+    NumericCoord,
     _scalar_dtype,
     get_coord,
 )
@@ -31,7 +30,7 @@ from dascore.io.dasdae._compat import (
     strip_legacy_coord_fields,
     translate_legacy_attrs,
 )
-from dascore.io.utils import get_exact_coord, resolve_keyed_source, should_snap
+from dascore.io.utils import resolve_keyed_source, should_snap
 from dascore.models.registry import get_model_tag, resolve_tagged_model
 from dascore.utils.array import (
     convert_bytes_to_strings,
@@ -172,45 +171,74 @@ def _extended_float(coord) -> bool:
 # Version 2 nodes state the coordinate class they hold, as every DASCore
 # model states its class in a document (see dascore.models.registry).
 _OBJECT_TYPE = "object_type"
+# The shapes a version 2 node can hold, as the format has always named them.
+_RANGE = "CoordRange"
+_SEGMENTED = "CoordSegmented"
 
 
 def _save_coord(coord, name, group, compact: bool):
     """
     Save one coordinate node.
 
-    Version 2 (``compact``) states each node's class: a range is written
-    as its description and a segmented coordinate as a group of its
-    segments, so a long acquisition costs a few numbers and no label is
-    re-inferred on read; any other class, and version 1 throughout,
-    writes its values.
+    Version 2 (``compact``) names each node's shape: a grid is written as
+    its description and a coordinate with holes as a group of its runs, so
+    a long acquisition costs a few numbers and no label is re-inferred on
+    read; anything else, and version 1 throughout, writes its values.
+
+    The names are the format's own -- they are what files written before
+    the coordinate classes were unified state -- not a class's tag.
     """
-    if compact and isinstance(coord, CoordSegmented):
+    grid = coord.runs[0] if getattr(coord, "evenly_sampled", False) else None
+    object_type = get_model_tag(type(coord))
+    if compact and getattr(coord, "runs_count", 1) > 1:
+        object_type = _SEGMENTED
         node = group.create_group(name)
         for i, segment in enumerate(coord.segments):
             _save_coord(segment, str(i), node, compact)
-    elif compact and isinstance(coord, CoordRange) and not _extended_float(coord):
+    elif compact and grid is not None and not _extended_float(coord):
+        object_type = _RANGE
         node = group.create_dataset(name, shape=(0,), dtype="int64")
+        origin, num, den, phase = grid.canonical()[:4]
         node.attrs["dtype"] = str(coord.dtype)
-        node.attrs["start"] = _raw(coord.start, coord.dtype)
         node.attrs["length"] = len(coord)
-        if coord._exact:
-            for field in _EXACT_GRID_FIELDS:
-                node.attrs[field] = getattr(coord, field)
+        if grid.exact:
+            terms = (num, den, phase)
+            node.attrs["start"] = _raw(
+                np.asarray(origin).astype(coord.dtype)[()], coord.dtype
+            )
+            for field, value in zip(_EXACT_GRID_FIELDS, terms, strict=True):
+                node.attrs[field] = value
         else:
-            node.attrs["stop"] = _raw(coord.stop, coord.dtype)
-            node.attrs["step"] = _raw(coord.step, coord.dtype)
+            node.attrs["start"] = _raw(origin, coord.dtype)
+            node.attrs["stop"] = _raw(origin + num * grid.count, coord.dtype)
+            node.attrs["step"] = _raw(num, coord.dtype)
+            if grid.parent_count is not None:
+                # Keep the ordinary range fields meaningful to older readers.
+                node.attrs["start"] = _raw(grid.labels(0, coord.dtype)[()], coord.dtype)
+                node.attrs["stop"] = _raw(
+                    grid.labels(grid.count, coord.dtype)[()], coord.dtype
+                )
+                node.attrs["step"] = _raw(coord.step, coord.dtype)
+                node.attrs["grid_origin"] = _raw(grid.origin, coord.dtype)
+                node.attrs["grid_step"] = _raw(grid.step_num, coord.dtype)
+                node.attrs["grid_step_is_numpy"] = isinstance(
+                    grid.step_num, np.floating
+                )
+                node.attrs["parent_count"] = grid.parent_count
+                node.attrs["k0"] = grid.k0
+                node.attrs["stride"] = grid.stride
     else:
         node = _save_array(coord.values, name, group)
         # Version 1 reads an array's step as a range to rebuild from its
         # first value, so only a range may state one there; version 2
         # reads it as the grid an array declares.
         step = coord.step
-        if step is not None and (compact or isinstance(coord, CoordRange)):
+        if step is not None and (compact or grid is not None):
             is_td = np.issubdtype(np.asarray(step).dtype, np.timedelta64)
             node.attrs["step"] = to_int(step) if is_td else step
             node.attrs["step_is_timedelta64"] = is_td
     if compact:
-        node.attrs[_OBJECT_TYPE] = get_model_tag(type(coord))
+        node.attrs[_OBJECT_TYPE] = object_type
     if coord.units is not None:
         node.attrs["units"] = str(coord.units)
 
@@ -226,7 +254,8 @@ def _save_coords(patch, patch_group, compact: bool):
 def _check_storable(patch):
     """Refuse a patch version 1 cannot store, before touching the file."""
     for name, coord in patch.coords.coord_map.items():
-        if getattr(coord, "step_denominator", None) not in (None, 1):
+        grid = coord.runs[0] if getattr(coord, "evenly_sampled", False) else None
+        if grid is not None and grid.exact and grid.step_den != 1:
             # Version 1 stores one whole-tick step and rebuilds the range
             # from it, which would quietly move every label off its grid.
             msg = (
@@ -320,20 +349,36 @@ def _read_range(node, units):
     start = np.asarray(attrs["start"]).astype(dtype)[()]
     shape = (int(attrs["length"]),)
     if "step_numerator" in attrs:
-        grid = {name: int(attrs[name]) for name in _EXACT_GRID_FIELDS}
-        return CoordRange(start=start, shape=shape, units=units, **grid)
-    stop = np.asarray(attrs["stop"]).astype(dtype)[()]
-    step = attrs["step"]
+        num, den, phase = (int(attrs[name]) for name in _EXACT_GRID_FIELDS)
+        return get_coord(
+            start=start,
+            shape=shape,
+            units=units,
+            step_numerator=num,
+            step_denominator=den,
+            origin_offset=phase,
+        )
+    if "parent_count" in attrs:
+        start = np.asarray(attrs["grid_origin"]).astype(dtype)[()]
+    step = attrs.get("grid_step", attrs["step"])
     if dtype.kind in "mM":
         step = np.asarray(step).astype(_scalar_dtype(dtype, "step"))[()]
-    elif isinstance(step, np.floating):
+    elif isinstance(step, np.floating) and not attrs.get("grid_step_is_numpy", False):
         # as the python float it was written from: a numpy scalar would
         # promote a float32 range to float64
         step = step.item()
-    coord = CoordRange(start=start, stop=stop, step=step, units=units)
     # The stored fields are a validated range's own; deriving the count
     # from them again can move a float32 endpoint by a sample.
-    return coord._construct(dict(start=start, stop=stop, step=step, shape=shape))
+    run = Grid(
+        start,
+        step,
+        0,
+        shape[0],
+        k0=int(attrs.get("k0", 0)),
+        parent_count=attrs.get("parent_count"),
+        stride=int(attrs.get("stride", 1)),
+    )
+    return get_coord(runs=(run,), dtype=dtype, units=units)
 
 
 def _node_step(attrs):
@@ -352,7 +397,15 @@ def _read_segment(node):
     # the segments were settled exactly when written, so an array
     # segment is read as the values it holds, never snapped to a range
     values = _read_array(node)
-    return CoordMonotonicArray(values=values, units=units, step=_node_step(node.attrs))
+    # the runs were settled when written, so a stored one is read back as
+    # the labels it holds rather than split at its own spacings again
+    return NumericCoord.from_labels(values, units=units, step=_node_step(node.attrs))
+
+
+def _shared_step(segments):
+    """The one step every segment sits on, or None."""
+    steps = {x.step for x in segments}
+    return steps.pop() if len(steps) == 1 else None
 
 
 def _read_coord(node, name, attrs2, snap):
@@ -360,10 +413,18 @@ def _read_coord(node, name, attrs2, snap):
     node_attrs = node.attrs
     units = node_attrs.get("units", None) or attrs2.get(f"{name}_units", None)
     object_type = unbyte(node_attrs.get(_OBJECT_TYPE, ""))
-    if object_type == "CoordSegmented":
+    if object_type == _SEGMENTED:
         segments = [_read_segment(node[str(i)]) for i in range(len(node))]
-        return CoordSegmented(segments=segments, units=units)
-    if object_type == "CoordRange" and "start" in node_attrs:
+        # The runs are rebuilt in the order they were written, which is the
+        # order the data sits in; concat_coords would sort them by value.
+        return NumericCoord(
+            runs=tuple(run for x in segments for run in x.runs),
+            sources={k: v for x in segments for k, v in x.sources.items()},
+            dtype=np.result_type(*[x.dtype for x in segments]),
+            units=units or segments[0].units,
+            step=_shared_step(segments),
+        )
+    if object_type == _RANGE and "start" in node_attrs:
         return _read_range(node, units)
     # any other class, a range too wide to describe, and every version 1
     # node hold their values
@@ -376,7 +437,7 @@ def _read_coord(node, name, attrs2, snap):
             return get_coord(data=array, units=units, step=node_step)
         if snap or np.ndim(array) != 1:
             return get_coord(data=array, units=units)
-        return get_exact_coord(array, units=units)
+        return get_coord(data=array, units=units, snap=False)
     step = node_step if node_step is not None else attrs2.get(f"{name}_step", None)
     shape = tuple(node.shape)
     can_use_range_fast_path = (
@@ -396,7 +457,7 @@ def _read_coord(node, name, attrs2, snap):
         # only for a single sample, where the values cannot.
         single = np.ndim(array) == 1 and len(array) == 1
         return get_coord(data=array, units=units, step=step if single else None)
-    return get_exact_coord(array, units=units)
+    return get_coord(data=array, units=units, snap=False)
 
 
 def _get_coords(patch_group, dims, attrs2, snap=True):

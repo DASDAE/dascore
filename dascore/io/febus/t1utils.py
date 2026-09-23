@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import dascore as dc
 from dascore import get_coord_manager
+from dascore.core.coords import get_coord
 from dascore.io.utils import (
     drop_blank_attrs,
-    get_exact_coord,
     get_gridded_coord,
     should_snap,
 )
@@ -33,7 +33,7 @@ def _get_distance_coord(fi, snap=True):
     dist = fi["Data/Distance"][()]
     if should_snap(snap, "distance"):
         return get_gridded_coord(dist, units="m")
-    return get_exact_coord(dist, units="m")
+    return get_coord(data=dist, units="m", snap=False)
 
 
 def _get_time_coord(fi, snap=True):
@@ -42,7 +42,7 @@ def _get_time_coord(fi, snap=True):
     times = (ts * 1e9).astype("datetime64[ns]")
     if should_snap(snap, "time"):
         return dc.get_coord(values=times, units="s")
-    return get_exact_coord(times, units="s")
+    return get_coord(data=times, units="s", snap=False)
 
 
 def _get_coords(fi, snap=True) -> dc.CoordManager:

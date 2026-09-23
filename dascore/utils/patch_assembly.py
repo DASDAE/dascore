@@ -27,7 +27,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.core.coordmanager import CoordManager, get_coord_manager
-from dascore.core.coords import _EXACT_GRID_FIELDS, CoordRange, get_coord
+from dascore.core.coords import _EXACT_GRID_FIELDS, get_coord
 from dascore.core.lazy_array import LazyArray
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
@@ -396,7 +396,7 @@ def coord_from_row(row: Mapping, dim: str, units=None):
     if isinstance(grid, tuple) and ticks and not _units_converted(row, dim):
         *terms, length = grid
         start = hi if terms[0] < 0 else lo
-        return CoordRange(
+        return get_coord(
             start=start,
             shape=(length,),
             units=units,
@@ -409,8 +409,9 @@ def coord_from_row(row: Mapping, dim: str, units=None):
 
 def _at_unit(coord, unit: str):
     """The same evenly sampled coordinate counted in ``unit``, or None."""
-    name = "datetime64" if np.asarray(coord.start).dtype.kind == "M" else "timedelta64"
-    start = np.asarray(coord.start).astype(f"{name}[{unit}]")
+    first = coord.max() if coord.reverse_sorted else coord.min()
+    name = "datetime64" if np.asarray(first).dtype.kind == "M" else "timedelta64"
+    start = np.asarray(first).astype(f"{name}[{unit}]")
     step = np.asarray(coord.step).astype(f"timedelta64[{unit}]")
     if step == np.zeros((), dtype=step.dtype):
         return None  # a unit this coarse cannot count this step

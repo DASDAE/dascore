@@ -300,8 +300,7 @@ class Spool(NodeRepr, NamespaceOwner):
 
     def __len__(self) -> int:
         """Return len of spool."""
-        # counting pushes to SQL (or the cold live registry); the flat
-        # relation is never realized just for a length
+        # Ordinary counts use SQL; patch-local filters may need the relation.
         return len(self._catalog)
 
     def _as_selector_array(self, item) -> np.ndarray:
@@ -378,8 +377,8 @@ class Spool(NodeRepr, NamespaceOwner):
         own positions rather than raising.
         """
         if isinstance(item, slice):
-            # a lazy id-membership window (D2); never realizes the flat
-            # relation, and keeps split()/map() parts cheap
+            # Ordinary windows use SQL ids; patch-local filters first resolve
+            # which rows survive, without loading patch data.
             return self._new_from_catalog(self._catalog.window(item))
         if is_array(item) or isinstance(item, pd.Series | list):
             array = self._as_selector_array(item)
@@ -526,8 +525,11 @@ class Spool(NodeRepr, NamespaceOwner):
             patch as it loads.
         relative
             If True, coordinate range bounds are relative to each patch:
-            positive from its start, negative from its end. Patches without
-            the selected coordinate are excluded.
+            positive from its start, negative from its end. Bounds keep
+            their lower/upper order; crossed bounds select nothing.
+            Patches without the selected coordinate or whose resolved
+            window is empty are excluded using the indexed coordinate
+            envelopes. Exact sample selection occurs when a patch loads.
         **kwargs
             Specifies query. A coordinate accepts one ``(start, stop)`` range
             or an ``(n, 2)`` array of bounded absolute ranges. Array rows

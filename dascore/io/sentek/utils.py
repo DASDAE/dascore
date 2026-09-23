@@ -8,7 +8,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
-from dascore.io.utils import get_exact_coord, should_snap
+from dascore.io.utils import should_snap
 
 
 def _read_float32(fid, count=1):
@@ -79,7 +79,7 @@ def _read_coord(fid, offset, count, snap, start_time=None):
             step=(values[-1] - values[0]) / (count - 1),
             shape=(count,),
         ).change_length(count)
-    return get_exact_coord(values)
+    return get_coord(data=values, snap=False)
 
 
 def _get_patch_attrs(fid, extras=None, *, snap=True):

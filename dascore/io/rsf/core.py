@@ -63,7 +63,7 @@ class RSFV1(FiberIO):
         assert len(spool) == 1
         patch = spool[0]
         axis_lengths = patch.shape
-        axis_origs = [to_float(patch.get_coord(x).start) for x in patch.dims]
+        axis_origs = [to_float(patch.get_coord(x).values[0]) for x in patch.dims]
         axis_steps = [to_float(patch.get_coord(x).step) for x in patch.dims]
         axis_names = patch.dims
         axis_units = [patch.get_coord(x).units.units for x in patch.dims]

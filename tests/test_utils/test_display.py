@@ -2182,8 +2182,8 @@ class TestCoordinatesAreStated:
 
     def test_the_kind_of_each_coordinate(self, patch):
         """A terminal states it in front of the fields; a panel columns it."""
-        assert "CoordRange(" in str(patch.coords)
-        assert "CoordRange" in patch._repr_html_()
+        assert "NumericCoord(" in str(patch.coords)
+        assert "NumericCoord" in patch._repr_html_()
 
     def test_a_name_which_looks_like_markup(self):
         """

@@ -3429,7 +3429,7 @@ class TestChannelSelectContracts:
         """
         Index-reconstructed grids select the same channels as patch grids.
 
-        Compare counts and positions: trimmed CoordRanges regenerate values from a new
+        Compare counts and positions: a trimmed grid regenerates values from a new
         start and may differ by an ulp.
         """
         distance = start + np.arange(size) * step

@@ -1258,8 +1258,8 @@ class TestStackPatches:
         # check that distance coordinates are the same
         dist_coords = stack_patch.coords.coord_map["distance"]
         orig_dist_coords = spool[0].coords.coord_map["distance"]
-        assert dist_coords.start == orig_dist_coords.start
-        assert dist_coords.stop == orig_dist_coords.stop
+        assert dist_coords.min() == orig_dist_coords.min()
+        assert dist_coords.max() == orig_dist_coords.max()
         assert dist_coords.step == orig_dist_coords.step
         assert dist_coords.units == orig_dist_coords.units
 

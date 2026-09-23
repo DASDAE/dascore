@@ -133,23 +133,21 @@ A size measures the data array alone; coordinates, attrs, and copies made by lat
 
 ## Merged coordinates
 
-Assembly builds the chunked dimension's coordinate by exact concatenation of the member coordinates: contiguous members fuse to a plain evenly sampled range, and every real seam is recorded. When `snap_coords=True` (default) the result is then simplified with **bounded error** — no coordinate value moves more than `tolerance * step`, or more than the tolerance itself when it states the limit in the coordinate's own units — and never at the cost of the sampling step. Simplification therefore absorbs the sub-sample jitter of labels rounded on their way to a file, but a gap the tolerance was wide enough to merge across stays segmented: its samples are missing, which is not the same as a slower sampling rate. `fill_value` is what writes those samples, and its output is a plain range.
+Assembly builds the chunked dimension's coordinate by exact concatenation of the member coordinates: contiguous members fuse to a plain evenly sampled range, and every real seam is recorded. When `snap_coords=True` (default) the result is then fused with **bounded error** — no coordinate value moves more than `tolerance * step`, or more than the tolerance itself when it states the limit in the coordinate's own units — and never at the cost of the sampling step. Fusing therefore absorbs the sub-sample jitter of labels rounded on their way to a file, but a gap the tolerance was wide enough to merge across stays a run boundary: its samples are missing, which is not the same as a slower sampling rate. `fill_value` is what writes those samples, and its output is one evenly sampled run.
 
 ```{python}
-from dascore.core.coords import CoordRange, CoordSegmented
-
-# Contiguous members: exact fuse to a range.
+# Contiguous members: exact fuse to one evenly sampled run.
 patch = dc.spool([p1, p2]).chunk(time=None)[0]
-assert isinstance(patch.get_coord("time"), CoordRange)
+assert patch.get_coord("time").evenly_sampled
 
 # A gap forced together by a loose tolerance warns, and the output keeps
-# the exact segmented coordinate: those samples are absent either way.
+# the exact coordinate, holes and all: those samples are absent either way.
 gap_start = time.max() + 3 * time.step
 p_gap = dc.get_example_patch(time_min=gap_start, acquisition_key="XX1.R2D1..RAW")
 with pytest.warns(UserWarning, match="force merging"):
     forced = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5)[0]
 coord = forced.get_coord("time")
-assert isinstance(coord, CoordSegmented)
+assert coord.runs_count == 2
 assert len(coord.get_discontinuities("gaps")) == 1
 
 # snap_coords only ever absorbs sub-sample jitter, so here it changes
@@ -169,11 +167,11 @@ assert absolute.get_coord("time") == coord
 # fill_value writes the missing samples, so the merge comes back evenly
 # sampled rather than segmented.
 filled = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5, fill_value=np.nan)[0]
-assert isinstance(filled.get_coord("time"), CoordRange)
+assert filled.get_coord("time").evenly_sampled
 assert np.isnan(filled.data).any()
 ```
 
-Segmented coordinates are an in-memory representation only: a written patch must be contiguous, so saving raises unless `split=True` (or `patch.split_gaps()` is used first) to write each contiguous section as its own patch.
+Coordinates with holes are an in-memory representation only: a written patch must be contiguous, so saving raises unless `split=True` (or `patch.split_gaps()` is used first) to write each contiguous run as its own patch.
 
 ## Union spools
 

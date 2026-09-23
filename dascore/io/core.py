@@ -44,7 +44,7 @@ from dascore.constants import (
     time_select_type,
     windows_type,
 )
-from dascore.core.coords import CoordSegmented
+from dascore.core.coords import NumericCoord
 from dascore.core.source import ArraySource
 from dascore.core.spool import Spool
 from dascore.core.summary import PatchSummary, normalize_source_patch_key
@@ -2037,7 +2037,7 @@ def _maybe_split_gapped_patches(spool, fiber_io, split):
 
     def _has_gaps(patch):
         coords = (patch.get_coord(x) for x in patch.dims)
-        return any(isinstance(x, CoordSegmented) for x in coords)
+        return any(isinstance(x, NumericCoord) and x.runs_count > 1 for x in coords)
 
     # Materialize once (cheap; patches are in memory) so gap detection and
     # splitting see the same patch sequence.

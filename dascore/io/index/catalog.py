@@ -978,6 +978,8 @@ class PatchCatalog:
         the membership unfiltered would ignore them entirely, and letting
         SQL order the result would undo the arrangement.
         """
+        if self._has_relative_selection():
+            return tuple(self.to_df()["_patch_row"])
         if self._ids is not None and self._order is None:
             if not self._queries:
                 return self._ids
@@ -1003,6 +1005,8 @@ class PatchCatalog:
         start = 0 if item.start is None else operator.index(item.start)
         stop = None if item.stop is None else operator.index(item.stop)
         step = 1 if item.step is None else operator.index(item.step)
+        if ids is None and self._has_relative_selection():
+            ids = self.ordered_rows()
         if (
             ids is None
             and (self._ids is None or self._order is not None)
@@ -1192,10 +1196,16 @@ class PatchCatalog:
             )
 
             df = patch_local_adjusted_envelopes(df, self._residuals, drop_empty=False)
-            df = _forget_what_a_trim_invalidates(df, self._residuals)
+            df = _forget_what_a_trim_invalidates(df, self._residuals).reset_index(
+                drop=True
+            )
             # Re-read the revision: bootstrapping the backend above can
             # bump it, and this frame reflects the state after that.
             return self._df_cache.set(df, self._revision.value)
+
+    def _has_relative_selection(self) -> bool:
+        """Whether patch-relative bounds can remove SQL candidate rows."""
+        return any(relative and not samples for _, samples, relative in self._residuals)
 
     def _requires_full_relation(self) -> bool:
         """Keep exact positional filtering for regex and complex coordinate trims."""
@@ -1223,12 +1233,13 @@ class PatchCatalog:
                 return len(live)
             if (df := self._df_cache.get(self._revision.value)) is not None:
                 return len(df)
-            # A range residual *after* a patch-local one can drop rows SQL
-            # candidacy kept: the patch-local pass empties the envelope of a
-            # patch its window misses, and the range pass then finds nothing
-            # left to overlap. Only that order forces us to build the frame.
+            # Relative windows and absolute windows after a sample trim can
+            # remove rows SQL kept. Count their projected relation so length
+            # agrees with positional access, contents, and iteration.
             patch_local = False
             for _, samples, relative in self._residuals:
+                if relative and not samples:
+                    return len(self.to_df())
                 if samples or relative:
                     patch_local = True
                 elif patch_local:
