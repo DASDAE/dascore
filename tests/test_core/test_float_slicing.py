@@ -134,7 +134,13 @@ class TestFloatSlices:
             get_coord(**payload)
 
     @pytest.mark.parametrize(
-        "start,step", [(0.0, 1.0), (2.5, 0.125), (np.float32(100), np.float32(0.5))]
+        "start,step",
+        [
+            (0.0, 1.0),
+            (0.0, np.int64(1)),
+            (2.5, 0.125),
+            (np.float32(100), np.float32(0.5)),
+        ],
     )
     def test_exact_binary_grid_fuses(self, start, step):
         """Exactly representable slices keep the same normal form as fresh grids."""

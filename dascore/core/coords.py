@@ -2047,8 +2047,8 @@ class Grid:
         """Whether the float expression needs no rounding on its binary grid."""
         # All denominators are powers of two. Bound every intermediate in
         # units of the finest one, at the narrowest operand's precision.
-        start, start_den = self.origin.as_integer_ratio()
-        step, step_den = self.step_num.as_integer_ratio()
+        start, start_den = np.asarray(self.origin).item().as_integer_ratio()
+        step, step_den = np.asarray(self.step_num).item().as_integer_ratio()
         den = max(start_den, step_den)
         start, step = start * (den // start_den), step * (den // step_den)
         count = self.count if self.parent_count is None else self.parent_count
