@@ -15,6 +15,7 @@ from typing import Any, ClassVar, Self
 import numpy as np
 import pytest
 from pydantic import ConfigDict, Field, ValidationError
+from scipy import ndimage
 
 import dascore as dc
 from dascore.constants import PatchMetaType, PatchType
@@ -1512,8 +1513,6 @@ class TestBatchOneParameters:
 
     def test_sobel_mode(self, patch):
         """The edge mode reaches scipy."""
-        from scipy import ndimage  # noqa: PLC0415
-
         axis = patch.get_axis("time")
         out = patch.sobel_filter("time", mode="constant", cval=1.0).data
         expected = ndimage.sobel(patch.data, axis=axis, mode="constant", cval=1.0)
