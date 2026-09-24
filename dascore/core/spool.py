@@ -106,6 +106,12 @@ from dascore.utils.display import (
 )
 from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import resolve_example_uri
+from dascore.utils.explicit_ranges import (
+    ExplicitRanges,
+    explicit_ranges,
+    known_coordinates,
+    looks_explicit,
+)
 from dascore.utils.misc import (
     _spool_map,
     deep_equality_check,
@@ -525,8 +531,12 @@ class Spool(NodeRepr, NamespaceOwner):
             window is empty are excluded using the indexed coordinate
             envelopes. Exact sample selection occurs when a patch loads.
         **kwargs
-            Specifies query. Can be of the form {dim_name=(start, stop)}
-            or {attr_name=query}.
+            Specifies query. A coordinate accepts one ``(start, stop)`` range
+            or an ``(n, 2)`` array of bounded absolute ranges. Array rows
+            select independently in input order, so overlaps and duplicates
+            return separate source pieces. Only one coordinate may use an
+            array per call; array ranges do not support ``samples=True`` or
+            ``relative=True``. Attribute selectors retain their usual meaning.
 
         Examples
         --------
@@ -537,7 +547,63 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> time_spool = spool.select(time=time)
         >>> # subselect based on matching tag parameter
         >>> tag_spool = spool.select(tag='some*')
+        >>> import numpy as np
+        >>> ranges = np.array([[0, 10], [20, 30]])
+        >>> pieces = spool.select(distance=ranges)
         """
+        # Explicit windows are independent requests, so they need separate
+        # plan outputs even when they name the same source samples.
+        raw = dict(kwargs)
+        if isinstance(_coords, Mapping):
+            raw.update({str(k): v for k, v in _coords.items()})
+        coord_names = self._catalog.backend.coord_names()
+        attr_names = self._catalog.backend.attr_names()
+        tagged = selector_spec_names(_coords)
+        # Avoid classifying ordinary selectors before the uncommon window path.
+        possible = any(
+            (name in tagged or (name in coord_names and name not in attr_names))
+            and looks_explicit(value)
+            and (not isinstance(value, list | tuple) or bool(value))
+            for name, value in raw.items()
+        )
+        explicit = []
+        if possible:
+            query = self._classify_query(_attrs, _coords, kwargs)
+            _, coords = resolve_selector_namespaces(
+                query.known_attrs | query.selectable,
+                query.known_coords,
+                _attrs=_attrs,
+                _coords=query.coords,
+                kwargs=query.kwargs,
+            )
+            explicit = [
+                (name, ranges)
+                for name, value in coords.items()
+                if (ranges := explicit_ranges(value)) is not None
+            ]
+        if explicit:
+            if len(explicit) != 1:
+                msg = "Only one coordinate may use explicit ranges per selection."
+                raise ParameterError(msg)
+            if samples or relative:
+                msg = "Explicit ranges require samples=False and relative=False."
+                raise ParameterError(msg)
+            from dascore.io.index.explicit import ExplicitSelectCatalog  # noqa: PLC0415
+
+            name, ranges = explicit[0]
+            other_coords = drop_selector_names(_coords, {name})
+            other_kwargs = dict(kwargs)
+            other_kwargs.pop(name, None)
+            base = self.select(
+                _attrs=_attrs,
+                _coords=other_coords,
+                samples=False,
+                relative=False,
+                **other_kwargs,
+            )
+            return base._new_from_catalog(
+                ExplicitSelectCatalog(base._catalog, name, ranges)
+            )
         if self._inventory is None:
             catalog = self._catalog.select(
                 _attrs=_attrs,
@@ -1686,6 +1752,16 @@ class Spool(NodeRepr, NamespaceOwner):
                 base = base[base["_patch_row"].isin(working["_patch_row"])]
         return base.reset_index(drop=True), working.reset_index(drop=True)
 
+    def _build_chunk_plan(self, dim_kwargs, **params):
+        """Build and coalesce one plan from this spool's current source rows."""
+        name = next(iter(dim_kwargs), None)
+        source_rows, working = self._plan_frames(name, runs=True)
+        exact = {}
+        if name is not None and explicit_ranges(dim_kwargs[name]) is not None:
+            exact = known_coordinates(self._catalog, source_rows, name)
+        plan = build_chunk_plan(working, _exact_coords=exact, **params, **dim_kwargs)
+        return source_rows, coalesce_runs(plan, working)
+
     def chunk_plan(
         self,
         overlap: numeric_types | timeable_types | None = None,
@@ -1696,6 +1772,7 @@ class Spool(NodeRepr, NamespaceOwner):
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "raise",
         fill_value=None,
+        on_incomplete: WARN_LEVELS = "raise",
         **kwargs,
     ):
         """
@@ -1708,7 +1785,11 @@ class Spool(NodeRepr, NamespaceOwner):
         feeds each output, and `params` records every resolved parameter
         (including the group attributes and sampling tolerance in effect).
         Accepts the same arguments as
-        [`chunk`](`dascore.Spool.chunk`).
+        [`chunk`](`dascore.Spool.chunk`). A dimension can be an ``(n, 2)``
+        array of absolute inclusive windows. Each requested window is checked
+        against compatible source groups, and ``on_incomplete`` controls
+        requests that cannot produce a complete output after ``keep_partial``
+        and the existing tolerance/fill rules are applied.
 
         Examples
         --------
@@ -1720,9 +1801,8 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> members = plan.members
         >>> first = members[members["output_id"] == 0]
         """
-        _, working = self._plan_frames(next(iter(kwargs), None), runs=True)
-        plan = build_chunk_plan(
-            working,
+        _, plan = self._build_chunk_plan(
+            kwargs,
             overlap=overlap,
             keep_partial=keep_partial,
             snap_coords=snap_coords,
@@ -1731,9 +1811,9 @@ class Spool(NodeRepr, NamespaceOwner):
             group=group,
             missing_dim=missing_dim,
             fill_value=fill_value,
-            **kwargs,
+            on_incomplete=on_incomplete,
         )
-        return coalesce_runs(plan, working)
+        return plan
 
     def _report_relation(self) -> pd.DataFrame:
         """
@@ -2018,6 +2098,7 @@ class Spool(NodeRepr, NamespaceOwner):
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "raise",
         fill_value=None,
+        on_incomplete: WARN_LEVELS = "raise",
         **kwargs,
     ) -> Self:
         """
@@ -2063,6 +2144,13 @@ class Spool(NodeRepr, NamespaceOwner):
         missing_dim
             What to do when patches lack the chunked dimension: "raise"
             (default) or "drop" (exclude them from the output).
+        on_incomplete
+            For explicit ``(n, 2)`` windows, ``"raise"`` (default) raises
+            ``ChunkError`` for an unmet request, ``"warn"`` reports and skips
+            it, and ``"ignore"`` skips it silently. With ``keep_partial=True``,
+            nonempty available pieces are accepted before this policy is
+            applied; wholly absent requests still follow it. Other chunk
+            modes retain their existing behavior.
         fill_value
             If given, the value written into the samples missing from a
             merge, so an output spanning a hole is evenly sampled rather
@@ -2078,7 +2166,11 @@ class Spool(NodeRepr, NamespaceOwner):
             The value may also be a quantity: one of the coordinate's own
             units (`time=10 * s`) or a data size (`time=25 * megabytes`),
             which chunks so each patch's data array is about that large.
-            `overlap` accepts the same forms.
+            `overlap` accepts the same forms. An ``(n, 2)`` array instead
+            requests bounded absolute coordinate windows with inclusive
+            endpoints, in input order. Overlapping and duplicate windows
+            produce separate outputs. Explicit windows do not accept
+            ``overlap``; quantities in their bounds are absolute points.
 
         Examples
         --------
@@ -2098,6 +2190,17 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> time_merged = spool.chunk(time=...)
         >>> # merge across holes of up to 9 missing samples, filling them
         >>> gapless = spool.chunk(time=..., tolerance=10, fill_value=np.nan)
+        >>> # Request two independent absolute windows and inspect the plan.
+        >>> start = spool.get_contents()["time_min"].min()
+        >>> step = spool.get_contents()["time_step"].iloc[0]
+        >>> windows = np.array([
+        ...     [start, start + 4 * step],
+        ...     [start + 8 * step, start + 12 * step],
+        ... ])
+        >>> selected = spool.select(time=windows)
+        >>> explicit = spool.chunk(time=windows, on_incomplete="ignore")
+        >>> explicit_plan = spool.chunk_plan(time=windows, on_incomplete="ignore")
+        >>> assert len(explicit_plan.outputs) == len(explicit)
 
         Notes
         -----
@@ -2120,9 +2223,8 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
 
-        source_rows, working = self._plan_frames(next(iter(kwargs), None), runs=True)
-        plan = build_chunk_plan(
-            working,
+        source_rows, plan = self._build_chunk_plan(
+            kwargs,
             overlap=overlap,
             keep_partial=keep_partial,
             snap_coords=snap_coords,
@@ -2131,9 +2233,8 @@ class Spool(NodeRepr, NamespaceOwner):
             group=group,
             missing_dim=missing_dim,
             fill_value=fill_value,
-            **kwargs,
+            on_incomplete=on_incomplete,
         )
-        plan = coalesce_runs(plan, working)
         merge_kwargs = {
             "conflict": conflict,
             "snap_coords": snap_coords,
@@ -2149,6 +2250,7 @@ class Spool(NodeRepr, NamespaceOwner):
             merge_kwargs=merge_kwargs,
             mode="chunk",
             origin_path=self.spool_path,
+            lossy=isinstance(plan.value, ExplicitRanges),
         )
         return self._new_from_catalog(catalog)
 

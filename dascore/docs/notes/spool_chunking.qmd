@@ -187,3 +187,28 @@ assert len(dc.spool([p1, p1])) == 1
 assert len(dc.spool([p1, p1.new()])) == 2
 assert len(dc.spool([p1]) + dc.spool([p1])) == 1
 ```
+
+## Explicit output windows
+
+Pass a rectangular `(n, 2)` array as the chunked dimension to request bounded absolute coordinate windows. Each row is independent and inclusive. Input order is preserved, including overlapping and duplicate rows; compatible source groups within a row follow deterministic group order. `chunk_plan` accepts the same form and retains original request-row numbers in private `_request_row` plan metadata. One selected range may yield several source pieces while the same chunk window assembles them into one patch.
+
+An explicit request is complete when its inward-aligned first and last sampled positions are supplied by one compatible output under the existing continuity and tolerance rules. A tolerated internal gap can remain segmented; `fill_value` may fill a permitted hole, even when a window is entirely inside it. Filling does not extend an acquisition beyond its overall envelope. Unknown or uneven sample steps use the source coordinates where available. `overlap` cannot be combined with explicit windows. Bare numeric bounds use the planner's normalized coordinate units, while quantity bounds convert as absolute points. An empty `(0, 2)` array returns an empty plan or spool.
+
+By default, an unmet request raises `ChunkError`. Set `on_incomplete="warn"` to report and skip unmet request/group outputs, or `"ignore"` to skip them silently. With `keep_partial=True`, nonempty available pieces within a request are retained first; the policy then handles requests still wholly absent. These rules apply to each applicable compatibility group whose overall envelope intersects a window. The `conflict` setting remains the separate policy for attributes of members that actually contribute to an accepted output. Planning uses coordinate metadata and keeps measurement-array loading deferred; source changes and unrelated read failures remain runtime errors.
+
+```{python}
+import numpy as np
+import pytest
+from dascore.exceptions import ChunkError
+
+patch = dc.get_example_patch().select(distance=(0, 9))
+source = dc.spool(patch)
+windows = np.array([[2, 4], [8, 10]])
+with pytest.raises(ChunkError):
+    source.chunk(distance=windows)
+partial = source.chunk(distance=windows, keep_partial=True)
+assert [(p.get_coord("distance").min(), p.get_coord("distance").max()) for p in partial] == [(2, 4), (8, 9)]
+accepted = source.chunk(distance=windows, on_incomplete="ignore")
+assert len(accepted) == 1
+assert len(source.chunk_plan(distance=windows, on_incomplete="ignore").outputs) == 1
+```

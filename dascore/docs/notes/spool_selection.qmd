@@ -64,3 +64,20 @@ for bounds in [(5, -1), (5, ...)]:
     assert short_patch.select(time=bounds, relative=True).size == 0
     assert len(dc.spool([short_patch]).select(time=bounds, relative=True)) == 0
 ```
+
+## Independent coordinate windows
+
+Pass a rectangular `(n, 2)` array to select several bounded absolute ranges along one coordinate. Each row is applied to each matching source patch in input order. Overlapping, repeated, and shared-endpoint ranges retain separate pieces, so selecting two rows over a file boundary can return more than two patches. The endpoints are inclusive coordinate bounds; an empty `(0, 2)` array selects nothing. Ordinary selectors on other attributes or coordinates can accompany the array. Array windows currently require `samples=False` and `relative=False`.
+
+The view is deferred and follows source catalog updates. Its contents report the selected sample envelopes when the source metadata holds the full coordinate values, including uneven coordinates; file scans can read coordinate payloads without loading the measurement arrays. A single `(start, stop)` selector keeps its existing semantics.
+
+```{python}
+import numpy as np
+
+patch = dc.get_example_patch()
+source = dc.spool(patch)
+windows = np.array([[2, 4], [4, 6], [2, 4]])
+pieces = source.select(distance=windows)
+assert len(pieces) == 3
+assert [(p.get_coord("distance").min(), p.get_coord("distance").max()) for p in pieces] == [(2, 4), (4, 6), (2, 4)]
+```
