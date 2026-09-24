@@ -15,18 +15,15 @@ import numpy as np
 import pandas as pd
 import pytest
 import rich.text
-from pydantic import ValidationError
 
 import dascore as dc
 from dascore.compat import random_state
 from dascore.core.coords import (
     BaseCoord,
-    CoordArray,
-    CoordMonotonicArray,
     CoordPartial,
-    CoordRange,
     CoordString,
     CoordSummary,
+    NumericCoord,
     _get_coord_kind,
     get_coord,
 )
@@ -235,7 +232,7 @@ class TestBasics:
         """Ensure every coord can be sorted."""
         if coord.degenerate or len(coord.shape) > 1:
             return  # no need to test degenerate coord or multidim
-        data = coord.data
+        data = coord.values
         new, indexer = coord.sort()
         assert new.dtype == coord.dtype
         assert new.sorted
@@ -248,7 +245,7 @@ class TestBasics:
         """Ensure every coord can be reverse sorted."""
         if coord.degenerate or len(coord.shape) > 1:
             return  # no need to test degenerate coord or multidim
-        data = coord.data
+        data = coord.values
         new, indexer = coord.sort(reverse=True)
         assert new.dtype == coord.dtype
         assert not new.sorted
@@ -264,7 +261,7 @@ class TestBasics:
     def test_values_immutable(self, coord):
         """Values should all be immutable arrays."""
         with pytest.raises(ValueError, match="assignment destination is read-only"):
-            coord.data[0] = coord.data[1]
+            coord.values[0] = coord.values[1]
 
     def test_str(self, coord):
         """All coords should be convertible to str."""
@@ -356,9 +353,9 @@ class TestBasics:
     def test_bad_range_step(self):
         """Ensure start, stop, step are consistent. See #321."""
         msg = "Sign of step must match"
-        with pytest.raises(ValidationError, match=msg):
+        with pytest.raises(CoordError, match=msg):
             get_coord(start=1, stop=5, step=-1)
-        with pytest.raises(ValidationError, match=msg):
+        with pytest.raises(CoordError, match=msg):
             get_coord(start=1, stop=-5, step=1)
 
     def test_both_values_and_data_raises(self):
@@ -416,7 +413,7 @@ class TestCoordSummary:
         """Ensure all coords can be converted to a summary."""
         out = coord.to_summary()
         assert isinstance(out, CoordSummary)
-        assert out.fingerprint == coord.fingerprint()
+        assert out.data_id == coord.data_id
 
     def test_coord_range_round_trip(self, coord):
         """Coord ranges should round-trip to summaries and back."""
@@ -484,17 +481,15 @@ class TestCoordSummary:
         source = SimpleNamespace(min=0.0, max="2.0", step="0.5")
         summary = CoordSummary.model_validate(source, from_attributes=True)
         assert summary == CoordSummary(min=0.0, max="2.0", step="0.5")
-        assert summary.to_coord() == CoordRange(start=0.0, stop=2.5, step=0.5)
+        assert summary.to_coord() == get_coord(start=0.0, stop=2.5, step=0.5)
 
     def test_json_dump(self):
         """JSON dumps should preserve coord summary fields."""
-        summary = CoordSummary(
-            min=1.0, max=2.0, step=0.5, units="m", fingerprint="abc123"
-        )
+        summary = CoordSummary(min=1.0, max=2.0, step=0.5, units="m", data_id="abc123")
         dumped = summary.model_dump(mode="json")
         assert dumped["units"] == "m"
         assert dumped["min"] == 1.0
-        assert dumped["fingerprint"] == "abc123"
+        assert dumped["data_id"] == "abc123"
 
 
 class TestGetSliceTuple:
@@ -504,10 +499,10 @@ class TestGetSliceTuple:
         """Basic tests for range of coords."""
         start = coord.min()
         end = coord.max()
-        out = coord.get_slice_tuple((start, end))
+        out = coord._get_slice_tuple((start, end))
         assert out == (start, end)
-        assert coord.get_slice_tuple((start, None)) == (start, None)
-        assert coord.get_slice_tuple((None, end)) == (None, end)
+        assert coord._get_slice_tuple((start, None)) == (start, None)
+        assert coord._get_slice_tuple((None, end)) == (None, end)
         # if units aren't none, ensure they work.
         if not (unit := coord.units):
             return
@@ -517,18 +512,18 @@ class TestGetSliceTuple:
         start_unit = start * get_quantity(unit)
         end_unit = end * get_quantity(unit)
         # check that first slice is close to original
-        sliced = coord.get_slice_tuple((start_unit, None))
+        sliced = coord._get_slice_tuple((start_unit, None))
         lims = (coord.min(), None)
         assert all_close([to_float(lims[0])], [to_float(sliced[0])])
         # same for second slice.
         lims = to_float(np.array((coord.min(), coord.max())))
-        sliced = to_float(np.array(coord.get_slice_tuple((start_unit, end_unit))))
+        sliced = to_float(np.array(coord._get_slice_tuple((start_unit, end_unit))))
         assert all_close(lims, sliced)
 
     def test_get_slice_range_bad_values(self, evenly_sampled_coord):
         """Ensure bad values raise helpful error."""
         with pytest.raises(ParameterError, match="must be a length 2"):
-            evenly_sampled_coord.get_slice_tuple((1, 2, 3))
+            evenly_sampled_coord._get_slice_tuple((1, 2, 3))
 
     def test_slice_with_step_raises(self, evenly_sampled_coord):
         """A slice with a step shouldn't work."""
@@ -541,12 +536,12 @@ class TestGetSliceTuple:
         coord = evenly_sampled_coord
         vmin, vmax = coord.min(), coord.max()
         sli = slice(vmin, vmax + 1)
-        out_sli = evenly_sampled_coord.get_slice_tuple(sli)
+        out_sli = evenly_sampled_coord._get_slice_tuple(sli)
         assert out_sli == (None, None) or out_sli == (0, len(coord))
 
 
-class TestCoordFingerprint:
-    """Tests for coordinate fingerprints."""
+class TestCoordDataId:
+    """Tests for coordinate data ids."""
 
     def test_hash_scalar_none(self):
         """The helper should preserve an explicit None sentinel."""
@@ -554,11 +549,11 @@ class TestCoordFingerprint:
         assert coord._hash_scalar(None) == ("none", None)
 
     def test_spelling_of_a_scalar_is_not_its_identity(self):
-        """Equal coordinates fingerprint alike however they were written."""
+        """Equal coordinates share an id however they were written."""
         as_ints = get_coord(start=0, stop=10, step=1.0)
         as_floats = get_coord(start=0.0, stop=10.0, step=1.0)
         assert as_ints == as_floats
-        assert as_ints.fingerprint() == as_floats.fingerprint()
+        assert as_ints.data_id == as_floats.data_id
 
     def test_time_precision_is_not_its_identity(self):
         """A step of four milliseconds is four million nanoseconds."""
@@ -574,7 +569,7 @@ class TestCoordFingerprint:
             step=np.timedelta64(4_000_000, "ns"),
         )
         assert coarse == fine
-        assert coarse.fingerprint() == fine.fingerprint()
+        assert coarse.data_id == fine.data_id
 
     def test_a_summary_round_trip_keeps_the_identity(self):
         """Describing a coordinate and rebuilding it is the same coordinate."""
@@ -584,7 +579,7 @@ class TestCoordFingerprint:
             stop=t0 + np.timedelta64(400, "ms"),
             step=np.timedelta64(4, "ms"),
         )
-        assert coord.to_summary().to_coord().fingerprint() == coord.fingerprint()
+        assert coord.to_summary().to_coord().data_id == coord.data_id
 
     def test_metadata_which_does_not_fit_its_dtype_still_differs(self):
         """Conforming is a change of spelling, never a loss of value."""
@@ -593,7 +588,7 @@ class TestCoordFingerprint:
             shape=(10,), dtype="int64", start=1.2, stop=11.2, step=1.0
         )
         assert first != second
-        assert first.fingerprint() != second.fingerprint()
+        assert first.data_id != second.data_id
 
     def test_finer_precision_than_nanoseconds_still_differs(self):
         """Conforming a scalar must not round away what a coordinate keeps."""
@@ -603,58 +598,55 @@ class TestCoordFingerprint:
         apart = start + np.timedelta64(1, "ps")
         second = get_coord(start=apart, stop=apart + step * 100, step=step)
         assert first != second
-        assert first.fingerprint() != second.fingerprint()
+        assert first.data_id != second.data_id
 
     def test_different_values_still_differ(self):
         """Canonicalizing the spelling does not blur real differences."""
         first = get_coord(start=0.0, stop=10.0, step=1.0)
-        assert (
-            first.fingerprint()
-            != get_coord(start=0.0, stop=20.0, step=1.0).fingerprint()
-        )
-        assert (
-            first.fingerprint()
-            != get_coord(start=1.0, stop=11.0, step=1.0).fingerprint()
-        )
-        assert (
-            first.fingerprint()
-            != get_coord(start=0.0, stop=10.0, step=0.5).fingerprint()
-        )
+        assert first.data_id != get_coord(start=0.0, stop=20.0, step=1.0).data_id
+        assert first.data_id != get_coord(start=1.0, stop=11.0, step=1.0).data_id
+        assert first.data_id != get_coord(start=0.0, stop=10.0, step=0.5).data_id
 
-    def test_range_equivalent_units_same_fingerprint(self):
-        """Equivalent range coords should fingerprint the same after normalization."""
+    def test_range_unit_spelling_is_part_of_the_id(self):
+        """One length spelled two ways is two ids: they select differently."""
+        # The same numbers throughout, so only the spelling can decide.
         coord_1 = get_coord(start=0, stop=10, step=1, units="m")
-        coord_2 = get_coord(start=0, stop=1000, step=100, units="cm")
-        assert coord_1.fingerprint() == coord_2.fingerprint()
+        coord_2 = get_coord(start=0, stop=10, step=1, units="km")
+        bare = get_coord(start=0, stop=10, step=1)
+        assert len({coord_1.data_id, coord_2.data_id, bare.data_id}) == 3
+        same = get_coord(start=0, stop=10, step=1, units="m")
+        assert coord_1.data_id == same.data_id
 
-    def test_nearby_range_coords_do_not_share_fingerprint(self):
+    def test_nearby_range_coords_do_not_share_data_id(self):
         """Range-like coords remain exact because equality for them is exact."""
         coord_1 = get_coord(start=0.0, stop=10.0, step=1.0, units="m")
         coord_2 = get_coord(start=1e-10, stop=10.0 + 1e-10, step=1.0, units="m")
         assert coord_1 != coord_2
-        assert coord_1.fingerprint() != coord_2.fingerprint()
+        assert coord_1.data_id != coord_2.data_id
 
-    def test_array_equivalent_units_same_fingerprint(self):
-        """Equivalent array coords should fingerprint the same after normalization."""
-        coord_1 = get_coord(data=np.arange(5.0), units="m")
-        coord_2 = get_coord(data=np.arange(5.0) * 100, units="cm")
-        assert coord_1.fingerprint() == coord_2.fingerprint()
+    def test_array_unit_spelling_is_part_of_the_id(self):
+        """Array coords are hashed in the units they are written in."""
+        values = np.arange(5.0)
+        coord_1 = get_coord(data=values, units="m")
+        coord_2 = get_coord(data=values, units="km")
+        bare = get_coord(data=values)
+        assert len({coord_1.data_id, coord_2.data_id, bare.data_id}) == 3
 
-    def test_approx_equal_float_array_coords_can_have_different_fingerprint(self):
+    def test_approx_equal_float_array_coords_can_have_different_data_id(self):
         """Fingerprints can be stricter than equality for inexact float arrays."""
         coord_1 = get_coord(data=np.array([1.0, 2.0, 4.0]))
         coord_2 = get_coord(data=np.array([1.0, 2.0 + 1e-10, 4.0]))
         assert coord_1 == coord_2
-        assert coord_1.fingerprint() != coord_2.fingerprint()
+        assert coord_1.data_id != coord_2.data_id
 
-    def test_string_coord_fingerprint_equal(self, string_coord):
-        """Equal string coords should share a fingerprint."""
+    def test_string_coord_data_id_equal(self, string_coord):
+        """Equal string coords should share an id."""
         other = get_coord(data=string_coord.values.copy())
         assert other == string_coord
-        assert other.fingerprint() == string_coord.fingerprint()
+        assert other.data_id == string_coord.data_id
 
-    def test_partial_coord_fingerprint_respects_metadata(self):
-        """Partial coord fingerprints must include scalar metadata."""
+    def test_partial_coord_data_id_respects_metadata(self):
+        """Partial coord ids must include scalar metadata."""
         coord_1 = CoordPartial(
             shape=(3,), start=1, stop=4, step=1, dtype=np.dtype("int64")
         )
@@ -662,19 +654,17 @@ class TestCoordFingerprint:
             shape=(3,), start=2, stop=5, step=1, dtype=np.dtype("int64")
         )
         assert coord_1 != coord_2
-        assert coord_1.fingerprint() != coord_2.fingerprint()
+        assert coord_1.data_id != coord_2.data_id
 
-    def test_partial_equivalent_units_same_fingerprint(self):
-        """Equivalent partial coords should fingerprint the same after normalization."""
-        coord_1 = CoordPartial(
-            shape=(3,), start=1.0, stop=4.0, step=1.0, units="m", dtype="float64"
-        )
-        coord_2 = CoordPartial(
-            shape=(3,), start=100.0, stop=400.0, step=100.0, units="cm", dtype="float64"
-        )
-        assert coord_1.fingerprint() == coord_2.fingerprint()
+    def test_partial_unit_spelling_is_part_of_the_id(self):
+        """Partial coords are hashed in the units they state."""
+        numbers = {"shape": (3,), "start": 1.0, "stop": 4.0, "step": 1.0}
+        coord_1 = CoordPartial(**numbers, units="m", dtype="float64")
+        coord_2 = CoordPartial(**numbers, units="km", dtype="float64")
+        bare = CoordPartial(**numbers, dtype="float64")
+        assert len({coord_1.data_id, coord_2.data_id, bare.data_id}) == 3
 
-    def test_nearby_partial_coords_do_not_share_fingerprint(self):
+    def test_nearby_partial_coords_do_not_share_data_id(self):
         """Partial coords remain exact because equality for them is exact."""
         coord_1 = CoordPartial(
             shape=(3,), start=1.0, stop=4.0, step=1.0, units="m", dtype="float64"
@@ -688,7 +678,7 @@ class TestCoordFingerprint:
             dtype="float64",
         )
         assert coord_1 != coord_2
-        assert coord_1.fingerprint() != coord_2.fingerprint()
+        assert coord_1.data_id != coord_2.data_id
 
     def test_partial_convert_units_preserves_null_scalars(self):
         """Null partial metadata should not be passed through conversion."""
@@ -720,7 +710,7 @@ class TestCoordFingerprint:
         assert out.step == coord.step
 
     def test_partial_convert_units_preserves_partial_type(self):
-        """Converting partial coord units should not upcast to CoordRange."""
+        """Converting partial coord units should not upcast to a numeric coord."""
         coord = CoordPartial(
             shape=(3,), start=1.0, stop=4.0, step=1.0, units="m", dtype="float64"
         )
@@ -731,15 +721,22 @@ class TestCoordFingerprint:
         assert out.stop == pytest.approx(0.004)
         assert out.step == pytest.approx(0.001)
 
-    def test_equal_coords_share_fingerprint(self, coord):
-        """Reconstructed equal coords should share a fingerprint."""
+    def test_a_copy_does_not_keep_the_id_it_came_from(self):
+        """model_copy skips validation, so a cached id must not survive it."""
+        coord = get_coord(start=0, stop=10, step=1, units="m")
+        assert len(coord.data_id) == 32
+        copied = coord.model_copy(update={"units": get_quantity("ft")})
+        assert copied.data_id == get_coord(start=0, stop=10, step=1, units="ft").data_id
+
+    def test_equal_coords_share_data_id(self, coord):
+        """Reconstructed equal coords should share an id."""
         payload = coord.model_dump()
         if "values" in payload:
             payload["values"] = coord.values.copy()
         other = get_coord(**payload)
         assert other is not coord
         assert other == coord
-        assert other.fingerprint() == coord.fingerprint()
+        assert other.data_id == coord.data_id
 
     def test_coords_are_explicitly_unhashable(self, coord):
         """Coords should not expose Python hash semantics for identity/content."""
@@ -775,7 +772,7 @@ class TestSelect:
         assert arg not in np.unique(values)
         out, indexer = coord.select((arg, arg))
         assert out.degenerate
-        assert np.size(coord.data[indexer]) == 0
+        assert np.size(coord.values[indexer]) == 0
 
     def test_select_start_start_time(self, coord):
         """Ensure when time range is == (start, start) that dim has len 1."""
@@ -827,11 +824,11 @@ class TestSelect:
         # it should return a degenerate because range not contained by coord.
         new, indexer = coord.select((v1, v2))
         assert new.degenerate
-        assert np.size(coord.data[indexer]) == 0
+        assert np.size(coord.values[indexer]) == 0
         # Same thing if end time is too early
         new, indexer = coord.select((None, v2))
         assert new.degenerate
-        assert np.size(coord.data[indexer]) == 0
+        assert np.size(coord.values[indexer]) == 0
         # but this should be fine
         new = coord.select((v1, None))[0]
         assert new == coord
@@ -845,11 +842,11 @@ class TestSelect:
         # it should return a degenerate since out of range
         new, indexer = coord.select((v1, v2))
         assert new.degenerate
-        assert np.size(coord.data[indexer]) == 0
+        assert np.size(coord.values[indexer]) == 0
         # Same thing if start time is too late
         new, indexer = coord.select((v1, None))
         assert new.degenerate
-        assert np.size(coord.data[indexer]) == 0
+        assert np.size(coord.values[indexer]) == 0
         assert coord.select((None, v2))[0] == coord
 
     def test_wide_select_bounds(self, coord):
@@ -914,6 +911,37 @@ class TestSelect:
         else:
             assert ind_1 == ind_2
 
+    @pytest.mark.parametrize("bounds", [(0.75, -0.75), (-0.25, 0.25), (1.5, -0.25)])
+    def test_crossed_relative_bounds(self, coord, bounds):
+        """Crossed relative limits select no values, even inside the coordinate."""
+        span = coord.max() - coord.min()
+        selected, indexer = coord.select(
+            tuple(span * bound for bound in bounds), relative=True
+        )
+        assert len(selected) == 0
+        assert coord.values[indexer].size == 0
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_crossed_segmented_relative_bounds(self, reverse):
+        """A segment must not reorder relative bounds resolved by its parent."""
+        coord = get_coord(data=np.array([0, 1, 2, 3, 4, 8, 9]), snap=False)
+        assert isinstance(coord, NumericCoord) and coord.runs_count > 1
+        if reverse:
+            coord = coord.sort(reverse=True)[0]
+        selected, indexer = coord.select((3, -7), relative=True)
+        assert len(selected) == 0
+        assert coord.values[indexer].size == 0
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_equal_relative_bounds(self, reverse):
+        """An inclusive relative window can contain exactly one sample."""
+        coord = get_coord(data=np.arange(7))
+        if reverse:
+            coord = coord.sort(reverse=True)[0]
+        selected, indexer = coord.select((5, -1), relative=True)
+        np.testing.assert_array_equal(selected.values, [5])
+        np.testing.assert_array_equal(coord.values[indexer], [5])
+
     def test_select_relative_numeric_offset_timedelta(self):
         """
         A numeric relative offset into a timedelta64 coordinate should be
@@ -934,7 +962,7 @@ class TestSelect:
 
     def test_select_changes_len(self, long_coord):
         """Ensure select changes the length of the coordinate."""
-        data = long_coord.data
+        data = long_coord.values
         new, dslice = long_coord.select((data[2], data[-2]))
         if hasattr(dslice, "stop") and hasattr(dslice, "start"):
             new_len = dslice.stop - dslice.start
@@ -1013,7 +1041,7 @@ class TestSelect:
         # try to make values that won't be in the coordinate.
         values2 = long_coord._get_compatible_value(-to_float(values1) + rand)
         # if by some chance there are any overlaps just bail out.
-        if np.any(np.isin(values2, long_coord.data)):
+        if np.any(np.isin(values2, long_coord.values)):
             return
         out, red = long_coord.select(values2)
         assert out.shape == red.sum()
@@ -1128,7 +1156,7 @@ class TestOrder:
         # try to make values that won't be in the coordinate.
         values2 = long_coord._get_compatible_value(-to_float(values1) + rand)
         # if by some chance there are any overlaps just bail out.
-        if np.any(np.isin(values2, long_coord.data)):
+        if np.any(np.isin(values2, long_coord.values)):
             return
         out, red = long_coord.order(values2)
         assert out.shape == red.shape
@@ -1222,14 +1250,14 @@ class TestApproxEqual:
     def test_different_values_ne(self, evenly_sampled_float_coord_with_units):
         """Ensure very different value coords are not approx equal."""
         coord = evenly_sampled_float_coord_with_units
-        out = coord.update(data=coord.data * 1_000_000)
+        out = coord.update(data=coord.values * 1_000_000)
         assert not out.approx_equal(coord)
 
     def test_close_values_equal(self, evenly_sampled_float_coord_with_units):
         """Ensure very close value coords are equal."""
         coord = evenly_sampled_float_coord_with_units
-        out = coord.update(data=coord.data * 0.99999999999)
-        assert not np.all(out.data == coord.data)
+        out = coord.update(data=coord.values * 0.99999999999)
+        assert not np.all(out.values == coord.values)
         assert out.approx_equal(coord)
 
 
@@ -1246,8 +1274,8 @@ class TestReduceCoord:
         assert out.values[0] == value
 
 
-class TestCoordRange:
-    """Tests for coords from array."""
+class TestRangeCoord:
+    """Tests for evenly sampled coords."""
 
     def test_empty_slice_units(self):
         """An empty compact slice keeps its coordinate units without expansion."""
@@ -1303,13 +1331,13 @@ class TestCoordRange:
     def test_identity_slice_ints(self, evenly_sampled_coord):
         """Ensure slice with exact start/end gives same coord."""
         coord = evenly_sampled_coord
-        new, _sliced = coord.select((coord.start, coord.stop))
+        new, _sliced = coord.select((coord.values[0], coord.values[-1] + coord.step))
         assert new == coord
 
     def test_identity_slice_floats(self, evenly_sampled_float_coord_with_units):
         """Ensure slice with exact start/end gives same coord."""
         coord = evenly_sampled_float_coord_with_units
-        new, _sliced = coord.select((coord.start, coord.stop))
+        new, _sliced = coord.select((coord.values[0], coord.values[-1] + coord.step))
         assert new == coord
 
     def test_float_basics(self):
@@ -1326,8 +1354,8 @@ class TestCoordRange:
         value_m = value_ft * 0.3048
         new, _sliced = coord.select((value_ft * dc.get_unit("ft"), ...))
         # ensure value is surrounded.
-        assert new.start + new.step >= value_m
-        assert new.start - new.step <= value_m
+        assert new.values[0] + new.step >= value_m
+        assert new.values[0] - new.step <= value_m
         # units should also not change
         assert new.units == coord.units
 
@@ -1361,8 +1389,8 @@ class TestCoordRange:
         date_str = "1970-01-01T12"
         new, _sliced = coord.select((date_str, ...))
         datetime = dc.to_datetime64(date_str)
-        assert new.start + new.step >= datetime
-        assert new.start - new.step <= datetime
+        assert new.values[0] + new.step >= datetime
+        assert new.values[0] - new.step <= datetime
 
     def test_sort(self, evenly_sampled_coord):
         """Ensure sort returns equal coord."""
@@ -1376,20 +1404,20 @@ class TestCoordRange:
 
     def test_update_limits_start(self, evenly_sampled_coord):
         """Ensure start can be updated."""
-        new_start = evenly_sampled_coord.start + 2 * evenly_sampled_coord.step
+        new_start = evenly_sampled_coord.values[0] + 2 * evenly_sampled_coord.step
         new = evenly_sampled_coord.update_limits(min=new_start)
         assert len(new) == len(evenly_sampled_coord)
         assert new.step == evenly_sampled_coord.step
-        assert new.start == new_start
+        assert new.values[0] == new_start
 
     def test_update_limits_end(self, evenly_sampled_coord):
         """Ensure end can be updated."""
-        new_stop = evenly_sampled_coord.start - 2 * evenly_sampled_coord.step
+        new_stop = evenly_sampled_coord.values[0] - 2 * evenly_sampled_coord.step
         step = evenly_sampled_coord.step
         new = evenly_sampled_coord.update_limits(max=new_stop - step)
         assert len(new) == len(evenly_sampled_coord)
         assert new.step == evenly_sampled_coord.step
-        assert new.stop == new_stop
+        assert new.values[-1] + new.step == new_stop
 
     def test_update_limits_step(self, evenly_sampled_coord):
         """Ensure the step can be updated."""
@@ -1404,8 +1432,8 @@ class TestCoordRange:
         start, stop = coord.values[2], coord.values[-2]
         new = coord.update_limits(min=start, max=stop)
         assert len(new) == len(coord)
-        assert new.start == start
-        assert new.stop == stop
+        assert new.values[0] == start
+        assert new.values[-1] + new.step == stop
 
     def test_update_limits_no_args(self, evenly_sampled_coord):
         """Ensure both start/stop can be updated."""
@@ -1440,7 +1468,7 @@ class TestCoordRange:
         dt = dc.to_timedelta64(0.09999)
         coord1 = get_coord(start=time[0], stop=time[0] + dt, step=dt)
         coord2 = get_coord(data=time, step=dt)
-        assert isinstance(coord1, CoordRange)
+        assert coord1.evenly_sampled
         assert coord1 == coord2
         # both length and shape should be 1
         assert len(coord1) == 1
@@ -1451,8 +1479,8 @@ class TestCoordRange:
         step = 1 / 1_000
         t_array = np.arange(1000) * step
         out = get_coord(data=t_array, step=step)
-        assert isinstance(out, CoordRange)
-        assert out.shape == out.data.shape == (len(out),)
+        assert out.evenly_sampled
+        assert out.shape == out.values.shape == (len(out),)
         assert out.step == step
 
     def test_off_grid_values_with_step_raise(self):
@@ -1467,9 +1495,9 @@ class TestCoordRange:
             action="always", category=DeprecationWarning, record=True
         ) as records:
             coord = get_coord(shape=601, start=np.array([0]), step=1)
-        assert isinstance(coord, CoordRange)
-        assert coord.start == 0
-        assert coord.stop == 601
+        assert coord.evenly_sampled
+        assert coord.values[0] == 0
+        assert coord.values[-1] + coord.step == 601
         assert coord.shape == (601,)
         assert not any(issubclass(x.category, DeprecationWarning) for x in records)
 
@@ -1483,7 +1511,7 @@ class TestCoordRange:
 
     def test_coord_range_len_1(self):
         """Ensure coord range can have step size of 0."""
-        new = CoordRange(start=0, stop=0, step=0)
+        new = get_coord(start=0, stop=0, step=0)
         assert len(new) == 1
         assert np.all(new.values == np.zeros(0))
 
@@ -1498,7 +1526,7 @@ class TestCoordRange:
     def test_select_step_of_0(self, start, unit):
         """All samples of a step of 0 coord equal start; select on that."""
         step = start - start  # a zero step of the right type.
-        coord = CoordRange(start=start, stop=start, step=step)
+        coord = get_coord(start=start, stop=start, step=step)
         # numpy scalars warn (rather than raise) on the zero division.
         with np.errstate(divide="ignore", invalid="ignore"):
             # a range which contains start keeps the sample.
@@ -1540,15 +1568,14 @@ class TestCoordRange:
         assert not len(coord.select((None, -1e308))[0])
 
     def test_zero_dim_array_inputs(self):
-        """Ensure 0d arrays (which aren't unboxed) can init a CoordRange."""
-        coord = CoordRange(start=np.array(0.0), stop=np.array(10.0), step=np.array(1.0))
+        """Ensure 0d arrays (which aren't unboxed) can init a range coord."""
+        coord = get_coord(start=np.array(0.0), stop=np.array(10.0), step=np.array(1.0))
         assert len(coord) == 10
         assert coord.step == 1.0
 
     def test_reversed_coord(self, evenly_sampled_reversed_coord):
         """Ensure reverse sampling works for evenly sampled coord."""
         coord = evenly_sampled_reversed_coord
-        assert isinstance(coord, CoordRange)
         assert coord.evenly_sampled
         assert coord.reverse_sorted
         assert not coord.sorted
@@ -1575,25 +1602,40 @@ class TestCoordRange:
 
     def test_length_with_stop(self):
         """The length argument should work for setting start."""
-        out1 = CoordRange(start=0, step=1, stop=10)
-        out2 = CoordRange(start=0, step=1, shape=(10,))
+        out1 = get_coord(start=0, step=1, stop=10)
+        out2 = get_coord(start=0, step=1, shape=(10,))
         assert out1 == out2
 
     def test_length_with_start(self):
         """The length argument should work for setting stop."""
-        out1 = CoordRange(start=0, step=1, stop=10)
-        out2 = CoordRange(stop=10, step=1, shape=(10,))
+        out1 = get_coord(start=0, step=1, stop=10)
+        out2 = get_coord(stop=10, step=1, shape=(10,))
         assert out1 == out2
 
     def test_length_with_step(self):
         """The length argument should work for setting step."""
-        out1 = CoordRange(start=0, step=1, stop=10)
-        out2 = CoordRange(start=0, stop=10, shape=10)
+        out1 = get_coord(start=0, step=1, stop=10)
+        out2 = get_coord(start=0, stop=10, shape=10)
         assert out1 == out2
 
 
 class TestMonotonicCoord:
     """Tests for monotonic array coords."""
+
+    @pytest.mark.parametrize("temporal", [False, True])
+    @pytest.mark.parametrize("operation", ["select", "index"])
+    def test_select_preserves_exact_values(self, temporal, operation):
+        """Selecting stored array labels must not infer a different regular grid."""
+        values = np.array([0, 1_000_001_000, 2_000_000_000, 3_000_000_000])
+        values = values.astype("datetime64[ns]") if temporal else values / 1e9
+        coord = NumericCoord.from_labels(values, units="s" if temporal else "m")
+        if operation == "select":
+            result, indexer = coord.select((values[1], None))
+            np.testing.assert_array_equal(result.values, values[indexer])
+        else:
+            result = coord.index(slice(1, None))
+        np.testing.assert_array_equal(result.values, values[1:])
+        assert result.units == coord.units
 
     def test_select_basic(self, monotonic_float_coord):
         """Basic select tests for monotonic array."""
@@ -1724,7 +1766,7 @@ class TestMonotonicCoord:
     def test_wide_filter_doesnt_change_size(self, monotonic_float_coord):
         """Ensure filtering outside data range doesn't change array size."""
         coord = monotonic_float_coord
-        lims = coord.limits
+        lims = (coord.min(), coord.max())
         dur = lims[1] - lims[0]
         select_range = (lims[0] - 2 * dur, lims[1] + dur)
         wide_coord, _inds = coord.select(select_range)
@@ -1779,18 +1821,19 @@ class TestNonOrderedArrayCoords:
     def test_sort(self, random_coord):
         """Ensure the coord can be ordered."""
         new, _ordering = random_coord.sort()
-        assert isinstance(new, CoordMonotonicArray)
+        assert isinstance(new, NumericCoord)
+        assert new.sorted and not new.evenly_sampled
 
     def test_snap(self, random_coord):
         """Ensure coords can be snapped to even sampling intervals."""
         out = random_coord.snap()
-        assert isinstance(out, CoordRange)
+        assert out.evenly_sampled
 
     def test_snap_date(self, random_date_coord):
         """Ensure coords can be snapped to even sampling intervals."""
         out = random_date_coord.snap()
         assert np.issubdtype(out.dtype, np.datetime64)
-        assert isinstance(out, CoordRange)
+        assert out.evenly_sampled
 
     def test_properties_random(self, random_coord):
         """Test key properties for evenly sampled."""
@@ -1801,7 +1844,7 @@ class TestNonOrderedArrayCoords:
         assert not coord.degenerate
 
 
-class TestCoordArray:
+class TestArrayCoord:
     """Tests for a coordinate managing an array."""
 
     def test_empty_2d(self, two_d_coord):
@@ -1952,14 +1995,14 @@ class TestPartialCoord:
     def test_nan_float_dtype(self):
         """Ensure data are NaN and float dtype."""
         default = get_coord(shape=10)
-        data = default.data
+        data = default.values
         assert np.all(pd.isnull(data))
         assert np.issubdtype(data.dtype, np.floating)
 
     def test_nat_datetime_dtype(self):
         """Ensure data are Nat and datetime dtype."""
         coord = get_coord(shape=10, dtype="datetime64[us]")
-        data = coord.data
+        data = coord.values
         assert np.all(pd.isnull(data))
         assert np.issubdtype(data.dtype, np.datetime64)
 
@@ -2027,10 +2070,10 @@ class TestPartialCoord:
         coord = get_coord(shape=10)
         data = random_state.rand(10)
         out = coord.update(data=data)
-        assert np.all(out.data == data)
+        assert np.all(out.values == data)
 
     def test_uptype_with_step(self):
-        """Ensure adding a step to existing length/start creates CoordRange."""
+        """Ensure adding a step to existing length/start creates a range coord."""
         partial = get_coord(shape=10, start=0)
         expected = get_coord(start=0, stop=10, step=1)
         out = partial.update(step=1)
@@ -2060,7 +2103,7 @@ class TestPartialCoord:
         assert pd.isnull(degenerate_time_coord.max())
 
     def test_degenerate_with_step_from_array(self):
-        """CoordRange should be possible empty."""
+        """An evenly sampled coord should be possible empty."""
         ar = np.empty(0, dtype=int)
         coord = get_coord(data=ar, step=1)
         assert coord.step == 1
@@ -2086,7 +2129,7 @@ class TestPartialCoord:
         out = degenerate_time_coord.update(step=dc.to_timedelta64(10)).update(
             start=dc.to_datetime64("2020-10-01")
         )
-        assert isinstance(out, CoordRange)
+        assert out.evenly_sampled
 
     def test_all_null_datetime_reduce_returns_nat(self):
         """All-null time reductions return NaT before calling reducer."""
@@ -2104,7 +2147,7 @@ class TestPartialCoord:
 
         assert len(out) == 1
         assert out.dtype == np.dtype("datetime64[ns]")
-        assert pd.isnull(out.data[0])
+        assert pd.isnull(out.values[0])
         assert dtypes == []
 
 
@@ -2351,7 +2394,8 @@ class TestUpdate:
     def test_update_changes_length(self, evenly_sampled_coord):
         """Ensure the length can be changed."""
         coord = evenly_sampled_coord
-        start, stop, step = coord.start, coord.stop, coord.step
+        step = coord.step
+        start, stop = coord.values[0], coord.values[-1] + step
         new = coord.update(start=start, stop=stop + step * 10)
         assert len(new) == (len(coord) + 10)
 
@@ -2359,14 +2403,14 @@ class TestUpdate:
         """Test updating data in the coordinate."""
         if coord.degenerate:
             return
-        data = coord.data
+        data = coord.values
         d_range = np.max(data) - np.min(data)
         new_data = data + d_range
         new_coord = coord.update(data=new_data)
         assert isinstance(new_coord, BaseCoord)
-        assert all_close(new_coord.data, new_data)
-        new_coord = coord.update_data(values=new_data)
-        assert all_close(new_coord.data, new_data)
+        assert all_close(new_coord.values, new_data)
+        new_coord = coord.update(values=new_data)
+        assert all_close(new_coord.values, new_data)
 
     def test_new_values_clears_shape(self, coord):
         """new(values=...) should rebuild from new values, not stale shape."""
@@ -2375,7 +2419,7 @@ class TestUpdate:
         new_values = coord.values[:2]
         new_coord = coord.new(values=new_values)
         assert len(new_coord) == len(new_values)
-        assert all_close(new_coord.data, new_values)
+        assert all_close(new_coord.values, new_values)
 
 
 class TestAlignTo:
@@ -2400,11 +2444,11 @@ class TestAlignTo:
         """Test for when two coords overlap but aren't contained in the other."""
         coord1 = evenly_sampled_coord
         mid_ind = len(coord1) // 2
-        coord2 = coord1.update_limits(min=coord1.data[mid_ind])
+        coord2 = coord1.update_limits(min=coord1.values[mid_ind])
         c1, c2, s1, s2 = coord1.align_to(coord2)
         assert c1 == c2
-        values1 = coord1.data[s1]
-        values2 = coord2.data[s2]
+        values1 = coord1.values[s1]
+        values2 = coord2.values[s2]
         assert np.all(values1 == values2)
 
     def test_no_overlap(self, evenly_sampled_coord):
@@ -2545,6 +2589,13 @@ class TestIssues:
         assert isinstance(coord, BaseCoord)
         assert len(coord) == 1
 
+    def test_squeezed_single_sample(self):
+        """An exact read takes a squeezed array as one sample, not as none."""
+        for data in (np.datetime64("2020-01-01"), np.asarray(np.float64(1.0))):
+            assert get_coord(data=data, snap=False).shape == (1,)
+        # a snapped read still makes the dimensionless coordinate it always has
+        assert get_coord(data=np.asarray(np.float64(1.0))).shape == ()
+
     def test_update_degenerate_from_attrs(self, degenerate_time_coord):
         """Ensure updating dt on degenerate time coord doesn't fail."""
         # before this would cause infinite recursion.
@@ -2582,7 +2633,7 @@ class TestIssues:
         dates = evenly_sampled_date_coord.values
         data = np.stack([dates, dates], axis=-1)
         coord = get_coord(data=data)
-        assert isinstance(coord, CoordArray)
+        assert isinstance(coord, NumericCoord)
 
 
 class TestStringCoords:
@@ -2857,7 +2908,7 @@ class TestStringCoordUtilities:
             dtype=object,
         )
         out = get_coord(data=data)
-        assert isinstance(out, CoordArray)
+        assert isinstance(out, NumericCoord)
 
     def test_detect_string_like_array(self):
         """The helper should recognize string arrays only."""
@@ -2951,10 +3002,14 @@ class TestDimensionalityErrors:
         with pytest.raises(CoordError, match="1D coords"):
             partial_2d.change_length(5)
 
-    def test_coord_range_requires_1d_shape(self):
-        """Constructing a CoordRange with a 2D shape must be rejected."""
-        with pytest.raises(ValidationError, match="only works for 1D coords"):
-            CoordRange(start=0, step=1, shape=(2, 3))
+    def test_range_metadata_with_2d_shape_is_partial(self):
+        """Range metadata with a 2D shape never builds an evenly sampled coord."""
+        # A numeric coord's shape comes from its runs, so an evenly sampled
+        # coord is 1D by construction; the multidimensional case can only be
+        # a partial coordinate.
+        coord = get_coord(start=0, step=1, shape=(2, 3))
+        assert isinstance(coord, CoordPartial)
+        assert coord.shape == (2, 3)
 
 
 class TestUnitNoOps:
@@ -2997,6 +3052,91 @@ class TestUnitNoOps:
 class TestIndexCoordinate:
     """The coordinate-level positional API remains usable independently."""
 
+    @pytest.mark.parametrize("operation", ["index", "getitem"])
+    @pytest.mark.parametrize("indices", [[2, 0, 3, 1], [1, 1, 0, 2]])
+    def test_reordered_array_selection(self, operation, indices):
+        """Reordering or repeating labels must not imply monotonic search order."""
+        coord = NumericCoord.from_labels(np.array([0.0, 1.0, 3.0, 6.0]), units="m")
+        indices = np.array(indices)
+        out = coord.index(indices) if operation == "index" else coord[indices]
+        np.testing.assert_array_equal(out.values, coord.values[indices])
+        selected, _ = out.select((0.0, 1.0))
+        expected = [0.0, 1.0] if indices[0] == 2 else [1.0, 1.0, 0.0]
+        np.testing.assert_array_equal(selected.values, expected)
+        assert selected.units == coord.units
+
+    @pytest.mark.parametrize("temporal", [False, True])
+    @pytest.mark.parametrize("operation", ["stride", "array", "select", "decimate"])
+    def test_segmented_selection_preserves_labels(self, temporal, operation):
+        """Selecting across stored runs must preserve their small discontinuity."""
+        values = np.array(
+            [
+                0,
+                1_000_000_000,
+                2_000_000_000,
+                3_000_000_000,
+                4_000_001_000,
+                5_000_001_000,
+                6_000_001_000,
+            ]
+        )
+        values = values.astype("datetime64[ns]") if temporal else values / 1e9
+        coord = get_coord(data=values, snap=False)
+        assert isinstance(coord, NumericCoord) and coord.runs_count > 1
+        indices = np.array([0, 2, 4, 6])
+        if operation == "stride":
+            out = coord.index(slice(None, None, 2))
+        elif operation == "array":
+            out = coord.index(indices)
+        elif operation == "select":
+            out, _ = coord.select(indices, samples=True)
+        else:
+            patch = dc.Patch(data=np.arange(7), coords={"x": coord}, dims=("x",))
+            selected = patch.decimate(x=2, filter_type=None)
+            np.testing.assert_array_equal(selected.data, [0, 2, 4, 6])
+            out = selected.get_coord("x")
+        np.testing.assert_array_equal(out.values, values[indices])
+
+    @pytest.mark.parametrize("indexer", [slice(1, 4), np.array([3, 2, 1])])
+    def test_partial_index_avoids_full_allocation(self, monkeypatch, indexer):
+        """Selecting a few unknown positions must not allocate all their values."""
+        coord = CoordPartial(shape=(100_000_000,), units="m", dtype="float32")
+        original_empty = np.empty
+
+        def bounded_empty(shape, *args, **kwargs):
+            assert np.prod(shape) < 1_000, "Allocated the full partial coordinate"
+            return original_empty(shape, *args, **kwargs)
+
+        monkeypatch.setattr(np, "empty", bounded_empty)
+        selected = coord.index(indexer)
+        assert selected.shape == (3,)
+        assert selected.units == coord.units
+        assert selected.dtype == coord.dtype
+
+    @pytest.mark.parametrize("indexer", [0, np.int64(-1), (0,)])
+    def test_partial_scalar_index(self, indexer):
+        """Scalar positional indexing still returns a usable one-sample coord."""
+        coord = CoordPartial(shape=(10,), units="m", dtype="float32")
+        out = coord.index(indexer)
+        assert out.shape == (1,)
+        assert len(out) == 1
+        assert out.units == coord.units
+        assert out.dtype == coord.dtype
+        np.testing.assert_array_equal(out.values, np.array([np.nan], dtype="float32"))
+
+    def test_partial_decimation_metadata(self):
+        """Sample decimation preserves a partial coordinate's units and dtype."""
+        coord = CoordPartial(shape=(10,), units="m", dtype="float32")
+        patch = dc.Patch(
+            data=np.arange(10), coords={"distance": coord}, dims=("distance",)
+        )
+        out = patch.decimate(distance=2, filter_type=None)
+        selected = out.get_coord("distance")
+        assert selected.units == coord.units
+        assert selected.dtype == coord.dtype
+        assert selected.shape == (5,)
+        np.testing.assert_array_equal(out.data, [0, 2, 4, 6, 8])
+
     @pytest.mark.parametrize("axis", [0, 1])
     def test_multidimensional(self, axis):
         """An explicit axis indexes only that dimension and preserves units."""
@@ -3006,3 +3146,37 @@ class TestIndexCoordinate:
         expected = values[1:3, :] if axis == 0 else values[:, 1:3]
         np.testing.assert_array_equal(actual.values, expected)
         assert actual.units == coord.units
+
+
+class TestSummaryRoundTripUnit:
+    """A summary rebuilds a time coordinate at the unit it records."""
+
+    @pytest.mark.parametrize("unit", ["s", "ms", "us", "ns"])
+    def test_datetime_keeps_its_unit(self, unit):
+        """The values, the dtype and the id all survive to_summary().to_coord()."""
+        values = np.datetime64("2020-01-01", unit) + np.arange(5) * np.timedelta64(
+            1, unit
+        )
+        coord = dc.get_coord(values=values.astype(f"datetime64[{unit}]"))
+        back = coord.to_summary().to_coord()
+        assert back.dtype == coord.dtype
+        assert np.array_equal(back.values, coord.values)
+        assert back.data_id == coord.data_id
+
+    def test_a_counted_unit_keeps_its_count(self):
+        """A dtype such as datetime64[10ms] keeps the count, not only the unit."""
+        values = np.datetime64("2020-01-01", "ms") + np.arange(5) * np.timedelta64(
+            10, "ms"
+        )
+        coord = dc.get_coord(values=values.astype("datetime64[10ms]"))
+        back = coord.to_summary().to_coord()
+        assert back.dtype == coord.dtype
+        assert np.array_equal(back.values, coord.values)
+        assert back.data_id == coord.data_id
+
+    def test_timedelta_keeps_its_unit(self):
+        """A timedelta coordinate too."""
+        coord = dc.get_coord(
+            values=(np.arange(4) * np.timedelta64(10, "ms")).astype("m8[ms]")
+        )
+        assert coord.to_summary().to_coord().dtype == coord.dtype

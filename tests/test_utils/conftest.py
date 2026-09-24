@@ -41,6 +41,10 @@ def to_backend(to_array):
 
     def _to_backend(patch: dc.Patch) -> dc.Patch:
         """Return the patch with its data on the array backend."""
-        return patch.new(data=to_array(np.asarray(patch.data)))
+        out = patch.new(data=to_array(np.asarray(patch.data)))
+        # The same values held by another backend are the same data;
+        # `new(data=...)` cannot know that, so the ids are restated.
+        ids = ("origin_id", "data_id")
+        return out.update_attrs(**{x: getattr(patch.attrs, x) for x in ids})
 
     return _to_backend

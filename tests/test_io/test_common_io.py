@@ -11,7 +11,6 @@ test_io_core.py
 from __future__ import annotations
 
 import inspect
-from collections import Counter
 from contextlib import suppress
 from functools import cache
 from io import BufferedIOBase, BytesIO, UnsupportedOperation
@@ -282,11 +281,6 @@ _SCAN_COST_MAX_FRACTION = 0.25
 # also what a reader that just started bypassing the handle would produce.
 IGNORE_SCAN_CHECK = frozenset({"SEGY", "MSEED"})
 
-# These inherit FiberIO.scan, which reads the whole file to build a summary.
-# Implementing only read is allowed, so this is a choice rather than a defect
-# -- pinned so a new format that skips scan fails instead of joining them.
-FORMATS_WITH_DEFAULT_SCAN = frozenset({"PickleIO", "RSFV1", "WavIO"})
-
 
 class _CountingHandle(BufferedIOBase):
     """
@@ -534,6 +528,34 @@ class TestRead:
         for patch in read_spool:
             _assert_coords_attrs_match(patch)
 
+    def test_source_loads_patch_data(self, read_spool):
+        """A source which says it can load gives the data of its own patch."""
+        for patch in read_spool:
+            source = patch._source
+            if source.loadable:
+                assert np.array_equal(source.load(), patch.data, equal_nan=True)
+                part = source[1:]
+                assert np.array_equal(part.load(), patch.data[1:], equal_nan=True)
+
+    def test_path_key_needs_no_reader(self, read_spool):
+        """A key which is a dataset path is all plain h5py needs."""
+        for patch in read_spool:
+            source = patch._source
+            if source.loadable and source.key.startswith("/"):
+                with h5py.File(source.path) as fi:
+                    stored = fi[source.key][tuple(slice(*x) for x in source.windows)]
+                assert np.array_equal(stored, patch.data, equal_nan=True)
+
+    def test_selected_source_loads_patch_data(self, io_path_tuple):
+        """A read which selects gives a source for the selection, or none."""
+        _, path = io_path_tuple
+        with skip_missing():
+            spool = dc.read(path, time=(1, 4), samples=True)
+        for patch in spool:
+            source = patch._source
+            if source.loadable:
+                assert np.array_equal(source.load(), patch.data, equal_nan=True)
+
     def test_time_coords_are_datetimes(self, read_spool):
         """Ensure the time coordinates have the type of datetime."""
         for patch in read_spool:
@@ -544,7 +566,7 @@ class TestRead:
     def test_read_stream(self, io_path_tuple):
         """If the format supports reading from a stream, test it out."""
         io, path = io_path_tuple
-        req_type = getattr(io.read, "_required_type", None)
+        req_type = _required_resource_type(io.read_array)
         if req_type is not BinaryReader:
             pytest.skip(f"{io} doesn't support BinaryReader streams.")
 
@@ -563,26 +585,55 @@ class TestRead:
         for patch1, patch2 in zip(spool1, spool2):
             assert patch1.equals(patch2)
 
+    @pytest.mark.parametrize("snap", [True, False])
+    @pytest.mark.parametrize("keyed", [True, False])
+    def test_read_window_matches_full_selection(self, io_path_tuple, snap, keyed):
+        """Every reader selects original samples without changing source identity."""
+        _io, path = io_path_tuple
+        with skip_missing():
+            full = dc.read(path, snap=snap)[0]
+        bounds = {
+            dim: (full.get_array(dim)[1], full.get_array(dim)[-2])
+            for dim, size in zip(full.dims, full.shape, strict=True)
+            if size > 4
+        }
+        key_query = {"source_patch_key": full._source.key} if keyed else {}
+        selected = dc.read(path, snap=snap, **key_query, **bounds)[0]
+        expected = full.select(**bounds)
+        np.testing.assert_array_equal(selected.data, expected.data)
+        assert selected.coords == expected.coords
+        assert selected.dtype == expected.dtype
+        assert selected.attrs.origin_id == full.attrs.origin_id
+        assert selected._source.key == full._source.key
+        # A bound pushed into the reader names what selecting the loaded
+        # patch names, and not the whole file.
+        assert selected.attrs.data_id == expected.attrs.data_id
+        assert selected.attrs.data_id != full.attrs.data_id
+        assert selected.attrs.history == full.attrs.history
+
     def test_read_array_matches_default(self, io_path_tuple):
         """A format's read_array override must agree with the read-and-trim default."""
         io, path = io_path_tuple
-        if not io.implements_read_array:
-            pytest.skip(f"{io.name} inherits the default read_array")
         with skip_missing():
             payload = dc.scan(path)[0]
         key = payload.source_patch_key
-        kwargs = {"source_patch_key": key} if key else {}
-        sized = [
-            (dim, size)
-            for dim, size in zip(payload.dims, payload.shape, strict=True)
-            if size > 2
-        ]
-        every = {dim: (1, size - 1) for dim, size in sized}
-        # the partial and empty cases pin the other half of the contract:
-        # a dimension absent from windows comes back whole
-        for windows in (every, {sized[0][0]: every[sized[0][0]]}, {}):
+        kwargs = {"key": key} if key else {}
+        every = tuple((1, size - 1) if size > 2 else None for size in payload.shape)
+        first = next(i for i, x in enumerate(every) if x is not None)
+        # the partial and empty cases pin the other half of the contract: an
+        # axis given None, and one left off the end, both come back whole
+        for windows in (every, every[: first + 1], ()):
             out = io.read_array(path, windows, **kwargs)
-            expected = FiberIO.read_array(io, path, windows, **kwargs)
+            select = {
+                dim: window
+                for dim, window in zip(payload.dims, windows, strict=False)
+                if window is not None
+            }
+            expected = (
+                dc.read(path, source_patch_key=key)[0]
+                .select(samples=True, **select)
+                .data
+            )
             assert out.dtype == expected.dtype
             # a gap is stored as nan, which is never equal to itself
             nan = np.issubdtype(out.dtype, np.inexact)
@@ -597,41 +648,35 @@ class TestRead:
         `scan`, and the shapes have to agree.
         """
         io, path = io_path_tuple
-        if not io.implements_read_array:
-            pytest.skip(f"{io.name} inherits the default read_array")
         # what scan takes, read_array must take: the caller forwards it
         if "snap" not in inspect.signature(io.scan).parameters:
             pytest.skip(f"{io.name}.scan takes no labelling option")
         with skip_missing():
             payloads = {x: dc.scan_payloads(path, snap=x)[0] for x in (True, False)}
-        key = payloads[True].get("source_patch_key", "")
-        kwargs = {"source_patch_key": key} if key else {}
+        key = payloads[True]._source.key
+        kwargs = {"key": key} if key else {}
         for snap, payload in payloads.items():
-            out = io.read_array(path, {}, snap=snap, **kwargs)
-            assert out.shape == tuple(payload["shape"]), snap
+            out = io.read_array(path, (), **kwargs)
+            assert out.shape == tuple(payload.shape), snap
 
     def test_hdf5_read_array_never_reads_the_array_whole(
         self, io_path_tuple, monkeypatch
     ):
         """An HDF5 override slices its data array in the file."""
         io, path = io_path_tuple
-        resource_type = (
-            _required_resource_type(io.read_array) if io.implements_read_array else None
-        )
+        resource_type = _required_resource_type(io.read_array)
         if resource_type is None or not issubclass(resource_type, H5Reader):
             pytest.skip(f"{io.name} has no HDF5 read_array override")
         with skip_missing():
             payload = dc.scan(path)[0]
         key = payload.source_patch_key
-        kwargs = {"source_patch_key": key} if key else {}
+        kwargs = {"key": key} if key else {}
         # a small window, so reading the array whole is never mistaken
         # for reading what was asked for
-        windows = {
-            dim: (1, min(size - 1, 4))
-            for dim, size in zip(payload.dims, payload.shape, strict=True)
-            if size > 2
-        }
-        assert windows, "no dimension long enough to window"
+        windows = tuple(
+            (1, min(size - 1, 4)) if size > 2 else None for size in payload.shape
+        )
+        assert any(x is not None for x in windows), "no axis long enough to window"
         reads = []
         original = h5py.Dataset.__getitem__
 
@@ -653,8 +698,8 @@ class TestRead:
             # the plain case: one read, sliced on every windowed axis
             assert len(reads) == 1, reads
             wanted = tuple(
-                (1, min(size - 1, 4)) if dim in windows else (0, size)
-                for dim, size in zip(payload.dims, payload.shape, strict=True)
+                window if window is not None else (0, size)
+                for window, size in zip(windows, payload.shape, strict=True)
             )
             index = reads[0][2]
             assert isinstance(index, tuple) and len(index) == len(wanted), index
@@ -664,6 +709,27 @@ class TestRead:
             # a cube of blocks reads more than the window, never all of it
             for shape, got, _ in reads:
                 assert got != shape, (shape, got)
+
+    def test_read_array_function_matches_read(self, io_path_tuple):
+        """`dc.read_array` gives each key's array, whole or windowed."""
+        _io, path = io_path_tuple
+        with skip_missing():
+            payloads = dc.scan(path)
+        for payload in payloads:
+            key = payload.source_patch_key
+            expected = dc.read(path, source_patch_key=key)[0].data
+            out = dc.read_array(path, key=key)
+            nan = np.issubdtype(out.dtype, np.inexact)
+            assert np.array_equal(out, expected, equal_nan=nan), key
+            # the windowed and strided reads run through the same route
+            windows = tuple(
+                (1, size - 1) if size > 2 else None for size in payload.shape
+            )
+            index = tuple(slice(*x) if x is not None else slice(None) for x in windows)
+            windowed = dc.read_array(path, windows, key=key)
+            assert np.array_equal(windowed, expected[index], equal_nan=nan), key
+            strided = dc.read_array(path, slice(0, payload.shape[0], 2), key=key)
+            assert np.array_equal(strided, expected[::2], equal_nan=nan), key
 
     def test_slice_single_dim_both_ends(self, io_path_tuple):
         """
@@ -704,25 +770,31 @@ class TestRead:
         spool = io.read(path, time=(end_time + one_second, ...))
         assert len(spool) == 0
 
-    def test_a_read_bound_records_nothing(self, io_path_tuple):
+    def test_a_read_bound_names_the_window(self, io_path_tuple):
         """
-        A patch read under a coordinate bound carries what a whole read carries.
+        A patch read under a coordinate bound names the window it read.
 
-        The bound is the read's business; a spool records the trim it
-        asked for, so a reader which recorded it too would record it twice.
+        The bound reaches the same samples as selecting the whole patch
+        would, so both routes name one array. `select` writes no history,
+        and neither does the read.
         """
         io, path = io_path_tuple
+        # Through `dc.read`, which says which data a patch is; a patch a
+        # reader builds on its own is new data each time.
+        kwargs = {"file_format": io.name, "file_version": io.version}
         with skip_missing():
-            whole = io.read(path)
+            whole = dc.read(path, **kwargs)
         if len(whole) != 1 or "time" not in whole[0].dims:
             pytest.skip("Test requires a single patch with a time dimension.")
         patch = whole[0]
         values = patch.get_coord("time").values
         if len(values) < 6:
             pytest.skip("Test requires a time dimension with room to trim.")
-        bounded = io.read(path, time=(values[2], values[-3]))
+        window = (values[2], values[-3])
+        bounded = dc.read(path, time=window, **kwargs)
         assert len(bounded) == 1
-        assert bounded[0].attrs.processing_id == patch.attrs.processing_id
+        assert bounded[0].attrs.data_id == patch.select(time=window).attrs.data_id
+        assert bounded[0].attrs.data_id != patch.attrs.data_id
         assert bounded[0].attrs.history == patch.attrs.history
 
     def test_slice_out_all_patches_distance(self, io_path_tuple):
@@ -780,48 +852,29 @@ class TestScan:
             f"{size:,} byte file; a scan should read headers, not samples."
         )
 
-    def test_formats_implement_scan(self):
-        """
-        Formats should implement scan rather than inherit the default.
-
-        The byte budget only covers formats with large fixtures. This check catches
-        formats that inherit the full-read fallback; ``FORMATS_WITH_DEFAULT_SCAN``
-        lists accepted exceptions.
-        """
+    def test_registered_readers_share_framework_methods(self):
+        """First-party readers provide the hooks and inherit the shared assembly."""
         FiberIO.manager.load_plugins()
-        # Other test modules register FiberIO subclasses globally on import,
-        # so only DASCore's own formats are considered here.
-        registered = {
-            type(fiber_io)
-            for fiber_io in FiberIO.manager.yield_fiberio()
-            if type(fiber_io).__module__.startswith("dascore.io.")
-        }
-        # Comparison below is by class name, so names must be unique.
-        by_name = Counter(fiber_io_class.__name__ for fiber_io_class in registered)
-        assert not (shared := [k for k, v in by_name.items() if v > 1]), (
-            f"format class names are no longer unique: {sorted(shared)}"
-        )
-        # All three are dependency-free, so all should load. Without this,
-        # a formatter failing to load would drop off both sides and pass.
-        names = {fiber_io_class.__name__ for fiber_io_class in registered}
-        assert FORMATS_WITH_DEFAULT_SCAN <= names, (
-            "formats expected to be registered are missing: "
-            f"{sorted(FORMATS_WITH_DEFAULT_SCAN - names)}"
-        )
-        # Every subclass gets its own type-casting wrapper around scan, so
-        # the function underneath is what says whose scan this really is.
-        default_scan = inspect.unwrap(FiberIO.scan)
-        using_default = {
-            fiber_io_class.__name__
-            for fiber_io_class in registered
-            if inspect.unwrap(fiber_io_class.scan) is default_scan
-        }
-        assert using_default == FORMATS_WITH_DEFAULT_SCAN, (
-            "formats inheriting the read-everything FiberIO.scan changed; "
-            f"expected {sorted(FORMATS_WITH_DEFAULT_SCAN)}, "
-            f"found {sorted(using_default)}. Implement scan for the new "
-            "format, or add it to FORMATS_WITH_DEFAULT_SCAN with a reason."
-        )
+        readers = [
+            x
+            for x in FiberIO.manager.yield_fiberio()
+            if type(x).__module__.startswith("dascore.io.")
+        ]
+        assert len(readers) >= 30
+        for reader in readers:
+            for name in ("get_format", "scan", "read"):
+                if name == "read" and reader.name == "Sintela_Protobuf":
+                    # Preserve fast scans and complete streaming reads.
+                    continue
+                assert inspect.unwrap(getattr(type(reader), name)) is getattr(
+                    FiberIO, name
+                )
+            if reader.name in {"WAV", "rsf"}:
+                continue  # Write-only formats cannot describe or load a resource.
+            for name in ("get_version", "get_metadata", "read_array"):
+                assert inspect.unwrap(getattr(type(reader), name)) is not getattr(
+                    FiberIO, name
+                )
 
     def test_raw_scan_excludes_source_metadata(self, io_path_tuple):
         """Direct FiberIO scans should not attach source metadata."""
@@ -829,10 +882,10 @@ class TestScan:
         with skip_missing():
             summary_list = io.scan(path)
         for summary in summary_list:
-            assert "source_path" not in summary
-            assert "source_format" not in summary
-            assert "source_version" not in summary
-            attr_dump = summary["attrs"].model_dump()
+            assert summary._source is None or not summary._source.path
+            assert summary._source is None or not summary._source.format
+            assert summary._source is None or not summary._source.version
+            attr_dump = summary.attrs.model_dump()
             assert "path" not in attr_dump
             assert "file_format" not in attr_dump
             assert "file_version" not in attr_dump
@@ -865,7 +918,7 @@ class TestScan:
 
         assert len(payloads) == len(patches)
         for payload, patch in zip(payloads, patches, strict=True):
-            coords = payload["coords"]
+            coords = payload.coords
             assert isinstance(coords, dc.CoordManager)
             assert coords.dims == patch.dims
             assert coords.shape == patch.shape
@@ -972,7 +1025,7 @@ class TestWrite:
 
     def test_roundtrip(self, random_patch, written_fiber_path, fiber_io_writer):
         """If the writer can read, ensure round-tripping patch is equal."""
-        if not fiber_io_writer.implements_read:
+        if fiber_io_writer.name in {"WAV", "rsf"}:
             pytest.skip("FiberIO doesn't implement read")
         new = fiber_io_writer.read(written_fiber_path)[0]
         assert new == random_patch

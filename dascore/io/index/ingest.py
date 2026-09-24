@@ -47,9 +47,9 @@ _SANITIZE_RE = re.compile(r"[^a-z0-9_]+")
 # Attrs handled structurally rather than indexed: history is a list, so
 # never a scalar column, and dims and coords are structure.
 #
-# Neither lineage id is here. `patch_id` is indexed so a spool can find a
+# Neither id is here. `origin_id` is indexed so a spool can find a
 # patch by the id it carries rather than by loading every patch to look;
-# `processing_id` because a provenance query needs to reach it. Both are
+# `data_id` because a provenance query needs to reach it. Both are
 # lineage rather than describing attrs, so the planner keeps them out of
 # merge conflicts (see `_SOURCE_COLUMNS`).
 _SKIPPED_ATTRS = frozenset({"history", "dims", "coords"})
@@ -75,7 +75,7 @@ class _CommonCoordFields(TypedDict):
     coord_dims: str
     length: int | None
     units: str | None
-    coord_hash: str | None
+    data_id: str | None
 
 
 class _ExactFields(TypedDict):
@@ -110,7 +110,7 @@ class CoordRecord:
     step_numerator: int | None = None
     step_denominator: int | None = None
     origin_offset: int | None = None
-    coord_hash: str | None = None
+    data_id: str | None = None
     # 0 for the coordinate as a whole, n for its nth run (a link field)
     run_index: int = 0
 
@@ -119,22 +119,15 @@ class CoordRecord:
         """
         Deduplication key for the coord definition.
 
-        The CoordSummary fingerprint when available ("fp:" prefix; exact
-        value identity), otherwise a hash of the stored summary fields
-        ("sum:" prefix; lossless for the index but too weak for
-        value-identity claims). Name and dims are patch-level and
-        excluded. The unit spelling rides after "|" on the fp form:
-        fingerprints simplify units before hashing, so one physical
-        coordinate spelled in metres and in feet hashes identically —
-        but the stored def rows carry spelling-dependent units and
-        envelopes, so deduplicating them together would let the first
-        spelling's row lie for the second.
+        The coordinate's data_id when available ("fp:" prefix; exact
+        value identity, which counts the unit spelling the patch wrote,
+        as the stored envelopes do), otherwise a hash of the stored
+        summary fields ("sum:" prefix; lossless for the index but too
+        weak for value-identity claims). Name and dims are patch-level
+        and excluded.
         """
-        if self.coord_hash:
-            # truncated: 128 bits is ample and key size shows up in the
-            # def_key index for archives with mostly-unique time coords
-            key = f"fp:{self.coord_hash[:32]}"
-            return f"{key}|{self.units}" if self.units else key
+        if self.data_id:
+            return f"fp:{self.data_id}"
         fields = tuple(getattr(self, f) for f in _COORD_DEF_FIELDS)
         digest = hashlib.sha256(repr(fields).encode()).hexdigest()[:32]
         return f"sum:{digest}"
@@ -307,9 +300,7 @@ def _extract_attrs(
                 complete = False
             continue
         # An empty identity means no recorded operations, not a missing field.
-        typed = (
-            TypedValue("str", value) if name == "processing_id" else typed_value(value)
-        )
+        typed = TypedValue("str", value) if name == "data_id" else typed_value(value)
         if typed is not None:
             out[name] = typed
             if typed.units is not None:
@@ -331,9 +322,9 @@ def _extract_attrs(
 
 # What a directory name may never claim to be. A path says where data is
 # kept, which is how renaming a directory corrects metadata; it does not
-# get to say which data it is, or a directory called `patch_id=x` would
-# rewrite the lineage of everything under it.
-_UNCLAIMABLE_BY_PATH = frozenset({"patch_id", "processing_id"})
+# get to say which data it is, or a directory called `origin_id=x` would
+# rewrite the identity of everything under it.
+_UNCLAIMABLE_BY_PATH = frozenset({"origin_id", "data_id"})
 
 
 def hive_path_attrs(rel_posix: str, warn: bool = True) -> dict[str, str]:
@@ -436,11 +427,11 @@ def coord_dtype_is_stateable(dtype: str | np.dtype | None) -> bool:
 
 def _coord_record(name: str, summary) -> CoordRecord | None:
     """Convert one CoordSummary into a CoordRecord."""
-    fingerprint = getattr(summary, "fingerprint", None)
-    if fingerprint is None and getattr(summary, "is_range_like", False):
+    data_id = getattr(summary, "data_id", None)
+    if data_id is None and getattr(summary, "is_range_like", False):
         # A range summary contains its complete representation, so recover the
         # same exact identity a loaded CoordRange would have produced.
-        fingerprint = summary.to_coord().fingerprint()
+        data_id = summary.to_coord().data_id
     # Stringify the pint Quantity once (a Quantity-keyed cache is unsafe —
     # 1 m == 100 cm with equal hashes but different strings). This is the
     # ORIGINAL unit, cleanly spelled: get_quantity_str drops the "1 " a
@@ -453,7 +444,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
         coord_dims=",".join(summary.dims),
         length=summary.len,
         units=units_str,
-        coord_hash=fingerprint,
+        data_id=data_id,
     )
     dtype = np.dtype(summary.dtype) if summary.dtype else None
     if dtype is None:
@@ -580,8 +571,9 @@ def summaries_to_records(
         but the root itself is *not* persisted (local directory spools
         resolve against their current root, per the design doc).
     mtimes_ns, sizes_bytes
-        Optional maps of source_path -> stat values. When omitted the
-        caller is responsible for change detection.
+        Optional maps of source_path -> stat values. A source with no
+        value recorded is one nothing can be promised about, so a merge
+        reading its windows from the index refuses to.
     """
     # Group by the original (OS-native) source path so the mtimes_ns /
     # sizes_bytes maps, which the caller keys by that same path, still
@@ -656,12 +648,12 @@ def summaries_to_records(
 # Record fields read straight off an index row of the same name. The
 # remaining fields need per-field handling: a coord's name/dims are
 # patch-level (they come from the link row, not the shared definition),
-# its hash is stored as "fingerprint", and a patch's id/dims get
+# its hash is stored as "data_id", and a patch's id/dims get
 # normalized below.
 _COORD_DEF_FIELDS = tuple(
     f.name
     for f in fields(CoordRecord)
-    if f.name not in ("coord_name", "coord_dims", "coord_hash", "run_index")
+    if f.name not in ("coord_name", "coord_dims", "data_id", "run_index")
 )
 _PATCH_ROW_FIELDS = tuple(
     f.name
@@ -676,7 +668,7 @@ _COORD_DEF_BOOLS = frozenset(
 
 
 def _int_key(key: Hashable) -> int:
-    """Return a groupby key as an int; the id columns grouped on are integral."""
+    """Return a groupby key as an int; the row columns grouped on are integral."""
     return int(cast("SupportsInt", key))
 
 
@@ -704,7 +696,7 @@ def coord_record(link, cdef) -> CoordRecord:
         coord_name=link.coord_name,
         coord_dims=link.coord_dims,
         run_index=int(link.run_index),
-        coord_hash=_py_scalar(cdef.fingerprint),
+        data_id=_py_scalar(cdef.data_id),
         dtype=link.dtype,
         **{
             f: _py_scalar(getattr(cdef, f), f in _COORD_DEF_BOOLS)
@@ -737,9 +729,9 @@ def assemble_source_records(
     # Records transfer in catalog order: re-ingesting assigns fresh
     # sequential ordinals, so record order IS the ordering contract.
     if "ordinal" in sources.columns:
-        sources = sources.sort_values(["ordinal", "source_id"])
-    if "patch_id" in patches.columns:
-        patches = patches.sort_values("patch_id")
+        sources = sources.sort_values(["ordinal", "source_row"])
+    if "patch_row" in patches.columns:
+        patches = patches.sort_values("patch_row")
     col_info = {
         column: (name, kind, _py_scalar(units))
         for column, name, kind, units in zip(
@@ -750,30 +742,30 @@ def assemble_source_records(
             strict=True,
         )
     }
-    def_map = {int(row.coord_def_id): row for row in iter_rows(defs, CoordDefRow)}
+    def_map = {int(row.coord_row): row for row in iter_rows(defs, CoordDefRow)}
     attr_rows = (
-        {int(k): v for k, v in attrs.set_index("patch_id").to_dict("index").items()}
+        {int(k): v for k, v in attrs.set_index("patch_row").to_dict("index").items()}
         if not attrs.empty
         else {}
     )
     link_groups = (
-        {_int_key(k): v for k, v in links.groupby("patch_id")}
+        {_int_key(k): v for k, v in links.groupby("patch_row")}
         if not links.empty
         else {}
     )
     patches_by_source = (
-        {_int_key(k): v for k, v in patches.groupby("source_id")}
+        {_int_key(k): v for k, v in patches.groupby("source_row")}
         if not patches.empty
         else {}
     )
     out = []
     for src in iter_rows(sources, SourceRow):
-        sub = patches_by_source.get(int(src.source_id))
+        sub = patches_by_source.get(int(src.source_row))
         if sub is None:
             continue
         patch_records = []
         for patch in iter_rows(sub, PatchRow):
-            pid = int(patch.patch_id)
+            pid = int(patch.patch_row)
             typed = {}
             for col, value in attr_rows.get(pid, {}).items():
                 if col in col_info and not pd.isnull(value):
@@ -783,7 +775,7 @@ def assemble_source_records(
                     )
             coords = []
             for link in iter_rows(link_groups.get(pid, pd.DataFrame()), PatchCoordRow):
-                coords.append(coord_record(link, def_map[int(link.coord_def_id)]))
+                coords.append(coord_record(link, def_map[int(link.coord_row)]))
             patch_records.append(
                 PatchRecord(
                     source_patch_key=normalize_source_patch_key(patch.source_patch_key),

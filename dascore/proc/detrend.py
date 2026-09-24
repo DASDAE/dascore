@@ -39,16 +39,13 @@ class Detrend(PatchProcessor):
     dim: str
     type: Literal["linear", "constant"] = "linear"
 
-    def plan(self, patch, out):
+    def get_metadata(self, meta):
         """Return the axis to detrend along."""
-        if self.dim not in patch.dims:
-            msg = f"dim '{self.dim}' is not in patch dimensions {patch.dims}"
+        if self.dim not in meta.dims:
+            msg = f"dim '{self.dim}' is not in patch dimensions {meta.dims}"
             raise ParameterError(msg)
-        return {"axis": patch.get_axis(self.dim)}
+        return meta, {"axis": meta.get_axis(self.dim)}
 
     def numpy_kernel(self, data, *, axis):
         """Return the data with the trend along the axis removed."""
         return scipy_detrend(data, axis=axis, type=self.type)
-
-
-detrend = Detrend.patch_function

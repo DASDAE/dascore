@@ -41,6 +41,28 @@ class TestSchemaValidation:
         with pytest.raises(InvalidIndexError, match="missing tables"):
             get_backend(path)
 
+    def test_missing_table_rejected(self, tmp_path):
+        """A current index missing one of its tables asks to be rebuilt."""
+        path = tmp_path / "index.sqlite3"
+        get_backend(path).close()
+        con = sqlite3.connect(path)
+        con.execute("DROP TABLE coord_variants")
+        con.commit()
+        con.close()
+        with pytest.raises(InvalidIndexError, match=r"missing tables \['coord_var"):
+            get_backend(path)
+
+    def test_missing_trigger_rejected(self, tmp_path):
+        """An index which lost a counting trigger would miscount; it is refused."""
+        path = tmp_path / "index.sqlite3"
+        get_backend(path).close()
+        con = sqlite3.connect(path)
+        con.execute("DROP TRIGGER count_patch_added")
+        con.commit()
+        con.close()
+        with pytest.raises(InvalidIndexError, match="missing triggers"):
+            get_backend(path)
+
     def test_old_version_rejected(self, tmp_path):
         """Prototype schemas require an explicit delete and rebuild."""
         path = tmp_path / "old.sqlite3"
@@ -61,7 +83,7 @@ class TestSchemaValidation:
         # on the NOT NULL check, which would pass with no FK declared.
         with pytest.raises(sqlite3.IntegrityError, match="FOREIGN KEY"):
             backend._execute(
-                "INSERT INTO patches (patch_id, source_id, source_patch_key, dims) "
+                "INSERT INTO patches (patch_row, source_row, source_patch_key, dims) "
                 "VALUES (1, 999, '0', 'time')"
             )
         backend.close()
@@ -70,13 +92,13 @@ class TestSchemaValidation:
         """The column states an invariant every ingest path already keeps."""
         backend = get_backend(tmp_path / "index.sqlite3")
         backend._execute(
-            "INSERT INTO sources (source_id, base_uri, source_path, source_format, "
+            "INSERT INTO sources (source_row, base_uri, source_path, source_format, "
             "format_version, mtime_ns, size_bytes, path_attrs, last_indexed_ns, "
             "ordinal) VALUES (1, '', 'p', 'DASDAE', '1', 0, 0, NULL, 0, 0)"
         )
         with pytest.raises(sqlite3.IntegrityError, match="dims"):
             backend._execute(
-                "INSERT INTO patches (patch_id, source_id, source_patch_key, dims) "
+                "INSERT INTO patches (patch_row, source_row, source_patch_key, dims) "
                 "VALUES (1, 1, '0', NULL)"
             )
         backend.close()

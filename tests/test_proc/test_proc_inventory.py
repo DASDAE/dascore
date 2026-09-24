@@ -27,6 +27,7 @@ from dascore.exceptions import (
     UnitError,
     UnresolvedPatchError,
 )
+from dascore.models import ArrayLike
 
 
 @pytest.fixture(scope="module")
@@ -283,14 +284,14 @@ class TestConflicts:
         Enriching twice is not an error and changes nothing.
 
         Nothing but what the decorator maintains, that is: doing it twice
-        is two operations, so `processing_id` says so even though every
+        is two operations, so `data_id` says so even though every
         attr it copied is the one it copied the first time.
         """
         once = patch.enrich(inventory, coords=False)
         twice = once.enrich(inventory, coords=False)
-        managed = ("history", "processing_id")
+        managed = ("history", "data_id")
         assert dict(twice.attrs.drop(*managed)) == dict(once.attrs.drop(*managed))
-        assert twice.attrs.processing_id != once.attrs.processing_id
+        assert twice.attrs.data_id != once.attrs.data_id
 
     def test_bad_conflicts_raises(self, patch, inventory):
         """The flag shares chunking's vocabulary and its validation."""
@@ -707,8 +708,16 @@ class TestEdgeCases:
             patch.enrich(split, coords=False)
 
     def test_incomparable_attr_is_a_conflict(self, patch, inventory):
-        """An attr which cannot be compared has not been shown to agree."""
-        odd = patch.update_attrs(gauge_length=np.array([1.0, 2.0]))
+        """A declared field may hold an array, which has not been shown to agree."""
+
+        class _Attrs(dc.PatchAttrs):
+            """Attrs whose gauge length is declared as an array."""
+
+            gauge_length: ArrayLike = ()
+
+        dumped = patch.attrs.model_dump(exclude_unset=True)
+        attrs = _Attrs(**{**dumped, "gauge_length": np.array([1.0, 2.0])})
+        odd = patch.new(attrs=attrs)
         with pytest.raises(PatchError, match="inventory says"):
             odd.enrich(inventory, coords=False, conflict="raise")
 
@@ -1062,18 +1071,16 @@ class TestEnrichContracts:
     def test_update_coords_stays_safe_to_bypass(self):
         """Enrich calls update_coords.raw_function to skip its history entry.
 
-        That is only legal while the wrapper does nothing else: any
-        requirement or data_type added to update_coords would be silently
-        skipped for enriched patches.
+        That is only legal while the operation does nothing else: a
+        data_type added to update_coords would be silently skipped for
+        enriched patches.
         """
-        from dascore.proc.coords import update_coords  # noqa: PLC0415
+        from dascore.proc.coords import UpdateCoords  # noqa: PLC0415
 
-        processor = update_coords.__processor__
-        for name in ("required_dims", "required_coords", "required_attrs", "data_type"):
-            assert getattr(processor, name) is None, (
-                f"update_coords now sets {name!r}, which Patch.enrich would "
-                "silently skip by calling raw_function."
-            )
+        assert UpdateCoords.data_type is None, (
+            "update_coords now sets a data_type, which Patch.enrich would "
+            "silently skip by calling raw_function."
+        )
 
     def test_enrich_writes_one_history_entry(self, patch, inventory):
         """The operation is enrich; how it updates coords is its own business."""

@@ -33,13 +33,22 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 17 links a segmented
-# coordinate to each of its runs; version 16 stored each range
+# changes, not only when a column does. Version 24 identifies a
+# coordinate by its runs, so a dev-era index states other ids for the
+# same labels; version 23 records a coordinate's dtype with the unit it
+# counts in, so a row rebuilds the coordinate the file holds rather than
+# one in nanoseconds; version 22 hashes a coordinate in the units it was
+# written in, so the key names one spelling; version 21
+# names row numbers `_row`; version 20 renamed the two id attrs and
+# rehashed coordinate keys;
+# version 19 keys a single-patch HDF5 source by its dataset path;
+# version 18 counts patches and coordinate variants; version 17 links a
+# segmented coordinate to each of its runs; version 16 stored each range
 # coordinate's exact grid and named the envelope columns by storage type;
-# version 15 stored source coordinate and numeric attribute dtypes. Earlier
-# indexes lack the metadata required for reconstruction and are rebuilt
-# when opened.
-INDEX_VERSION = 17
+# version 15 stored source coordinate and numeric attribute dtypes.
+# Earlier indexes lack the metadata required for reconstruction and are
+# rebuilt when opened.
+INDEX_VERSION = 24
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -69,12 +78,14 @@ class MetaDataRow(NamedTuple):
     index_version: int
     dascore_version: str
     last_indexed_ns: int
+    # every patch in the index, kept by the counting triggers
+    patch_count: int
 
 
 class SourceRow(NamedTuple):
     """A row of the sources table (one scan unit)."""
 
-    source_id: int
+    source_row: int
     base_uri: str
     source_path: str
     source_format: str
@@ -89,7 +100,7 @@ class SourceRow(NamedTuple):
     path_attrs: str | None
     last_indexed_ns: int
     # The catalog's explicit ordering contract: patch rows present in
-    # (ordinal, patch_id) order. Assigned at ingest (insertion
+    # (ordinal, patch_row) order. Assigned at ingest (insertion
     # sequence); a replaced source keeps its position while new
     # sources append, so merging catalogs concatenates and
     # deduplication keeps first-occurrence position with
@@ -108,8 +119,8 @@ class PatchRow(NamedTuple):
     dims (hot path), not attr promotion.
     """
 
-    patch_id: int
-    source_id: int
+    patch_row: int
+    source_row: int
     source_patch_key: str
     dims: str
     dtype: str  # the data array's dtype, eg "float64"
@@ -138,7 +149,7 @@ class AttrsRow(NamedTuple):
     are added lazily at ingest, so a fetched row carries more than this.
     """
 
-    patch_id: int
+    patch_row: int
 
 
 class AttrMetaRow(NamedTuple):
@@ -155,9 +166,9 @@ class CoordDefRow(NamedTuple):
     A row of the coord_defs table.
 
     Unique coordinate summaries, deduplicated across patches. Range
-    coordinates use a semantic fingerprint supplied by the scan or
+    coordinates use the coordinate's data_id, supplied by the scan or
     reconstructed exactly from the range summary. Non-range coordinates
-    without a fingerprint use a summary hash for storage deduplication,
+    without a data_id use a summary hash for storage deduplication,
     but it is not exposed as value identity.
 
     The envelope columns are named by storage type: `_int` holds epoch
@@ -165,9 +176,9 @@ class CoordDefRow(NamedTuple):
     `_str` text. `value_kind` and `is_relative` say what the integers mean.
     """
 
-    coord_def_id: int
+    coord_row: int
     def_key: str
-    fingerprint: str | None  # semantic hash from CoordSummary
+    data_id: str | None  # value identity from CoordSummary
     value_kind: str  # num | time | str
     dtype: str
     length: int | None
@@ -208,12 +219,32 @@ class PatchCoordRow(NamedTuple):
     plans and exports carry.
     """
 
-    patch_id: int
+    patch_row: int
     coord_name: str
     run_index: int
     coord_dims: str
-    coord_def_id: int
+    coord_row: int
     dtype: str  # source representation; shared definitions identify values
+
+
+class CoordVariantRow(NamedTuple):
+    """
+    A row of the coord_variants table: one per distinct stated coordinate.
+
+    Counts the whole-coordinate links (`run_index` 0) sharing a name,
+    dtype, kind, units and relativity, so coordinate discovery reads these
+    few rows rather than every link. Kept by the counting triggers;
+    `variant_key` is the other five as a JSON array, giving a tuple with
+    nullable members a unique identity.
+    """
+
+    variant_key: str
+    coord_name: str
+    dtype: str
+    value_kind: str
+    units: str | None
+    is_relative: bool | None
+    patch_count: int
 
 
 # The row class declaring each stored table.
@@ -226,6 +257,7 @@ TABLE_ROWS = MappingProxyType(
         "attr_meta": AttrMetaRow,
         "coord_defs": CoordDefRow,
         "patch_coords": PatchCoordRow,
+        "coord_variants": CoordVariantRow,
     }
 )
 
@@ -255,23 +287,23 @@ TABLE_CONSTRAINTS = MappingProxyType(
             f"CHECK (what_is_this = '{WHAT_IS_THIS}')",
         ),
         "sources": (
-            "PRIMARY KEY (source_id)",
+            "PRIMARY KEY (source_row)",
             "UNIQUE (base_uri, source_path)",
             "CHECK (base_uri IS NOT NULL)",
             "CHECK (source_path IS NOT NULL)",
         ),
         "patches": (
-            "PRIMARY KEY (patch_id)",
+            "PRIMARY KEY (patch_row)",
             # Every ingest path joins a string here, so this cannot fire
             # today; it states the invariant where the schema states its
             # other invariants, for a writer which does not yet exist.
             "CHECK (dims IS NOT NULL)",
-            "UNIQUE (source_id, source_patch_key)",
-            "FOREIGN KEY (source_id) REFERENCES sources(source_id) ON DELETE CASCADE",
+            "UNIQUE (source_row, source_patch_key)",
+            "FOREIGN KEY (source_row) REFERENCES sources(source_row) ON DELETE CASCADE",
         ),
         "attrs": (
-            "PRIMARY KEY (patch_id)",
-            "FOREIGN KEY (patch_id) REFERENCES patches(patch_id) ON DELETE CASCADE",
+            "PRIMARY KEY (patch_row)",
+            "FOREIGN KEY (patch_row) REFERENCES patches(patch_row) ON DELETE CASCADE",
         ),
         "attr_meta": (
             "PRIMARY KEY (attr_name, value_kind)",
@@ -279,17 +311,18 @@ TABLE_CONSTRAINTS = MappingProxyType(
             "CHECK (value_kind IN ('num', 'str', 'bool', 'time', 'dur'))",
         ),
         "coord_defs": (
-            "PRIMARY KEY (coord_def_id)",
+            "PRIMARY KEY (coord_row)",
             "UNIQUE (def_key)",
             "CHECK (value_kind IN ('num', 'time', 'str'))",
             "CHECK (is_exact IN (0, 1))",
             "CHECK (is_relative IS NULL OR is_relative IN (0, 1))",
         ),
         "patch_coords": (
-            "PRIMARY KEY (patch_id, coord_name, run_index)",
-            "FOREIGN KEY (patch_id) REFERENCES patches(patch_id) ON DELETE CASCADE",
-            "FOREIGN KEY (coord_def_id) REFERENCES coord_defs(coord_def_id)",
+            "PRIMARY KEY (patch_row, coord_name, run_index)",
+            "FOREIGN KEY (patch_row) REFERENCES patches(patch_row) ON DELETE CASCADE",
+            "FOREIGN KEY (coord_row) REFERENCES coord_defs(coord_row)",
         ),
+        "coord_variants": ("PRIMARY KEY (variant_key)",),
     }
 )
 
@@ -298,12 +331,9 @@ TABLE_CONSTRAINTS = MappingProxyType(
 # not indexed; ingest warns about them.
 RESERVED_ATTR_COLUMNS = frozenset(
     {
-        # storage tables. `patch_id` is deliberately absent: the row id it
-        # names here is renamed private (SPOOL_EARLY_RENAMES) before attr
-        # columns are applied, so a patch's own `patch_id` claims the
-        # public spelling rather than colliding with it. A path may still
-        # not claim it; see `_UNCLAIMABLE_BY_PATH`.
-        "source_id",
+        # The row numbers and provenance columns of the storage tables.
+        "source_row",
+        "patch_row",
         "source_patch_key",
         "source_path",
         "source_format",
@@ -325,7 +355,7 @@ RESERVED_ATTR_COLUMNS = frozenset(
         "n_dims",
         "shape",
         "sample_count_total",
-        "coord_def_id",
+        "coord_row",
         "def_key",
         # fixed time/distance envelope columns on the patches table: these
         # exist for every row regardless of the patch's coords, so an attr
@@ -364,30 +394,74 @@ RESERVED_ATTR_COLUMNS = frozenset(
 # with differing element types, and a public `data_size` would do the
 # same to every merge of patches of different lengths. `present_columns`
 # gives both back their public spelling on the way out to a caller.
-# `patch_id` is the one of these an attr also legitimately claims: it
-# names a row in this schema and a datum on a patch. It is renamed in the
-# backend, before attr columns land, so the attr finds the public spelling
-# free; the rest are renamed where the spool relation is built.
-SPOOL_EARLY_RENAMES = MappingProxyType({"patch_id": "_patch_id"})
+# `patch_row`, the row number, is renamed in the backend before attr columns
+# land: residual queries and the catalog's ordering read `_patch_row`. The
+# rest are renamed where the spool relation is built.
+
+# What the index last measured of each member's source, projected beside
+# the member's own row so the two describe one revision of the index.
+SOURCE_STAT_COLUMNS = ("_mtime_ns", "_size_bytes")
+
+SPOOL_EARLY_RENAMES = MappingProxyType({"patch_row": "_patch_row"})
 SPOOL_LATE_RENAMES = MappingProxyType(
     {
         "dtype": "_dtype",
         "data_size": "_data_size",
         "attrs_complete": "_attrs_complete",
         "attr_dtypes": "_attr_dtypes",
+        "mtime_ns": SOURCE_STAT_COLUMNS[0],
+        "size_bytes": SOURCE_STAT_COLUMNS[1],
     }
 )
 
 # Explicit secondary indexes, as (name, table, columns, WHERE clause or
 # None). Every other access path is covered by a PRIMARY KEY or UNIQUE
-# autoindex above — patch_coords(patch_id, coord_name, run_index), sources(base_uri,
-# source_path), patches(source_id, source_patch_key), coord_defs(def_key)
+# autoindex above — patch_coords(patch_row, coord_name, run_index),
+# sources(base_uri, source_path), patches(source_row, source_patch_key),
+# coord_defs(def_key)
 # — and duplicating them measured ~25% extra file size and slower writes
 # for no query gain. `idx_cdefs_grid` lists the definitions whose grid
 # the envelope cannot restate -- a fractional step or offset, or a
 # descending run, whose start the envelope does not name -- so a query
 # need not scan them all.
 GRID_NEEDED = "step_denominator != 1 OR origin_offset != 0 OR step_numerator < 0"
+
+# A patch_coords row's coord_variants identity, given its alias; the row's
+# definition is always joined as `cd`.
+VARIANT_COLUMNS = "{0}.coord_name, {0}.dtype, cd.value_kind, cd.units, cd.is_relative"
+_NEW, _OLD = VARIANT_COLUMNS.format("NEW"), VARIANT_COLUMNS.format("OLD")
+_OLD_KEY = (
+    f"(SELECT json_array({_OLD}) FROM coord_defs cd WHERE cd.coord_row = OLD.coord_row)"
+)
+# Triggers keeping the patch and coordinate variant counts. Living in the
+# database, they count every write however it arrives, including cascaded
+# deletes and rows written straight through SQL.
+TRIGGERS = MappingProxyType(
+    {
+        "count_patch_added": (
+            "AFTER INSERT ON patches BEGIN "
+            "UPDATE meta_data SET patch_count = patch_count + 1; END"
+        ),
+        "count_patch_removed": (
+            "AFTER DELETE ON patches BEGIN "
+            "UPDATE meta_data SET patch_count = patch_count - 1; END"
+        ),
+        "count_variant_added": (
+            "AFTER INSERT ON patch_coords WHEN NEW.run_index = 0 BEGIN "
+            f"INSERT INTO coord_variants SELECT json_array({_NEW}), {_NEW}, 1 "
+            "FROM coord_defs cd WHERE cd.coord_row = NEW.coord_row "
+            "ON CONFLICT (variant_key) "
+            "DO UPDATE SET patch_count = patch_count + 1; END"
+        ),
+        "count_variant_removed": (
+            "AFTER DELETE ON patch_coords WHEN OLD.run_index = 0 BEGIN "
+            "UPDATE coord_variants SET patch_count = patch_count - 1 "
+            f"WHERE variant_key = {_OLD_KEY}; "
+            "DELETE FROM coord_variants "
+            f"WHERE variant_key = {_OLD_KEY} AND patch_count = 0; END"
+        ),
+    }
+)
 INDEXES = (
     # whole coordinates only, so run links never lengthen a coordinate scan
     ("idx_pcoords_name", "patch_coords", "coord_name", "run_index = 0"),

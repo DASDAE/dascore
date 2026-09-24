@@ -8,6 +8,7 @@ import gc
 import struct
 import warnings
 from functools import cache
+from io import BufferedReader
 from pathlib import Path
 
 import numpy as np
@@ -15,11 +16,11 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import InvalidFiberFileError, MissingOptionalDependencyError
-from dascore.io.core import _scan_payload_to_summary
 from dascore.io.sintela import SintelaProtobufV1
 from dascore.io.sintela import protobuf_utils as sintela_utils
 from dascore.units import get_quantity
 from dascore.utils.downloader import fetch
+from dascore.utils.io import IOResourceManager
 
 # protobuf is an optional dependency and is not in the test extra, so the
 # min-deps job runs without it. Skipping here (rather than installing it
@@ -87,7 +88,7 @@ def _build_meta_payload_without_fiber_id():
 
 def _payload_to_summary(payload):
     """Convert a raw FiberIO scan payload using the production scan path."""
-    return _scan_payload_to_summary(payload)
+    return payload.summary
 
 
 def _without_ids(summary):
@@ -99,7 +100,7 @@ def _without_ids(summary):
     one minted for any in-memory patch and a scan payload carries none.
     Comparing the two at this level would compare that, not the metadata.
     """
-    attrs = summary.attrs.update(patch_id="", processing_id="")
+    attrs = summary.attrs.update(origin_id="", data_id="")
     return summary.model_copy(update={"attrs": attrs})
 
 
@@ -270,7 +271,7 @@ class _BytesReader:
         return out
 
 
-class _CountingReader:
+class _CountingReader(BufferedReader):
     """
     A binary handle that records how many bytes were actually read.
 
@@ -281,26 +282,22 @@ class _CountingReader:
     """
 
     def __init__(self, handle):
-        self._handle = handle
+        super().__init__(handle)
         self.bytes_read = 0
 
     def read(self, size=-1):
         """Read from the wrapped handle, accumulating the byte count."""
-        out = self._handle.read(size)
+        out = super().read(size)
         self.bytes_read += len(out)
         return out
-
-    def __getattr__(self, name):
-        """Delegate seek/tell and friends to the wrapped handle."""
-        return getattr(self._handle, name)
 
 
 def _bytes_read_by(func, path) -> int:
     """Return how many bytes ``func`` pulls off disk for ``path``."""
     with path.open("rb") as handle:
-        reader = _CountingReader(handle)
-        func(reader)
-        return reader.bytes_read
+        with _CountingReader(handle) as reader:
+            func(reader)
+            return reader.bytes_read
 
 
 def del_samples_beyond(msg, keep: int):
@@ -559,6 +556,22 @@ class TestSintelaProtobuf:
         spool = fiber_io.read(path, distance=(999, 1000))
         assert len(spool) == 0
 
+    @pytest.mark.parametrize("method", ["read", "scan"])
+    def test_borrowed_stream_remains_open(
+        self, fiber_io, write_sintela_file, ts_records, method
+    ):
+        """The special read and derived scan leave caller-owned streams reusable."""
+        path = write_sintela_file("borrowed.pb", ts_records)
+        with path.open("rb") as stream:
+            first = getattr(fiber_io, method)(stream)
+            assert not stream.closed
+            second = getattr(fiber_io, method)(stream)
+            assert len(first) == len(second) == 1
+
+    def test_unknown_source_key_skips_read(self, fiber_io):
+        """An unmatched logical key avoids opening or decoding the recording."""
+        assert len(fiber_io.read("does-not-exist.pb", source_patch_key="missing")) == 0
+
     def test_mixed_families_raise(
         self, fiber_io, write_sintela_file, ts_records, band_records
     ):
@@ -683,10 +696,7 @@ class TestSintelaProtobuf:
         with path.open("rb") as handle:
             assert handle.read(4)
             before = handle.tell()
-            assert fiber_io.get_format.func(fiber_io, handle) == (
-                "Sintela_Protobuf",
-                "1",
-            )
+            assert fiber_io.get_version.func(fiber_io, handle) == "1"
             assert handle.tell() == before
 
     def test_truncated_payload_raises(self, fiber_io, tmp_path):
@@ -1171,7 +1181,23 @@ _FAMILY_BUILDERS = [
 class TestSintelaProtobufScanCost:
     """Scanning must not pay for the sample data it does not report."""
 
-    def test_scan_reads_do_not_grow_with_recording_length(self, write_sintela_file):
+    @pytest.mark.parametrize(
+        "scan",
+        [
+            sintela_utils.scan_payload,
+            SintelaProtobufV1().scan,
+            lambda resource: dc.scan_payloads(
+                IOResourceManager(resource),
+                file_format="Sintela_Protobuf",
+                file_version="1",
+                progress=None,
+            ),
+        ],
+        ids=["helper", "reader", "dispatcher"],
+    )
+    def test_scan_reads_do_not_grow_with_recording_length(
+        self, write_sintela_file, scan
+    ):
         """
         A longer timeseries recording must not cost a longer scan.
 
@@ -1192,8 +1218,8 @@ class TestSintelaProtobufScanCost:
         long = _write("ts_long.pb", 64)
         assert long.stat().st_size > 8 * short.stat().st_size
 
-        short_bytes = _bytes_read_by(sintela_utils.scan_payload, short)
-        long_bytes = _bytes_read_by(sintela_utils.scan_payload, long)
+        short_bytes = _bytes_read_by(scan, short)
+        long_bytes = _bytes_read_by(scan, long)
         assert short_bytes == long_bytes
         assert long_bytes < long.stat().st_size / 4
 
@@ -1217,9 +1243,9 @@ class TestSintelaProtobufScanCost:
         used = []
         original = sintela_utils.TimeseriesMetadata.decode_stream
 
-        def _spy(self, resource, meta):
+        def _spy(self, resource, meta, windows=()):
             used.append(True)
-            return original(self, resource, meta)
+            return original(self, resource, meta, windows=windows)
 
         monkeypatch.setattr(
             sintela_utils.TimeseriesMetadata, "decode_stream", _spy, raising=True
@@ -1861,3 +1887,411 @@ class TestSintelaProtobufUtils:
         assert fft_summary.shape == fft_data.shape
         assert fft_shape == (len(fft_records), 2, 3)
         assert fft_dtype == str(np.dtype(np.float32))
+
+
+class TestNamedPacketSnap:
+    """BAND and FFT timestamps are stored values rather than a header grid."""
+
+    @pytest.mark.parametrize(
+        ("builder", "message_type"),
+        [(_build_band_payloads, "BandPacket"), (_build_real_fft_payloads, "FFTPacket")],
+    )
+    @pytest.mark.parametrize("snap", [False, (), "distance", ("distance",)])
+    def test_unselected_time_stays_exact(
+        self, write_sintela_file, builder, message_type, snap
+    ):
+        """Scan and read retain packet jitter and apply bounds to those labels."""
+        records = [builder()[0]] * 4
+        seconds = np.arange(1_700_000_100, 1_700_000_104)
+        nanos = np.array([0, 1000, 0, 0])
+        for index, (sec, nano) in enumerate(zip(seconds, nanos)):
+            records = _mutate_record(
+                records,
+                index,
+                message_type,
+                lambda msg, sec=int(sec), nano=int(nano): _set_timestamp(
+                    msg.header.common_header.time, sec, nano
+                ),
+            )
+        path = write_sintela_file("packet_jitter.pb", records)
+        expected = seconds.astype("datetime64[s]").astype(
+            "datetime64[ns]"
+        ) + nanos.astype("timedelta64[ns]")
+        patch = dc.read(path, snap=snap)[0]
+        scanned = dc.scan_payloads(path, snap=snap)[0]
+        np.testing.assert_array_equal(patch.get_coord("time").values, expected)
+        np.testing.assert_array_equal(scanned.get_coord("time").values, expected)
+        assert not np.array_equal(dc.read(path)[0].get_coord("time").values, expected)
+        bounded = dc.read(
+            path, snap=snap, time=(None, expected[1] - np.timedelta64(1, "ns"))
+        )[0]
+        assert bounded.shape[0] == 1
+        np.testing.assert_array_equal(bounded.data, patch.data[:1])
+
+
+class TestPackedTimeseriesSamples:
+    """Packed wire samples avoid scalar conversion without changing reads."""
+
+    @pytest.mark.parametrize(
+        "encoding",
+        ["packed", "split", "mixed", "packed_first", "empty", "unpacked", "group"],
+    )
+    @pytest.mark.parametrize("samples_first", [False, True])
+    def test_read_encodings(self, tmp_path, encoding, samples_first):
+        """All legal encodings retain sample order, coordinates, and metadata."""
+        records = _build_ts_payloads(n_packets=4)
+        reference_path = tmp_path / "reference.pb"
+        _write_records(reference_path, records)
+        reference = dc.read(reference_path)[0]
+        converted = []
+        cls = _get_test_proto_messages()["TimeseriesPacket"]
+        for index, (tag, payload) in enumerate(records):
+            # Keep endpoints conventional so every encoding reaches decode_stream.
+            if index in (0, len(records) - 1):
+                converted.append((tag, payload))
+                continue
+            msg = cls()
+            msg.ParseFromString(payload)
+            values = np.asarray(msg.samples, dtype="<f4")
+            msg.ClearField("samples")
+            header = msg.SerializeToString()
+            packed = b"\x1a\x18" + values.tobytes()
+            if encoding == "split":
+                packed = (
+                    b"\x1a\x0c"
+                    + values[:3].tobytes()
+                    + b"\x1a\x0c"
+                    + values[3:].tobytes()
+                )
+            elif encoding == "mixed":
+                packed = (
+                    b"\x1d" + values[:1].tobytes() + b"\x1a\x14" + values[1:].tobytes()
+                )
+            elif encoding == "packed_first":
+                packed = (
+                    b"\x1a\x14" + values[:5].tobytes() + b"\x1d" + values[5:].tobytes()
+                )
+            elif encoding == "empty":
+                packed = b"\x1a\x00" + packed
+            elif encoding == "unpacked":
+                packed = b"".join(b"\x1d" + value.tobytes() for value in values)
+            elif encoding == "group":
+                packed += b"\x2b\x08\x01\x2c"
+            # Unknown fields cover varint, fixed64, length-delimited, fixed32.
+            unknown = b"\x28\x01\x31" + bytes(8) + b"\x3a\x01x\x45" + bytes(4)
+            payload = packed + header if samples_first else header + packed
+            converted.append((tag, unknown + payload))
+        path = tmp_path / "encoded.pb"
+        _write_records(path, converted)
+        actual = dc.read(path)[0]
+        assert actual.equals(reference)
+
+    def test_packed_samples_share_wire_buffer(self):
+        """The fast path must view wire bytes instead of boxing each sample."""
+        values = np.array([-1.5, 0.0, np.inf, -np.inf, np.nan, 42], dtype="<f4")
+        payload = b"\x1a\x18" + values.tobytes()
+        packet = sintela_utils._packed_ts_samples(payload)
+        assert packet is not None
+        assert packet.base is payload
+        np.testing.assert_array_equal(packet, values)
+
+    def test_stream_uses_packed_view(self, tmp_path, monkeypatch):
+        """A read must pass wire payloads through the bulk conversion path."""
+        records = []
+        cls = _get_test_proto_messages()["TimeseriesPacket"]
+        for tag, payload in _build_ts_payloads():
+            msg = cls()
+            msg.ParseFromString(payload)
+            values = np.asarray(msg.samples, dtype="<f4")
+            msg.ClearField("samples")
+            records.append(
+                (tag, msg.SerializeToString() + b"\x1a\x18" + values.tobytes())
+            )
+        path = tmp_path / "packed.pb"
+        _write_records(path, records)
+        original = sintela_utils._packed_ts_samples
+        views = []
+
+        def track(payload):
+            out = original(payload)
+            assert out is not None and out.base is payload
+            views.append(out)
+            return out
+
+        monkeypatch.setattr(sintela_utils, "_packed_ts_samples", track)
+        patch = dc.read(path)[0]
+        np.testing.assert_array_equal(patch.data, np.arange(12).reshape(6, 2))
+        assert len(views) == 2
+
+    @pytest.mark.parametrize("samples", [b"\x1a\x01x", b"\x1a\x18" + bytes(4)])
+    def test_malformed_packed_field(self, tmp_path, samples):
+        """The protobuf parser must still reject invalid packed lengths."""
+        records = _build_ts_payloads(n_packets=3)
+        cls = _get_test_proto_messages()["TimeseriesPacket"]
+        msg = cls()
+        msg.ParseFromString(records[1][1])
+        msg.ClearField("samples")
+        records[1] = ("TS05", msg.SerializeToString() + samples)
+        path = tmp_path / "malformed.pb"
+        _write_records(path, records)
+        with pytest.raises(InvalidFiberFileError):
+            dc.read(path)
+
+
+class TestWindowedTimeseriesReads:
+    """Read selected samples with bounded waveform storage."""
+
+    @pytest.fixture(scope="class")
+    @staticmethod
+    def windowed_path(tmp_path_factory):
+        """A multi-packet file large enough to expose excess sample IO."""
+        path = tmp_path_factory.mktemp("windowed_ts") / "timeseries.pb"
+        records = []
+        cls = _get_test_proto_messages()["TimeseriesPacket"]
+        for index, (tag, payload) in enumerate(_build_ts_payloads(64)):
+            msg = cls()
+            msg.ParseFromString(payload)
+            msg.header.num_samples = 256
+            msg.header.sample_count = index * 256
+            msg.header.common_header.num_channels = 64
+            _set_timestamp(
+                msg.header.common_header.time, 1_700_000_000 + index * 128, 0
+            )
+            msg.ClearField("samples")
+            values = np.arange(index * 16384, (index + 1) * 16384, dtype="<f4")
+            records.append(
+                (tag, msg.SerializeToString() + b"\x1a\x80\x80\x04" + values.tobytes())
+            )
+        _write_records(path, records)
+        return path
+
+    @pytest.mark.parametrize(
+        "windows",
+        [
+            ((255, 258), (2, 5)),
+            ((0, 1),),
+            ((-1, None),),
+            ((None, None), (3, 4)),
+            ((4, 4),),
+            ((7, 2),),
+            ((0, 2), (3, 3)),
+        ],
+    )
+    def test_read_array(self, windowed_path, windows):
+        """Packet boundaries, channels, negative bounds, and empty windows match."""
+        expected = SintelaProtobufV1().read_array(windowed_path)
+        slices = sintela_utils.windows_to_slices(windows, expected.shape)
+        actual = SintelaProtobufV1().read_array(windowed_path, windows=windows)
+        np.testing.assert_array_equal(actual, expected[slices])
+        assert actual.nbytes == actual.size * 4
+        assert actual.base is None
+
+    @pytest.mark.parametrize("api", ["array", "read", "spool"])
+    def test_allocation_is_bounded(self, windowed_path, monkeypatch, api):
+        """A tiny selection allocates only its output while traversing headers."""
+        original = np.empty
+        shapes = []
+
+        def track(shape, *args, **kwargs):
+            shapes.append(shape)
+            return original(shape, *args, **kwargs)
+
+        monkeypatch.setattr(sintela_utils.np, "empty", track)
+        if api == "array":
+            data = SintelaProtobufV1().read_array(
+                windowed_path, windows=((255, 258), (2, 5))
+            )
+        elif api == "read":
+            data = dc.read(
+                windowed_path, time=(255, 258), distance=(2, 5), samples=True
+            )[0].data
+        else:
+            data = (
+                dc.spool(windowed_path)
+                .select(
+                    time=(
+                        dc.to_datetime64(1_700_000_000) + dc.to_timedelta64(127.5),
+                        dc.to_datetime64(1_700_000_000) + dc.to_timedelta64(128.5),
+                    ),
+                    distance=(50, 70),
+                )[0]
+                .data
+            )
+        np.testing.assert_array_equal(
+            data, np.arange(64 * 16384).reshape(-1, 64)[255:258, 2:5]
+        )
+        assert (3, 3) in shapes
+        assert (16384, 64) not in shapes
+
+    @pytest.mark.parametrize(
+        "selectors",
+        [
+            dict(time=(127, 130), relative=True),
+            dict(time=(255, 258), distance=(2, 5), samples=True),
+            dict(time=(0, 0), samples=True),
+            dict(time=(100000, None), samples=True),
+        ],
+    )
+    def test_public_selection(self, windowed_path, selectors):
+        """Public reads and spool selections retain coordinate selection semantics."""
+        full = dc.read(windowed_path)[0]
+        expected = full.select(**selectors)
+        actual = dc.read(windowed_path, **selectors)
+        spooled = list(dc.spool(windowed_path).select(**selectors))
+        if not expected.size:
+            assert not len(actual)
+            assert all(not patch.size for patch in spooled)
+        else:
+            assert actual[0].equals(expected, only_required_attrs=True)
+            assert spooled[0].equals(expected, only_required_attrs=True)
+
+    def test_late_meta_and_bad_headers(self, write_sintela_file):
+        """Skipping samples still collects later META and validates all headers."""
+        records = _build_ts_payloads(5)
+        records.insert(3, ("META", _build_meta_payload()))
+        path = write_sintela_file("late_meta_window.pb", records)
+        selected = dc.read(path, time=(0, 1), samples=True)[0]
+        assert selected.attrs.recorder_namespace == "manualRecord/recorder"
+        bad = _mutate_record(
+            records,
+            4,
+            "TimeseriesPacket",
+            lambda msg: setattr(msg.header, "sample_count", 1000),
+        )
+        path = write_sintela_file("bad_header_outside_window.pb", bad)
+        with pytest.raises(InvalidFiberFileError, match="sample count"):
+            dc.read(path, time=(0, 1), samples=True)
+
+    @pytest.mark.parametrize("selected", [False, True])
+    def test_only_selected_payloads_are_decoded(self, write_sintela_file, selected):
+        """Unselected corrupt samples are skipped; selected corrupt samples raise."""
+        records = _build_ts_payloads(5)
+        records = _mutate_record(
+            records, 2, "TimeseriesPacket", lambda msg: msg.samples.pop()
+        )
+        path = write_sintela_file("bad_samples_window.pb", records)
+        if selected:
+            with pytest.raises(InvalidFiberFileError, match="payload size"):
+                dc.read(path, time=(6, 7), samples=True)
+        else:
+            data = dc.read(path, time=(0, 1), samples=True)[0].data
+            np.testing.assert_array_equal(data, [[0, 1]])
+
+    @pytest.mark.parametrize(
+        "selection",
+        [slice(255, 260, 2), slice(260, 255, -1), np.array([255, 257, 259])],
+    )
+    def test_stepped_read(self, windowed_path, selection):
+        """Read supports residual sample indexers after loading their bounds."""
+        selectors = dict(time=selection, samples=True)
+        expected = dc.read(windowed_path)[0].select(**selectors)
+        actual = dc.read(windowed_path, **selectors)[0]
+        assert actual.equals(expected, only_required_attrs=True)
+
+    @pytest.mark.parametrize(
+        "builder", [_build_band_payloads, _build_real_fft_payloads]
+    )
+    def test_other_families(self, write_sintela_file, builder):
+        """BAND and FFT selections retain the existing full-decoder fallback."""
+        path = write_sintela_file("other_family_window.pb", builder())
+        full = dc.read(path)[0]
+        actual = dc.read(path, time=(0, 1), distance=(0, 1), samples=True)[0]
+        expected = full.select(time=(0, 1), distance=(0, 1), samples=True)
+        assert actual.equals(expected, only_required_attrs=True)
+
+    def test_header_after_samples(self, write_sintela_file):
+        """A packet without a leading header can still be read through fallback."""
+        records = _build_ts_payloads(5)
+        cls = _get_test_proto_messages()["TimeseriesPacket"]
+        reordered = []
+        for tag, payload in records:
+            msg = cls()
+            msg.ParseFromString(payload)
+            msg.ClearField("header")
+            samples = msg.SerializeToString()
+            reordered.append((tag, samples + payload[: -len(samples)]))
+        path = write_sintela_file("reordered_window.pb", reordered)
+        full = dc.read(path)[0]
+        actual = dc.read(path, time=(4, 7), samples=True)[0]
+        assert actual.equals(
+            full.select(time=(4, 7), samples=True), only_required_attrs=True
+        )
+
+    def test_large_packet_tails_are_skipped(self, windowed_path, monkeypatch):
+        """Tails above the existing seek threshold need not cross the IO boundary."""
+        # Use the regular fixture at a smaller threshold rather than a huge file.
+        monkeypatch.setattr(sintela_utils, "_SEEK_SKIP_THRESHOLD", 8192)
+        with _CountingReader(windowed_path.open("rb")) as stream:
+            data = SintelaProtobufV1().read_array(stream, windows=((255, 258), (2, 5)))
+            assert stream.bytes_read < windowed_path.stat().st_size // 5
+        np.testing.assert_array_equal(
+            data, np.arange(64 * 16384).reshape(-1, 64)[255:258, 2:5]
+        )
+
+    @pytest.mark.parametrize(
+        "builder", [_build_band_payloads, _build_real_fft_payloads]
+    )
+    def test_fallback_does_not_scan_twice(self, write_sintela_file, builder):
+        """Selection adds only an endpoint probe, not a second full header walk."""
+        padding = b"\x9a\x06\x80\x80\x04" + bytes(65536)
+        records = [(tag, payload + padding) for tag, payload in builder()]
+        path = write_sintela_file("fallback_io.pb", records)
+        with _CountingReader(path.open("rb")) as stream:
+            assert sintela_utils._get_endpoint_metadata(stream) is None
+            probe_bytes = stream.bytes_read
+        with _CountingReader(path.open("rb")) as stream:
+            full = SintelaProtobufV1().read(stream)[0]
+            full_bytes = stream.bytes_read
+        with _CountingReader(path.open("rb")) as stream:
+            actual = SintelaProtobufV1().read(stream, time=(0, 1), samples=True)[0]
+            assert stream.bytes_read <= full_bytes + probe_bytes
+        assert actual.equals(
+            full.select(time=(0, 1), samples=True), only_required_attrs=True
+        )
+
+    def test_small_packet_tails_are_streamed(self, windowed_path):
+        """Sub-threshold tails are read sequentially to avoid hard-drive seeks."""
+        with _CountingReader(windowed_path.open("rb")) as stream:
+            data = SintelaProtobufV1().read_array(stream, windows=((255, 258), (2, 5)))
+            assert stream.bytes_read >= windowed_path.stat().st_size
+        np.testing.assert_array_equal(
+            data, np.arange(64 * 16384).reshape(-1, 64)[255:258, 2:5]
+        )
+
+    def test_larger_headers_do_not_decode_unselected_samples(
+        self, windowed_path, tmp_path, monkeypatch
+    ):
+        """Headers beyond the small prefix still allow packet sample filtering."""
+        records = []
+        cls = _get_test_proto_messages()["TimeseriesPacket"]
+        with windowed_path.open("rb") as stream:
+            for record in sintela_utils._iter_envelope_records(stream, strict=True):
+                header = sintela_utils._leading_header_bytes(record.payload)
+                assert header is not None
+                msg = cls()
+                msg.ParseFromString(header)
+                msg.header.MergeFromString(b"\x9a\x06\x80\x10" + bytes(2048))
+                records.append(
+                    (
+                        record.tag,
+                        msg.SerializeToString() + record.payload[len(header) :],
+                    )
+                )
+        path = tmp_path / "large_headers.pb"
+        _write_records(path, records)
+        original = sintela_utils._parse_packet
+        decoded = []
+
+        def track(tag, payload, messages, error):
+            """Count packets for which the full samples field was decoded."""
+            out = original(tag, payload, messages, error)
+            if hasattr(out, "samples") and len(out.samples):
+                decoded.append(tag)
+            return out
+
+        monkeypatch.setattr(sintela_utils, "_parse_packet", track)
+        actual = SintelaProtobufV1().read_array(path, windows=((255, 258), (2, 5)))
+        np.testing.assert_array_equal(
+            actual, np.arange(64 * 16384).reshape(-1, 64)[255:258, 2:5]
+        )
+        assert len(decoded) == 2

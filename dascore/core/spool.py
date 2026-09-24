@@ -79,7 +79,7 @@ from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
     _drop_patch_local_empty,
-    _ensure_patch_id,
+    _ensure_patch_row,
     _resolve_group_attrs,
     _structural,
     build_chunk_plan,
@@ -106,6 +106,12 @@ from dascore.utils.display import (
 )
 from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import resolve_example_uri
+from dascore.utils.explicit_ranges import (
+    ExplicitRanges,
+    explicit_ranges,
+    known_coordinates,
+    looks_explicit,
+)
 from dascore.utils.misc import (
     _spool_map,
     deep_equality_check,
@@ -155,6 +161,21 @@ class _InventoryQuery(NamedTuple):
 # neither end carries; every other dimension states its own magnitude
 # in its own units.
 _TIMES = _TIME_TYPES
+
+
+def _spool_input_message(data) -> str:
+    """Say what a spool was handed and what it needed instead."""
+    members = data if isinstance(data, list | tuple) else [data]
+    if any(
+        isinstance(x, dc.PatchMeta) and not isinstance(x, dc.Patch) for x in members
+    ):
+        return (
+            "A spool holds patches, and a PatchMeta holds no data for one to "
+            "read; give each one its data with to_patch(data) first."
+        )
+    return (
+        f"Spool accepts a Patch, a sequence of patches, or a spool; got {type(data)}."
+    )
 
 
 class Spool(NodeRepr, NamespaceOwner):
@@ -235,11 +256,7 @@ class Spool(NodeRepr, NamespaceOwner):
         elif isinstance(data, Sequence) and all(isinstance(x, dc.Patch) for x in data):
             patches = data
         else:
-            msg = (
-                "Spool accepts a Patch, a sequence of patches, or a "
-                f"spool; got {type(data)}."
-            )
-            raise InvalidSpoolError(msg)
+            raise InvalidSpoolError(_spool_input_message(data))
         self._catalog = PatchCatalog.from_patches(patches)
 
     # --- presented relation --------------------------------------------
@@ -283,8 +300,7 @@ class Spool(NodeRepr, NamespaceOwner):
 
     def __len__(self) -> int:
         """Return len of spool."""
-        # counting pushes to SQL (or the cold live registry); the flat
-        # relation is never realized just for a length
+        # Ordinary counts use SQL; patch-local filters may need the relation.
         return len(self._catalog)
 
     def _as_selector_array(self, item) -> np.ndarray:
@@ -361,8 +377,8 @@ class Spool(NodeRepr, NamespaceOwner):
         own positions rather than raising.
         """
         if isinstance(item, slice):
-            # a lazy id-membership window (D2); never realizes the flat
-            # relation, and keeps split()/map() parts cheap
+            # Ordinary windows use SQL ids; patch-local filters first resolve
+            # which rows survive, without loading patch data.
             return self._new_from_catalog(self._catalog.window(item))
         if is_array(item) or isinstance(item, pd.Series | list):
             array = self._as_selector_array(item)
@@ -509,11 +525,18 @@ class Spool(NodeRepr, NamespaceOwner):
             patch as it loads.
         relative
             If True, coordinate range bounds are relative to each patch:
-            positive from its start, negative from its end. Patches without
-            the selected coordinate are excluded.
+            positive from its start, negative from its end. Bounds keep
+            their lower/upper order; crossed bounds select nothing.
+            Patches without the selected coordinate or whose resolved
+            window is empty are excluded using the indexed coordinate
+            envelopes. Exact sample selection occurs when a patch loads.
         **kwargs
-            Specifies query. Can be of the form {dim_name=(start, stop)}
-            or {attr_name=query}.
+            Specifies query. A coordinate accepts one ``(start, stop)`` range
+            or an ``(n, 2)`` array of bounded absolute ranges. Array rows
+            select independently in input order, so overlaps and duplicates
+            return separate source pieces. Only one coordinate may use an
+            array per call; array ranges do not support ``samples=True`` or
+            ``relative=True``. Attribute selectors retain their usual meaning.
 
         Examples
         --------
@@ -524,7 +547,63 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> time_spool = spool.select(time=time)
         >>> # subselect based on matching tag parameter
         >>> tag_spool = spool.select(tag='some*')
+        >>> import numpy as np
+        >>> ranges = np.array([[0, 10], [20, 30]])
+        >>> pieces = spool.select(distance=ranges)
         """
+        # Explicit windows are independent requests, so they need separate
+        # plan outputs even when they name the same source samples.
+        raw = dict(kwargs)
+        if isinstance(_coords, Mapping):
+            raw.update({str(k): v for k, v in _coords.items()})
+        coord_names = self._catalog.backend.coord_names()
+        attr_names = self._catalog.backend.attr_names()
+        tagged = selector_spec_names(_coords)
+        # Avoid classifying ordinary selectors before the uncommon window path.
+        possible = any(
+            (name in tagged or (name in coord_names and name not in attr_names))
+            and looks_explicit(value)
+            and (not isinstance(value, list | tuple) or bool(value))
+            for name, value in raw.items()
+        )
+        explicit = []
+        if possible:
+            query = self._classify_query(_attrs, _coords, kwargs)
+            _, coords = resolve_selector_namespaces(
+                query.known_attrs | query.selectable,
+                query.known_coords,
+                _attrs=_attrs,
+                _coords=query.coords,
+                kwargs=query.kwargs,
+            )
+            explicit = [
+                (name, ranges)
+                for name, value in coords.items()
+                if (ranges := explicit_ranges(value)) is not None
+            ]
+        if explicit:
+            if len(explicit) != 1:
+                msg = "Only one coordinate may use explicit ranges per selection."
+                raise ParameterError(msg)
+            if samples or relative:
+                msg = "Explicit ranges require samples=False and relative=False."
+                raise ParameterError(msg)
+            from dascore.io.index.explicit import ExplicitSelectCatalog  # noqa: PLC0415
+
+            name, ranges = explicit[0]
+            other_coords = drop_selector_names(_coords, {name})
+            other_kwargs = dict(kwargs)
+            other_kwargs.pop(name, None)
+            base = self.select(
+                _attrs=_attrs,
+                _coords=other_coords,
+                samples=False,
+                relative=False,
+                **other_kwargs,
+            )
+            return base._new_from_catalog(
+                ExplicitSelectCatalog(base._catalog, name, ranges)
+            )
         if self._inventory is None:
             catalog = self._catalog.select(
                 _attrs=_attrs,
@@ -660,7 +739,7 @@ class Spool(NodeRepr, NamespaceOwner):
         # The complement is taken against select itself rather than by
         # negating each predicate, so the two can never drift apart.
         if not query.channels:
-            removed = self.select(_attrs=stated)._catalog.ordered_ids()
+            removed = self.select(_attrs=stated)._catalog.ordered_rows()
             return self._restrict_to_rows(removed, keep=False)
         # With both, the complement is still one set: a patch keeps every
         # channel unless the attrs matched it, and the channels the fiber
@@ -670,7 +749,7 @@ class Spool(NodeRepr, NamespaceOwner):
         return self._select_channels(
             stated_channels(query.channels),
             complement=True,
-            applies_to=matched._catalog.ordered_ids(),
+            applies_to=matched._catalog.ordered_rows(),
         )
 
     def _classify_query(self, _attrs, _coords, kwargs) -> _InventoryQuery:
@@ -792,7 +871,7 @@ class Spool(NodeRepr, NamespaceOwner):
         if applies_to is not None:
             # A row the attrs did not match is a row the selection never
             # held, so it is left unjudged rather than judged and kept.
-            judged = np.isin(working["_patch_id"].to_numpy(), np.asarray(applies_to))
+            judged = np.isin(working["_patch_row"].to_numpy(), np.asarray(applies_to))
             contexts[~judged] = None
         name, pieces, reasons = resolve_channel_pieces(
             self._resolved_inventory(),
@@ -816,7 +895,7 @@ class Spool(NodeRepr, NamespaceOwner):
         if all(keep or not row for keep, row in zip(whole, pieces, strict=True)):
             # Every patch is kept whole or dropped, so this is a filter and
             # the relation it presents need not be rebuilt.
-            kept = working["_patch_id"].to_numpy()[[bool(x) for x in pieces]]
+            kept = working["_patch_row"].to_numpy()[[bool(x) for x in pieces]]
             return self._restrict_to_rows(kept)
         return self._subdivided(source_rows, working, pieces, name)
 
@@ -829,7 +908,7 @@ class Spool(NodeRepr, NamespaceOwner):
         unresolved by the inventory do not match. Selection uses the same projection
         and conflict rules as extraction.
         """
-        ids = np.asarray(self._catalog.ordered_ids(), dtype=np.int64)
+        ids = np.asarray(self._catalog.ordered_rows(), dtype=np.int64)
         if not len(ids):
             return self
         backend = self._catalog.backend
@@ -851,7 +930,7 @@ class Spool(NodeRepr, NamespaceOwner):
             # Which rows state the name is asked of the index rather than
             # read off the relation, so a spool whose headers state it
             # everywhere is realized only when enrichment will rewrite it.
-            stated = np.isin(ids, list(backend.attr_stated_ids(name, patch_ids=ids)))
+            stated = np.isin(ids, list(backend.attr_stated_ids(name, patch_rows=ids)))
             # A name no patch states is asked about rather than tried: the
             # index rejects it and the inventory answers for every row, and
             # catching that rejection would catch a malformed selector with
@@ -859,7 +938,7 @@ class Spool(NodeRepr, NamespaceOwner):
             # the verdict for the stated rows and False everywhere else.
             index_ids = (
                 np.asarray(
-                    self._catalog.select(_attrs={name: selector}).ordered_ids(),
+                    self._catalog.select(_attrs={name: selector}).ordered_rows(),
                     dtype=np.int64,
                 )
                 if name in known
@@ -924,10 +1003,10 @@ class Spool(NodeRepr, NamespaceOwner):
         by a route of its own and need not present every row the id list
         does, and a row it leaves out is one nothing was resolved for.
         """
-        by_id = dict(zip(df["_patch_id"].to_numpy(), values, strict=True))
+        by_id = dict(zip(df["_patch_row"].to_numpy(), values, strict=True))
         out = np.full(len(ids), None, dtype=object)
-        for position, patch_id in enumerate(ids):
-            out[position] = by_id.get(patch_id)
+        for position, patch_row in enumerate(ids):
+            out[position] = by_id.get(patch_row)
         return out
 
     def attach_inventory(self, inventory=None) -> Self:
@@ -1284,7 +1363,7 @@ class Spool(NodeRepr, NamespaceOwner):
         # The two frames are one relation split by column, so a row of
         # either is the same patch as the row beside it; the messages
         # below name files from one while judging the other.
-        assert (source_rows["_patch_id"].to_numpy() == working["_patch_id"]).all()
+        assert (source_rows["_patch_row"].to_numpy() == working["_patch_row"]).all()
         columns = resolution_columns(working, new._enrich_kwargs)
         epochs = (
             [NO_EPOCHS] * len(working)
@@ -1303,7 +1382,7 @@ class Spool(NodeRepr, NamespaceOwner):
         kept = working[described].reset_index(drop=True)
         cuts = [x.cuts for x, keep in zip(epochs, described, strict=True) if keep]
         if not any(cuts):  # nothing to subdivide: a filter is the whole job
-            return new._restrict_to_rows(kept["_patch_id"].to_numpy())
+            return new._restrict_to_rows(kept["_patch_row"].to_numpy())
         sources = source_rows[described].reset_index(drop=True)
         refuse_rows(
             sources,
@@ -1371,7 +1450,7 @@ class Spool(NodeRepr, NamespaceOwner):
             )
             raise ParameterError(msg)
 
-    def _restrict_to_rows(self, patch_ids, keep: bool = True) -> Self:
+    def _restrict_to_rows(self, patch_rows, keep: bool = True) -> Self:
         """
         Return the view holding the named rows, or all but them.
 
@@ -1379,8 +1458,8 @@ class Spool(NodeRepr, NamespaceOwner):
         which rows a spool holds without saying anything about how they
         come out.
         """
-        ids = np.asarray(self._catalog.ordered_ids(), dtype=np.int64)
-        named = np.isin(ids, np.asarray(patch_ids, dtype=np.int64))
+        ids = np.asarray(self._catalog.ordered_rows(), dtype=np.int64)
+        named = np.isin(ids, np.asarray(patch_rows, dtype=np.int64))
         mask = named if keep else ~named
         if mask.all():
             return self
@@ -1504,7 +1583,7 @@ class Spool(NodeRepr, NamespaceOwner):
             step = int(np.ceil(value))  # tolerate a non-integral size
         if not length:
             return
-        ids = self._catalog.ordered_ids()
+        ids = self._catalog.ordered_rows()
         length = len(ids)
         if count is not None:
             step = int(np.ceil(length / value))
@@ -1611,12 +1690,12 @@ class Spool(NodeRepr, NamespaceOwner):
         # outputs are not file rows: source bookkeeping stays on the
         # members (where loading needs it), never on the derived rows
         outputs = working.drop(
-            columns=["_patch_id", *_SOURCE_COLUMNS], errors="ignore"
+            columns=["_patch_row", *_SOURCE_COLUMNS], errors="ignore"
         ).assign(output_id=ids)
         members = pd.DataFrame(
             {
                 "output_id": ids,
-                "_patch_id": working.get("_patch_id", pd.Series(dtype=object)).values,
+                "_patch_row": working.get("_patch_row", pd.Series(dtype=object)).values,
                 "_modified": False,
             }
         )
@@ -1657,21 +1736,31 @@ class Spool(NodeRepr, NamespaceOwner):
         base = collapse_working_df(self._catalog) if same_dim else None
         if base is None:
             base = self._catalog.to_df().reset_index(drop=True)
-            if "_patch_id" in base.columns:
+            if "_patch_row" in base.columns:
                 # the index's own ids, which only rows read from it carry
-                base = base.assign(_index_id=base["_patch_id"])
-        base = _ensure_patch_id(base)
+                base = base.assign(_index_row=base["_patch_row"])
+        base = _ensure_patch_row(base)
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
         working = _drop_patch_local_empty(working)
-        base = base[base["_patch_id"].isin(working["_patch_id"])]
+        base = base[base["_patch_row"].isin(working["_patch_row"])]
         patch_local = any(s or r for _, s, r in self._catalog.residuals)
-        if runs and dim is not None and "_index_id" in base.columns:
+        if runs and dim is not None and "_index_row" in base.columns:
             # a sample or relative selection resolves against the whole
             # patch at load, so its runs cannot be planned apart
             if not patch_local:
                 working = self._runs_as_members(working, dim)
-                base = base[base["_patch_id"].isin(working["_patch_id"])]
+                base = base[base["_patch_row"].isin(working["_patch_row"])]
         return base.reset_index(drop=True), working.reset_index(drop=True)
+
+    def _build_chunk_plan(self, dim_kwargs, **params):
+        """Build and coalesce one plan from this spool's current source rows."""
+        name = next(iter(dim_kwargs), None)
+        source_rows, working = self._plan_frames(name, runs=True)
+        exact = {}
+        if name is not None and explicit_ranges(dim_kwargs[name]) is not None:
+            exact = known_coordinates(self._catalog, source_rows, name)
+        plan = build_chunk_plan(working, _exact_coords=exact, **params, **dim_kwargs)
+        return source_rows, coalesce_runs(plan, working)
 
     def chunk_plan(
         self,
@@ -1682,6 +1771,8 @@ class Spool(NodeRepr, NamespaceOwner):
         conflict: Literal["drop", "raise", "keep_first"] = "raise",
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "raise",
+        fill_value=None,
+        on_incomplete: WARN_LEVELS = "raise",
         **kwargs,
     ):
         """
@@ -1694,7 +1785,11 @@ class Spool(NodeRepr, NamespaceOwner):
         feeds each output, and `params` records every resolved parameter
         (including the group attributes and sampling tolerance in effect).
         Accepts the same arguments as
-        [`chunk`](`dascore.Spool.chunk`).
+        [`chunk`](`dascore.Spool.chunk`). A dimension can be an ``(n, 2)``
+        array of absolute inclusive windows. Each requested window is checked
+        against compatible source groups, and ``on_incomplete`` controls
+        requests that cannot produce a complete output after ``keep_partial``
+        and the existing tolerance/fill rules are applied.
 
         Examples
         --------
@@ -1706,9 +1801,8 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> members = plan.members
         >>> first = members[members["output_id"] == 0]
         """
-        _, working = self._plan_frames(next(iter(kwargs), None), runs=True)
-        plan = build_chunk_plan(
-            working,
+        _, plan = self._build_chunk_plan(
+            kwargs,
             overlap=overlap,
             keep_partial=keep_partial,
             snap_coords=snap_coords,
@@ -1716,9 +1810,10 @@ class Spool(NodeRepr, NamespaceOwner):
             conflict=conflict,
             group=group,
             missing_dim=missing_dim,
-            **kwargs,
+            fill_value=fill_value,
+            on_incomplete=on_incomplete,
         )
-        return coalesce_runs(plan, working)
+        return plan
 
     def _report_relation(self) -> pd.DataFrame:
         """
@@ -1732,7 +1827,7 @@ class Spool(NodeRepr, NamespaceOwner):
         selections into those envelopes. No dimension is needed: the whole
         relation is returned and the caller picks its columns.
         """
-        base = _ensure_patch_id(self._df.reset_index(drop=True))
+        base = _ensure_patch_row(self._df.reset_index(drop=True))
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
         return _drop_patch_local_empty(working)
 
@@ -1755,20 +1850,20 @@ class Spool(NodeRepr, NamespaceOwner):
             return none
         # a row with no envelope here is one neither report nor plan can
         # place (a relative time among absolute ones), and its runs no better
-        # rows name their patch in this spool's index by `_index_id` when
-        # they are plan members, else by `_patch_id`
-        key = "_index_id" if "_index_id" in df.columns else "_patch_id"
+        # rows name their patch in this spool's index by `_index_row` when
+        # they are plan members, else by `_patch_row`
+        key = "_index_row" if "_index_row" in df.columns else "_patch_row"
         placed = df[df[min_col].notna() & df[key].notna()]
         wanted = placed[key].astype("int64").unique()
         runs = self._catalog.backend.coord_runs(dim, wanted)
         if runs.empty:
             return none
-        by_patch = runs.groupby("patch_id")["_env_step"]
-        unstepped = runs["_env_step"].isna().groupby(runs["patch_id"]).transform("sum")
+        by_patch = runs.groupby("patch_row")["_env_step"]
+        unstepped = runs["_env_step"].isna().groupby(runs["patch_row"]).transform("sum")
         runs = runs[(unstepped == 0) & (by_patch.transform("nunique") == 1)]
         if runs.empty:
             return none
-        runs = runs.rename(columns={"patch_id": key})
+        runs = runs.rename(columns={"patch_row": key})
         placed = placed.astype({key: "int64"})
         split = placed.merge(runs, on=key, how="inner")
         for run_col, col in zip(
@@ -1798,7 +1893,7 @@ class Spool(NodeRepr, NamespaceOwner):
         split, ids = self._run_rows(df, dim)
         if not ids:
             return df
-        whole = df[~df["_patch_id"].isin(ids)]  # reports carry no `_index_id`
+        whole = df[~df["_patch_row"].isin(ids)]  # reports carry no `_index_row`
         return pd.concat([whole, split], ignore_index=True)
 
     def _runs_as_members(self, working: pd.DataFrame, dim: str) -> pd.DataFrame:
@@ -1814,7 +1909,7 @@ class Spool(NodeRepr, NamespaceOwner):
         split, ids = self._run_rows(working, dim)
         if not ids:
             return working
-        kept = working[~working["_index_id"].isin(ids)]
+        kept = working[~working["_index_row"].isin(ids)]
         working = pd.concat(
             [kept, split.assign(_modified=True)],
             ignore_index=True,
@@ -2002,6 +2097,8 @@ class Spool(NodeRepr, NamespaceOwner):
         conflict: Literal["drop", "raise", "keep_first"] = "raise",
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "raise",
+        fill_value=None,
+        on_incomplete: WARN_LEVELS = "raise",
         **kwargs,
     ) -> Self:
         """
@@ -2017,10 +2114,10 @@ class Spool(NodeRepr, NamespaceOwner):
             This often occurs because of data gaps or at end of chunks.
         snap_coords
             If True (default), simplify the coordinates of joined patches to
-            an evenly sampled range when doing so moves no coordinate value
-            by more than `tolerance` (samples, or the length itself when
-            the tolerance states one). Merges whose gaps exceed that keep
-            an exact segmented coordinate instead.
+            an evenly sampled range, absorbing the sub-sample jitter of
+            labels rounded on their way to a file. A merge across a hole
+            keeps an exact segmented coordinate however wide the tolerance:
+            missing samples are absent data, not a slower sampling rate.
         tolerance
             The maximum number of samples a block of data can be spaced (gap)
             and still be considered contiguous. A quantity or timedelta
@@ -2047,16 +2144,38 @@ class Spool(NodeRepr, NamespaceOwner):
         missing_dim
             What to do when patches lack the chunked dimension: "raise"
             (default) or "drop" (exclude them from the output).
+        on_incomplete
+            For explicit ``(n, 2)`` windows, ``"raise"`` (default) raises
+            ``ChunkError`` for an unmet request, ``"warn"`` reports and skips
+            it, and ``"ignore"`` skips it silently. With ``keep_partial=True``,
+            nonempty available pieces are accepted before this policy is
+            applied; wholly absent requests still follow it. Other chunk
+            modes retain their existing behavior.
+        fill_value
+            If given, the value written into the samples missing from a
+            merge, so an output spanning a hole is evenly sampled rather
+            than segmented. `tolerance` still decides which holes are
+            bridged at all: a hole it does not span separates patches as
+            before, and nothing is filled across it. The value has to
+            survive a cast to the data's own dtype, so `np.nan` needs
+            float data; fill integer data with an integer, or cast it
+            first.
         kwargs
             kwargs are used to specify the dimension along which to chunk, eg:
             `time=10` chunks along the time axis in 10 second increments.
             The value may also be a quantity: one of the coordinate's own
             units (`time=10 * s`) or a data size (`time=25 * megabytes`),
             which chunks so each patch's data array is about that large.
-            `overlap` accepts the same forms.
+            `overlap` accepts the same forms. An ``(n, 2)`` array instead
+            requests bounded absolute coordinate windows with inclusive
+            endpoints, in input order. Overlapping and duplicate windows
+            produce separate outputs. Explicit windows do not accept
+            ``overlap``; quantities in their bounds are absolute points.
 
         Examples
         --------
+        >>> import numpy as np
+        >>>
         >>> import dascore as dc
         >>> from dascore.units import s, megabytes
         >>>
@@ -2069,6 +2188,19 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> size_chunked = spool.chunk(time=1 * megabytes)
         >>> # merge along time axis
         >>> time_merged = spool.chunk(time=...)
+        >>> # merge across holes of up to 9 missing samples, filling them
+        >>> gapless = spool.chunk(time=..., tolerance=10, fill_value=np.nan)
+        >>> # Request two independent absolute windows and inspect the plan.
+        >>> start = spool.get_contents()["time_min"].min()
+        >>> step = spool.get_contents()["time_step"].iloc[0]
+        >>> windows = np.array([
+        ...     [start, start + 4 * step],
+        ...     [start + 8 * step, start + 12 * step],
+        ... ])
+        >>> selected = spool.select(time=windows)
+        >>> explicit = spool.chunk(time=windows, on_incomplete="ignore")
+        >>> explicit_plan = spool.chunk_plan(time=windows, on_incomplete="ignore")
+        >>> assert len(explicit_plan.outputs) == len(explicit)
 
         Notes
         -----
@@ -2084,12 +2216,15 @@ class Spool(NodeRepr, NamespaceOwner):
         [`Spool.chunk_plan`](`dascore.core.spool.Spool.chunk_plan`),
         which takes the same arguments and returns the plan without
         touching any data.
+
+        Keywords
+        --------
+        spool, chunking, overlapping chunks, gaps, archive
         """
         from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
 
-        source_rows, working = self._plan_frames(next(iter(kwargs), None), runs=True)
-        plan = build_chunk_plan(
-            working,
+        source_rows, plan = self._build_chunk_plan(
+            kwargs,
             overlap=overlap,
             keep_partial=keep_partial,
             snap_coords=snap_coords,
@@ -2097,12 +2232,13 @@ class Spool(NodeRepr, NamespaceOwner):
             conflict=conflict,
             group=group,
             missing_dim=missing_dim,
-            **kwargs,
+            fill_value=fill_value,
+            on_incomplete=on_incomplete,
         )
-        plan = coalesce_runs(plan, working)
         merge_kwargs = {
             "conflict": conflict,
             "snap_coords": snap_coords,
+            "fill_value": fill_value,
             # the plan's copy is normalized (eg a dimensionless quantity
             # has become the plain multiple it means)
             "tolerance": plan.params["tolerance"],
@@ -2114,6 +2250,7 @@ class Spool(NodeRepr, NamespaceOwner):
             merge_kwargs=merge_kwargs,
             mode="chunk",
             origin_path=self.spool_path,
+            lossy=isinstance(plan.value, ExplicitRanges),
         )
         return self._new_from_catalog(catalog)
 
@@ -2443,6 +2580,7 @@ class Spool(NodeRepr, NamespaceOwner):
         new instance attributes cannot silently join equality.
         """
         from dascore.io.index.catalog import _SOURCE_SUFFIX  # noqa: PLC0415
+        from dascore.io.index.schema import SOURCE_STAT_COLUMNS  # noqa: PLC0415
 
         def _private(column, suffix) -> bool:
             # the generated `_<coord><suffix>` column, not an attr which
@@ -2455,19 +2593,19 @@ class Spool(NodeRepr, NamespaceOwner):
             # backend provenance (format/version) are not content; equal
             # spools must compare equal without them, and column order
             # (a construction artifact) must not matter. A patch's own
-            # lineage ids go too: a plan's outputs state none (a merged
-            # patch folds its members' rather than inheriting one), so
+            # ids go too: a plan's outputs state none (a merged patch
+            # derives its own from its members'), so
             # keeping them would make a view unequal to its own
             # materialization over a column neither describes it by.
             # Coordinate def keys are representation artifacts too: a
             # residual-trimmed
-            # view cannot know its trimmed fingerprint without loading,
+            # view cannot know its trimmed `data_id` without loading,
             # and data values are never compared here anyway.
             drop = [
                 "source_path",
-                "_patch_id",
-                "patch_id",
-                "processing_id",
+                "_patch_row",
+                "origin_id",
+                "data_id",
                 "source_patch_key",
                 "source_format",
                 "source_version",
@@ -2491,6 +2629,9 @@ class Spool(NodeRepr, NamespaceOwner):
                 # what the index can state, not what the patch is
                 "_attrs_complete",
                 "_attr_dtypes",
+                # when a source was last written and how big it is says
+                # what backs the row, not what the row describes
+                *SOURCE_STAT_COLUMNS,
             ]
             out = df.drop(columns=drop, errors="ignore")
             return out[sorted(out.columns)]
@@ -2802,11 +2943,7 @@ def _spool_from_str(path, **kwargs):
     # scanning build a lazy file-backed spool, else read it into memory.
     elif path.exists():  # a single file path was passed.
         _format, _version = dc.get_format(path, **kwargs)
-        formatter = dc.io.FiberIO.manager.get_fiberio(format=_format, version=_version)
-        if formatter.implements_scan:
-            return Spool.from_file(path, _format, _version)
-        else:
-            return Spool(dc.read(path, _format, _version))
+        return Spool.from_file(path, _format, _version)
     else:
         msg = (
             f"could not get spool from argument: {path}. "
@@ -2832,3 +2969,9 @@ def _spool_from_patch_list(patch_list, **kwargs):
 def _spool_from_patch(patch):
     """Get a spool from a single patch."""
     return Spool([patch])
+
+
+@spool.register(dc.PatchMeta)
+def _spool_from_patch_meta(patch_meta, **kwargs):
+    """Refuse metadata, which a spool has nothing to read from."""
+    raise InvalidSpoolError(_spool_input_message(patch_meta))

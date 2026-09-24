@@ -7,6 +7,7 @@ from __future__ import annotations
 import functools
 import hashlib
 import inspect
+import json
 from collections.abc import Iterable, Mapping
 from typing import Any
 
@@ -26,9 +27,13 @@ from dascore.utils.array_api import (
     nan_reduce,
 )
 from dascore.utils.identity import (
+    DIGEST_SIZE,
+    PatchMarker,
+    dtype_description,
     ids_enabled,
-    operation_fingerprint,
-    stamp_combination,
+    operation_context,
+    stamp,
+    try_operation_id,
 )
 from dascore.utils.misc import iterate
 from dascore.utils.patch import (
@@ -39,7 +44,6 @@ from dascore.utils.patch import (
     numpy_fallback,
     swap_kwargs_dim_to_axis,
 )
-from dascore.utils.serialize import PATCH_ARGUMENT
 
 # Numpy reductions which skip nans, and the name they are known by in
 # dascore.utils.array_api.nan_reduce.
@@ -96,7 +100,10 @@ def _clear_units_if_bool_dtype(patch):
     # Every ufunc and array function path reassembles a patch first.
     assert hasattr(patch, "dtype"), "can only clear the units of a patch"
     if array_namespace(patch.data).isdtype(patch.dtype, "bool"):
-        return patch.update_attrs(data_units=None)
+        # Part of the operation which made the booleans, which has already
+        # said what its result is.
+        with operation_context():
+            return patch.update_attrs(data_units=None)
     return patch
 
 
@@ -260,17 +267,18 @@ def _apply_unary_ufunc(operator: np.ufunc, patch, *args, **kwargs):
     We assume the shape of the array won't change.
     """
     out = _apply_operator(operator, patch.data, *args, **kwargs)
+
     # As for the binary case: a ufunc has no patch function to name it, so
     # `np.abs(patch)` would otherwise record that nothing happened.
-    fingerprint = operation_fingerprint(
+    operation = ids_enabled() and try_operation_id(
         "Ufunc",
         {
             "name": getattr(operator, "__name__", str(operator)),
-            "operands": _without_patch_values(args),
-            "kwargs": _without_patch_values(kwargs),
+            "operands": _without_patch_values(args, [patch]),
+            "kwargs": _without_patch_values(kwargs, [patch]),
         },
     )
-    attrs = stamp_combination(patch.attrs, [patch.attrs], fingerprint)
+    attrs = stamp(patch.attrs, [patch.attrs], operation or None)
     return patch.new(data=out, attrs=attrs)
 
 
@@ -742,27 +750,27 @@ def _apply_binary_ufunc(
         )
     else:
         new_data = _apply_op(patch.data, other, operator, reversed)
+
     # A ufunc is not a patch function, so nothing else names it. Without
     # this, `patch + 1` and `patch - (-1)` produce the same data and the
     # same id, though they are different operations. Guarded, so that a
     # process which has turned the ids off does not hash operands for a
     # value nothing will read.
-    if ids_enabled():
-        rest = () if other_is_patch else (other,)
-        fingerprint = operation_fingerprint(
-            "Ufunc",
-            {
-                "name": getattr(operator, "__name__", str(operator)),
-                "reversed": reversed,
-                # `args` reaches the operator too, so two calls which
-                # differ only in those are two operations.
-                "operands": _without_patch_values((*rest, *args)),
-                "kwargs": _without_patch_values(kwargs),
-            },
-        )
-        attrs = stamp_combination(attrs, members, fingerprint)
-    new = patch.new(data=new_data, coords=coords, attrs=attrs)
-    return new
+    rest = () if other_is_patch else (other,)
+    given = [x for x in (patch, other) if isinstance(x, dc.Patch)]
+    operation = ids_enabled() and try_operation_id(
+        "Ufunc",
+        {
+            "name": getattr(operator, "__name__", str(operator)),
+            "reversed": reversed,
+            # `args` reaches the operator too, so two calls which
+            # differ only in those are two operations.
+            "operands": _without_patch_values((*rest, *args), given),
+            "kwargs": _without_patch_values(kwargs, given),
+        },
+    )
+    attrs = stamp(attrs, members, operation or None)
+    return patch.new(data=new_data, coords=coords, attrs=attrs)
 
 
 class _BoundPatchUFunc:
@@ -1039,21 +1047,22 @@ def _apply_array_func(func, *args, **kwargs):
     patch = _reassemble_patch(
         result, first_patch, func, converted_args, converted_kwargs
     )
+
     # An array function is not a patch function either, so nothing else
     # names it: without this `np.mean(patch, axis=0)` leaves the ids where
     # they were and claims nothing was done.
-    if ids_enabled():
-        fingerprint = operation_fingerprint(
-            "ArrayFunc",
-            {
-                "name": _array_func_name(func),
-                # The positional arguments say which reduction it was:
-                # `np.mean(patch, 0)` and `np.mean(patch, 1)` are two.
-                "args": _without_patch_values(converted_args),
-                "kwargs": _without_patch_values(converted_kwargs),
-            },
-        )
-        attrs = stamp_combination(patch.attrs, [x.attrs for x in patches], fingerprint)
+    operation = ids_enabled() and try_operation_id(
+        "ArrayFunc",
+        {
+            "name": _array_func_name(func),
+            # The positional arguments say which reduction it was:
+            # `np.mean(patch, 0)` and `np.mean(patch, 1)` are two.
+            "args": _without_patch_values(converted_args, patches),
+            "kwargs": _without_patch_values(converted_kwargs, patches),
+        },
+    )
+    attrs = stamp(patch.attrs, [x.attrs for x in patches], operation or None)
+    if attrs is not patch.attrs:
         patch = patch.new(attrs=attrs)
     return _clear_units_if_bool_dtype(patch)
 
@@ -1072,19 +1081,19 @@ def _array_func_name(func) -> str:
     return f"{owner}.{name}" if owner else name
 
 
-def _without_patch_values(values):
+def _without_patch_values(values, patches):
     """
-    Return arguments with anything the fingerprint should not hold replaced.
+    Return arguments with anything an operation id should not hold replaced.
 
-    A patch is an *input*, not a parameter -- which one it was is said by
-    the ids folded from the operands. A numpy dtype has no encoding of its
-    own, so it is spelled out rather than hashed by its class, which would
-    give every dtype one fingerprint and warn on every call.
+    A patch is an *input*, not a parameter, so it becomes a marker naming
+    its place among `patches`, the operation's inputs. A numpy dtype has no
+    encoding of its own, so it is spelled out.
     """
+    places = {id(x): index for index, x in enumerate(patches)}
 
     def _plain(value):
         if isinstance(value, dc.Patch):
-            return PATCH_ARGUMENT
+            return PatchMarker(places.get(id(value), len(places)))
         if isinstance(value, np.dtype):
             return str(value)
         return value
@@ -1250,7 +1259,7 @@ def hash_array(arr: np.ndarray) -> str:
         - makes one contiguous copy for non-contiguous arrays
 
     The hash includes:
-        - dtype
+        - dtype (the full field description of a structured one)
         - shape
         - raw array bytes
 
@@ -1272,16 +1281,18 @@ def hash_array(arr: np.ndarray) -> str:
     >>> assert hash_array(a) != hash_array(a.astype(np.float32))
     """
     arr = np.asarray(arr)
-    if arr.dtype == object:
+    if arr.dtype.hasobject:
         msg = "hash_array does not support object arrays."
         raise ParameterError(msg)
 
-    h = hashlib.blake2b(digest_size=16)
+    h = hashlib.blake2b(digest_size=DIGEST_SIZE)
 
-    # Include dtype and shape so arrays with identical raw bytes but different
-    # interpretations do not collide.
-    h.update(arr.dtype.str.encode("ascii"))
-    h.update(np.asarray(arr.shape, dtype=np.int64).tobytes())
+    # A length-prefixed header of the dtype and shape, so that the shape's
+    # bytes cannot read as data, nor two record layouts of one width alike.
+    header = json.dumps([dtype_description(arr.dtype), list(arr.shape)])
+    header = header.encode("ascii")
+    h.update(len(header).to_bytes(8, "little"))
+    h.update(header)
     if not arr.size:
         return h.hexdigest()
 

@@ -1,4 +1,5 @@
 ---
+keywords: [spool, chunking, overlapping chunks, gaps, archive]
 title: Spool
 execute:
   warning: false
@@ -140,15 +141,15 @@ regex_tags = diverse.select(tag=re.compile(r"^some"))
 
 ## Finding a patch by ID
 
-File-backed `patch_id` values are indexed, so a recorded ID can locate its source without loading every patch:
+File-backed `origin_id` values are indexed, so a recorded ID can locate its source without loading every patch:
 
 ```{python}
-wanted = spool.get_contents()["patch_id"].iloc[0]
-found = spool.select(patch_id=wanted)
-assert found[0].attrs.patch_id == wanted
+wanted = spool.get_contents()["origin_id"].iloc[0]
+found = spool.select(origin_id=wanted)
+assert found[0].attrs.origin_id == wanted
 ```
 
-`processing_id` is also indexed. Attribute queries match the stored source ID, including the empty string when no operations were recorded. A value trim clears the ID in presented contents because the loaded patch records the selection and carries a different value; sample selections defer it until loading. Built or chunked spools may have no `patch_id`, and moving a source invalidates its derived ID until the directory is rescanned. See [Patch identity](patch.qmd#patch-identity) for the identity rules.
+`data_id` is also indexed. Attribute queries match the stored source ID. A value trim clears the ID in presented contents because the loaded patch names the window it read and so carries a different value; sample selections defer it until loading. Built or chunked spools may have no `origin_id`, and moving a source invalidates its derived IDs until the directory is rescanned. See [Patch identity](patch.qmd#patch-identity) for the identity rules.
 
 An empty ID after a file move is intentional: retaining the path-derived value would point at a source which no longer exists. Calling `update()` rebuilds the row from its new location.
 
@@ -186,9 +187,36 @@ bounded = spool.chunk(time=1 * megabytes)
 
 `overlap` accepts the same coordinate-unit, quantity, or data-size forms as the chunk length. `keep_partial=True` retains a shorter final window. Passing `time=None` asks DASCore to merge every contiguous compatible segment.
 
+To request particular absolute windows, pass an `(n, 2)` array. `select` returns each matching source piece separately; `chunk` assembles compatible pieces inside each requested row. Rows stay in input order, including overlaps and duplicates. Chunking requires every requested sampled window by default, and `chunk_plan` shows the accepted outputs without loading measurement arrays. `on_incomplete="warn"` or `"ignore"` skips unmet outputs, while `keep_partial=True` accepts available nonempty pieces before that policy applies.
+
+```{python}
+import numpy as np
+
+small = dc.spool(dc.get_example_patch().select(distance=(0, 9)))
+windows = np.array([[2, 4], [6, 8]])
+source_pieces = small.select(distance=windows)
+requested_chunks = small.chunk(distance=windows)
+requested_plan = small.chunk_plan(distance=windows)
+assert len(source_pieces) == len(requested_chunks) == len(requested_plan.outputs) == 2
+```
+
 Eligible whole-file merges read arrays directly and reconstruct coordinates and scalar attributes from the index. Members requiring trims, associated coordinates, or metadata the index cannot reproduce use the patch reader. Index-built results retain patch and processing identities and omit stored history. To retain stored history, load the members first, as in `dc.spool(list(file_spool)).chunk(time=None)`.
 
 Data-size limits cover the array only, not coordinates, metadata, or later processing copies. `MB` is decimal and `MiB` is binary.
+
+## Filling bridged holes
+
+A `tolerance` wide enough to span a hole merges the patches on either side, but the samples in between are still missing, so the merged patch is unevenly sampled and its coordinate stays segmented. `fill_value` writes those samples instead, and the output comes back as an ordinary evenly sampled patch.
+
+```{python}
+import numpy as np
+from dascore.examples import random_spool
+
+with_gaps = random_spool(time_gap=np.timedelta64(1, "s"), length=3)
+filled = with_gaps.chunk(time=None, tolerance=300, fill_value=np.nan)
+```
+
+`tolerance` alone decides which holes are bridged: a hole it does not span separates patches as before, and nothing is filled across it. When a chunk length is given as well, the windows cover the whole bridged span, so one lying entirely inside a hole comes back as an all-fill patch and one the sources only partly feed is padded rather than left short. The fill value has to survive a cast to the data's own dtype, so `np.nan` needs float data; fill integer data with an integer, or cast it first. [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`) does the same to a patch you already hold.
 
 ## Gaps and coverage
 

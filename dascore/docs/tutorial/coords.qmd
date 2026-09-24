@@ -56,8 +56,9 @@ time = get_coord(start=t0, step=(1, 1024), shape=(3_686_400,))
 
 assert time.step_exact == Fraction(1, 1024)
 assert time[::2].step_exact == Fraction(1, 512)
-assert time.stop == t0 + np.timedelta64(1, "h")
 assert time.step == np.timedelta64(976562, "ns")
+# the rounded step would have drifted 1.8 ms by the end of the hour
+assert time.max() - (t0 + time.step * (len(time) - 1)) == np.timedelta64(1843199, "ns")
 ```
 
 Float coordinates have no tick to be exact against, so a fraction step on one raises and their `step_exact` is `None`.
@@ -74,9 +75,9 @@ Paired cell bounds require monotonic row order. Reversals and monotonic subsets 
 
 Selection and raw decimation retain the selected bounds. Operations that build a new grid, including interpolation, resampling, filtered decimation, padding, rolling windows, and correlation lag grids, drop them. Translation and unit conversion transform them with the dimension. Waterfall image extents use the outer cell edges: half a step beyond the first and last labels, or the explicit pair when attached. Spectrograms display each spectrum at its window-centre label over one hop interval; overlapping source-window bounds are omitted from that plotting view.
 
-## Segmented coordinates
+## Coordinates with holes
 
-[`CoordSegmented`](`dascore.core.coords.CoordSegmented`) preserves monotonic blocks and their discontinuities. Use [`concat_coords(...)`](`dascore.core.coords.concat_coords`) when the blocks are known:
+A coordinate holds its labels as a tuple of *runs* — an evenly sampled [`Grid`](`dascore.core.coords.Grid`) described by numbers, or [`Labels`](`dascore.core.coords.Labels`) held as they are — so monotonic blocks and the discontinuities between them survive. Use [`concat_coords(...)`](`dascore.core.coords.concat_coords`) when the blocks are known:
 
 ```{python}
 from dascore.core.coords import concat_coords
@@ -88,23 +89,22 @@ segmented = concat_coords(first, second)
 print(segmented.get_discontinuities("gaps"))
 ```
 
-Use [`CoordSegmented.from_array(...)`](`dascore.core.coords.CoordSegmented.from_array`) to preserve an exact monotonic array. It returns the simplest truthful coordinate, so uniform input becomes `CoordRange`. A segmented coordinate reports a `step` only when every run declares the same one, and `None` otherwise. `simplify(tolerance=...)` may reduce segments within an error bound, while `snap()` replaces values with one evenly sampled range. Use `patch.split_gaps()` before writing segmented dimensions to formats that cannot represent gaps; DASDAE version 2 stores them whole.
+Pass `snap=False` to preserve an exact monotonic array. It returns the simplest truthful coordinate, so uniform input becomes one evenly sampled run. A coordinate of several runs reports a `step` only when every run sits on the same one, and `None` otherwise. `fuse(tolerance=...)` may reduce the number of runs within an error bound, while `snap()` replaces values with one evenly sampled run. Use `patch.split_gaps()` before writing a dimension with holes to formats that cannot represent gaps; DASDAE version 2 stores them whole.
 
 ```{python}
-from dascore.core.coords import CoordSegmented
-
 values = np.array([0.0, 1.0, 2.0, 7.0, 8.0, 9.0])
-exact = CoordSegmented.from_array(values, tolerance=0, units="m")
+exact = get_coord(data=values, units="m", snap=False)
 assert np.array_equal(exact.values, values)
+assert exact.runs_count == 2
 ```
 
 ### Declaring a grid and finding missing samples
 
-Labels alone do not say which positions are missing: `[0, 2, 4]` fills a step-2 grid and misses two positions of a step-1 grid. Passing `step` with array data declares the grid. Every value must sit on it (an off-grid value raises rather than moves), each run of consecutive positions becomes a range of that step, and [`missing()`](`dascore.core.coords.BaseCoord.missing`) reports the positions between the first and last sample that have no sample, one entry per hole rather than one per position.
+Labels alone do not say which positions are missing: `[0, 2, 4]` fills a step-2 grid and misses two positions of a step-1 grid. Passing `step` with array data declares the grid. Every value must sit on it (an off-grid value raises rather than moves), each run of consecutive positions becomes a grid of that step, and [`missing()`](`dascore.core.coords.BaseCoord.missing`) reports the positions between the first and last sample that have no sample, one entry per hole rather than one per position.
 
 ```{python}
 coord = get_coord(data=[1, 3, 4, 10, 11, 12], step=1)
-assert coord.segment_count == 3 and coord.step == 1
+assert coord.runs_count == 3 and coord.step == 1
 
 missing = coord.missing()
 assert missing.count == 6 and not missing.complete
@@ -112,7 +112,15 @@ assert list(missing.iter_runs()) == [(2, 2), (5, 9)]
 print(missing.positions())
 ```
 
-A dense array whose runs would outnumber a tenth of its samples keeps its values as one monotonic coordinate with the declared step, and `missing()` answers the same. Without a declared step, `missing()` raises; evenly sampled coordinates are always complete. Filling the holes with samples is a patch operation, never a coordinate one.
+A dense array whose runs would outnumber a tenth of its samples keeps its labels as one stored run with the declared step, and `missing()` answers the same. Without a declared step there is no grid to be missing from, so `missing()` reports nothing missing; evenly sampled coordinates are always complete. Filling the holes with samples is a patch operation, never a coordinate one. [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`) places every run on one grid and writes a fill value (NaN by default) where no sample sits, so the coordinate becomes one evenly sampled run. Giving the dimension a limit as a keyword (`fill_gaps(time=10)` in coordinate units, or a count of missing samples with `samples=True`) fills only holes that narrow and leaves wider ones as seams. A hole's width is its missing samples times the step.
+
+```{python}
+import dascore as dc
+
+patch = dc.Patch(data=np.ones(len(coord)), coords={"x": coord}, dims=("x",))
+filled = patch.fill_gaps("x", value=0)
+assert filled.shape == (12,) and filled.data.sum() == len(coord)
+```
 
 [`get_discontinuities`](`dascore.core.coords.BaseCoord.get_discontinuities`) reports the seams between runs, and for a monotonic array every spacing that is not its declared step (or its median spacing when it declares none). Its `tolerance` is an excess over one step in coordinate units; pass [`GapTolerance.samples(k)`](`dascore.utils.gaps.GapTolerance`) to count steps instead, which is how `Spool.chunk` and `waterfall(gap_factor=)` judge the same spacing.
 

@@ -29,43 +29,36 @@ from xarray.indexes import CoordinateTransform, CoordinateTransformIndex, Pandas
 
 from dascore.core.coords import (
     BaseCoord,
-    CoordArray,
-    CoordMonotonicArray,
-    CoordRange,
-    CoordSegmented,
+    Grid,
+    NumericCoord,
     concat_coords,
     get_coord,
 )
 from dascore.exceptions import CoordError
 from dascore.utils.indexing import label_indexer, positional_indexer
-from dascore.utils.misc import is_strictly_monotonic
 from dascore.utils.time import dtype_time_like
 
 
 def is_servable(coord) -> bool:
     """Whether `CoordIndex` can serve a coordinate's labels."""
-    if isinstance(coord, CoordSegmented):
+    if isinstance(coord, NumericCoord) and coord.runs_count > 1:
         return True
     # a zero step repeats one label, which no index can look up
-    return isinstance(coord, CoordRange) and bool(coord.step)
+    return getattr(coord, "evenly_sampled", False) and bool(coord.step)
 
 
 def _relabels_exactly(coord) -> bool:
-    """Whether slices of a coordinate keep exactly the labels they select."""
-    # a float range recomputes a slice's labels from its new start, which
-    # can move them in the last bits, and then they no longer align
-    if isinstance(coord, CoordSegmented):
-        return all(_relabels_exactly(x) for x in coord.segments)
-    return not isinstance(coord, CoordRange) or coord._exact
+    """Whether fused runs retain exactly the labels of their inputs."""
+    # Independently constructed float grids can change their last bits
+    # when fused, so concatenation still uses stored labels for them.
+    return all(not isinstance(x, Grid) or x.exact for x in getattr(coord, "runs", ()))
 
 
 def _array_coord(labels, units) -> BaseCoord:
     """Labels held as they are, never re-inferred as a range."""
     if np.asarray(labels).dtype.kind in "USO":
         return get_coord(data=labels, units=units)  # text keeps its own class
-    monotonic = len(labels) > 1 and is_strictly_monotonic(labels)
-    cls = CoordMonotonicArray if monotonic else CoordArray
-    return cls(values=labels, units=units)
+    return NumericCoord.from_labels(labels, units=units)
 
 
 def _as_pandas(index) -> PandasIndex:
@@ -81,16 +74,28 @@ def _same_labels(first: BaseCoord, second: BaseCoord) -> bool:
         return True
     if len(first) != len(second) or first.dtype != second.dtype:
         return False
-    if not (is_servable(first) and is_servable(second)):
-        # a side which holds its labels costs nothing more to compare
-        positions = np.arange(len(first))
-        labels = (x._get_index_values(positions) for x in (first, second))
-        return bool(np.array_equal(next(labels), next(labels)))
-    if first.units != second.units:
-        # xarray states units as an attribute beside the labels, so an
-        # index compares labels only, as a materialized index does
-        first, second = first.set_units(None), second.set_units(None)
-    return first.fingerprint() == second.fingerprint()
+    if is_servable(first) and is_servable(second):
+        if first.units != second.units:
+            # xarray states units as an attribute beside the labels, so an
+            # index compares labels only, as a materialized index does
+            first, second = first.set_units(None), second.set_units(None)
+        if first.data_id == second.data_id:
+            return True
+        if isinstance(first, NumericCoord) and isinstance(second, NumericCoord):
+            grids = (first._grid, second._grid)
+            if all(grid is not None and grid.exact for grid in grids):
+                return False  # exact grids have one canonical identity
+            # Float windows can spell identical labels with different parents.
+            ends = [0, len(first) - 1]
+            if not np.array_equal(
+                first._get_index_values(ends), second._get_index_values(ends)
+            ):
+                return False
+    # An id names the runs a coordinate holds as well as the labels they
+    # spell, so two ways of partitioning one set of labels differ by it.
+    positions = np.arange(len(first))
+    labels = (x._get_index_values(positions) for x in (first, second))
+    return bool(np.array_equal(next(labels), next(labels)))
 
 
 def _chained(coords: list[BaseCoord]) -> BaseCoord | None:
@@ -155,9 +160,8 @@ class CoordIndex(CoordinateTransformIndex):
     pandas index answers: partial datetime strings name their periods,
     slices include both endpoints, and ``method`` and ``tolerance`` work
     as pandas has them. A slice ``isel`` or a concatenation whose parts
-    chain returns a new lazy index; fancy indexing, an empty slice, a
-    slice whose labels a coordinate would recompute (a float range, or a
-    stride over segments), or a concatenation which reorders or overlaps
+    chain returns a new lazy index; fancy indexing, an empty slice,
+    or a concatenation which reorders or overlaps
     holds just the labels concerned, still as a `CoordIndex`, so arrays
     derived from one another align. Aligning with a `CoordIndex` whose
     labels differ materializes both, costing what aligning materialized
@@ -253,9 +257,7 @@ class CoordIndex(CoordinateTransformIndex):
         if isinstance(idx, slice):
             start, stop, stride = idx.indices(len(coord))
             positions = range(start, stop, stride)
-            # a strided segmented coordinate is an array of its labels
-            lazy = isinstance(coord, CoordRange) or stride == 1
-            if len(positions) and lazy and _relabels_exactly(coord):
+            if len(positions):
                 return self._with(coord[idx])
             return self._picked(np.asarray(positions, dtype=np.int64))
         if getattr(idx, "dims", (self.dim,)) != (self.dim,):

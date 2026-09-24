@@ -1,7 +1,7 @@
 """
 Tests for the catalog ordering contract (source ordinals).
 
-Patch rows present in (ordinal, patch_id) order: live spools keep
+Patch rows present in (ordinal, patch_row) order: live spools keep
 construction order, unions concatenate (dedup keeps first-occurrence
 position), and directory archives present in time order (the syncer
 renumbers after each sync).
@@ -125,7 +125,7 @@ class TestIndexVersionRebuild:
         spool = dc.spool(tmp_path).update(progress=None)
         index_path = spool.indexer.index_path
         spool.indexer.close()
-        # simulate an index written by another (older/newer) schema version;
+        # simulate an index written by an older schema version;
         # close the connection explicitly (the sqlite3 context manager only
         # manages transactions) or Windows cannot unlink the file below.
         con = sqlite3.connect(index_path)
@@ -155,7 +155,7 @@ class TestSortNonHotCoords:
         p = dc.get_example_patch().rename_coords(time="event_time")
         t = p.get_coord("event_time")
         span = t.max() - t.min() + t.step
-        p2 = p.update_coords(event_time=t.data + span)
+        p2 = p.update_coords(event_time=t.values + span)
         return dc.spool([p2, p])  # deliberately out of order
 
     @pytest.mark.parametrize("key", ["event_time", "event_time_min"])

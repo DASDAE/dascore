@@ -139,7 +139,7 @@ def present_columns(df: pd.DataFrame) -> pd.DataFrame:
     Return the public view of a flat relation.
 
     The relation carries private columns the spool needs and a caller
-    does not: the row id, per-coordinate identity keys, the raw path
+    does not: the row number, per-coordinate identity keys, the raw path
     attrs. A leading underscore means private everywhere else in
     DASCore, so a frame handed out publicly should not carry them. A few
     are private only because the planners police public columns, and

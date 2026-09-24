@@ -21,6 +21,7 @@ import dascore as dc
 from dascore.config import get_config
 from dascore.constants import (
     WARN_LEVELS,
+    PatchMetaType,
     PatchType,
     check_behavior_description,
 )
@@ -56,14 +57,12 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.gaps import GapTolerance
 from dascore.utils.identity import (
     _ID_FIELDS,
-    advance,
-    fold_patch_ids,
-    fold_processing_ids,
     ids_enabled,
-    operation_fingerprint,
-    patch_id_of,
-    processing_id_of,
-    stamp_combination,
+    merge_operation,
+    operation_context,
+    operation_id,
+    stamp,
+    warn_random_id,
 )
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
@@ -76,9 +75,14 @@ from dascore.utils.misc import (
     warn_or_raise,
     yield_sub_sequences,
 )
-from dascore.utils.patch_registry import fingerprint_call, register_patch_function
+from dascore.utils.patch_registry import (
+    call_inputs,
+    call_operation,
+    register_patch_function,
+)
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.time import to_float
+from dascore.warnings import DASCoreWarning
 
 _DimAxisValue = namedtuple("_DimAxisValue", ["dim", "axis", "value"])
 
@@ -87,10 +91,10 @@ attr_type = dict[str, Any] | str | Sequence[str] | None
 
 
 def check_patch_coords(
-    patch: PatchType,
+    patch: PatchMetaType,
     dims: Sequence[str] | None = None,
     coords: Sequence[str] | None = None,
-) -> PatchType:
+) -> PatchMetaType:
     """
     Check that a patch has the required coordinates, else raise.
 
@@ -124,28 +128,31 @@ def check_patch_coords(
     return patch
 
 
-def check_patch_data(patch: PatchType) -> PatchType:
+def check_patch_data(patch: PatchMetaType) -> PatchMetaType:
     """
-    Check that a patch holds data, else raise.
+    Check that data are in reach, else raise.
 
-    A patch built without data (`Patch.drop_data`) describes data; it cannot
-    be processed, even by an operation which would change nothing.
+    A `PatchMeta` describes data it does not hold, so an operation which
+    computes data cannot run on one. A method is out of reach there, being
+    bound to `Patch`, but a bare call is not: this is what turns
+    `dc.proc.pass_filter(meta)` into a clear error rather than an
+    `AttributeError` from somewhere inside the operation.
 
     Raises
     ------
     PatchDataError
-        If the patch was built without data.
+        If given a patch's metadata rather than the patch.
     """
-    if getattr(patch, "_data", True) is None:
+    if isinstance(patch, dc.PatchMeta) and not isinstance(patch, dc.Patch):
         msg = (
-            "This patch was built without data, so it has none to use. "
-            "Attach data with patch.new(data=...) first."
+            "This is a patch's metadata, which holds no data to use. "
+            "Attach data with meta.to_patch(data) first."
         )
         raise PatchDataError(msg)
     return patch
 
 
-def check_patch_attrs(patch: PatchType, required_attrs: attr_type) -> PatchType:
+def check_patch_attrs(patch: PatchMetaType, required_attrs: attr_type) -> PatchMetaType:
     """
     Check for expected attributes.
 
@@ -312,45 +319,33 @@ class _PatchFunction(Protocol):
     def __call__(self, patch, *args, **kwargs): ...
 
 
-def _stamp(patch, attrs, patch_func, args, kwargs):
+def _stamp(patch, attrs, patch_func, args, kwargs, output=None):
     """
-    Return attrs saying which data this is and what was just done to it.
+    Return attrs saying which data this is after a call to a patch function.
 
-    Every patch given to the call counts towards which data the result is
-    -- `where(cond_patch, other_patch)` uses all three -- so their ids are
-    folded rather than the first one being copied across. The ids are read
-    with `getattr`, because attrs unpickled from before these fields
-    existed have neither.
+    Every patch given to the call is an input -- `where(cond_patch,
+    other_patch)` uses all three -- in the order the operation's markers
+    number them. A call the encoder refuses still made new data, so the
+    result gets a random id rather than none.
     """
+    if not ids_enabled():
+        return stamp(attrs, (), None)
     try:
-        fingerprint = fingerprint_call(patch_func, args, kwargs)
-    except Exception:
-        # Provenance is metadata about the work, not the work. An argument
-        # the serializer cannot encode is a reason to say nothing about
-        # this call, never a reason to fail a call which otherwise worked.
-        return attrs
-    others = [x for x in (*args, *kwargs.values()) if isinstance(x, dc.Patch)]
-    return _stamp_ids(patch, attrs, fingerprint, others)
+        operation, others = call_operation(patch_func, args, kwargs)
+    except Exception as error:
+        warn_random_id(getattr(patch_func, "__name__", "a patch function"), error)
+        # The patches it was given still say where the data came from.
+        operation, others = None, _given_patches(patch_func, args, kwargs)
+    return stamp(attrs, [patch.attrs, *(x.attrs for x in others)], operation, output)
 
 
-def _stamp_ids(patch, attrs, fingerprint: str, others=()):
-    """
-    Return attrs whose ids say an operation with `fingerprint` made them.
-
-    `patch` and any `others` are the patches the operation was given; all
-    of them count towards which data the result is.
-    """
-    members = [patch.attrs, *(x.attrs for x in others)]
-    return attrs.update(
-        # Carried from the inputs rather than from whatever the body
-        # returned: filtering data does not make it other data, and a
-        # function building its result from scratch would otherwise mint a
-        # new id and claim it had.
-        patch_id=fold_patch_ids([patch_id_of(x) for x in members]),
-        processing_id=advance(
-            fold_processing_ids([processing_id_of(x) for x in members]), fingerprint
-        ),
-    )
+def _given_patches(patch_func, args, kwargs) -> list:
+    """Return the patches among a call's arguments, however deep."""
+    try:
+        return call_inputs(patch_func, args, kwargs)[1]
+    except Exception:  # a call which does not bind; the plain ones, then
+        given = (*args, *kwargs.values())
+        return [x for x in given if isinstance(x, dc.Patch)]
 
 
 def record_call(
@@ -359,6 +354,7 @@ def record_call(
     patch_func: Callable,
     args: tuple,
     kwargs: Mapping[str, object],
+    output: int | None = None,
 ) -> dc.Patch:
     """
     Return ``out`` carrying what a call to ``patch_func`` records.
@@ -377,9 +373,28 @@ def record_call(
     history = getattr(patch_func, "_history", "full")
     hist_str = _get_history_str(patch, func, *args, _history=history, **kwargs)
     attrs = _maybe_add_history_str(out.attrs, hist_str)
-    if ids_enabled():
-        attrs = _stamp(patch, attrs, patch_func, args, kwargs)
+    attrs = _stamp(patch, attrs, patch_func, args, kwargs, output)
     return out if attrs is out.attrs else out.update(attrs=attrs)
+
+
+def _record_members(out, patch, patch_func, args, kwargs):
+    """
+    Return several results, each recording the call and its place among them.
+
+    The place is the absolute position in what the function returned, so a
+    member which is the input itself -- nothing was done to it -- keeps its
+    ids without moving the others'.
+    """
+    members = [
+        record_call(x, patch, patch_func, args, kwargs, output=index)
+        if isinstance(x, dc.Patch) and x is not patch
+        else x
+        for index, x in enumerate(out)
+    ]
+    if isinstance(out, dc.BaseSpool):
+        return dc.spool(members)
+    # A namedtuple takes its members one by one.
+    return type(out)(*members) if hasattr(out, "_fields") else type(out)(members)
 
 
 def _to_numpy_arg(obj):
@@ -418,12 +433,16 @@ def numpy_fallback(name, data, func, args=(), kwargs=None, stacklevel=4):
         The stack level, as understood by warnings.warn, of the caller.
     """
     warn_numpy_fallback(name, backend_name(data), stacklevel=stacklevel + 1)
-    converted = tuple(_to_numpy_arg(x) for x in args)
-    kwargs = {i: _to_numpy_arg(v) for i, v in (kwargs or {}).items()}
-    out = func(*converted, **kwargs)
-    # Only patches carry data back to the original backend.
-    if isinstance(out, dc.Patch):
-        out = out.new(data=asarray_like(out.data, data))
+    # Crossing the backend boundary is part of the operation being applied,
+    # not data replacement: the same values are the same data, and what
+    # `func` records still stands.
+    with operation_context():
+        converted = tuple(_to_numpy_arg(x) for x in args)
+        kwargs = {i: _to_numpy_arg(v) for i, v in (kwargs or {}).items()}
+        out = func(*converted, **kwargs)
+        # Only patches carry data back to the original backend.
+        if isinstance(out, dc.Patch):
+            out = out.new(data=asarray_like(out.data, data))
     return out
 
 
@@ -461,7 +480,7 @@ def patch_function(
         Output ``data_type``. None preserves it; an empty string clears it.
     version
         Operation version. Bump it when the same arguments mean a different
-        result, keeping new fingerprints distinct from old ones.
+        result, keeping new operation ids distinct from old ones.
 
     Examples
     --------
@@ -516,17 +535,22 @@ def patch_function(
                 coords=required_coords,
             )
             check_patch_attrs(patch, required_attrs)
-            out = func(patch, *args, **kwargs)
-            attr_updates = {}
-            if data_type is not None:
-                attr_updates["data_type"] = data_type
-            # Only when something new came back: an operation which
-            # handed the patch straight through did nothing, and nothing
-            # is what it records.
-            if out is not patch and hasattr(out, "attrs"):
-                out = record_call(out, patch, patch_func, args, kwargs)
-            if attr_updates and hasattr(out, "attrs"):
-                out = out.update_attrs(**attr_updates)
+            # The body and what it records are one operation, which names
+            # itself; the replacements it makes on the way do not.
+            with operation_context():
+                out = func(patch, *args, **kwargs)
+                attr_updates = {}
+                if data_type is not None:
+                    attr_updates["data_type"] = data_type
+                # Only when something new came back: an operation which
+                # handed the patch straight through did nothing, and nothing
+                # is what it records.
+                if out is not patch and hasattr(out, "attrs"):
+                    out = record_call(out, patch, patch_func, args, kwargs)
+                elif isinstance(out, dc.BaseSpool | list | tuple):
+                    out = _record_members(out, patch, patch_func, args, kwargs)
+                if attr_updates and hasattr(out, "attrs"):
+                    out = out.update_attrs(**attr_updates)
             return out
 
         # Attach original function. Although we want to encourage raw_function
@@ -658,6 +682,9 @@ def _split_coord_merge_kwargs(merge_kwargs) -> tuple[dict, dict]:
         "snap_coords": merge_kwargs.pop("snap_coords", True),
         "tolerance": merge_kwargs.pop("tolerance", 1.5),
     }
+    # filling happens once the whole output is assembled, which is the
+    # only point at which every missing sample is known
+    merge_kwargs.pop("fill_value", None)
     return merge_kwargs, coord_kwargs
 
 
@@ -672,9 +699,9 @@ def _get_merged_coord(
     a plain range; recorded seams otherwise), then — when `snap_coords` —
     simplified with bounded error: no value moves more than the tolerance
     allows, `tolerance` steps for a count or the excess itself for a
-    quantity or timedelta (see `dascore.utils.gaps.GapTolerance`). Merges
-    whose gaps exceed that stay segmented (honestly non-uniform) rather
-    than being relabeled.
+    quantity or timedelta (see `dascore.utils.gaps.GapTolerance`), and the
+    members' own step is kept, so a merge across a hole stays segmented
+    (honestly non-uniform) rather than being relabeled at a slower rate.
     """
     from dascore.core.coords import concat_coords  # noqa: PLC0415
 
@@ -687,7 +714,9 @@ def _get_merged_coord(
             coords, dim=merge_dim, drop_conflicting=drop_conflicting
         )
     if snap_coords:
-        merged = merged.simplify(GapTolerance.from_user(tolerance, merge_dim))
+        merged = merged.fuse(
+            GapTolerance.from_user(tolerance, merge_dim), keep_step=True
+        )
     # Passing the pre-built dim coord avoids materializing the members'
     # concatenated values only to discard them.
     return merge_coord_managers(
@@ -724,10 +753,35 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
         df, merge_dim, coords, drop_conf_coords, **coord_kwargs
     )
     warn_if_histories_differ(attrs, "Merging")
-    new_attrs = combine_patch_attrs(attrs, **attr_kwargs)
-    patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
+    new_attrs = combine_patch_attrs(attrs, **attr_kwargs, merge_params=merge_kwargs)
+    # The fold named the result; building it is not another array.
+    with operation_context():
+        patch = dc.Patch(data=new_data, coords=new_coord, attrs=new_attrs, dims=dims)
     new_dict = {"patch": patch}
     return [new_dict]
+
+
+def drop_associated_coords(coords, dim: str, action: str):
+    """
+    Drop, with a warning, the non-dimensional coordinates along a dimension.
+
+    Use when an operation changes the dimension's samples, leaving those
+    coordinates' values unknown; `action` begins the warning, eg
+    "Resampling". Cell edges are left for the grid update, which drops them
+    without a warning.
+    """
+    edges = dc.core.coordmanager._cell_edge_names(dim, coords.coord_map)
+    associated = sorted(
+        name
+        for name, coord_dims in coords.dim_map.items()
+        if name != dim and dim in coord_dims and name not in edges
+    )
+    if not associated:
+        return coords
+    names = ", ".join(associated)
+    msg = f"{action} dimension {dim!r} dropped associated coordinates: {names}."
+    warnings.warn(msg, DASCoreWarning, stacklevel=4)
+    return coords.drop_coords(*associated)[0]
 
 
 def get_start_stop_step(patch: PatchType, dim):
@@ -746,7 +800,7 @@ def get_patch_names(
     # io.core.ScanInput: importing that is circular, and hiding it behind
     # TYPE_CHECKING leaves the annotation unresolvable at runtime, which
     # breaks get_type_hints and the API doc renderer.
-    patch_data: pd.DataFrame | dc.Patch | dc.Spool | Iterable[dc.Patch],
+    patch_data: pd.DataFrame | dc.PatchMeta | dc.Spool | Iterable[dc.PatchMeta],
     prefix="DAS",
     attrs=("acquisition_key", "tag"),
     coords=("time",),
@@ -1169,7 +1223,7 @@ def _get_dx_or_spacing_and_axes(
         if coord.evenly_sampled:
             val = coord.step
         else:
-            val = coord.data
+            val = coord.values
         # need to convert val to float so datetimes work
         out.append(to_float(val))
         axes.append(patch.get_axis(dim_))
@@ -1214,7 +1268,11 @@ def align_patch_coords(
     patch1 = patch1.append_dims(*dims).transpose(*dims)
     patch2 = patch2.append_dims(*dims).transpose(*dims)
     # Next, find the common coordinates and align.
-    align_1, align_2 = [slice(None)] * len(dims), [slice(None)] * len(dims)
+    # Annotated because `align_to` answers with a slice or an index
+    # array, and the whole-slice start below would otherwise fix the
+    # element type as the former.
+    align_1: list[slice | np.ndarray] = [slice(None)] * len(dims)
+    align_2: list[slice | np.ndarray] = [slice(None)] * len(dims)
     new_coords_1, new_coords_2 = {}, {}
     for dim in shared_dims:
         coord1, coord2 = patch1.get_coord(dim), patch2.get_coord(dim)
@@ -1245,7 +1303,7 @@ def align_patch_coords(
     return out1, out2
 
 
-def get_patch_kind(patch: PatchType | dc.PatchAttrs) -> FrozenDict:
+def get_patch_kind(patch: dc.PatchMeta | dc.PatchAttrs) -> FrozenDict:
     """
     Return the attribute values which decide what kind of patch this is.
 
@@ -1270,7 +1328,7 @@ def get_patch_kind(patch: PatchType | dc.PatchAttrs) -> FrozenDict:
     >>> assert kind["tag"] == patch.attrs.tag
     >>> assert kind["acquisition_key"] is None  # not set
     """
-    attrs = patch.attrs if isinstance(patch, dc.Patch) else patch
+    attrs = patch.attrs if isinstance(patch, dc.PatchMeta) else patch
     names = get_config().patch_kind_attrs
     return FrozenDict({x: _kind_value(attrs.get(x)) for x in names})
 
@@ -1509,6 +1567,12 @@ def _merge_aligned_coords(cm1, cm2):
     return cm1.update(**out)
 
 
+def _same_but_for_ids(attrs1, attrs2) -> bool:
+    """Whether two attrs agree on everything but which data they name."""
+    blank = dict.fromkeys(_ID_FIELDS, "")
+    return attrs1.model_copy(update=blank) == attrs2.model_copy(update=blank)
+
+
 def _merge_models(attrs1, attrs2):
     """
     Fold the attrs of two same-kind patches: the first wins, the second adds.
@@ -1521,6 +1585,11 @@ def _merge_models(attrs1, attrs2):
     """
     if attrs1 == attrs2:
         return attrs1
+    if _same_but_for_ids(attrs1, attrs2):
+        # Short-circuited for the private attrs the fold drops, but the ids
+        # are the fold's: which arrays these were must not turn on whether
+        # some unrelated attr happened to differ as well.
+        return stamp(attrs1, [attrs1, attrs2], merge_operation())
     # keep_first gives the first patch's value for everything, folds the
     # ids, and keeps the history and the attrs subclass; the data units of
     # the output are decided by the operation from each operand's own, so
@@ -1532,7 +1601,7 @@ def _merge_models(attrs1, attrs2):
     fill = {
         key: value
         for key, value in attrs2.model_dump(exclude_defaults=True).items()
-        if key not in _ID_FIELDS  # fold_ids returns {} when ids are disabled
+        if key not in _ID_FIELDS
         and key not in ("history", "data_units")
         and not key.startswith("_")
         and not _is_missing(value)
@@ -1719,7 +1788,7 @@ def concatenate_patches(
 
     dim, val = _get_dim_and_value(kwargs)
     patches = get_compatible_patches(patches, dim, check_behavior)
-    fingerprint = operation_fingerprint(
+    operation = operation_id(
         "Concatenate",
         {"arguments": tuple(kwargs.items()), "check_behavior": check_behavior},
     )
@@ -1727,7 +1796,7 @@ def concatenate_patches(
     for patch_list in yield_sub_sequences(patches, val):
         # The members agree on kind and units, so the first states them.
         attrs = patch_list[0].attrs
-        out.append(_concatenate_group(patch_list, dim, attrs, fingerprint))
+        out.append(_concatenate_group(patch_list, dim, attrs, operation))
     return out
 
 
@@ -1735,7 +1804,7 @@ def _concatenate_group(
     patches: Sequence[dc.Patch],
     dim: str,
     attrs: dc.PatchAttrs,
-    fingerprint: str,
+    operation: str,
 ) -> dc.Patch:
     """
     Concatenate patches already known to fit, along `dim`.
@@ -1803,8 +1872,9 @@ def _concatenate_group(
             coords = coords.update(**riders)
     warn_if_histories_differ([x.attrs for x in patches], "Concatenating")
     attrs = _maybe_add_history_str(attrs, "concatenate")
-    attrs = stamp_combination(attrs, [x.attrs for x in patches], fingerprint)
-    return dc.Patch(data=data, attrs=attrs, coords=coords, dims=dims)
+    attrs = stamp(attrs, [x.attrs for x in patches], operation)
+    with operation_context():
+        return dc.Patch(data=data, attrs=attrs, coords=coords, dims=dims)
 
 
 def _joinable(coords, dim: str) -> list[np.ndarray]:
@@ -1939,10 +2009,10 @@ def concatenate_planned(
             for x in patches
         ]
         attrs = attrs.update(data_units=kept)
-    fingerprint = operation_fingerprint(
+    operation = operation_id(
         "Concatenate", {"arguments": ((dim, count),), "conflict": conflict}
     )
-    return _concatenate_group(patches, dim, attrs, fingerprint)
+    return _concatenate_group(patches, dim, attrs, operation)
 
 
 def stack_patches(
@@ -2000,12 +2070,10 @@ def stack_patches(
     stack_attrs = _maybe_add_history_str(init_patch.attrs, "stack")
     # The kept members only: one dropped for being incompatible did not
     # contribute its data, so it is not part of what this data is.
-    stack_attrs = stamp_combination(
+    stack_attrs = stamp(
         stack_attrs,
         kept,
-        operation_fingerprint(
-            "Stack", {"dim_vary": dim_vary, "check_behavior": check_behavior}
-        ),
+        operation_id("Stack", {"dim_vary": dim_vary, "check_behavior": check_behavior}),
     )
 
     # create coords array for the stack
@@ -2014,7 +2082,8 @@ def stack_patches(
         coord_to_change = stack_coords.coord_map[dim_vary]
         new_dim = coord_to_change.update_limits(min=0)
         stack_coords = stack_coords.update_coords(**{dim_vary: new_dim})
-    return dc.Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
+    with operation_context():
+        return dc.Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
 
 
 def swap_kwargs_dim_to_axis(patch, kwargs):

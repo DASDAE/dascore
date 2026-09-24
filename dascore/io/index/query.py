@@ -91,8 +91,8 @@ def _is_collection(value) -> bool:
 # attrs row per patch), so it is safe for both the projection and the count.
 _FROM = (
     "FROM patches p "
-    "JOIN sources s ON s.source_id = p.source_id "
-    "LEFT JOIN attrs a ON a.patch_id = p.patch_id "
+    "JOIN sources s ON s.source_row = p.source_row "
+    "LEFT JOIN attrs a ON a.patch_row = p.patch_row "
 )
 
 
@@ -489,8 +489,8 @@ def _add_exists_clause(
             conditions.append(f"(cd.units IS NULL OR cd.units IN ({marks}))")
             params.extend(sorted(compatible))
     where.add(
-        "p.patch_id IN (SELECT pc.patch_id FROM patch_coords pc "
-        "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+        "p.patch_row IN (SELECT pc.patch_row FROM patch_coords pc "
+        "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
         "WHERE pc.run_index = 0 AND " + " AND ".join(conditions) + ")",
         *params,
     )
@@ -596,8 +596,8 @@ def build_coord_clause(
     # A semi-join the engine can evaluate once (idx_pcoords_name) beats a
     # correlated EXISTS probed per patch row (~2.5x on a 200k-source index).
     where.add(
-        "p.patch_id IN (SELECT pc.patch_id FROM patch_coords pc "
-        "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
+        "p.patch_row IN (SELECT pc.patch_row FROM patch_coords pc "
+        "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
         "WHERE pc.run_index = 0 AND " + " AND ".join(conditions) + ")",
         *params,
     )
@@ -643,6 +643,7 @@ def _order_clause(
     direction = "ASC" if ascending else "DESC"
     params: list = []
     missing_time = ""
+    # (expression, parameters) of each sort key
     if kind == "coord" and name in _HOT_COORDS:
         column = f"p.{quote(f'{name}_min')}"
         rows = coord_meta[coord_meta["coord_name"] == name]
@@ -655,38 +656,38 @@ def _order_clause(
                 f"COALESCE({column}, (SELECT "
                 "COALESCE(cd.min_int, cd.min_float, cd.min_str) "
                 "FROM patch_coords pc JOIN coord_defs cd "
-                "ON cd.coord_def_id = pc.coord_def_id "
-                "WHERE pc.patch_id = p.patch_id AND pc.coord_name = ? "
+                "ON cd.coord_row = pc.coord_row "
+                "WHERE pc.patch_row = p.patch_row AND pc.coord_name = ? "
                 "AND pc.run_index = 0))"
             )
             params.append(name)
             missing_time = "p.time_min IS NULL, "
+        keys = [(column, params)]
     elif kind == "coord":
         rows = coord_meta[coord_meta["coord_name"] == name]
-        # a coord observed under several kinds orders by its first kind
-        value_kind = str(rows["value_kind"].iloc[0])
-        min_col = _COORD_MIN_COLUMNS[value_kind]
-        column = (
-            f"(SELECT cd.{min_col} FROM patch_coords pc "
-            "JOIN coord_defs cd ON cd.coord_def_id = pc.coord_def_id "
-            "WHERE pc.patch_id = p.patch_id AND pc.coord_name = ? "
-            "AND pc.run_index = 0)"
-        )
-        params.append(name)
+        # one key per kind the coord is stated under, so each kind's values
+        # sort among themselves in any view, kinds in coord_meta's order
+        keys = [
+            (
+                f"(SELECT cd.{_COORD_MIN_COLUMNS[value_kind]} FROM patch_coords pc "
+                "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
+                "WHERE pc.patch_row = p.patch_row AND pc.coord_name = ? "
+                "AND pc.run_index = 0)",
+                [name],
+            )
+            for value_kind in dict.fromkeys(rows["value_kind"])
+        ]
     else:
         rows = attr_meta[attr_meta["attr_name"] == name]
         columns = [quote(c) for c in rows["column_name"]]
         # an attr observed under several kinds orders by its first column
-        column = f"a.{columns[0]}"
+        keys = [(f"a.{columns[0]}", params)]
     # rows without a value sort last regardless of direction (matching
-    # the ordinal renumberer's missing-time-last rule); the null key
-    # repeats the column expression, so its parameters repeat too
-    params = [*params, *params]
-    sql = (
-        f"ORDER BY {missing_time}{column} IS NULL, "
-        f"{column} {direction}, s.ordinal, p.patch_id"
-    )
-    return sql, params
+    # the ordinal renumberer's missing-time-last rule); each null key
+    # repeats its expression, so its parameters repeat too
+    sql = ", ".join(f"{column} IS NULL, {column} {direction}" for column, _ in keys)
+    params = [x for _, key_params in keys for x in (*key_params, *key_params)]
+    return f"ORDER BY {missing_time}{sql}, s.ordinal, p.patch_row", params
 
 
 def build_sql(
@@ -695,7 +696,7 @@ def build_sql(
     coord_meta: pd.DataFrame,
     count: bool = False,
     order_by=None,
-    patch_ids=None,
+    patch_rows=None,
     ids_only: bool = False,
 ) -> tuple[str, list, list[tuple[str, re.Pattern]]]:
     """
@@ -707,7 +708,7 @@ def build_sql(
     (the cheap realization slices/windows use). coord_meta must cover
     every coordinate the queries reference (it may be empty for
     attr-only queries). ``order_by`` overrides the default ordinal
-    ordering (see `_order_clause`); ``patch_ids`` restricts rows to an
+    ordering (see `_order_clause`); ``patch_rows`` restricts rows to an
     id membership (one JSON parameter, so the SQLite bound-variable cap
     does not limit membership size).
 
@@ -719,32 +720,33 @@ def build_sql(
     """
     queries = _as_query_list(query)
     where, residuals = _build_where(queries, attr_meta, coord_meta)
-    if patch_ids is not None:
+    if patch_rows is not None:
         where.add(
-            "p.patch_id IN (SELECT value FROM json_each(?))",
-            json.dumps([int(x) for x in patch_ids]),
+            "p.patch_row IN (SELECT value FROM json_each(?))",
+            json.dumps([int(x) for x in patch_rows]),
         )
     if count:
-        # COUNT(p.patch_id) counts patches; a WHERE may reference a.<column>.
-        sql = f"SELECT COUNT(p.patch_id) AS n {_FROM}WHERE {where.sql}"
+        # COUNT(p.patch_row) counts patches; a WHERE may reference a.<column>.
+        sql = f"SELECT COUNT(p.patch_row) AS n {_FROM}WHERE {where.sql}"
         return sql, where.params, residuals
     if order_by is not None:
         order, order_params = _order_clause(order_by, attr_meta, coord_meta)
     else:
         # the ordering contract: source ordinal, then file-internal order
-        order, order_params = "ORDER BY s.ordinal, p.patch_id", []
+        order, order_params = "ORDER BY s.ordinal, p.patch_row", []
     params = [*where.params, *order_params]
     if ids_only:
-        sql = f"SELECT p.patch_id {_FROM}WHERE {where.sql} {order}"
+        sql = f"SELECT p.patch_row {_FROM}WHERE {where.sql} {order}"
         return sql, params, residuals
-    # attr columns selected explicitly: `a.*` would duplicate patch_id,
+    # attr columns selected explicitly: `a.*` would duplicate patch_row,
     # and the duplicate's spelling in the result is not worth relying on.
     attr_cols = "".join(
         f", a.{quote(col)}" for col in attr_meta["column_name"].unique()
     )
     sql = (
         "SELECT s.source_path, s.base_uri, s.source_format, s.format_version, "
-        f"s.path_attrs, p.*{attr_cols} "
+        "s.path_attrs, s.mtime_ns, s.size_bytes, "
+        f"p.*{attr_cols} "
         f"{_FROM}"
         f"WHERE {where.sql} "
         f"{order}"

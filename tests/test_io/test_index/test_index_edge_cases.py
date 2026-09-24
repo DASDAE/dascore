@@ -12,6 +12,7 @@ import datetime
 import gc
 import json
 import os
+import pathlib
 import pickle
 import re
 import sqlite3
@@ -49,6 +50,7 @@ from dascore.io.index.catalog import LiveResolver, PatchCatalog
 from dascore.io.index.indexer import (
     DBDirectoryIndexer,
     _set_mapped_index_path,
+    scan_unit_stats,
 )
 from dascore.io.index.ingest import (
     SourceRecord,
@@ -237,10 +239,10 @@ class TestIndexCoverageEdges:
         """A failure while creating the schema rolls back and re-raises."""
 
         class _BoomBackend(SQLiteIndexBackend):
-            def _execute(self, sql, params=()):
-                if "INSERT INTO meta_data" in sql:
+            def _bulk_insert(self, table, columns, rows):
+                if table == "meta_data":
                     raise RuntimeError("boom during schema init")
-                return super()._execute(sql, params)
+                return super()._bulk_insert(table, columns, rows)
 
         with pytest.raises(RuntimeError, match="boom during schema init"):
             _BoomBackend(tmp_path / "i.sqlite3")
@@ -553,7 +555,7 @@ class TestAdaptAndBackendBasics:
 
     def test_flatten_skips_absent_columns(self, backend):
         """attr_meta rows without a matching result column are skipped."""
-        df = backend._fetch_df("SELECT patch_id FROM patches LIMIT 2")
+        df = backend._fetch_df("SELECT patch_row FROM patches LIMIT 2")
         out = backend._flatten(df, backend._attr_meta())
         assert len(out) == 2
 
@@ -904,13 +906,14 @@ class TestIngestEdges:
         """
         An attr named for a structural column is skipped with a warning.
 
-        It used to be spelled with `patch_id`, which is now a field of
-        `PatchAttrs` in its own right -- a first-class id rather than a
-        user attr which happens to collide -- and is skipped silently.
-        `source_id` is still only a column, so it still warns.
+        It used to be spelled with `patch_id` (now `origin_id`), which is
+        now a field of `PatchAttrs` in its own right -- a first-class id
+        rather than a user attr which happens to collide -- and is skipped
+        silently.
+        `source_row` is still only a column, so it still warns.
         """
         summary = PatchSummary(
-            attrs={"source_id": 5, "tag": "x"},
+            attrs={"source_row": 5, "tag": "x"},
             coords={
                 "distance": {
                     "dtype": "float64",
@@ -929,9 +932,9 @@ class TestIngestEdges:
         )
         with pytest.warns(UserWarning, match="reserved attr name"):
             records = s2r([summary])
-        assert "source_id" not in records[0].patches[0].attrs
+        assert "source_row" not in records[0].patches[0].attrs
 
-    @pytest.mark.parametrize("name", ["patch_id"])
+    @pytest.mark.parametrize("name", ["origin_id", "data_id"])
     def test_the_ids_are_indexed_silently(self, name):
         """
         An id is a search term: it is how a result finds its data again.
@@ -992,7 +995,7 @@ class TestIngestEdges:
             dims = ("x",)
             len = 2
             units = None
-            fingerprint = None
+            data_id = None
             min = 0
             max = 1
             step = None
@@ -1216,7 +1219,7 @@ class TestCoordDeduplication:
         assert len(defs) < len(links)
         # das1 and das2 share an identical distance coord: one def, two links
         dist_links = links[links["coord_name"] == "distance"]
-        das_defs = dist_links["coord_def_id"].value_counts()
+        das_defs = dist_links["coord_row"].value_counts()
         assert (das_defs >= 2).any()
         back.close()
 
@@ -1232,8 +1235,8 @@ class TestCoordDeduplication:
         assert n_defs_after == n_defs + 1
         back.close()
 
-    def test_fingerprint_backed_defs(self, tmp_path):
-        """Summaries from real patches carry fingerprints into defs."""
+    def test_data_id_backed_defs(self, tmp_path):
+        """Summaries from real patches carry coordinate ids into defs."""
         summary = PatchSummary.from_patch(dc.get_example_patch())
         structured = summary.dump_structured()
         structured.update(
@@ -1245,8 +1248,8 @@ class TestCoordDeduplication:
         )
         back = get_backend(tmp_path / "fp.sqlite3")
         back.write_sources(summaries_to_records([PatchSummary(**structured)]))
-        defs = back._fetch_df("SELECT def_key, fingerprint FROM coord_defs")
-        assert defs["fingerprint"].notna().all()
+        defs = back._fetch_df("SELECT def_key, data_id FROM coord_defs")
+        assert defs["data_id"].notna().all()
         assert defs["def_key"].str.startswith("fp:").all()
         back.close()
 
@@ -1260,13 +1263,13 @@ class TestCoordDeduplication:
         summary = PatchSummary.from_patch(patch)
         record = _coord_record("distance", summary.coords["distance"])
         assert record is not None
-        assert record.coord_hash == patch.get_coord("distance").fingerprint()
+        assert record.data_id == patch.get_coord("distance").data_id
         assert record.def_key.startswith("fp:")
 
     def test_summary_key_stable_through_export(self, tmp_path):
         """A summary-keyed coord dedups against its own exported records."""
         # Without a step the coord is not range-like, so it has no
-        # fingerprint to key on and falls back to hashing its stored fields.
+        # data_id to key on and falls back to hashing its stored fields.
         summary = PatchSummary(
             attrs={"tag": "raw"},
             coords={"time": {**_time_coord("2024-01-01T00:00:00", 60), "step": None}},
@@ -1446,7 +1449,7 @@ class TestReservedAttrNames:
         [
             ("source_path", "user-path"),
             ("source_format", "attr-format"),
-            ("source_id", 42),
+            ("source_row", 42),
         ],
     )
     def test_reserved_attr_warns_and_skips(self, name, value):
@@ -1495,14 +1498,12 @@ class TestWhatARowCannotState:
         "attrs,complete",
         [
             ({"tag": "x"}, True),
-            ({"gauge": np.array([1.0, 2.0])}, False),
             ({"source_path": "user-path"}, False),
             ({"gauge": get_quantity("2 km")}, False),
             ({"counter": 2**53 + 1}, False),
             ({"empty_extra": ""}, False),
             ({"empty_extra": None}, False),
             ({"empty_extra": np.nan}, False),
-            ({"empty_extra": np.array([np.nan])}, False),
             ({"coords": "user metadata"}, False),
         ],
     )
@@ -1538,20 +1539,26 @@ class TestWhatARowCannotState:
         assert not row["_attrs_complete"]
 
     def test_source_dtypes_survive_shared_coordinate_definitions(self):
-        """Equal coordinate values share an identity while retaining source types."""
+        """Identical coordinates share a definition; a dtype is part of one."""
         base = dc.get_example_patch()
+        dtypes = (np.int32, np.float64, np.float64)
         patches = [
             base.update_coords(
                 distance=get_coord(values=np.arange(300, dtype=dtype), units="m")
             )
-            for dtype in (np.int32, np.float64)
+            for dtype in dtypes
         ]
         spool = dc.spool(patches)
         copies = (spool, spool + dc.spool([]), pickle.loads(pickle.dumps(spool)))
         for copied in copies:
             rows = copied._df
-            assert list(rows["_distance_coord_dtype"]) == ["int32", "float64"]
-            assert rows["_distance_def_key"].nunique() == 1
+            assert list(rows["_distance_coord_dtype"]) == [
+                "int32",
+                "float64",
+                "float64",
+            ]
+            keys = list(rows["_distance_def_key"])
+            assert keys[1] == keys[2] != keys[0]
 
     def test_flat_attribute_collision_requires_loading(self):
         """Queryable attrs omitted from flat rows cannot be reconstructed there."""
@@ -1626,3 +1633,34 @@ class TestTransactionIsolation:
             release.set()
         assert counts == [1]
         backend.close()
+
+
+class TestScanUnitStats:
+    """What the index records for one scan unit."""
+
+    def test_a_source_which_vanished_states_nothing(self, tmp_path):
+        """A path the filesystem will not answer for has no stats."""
+        assert scan_unit_stats(tmp_path / "gone.h5") == (None, None)
+
+    def test_a_file_states_its_own_stat(self, tmp_path):
+        """A file answers with its modification time and size."""
+        path = tmp_path / "some.txt"
+        path.write_text("hello")
+        status = path.stat()
+        assert scan_unit_stats(path) == (status.st_mtime_ns, status.st_size)
+
+    def test_a_member_lost_during_the_walk_states_nothing(self, tmp_path, monkeypatch):
+        """A directory whose member vanishes mid-signature has no stats."""
+        unit = tmp_path / "unit"
+        unit.mkdir()
+        (unit / "a.raw").write_bytes(b"1")
+        (unit / "b.raw").write_bytes(b"2")
+        real = pathlib.Path.stat
+
+        def gone(self, *args, **kwargs):
+            if self.name == "b.raw":
+                raise FileNotFoundError(self)
+            return real(self, *args, **kwargs)
+
+        monkeypatch.setattr(pathlib.Path, "stat", gone)
+        assert scan_unit_stats(unit) == (None, None)

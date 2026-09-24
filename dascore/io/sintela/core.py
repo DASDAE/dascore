@@ -4,27 +4,35 @@ Core module for reading Sintela binary format.
 
 from __future__ import annotations
 
-from typing import Literal
+from collections.abc import Iterable
 
 import numpy as np
 
 import dascore as dc
-from dascore.constants import opt_timeable_types
-from dascore.io import FiberIO, ScanPayload, make_scan_payload
-from dascore.io.utils import windows_to_slices
+from dascore.constants import snap_type, windows_type
+from dascore.io import FiberIO
+from dascore.io.core import _selected_read_attrs, _stamp_source_ids
+from dascore.io.utils import selection_windows, windows_to_slices
 from dascore.models import OptionalFiniteFloat
-from dascore.utils.io import BinaryReader, LocalBinaryReader
-from dascore.utils.misc import raise_on_extra_kwargs
+from dascore.utils.io import (
+    BinaryReader,
+    IOResourceManager,
+    LocalBinaryReader,
+    _normalize_source_patch_keys,
+)
 
-from .protobuf_utils import get_supported_family_tag, read_payload, scan_payload
+from .protobuf_utils import (
+    _get_endpoint_metadata,
+    get_supported_family_tag,
+    read_payload,
+    scan_payload,
+)
 from .utils import (
     _HEADER_SIZES,
-    DIMS,
     SYNC_WORD,
     _get_attrs_coords_header,
     _get_complete_header,
     _get_data_shape,
-    _get_patches,
     _read_base_header,
     _read_sample_range,
 )
@@ -43,56 +51,34 @@ class SintelaBinaryV3(FiberIO):
     preferred_extensions = ("raw",)
     version = "3"
 
-    def get_format(
-        self,
-        resource: BinaryReader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """
-        Return name and version string or False.
-
-        Parameters
-        ----------
-        resource
-            An open binary reader which may contain Sintela data.
-        """
+    def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
         resource.seek(0)
         base = _read_base_header(resource)
         sync = base["sync_word"]
         version = str(base["version"])
         size = base["header_size"]
         expected_size = _HEADER_SIZES.get(version, 0)
-        if sync == SYNC_WORD and version == self.version and size == expected_size:
-            return self.name, version
-        return False
+        if sync == SYNC_WORD and version == self.version and (size == expected_size):
+            return version
+        return None
 
-    def scan(self, resource: BinaryReader, **kwargs) -> list[ScanPayload]:
+    def get_metadata(
+        self, resource: BinaryReader, *, snap: snap_type = True
+    ) -> list[dc.PatchMeta]:
         """Scan a file, return summary information on the contents."""
         attrs, coords, header = _get_attrs_coords_header(resource, SintelaPatchAttrs)
         return [
-            make_scan_payload(
-                attrs=attrs,
-                coords=coords,
-                dtype=str(np.dtype(header["dtype"])),
+            dc.PatchMeta(
+                attrs=attrs, coords=coords, dtype=str(np.dtype(header["dtype"]))
             )
         ]
 
-    def read(
+    def read_array(
         self,
         resource: LocalBinaryReader,
-        time: tuple[opt_timeable_types, opt_timeable_types] | None = None,
-        distance: tuple[float | None, float | None] | None = None,
-        **kwargs,
-    ) -> dc.Spool:
-        """Read a single Sintela binary file."""
-        patch = _get_patches(
-            resource, time=time, distance=distance, attr_class=SintelaPatchAttrs
-        )
-
-        return dc.spool(patch)
-
-    def read_array(
-        self, resource: LocalBinaryReader, windows: dict[str, tuple[int, int]], **kwargs
+        windows: windows_type = (),
+        key: str = "",
     ) -> np.ndarray:
         """
         Slice the memory-mapped packet payloads.
@@ -100,10 +86,9 @@ class SintelaBinaryV3(FiberIO):
         Only the header and the requested block leave the file; the map
         skips each packet's header, so the window indexes samples.
         """
-        raise_on_extra_kwargs(kwargs, "windows")
         header = _get_complete_header(resource)
         shape = _get_data_shape(header)
-        time_slice, dist_slice = windows_to_slices(windows, DIMS, shape)
+        time_slice, dist_slice = windows_to_slices(windows, shape)
         data = _read_sample_range(resource, header, time_slice.start, time_slice.stop)
         return np.asarray(data[:, dist_slice])
 
@@ -115,29 +100,103 @@ class SintelaProtobufV1(FiberIO):
     preferred_extensions = ("pb",)
     version = "1"
 
-    def get_format(
-        self,
-        resource: BinaryReader,
-        **kwargs,
-    ) -> tuple[str, str] | Literal[False]:
-        """Return the format/version tuple if the file is Sintela protobuf."""
+    def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
+        """Return the file version when the resource matches this family."""
         position = resource.tell()
         try:
             tag = get_supported_family_tag(resource)
         finally:
             resource.seek(position)
-        return (self.name, self.version) if tag else False
+        return self.version if tag else None
 
-    def scan(self, resource: BinaryReader, **kwargs) -> list[ScanPayload]:
+    def get_metadata(
+        self, resource: BinaryReader, *, snap: snap_type = True
+    ) -> list[dc.PatchMeta]:
         """Scan a Sintela protobuf recording."""
-        return scan_payload(resource)
+        return scan_payload(resource, snap=snap)
 
-    def read(self, resource: BinaryReader, **kwargs) -> dc.Spool:
-        """Read a Sintela protobuf recording into a spool."""
-        data, coords, attrs = read_payload(resource)
-        selectors = {name: kwargs[name] for name in coords.dims if name in kwargs}
-        if selectors:
-            coords, data = coords.select(data, **selectors)
-        if not np.size(data):
+    def read_array(
+        self,
+        resource: BinaryReader,
+        windows: windows_type = (),
+        key: str = "",
+    ) -> np.ndarray:
+        """Decode the requested TS window without allocating the full recording."""
+        data, _, _ = read_payload(resource, windows=windows)
+        return data
+
+    def read(
+        self,
+        resource,
+        *,
+        snap: snap_type | None = None,
+        samples: bool = False,
+        source_patch_key: str | Iterable[str] = "",
+        **kwargs,
+    ) -> dc.Spool:
+        """Load all packet metadata while decoding, preserving fast endpoint scans.
+
+        META records can appear between data packets. Collecting them during
+        indexing would require a header walk through every recording, so this
+        reader retains its streaming assembly path instead of the shared read.
+        """
+        snap_dims = kwargs.pop("snap_dims", True)
+        snap = snap_dims if snap is None else snap
+        wanted = _normalize_source_patch_keys(source_patch_key)
+        if wanted and "0" not in wanted:
             return dc.spool([])
-        return dc.spool([dc.Patch(data=data, coords=coords, attrs=attrs)])
+        with IOResourceManager(resource) as manager:
+            stream = manager.get_resource(BinaryReader)
+            stream.seek(0)
+            selectors = {
+                name: kwargs[name]
+                for name in ("time", "distance", "band", "frequency")
+                if name in kwargs and kwargs[name] is not None
+            }
+            endpoints = _get_endpoint_metadata(stream) if selectors else None
+            if endpoints is not None:
+                metadata, meta = endpoints
+                source_coords = metadata.coords
+                selectors = {
+                    k: v for k, v in selectors.items() if k in source_coords.dims
+                }
+                _, indexers = source_coords.select_indexers(
+                    samples=samples, relative=kwargs.get("relative", False), **selectors
+                )
+                windows, residual = selection_windows(source_coords, indexers)
+                data, coords, attrs = metadata.decode_stream(stream, meta, windows)
+                coords, data = coords.isel(
+                    dict(zip(coords.dims, residual, strict=True)), array=data
+                )
+            else:
+                # BAND/FFT and unusual TS layouts already need a full decode.
+                # A preliminary metadata walk would double their sample IO.
+                data, coords, attrs = read_payload(stream, snap=snap)
+                selectors = {k: v for k, v in selectors.items() if k in coords.dims}
+                if selectors:
+                    coords, data = coords.select(
+                        data,
+                        samples=samples,
+                        relative=kwargs.get("relative", False),
+                        **selectors,
+                    )
+            if not np.size(data):
+                return dc.spool([])
+            patches = [dc.Patch(data=data, coords=coords, attrs=attrs)]
+            if (source := kwargs.get("_provenance_source")) is not None:
+                patches = _stamp_source_ids(
+                    patches, self.name, self.version, source, snap=snap
+                )
+                if selectors:
+                    # This reader never describes a loadable source, so a
+                    # trim here names what the same select would derive.
+                    attrs = _selected_read_attrs(
+                        patches[0].attrs,
+                        None,
+                        None,
+                        selectors,
+                        relative=kwargs.get("relative", False),
+                        samples=samples,
+                    )
+                    patches = [patches[0].update(attrs=attrs)]
+            return dc.spool(patches)

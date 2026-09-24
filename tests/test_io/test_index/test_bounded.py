@@ -125,7 +125,7 @@ class TestBoundedMetadata:
         queries = [
             call.args
             for call in fetch.call_args_list
-            if call.args[0].startswith("SELECT p.patch_id ")
+            if call.args[0].startswith("SELECT p.patch_row ")
         ]
         assert len(queries) == 1
         assert "LIMIT ? OFFSET ?" in queries[0][0]
@@ -150,8 +150,8 @@ class TestBoundedMetadata:
     def test_slice_semantics(self, indexed_spool, item):
         """Open, negative, reversed, strided, and empty slices retain membership."""
         catalog = indexed_spool._catalog
-        expected = catalog.ordered_ids()[item]
-        assert catalog.window(item).ordered_ids() == expected
+        expected = catalog.ordered_rows()[item]
+        assert catalog.window(item).ordered_rows() == expected
 
     @pytest.mark.parametrize(
         "item", [slice(1.5, 3), slice(None, 2.5), slice(None, None, 1.5)]
@@ -275,7 +275,9 @@ class TestSplitMembership:
     def test_one_membership_fetch(self, indexed_spool, options):
         """The number of full membership queries does not grow with batches."""
         backend = indexed_spool._catalog.backend
-        with mock.patch.object(backend, "query_ids", wraps=backend.query_ids) as query:
+        with mock.patch.object(
+            backend, "query_rows", wraps=backend.query_rows
+        ) as query:
             parts = list(indexed_spool.split(**options))
         assert query.call_count == 1
         assert [len(part) for part in parts] == [2] * 6

@@ -587,7 +587,7 @@ def spool_to_xarray(
     resolver = catalog.resolver
     assert isinstance(resolver, PlanResolver)  # a chunk derivation always is
     # plan.members and the resolver's member_rows are the same rows in the
-    # same order; the former keeps _patch_id (for the source grid), the
+    # same order; the former keeps _patch_row (for the source grid), the
     # latter is what the resolver loads from. Verify the invariant, since
     # derived_catalog does not promise it to other callers.
     member_rows = resolver.member_rows.reset_index(drop=True)
@@ -596,12 +596,13 @@ def spool_to_xarray(
     assert members[check_cols].equals(member_rows[check_cols])
     # Member grids in the plan's normalized units, so trims and envelopes
     # speak the same unit; the plan normalized the same frame identically.
-    norm = _normalize_chunk_units(working, dim).set_index("_patch_id")
+    norm = _normalize_chunk_units(working, dim).set_index("_patch_row")
     # A working row which is itself a trim (a collapsed plan's member)
     # states a trimmed envelope, so a sample window measured against it
     # is not anchored on the file's grid; such members load by value.
     if "_modified" in norm.columns:
-        modified = members["_patch_id"].map(norm["_modified"]).fillna(True).astype(bool)
+        mapped = members["_patch_row"].map(norm["_modified"])
+        modified = mapped.fillna(True).astype(bool)
     else:
         modified = pd.Series(False, index=members.index)
     members = members.assign(
@@ -639,7 +640,7 @@ def spool_to_xarray(
                 coord, window = _member_coord(
                     m[f"{dim}_min"],
                     m[f"{dim}_max"],
-                    norm.loc[m["_patch_id"]],
+                    norm.loc[m["_patch_row"]],
                     dim,
                     get_coord,
                     units=m.get(f"_{dim}_units"),
@@ -651,10 +652,11 @@ def spool_to_xarray(
                 if d == dim:
                     # The same construction chunk merges by: concatenate
                     # the member coordinates truth-preservingly, then
-                    # absorb sub-tolerance seams. A seam beyond tolerance
-                    # stays segmented here exactly as it does there.
-                    coord = concat_coords(*member_coords).simplify(
-                        GapTolerance.from_user(tolerance, dim)
+                    # absorb the seams which are sub-sample jitter. A
+                    # seam past tolerance, or a hole of whole missing
+                    # samples, stays segmented here exactly as there.
+                    coord = concat_coords(*member_coords).fuse(
+                        GapTolerance.from_user(tolerance, dim), keep_step=True
                     )
                 else:
                     coord = _envelope_coord(out, d, get_coord)

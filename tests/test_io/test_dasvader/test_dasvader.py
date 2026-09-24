@@ -21,7 +21,6 @@ from dascore.exceptions import (
     DependencyError,
     UnknownFiberFormatError,
 )
-from dascore.io.core import FiberIO
 from dascore.io.dasvader.core import DASVaderV1
 from dascore.io.dasvader.utils import (
     EXPECTED,
@@ -382,12 +381,14 @@ class TestDASVader:
         """
         io = DASVaderV1()
         patch = dc.spool(read_array_path)[0]
-        windows = {
-            dim: (1, size - 1)
-            for dim, size in zip(patch.dims, patch.shape, strict=True)
-        }
+        windows = tuple((1, size - 1) for size in patch.shape)
         out = io.read_array(read_array_path, windows)
-        expected = FiberIO.read_array(io, read_array_path, windows)
+        select = dict(zip(patch.dims, windows, strict=True))
+        expected = (
+            io.read(read_array_path, source_patch_key="")[0]
+            .select(samples=True, **select)
+            .data
+        )
         assert out.dtype == expected.dtype
         assert np.array_equal(out, expected)
         assert out.shape == tuple(size - 2 for size in patch.shape)
@@ -395,5 +396,5 @@ class TestDASVader:
     def test_read_array_whole(self, read_array_path):
         """No windows returns the array the patch holds."""
         patch = dc.spool(read_array_path)[0]
-        out = DASVaderV1().read_array(read_array_path, {})
+        out = DASVaderV1().read_array(read_array_path, ())
         assert np.array_equal(out, patch.data)

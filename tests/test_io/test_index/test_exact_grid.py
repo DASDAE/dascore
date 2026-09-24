@@ -9,7 +9,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.core.coords import CoordRange, get_coord
+from dascore.core.coords import get_coord
 from dascore.core.summary import PatchSummary
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import _coord_from_envelope
@@ -29,11 +29,17 @@ def hz_1024_patch():
 
 
 @pytest.fixture(scope="module")
-def indexed(hz_1024_patch, tmp_path_factory):
-    """A directory spool holding the 1024 Hz patch, indexed."""
+def exact_path(hz_1024_patch, tmp_path_factory):
+    """A DASDAE file holding the 1024 Hz patch."""
     path = tmp_path_factory.mktemp("exact") / "hz.h5"
     dc.write(hz_1024_patch, path, "dasdae")
-    return dc.spool(path.parent).update()
+    return path
+
+
+@pytest.fixture(scope="module")
+def indexed(exact_path):
+    """A directory spool holding the 1024 Hz patch, indexed."""
+    return dc.spool(exact_path.parent).update()
 
 
 class TestSchema:
@@ -91,7 +97,7 @@ class TestFlatRelation:
         """A row rebuilds the exact coordinate, not the rounded one."""
         row = indexed._catalog.to_df().iloc[0].to_dict()
         coord = coord_from_row(row, "time", units="s")
-        assert isinstance(coord, CoordRange)
+        assert coord.evenly_sampled
         assert coord == hz_1024_patch.get_coord("time")
         distance = coord_from_row(row, "distance", units="m")
         assert distance == hz_1024_patch.get_coord("distance")
@@ -115,12 +121,14 @@ class TestFlatRelation:
         coord = _coord_from_envelope(envelope, "time", "s")
         assert coord == hz_1024_patch.get_coord("time")
 
-    def test_select_matches_memory(self, indexed, hz_1024_patch):
+    def test_select_matches_memory(self, indexed, exact_path, hz_1024_patch):
         """A reader-hinted selection lands on the same samples as in memory.
 
         The bound sits where the whole-tick and exact grids disagree, and
-        the recorded selection (the processing id) shows the replay saw
-        the same coordinate the file holds.
+        the window the selection names shows the replay saw the same
+        coordinate the file holds: a whole-tick replay would name another
+        sample range. The in-memory patch loads from nothing, so it names
+        no window and only its samples can be compared.
         """
         window = (T0 + np.timedelta64(1, "s"), T0 + np.timedelta64(1952148000, "ns"))
         out, expected = (
@@ -128,7 +136,8 @@ class TestFlatRelation:
             hz_1024_patch.select(time=window),
         )
         assert out == expected
-        assert out.attrs.processing_id == expected.attrs.processing_id
+        direct = dc.read(exact_path)[0].select(time=window)
+        assert out.attrs.data_id == direct.attrs.data_id
 
     def test_merge_through_index(self, hz_1024_patch, tmp_path):
         """Two files merged by their rows alone keep the grid.
@@ -169,11 +178,8 @@ class TestFlatRelation:
         """A descending grid rebuilds from its maximum, which the row states."""
         row = indexed._catalog.to_df().iloc[0].to_dict()
         reversed_time = hz_1024_patch.get_coord("time")[::-1]
-        num, den, offset = (
-            reversed_time.step_numerator,
-            reversed_time.step_denominator,
-            reversed_time.origin_offset,
-        )
+        run = reversed_time.runs[0]
+        num, den, offset = run.step_num, run.step_den, run.phase
         row["time_step"] = -row["time_step"]
         row["_time_grid"] = (num, den, offset, len(reversed_time))
         assert coord_from_row(row, "time", units="s") == reversed_time
@@ -187,7 +193,7 @@ class TestFlatRelation:
         coord = coord_from_row(row, "x")
         assert coord is not None
         assert coord.dtype == np.dtype("float64")
-        assert coord.step_numerator is None
+        assert not coord.runs[0].exact
 
 
 class TestPlannedRows:

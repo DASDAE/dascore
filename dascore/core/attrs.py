@@ -2,9 +2,11 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Mapping
 from typing import Annotated, Any, Self, cast
 
+import numpy as np
 from pydantic import (
     AfterValidator,
     ConfigDict,
@@ -21,10 +23,12 @@ from dascore.constants import (
 from dascore.models import DascoreBaseModel, UnitQuantity
 from dascore.utils.misc import (
     to_str,
+    unbyte,
     validate_acquisition_key,
 )
 
 str_validator = PlainValidator(to_str)
+_ARRAYS = frozenset({np.ndarray, list, tuple})
 
 
 class PatchAttrs(DascoreBaseModel):
@@ -83,20 +87,20 @@ class PatchAttrs(DascoreBaseModel):
         default_factory=tuple,
         description="A list of processing performed on the patch.",
     )
-    patch_id: str = Field(
+    origin_id: str = Field(
         default="",
         description=(
-            "Identifies which data this is. It survives every operation "
-            "which does not change what the data is of, and changes only "
-            "when data from more than one source is combined."
+            "Identifies which stored data this came from. It survives every "
+            "operation, and changes only when data from more than one "
+            "origin is combined."
         ),
     )
-    processing_id: str = Field(
+    data_id: str = Field(
         default="",
         description=(
-            "Identifies what was done to the data. It advances on every "
-            "operation, so two patches which took the same route from the "
-            "same source carry the same value and two which did not, do not."
+            "Identifies which array this is: its origin's id until an "
+            "operation runs, then an id derived from the inputs' ids and "
+            "the operation, so equal ids mean the same route from the same data."
         ),
     )
 
@@ -111,6 +115,23 @@ class PatchAttrs(DascoreBaseModel):
             msg = "PatchAttrs no longer accepts coordinate metadata. Received: coords."
             raise ValueError(msg)
         data.pop("dims", None)
+        # What the two ids were called before they were renamed.
+        for old, new in (("patch_id", "origin_id"), ("processing_id", "data_id")):
+            if value := data.pop(old, None):
+                data.setdefault(new, value)
+        # An extra attr holds one value; an array belongs on a coordinate.
+        for name in [k for k, v in data.items() if type(v) in _ARRAYS]:
+            if name in cls.model_fields:
+                continue
+            # As objects, so a ragged list counts rather than raising and a
+            # python scalar stays one.
+            value = data.pop(name)
+            value = np.asarray(value, None if type(value) is np.ndarray else object)
+            if value.size == 1:  # how HDF5 and netCDF spell a scalar
+                data[name] = unbyte(value.reshape(-1)[0])
+            else:
+                msg = f"Skipped attr {name!r}: an array belongs on a coordinate."
+                warnings.warn(msg, UserWarning, stacklevel=2)
         return data
 
     def __getitem__(self, item):

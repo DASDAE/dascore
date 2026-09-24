@@ -55,10 +55,10 @@ from rich.text import Text
 from dascore.constants import dascore_styles, select_values_description
 from dascore.core.coords import (
     BaseCoord,
-    CoordArray,
     CoordPartial,
-    CoordRange,
     CoordSummary,
+    Labels,
+    NumericCoord,
     get_coord,
 )
 from dascore.exceptions import (
@@ -74,7 +74,6 @@ from dascore.models import (
     frozen_dict_serializer,
     frozen_dict_validator,
 )
-from dascore.utils.array_api import array_namespace
 from dascore.utils.display import (
     RichRepr,
     Row,
@@ -83,7 +82,7 @@ from dascore.utils.display import (
     render_text,
 )
 from dascore.utils.docs import compose_docstring
-from dascore.utils.indexing import get_indexers, positional_indexer
+from dascore.utils.indexing import compose_indexers, get_indexers, positional_indexer
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
     _apply_union_indexers,
@@ -187,8 +186,8 @@ def _shift_cell_edge(edge, delta):
             limits.min <= int(edge.min()) + delta
             and int(edge.max()) + delta <= limits.max
         )
-        if isinstance(edge, CoordRange) and delta == int(delta) and in_range:
-            return edge._translated(int(delta))
+        if edge.evenly_sampled and delta == int(delta) and in_range:
+            return edge._shifted(int(delta))
         values = np.asarray([value.item() + delta for value in edge.values])
         return get_coord(data=values, units=edge.units)
     return edge.update(min=edge.min() + delta)
@@ -310,7 +309,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
     def __contains__(self, key):
         return key in self.coord_map
 
-    def update(self, **kwargs) -> Self:
+    def update(self, /, **kwargs) -> Self:
         """
         Update the coordinates, return a new Coordinate Manager.
 
@@ -727,6 +726,16 @@ class CoordManager(RichRepr, DascoreBaseModel):
         """
         return self._select(kwargs, array, relative=relative, samples=samples)
 
+    def select_indexers(
+        self, *, relative: bool = False, samples: bool = False, **kwargs
+    ) -> tuple[Self, dict[str, int | slice | np.ndarray]]:
+        """Select coordinates and return positional indexers on their original grid."""
+        indexers = {}
+        coords, _ = self._select(
+            kwargs, relative=relative, samples=samples, _indexers=indexers
+        )
+        return coords, indexers
+
     def isel(
         self,
         indexers: Mapping[str, Any] | None = None,
@@ -749,8 +758,12 @@ class CoordManager(RichRepr, DascoreBaseModel):
         relative=False,
         samples=False,
         drop=False,
+        _indexers=None,
     ):
         """Resolve queries, then apply every selection through one indexing engine."""
+        original_sizes = (
+            dict(zip(self.dims, self.shape)) if _indexers is not None else {}
+        )
         if relative or samples:
             self._check_multiple_relative(queries)
         groups = (
@@ -771,6 +784,12 @@ class CoordManager(RichRepr, DascoreBaseModel):
                 dim: positional_indexer(value, len(self.coord_map[dim]))
                 for dim, value in indices.items()
             }
+            if _indexers is not None:
+                for dim, indexer in indices.items():
+                    previous = _indexers.get(dim, slice(None))
+                    _indexers[dim] = compose_indexers(
+                        original_sizes[dim], previous, indexer
+                    )
             self, array = self._apply_indexers(indices, array, selected, drop=drop)
         return self, array
 
@@ -788,11 +807,11 @@ class CoordManager(RichRepr, DascoreBaseModel):
                 continue
             key = tuple(indices.get(dim, slice(None)) for dim in old_dims)
             # Keep slice results compact, including floating grids, as select does.
-            if isinstance(coord, CoordRange) and isinstance(key[0], slice):
+            if coord.evenly_sampled and isinstance(key[0], slice):
                 new_coord = coord[key[0]]
                 if not new_coord.size:
-                    new_coord = CoordArray(
-                        values=np.empty(new_coord.shape, dtype=coord.dtype),
+                    new_coord = NumericCoord.from_labels(
+                        np.empty(new_coord.shape, dtype=coord.dtype),
                         units=coord.units,
                     )
             elif isinstance(coord, CoordPartial) and new_dims:
@@ -807,12 +826,12 @@ class CoordManager(RichRepr, DascoreBaseModel):
             else:
                 values = (
                     coord._get_index_values(key[0])
-                    if isinstance(coord, CoordRange)
+                    if coord.evenly_sampled
                     else np.asarray(_apply_union_indexers(key, coord.values))
                 )
                 new_coord = get_coord(data=values, units=coord.units)
                 if values.dtype.kind not in "US":
-                    original = CoordArray(values=values, units=coord.units)
+                    original = NumericCoord.from_labels(values, units=coord.units)
                     if new_coord._partial or _canonicalization_moved_values(
                         original, new_coord
                     ):
@@ -855,9 +874,9 @@ class CoordManager(RichRepr, DascoreBaseModel):
     def make_broadcastable_to(
         self,
         shape: tuple[int, ...],
-        array: MaybeArray,
+        *,
         drop_coords: bool = False,
-    ) -> tuple[Self, MaybeArray]:
+    ) -> Self:
         """
         Try to make coord manager broadcastable to a given shape.
 
@@ -867,8 +886,6 @@ class CoordManager(RichRepr, DascoreBaseModel):
         ----------
         shape
             A shape tuple (tuple of ints)
-        array
-            An array with the same shape as coord manager.
         drop_coords
             If True, allow dropping coordinates to broadcast coord manager
             dimensions. Otherwise, only NonCoords can change shape.
@@ -889,9 +906,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
             else:
                 msg = f"Cannot broadcast non-empty coord {name} to shape {new}."
                 raise PatchBroadcastError(msg)
-        if array is not None:
-            array = array_namespace(array).broadcast_to(array, target_shape)
-        return self.update_coords(**new_coords), array
+        return self.update_coords(**new_coords)
 
     def _check_multiple_relative(self, kwargs):
         """
@@ -1114,7 +1129,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
             return self
         return self.new(dims=dims)
 
-    def rename_coord(self, **kwargs) -> Self:
+    def rename_coord(self, /, **kwargs) -> Self:
         """
         Rename the coordinates or dimensions.
 
@@ -1471,16 +1486,16 @@ def _canonicalization_moved_values(original, out) -> bool:
     """
     Return True if canonicalizing `original` to `out` changed any value.
 
-    Collapsing an array coord to a CoordRange is meant to be a change of
+    Collapsing stored labels to a grid is meant to be a change of
     representation, but the evenness test behind it is tolerant, so a
     coordinate carrying small real irregularity (measured positions, timing
     jitter) would be replaced by an idealized ramp. Only the exact case is a
     canonicalization; the rest is data loss.
     """
-    # Only collapsing to a range can move values, and only a coord we were
-    # handed can be kept, so everything else skips the comparison. A CoordRange
-    # cannot reach here; the caller returns it before this is consulted.
-    if original is None or not isinstance(out, CoordRange):
+    # Only collapsing to a grid can move values, and only a coord we were
+    # handed can be kept, so everything else skips the comparison. An evenly
+    # sampled coord cannot reach here; the caller returns it first.
+    if original is None or not out.evenly_sampled:
         return False
     # A CoordPartial is a placeholder whose values are all NaN, so it has
     # nothing to lose; canonicalizing it is the whole point.
@@ -1496,17 +1511,21 @@ def _get_coord_dim_map(coords, dims):
 
     def _get_coord(coord):
         """Get a coordinate from various inputs."""
-        # A CoordRange is already canonical (it is the evenly-sampled
+        # One grid is already canonical (it is the evenly-sampled
         # representation), so re-parsing it via model_dump -> get_coord is pure
-        # overhead; return it directly. Other coord types are NOT short-circuited:
-        # array coords (CoordArray/CoordMonotonicArray) can be left non-canonical
-        # by slicing (e.g. an evenly spaced subset that should collapse to a
-        # CoordRange), and a fully-specified CoordPartial should canonicalize to a
-        # CoordRange -- get_coord performs that inference.
-        if isinstance(coord, CoordRange):
+        # overhead; return it directly. Other coords are NOT short-circuited:
+        # stored labels can be left non-canonical by slicing (e.g. an evenly
+        # spaced subset that should collapse to a grid), and a fully-specified
+        # CoordPartial should canonicalize to one -- get_coord infers that.
+        if isinstance(coord, BaseCoord) and coord.evenly_sampled:
             return coord
         original = coord if isinstance(coord, BaseCoord) else None
-        if hasattr(coord, "model_dump"):
+        stored = isinstance(coord, NumericCoord) and coord.runs_count == 1
+        if stored and isinstance(coord.runs[0], Labels):
+            # Rebuilding from the run would hand back the same labels, so
+            # the values are read again for the inference to see them.
+            coord = dict(data=coord.values, units=coord.units, step=coord.step)
+        elif hasattr(coord, "model_dump"):
             coord = coord.model_dump(exclude_defaults=True)
         if isinstance(coord, Mapping):  # input is a dict
             out = get_coord(**coord)

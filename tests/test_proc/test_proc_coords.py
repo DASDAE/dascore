@@ -2,15 +2,25 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
+from pydantic import ValidationError
 
 import dascore as dc
-import dascore.proc.coords
+import dascore.proc.coords as coords_module
 from dascore.compat import is_array
-from dascore.core.coords import BaseCoord
+from dascore.core.coords import (
+    BaseCoord,
+    NumericCoord,
+    _fill_layout,
+    concat_coords,
+    get_coord,
+)
 from dascore.exceptions import (
+    CoordDataError,
     CoordError,
     ParameterError,
     PatchBroadcastError,
@@ -18,6 +28,8 @@ from dascore.exceptions import (
     PatchError,
 )
 from dascore.units import get_quantity
+from dascore.utils.gaps import GapTolerance
+from dascore.warnings import DASCoreWarning
 
 
 class TestSortCoords:
@@ -94,7 +106,7 @@ class TestSnapDims:
 
     @pytest.fixture(scope="class")
     def even_time_uneven_distance_patch(self):
-        """A patch with an even (CoordRange) time and monotonic-uneven distance."""
+        """A patch with an evenly sampled time and monotonic-uneven distance."""
         time = dc.to_datetime64(np.arange(20))
         distance = np.cumsum(np.arange(1, 11) ** 1.5)
         data = np.arange(len(time) * len(distance)).reshape(len(time), len(distance))
@@ -1418,3 +1430,620 @@ class TestIntegerCellTranslation:
             np.testing.assert_array_equal(
                 out.get_array(name), patch.get_array(name).astype(float) + shift
             )
+
+
+class TestAppendDimsNames:
+    """append_dims takes dimension names positionally or as keywords."""
+
+    def test_both_spellings(self, random_patch):
+        """A bare name is a length one dimension; a keyword gives its values."""
+        assert random_patch.append_dims("end", "stop").dims[-2:] == ("end", "stop")
+        assert random_patch.append_dims(face=[1, 2]).shape[-1] == 2
+
+    def test_a_keyword_overrides_the_same_bare_name(self, random_patch):
+        """Naming a dimension twice takes the values, as it always did."""
+        assert random_patch.append_dims("end", end=[1, 2]).shape[-1] == 2
+
+    def test_a_dimension_may_be_named_for_the_varargs(self, random_patch):
+        """`empty_dims` is a dimension name like any other.
+
+        A keyword never fills a `*args` parameter, so this has always named
+        a dimension rather than filling the varargs. It stays that way only
+        while the operation holds the bare names nowhere a caller could
+        also name -- see `AppendDims.from_names`.
+        """
+        out = random_patch.append_dims(empty_dims=[1, 2])
+        assert out.dims[-1] == "empty_dims"
+        assert out.shape[-1] == 2
+
+    @pytest.mark.parametrize("name", [3, ["a", "b"], None])
+    def test_a_name_which_is_not_a_string(self, random_patch, name):
+        """Dimensions are named with strings; the message says which value.
+
+        Through the patch method, which is the way a caller reaches it.
+        Both spellings reach CPython first otherwise: a number becomes a
+        keyword ("keywords must be strings") and a list becomes a dict key
+        ("unhashable type"), neither naming the operation.
+        """
+        with pytest.raises(ParameterError, match="names dimensions with strings"):
+            random_patch.append_dims(name)
+
+    def test_names_and_values_merge(self):
+        """Bare names and keywords become one mapping, keywords last."""
+        out = coords_module.AppendDims.from_names(("end", "stop"), {"end": [1, 2]})
+        assert out.kwargs == {"end": [1, 2], "stop": 1}
+
+
+class TestProcessorConstruction:
+    """Building an operation directly names the field holding the names."""
+
+    @pytest.mark.parametrize(
+        ("cls", "field"),
+        [
+            (coords_module.SortCoords, "coords"),
+            (coords_module.SnapCoords, "coords"),
+            (coords_module.DropCoords, "coords"),
+            (coords_module.Transpose, "dims"),
+        ],
+    )
+    def test_one_bare_name_is_refused(self, cls, field):
+        """The varargs spelling is the patch method's, not the operation's."""
+        with pytest.raises(ValidationError, match=f"holds the names in `{field}`"):
+            cls("distance")
+
+    def test_a_sequence_of_names_is_how(self, random_patch):
+        """Which is what the message says to write."""
+        assert coords_module.SortCoords(coords=("distance",)).coords == ("distance",)
+        assert coords_module.Transpose(dims=("time", "distance"))(
+            random_patch
+        ).dims == ("time", "distance")
+
+
+class TestDropPrivateCoords:
+    """Dropping the coordinates whose names begin with an underscore."""
+
+    def test_private_coord_leaves_data_alone(self, random_patch):
+        """A private coordinate which is not a dimension costs no samples."""
+        patch = random_patch.update_coords(_private=(None, np.array([1, 2, 3])))
+        out = patch.drop_private_coords()
+        assert "_private" not in out.coords.coord_map
+        assert out.shape == random_patch.shape
+        assert np.array_equal(out.data, random_patch.data)
+
+    def test_private_dimension_empties_its_axis(self):
+        """A private dimension takes its axis with it, data included."""
+        patch = dc.Patch(np.arange(3), coords={"_x": np.arange(3)}, dims=("_x",))
+        out = patch.drop_private_coords()
+        assert out.dims == ()
+        assert out.data.shape == (0,)
+
+    def test_private_dimension_beside_a_public_one(self):
+        """The manager empties that axis rather than removing it, so no patch fits.
+
+        Emptying is what makes a patch of nothing but private dimensions work;
+        beside a public dimension it leaves an axis the coordinates no longer
+        describe, which no patch can hold. Pinned so the array half of this
+        operation cannot drift from what the coordinate manager does.
+        """
+        patch = dc.Patch(
+            np.ones((3, 4)),
+            coords={"_x": np.arange(3), "time": dc.to_datetime64(np.arange(4))},
+            dims=("_x", "time"),
+        )
+        with pytest.raises(CoordDataError, match=r"shape of \(0, 4\)"):
+            patch.drop_private_coords()
+
+
+class TestProcessorSeam:
+    """The coordinate operations split their metadata from their array work."""
+
+    # Operations which only re-describe the data; they bind onto metadata.
+    metadata_only = (
+        coords_module.RenameCoords,
+        coords_module.UpdateCoords,
+        coords_module.DropCoords,
+        coords_module.CoordsFromDf,
+    )
+    # Operations which also move, drop or repeat samples.
+    with_kernel = (
+        coords_module.SnapCoords,
+        coords_module.SortCoords,
+        coords_module.DropPrivateCoords,
+        coords_module.Select,
+        coords_module.Isel,
+        coords_module.Sel,
+        coords_module.Unselect,
+        coords_module.Order,
+        coords_module.Transpose,
+        coords_module.AppendDims,
+        coords_module.Squeeze,
+        coords_module.MakeBroadcastableTo,
+    )
+
+    @pytest.fixture(scope="class")
+    def described(self, random_patch_with_lat_lon):
+        """A patch which has no data to fall back on."""
+        return random_patch_with_lat_lon.drop_data()
+
+    @pytest.mark.parametrize("cls", metadata_only)
+    def test_metadata_only_has_no_kernel(self, cls):
+        """A kernel would stop the operation binding onto metadata."""
+        assert cls.kernel_for("numpy") is None
+
+    @pytest.mark.parametrize("cls", with_kernel)
+    def test_array_operations_have_a_kernel(self, cls):
+        """An operation which moves samples has to say so with a kernel."""
+        assert cls.kernel_for("numpy") is not None
+
+    # Each case says what the operation should produce without asking the
+    # operation: comparing the metadata path against the data path alone
+    # only shows the two halves agree, which a broken operation also does.
+    @pytest.mark.parametrize(
+        ("processor", "expected"),
+        [
+            (coords_module.Select(distance=(10, 200)), ("distance", "time", 191, 2000)),
+            (coords_module.Select(time=-1, samples=True), ("distance", "time", 300, 1)),
+            (coords_module.Isel(distance=3), ("time", None, 2000, None)),
+            (
+                coords_module.Isel({"time": slice(0, 100, 2)}),
+                ("distance", "time", 300, 50),
+            ),
+            (
+                coords_module.Sel(distance=slice(10, 20)),
+                ("distance", "time", 11, 2000),
+            ),
+            (
+                coords_module.Unselect(distance=(10, 200)),
+                ("distance", "time", 109, 2000),
+            ),
+            (
+                coords_module.Order(time=[0, 0, 0], samples=True),
+                ("distance", "time", 300, 3),
+            ),
+            (
+                coords_module.Transpose(dims=("time", "distance")),
+                ("time", "distance", 2000, 300),
+            ),
+            (coords_module.AppendDims(face=1), ("distance", "time", 300, 2000)),
+            (
+                coords_module.RenameCoords(distance="fragrance"),
+                ("fragrance", "time", 300, 2000),
+            ),
+            (
+                coords_module.DropCoords(coords=("latitude",)),
+                ("distance", "time", 300, 2000),
+            ),
+        ],
+    )
+    def test_metadata_needs_no_data(
+        self, processor, expected, described, random_patch_with_lat_lon
+    ):
+        """Each operation works out its result without reading the array."""
+        first, second, length, width = expected
+        out, _ = processor.get_metadata(described)
+        assert out.dims[:2] == tuple(x for x in (first, second) if x is not None)
+        assert out.shape[:2] == tuple(x for x in (length, width) if x is not None)
+        # And the metadata half agrees with the same operation over the data.
+        expected_patch = processor(random_patch_with_lat_lon)
+        assert out.coords == expected_patch.coords
+        assert out.dims == expected_patch.dims
+
+    def test_dropped_coordinate_is_gone(self, described):
+        """drop_coords is the one case a shape cannot show."""
+        out, _ = coords_module.DropCoords(coords=("latitude",)).get_metadata(described)
+        assert "latitude" not in out.coords.coord_map
+        assert "latitude" in described.coords.coord_map
+
+    def test_appended_dimension_is_there(self, described):
+        """append_dims is the other: its new dimension is the third."""
+        out, _ = coords_module.AppendDims(face=1).get_metadata(described)
+        assert out.dims == (*described.dims, "face")
+
+    @pytest.mark.parametrize(
+        "processor",
+        [
+            coords_module.SnapCoords(coords=("time",)),
+            coords_module.SnapCoords(coords=("distance",), reverse=True),
+            # Not sort_coords("time"): that coordinate is already sorted, so
+            # sorting it is the no-op this test exists to keep out.
+            coords_module.SortCoords(coords=("distance",)),
+            coords_module.SortCoords(coords=("time",), reverse=True),
+        ],
+    )
+    def test_uneven_coords_need_no_data(self, processor, wacky_dim_patch):
+        """Sorting and snapping are worked out from the coordinates alone.
+
+        On a patch whose coordinates are already sorted and evenly sampled
+        both operations are no-ops, which asserts nothing about either.
+        """
+        described = wacky_dim_patch.drop_data()
+        out, _ = processor.get_metadata(described)
+        for name in processor.coords:
+            coord = out.coords.coord_map[name]
+            assert coord.reverse_sorted if processor.reverse else coord.sorted
+            if isinstance(processor, coords_module.SnapCoords):
+                assert coord.evenly_sampled
+        # The operation really had something to do on these coordinates.
+        assert out.coords != described.coords
+        # And the metadata half agrees with the same operation over the data.
+        expected = processor(wacky_dim_patch)
+        assert out.coords == expected.coords
+        assert out.dims == expected.dims
+
+    def test_plan_reaches_the_kernel(self, described, random_patch_with_lat_lon):
+        """What select plans is the indexing its kernel replays."""
+        select = coords_module.Select(distance=(10, 200))
+        out, plan = select.get_metadata(described)
+        data = np.arange(described.size).reshape(described.shape)
+        assert select.kernel(data, **plan).shape == out.shape
+        assert out.shape == select(random_patch_with_lat_lon).shape
+
+
+def _gapped_patch(coord, dim="time", dtype=np.float64):
+    """A 3 x len(coord) patch whose data counts up along the coordinate."""
+    size = len(coord)
+    data = np.arange(3 * size).reshape(3, size).astype(dtype)
+    coords = {"distance": np.arange(3), dim: coord}
+    return dc.Patch(data=data, coords=coords, dims=("distance", dim))
+
+
+class TestFillGaps:
+    """Tests for filling holes along a dimension."""
+
+    t0 = np.datetime64("2020-01-01", "ns")
+    ms = np.timedelta64(1_000_000, "ns")
+
+    @pytest.fixture()
+    def gapped(self):
+        """Five samples, three missing, then four more, at 1 ms."""
+        first = get_coord(start=self.t0, step=self.ms, shape=(5,))
+        second = get_coord(start=self.t0 + 8 * self.ms, step=self.ms, shape=(4,))
+        return _gapped_patch(concat_coords(first, second))
+
+    @pytest.fixture()
+    def three_runs(self, gapped):
+        """The gapped patch plus two samples after an 18-sample hole."""
+        coord = gapped.get_coord("time")
+        last = get_coord(start=self.t0 + 30 * self.ms, step=self.ms, shape=(2,))
+        return _gapped_patch(concat_coords(coord, last))
+
+    def test_fills_hole(self, gapped):
+        """The hole becomes NaN and each run lands at its grid position."""
+        out = gapped.fill_gaps("time")
+        expected = get_coord(start=self.t0, step=self.ms, shape=(12,))
+        assert out.get_coord("time") == expected
+        assert np.isnan(out.data[:, 5:8]).all()
+        assert np.array_equal(out.data[:, :5], gapped.data[:, :5])
+        assert np.array_equal(out.data[:, 8:], gapped.data[:, 5:])
+
+    @pytest.mark.parametrize(
+        ("limit", "samples", "filled"),
+        [
+            (0.003, False, True),
+            (0.0029, False, False),
+            (np.timedelta64(3, "ms"), False, True),
+            (3 * get_quantity("ms"), False, True),
+            (3, True, True),
+            (2, True, False),
+            (0, True, False),
+        ],
+    )
+    def test_limit(self, gapped, limit, samples, filled):
+        """A hole is filled only when it is no wider than the limit."""
+        out = gapped.fill_gaps(time=limit, samples=samples)
+        assert out.shape[1] == (12 if filled else 9)
+
+    def test_limit_leaves_wide_holes(self, three_runs):
+        """Only the narrow hole is filled; the wide one stays a seam."""
+        out = three_runs.fill_gaps(time=0.005)
+        coord = out.get_coord("time")
+        assert coord.runs_count == 2 and out.shape == (3, 14)
+        assert coord.segments[-1] == three_runs.get_coord("time").segments[-1]
+        assert np.array_equal(out.data[:, -2:], three_runs.data[:, -2:])
+
+    @pytest.mark.parametrize(
+        ("start", "step", "limit", "filled"),
+        [
+            (0.0, 0.5, 1.5, True),
+            (0.0, 0.5, 1.4, False),
+            (0, 2, 6, True),
+            (0, 2, 5, False),
+        ],
+    )
+    def test_limit_numeric_coord(self, start, step, limit, filled):
+        """Float and integer coordinates take a limit in their own units."""
+        first = get_coord(start=start, step=step, shape=(4,))
+        second = get_coord(start=start + 7 * step, step=step, shape=(3,))
+        patch = _gapped_patch(concat_coords(first, second), dim="x")
+        assert patch.fill_gaps(x=limit).shape[1] == (10 if filled else 7)
+
+    def test_value_not_castable(self, gapped):
+        """A value which is not a number cannot fill numeric data."""
+        with pytest.raises(ParameterError, match="Cannot fill"):
+            gapped.fill_gaps("time", value="bob")
+
+    @pytest.mark.parametrize("limit", [-1, 1.5])
+    def test_bad_sample_limit(self, gapped, limit):
+        """A sample limit must be a non-negative integer."""
+        with pytest.raises(ParameterError, match="non-negative integer"):
+            gapped.fill_gaps(time=limit, samples=True)
+
+    def test_range_unchanged(self, random_patch):
+        """A patch with nothing to fill comes back as it is."""
+        assert random_patch.fill_gaps("time") is random_patch
+
+    @pytest.mark.parametrize("shift_us", [300, 490, -300, -600])
+    def test_off_grid_seam(self, shift_us):
+        """A run off the grid moves to the nearest position, by at most half a step."""
+        first = get_coord(start=self.t0, step=self.ms, shape=(5,))
+        start = self.t0 + 8 * self.ms + np.timedelta64(shift_us, "us")
+        second = get_coord(start=start, step=self.ms, shape=(4,))
+        patch = _gapped_patch(concat_coords(first, second))
+        out = patch.fill_gaps("time")
+        coord = out.get_coord("time")
+        assert coord.evenly_sampled and coord.step == self.ms
+        # every sample keeps its value, at a label at most half a step away
+        kept = ~np.isnan(out.data[0])
+        assert np.array_equal(out.data[:, kept], patch.data)
+        moved = np.abs(coord.values[kept] - patch.get_coord("time").values)
+        assert moved.max() <= self.ms // 2
+
+    def test_colliding_runs_raise(self):
+        """A run within half a step of the previous last sample cannot be placed."""
+        first = get_coord(start=self.t0, step=self.ms, shape=(5,))
+        start = self.t0 + 4 * self.ms + np.timedelta64(400, "us")
+        second = get_coord(start=start, step=self.ms, shape=(4,))
+        patch = _gapped_patch(concat_coords(first, second))
+        with pytest.raises(CoordError, match="same grid position"):
+            patch.fill_gaps("time")
+
+    def test_descending(self):
+        """A descending coordinate fills in its own direction."""
+        first = get_coord(start=10.0, step=-1.0, shape=(3,))
+        second = get_coord(start=5.0, step=-1.0, shape=(3,))
+        out = _gapped_patch(concat_coords(first, second), dim="depth")
+        out = out.fill_gaps("depth")
+        assert np.array_equal(out.get_coord("depth").values, np.arange(10.0, 2.0, -1))
+        assert np.isnan(out.data[0, 3:5]).all()
+
+    def test_float_steps_nearly_equal(self):
+        """Float runs whose steps differ in the last bits share one grid."""
+        first = get_coord(start=0.0, step=0.1, shape=(10,))
+        second = get_coord(start=1.5, step=0.1 * (1 + 1e-12), shape=(5,))
+        out = _gapped_patch(concat_coords(first, second), dim="x").fill_gaps("x")
+        assert np.allclose(out.get_coord("x").values, np.arange(20) * 0.1)
+
+    def test_different_steps_raise(self):
+        """Runs sampled at different steps cannot share a grid."""
+        first = get_coord(start=self.t0, step=self.ms, shape=(5,))
+        second = get_coord(start=self.t0 + 8 * self.ms, step=2 * self.ms, shape=(4,))
+        patch = _gapped_patch(concat_coords(first, second))
+        with pytest.raises(CoordError, match="different steps"):
+            patch.fill_gaps("time")
+
+    def test_no_step_raises(self):
+        """An array coordinate without a declared step has no grid to fill."""
+        patch = _gapped_patch(get_coord(data=np.array([0.0, 1.0, 3.5])), dim="x")
+        with pytest.raises(CoordError, match="declared step"):
+            patch.fill_gaps("x")
+
+    def test_dense_array_with_step(self):
+        """A dense array kept whole with its declared step fills too."""
+        values = np.delete(np.arange(3000), np.arange(5, 3000, 7))
+        coord = get_coord(data=values, step=1)
+        assert coord.sorted and not coord.evenly_sampled and coord.runs_count == 1
+        out = _gapped_patch(coord, dim="channel").fill_gaps("channel")
+        assert out.get_coord("channel") == get_coord(start=0, stop=3000, step=1)
+        assert np.isnan(out.data[0]).sum() == 3000 - len(values)
+        assert np.array_equal(out.data[:, values], _gapped_patch(coord, "c").data)
+
+    def test_integer_data(self, gapped):
+        """NaN cannot fill integers; an integer value can."""
+        patch = gapped.new(data=gapped.data.astype(np.int32))
+        with pytest.raises(ParameterError, match="int32"):
+            patch.fill_gaps("time")
+        with pytest.raises(ParameterError, match="int32"):
+            patch.fill_gaps("time", value=1.5)
+        out = patch.fill_gaps("time", value=0)
+        assert out.data.dtype == np.int32 and (out.data[:, 5:8] == 0).all()
+
+    def test_drops_associated_coords(self, gapped):
+        """A coordinate along the dimension is dropped, with a warning."""
+        size = gapped.shape[1]
+        patch = gapped.update_coords(quality=("time", np.arange(size)))
+        with pytest.warns(DASCoreWarning, match="Filling gaps.*quality"):
+            out = patch.fill_gaps("time")
+        assert "quality" not in out.coords.coord_map
+
+    def test_middle_axis(self, gapped):
+        """The dimension may sit on any axis."""
+        coord = gapped.get_coord("time")
+        data = np.ones((2, len(coord), 4))
+        coords = {"a": np.arange(2), "time": coord, "b": np.arange(4)}
+        patch = dc.Patch(data=data, coords=coords, dims=("a", "time", "b"))
+        out = patch.fill_gaps("time")
+        assert out.shape == (2, 12, 4)
+        assert np.isnan(out.data[:, 5:8]).all() and not np.isnan(out.data[:, 8:]).any()
+
+    @pytest.mark.parametrize(
+        "full",
+        [
+            get_coord(start=np.datetime64("2020-01-01"), step=(1, 1024), shape=(500,)),
+            get_coord(start=0, step=3, shape=(500,)),
+            get_coord(start=0.0, step=0.25, shape=(500,)),
+            get_coord(start=2000, step=-3, shape=(500,)),
+        ],
+        ids=["1024Hz", "int", "float", "descending"],
+    )
+    def test_random_holes(self, full):
+        """Random runs of a grid fill back to the grid with data in place."""
+        rng = np.random.default_rng(42)
+        for _ in range(20):
+            edges = np.sort(rng.choice(np.arange(1, 499), size=8, replace=False))
+            keep = [(0, edges[0]), *zip(edges[1::2], edges[2::2]), (edges[-1], 500)]
+            keep = [(a, b) for a, b in keep if b > a]
+            coord = concat_coords(*(full[a:b] for a, b in keep))
+            patch = _gapped_patch(coord, dim="x")
+            out = patch.fill_gaps("x")
+            span = full[keep[0][0] : keep[-1][1]]
+            got = out.get_coord("x")
+            if full.runs[0].exact:
+                assert got == span
+            else:
+                assert np.allclose(got.values, span.values)
+            index = np.concatenate([np.arange(a, b) for a, b in keep])
+            assert np.array_equal(out.data[:, index - keep[0][0]], patch.data)
+
+    def test_jitter_seam_fuses(self):
+        """A run landing on the next position fuses without a hole."""
+        first = get_coord(start=self.t0, step=self.ms, shape=(5,))
+        start = self.t0 + 5 * self.ms + np.timedelta64(400_000, "ns")
+        second = get_coord(start=start, step=self.ms, shape=(4,))
+        out = _gapped_patch(concat_coords(first, second)).fill_gaps("time")
+        assert out.get_coord("time").evenly_sampled and out.shape == (3, 9)
+        assert not np.isnan(out.data).any()
+
+    def test_float_off_grid(self):
+        """A float run 8.6 steps on lands at position 9, the nearest."""
+        first = get_coord(start=0.0, step=0.1, shape=(5,))
+        second = get_coord(start=0.86, step=0.1, shape=(3,))
+        patch = _gapped_patch(concat_coords(first, second), dim="x")
+        out = patch.fill_gaps("x")
+        assert np.allclose(out.get_coord("x").values, np.arange(12) * 0.1)
+        assert np.isnan(out.data[:, 5:9]).all()
+        assert np.array_equal(out.data[:, 9:], patch.data[:, 5:])
+
+    def test_array_segment_offset(self):
+        """An array segment inside a segmented coordinate keeps its data."""
+        array = NumericCoord.from_labels(np.array([10, 11, 13]), step=1)
+        coord = concat_coords(get_coord(start=0, step=1, shape=(4,)), array)
+        patch = _gapped_patch(coord, dim="x")
+        out = patch.fill_gaps("x")
+        assert out.get_coord("x") == get_coord(start=0, stop=14, step=1)
+        assert np.array_equal(out.data[:, [10, 11, 13]], patch.data[:, 4:])
+        assert np.isnan(out.data[:, [4, 5, 6, 7, 8, 9, 12]]).all()
+
+    def test_lone_sample_takes_step(self):
+        """A single sample without a step joins its neighbours' grid."""
+        first = get_coord(start=0.0, step=1.0, shape=(5,))
+        last = get_coord(start=10.0, step=1.0, shape=(2,))
+        coord = concat_coords(first, get_coord(data=np.array([8.0])), last)
+        out = _gapped_patch(coord, dim="x").fill_gaps("x")
+        assert out.get_coord("x") == get_coord(start=0.0, stop=12.0, step=1.0)
+
+    def test_narrow_hole_after_wide(self):
+        """A narrow hole after a wide one is measured from its own group."""
+        runs = [(0, 5), (30, 3), (35, 2)]
+        coord = concat_coords(
+            *(
+                get_coord(start=self.t0 + a * self.ms, step=self.ms, shape=(n,))
+                for a, n in runs
+            )
+        )
+        out = _gapped_patch(coord).fill_gaps(time=0.005)
+        new = out.get_coord("time")
+        assert new.runs_count == 2 and out.shape == (3, 12)
+        assert new.segments[-1] == get_coord(
+            start=self.t0 + 30 * self.ms, step=self.ms, shape=(7,)
+        )
+
+    def test_float_different_steps_raise(self):
+        """Float runs at clearly different steps cannot share a grid."""
+        first = get_coord(start=0.0, step=0.1, shape=(5,))
+        second = get_coord(start=1.0, step=0.2, shape=(3,))
+        patch = _gapped_patch(concat_coords(first, second), dim="x")
+        with pytest.raises(CoordError, match="different steps"):
+            patch.fill_gaps("x")
+
+    def test_float_step_drift_raises(self):
+        """Steps close in ratio but drifting over a long run do not share a grid."""
+        first = get_coord(start=0.0, step=1.0, shape=(5,))
+        second = get_coord(start=10.0, step=1.0000009, shape=(1000,))
+        patch = _gapped_patch(concat_coords(first, second), dim="x")
+        with pytest.raises(CoordError, match="different steps"):
+            patch.fill_gaps("x")
+
+    @pytest.mark.parametrize(
+        ("first", "second", "limit", "filled"),
+        [
+            ((10.0, -1.0), (5.0, -1.0), 2.0, True),
+            ((10.0, -1.0), (5.0, -1.0), 1.5, False),
+            ((2000, -3), (1988, -3), 3, True),
+            ((2000, -3), (1988, -3), 2, False),
+        ],
+    )
+    def test_descending_limit(self, first, second, limit, filled):
+        """A descending coordinate measures holes by the step's magnitude."""
+        coord = concat_coords(
+            get_coord(start=first[0], step=first[1], shape=(3,)),
+            get_coord(start=second[0], step=second[1], shape=(3,)),
+        )
+        patch = _gapped_patch(coord, dim="x")
+        missing = 2 if isinstance(first[0], float) else 1
+        assert patch.fill_gaps(x=limit).shape[1] == 6 + (missing if filled else 0)
+
+    def test_float_limit_equal_to_hole(self):
+        """A limit equal to a float hole's width fills it despite rounding."""
+        first = get_coord(start=0.0, step=0.1, shape=(5,))
+        second = get_coord(start=0.8, step=0.1, shape=(3,))
+        patch = _gapped_patch(concat_coords(first, second), dim="x")
+        assert patch.fill_gaps(x=0.3).shape == (3, 11)
+
+    def test_fractional_limit(self):
+        """A 1024 Hz hole of one sample fills with a limit of one step."""
+        full = get_coord(start=self.t0, step=(1, 1024), shape=(20,))
+        patch = _gapped_patch(concat_coords(full[:7], full[8:]))
+        out = patch.fill_gaps(time=1 / 1024)
+        assert out.get_coord("time") == full
+
+    def test_unsigned_coordinate(self):
+        """An unsigned run off the grid moves to the nearest position."""
+        first = get_coord(start=np.uint32(0), step=np.uint32(4), shape=(3,))
+        second = get_coord(start=np.uint32(13), step=np.uint32(4), shape=(2,))
+        out = _gapped_patch(concat_coords(first, second), dim="channel")
+        out = out.fill_gaps("channel")
+        assert np.array_equal(out.get_coord("channel").values, [0, 4, 8, 12, 16])
+        assert not np.isnan(out.data).any()
+
+    def test_float32_overflow(self, gapped):
+        """A fill value past float32's range raises; a rounded one does not."""
+        patch = gapped.new(data=gapped.data.astype(np.float32))
+        with pytest.raises(ParameterError, match="float32"):
+            patch.fill_gaps("time", value=1e40)
+        assert patch.fill_gaps("time", value=0.1).data.dtype == np.float32
+
+    def test_sample_tolerance_raises(self, gapped):
+        """A sample-count tolerance points to samples=True."""
+        with pytest.raises(ParameterError, match="samples=True"):
+            gapped.fill_gaps(time=GapTolerance.samples(4))
+
+    def test_foreign_backend(self, gapped):
+        """Data from another array backend fills as numpy data."""
+        xp = pytest.importorskip("array_api_strict")
+        patch = gapped.new(data=xp.asarray(gapped.data))
+        out = patch.fill_gaps("time")
+        assert out.shape == (3, 12) and np.isnan(np.asarray(out.data)[:, 5:8]).all()
+
+    def test_cell_edges_dropped_quietly(self, gapped):
+        """Cell edges along the dimension are dropped without a warning."""
+        labels = gapped.get_coord("time").values
+        patch = gapped.update_coords(
+            time_start=("time", labels), time_stop=("time", labels + self.ms)
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = patch.fill_gaps("time")
+        assert "time_start" not in out.coords.coord_map
+
+    def test_integer_nothing_to_fill(self, random_patch):
+        """An integer patch with nothing to fill ignores the default NaN."""
+        patch = random_patch.new(data=random_patch.data.astype(np.int32))
+        assert patch.fill_gaps("time") is patch
+
+    def test_float_array_drift_raises(self):
+        """A float array whose spacings drift off its declared step raises."""
+        values = np.arange(2_000_010) * (1 + 4e-7)
+        values = np.delete(values, [5])
+        coord = NumericCoord.from_labels(values, step=1.0)
+        with pytest.raises(CoordError, match="drift"):
+            _fill_layout(coord)

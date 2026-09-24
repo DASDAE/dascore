@@ -1,0 +1,95 @@
+---
+title: Keys, IDs and Rows
+---
+
+DASCore names things three ways, and the suffix says which.
+
+| Suffix | What it is | Meaningful | Examples |
+|---|---|---|---|
+| `_id` | An identity: 32 hex characters, hashed or random | Everywhere | `origin_id`, `data_id`, `operation_id` |
+| `_key` | A native name inside a resource, given by a reader | Within that resource | `source_patch_key`, `ArraySource.key` |
+| `_row` | A row number in a spool index | Within that database | `patch_row`, `source_row`, `coord_row` |
+
+Two indexes over the same files agree on every `_id` and `_key`, and on no `_row`. A key may be hashed into an ID; a row never is.
+
+Three names sit outside the table. Inventory `resource_id` values are UUID labels for shareable objects, and `acquisition_key` is the inventory identity which joins a patch to them. The frame columns `output_id` (chunk plans) and `group_id` (gap reports) predate the rule: they are ordinal numbers, not identities.
+
+## The three identities
+
+Every ID comes from one function, [`H`](`dascore.utils.identity.H`), which hashes the canonical JSON of a domain and a payload. Domains keep equal payloads of different kinds apart.
+
+| ID | Says | Carried by |
+|---|---|---|
+| `origin_id` | Which whole stored thing this came from | patches, `ArraySource` |
+| `data_id` | Which array this is | patches, `ArraySource`, coordinates |
+| `operation_id` | Which call: name, version and parameters | patch functions, `PatchProcessor` |
+
+```{python}
+import dascore as dc
+
+patch = dc.get_example_patch()
+filtered = patch.pass_filter(time=(1, 10))
+
+# Where the data came from survives processing; which array it is does not.
+assert filtered.attrs.origin_id == patch.attrs.origin_id
+assert filtered.attrs.data_id != patch.attrs.data_id
+# The same route gives the same array id.
+assert filtered.attrs.data_id == patch.pass_filter(time=(1, 10)).attrs.data_id
+```
+
+Development versions briefly called the two patch IDs `patch_id` and `processing_id`. Attributes read under those names are taken as `origin_id` and `data_id`; only the current names are written.
+
+## Weak and strong `data_id`
+
+A `data_id` is the best name available for an object, and there are two grades.
+
+A **strong** ID is a hash of content. Coordinates always have one: a range hashes its start, stop, step and units, never its materialized values, and an array coordinate hashes the values it holds in memory. A strong ID needs nothing beside it.
+
+A coordinate is hashed exactly as it is written — in its own units and dtype — because that is what it selects with. Ten metres and a thousand centimetres cover the same fibre, but `select(distance=(0, 5))` cuts them differently, so they are two coordinates and two IDs.
+
+```{python}
+first = dc.get_coord(start=0, stop=10, step=1, units="m")
+second = dc.get_coord(start=0, stop=10, step=1, units="m")
+assert first.data_id == second.data_id
+
+centimetres = dc.get_coord(start=0, stop=1000, step=100, units="cm")
+assert first.data_id != centimetres.data_id
+```
+
+A **weak** ID is derived without reading data, so it is only as good as what it was derived from, and it always has an `origin_id` beside it:
+
+- a stored patch takes its origin's ID, which is derived from the format, version, path, key, size and modification time unless the file stores one;
+- a window of a stored array is derived from the whole array's ID and the absolute sample windows, so slicing twice and slicing once agree; a window says nothing about a coordinate riding no dimension, so changing one is an operation rather than a window;
+- an operation's result is derived from the `data_id` of each input, in order, and the `operation_id`.
+
+Equal IDs mean the same array under either grade. Unequal IDs promise nothing: the same bytes reached two ways can carry two IDs. A strong ID only makes equal IDs more common, which is what lets identical coordinate arrays in thousands of files share one entry.
+
+An ID is never knowingly false. When an operation's parameters cannot be described faithfully (a closure, a lambda, an object of an unknown type), or an input carries no ID, the call still succeeds and its result receives a random `data_id` with a `DASCoreWarning`.
+
+### Pinning
+
+[`pin_id`](`dascore.Patch.pin_id`) replaces a weak ID with a strong one. It hashes the data (its dtype, a time's resolution included, and its mask), the dims, every coordinate's ID together with the dims it rides, and every attribute except the history and the two IDs — so pinning twice changes nothing.
+
+```{python}
+pinned = patch.pin_id()
+assert pinned.attrs.data_id != patch.attrs.data_id
+assert pinned.attrs.data_id == dc.get_example_patch().pin_id().attrs.data_id
+```
+
+It reads the whole array, about a second per gigabyte, so it is a checkpoint rather than a step in a pipeline: every ID derived afterwards builds on content verified here. Any patch may be pinned, a derived one included; re-running the recipe gives the weak ID again, which is a false distinction, never a false identity.
+
+`origin_id`, the history and the source are left alone, though narrowing a pinned patch is an operation rather than a window, since it is no longer the array its source loads. [`strong_data_id`](`dascore.utils.identity.strong_data_id`) gives the same ID without pinning, so a caller can record that the weak ID a patch carries names the same array. Object, record and extended-precision data are refused, because none has bytes which are exactly its content, and `PatchMeta`, which holds no data, has no `pin_id`.
+
+## The mutation boundary
+
+`new`, `update`, `update_attrs`, `set_dims` and the `Patch` constructor replace what a patch is made of. Inside an operation — the body of a patch function or a `PatchProcessor`, and the routes which combine patches — they add nothing, because the operation stamps its own result. Called outside one they say what happened: an array the patch was handed gets a random `data_id` (nothing names it) with `origin_id` kept, while replaced coordinates or attributes are a describable change and get a derived one. Coordinates count as replaced unless the dims, in order, and every coordinate's own ID are the ones the patch already had. A call which changes nothing, and a call which states a `data_id` of its own, keep the IDs they were given; stating any other ID in the same call does not say which array the result is. `PatchMeta` holds no data, so replacing its metadata names nothing; giving it data with `to_patch` outside an operation makes an array of its own, with a random `data_id`.
+
+## Operations
+
+`operation_id` is `H("operation", {name, version, params})`. Patches among the arguments are inputs rather than parameters, numbered in one canonical walk, so which argument a patch filled is part of the operation. An argument which restates its default is left out, so adding a defaulted parameter changes no ID; changing what a default *does* requires raising the operation's version.
+
+## Rows
+
+Row numbers exist so tables can refer to each other: `patches.source_row` points at `sources.source_row`, and `patch_coords` joins `patch_row` to `coord_row`. They are assigned at ingest, differ between databases, and never enter an ID. A spool frame carries the patch's row as the private column `_patch_row`.
+
+See [Patch identity](../tutorial/patch.qmd#patch-identity) for the user-facing rules and [Spool Index](spool_index.qmd) for the tables.

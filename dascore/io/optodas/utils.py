@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 import dascore as dc
 import dascore.core
 from dascore.core.coords import get_coord
-from dascore.io.utils import build_patches, get_exact_coord
+from dascore.io.utils import should_snap
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
@@ -53,10 +55,10 @@ def _get_coord_manager(fi, snap=True):
         else:  # and distance
             # The channels are ints so we multiply by step to get distance.
             distance = fi["/header/channels"][:] * step
-            if snap:
+            if should_snap(snap, dim):
                 coord = get_coord(data=distance, units=unit)
             else:
-                coord = get_exact_coord(distance, units=unit)
+                coord = get_coord(data=distance, units=unit, snap=False)
         coords[dim] = coord
     out = dascore.core.get_coord_manager(coords=coords, dims=dims)
     return out
@@ -86,13 +88,23 @@ def _get_opto_das_attrs(fi, snap=True) -> tuple[dict, dascore.core.CoordManager]
     return attrs, cm
 
 
-def _read_opto_das(fi, distance=None, time=None, snap=True, attr_cls=dc.PatchAttrs):
-    """Read the OptoDAS values into a patch."""
-    attrs, coords = _get_opto_das_attrs(fi, snap=snap)
-    return build_patches(
-        coords,
-        fi["data"],
-        attrs,
-        attr_cls=attr_cls,
-        selection={"time": time, "distance": distance},
-    )
+def _get_data_scale(fi) -> float | None:
+    """Return the header's storage scale, or None if the file has none."""
+    header = fi["header"]
+    return float(_scalar(header["dataScale"])) if "dataScale" in header else None
+
+
+def _get_data_dtype(fi) -> np.dtype:
+    """Return the dtype of the data once storage scaling is applied."""
+    dtype = fi["data"].dtype
+    if _get_data_scale(fi) is None:
+        return dtype
+    return np.result_type(dtype, np.float32)
+
+
+def _apply_data_scale(fi, data):
+    """Scale stored samples so they match the declared units."""
+    if (scale := _get_data_scale(fi)) is None:
+        return data
+    # Storage scaling applies to floating-point data as well as integers.
+    return data.astype(_get_data_dtype(fi), copy=False) * scale

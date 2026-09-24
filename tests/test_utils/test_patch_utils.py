@@ -20,6 +20,7 @@ from dascore.exceptions import (
     PatchAttributeError,
     PatchCoordinateError,
 )
+from dascore.models import ArrayLike
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import (
     _force_patch_merge,
@@ -260,6 +261,17 @@ class TestHistory:
         history = out.attrs["history"]
         assert len(history) == 1
         assert "add_one" in history[0]
+
+    def test_history_by_method_name(self, random_patch):
+        """`history="method_name"` records the name without the arguments."""
+
+        @dc.patch_function(history="method_name")
+        def named_only(patch, value=1):
+            """Return a new patch, so the call is recorded."""
+            return patch.update_attrs(station=str(value))
+
+        history = named_only(random_patch, value=2).attrs["history"]
+        assert history[-1] == "named_only"
 
     def test_original_history_unchanged(self, random_patch):
         """Ensure logging history only occurs on new Patch."""
@@ -602,10 +614,18 @@ class TestCheckKind:
         assert check_kind(legacy, random_patch, strict=True)
 
     def test_array_valued_kind_attr(self, random_patch):
-        """Array-valued kind attrs compare as a whole rather than raising."""
-        pa1 = random_patch.update_attrs(foo=np.array([1, 2]))
-        pa2 = random_patch.update_attrs(foo=np.array([1, 2]))
-        pa3 = random_patch.update_attrs(foo=np.array([1, 3]))
+        """A declared field may hold an array, which compares as a whole."""
+
+        class _Attrs(dc.PatchAttrs):
+            """Attrs whose kind attr is declared as an array."""
+
+            foo: ArrayLike = ()
+
+        def _kinded(values):
+            dumped = random_patch.attrs.model_dump(exclude_unset=True)
+            return random_patch.new(attrs=_Attrs(**{**dumped, "foo": values}))
+
+        pa1, pa2, pa3 = (_kinded(x) for x in ([1, 2], [1, 2], [1, 3]))
         with config_context(patch_kind_attrs=("foo",)):
             assert check_kind(pa1, pa2)
             assert not check_kind(pa1, pa3, check_behavior="ignore")
@@ -1238,8 +1258,8 @@ class TestStackPatches:
         # check that distance coordinates are the same
         dist_coords = stack_patch.coords.coord_map["distance"]
         orig_dist_coords = spool[0].coords.coord_map["distance"]
-        assert dist_coords.start == orig_dist_coords.start
-        assert dist_coords.stop == orig_dist_coords.stop
+        assert dist_coords.min() == orig_dist_coords.min()
+        assert dist_coords.max() == orig_dist_coords.max()
         assert dist_coords.step == orig_dist_coords.step
         assert dist_coords.units == orig_dist_coords.units
 

@@ -20,7 +20,7 @@ import pytest
 
 import dascore as dc
 from dascore.core.spool import Spool
-from dascore.examples import spool_to_directory
+from dascore.examples import inventory_patch_pair, spool_to_directory
 from dascore.io.index import ingest
 from dascore.io.index.schema import INDEX_VERSION
 from dascore.utils.paths import parse_hive_path_attrs
@@ -269,6 +269,43 @@ class TestPatchStamping:
         finally:
             spool.indexer.close()
 
+    @pytest.mark.parametrize("dim, size", [("time", 2), ("distance", 100)])
+    def test_trimmed_chunk(self, hive_spool, dim, size):
+        """Read hints must not filter file attrs using the path's overrides."""
+        original = hive_spool[0]
+        chunked = hive_spool.select(tag="raw").chunk(**{dim: size})
+        contents = chunked.get_contents()
+        assert len(chunked) > 1
+        for index, row in contents.iterrows():
+            patch = chunked[index]
+            expected = original.select(**{dim: (row[f"{dim}_min"], row[f"{dim}_max"])})
+            assert patch.coords == expected.coords
+            np.testing.assert_array_equal(patch.data, expected.data)
+            assert patch.attrs.tag == "raw"
+            assert patch.attrs.network == "XX"
+            assert patch.attrs.station == "A"
+
+    def test_inventory_selection(self, tmp_path):
+        """Inventory channel selection loads a path-identified acquisition."""
+        patch, inventory = inventory_patch_pair()
+        sub = tmp_path / f"acquisition_key={patch.attrs.acquisition_key}"
+        sub.mkdir()
+        patch.update_attrs(acquisition_key="").io.write(sub / "patch.h5", "dasdae")
+        spool = dc.spool(tmp_path).update(progress=None).attach_inventory(inventory)
+        try:
+            selected = spool.select(zone="north")
+            expected = (
+                dc.spool(patch).attach_inventory(inventory).select(zone="north")[0]
+            )
+            assert len(selected) == 1
+            actual = selected[0]
+            assert actual.shape != patch.shape
+            assert actual.coords == expected.coords
+            np.testing.assert_array_equal(actual.data, expected.data)
+            assert actual.attrs.acquisition_key == patch.attrs.acquisition_key
+        finally:
+            spool.indexer.close()
+
     def test_union(self, hive_spool, tmp_path_factory):
         """Union spools keep hive attrs in contents and patches."""
         other_dir = tmp_path_factory.mktemp("other") / "station=Z"
@@ -294,7 +331,7 @@ class TestMoveDetection:
 
     def test_directory_rename_no_rescan(self, hive_spool, hive_dir, scan_calls):
         """Renaming a partition directory never re-reads file contents."""
-        ids_before = list(hive_spool._df["_patch_id"])
+        ids_before = list(hive_spool._df["_patch_row"])
         (hive_dir / "network=XX" / "station=A").rename(
             hive_dir / "network=XX" / "station=Q"
         )
@@ -304,7 +341,7 @@ class TestMoveDetection:
         assert df["station"].iloc[0] == "Q"
         assert df["source_path"].iloc[0].startswith("network=XX/station=Q/")
         # patch/coord rows survived: same patch identity
-        assert list(updated._df["_patch_id"]) == ids_before
+        assert list(updated._df["_patch_row"]) == ids_before
         assert updated[0].attrs.station == "Q"
 
     def test_added_key_is_a_pure_move(self, hive_spool, hive_dir, scan_calls):

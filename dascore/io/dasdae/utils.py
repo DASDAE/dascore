@@ -9,29 +9,28 @@ from __future__ import annotations
 import json
 
 import numpy as np
-import pandas as pd
 
 import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import (
     _EXACT_GRID_FIELDS,
-    CoordMonotonicArray,
-    CoordRange,
-    CoordSegmented,
+    Grid,
+    NumericCoord,
     _scalar_dtype,
     get_coord,
 )
+from dascore.core.source import ArraySource
 from dascore.core.summary import normalize_source_patch_key
-from dascore.exceptions import PatchAttributeError
-from dascore.io.core import STORED_PATCH_ID, make_scan_payload
+from dascore.exceptions import InvalidFiberFileError, PatchAttributeError
+from dascore.io.core import STORED_ORIGIN_ID
 from dascore.io.dasdae._compat import (
     NOT_DECODED,
     decode_pytables_attr,
     strip_legacy_coord_fields,
     translate_legacy_attrs,
 )
-from dascore.io.utils import get_exact_coord, resolve_keyed_source
+from dascore.io.utils import resolve_keyed_source, should_snap
 from dascore.models.registry import get_model_tag, resolve_tagged_model
 from dascore.utils.array import (
     convert_bytes_to_strings,
@@ -39,11 +38,8 @@ from dascore.utils.array import (
     is_string_byte_serializable_array,
 )
 from dascore.utils.misc import unbyte
-from dascore.utils.pd import filter_df
 from dascore.utils.time import to_int
 
-# Keys not counted as true kwargs for determining if patch is filtered/selected.
-_KWARG_NON_KEYS = {"file_version", "file_format", "path", "source_patch_key"}
 _ATTR_PREFIX = "_attrs_"
 _ATTR_TYPE_PREFIX = "_attr_type_"
 # Root marker set on files whose patch attr namespace holds only true attrs.
@@ -107,12 +103,13 @@ def _save_attrs_and_dims(patch, patch_group):
     """Save the attributes."""
     # copy attrs to group attrs
     # TODO will need to test if objects are serializable
-    attr_dict = patch.attrs.model_dump(exclude_unset=True)
+    # Persist concrete defaults too: the defining attrs subclass may not be
+    # installed when the archive is reopened.
+    attr_dict = patch.attrs.model_dump()
     # The ids are written. An older DASCore reads them as ordinary attrs
     # and then refuses to merge two patches whose ids differ -- which is
     # every pair -- so chunking such a spool there needs conflict="drop".
-    # Worth it: a stored id is the only one which survives a move, and
-    # everything else DASCore does with a patch already folds them.
+    # Worth it: a stored id is the only one which survives a move.
     for i, v in attr_dict.items():
         encoded, attr_type = _encode_attr_value(i, v)
         patch_group.attrs[f"{_ATTR_PREFIX}{i}"] = encoded
@@ -174,45 +171,74 @@ def _extended_float(coord) -> bool:
 # Version 2 nodes state the coordinate class they hold, as every DASCore
 # model states its class in a document (see dascore.models.registry).
 _OBJECT_TYPE = "object_type"
+# The shapes a version 2 node can hold, as the format has always named them.
+_RANGE = "CoordRange"
+_SEGMENTED = "CoordSegmented"
 
 
 def _save_coord(coord, name, group, compact: bool):
     """
     Save one coordinate node.
 
-    Version 2 (``compact``) states each node's class: a range is written
-    as its description and a segmented coordinate as a group of its
-    segments, so a long acquisition costs a few numbers and no label is
-    re-inferred on read; any other class, and version 1 throughout,
-    writes its values.
+    Version 2 (``compact``) names each node's shape: a grid is written as
+    its description and a coordinate with holes as a group of its runs, so
+    a long acquisition costs a few numbers and no label is re-inferred on
+    read; anything else, and version 1 throughout, writes its values.
+
+    The names are the format's own -- they are what files written before
+    the coordinate classes were unified state -- not a class's tag.
     """
-    if compact and isinstance(coord, CoordSegmented):
+    grid = coord.runs[0] if getattr(coord, "evenly_sampled", False) else None
+    object_type = get_model_tag(type(coord))
+    if compact and getattr(coord, "runs_count", 1) > 1:
+        object_type = _SEGMENTED
         node = group.create_group(name)
         for i, segment in enumerate(coord.segments):
             _save_coord(segment, str(i), node, compact)
-    elif compact and isinstance(coord, CoordRange) and not _extended_float(coord):
+    elif compact and grid is not None and not _extended_float(coord):
+        object_type = _RANGE
         node = group.create_dataset(name, shape=(0,), dtype="int64")
+        origin, num, den, phase = grid.canonical()[:4]
         node.attrs["dtype"] = str(coord.dtype)
-        node.attrs["start"] = _raw(coord.start, coord.dtype)
         node.attrs["length"] = len(coord)
-        if coord._exact:
-            for field in _EXACT_GRID_FIELDS:
-                node.attrs[field] = getattr(coord, field)
+        if grid.exact:
+            terms = (num, den, phase)
+            node.attrs["start"] = _raw(
+                np.asarray(origin).astype(coord.dtype)[()], coord.dtype
+            )
+            for field, value in zip(_EXACT_GRID_FIELDS, terms, strict=True):
+                node.attrs[field] = value
         else:
-            node.attrs["stop"] = _raw(coord.stop, coord.dtype)
-            node.attrs["step"] = _raw(coord.step, coord.dtype)
+            node.attrs["start"] = _raw(origin, coord.dtype)
+            node.attrs["stop"] = _raw(origin + num * grid.count, coord.dtype)
+            node.attrs["step"] = _raw(num, coord.dtype)
+            if grid.parent_count is not None:
+                # Keep the ordinary range fields meaningful to older readers.
+                node.attrs["start"] = _raw(grid.labels(0, coord.dtype)[()], coord.dtype)
+                node.attrs["stop"] = _raw(
+                    grid.labels(grid.count, coord.dtype)[()], coord.dtype
+                )
+                node.attrs["step"] = _raw(coord.step, coord.dtype)
+                node.attrs["grid_origin"] = _raw(grid.origin, coord.dtype)
+                node.attrs["grid_step"] = _raw(grid.step_num, coord.dtype)
+                node.attrs["grid_step_is_numpy"] = isinstance(
+                    grid.step_num, np.floating
+                )
+                node.attrs["parent_count"] = grid.parent_count
+                node.attrs["k0"] = grid.k0
+                node.attrs["stride"] = grid.stride
     else:
         node = _save_array(coord.values, name, group)
         # Version 1 reads an array's step as a range to rebuild from its
         # first value, so only a range may state one there; version 2
         # reads it as the grid an array declares.
         step = coord.step
-        if step is not None and (compact or isinstance(coord, CoordRange)):
+        if step is not None and (compact or grid is not None):
             is_td = np.issubdtype(np.asarray(step).dtype, np.timedelta64)
             node.attrs["step"] = to_int(step) if is_td else step
             node.attrs["step_is_timedelta64"] = is_td
     if compact:
-        node.attrs[_OBJECT_TYPE] = get_model_tag(type(coord))
+        node.attrs[_OBJECT_TYPE] = object_type
     if coord.units is not None:
         node.attrs["units"] = str(coord.units)
 
@@ -228,7 +254,8 @@ def _save_coords(patch, patch_group, compact: bool):
 def _check_storable(patch):
     """Refuse a patch version 1 cannot store, before touching the file."""
     for name, coord in patch.coords.coord_map.items():
-        if getattr(coord, "step_denominator", None) not in (None, 1):
+        grid = coord.runs[0] if getattr(coord, "evenly_sampled", False) else None
+        if grid is not None and grid.exact and grid.step_den != 1:
             # Version 1 stores one whole-tick step and rebuilds the range
             # from it, which would quietly move every label off its grid.
             msg = (
@@ -322,20 +349,36 @@ def _read_range(node, units):
     start = np.asarray(attrs["start"]).astype(dtype)[()]
     shape = (int(attrs["length"]),)
     if "step_numerator" in attrs:
-        grid = {name: int(attrs[name]) for name in _EXACT_GRID_FIELDS}
-        return CoordRange(start=start, shape=shape, units=units, **grid)
-    stop = np.asarray(attrs["stop"]).astype(dtype)[()]
-    step = attrs["step"]
+        num, den, phase = (int(attrs[name]) for name in _EXACT_GRID_FIELDS)
+        return get_coord(
+            start=start,
+            shape=shape,
+            units=units,
+            step_numerator=num,
+            step_denominator=den,
+            origin_offset=phase,
+        )
+    if "parent_count" in attrs:
+        start = np.asarray(attrs["grid_origin"]).astype(dtype)[()]
+    step = attrs.get("grid_step", attrs["step"])
     if dtype.kind in "mM":
         step = np.asarray(step).astype(_scalar_dtype(dtype, "step"))[()]
-    elif isinstance(step, np.floating):
+    elif isinstance(step, np.floating) and not attrs.get("grid_step_is_numpy", False):
         # as the python float it was written from: a numpy scalar would
         # promote a float32 range to float64
         step = step.item()
-    coord = CoordRange(start=start, stop=stop, step=step, units=units)
     # The stored fields are a validated range's own; deriving the count
     # from them again can move a float32 endpoint by a sample.
-    return coord._construct(dict(start=start, stop=stop, step=step, shape=shape))
+    run = Grid(
+        start,
+        step,
+        0,
+        shape[0],
+        k0=int(attrs.get("k0", 0)),
+        parent_count=attrs.get("parent_count"),
+        stride=int(attrs.get("stride", 1)),
+    )
+    return get_coord(runs=(run,), dtype=dtype, units=units)
 
 
 def _node_step(attrs):
@@ -354,7 +397,15 @@ def _read_segment(node):
     # the segments were settled exactly when written, so an array
     # segment is read as the values it holds, never snapped to a range
     values = _read_array(node)
-    return CoordMonotonicArray(values=values, units=units, step=_node_step(node.attrs))
+    # the runs were settled when written, so a stored one is read back as
+    # the labels it holds rather than split at its own spacings again
+    return NumericCoord.from_labels(values, units=units, step=_node_step(node.attrs))
+
+
+def _shared_step(segments):
+    """The one step every segment sits on, or None."""
+    steps = {x.step for x in segments}
+    return steps.pop() if len(steps) == 1 else None
 
 
 def _read_coord(node, name, attrs2, snap):
@@ -362,10 +413,18 @@ def _read_coord(node, name, attrs2, snap):
     node_attrs = node.attrs
     units = node_attrs.get("units", None) or attrs2.get(f"{name}_units", None)
     object_type = unbyte(node_attrs.get(_OBJECT_TYPE, ""))
-    if object_type == "CoordSegmented":
+    if object_type == _SEGMENTED:
         segments = [_read_segment(node[str(i)]) for i in range(len(node))]
-        return CoordSegmented(segments=segments, units=units)
-    if object_type == "CoordRange" and "start" in node_attrs:
+        # The runs are rebuilt in the order they were written, which is the
+        # order the data sits in; concat_coords would sort them by value.
+        return NumericCoord(
+            runs=tuple(run for x in segments for run in x.runs),
+            sources={k: v for x in segments for k, v in x.sources.items()},
+            dtype=np.result_type(*[x.dtype for x in segments]),
+            units=units or segments[0].units,
+            step=_shared_step(segments),
+        )
+    if object_type == _RANGE and "start" in node_attrs:
         return _read_range(node, units)
     # any other class, a range too wide to describe, and every version 1
     # node hold their values
@@ -378,7 +437,7 @@ def _read_coord(node, name, attrs2, snap):
             return get_coord(data=array, units=units, step=node_step)
         if snap or np.ndim(array) != 1:
             return get_coord(data=array, units=units)
-        return get_exact_coord(array, units=units)
+        return get_coord(data=array, units=units, snap=False)
     step = node_step if node_step is not None else attrs2.get(f"{name}_step", None)
     shape = tuple(node.shape)
     can_use_range_fast_path = (
@@ -398,7 +457,7 @@ def _read_coord(node, name, attrs2, snap):
         # only for a single sample, where the values cannot.
         single = np.ndim(array) == 1 and len(array) == 1
         return get_coord(data=array, units=units, step=step if single else None)
-    return get_exact_coord(array, units=units)
+    return get_coord(data=array, units=units, snap=False)
 
 
 def _get_coords(patch_group, dims, attrs2, snap=True):
@@ -410,7 +469,7 @@ def _get_coords(patch_group, dims, attrs2, snap=True):
         if not name.startswith("_coord_"):
             continue
         name = name.removeprefix("_coord_")
-        coord_dict[name] = _read_coord(node, name, attrs2, snap)
+        coord_dict[name] = _read_coord(node, name, attrs2, should_snap(snap, name))
     # associates coordinates with dimensions
     group_attrs = patch_group.attrs
     c_dims = [x for x in group_attrs if x.startswith("_cdims")]
@@ -450,90 +509,8 @@ def _get_patch_group(h5, source_patch_key=""):
     return resolve_keyed_source(waveforms, key, where=str(h5.filename))
 
 
-def _matches_attr_filters(attrs, kwargs):
-    """Return True if attrs match any applicable attr filters in kwargs."""
-
-    def is_nullish(value):
-        """Return True if value is a scalar nullish query value."""
-        is_null = pd.isnull(value)
-        return bool(is_null) if not hasattr(is_null, "__len__") else False
-
-    query = {
-        x: y
-        for x, y in kwargs.items()
-        if x not in _KWARG_NON_KEYS and not x.startswith("_") and not is_nullish(y)
-    }
-    if not query:
-        return True
-    attr_df = pd.DataFrame([attrs])
-    return bool(filter_df(attr_df, ignore_bad_kwargs=True, **query)[0])
-
-
-def _get_patch_attrs(patch_group, legacy: bool) -> dict:
-    """Get the true patch attrs, cleaning legacy coord metadata if needed."""
-    attrs = _get_attrs(patch_group, legacy=legacy)
-    if legacy:
-        dims = _get_dims(patch_group)
-        coord_names = _get_group_coord_names(patch_group)
-        attrs["dims"] = ",".join(dims)
-        attrs = translate_legacy_attrs(attrs, coord_names)
-        attrs = strip_legacy_coord_fields(attrs, coord_names)
-    return attrs
-
-
-def _read_patch(patch_group, legacy: bool = True, **kwargs):
-    """Read a patch group, return Patch."""
-    attrs = _get_attrs(patch_group, legacy=legacy)
-    dims = _get_dims(patch_group)
-    if legacy:
-        attrs["dims"] = ",".join(dims)
-        attrs = translate_legacy_attrs(attrs, _get_group_coord_names(patch_group))
-        coords = _get_coords(patch_group, dims, attrs)
-        attr_info = strip_legacy_coord_fields(attrs, set(coords.coord_map) | set(dims))
-    else:
-        coords = _get_coords(patch_group, dims, {})
-        attr_info = attrs
-    attr_info["_source_patch_key"] = patch_group.name.rsplit("/", maxsplit=1)[-1]
-    # An id the file carries is the one which survived the round trip;
-    # `read` prefers it to the one it would derive from the path.
-    if stored := attr_info.get("patch_id", ""):
-        attr_info[STORED_PATCH_ID] = stored
-    attrs = _get_attrs_class(patch_group).from_dict(attr_info)
-    # Note, previously this was wrapped with try, except (Index, KeyError)
-    # and the data = np.array(None) in except block. Not sure, why, removed
-    # try except.
-    if not _kwargs_empty(kwargs):
-        # We need to remove any coordinates from kwargs that are multi-dim
-        # coords.
-        cmap = coords.dim_map
-        sub_kwargs = {
-            i: v
-            for i, v in kwargs.items()
-            if v is not None
-            and i not in _KWARG_NON_KEYS
-            and ((i not in cmap) or (len(cmap[i]) == 1))
-        }
-        if sub_kwargs:
-            coords, data = coords.select(array=patch_group["data"], **sub_kwargs)
-        else:
-            data = patch_group["data"][()]
-    else:
-        data = patch_group["data"][()]
-    return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
-
-
-def _kwargs_empty(kwargs) -> bool:
-    """Determine if the keyword arguments are *effectively* empty."""
-    # These keys get passed in from some spools, so don't count them.
-    # We also only count keys whose values are not None.
-    out = {
-        i: v for i, v in kwargs.items() if v is not None and i not in _KWARG_NON_KEYS
-    }
-    return not bool(out)
-
-
-def _get_scan_payload_from_group(group, legacy: bool = True, snap=True):
-    """Build one structured scan payload from a stored DASDAE patch group."""
+def _get_metadata_from_group(group, legacy: bool = True, snap=True):
+    """Build one data-less patch from a stored DASDAE patch group."""
     attrs = group.attrs
     out = {}
     # First recover the flat attr payload saved on the patch group itself.
@@ -558,19 +535,21 @@ def _get_scan_payload_from_group(group, legacy: bool = True, snap=True):
     # Marked here as it is when the patch is read: an id the file carries
     # is the one which survived the round trip, and `scan` prefers it to
     # the one it would derive only when a format says it stored one.
-    if stored := attr_info.get("patch_id", ""):
-        attr_info[STORED_PATCH_ID] = stored
+    if stored := attr_info.get("origin_id", ""):
+        attr_info[STORED_ORIGIN_ID] = stored
     # Data shape/dtype come from the stored data node without loading the array.
     data_node = group.get("data")
-    dtype = str(data_node.dtype) if data_node is not None else ""
-    shape = tuple(data_node.shape) if data_node is not None else ()
-    return make_scan_payload(
+    if data_node is None or coords.shape != data_node.shape:
+        raise InvalidFiberFileError(
+            f"{group.name} data and coordinate shapes disagree."
+        )
+    dtype = str(data_node.dtype)
+    return dc.PatchMeta(
         attrs=_get_attrs_class(group).from_dict(attr_info),
         coords=coords,
         dims=dims,
-        shape=shape,
         dtype=dtype,
-        source_patch_key=group.name.rsplit("/", maxsplit=1)[-1],
+        source=ArraySource(key=group.name.rsplit("/", maxsplit=1)[-1]),
     )
 
 
@@ -669,7 +648,7 @@ def _get_contents_from_patch_groups_generic(h5, snap=True):
         return []
     file_legacy = _is_legacy_file(h5)
     return [
-        _get_scan_payload_from_group(
+        _get_metadata_from_group(
             group,
             legacy=_is_legacy_group(group, file_legacy),
             snap=snap,

@@ -19,6 +19,7 @@ from __future__ import annotations
 import abc
 import json
 import operator
+import os
 import re
 import sys
 import warnings
@@ -38,7 +39,7 @@ from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import MissingPatchError
 from dascore.io.core import _resolve_read_spool
 from dascore.io.index.backend import get_backend
-from dascore.io.index.indexer import DBDirectoryIndexer
+from dascore.io.index.indexer import DBDirectoryIndexer, scan_unit_stats
 from dascore.io.index.ingest import SourceRecord, patch_record, summaries_to_records
 from dascore.io.index.query import (
     CoordExists,
@@ -52,11 +53,10 @@ from dascore.utils.misc import (
     express_range_for_coord,
     is_range,
 )
-from dascore.utils.patch import record_call
-from dascore.utils.paths import is_memory_uri
+from dascore.utils.paths import coerce_to_local_path, is_memory_uri
 
 # Directory archives present in per-patch time order (source ordinals
-# alone cannot interleave multi-patch files); ordinal and patch id stay
+# alone cannot interleave multi-patch files); ordinal and patch row stay
 # the deterministic tiebreak inside the ORDER BY.
 _DIRECTORY_ORDER = ("coord", "time", True)
 
@@ -111,22 +111,18 @@ def _row_source_patch_key(row: Mapping) -> str:
     return normalize_source_patch_key(row.get("source_patch_key"))
 
 
-def apply_exact_residuals(patch: dc.Patch, residuals, hinted=()) -> dc.Patch:
+def apply_exact_residuals(patch: dc.Patch, residuals) -> dc.Patch:
     """
     Apply a view's exact residual selections to a loaded patch.
 
     Shared by catalog row resolution and plan-member loading so the
     two-stage select contract has exactly one implementation.
 
-    ``hinted`` runs parallel to ``residuals``, naming per residual the
-    coordinates whose bounds went to the reader and cut this row. Such a
-    selection leaves its `select` nothing to do, and a call which
-    changes nothing records nothing, so it is recorded here instead and
-    a trimmed patch does not state the untrimmed patch's id. A shorter
-    sequence records nothing for the residuals past its end, which is
-    what a caller reading no hints out of the row wants.
+    A bound pushed into the reader leaves its `select` here nothing to
+    do, and nothing to record: the reader already gave the loaded patch
+    the id of the window it read.
     """
-    for index, (coords, samples, relative) in enumerate(residuals):
+    for coords, samples, relative in residuals:
         coord_map = patch.coords.coord_map
         usable = {
             k: express_range_for_coord(v, coord_map[k])
@@ -139,11 +135,7 @@ def apply_exact_residuals(patch: dc.Patch, residuals, hinted=()) -> dc.Patch:
                 called["samples"] = True
             if relative:
                 called["relative"] = True
-            out = patch.select(**called)
-            cut = hinted[index] if index < len(hinted) else ()
-            if out is patch and any(name in cut for name in usable):
-                out = record_call(out, patch, dc.Patch.select, (), called)
-            patch = out
+            patch = patch.select(**called)
     return patch
 
 
@@ -203,6 +195,22 @@ class LiveResolver(PatchResolver):
             raise MissingPatchError(msg) from None
 
 
+def resolve_against_root(path: str | Path, root: Path | None) -> str | Path:
+    """
+    Resolve a stored source path against a catalog root.
+
+    Relative paths resolve against the root; URIs and absolute paths
+    pass through untouched. This is the one rule for turning a stored
+    spelling into one a reader can open. `os.path.isabs` rather than
+    `Path.is_absolute`: it answers the same question per platform
+    without building a path object for every row of an index.
+    """
+    text = str(path)
+    if root is None or "://" in text or os.path.isabs(text):
+        return path
+    return root / path
+
+
 def _patch_path(patch: dc.Patch) -> str:
     """Return the synthetic source path identifying a live patch."""
     return f"memorypatch://{patch._instance_id}"
@@ -232,16 +240,8 @@ class FileResolver(PatchResolver):
         return dc.read(**kwargs, **id_kwargs, **trim)
 
     def resolve_path(self, path: str | Path) -> str | Path:
-        """
-        Resolve a row's source path against the catalog root.
-
-        Relative paths resolve against the root; URIs and absolute paths
-        pass through untouched.
-        """
-        if self._root is not None and "://" not in str(path):
-            if not Path(path).is_absolute():
-                return self._root / path
-        return path
+        """Resolve a row's source path against the catalog root."""
+        return resolve_against_root(path, self._root)
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
         """Read the patch, passing range trims down as read hints."""
@@ -321,7 +321,7 @@ def _live_records(registry: Mapping[str, dc.Patch]):
     """Build source records for live patches keyed by their identity."""
     records = []
     for path, patch in registry.items():
-        # patch.summary is a cached_property: reuse fingerprints and
+        # patch.summary is a cached_property: reuse ids and
         # summaries the patch already computed instead of rebuilding.
         record = patch_record(patch.summary)
         records.append(
@@ -374,14 +374,21 @@ def _merge_source_records(existing, new):
     Merge two partial records for the same source.
 
     Union members export only their selected patches, so two members can
-    hold disjoint (or overlapping) slices of one multi-patch file. The
-    merged record unions the patch lists by source_patch_key: a patch
-    keeps its first-occurrence position, a duplicate identity takes the
-    last occurrence's metadata (dict-merge semantics, matching the
-    ordering contract), and the source-level metadata (mtime, size)
-    comes from the last record.
+    hold disjoint (or overlapping) slices of one multi-patch file. Two
+    records which measured the same source alike describe one revision of
+    it, so their patch lists union by source_patch_key: a patch keeps its
+    first-occurrence position, a duplicate identity takes the last
+    occurrence's metadata (dict-merge semantics, matching the ordering
+    contract). Two records which measured it differently describe two
+    revisions, and the later one replaces the earlier whole -- rows and
+    stats together, since a row of one revision beside the stats of
+    another says a file is what it is not. Records of two revisions
+    which measured alike cannot arise: the measurement is what makes a
+    revision one.
     """
     if existing is None:
+        return new
+    if (existing.mtime_ns, existing.size_bytes) != (new.mtime_ns, new.size_bytes):
         return new
     patches = {p.source_patch_key: p for p in existing.patches}
     patches.update({p.source_patch_key: p for p in new.patches})
@@ -468,8 +475,8 @@ def _residual_cuts_unmarked_rows(residuals) -> bool:
 
 
 # What a row states about the whole of its source patch, which a trim
-# leaves untrue. `patch_id` is deliberately not here; see below.
-_FORGOTTEN_ON_TRIM = ("_data_size", "processing_id")
+# leaves untrue. `origin_id` is deliberately not here; see below.
+_FORGOTTEN_ON_TRIM = ("_data_size", "data_id")
 
 
 def _forget_what_a_trim_invalidates(df: pd.DataFrame, residuals=()) -> pd.DataFrame:
@@ -478,16 +485,15 @@ def _forget_what_a_trim_invalidates(df: pd.DataFrame, residuals=()) -> pd.DataFr
 
     A trimmed row describes fewer samples than its source patch holds,
     and how many is known only once the trim is applied, so it states no
-    size rather than the source's. `processing_id` goes the same way for
-    the same reason: a trim is an operation, the patch which comes back
-    carries the id that operation leads to, and the stored one names the
-    patch on disk. Attribute queries still match the stored source id;
+    size rather than the source's. `data_id` goes the same way: the
+    loaded patch names the window it read, and the stored id names the
+    whole patch on disk. Attribute queries still match the stored source id;
     clearing this presented value does not change SQL candidacy.
 
-    `patch_id` stays. A trim does not change which data this is, so the
-    stored id is still the loaded patch's and selecting on it still
-    finds the row -- the two ids parting company here is what having two
-    of them is for.
+    `origin_id` stays. A trim does not change which stored data this came
+    from, so the stored id is still the loaded patch's and selecting on it
+    still finds the row -- the two ids parting company here is what having
+    two of them is for.
 
     A row a selection leaves whole keeps both: only what a selection
     actually cuts loses what the cut invalidates.
@@ -724,10 +730,10 @@ class PatchCatalog:
         for catalog in catalogs:
             # a view transfers only the rows it presents; a root transfers
             # all of them, which lets the whole table move as-is
-            patch_ids = (
-                catalog.to_df()["_patch_id"].tolist() if catalog.is_view else None
+            patch_rows = (
+                catalog.to_df()["_patch_row"].tolist() if catalog.is_view else None
             )
-            records = catalog.backend.export_records(patch_ids=patch_ids)
+            records = catalog.backend.export_records(patch_rows=patch_rows)
             root = getattr(catalog.resolver, "_root", None)
             if root is not None:
                 records = [_absolutize_record(x, root) for x in records]
@@ -756,10 +762,22 @@ class PatchCatalog:
         in-memory backend; patches load through the file resolver on
         demand. There is no syncer — a changed file needs a new catalog.
         """
+        # Measured the way the directory indexer measures it, so a row
+        # from either carries the same promise about its source. The scan
+        # is bracketed because a reading taken only afterwards can belong
+        # to the file which replaced the one the rows describe; a source
+        # which moved between the two, or which the filesystem will not
+        # answer for, is left unmeasured, which refuses the recipe rather
+        # than promising a window of it.
+        source = coerce_to_local_path(path)
+        mtime, size = scan_unit_stats(source)
         summaries = dc.scan(
             path, file_format=file_format, file_version=file_version, progress=None
         )
-        records = summaries_to_records(summaries)
+        mtimes, sizes = {}, {}
+        if mtime is not None and scan_unit_stats(source) == (mtime, size):
+            mtimes[str(source)], sizes[str(source)] = mtime, size
+        records = summaries_to_records(summaries, mtimes_ns=mtimes, sizes_bytes=sizes)
         out = cls(resolver=FileResolver())
         out.backend.write_sources(records)
         out._invalidate()
@@ -844,9 +862,9 @@ class PatchCatalog:
             and not isinstance(self.resolver, LiveResolver)
         )
         if needs_records:
-            patch_ids = self._ids if rebuilt_membership else None
+            patch_rows = self._ids if rebuilt_membership else None
             state["_rebuild_records"] = tuple(
-                self._backend.export_records(patch_ids=patch_ids)
+                self._backend.export_records(patch_rows=patch_rows)
             )
         # A view shares the root's resolver, but must not drag the whole
         # live registry across the wire: keep only the entries its rows
@@ -926,13 +944,13 @@ class PatchCatalog:
         if self._default_order is None:
             return False
         by_ordinal = tuple(
-            self.backend.query_ids(
+            self.backend.query_rows(
                 list(self._queries) or None,
                 order_by=None,
-                patch_ids=self._ids,
+                patch_rows=self._ids,
             )
         )
-        return tuple(self.ordered_ids()) != by_ordinal
+        return tuple(self.ordered_rows()) != by_ordinal
 
     @property
     def residuals(self) -> tuple[tuple[dict, bool, bool], ...]:
@@ -950,7 +968,7 @@ class PatchCatalog:
         """The directory syncer keeping this catalog current, or None."""
         return self._syncer
 
-    def ordered_ids(self) -> tuple[int, ...]:
+    def ordered_rows(self) -> tuple[int, ...]:
         """
         The view's patch ids in presentation order (ids only, cheap).
 
@@ -960,18 +978,20 @@ class PatchCatalog:
         the membership unfiltered would ignore them entirely, and letting
         SQL order the result would undo the arrangement.
         """
+        if self._has_relative_selection():
+            return tuple(self.to_df()["_patch_row"])
         if self._ids is not None and self._order is None:
             if not self._queries:
                 return self._ids
             matched = set(
-                self.backend.query_ids(list(self._queries), patch_ids=self._ids)
+                self.backend.query_rows(list(self._queries), patch_rows=self._ids)
             )
             return tuple(x for x in self._ids if x in matched)
         return tuple(
-            self.backend.query_ids(
+            self.backend.query_rows(
                 list(self._queries) or None,
                 order_by=self._effective_order,
-                patch_ids=self._ids,
+                patch_rows=self._ids,
             )
         )
 
@@ -985,6 +1005,8 @@ class PatchCatalog:
         start = 0 if item.start is None else operator.index(item.start)
         stop = None if item.stop is None else operator.index(item.stop)
         step = 1 if item.step is None else operator.index(item.step)
+        if ids is None and self._has_relative_selection():
+            ids = self.ordered_rows()
         if (
             ids is None
             and (self._ids is None or self._order is not None)
@@ -993,15 +1015,15 @@ class PatchCatalog:
             and (stop is None or stop >= 0)
         ):
             start, stop, _ = item.indices(sys.maxsize)
-            ids = self.backend.query_ids(
+            ids = self.backend.query_rows(
                 list(self._queries) or None,
                 order_by=self._effective_order,
-                patch_ids=self._ids,
+                patch_rows=self._ids,
                 limit=None if item.stop is None else max(0, stop - start),
                 offset=start,
             )
         else:
-            ids = (self.ordered_ids() if ids is None else ids)[item]
+            ids = (self.ordered_rows() if ids is None else ids)[item]
         return self._view(self._queries, self._residuals, ids=tuple(ids))
 
     def restrict(self, indices, ids=None) -> PatchCatalog:
@@ -1013,7 +1035,7 @@ class PatchCatalog:
         one row, matching the spool's set semantics). ``ids`` is this
         view's presented ids, for a caller which has just read them.
         """
-        ids = np.asarray(self.ordered_ids() if ids is None else ids)
+        ids = np.asarray(self.ordered_rows() if ids is None else ids)
         picked = ids[np.asarray(indices)]
         deduped = tuple(dict.fromkeys(int(x) for x in picked))
         return self._view(self._queries, self._residuals, ids=deduped)
@@ -1137,7 +1159,7 @@ class PatchCatalog:
         """
         The spool-facing flat patch-row relation under the selection.
 
-        Unique-per-patch structural columns (patch_id and friends) are
+        Unique-per-patch structural columns (patch_row and friends) are
         hidden or renamed private so chunk merge-compatibility (which
         compares all non-private columns) is not spuriously blocked.
         """
@@ -1147,13 +1169,13 @@ class PatchCatalog:
             df = self.backend.query(
                 list(self._queries) or None,
                 order_by=self._effective_order,
-                patch_ids=self._ids,
+                patch_rows=self._ids,
             )
             if self._ids is not None and self._order is None:
                 # id membership presents in its own (window/array) order
                 position = {pid: i for i, pid in enumerate(self._ids)}
                 df = df.sort_values(
-                    "_patch_id", key=lambda s: s.map(position), kind="stable"
+                    "_patch_row", key=lambda s: s.map(position), kind="stable"
                 ).reset_index(drop=True)
             # The early ones are already done; see SPOOL_EARLY_RENAMES.
             df = df.rename(columns=dict(SPOOL_LATE_RENAMES))
@@ -1174,10 +1196,16 @@ class PatchCatalog:
             )
 
             df = patch_local_adjusted_envelopes(df, self._residuals, drop_empty=False)
-            df = _forget_what_a_trim_invalidates(df, self._residuals)
+            df = _forget_what_a_trim_invalidates(df, self._residuals).reset_index(
+                drop=True
+            )
             # Re-read the revision: bootstrapping the backend above can
             # bump it, and this frame reflects the state after that.
             return self._df_cache.set(df, self._revision.value)
+
+    def _has_relative_selection(self) -> bool:
+        """Whether patch-relative bounds can remove SQL candidate rows."""
+        return any(relative and not samples for _, samples, relative in self._residuals)
 
     def _requires_full_relation(self) -> bool:
         """Keep exact positional filtering for regex and complex coordinate trims."""
@@ -1205,19 +1233,20 @@ class PatchCatalog:
                 return len(live)
             if (df := self._df_cache.get(self._revision.value)) is not None:
                 return len(df)
-            # A range residual *after* a patch-local one can drop rows SQL
-            # candidacy kept: the patch-local pass empties the envelope of a
-            # patch its window misses, and the range pass then finds nothing
-            # left to overlap. Only that order forces us to build the frame.
+            # Relative windows and absolute windows after a sample trim can
+            # remove rows SQL kept. Count their projected relation so length
+            # agrees with positional access, contents, and iteration.
             patch_local = False
             for _, samples, relative in self._residuals:
+                if relative and not samples:
+                    return len(self.to_df())
                 if samples or relative:
                     patch_local = True
                 elif patch_local:
                     return len(self.to_df())
             # Otherwise SQL candidacy already accounts for every drop, so the
             # count matches len(to_df()) without projecting or pivoting.
-            return self.backend.count(list(self._queries) or None, patch_ids=self._ids)
+            return self.backend.count(list(self._queries) or None, patch_rows=self._ids)
 
     def get_patch(self, index: int) -> dc.Patch:
         """Materialize one patch: resolve, then exact two-stage trim."""
@@ -1277,11 +1306,10 @@ class PatchCatalog:
         coords = self._source_coords(row, set(trim_hint))
         if self._residuals:
             # A coordinate the row cannot describe cannot say what a
-            # reader did to it; it replays on the patch, which records it.
+            # reader did to it; it replays on the loaded patch instead.
             trim_hint = {k: v for k, v in trim_hint.items() if k in coords}
         patch = self.resolver.resolve(row, **trim_hint)
-        hinted = self._hinted_per_residual(coords)
-        return apply_exact_residuals(patch, self._residuals, hinted=hinted)
+        return apply_exact_residuals(patch, self._residuals)
 
     def _source_coords(self, row: Mapping, names: set[str]) -> dict:
         """Rebuild each hintable coordinate as the row had it untrimmed."""
@@ -1296,34 +1324,6 @@ class PatchCatalog:
             if coord is not None:
                 out[name] = coord
         return out
-
-    def _hinted_per_residual(self, coords: dict):
-        """
-        Per residual, which of its coordinates the reader already cut.
-
-        ``coords`` holds each hinted coordinate as it was before
-        anything trimmed it, so the selections are replayed on the
-        coordinate itself: whichever shortens it is one the reader
-        carried out, which the `select` on the patch will not record.
-        Running the coordinate's own `select` is what makes this agree
-        with the patch about every edge -- a bound between two samples,
-        a coordinate stored at lower precision -- rather than being a
-        second implementation of the same arithmetic.
-        """
-        if not self._residuals:
-            return ()
-        out = []
-        for selection, samples, relative in self._residuals:
-            names = set()
-            for name, value in selection.items():
-                if (coord := coords.get(name)) is None:
-                    continue
-                new, _ = coord.select(value, samples=samples, relative=relative)
-                if len(new) != len(coord):
-                    names.add(name)
-                coords[name] = new
-            out.append(names)
-        return tuple(out)
 
     def __iter__(self):
         """

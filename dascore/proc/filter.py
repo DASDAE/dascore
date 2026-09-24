@@ -143,6 +143,10 @@ def pass_filter(
     >>> bp_m = pa.pass_filter(distance=(50 * m, 100 * m))
     >>> # filter wavelengths less than 200 ft
     >>> lp_ft = pa.pass_filter(distance=(200 * ft, ...))
+
+    Keywords
+    --------
+    filtering, bandpass, low pass, high pass, frequency
     """
     dim, (arg1, arg2) = check_filter_kwargs(kwargs)
     axis = patch.get_axis(dim)
@@ -196,17 +200,14 @@ class SobelFilter(PatchProcessor):
     mode: Any = "reflect"
     cval: Any = 0.0
 
-    def plan(self, patch, out):
+    def get_metadata(self, meta):
         """Return the axis to filter along, once the arguments are checked."""
         dim, _, _ = _check_sobel_args(self.dim, self.mode, self.cval)
-        return {"axis": patch.get_axis(dim)}
+        return meta, {"axis": meta.get_axis(dim)}
 
     def numpy_kernel(self, data, *, axis):
         """Return the Sobel gradient along the axis."""
         return ndimage.sobel(data, axis=axis, mode=self.mode, cval=self.cval)
-
-
-sobel_filter = SobelFilter.patch_function
 
 
 @patch_function()
@@ -260,6 +261,10 @@ def median_filter(
 
     Values specified with kwargs should be small, for example < 10 samples
     otherwise this can take a long time and use lots of memory.
+
+    Keywords
+    --------
+    filtering, median, smoothing, denoising
     """
     size = resolve_window(patch, kwargs, samples=samples, min_samples=0).full_size()
     new_data = nd_median_filter(patch.data, size=size, mode=mode, cval=cval)

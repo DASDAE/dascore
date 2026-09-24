@@ -50,6 +50,8 @@ _TIMING_PASSES = 3
 _BOOKKEEPING = {"_timing", "_dascore_path"}
 
 
+# The fingerprint fields which say what a call answered, as opposed to what
+# it claims the answer is.
 # Cover dtypes and edge values missed by example calls; this caught the
 # float32 promotion regression in #921.
 def make_arrays() -> dict:
@@ -143,20 +145,33 @@ MATRIX_CALLS = {
 }
 
 
-def _matrix_patch(array):
+def _pinned(patch, label: str):
+    """
+    Give a patch built here the same ids in every process.
+
+    A patch built in memory gets random ids, and every id downstream is
+    derived from them, so without this no two runs could be compared.
+    """
+    names = [x for x in ("origin_id", "data_id") if x in dc.PatchAttrs.model_fields]
+    fixed = hashlib.blake2b(label.encode(), digest_size=16).hexdigest()
+    return patch.update_attrs(**dict.fromkeys(names, fixed))
+
+
+def _matrix_patch(array, label: str = "matrix"):
     """Wrap an array in a patch with evenly sampled coordinates."""
     coords = {
         "distance": np.arange(array.shape[0]) * 1.0,
         "time": np.arange(array.shape[1]) * 0.5,
     }
-    return dc.Patch(data=array, coords=coords, dims=("distance", "time"))
+    patch = dc.Patch(data=array, coords=coords, dims=("distance", "time"))
+    return _pinned(patch, label)
 
 
 def get_matrix_calls() -> dict:
     """Return every call in MATRIX_CALLS against every array."""
     out = {}
     for array_name, array in make_arrays().items():
-        patch = _matrix_patch(array)
+        patch = _matrix_patch(array, array_name)
         out[f"matrix/{array_name}/input"] = lambda patch=patch: patch
         for call_name, call in MATRIX_CALLS.items():
             key = f"matrix/{array_name}/{call_name}"
@@ -166,14 +181,18 @@ def get_matrix_calls() -> dict:
 
 def get_calls() -> dict:
     """Return the calls to compare, keyed by a name for the report."""
-    patch = dc.get_example_patch()
-    null_patch = dc.get_example_patch("patch_with_null")
+    patch = _pinned(dc.get_example_patch(), "example")
+    null_patch = _pinned(dc.get_example_patch("patch_with_null"), "null")
     dft_patch = patch.dft("time")
-    int_patch = patch.new(data=(np.asarray(patch.data) * 10).astype("int32"))
-    bool_patch = patch.new(data=np.asarray(patch.data) > 0.5)
+    # Pinned like the patches above: replacing a patch's data outside an
+    # operation gives the result a random id, which no two runs share.
+    int_patch = _pinned(
+        patch.new(data=(np.asarray(patch.data) * 10).astype("int32")), "int"
+    )
+    bool_patch = _pinned(patch.new(data=np.asarray(patch.data) > 0.5), "bool")
     collapsed = patch.mean("time")
     # Use a nonempty data_type so failures to clear it are visible.
-    typed = patch.update_attrs(data_type="strain_rate")
+    typed = _pinned(patch.update_attrs(data_type="strain_rate"), "typed")
     with_nondim = patch.update_coords(
         quality=("distance", np.arange(patch.shape[0], dtype="float64"))
     )
@@ -300,9 +319,14 @@ def digest(patch) -> dict:
     coords = {
         name: _hash(patch.get_array(name)) for name in sorted(patch.coords.coord_map)
     }
-    # Ignore argument reprs in history and process-specific patch IDs. Keep
-    # processing_id to detect changes in operation stamping and fingerprints.
-    attrs = patch.attrs.model_dump(exclude={"history", "coords", "patch_id"})
+    # Ignore argument reprs in history. The ids are a field of their own,
+    # so `--fields` can leave them out against a ref which names or derives
+    # them differently; the leaves are pinned, so a changed id otherwise
+    # means a changed operation id or stamping rule.
+    names = {"origin_id", "data_id", "patch_id", "processing_id"}
+    dumped = patch.attrs.model_dump(exclude={"history", "coords"})
+    ids = {i: str(v) for i, v in sorted(dumped.items()) if i in names}
+    attrs = {i: v for i, v in dumped.items() if i not in names}
     return {
         "dtype": str(data.dtype),
         "shape": list(data.shape),
@@ -310,6 +334,7 @@ def digest(patch) -> dict:
         "data_hash": _hash(data),
         "coords": coords,
         "attrs": {i: str(v) for i, v in sorted(attrs.items())},
+        "ids": ids,
     }
 
 
@@ -389,20 +414,63 @@ def compare(before: dict, after: dict, fields: set[str] | None = None) -> list[s
     report = []
     # Timing is not a result; it is reported on its own and never compared.
     names = (set(before) | set(after)) - _BOOKKEEPING
+    # An input which changed explains every result downstream of it, so no
+    # operation is told to raise its version.
+    picked = _picked(before, after, names, fields)
+    changed_input = any(
+        _is_leaf(before.get(name)) and old != new for name, (old, new) in picked.items()
+    )
     for name in sorted(names):
-        old, new = _select(before.get(name), fields), _select(after.get(name), fields)
+        old, new = picked[name]
         if old == new:
             continue
         if old is None or new is None:
             report.append(f"{name}: only in {'after' if old is None else 'before'}")
             continue
-        fields = sorted(i for i in set(old) | set(new) if old.get(i) != new.get(i))
-        report.append(f"{name}: differs in {fields}")
+        # Not `fields`, which says what is being compared for every call.
+        differing = sorted(i for i in set(old) | set(new) if old.get(i) != new.get(i))
+        gated = not changed_input and _same_recipe(before[name], after[name])
+        report.append(_headline(name, differing, gated))
         report.extend(
             f"    {i}\n      before: {old.get(i)}\n      after:  {new.get(i)}"
-            for i in fields
+            for i in differing
         )
     return report
+
+
+def _headline(name: str, differing: list[str], gated: bool) -> str:
+    """Return the line which says what kind of difference this is."""
+    if gated and set(differing) - {"ids"}:
+        gate = "same data_id, different content — raise the operation's version"
+        return f"{name}: {gate}"
+    return f"{name}: differs in {differing}"
+
+
+def _picked(before: dict, after: dict, names, fields) -> dict:
+    """Return each call's two fingerprints, narrowed to what is compared."""
+    return {
+        name: (_select(before.get(name), fields), _select(after.get(name), fields))
+        for name in names
+    }
+
+
+def _same_recipe(old: dict, new: dict) -> bool:
+    """
+    Whether both sides are the result of one derivation.
+
+    Whole fingerprints: `--fields` may leave the ids out of what is
+    compared. A leaf's id is assigned rather than derived, so it names no
+    recipe.
+    """
+    ids = [(x.get("ids") or {}).get("data_id") for x in (old, new)]
+    derived = not _is_leaf(old) and not _is_leaf(new)
+    return bool(ids[0]) and ids[0] == ids[1] and derived
+
+
+def _is_leaf(fingerprint: dict | None) -> bool:
+    """Whether a fingerprint is of an input, whose two ids are one."""
+    ids = (fingerprint or {}).get("ids") or {}
+    return bool(ids.get("data_id")) and ids.get("data_id") == ids.get("origin_id")
 
 
 def _select(fingerprint: dict | None, fields: set[str] | None) -> dict | None:

@@ -11,7 +11,6 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.io.core import FiberIO
 from dascore.io.terra15.core import Terra15FormatterV4
 from dascore.io.terra15.utils import _get_version_data_node
 from dascore.utils.time import to_datetime64
@@ -50,8 +49,8 @@ class TestTerra15:
 
     def test_scan_payload_snap_contract(self, terra15_v6_path):
         """Raw payload scans should expose exact stored times on request."""
-        snapped = dc.scan_payloads(terra15_v6_path, snap=True)[0]["coords"]
-        exact = dc.scan_payloads(terra15_v6_path, snap=False)[0]["coords"]
+        snapped = dc.scan_payloads(terra15_v6_path, snap=True)[0].coords
+        exact = dc.scan_payloads(terra15_v6_path, snap=False)[0].coords
         read_exact = dc.read(terra15_v6_path, snap_dims=False)[0].coords
 
         assert snapped.get_coord("time").evenly_sampled
@@ -127,7 +126,7 @@ class TestTerra15Unfinished:
                 patch.coords.get_array("time"), to_datetime64(times[:count])
             )
         payload = dc.scan_payloads(path, snap=snap)[0]
-        assert payload["coords"] == patch.coords
+        assert payload.coords == patch.coords
 
 
 class TestReadArray:
@@ -139,11 +138,11 @@ class TestReadArray:
         """Zero-filled rows past the last written sample are never returned."""
         io = Terra15FormatterV4()
         patch = dc.spool(terra15_das_unfinished_path)[0]
-        out = io.read_array(terra15_das_unfinished_path, {})
+        out = io.read_array(terra15_das_unfinished_path, ())
         assert out.shape == patch.shape
         assert np.array_equal(out, patch.data)
         # a window past the end clips to the written samples, as select does
-        tail = io.read_array(terra15_das_unfinished_path, {"time": (-3, 10**6)})
+        tail = io.read_array(terra15_das_unfinished_path, ((-3, 10**6),))
         assert np.array_equal(tail, patch.data[-3:])
 
     @pytest.mark.parametrize("snap", [False, True])
@@ -151,12 +150,14 @@ class TestReadArray:
         """Array windows count from the written tail with either snap setting."""
         io = Terra15FormatterV4()
         path = terra15_das_unfinished_path
-        out = io.read_array(path, {"time": (-5, None)}, snap_dims=snap)
-        expected = FiberIO.read_array(io, path, {"time": (-5, None)}, snap_dims=snap)
+        out = io.read_array(path, ((-5, None),))
+        expected = (
+            io.read(path, snap=snap)[0].select(samples=True, time=(-5, None)).data
+        )
         assert np.array_equal(out, expected)
         assert len(out) == 5
-        raw = io.read_array(path, {}, snap_dims=snap)
-        np.testing.assert_array_equal(raw, io.read_array(path, {}))
+        raw = io.read_array(path, ())
+        np.testing.assert_array_equal(raw, io.read_array(path, ()))
         np.testing.assert_array_equal(out, raw[-5:])
 
     def test_both_spellings_agree(self, terra15_das_unfinished_path):
@@ -170,7 +171,7 @@ class TestReadArray:
             {"snap": True, "snap_dims": False},
         ):
             np.testing.assert_array_equal(
-                io.read_array(path, {}, **options), snapped.data
+                io.read(path, **options)[0].data, snapped.data
             )
         both = io.read(path, snap=True, snap_dims=False)[0]
         assert both.coords == snapped.coords
@@ -186,6 +187,6 @@ class TestReadArray:
             return original(self, index)
 
         monkeypatch.setattr(h5py.Dataset, "__getitem__", spy)
-        Terra15FormatterV4().read_array(terra15_v6_path, {"time": (2, 6)})
+        Terra15FormatterV4().read_array(terra15_v6_path, ((2, 6),))
         assert len(seen) == 1
         assert seen[0][0] == slice(2, 6)

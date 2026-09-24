@@ -1062,9 +1062,9 @@ class TestApplyArrayFunc:
         assert result.coords.equals(random_patch.coords)  # coords should be preserved
         # attrs should be preserved, apart from the id which says an array
         # function was applied -- which is the one thing that did happen.
-        managed = ("processing_id",)
+        managed = ("data_id",)
         assert result.attrs.drop(*managed) == random_patch.attrs.drop(*managed)
-        assert result.attrs.processing_id != random_patch.attrs.processing_id
+        assert result.attrs.data_id != random_patch.attrs.data_id
         assert np.allclose(result.data, np.abs(random_patch.data) + 1)
 
 
@@ -1073,7 +1073,7 @@ class TestHashArray:
 
     @pytest.mark.parametrize("dtype", ["int64", "float64", "datetime64[ns]"])
     def test_empty_multidimensional(self, dtype):
-        """Empty arrays have stable fingerprints that still distinguish shapes."""
+        """Empty arrays have stable hashes that still distinguish shapes."""
         first = np.empty((2, 0), dtype=dtype)
         assert hash_array(first) == hash_array(first.copy())
         assert hash_array(first) != hash_array(np.empty((0, 2), dtype=dtype))
@@ -1143,7 +1143,11 @@ class TestArrayBackends:
     def int_numpy_patch(self, random_patch) -> dc.Patch:
         """A patch with integer data."""
         data = (np.asarray(random_patch.data) * 10).astype("int32")
-        return random_patch.new(data=data)
+        # The two routes under comparison start from one patch, so the
+        # random id `new(data=...)` gives this one is stated here instead.
+        out = random_patch.new(data=data)
+        ids = ("origin_id", "data_id")
+        return out.update_attrs(**{x: getattr(random_patch.attrs, x) for x in ids})
 
     @pytest.fixture(scope="class")
     def int_patch(self, int_numpy_patch, to_backend) -> dc.Patch:
@@ -1157,7 +1161,12 @@ class TestArrayBackends:
         assert array.dtype == expected.data.dtype
         assert out.dims == expected.dims
         assert out.coords == expected.coords
-        assert out.attrs == expected.attrs
+        # Not which data each is: the two sides are built by separate
+        # `new(data=...)` calls, and each such array is its own.
+        ids = {"origin_id", "data_id"}
+        assert out.attrs.model_dump(exclude=ids) == expected.attrs.model_dump(
+            exclude=ids
+        )
         assert np.allclose(array, np.asarray(expected.data), equal_nan=True)
 
     def test_scalar_operand(self, backend_patch, random_patch, backend):

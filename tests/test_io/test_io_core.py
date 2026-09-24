@@ -9,7 +9,7 @@ import shutil
 import threading
 from fractions import Fraction
 from pathlib import Path
-from typing import ClassVar, Literal, TypeVar
+from typing import ClassVar, TypeVar
 
 import h5py
 import numpy as np
@@ -20,8 +20,8 @@ from upath import UPath
 
 import dascore as dc
 from dascore.config import config_context
-from dascore.core.coordmanager import get_coord_manager
-from dascore.core.coords import CoordSegmented, get_coord
+from dascore.core.coords import get_coord
+from dascore.core.source import ArraySource
 from dascore.exceptions import (
     DependencyError,
     InvalidFiberIOError,
@@ -34,8 +34,9 @@ from dascore.exceptions import (
 )
 from dascore.io import core as io_core
 from dascore.io.core import (
-    STORED_PATCH_ID,
+    STORED_ORIGIN_ID,
     FiberIO,
+    H5ArrayMixin,
     _canonical_path,
     _FiberIOManager,
     _get_missing_install_name,
@@ -43,19 +44,14 @@ from dascore.io.core import (
     _handle_missing_optionals,
     _reinit_manager_lock,
     _resolve_read_spool,
-    _scan_result_to_summary,
     _select_patch_from_spool,
     _size_and_mtime,
     _source_stats,
-    _validate_scan_payload,
     is_directory_format,
-    make_scan_payload,
 )
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.utils import (
-    build_patches,
     convert_attr_units,
-    get_exact_coord,
     resolve_keyed_source,
     slice_dataset,
     step_from_interval,
@@ -63,8 +59,8 @@ from dascore.io.utils import (
     windows_to_slices,
 )
 from dascore.utils.downloader import fetch
-from dascore.utils.hdf5 import H5Writer
-from dascore.utils.identity import source_patch_id
+from dascore.utils.hdf5 import H5Reader, H5Writer
+from dascore.utils.identity import origin_id_for
 from dascore.utils.io import (
     BinaryReader,
     BinaryWriter,
@@ -97,16 +93,16 @@ class _FiberImplementer(FiberIO):
     name = "_Implementer"
     version = "2"
 
-    def read(self, resource, **kwargs):
+    def read_array(self, resource, windows, **kwargs):
         """Dummy read."""
 
     def write(self, spool, resource, **kwargs):
         """Dummy write."""
 
-    def scan(self, resource: BinaryReader, *, snap: bool = True, **kwargs):
+    def get_metadata(self, resource: BinaryReader, *, snap: bool = True, **kwargs):
         """Dummy scan."""
 
-    def get_format(self, resource, **kwargs):
+    def get_version(self, resource, **kwargs) -> str | None:
         """Dummy get_format."""
 
 
@@ -116,7 +112,7 @@ class _FiberCaster(FiberIO):
     name = "_TestFormatter"
     version = "2"
 
-    def read(self, resource: BinaryReader, **kwargs):
+    def read_array(self, resource: BinaryReader, windows, **kwargs):
         """Just ensure read was cast to correct type."""
         assert isinstance(resource, io.BufferedReader)
 
@@ -124,12 +120,12 @@ class _FiberCaster(FiberIO):
         """Ditto for write."""
         assert isinstance(resource, io.BufferedWriter)
 
-    def get_format(self, resource: Path, **kwargs) -> tuple[str, str] | Literal[False]:
+    def get_version(self, resource: Path, **kwargs) -> str | None:
         """And get format."""
         assert isinstance(resource, Path)
-        return False
+        return None
 
-    def scan(self, not_path: BinaryReader):
+    def get_metadata(self, not_path: BinaryReader):
         """Ensure an off-name still works for type casting."""
         assert isinstance(not_path, io.BufferedReader)
 
@@ -141,10 +137,10 @@ class _FiberInheritsScan(FiberIO):
     version = "1"
     seen_snap: ClassVar[list] = []
 
-    def read(self, resource, snap=True, **kwargs):
+    def get_metadata(self, resource, snap=True, **kwargs):
         """Record what the inherited scan forwarded."""
         self.seen_snap.append(snap)
-        return dc.spool([dc.get_example_patch()])
+        return [dc.get_example_patch().drop_data()]
 
 
 class _FiberUnsupportedTypeHints(FiberIO):
@@ -153,7 +149,7 @@ class _FiberUnsupportedTypeHints(FiberIO):
     name = "_TypeHinterNotRight"
     version = "2"
 
-    def read(self, resource: tvar, **kwargs):
+    def get_metadata(self, resource: tvar, **kwargs):
         """Dummy read."""
         with open(resource) as fi:
             return fi.read()
@@ -166,23 +162,22 @@ class _FiberDirectory(FiberIO):
     version = "0.1"
     input_type = "directory"
 
-    def get_format(self, resource, **kwargs) -> tuple[str, str] | Literal[False]:
+    def get_version(self, resource, **kwargs) -> str | None:
         """Only accept directories which have specific naming."""
         path = Path(resource)
         name = path.name
         if self.name in name:
-            return self.name, self.version
-        return False
+            return self.version
+        return None
 
-    def scan(self, resource, snap=True, **kwargs):
+    def get_metadata(self, resource, snap=True, **kwargs):
         """Return a payload that records the forwarded snap mode."""
         patch = dc.get_example_patch().update_attrs(tag=str(snap))
         return [
-            make_scan_payload(
+            dc.PatchMeta(
                 attrs=patch.attrs,
                 coords=patch.coords,
                 dims=patch.dims,
-                shape=patch.shape,
                 dtype=str(patch.dtype),
             )
         ]
@@ -194,44 +189,44 @@ class _ReadOnlySummaryFormatter(FiberIO):
     name = "_read_only_summary_formatter"
     version = "1"
 
-    def read(self, resource: Path, snap_dims=True, **kwargs) -> dc.BaseSpool:
+    def get_metadata(self, resource: Path, *, snap=True, **kwargs) -> dc.BaseSpool:
         """Return a simple spool for default scan conversion."""
         patch = dc.get_example_patch().update_attrs(tag="fallback")
         values = patch.get_coord("time").values.copy()
         values[len(values) // 2] += np.timedelta64(1, "ms")
         time = dc.get_coord(data=values)
-        if snap_dims:
+        if snap:
             time = time.snap()
-        return dc.spool([patch.update_coords(time=time)])
+        return [patch.update_coords(time=time).drop_data()]
 
-    def get_format(self, resource: Path, **kwargs) -> tuple[str, str] | Literal[False]:
+    def get_version(self, resource: Path, **kwargs) -> str | None:
         """Only accept the explicit fallback-scan test resource."""
         path = Path(resource)
         if path.suffix == ".h5" and path.name == "fallback_scan.h5":
-            return self.name, self.version
-        return False
+            return self.version
+        return None
 
 
 class _MissingOptionalFormatter(FiberIO):
-    """A formatter whose scan path requires an unavailable optional dependency."""
+    """A formatter whose metadata needs an unavailable optional dependency."""
 
     name = "_missing_optional_formatter"
     version = "1"
 
-    def scan(self, resource: Path, **kwargs):
+    def get_metadata(self, resource: Path, **kwargs):
         """Raise a stable missing-optional error for scan coverage tests."""
         msg = (
-            "not_optional_pkg is not installed but is required for the requested "
-            "functionality."
+            "not_optional_pkg is not installed but is required for the "
+            "requested functionality."
         )
         raise MissingOptionalDependencyError(msg)
 
-    def get_format(self, resource: Path, **kwargs) -> tuple[str, str] | Literal[False]:
+    def get_version(self, resource: Path, **kwargs) -> str | None:
         """Only accept the explicit missing-optional test resource."""
         path = Path(resource)
         if path.suffix == ".opt" and path.name == "missing_optional.opt":
-            return self.name, self.version
-        return False
+            return self.version
+        return None
 
 
 class _ScanBehaviorFormatter(FiberIO):
@@ -249,28 +244,24 @@ class _ScanBehaviorFormatter(FiberIO):
     name = "_scan_behavior_formatter"
     version = "1"
 
-    def get_format(self, resource: Path, **kwargs) -> tuple[str, str] | Literal[False]:
+    def get_version(self, resource: Path, **kwargs) -> str | None:
         """Claim only this test's sentinel files."""
-        return (
-            (self.name, self.version)
-            if Path(resource).suffix == ".scanbehavior"
-            else False
-        )
+        return self.version if Path(resource).suffix == ".scanbehavior" else None
 
-    def scan(self, resource: Path, **kwargs):
+    def get_metadata(self, resource: Path, **kwargs):
         """Do what the file name says, rather than scanning it."""
         behavior = Path(resource).stem
         if behavior == "os_error":
             raise OSError("Simulated OS issue")
         if behavior == "remote_cache_error":
             raise RemoteCacheError("metadata cache blocked")
-        if behavior == "patch_attrs":  # the pre-ScanPayload return type
+        if behavior == "patch_attrs":
             return [dc.PatchAttrs(tag="legacy")]
         if behavior == "missing_keys":
             return [{"unexpected": 1}]
         if behavior == "non_mapping":
             return ["not a payload"]
-        if behavior == "summary_coords":  # coords collapsed to summaries
+        if behavior == "summary_coords":
             patch = dc.get_example_patch()
             return [
                 {
@@ -298,27 +289,27 @@ class _DependencyErrorFormatter(FiberIO):
     name = "_dependency_error_formatter"
     version = "1"
 
-    def scan(self, resource: Path, **kwargs):
+    def get_metadata(self, resource: Path, **kwargs):
         """Raise a stable dependency error for scan coverage tests."""
         msg = "simulated stack incompatibility while scanning"
         raise DependencyError(msg)
 
-    def get_format(self, resource: Path, **kwargs) -> tuple[str, str] | Literal[False]:
+    def get_version(self, resource: Path, **kwargs) -> str | None:
         """Only accept the explicit dependency-error test resource."""
         path = Path(resource)
         if path.suffix == ".dep" and path.name == "dependency_error.dep":
-            return self.name, self.version
-        return False
+            return self.version
+        return None
 
 
-class TestGetExactCoord:
+class TestExactCoord:
     """Tests for constructing exact coordinates during scans."""
 
     def test_preserves_irregular_monotonic_values(self):
         """Irregular monotonic arrays should retain every stored value."""
         values = np.array([0.0, 1.0, 2.0, 5.0, 6.0])
 
-        coord = get_exact_coord(values, units="m")
+        coord = get_coord(data=values, units="m", snap=False)
 
         np.testing.assert_array_equal(coord.values, values)
         assert coord.units == dc.get_quantity("m")
@@ -327,7 +318,7 @@ class TestGetExactCoord:
         """Non-monotonic arrays should use the exact generic fallback."""
         values = np.array([0.0, 2.0, 1.0])
 
-        coord = get_exact_coord(values)
+        coord = get_coord(data=values, snap=False)
 
         np.testing.assert_array_equal(coord.values, values)
 
@@ -339,12 +330,12 @@ class TestGetExactCoord:
             np.arange(n) * 1000 + rng.integers(-3, 4, size=n)
         ).astype("datetime64[ns]")
 
-        coord = get_exact_coord(values)
+        coord = get_coord(data=values, snap=False)
 
         # Values are preserved exactly, but the degenerate segmented form is
         # avoided (it would hold roughly n / 2 short segments).
         np.testing.assert_array_equal(coord.values, values)
-        assert not isinstance(coord, CoordSegmented)
+        assert coord.runs_count == 1
 
     @pytest.mark.parametrize("length", [999, 1000, 2000])
     @pytest.mark.parametrize("reverse", [False, True])
@@ -354,10 +345,10 @@ class TestGetExactCoord:
         values += np.random.default_rng(4).uniform(-1e-5, 1e-5, length)
         values = values[::-1] if reverse else values
 
-        coord = get_exact_coord(values, units="m")
+        coord = get_coord(data=values, units="m", snap=False)
 
         np.testing.assert_array_equal(coord.values, values)
-        assert not isinstance(coord, CoordSegmented)
+        assert coord.runs_count == 1
         assert coord.units == dc.get_quantity("m")
         assert coord.reverse_sorted == reverse
 
@@ -365,7 +356,7 @@ class TestGetExactCoord:
     def test_unsigned_unsorted_selection(self, repeats):
         """Unsigned difference wraparound must not select a monotonic search path."""
         values = np.tile(np.array([0, 2, 1, 3], dtype=np.uint16), repeats)
-        coord = get_exact_coord(values)
+        coord = get_coord(data=values, snap=False)
 
         np.testing.assert_array_equal(coord.values, values)
         selected, indexer = coord.select((1, 1))
@@ -378,7 +369,7 @@ class TestGetExactCoord:
         rng = np.random.default_rng(1)
         values = rng.permutation(2_000).astype(float)
 
-        coord = get_exact_coord(values, units="m")
+        coord = get_coord(data=values, units="m", snap=False)
 
         np.testing.assert_array_equal(coord.values, values)
 
@@ -386,252 +377,11 @@ class TestGetExactCoord:
         """Genuinely piecewise-uniform arrays keep their queryable seams."""
         values = np.concatenate([np.arange(0.0, 2_000.0), np.arange(3_000.0, 5_000.0)])
 
-        coord = get_exact_coord(values, units="m")
+        coord = get_coord(data=values, units="m", snap=False)
 
-        assert isinstance(coord, CoordSegmented)
+        assert coord.runs_count > 1
         np.testing.assert_array_equal(coord.values, values)
         assert len(coord.get_discontinuities("gaps")) == 1
-
-
-class TestMakeScanPayload:
-    """Tests for the shared scan payload constructor."""
-
-    def test_dims_shape_derived_from_coords(self):
-        """Omitted dims/shape come from the coords."""
-        patch = dc.get_example_patch()
-
-        payload = make_scan_payload(attrs=patch.attrs, coords=patch.coords, dtype="f8")
-
-        assert payload["dims"] == patch.coords.dims
-        assert payload["shape"] == patch.coords.shape
-
-    def test_explicit_values_win(self):
-        """Explicit dims/shape are not overwritten by the coords."""
-        patch = dc.get_example_patch()
-
-        payload = make_scan_payload(
-            attrs=patch.attrs, coords=patch.coords, dims=(), shape=(), dtype="f8"
-        )
-
-        assert payload["dims"] == ()
-        assert payload["shape"] == ()
-
-    def test_explicit_shape_with_derived_dims(self):
-        """Shape may be given while dims still come from the coords."""
-        patch = dc.get_example_patch()
-        shape = tuple(x - 1 for x in patch.coords.shape)
-
-        payload = make_scan_payload(
-            attrs=patch.attrs, coords=patch.coords, shape=shape, dtype="f8"
-        )
-
-        assert payload["dims"] == patch.coords.dims
-        assert payload["shape"] == shape
-
-    def test_attrs_none(self):
-        """No attrs yields default PatchAttrs rather than raising."""
-        patch = dc.get_example_patch()
-
-        payload = make_scan_payload(attrs=None, coords=patch.coords, dtype="f8")
-
-        assert isinstance(payload["attrs"], dc.PatchAttrs)
-
-
-class TestBuildPatches:
-    """Tests for the shared read tail used by format readers."""
-
-    @pytest.fixture
-    def patch(self):
-        """A patch whose pieces feed build_patches."""
-        return dc.get_example_patch()
-
-    def test_no_selection_builds_patch(self, patch):
-        """With nothing to select the whole patch comes back."""
-        out = build_patches(patch.coords, patch.data, patch.attrs)
-
-        assert len(out) == 1
-        assert out[0].shape == patch.shape
-
-    def test_none_selections_skip_select(self, patch, monkeypatch):
-        """All-None selections must not touch the data source."""
-
-        def _boom(*args, **kwargs):
-            raise AssertionError("select should not be called")
-
-        monkeypatch.setattr(type(patch.coords), "select", _boom)
-
-        out = build_patches(
-            patch.coords,
-            patch.data,
-            patch.attrs,
-            selection={"time": None, "distance": None},
-        )
-
-        assert len(out) == 1
-
-    def test_selection_trims(self, patch):
-        """A selection trims the returned patch."""
-        time = patch.get_coord("time")
-        stop = time.min() + (time.max() - time.min()) / 2
-
-        out = build_patches(
-            patch.coords, patch.data, patch.attrs, selection={"time": (None, stop)}
-        )
-
-        assert (
-            out[0].shape[patch.dims.index("time")]
-            < patch.shape[patch.dims.index("time")]
-        )
-
-    def test_emptied_selection_returns_empty_list(self, patch):
-        """A selection which removes all data yields no patches."""
-        time = patch.get_coord("time")
-        after_end = time.max() + np.timedelta64(10, "s")
-
-        out = build_patches(
-            patch.coords,
-            patch.data,
-            patch.attrs,
-            selection={"time": (after_end, None)},
-        )
-
-        assert out == []
-
-    def test_empty_data_returns_empty_list(self, patch):
-        """An already empty source yields no patches, even untrimmed."""
-        coords = get_coord_manager(
-            {
-                "time": get_coord(
-                    start=np.datetime64("2020-01-01"),
-                    step=np.timedelta64(1, "s"),
-                    shape=(0,),
-                ),
-                "distance": get_coord(start=0.0, step=1.0, shape=(3,)),
-            },
-            dims=("time", "distance"),
-        )
-
-        out = build_patches(coords, np.empty(coords.shape), patch.attrs)
-
-        assert out == []
-
-    def test_attr_cls_used(self, patch):
-        """The format's attrs class is applied to a plain dict."""
-
-        class _MyAttrs(dc.PatchAttrs):
-            """Attrs with one format specific field."""
-
-            my_field: float = np.nan
-
-        out = build_patches(
-            patch.coords, patch.data, {"my_field": 2.0}, attr_cls=_MyAttrs
-        )
-
-        assert isinstance(out[0].attrs, _MyAttrs)
-        assert out[0].attrs.my_field == 2.0
-
-    def test_attrs_none(self, patch):
-        """No attrs yields a patch with default attrs."""
-        out = build_patches(patch.coords, patch.data)
-
-        assert isinstance(out[0].attrs, dc.PatchAttrs)
-
-
-class TestScanResultToSummary:
-    """Tests for converting scan metadata into summaries."""
-
-    def test_scan_payload_dict_input_builds_summary(self):
-        """Structured scan payloads should normalize to PatchSummary."""
-        patch = dc.get_example_patch()
-        payload = {
-            "attrs": patch.attrs,
-            "coords": patch.coords,
-            "dims": patch.dims,
-            "shape": patch.shape,
-            "dtype": str(patch.data.dtype),
-            "source_patch_key": "node-1",
-        }
-        out = _scan_result_to_summary(payload, source_path="some_path")
-        assert isinstance(out, dc.PatchSummary)
-        assert (
-            out.get_coord_summary("time").fingerprint
-            == patch.get_coord("time").fingerprint()
-        )
-        assert out.source_patch_key == "node-1"
-        assert str(out.source_path) == "some_path"
-
-    def test_scan_payload_missing_dtype_raises(self):
-        """Structured scan payloads should require dtype metadata."""
-        patch = dc.get_example_patch()
-        payload = {
-            "attrs": patch.attrs,
-            "coords": patch.coords,
-            "dims": patch.dims,
-            "shape": patch.shape,
-        }
-        msg = r"requires a mapping with `coords`, `attrs`, and `dtype`"
-        with pytest.raises(TypeError, match=msg):
-            _scan_result_to_summary(payload, source_path="some_path")
-
-    def test_make_scan_payload_uses_dtype_key(self):
-        """The helper should emit the normalized dtype field."""
-        patch = dc.get_example_patch()
-        out = make_scan_payload(
-            attrs=patch.attrs,
-            coords=patch.coords,
-            dims=patch.dims,
-            shape=patch.shape,
-            dtype=str(patch.data.dtype),
-        )
-        assert out["dtype"] == str(patch.data.dtype)
-
-    def test_invalid_dict_input_raises(self):
-        """Untyped dict payloads should still be rejected."""
-        msg = r"requires a mapping with `coords`, `attrs`, and `dtype`"
-        with pytest.raises(TypeError, match=msg):
-            _scan_result_to_summary({"tag": "x"})
-
-    def test_invalid_non_mapping_input_raises(self):
-        """Unsupported scan outputs should mention allowed input shapes."""
-        msg = "only accepts PatchSummary or structured scan payload mappings"
-        with pytest.raises(TypeError, match=msg):
-            _scan_result_to_summary("bad scan output")
-
-    def test_patch_attrs_input_raises(self):
-        """PatchAttrs scan outputs should fail with a migration hint."""
-        patch = dc.get_example_patch()
-        msg = (
-            "DASCore no longer accepts PatchAttrs from FiberIO.scan\\(\\).*"
-            "dascore/docs/contributing/new_format.qmd"
-        )
-        with pytest.raises(ValueError, match=msg):
-            _scan_result_to_summary(patch.attrs)
-
-    def test_summary_source_patch_key_sets_private_attr(self):
-        """Summary source ids should be copied onto private attrs."""
-        summary = dc.PatchSummary(
-            attrs=dc.PatchAttrs(tag="x"),
-            source_patch_key="node-1",
-        )
-        assert summary.source_patch_key == "node-1"
-        assert summary.attrs["_source_patch_key"] == "node-1"
-
-    def test_private_attr_source_patch_key_sets_summary(self):
-        """Private attr source ids should populate the summary field."""
-        summary = dc.PatchSummary(
-            attrs=dc.PatchAttrs(tag="x", _source_patch_key="node-2"),
-        )
-        assert summary.source_patch_key == "node-2"
-        assert summary.attrs["_source_patch_key"] == "node-2"
-
-    def test_summary_source_patch_key_wins_on_conflict(self):
-        """Conflicting ids should resolve in favor of the summary field."""
-        summary = dc.PatchSummary(
-            attrs=dc.PatchAttrs(tag="x", _source_patch_key="attrs-id"),
-            source_patch_key="summary-id",
-        )
-        assert summary.source_patch_key == "summary-id"
-        assert summary.attrs["_source_patch_key"] == "summary-id"
 
 
 class TestFormatManager:
@@ -973,18 +723,12 @@ class TestFormatter:
         """Tests for implements_x methods."""
         # this test fiber io don't implement anything
         fio = _FiberFormatTestV1()
-        assert not fio.implements_scan
-        assert not fio.implements_get_format
-        assert not fio.implements_read
         assert not fio.implements_write
 
     def test_implements(self):
         """Tests for implements_x methods."""
         # this test fiber implements all the things
         fio = _FiberImplementer()
-        assert fio.implements_scan
-        assert fio.implements_get_format
-        assert fio.implements_read
         assert fio.implements_write
 
 
@@ -1137,7 +881,7 @@ class TestExampleUri:
     def test_scan_payloads(self, example_uri):
         """Payload scans accept the uri too."""
         payload = dc.scan_payloads(example_uri, snap=False)[0]
-        assert "coords" in payload
+        assert isinstance(payload.coords, dc.CoordManager)
 
     def test_scan_through_manager_names_the_file(self, example_uri, example_path):
         """A manager wrapping a uri still reports a reloadable source path."""
@@ -1183,7 +927,7 @@ class TestExampleUri:
         """A patch read by uri has the id of one read by path."""
         by_uri = dc.read(example_uri)[0]
         by_path = dc.read(example_path)[0]
-        assert by_uri.attrs.patch_id == by_path.attrs.patch_id
+        assert by_uri.attrs.origin_id == by_path.attrs.origin_id
         assert by_uri.attrs.history == by_path.attrs.history
 
 
@@ -1258,7 +1002,7 @@ class TestScan:
         out = dc.scan_payloads(path, snap=False)
 
         assert len(out) == 1
-        assert out[0]["attrs"].tag == "False"
+        assert out[0].attrs.tag == "False"
 
     def test_scan_bad_files(self, tmp_path):
         """Trying to scan a directory should raise a nice error."""
@@ -1291,11 +1035,11 @@ class TestScan:
 
         assert len(out) == 1
         payload = out[0]
-        assert isinstance(payload["coords"], dc.CoordManager)
-        assert payload["coords"] == random_patch.coords
-        assert payload["source_path"] == ""
-        assert payload["source_format"] == ""
-        assert payload["source_version"] == ""
+        assert isinstance(payload.coords, dc.CoordManager)
+        assert payload.coords == random_patch.coords
+        assert (payload._source or ArraySource()).path == ""
+        assert (payload._source or ArraySource()).format == ""
+        assert (payload._source or ArraySource()).version == ""
 
     def test_scan_payloads_spool_returns_each_patch(self, random_patch):
         """Spool inputs should produce one raw payload per patch."""
@@ -1305,8 +1049,8 @@ class TestScan:
 
         out = dc.scan_payloads(spool)
 
-        assert [payload["attrs"].tag for payload in out] == ["one", "two"]
-        assert all(isinstance(payload["coords"], dc.CoordManager) for payload in out)
+        assert [payload.attrs.tag for payload in out] == ["one", "two"]
+        assert all(isinstance(payload.coords, dc.CoordManager) for payload in out)
 
     def test_scan_multi_patch_includes_source_patch_key(self, tmp_path):
         """Multi-patch scan rows should include a stable source patch id."""
@@ -1459,104 +1203,42 @@ class TestReloadableSourcePath:
     def test_scan_legacy_patch_attrs_raises(self, tmp_path):
         """FiberIO returning PatchAttrs should now fail loudly."""
         path = _misbehaving_scan_path(tmp_path, "patch_attrs")
-        with pytest.raises(ValueError, match=r"PatchAttrs from FiberIO\.scan"):
+        with pytest.raises(TypeError, match="must return PatchMeta"):
             dc.scan(path)
 
     def test_scan_payloads_legacy_patch_attrs_raises(self, tmp_path):
         """Raw payload scans should reject legacy summary-only results."""
         path = _misbehaving_scan_path(tmp_path, "patch_attrs")
-        with pytest.raises(ValueError, match="no longer accepts PatchAttrs"):
+        with pytest.raises(TypeError, match="must return PatchMeta"):
             dc.scan_payloads(path)
 
     def test_scan_payloads_missing_keys_raises(self, tmp_path):
         """Raw payload scans should validate all required payload keys."""
         path = _misbehaving_scan_path(tmp_path, "missing_keys")
-        with pytest.raises(TypeError, match="missing required keys"):
+        with pytest.raises(TypeError, match="must return PatchMeta"):
             dc.scan_payloads(path)
 
     def test_scan_payloads_non_mapping_raises(self, tmp_path):
         """Raw payload scans should reject unsupported result types."""
         path = _misbehaving_scan_path(tmp_path, "non_mapping")
-        with pytest.raises(TypeError, match="must return ScanPayload mappings"):
+        with pytest.raises(TypeError, match="must return PatchMeta"):
             dc.scan_payloads(path)
 
     def test_scan_payloads_requires_coord_manager(self, tmp_path):
         """Raw payload scans should reject collapsed coordinate summaries."""
         path = _misbehaving_scan_path(tmp_path, "summary_coords")
-        with pytest.raises(TypeError, match="must be a CoordManager"):
+        with pytest.raises(TypeError, match="must return PatchMeta"):
             dc.scan_payloads(path)
 
-    @pytest.mark.parametrize(
-        ("key", "value"),
-        [
-            ("attrs", "not-attrs"),
-            ("attrs", {"tag": ["not-a-string"]}),
-            ("coords", object()),
-            ("dims", "time"),
-            ("dims", ("time", "")),
-            ("dims", ("time", "time")),
-            ("shape", [1, 2]),
-            ("shape", (1, -1)),
-            ("dtype", np.dtype("float64")),
-            ("dtype", "not-a-dtype"),
-            ("source_patch_key", 1),
-            ("source_path", 1),
-            ("source_format", Path("format")),
-            ("source_version", None),
-        ],
-    )
-    def test_scan_payload_field_validation(self, key, value):
-        """Every declared payload field should enforce its public type."""
-        patch = dc.get_example_patch()
-        payload = make_scan_payload(
-            attrs=patch.attrs,
-            coords=patch.coords,
-            dims=patch.dims,
-            shape=patch.shape,
-            dtype=str(patch.dtype),
-        )
-        payload[key] = value
-
-        with pytest.raises(TypeError, match=key):
-            _validate_scan_payload(payload)
-
-    @pytest.mark.parametrize("key", ["dims", "shape"])
-    def test_scan_payload_coord_metadata_must_match(self, key):
-        """Strict payload metadata must agree with the full coord manager."""
-        patch = dc.get_example_patch()
-        payload = make_scan_payload(
-            attrs=patch.attrs,
-            coords=patch.coords,
-            dims=patch.dims,
-            shape=patch.shape,
-            dtype=str(patch.dtype),
-        )
-        if key == "dims":
-            payload[key] = tuple(reversed(patch.dims))
-        else:
-            payload[key] = (patch.shape[0] + 1, *patch.shape[1:])
-
-        with pytest.raises(ValueError, match=rf"`{key}` must exactly match"):
-            _validate_scan_payload(payload, require_coord_manager=True)
-
-    def test_scan_payloads_normalizes_attrs(self, monkeypatch, terra15_v6_path):
-        """The public payload API should always return PatchAttrs."""
-        fname, ver = FiberIO.manager._get_format(path=terra15_v6_path)
+    def test_scan_payloads_rejects_loaded_patch(self, monkeypatch, terra15_v6_path):
+        """Metadata providers must not sneak a loaded array through scanning."""
+        fname, ver = dc.get_format(terra15_v6_path)
         fiber_io = FiberIO.manager.get_fiberio(format=fname, version=ver)
-        patch = dc.get_example_patch()
-        payload = make_scan_payload(
-            attrs=patch.attrs,
-            coords=patch.coords,
-            dims=patch.dims,
-            shape=patch.shape,
-            dtype=str(patch.dtype),
+        monkeypatch.setattr(
+            fiber_io, "get_metadata", lambda *a, **k: [dc.get_example_patch()]
         )
-        payload["attrs"] = patch.attrs.model_dump()
-        monkeypatch.setattr(fiber_io, "scan", lambda *args, **kwargs: [payload])
-
-        out = dc.scan_payloads(terra15_v6_path)
-
-        assert isinstance(out[0]["attrs"], dc.PatchAttrs)
+        with pytest.raises(TypeError, match="must return PatchMeta"):
+            dc.scan_payloads(terra15_v6_path)
 
     def test_default_fiberio_scan_uses_reloadable_source_path(self, tmp_path):
         """Default FiberIO.scan should return structured scan payloads."""
@@ -1567,11 +1249,11 @@ class TestReloadableSourcePath:
         out = fio.scan(path)
 
         assert len(out) == 1
-        assert isinstance(out[0], dict)
-        assert "source_path" not in out[0]
-        assert "source_format" not in out[0]
-        assert "source_version" not in out[0]
-        assert not out[0]["source_patch_key"]
+        assert isinstance(out[0], dc.PatchMeta)
+        assert out[0]._source is None
+        assert out[0]._source is None
+        assert out[0]._source is None
+        assert not (out[0]._source or ArraySource()).key
 
     def test_default_fiberio_scan_forwards_snap_dims(self, tmp_path):
         """Default scans should forward exact-coordinate mode to read()."""
@@ -1579,9 +1261,9 @@ class TestReloadableSourcePath:
         path.write_text("placeholder")
         fio = _ReadOnlySummaryFormatter()
 
-        exact = fio.scan(path, snap=False)[0]["coords"].get_coord("time")
-        snapped = fio.scan(path, snap=True)[0]["coords"].get_coord("time")
-        read_exact = fio.read(path, snap_dims=False)[0].get_coord("time")
+        exact = fio.scan(path, snap=False)[0].coords.get_coord("time")
+        snapped = fio.scan(path, snap=True)[0].coords.get_coord("time")
+        read_exact = fio.get_metadata(path, snap=False)[0].get_coord("time")
 
         np.testing.assert_array_equal(exact.values, read_exact.values)
         assert not np.array_equal(exact.values, snapped.values)
@@ -1595,35 +1277,13 @@ class TestReloadableSourcePath:
 
         def read(resource, snap=True):
             seen["snap"] = snap
-            return dc.spool([dc.get_example_patch()])
+            return [dc.get_example_patch().drop_data()]
 
-        monkeypatch.setattr(fio, "read", read)
+        monkeypatch.setattr(fio, "get_metadata", read)
 
         fio.scan(path, snap=False)
 
         assert seen["snap"] is False
-
-    def test_default_fiberio_scan_forwards_read_kwargs(self, monkeypatch, tmp_path):
-        """Default scans should preserve reader filters and override snap mode."""
-        path = tmp_path / "fallback_scan.h5"
-        path.write_text("placeholder")
-        fio = _ReadOnlySummaryFormatter()
-        seen = {}
-
-        def read(resource, snap_dims=True, **kwargs):
-            seen.update(kwargs)
-            seen["snap_dims"] = snap_dims
-            return dc.spool([dc.get_example_patch()])
-
-        monkeypatch.setattr(fio, "read", read)
-
-        fio.scan(path, snap=False, snap_dims=True, time=(1, 2), custom="value")
-
-        assert seen == {
-            "snap_dims": False,
-            "time": (1, 2),
-            "custom": "value",
-        }
 
     def test_dc_scan_adds_source_metadata_to_raw_fiberio_scan(self, tmp_path):
         """dc.scan should add path/format/version on top of raw formatter scan."""
@@ -1632,9 +1292,9 @@ class TestReloadableSourcePath:
 
         raw = _ReadOnlySummaryFormatter().scan(path)
         assert len(raw) == 1
-        assert "source_path" not in raw[0]
-        assert "source_format" not in raw[0]
-        assert "source_version" not in raw[0]
+        assert raw[0]._source is None
+        assert raw[0]._source is None
+        assert raw[0]._source is None
 
         out = dc.scan(path)
         assert len(out) == 1
@@ -1669,10 +1329,10 @@ class TestReloadableSourcePath:
 
         assert seen["snap"] is False
         assert len(out) == 1
-        assert isinstance(out[0]["coords"], dc.CoordManager)
-        assert str(out[0]["source_path"]) == str(path)
-        assert out[0]["source_format"] == fiber_io.name
-        assert out[0]["source_version"] == fiber_io.version
+        assert isinstance(out[0].coords, dc.CoordManager)
+        assert str((out[0]._source or ArraySource()).path) == str(path)
+        assert (out[0]._source or ArraySource()).format == fiber_io.name
+        assert (out[0]._source or ArraySource()).version == fiber_io.version
 
     def test_default_fiberio_scan_multi_patch_does_not_set_source_patch_key(
         self, tmp_path, monkeypatch
@@ -1687,13 +1347,13 @@ class TestReloadableSourcePath:
                 dc.get_example_patch().update_attrs(tag="first"),
                 dc.get_example_patch().update_attrs(tag="second"),
             ]
-            return dc.spool(patches)
+            return [p.drop_data() for p in patches]
 
-        monkeypatch.setattr(fio, "read", read_two_patches)
+        monkeypatch.setattr(fio, "get_metadata", read_two_patches)
         out = fio.scan(path)
 
         assert len(out) == 2
-        assert not any(summary["source_patch_key"] for summary in out)
+        assert all(p._source is None for p in out)
 
     @pytest.mark.concurrency
     def test_keyboard_interrupt(self, monkeypatch):
@@ -1737,7 +1397,7 @@ class TestCastType:
         """Ensure write casts type."""
         io = _FiberCaster()
         # this passes if it doesnt raise.
-        io.read(dummy_text_file)
+        io.read_array(dummy_text_file, {})
 
     def test_write(self, tmp_path, random_spool):
         """Ensure write casts type."""
@@ -1749,19 +1409,21 @@ class TestCastType:
     def test_non_standard_name(self, dummy_text_file):
         """Ensure non-standard names still work."""
         io = _FiberCaster()
-        io.scan(dummy_text_file)
+        io.get_metadata(dummy_text_file)
 
     def test_unsupported_typehints(self, dummy_text_file):
         """Ensure FiberIO with non-"special" type hints still works."""
         fiberio = _FiberUnsupportedTypeHints()
-        out = fiberio.read(dummy_text_file)
+        out = fiberio.get_metadata(dummy_text_file)
         assert out == Path(dummy_text_file).read_text()
 
     def test_unsupported_type(self, dummy_text_file):
         """Ensure FiberIO from above works with dascore.read."""
         name = _FiberUnsupportedTypeHints.name
         version = _FiberUnsupportedTypeHints.version
-        out = dc.read(dummy_text_file, name, version)
+        out = FiberIO.manager.get_fiberio(format=name, version=version).get_metadata(
+            dummy_text_file
+        )
         assert out == Path(dummy_text_file).read_text()
 
     def test_handle_closed_when_method_raises(self, dummy_text_file, monkeypatch):
@@ -1783,11 +1445,12 @@ class TestCastType:
             name = "_ExploderIO"
             version = "1"
 
-            def read(self, resource: BinaryReader, **kwargs):
+            def read_array(self, resource: BinaryReader, windows, **kwargs):
+                """Fail after coercion to exercise handle cleanup."""
                 raise ValueError("mid-read failure")
 
         with pytest.raises(ValueError, match="mid-read failure"):
-            _Exploder().read(dummy_text_file)
+            _Exploder().read_array(dummy_text_file, {})
         assert recorder.closed
 
     def test_handle_aborted_when_write_raises(self, dummy_text_file, monkeypatch):
@@ -1836,14 +1499,13 @@ class TestGetSupportedIOTable:
         # assert that the length of the DataFrame is not 0
         assert len(result_df) > 0
 
-    def test_read_array_column(self):
-        """The table says which formats slice storage directly."""
+    def test_only_optional_write_capability_is_reported(self):
+        """All readers expose the three hooks; writing remains optional."""
         table = FiberIO.get_supported_io_table()
-        flags = table.groupby("name")["read_array"].any()
-        assert flags["DASDAE"]
-        # a format which writes but inherits the default, so the column
-        # cannot be mistaken for the write flag
-        assert not flags["PICKLE"]
+        assert set(table.columns) == {"name", "version", "write"}
+        flags = table.groupby("name")["write"].any()
+        assert flags["DASDAE"] and flags["PICKLE"]
+        assert not flags["TDMS"]
 
 
 class TestMissingInstallName:
@@ -2079,44 +1741,59 @@ class TestSourceIds:
         """Which is the whole point of deriving the id."""
         first = dc.read(terra15_path)[0]
         second = dc.read(terra15_path)[0]
-        assert first.attrs.patch_id
-        assert first.attrs.patch_id == second.attrs.patch_id
+        assert first.attrs.origin_id
+        assert first.attrs.origin_id == second.attrs.origin_id
 
     def test_the_id_names_the_source(self, terra15_path):
         """Every field the index keeps, and nothing else."""
         patch = dc.read(terra15_path)[0]
         stat = Path(terra15_path).stat()
         fmt, version = dc.get_format(terra15_path)
-        expected = source_patch_id(
-            fmt,
-            version,
-            str(terra15_path),
-            patch.attrs.get("_source_patch_key", "") or 0,
+        expected = origin_id_for(
+            ArraySource(
+                path=str(terra15_path),
+                format=fmt,
+                version=version,
+                key=patch._source.key,
+            ),
             stat.st_size,
             stat.st_mtime_ns,
+            ordinal=0,
         )
-        assert patch.attrs.patch_id == expected
+        assert patch.attrs.origin_id == expected
 
     def test_a_rewritten_file_is_new_data(self, terra15_path, tmp_path):
         """Data written over a path does not inherit the id it replaced."""
         path = tmp_path / "rewritten.hdf5"
         shutil.copy(terra15_path, path)
-        before = dc.read(path)[0].attrs.patch_id
+        before = dc.read(path)[0].attrs.origin_id
         stat = path.stat()
         os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 1_000_000_000))
-        assert dc.read(path)[0].attrs.patch_id != before
+        assert dc.read(path)[0].attrs.origin_id != before
 
     def test_a_stored_id_beats_a_derived_one(self, dasdae_path, tmp_path):
         """A DASDAE file carries its ids, so they survive being moved."""
         patch = dc.read(dasdae_path)[0]
         moved = tmp_path / "moved.h5"
         patch.io.write(moved, "dasdae")
-        assert dc.read(moved)[0].attrs.patch_id == patch.attrs.patch_id
+        assert dc.read(moved)[0].attrs.origin_id == patch.attrs.origin_id
+
+    @pytest.mark.parametrize("nameless", [False, True])
+    @pytest.mark.parametrize("disabled", [False, True])
+    def test_marker_removed_without_source_ids(self, dasdae_path, nameless, disabled):
+        """Internal stored-ID markers never leak from pathless or IDs-off reads."""
+        resource = (
+            io.BytesIO(Path(dasdae_path).read_bytes()) if nameless else dasdae_path
+        )
+        mode = "disabled" if disabled else "ids"
+        with config_context(patch_provenance=mode):
+            patch = dc.read(resource, *dc.get_format(dasdae_path))[0]
+        assert STORED_ORIGIN_ID not in dict(patch.attrs)
 
     def test_the_marker_does_not_survive(self, dasdae_path):
         """The stored id is consumed, not left lying on the attrs."""
         patch = dc.read(dasdae_path)[0]
-        assert STORED_PATCH_ID not in dict(patch.attrs)
+        assert STORED_ORIGIN_ID not in dict(patch.attrs)
 
     def test_an_open_file_is_the_file_it_was_opened_on(self, terra15_path):
         """Reading by handle is reading the same data as reading by name."""
@@ -2124,28 +1801,29 @@ class TestSourceIds:
         by_name = dc.read(terra15_path)[0]
         with Path(terra15_path).open("rb") as fid:
             by_handle = dc.read(fid, name, version)[0]
-        assert by_handle.attrs.patch_id == by_name.attrs.patch_id
+        assert by_handle.attrs.origin_id == by_name.attrs.origin_id
 
     def test_a_manager_names_what_it_was_built_around(self, terra15_path):
         """A manager is a way of holding a source, not a source of its own."""
         by_name = dc.read(terra15_path)[0]
         with IOResourceManager(terra15_path) as man:
-            assert dc.read(man)[0].attrs.patch_id == by_name.attrs.patch_id
+            assert dc.read(man)[0].attrs.origin_id == by_name.attrs.origin_id
 
     def test_a_source_with_no_path_keeps_its_own_id(self, terra15_path):
         """Two streams must not derive one id out of having no path."""
         name, version = dc.get_format(terra15_path)
         data = Path(terra15_path).read_bytes()
         streams = (io.BytesIO(data), io.BytesIO(data))
-        ids = {dc.read(x, name, version)[0].attrs.patch_id for x in streams}
+        ids = {dc.read(x, name, version)[0].attrs.origin_id for x in streams}
         assert all(ids) and len(ids) == 2
 
     def test_a_key_naming_several_patches_names_none(self, idless_multi_patch):
         """Or every patch asked for at once would answer to one id."""
         spool = dc.read(idless_multi_patch)
-        keys = [x.attrs.get("_source_patch_key", "") for x in spool]
+        keys = [x._source.key for x in spool]
         ids = {
-            x.attrs.patch_id for x in dc.read(idless_multi_patch, source_patch_key=keys)
+            x.attrs.origin_id
+            for x in dc.read(idless_multi_patch, source_patch_key=keys)
         }
         assert len(ids) == len(keys)
 
@@ -2153,7 +1831,7 @@ class TestSourceIds:
         """Two spellings resolve to one reader, so they name one datum."""
         name, version = dc.get_format(terra15_path)
         spelled = dc.read(terra15_path, name.lower(), version)[0]
-        assert spelled.attrs.patch_id == dc.read(terra15_path)[0].attrs.patch_id
+        assert spelled.attrs.origin_id == dc.read(terra15_path)[0].attrs.origin_id
 
     def test_a_hidden_member_is_not_part_of_a_directory(self, tmp_path):
         """Including one under a hidden directory, which is hidden too."""
@@ -2171,9 +1849,9 @@ class TestSourceIds:
         `relpath` refuses to answer across windows drives, and where the
         test data is cached is not this test's business.
         """
-        absolute = dc.read(terra15_path)[0].attrs.patch_id
+        absolute = dc.read(terra15_path)[0].attrs.origin_id
         monkeypatch.chdir(Path(terra15_path).parent)
-        assert dc.read(Path(terra15_path).name)[0].attrs.patch_id == absolute
+        assert dc.read(Path(terra15_path).name)[0].attrs.origin_id == absolute
 
     def test_a_path_which_cannot_be_canonicalized(self, monkeypatch):
         """
@@ -2192,7 +1870,7 @@ class TestSourceIds:
     def test_scanning_with_the_ids_disabled(self, terra15_path):
         """The config which turns the ids off turns scanning off too."""
         with config_context(patch_provenance="disabled"):
-            assert dc.scan(terra15_path)[0].attrs.patch_id == ""
+            assert dc.scan(terra15_path)[0].attrs.origin_id == ""
 
     def test_a_source_which_will_not_answer(self):
         """Nothing said is better than fields which pretend to be equal."""
@@ -2227,27 +1905,27 @@ class TestSourceIds:
         with config_context(patch_provenance="disabled"):
             first = dc.get_example_patch().update_attrs(tag="first")
             second = dc.get_example_patch().update_attrs(tag="second")
-            assert not first.attrs.patch_id
+            assert not first.attrs.origin_id
             dc.write(dc.spool([first, second]), path, "dasdae")
         return path
 
     def test_each_patch_of_a_file_is_its_own_data(self, idless_multi_patch):
         """Or every patch of a file would answer to one id."""
-        ids = {patch.attrs.patch_id for patch in dc.read(idless_multi_patch)}
+        ids = {patch.attrs.origin_id for patch in dc.read(idless_multi_patch)}
         assert len(ids) == 2
 
     def test_one_patch_read_by_key(self, idless_multi_patch):
         """Asking for one patch gives the id reading them all would."""
         spool = dc.read(idless_multi_patch)
         wanted = spool[1]
-        key = wanted.attrs.get("_source_patch_key", "")
+        key = wanted._source.key
         alone = dc.read(idless_multi_patch, source_patch_key=key)[0]
-        assert alone.attrs.patch_id == wanted.attrs.patch_id
+        assert alone.attrs.origin_id == wanted.attrs.origin_id
 
     def test_disabled_mints_nothing(self, terra15_path):
         """The config which turns the ids off turns this off too."""
         with config_context(patch_provenance="disabled"):
-            assert dc.read(terra15_path)[0].attrs.patch_id == ""
+            assert dc.read(terra15_path)[0].attrs.origin_id == ""
 
 
 class TestFiberIOReadArray:
@@ -2285,20 +1963,20 @@ class TestFiberIOReadArray:
         """
         patch = dc.read(single_patch_path)[0]
         assert patch.dims == ("distance", "time")
-        windows = {"time": (5, 50), "distance": (2, 9)}
-        out = FiberIO.read_array(dasdae_io, single_patch_path, windows)
+        out = dasdae_io.read_array(single_patch_path, ((2, 9), (5, 50)))
         expected = patch.data[2:9, 5:50]
         assert np.array_equal(out, expected)
         # untransposed and uncast: the file's own order and dtype
         assert out.dtype == patch.data.dtype
 
-    def test_absent_dimensions_load_whole(self, dasdae_io, single_patch_path):
-        """A dimension missing from windows comes back whole."""
+    def test_absent_axes_load_whole(self, dasdae_io, single_patch_path):
+        """An axis left out of windows, or given None, comes back whole."""
         patch = dc.read(single_patch_path)[0]
-        out = FiberIO.read_array(dasdae_io, single_patch_path, {"time": (0, 10)})
-        expected = patch.select(time=(0, 10), samples=True).data
-        assert np.array_equal(out, expected)
-        whole = FiberIO.read_array(dasdae_io, single_patch_path, {})
+        out = dasdae_io.read_array(single_patch_path, ((0, 10),))
+        assert np.array_equal(out, patch.data[:10])
+        leading = dasdae_io.read_array(single_patch_path, (None, (0, 10)))
+        assert np.array_equal(leading, patch.data[:, :10])
+        whole = dasdae_io.read_array(single_patch_path, ())
         assert np.array_equal(whole, patch.data)
 
     def test_multi_patch_selects_keyed_patch(self, dasdae_io, multi_patch_path):
@@ -2306,16 +1984,14 @@ class TestFiberIOReadArray:
         for payload in dc.scan(multi_patch_path):
             key = payload.source_patch_key
             wanted = dc.read(multi_patch_path, source_patch_key=key)[0]
-            out = FiberIO.read_array(
-                dasdae_io, multi_patch_path, {"time": (3, 17)}, source_patch_key=key
-            )
+            out = dasdae_io.read_array(multi_patch_path, (None, (3, 17)), key=key)
             expected = wanted.select(time=(3, 17), samples=True).data
             assert np.array_equal(out, expected)
 
     def test_multi_patch_without_key_raises(self, dasdae_io, multi_patch_path):
         """Windows on an ambiguous grid never guess a patch."""
-        with pytest.raises(PatchAttributeError, match="uniquely resolved"):
-            FiberIO.read_array(dasdae_io, multi_patch_path, {"time": (0, 5)})
+        with pytest.raises(PatchAttributeError, match="several patches"):
+            dasdae_io.read_array(multi_patch_path, (None, (0, 5)))
 
     def test_override_resource_coercion(self, single_patch_path):
         """An override's resource annotation is honored like read's.
@@ -2336,59 +2012,181 @@ class TestFiberIOReadArray:
                 return np.zeros(2)
 
         fiber_io = ReadArrayCastFormat()
-        out = fiber_io.read_array(single_patch_path, {})
+        out = fiber_io.read_array(single_patch_path, ())
         assert np.array_equal(out, np.zeros(2))
         assert hasattr(seen["resource"], "read")  # a handle, not a path
 
-    def test_implements_flag(self, dasdae_io):
-        """The flag says whether a format overrides the default."""
-        assert dasdae_io.implements_read_array
+    def test_missing_array_hook_raises(self):
+        """A reader must implement array loading; no read fallback exists."""
 
         class PlainFormat(FiberIO):
             name = "_test_plain_read_array"
             version = "1"
 
-        plain = PlainFormat()
-        assert not plain.implements_read_array
-        # set and delete by hand: monkeypatch would restore the inherited
-        # method as an own class attribute rather than remove it
-        PlainFormat.read_array = lambda self, resource, windows, **kw: np.empty(0)
-        try:
-            assert plain.implements_read_array
-        finally:
-            del PlainFormat.read_array
-        assert not plain.implements_read_array
+        with pytest.raises(NotImplementedError):
+            PlainFormat().read_array("unused", ())
+
+
+class TestReadArrayFunction:
+    """Tests for the format-independent half of `dc.read_array`."""
+
+    @pytest.fixture(scope="class")
+    def patch(self):
+        """A non-square patch, so an axis mix-up cannot pass unnoticed."""
+        return dc.get_example_patch("random_das", shape=(11, 7))
+
+    @pytest.fixture(scope="class")
+    def path(self, tmp_path_factory, patch):
+        """The patch written to a DASDAE file."""
+        path = tmp_path_factory.mktemp("read_array_function") / "one.h5"
+        dc.write(patch, path, "dasdae")
+        return path
+
+    def test_stride_lands_on_its_own_axis(self, path, patch):
+        """Each axis is strided by the step its own window asked for."""
+        out = dc.read_array(path, (slice(None, None, 3), slice(None, None, 2)))
+        assert np.array_equal(out, patch.data[::3, ::2])
+        one = dc.read_array(path, (None, slice(1, 7, 2)))
+        assert np.array_equal(one, patch.data[:, 1:7:2])
+
+    def test_backwards_step_raises(self, path):
+        """A window is read forwards; a negative step is refused."""
+        with pytest.raises(ParameterError, match="steps backwards"):
+            dc.read_array(path, (slice(None, None, -1),))
+
+    @pytest.mark.parametrize(
+        "windows",
+        [(0, 10), 5, (None, 10), ..., ((0, 5, 1),), np.array([0, 10])],
+    )
+    def test_window_spelling_refused(self, path, windows):
+        """A bare integer, or anything but a window, is never guessed at."""
+        with pytest.raises(ParameterError):
+            dc.read_array(path, windows)
+
+    @pytest.mark.parametrize(
+        "windows,index",
+        [
+            (((0, 10),), np.s_[0:10]),
+            ([(0, 10)], np.s_[0:10]),
+            ((None, (2, 7)), np.s_[:, 2:7]),
+            ((slice(1, 9), None), np.s_[1:9]),
+            (((np.int64(1), np.int64(9)),), np.s_[1:9]),
+        ],
+    )
+    def test_window_spelling_accepted(self, path, patch, windows, index):
+        """Every accepted spelling indexes as numpy does, by either route."""
+        expected = patch.data[index]
+        assert np.array_equal(dc.read_array(path, windows), expected)
+        # the reader's own hook must read the same spelling the same way
+        assert np.array_equal(DASDAEV1().read_array(path, windows), expected)
+
+    def test_bare_slice_windows_the_first_axis(self, path, patch):
+        """The one convenience, and it belongs to the function alone."""
+        assert np.array_equal(dc.read_array(path, slice(0, 10)), patch.data[0:10])
+        with pytest.raises(ParameterError):
+            DASDAEV1().read_array(path, slice(0, 10))
+
+    def test_missing_path_key_raises(self, path):
+        """An absolute path naming no dataset is refused, not ignored."""
+        with pytest.raises(PatchAttributeError, match="names no stored array"):
+            dc.read_array(path, key="/waveforms/nope/data")
+
+    def test_group_path_key_raises(self, path):
+        """An absolute path naming a group holds no array."""
+        with pytest.raises(PatchAttributeError, match="names no stored array"):
+            dc.read_array(path, key="/waveforms")
+
+
+class TestH5ArrayMixin:
+    """Tests for the shared single-patch HDF5 array reader."""
+
+    @pytest.fixture(scope="class")
+    def array(self):
+        """The values the mixin reader's file stores."""
+        return np.arange(77, dtype=np.float64).reshape(11, 7)
+
+    @pytest.fixture(scope="class")
+    def path(self, tmp_path_factory, array):
+        """A file with two datasets, so only the named one can pass."""
+        path = tmp_path_factory.mktemp("h5_array_mixin") / "mixin.h5"
+        with h5py.File(path, "w") as h5:
+            h5.create_dataset("group/data", data=array)
+            h5.create_dataset("group/other", data=-array)
+        return path
+
+    @pytest.fixture(scope="class")
+    def mixin_io(self, array):
+        """A reader which takes its array loading from the mixin."""
+
+        class MixinFormat(H5ArrayMixin, FiberIO):
+            name = "_test_h5_array_mixin"
+            version = "1"
+
+            def get_metadata(self, resource: H5Reader, *, snap=True):
+                data = resource["group/data"]
+                coords = {
+                    "distance": np.arange(array.shape[0]),
+                    "time": np.arange(array.shape[1]),
+                }
+                return [
+                    dc.PatchMeta(
+                        coords=coords,
+                        dims=("distance", "time"),
+                        dtype=data.dtype,
+                        source=ArraySource(key=data.name),
+                    )
+                ]
+
+        return MixinFormat()
+
+    def test_key_names_the_dataset(self, mixin_io, path, array):
+        """The key picks which dataset the windows index, not the metadata."""
+        out = mixin_io.read_array(path, ((1, 9),), key="/group/other")
+        assert np.array_equal(out, -array[1:9])
+
+    def test_keyless_uses_the_metadata_key(self, mixin_io, path, array):
+        """Without a key the metadata's own source key is read."""
+        out = mixin_io.read_array(path, ((1, 9),))
+        assert np.array_equal(out, array[1:9])
+
+    def test_wrong_key_raises(self, mixin_io, path):
+        """A key naming nothing in the file is h5py's to refuse."""
+        with pytest.raises(KeyError):
+            mixin_io.read_array(path, (), key="/group/nope")
 
 
 class TestWindowsToSlices:
-    """Tests for turning read_array windows into per-dimension slices."""
+    """Tests for turning read_array windows into per-axis slices."""
 
-    def test_absent_dimension_is_whole(self):
-        """A dimension without a window spans its whole length."""
-        out = windows_to_slices({"time": (2, 5)}, ("distance", "time"), (7, 9))
-        assert out == (slice(0, 7), slice(2, 5))
+    def test_absent_axis_is_whole(self):
+        """An axis left out, or given None, spans its whole length."""
+        assert windows_to_slices(((2, 5),), (7, 9)) == (slice(2, 5), slice(0, 9))
+        assert windows_to_slices((None, (2, 5)), (7, 9)) == (slice(0, 7), slice(2, 5))
 
     def test_open_negative_and_overlong_bounds_resolve(self):
         """None, ..., negative, and past-the-end bounds resolve like numpy."""
-        out = windows_to_slices(
-            {"time": (..., 3), "distance": (-2, 50)}, ("time", "distance"), (9, 7)
-        )
+        out = windows_to_slices(((..., 3), (-2, 50)), (9, 7))
         assert out == (slice(0, 3), slice(5, 7))
-        assert windows_to_slices({"time": (4, None)}, ("time",), (9,)) == (slice(4, 9),)
+        assert windows_to_slices(((4, None),), (9,)) == (slice(4, 9),)
 
     def test_empty_window_stays_empty(self):
         """A reversed window is empty, never negative-length."""
-        assert windows_to_slices({"time": (6, 2)}, ("time",), (9,)) == (slice(6, 6),)
+        assert windows_to_slices(((6, 2),), (9,)) == (slice(6, 6),)
 
-    def test_unknown_dimension_raises(self):
-        """A window on a dimension the array lacks raises."""
-        with pytest.raises(ParameterError, match="not among patch dims"):
-            windows_to_slices({"bob": (0, 1)}, ("time",), (9,))
+    def test_more_windows_than_axes_raises(self):
+        """A window past the last axis has nothing to index."""
+        with pytest.raises(ParameterError, match="one positional range per axis"):
+            windows_to_slices(((0, 1), (0, 1)), (9,))
+
+    def test_mapping_raises(self):
+        """Windows are positional; dimension names live above this layer."""
+        with pytest.raises(ParameterError, match="one positional window per axis"):
+            windows_to_slices({"time": (0, 1)}, (9,))
 
     def test_non_integer_bounds_raise(self):
         """Bounds are sample indices, never values."""
-        with pytest.raises(ParameterError, match="integers"):
-            windows_to_slices({"time": (1.5, 3)}, ("time",), (9,))
+        with pytest.raises(ParameterError, match="sample indices"):
+            windows_to_slices(((1.5, 3),), (9,))
 
 
 class TestSliceDataset:
@@ -2405,16 +2203,16 @@ class TestSliceDataset:
 
     def test_windows_read_in_the_file(self, dataset):
         """Only the window's values come back, in the dataset's order."""
-        out = slice_dataset(dataset, ("time", "distance"), {"time": (2, 5)})
+        out = slice_dataset(dataset, ((2, 5),))
         assert np.array_equal(out, dataset[2:5, :])
 
     def test_shape_caps_a_shorter_grid(self, dataset):
         """A grid shorter than the stored array never reads past its end."""
-        dims, short = ("time", "distance"), (4, 6)
-        whole = slice_dataset(dataset, dims, {}, short)
+        short = (4, 6)
+        whole = slice_dataset(dataset, (), short)
         assert np.array_equal(whole, dataset[:4, :])
         # a window past the shortened grid clips to it, not to the file
-        tail = slice_dataset(dataset, dims, {"time": (2, 50)}, short)
+        tail = slice_dataset(dataset, ((2, 50),), short)
         assert np.array_equal(tail, dataset[2:4, :])
 
 
@@ -2446,7 +2244,7 @@ class TestResolveKeyedSource:
     def test_keyless_ambiguous(self):
         """Several sources and no key cannot be resolved."""
         for sources in ({"a": 1, "b": 2}, [("a", 1), ("b", 2)]):
-            with pytest.raises(PatchAttributeError, match="source_patch_key"):
+            with pytest.raises(PatchAttributeError, match="pass an explicit key"):
                 resolve_keyed_source(sources, "")
 
     def test_repeated_name_in_pairs(self):
@@ -2494,4 +2292,4 @@ class TestStepFromRate:
         t0 = np.datetime64("2020-01-01T00:00:00", "ns")
         coord = get_coord(start=t0, step=step_from_rate(1024.0), shape=(1024,))
         assert coord.step_exact == Fraction(1, 1024)
-        assert coord.stop == t0 + np.timedelta64(1, "s")
+        assert coord.min() + coord.coord_range() == t0 + np.timedelta64(1, "s")

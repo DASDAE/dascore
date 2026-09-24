@@ -10,12 +10,11 @@ from typing import Any, cast
 import numpy as np
 
 import dascore as dc
-from dascore.constants import INVENTORY_ATTRS
+from dascore.constants import INVENTORY_ATTRS, snap_type
 from dascore.core.coordmanager import CoordManager
-from dascore.core.coords import BaseCoord, CoordSegmented, get_coord
+from dascore.core.coords import BaseCoord, get_coord
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import (
-    CoordError,
     MissingPatchError,
     ParameterError,
     PatchAttributeError,
@@ -23,8 +22,13 @@ from dascore.exceptions import (
 )
 from dascore.models import ArrayLike
 from dascore.units import convert_units, get_quantity_str
-from dascore.utils.misc import _to_slice, _validate_sample_values, unbyte
+from dascore.utils.misc import _to_slice, iterate, unbyte
 from dascore.utils.time import to_exact_fraction
+
+
+def should_snap(snap: snap_type, name: str) -> bool:
+    """Return whether the all/none or named-coordinate option enables snapping."""
+    return snap if isinstance(snap, bool) else name in iterate(snap)
 
 
 def get_attr_names(attr_cls) -> set[str]:
@@ -107,83 +111,79 @@ def drop_blank_attrs(attrs: dict, names: Iterable[str]) -> dict:
     return attrs
 
 
-def build_patches(
-    coords: CoordManager,
-    data: ArrayLike,
-    attrs: dc.PatchAttrs | Mapping[str, Any] | None = None,
-    *,
-    attr_cls: type[dc.PatchAttrs] | None = None,
-    selection: Mapping[str, Any] | None = None,
-) -> list[dc.Patch]:
-    """
-    Trim a data source to a selection and build the resulting patch list.
+_WINDOW_BOUNDS = (int, np.integer, type(None), type(Ellipsis))
 
-    This is the tail most single-patch readers share. It returns one
-    patch, or nothing if the selection left no data.
 
-    Parameters
-    ----------
-    coords
-        The coordinates of the untrimmed patch.
-    data
-        The patch data, often an unread node (eg an h5 dataset).
-    attrs
-        The patch attributes, or anything convertible to them.
-    attr_cls
-        The format's PatchAttrs subclass. Defaults to PatchAttrs.
-    selection
-        A mapping of {dimension_name: selection}, eg {"time": (t1, t2)}.
-        None values are dropped, so a read with nothing to trim never
-        touches the data source. Passed to `CoordManager.select`, which
-        ignores names it doesn't know.
+def validate_windows(windows: Sequence[Any]) -> tuple[Any, ...]:
     """
-    # A def-time default would need dc.PatchAttrs while dascore is still
-    # importing this module, so the sentinel is resolved here instead.
-    attr_cls = dc.PatchAttrs if attr_cls is None else attr_cls
-    # Validate attrs before the selection can short-circuit, so bad metadata
-    # still raises on a read which happens to select nothing.
-    patch_attrs = attr_cls.from_dict(attrs)
-    trim = {i: v for i, v in (selection or {}).items() if v is not None}
-    if trim:
-        coords, data = coords.select(array=data, **trim)
-    if not data.size:
-        return []
-    # Ellipsis rather than a slice so 0d data (a scalar patch) also loads.
-    return [dc.Patch(data=data[...], coords=coords, attrs=patch_attrs)]
+    Return `FiberIO.read_array` windows, refusing a spelling which is not one.
+
+    A window is ``None`` (the whole axis), a slice, or a ``(start, stop)``
+    pair of sample indices; ``windows`` holds one per axis, in order. A
+    bare integer is not a window, so no spelling is read two ways.
+    """
+    if not isinstance(windows, Sequence) or isinstance(windows, str):
+        msg = (
+            f"Windows are one positional window per axis; got {windows!r}. "
+            f"Use ((0, 10),) or slice(0, 10) to window the first axis."
+        )
+        raise ParameterError(msg)
+    for window in windows:
+        if window is None or isinstance(window, slice):
+            continue
+        pair = isinstance(window, Sequence) and not isinstance(window, str)
+        if not (
+            pair
+            and len(window) == 2
+            and all(isinstance(x, _WINDOW_BOUNDS) for x in window)
+        ):
+            msg = (
+                f"Each window is None, a slice, or a (start, stop) pair of "
+                f"sample indices; got {window!r} in {windows!r}. Use "
+                f"((0, 10),) or slice(0, 10) to window the first axis."
+            )
+            raise ParameterError(msg)
+    return tuple(windows)
 
 
 def windows_to_slices(
-    windows: Mapping[str, Any], dims: Sequence[str], shape: Sequence[int]
+    windows: Sequence[Any], shape: Sequence[int]
 ) -> tuple[slice, ...]:
     """
-    Turn `FiberIO.read_array` windows into one slice per dimension.
+    Turn `FiberIO.read_array` windows into one slice per axis.
 
-    Each window is validated as `Patch.select` validates ``samples=True``
-    values and resolved against its dimension's length, so every slice
-    comes back with explicit non-negative bounds and ``start <= stop`` (a
-    reversed window is empty); a dimension without a window is taken whole.
+    Each window is checked by `validate_windows` and resolved against its
+    axis's length, so every slice comes back with explicit non-negative
+    bounds and ``start <= stop`` (a reversed window is empty); an axis
+    without a window is taken whole.
 
     Parameters
     ----------
     windows
-        Dimension name to ``(start, stop)`` half-open sample indices.
-    dims
-        The dimensions in the array's stored order.
+        A ``(start, stop)`` half-open sample range, a slice, or ``None``
+        for a whole axis, one per axis in order. Trailing axes may be
+        left out.
     shape
-        The array's shape, in the same order.
+        The array's shape.
     """
-    if unknown := sorted(set(windows) - set(dims)):
-        msg = f"Window dimensions {unknown} are not among patch dims {tuple(dims)}."
+    windows = validate_windows(windows)
+    if len(windows) > len(shape):
+        msg = (
+            f"Windows are one positional range per axis of {tuple(shape)}; "
+            f"got {windows!r}."
+        )
         raise ParameterError(msg)
     out = []
-    for dim, size in zip(dims, shape, strict=True):
-        if dim not in windows:
+    for axis, size in enumerate(shape):
+        if axis >= len(windows) or windows[axis] is None:
             out.append(slice(0, size))
             continue
-        _validate_sample_values(windows[dim])
-        window = _to_slice(windows[dim])
+        window = _to_slice(windows[axis])
         if window.step not in (None, 1):
-            msg = f"A window is a contiguous range; {dim!r} asked for {windows[dim]!r}."
+            msg = (
+                f"A window is a contiguous range; "
+                f"axis {axis} asked for {windows[axis]!r}."
+            )
             raise ParameterError(msg)
         span = range(size)[window]
         out.append(slice(span.start, max(span.stop, span.start)))
@@ -196,13 +196,11 @@ def resolve_keyed_source(
     where: str = "the resource",
 ):
     """
-    Return the one source a ``source_patch_key`` names.
+    Return the one source a native logical key names.
 
-    Resolves a native key as the default `FiberIO.read_array` does: an
-    empty resource is missing data, and an unknown key, an ambiguous
-    keyless one, or a key naming more than one source cannot be
-    resolved. Unlike the default it takes no positional key, since a
-    format which states its own keys never synthesizes one.
+    An empty resource is missing data. An unknown key, an ambiguous
+    keyless resource, or a key naming multiple sources cannot be resolved.
+    Native keys do not fall back to positional indices.
 
     ``sources`` maps each native key to whatever the caller needs back,
     and is read lazily, so an h5py group can be passed as it is. Pass
@@ -221,7 +219,7 @@ def resolve_keyed_source(
                 raise PatchAttributeError(f"No patch named '{key}' in {where}.")
             return mapping[key]
         if len(mapping) > 1:
-            msg = f"{where} holds several patches; pass source_patch_key."
+            msg = f"{where} holds several patches; pass an explicit key."
             raise PatchAttributeError(msg)
         return next(iter(mapping.values()))
     pairs = list(sources)
@@ -236,26 +234,25 @@ def resolve_keyed_source(
             raise PatchAttributeError(msg)
         return found[0]
     if len(pairs) > 1:
-        msg = f"{where} holds several patches; pass source_patch_key."
+        msg = f"{where} holds several patches; pass an explicit key."
         raise PatchAttributeError(msg)
     return pairs[0][1]
 
 
 def slice_dataset(
     dataset: ArrayLike,
-    dims: Sequence[str],
-    windows: Mapping[str, Any],
+    windows: Sequence[Any] = (),
     shape: Sequence[int] | None = None,
 ) -> np.ndarray:
     """
-    Read the sample windows of an array stored in ``dims`` order.
+    Read the positional sample windows of a stored array.
 
     ``shape`` defaults to the dataset's own; pass it when an axis of the
     grid `scan` reports is shorter than the stored one, as it is for a
     Terra15 file whose trailing rows were never written.
     """
     shape = dataset.shape if shape is None else shape
-    return dataset[windows_to_slices(windows, dims, shape)]
+    return dataset[windows_to_slices(windows, shape)]
 
 
 def get_gridded_coord(values, units=None) -> BaseCoord:
@@ -289,23 +286,6 @@ def get_gridded_coord(values, units=None) -> BaseCoord:
     return coord.snap() if len(coord) > 1 else coord
 
 
-def get_exact_coord(values, units=None) -> BaseCoord:
-    """
-    Return an exact coordinate, including for non-monotonic values.
-
-    Monotonic values keep their runs (`CoordSegmented.from_array`, whose
-    dense-array guard keeps a jittery array as one monotonic coordinate);
-    anything else keeps its values as an array.
-    """
-    # atleast_1d matches get_coord(values=...): a squeezed single-sample
-    # array (0-d) becomes a length-1 coordinate rather than a scalar.
-    values = np.atleast_1d(np.asarray(values))
-    try:
-        return CoordSegmented.from_array(values, tolerance=0, units=units)
-    except CoordError:
-        return get_coord(data=values, units=units)
-
-
 def step_from_rate(rate) -> Fraction | np.timedelta64:
     """
     The time step a file states as a sampling rate in Hz.
@@ -334,3 +314,39 @@ def step_from_interval(seconds) -> Fraction | np.timedelta64:
     if frac is not None and frac > 0:
         return frac
     return dc.to_timedelta64(float(seconds))
+
+
+def selection_windows(
+    coords: CoordManager, indexers: Mapping[str, int | slice | np.ndarray]
+) -> tuple[tuple[tuple[int, int], ...], tuple[slice | np.ndarray, ...]]:
+    """Return bounding array windows and residual coordinate indexers."""
+    windows, residual = [], []
+    if not coords.dims:
+        return (), ()
+    for dim, size in zip(coords.dims, coords.shape, strict=True):
+        indexer = indexers.get(dim, slice(None))
+        if isinstance(indexer, slice):
+            span = range(size)[indexer]
+            if not span:
+                windows.append((0, 0))
+                residual.append(slice(None))
+                continue
+            start, stop = min(span[0], span[-1]), max(span[0], span[-1]) + 1
+            leftover = (
+                slice(None)
+                if span.step == 1
+                else slice(
+                    span[0] - start, None if span.step < 0 else stop - start, span.step
+                )
+            )
+        else:
+            indices = np.atleast_1d(indexer)
+            if not len(indices):
+                windows.append((0, 0))
+                residual.append(slice(None))
+                continue
+            start, stop = int(indices.min()), int(indices.max()) + 1
+            leftover = indices - start
+        windows.append((start, stop))
+        residual.append(leftover)
+    return tuple(windows), tuple(residual)

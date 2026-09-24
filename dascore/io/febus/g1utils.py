@@ -6,10 +6,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import numpy as np
-
 import dascore as dc
-from dascore.io.utils import get_exact_coord, get_gridded_coord
+from dascore.core.coords import get_coord
+from dascore.io.utils import get_gridded_coord, should_snap
 from dascore.utils.misc import maybe_get_items, unbyte
 
 _G1_H5_BASE_DATASETS = frozenset(
@@ -153,17 +152,6 @@ def _get_g1_coords_and_attrs(resource):
     return coords, attrs
 
 
-def _get_g1_patch(resource, attr_cls):
-    """Get a patch from the g1 file."""
-    coords, attrs = _get_g1_coords_and_attrs(resource)
-    data_start_line = int(attrs.pop("_data_start_line", 0))
-    resource.seek(0)
-    data = np.loadtxt(resource, skiprows=data_start_line)
-    data = np.asarray(data).reshape(coords.shape)
-    attrs = attr_cls(**{i: v for i, v in attrs.items() if not i.startswith("_")})
-    return dc.Patch(data=data, coords=coords, attrs=attrs)
-
-
 def _get_g1_h5_mapped_attrs(resource, mapping):
     """Return mapped G1 HDF5 attrs, unpacking scalar arrays and decoding bytes."""
     attrs = dict(resource.attrs)
@@ -184,11 +172,11 @@ def _get_g1_h5_version(resource, required_datasets, required_attrs) -> str | boo
 def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
     """Return time/distance coords shared by G1 HDF5 files."""
 
-    def _coord(values, units=None):
+    def _coord(values, name, units=None):
         """Return a tolerant or exact coordinate from stored values."""
-        if snap:
+        if should_snap(snap, name):
             return dc.get_coord(data=values, units=units)
-        return get_exact_coord(values, units=units)
+        return get_coord(data=values, units=units, snap=False)
 
     extra_coords = {} if extra_coords is None else extra_coords
     starts = resource["start_times"][...]
@@ -199,24 +187,24 @@ def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
             f"{ends.shape}; the file is truncated or still being written."
         )
         raise ValueError(msg)
-    time = _coord(dc.to_datetime64(starts))
+    time = _coord(dc.to_datetime64(starts), "time")
     # Each sample covers a window rather than being instantaneous, so keep how
     # long it ran. The span is differenced off the raw arrays rather than
     # stored as end_times: starts and ends are each near-regular and snap to
     # slightly different steps, so subtracting the two built coords would turn
     # the jitter into a linear drift. Built exactly, and ignoring `snap`,
     # because that jitter is the signal.
-    sample_span = get_exact_coord(dc.to_timedelta64(ends - starts))
+    sample_span = get_coord(data=dc.to_timedelta64(ends - starts), snap=False)
     # The interrogator fixes the spatial sampling, so the stored distances
     # only restate a grid, quantized to float32. That quantization can exceed
     # the tolerance get_coord uses to recognize an even coordinate, leaving a
     # monotonic coord with no step, so put it back on the grid it restates.
     distances = resource["distances"][...]
-    if snap:
+    if should_snap(snap, "distance"):
         distance = get_gridded_coord(distances, units="m")
     else:
-        distance = get_exact_coord(distances, units="m")
-    temperature = _coord(resource["temperatures"][...], units="°C")
+        distance = get_coord(data=distances, units="m", snap=False)
+    temperature = _coord(resource["temperatures"][...], "temperature", units="°C")
     coords = {
         "time": time,
         "distance": distance,
@@ -225,16 +213,6 @@ def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
         **extra_coords,
     }
     return dc.get_coord_manager(coords, dims=dims)
-
-
-def _get_g1_h5_patch(resource, attr_cls, data_name, attrs, coords, select_kwargs=None):
-    """Read selected G1 HDF5 data into a patch."""
-    select_kwargs = {} if select_kwargs is None else select_kwargs
-    coords, data = coords.select(array=resource[data_name], **select_kwargs)
-    if 0 in coords.shape:  # Empty data; dont return.
-        return None
-    data = np.asarray(data)
-    return dc.Patch(data=data, coords=coords, attrs=attr_cls(**attrs))
 
 
 def _get_mtx_attrs(resource):
@@ -285,18 +263,6 @@ def _get_mtx_coords(resource, dims=_MTX_DIMS, snap=True):
     )
 
 
-def _get_mtx_patch(resource, attr_cls, attrs=None, select_kwargs=None):
-    """Read a Febus MTX HDF5 file into a patch."""
-    return _get_g1_h5_patch(
-        resource,
-        attr_cls=attr_cls,
-        data_name="mtx",
-        attrs=_get_mtx_attrs(resource) if attrs is None else attrs,
-        coords=_get_mtx_coords(resource),
-        select_kwargs=select_kwargs,
-    )
-
-
 def _bsl_version(resource) -> str | bool:
     """Return the version if a file looks like a Febus G1 BSL HDF5 file."""
     return _get_g1_h5_version(resource, _BSL_H5_DATASETS, _BSL_H5_ATTRS)
@@ -322,17 +288,3 @@ def _get_bsl_attrs(resource):
         }
     )
     return attrs
-
-
-def _get_bsl_patch(resource, attr_cls, attrs=None, select_kwargs=None):
-    """Read a Febus BSL HDF5 file into a patch."""
-    coords = _get_bsl_coords(resource)
-    attrs = _get_bsl_attrs(resource) if attrs is None else attrs
-    return _get_g1_h5_patch(
-        resource,
-        attr_cls=attr_cls,
-        data_name="bsl_data",
-        attrs=attrs,
-        coords=coords,
-        select_kwargs=select_kwargs,
-    )

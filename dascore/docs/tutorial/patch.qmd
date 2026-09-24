@@ -80,6 +80,19 @@ Dimension coordinates usually share a dimension's name, but that is not required
 
 String coordinates support exact matches, wildcards, compiled regular expressions, masks, and sorting, but not units or numeric ranges. See [String coordinates](coords.qmd#string-coordinates) for examples and literal-label caveats.
 
+## Metadata without data
+
+[`PatchMeta`](`dascore.PatchMeta`) is everything a patch is apart from its data: coordinates, attrs and dtype. Scanning a file returns these, so a patch's shape and extents can be read without loading samples.
+
+```{python}
+meta = patch.drop_data()
+print(meta.shape, meta.dtype)
+
+patch_again = meta.to_patch(patch.data)
+```
+
+`drop_data` and `to_patch` are inverses. Operations which only describe data, such as `rename_coords`, run on a `PatchMeta`; those which compute samples need a `Patch`.
+
 ## Attributes and summaries
 
 `Patch.attrs` contains validated, non-coordinate metadata such as `data_units`, `acquisition_key`, `gauge_length`, and processing history. Coordinate bounds and steps are derived through `Patch.summary` rather than duplicated in `attrs`.
@@ -118,37 +131,63 @@ Two attributes track identity:
 
 | Attribute | Meaning | Changes when |
 |---|---|---|
-| `patch_id` | Which source data this is | Multiple sources are combined |
-| `processing_id` | Which operations produced it | A patch function changes the patch |
+| `origin_id` | Which stored data this came from | Data from more than one origin is combined |
+| `data_id` | Which array this is | An operation changes the patch |
+
+A patch nothing has been done to carries its origin's ID as its `data_id`. An operation's result takes an ID derived from the `data_id` of every patch it was given, in order, and from the operation's name, version, and parameters, so one ID commits to the whole route which led to it:
 
 ```{python}
+assert patch.attrs.data_id == patch.attrs.origin_id
+
 filtered = patch.pass_filter(time=(1, 10))
-assert filtered.attrs.patch_id == patch.attrs.patch_id
-assert filtered.attrs.processing_id != patch.attrs.processing_id
+assert filtered.attrs.origin_id == patch.attrs.origin_id
+assert filtered.attrs.data_id != patch.attrs.data_id
 ```
 
-The processing route matters. Repeating the same operations produces the same `processing_id`, while changing their order does not:
+The route matters. Repeating the same operations produces the same `data_id`, while changing their order does not:
 
 ```{python}
 first = patch.pass_filter(time=(1, 10)).decimate(time=2)
 same = patch.pass_filter(time=(1, 10)).decimate(time=2)
 other = patch.decimate(time=2).pass_filter(time=(1, 10))
 
-assert first.attrs.processing_id == same.attrs.processing_id
-assert first.attrs.processing_id != other.attrs.processing_id
+assert first.attrs.data_id == same.attrs.data_id
+assert first.attrs.data_id != other.attrs.data_id
 ```
 
-When a file does not contain a `patch_id`, DASCore derives one from the format, version, path, patch key, file size, and modification time. Repeated reads and metadata scans therefore agree without hashing the data array. Copying the same bytes to another path produces a different derived ID, and overwriting a path also changes it. Formats that support stored lineage IDs restore those values when the file is read elsewhere.
+A parameter left at its default is the same call as one which passes that default, so adding a defaulted parameter to an operation changes no ID; changing what a default *does* requires raising the operation's version. An ID is never knowingly false: when a parameter cannot be described faithfully (a closure, an object of an unknown type), or an input carries no ID, the result receives a random `data_id` instead of a derived one.
 
-In-memory patches receive process-local IDs. Direct calls to `new`, `update`, and `update_attrs` preserve both IDs because patch functions use them to assemble results. Changing data through these low-level methods does not describe a processing step:
+Trimming a stored patch is not a route. While a patch is still exactly what its source loads, narrowing it to a window of that array names the window rather than the call which reached it, so `dc.read(path, time=window)`, `dc.read(path)[0].select(time=window)` and `spool.select(time=window)` all name one array, and selecting twice lands where selecting once does. Once anything else has been done to the patch, or the selection is one the stored array cannot be sliced to, the result derives like any other operation's. Reading under non-default decode options, such as `snap=False`, is itself an operation on the stored thing, so it names a different array than the default read of the same file.
+
+When a file does not contain an `origin_id`, DASCore derives one from the format, version, path, patch key, file size, and modification time. Repeated reads and metadata scans therefore agree without hashing the data array. Copying the same bytes to another path produces a different derived ID, and overwriting a path also changes it. Formats that store the IDs (DASDAE) restore both when the file is read elsewhere, so a route continues across a save.
+
+In-memory patches receive process-local IDs. The low-level methods — `new`, `update`, `update_attrs`, `set_dims` and `to_patch` — are how patch functions assemble their results, so inside an operation they add nothing: the operation names its own result. Called on their own they say what they did. Handing a patch an array nothing else names gives the result a random `data_id`, since no route describes it, while `origin_id` still says where the data came from:
 
 ```{python}
 doubled = patch.new(data=patch.data * 2)
-assert doubled.attrs.patch_id == patch.attrs.patch_id
-assert doubled.attrs.processing_id == patch.attrs.processing_id
+assert doubled.attrs.origin_id == patch.attrs.origin_id
+assert doubled.attrs.data_id != patch.attrs.data_id
 ```
 
-Use patch functions when processing should advance provenance. A function that returns the input unchanged advances neither ID, and IDs do not participate in `Patch.equals`. Set `patch_provenance="disabled"` only when IDs are not needed. See [Finding a patch by its ID](spool.qmd#finding-a-patch-by-id) for lookup.
+Replacing metadata instead is a describable change, so the result's ID is derived from the call and can be arrived at twice:
+
+```{python}
+tagged = patch.update_attrs(tag="cleaned")
+assert tagged.attrs.data_id == patch.update_attrs(tag="cleaned").attrs.data_id
+assert tagged.attrs.data_id != patch.attrs.data_id
+```
+
+A call which changes nothing returns the patch's own IDs, and stating `origin_id` or `data_id` in the call keeps what was stated — which is how a patch rebuilt by hand is given the identity it should carry. Use patch functions when processing should change the `data_id`; a function that returns the input unchanged changes neither ID, and IDs do not participate in `Patch.equals`. Set `patch_provenance="disabled"` only when IDs are not needed; a patch changed while it is disabled carries no IDs rather than stale ones. See [Finding a patch by its ID](spool.qmd#finding-a-patch-by-id) for lookup.
+
+Those IDs are derived without reading anything. [`pin_id`](`dascore.Patch.pin_id`) reads the array instead and states a `data_id` hashed from the patch's content, so patches which arrived by different routes share one ID and everything derived afterwards builds on data checked here:
+
+```{python}
+pinned = patch.pin_id()
+assert pinned.attrs.data_id == dc.get_example_patch().pin_id().attrs.data_id
+assert pinned.pin_id().attrs.data_id == pinned.attrs.data_id
+```
+
+Pinning is a checkpoint rather than something every operation does. See [Weak and strong `data_id`](../notes/identity.qmd#weak-and-strong-data_id) for what it hashes.
 
 ## Display and shortcuts
 

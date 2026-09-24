@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import warnings
 from typing import Literal
 
 import numpy as np
@@ -14,12 +13,12 @@ from dascore.exceptions import FilterValueError, ParameterError
 from dascore.units import get_filter_units
 from dascore.utils.imports import lazy_import
 from dascore.utils.patch import (
+    drop_associated_coords,
     get_dim_axis_value,
     get_start_stop_step,
     patch_function,
 )
 from dascore.utils.time import dtype_time_like, to_int, to_timedelta64
-from dascore.warnings import DASCoreWarning
 
 scipy_decimate = lazy_import("scipy.signal", "decimate")
 
@@ -301,17 +300,7 @@ def resample(
     data, new_coord = compat.resample(
         patch.data, int(np.round(new_len)), t=coord, axis=axis, window=window
     )
-    associated = sorted(
-        name
-        for name, coord_dims in patch.coords.dim_map.items()
-        if name != dim and dim in coord_dims
-    )
-    cm = patch.coords
-    if associated:
-        names = ", ".join(associated)
-        msg = f"Resampling dimension {dim!r} dropped associated coordinates: {names}."
-        warnings.warn(msg, DASCoreWarning, stacklevel=3)
-        cm, _ = cm.drop_coords(*associated)
+    cm = drop_associated_coords(patch.coords, dim, "Resampling")
     cm = cm._update_grid(dim, **{dim: new_coord})
     out = patch.new(data=data, coords=cm)
     # Interpolate if new sampling rate is not very close to desired sampling rate.

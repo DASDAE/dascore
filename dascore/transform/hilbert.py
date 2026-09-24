@@ -86,10 +86,10 @@ class Hilbert(PatchProcessor):
 
     data_type = ""
 
-    def plan(self, patch, out):
+    def get_metadata(self, meta):
         """Return the axis, once it is known to be evenly sampled."""
-        patch.get_coord(self.dim, require_evenly_sampled=True)
-        return {"axis": patch.get_axis(self.dim)}
+        meta.get_coord(self.dim, require_evenly_sampled=True)
+        return meta, {"axis": meta.get_axis(self.dim)}
 
     def numpy_kernel(self, data, *, axis):
         """Return the analytic signal along the axis."""
@@ -98,9 +98,6 @@ class Hilbert(PatchProcessor):
     def kernel(self, data, *, axis):
         """Return the analytic signal along the axis, through the FFT."""
         return analytic_signal(data, axis)
-
-
-hilbert = Hilbert.patch_function
 
 
 class Envelope(Hilbert):
@@ -142,9 +139,6 @@ class Envelope(Hilbert):
     def kernel(self, data, *, axis):
         """Return the magnitude of the analytic signal along the axis."""
         return array_namespace(data).abs(analytic_signal(data, axis))
-
-
-envelope = Envelope.patch_function
 
 
 def __infer_transform_dim(patch, stack_dim):

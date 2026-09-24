@@ -66,6 +66,90 @@ class TestCompare:
         assert compare({"a": digest(patch)}, {}) == ["a: only in before"]
 
 
+class TestVersionGate:
+    """Two sides which claim one array and answer differently."""
+
+    GATE = "abs: same data_id, different content — raise the operation's version"
+
+    @pytest.fixture()
+    def before(self, patch):
+        """The fingerprint of an operation's result, whose id is derived."""
+        return digest(patch.abs())
+
+    def test_same_id_different_content(self, before):
+        """A changed answer under an unchanged recipe names the cure."""
+        # What a rewritten operation gives when nobody raised its version.
+        after = {**before, "data_hash": "0" * 32}
+        assert compare({"abs": before}, {"abs": after})[0] == self.GATE
+
+    def test_bumped_version_is_an_ordinary_difference(self, before):
+        """A raised version moves the id, so the gate has nothing to say."""
+        after = {**before, "data_hash": "0" * 32}
+        after["ids"] = {**after["ids"], "data_id": "1" * 32}
+        report = compare({"abs": before}, {"abs": after})
+        assert report[0].startswith("abs: differs in ")
+
+    def test_an_id_beside_the_data_id(self, before):
+        """The content agrees, so no operation is owed a version."""
+        after = {**before, "ids": {**before["ids"], "origin_id": "1" * 32}}
+        report = compare({"abs": before}, {"abs": after})
+        assert report[0] == "abs: differs in ['ids']"
+
+    def test_a_leaf_names_no_recipe(self, patch):
+        """An input's id is assigned, so its content moving is not a version."""
+        before = digest(patch)
+        assert before["ids"]["data_id"] == before["ids"]["origin_id"]
+        after = {**before, "data_hash": "0" * 32}
+        report = compare({"input": before}, {"input": after})
+        assert report[0] == "input: differs in ['data_hash']"
+
+    def test_a_changed_input_excuses_what_follows(self, patch, before):
+        """The fixture moved, not the operation."""
+        leaf = digest(patch)
+        moved = {**leaf, "data_hash": "1" * 32}
+        after = {**before, "data_hash": "0" * 32}
+        report = compare({"input": leaf, "abs": before}, {"input": moved, "abs": after})
+        assert "abs: differs in ['data_hash']" in report
+        assert self.GATE not in report
+
+    def test_a_leaf_on_either_side_names_no_recipe(self, before):
+        """One id on both sides is not one recipe when either is an input."""
+        ids = before["ids"]
+        after = {
+            **before,
+            "data_hash": "0" * 32,
+            "ids": {**ids, "origin_id": ids["data_id"]},
+        }
+        report = compare({"abs": before}, {"abs": after})
+        assert report[0].startswith("abs: differs in ")
+
+    def test_fields_do_not_hide_the_ids(self, before):
+        """Narrowing what is compared still knows whether the recipe held."""
+        after = {**before, "data_hash": "0" * 32}
+        report = compare({"abs": before}, {"abs": after}, fields={"data_hash"})
+        assert report[0] == self.GATE
+
+    def test_no_ids_is_not_one_id(self, before):
+        """A ref from before the ids states none, which is not agreement."""
+        old = {i: v for i, v in before.items() if i != "ids"}
+        new = {**old, "data_hash": "0" * 32}
+        report = compare({"abs": old}, {"abs": new}, fields={"data_hash"})
+        assert report[0] == "abs: differs in ['data_hash']"
+
+    def test_fields_hold_for_every_call(self, before):
+        """One call's differing fields do not narrow the next call's."""
+        first = {**before, "data_hash": "0" * 32, "dtype": "int8"}
+        second = {**before, "dtype": "int8"}
+        ids = {"ids": {}}
+        report = compare(
+            {"a": before | ids, "b": before | ids},
+            {"a": first | ids, "b": second | ids},
+            fields={"data_hash", "dtype"},
+        )
+        assert "a: differs in ['data_hash', 'dtype']" in report
+        assert "b: differs in ['dtype']" in report
+
+
 # dump() records the error instead of the fingerprint when a call raises,
 # so the comparison covers what each version says about a bad argument --
 # the class included, since it names the error it writes. Naming them here

@@ -136,7 +136,7 @@ class TestKurtosis:
 
     def test_runs_on_reversed_coordinate(self, random_patch):
         """Descending coordinates should use their absolute sample spacing."""
-        time = random_patch.get_coord("time").data[::-1]
+        time = random_patch.get_coord("time").values[::-1]
         patch = random_patch.update_coords(time=time)
 
         out = patch.kurtosis(time=0.01)
@@ -146,7 +146,7 @@ class TestKurtosis:
 
     def test_uneven_coordinate_raises(self, random_patch):
         """Uneven coordinates should raise a clear CoordError."""
-        time = random_patch.get_coord("time").data.copy()
+        time = random_patch.get_coord("time").values.copy()
         time[2:] += np.timedelta64(1, "s")
         patch = random_patch.update_coords(time=time)
 

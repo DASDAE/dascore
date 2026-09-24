@@ -11,7 +11,6 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.core.coords import CoordRange
 from dascore.io.index.catalog import CompositeResolver, PatchCatalog, _absolutize_record
 from dascore.io.index.ingest import SourceRecord
 
@@ -93,7 +92,7 @@ class TestMemoryUnion:
         assert len(merged) == 1
         patch = merged[0]
         time = patch.get_coord("time")
-        assert isinstance(time, CoordRange)
+        assert time.evenly_sampled
         assert time.min() == p1.get_coord("time").min()
         assert time.max() == p2.get_coord("time").max()
 
@@ -257,10 +256,10 @@ class TestExportPushdown:
             ):
                 fetched_patches.append(sql)
 
-        target = int(catalog.to_df()["_patch_id"].iloc[0])
+        target = int(catalog.to_df()["_patch_row"].iloc[0])
         con.set_trace_callback(_trace)
         try:
-            records = backend.export_records(patch_ids=[target])
+            records = backend.export_records(patch_rows=[target])
         finally:
             con.set_trace_callback(None)
 
@@ -268,7 +267,7 @@ class TestExportPushdown:
         assert sum(len(r.patches) for r in records) == 1
         # ...and every patches query was id-filtered (no full-table scan).
         assert fetched_patches
-        assert all("patch_id in" in sql.lower() for sql in fetched_patches)
+        assert all("patch_row in" in sql.lower() for sql in fetched_patches)
 
     def test_export_all_matches_full(self):
         """export_records() with no ids returns every source, unchanged."""
@@ -278,11 +277,11 @@ class TestExportPushdown:
         records = catalog.backend.export_records()
         assert sum(len(r.patches) for r in records) == 5
 
-    def test_export_empty_patch_ids(self):
+    def test_export_empty_patch_rows(self):
         """Exporting an empty id set returns no records without querying."""
         catalog = PatchCatalog.from_patches([dc.get_example_patch()])
         catalog.to_df()
-        assert catalog.backend.export_records(patch_ids=[]) == []
+        assert catalog.backend.export_records(patch_rows=[]) == []
 
     def test_absolutize_record_passthrough(self, tmp_path):
         """A record already carrying an absolute/URI path is returned as-is."""

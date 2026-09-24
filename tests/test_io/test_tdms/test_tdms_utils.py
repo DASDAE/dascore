@@ -11,12 +11,14 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.io.core import FiberIO
+from dascore.constants import INVENTORY_ATTRS
+from dascore.exceptions import RemoteCacheError
 from dascore.io.silixah5.utils import _ATTR_MAP as _SILIXA_ATTR_MAP
 from dascore.io.tdms import utils as tdms_utils
 from dascore.io.tdms.core import TDMSFormatterV4713
 from dascore.io.tdms.utils import parse_time_stamp, type_not_supported
 from dascore.utils.downloader import fetch
+from dascore.utils.io import IOResourceManager, LocalBinaryReader
 
 
 class _FakeTDMSFile(io.BytesIO):
@@ -27,6 +29,56 @@ class _FakeTDMSFile(io.BytesIO):
     def fileno(self):
         """Return a dummy file descriptor for monkeypatched mmap."""
         return 0
+
+
+class TestReadWork:
+    """A read does not fetch the TDMS header twice."""
+
+    @pytest.mark.parametrize(
+        "selection",
+        [
+            {"source_patch_key": "missing"},
+            {"samples": True, "time": (10**9, 10**9 + 1)},
+        ],
+    )
+    def test_rejected_selection_does_not_materialize(self, selection):
+        """Metadata rejection works even when local materialization is disabled."""
+
+        class NoLocalCopy(IOResourceManager):
+            def get_resource(self, required_type):
+                if required_type is LocalBinaryReader:
+                    raise RemoteCacheError("Local materialization is disabled")
+                return super().get_resource(required_type)
+
+        path = fetch("sample_tdms_file_v4713.tdms")
+        with path.open("rb") as resource:
+            manager = NoLocalCopy(resource)
+            assert len(TDMSFormatterV4713().read(manager, **selection)) == 0
+            assert not resource.closed
+
+    def test_header_read_volume(self):
+        """Reading samples needs only the scan header plus the chunk-size fields."""
+
+        class Counter(io.BufferedReader):
+            bytes_read = 0
+
+            def read(self, size=-1):
+                out = super().read(size)
+                self.bytes_read += len(out)
+                return out
+
+        reader = TDMSFormatterV4713()
+        path = fetch("sample_tdms_file_v4713.tdms")
+        with Counter(path.open("rb")) as resource:
+            metadata = reader.get_metadata(resource)[0]
+            scan_bytes = resource.bytes_read
+            resource.seek(0)
+            resource.bytes_read = 0
+            patch = reader.read(resource)[0]
+            assert resource.bytes_read <= scan_bytes + 8
+            assert not resource.closed
+        assert patch.shape == metadata.shape
+        assert patch.dtype == metadata.dtype
 
 
 class TestTDMSUtils:
@@ -267,9 +319,12 @@ class TestReadArray:
     def test_matches_default_across_segments(self, two_segment_path):
         """A window spanning the segment boundary matches the default."""
         io = TDMSFormatterV4713()
-        windows = {"time": (990, 1010), "distance": (5, 9)}
-        out = io.read_array(two_segment_path, windows)
-        expected = FiberIO.read_array(io, two_segment_path, windows)
+        out = io.read_array(two_segment_path, ((990, 1010), (5, 9)))
+        expected = (
+            io.read(two_segment_path, source_patch_key="")[0]
+            .select(samples=True, time=(990, 1010), distance=(5, 9))
+            .data
+        )
         assert out.dtype == expected.dtype
         assert np.array_equal(out, expected)
         assert out.shape == (20, 4)
@@ -303,7 +358,7 @@ class TestReadArray:
         }
         for (start, stop), expected in cases.items():
             decoded.clear()
-            out = io.read_array(two_segment_path, {"time": (start, stop)})
+            out = io.read_array(two_segment_path, ((start, stop),))
             assert decoded == expected, (start, stop)
             # both segments hold the example's samples
             rows = np.concatenate([single.data, single.data])[start:stop]
@@ -312,9 +367,9 @@ class TestReadArray:
     def test_empty_window(self, two_segment_path):
         """A window past the end is empty with the right width and dtype."""
         io = TDMSFormatterV4713()
-        out = io.read_array(two_segment_path, {"time": (5000, 6000)})
+        out = io.read_array(two_segment_path, ((5000, 6000),))
         assert out.shape == (0, 1152)
-        assert out.dtype == FiberIO.read_array(io, two_segment_path, {}).dtype
+        assert out.dtype == io.read(two_segment_path, source_patch_key="")[0].dtype
 
 
 class TestTDMSInterrogator:
@@ -339,6 +394,46 @@ class TestTDMSInterrogator:
         with open(tdms_path, "rb") as fi:
             header, _ = tdms_utils._get_all_attrs(fi)
         return header["SystemInfomation.OS.HostName"]
+
+    def test_flat_inventory_attr(self, tdms_path, monkeypatch):
+        """A canonical property already named in the header survives filtering."""
+        read_attr = tdms_utils._read_attr
+
+        def canonical_attr(resource):
+            name, value = read_attr(resource)
+            if name == "GaugeLength":
+                name = "gauge_length"
+            return name, value
+
+        monkeypatch.setattr(tdms_utils, "_read_attr", canonical_attr)
+        patch = dc.read(tdms_path)[0]
+        metadata = dc.scan_payloads(tdms_path)[0]
+        summary = dc.scan(tdms_path)[0]
+        assert patch.attrs.gauge_length == 10.0
+        assert metadata.attrs.gauge_length == summary.attrs.gauge_length == 10.0
+
+    def test_canonical_scan_and_read(self, tdms_path, raw_host_name):
+        """Scan and read omit raw vendor fields while retaining canonical facts."""
+        patch = dc.read(tdms_path)[0]
+        metadata = dc.scan_payloads(tdms_path)[0]
+        summary = dc.scan(tdms_path)[0]
+        attrs = dict(patch.attrs)
+        allowed = set(dc.PatchAttrs.model_fields) | set(INVENTORY_ATTRS)
+        assert set(attrs) <= allowed
+        assert attrs == dict(metadata.attrs) == dict(summary.attrs)
+        assert attrs["interrogator.name"] == raw_host_name
+        assert attrs["data_type"] == "strain_rate"
+        assert metadata.coords == patch.coords
+        assert metadata.dtype == patch.dtype
+        selected = dc.read(tdms_path, samples=True, time=(1, 4), distance=(2, 5))[0]
+        np.testing.assert_array_equal(selected.data, patch.data[1:4, 2:5])
+        # A trim names a window of the file, so its data_id alone moves.
+        assert selected.attrs.data_id != patch.attrs.data_id
+        assert selected.attrs.update(data_id=patch.attrs.data_id) == patch.attrs
+        assert patch._source == metadata._source
+        # The selection keeps the same provenance and narrows the windows.
+        assert selected._source.detach() == patch._source.detach()
+        assert selected._source.windows == ((1, 4), (2, 5))
 
     def test_name_is_host_name(self, tdms_attrs, raw_host_name):
         """The name is exactly the HostName property, eg "iDAS005"."""

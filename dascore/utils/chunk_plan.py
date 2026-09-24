@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.constants import attr_conflict_description
+from dascore.constants import WARN_LEVELS, attr_conflict_description
 from dascore.exceptions import (
     ChunkError,
     CoordMergeError,
@@ -49,14 +49,28 @@ from dascore.units import (
 from dascore.utils.attrs import known_only, validate_conflict
 from dascore.utils.chunk import get_intervals
 from dascore.utils.docs import compose_docstring
+from dascore.utils.explicit_ranges import ExplicitRanges, explicit_ranges
 from dascore.utils.gaps import DEFAULT_TOLERANCE, GapTolerance, gap_boundaries
-from dascore.utils.misc import _CanonicalRange, get_middle_value, is_range
+from dascore.utils.misc import (
+    _CanonicalRange,
+    express_range_for_coord,
+    get_middle_value,
+    is_range,
+    validate_warn_level,
+    warn_or_raise,
+)
 from dascore.utils.pd import (
     adjust_segments,
     get_dim_names_from_columns,
     get_interval_columns,
 )
-from dascore.utils.time import is_datetime64, is_timedelta64, to_float, to_timedelta64
+from dascore.utils.time import (
+    is_datetime64,
+    is_timedelta64,
+    to_datetime64,
+    to_float,
+    to_timedelta64,
+)
 
 # Columns which never participate in conflict policing and never carry to
 # outputs: source bookkeeping (outputs are not file rows) and the two
@@ -67,10 +81,17 @@ _SOURCE_COLUMNS = (
     "source_format",
     "source_version",
     "source_patch_key",
+    "origin_id",
+    "data_id",
+    # The ids' former names, which attrs pickled before the rename hold.
     "patch_id",
     "processing_id",
 )
 _PATCH_LOCAL_EMPTY = "_patch_local_empty"
+
+# Slack when deciding which side of a grid position a window edge falls on,
+# so an edge a float rounding error short of a position still holds it.
+_GRID_SNAP_RTOL = 1e-9
 
 
 @dataclass(frozen=True)
@@ -86,7 +107,7 @@ class ChunkPlan:
         dims, structural def keys, conflict-policed attrs).
     members
         Instruction rows binding outputs to sources: `output_id`,
-        `_patch_id`, the exact `{dim}_min/max` trim for that member, and
+        `_patch_row`, the exact `{dim}_min/max` trim for that member, and
         `_modified` (False when the member loads whole).
     dim
         The chunked dimension.
@@ -115,17 +136,17 @@ def coalesce_runs(plan: ChunkPlan, working: pd.DataFrame) -> ChunkPlan:
     Merge each output's consecutive members cut from one patch's runs.
 
     A patch split into runs plans run by run (its rows share one
-    `_patch_id`), so a hole can end an output; the runs which land in
+    `_patch_row`), so a hole can end an output; the runs which land in
     one output are read from their patch once, as one member spanning
     them.
     """
     members = plan.members
-    ids = working["_patch_id"]
+    ids = working["_patch_row"]
     split = set(ids[ids.duplicated(keep=False)])
     if not split or members.empty:
         return plan
     lo, hi = f"{plan.dim}_min", f"{plan.dim}_max"
-    out, pid = members["output_id"], members["_patch_id"]
+    out, pid = members["output_id"], members["_patch_row"]
     same = (out == out.shift()) & (pid == pid.shift()) & pid.isin(split)
     if not same.any():
         return plan
@@ -204,19 +225,18 @@ def _relative_bound(mins, maxs, value, open_values, units=None):
     """
     Resolve one patch-local relative bound for every relation row.
 
-    Returns the per-row values, whether the bound could not be projected,
-    and whether it leaves its side of the range unbounded.
+    Returns values, whether projection failed, and the fixed origin if known.
     """
     is_quantity = hasattr(value, "units")
     if value is None or value is Ellipsis:
-        return open_values, False, True
+        return open_values, False, None
     if not is_quantity and np.ndim(value) == 0 and pd.isnull(value):
-        return open_values, False, True
+        return open_values, False, None
     try:
         was_percent = is_percent(value)
         sign = value.magnitude if is_quantity else to_float(value)
         if np.ndim(sign):
-            return open_values, True, False
+            return open_values, True, None
         reference = mins if sign >= 0 else maxs
         time_like = is_datetime64(mins) or is_timedelta64(mins)
         if not np.isfinite(sign) and time_like:
@@ -224,7 +244,7 @@ def _relative_bound(mins, maxs, value, open_values, units=None):
             # so the patch loads whole and the envelope stays open. A numeric
             # coordinate takes the infinity literally and the arithmetic
             # below already says so: +inf from the start selects nothing.
-            return open_values, False, True
+            return open_values, False, None
         if was_percent:
             offset = (value.magnitude / 100) * (maxs - mins)
         elif is_quantity:
@@ -237,15 +257,73 @@ def _relative_bound(mins, maxs, value, open_values, units=None):
             offset = to_timedelta64(value)
         else:
             offset = value
-        return reference + offset, False, False
+        origin = None if was_percent else ("min" if sign >= 0 else "max")
+        return reference + offset, False, origin
     except (NotImplementedError, TypeError, UnitError, ValueError):
         # Keep the source envelope as a candidacy superset. The loaded
         # coordinate remains authoritative and applies the exact selection.
-        return open_values, True, False
+        return open_values, True, None
 
 
-def _adjust_relative_envelopes(df, coords, drop_empty):
+def _relative_endpoints(df, source, previous, names):
+    """Recover sampled endpoints before resolving another relative window."""
+    # Circular import: patch assembly imports the index and its plan utilities.
+    from dascore.utils.patch_assembly import coord_from_row  # noqa: PLC0415
+
+    uncertain = {}
+    previous_names = {name for coords, _, _ in previous for name in coords}
+    if not previous_names:
+        return df, uncertain
+    # Relative projections flag every trim or unresolved window. Rows known
+    # to load whole still use their source origins, including associated axes.
+    whole = set()
+    if "_modified" in df and all(r and not s for _, s, r in previous):
+        whole = set(df.index[~df["_modified"]])
+    for name in names:
+        selections = [(c[name], s, r) for c, s, r in previous if name in c]
+        cols = [f"{name}_min", f"{name}_max"]
+        if not set(cols).issubset(df.columns):
+            continue
+        unknown = set()
+        for index in df.index:
+            if index in whole:
+                continue
+            row = source.loc[index]
+            dims = set(str(row.get("dims", "")).split(","))
+            if "dims" in row and (name not in dims or previous_names - dims):
+                # Selecting an associated coordinate can trim another axis;
+                # envelopes do not describe that relationship sample by sample.
+                unknown.add(index)
+                continue
+            if not selections:
+                continue
+            unit = row.get(f"_{name}_units")
+            units = unit if isinstance(unit, str) and unit else None
+            coord = coord_from_row(row, name, units=units)
+            if coord is None:
+                # An irregular envelope does not say which sample an earlier
+                # trim reached. Do not reject its patch using guessed endpoints.
+                unknown.add(index)
+                continue
+            for selection, samples, relative in selections:
+                if not len(coord):
+                    break
+                selection = express_range_for_coord(selection, coord)
+                coord, _ = coord.select(selection, samples=samples, relative=relative)
+            if not len(coord):
+                if _PATCH_LOCAL_EMPTY not in df:
+                    df[_PATCH_LOCAL_EMPTY] = False
+                df.loc[index, _PATCH_LOCAL_EMPTY] = True
+            else:
+                df.loc[index, cols] = coord.min(), coord.max()
+        uncertain[name] = unknown
+    return df, uncertain
+
+
+def _adjust_relative_envelopes(df, coords, uncertain):
     """Project patch-local relative ranges onto relation envelopes."""
+    if "_data_size" in df:
+        df = df[df["_data_size"].ne(0).fillna(True)]
     for name, value in coords.items():
         cols = [f"{name}_min", f"{name}_max"]
         if not set(cols).issubset(df.columns) or not is_range(value):
@@ -259,41 +337,54 @@ def _adjust_relative_envelopes(df, coords, drop_empty):
                 ("float16", "float32")
             )
         unit_col = f"_{name}_units"
+        group_cols = [c for c in (unit_col, dtype_col) if c in df.columns]
         grouped = (
-            df.groupby(df[unit_col], dropna=False, sort=False)
-            if unit_col in df.columns
+            df.groupby(group_cols, dropna=False, sort=False, observed=True)
+            if group_cols
             else [(None, df)]
         )
         pieces = []
-        for unit, sub in grouped:
+        for _, sub in grouped:
             mins, maxs = (sub[c] for c in cols)
+            # Relative arithmetic must round as the loaded coordinate does:
+            # widening a float32 bound can turn one selected sample into an
+            # inverted window and wrongly remove the patch.
+            dtype = sub[dtype_col].iloc[0] if dtype_col in sub else None
+            if isinstance(dtype, str) and dtype in ("float16", "float32"):
+                mins, maxs = mins.astype(dtype), maxs.astype(dtype)
             lo, hi = value
+            unit = sub[unit_col].iloc[0] if unit_col in sub else None
             units = None if unit is None or pd.isnull(unit) or unit == "" else str(unit)
-            left, left_unresolved, left_open = _relative_bound(
+            left, left_unresolved, left_origin = _relative_bound(
                 mins, maxs, lo, mins, units
             )
-            right, right_unresolved, right_open = _relative_bound(
+            right, right_unresolved, right_origin = _relative_bound(
                 mins, maxs, hi, maxs, units
             )
             unresolved = mins.isna() | maxs.isna()
+            unresolved |= sub.index.isin(uncertain.get(name, ()))
             if left_unresolved or right_unresolved:
                 unresolved |= True
-            # An open bound already sits at the envelope extreme on its own
-            # side, so it can never reorder the range. Swapping it back in
-            # would make a window that starts past the patch end look like
-            # one ending at it, hiding the emptiness the `keep` test finds.
-            if left_open or right_open:
-                swap = pd.Series(False, index=sub.index)
-            else:
-                swap = right < left
-            new_min = left.where(~swap, other=right)
-            new_max = right.where(~swap, other=left)
-            new_min = new_min.mask(unresolved, mins)
-            new_max = new_max.mask(unresolved, maxs)
+            # Fixed offsets from the same endpoint can cross even when an
+            # earlier trim left that endpoint unknown. Shrinking an envelope
+            # also cannot rescue a crossed minimum-to-maximum fixed window.
+            # Floating-point offsets must remain distinct after rounding.
+            same_origin = left_origin is not None and left_origin == right_origin
+            min_to_max = left_origin == "min" and right_origin == "max"
+            crossed = (left > right) & (same_origin or min_to_max)
+            if pd.api.types.is_float_dtype(left):
+                extent = np.maximum(left.abs(), right.abs()) + (maxs - mins).abs()
+                roundoff = 4 * np.finfo(left.dtype).eps * extent
+                crossed &= (left - right) > roundoff
+            new_min = left.mask(unresolved, mins)
+            new_max = right.mask(unresolved, maxs)
             # Test before clipping so an entirely out-of-range window is not
             # resurrected as a one-sample envelope.
-            keep = (new_min <= maxs) & (new_max >= mins)
+            keep = (new_min <= new_max) & (new_min <= maxs) & (new_max >= mins)
             keep |= unresolved
+            keep &= ~crossed
+            if _PATCH_LOCAL_EMPTY in sub:
+                keep &= ~sub[_PATCH_LOCAL_EMPTY]
             # Preserve whole-source metadata for relative no-ops. Unknown
             # projections still cannot claim that the source loads whole.
             sub["_modified"] = (
@@ -305,13 +396,7 @@ def _adjust_relative_envelopes(df, coords, drop_empty):
             )
             sub[cols[0]] = new_min.clip(lower=mins, upper=maxs)
             sub[cols[1]] = new_max.clip(lower=mins, upper=maxs)
-            if drop_empty:
-                sub = sub[keep]
-            else:
-                empty = ~keep & ~unresolved
-                sub[cols] = sub[cols].mask(empty)
-                sub[_PATCH_LOCAL_EMPTY] = sub.get(_PATCH_LOCAL_EMPTY, False) | empty
-            pieces.append(sub)
+            pieces.append(sub[keep])
         df = pd.concat(pieces).sort_index() if pieces else df.iloc[:0]
     return df
 
@@ -322,26 +407,30 @@ def patch_local_adjusted_envelopes(
     """
     Replay coordinate residuals onto relation envelopes in call order.
 
-    Absolute residuals trim membership and envelopes. A patch-local sample
-    or relative selection preserves row membership, but the planner must
+    Absolute and relative residuals trim membership and envelopes. A
+    sample selection preserves row membership, but the planner must
     consume its trimmed envelopes or it publishes outputs
     that lie entirely outside the selected samples (phantom empties).
     Negative indices resolve per patch against the envelope-derived
     sample count (rows whose count is unknown keep their envelope as a
     candidacy superset — exactness is always re-applied at load).
-    ``drop_empty`` removes rows whose window selects nothing (planning
-    truth); equality comparison keeps them, since a presented-but-empty
-    row is still a presented row.
+    ``drop_empty`` removes rows emptied by sample selection for planning;
+    presentation keeps those rows. Relative selections always remove rows
+    whose resolved windows are empty.
     """
 
     def _usable_index(value) -> bool:
         return value is None or isinstance(value, int | np.integer)
 
+    source = df
     df = df.copy(deep=False)
-    for coords, samples, relative in residuals:
+    for position, (coords, samples, relative) in enumerate(residuals):
         if not samples:
             if relative:
-                df = _adjust_relative_envelopes(df, coords, drop_empty)
+                df, uncertain = _relative_endpoints(
+                    df, source, residuals[:position], coords
+                )
+                df = _adjust_relative_envelopes(df, coords, uncertain)
             else:
                 df = _adjust_absolute_envelopes(df, coords)
             continue
@@ -409,11 +498,11 @@ def _drop_patch_local_empty(df: pd.DataFrame) -> pd.DataFrame:
     return df if empty is None else df[~empty]
 
 
-def _ensure_patch_id(df: pd.DataFrame) -> pd.DataFrame:
+def _ensure_patch_row(df: pd.DataFrame) -> pd.DataFrame:
     """Attach the positional identity fallback for plain dataframes."""
-    if "_patch_id" in df.columns:
+    if "_patch_row" in df.columns:
         return df
-    return df.assign(_patch_id=np.arange(len(df)))
+    return df.assign(_patch_row=np.arange(len(df)))
 
 
 def _dim_def_key_columns(df: pd.DataFrame, name: str) -> list[str]:
@@ -500,7 +589,7 @@ def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
     Envelope columns are stored in each coordinate's original units, so
     compatible spellings (metres beside feet) are not directly
     comparable. Rows sharing a dimensionality convert to the unit of
-    their first row — ordered by (envelope min in base units, patch id),
+    their first row — ordered by (envelope min in base units, patch row),
     the same deterministic order partitions present in — so continuity
     and instruction math stay valid and the plan speaks one unit per
     partition. The rewritten ``_{name}_units`` column tells assembly
@@ -542,7 +631,7 @@ def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
             idx = sub.index[sub[unit_col] == unit]
             values = sub.loc[idx, min_name].to_numpy(dtype=float)
             base_min.loc[idx] = convert_units(values, to_units=base, from_units=unit)
-        order = pd.DataFrame({"_min": base_min, "_pid": sub["_patch_id"]}).sort_values(
+        order = pd.DataFrame({"_min": base_min, "_pid": sub["_patch_row"]}).sort_values(
             ["_min", "_pid"], kind="stable"
         )
         target = str(df.at[order.index[0], unit_col])
@@ -589,7 +678,7 @@ def _prepare_relation(
     """
     Ready a flat relation for planning or reporting along ``name``.
 
-    Attaches patch ids, re-spells compatible units, then applies the
+    Attaches patch rows, re-spells compatible units, then applies the
     `missing_dim` policy. Missing envelopes, and patches carrying the
     name only as a non-dimensional coordinate (spec 7 / D2), both count
     as missing: envelope presence is not enough, because auxiliary
@@ -602,7 +691,7 @@ def _prepare_relation(
     """
     _validate_missing_dim(missing_dim)
     min_name, max_name = f"{name}_min", f"{name}_max"
-    df = _ensure_patch_id(df)
+    df = _ensure_patch_row(df)
     df = _normalize_chunk_units(df, name)
     null_rows = pd.isnull(df[min_name]) | pd.isnull(df[max_name])
     if "dims" in df.columns:
@@ -614,7 +703,7 @@ def _prepare_relation(
     if not unusable.any():
         return df
     if missing_dim == "raise":
-        bad = df.loc[unusable, "_patch_id"].tolist()
+        bad = df.loc[unusable, "_patch_row"].tolist()
         rides = int((not_a_dim & ~null_rows).sum())
         detail = (
             f" ({rides} of them carry {name!r} only as a non-dimensional "
@@ -624,7 +713,7 @@ def _prepare_relation(
         )
         msg = (
             f"{int(unusable.sum())} patch(es) lack the {dim_label} "
-            f"{name!r}{detail} (patch ids {bad[:5]}...). Pass "
+            f"{name!r}{detail} (patch rows {bad[:5]}...). Pass "
             "missing_dim='drop' to exclude them."
         )
         raise ChunkError(msg)
@@ -1046,22 +1135,22 @@ def _coord_owner(col: str, coord_names: set[str]) -> str | None:
 
 def _partition_frames(df: pd.DataFrame, labels: pd.Series, name: str):
     """
-    Order the relation by (partition, envelope min, patch id).
+    Order the relation by (partition, envelope min, patch row).
 
     Partition order follows spec 8: by (partition min, smallest member
-    patch id) — never by anything derived from input row order. Returns
+    patch row) — never by anything derived from input row order. Returns
     the sorted frame (fresh RangeIndex), each row's partition ordinal,
     the offsets where partitions begin, and the partition envelopes.
     """
     min_name, max_name = f"{name}_min", f"{name}_max"
     grouped = df.groupby(labels, sort=False)
     stats = grouped.agg(
-        _min=(min_name, "min"), _max=(max_name, "max"), _pid=("_patch_id", "min")
+        _min=(min_name, "min"), _max=(max_name, "max"), _pid=("_patch_row", "min")
     ).sort_values(["_min", "_pid"], kind="stable")
     rank = pd.Series(np.arange(len(stats)), index=stats.index)
     codes = labels.map(rank).to_numpy(dtype=np.intp)
     # last lexsort key is primary: partition, then envelope min, then id
-    order = np.lexsort((df["_patch_id"].to_numpy(), df[min_name].to_numpy(), codes))
+    order = np.lexsort((df["_patch_row"].to_numpy(), df[min_name].to_numpy(), codes))
     sorted_df = df.iloc[order].reset_index(drop=True)
     codes = codes[order]
     seg_starts = np.flatnonzero(np.r_[True, np.diff(codes) != 0])
@@ -1078,7 +1167,7 @@ def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str
     """
     Overlap-corrected source envelopes over the whole sorted relation.
 
-    Within each partition (rows ordered by start, patch id) an
+    Within each partition (rows ordered by start, patch row) an
     overlapping source's start moves to just past the furthest stop of
     the sources before it, so the earliest source owns the overlap (D3:
     complete overlaps keep the first member, deterministically). Returns
@@ -1218,11 +1307,15 @@ def _carried_columns(
         if has_dims and not pd.isnull(dims_val):
             dim_names = set(str(dims_val).split(","))
         dim_names.discard(name)
-        # a kept identity brings the exact grid it describes
+        # a kept identity brings the exact grid it describes, and the
+        # dtype that grid's values are stated in: a row is all an output
+        # with no members has to rebuild the coordinate from, and an
+        # integer coordinate rebuilt from the frame's float envelope
+        # would not match the same coordinate on its neighbours
         part_cols = [
             key
             for x in sorted(dim_names)
-            for suffix in ("_def_key", "_grid")
+            for suffix in ("_def_key", "_grid", "_coord_dtype")
             if (key := f"_{x}{suffix}") in columns
         ]
         coord_names = set(police_dims[part].split(",")) | {name}
@@ -1322,7 +1415,7 @@ def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance):
     Yield `(cell rows, gaps in that cell)` for every cell in `df`.
 
     Cells come in envelope-min order, as partitions do (spec 8), and
-    ties break on what the cell states rather than on a patch id, which
+    ties break on what the cell states rather than on a patch row, which
     is positional — so a report never depends on the order the relation
     happened to arrive in. Each cell's ordinal rides on its gaps as
     `group_id`, which is the only thing that always tells two cells
@@ -1505,6 +1598,9 @@ def build_chunk_plan(
     conflict: Literal["drop", "raise", "keep_first"] = "raise",
     group=None,
     missing_dim: Literal["raise", "drop"] = "raise",
+    fill_value=None,
+    on_incomplete: WARN_LEVELS = "raise",
+    _exact_coords=None,
     **kwargs,
 ) -> ChunkPlan:
     """
@@ -1523,21 +1619,26 @@ def build_chunk_plan(
     # offending chunk call. See #804.
     validate_conflict(conflict)
     ((name, value),) = kwargs.items()
+    on_incomplete = validate_warn_level(on_incomplete, "on_incomplete")
+    explicit = explicit_ranges(value)
+    if explicit is not None and overlap is not None:
+        msg = "overlap cannot be combined with explicit ranges."
+        raise ParameterError(msg)
     tolerance = GapTolerance.from_user(tolerance, name)
-    value = None if value is Ellipsis else value
+    value = explicit if explicit is not None else (None if value is Ellipsis else value)
     # Police quantities before merge_mode is decided: a NaN magnitude is
     # null, so a nan-valued size would silently merge the whole spool
     # when the user asked for a size *cap*.
     for label, quant in (("chunk value", value), ("overlap", overlap)):
         _validate_quantity(label, quant, name)
-    merge_mode = pd.isnull(value)
+    merge_mode = explicit is None and bool(pd.isnull(value))
     if merge_mode and (keep_partial or overlap):
         msg = (
             "When chunk value is None (ie chunking is used for merging) "
             "keep_partial and overlap are not supported."
         )
         raise ParameterError(msg)
-    if not merge_mode:
+    if not merge_mode and not isinstance(value, ExplicitRanges):
         assert value is not None  # pd.isnull(None) is True, so merge_mode covers it
         zero = to_timedelta64(0) if is_timedelta64(value) else 0
         if value <= zero:
@@ -1549,39 +1650,56 @@ def build_chunk_plan(
         msg = f"No patch in the spool has a {name!r} dimension to chunk."
         raise ChunkError(msg)
     empty_members = pd.DataFrame(
-        columns=["output_id", "_patch_id", min_name, max_name, "_modified"]
+        columns=["output_id", "_patch_row", min_name, max_name, "_modified"]
     )
     params = dict(
         overlap=overlap,
         keep_partial=keep_partial,
         snap_coords=snap_coords,
         tolerance=tolerance,
+        fill_value=fill_value,
         conflict=conflict,
         missing_dim=missing_dim,
         group=_resolve_group_attrs(group, set(df.columns)),
         sampling_group_tolerance=dc.get_config().sampling_group_tolerance,
+        on_incomplete=on_incomplete,
     )
+    if not df.empty:
+        df = _prepare_relation(df, name, missing_dim)
     if df.empty:
-        outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
-        return ChunkPlan(outputs, empty_members, name, value, params)
-    df = _prepare_relation(df, name, missing_dim)
-    if df.empty:
+        if explicit is not None:
+            _report_incomplete(
+                [
+                    (i, bounds, "no applicable group", "source is empty")
+                    for i, bounds in enumerate(explicit.rows)
+                ],
+                on_incomplete,
+            )
         outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
         return ChunkPlan(outputs, empty_members, name, value, params)
 
+    if explicit is not None:
+        df = df.assign(
+            _explicit_cell=_cell_labels(
+                df, name, params["group"], params["sampling_group_tolerance"]
+            )
+        )
     labels, forced_merge = _partition(
         df, name, params["group"], tolerance, params["sampling_group_tolerance"]
     )
-    if forced_merge:
+    if forced_merge and fill_value is None:
+        # with a fill value the holes are filled, so the outputs are
+        # evenly sampled after all and there is nothing to warn about
         msg = (
             f"There is a gap in the patch along dimension {name} but a "
             f"merge tolerance of {tolerance} was used to force merging "
             "the patches. As a result, some patches in the chunked spool "
-            "may be unevenly sampled, or have their sampling rate increased."
+            "are unevenly sampled. Pass fill_value to fill the missing "
+            "samples instead."
         )
         warnings.warn(msg, UserWarning, stacklevel=_user_stacklevel())
-    per_partition = _needs_partition_resolution(value, overlap)
-    if not per_partition:
+    per_partition = explicit is None and _needs_partition_resolution(value, overlap)
+    if not per_partition and explicit is None:
         value_c, overlap_c = _coerce_length_overlap(value, overlap, df[min_name].dtype)
     size_diagnostics: list[dict] = []
     sorted_df, codes, seg_starts, g_starts, g_stops = _partition_frames(
@@ -1600,7 +1718,7 @@ def build_chunk_plan(
     stop_all = sorted_df[max_name].to_numpy()
     src1, src2 = corrected[keep_row], stop_all[keep_row]
     korig_min, korig_max = start_all[keep_row], stop_all[keep_row]
-    kpids = sorted_df["_patch_id"].to_numpy()[keep_row]
+    kpids = sorted_df["_patch_row"].to_numpy()[keep_row]
     ksteps, kmod = step_all[keep_row], mod_after[keep_row]
     koffsets = np.r_[0, np.cumsum(np.bincount(codes[keep_row], minlength=n_parts))]
     has_dtype = "_dtype" in sorted_df.columns
@@ -1620,6 +1738,7 @@ def build_chunk_plan(
     active = np.zeros(n_parts, dtype=bool)
     fed_counts = np.zeros(n_parts, dtype=np.intp)
     out_starts, out_stops, out_ids = [], [], []
+    out_requests = []
     m_out_ids, m_src, m_lo, m_hi, m_parts, dtype_parts = [], [], [], [], [], []
     next_id = 0
     # An error hit while processing partition p is deferred until the
@@ -1647,7 +1766,48 @@ def build_chunk_plan(
                 break
             if diag is not None:
                 size_diagnostics.append({"first_output_id": next_id, **diag})
-        if merge_mode:
+        if explicit is not None:
+            unit = _partition_unit(sorted_df, name, seg_starts[part])
+            # Source coordinates are invariant across requests in this partition.
+            part_coords = (
+                [
+                    _exact_coords[row_id]
+                    for row_id in sorted_df["_patch_row"].iloc[
+                        seg_starts[part] : seg_ends[part]
+                    ]
+                    if _exact_coords.get(row_id) is not None
+                ]
+                if _exact_coords and not pd.isnull(part_step) and part_step != 0
+                else []
+            )
+            starts_list, stops_list, requests_p = [], [], []
+            for request, bounds in enumerate(explicit.rows):
+                low, high = _explicit_bounds_for_partition(bounds, g_starts[part], unit)
+                if high < g_starts[part] or low > g_stops[part]:
+                    continue
+                low, high = max(low, g_starts[part]), min(high, g_stops[part])
+                if not pd.isnull(part_step) and part_step != 0:
+                    envelope = _exact_envelope(part_coords, (low, high), unit)
+                    if envelope is not None and fill_value is None:
+                        low, high = envelope
+                    else:
+                        snapped_low, snapped_high, present = _grid_snapped(
+                            np.asarray([low]),
+                            np.asarray([high]),
+                            g_starts[part],
+                            abs(part_step),
+                        )
+                        if not present[0]:
+                            continue
+                        low, high = snapped_low[0], snapped_high[0]
+                starts_list.append(low)
+                stops_list.append(high)
+                requests_p.append(request)
+            if not starts_list:
+                continue
+            starts_p, stops_p = np.asarray(starts_list), np.asarray(stops_list)
+            requests_p = np.asarray(requests_p, dtype=np.int64)
+        elif merge_mode:
             starts_p = g_starts[part : part + 1]
             stops_p = g_stops[part : part + 1]
         else:
@@ -1669,6 +1829,17 @@ def build_chunk_plan(
                 deferred = exc
                 break
             starts_p, stops_p = start_stop[:, 0], start_stop[:, 1]
+            if fill_value is not None:
+                starts_p, stops_p, on_grid = _grid_snapped(
+                    starts_p, stops_p, g_starts[part], abs(part_step)
+                )
+                starts_p, stops_p = starts_p[on_grid], stops_p[on_grid]
+                # A window can hold no position at all once snapped -- a
+                # partition whose envelope a pending selection resolved
+                # against the patch need not start on the grid -- and a
+                # partition of nothing but those produces no output.
+                if not len(starts_p):
+                    continue
         active[part] = True
         n_out = len(starts_p)
         ids_p = np.arange(next_id, next_id + n_out)
@@ -1698,12 +1869,17 @@ def build_chunk_plan(
             total = int(m_counts.sum())
         # Plan invariant: every published output has at least one member.
         # An advertised row that cannot assemble is never surfaced as a
-        # runtime error; it is not surfaced at all.
-        fed = m_counts > 0
+        # runtime error; it is not surfaced at all. A fill value lifts
+        # that: a window lying wholly inside a bridged hole has no source
+        # to draw from and is assembled from fill alone, so the outputs
+        # cover the partition evenly instead of skipping the hole.
+        fed = np.ones(n_out, dtype=bool) if fill_value is not None else m_counts > 0
         fed_counts[part] = int(fed.sum())
         out_starts.append(starts_p[fed])
         out_stops.append(stops_p[fed])
         out_ids.append(ids_p[fed])
+        if explicit is not None:
+            out_requests.append(np.asarray(requests_p)[fed])
         m_out_ids.append(ids_p[rel_out])
         m_src.append(rel_src + lo_k)
         m_lo.append(lo)
@@ -1719,6 +1895,9 @@ def build_chunk_plan(
                 # per-output dtype pools are simple slices
                 kdt = kdtypes[lo_k:hi_k]
                 bounds = np.cumsum(m_counts) - m_counts
+                # an all-fill output draws from no member, so it is the
+                # partition, not its own pool, which names its dtype
+                whole = _combined_dtype(pd.Series(part_dtypes, dtype=object))
                 combined = [
                     _combined_dtype(
                         pd.Series(
@@ -1726,6 +1905,8 @@ def build_chunk_plan(
                             dtype=object,
                         )
                     )
+                    if m_counts[out]
+                    else whole
                     for out in np.flatnonzero(fed)
                 ]
                 dtype_parts.append(
@@ -1737,7 +1918,11 @@ def build_chunk_plan(
     # partitions are exempt, and a conflict in a partition processed
     # before a deferred error outranks that error, exactly as the
     # per-partition loop raised them.
-    carried = _carried_columns(sorted_df, codes, seg_starts, name, conflict, active)
+    carried = (
+        {}
+        if explicit is not None
+        else _carried_columns(sorted_df, codes, seg_starts, name, conflict, active)
+    )
     if deferred is not None:
         raise deferred
     if size_diagnostics:
@@ -1757,6 +1942,31 @@ def build_chunk_plan(
                 "dimension first to make them smaller."
             )
             warnings.warn(msg, UserWarning, stacklevel=_user_stacklevel())
+    if not fed_counts.sum() and explicit is not None:
+        outputs = pd.DataFrame(
+            columns=[
+                min_name,
+                max_name,
+                "output_id",
+                "_request_row",
+                "_compat_group",
+                "_partition",
+            ]
+        )
+        outputs, empty_members = _finish_explicit_plan(
+            outputs=outputs,
+            members=empty_members,
+            sources=sorted_df,
+            seg_starts=seg_starts,
+            name=name,
+            requests=explicit,
+            keep_partial=keep_partial,
+            conflict=conflict,
+            on_incomplete=on_incomplete,
+            exact_coords=_exact_coords,
+            fill_value=fill_value,
+        )
+        return ChunkPlan(outputs, empty_members, name, value, params)
     if not fed_counts.sum():
         msg = "Could not chunk. No segments with sufficient length found."
         # Say how short the data actually is, and name the two knobs which
@@ -1799,6 +2009,15 @@ def build_chunk_plan(
     if has_dtype:
         data["_dtype"] = np.concatenate(dtype_parts)
     outputs = pd.DataFrame(data)
+    if explicit is not None:
+        outputs["_request_row"] = np.concatenate(out_requests)
+        outputs["_compat_group"] = (
+            sorted_df["_explicit_cell"].iloc[seg_starts].to_numpy()[repeats]
+        )
+        outputs["_partition"] = repeats
+        outputs["_anchor_patch_row"] = (
+            sorted_df["_patch_row"].iloc[seg_starts].to_numpy()[repeats]
+        )
     src_rows = np.concatenate(m_src)
     unchanged = (
         (np.concatenate(m_lo) == korig_min[src_rows])
@@ -1808,7 +2027,7 @@ def build_chunk_plan(
     members = pd.DataFrame(
         {
             "output_id": np.concatenate(m_out_ids),
-            "_patch_id": kpids[src_rows],
+            "_patch_row": kpids[src_rows],
             min_name: np.concatenate(m_lo),
             max_name: np.concatenate(m_hi),
             f"{name}_step": ksteps[src_rows],
@@ -1822,6 +2041,20 @@ def build_chunk_plan(
         first_units = sorted_df[unit_col].iloc[seg_starts].reset_index(drop=True)
         member_parts = np.concatenate(m_parts)
         members[unit_col] = first_units.take(member_parts).reset_index(drop=True)
+    if explicit is not None:
+        outputs, members = _finish_explicit_plan(
+            outputs=outputs,
+            members=members,
+            sources=sorted_df,
+            seg_starts=seg_starts,
+            name=name,
+            requests=explicit,
+            keep_partial=keep_partial,
+            conflict=conflict,
+            on_incomplete=on_incomplete,
+            exact_coords=_exact_coords,
+            fill_value=fill_value,
+        )
     return ChunkPlan(outputs, members, name, value, params)
 
 
@@ -1892,12 +2125,12 @@ def build_concat_plan(
         members = pd.DataFrame(
             {
                 "output_id": pd.Series(dtype=np.int64),
-                "_patch_id": pd.Series(dtype=object),
+                "_patch_row": pd.Series(dtype=object),
                 "_modified": pd.Series(dtype=bool),
             }
         )
         return ChunkPlan(outputs, members, name, value, params)
-    df = _ensure_patch_id(df).reset_index(drop=True)
+    df = _ensure_patch_row(df).reset_index(drop=True)
     # rows which carry the name as a dimension; the others (a non-dimensional
     # coordinate of that name, or none) gain a new dimension in its place
     along = _structural(df, name)
@@ -2074,9 +2307,7 @@ def build_concat_plan(
             # on it
             keys = list(data.get(key_col, pd.Series([None] * n_out, dtype=object)))
             keys = [
-                f"fp:{dc.core.coords.get_coord(shape=(int(s),)).fingerprint()[:32]}"
-                if n
-                else k
+                f"fp:{dc.core.coords.get_coord(shape=(int(s),)).data_id}" if n else k
                 for k, n, s in zip(keys, new_dim, sizes)
             ]
             data[key_col] = pd.Series(keys, dtype=object)
@@ -2084,7 +2315,7 @@ def build_concat_plan(
             # a dimension the members carry without values is resized too,
             # and the relation says nothing about how long it comes out;
             # what the members are is the best identity available, and it
-            # is not a fingerprint claim about values
+            # is not a claim about values
             keys = list(data.get(key_col, pd.Series([None] * n_out, dtype=object)))
             member_keys = _member_key_digests(sorted_df, codes, name)
             keys = [
@@ -2117,7 +2348,7 @@ def build_concat_plan(
     # members load whole unless the rows are themselves trims (a re-plan
     # over a chunked view), whose ranges they then keep
     members = pd.DataFrame(
-        {"output_id": codes, "_patch_id": sorted_df["_patch_id"].to_numpy()}
+        {"output_id": codes, "_patch_row": sorted_df["_patch_row"].to_numpy()}
     )
     if has_envelope:
         for col in (min_name, max_name, step_name, unit_col):
@@ -2293,6 +2524,28 @@ def _concatenated_steps(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
     return first.where(one_step & contiguous).to_numpy()
 
 
+def _grid_snapped(starts, stops, origin, step):
+    """
+    Window edges moved onto the grid the partition's samples sit on.
+
+    A chunk length need not be a whole number of samples, so an edge can
+    fall between two positions. A filled output builds its coordinate
+    from the envelope its row states, so that envelope has to be the
+    first and last position the window actually holds -- otherwise the
+    coordinate is anchored between samples and every label it carries is
+    wrong. Returns the snapped edges and a mask dropping any window which
+    holds no position at all.
+    """
+    lo = np.ceil((starts - origin) / step - _GRID_SNAP_RTOL)
+    hi = np.floor((stops - origin) / step + _GRID_SNAP_RTOL)
+    # An edge a pending selection left unstated has no position, which
+    # the comparison already answers False; the cast still has to see a
+    # number, so it is given one which the mask then drops.
+    keep = hi >= lo
+    lo, hi = (np.where(keep, x, 0).astype(np.int64) for x in (lo, hi))
+    return origin + lo * step, origin + hi * step, keep
+
+
 def _snapped_cuts(cuts, start, step) -> list:
     """
     Return each cut moved up to the first sample at or after it.
@@ -2416,7 +2669,7 @@ def build_subdivision_plan(df: pd.DataFrame, pieces, name: str) -> ChunkPlan:
     # One entry per row, even where it is empty: a short sequence would
     # drop the rows past its end from the plan, and so from the spool.
     assert len(pieces) == len(df)
-    df = _ensure_patch_id(df).reset_index(drop=True)
+    df = _ensure_patch_row(df).reset_index(drop=True)
     positions, lows, highs, modified = [], [], [], []
     for position, row_pieces in enumerate(pieces):
         whole = (df.at[position, min_name], df.at[position, max_name])
@@ -2431,14 +2684,14 @@ def build_subdivision_plan(df: pd.DataFrame, pieces, name: str) -> ChunkPlan:
     # Outputs are not file rows: source bookkeeping stays on the members,
     # and the dimension's structural identity described the whole row.
     outputs = df.iloc[positions].drop(
-        columns=["_patch_id", f"_{name}_def_key", "_data_size", *_SOURCE_COLUMNS],
+        columns=["_patch_row", f"_{name}_def_key", "_data_size", *_SOURCE_COLUMNS],
         errors="ignore",
     )
     outputs = outputs.assign(**{min_name: lows, max_name: highs, "output_id": ids})
     members = pd.DataFrame(
         {
             "output_id": ids,
-            "_patch_id": df["_patch_id"].to_numpy()[positions],
+            "_patch_row": df["_patch_row"].to_numpy()[positions],
             min_name: lows,
             max_name: highs,
             step_name: df[step_name].to_numpy()[positions],
@@ -2446,3 +2699,356 @@ def build_subdivision_plan(df: pd.DataFrame, pieces, name: str) -> ChunkPlan:
         }
     )
     return ChunkPlan(outputs.reset_index(drop=True), members, name, None, {})
+
+
+def _report_incomplete(failures, behavior: WARN_LEVELS) -> None:
+    """Report unmet explicit output requests once per planning call."""
+    if not failures:
+        return
+    details = "; ".join(
+        f"row {row} {bounds!r}, group {group}: {reason}"
+        for row, bounds, group, reason in failures
+    )
+    warn_or_raise(
+        f"Could not satisfy explicit chunk request(s): {details}",
+        ChunkError,
+        behavior=behavior,
+    )
+
+
+def _explicit_bounds_for_partition(bounds, start, unit):
+    """Express absolute requested points in one partition's coordinate units."""
+    out = []
+    time = is_datetime64(start)
+    duration = is_timedelta64(start)
+    for bound in bounds:
+        if isinstance(bound, Quantity):
+            if time:
+                msg = f"Datetime bounds must be absolute instants, got {bound}."
+                raise ParameterError(msg)
+            target = "s" if duration else (unit or None)
+            if target is None:
+                msg = (
+                    f"Cannot use quantity bounds on a unitless coordinate: {bounds!r}."
+                )
+                raise UnitError(msg)
+            point = convert_units(
+                bound.magnitude, to_units=target, from_units=bound.units
+            )
+            out.append(to_timedelta64(point) if duration else point)
+        elif time:
+            out.append(to_datetime64(bound))
+        elif duration:
+            out.append(to_timedelta64(bound))
+        else:
+            out.append(bound)
+    if out[0] > out[1]:
+        msg = f"Explicit range {bounds!r} has its lower bound above its upper bound."
+        raise ParameterError(msg)
+    return tuple(out)
+
+
+def _finish_explicit_plan(
+    outputs,
+    members,
+    sources,
+    seg_starts,
+    name,
+    requests: ExplicitRanges,
+    keep_partial,
+    conflict,
+    on_incomplete,
+    exact_coords,
+    fill_value,
+):
+    """Keep deliverable request/group outputs and carry their actual attrs."""
+    min_name, max_name, step_name = _dim_columns(sources, name)
+    exact_coords = exact_coords or {}
+    # A member's envelope is only a read hint until the source coordinate
+    # chooses its actual samples. Known in-memory coordinates answer here
+    # without reading the measurement array.
+    retained = []
+    for index, member in members.iterrows():
+        coord = exact_coords.get(member["_patch_row"])
+        if coord is None:
+            retained.append(index)
+            continue
+        plan_unit = member.get(f"_{name}_units")
+        plan_unit = None if pd.isnull(plan_unit) else str(plan_unit)
+        actual = exact_coordinate_bounds(
+            coord, (member[min_name], member[max_name]), plan_unit
+        )
+        if actual is None:
+            continue
+        members.at[index, min_name], members.at[index, max_name] = actual
+        retained.append(index)
+    members = members.loc[retained].copy()
+    # Aggregate actual member envelopes once. A regular filled output
+    # keeps its requested grid because fill supplies the missing samples.
+    fed_bounds = members.groupby("output_id")[[min_name, max_name]].agg(
+        {min_name: "min", max_name: "max"}
+    )
+    actual = fed_bounds.reindex(outputs["output_id"]).set_axis(outputs.index)
+    update = outputs["output_id"].isin(fed_bounds.index)
+    if fill_value is not None and len(outputs):
+        update &= outputs[step_name].isna()
+    for column in (min_name, max_name):
+        outputs.loc[update, column] = actual.loc[update, column]
+    if fill_value is None:
+        outputs = outputs[outputs["output_id"].isin(members["output_id"])].copy()
+    # A request needs every row in the continuity partitions it touches,
+    # including fill anchors and overlap-owned rows, but disconnected
+    # partitions of the same compatibility cell cannot affect its samples.
+    partitions: dict[Any, list[dict[str, Any]]] = {}
+    part_ends = np.r_[seg_starts[1:], len(sources)]
+    for begin, end in zip(seg_starts, part_ends):
+        sub = sources.iloc[begin:end]
+        label = sub["_explicit_cell"].iloc[0]
+        ids = sub["_patch_row"]
+        coords = [exact_coords[row_id] for row_id in ids if row_id in exact_coords]
+        partitions.setdefault(label, []).append(
+            dict(
+                start=sub[min_name].min(),
+                stop=sub[max_name].max(),
+                count=len(sub),
+                coords=coords,
+            )
+        )
+    raw_groups = [
+        (label, sub[min_name].min(), sub[max_name].max(), sub)
+        for label, sub in sources.groupby("_explicit_cell", sort=False)
+    ]
+    raw_groups.sort(key=lambda item: (item[1], str(item[0])))
+    groups: list[dict[str, Any]] = []
+    for label, start, stop, sub in raw_groups:
+        if is_datetime64(start):
+            start, stop = to_datetime64(start), to_datetime64(stop)
+        elif is_timedelta64(start):
+            start, stop = to_timedelta64(start), to_timedelta64(stop)
+        groups.append(
+            dict(
+                label=label,
+                start=start,
+                stop=stop,
+                unit=_partition_unit(sub, name, 0),
+                step=get_middle_value(sub[step_name].to_numpy()),
+                partitions=partitions[label],
+            )
+        )
+    rank = {item["label"]: pos for pos, item in enumerate(groups)}
+    accepted = set()
+    failures = []
+    for request, bounds in enumerate(requests.rows):
+        applicable = False
+        for group in groups:
+            label, start, stop = group["label"], group["start"], group["stop"]
+            unit = group["unit"]
+            step: Any = group["step"]
+            low, high = _explicit_bounds_for_partition(bounds, start, unit)
+            if high < start or low > stop:
+                continue
+            applicable = True
+            relevant = [
+                part
+                for part in group["partitions"]
+                if part["start"] <= high and part["stop"] >= low
+            ]
+            coords = [coord for part in relevant for coord in part["coords"]]
+            if any(coord is None for coord in coords):
+                failures.append(
+                    (request, bounds, label, "exact source coordinates are unavailable")
+                )
+                continue
+            all_known = len(coords) == sum(part["count"] for part in relevant)
+            no_grid = pd.isnull(step) or step == 0
+            if no_grid and not all_known:
+                failures.append(
+                    (request, bounds, label, "exact source coordinates are unavailable")
+                )
+                continue
+            requested_low, requested_high = low, high
+            candidates = outputs[
+                (outputs["_request_row"] == request)
+                & (outputs["_compat_group"] == label)
+            ]
+            envelope = _exact_envelope(coords, (low, high), unit or None)
+            if no_grid:
+                if envelope is None:
+                    failures.append(
+                        (request, bounds, label, "contains no source samples")
+                    )
+                    continue
+                low, high = envelope
+            elif all_known and envelope is not None and fill_value is None:
+                # Exact member labels obey the existing snap/assembly rules.
+                # Another partition in the group may have a shifted origin,
+                # and a joined source may have sub-sample jitter.
+                low, high = envelope
+                expected_low, expected_high, _ = _grid_snapped(
+                    np.repeat(np.asarray([requested_low]), 2),
+                    np.repeat(np.asarray([requested_high]), 2),
+                    np.asarray([low, high]),
+                    abs(step),
+                )
+                if expected_low[0] < low or expected_high[1] > high:
+                    if not keep_partial:
+                        failures.append(
+                            (request, bounds, label, "sampled bounds are incomplete")
+                        )
+                        continue
+            else:
+                # Without exact arrays, use each candidate's own partition
+                # origin, not a possibly disconnected compatibility group.
+                origins = [
+                    sources.iloc[seg_starts[int(part)]][min_name]
+                    for part in candidates["_partition"]
+                ]
+                if origins:
+                    snapped = [
+                        _grid_snapped(
+                            np.asarray([low]), np.asarray([high]), origin, abs(step)
+                        )
+                        for origin in origins
+                    ]
+                    valid = [(lo[0], hi[0]) for lo, hi, mask in snapped if mask[0]]
+                else:
+                    valid = []
+                if valid:
+                    low = min(x[0] for x in valid)
+                    high = max(x[1] for x in valid)
+                else:
+                    failures.append(
+                        (request, bounds, label, "contains no sampled position")
+                    )
+                    continue
+            if keep_partial and len(candidates):
+                accepted.update(candidates["output_id"])
+                continue
+            margin = (
+                abs(float(step)) * _GRID_SNAP_RTOL
+                if not pd.isnull(step) and _value_family(low) == "number"
+                else 0
+            )
+            complete = candidates[
+                (candidates[min_name] <= low + margin)
+                & (candidates[max_name] >= high - margin)
+            ]
+            if no_grid and (requested_low < start or requested_high > stop):
+                complete = complete.iloc[0:0]
+            if len(complete) == 1:
+                accepted.add(int(complete["output_id"].iloc[0]))
+            else:
+                failures.append(
+                    (
+                        request,
+                        bounds,
+                        label,
+                        "sampled bounds are incomplete or split by a gap",
+                    )
+                )
+        if not applicable:
+            failures.append(
+                (request, bounds, "no applicable group", "outside source coverage")
+            )
+    _report_incomplete(failures, on_incomplete)
+    outputs = outputs[outputs["output_id"].isin(accepted)].copy()
+    members = members[members["output_id"].isin(accepted)].copy()
+    if outputs.empty:
+        return outputs.reset_index(drop=True), members.reset_index(drop=True)
+    # Resolve all accepted outputs' contributors together, preserving
+    # member order and multiplicity; fill-only outputs use their anchor.
+    contributors = (
+        members[["output_id", "_patch_row"]]
+        .rename(columns={"output_id": "_contributor_output"})
+        .merge(sources, on="_patch_row", how="left", sort=False)
+    )
+    unfed = outputs[~outputs["output_id"].isin(members["output_id"])][
+        ["output_id", "_partition"]
+    ].rename(columns={"output_id": "_contributor_output"})
+    if len(unfed):
+        unfed["_patch_row"] = (
+            sources["_patch_row"]
+            .iloc[seg_starts[unfed["_partition"].to_numpy(dtype=np.intp)]]
+            .to_numpy()
+        )
+        anchors = unfed[["_contributor_output", "_patch_row"]].merge(
+            sources, on="_patch_row", how="left", sort=False
+        )
+        contributors = pd.concat((contributors, anchors), ignore_index=True)
+    order = {output_id: index for index, output_id in enumerate(outputs["output_id"])}
+    contributors["_output_order"] = contributors["_contributor_output"].map(order)
+    contributors = contributors.sort_values("_output_order", kind="stable")
+    codes = contributors["_output_order"].to_numpy(dtype=np.intp)
+    starts = np.r_[0, np.flatnonzero(np.diff(codes)) + 1]
+    assert len(starts) == len(outputs), "every output needs a contributor"
+    carried = _carried_columns(
+        contributors.drop(columns=["_contributor_output", "_output_order"]),
+        codes,
+        starts,
+        name,
+        conflict,
+        np.ones(len(outputs), dtype=bool),
+    )
+    carried_rows = [
+        {column: values.iloc[index] for column, values in carried.items()}
+        for index in range(len(outputs))
+    ]
+    carried_frame = pd.DataFrame(carried_rows, index=outputs.index)
+    for column in carried_frame:
+        outputs[column] = carried_frame[column]
+    outputs["_group_order"] = outputs["_compat_group"].map(rank)
+    outputs = (
+        outputs.sort_values(
+            ["_request_row", "_group_order", "_partition"], kind="stable"
+        )
+        .drop(columns="_group_order")
+        .reset_index(drop=True)
+    )
+    return outputs, members.reset_index(drop=True)
+
+
+def _exact_envelope(coords, bounds, unit=None):
+    """Return the outer selected sample labels across known coordinates."""
+    selected = [exact_coordinate_bounds(coord, bounds, unit) for coord in coords]
+    selected = [item for item in selected if item is not None]
+    return (
+        (min(x[0] for x in selected), max(x[1] for x in selected)) if selected else None
+    )
+
+
+def exact_coordinate_bounds(coord, bounds, plan_unit=None):
+    """Select a known coordinate alone, returning its actual inclusive bounds."""
+    native_unit = getattr(coord, "units", None)
+    in_native = bounds
+    if (
+        plan_unit is not None
+        and native_unit is not None
+        and str(native_unit) != str(plan_unit)
+    ):
+        in_native = tuple(
+            convert_units(x, to_units=native_unit, from_units=plan_unit) for x in bounds
+        )
+    step = getattr(coord, "step", None)
+    if (
+        step is not None
+        and not pd.isnull(step)
+        and step != 0
+        and all(isinstance(x, (float, np.floating)) for x in in_native)
+    ):
+        assert step is not None
+        margin = abs(step) * _GRID_SNAP_RTOL
+        in_native = (in_native[0] - margin, in_native[1] + margin)
+    selected, _ = coord.select(tuple(in_native))
+    if not len(selected):
+        return None
+    low, high = selected.min(), selected.max()
+    if (
+        plan_unit is not None
+        and native_unit is not None
+        and str(native_unit) != str(plan_unit)
+    ):
+        low, high = (
+            convert_units(x, to_units=plan_unit, from_units=native_unit)
+            for x in (low, high)
+        )
+    return low, high

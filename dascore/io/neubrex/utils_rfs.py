@@ -1,7 +1,8 @@
 """Utilities functions for Neubrex IO support"""
 
 import dascore as dc
-from dascore.io.utils import get_exact_coord
+from dascore.core.coords import get_coord
+from dascore.io.utils import should_snap
 from dascore.utils.misc import maybe_get_items
 
 
@@ -24,16 +25,20 @@ def _get_coord_manager(h5fi, snap=True):
         """Get the time coordinate."""
         # Unix stamps are in us for test files, not sure if always true.
         unix_stamps = dc.to_datetime64(h5fi["stamps_unix"][:] / 1_000_000)
-        if snap:
+        if should_snap(snap, "time"):
             time_coord = dc.get_coord(data=unix_stamps).snap()
         else:
-            time_coord = get_exact_coord(unix_stamps)
+            time_coord = get_coord(data=unix_stamps, snap=False)
         return time_coord
 
     def _get_dist_coord(h5fi):
         """Get the distance (depth) coordinate."""
         depth = h5fi["depth"][:]
-        return dc.get_coord(data=depth)
+        return (
+            dc.get_coord(data=depth)
+            if should_snap(snap, "distance")
+            else get_coord(data=depth, snap=False)
+        )
 
     coords = {
         "time": _get_time_coord(h5fi, snap=snap),
@@ -62,11 +67,3 @@ def _get_attr_dict(h5fi):
     out = maybe_get_items(data_attrs, mapping)
     out["data_units"] = _get_data_units_and_type(data_attrs["DataUnitLabel"])
     return out
-
-
-def _get_attrs_coords_and_data(h5fi, snap=True):
-    """Return the attributes, coordinates, and data array."""
-    cm = _get_coord_manager(h5fi, snap)
-    attrs = _get_attr_dict(h5fi)
-    data = h5fi["data"]
-    return attrs, cm, data

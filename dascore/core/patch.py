@@ -2,61 +2,65 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
-from functools import cached_property
-from typing import Any, Final, cast
-from uuid import uuid4
+from collections.abc import Callable, Mapping, Sequence
+from typing import Any, Final, Literal, Self
 
 import numpy as np
 
 import dascore as dc
+import dascore.proc.basic
 import dascore.proc.coords
 import dascore.utils.io
 from dascore import transform
 from dascore.compat import DataArray, array
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
-from dascore.core.summary import PatchSummary
+from dascore.core.patch_meta import PatchMeta, _as_dtype
+from dascore.core.processor import check_patch_listings
+from dascore.core.source import ArraySource
 from dascore.models import ArrayLike
+from dascore.proc.adaptive_spectral_filter import AdaptiveSpectralFilter
+from dascore.proc.tile_apply import TileApply
 from dascore.utils.array import (
     PatchUFunc,
     apply_ufunc,
     patch_array_function,
     patch_array_ufunc,
 )
-from dascore.utils.array_api import to_numpy
+from dascore.utils.array_api import backend_name, to_numpy
 from dascore.utils.display import (
-    NodeRepr,
     Repr,
     array_to_text,
     attrs_to_text,
-    dataless_to_text,
     get_header_text,
     split_block,
 )
-from dascore.utils.identity import with_patch_id
-from dascore.utils.namespace import NamespaceOwner
-from dascore.utils.patch import (
-    check_patch_attrs,
-    check_patch_coords,
-    check_patch_data,
-    get_patch_names,
+from dascore.utils.identity import (
+    _ID_FIELDS,
+    ids_enabled,
+    inside_operation,
+    new_id,
+    operation_context,
 )
-from dascore.utils.time import to_float
+from dascore.utils.namespace import NamespaceOwner
 
 
-def _as_dtype(dtype):
-    """Return a numpy dtype where there is one, else the backend's own."""
-    try:
-        return np.dtype(dtype)
-    except TypeError:
-        # A string is a spelling numpy should know; a misspelling is an error.
-        if isinstance(dtype, str):
-            raise
-        return dtype
+def _handed_array_attrs(attrs):
+    """Return the attrs of an array a constructor was handed; see `__init__`."""
+    if attrs is None or inside_operation():
+        return attrs
+    # A mapping and a PatchAttrs both answer `get`; anything else is
+    # converted later and carries no id of its own.
+    get = getattr(attrs, "get", None)
+    if get is None or not get("data_id", ""):
+        return attrs
+    ids = {"data_id": new_id()} if ids_enabled() else dict.fromkeys(_ID_FIELDS, "")
+    if isinstance(attrs, PatchAttrs):
+        return attrs.model_copy(update=ids)
+    return {**attrs, **ids}
 
 
-class Patch(NodeRepr, NamespaceOwner):
+class Patch(NamespaceOwner, PatchMeta):
     """
     A Class for managing data and metadata.
 
@@ -83,23 +87,25 @@ class Patch(NodeRepr, NamespaceOwner):
         Optional attributes (non-coordinate metadata) passed as a dict or
         [PatchAttrs](`dascore.core.attrs.PatchAttrs`)
     dtype
-        The data's dtype. Required when coords are given without data, which
-        builds a patch describing data it does not hold; see
-        [`drop_data`](`dascore.Patch.drop_data`).
+        Optional. When given, the data are refused unless that is what
+        they hold; a patch's dtype is always its data's.
+
+    source
+        Internal source metadata supplied by the I/O framework.
 
     Notes
     -----
     Coordinates are owned by the patch/coord manager, not by attrs.
     Use `Patch.summary` when you need a combined view of attrs plus
     coordinate summary metadata.
+
+    Coords and a dtype describe data without holding any, which is a
+    [`PatchMeta`](`dascore.PatchMeta`); see
+    [`drop_data`](`dascore.Patch.drop_data`).
     """
 
     data: ArrayLike
-    coords: CoordManager
-    dims: tuple[str, ...]
-    attrs: PatchAttrs
-    _data: ArrayLike | None
-    _dtype: Any
+    _data: ArrayLike
 
     _namespace_entry_point_group: Final[str] = "dascore.patch_namespace"
 
@@ -110,6 +116,7 @@ class Patch(NodeRepr, NamespaceOwner):
         dims: Sequence[str] | None = None,
         attrs: Mapping | PatchAttrs | None = None,
         dtype: Any = None,
+        source: ArraySource | None = None,
     ):
         # Init empty patch
         if all(x is None for x in (data, coords, dims, attrs)):
@@ -119,46 +126,39 @@ class Patch(NodeRepr, NamespaceOwner):
             attrs = dc.PatchAttrs()
         # Init Patch from Patch-like
         if isinstance(data, Patch):
-            dtype = data.dtype if dtype is None else dtype
             data, attrs, coords = data._data, data.attrs, data.coords
         elif isinstance(data, DataArray):
             data, attrs, coords = data.data, data.attrs, data.coords
-        if attrs is None:
-            attrs = dc.PatchAttrs()
+        elif isinstance(data, PatchMeta):
+            # Metadata describes data; it is not data, and no patch can be
+            # made of it without an array to go with it.
+            msg = (
+                "A PatchMeta holds no data, so a Patch cannot be built from "
+                "one. Use meta.to_patch(data) for the patch it describes."
+            )
+            raise ValueError(msg)
+        else:
+            # The attrs came from somewhere other than the data. Outside an
+            # operation nothing says the two belong together, so the array
+            # is one of its own; where it came from still stands.
+            attrs = _handed_array_attrs(attrs)
         if dims is None and isinstance(coords, CoordManager):
             dims = coords.dims
         # By this point, everything should be defined.
-        if coords is None or dims is None or (data is None and dtype is None):
+        if data is None or coords is None or dims is None:
             msg = (
                 "data, coords, and dims must be defined to init Patch; "
-                "a dtype may stand in for data."
+                "coords and a dtype alone describe data, which is a PatchMeta."
             )
             raise ValueError(msg)
-        if data is None:
-            coords = get_coord_manager(coords, dims=dims)
-            self._dtype = _as_dtype(dtype)
-        else:
-            data = array(data)
-            coords = get_coord_manager(coords, dims=dims, shape=data.shape)
-            data = array(coords.validate_data(data))
-            if dtype is not None and _as_dtype(dtype) != _as_dtype(data.dtype):
-                msg = f"The data are {data.dtype}, not the dtype given: {dtype}."
-                raise ValueError(msg)
-            self._dtype = None
-        attrs = dc.PatchAttrs.from_dict(attrs)
-        # Data which names no source still says which data it is, so that
-        # everything downstream has something to carry forward.
-        attrs = with_patch_id(attrs)
-        self._coords = coords
-        self._attrs = attrs
+        data = array(data)
+        coords = get_coord_manager(coords, dims=dims, shape=data.shape)
+        data = array(coords.validate_data(data))
+        if dtype is not None and _as_dtype(dtype) != _as_dtype(data.dtype):
+            msg = f"The data are {data.dtype}, not the dtype given: {dtype}."
+            raise ValueError(msg)
         self._data = data
-        # Lineage identity: minted eagerly so copies made at any point
-        # (deepcopy/pickle carry __dict__) share it deterministically.
-        self._instance_id = uuid4().hex
-
-    def __eq__(self, other):
-        """Compare one Patch."""
-        return dascore.proc.equals(self, other)
+        self._set_state(coords, attrs, source)
 
     def __add__(self, other):
         return apply_ufunc(np.add, self, other)
@@ -250,91 +250,14 @@ class Patch(NodeRepr, NamespaceOwner):
     def _repr_node(self) -> Repr:
         """The banner, the coordinates, the data and the attributes."""
         attrs = self.attrs
-        units = attrs.get("data_units")
-        data_text = (
-            dataless_to_text(self.dtype, units=units)
-            if self._data is None
-            else array_to_text(self._data, units=units)
-        )
         return Repr(
             header=get_header_text("Patch ⚡"),
             body=(
                 self.coords._repr_section(),
-                split_block(data_text),
+                split_block(array_to_text(self._data, units=attrs.get("data_units"))),
                 split_block(attrs_to_text(attrs)),
             ),
         )
-
-    def flat_dump(self, exclude=None) -> dict:
-        """Return a flat summary dict for dataframe-oriented helpers."""
-        return self.summary.flat_dump(exclude=exclude)
-
-    @property
-    def dims(self) -> tuple[str, ...]:
-        """
-        Return the dimensions contained in patch.
-
-        Examples
-        --------
-        >>> import dascore as dc
-        >>> patch = dc.get_example_patch()
-        >>>
-        >>> # Get dims from patch.
-        >>> dims = patch.dims
-        >>> assert 'time' in dims
-        >>> assert 'distance' in dims
-        """
-        return self.coords.dims
-
-    @property
-    def ndim(self) -> int:
-        """Return the number of dimensions contained in patch."""
-        return len(self.coords.dims)
-
-    @property
-    def coord_shapes(self) -> Mapping[str, tuple[int, ...]]:
-        """Return an immutable mapping of {coordinate: (shape, ...)}."""
-        return self.coords.coord_shapes
-
-    @property
-    def attrs(self) -> PatchAttrs:
-        """
-        Return the patch's non-coordinate metadata.
-
-        Examples
-        --------
-        >>> import dascore as dc
-        >>> patch = dc.get_example_patch()
-        >>>
-        >>> # Get attrs from patch.
-        >>> attrs = patch.attrs
-        >>> assert hasattr(attrs, 'data_type')
-        """
-        return self._attrs
-
-    @cached_property
-    def summary(self):
-        """
-        Return a metadata-only summary of the patch.
-        """
-        return PatchSummary.from_patch(self)
-
-    @property
-    def coords(self) -> CoordManager:
-        """
-        Return the patch coordinates.
-
-        Examples
-        --------
-        >>> import dascore as dc
-        >>> patch = dc.get_example_patch()
-        >>> coords = patch.coords
-        >>>
-        >>> # Get coords from patch.
-        >>> assert 'time' in coords
-        >>> assert 'distance' in coords
-        """
-        return self._coords
 
     @property
     def data(self) -> ArrayLike:
@@ -348,53 +271,26 @@ class Patch(NodeRepr, NamespaceOwner):
         >>> data = patch.data
         >>> assert data.shape == patch.shape
         """
-        return cast(ArrayLike, check_patch_data(self)._data)
-
-    @property
-    def shape(self) -> tuple[int, ...]:
-        """
-        Return the shape of the data array.
-
-        Examples
-        --------
-        >>> import dascore as dc
-        >>> patch = dc.get_example_patch()
-        >>>
-        >>> # Get shape from patch.
-        >>> shape = patch.shape
-        >>> assert len(shape) == len(patch.dims)
-        """
-        return self.coords.shape
-
-    @property
-    def size(self) -> int:
-        """
-        Return the size of the data array.
-
-        Examples
-        --------
-        >>> import dascore as dc
-        >>> patch = dc.get_example_patch()
-        >>>
-        >>> # Get size from patch.
-        >>> size = patch.size
-        >>> assert size == patch.data.size
-        """
-        return self.coords.size
+        return self._data
 
     @property
     def dtype(self) -> np.dtype:
-        """Return the dtype of the array, which a patch without data still has."""
-        # `_dtype` is set only for a patch without data; one pickled before
-        # it existed has none, so a patch with data reads its data's.
-        return self._dtype if self._data is None else self._data.dtype
+        """Return the dtype of the data array."""
+        return self._data.dtype
 
-    def drop_data(self) -> Patch:
+    @property
+    def backend(self) -> str:
+        """Return the array backend the data are in."""
+        return backend_name(self._data)
+
+    def drop_data(self) -> PatchMeta:
         """
-        Return this patch without its data.
+        Return this patch's metadata, without its data.
 
         The result keeps the coords, attrs and dtype, so it still describes
-        the data; asking it for `data` raises. `new(data=...)` fills it again.
+        the data. The inverse of
+        [`to_patch`](`dascore.PatchMeta.to_patch`), which gives a
+        description its data back.
 
         Examples
         --------
@@ -403,36 +299,55 @@ class Patch(NodeRepr, NamespaceOwner):
         >>> described = patch.drop_data()
         >>> assert described.shape == patch.shape
         >>> assert described.dtype == patch.dtype
-        >>> assert described.new(data=patch.data).equals(patch)
+        >>> assert described.to_patch(patch.data).equals(patch)
         """
-        out = self._described()
-        # Another patch, so another identity: a spool keys patches by it.
-        out._instance_id = uuid4().hex
+        out = PatchMeta(
+            coords=self.coords,
+            attrs=self.attrs,
+            dtype=self.dtype,
+            backend=self.backend,
+            source=self._source,
+        )
+        # What `to_patch` builds: this patch's class, so an operation which
+        # drops the data and fills them again keeps a subclass.
+        out._patch_type = type(self)
         return out
 
-    def _described(self) -> Patch:
+    def _new_like(self, data, coords: CoordManager, attrs: PatchAttrs, dtype=None):
+        """Return a patch of this one's class; without new data it keeps its own."""
+        # A dtype is handed on only when one was asked for: a subclass's
+        # `__init__` need not take one, and the data already state theirs.
+        extra = {} if dtype is None else {"dtype": dtype}
+        data = self._data if data is None else data
+        # The ids were settled before this; the constructor names an array
+        # nothing else has spoken for, which this is not.
+        with operation_context():
+            return type(self)(data=data, coords=coords, attrs=attrs, **extra)
+
+    def _reattach(self, out: PatchMeta, attrs: PatchAttrs) -> Patch:
+        """Return `out` under `attrs`, carrying this patch's unchanged data."""
+        new = out.update(attrs=attrs).to_patch(self._data)
+        # The data are unchanged, so `out` already says whether its source loads them.
+        new._source = out._source
+        return new
+
+    def to_patch(self, data) -> Patch:
         """
-        Return a copy without data which shares this patch's identity.
+        Return this patch holding `data` instead of its own.
 
-        A copy of state already validated, not a new construction: every
-        processor call makes one to plan with and throws it away, and a
-        subclass's `__init__` need not take a dtype.
+        What [`PatchMeta.to_patch`](`dascore.PatchMeta.to_patch`) means for
+        something which already has data, and the same as `new(data=...)`.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> patch = dc.get_example_patch()
+        >>> assert patch.to_patch(patch.data * 2).shape == patch.shape
         """
-        out = self.__class__.__new__(self.__class__)
-        out.__dict__.update(self.__dict__)
-        out._dtype = _as_dtype(self.dtype)
-        out._data = None
-        return out
-
-    @property
-    def seconds(self) -> float:
-        """Return number of seconds in the time coordinate."""
-        return to_float(self.coords.coord_range("time"))
-
-    @property
-    def channel_count(self) -> int:
-        """Return number of channels in the distance coordinate."""
-        return self.coords.coord_size("distance")
+        # Not inherited: the base reads `_patch_type`, which describes the
+        # patch a `PatchMeta` came from and which a patch never sets, so a
+        # subclass would come back a plain `Patch`.
+        return self.new(data=data)
 
     @property
     def T(self):  # noqa: N802
@@ -442,35 +357,72 @@ class Patch(NodeRepr, NamespaceOwner):
 
     # --- basic patch functionality.
 
-    update = dascore.proc.update
-    # Before 0.1.0 update was called new, this is for backwards compatibility.
-    new = dascore.proc.update
     equals = dascore.proc.equals
-    update_attrs = dascore.proc.update_attrs
-    check_coords = check_patch_coords
-    check_attrs = check_patch_attrs
-    get_coord = dascore.proc.get_coord
     get_array = dascore.proc.get_array
-    pipe = dascore.proc.pipe
-    set_dims = dascore.proc.set_dims
-    squeeze = dascore.proc.coords.squeeze
-    append_dims = dascore.proc.coords.append_dims
+    pin_id = dascore.proc.pin_id
     split_gaps = dascore.proc.coords.split_gaps
-    transpose = dascore.proc.coords.transpose
+    fill_gaps = dascore.proc.coords.fill_gaps
     add_distance_to = dascore.proc.coords.add_distance_to
     enrich = dascore.proc.enrich
-    snap_coords = dascore.proc.snap_coords
-    sort_coords = dascore.proc.sort_coords
-    radians_to_strain = dascore.transform.radians_to_strain
-    rename_coords = dascore.proc.rename_coords
-    update_coords = dascore.proc.update_coords
-    drop_coords = dascore.proc.drop_coords
-    drop_private_coords = dascore.proc.drop_private_coords
-    coords_from_df = dascore.proc.coords_from_df
-    make_broadcastable_to = dascore.proc.make_broadcastable_to
-    get_patch_names = get_patch_names
-    get_axis = dascore.proc.get_axis
-    full = dascore.proc.full
+
+    def radians_to_strain(
+        self,
+        gauge_length: Any = None,
+        wave_length: float = 1550.0 * 10 ** (-9),
+        stress_constant: float = 0.79,
+        refractive_index: float = 1.445,
+    ) -> Self:
+        """Convert phase data to strain or strain rate."""
+        return transform.RadiansToStrain(
+            gauge_length=gauge_length,
+            wave_length=wave_length,
+            stress_constant=stress_constant,
+            refractive_index=refractive_index,
+        ).run(self)
+
+    def full(self, fill_value: Any) -> Self:
+        """Return a patch filled with the given value."""
+        return dascore.proc.basic.Full(fill_value=fill_value).run(self)
+
+    # The operations written as `PatchProcessor` subclasses which compute
+    # data. Written here rather than attached at import so that a reader, an
+    # IDE and a type checker all see the patch's surface; each body builds
+    # its processor and runs it, and the framework refuses a method which is
+    # missing, on the wrong class, or whose parameters have drifted from the
+    # processor's fields. The operation is documented once, with its class,
+    # and that docstring replaces the summary line below at import.
+
+    def squeeze(self, dim=None) -> Self:
+        """Return a patch with length-one dimensions removed."""
+        return dascore.proc.coords.Squeeze(dim=dim).run(self)
+
+    def append_dims(self, /, *empty_dims, **dim_kwargs) -> Self:
+        """Insert dimensions at the end of the patch."""
+        return dascore.proc.coords.AppendDims.from_names(empty_dims, dim_kwargs).run(
+            self
+        )
+
+    def transpose(self, *dims) -> Self:
+        """Transpose the data array to any dimension order."""
+        return dascore.proc.coords.Transpose(dims=dims).run(self)
+
+    def snap_coords(self, *coords, reverse: bool = False) -> Self:
+        """Snap coordinates to evenly sampled versions of themselves."""
+        return dascore.proc.coords.SnapCoords(coords=coords, reverse=reverse).run(self)
+
+    def sort_coords(self, *coords, reverse: bool = False) -> Self:
+        """Sort the patch along one or more coordinates."""
+        return dascore.proc.coords.SortCoords(coords=coords, reverse=reverse).run(self)
+
+    def drop_private_coords(self) -> Self:
+        """Drop coordinates whose names start with an underscore."""
+        return dascore.proc.coords.DropPrivateCoords().run(self)
+
+    def make_broadcastable_to(self, shape: tuple[int, ...], drop_coords=False) -> Self:
+        """Make the patch broadcastable to a given shape."""
+        return dascore.proc.coords.MakeBroadcastableTo(
+            shape=shape, drop_coords=drop_coords
+        ).run(self)
 
     def apply_ufunc(self, ufunc, *args, **kwargs) -> Patch:
         """
@@ -505,63 +457,209 @@ class Patch(NodeRepr, NamespaceOwner):
         # The module-level function, not this method.
         return apply_ufunc(ufunc, self, *args, **kwargs)
 
-    def get_patch_name(self, *args, **kwargs) -> str:
-        """
-        Return the name of the patch.
+    def convert_units(self, data_units: Any = None, **kwargs) -> Self:
+        """Convert the data or coordinate units."""
+        return dascore.proc.ConvertUnits(data_units=data_units, **kwargs).run(self)
 
-        See [`get_patch_names`](`dascore.utils.patch.get_patch_names`)
-        for argument details.
-        """
-        return get_patch_names(self, *args, **kwargs).iloc[0]
-
-    set_units = dascore.proc.set_units
-    convert_units = dascore.proc.convert_units
-    simplify_units = dascore.proc.simplify_units
+    def simplify_units(self) -> Self:
+        """Convert data and coordinate units to base metric units."""
+        return dascore.proc.SimplifyUnits().run(self)
 
     # --- processing funcs
 
-    sel = dascore.proc.sel
-    isel = dascore.proc.isel
-    select = dascore.proc.select
-    unselect = dascore.proc.unselect
-    order = dascore.proc.order
+    def sel(
+        self,
+        /,
+        indexers: Mapping[str, Any] | None = None,
+        method: Literal["nearest"] | None = None,
+        tolerance: Any = None,
+        drop: bool = False,
+        **indexers_kwargs: Any,
+    ) -> Self:
+        """Select values by coordinate label, as xarray does."""
+        return dascore.proc.coords.Sel(
+            indexers=indexers,
+            method=method,
+            tolerance=tolerance,
+            drop=drop,
+            **indexers_kwargs,
+        ).run(self)
+
+    def isel(
+        self,
+        /,
+        indexers: Mapping[str, Any] | None = None,
+        drop: bool = False,
+        missing_dims: str = "raise",
+        **indexers_kwargs: Any,
+    ) -> Self:
+        """Select values by integer index, as xarray does."""
+        return dascore.proc.coords.Isel(
+            indexers=indexers,
+            drop=drop,
+            missing_dims=missing_dims,
+            **indexers_kwargs,
+        ).run(self)
+
+    def select(self, /, *, copy=False, relative=False, samples=False, **kwargs) -> Self:
+        """Return a subset of the patch."""
+        return dascore.proc.coords.Select(
+            copy=copy, relative=relative, samples=samples, **kwargs
+        ).run(self)
+
+    def unselect(
+        self, /, *, copy=False, relative=False, samples=False, **kwargs
+    ) -> Self:
+        """Return the patch with the selected range removed."""
+        return dascore.proc.coords.Unselect(
+            copy=copy, relative=relative, samples=samples, **kwargs
+        ).run(self)
+
+    def order(self, /, *, copy=False, relative=False, samples=False, **kwargs) -> Self:
+        """Order the patch along coordinates by a set of values."""
+        return dascore.proc.coords.Order(
+            copy=copy, relative=relative, samples=samples, **kwargs
+        ).run(self)
 
     correlate = dascore.proc.correlate
     correlate_shift = dascore.proc.correlate_shift
     decimate = dascore.proc.decimate
-    demean = dascore.proc.demean
-    demedian = dascore.proc.demedian
-    detrend = dascore.proc.detrend
+
+    def demedian(self, dim: str = "time") -> Self:
+        """Remove the median along a dimension."""
+        return dascore.proc.basic.Demedian(dim=dim).run(self)
+
+    def detrend(self, dim: str, type: Literal["linear", "constant"] = "linear") -> Self:
+        """Remove a linear or constant trend along a dimension."""
+        return dascore.proc.Detrend(dim=dim, type=type).run(self)
+
     dropna = dascore.proc.dropna
-    fillna = dascore.proc.fillna
+
+    def fillna(self, value: Any, include_inf: bool = True) -> Self:
+        """Replace nullish data with a value."""
+        return dascore.proc.basic.Fillna(value=value, include_inf=include_inf).run(self)
+
     pass_filter = dascore.proc.pass_filter
     hampel_filter = dascore.proc.hampel_filter
-    sobel_filter = dascore.proc.sobel_filter
+
+    def sobel_filter(self, dim: Any, mode: Any = "reflect", cval: Any = 0.0) -> Self:
+        """Apply a Sobel filter along a dimension."""
+        return dascore.proc.SobelFilter(dim=dim, mode=mode, cval=cval).run(self)
+
     median_filter = dascore.proc.median_filter
     notch_filter = dascore.proc.notch_filter
     savgol_filter = dascore.proc.savgol_filter
     gaussian_filter = dascore.proc.gaussian_filter
     slope_filter = dascore.proc.slope_filter
     wiener_filter = dascore.proc.wiener_filter
-    adaptive_spectral_filter = dascore.proc.adaptive_spectral_filter
-    tile_apply = dascore.proc.tile_apply
     reassemble = dascore.proc.reassemble
-    abs = dascore.proc.abs
-    conj = dascore.proc.conj
-    real = dascore.proc.real
-    imag = dascore.proc.imag
-    angle = dascore.proc.angle
+
+    def angle(self) -> Self:
+        """Return the phase angle of the data."""
+        return dascore.proc.basic.Angle().run(self)
+
     resample = dascore.proc.resample
     pad = dascore.proc.pad
-    roll = dascore.proc.roll
+
+    def roll(self, samples: bool = False, update_coord: bool = False, **kwargs) -> Self:
+        """Roll the data and optionally the coordinates along a dimension."""
+        return dascore.proc.basic.Roll(
+            samples=samples, update_coord=update_coord, **kwargs
+        ).run(self)
+
     where = dascore.proc.where
-    flip = dascore.proc.flip
+
+    def flip(self, *dims, flip_coords: bool = True) -> Self:
+        """Flip data and optionally coordinates along dimensions."""
+        return dascore.proc.basic.Flip(dims=dims, flip_coords=flip_coords).run(self)
+
     align_to_coord = dascore.proc.align_to_coord
 
     interpolate = dascore.proc.interpolate
-    normalize = dascore.proc.normalize
+
+    def abs(self) -> Self:
+        """Return a patch with the absolute value of its data."""
+        return dascore.proc.basic.Abs().run(self)
+
+    def conj(self) -> Self:
+        """Return a patch with the complex conjugate of its data."""
+        return dascore.proc.basic.Conj().run(self)
+
+    def real(self) -> Self:
+        """Return a patch with the real part of its data."""
+        return dascore.proc.basic.Real().run(self)
+
+    def imag(self) -> Self:
+        """Return a patch with the imaginary part of its data."""
+        return dascore.proc.basic.Imag().run(self)
+
+    def demean(self, dim: str = "time") -> Self:
+        """Remove the mean along a dimension."""
+        return dascore.proc.basic.Demean(dim=dim).run(self)
+
+    def normalize(
+        self,
+        dim: str,
+        norm: str = "l2",
+        window: Any | None = None,
+        samples: bool = False,
+    ) -> Self:
+        """Normalize a patch along a specified dimension."""
+        return dascore.proc.basic.Normalize(
+            dim=dim, norm=norm, window=window, samples=samples
+        ).run(self)
+
+    def standardize(self, dim: str) -> Self:
+        """Standardize a patch along a dimension."""
+        return dascore.proc.basic.Standardize(dim=dim).run(self)
+
+    def adaptive_spectral_filter(
+        self,
+        /,
+        *,
+        overlap: Any = None,
+        exponent: float = 0.8,
+        normalize_power: bool = False,
+        samples: bool = False,
+        engine: str = "auto",
+        **kwargs,
+    ) -> Self:
+        """Apply an adaptive spectral filter to the patch."""
+        return AdaptiveSpectralFilter(
+            overlap=overlap,
+            exponent=exponent,
+            normalize_power=normalize_power,
+            samples=samples,
+            engine=engine,
+            **kwargs,
+        ).run(self)
+
+    def tile_apply(
+        self,
+        /,
+        function: Callable,
+        *,
+        mode: str = "overlap_add",
+        overlap: Any = None,
+        taper: Any = None,
+        analysis: Any = None,
+        samples: bool = False,
+        engine: str = "auto",
+        **kwargs,
+    ) -> Self:
+        """Apply a function to overlapping tiles of the patch."""
+        return TileApply(
+            function=function,
+            mode=mode,
+            overlap=overlap,
+            taper=taper,
+            analysis=analysis,
+            samples=samples,
+            engine=engine,
+            **kwargs,
+        ).run(self)
+
     pow_coord = dascore.proc.pow_coord
-    standardize = dascore.proc.standardize
     taper = dascore.proc.taper
     taper_range = dascore.proc.taper_range
     line_mute = dascore.proc.line_mute
@@ -608,11 +706,37 @@ class Patch(NodeRepr, NamespaceOwner):
     istft = transform.istft
     integrate = transform.integrate
     stalta = transform.stalta
-    kurtosis = transform.kurtosis
+
+    def kurtosis(self, samples: bool = False, recursive: bool = True, **kwargs) -> Self:
+        """Compute windowed or recursive kurtosis along a dimension."""
+        return transform.Kurtosis(samples=samples, recursive=recursive, **kwargs).run(
+            self
+        )
+
     velocity_to_strain_rate = transform.velocity_to_strain_rate
     velocity_to_strain_rate_edgeless = transform.velocity_to_strain_rate_edgeless
     dispersion_phase_shift = transform.dispersion_phase_shift
     tau_p = transform.tau_p
-    hilbert = transform.hilbert
-    envelope = transform.envelope
+
+    def hilbert(self, dim: str) -> Self:
+        """Return the analytic signal along a dimension."""
+        return transform.Hilbert(dim=dim).run(self)
+
+    def envelope(self, dim: str) -> Self:
+        """Return the magnitude of the analytic signal."""
+        return transform.Envelope(dim=dim).run(self)
+
     phase_weighted_stack = transform.phase_weighted_stack
+    median_frequency = transform.median_frequency
+    spectral_centroid = transform.spectral_centroid
+    spectral_peak_frequency = transform.spectral_peak_frequency
+    spectral_peak_amplitude = transform.spectral_peak_amplitude
+    spectral_entropy = transform.spectral_entropy
+    spectral_kurtosis = transform.spectral_kurtosis
+    spectral_flatness = transform.spectral_flatness
+
+
+# Both classes list their operations by hand, and this is what refuses a
+# listing which is missing or on the wrong class. Deferred to here because
+# the classes are created while this module is still importing.
+check_patch_listings(Patch, PatchMeta)

@@ -7,7 +7,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.core import get_coord
-from dascore.io.utils import get_exact_coord
+from dascore.io.utils import should_snap
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
@@ -38,16 +38,17 @@ def _get_attrs_coords_and_data(h5, snap):
 
 def _get_coord(v, snap, name):
     """Get the coord values from a node."""
-    if snap:
+    length = len(v)
+    if should_snap(snap, name) and length > 1:
         start = v[0] if name != "time" else dc.to_datetime64(v[0])
         stop = v[-1] if name != "time" else dc.to_datetime64(v[-1])
         duration = stop - start
-        step = duration / (len(v) - 1)
+        step = duration / (length - 1)
         coord = get_coord(min=start, max=stop + step, step=step)
-        assert len(coord) == len(v)
+        assert len(coord) == length
     else:
         values = v[:] if name != "time" else dc.to_datetime64(v[:])
-        coord = get_exact_coord(values)
+        coord = get_coord(data=values, snap=False)
     return coord
 
 
@@ -116,14 +117,6 @@ def _get_nodes(h5):
         root_nodes[next(iter(time_node_name))],
         {x: root_nodes[x] for x in other_node_names},
     )
-
-
-def _get_dims_and_data(h5):
-    """Return the data node's dims and the node itself, reading no values."""
-    dims_attr = unbyte(h5.attrs["dims"]) if "dims" in h5.attrs else None
-    data_node, time_node, other_nodes = _get_nodes(h5)
-    dims, _ = _get_dims(data_node, time_node, other_nodes, dims_attr)
-    return dims, data_node
 
 
 def _get_cm_and_data(h5, snap=False, dims=None):

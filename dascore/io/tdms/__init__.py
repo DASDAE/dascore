@@ -1,6 +1,10 @@
 """
 Module for reading and writing TDMS fiber data recorded by Silixa.
 
+Scans and reads retain canonical DASCore metadata and omit raw vendor
+properties. Header values needed to construct coordinates and decode samples
+are still used internally.
+
 Interrogator identity
 ---------------------
 ``SystemInfomation.OS.HostName`` is reported as ``interrogator.name`` (eg

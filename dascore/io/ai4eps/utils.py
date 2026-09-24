@@ -8,7 +8,6 @@ import pandas as pd
 
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
-from dascore.io.utils import build_patches
 from dascore.units import get_quantity
 from dascore.utils.hdf5 import h5_matches_structure
 from dascore.utils.misc import _maybe_unpack, maybe_get_items, unbyte
@@ -103,15 +102,3 @@ def _get_attrs_dict(dataset) -> dict:
     if "event_time" in attrs:
         out["event_time"] = _to_utc_datetime64(attrs["event_time"])
     return out
-
-
-def _get_patches(resource, time=None, distance=None, attr_cls=dc.PatchAttrs):
-    """Read patches from an AI4EPS file, optionally trimming coords."""
-    data = resource["data"]
-    return build_patches(
-        _get_coords(data),
-        data,
-        _get_attrs_dict(data),
-        attr_cls=attr_cls,
-        selection={"time": time, "distance": distance},
-    )

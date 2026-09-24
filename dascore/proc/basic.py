@@ -12,7 +12,6 @@ from pydantic import ConfigDict
 from scipy.fft import next_fast_len
 from scipy.ndimage import correlate1d
 
-import dascore as dc
 from dascore.compat import array
 from dascore.constants import PatchType, samples_arg_description
 from dascore.core.attrs import PatchAttrs
@@ -21,10 +20,12 @@ from dascore.core.coordmanager import (
     CoordManagerInput,
     get_coord_manager,
 )
-from dascore.core.coords import CoordRange, get_coord
+from dascore.core.coords import get_coord
 from dascore.core.processor import PatchProcessor, register_kernel
+from dascore.core.source import ArraySource
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
+from dascore.models.base import values_equal
 from dascore.units import get_quantity
 from dascore.utils.array import _apply_binary_ufunc
 from dascore.utils.array_api import (
@@ -39,6 +40,16 @@ from dascore.utils.array_api import (
     warn_numpy_fallback,
 )
 from dascore.utils.docs import compose_docstring
+from dascore.utils.identity import (
+    _ID_FIELDS,
+    _without_ids,
+    ids_enabled,
+    inside_operation,
+    new_id,
+    stamp,
+    strong_data_id,
+    try_operation_id,
+)
 from dascore.utils.misc import _get_nullish
 from dascore.utils.moving import move_max
 from dascore.utils.patch import (
@@ -48,6 +59,9 @@ from dascore.utils.patch import (
 )
 from dascore.utils.time import dtype_time_like
 from dascore.utils.window import resolve_window
+
+# An attr a patch does not state at all, which no value can equal.
+_MISSING = object()
 
 # The dtypes which promise, without the values being looked at, that there
 # is no imaginary part: bool, signed and unsigned integers, and floats.
@@ -90,6 +104,78 @@ def _as_float(data):
     return xp.astype(data, xp.float64)
 
 
+def _data_id_given(patch, attrs) -> bool:
+    """Whether the caller installed a data id of its own rather than the patch's."""
+    return getattr(attrs, "data_id", "") != getattr(patch.attrs, "data_id", "")
+
+
+# What an id does not speak for: which data it is, and how it was reached.
+# Never a parameter of the change either: two routes to one array are one id.
+_UNSTAMPED = {**dict.fromkeys(_ID_FIELDS, ""), "history": ()}
+
+
+def _same_coords(coords, other) -> bool:
+    """
+    Whether two coord managers hold the same coordinates, laid out alike.
+
+    `CoordManager.__eq__` compares values approximately and ignores the
+    order of the dims; which array a patch is can afford neither.
+    """
+    if coords is other:
+        return True
+    if coords.dims != other.dims or coords.dim_map != other.dim_map:
+        return False
+    first, second = coords.coord_map, other.coord_map
+    return all(first[name].data_id == second[name].data_id for name in first)
+
+
+def _named_mutation(patch, attrs, name: str, params: Mapping, changed: bool):
+    """
+    Return the ids a metadata change made outside an operation leaves behind.
+
+    Inside one the operation stamps its own result, a call which changed
+    nothing keeps what it was given, and a data id the caller stated is its
+    own. Metadata, which describes data it does not hold, is left to the
+    routes which build it (the readers and the index).
+    """
+    if not changed or inside_operation() or not hasattr(patch, "_data"):
+        return attrs
+    if not ids_enabled():
+        # A changed patch claims no id rather than the one it came from.
+        return _without_ids(attrs)
+    if _data_id_given(patch, attrs):
+        return attrs
+    # The attrs being installed, not the patch's, so an origin the call
+    # states is the result's origin.
+    return stamp(attrs, [attrs], try_operation_id(name, params))
+
+
+def _replacement_attrs(patch, data, coords, attrs, dtype):
+    """Return the ids `update` leaves behind when it is not inside an operation."""
+    if inside_operation() or not hasattr(patch, "_data"):
+        return attrs
+    on = ids_enabled()
+    # A caller which named the array has said what this is. Checked before
+    # anything is compared: an operation stamps its result and installs it
+    # through here, and it has just worked out that very answer.
+    if on and _data_id_given(patch, attrs):
+        return attrs
+    replaced_data = data is not None and data is not patch._data
+    if replaced_data or (dtype is not None and dtype != patch.dtype):
+        if not on:
+            return _without_ids(attrs)
+        # An array nothing can be derived for; where it came from still stands.
+        return attrs.update(data_id=new_id())
+    params = {}
+    if not _same_coords(coords, patch.coords):
+        params["coords"] = coords
+    if attrs is not patch.attrs:
+        stated = attrs.model_copy(update=_UNSTAMPED)
+        if stated != patch.attrs.model_copy(update=_UNSTAMPED):
+            params["attrs"] = stated
+    return _named_mutation(patch, attrs, "update", params, bool(params))
+
+
 def set_dims(self: PatchType, **kwargs: str) -> PatchType:
     """
     Set dimension to non-dimensional coordinate.
@@ -116,7 +202,9 @@ def set_dims(self: PatchType, **kwargs: str) -> PatchType:
     >>> assert "my_coord" in out.dims
     """
     cm = self.coords.set_dims(**kwargs)
-    return self.new(coords=cm)
+    changed = not _same_coords(cm, self.coords)
+    attrs = _named_mutation(self, self.attrs, "set_dims", kwargs, changed)
+    return self.new(coords=cm, attrs=attrs)
 
 
 def pipe(self: PatchType, func: Callable[..., PatchType], *args, **kwargs) -> PatchType:
@@ -176,19 +264,60 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     >>> # Add new custom attributes
     >>> with_custom = patch.update_attrs(processing_date="2024-01-01")
     """
-    new_attrs = self.attrs.model_dump(exclude_unset=True)
-    new_attrs.update(attrs)
-    validated = PatchAttrs.from_dict(new_attrs)
-    if self._data is None:
-        return _dataless_like(self, self.coords, validated)
-    return self.__class__(
-        self._data, coords=self.coords, attrs=validated, dims=self.dims
-    )
+    stated = self.attrs.model_dump(exclude_unset=True)
+    out_attrs = self.attrs.from_dict({**stated, **attrs})
+    if not inside_operation():
+        # Only the keys the caller wrote, each against what the patch says
+        # now: restating a value is not a change, and comparing whole
+        # models costs more than the call itself.
+        # As validated, so that "m" and a unit object are one spelling.
+        params = {
+            key: out_attrs.get(key, _MISSING) for key in attrs if key not in _UNSTAMPED
+        }
+        changed = any(
+            not values_equal(self.attrs.get(key, _MISSING), value)
+            for key, value in params.items()
+        )
+        out_attrs = _named_mutation(self, out_attrs, "update_attrs", params, changed)
+    return self.new(attrs=out_attrs)
+
+
+def pin_id(self: PatchType) -> PatchType:
+    """
+    Return the patch with a `data_id` hashed from the data it holds.
+
+    Pinning replaces a weak `data_id` (derived without reading anything)
+    with a strong one, so every id derived afterwards builds on content
+    verified here. Any patch can be pinned, and pinning again changes
+    nothing. `origin_id`, history and the source are left alone. It reads
+    the whole array, about a second per gigabyte.
+
+    [`strong_data_id`](`dascore.utils.identity.strong_data_id`) gives the
+    same id without pinning, so a caller can record that the weak id a
+    patch carries names the same array. Inside a patch function the
+    function's own stamp replaces the pin, so pin its result instead.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>>
+    >>> pinned = patch.pin_id()
+    >>> # Equal patches built apart from one another share the id.
+    >>> assert pinned.attrs.data_id == dc.get_example_patch().pin_id().attrs.data_id
+    >>> assert pinned.pin_id().attrs.data_id == pinned.attrs.data_id
+    """
+    strong = strong_data_id(self)
+    if getattr(self.attrs, "data_id", "") == strong:
+        return self
+    # Copied, not revalidated: the id describes the attrs as they are.
+    return self.new(attrs=self.attrs.model_copy(update={"data_id": strong}))
 
 
 # Which data a patch is and what was done to it are not part of what it
 # *is*: two patches holding the same data are equal however they were made.
-_LINEAGE = {"patch_id", "processing_id"}
+# The ids, and what attrs pickled before they were renamed call them.
+_LINEAGE = {"origin_id", "data_id", "patch_id", "processing_id"}
 
 
 def equals(self: PatchType, other: Any, only_required_attrs=True, close=False) -> bool:
@@ -226,32 +355,10 @@ def equals(self: PatchType, other: Any, only_required_attrs=True, close=False) -
     # different types are not equal
     if not isinstance(other, type(self)):
         return False
-    # Different coords are not equal; can pop out coords from attrs
-    if not self.coords == other.coords:
+    # The coords and attrs are compared where a `PatchMeta` compares them,
+    # so a patch and the metadata describing it cannot answer differently.
+    if not self._metadata_equals(other, only_required_attrs):
         return False
-    if only_required_attrs:  # only include default fields
-        # The ids are not part of what a patch *is*: two patches with the
-        # same data, coords and attrs are equal however they were made.
-        attrs_to_compare = set(PatchAttrs.model_fields) - {"history"} - _LINEAGE
-        attrs1 = self.attrs.model_dump(include=attrs_to_compare)
-        attrs2 = other.attrs.model_dump(include=attrs_to_compare)
-    else:
-        # The ids are excluded here too: comparing every attr is about
-        # the user's attrs, not about where the data came from.
-        attrs1 = self.attrs.model_dump(exclude=_LINEAGE)
-        attrs2 = other.attrs.model_dump(exclude=_LINEAGE)
-    if set(attrs1) != set(attrs2):  # attrs don't have same keys; not equal
-        return False
-    if attrs1 != attrs2:
-        # see if some values are NaNs, these should be counted equal
-        not_equal = {
-            x
-            for x in attrs1
-            if attrs1[x] != attrs2[x]
-            and not (pd.isnull(attrs1[x]) and pd.isnull(attrs2[x]))
-        }
-        if not_equal:
-            return False
     # Test data equality or proximity.
     if self.data.shape != other.data.shape:
         return False
@@ -279,14 +386,21 @@ def update(
     coords: CoordManagerInput | CoordManager | None = None,
     dims: Sequence[str] | None = None,
     attrs: Mapping | PatchAttrs | None = None,
+    dtype: Any = None,
+    source: ArraySource | None = None,
 ) -> PatchType:
     """
     Return a copy of the Patch with updated data, coords, dims, or attrs.
 
+    The kind is preserved: a patch gives back a patch, and a `PatchMeta`
+    gives back metadata. Use
+    [`to_patch`](`dascore.PatchMeta.to_patch`) to give metadata data.
+
     Parameters
     ----------
     data
-        An array-like containing data, an xarray DataArray object, or a Patch.
+        An array-like containing data, an xarray DataArray object, or a
+        Patch. Metadata holds none, so giving it data here is an error.
     coords
         The coordinates, or dimensional labels for the data. These can be
         passed in three forms:
@@ -298,12 +412,13 @@ def update(
         first axis of data, the second to the second dimension, and so on.
     attrs
         Optional attributes (non-coordinate metadata) passed as a dict.
+    dtype
+        The dtype of the data. Metadata, which holds none, takes the one it
+        is given; a patch checks its data against it.
+    source
+        Internal I/O source metadata. If omitted, retain the current source.
 
     """
-    # A patch without data stays one unless data are given; `drop_data`,
-    # not `new(data=None)`, is how data are taken away.
-    dataless = data is None and self._data is None
-    data = data if data is not None else self._data
     coords = coords if coords is not None else self.coords
     if dims is None:
         dims = coords.dims if isinstance(coords, CoordManager) else self.dims
@@ -312,20 +427,17 @@ def update(
         attrs = PatchAttrs.from_dict(attrs)
     else:
         attrs = self.attrs
-    if dataless:
-        return _dataless_like(self, coords, attrs)
-    return self.__class__(data=data, coords=coords, attrs=attrs)
-
-
-def _dataless_like(patch, coords, attrs):
-    """
-    Return a patch of `patch`'s class holding no data.
-
-    Built as a `Patch` and handed to the subclass positionally, so a
-    subclass whose `__init__` takes no dtype still works.
-    """
-    out = dc.Patch(coords=coords, attrs=attrs, dtype=patch.dtype)
-    return out if type(patch) is dc.Patch else patch.__class__(out)
+    attrs = _replacement_attrs(self, data, coords, attrs, dtype)
+    # Each kind keeps what it is: `drop_data` and `to_patch`, not a
+    # keyword here, are how data come and go.
+    out = self._new_like(data, coords, attrs, dtype)
+    if source is None and (source := self._source) is not None:
+        # A source loads the array it was made for, not one replaced or relaid.
+        described = (self.dims, self.shape, self.dtype)
+        if data is not None or (out.dims, out.shape, out.dtype) != described:
+            source = source.detach()
+    out._source = source
+    return out
 
 
 class Abs(PatchProcessor):
@@ -342,9 +454,6 @@ class Abs(PatchProcessor):
     def kernel(self, data):
         """Return the magnitude of every sample."""
         return array_namespace(data).abs(data)
-
-
-abs = Abs.patch_function
 
 
 class Conj(PatchProcessor):
@@ -368,9 +477,6 @@ class Conj(PatchProcessor):
         return array_namespace(data).conj(data)
 
 
-conj = Conj.patch_function
-
-
 class Real(PatchProcessor):
     """
     Return a new patch with the real part of the data array.
@@ -387,9 +493,6 @@ class Real(PatchProcessor):
         if _known_real(data):
             return data
         return array_namespace(data).real(data)
-
-
-real = Real.patch_function
 
 
 class Imag(PatchProcessor):
@@ -416,9 +519,6 @@ class Imag(PatchProcessor):
         return xp.imag(data)
 
 
-imag = Imag.patch_function
-
-
 class Angle(PatchProcessor):
     """
     Return a new patch with the phase angles from the data array.
@@ -443,9 +543,6 @@ class Angle(PatchProcessor):
             return xp.atan2(xp.imag(data), xp.real(data))
         real = _as_float(data)
         return xp.atan2(xp.zeros_like(real), real)
-
-
-angle = Angle.patch_function
 
 
 @compose_docstring(sample_explanation=samples_arg_description)
@@ -511,11 +608,11 @@ class Normalize(PatchProcessor):
 
     data_type = ""
 
-    def plan(self, patch, out):
-        """Return the axis, and the window in samples when one is given."""
-        axis = patch.get_axis(self.dim)
+    def get_metadata(self, meta):
+        """Return the metadata as it is, the axis, and any window in samples."""
+        axis = meta.get_axis(self.dim)
         if self.window is None:
-            return {"axis": axis}
+            return meta, {"axis": axis}
         if self.norm == "bit":
             msg = (
                 "normalize(norm='bit') scales each sample by its own magnitude, "
@@ -525,7 +622,7 @@ class Normalize(PatchProcessor):
         # A window has to be centered on the sample it scales, so it must
         # hold an odd number of them.
         window = resolve_window(
-            patch,
+            meta,
             {self.dim: self.window},
             samples=self.samples,
             allow_multiple=False,
@@ -533,16 +630,13 @@ class Normalize(PatchProcessor):
             require_evenly_sampled=False,
             enforce_lt_coord=True,
         )
-        return {"axis": axis, "window": int(window.size[0])}
+        return meta, {"axis": axis, "window": int(window.size[0])}
 
     def kernel(self, data, *, axis, window=None):
         """Return the data with each slice, or window, divided by its norm."""
         if window is None:
             return _normalize_kernel(data, axis, self.norm)
         return _windowed_normalize_kernel(data, axis, self.norm, window)
-
-
-normalize = Normalize.patch_function
 
 
 def _window_mean(data, window: int, axis: int):
@@ -812,9 +906,9 @@ class Standardize(PatchProcessor):
 
     data_type = ""
 
-    def plan(self, patch, out):
-        """Return the axis to standardize along."""
-        return {"axis": patch.get_axis(self.dim)}
+    def get_metadata(self, meta):
+        """Return the metadata as it is, and the axis to standardize along."""
+        return meta, {"axis": meta.get_axis(self.dim)}
 
     def kernel(self, data, *, axis):
         """Return the data centred and scaled along its dimension."""
@@ -822,9 +916,6 @@ class Standardize(PatchProcessor):
         mean = nan_reduce("mean", data, axis=axis, keepdims=True)
         std = nan_reduce("std", data, axis=axis, keepdims=True)
         return (data - mean) / std
-
-
-standardize = Standardize.patch_function
 
 
 # This is left here to not break compatibility. It also forces `apply_ufunc`
@@ -951,9 +1042,6 @@ class Fillna(PatchProcessor):
         return xp.where(to_replace, value, data)
 
 
-fillna = Fillna.patch_function
-
-
 @patch_function()
 def pad(
     patch: PatchType,
@@ -1043,11 +1131,13 @@ def pad(
         # an integer coordinate to hold a NaN nothing is going to write.
         if not any(pad_tuple):
             return coord
-        if expand_coords and isinstance(coord, CoordRange):
+        if expand_coords and coord.evenly_sampled:
             # Extend the grid itself: rebuilding from the rounded step would
             # move every label of a fractional grid.
             total = len(coord) + pad_tuple[0] + pad_tuple[1]
-            new_coord = coord._sliced(-pad_tuple[0], 1, total)
+            new_coord = coord._with_runs(
+                (coord.runs[0].sliced(-pad_tuple[0], 1, total),)
+            )
         else:
             old_values = coord.values
             # Need to convert ints to float so NaN can be used.
@@ -1158,32 +1248,20 @@ class Roll(PatchProcessor):
 
     model_config = ConfigDict(extra="allow")
 
-    def _shift(self, patch):
-        """Return the dimension, its axis, and the roll in samples."""
-        dim, axis, value = get_dim_axis_value(patch, kwargs=self.model_extra or {})[0]
-        count = patch.get_coord(dim).get_sample_count(value, samples=self.samples)
-        return dim, axis, count
-
-    def derive(self, patch):
-        """Return the coordinate rolled too, when asked to."""
-        if not self.update_coord:
-            return patch
-        dim, _, count = self._shift(patch)
-        coord = patch.get_coord(dim)
-        new = coord.update(values=np.roll(coord.values, count))
-        return patch.new(coords=patch.coords.update(**{dim: new}))
-
-    def plan(self, patch, out):
-        """Return the axis and the shift in samples."""
-        _, axis, count = self._shift(patch)
-        return {"axis": axis, "shift": count}
+    def get_metadata(self, meta):
+        """Return the rolled metadata and the shift in samples."""
+        dim, axis, value = get_dim_axis_value(meta, kwargs=self.model_extra or {})[0]
+        coord = meta.get_coord(dim)
+        count = coord.get_sample_count(value, samples=self.samples)
+        out = meta
+        if self.update_coord:
+            new = coord.update(values=np.roll(coord.values, count))
+            out = meta.new(coords=meta.coords.update(**{dim: new}))
+        return out, {"axis": axis, "shift": count}
 
     def kernel(self, data, *, axis, shift):
         """Return the data rolled along the axis."""
         return array_namespace(data).roll(data, shift, axis=axis)
-
-
-roll = Roll.patch_function
 
 
 @patch_function()
@@ -1282,26 +1360,19 @@ class Flip(PatchProcessor):
     dims: tuple[Any, ...] = ()
     flip_coords: bool = True
 
-    _var_positional = "dims"
-
-    def derive(self, patch):
-        """Return the coordinates flipped, when they flip with the data."""
-        if not self.dims or not self.flip_coords:
-            return patch
-        return patch.new(coords=patch.coords.flip(*self.dims))
-
-    def plan(self, patch, out):
-        """Return the axes to flip."""
-        return {"axes": tuple(patch.get_axis(name) for name in self.dims)}
+    def get_metadata(self, meta):
+        """Return the flipped metadata and the axes to mirror."""
+        axes = tuple(meta.get_axis(name) for name in self.dims)
+        out = meta
+        if self.dims and self.flip_coords:
+            out = meta.new(coords=meta.coords.flip(*self.dims))
+        return out, {"axes": axes}
 
     def kernel(self, data, *, axes):
         """Return the data mirrored along the axes; the data if there are none."""
         if not axes:
             return data
         return array_namespace(data).flip(data, axis=axes)
-
-
-flip = Flip.patch_function
 
 
 class Full(PatchProcessor):
@@ -1342,9 +1413,6 @@ class Full(PatchProcessor):
             # A fill which is not a scalar broadcasts, as numpy's full does.
             return xp.asarray(xp.broadcast_to(like, data.shape), copy=True)
         return xp.full(data.shape, fill.item(), dtype=like.dtype, device=device(data))
-
-
-full = Full.patch_function
 
 
 class Demedian(PatchProcessor):
@@ -1400,21 +1468,13 @@ class Demedian(PatchProcessor):
 
     dim: str = "time"
 
-    def plan(self, patch, out):
+    def get_metadata(self, meta):
         """Return the axis to remove the median along."""
-        return {"axis": patch.get_axis(self.dim)}
+        return meta, {"axis": meta.get_axis(self.dim)}
 
     def numpy_kernel(self, data, *, axis):
         """Return the data with the NaN-ignoring median of each slice removed."""
         return data - np.nanmedian(data, axis=axis, keepdims=True)
-
-
-# Dask and cupy implement np.nanmedian themselves, so need no numpy copy.
-for _backend in ("dask", "cupy"):
-    register_kernel(Demedian, _backend)(Demedian.numpy_kernel)
-
-
-demedian = Demedian.patch_function
 
 
 class Demean(PatchProcessor):
@@ -1470,9 +1530,9 @@ class Demean(PatchProcessor):
 
     dim: str = "time"
 
-    def plan(self, patch, out):
-        """Return the axis to remove the mean along."""
-        return {"axis": patch.get_axis(self.dim)}
+    def get_metadata(self, meta):
+        """Return the metadata as it is, and the axis to demean along."""
+        return meta, {"axis": meta.get_axis(self.dim)}
 
     def kernel(self, data, *, axis):
         """Return the data with the mean of each slice taken out."""
@@ -1480,4 +1540,6 @@ class Demean(PatchProcessor):
         return data - nan_reduce("mean", data, axis=axis, keepdims=True)
 
 
-demean = Demean.patch_function
+# Dask and cupy implement nanmedian without copying to numpy.
+for _backend in ("dask", "cupy"):
+    register_kernel(Demedian, _backend)(Demedian.numpy_kernel)

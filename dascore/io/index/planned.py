@@ -24,9 +24,15 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
+from dascore.core.source import ArraySource
 from dascore.exceptions import UnknownFiberFormatError
-from dascore.io.core import FiberIO, _required_resource_type
+from dascore.io.core import (
+    FiberIO,
+    _read_open_resource,
+    _required_resource_type,
+)
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import (
     CompositeResolver,
@@ -36,24 +42,35 @@ from dascore.io.index.catalog import (
     _row_source_patch_key,
     apply_exact_residuals,
 )
+from dascore.io.index.indexer import scan_unit_stats
 from dascore.io.index.ingest import (
     CoordRecord,
     PatchRecord,
     SourceRecord,
     _coord_record,
+    _is_missing,
     typed_value,
 )
+from dascore.io.index.schema import SOURCE_STAT_COLUMNS
 from dascore.units import get_quantity
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     _concatenated_steps,
-    _ensure_patch_id,
+    _ensure_patch_row,
     patch_local_adjusted_envelopes,
 )
+from dascore.utils.explicit_ranges import _select_manager, _source_manager
 from dascore.utils.io import IOResourceManager
+from dascore.utils.misc import is_range
 from dascore.utils.patch import concatenate_planned
-from dascore.utils.patch_assembly import PatchAssembler
-from dascore.utils.paths import is_memory_uri
+from dascore.utils.patch_assembly import (
+    SOURCE_RANGE_ENDS,
+    PatchAssembler,
+    fill_to_row,
+    patch_from_fill,
+    source_range_column,
+)
+from dascore.utils.paths import is_local_path, is_memory_uri
 
 # Row columns which name dc.read's own keyword arguments; passing one along
 # as a trim hint would collide with the value the loader already supplies.
@@ -87,16 +104,15 @@ def _source_units_column(name: str) -> str:
     return f"_{name}_units_source"
 
 
-def _def_key_fingerprint(key) -> str | None:
-    """Recover the semantic fingerprint from a stored def key.
+def _def_key_data_id(key) -> str | None:
+    """Recover the coordinate's data_id from a stored def key.
 
-    Fingerprinted keys are ``fp:{hash}`` with the unit spelling riding
-    after ``|`` (see CoordRecord.def_key); the spelling belongs to
-    storage deduplication only, never to value identity.
+    Value-identity keys are ``fp:{data_id}`` (see CoordRecord.def_key);
+    any other prefix names a summary, not the values.
     """
     if not (isinstance(key, str) and key.startswith("fp:")):
         return None
-    return key[3:].split("|", maxsplit=1)[0]
+    return key[3:]
 
 
 def _ns(value) -> int | None:
@@ -115,9 +131,42 @@ def _num(value) -> float | None:
     return float(value)
 
 
+def _is_local(path: str) -> bool:
+    """Whether a stored path names a local file this process can stat."""
+    try:
+        return is_local_path(path)
+    except ValueError:
+        # a scheme no filesystem here claims is not a local file
+        return False
+
+
+# What a stat column holds where the index recorded none. No file's mtime
+# or size can be it, and it is a value rather than a null because the
+# column must be read as exact int64; a nullable integer column (the
+# planned Arrow move) would hold the null itself and drop the sentinel.
+NO_STAT = np.iinfo(np.int64).min
+
+
+def _stat_column(series: pd.Series) -> np.ndarray:
+    """One stat column as exact int64, with what it never measured as NO_STAT."""
+    # Never through float64: a nanosecond mtime does not survive it.
+    if series.dtype == np.dtype(np.int64):
+        return series.to_numpy()
+    return series.fillna(NO_STAT).to_numpy(np.int64)
+
+
 def _row_str(value) -> str:
     """A row cell as a string, with the frame's nulls (None/NaN) as ""."""
     return "" if value is None or pd.isnull(value) else str(value)
+
+
+def _numeric_dtype_str(stored) -> str:
+    """The numeric dtype a row states for a coordinate, else float64."""
+    if not isinstance(stored, str) or not stored:
+        return "float64"
+    # the column is written from a real dtype, as _row_values also assumes
+    dtype = np.dtype(stored)
+    return str(dtype) if np.issubdtype(dtype, np.number) else "float64"
 
 
 def _coord_record_from_row(
@@ -132,7 +181,7 @@ def _coord_record_from_row(
     Delegates to the ingest converter through a range CoordSummary so
     virtual outputs carry the same identities real patches would: a
     carried ``fp:`` def key survives for non-planned dims, and the
-    planned dim's range fingerprint is reconstructed exactly. ``dims``
+    planned dim's range data_id is reconstructed exactly. ``dims``
     names the dimensions the coordinate rides (itself by default).
     `name_is_held` says the members hold this coordinate, so a record is
     written even when nothing about its values can be stated: the patch
@@ -148,10 +197,10 @@ def _coord_record_from_row(
         # the same way, matching another output only when the members it
         # joined were the same.
         key = row.get(f"_{name}_def_key")
-        fingerprint = _def_key_fingerprint(key)
-        if fingerprint is None and isinstance(key, str) and key.startswith("cat:"):
-            fingerprint = key[4:]
-        if fingerprint is None and not name_is_held:
+        data_id = _def_key_data_id(key)
+        if data_id is None and isinstance(key, str) and key.startswith("cat:"):
+            data_id = key[4:]
+        if data_id is None and not name_is_held:
             return None
         units = row.get(f"_{name}_units")
         if units == "" or (units is not None and pd.isnull(units)):
@@ -163,7 +212,7 @@ def _coord_record_from_row(
             coord_dims=",".join(dims),
             length=None,
             units=units,
-            coord_hash=fingerprint,
+            data_id=data_id,
         )
     step = row.get(f"{name}_step")
     step = None if step is None or pd.isnull(step) else step
@@ -171,7 +220,7 @@ def _coord_record_from_row(
         # string coords have no range representation; store the
         # lexicographic envelope directly
         key = row.get(f"_{name}_def_key")
-        fingerprint = _def_key_fingerprint(key)
+        data_id = _def_key_data_id(key)
         return CoordRecord(
             coord_name=name,
             value_kind="str",
@@ -181,7 +230,7 @@ def _coord_record_from_row(
             units=None,
             min_str=str(lo),
             max_str=None if hi is None or pd.isnull(hi) else str(hi),
-            coord_hash=fingerprint,
+            data_id=data_id,
         )
     # Only the str envelope above represents a missing max. Every producer
     # writes {name}_min and {name}_max together -- _output_records feeds
@@ -199,7 +248,11 @@ def _coord_record_from_row(
         lo, hi = float(lo), float(hi)
         # the sign says which way the coordinate runs, as ingest records it
         step = None if step is None else float(step)
-        dtype = "float64"
+        # The frame holds every numeric envelope as float, but the row
+        # says what the values really are. Publishing float64 regardless
+        # would make an output rebuilt from its row disagree with the
+        # same coordinate on the patches beside it.
+        dtype = _numeric_dtype_str(row.get(f"_{name}_coord_dtype"))
     if isinstance(step, pd.Timedelta):
         step = step.to_timedelta64()
     if step is not None and not step:
@@ -219,10 +272,10 @@ def _coord_record_from_row(
         span = (hi - lo) / step  # ty: ignore[unsupported-operator]
         length = round(abs(span)) + 1
     key = row.get(f"_{name}_def_key")
-    fingerprint = _def_key_fingerprint(key)
+    data_id = _def_key_data_id(key)
     # the grid is the source's; once the def key (value identity) is gone,
     # so are the values it described
-    grid = row.get(f"_{name}_grid") if fingerprint else None
+    grid = row.get(f"_{name}_grid") if data_id else None
     exact = {}
     if isinstance(grid, tuple):
         *terms, length = grid
@@ -235,7 +288,7 @@ def _coord_record_from_row(
         units=units,
         dims=dims,
         len=length,
-        fingerprint=fingerprint,
+        data_id=data_id,
         **exact,
     )
     return _coord_record(name, summary)
@@ -273,7 +326,7 @@ def _aux_coord_info(
 
     Aggregated from the *member source rows* (authoritative, unlike the
     planner's carried columns). Structural identity (def key and step,
-    which permit fingerprint claims) is kept only when every member
+    which permit value-identity claims) is kept only when every member
     shares one def key and the values provably survive assembly: a
     coordinate riding the planned dimension is trimmed/merged with it,
     so only a lone unmodified member keeps identity there. Envelopes
@@ -288,8 +341,8 @@ def _aux_coord_info(
     out: dict[int, dict[str, dict]] = {}
     if not len(members) or not coord_dims_map:
         return out
-    cols = [c for c in ("output_id", "_patch_id", "_modified") if c in members.columns]
-    joined = members[cols].merge(source_rows, on="_patch_id", how="left")
+    cols = [c for c in ("output_id", "_patch_row", "_modified") if c in members.columns]
+    joined = members[cols].merge(source_rows, on="_patch_row", how="left")
     grouped = joined.groupby("output_id", sort=True)
     output_ids = grouped.size().index.to_numpy()
     single = (grouped.size() == 1).to_numpy()
@@ -522,6 +575,8 @@ class PlanResolver(PatchResolver):
         origin_path=None,
         stamped: tuple[str, ...] = (),
         lossy: bool = False,
+        output_rows: pd.DataFrame | None = None,
+        anchor_rows: pd.DataFrame | None = None,
     ):
         if "output_id" not in member_rows.columns:
             msg = "member_rows must carry an output_id column."
@@ -529,7 +584,17 @@ class PlanResolver(PatchResolver):
         # plan invariant: outputs without members must never be published
         self.token = token
         self.dim = dim
-        self.member_rows = member_rows.reset_index(drop=True)
+        rows = member_rows.reset_index(drop=True)
+        # What the index measured of each member's source, held beside
+        # the rows rather than in them: every output slices this frame,
+        # and a column is charged for at every slice. Row number is the
+        # key, which the slices keep.
+        self._source_stats = {
+            name: _stat_column(rows[name])
+            for name in SOURCE_STAT_COLUMNS
+            if name in rows.columns
+        }
+        self.member_rows = rows.drop(columns=list(self._source_stats))
         self.loader = loader
         self.aux_coords = frozenset(aux_coords)
         self.merge_kwargs = dict(merge_kwargs)
@@ -544,6 +609,22 @@ class PlanResolver(PatchResolver):
         # sources, so re-planning over them would load back what it
         # dropped. See `collapse_working_df`.
         self.lossy = bool(lossy)
+        # What each output advertises about itself, which only a filling
+        # plan needs: the row reaching `resolve` is the caller's, and a
+        # nested plan loading this one's outputs passes its own member
+        # row instead -- trim instructions, with no envelope to fill to.
+        self._output_rows: dict[int, Mapping] = {}
+        # a sibling's coordinates per output which has none of its own
+        self._fill_coords: dict[int, CoordManager] = {}
+        self._anchor_rows = (
+            {}
+            if anchor_rows is None
+            else {row["_patch_row"]: row for row in anchor_rows.to_dict("records")}
+        )
+        if merge_kwargs.get("fill_value") is not None and output_rows is not None:
+            self._output_rows = {
+                int(row["output_id"]): row for row in output_rows.to_dict("records")
+            }
 
     def live_entries(self) -> dict[str, dc.Patch]:
         """Expose the loader's live registry (for absorption/transfer)."""
@@ -555,38 +636,133 @@ class PlanResolver(PatchResolver):
         nested[f"{PLAN_SCHEME}{self.token}/"] = self
         return nested
 
-    def _assembler(self):
+    def _assembler(self, *, fill=True):
+        merge_kwargs = (
+            self.merge_kwargs
+            if fill
+            else {
+                key: value
+                for key, value in self.merge_kwargs.items()
+                if key != "fill_value"
+            }
+        )
         return PatchAssembler(
             load_patch=self._load_member,
-            merge_kwargs=self.merge_kwargs,
+            merge_kwargs=merge_kwargs,
             plan_dim=self.dim,
-            load_array=self._load_member_whole,
-            can_load_array=self._can_load_member_whole,
+            array_source=self._member_array_source,
+            can_use_index=self._can_load_member_from_index,
+            sources_unchanged=self._sources_unchanged,
         )
 
-    def _can_load_member_whole(self, row: Mapping) -> bool:
+    def _can_load_member_from_index(self, row: Mapping) -> bool:
         """Check every row-only fast-path condition before any array is read."""
-        if row.get("_modified") or self.aux_coords:
+        if self.aux_coords:
             return False
-        # An unmodified row lies wholly inside any value selection on the
-        # plan's dimension; other residuals still need the loaded patch.
-        for coords, samples, relative in self.parent_residuals:
-            if samples or relative or set(coords) - {self.dim}:
+        if row.get("_modified"):
+            # A trim is a window of the source, which is only placeable
+            # when the row keeps the source's own range beside it --
+            # which `_with_source_range` withholds from every row a
+            # residual this plan cannot stand for would trim again.
+            if _is_missing(row.get(source_range_column(self.dim, "low"))):
                 return False
+        else:
+            # An unmodified row lies wholly inside any value selection on
+            # the plan's dimension; other residuals need the loaded patch.
+            for coords, samples, relative in self.parent_residuals:
+                if samples or relative or set(coords) - {self.dim}:
+                    return False
         return self._array_read_info(row) is not None
 
-    def _load_member_whole(self, row: Mapping) -> np.ndarray | None:
-        """Read a whole member after all rows pass the metadata preflight."""
-        return self._load_member_array(row, {}, ignore_residuals=True)
+    def _sources_unchanged(self, rows: pd.DataFrame) -> bool:
+        """
+        Whether every member source still is what the index recorded.
+
+        A recipe reads the window the index promised rather than the whole
+        array, so a file rewritten longer under the same key would come
+        back the shape its row predicted and go unnoticed. What the index
+        measured of each source came from the same join as the member
+        rows and is held under their row numbers, so the two describe
+        one revision of the index however long ago it was planned and
+        nothing is asked of the index here. Each distinct source is
+        measured once, by the same function the indexer records -- a file
+        by its own stat, a directory-format unit by its manifest.
+
+        Only a source measured now and found to be what was recorded
+        keeps the recipe. A remote store is never touched, and so is
+        never read blind: a path this process cannot stat, one the index
+        recorded nothing for, and one which will not answer all refuse
+        the recipe and send the merge down the patch path.
+        """
+        stats = self._source_stats
+        if len(stats) != len(SOURCE_STAT_COLUMNS) or "source_path" not in rows.columns:
+            return False
+        # the row numbers this slice kept, which is what the stats are under
+        taken = rows.index.to_numpy()
+        paths = rows["source_path"].to_numpy()
+        mtimes = stats[SOURCE_STAT_COLUMNS[0]][taken]
+        sizes = stats[SOURCE_STAT_COLUMNS[1]][taken]
+        seen = set()
+        for path, mtime, size in zip(paths, mtimes, sizes, strict=True):
+            path = _row_str(path)
+            if path in seen:
+                continue
+            seen.add(path)
+            if not path or not _is_local(path):
+                return False
+            if mtime == NO_STAT or size == NO_STAT:
+                return False
+            if scan_unit_stats(path) != (int(mtime), int(size)):
+                return False
+        return True
+
+    def source_stats_of(self, rows: pd.DataFrame) -> pd.DataFrame:
+        """Put what the index measured back beside these member rows."""
+        taken = rows.index.to_numpy()
+        return rows.assign(**{k: v[taken] for k, v in self._source_stats.items()})
+
+    def _member_array_source(self, row: Mapping, shape) -> ArraySource | None:
+        """
+        Name the whole stored array a member is part of; nothing is read.
+
+        The row states the shape its caller passes and the dtype the
+        array comes back as, so a source which names the whole of it is
+        enough to window the member out of it later. A row which states
+        no dtype cannot be named and sends the merge down the patch path.
+
+        A source's origin is the id of the array itself, which is the
+        patch's `data_id` -- not the lineage `origin_id` beside it, which
+        a processed patch keeps from what it was made of.
+        """
+        info = self._array_read_info(row)
+        assert info is not None, "the preflight resolved every member's reader"
+        loader, path, _, key = info
+        dtype = row.get("_dtype")
+        if not isinstance(dtype, str) or not dtype:
+            return None
+        origin = row.get("data_id")
+        source = ArraySource(
+            path=str(loader.resolve_path(path)),
+            format=_row_str(row.get("source_format")),
+            version=_row_str(row.get("source_version")),
+            key=key,
+            origin_id="" if origin is None or pd.isnull(origin) else str(origin),
+        )
+        return source.describe(shape, dtype)
 
     def _load_member(self, kwargs: Mapping) -> dc.Patch:
         """Load one member source patch, applying parent residuals."""
         trim = {}
         if kwargs.get("_modified"):
+            # The index already selected the source row. Only coordinate
+            # ranges are read hints: attrs may have been overridden by the
+            # path and would reject the file before those overrides apply.
+            dims = set(str(kwargs.get("dims", "")).split(","))
             trim = {
                 k: v
                 for k, v in kwargs.items()
-                if not str(k).startswith("_")
+                if k in dims
+                and not str(k).startswith("_")
                 and k not in _SOURCE_COLUMNS
                 and k not in _READ_KWARGS
             }
@@ -600,8 +776,7 @@ class PlanResolver(PatchResolver):
                 kwargs.get(_source_units_column(self.dim), plan_units)
             )
             if plan_units is not None and source_units != plan_units:
-                for suffix in ("_min", "_max", "_step"):
-                    trim.pop(f"{self.dim}{suffix}", None)
+                trim.pop(self.dim, None)
         patch_local = any(s or r for _, s, r in self.parent_residuals)
         if trim and patch_local:
             # A patch-local residual resolves against the source patch, so
@@ -616,16 +791,15 @@ class PlanResolver(PatchResolver):
             patch = apply_exact_residuals(patch, self.parent_residuals)
         return self._in_plan_units(patch, kwargs)
 
-    def _load_member_array(
-        self, row: Mapping, windows: Mapping, *, ignore_residuals: bool = False
-    ) -> np.ndarray | None:
+    def _load_member_array(self, row: Mapping, windows: Mapping) -> np.ndarray | None:
         """
         Load one member's raw array through the format's `read_array`.
 
         ``windows`` maps dimension name to a half-open ``(start, stop)``
         sample window on the member source's own grid; absent dimensions
-        load whole. The array comes back in the source's stated dimension
-        order, untransposed and uncast.
+        load whole, and a window naming a dimension the row does not
+        state takes the fallback. The array comes back in the source's
+        stated dimension order, untransposed and uncast.
 
         The caller must anchor the windows on the raw file grid — a
         window computed against a trimmed or residual-adjusted envelope
@@ -639,16 +813,20 @@ class PlanResolver(PatchResolver):
         parent residuals — a residual re-trims the loaded patch, and a
         data-only read would skip that trim. The fast path trusts the
         index about the grid itself: the caller's shape guard catches a
-        resized file, not a shifted one. ``ignore_residuals`` is for a
-        caller which has established the residuals cannot touch this row.
+        resized file, not a shifted one.
         """
-        if self.parent_residuals and not ignore_residuals:
+        if self.parent_residuals:
             return None
         info = self._array_read_info(row)
         if info is None:
             return None
         loader, path, fiber_io, key = info
-        kwargs = {"source_patch_key": key} if key else {}
+        # The reader takes its windows by position, in the source's order,
+        # so a window the row cannot place must take the exact fallback.
+        dims = [x for x in str(row.get("dims") or "").split(",") if x]
+        if set(windows) - set(dims):
+            return None
+        positional = tuple(windows.get(dim) for dim in dims)
         # The resource manager resolves remote paths and opens the handle
         # type the override's annotation asks for, exactly as dc.read
         # provisions its reader; _pre_cast says the work is already done.
@@ -656,9 +834,7 @@ class PlanResolver(PatchResolver):
             resource = manager.get_resource(
                 _required_resource_type(fiber_io.read_array)
             )
-            return fiber_io.read_array(
-                resource, dict(windows), _pre_cast=True, **kwargs
-            )
+            return _read_open_resource(fiber_io, resource, positional, key)
 
     def can_read_array(self, row: Mapping) -> bool:
         """
@@ -692,8 +868,6 @@ class PlanResolver(PatchResolver):
             # back the newest reader, which may not match this file.
             fiber_io = FiberIO.manager.get_fiberio(format=fmt, version=version)
         except UnknownFiberFormatError:
-            return None
-        if not fiber_io.implements_read_array:
             return None
         key = _row_source_patch_key(row)
         if key.isdigit():
@@ -735,7 +909,18 @@ class PlanResolver(PatchResolver):
         """Assemble the output patch a plan row describes."""
         output_id = int(_row_source_patch_key(row))
         members = self.member_rows[self.member_rows["output_id"] == output_id]
-        assert len(members), "no plan members found for output row"
+        fill_value = self.merge_kwargs.get("fill_value")
+        fill_row = self._output_rows.get(output_id) if fill_value is not None else None
+        can_fill = fill_row is not None and (
+            "_request_row" not in fill_row
+            or not pd.isnull(fill_row.get(f"{self.dim}_step"))
+        )
+        if not len(members):
+            # only a fill plan publishes an output no source feeds
+            assert fill_row is not None, "no plan members found for output row"
+            coords = self._sibling_coords(output_id)
+            filled = patch_from_fill(coords, fill_row, self.dim, fill_value)
+            return self._stamp(filled, row)
         if self.mode == "identity":
             # one untouched member per output; residuals apply at load
             assert len(members) == 1
@@ -753,10 +938,60 @@ class PlanResolver(PatchResolver):
             )
         else:
             joined = members.assign(current_index=output_id)
-            assembled = self._assembler()._patch_from_instruction_df(joined)
+            assembled = self._assembler(fill=can_fill)._patch_from_instruction_df(
+                joined
+            )
             assert len(assembled) == 1
             patch = assembled[0]
+            if can_fill:
+                patch = fill_to_row(
+                    patch,
+                    self.dim,
+                    fill_row,
+                    fill_value,
+                    self.merge_kwargs["tolerance"],
+                )
         return self._stamp(patch, row)
+
+    def _sibling_coords(self, output_id: int):
+        """
+        The coordinates of the nearest output a source actually feeds.
+
+        An output with no members still has to look like the ones beside
+        it -- the same coordinates, values, dtypes and units on every
+        dimension but the chunked one -- and only a real patch states
+        those; an envelope cannot restate an arbitrary array, and the
+        frame holds every numeric one as float. Outputs are numbered in
+        order, so the nearest fed one is a neighbour in the same
+        partition. File, live, and nested-plan anchors supply coordinate
+        metadata; unsupported sources use the loader as a fallback.
+        """
+        output = self._output_rows.get(output_id, {})
+        anchor_id = output.get("_anchor_patch_row")
+        if anchor_id is not None and anchor_id in self._anchor_rows:
+            if output_id not in self._fill_coords:
+                anchor = self._anchor_rows[anchor_id]
+                coords = _source_manager(self.loader, anchor)
+                if coords is not None:
+                    coords = _select_manager(coords, self.parent_residuals)
+                if coords is None:
+                    # Unsupported metadata sources still have a patch loader.
+                    coords = self._load_member({**anchor, "_modified": False}).coords
+                # Fill bounds use the plan's unit, while either anchor path
+                # can return coordinates in the source's native unit.
+                units = _stated_units(output.get(f"_{self.dim}_units"))
+                if units is not None:
+                    coords = coords.convert_units(**{self.dim: units})
+                self._fill_coords[output_id] = coords
+            return self._fill_coords[output_id]
+        ids = self.member_rows["output_id"].to_numpy()
+        assert len(ids), "a fill plan with no members anywhere has no structure"
+        nearest = int(ids[np.argmin(np.abs(ids - output_id))])
+        if nearest not in self._fill_coords:
+            rows = self.member_rows[self.member_rows["output_id"] == nearest]
+            patch = self._load_member(rows.iloc[0].to_dict())
+            self._fill_coords[nearest] = patch.coords
+        return self._fill_coords[nearest]
 
     def _stamp(self, patch: dc.Patch, row: Mapping) -> dc.Patch:
         """
@@ -813,16 +1048,75 @@ def _whole_member_sizes(trims: pd.DataFrame, sources: pd.DataFrame) -> dict[int,
     """
     if trims.empty or "_data_size" not in sources.columns:
         return {}
-    counts = trims.groupby("output_id")["_patch_id"].transform("size").to_numpy()
+    counts = trims.groupby("output_id")["_patch_row"].transform("size").to_numpy()
     modified = np.asarray(trims.get("_modified", False), dtype=bool)
     whole = trims[(counts == 1) & ~modified]
-    lookup = sources.drop_duplicates("_patch_id").set_index("_patch_id")["_data_size"]
+    lookup = sources.drop_duplicates("_patch_row").set_index("_patch_row")["_data_size"]
     out = {}
-    for output_id, patch_id in zip(whole["output_id"], whole["_patch_id"], strict=True):
-        size = lookup.get(patch_id)
+    whole_rows = zip(whole["output_id"], whole["_patch_row"], strict=True)
+    for output_id, patch_row in whole_rows:
+        size = lookup.get(patch_row)
         if not pd.isnull(size):
             out[int(output_id)] = int(size)
     return out
+
+
+def _value_residuals_on(residuals, name: str) -> bool:
+    """
+    Whether every residual is one plain value range on ``name``.
+
+    Such a selection is projected onto the relation's envelopes before
+    anything is planned, so a row it narrows says so (`_modified`) and a
+    row it leaves whole still states its source's own range. Nothing
+    else can: a sample or relative selection resolves against the loaded
+    patch, one naming another coordinate trims an axis the row still
+    describes whole, one which is not a range never reached the
+    envelopes at all, and a unit-bearing one is clipped by a different
+    conversion than the patch itself makes.
+    """
+    for coords, samples, relative in residuals:
+        if samples or relative or set(coords) - {name}:
+            return False
+        value = coords.get(name)
+        if getattr(value, "magnitudes", None) is not None or not is_range(value):
+            return False
+        if any(hasattr(bound, "units") for bound in value):
+            return False
+    return True
+
+
+def _with_source_range(sources: pd.DataFrame, name: str, residuals) -> pd.DataFrame:
+    """
+    Keep each source's own range on the plan dimension beside its trim.
+
+    A member the plan cuts states the window it was cut to, and placing
+    that window back on the file's samples takes the range the file
+    itself spans. Only a row which describes the whole of its source
+    states one: a row a residual selection already trimmed no longer
+    does, and neither does one which arrived trimmed for a reason this
+    plan cannot name. A residual selection a window cannot stand for
+    takes the range from every row, cut or not.
+    """
+    columns = [source_range_column(name, x) for x in SOURCE_RANGE_ENDS]
+    if residuals and not _value_residuals_on(residuals, name):
+        # Such a residual re-trims whatever the member load returns, so
+        # its trimmed rows must not take the recipe; dropping the range
+        # is what refuses them (`_can_load_member_from_index`).
+        return sources.drop(columns=columns, errors="ignore")
+    if set(columns).issubset(sources.columns):
+        # already carried: these rows are the members of a plan on this
+        # same dimension, and the range beside them is still the file's
+        return sources
+    envelope = [f"{name}_{x}" for x in ("min", "max", "step")]
+    if not set(envelope).issubset(sources.columns):
+        return sources
+    modified = sources.get("_modified", pd.Series(False, index=sources.index))
+    whole = pd.Series(~np.asarray(modified, dtype=bool), index=sources.index)
+    values = {
+        column: sources[source].where(whole)
+        for column, source in zip(columns, envelope, strict=True)
+    }
+    return sources.assign(**values)
 
 
 def derived_catalog(
@@ -840,7 +1134,7 @@ def derived_catalog(
     Materialize a plan into a fresh in-memory catalog.
 
     ``source_rows`` are the full member source rows (path/format/
-    identity plus envelopes and attrs) keyed by ``_patch_id`` matching
+    identity plus envelopes and attrs) keyed by ``_patch_row`` matching
     ``plan.members``; ``parent`` supplies the resolver (live registry,
     file root, nested plans) and the residual selections its view
     carried, which member loading re-applies.
@@ -848,10 +1142,10 @@ def derived_catalog(
     token = secrets.token_hex(8)
     name = plan.dim
     trims = plan.members
-    trim_cols = [c for c in trims.columns if c not in ("_patch_id",)]
+    trim_cols = [c for c in trims.columns if c not in ("_patch_row",)]
     sources = source_rows.copy(deep=False)
-    if "_patch_id" not in sources.columns:
-        sources = _ensure_patch_id(sources)
+    if "_patch_row" not in sources.columns:
+        sources = _ensure_patch_row(sources)
     # Trim magnitudes are in the plan's (partition-normalized) unit; the
     # source's own spelling survives under a renamed column so member
     # loading can tell when a bare read hint would mean the wrong unit.
@@ -867,31 +1161,38 @@ def derived_catalog(
             sources = sources.drop(columns=[unit_col])
         else:
             sources = sources.rename(columns={unit_col: source_unit_col})
-    member_rows = trims[["_patch_id", *[c for c in trim_cols]]].merge(
+    parent_residuals = () if parent is None else parent.residuals
+    sources = _with_source_range(sources, name, parent_residuals)
+    # Resolve source paths once before deriving both members and fill anchors.
+    root = getattr(parent.resolver, "_root", None) if parent is not None else None
+    if root is not None and "source_path" in sources.columns:
+        file_resolver = FileResolver(root)
+        sources = sources.assign(
+            source_path=[
+                str(file_resolver.resolve_path(path)) for path in sources["source_path"]
+            ]
+        )
+    member_rows = trims[["_patch_row", *[c for c in trim_cols]]].merge(
         sources.drop(columns=[c for c in trim_cols if c in sources], errors="ignore"),
-        on="_patch_id",
+        on="_patch_row",
         how="left",
     )
     # the member's trimmed range replaces the source envelope for loading
-    member_rows = member_rows.drop(columns=["_patch_id"])
-    parent_residuals = () if parent is None else parent.residuals
-    # resolve stored-relative paths once; the derived catalog is
-    # root-independent afterwards
-    root = getattr(parent.resolver, "_root", None) if parent is not None else None
-    if root is not None and "source_path" in member_rows.columns:
-        member_rows = member_rows.assign(
-            source_path=[
-                str(p)
-                if "://" in str(p) or str(p).startswith("/")
-                else str(root / str(p))
-                for p in member_rows["source_path"]
-            ]
-        )
+    member_rows = member_rows.drop(columns=["_patch_row"])
+    anchors = (
+        sources[sources["_patch_row"].isin(plan.outputs["_anchor_patch_row"])]
+        if "_anchor_patch_row" in plan.outputs
+        else None
+    )
     loader = CompositeResolver()
     if parent is not None:
         member_paths = set(
             member_rows.get("source_path", pd.Series(dtype=str)).astype(str)
         )
+        if anchors is not None:
+            member_paths.update(
+                anchors.get("source_path", pd.Series(dtype=str)).astype(str)
+            )
         loader.absorb(parent.resolver, paths=member_paths)
     coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()
     # a coordinate riding a dimension it is not named for, on any member,
@@ -911,6 +1212,8 @@ def derived_catalog(
         origin_path=origin_path,
         stamped=stamped,
         lossy=lossy,
+        output_rows=plan.outputs,
+        anchor_rows=anchors,
     )
     backend = get_backend(":memory:")
     # residual selections trim at load; identity claims (def keys) for
@@ -923,6 +1226,10 @@ def derived_catalog(
     aux_info = _aux_coord_info(
         sources, trims, name, coord_dims_map, trimmed_dims, concat=mode == "concat"
     )
+    if merge_kwargs.get("fill_value") is not None:
+        aux_info = _aux_info_for_unfed(
+            aux_info, outputs, sources, name, coord_dims_map, trimmed_dims
+        )
     records = _output_records(
         outputs,
         token,
@@ -933,6 +1240,41 @@ def derived_catalog(
         records = _with_parent_runs(records, parent.backend, trims, sources, name)
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver)
+
+
+def _aux_info_for_unfed(
+    aux_info: Mapping,
+    outputs: pd.DataFrame,
+    sources: pd.DataFrame,
+    plan_dim: str,
+    coord_dims_map: Mapping[str, str],
+    trimmed_dims: frozenset[str],
+) -> dict:
+    """Describe fill-only outputs from a sibling or their metadata anchor."""
+    out = dict(aux_info)
+    known = np.array(sorted(aux_info))
+    by_id = sources.set_index("_patch_row", drop=False)
+    for row in outputs.to_dict("records"):
+        output_id = int(row["output_id"])
+        if output_id in out:
+            continue
+        anchor_id = row.get("_anchor_patch_row")
+        if anchor_id in by_id.index:
+            anchor = by_id.loc[[anchor_id]].reset_index(drop=True)
+            pseudo = pd.DataFrame([{"output_id": output_id, "_patch_row": anchor_id}])
+            info = _aux_coord_info(
+                anchor, pseudo, plan_dim, coord_dims_map, trimmed_dims
+            )
+            if info:
+                out[output_id] = {
+                    name: value
+                    for name, value in info[output_id].items()
+                    if plan_dim not in value["dims"]
+                }
+                continue
+        if len(known):
+            out[output_id] = aux_info[int(known[np.argmin(np.abs(known - output_id))])]
+    return out
 
 
 def _with_parent_runs(
@@ -947,15 +1289,16 @@ def _with_parent_runs(
     kept its identity, and so equals each member's; never along the
     dimension it merged, whose runs no single member states. A run in other units
     or of another kind than the output's coordinate is dropped. Members
-    find their runs through the parent's patch ids (``_index_id``); a
+    find their runs through the parent's patch rows (``_index_row``); a
     collapsed re-plan's members carry the id of the output holding them.
     """
-    if trims.empty or "_index_id" not in sources.columns:
+    if trims.empty or "_index_row" not in sources.columns:
         return records
-    index_ids = dict(zip(sources["_patch_id"], sources["_index_id"], strict=True))
+    index_ids = dict(zip(sources["_patch_row"], sources["_index_row"], strict=True))
     members: dict[str, list] = {}
-    for output_id, patch_id in zip(trims["output_id"], trims["_patch_id"], strict=True):
-        members.setdefault(str(int(output_id)), []).append(index_ids.get(patch_id))
+    trim_rows = zip(trims["output_id"], trims["_patch_row"], strict=True)
+    for output_id, patch_row in trim_rows:
+        members.setdefault(str(int(output_id)), []).append(index_ids.get(patch_row))
     known = {x for ids in members.values() for x in ids if pd.notna(x)}
     runs = parent_backend.patch_runs(known)
     if not runs:
@@ -970,7 +1313,7 @@ def _with_parent_runs(
             for coord in patch.coords:
                 coords.append(coord)
                 merged = name in str(coord.coord_dims).split(",")
-                if len(ids) > 1 and (merged or not coord.coord_hash):
+                if len(ids) > 1 and (merged or not coord.data_id):
                     continue
                 kind = (coord.coord_name, coord.value_kind, coord.is_relative)
                 coords.extend(
@@ -1000,10 +1343,17 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
     their sources, so a re-plan which merges them back is entitled to
     load a source whole. A plan which drops samples — channel selection
     keeping some channels of a patch and not others — breaks exactly
-    that, and collapsing it would quietly load back what it removed.
+    that, and collapsing it would quietly load back what it removed. A
+    plan which *adds* samples, by filling a bridged hole, breaks it the
+    same way and is the second exception.
     """
     resolver = catalog.resolver
     if not isinstance(resolver, PlanResolver) or resolver.lossy:
+        return None
+    # A fill plan is the same exception from the other side: its outputs
+    # hold samples no member has, so a re-plan over the members would
+    # quietly drop the ones it added.
+    if resolver.merge_kwargs.get("fill_value") is not None:
         return None
     if any(samples or relative for _, samples, relative in catalog.residuals):
         return None
@@ -1023,7 +1373,10 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
     # that output's patch in this catalog (a stale one named the parent's)
     ids = catalog.backend.patch_ids_by_key()
     index_ids = [ids.get(str(int(x))) for x in members["output_id"]]
-    working = members.assign(_index_id=pd.array(index_ids, dtype="Int64"))
+    # the re-plan builds new member rows from these, so what the index
+    # measured of each source has to travel with them
+    members = resolver.source_stats_of(members)
+    working = members.assign(_index_row=pd.array(index_ids, dtype="Int64"))
     working = working.drop(columns=["output_id"])
     working = patch_local_adjusted_envelopes(
         working, catalog.residuals, drop_empty=True

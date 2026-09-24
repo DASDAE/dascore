@@ -8,6 +8,7 @@ import pytest
 import dascore as dc
 from dascore.config import config_context
 from dascore.exceptions import PatchConversionError
+from dascore.io.index.planned import PlanResolver
 
 
 class TestSpoolToXarray:
@@ -116,9 +117,9 @@ class TestSpoolToXarray:
             calls.append("patch")
             return original(self, kwargs)
 
-        def _counting_array(self, row, windows, **kwargs):
+        def _counting_array(self, row, windows):
             calls.append("array")
-            return original_array(self, row, windows, **kwargs)
+            return original_array(self, row, windows)
 
         monkeypatch.setattr(PlanResolver, "_load_member", _counting)
         monkeypatch.setattr(PlanResolver, "_load_member_array", _counting_array)
@@ -372,6 +373,17 @@ class TestSpoolToXarray:
         )
         np.testing.assert_array_equal(data.values, flipped.data)
 
+    def test_descending_non_dim_coord_without_a_grid(self, random_patch):
+        """A descending coordinate no stored grid describes is sized by envelope."""
+        # float values, so the row states no exact grid to rebuild from
+        # and the envelope is all there is to size the lazy array with
+        values = random_patch.get_coord("distance").values[::-1] * 1.5
+        flipped = random_patch.update_coords(distance=values)
+        leaf = self._leaves(dc.spool([flipped]).io.to_xarray())[0]
+        data = leaf.dataset["data"]
+        np.testing.assert_array_equal(data["distance"].values, values)
+        np.testing.assert_array_equal(data.values, flipped.data)
+
     def test_mixed_dtype_upcasts(self, random_patch):
         """Blocks narrower than the combined dtype upcast at load."""
         coord = random_patch.get_coord("time")
@@ -454,31 +466,19 @@ class TestToXarrayReadArray:
         return path
 
     @pytest.fixture
-    def override_calls(self):
-        """Give DASDAE a counting read_array override."""
-        from dascore.io.core import FiberIO  # noqa: PLC0415
-        from dascore.io.dasdae.core import DASDAEV2  # noqa: PLC0415
-
+    def override_calls(self, monkeypatch):
+        """Record successful array-only loads, excluding normal derived reads."""
         calls = []
+        original = PlanResolver._load_member_array
 
-        def read_array(self, resource, windows, **kwargs):
-            # a real override's caster wrapper consumes _pre_cast; this
-            # raw function sees it and must not forward it to read
-            kwargs.pop("_pre_cast", None)
-            calls.append(windows)
-            return FiberIO.read_array(self, resource, windows, **kwargs)
+        def load(resolver, row, windows):
+            out = original(resolver, row, windows)
+            if out is not None:
+                calls.append(windows)
+            return out
 
-        # set and restore by hand: monkeypatch would put the inherited
-        # method back as an own class attribute rather than remove it,
-        # and DASDAE has an override of its own to hand back afterwards.
-        missing = object()
-        stored = DASDAEV2.__dict__.get("read_array", missing)
-        DASDAEV2.read_array = read_array
-        yield calls
-        if stored is missing:
-            del DASDAEV2.read_array
-        else:
-            DASDAEV2.read_array = stored
+        monkeypatch.setattr(PlanResolver, "_load_member_array", load)
+        return calls
 
     def _leaf(self, tree):
         """The first dataset holding a data variable."""
@@ -493,7 +493,7 @@ class TestToXarrayReadArray:
         metres = dc.get_example_patch().set_units(distance="m")
         dist = metres.get_coord("distance")
         span = float(dist.max() - dist.min() + dist.step)
-        feet = metres.update_coords(distance=(dist.data + span) / 0.3048)
+        feet = metres.update_coords(distance=(dist.values + span) / 0.3048)
         feet = feet.set_units(distance="ft")
         dc.write(metres, tmp_path / "m.h5", "dasdae")
         dc.write(feet, tmp_path / "ft.h5", "dasdae")
@@ -540,6 +540,7 @@ class TestToXarrayReadArray:
         """
         spool = dc.spool(dasdae_directory).update().chunk(time=3)
         eager = spool.chunk(time=None)[0].data
+        override_calls.clear()
         out = self._leaf(spool.io.to_xarray())["data"].data.compute()
         assert np.array_equal(out, eager)
         assert override_calls == []
@@ -560,6 +561,7 @@ class TestToXarrayReadArray:
             patch.update_attrs(history=[]).io.write(tmp_path / f"p{num}.h5", "dasdae")
         spool = dc.spool(tmp_path).update()
         eager = spool.chunk(time=None)[0].data
+        override_calls.clear()
         out = self._leaf(spool.io.to_xarray())["data"].data.compute()
         assert np.array_equal(out, eager)
         # the trimmed member's window must not be anchored at the start
@@ -622,7 +624,6 @@ class TestToXarrayReadArray:
 
     def test_stale_shape_raises(self):
         """An array which breaks the index's promise raises."""
-        from dascore.exceptions import PatchConversionError  # noqa: PLC0415
         from dascore.xarray.spool import _load_xarray_block  # noqa: PLC0415
 
         class _Fake:
@@ -685,7 +686,7 @@ class TestToXarrayLazyCoords:
         metres = dc.get_example_patch().set_units(distance="m")
         dist = metres.get_coord("distance")
         span = float(dist.max() - dist.min() + dist.step)
-        feet = metres.update_coords(distance=(dist.data + span) / 0.3048)
+        feet = metres.update_coords(distance=(dist.values + span) / 0.3048)
         feet = feet.set_units(distance="ft")
         dc.write(metres, tmp_path / "m.h5", "dasdae")
         dc.write(feet, tmp_path / "ft.h5", "dasdae")
@@ -737,7 +738,6 @@ class TestToXarrayLazyCoords:
 
     def test_segmented_time_stays_lazy(self, random_patch):
         """A jittered merge is not one range; it is served as its segments."""
-        from dascore.core.coords import CoordSegmented  # noqa: PLC0415
         from dascore.xarray.index import CoordIndex  # noqa: PLC0415
 
         coord = random_patch.get_coord("time")
@@ -749,7 +749,7 @@ class TestToXarrayLazyCoords:
         data = self._leaf(spool.io.to_xarray())["data"]
         index = data.xindexes["time"]
         assert isinstance(index, CoordIndex)
-        assert isinstance(index.coordinate, CoordSegmented)
+        assert index.coordinate.runs_count > 1
         merged = spool.chunk(time=None)[0]
         np.testing.assert_array_equal(
             data["time"].values, merged.get_coord("time").values
@@ -910,9 +910,7 @@ class TestToXarrayBlockSize:
             patcher.setattr(
                 PlanResolver,
                 "_load_member_array",
-                lambda self, row, w, **k: (
-                    reads.append(w) or original(self, row, w, **k)
-                ),
+                lambda self, row, w: reads.append(w) or original(self, row, w),
             )
             out = data.isel(time=slice(0, 0)).compute()
         assert out.sizes["time"] == 0
@@ -928,7 +926,7 @@ class TestToXarrayBlockSize:
         merged = file_spool.chunk(time=None)[0]
         whole = merged.transpose(*data.dims).data
         monkeypatch.setattr(
-            PlanResolver, "_load_member_array", lambda self, row, w, **k: None
+            PlanResolver, "_load_member_array", lambda self, row, w: None
         )
         got = data.isel(distance=slice(0, 4), time=slice(0, 6)).compute().values
         assert np.array_equal(got, whole[:4, :6])
@@ -1001,7 +999,7 @@ class TestToXarrayBlockSize:
         data = self._leaf(file_spool.io.to_xarray(block_size=quarter))
         merged = file_spool.chunk(time=None)[0]
         monkeypatch.setattr(
-            PlanResolver, "_load_member_array", lambda self, row, w, **k: None
+            PlanResolver, "_load_member_array", lambda self, row, w: None
         )
         assert np.array_equal(data.compute().values, merged.transpose(*data.dims).data)
 
@@ -1119,3 +1117,39 @@ class TestBlockPieces:
 
         assert _samples_per_block(0, np.dtype("float64"), {"t": 5}, "t") is None
         assert _samples_per_block(None, np.dtype("float64"), {"t": 5}, "t") is None
+
+
+class TestToXarrayExactGrid:
+    """A spool whose coordinates carry an exact grid converts like any other."""
+
+    @pytest.fixture(autouse=True)
+    def _require_libs(self):
+        """These tests need both optional libraries."""
+        pytest.importorskip("xarray")
+        pytest.importorskip("dask")
+
+    @pytest.fixture(scope="class")
+    def third_second_spool(self, tmp_path_factory):
+        """Five adjacent files sampled on an exact one third second grid."""
+        path = tmp_path_factory.mktemp("exact_grid_tree")
+        start = np.datetime64("2020-01-01")
+        for num in range(5):
+            time = dc.core.get_coord(start=start, step=(1, 3), shape=(20,))
+            distance = dc.core.get_coord(start=0.0, step=1.0, shape=(4,))
+            patch = dc.Patch(
+                data=np.random.default_rng(num).random((20, 4)),
+                coords={"time": time, "distance": distance},
+                dims=("time", "distance"),
+            )
+            patch.io.write(path / f"g{num}.h5", "dasdae")
+            start = time.max() + time.step
+        return dc.spool(path).update()
+
+    def test_a_sample_selection_converts(self, third_second_spool):
+        """A window of an exact grid sizes its blocks as it reads them."""
+        tree = third_second_spool.select(time=(1, -1), samples=True).io.to_xarray()
+        leaves = [x for x in tree.subtree if "data" in x.dataset]
+        assert len(leaves) == 5
+        for leaf in leaves:
+            array = leaf.dataset["data"]
+            assert np.asarray(array.values).shape == array.shape

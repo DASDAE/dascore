@@ -52,14 +52,19 @@ class TestEqualityContract:
         assert one == same
         assert one != other
 
-    def test_plan_dtype_placeholder_does_not_change_equality(self):
-        """A plan equals its materialization despite its placeholder dtype."""
+    def test_plan_states_the_dtype_a_coordinate_it_passes_through_has(self):
+        """A plan equals its materialization, and agrees on the dtype."""
         patch = dc.get_example_patch()
         patch = patch.update_coords(distance=np.arange(patch.shape[0], dtype=np.int32))
         planned = dc.spool(patch).chunk(time=2)
         materialized = dc.spool(list(planned))
-        assert set(planned._df["_distance_coord_dtype"]) == {"float64"}
+        # The chunked dimension's envelope is a window the plan computed,
+        # so it keeps the float placeholder; distance passes through
+        # untouched and is stated as the integer coordinate it is, which
+        # is what an output rebuilt from its row alone has to go on.
+        assert set(planned._df["_distance_coord_dtype"]) == {"int32"}
         assert set(materialized._df["_distance_coord_dtype"]) == {"int32"}
+        assert planned[0].get_coord("distance").dtype == np.int32
         assert planned == materialized
 
     def test_order_matters(self, patches):

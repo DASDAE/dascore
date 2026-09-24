@@ -7,7 +7,6 @@ import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io.utils import (
-    build_patches,
     convert_attr_units,
     drop_blank_attrs,
     get_attr_names,
@@ -132,20 +131,6 @@ def _get_attr(resource, attr_cls, extras=None):
     return _validate_attrs(attrs, attr_cls, extras), coords
 
 
-def _build_patches(attrs_dict, coords, data, time, distance, attr_cls):
-    """Assemble patches from attrs, coords, and a data node."""
-    attrs = _validate_attrs(attrs_dict, attr_cls)
-    return build_patches(
-        coords, data, attrs, selection={"time": time, "distance": distance}
-    )
-
-
-def _get_patches(resource, time=None, distance=None, attr_cls=dc.PatchAttrs):
-    """Get a patch from a Silixa V1 (Acoustic) file."""
-    attrs, coords = _get_attr_dict(resource)
-    return _build_patches(attrs, coords, resource["Acoustic"], time, distance, attr_cls)
-
-
 # --- Carina (netCDF-shell) variant helpers.
 # These files (e.g. the INGV Mt Etna deployment) are written through a
 # netCDF library: the Silixa attrs sit on the file root rather than on an
@@ -256,10 +241,3 @@ def _get_carina_attr(resource, attr_cls, extras=None):
     """Get the attribute class and coordinates for a Carina-variant file."""
     attrs, coords = _get_carina_attrs_and_coords(resource)
     return _validate_attrs(attrs, attr_cls, extras), coords
-
-
-def _get_carina_patches(resource, time=None, distance=None, attr_cls=dc.PatchAttrs):
-    """Get a patch from a Carina-variant file."""
-    attrs, coords = _get_carina_attrs_and_coords(resource)
-    data = resource[_CARINA_DATA_NAME]
-    return _build_patches(attrs, coords, data, time, distance, attr_cls)

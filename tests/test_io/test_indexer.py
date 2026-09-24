@@ -373,14 +373,14 @@ class TestUpdate:
         path = empty_index.path / get_patch_names(random_patch).iloc[0]
         random_patch.io.write(path, file_format="dasdae")
         updated = empty_index.update(progress=None)
-        assert len(updated._backend.query_ids()) == 1
+        assert len(updated._backend.query_rows()) == 1
 
     def test_index_with_bad_file(self, spool_directory_with_non_das_file):
         """Ensure if one file is not readable index continues."""
         indexer = DBDirectoryIndexer(spool_directory_with_non_das_file)
         updated = indexer.update(progress=None)
         assert isinstance(updated, DBDirectoryIndexer)
-        assert len(updated._backend.query_ids()) == 2
+        assert len(updated._backend.query_rows()) == 2
 
     def test_removed_file_dropped(self, two_patch_directory, tmp_path_factory):
         """A deleted file's rows disappear on the next update."""
@@ -389,9 +389,9 @@ class TestUpdate:
         for index in Path(new).glob(".dascore_index*"):
             index.unlink()
         indexer = DBDirectoryIndexer(new).update(progress=None)
-        assert len(indexer._backend.query_ids()) == 2
+        assert len(indexer._backend.query_rows()) == 2
         next(iter(Path(new).glob("*.hdf5"))).unlink()
-        assert len(indexer.update(progress=None)._backend.query_ids()) == 1
+        assert len(indexer.update(progress=None)._backend.query_rows()) == 1
 
     def test_noop_update_rescans_nothing(self, basic_indexer):
         """Unchanged sources are not rescanned."""

@@ -12,11 +12,8 @@ from pydantic import ValidationError
 
 import dascore as dc
 from dascore.core.coords import (
-    CoordArray,
-    CoordMonotonicArray,
     CoordPartial,
-    CoordRange,
-    CoordSegmented,
+    NumericCoord,
     concat_coords,
     get_coord,
 )
@@ -25,45 +22,45 @@ from dascore.units import get_quantity
 
 
 @pytest.fixture(scope="session")
-def float_gap_coord() -> CoordSegmented:
+def float_gap_coord() -> NumericCoord:
     """Two evenly sampled float blocks (0..9, 15..24) separated by a gap."""
     c1 = get_coord(start=0.0, stop=10.0, step=1.0)
     c2 = get_coord(start=15.0, stop=25.0, step=1.0)
     out = concat_coords(c1, c2)
-    assert isinstance(out, CoordSegmented)
+    assert out.runs_count == 2
     return out
 
 
 @pytest.fixture(scope="session")
-def time_gap_coord() -> CoordSegmented:
+def time_gap_coord() -> NumericCoord:
     """Two evenly sampled time blocks separated by a 3 second gap."""
     one_s = np.timedelta64(1, "s")
     t0 = np.datetime64("2020-01-01T00:00:00", "ns")
     c1 = get_coord(start=t0, stop=t0 + 10 * one_s, step=one_s)
     c2 = get_coord(start=t0 + 12 * one_s, stop=t0 + 22 * one_s, step=one_s)
     out = concat_coords(c1, c2)
-    assert isinstance(out, CoordSegmented)
+    assert out.runs_count == 2
     return out
 
 
 @pytest.fixture(scope="session")
-def mixed_segment_coord() -> CoordSegmented:
+def mixed_segment_coord() -> NumericCoord:
     """A range segment followed by an irregular array segment."""
     c1 = get_coord(start=0.0, stop=10.0, step=1.0)
     c2 = get_coord(data=np.array([12.0, 12.1, 13.7, 20.0]))
-    assert isinstance(c2, CoordMonotonicArray)
+    assert c2.sorted and not c2.evenly_sampled
     out = concat_coords(c1, c2)
-    assert isinstance(out, CoordSegmented)
+    assert out.runs_count == 2
     return out
 
 
 @pytest.fixture(scope="session")
-def reverse_gap_coord() -> CoordSegmented:
+def reverse_gap_coord() -> NumericCoord:
     """A reverse-sorted segmented coordinate."""
     c1 = get_coord(start=24.0, stop=14.0, step=-1.0)
     c2 = get_coord(start=9.0, stop=-1.0, step=-1.0)
     out = concat_coords(c1, c2)
-    assert isinstance(out, CoordSegmented)
+    assert out.runs_count == 2
     return out
 
 
@@ -72,8 +69,7 @@ class TestConstruction:
 
     def test_concat_returns_segmented(self, float_gap_coord):
         """Two non-contiguous blocks make a segmented coord."""
-        assert isinstance(float_gap_coord, CoordSegmented)
-        assert float_gap_coord.segment_count == 2
+        assert float_gap_coord.runs_count == 2
         assert len(float_gap_coord) == 20
 
     def test_exactly_contiguous_fuse(self):
@@ -81,7 +77,7 @@ class TestConstruction:
         c1 = get_coord(start=0.0, stop=10.0, step=1.0)
         c2 = get_coord(start=10.0, stop=20.0, step=1.0)
         out = concat_coords(c1, c2)
-        assert isinstance(out, CoordRange)
+        assert out.evenly_sampled
         assert out == get_coord(start=0.0, stop=20.0, step=1.0)
 
     def test_uniform_array_segments_promoted(self):
@@ -89,8 +85,8 @@ class TestConstruction:
         c1 = get_coord(data=np.arange(5.0))
         c2 = get_coord(start=8.0, stop=12.0, step=1.0)
         out = concat_coords(c1, c2)
-        assert isinstance(out, CoordSegmented)
-        assert all(isinstance(x, CoordRange) for x in out.segments)
+        assert out.runs_count == 2
+        assert all(x.evenly_sampled for x in out.segments)
 
     def test_canonical_across_construction_orders(self):
         """Equal values give equal coords regardless of how assembled."""
@@ -103,7 +99,7 @@ class TestConstruction:
             get_coord(data=np.array([0.0, 1.0, 2.0, 3.0, 4.0])),
         )
         assert a == b
-        assert a.fingerprint() == b.fingerprint()
+        assert a.data_id == b.data_id
 
     def test_out_of_order_inputs_sorted(self):
         """concat_coords orders inputs by their envelopes."""
@@ -113,25 +109,14 @@ class TestConstruction:
         assert out.min() == 0.0 and out.max() == 24.0
         assert np.all(np.diff(out.values) > 0)
 
-    def test_adjacent_arrays_fuse(self):
-        """Adjacent irregular arrays fuse (their boundary has no meaning)."""
+    def test_adjacent_arrays_keep_their_seam(self):
+        """Adjacent stored runs stay apart; the boundary is a fact about the data."""
         c1 = get_coord(data=np.array([0.0, 0.1, 1.7]))
         c2 = get_coord(data=np.array([2.0, 3.3, 3.4]))
         out = concat_coords(c1, c2)
-        assert isinstance(out, CoordMonotonicArray)
-
-    def test_direct_construction_needs_two_segments(self):
-        """The class itself requires >= 2 segments post normalization."""
-        c1 = get_coord(start=0.0, stop=10.0, step=1.0)
-        with pytest.raises(ValidationError, match="fuse"):
-            CoordSegmented(segments=(c1,))
-
-    def test_fusing_inputs_rejected_by_class(self):
-        """Directly constructing with fusable segments raises (use concat)."""
-        c1 = get_coord(start=0.0, stop=10.0, step=1.0)
-        c2 = get_coord(start=10.0, stop=20.0, step=1.0)
-        with pytest.raises(ValidationError, match="fuse"):
-            CoordSegmented(segments=(c1, c2))
+        assert out.sorted and not out.evenly_sampled
+        assert out.runs_count == 2
+        assert np.array_equal(out.values, np.concatenate([c1.values, c2.values]))
 
     def test_shared_value_raises(self):
         """Segments sharing a boundary value are rejected (not strict)."""
@@ -197,8 +182,7 @@ class TestConstruction:
         """Segmented inputs contribute their segments."""
         c3 = get_coord(start=30.0, stop=40.0, step=1.0)
         out = concat_coords(float_gap_coord, c3)
-        assert isinstance(out, CoordSegmented)
-        assert out.segment_count == 3
+        assert out.runs_count == 3
 
     def test_units_param_sets_units(self):
         """The units argument sets units on the result."""
@@ -217,11 +201,6 @@ class TestConstruction:
         c1 = get_coord(start=0.0, stop=10.0, step=1.0)
         with pytest.raises(CoordError, match="cannot be combined"):
             get_coord(segments=(c1,), start=0, stop=1, step=0.1)
-
-    def test_container_units_mismatch_raises(self, float_gap_coord):
-        """Explicit units that contradict segment units raise."""
-        with pytest.raises(ValidationError, match="units"):
-            CoordSegmented(segments=float_gap_coord.segments, units="m")
 
 
 class TestProperties:
@@ -242,7 +221,7 @@ class TestProperties:
 
     def test_cached_arrays_read_only(self, float_gap_coord):
         """Cached arrays are shared between callers, so must be read-only."""
-        assert not float_gap_coord._segment_offsets().flags.writeable
+        assert not float_gap_coord._run_offsets().flags.writeable
         assert not float_gap_coord.values.flags.writeable
 
     def test_sorted_flags(self, float_gap_coord, reverse_gap_coord):
@@ -376,15 +355,14 @@ class TestSelect:
     def test_select_across_seam_keeps_structure(self, float_gap_coord):
         """A window spanning the seam returns a segmented coord."""
         out, indexer = float_gap_coord.select((5.0, 18.0))
-        assert isinstance(out, CoordSegmented)
-        assert out.segment_count == 2
+        assert out.runs_count == 2
         assert np.array_equal(out.values, np.array([5.0, 6, 7, 8, 9, 15, 16, 17, 18]))
         assert indexer == slice(5, 14)
 
     def test_select_single_segment_degrades(self, float_gap_coord):
         """A window inside one block returns a plain range."""
         out, _ = float_gap_coord.select((16.0, 20.0))
-        assert isinstance(out, CoordRange)
+        assert out.evenly_sampled
 
     def test_select_samples(self, float_gap_coord):
         """Samples-based selection works via base machinery (stop exclusive)."""
@@ -411,7 +389,7 @@ class TestSelect:
 
     def test_select_between_samples_of_segment(self):
         """A window inside a segment's envelope but between samples is empty."""
-        coarse = CoordMonotonicArray(values=np.array([0.0, 10.0]))
+        coarse = NumericCoord.from_labels(np.array([0.0, 10.0]))
         fine = get_coord(start=20.0, stop=25.0, step=1.0)
         coord = concat_coords(coarse, fine)
         out, indexer = coord.select((3.0, 7.0))
@@ -442,13 +420,13 @@ class TestGetItem:
     def test_slice_across_seam(self, float_gap_coord):
         """Slices spanning the seam preserve structure."""
         out = float_gap_coord[8:12]
-        assert isinstance(out, CoordSegmented)
+        assert out.runs_count == 2
         assert np.array_equal(out.values, np.array([8.0, 9.0, 15.0, 16.0]))
 
     def test_slice_single_segment(self, float_gap_coord):
         """Slices within one block degrade to that block's type."""
         out = float_gap_coord[2:5]
-        assert isinstance(out, CoordRange)
+        assert out.evenly_sampled
 
     def test_empty_slice(self, float_gap_coord):
         """Empty slices produce an empty coordinate."""
@@ -484,7 +462,7 @@ class TestSortAndShift:
         out = float_gap_coord.update_limits(min=100.0)
         assert out.min() == 100.0
         assert np.array_equal(out.values, float_gap_coord.values + 100.0)
-        assert isinstance(out, CoordSegmented)
+        assert out.runs_count == 2
 
     def test_update_limits_max_shifts(self, float_gap_coord):
         """Setting max translates all segments."""
@@ -519,28 +497,17 @@ class TestSortAndShift:
         out = float_gap_coord.set_units("m").convert_units("ft")
         expected = float_gap_coord.values / 0.3048
         assert np.allclose(out.values, expected)
-        assert isinstance(out, CoordSegmented)
+        assert out.runs_count == 2
 
     def test_convert_units_time_noop(self, time_gap_coord):
         """Time coords do not convert units."""
         assert time_gap_coord.convert_units("ft") is time_gap_coord
 
-    def test_the_guard_asks_every_segment(self, float_gap_coord):
-        """
-        `self.units` speaks only for the first segment.
-
-        Segments are admitted when their units are merely equal, so a
-        coord reporting metres can hold one in `100 cm`, and that one
-        still has work to do.
-        """
+    def test_equivalent_units_are_a_noop(self, float_gap_coord):
+        """Setting units which mean the same thing returns the same object."""
         coord = float_gap_coord.set_units("m")
-        assert coord.set_units("meter") is coord  # every segment agrees
-        mixed = coord.__class__(
-            segments=(coord.segments[0], coord.segments[1].set_units("100 cm"))
-        )
-        for out in (mixed.set_units("m"), mixed.convert_units("m")):
-            assert out is not mixed
-            assert all(get_quantity(x.units) == get_quantity("m") for x in out.segments)
+        assert coord.set_units("meter") is coord
+        assert coord.set_units("100 cm") is not coord
 
 
 class TestSimplifyAndSnap:
@@ -548,8 +515,8 @@ class TestSimplifyAndSnap:
 
     def test_simplify_absorbs_gap_within_tolerance(self, float_gap_coord):
         """A large enough tolerance collapses to a single range."""
-        out = float_gap_coord.simplify(3.0)
-        assert isinstance(out, CoordRange)
+        out = float_gap_coord.fuse(3.0)
+        assert out.evenly_sampled
         assert len(out) == len(float_gap_coord)
         assert out.min() == float_gap_coord.min()
         assert out.max() == float_gap_coord.max()
@@ -557,24 +524,24 @@ class TestSimplifyAndSnap:
     def test_simplify_error_bounded(self, float_gap_coord):
         """No value moves by more than the tolerance."""
         tol = 3.0
-        out = float_gap_coord.simplify(tol)
+        out = float_gap_coord.fuse(tol)
         deviation = np.max(np.abs(out.values - float_gap_coord.values))
         assert deviation <= tol
 
     def test_simplify_insufficient_tolerance_noop(self, float_gap_coord):
         """A too-small tolerance leaves the coord unchanged."""
-        out = float_gap_coord.simplify(0.5)
+        out = float_gap_coord.fuse(0.5)
         assert out == float_gap_coord
 
     def test_simplify_idempotent(self, float_gap_coord):
         """Simplifying twice equals simplifying once."""
-        once = float_gap_coord.simplify(3.0)
-        assert once.simplify(3.0) == once
+        once = float_gap_coord.fuse(3.0)
+        assert once.fuse(3.0) == once
 
     def test_simplify_time_tolerance_seconds(self, time_gap_coord):
         """Numeric tolerances on time coords mean seconds."""
-        out = time_gap_coord.simplify(2)
-        assert isinstance(out, CoordRange)
+        out = time_gap_coord.fuse(2)
+        assert out.evenly_sampled
         deviation = np.max(np.abs(out.values - time_gap_coord.values))
         assert deviation <= np.timedelta64(2, "s")
 
@@ -584,32 +551,56 @@ class TestSimplifyAndSnap:
         coord = concat_coords(
             get_coord(data=values), get_coord(start=10.0, stop=14.0, step=1.0)
         )
-        out = coord.simplify(0.1)
-        assert isinstance(out, CoordSegmented)
-        assert all(isinstance(x, CoordRange) for x in out.segments)
+        out = coord.fuse(0.1)
+        assert out.runs_count == 2
+        assert all(x.evenly_sampled for x in out.segments)
 
     def test_negative_tolerance_raises(self, float_gap_coord):
         """Negative tolerances make no sense."""
         with pytest.raises(ParameterError):
-            float_gap_coord.simplify(-1.0)
+            float_gap_coord.fuse(-1.0)
+
+    def test_keep_step_refuses_to_absorb_a_hole(self, float_gap_coord):
+        """With keep_step the missing samples stay missing, tolerance or not."""
+        out = float_gap_coord.fuse(1e6, keep_step=True)
+        assert out.runs_count == 2
+        assert np.array_equal(out.values, float_gap_coord.values)
+
+    def test_keep_step_still_absorbs_jitter(self):
+        """A seam a fraction of a step off the grid collapses even so."""
+        coord = concat_coords(
+            get_coord(start=0.0, stop=10.0, step=1.0),
+            get_coord(start=10.3, stop=20.3, step=1.0),
+        )
+        out = coord.fuse(0.5, keep_step=True)
+        assert out.evenly_sampled
+        assert np.max(np.abs(out.values - coord.values)) <= 0.5
+
+    def test_keep_step_allows_a_refit_of_disagreeing_steps(self):
+        """Segments stating different steps have no one step to keep."""
+        coord = concat_coords(
+            get_coord(start=0.0, stop=10.0, step=1.0),
+            get_coord(start=10.0, stop=20.2, step=1.02),
+        )
+        assert coord.fuse(0.5, keep_step=True).evenly_sampled
 
     def test_simplify_base_coord_noop(self):
-        """Other coords return themselves from simplify."""
+        """Other coords return themselves from fuse."""
         coord = get_coord(start=0.0, stop=10.0, step=1.0)
-        assert coord.simplify(10) is coord
+        assert coord.fuse(10) is coord
 
     def test_snap_forces_range(self, float_gap_coord):
         """Snap always produces a range preserving min/max and length."""
         out = float_gap_coord.snap()
-        assert isinstance(out, CoordRange)
+        assert out.evenly_sampled
         assert len(out) == len(float_gap_coord)
         assert out.min() == float_gap_coord.min()
         assert out.max() == float_gap_coord.max()
 
     def test_reverse_simplify(self, reverse_gap_coord):
         """Simplify works on reverse-sorted coords."""
-        out = reverse_gap_coord.simplify(3.0)
-        assert isinstance(out, CoordRange)
+        out = reverse_gap_coord.fuse(3.0)
+        assert out.evenly_sampled
         assert out.reverse_sorted
 
 
@@ -655,7 +646,7 @@ class TestRoundTrips:
 
     def test_model_dump_round_trip(self, mixed_segment_coord):
         """model_dump payloads rebuild the same coordinate."""
-        out = CoordSegmented(**mixed_segment_coord.model_dump())
+        out = NumericCoord(**mixed_segment_coord.model_dump())
         assert out == mixed_segment_coord
 
     def test_pickle_round_trip(self, time_gap_coord):
@@ -670,7 +661,7 @@ class TestRoundTrips:
         assert summary.max == 24.0
         assert summary.step is None
         assert summary.len == 20
-        assert summary.fingerprint == float_gap_coord.fingerprint()
+        assert summary.data_id == float_gap_coord.data_id
 
     def test_ns_precision_exact(self):
         """Nanosecond datetimes survive bit-exactly (no float pass)."""
@@ -712,7 +703,7 @@ class TestRoundTrips:
     def test_new_with_data(self, float_gap_coord):
         """new(data=...) falls back to plain coord creation."""
         out = float_gap_coord.new(data=np.arange(10.0))
-        assert isinstance(out, CoordRange)
+        assert out.evenly_sampled
 
 
 class TestEdgeCases:
@@ -724,57 +715,36 @@ class TestEdgeCases:
         # the values exactly, so it must stay an array segment.
         values = np.array([0.0, 0.1, 0.2])
         assert len(np.unique(np.diff(values))) == 1
-        out = concat_coords(CoordMonotonicArray(values=values))
-        assert isinstance(out, CoordMonotonicArray)
+        out = concat_coords(NumericCoord.from_labels(values))
+        assert out.sorted and not out.evenly_sampled
 
     def test_slice_can_promote_and_fuse(self):
         """Slicing an array segment uniform lets it fuse with a range."""
         a = get_coord(start=0.0, stop=10.0, step=1.0)
-        b = CoordMonotonicArray(values=np.array([10.0, 11.0, 12.0, 13.5]))
+        b = NumericCoord.from_labels(np.array([10.0, 11.0, 12.0, 13.5]))
         coord = concat_coords(a, b)
-        assert isinstance(coord, CoordSegmented)
-        assert coord.segment_count == 2
+        assert coord.runs_count == 2
         out = coord[0:13]
-        assert isinstance(out, CoordRange)
+        assert out.evenly_sampled
         assert np.array_equal(out.values, np.arange(13.0))
 
-    def test_segments_must_be_coords(self):
-        """Raw arrays passed as segments raise."""
-        with pytest.raises(ValidationError, match="must be coordinates"):
-            CoordSegmented(segments=(np.arange(3),))
+    def test_unsupported_run_input_raises(self):
+        """A run is a grid, a window, or the labels one is made from."""
+        with pytest.raises(ValidationError, match="must be a Grid or Labels"):
+            NumericCoord(runs=("not a run",), dtype=np.float64)
 
-    def test_unsupported_segment_class_raises(self):
-        """Coord classes other than range/monotonic are rejected."""
-        bad = CoordArray(values=np.array([3.0, 1.0, 2.0]))
-        good = get_coord(start=10.0, stop=20.0, step=1.0)
-        with pytest.raises(ValidationError, match="CoordRange or CoordMonotonic"):
-            CoordSegmented(segments=(bad, good))
-
-    def test_empty_segment_raises(self):
-        """Zero-length segments are rejected."""
-        empty = CoordMonotonicArray(values=np.array([], dtype=np.float64))
-        good = get_coord(start=10.0, stop=20.0, step=1.0)
-        with pytest.raises(ValidationError, match="must not be empty"):
-            CoordSegmented(segments=(empty, good))
-
-    def test_no_segments_raises(self):
-        """An empty segment tuple is rejected."""
-        with pytest.raises(ValidationError, match="at least one segment"):
-            CoordSegmented(segments=())
-
-    def test_single_coord_instance_as_segments(self):
-        """A bare coordinate as segments is wrapped, then fails the 2+ rule."""
-        c1 = get_coord(start=0.0, stop=10.0, step=1.0)
-        with pytest.raises(ValidationError, match="fuse"):
-            CoordSegmented(segments=c1)
+    def test_no_runs_raises(self):
+        """An empty run tuple is rejected."""
+        with pytest.raises(ValidationError, match="at least one run"):
+            NumericCoord(runs=(), dtype=np.float64)
 
     def test_validator_passes_non_dict_through(self, float_gap_coord):
         """The before-validator leaves non-dict payloads alone."""
-        out = CoordSegmented._validate_segments(float_gap_coord)
+        out = NumericCoord._validate_runs(float_gap_coord)
         assert out is float_gap_coord
 
     def test_eq_other_types(self, float_gap_coord):
-        """Equality is False for other coord types and segment counts."""
+        """Equality is False for other run layouts and run counts."""
         mono = get_coord(data=float_gap_coord.values)
         assert float_gap_coord != mono
         three = concat_coords(
@@ -793,18 +763,18 @@ class TestEdgeCases:
         assert np.allclose(out.values, mixed_segment_coord.values + 100.0)
 
     def test_simplify_single_sample_segment(self):
-        """Length-one segments cannot be fit and pass through simplify."""
+        """Length-one segments cannot be fit and pass through fuse."""
         coord = concat_coords(
             get_coord(start=0.0, stop=10.0, step=1.0),
-            CoordMonotonicArray(values=np.array([99.0])),
+            NumericCoord.from_labels(np.array([99.0])),
         )
-        out = coord.simplify(0.5)
+        out = coord.fuse(0.5)
         assert out == coord
 
     def test_discontinuities_after_array_segment(self):
         """The expected step after an array segment comes from its diffs."""
         coord = concat_coords(
-            CoordMonotonicArray(values=np.array([0.0, 1.0, 2.5])),
+            NumericCoord.from_labels(np.array([0.0, 1.0, 2.5])),
             get_coord(start=10.0, stop=20.0, step=1.0),
         )
         df = coord.get_discontinuities()
@@ -815,7 +785,7 @@ class TestEdgeCases:
     def test_discontinuities_after_single_sample_segment(self):
         """No expected step after a length-one segment (excess is null)."""
         coord = concat_coords(
-            CoordMonotonicArray(values=np.array([0.0])),
+            NumericCoord.from_labels(np.array([0.0])),
             get_coord(start=10.0, stop=20.0, step=1.0),
         )
         df = coord.get_discontinuities()
@@ -829,16 +799,6 @@ class TestEdgeCases:
         coord = get_coord(start=0.0, stop=10.0, step=1.0)
         with pytest.raises(ParameterError, match="kind"):
             coord.get_discontinuities("overlaps")
-
-    def test_rebuild_reraises_real_errors(self, float_gap_coord):
-        """_rebuild only swallows errors caused by segments fusing to one."""
-        t0 = np.datetime64("2020-01-01", "ns")
-        time_seg = get_coord(
-            start=t0, stop=t0 + np.timedelta64(10, "s"), step=np.timedelta64(1, "s")
-        )
-        bad = [float_gap_coord.segments[0], time_seg]
-        with pytest.raises(ValidationError, match="compatible dtypes"):
-            float_gap_coord._rebuild(bad)
 
 
 class TestReviewFindings:
@@ -856,10 +816,10 @@ class TestReviewFindings:
         """Different int widths share a kind and concatenate exactly."""
         # Non-uniform diffs keep these as array segments; a float pass
         # would corrupt values above 2**53.
-        small = CoordMonotonicArray(values=np.array([0, 1, 3], dtype=np.int32))
+        small = NumericCoord.from_labels(np.array([0, 1, 3], dtype=np.int32))
         big_val = 2**53 + 1
-        big = CoordMonotonicArray(
-            values=np.array([big_val, big_val + 2, big_val + 3], dtype=np.int64)
+        big = NumericCoord.from_labels(
+            np.array([big_val, big_val + 2, big_val + 3], dtype=np.int64)
         )
         coord = concat_coords(small, big)
         assert coord.values[-3] == big_val
@@ -893,7 +853,7 @@ class TestReviewFindings:
     def test_reverse_unsigned_select(self):
         """Unsigned reverse coords negate via float (would wrap natively)."""
         # Direct construction; get_coord inference wraps on descending uints.
-        coord = CoordMonotonicArray(values=np.array([30, 20, 5], dtype=np.uint64))
+        coord = NumericCoord.from_labels(np.array([30, 20, 5], dtype=np.uint64))
         assert coord.reverse_sorted
         out, _ = coord.select((20, 20))
         assert len(out) == 1
@@ -902,23 +862,23 @@ class TestReviewFindings:
     def test_quantity_tolerance_numeric(self, float_gap_coord):
         """Unit-bearing tolerances convert to coordinate units."""
         coord = float_gap_coord.set_units("m")
-        out = coord.simplify(get_quantity("3 m"))
-        assert isinstance(out, CoordRange)
+        out = coord.fuse(get_quantity("3 m"))
+        assert out.evenly_sampled
         # 300 cm is the same tolerance in other units.
-        out2 = coord.simplify(get_quantity("300 cm"))
+        out2 = coord.fuse(get_quantity("300 cm"))
         assert out2 == out
 
     def test_quantity_tolerance_time(self, time_gap_coord):
         """Time coords accept time-dimensional quantity tolerances."""
-        out = time_gap_coord.simplify(get_quantity("2000 ms"))
-        assert isinstance(out, CoordRange)
+        out = time_gap_coord.fuse(get_quantity("2000 ms"))
+        assert out.evenly_sampled
         df = time_gap_coord.get_discontinuities("gaps", tolerance=get_quantity("10 s"))
         assert df.empty
 
     def test_quantity_tolerance_bad_dimensionality(self, time_gap_coord):
         """Dimensionality mismatches raise."""
         with pytest.raises(Exception, match=r"(?i)cannot convert|dimensionality"):
-            time_gap_coord.simplify(get_quantity("1 m"))
+            time_gap_coord.fuse(get_quantity("1 m"))
 
     def test_select_never_materializes(self, monkeypatch):
         """Value selection must stay O(segments): no full-array pass.
@@ -934,7 +894,7 @@ class TestReviewFindings:
             msg = "select must not materialize concatenated values"
             raise AssertionError(msg)
 
-        monkeypatch.setattr(CoordSegmented, "values", property(_boom))
+        monkeypatch.setattr(NumericCoord, "values", property(_boom))
         out, indexer = coord.select((5.0, 2.5e7))
         assert isinstance(indexer, slice)
         assert out.min() == 5.0 and out.max() == 2.5e7
@@ -956,11 +916,11 @@ class TestReviewFindings:
             dims=("distance", "time"),
         )
         attached = patch.get_coord("distance")
-        assert isinstance(attached, CoordSegmented)
+        assert attached.runs_count == 2
         assert np.array_equal(attached.values, float_gap_coord.values)
         # update_coords goes through the model_dump round trip.
         updated = patch.update_coords(distance=float_gap_coord)
-        assert isinstance(updated.get_coord("distance"), CoordSegmented)
+        assert updated.get_coord("distance").runs_count == 2
         # selection across the gap trims data consistently.
         sub = patch.select(distance=(5.0, 18.0))
         assert sub.shape == (9, 10)
@@ -992,8 +952,8 @@ class TestSplitGapsAndWrite:
         spool = gapped_patch.split_gaps()
         assert len(spool) == 2
         p1, p2 = spool
-        assert isinstance(p1.get_coord("distance"), CoordRange)
-        assert isinstance(p2.get_coord("distance"), CoordRange)
+        assert p1.get_coord("distance").evenly_sampled
+        assert p2.get_coord("distance").evenly_sampled
         assert np.array_equal(p1.data, gapped_patch.data[:10])
         assert np.array_equal(p2.data, gapped_patch.data[10:])
         combined = np.concatenate(
@@ -1056,15 +1016,14 @@ class TestSplitGapsAndWrite:
 
 
 class TestFromArray:
-    """Tests for CoordSegmented.from_array."""
+    """Tests for reading an array exactly, with ``get_coord(snap=False)``."""
 
     def test_gapped_uniform_array(self):
         """Uniform runs separated by a gap become two range segments."""
         values = np.array([0.0, 1, 2, 3, 10, 11, 12, 13])
-        coord = CoordSegmented.from_array(values)
-        assert isinstance(coord, CoordSegmented)
-        assert coord.segment_count == 2
-        assert all(isinstance(x, CoordRange) for x in coord.segments)
+        coord = get_coord(data=values, snap=False)
+        assert coord.runs_count == 2
+        assert all(x.evenly_sampled for x in coord.segments)
         assert np.array_equal(coord.values, values)
         gaps = coord.get_discontinuities("gaps")
         assert len(gaps) == 1
@@ -1072,24 +1031,24 @@ class TestFromArray:
 
     def test_fully_uniform_returns_range(self):
         """A gapless uniform array degrades to a plain range."""
-        coord = CoordSegmented.from_array(np.arange(10.0))
-        assert isinstance(coord, CoordRange)
+        coord = get_coord(data=np.arange(10.0), snap=False)
+        assert coord.evenly_sampled
 
     @pytest.mark.parametrize("reverse", [False, True])
     def test_irregular_returns_monotonic(self, reverse):
         """Arrays with no uniform runs retain their values and direction."""
         values = np.array([0.0, 1.0, 2.1, 3.3, 4.0])
         values = values[::-1] if reverse else values
-        coord = CoordSegmented.from_array(values)
-        assert isinstance(coord, CoordMonotonicArray)
+        coord = get_coord(data=values, snap=False)
+        assert not coord.evenly_sampled
+        assert coord.reverse_sorted if reverse else coord.sorted
         assert np.array_equal(coord.values, values)
 
     def test_isolated_sample_between_gaps(self):
         """A lone sample between gaps becomes its own segment."""
         values = np.array([0.0, 1, 2, 10, 20, 21, 22])
-        coord = CoordSegmented.from_array(values)
-        assert isinstance(coord, CoordSegmented)
-        assert coord.segment_count == 3
+        coord = get_coord(data=values, snap=False)
+        assert coord.runs_count == 3
         assert np.array_equal(coord.values, values)
         assert len(coord.get_discontinuities()) == 2
 
@@ -1100,54 +1059,35 @@ class TestFromArray:
         values = np.concatenate(
             [t0 + np.arange(5) * one_s, t0 + (np.arange(5) + 8) * one_s]
         )
-        coord = CoordSegmented.from_array(values)
-        assert isinstance(coord, CoordSegmented)
-        assert coord.segment_count == 2
+        coord = get_coord(data=values, snap=False)
+        assert coord.runs_count == 2
         assert np.array_equal(coord.values, values)
         assert len(coord.get_discontinuities("gaps")) == 1
 
     def test_tolerance_absorbs_gap(self):
         """A tolerance re-fits the result with bounded error."""
         values = np.array([0.0, 1, 2, 3, 6, 7, 8, 9])
-        coord = CoordSegmented.from_array(values, tolerance=2.0)
-        assert isinstance(coord, CoordRange)
+        coord = get_coord(data=values, snap=False).fuse(2.0)
+        assert coord.evenly_sampled
         assert np.max(np.abs(coord.values - values)) <= 2.0
 
     def test_reverse_array(self):
         """Reverse-sorted arrays segment correctly."""
         values = np.array([13.0, 12, 11, 10, 3, 2, 1, 0])
-        coord = CoordSegmented.from_array(values)
-        assert isinstance(coord, CoordSegmented)
-        assert coord.segment_count == 2
+        coord = get_coord(data=values, snap=False)
+        assert coord.runs_count == 2
         assert coord.reverse_sorted
         assert np.array_equal(coord.values, values)
 
     def test_short_arrays_pass_through(self):
         """Arrays too short to segment build plain coords."""
-        assert len(CoordSegmented.from_array(np.array([1.0, 2.0]))) == 2
-        assert len(CoordSegmented.from_array(np.array([1.0]))) == 1
-
-    def test_non_monotonic_raises(self):
-        """Unsorted or duplicated values are rejected."""
-        with pytest.raises(CoordError, match="monotonic"):
-            CoordSegmented.from_array(np.array([0.0, 2.0, 1.0, 3.0]))
-        with pytest.raises(CoordError, match="monotonic"):
-            CoordSegmented.from_array(np.array([0.0, 1.0, 1.0, 2.0]))
-
-    def test_nan_raises(self):
-        """Missing values are rejected."""
-        with pytest.raises(CoordError, match="missing"):
-            CoordSegmented.from_array(np.array([0.0, np.nan, 2.0]))
-
-    def test_2d_raises(self):
-        """Only 1D arrays are supported."""
-        with pytest.raises(CoordError, match="1D"):
-            CoordSegmented.from_array(np.zeros((3, 3)))
+        assert len(get_coord(data=np.array([1.0, 2.0]), snap=False)) == 2
+        assert len(get_coord(data=np.array([1.0]), snap=False)) == 1
 
     def test_units(self):
         """Units land on the result."""
         values = np.array([0.0, 1, 2, 10, 11, 12])
-        coord = CoordSegmented.from_array(values, units="m")
+        coord = get_coord(data=values, units="m", snap=False)
         assert get_quantity(coord.units) == get_quantity("m")
 
 
@@ -1171,7 +1111,7 @@ class TestPlannedSpoolWriteGuard:
                 .update(progress=None)
                 .chunk(time=None, tolerance=5, snap_coords=False, conflict="drop")
             )
-        assert isinstance(planned[0].get_coord("time"), CoordSegmented)
+        assert planned[0].get_coord("time").runs_count > 1
         assert not planned.has_live_patches
         return planned
 
@@ -1189,4 +1129,4 @@ class TestPlannedSpoolWriteGuard:
         back = dc.spool(path)
         assert len(back) == 2
         for patch in back:
-            assert not isinstance(patch.get_coord("time"), CoordSegmented)
+            assert patch.get_coord("time").runs_count == 1

@@ -62,19 +62,15 @@ class SetUnits(PatchProcessor):
 
     model_config = ConfigDict(extra="allow")
 
-    def derive(self, patch):
+    def get_metadata(self, meta):
         """Return the coordinates and data units with the units set."""
-        new_coords = patch.coords.set_units(**(self.model_extra or {}))
-        # data_units=None means "clear them", which units_match reports as a change.
-        if new_coords is patch.coords and units_match(
-            patch.attrs.data_units, self.data_units
+        coords = meta.coords.set_units(**(self.model_extra or {}))
+        if coords is meta.coords and units_match(
+            meta.attrs.data_units, self.data_units
         ):
-            return patch
-        new_attrs = _replace_data_units(patch.attrs, self.data_units)
-        return patch.new(attrs=new_attrs, coords=new_coords)
-
-
-set_units = SetUnits.patch_function
+            return meta, {}
+        attrs = _replace_data_units(meta.attrs, self.data_units)
+        return meta.new(attrs=attrs, coords=coords), {}
 
 
 class ConvertUnits(PatchProcessor):
@@ -122,38 +118,30 @@ class ConvertUnits(PatchProcessor):
 
     model_config = ConfigDict(extra="allow")
 
-    def derive(self, patch):
-        """Return the coordinates and data units converted."""
-        coords = patch.coords.convert_units(**(self.model_extra or {}))
+    def get_metadata(self, meta):
+        """Return converted metadata and the affine factors for the data."""
+        coords = meta.coords.convert_units(**(self.model_extra or {}))
         data_units = self.data_units
-        # Nothing to convert.
-        if coords is patch.coords and (
-            data_units is None or units_match(patch.attrs.data_units, data_units)
+        if coords is meta.coords and (
+            data_units is None or units_match(meta.attrs.data_units, data_units)
         ):
-            return patch
+            return meta, {}
         attrs = _replace_data_units(
-            patch.attrs, data_units, preserve_existing_data_units=True
+            meta.attrs, data_units, preserve_existing_data_units=True
         )
-        return patch.new(coords=coords, attrs=attrs)
-
-    def plan(self, patch, out):
-        """Return the affine factors which convert the data, if they change."""
-        if self.data_units is None:
-            return {}
-        factors = conversion_factors(patch.attrs.data_units, self.data_units)
-        if factors is None:
-            return {}
-        mult1, add, mult2 = factors
-        return {"mult1": mult1, "add": add, "mult2": mult2}
+        factors = (
+            None
+            if data_units is None
+            else conversion_factors(meta.attrs.data_units, data_units)
+        )
+        plan = {} if factors is None else dict(zip(("mult1", "add", "mult2"), factors))
+        return meta.new(coords=coords, attrs=attrs), plan
 
     def kernel(self, data, *, mult1=None, add=None, mult2=None):
         """Return the data converted; the data if their units stand."""
         if mult1 is None:
             return data
         return (data * mult1 + add) * mult2
-
-
-convert_units = ConvertUnits.patch_function
 
 
 class SimplifyUnits(PatchProcessor):
@@ -175,24 +163,16 @@ class SimplifyUnits(PatchProcessor):
     >>> simplified = complex_units.simplify_units()
     """
 
-    def derive(self, patch):
-        """Return the coordinates and data units in base metric units."""
-        attrs = patch.attrs
-        _, d_units = get_factor_and_unit(attrs.get("data_units"), simplify=True)
-        coords = patch.coords.simplify_units()
-        if coords is patch.coords and units_match(attrs.get("data_units"), d_units):
-            return patch
-        new_attrs = _replace_data_units(attrs, d_units)
-        return patch.new(coords=coords, attrs=new_attrs, dims=patch.dims)
-
-    def plan(self, patch, out):
-        """Return the factor which scales the data to base units."""
-        factor, _ = get_factor_and_unit(patch.attrs.get("data_units"), simplify=True)
-        return {"factor": factor}
+    def get_metadata(self, meta):
+        """Return base-unit metadata and the factor which scales the data."""
+        attrs = meta.attrs
+        factor, units = get_factor_and_unit(attrs.get("data_units"), simplify=True)
+        coords = meta.coords.simplify_units()
+        out = meta
+        if coords is not meta.coords or not units_match(attrs.get("data_units"), units):
+            out = meta.new(coords=coords, attrs=_replace_data_units(attrs, units))
+        return out, {"factor": factor}
 
     def kernel(self, data, *, factor):
         """Return the data scaled; the data themselves for a factor of one."""
         return data * factor if factor != 1 else data
-
-
-simplify_units = SimplifyUnits.patch_function

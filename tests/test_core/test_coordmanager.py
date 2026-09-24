@@ -17,9 +17,8 @@ from dascore.core.coordmanager import (
 )
 from dascore.core.coords import (
     BaseCoord,
-    CoordMonotonicArray,
     CoordPartial,
-    CoordRange,
+    NumericCoord,
     get_coord,
 )
 from dascore.exceptions import (
@@ -191,13 +190,13 @@ class TestBasicCoordManager:
 
     def test_min(self, cm_basic):
         """Ensure we can get min value."""
-        expected = np.min(cm_basic.time.data).astype(np.int64)
+        expected = np.min(cm_basic.time.values).astype(np.int64)
         got = cm_basic.min("time").astype(np.int64)
         assert np.isclose(got, expected)
 
     def test_max(self, cm_basic):
         """Ensure we can get max value."""
-        expected = np.max(cm_basic.time.data).astype(np.int64)
+        expected = np.max(cm_basic.time.values).astype(np.int64)
         got = cm_basic.max("time").astype(np.int64)
         assert np.isclose(got, expected)
 
@@ -236,7 +235,7 @@ class TestBasicCoordManager:
 
     def test_coord_range(self, random_patch):
         """Ensure we can get a scaler value for the coordinate."""
-        coord_array = random_patch.get_coord("time").data
+        coord_array = random_patch.get_coord("time").values
         expected = (
             np.max(coord_array)
             - np.min(coord_array)
@@ -1064,33 +1063,33 @@ class TestUpdate:
 
 class TestPreserveBaseCoord:
     """
-    Update/select preserve CoordRange and re-infer other coordinate types.
+    Update/select preserve evenly sampled coords and re-infer the rest.
 
     Canonicalization must not change values: arrays become ranges only when the
     representation is exact.
     """
 
     def test_update_preserves_range_coord_identity(self, cm_basic):
-        """Updating a CoordRange dim with its own coord keeps the same object."""
+        """Updating an evenly sampled dim with its own coord keeps the same object."""
         for name in cm_basic.dims:
             coord = cm_basic.coord_map[name]
-            assert isinstance(coord, CoordRange)
+            assert coord.evenly_sampled
             out = cm_basic.update(**{name: coord})
             assert out.coord_map[name] is coord
 
     def test_full_partial_canonicalizes_to_range(self, cm_non_coord_dim):
-        """A fully-specified CoordPartial must still become a CoordRange.
+        """A fully-specified CoordPartial must still become an evenly sampled coord.
 
-        Regression guard: only CoordRange is short-circuited, so a CoordPartial
-        that carries complete start/stop/step is re-inferred into a CoordRange
-        (otherwise value-based selection on it would wrongly raise).
+        Regression guard: only an evenly sampled coord is short-circuited, so
+        a CoordPartial that carries complete start/stop/step is re-inferred
+        into one (otherwise value-based selection on it would wrongly raise).
         """
         cm = cm_non_coord_dim
         assert isinstance(cm.coord_map["time"], CoordPartial)
         size = cm.shape[cm.get_axis("time")]
         full_partial = CoordPartial(shape=(size,), start=0, stop=size, step=1)
         out = cm.update(time=full_partial)
-        assert isinstance(out.coord_map["time"], CoordRange)
+        assert out.coord_map["time"].evenly_sampled
         # value-based selection must work on the canonicalized coord.
         selected, _ = out.select(time=(0, size - 1))
         assert selected.shape[selected.get_axis("time")] <= size
@@ -1104,9 +1103,9 @@ class TestPreserveBaseCoord:
             assert np.array_equal(out.get_array(name), cm_wacky_dims.get_array(name))
 
     def test_select_preserves_untouched_range_coord(self, cm_multidim):
-        """Selecting distance leaves the independent CoordRange time unchanged."""
+        """Selecting distance leaves the independent evenly sampled time unchanged."""
         original_time = cm_multidim.coord_map["time"]
-        assert isinstance(original_time, CoordRange)
+        assert original_time.evenly_sampled
         new, _ = cm_multidim.select(distance=(100, 400))
         assert new.coord_map["time"] is original_time
         # latitude is tied to distance, so it must be re-sliced (new object).
@@ -1121,17 +1120,16 @@ class TestPreserveBaseCoord:
         assert np.array_equal(dist, expected)
 
     def test_even_subset_of_irregular_coord_canonicalizes(self):
-        """A sample-selected even subset of an irregular coord becomes a CoordRange.
+        """A sample-selected even subset of an irregular coord becomes evenly sampled.
 
-        Regression guard: array coords must still be re-inferred so slicing that
-        happens to be evenly sampled is canonicalized rather than left as an
-        irregular array coordinate.
+        Regression guard: array coords must still be re-inferred so slicing
+        that happens to be evenly sampled is canonicalized rather than left as
+        an irregular array coordinate.
         """
         coord = dc.get_coord(data=np.array([0.0, 1.0, 3.0]))
         patch = dc.Patch(data=np.arange(3.0), coords={"x": coord}, dims=("x",))
         out = patch.select(x=(0, 2), samples=True)  # indices 0..2 -> [0, 1]
         new_coord = out.coords.coord_map["x"]
-        assert isinstance(new_coord, CoordRange)
         assert new_coord.evenly_sampled
 
     def test_near_even_coord_keeps_its_values(self):
@@ -1142,27 +1140,27 @@ class TestPreserveBaseCoord:
         inventing sample positions.
         """
         values = np.array([0.0, 1.0, 2.0005, 3.0015, 4.002])
-        coord = CoordMonotonicArray(values=values)
+        coord = NumericCoord.from_labels(values)
         cm = get_coord_manager({"distance": coord}, dims=("distance",))
         out = cm.coord_map["distance"]
         assert np.array_equal(out.values, values)
         # a range here would mean the spacing was made up
-        assert not isinstance(out, CoordRange)
+        assert not out.evenly_sampled
 
     def test_near_even_coord_survives_patch(self):
         """The public Patch path must not move the values either."""
         values = np.array([0.0, 1.0, 2.0005, 3.0015, 4.002])
-        coord = CoordMonotonicArray(values=values)
+        coord = NumericCoord.from_labels(values)
         patch = dc.Patch(data=np.zeros(5), coords={"x": coord}, dims=("x",))
         assert np.array_equal(patch.get_coord("x").values, values)
 
     def test_exactly_even_array_still_canonicalizes(self):
         """Preserving values must not disable the lossless collapse."""
         values = np.arange(5, dtype=float)
-        coord = CoordMonotonicArray(values=values)
+        coord = NumericCoord.from_labels(values)
         cm = get_coord_manager({"distance": coord}, dims=("distance",))
         out = cm.coord_map["distance"]
-        assert isinstance(out, CoordRange)
+        assert out.evenly_sampled
         assert np.array_equal(out.values, values)
 
 
@@ -1190,17 +1188,6 @@ class TestSqueeze:
         cm = cm_degenerate_time
         out = cm.squeeze()
         assert "time" not in out.dims
-
-
-class TestMakeBroadcastableTo:
-    """Tests for broadcasting a coord manager up to a shape."""
-
-    def test_array_broadcasts_with_the_coords(self):
-        """An array handed in comes back broadcast to the target shape."""
-        patch = dc.get_example_patch().mean()
-        shape = (3, 2)
-        cm, array = patch.coords.make_broadcastable_to(shape, patch.data)
-        assert cm.shape == array.shape == shape
 
 
 class TestNonDimCoords:
@@ -1413,8 +1400,8 @@ class TestConvertUnits:
         dist1 = cm_with_units.coord_map["distance"]
         dist2 = cm.coord_map["distance"]
         assert np.isclose(dist1.step, dist2.step / conv)
-        assert np.isclose(dist1.start, dist2.start / conv)
-        assert np.isclose(dist1.stop, dist2.stop / conv)
+        assert np.isclose(dist1.values[0], dist2.values[0] / conv)
+        assert np.isclose(dist1.values[-1], dist2.values[-1] / conv)
 
     def test_convert_time(self, cm_with_units):
         """When time is already set and a datetime, units should just change."""
@@ -1731,3 +1718,65 @@ class TestSnapAuxiliary:
         assert out["latitude"].evenly_sampled
         assert out.dim_map["latitude"] == ("x",)
         assert out.dims == ("x",)
+
+
+class TestSelectIndexers:
+    """I/O selection indexers refer to the original grid without a data array."""
+
+    @pytest.mark.parametrize("quality_name", ["quality", "zquality"])
+    def test_associated_constraints_compose(self, quality_name):
+        """A label constraint and a dimension constraint keep their intersection."""
+        data = np.arange(48).reshape(6, 8)
+        patch = dc.Patch(
+            data=data,
+            dims=("distance", "time"),
+            coords={
+                "distance": np.arange(6),
+                "time": np.arange(8),
+                quality_name: ("time", np.arange(8) % 2),
+            },
+        )
+        queries = {"distance": (1, 4), "time": (2, 6), quality_name: (1, 1)}
+        coords, indexers = patch.coords.select_indexers(**queries)
+        distance = np.arange(6)[indexers["distance"]]
+        time = np.arange(8)[indexers["time"]]
+        np.testing.assert_array_equal(distance, [1, 2, 3, 4])
+        np.testing.assert_array_equal(time, [3, 5])
+        expected_coords, expected = patch.coords.select(array=data, **queries)
+        assert coords == expected_coords
+        np.testing.assert_array_equal(data[np.ix_(distance, time)], expected)
+
+    def test_large_range_stays_compact(self):
+        """An index window does not materialize a large regular coordinate."""
+        count = min(10**12, np.iinfo(np.intp).max)
+        coord = dc.get_coord(start=0, step=1, shape=(count,))
+        patch = dc.PatchMeta(coords={"time": coord}, dims=("time",), dtype="float32")
+        coords, indexers = patch.coords.select_indexers(time=(-5, None), samples=True)
+        assert coords.shape == (5,)
+        assert indexers == {"time": slice(count - 5, count, 1)}
+
+
+class TestMakeBroadcastableTo:
+    """The coord manager stretches; the data are the kernel's business."""
+
+    @pytest.fixture
+    def collapsed(self):
+        """A manager with a dimension nothing has filled in."""
+        patch = dc.get_example_patch().mean("time")
+        return patch.coords
+
+    def test_returns_only_the_manager(self, collapsed):
+        """The array the old signature took is gone, and so is the tuple."""
+        out = collapsed.make_broadcastable_to((collapsed.shape[0], 3))
+        assert isinstance(out, CoordManager)
+        assert out.shape == (collapsed.shape[0], 3)
+
+    def test_the_second_argument_is_keyword_only(self, collapsed):
+        """So a call written for the old signature is refused, not rebound.
+
+        Its second parameter used to be the array. Taking `drop_coords`
+        positionally would read that array as a flag and quietly drop
+        coordinates instead.
+        """
+        with pytest.raises(TypeError, match="positional"):
+            collapsed.make_broadcastable_to((collapsed.shape[0], 3), None)

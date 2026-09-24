@@ -80,17 +80,14 @@ class Kurtosis(PatchProcessor):
     model_config = ConfigDict(extra="allow")
     data_type = "kurtosis"
 
-    def derive(self, patch):
-        """Return the metadata: kurtosis is dimensionless."""
-        return patch.new(attrs=patch.attrs.update(data_units=""))
-
-    def plan(self, patch, out):
-        """Return the axis, the sample step, and the window in samples."""
-        dim, axis, winlen = get_dim_axis_value(patch, kwargs=self.model_extra or {})[0]
-        coord = patch.get_coord(dim, require_evenly_sampled=True)
+    def get_metadata(self, meta):
+        """Return dimensionless metadata, the axis, step and window size."""
+        dim, axis, winlen = get_dim_axis_value(meta, kwargs=self.model_extra or {})[0]
+        coord = meta.get_coord(dim, require_evenly_sampled=True)
         step = abs(to_float(coord.step))
         nwin = _get_window_samples(coord, dim, winlen, self.samples)
-        return {"axis": axis, "step": step, "nwin": nwin}
+        out = meta.new(attrs=meta.attrs.update(data_units=""))
+        return out, {"axis": axis, "step": step, "nwin": nwin}
 
     def numpy_kernel(self, data, *, axis, step, nwin):
         """Return the kurtosis of every window along the axis."""
@@ -108,6 +105,3 @@ class Kurtosis(PatchProcessor):
         else:
             out = _windowed_kurtosis(data_2d, nwin=nwin)
         return np.moveaxis(out.reshape(moved.shape), 0, axis)
-
-
-kurtosis = Kurtosis.patch_function

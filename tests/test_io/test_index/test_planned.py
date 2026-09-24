@@ -59,7 +59,7 @@ class TestHelpers:
         assert record.min_int == _ns(lo)
 
     def test_coord_record_without_values(self):
-        """A null envelope is a coordinate only with a fingerprinted identity."""
+        """A null envelope is a coordinate only with a data_id."""
         row = {"rank_min": None, "rank_max": None}
         assert _coord_record_from_row(row, "rank") is None
         row["_rank_def_key"] = "sum:abc"
@@ -67,7 +67,7 @@ class TestHelpers:
         row["_rank_def_key"] = "fp:" + "a" * 32
         record = _coord_record_from_row(row, "rank")
         assert record is not None
-        assert record.coord_hash == "a" * 32
+        assert record.data_id == "a" * 32
         assert record.min_float is None and record.length is None
 
     def test_coord_record_half_null_timedelta(self):
@@ -109,12 +109,12 @@ class TestHelpers:
                 merge_kwargs={},
             )
 
-    def test_derived_catalog_adds_patch_ids(self, patches):
-        """source_rows without _patch_id get positional ids."""
+    def test_derived_catalog_adds_patch_rows(self, patches):
+        """source_rows without _patch_row get positional row numbers."""
         spool = dc.spool(patches)
-        rows = spool._df.drop(columns=["_patch_id"]).reset_index(drop=True)
+        rows = spool._df.drop(columns=["_patch_row"]).reset_index(drop=True)
         members = pd.DataFrame(
-            {"output_id": [0], "_patch_id": [0], "_modified": [False]}
+            {"output_id": [0], "_patch_row": [0], "_modified": [False]}
         )
         outputs = rows.iloc[:1].assign(output_id=0)
         plan = ChunkPlan(outputs, members, "time", None, {})
@@ -130,6 +130,50 @@ class TestHelpers:
 
 class TestDerivedComposition:
     """Operation-order coverage over derived catalogs."""
+
+    @pytest.mark.parametrize("dim", ["data_id", "origin_id"])
+    def test_lineage_named_dimension(self, tmp_path, dim):
+        """Coordinate trims must not become lineage attribute filters."""
+        patch = dc.get_example_patch(shape=(20, 100)).rename_coords(distance=dim)
+        path = tmp_path / "patch.h5"
+        patch.io.write(path, "dasdae")
+        actual = dc.spool(path).chunk(**{dim: 5})[0]
+        expected = patch.select(**{dim: (0, 5)}, samples=True)
+        assert actual.coords == expected.coords
+        np.testing.assert_array_equal(actual.data, expected.data)
+
+    @pytest.mark.parametrize("units", ["ft", "cm"])
+    @pytest.mark.parametrize("other_first", [False, True])
+    def test_chunk_files_with_different_units(self, tmp_path, units, other_first):
+        """Read hints must use the source file's coordinate units."""
+        # Leave a partial tail so the file extent is not a chunk boundary.
+        patch = dc.get_example_patch(shape=(21, 100)).set_units(distance="m")
+        shifted = patch.update_coords(
+            time=patch.get_coord("time").values + np.timedelta64(1, "D")
+        )
+        converted = shifted.convert_units(distance=units)
+        first, second = (converted, patch) if other_first else (patch, converted)
+        first.io.write(tmp_path / "first.h5", "dasdae")
+        spool = dc.spool(tmp_path).update(progress=None)
+        try:
+            # Index each file separately to exercise both choices of plan units.
+            second.io.write(tmp_path / "second.h5", "dasdae")
+            spool = spool.update(progress=None)
+            actual = spool.chunk(distance=5 * m).sort("time")
+            expected = dc.spool([patch, shifted]).chunk(distance=5 * m).sort("time")
+            assert len(actual) == len(expected) == 8
+            for index in range(len(expected)):
+                loaded = actual[index].convert_units(distance="m")
+                wanted = expected[index]
+                assert loaded.shape == wanted.shape == (5, 100)
+                np.testing.assert_allclose(
+                    loaded.get_coord("distance").values,
+                    wanted.get_coord("distance").values,
+                )
+                assert loaded.get_coord("time") == wanted.get_coord("time")
+                np.testing.assert_array_equal(loaded.data, wanted.data)
+        finally:
+            spool.indexer.close()
 
     def test_collapse_with_value_residual(self, patches):
         """Chunk of a selected chunked spool re-plans from trimmed members."""
@@ -302,18 +346,18 @@ class TestAuxInfoEdges:
     def test_absent_envelope_columns_skipped(self):
         """A mapped coord with no envelope columns contributes nothing."""
         members = pd.DataFrame(
-            {"output_id": [0], "_patch_id": [1], "_modified": [False]}
+            {"output_id": [0], "_patch_row": [1], "_modified": [False]}
         )
-        sources = pd.DataFrame({"_patch_id": [1]})
+        sources = pd.DataFrame({"_patch_row": [1]})
         assert _aux_coord_info(sources, members, "time", {"ghost": "distance"}) == {}
 
     def test_all_null_group_skipped(self):
         """An output whose members carry no values for a coord is skipped."""
         members = pd.DataFrame(
-            {"output_id": [0], "_patch_id": [1], "_modified": [False]}
+            {"output_id": [0], "_patch_row": [1], "_modified": [False]}
         )
         sources = pd.DataFrame(
-            {"_patch_id": [1], "sensor_min": [np.nan], "sensor_max": [np.nan]}
+            {"_patch_row": [1], "sensor_min": [np.nan], "sensor_max": [np.nan]}
         )
         assert _aux_coord_info(sources, members, "time", {"sensor": "distance"}) == {}
 
@@ -369,7 +413,9 @@ class TestRePlanKeepsTheTrim:
         patch = dc.get_example_patch().set_units(distance="m")
         coord = patch.get_coord("distance")
         span = float(coord.max() - coord.min() + coord.step)
-        moved = patch.update_coords(distance=coord.data + span).set_units(distance="m")
+        moved = patch.update_coords(distance=coord.values + span).set_units(
+            distance="m"
+        )
         chunked = dc.spool([patch, moved]).chunk(
             distance=200, conflict="keep_first", keep_partial=True
         )
@@ -437,7 +483,12 @@ class TestLoadMemberArray:
         original = format_class.__dict__["read_array"]
 
         def install(func):
-            format_class.read_array = FiberIO.read_array if func is None else func
+            def missing(self, resource, windows, **kwargs):
+                return FiberIO.read_array(
+                    self, resource, windows, key=kwargs.get("key", "")
+                )
+
+            format_class.read_array = missing if func is None else func
 
         yield install
         format_class.read_array = original
@@ -448,24 +499,25 @@ class TestLoadMemberArray:
         swap_read_array(None)
 
     @pytest.fixture
-    def override(self, swap_read_array):
+    def override(self, swap_read_array, format_class):
         """Give the row's format a counting read_array override."""
         calls = []
+        original = format_class.read_array
 
         def read_array(self, resource, windows, **kwargs):
             # a real override's caster wrapper consumes _pre_cast; this
             # raw function sees it and must not forward it to read
             kwargs.pop("_pre_cast", None)
             calls.append((windows, kwargs))
-            return FiberIO.read_array(self, resource, windows, **kwargs)
+            return original(self, resource, windows, **kwargs)
 
         swap_read_array(read_array)
         return calls
 
-    def test_no_override_returns_none(self, resolver, row, format_class, no_override):
-        """A format without an override takes the patch path."""
-        assert not format_class().implements_read_array
-        assert resolver._load_member_array(row, {"time": (0, 5)}) is None
+    def test_missing_array_hook_raises(self, resolver, row, no_override):
+        """A broken reader cannot silently fall back through its derived read."""
+        with pytest.raises(NotImplementedError):
+            resolver._load_member_array(row, {"time": (0, 5)})
 
     def test_real_override_matches_patch_path(self, resolver, row):
         """DASDAE's own override, through the resolver, matches the patch path."""
@@ -476,13 +528,25 @@ class TestLoadMemberArray:
 
     def test_override_loads_window(self, resolver, row, override):
         """The override gets the windows and its array matches the patch path."""
-        out = resolver._load_member_array(row, {"time": (2, 9)})
         expected = resolver._load_member(row).select(time=(2, 9), samples=True).data
+        override.clear()
+        out = resolver._load_member_array(row, {"time": (2, 9)})
         assert np.array_equal(out, expected)
         assert out.dtype == expected.dtype
         # the row's own patch key rides along so multi-patch files resolve
-        expected_kwargs = {"source_patch_key": row["source_patch_key"]}
-        assert override == [({"time": (2, 9)}, expected_kwargs)]
+        expected_kwargs = {"key": row["source_patch_key"]}
+        # the reader takes its windows by position, in the row's stored order
+        positional = tuple(
+            (2, 9) if dim == "time" else None for dim in row["dims"].split(",")
+        )
+        assert override == [(positional, expected_kwargs)]
+
+    def test_unplaceable_window_returns_none(self, resolver, row, override):
+        """A window the row's dims cannot place has no position to take."""
+        assert resolver._load_member_array(row, {"nope": (0, 5)}) is None
+        blank = dict(row, dims="")
+        assert resolver._load_member_array(blank, {"time": (0, 5)}) is None
+        assert override == []
 
     def test_digit_key_returns_none(self, resolver, row, override):
         """A synthesized positional key only binds against a full read."""
@@ -541,6 +605,23 @@ class TestLoadMemberArray:
         monkeypatch.setattr(resolver, "loader", object())
         assert resolver._load_member_array(row, {"time": (0, 5)}) is None
         assert override == []
+
+    def test_member_source_names_the_whole_array(self, resolver, row):
+        """The source a member row names reads exactly the member's array."""
+        expected = resolver._load_member(row).data
+        source = resolver._member_array_source(row, expected.shape)
+        assert source.shape == expected.shape
+        assert np.dtype(source.dtype) == expected.dtype
+        assert source.windows == tuple((0, x) for x in expected.shape)
+        assert source.extent == expected.shape
+        assert np.array_equal(source.load(), expected)
+
+    def test_member_source_without_a_dtype_returns_none(self, resolver, row):
+        """A row which does not say what the array is cannot name it."""
+        shape = resolver._load_member(row).shape
+        for value in ("", None, float("nan")):
+            blank = dict(row, _dtype=value)
+            assert resolver._member_array_source(blank, shape) is None
 
     def test_override_gets_annotated_handle(self, resolver, row, swap_read_array):
         """The override receives the handle type it declares, like read.
