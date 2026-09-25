@@ -14,10 +14,12 @@ from pydantic import ValidationError
 
 import dascore as dc
 from dascore.core.coords import (
+    CoordPartial,
     Grid,
     Labels,
     Missing,
     NumericCoord,
+    _lattice_gap,
     concat_coords,
     get_coord,
 )
@@ -1078,3 +1080,72 @@ class TestReviewRoundSix:
         pair = (pico, nano) if flip else (nano, pico)
         with pytest.raises(CoordError, match="compatible dtypes"):
             concat_coords(*pair)
+
+
+class TestRefactorParity:
+    """Behaviour the step and tolerance consolidation must keep."""
+
+    def test_float_fuse_keeps_step(self):
+        """A float re-fit a few ULP off the step keeps the stated step."""
+        values = np.delete(-7.7105 + np.arange(11) * 0.001, 2)
+        coord = get_coord(data=values, step=0.001)
+        assert coord.fuse(1.0, keep_step=True).step == 0.001
+
+    def test_merged_float_patches_fill(self):
+        """Merged float patches keep a step, so their holes can be filled."""
+
+        def patch(values):
+            dist = get_coord(data=values, step=0.1, units="m")
+            time = get_coord(start=T0, step=MS, shape=(4,))
+            coords = {"distance": dist, "time": time}
+            data = np.ones((len(dist), 4))
+            return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+        first = np.delete(np.arange(10) * 0.1 + 0.3, 4)
+        second = np.arange(10, 20) * 0.1 + 0.3
+        out = dc.spool([patch(first), patch(second)]).chunk(distance=None)
+        assert out[0].get_coord("distance").step == 0.1
+        assert out[0].fill_gaps("distance").shape == (20, 4)
+
+    def test_lossless_fuse_keeps_stated_step(self):
+        """Fusing without re-fitting keeps a step finer than the runs'."""
+        full = get_coord(start=0, step=4, shape=(20,))
+        coord = concat_coords(full[:10], full[12:])[::2]
+        fused = coord.fuse()
+        assert fused.step == coord.step
+        assert fused.missing().count == coord.missing().count
+
+    @pytest.mark.parametrize("shape", [(0,), (2, 3)])
+    def test_new_shape_not_a_range(self, shape):
+        """A shape no range can hold still gives a partial coordinate."""
+        coord = get_coord(start=0, step=4, shape=(5,))
+        assert isinstance(coord.new(shape=shape), CoordPartial)
+
+    @pytest.mark.parametrize("start", [0, T0])
+    def test_update_to_empty_range(self, start):
+        """An exact range updated to no samples is a partial coordinate."""
+        coord = get_coord(start=start, step=Fraction(3, 2), shape=(10,))
+        assert isinstance(coord.update(shape=(0,)), CoordPartial)
+
+    def test_odd_phase_hole_ends(self):
+        """A hole on a fractional lattice ends on its floored label."""
+        full = get_coord(start=0, step=(3, 2), shape=(20,))
+        missing = concat_coords(full[:3], full[6:]).missing()
+        assert missing.runs == ((4, 7, 3),)
+
+    def test_lattice_gap_needs_one_step(self):
+        """Grids of different steps share no lattice."""
+        assert _lattice_gap(Grid(0, 1, 1, 4), Grid(6, 2, 1, 3)) is None
+
+    def test_reversed_unsigned_empty(self):
+        """An empty reversed unsigned grid does not overflow."""
+        coord = get_coord(start=np.uint32(0), step=np.uint32(2), shape=(5,))[::-1]
+        assert isinstance(coord.new(shape=(0,)), CoordPartial)
+
+    def test_dimensionless_quantity_is_a_number(self):
+        """A dimensionless quantity tolerance reads as a plain excess."""
+        full = get_coord(start=0.0, step=1.0, shape=(10,))
+        coord = concat_coords(full[:4], full[6:])
+        tolerance = dc.get_quantity("2")
+        assert coord.get_discontinuities("gaps", tolerance=tolerance).empty
+        assert coord.fuse(tolerance).runs_count == 1

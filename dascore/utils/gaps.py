@@ -220,6 +220,8 @@ class GapTolerance:
             return self
         if is_timedelta64(excess) and not time_like:
             excess = get_quantity(f"{to_float(excess)} s")
+        if isinstance(excess, Quantity) and excess.dimensionless:
+            excess = float(excess.m_as("dimensionless"))  # a plain number
         if isinstance(excess, Quantity):
             prefix = f"Cannot use a tolerance of {excess} for {name!r}"
             excess = _quantity_to_dim_value(excess, dtype, units, prefix)

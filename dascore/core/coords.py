@@ -3115,9 +3115,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         # A re-fit spaces its labels evenly, which integers and coarse
         # times cannot always hold; the fit says what dtype they need.
         # a run re-fit at another cadence no longer sits on the old step
-        kept = all(
-            not isinstance(x, Grid) or x.step(self.dtype) == self.step for x in runs
-        )
+        refits = [x for x in runs if isinstance(x, Grid) and x not in self.runs]
+        kept = all(_same_step(x.step(self.dtype), self.step) for x in refits)
         step = ... if kept else None
         return self._with_runs(runs, dtype=np.result_type(*dtypes), step=step)
 
@@ -4106,7 +4105,9 @@ def get_coord(
     max
         Alias for stop; exclusive, like stop.
     step
-        The sampling spacing of an array.
+        The sampling spacing of an array. With start, a ``Fraction`` or a
+        ``(numerator, denominator)`` tuple states an exact fractional step
+        for time (in seconds) or integer coordinates.
     units
         Indication of units.
     shape
@@ -4355,8 +4356,18 @@ def _range_coord(spec: dict, units) -> BaseCoord:
     return NumericCoord(runs=(grid,), units=units, dtype=dtype)
 
 
+def _same_step(step, other) -> bool:
+    """Whether two steps agree: exactly for ticks, within a float's rounding."""
+    if isinstance(step, float | np.floating) and not _is_null(other):
+        return math.isclose(step, other, rel_tol=_GRID_RTOL)
+    return bool(step == other)
+
+
 def _grid_coord(terms, units=None, **spec) -> BaseCoord:
     """The range ``spec`` states on an exact grid of ``_EXACT_GRID_FIELDS`` terms."""
+    shape = spec.get("shape")
+    if shape is not None and (len(shape) != 1 or not shape[0]):
+        return get_coord(**spec, units=units)  # no range holds it: a partial
     return _range_coord({**spec, **dict(zip(_EXACT_GRID_FIELDS, terms))}, units)
 
 
