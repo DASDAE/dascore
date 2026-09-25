@@ -301,3 +301,21 @@ class TestMultiRunRoundTrip:
         out = back.get_coord("t")
         assert out == coord
         assert out.step == coord.step and out.step_exact == coord.step_exact
+
+    def test_older_strided_file_reads(self):
+        """A stored step beside grids a stride widened reads back stepless."""
+        h5 = h5py.File(io.BytesIO(), "w")
+        labels = np.array([0.0, 1 + 1e-12, 2.0, 3.0, 5.0])
+        segments = (
+            NumericCoord.from_labels(labels, step=1.0),
+            get_coord(start=20.0, step=2.0, shape=(5,)),
+        )
+        group = h5.create_group("x")
+        for num, segment in enumerate(segments):
+            _save_coord(segment, str(num), group, compact=True)
+        group.attrs["object_type"] = "CoordSegmented"
+        back = _read_coord(group, "x", {}, snap=True)
+        assert back.step is None
+        np.testing.assert_array_equal(
+            back.values, np.concatenate([x.values for x in segments])
+        )

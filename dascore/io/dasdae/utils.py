@@ -407,7 +407,12 @@ def _shared_step(segments):
     # grid segments restate their shared step exactly; a rounded one would
     # misstate a fractional grid, or a lattice the runs do not share
     steps = {x.step for x in segments if not x.evenly_sampled}
-    return steps.pop() if len(steps) == 1 else None
+    if len(steps) != 1:
+        return None
+    step = steps.pop()
+    # older files may pair a declared step with grids a stride widened
+    grids = (x for x in segments if x.evenly_sampled and len(x) > 1)
+    return None if any(x.step != step for x in grids) else step
 
 
 def _read_coord(node, name, attrs2, snap):

@@ -1108,17 +1108,30 @@ class TestStepContract:
         out = concat_coords(full[:10], full[15:])[::2]
         assert out.runs_count == 2 and out.step is None
 
-    def test_restrided_runs_fuse(self, full):
-        """Pieces of one strided grid join back into it, whatever their phase."""
-        strided = full[::2]
-        assert concat_coords(strided[:5], strided[5:]) == strided
-        coord = concat_coords(strided[:5], strided[7:])
-        assert coord.step_exact == strided.step_exact
-        np.testing.assert_array_equal(coord.missing().positions(), strided.values[5:7])
+    def test_stride_widens_a_declared_step(self):
+        """Stored labels beside a grid keep the declared step times the stride."""
+        labels = NumericCoord.from_labels(
+            np.array([20.0, 21, 22, 23, 26, 27]), step=1.0
+        )
+        coord = concat_coords(get_coord(start=0.0, stop=12.0, step=1.0), labels)
+        out = coord[::2]
+        assert out.step == 2.0
+        assert out.missing().positions().tolist() == [12.0, 14.0, 16.0, 18.0, 24.0]
 
     def test_declared_step_a_grid_contradicts_raises(self):
         """A declared step other than the one the grid runs sit on raises."""
         runs = (Grid(0, 2, 1, 5), Grid(20, 2, 1, 5))
-        with pytest.raises((CoordError, ValidationError), match="contradicts"):
+        with pytest.raises(ValidationError, match="contradicts"):
             NumericCoord(runs=runs, dtype="int64", step=1)
         assert NumericCoord(runs=runs, dtype="int64", step=2).missing().count == 5
+
+    def test_partial_fit_drops_a_contradicted_step(self):
+        """A re-fit run the declared step no longer fits leaves no step."""
+        coord = concat_coords(
+            get_coord(start=0.0, stop=10.0, step=1.0),
+            get_coord(start=11.0, stop=16.0, step=1.0),
+            get_coord(start=40.0, stop=45.0, step=1.0),
+        )
+        out = coord.fuse(tolerance=1.0)
+        assert out.runs_count == 2 and out.step is None
+        np.testing.assert_array_equal(out.values[-5:], coord.values[-5:])

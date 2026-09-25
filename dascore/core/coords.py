@@ -3144,11 +3144,14 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         runs, dtypes = zip(*result)
         # A re-fit spaces its labels evenly, which integers and coarse
         # times cannot always hold; the fit says what dtype they need.
-        # a step inferred from one fractional lattice is inferred afresh,
-        # since a re-fit run leaves that lattice
+        # A re-fit run may leave the declared step, and a step inferred
+        # from one fractional lattice is always inferred afresh.
+        dtype = np.result_type(*dtypes)
         grid = _common_grid(self.runs)
-        step = None if grid is not None and grid.step_den != 1 else ...
-        return self._with_runs(runs, dtype=np.result_type(*dtypes), step=step)
+        if grid is None or grid.step_den == 1:
+            with suppress(CoordError, ValidationError):
+                return self._with_runs(runs, dtype=dtype)
+        return self._with_runs(runs, dtype=dtype, step=None)
 
     def _fit_tolerance(self, tolerance):
         """
@@ -3628,13 +3631,9 @@ def _runs_step(runs, declared, dtype, sources):
 def _check_grid_spacings(runs, step, dtype):
     """Raise where a grid run of several samples is spaced other than the step."""
     spacings = [x.step(dtype) for x in runs if isinstance(x, Grid) and len(x) > 1]
-    if not spacings:
-        return
-    with suppress(CoordError):
-        if np.all(np.abs(_on_grid(np.asarray(spacings), step)) == 1):
-            return
-    msg = f"The declared step {step} contradicts a grid run's spacing."
-    raise CoordError(msg)
+    if spacings and np.any(np.abs(_on_grid(np.asarray(spacings), step)) != 1):
+        msg = f"The declared step {step} contradicts a grid run's spacing."
+        raise CoordError(msg)
 
 
 def _run_edges(run, dtype, sources) -> np.ndarray:
