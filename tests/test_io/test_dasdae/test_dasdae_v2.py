@@ -278,3 +278,26 @@ class TestVersion2Files:
         (back,) = dc.spool(dc.write(patch, tmp_path / "runs.h5", "dasdae"))
         np.testing.assert_array_equal(back.get_coord("x").values, coord.values)
         np.testing.assert_array_equal(back.data, data)
+
+
+class TestMultiRunRoundTrip:
+    """Coordinates of several exact runs read back as they were written."""
+
+    @pytest.mark.parametrize("rate", [1000, 1024, 3000])
+    @pytest.mark.parametrize("layout", ["hole", "strided", "off_lattice"])
+    def test_round_trip(self, rate, layout, tmp_path):
+        """The runs and the step they share survive a write and a read."""
+        full = get_coord(start=T0, step=(1, rate), shape=(60,))
+        if layout == "hole":
+            coord = concat_coords(full[:10], full[11:])
+        elif layout == "strided":
+            coord = concat_coords(full[:12], full[16:])[::2]
+        else:
+            later = full.min() + np.timedelta64(1, "s") + np.timedelta64(5, "ns")
+            other = get_coord(start=later, step=(1, rate), shape=(20,))
+            coord = concat_coords(full, other)
+        patch = dc.Patch(data=np.ones(len(coord)), coords={"t": coord}, dims=("t",))
+        (back,) = dc.read(dc.write(patch, tmp_path / "runs.h5", "dasdae"))
+        out = back.get_coord("t")
+        assert out == coord
+        assert out.step == coord.step and out.step_exact == coord.step_exact

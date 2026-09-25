@@ -403,8 +403,10 @@ def _read_segment(node):
 
 
 def _shared_step(segments):
-    """The one step every segment sits on, or None."""
-    steps = {x.step for x in segments}
+    """The step the stored segments declare, or None."""
+    # grid segments restate their shared step exactly; a rounded one would
+    # misstate a fractional grid, or a lattice the runs do not share
+    steps = {x.step for x in segments if not x.evenly_sampled}
     return steps.pop() if len(steps) == 1 else None
 
 

@@ -2793,11 +2793,14 @@ get_coord(start=0.0, stop=20.0, step=1.0)
                 out.append(self._promoted_labels(run.window(first, stride, count)))
         # a backwards range reads the runs from the last one
         runs = out if stride > 0 else out[::-1]
-        # A stride multiplies every spacing, so a step declared over the
-        # samples it skips is kept only where the ones it keeps still sit
-        # on it; a widened seam says they do not.
-        with suppress(CoordError, ValidationError):
-            return self._with_runs(runs)
+        # A stride multiplies every spacing: the step is the widened one
+        # where the kept samples sit on it, else the declared one where no
+        # grid run contradicts it, else whatever the runs share.
+        step = self.step
+        candidates = () if _is_null(step) else (step * abs(stride), step)
+        for candidate in candidates:
+            with suppress(CoordError, ValidationError):
+                return self._with_runs(runs, step=candidate)
         return self._with_runs(runs, step=None)
 
     def _promoted_labels(self, window: Labels) -> Grid | Labels:
@@ -3587,6 +3590,7 @@ def _runs_step(runs, declared, dtype, sources):
             return step
     if strict:
         step = _declared_step(declared, dtype)
+        _check_grid_spacings(runs, step, dtype)
     else:
         steps = [x.step(dtype) for x in runs if isinstance(x, Grid)]
         if len(steps) != len(runs) or len({_maybe_unpack(x) for x in steps}) != 1:
@@ -3619,6 +3623,18 @@ def _runs_step(runs, declared, dtype, sources):
             raise
         return None
     return step
+
+
+def _check_grid_spacings(runs, step, dtype):
+    """Raise where a grid run of several samples is spaced other than the step."""
+    spacings = [x.step(dtype) for x in runs if isinstance(x, Grid) and len(x) > 1]
+    if not spacings:
+        return
+    with suppress(CoordError):
+        if np.all(np.abs(_on_grid(np.asarray(spacings), step)) == 1):
+            return
+    msg = f"The declared step {step} contradicts a grid run's spacing."
+    raise CoordError(msg)
 
 
 def _run_edges(run, dtype, sources) -> np.ndarray:

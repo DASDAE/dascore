@@ -1071,3 +1071,54 @@ class TestReviewRoundSix:
         pair = (pico, nano) if flip else (nano, pico)
         with pytest.raises(CoordError, match="compatible dtypes"):
             concat_coords(*pair)
+
+
+class TestStepContract:
+    """A coordinate's step is the one its grid runs share, at any rate."""
+
+    @pytest.fixture(params=[1000, 1024, 3000])
+    def full(self, request):
+        """A time grid at a whole or a fractional rate."""
+        return get_coord(start=T0, step=Fraction(1, request.param), shape=(60,))
+
+    @pytest.mark.parametrize("stride", [2, 3])
+    def test_stride_restates_the_step(self, full, stride):
+        """A strided slice states its runs' step and counts holes on it."""
+        coord = concat_coords(full[:12], full[12 + 2 * stride :])
+        out = coord[::stride]
+        assert out.runs_count == 2
+        assert out.step == out.runs[0].step(out.dtype)
+        assert out.step_exact == full.step_exact * stride
+        missing = out.missing()
+        assert missing.count == 2
+        expected = full.values[12 : 12 + 2 * stride : stride]
+        np.testing.assert_array_equal(missing.positions(), expected)
+
+    def test_decimate_restates_the_step(self, full):
+        """Decimating without a filter states the decimated grid's step."""
+        time = concat_coords(full[:20], full[24:])
+        patch = dc.Patch(data=np.ones(len(time)), coords={"time": time}, dims=("time",))
+        out = patch.decimate(time=2, filter_type=None).get_coord("time")
+        assert out.step == out.runs[0].step(out.dtype)
+        assert out.step_exact == full.step_exact * 2
+        assert out.missing().count == 2
+
+    def test_off_lattice_stride_states_no_step(self, full):
+        """A stride which leaves the runs on different lattices states nothing."""
+        out = concat_coords(full[:10], full[15:])[::2]
+        assert out.runs_count == 2 and out.step is None
+
+    def test_restrided_runs_fuse(self, full):
+        """Pieces of one strided grid join back into it, whatever their phase."""
+        strided = full[::2]
+        assert concat_coords(strided[:5], strided[5:]) == strided
+        coord = concat_coords(strided[:5], strided[7:])
+        assert coord.step_exact == strided.step_exact
+        np.testing.assert_array_equal(coord.missing().positions(), strided.values[5:7])
+
+    def test_declared_step_a_grid_contradicts_raises(self):
+        """A declared step other than the one the grid runs sit on raises."""
+        runs = (Grid(0, 2, 1, 5), Grid(20, 2, 1, 5))
+        with pytest.raises((CoordError, ValidationError), match="contradicts"):
+            NumericCoord(runs=runs, dtype="int64", step=1)
+        assert NumericCoord(runs=runs, dtype="int64", step=2).missing().count == 5
