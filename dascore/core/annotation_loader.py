@@ -923,27 +923,27 @@ def _load_set(directory: Path, attrs: Mapping, dims, **kwargs) -> AnnotationSet:
         raise ParameterError(msg)
     declared, skip = _read_table_dims(table)
     stated = _declared_dims(attrs, dims, directory, declared, table)
-    columns = attrs.get("annotation_columns")
+    dtypes = _stated_dtypes(attrs, "annotation_columns")
     frame = _read_set_table(
         table,
         stated,
         "no annotations",
         ordered=True,
         skip=skip,
-        text=_stated_text(attrs, "annotation_columns"),
+        text=_text_columns(dtypes),
     )
-    frame = _restore_dtypes(frame, columns, table)
+    frame = _restore_dtypes(frame, dtypes, table)
     features = None
     if (path := _one_spelling(directory, FEATURE_STEM, TABLE_SUFFIXES)) is not None:
-        columns = attrs.get("feature_columns")
+        dtypes = _stated_dtypes(attrs, "feature_columns")
         features = _read_set_table(
             path,
             (),
             "no features",
             skip=_undeclared(path),
-            text=_stated_text(attrs, "feature_columns"),
+            text=_text_columns(dtypes),
         )
-        features = _restore_dtypes(features, columns, path)
+        features = _restore_dtypes(features, dtypes, path)
     return AnnotationSet(
         frame,
         features=features,
@@ -954,7 +954,7 @@ def _load_set(directory: Path, attrs: Mapping, dims, **kwargs) -> AnnotationSet:
     )
 
 
-def _restore_dtypes(frame, columns: Mapping | None, path: Path):
+def _restore_dtypes(frame, dtypes: Mapping[str, str], path: Path):
     """
     Give each column back the dtype the set declares for it.
 
@@ -967,7 +967,7 @@ def _restore_dtypes(frame, columns: Mapping | None, path: Path):
     which is not one is left for the set's own validation to refuse.
     """
     restored = {}
-    for name, dtype in _declared_dtypes(columns).items():
+    for name, dtype in dtypes.items():
         if frame is None or name not in frame.columns or _is_text_dtype(dtype):
             continue
         try:
@@ -1002,20 +1002,26 @@ def _is_text_dtype(dtype: str) -> bool:
     return False
 
 
-def _text_columns(columns: Mapping | None) -> frozenset[str]:
-    """The columns a set declares as text, which a table leaves as it reads them."""
-    return frozenset(
-        name
-        for name, dtype in _declared_dtypes(columns).items()
-        if _is_text_dtype(dtype)
-    )
+def _text_columns(dtypes: Mapping[str, str]) -> frozenset[str]:
+    """The columns declared as text, which a table leaves as it reads them."""
+    return frozenset(k for k, v in dtypes.items() if _is_text_dtype(v))
 
 
-def _stated_text(attrs: Mapping, key: str) -> frozenset[str]:
-    """The text columns a set, or any set saved flat into it, declares."""
-    children = (attrs.get("sets") or {}).values()
-    stated = [attrs.get(key), *(_child_field(x, key) for x in children)]
-    return frozenset().union(*(_text_columns(x) for x in stated))
+def _stated_dtypes(attrs: Mapping, key: str, own=None) -> dict[str, str]:
+    """
+    The dtype each column is declared as: the set's own, else the one every
+    set saved flat into it agrees on. Children which disagree leave the
+    column to inference.
+    """
+    merged: dict[str, str] = {}
+    clashing = set()
+    for child in (attrs.get("sets") or {}).values():
+        for name, dtype in _declared_dtypes(_child_field(child, key)).items():
+            if merged.setdefault(name, dtype) != dtype:
+                clashing.add(name)
+    out = {k: v for k, v in merged.items() if k not in clashing}
+    out.update(_declared_dtypes(attrs.get(key) if own is None else own))
+    return out
 
 
 def _child_field(child, key: str):
@@ -1043,17 +1049,16 @@ def _load_file(path: Path, dims, **kwargs) -> AnnotationSet:
     columns = kwargs.get("annotation_columns")
     if columns is None:
         columns = given.get("annotation_columns")
+    dtypes = _stated_dtypes(given, "annotation_columns", own=columns or {})
     frame = _read_set_table(
         path,
         stated,
         "no annotations",
         ordered=True,
         skip=skip,
-        text=_stated_text(
-            {**given, "annotation_columns": columns}, "annotation_columns"
-        ),
+        text=_text_columns(dtypes),
     )
-    return AnnotationSet(_restore_dtypes(frame, columns, path), dims=stated, **kwargs)
+    return AnnotationSet(_restore_dtypes(frame, dtypes, path), dims=stated, **kwargs)
 
 
 def _undeclared(path: Path) -> int:

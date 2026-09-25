@@ -669,9 +669,9 @@ class TestColumns:
         """A dtype naming nothing says so, rather than raising numpy's error."""
         with pytest.raises(ParameterError, match="declares the dtype"):
             AnnotationSet(
-                pd.DataFrame({"time": [1.0]}),
+                pd.DataFrame({"time": [1.0], "score": [1.0]}),
                 dims=DIMS,
-                annotation_columns={"time": {"dtype": "not-a-dtype"}},
+                annotation_columns={"score": {"dtype": "not-a-dtype"}},
             )
 
     def test_stated_dtype_absent_column(self):
@@ -1163,6 +1163,13 @@ class TestBases:
         with pytest.raises(ParameterError, match="does not declare"):
             AnnotationSet(None, dims=DIMS, bases={"m": line})
 
+    def test_keys_colliding_as_text_refused(self):
+        """A key of 1 and a key of "1" name one basis, so both are refused."""
+        line = Line(start={"distance": 0.0}, end={"distance": 1.0})
+        other = Line(start={"distance": 0.0}, end={"distance": 2.0})
+        with pytest.raises(ParameterError, match="keyed '1'"):
+            AnnotationSet(None, dims=DIMS, bases={1: line, "1": other})
+
     def test_a_blank_key_refused(self):
         """A key is what a feature names a basis by, so it says something."""
         with pytest.raises(ParameterError, match="nonblank key"):
@@ -1356,6 +1363,25 @@ class TestAttrs:
         assert attrs.data_id == "abc123"
         with pytest.raises(ValidationError, match="Extra inputs"):
             AnnotationSetAttrs(dims=DIMS, history=("decimate",))
+
+    @pytest.mark.parametrize(
+        ("field", "column", "dtype"),
+        [
+            ("annotation_columns", "seq", "int64"),
+            ("feature_columns", "geometry", "category"),
+            ("annotation_columns", "time_min", "float64"),
+        ],
+    )
+    def test_a_fixed_column_takes_no_dtype(self, field, column, dtype):
+        """A reserved or dimension column's dtype is the set's, not declared."""
+        with pytest.raises(ValidationError, match="dtype is fixed"):
+            AnnotationSetAttrs(dims=DIMS, **{field: {column: {"dtype": dtype}}})
+
+    def test_a_fixed_column_may_be_documented(self):
+        """A description of a reserved column is still welcome."""
+        columns = {"geometry": {"description": "what the members draw"}}
+        attrs = AnnotationSetAttrs(dims=DIMS, feature_columns=columns)
+        assert attrs.feature_columns["geometry"].description
 
     def test_columns_per_table(self):
         """Each table documents its own columns."""

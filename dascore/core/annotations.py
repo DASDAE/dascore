@@ -718,6 +718,21 @@ class AnnotationSetAttrs(_AnnotationModel):
         return self
 
     @model_validator(mode="after")
+    def _check_column_dtypes(self) -> Self:
+        """A reserved or dimension column may be documented, not retyped."""
+        spelled = {x for d in self.dims for x in (d, f"{d}{_MIN}", f"{d}{_MAX}")}
+        fixed = set(RESERVED_COLUMNS) | spelled
+        for field in ("annotation_columns", "feature_columns"):
+            declared = getattr(self, field)
+            if named := sorted(x for x in fixed & set(declared) if declared[x].dtype):
+                msg = (
+                    f"The {field} declare a dtype for {', '.join(named)}, whose "
+                    "dtype is fixed by the set; document it without one."
+                )
+                raise ValueError(msg)
+        return self
+
+    @model_validator(mode="after")
     def _check_sets(self) -> Self:
         """Sets loaded together are one collection, in its dimensions."""
         for name, child in self.sets.items():
@@ -1134,6 +1149,9 @@ def _read_bases(bases, dims) -> FrozenDict:
     for key, value in bases.items():
         if not _text(key):
             msg = "A basis is named by a nonblank key."
+            raise ParameterError(msg)
+        if str(key) in out:
+            msg = f"Two bases are keyed {str(key)!r} once spelled as text."
             raise ParameterError(msg)
         out[str(key)] = _read_basis(value, dims, str(key))
     return FrozenDict(out)

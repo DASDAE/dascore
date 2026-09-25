@@ -1229,6 +1229,34 @@ class TestCollections:
         bare = dc.annotations(path, dims=loaded.dims, attrs=loaded.attrs)
         assert list(bare.annotations["station"]) == ["001", "002"]
 
+    def test_child_dtype_declarations_survive_a_flat_save(self, tmp_path):
+        """Children agreeing on a dtype keep it through a flat save."""
+        root = tmp_path / "sets"
+        for name, count in (("a", [1, None]), ("b", [2, 3])):
+            frame = pd.DataFrame(
+                {"time": [1.0, 2.0], "count": pd.array(count, dtype="Int64")}
+            )
+            dc.AnnotationSet(
+                frame,
+                dims=("time",),
+                annotation_columns={"count": {"dtype": "Int64"}},
+            ).io.save(root / name)
+        loaded = dc.annotations(root)
+        flat = dc.annotations(loaded.io.save(tmp_path / "flat"))
+        assert flat.annotations["count"].dtype.name == "Int64"
+        assert flat == loaded
+
+    def test_children_disagreeing_on_a_dtype(self, tmp_path):
+        """Where children declare different dtypes the column is inferred."""
+        root = tmp_path / "sets"
+        for name, dtype in (("a", "Int64"), ("b", "float64")):
+            frame = pd.DataFrame({"time": [1.0], "count": [1]}).astype({"count": dtype})
+            dc.AnnotationSet(
+                frame, dims=("time",), annotation_columns={"count": {"dtype": dtype}}
+            ).io.save(root / name)
+        flat = dc.annotations(dc.annotations(root).io.save(tmp_path / "flat"))
+        assert list(flat.annotations["count"]) == [1, 1]
+
     def test_a_basis_key_naming_two_curves(self, with_features, tmp_path):
         """One key names one curve across the sets loaded together."""
         root = tmp_path / "sets"
