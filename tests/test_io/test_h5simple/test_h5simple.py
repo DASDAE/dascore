@@ -14,6 +14,7 @@ import pytest
 
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
+from dascore.core.lazy_array import LazyArray
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io import FiberIO
 from dascore.io.h5simple.core import H5Simple
@@ -191,6 +192,94 @@ class TestH5Simple:
 
         monkeypatch.setattr(owner, "read_array", wrapped)
         np.testing.assert_array_equal(patch._source.load(), expected * 2)
+
+    @pytest.mark.parametrize("doubled_first", [True, False])
+    def test_bases_with_different_hooks(
+        self, h5simple_path, source_registry, doubled_first
+    ):
+        """
+        A hook one base defines cannot bypass another base's read_array.
+
+        The doubling base defines its own `_prepare_read`, and H5Simple the
+        array hook, which was written for H5Simple's read_array.
+        """
+
+        class Doubled(FiberIO):
+            name = f"_test_h5simple_doubled_{doubled_first}"
+
+            def _prepare_read(self, manager, snap):
+                return FiberIO._prepare_read(self, manager, snap)
+
+            def get_metadata(self, resource: H5Reader, *, snap=True):
+                return H5Simple().get_metadata(resource, snap=snap)
+
+            def read_array(self, resource: H5Reader, windows=(), key=""):
+                return H5Simple().read_array(resource, windows, key=key) * 2
+
+        bases = (Doubled, H5Simple) if doubled_first else (H5Simple, Doubled)
+
+        class Combined(*bases):
+            name = f"{Doubled.name}_combined"
+
+        patch = dc.read(h5simple_path, file_format=H5Simple.name)[0]
+        plain = np.array(patch.data)
+        expected = plain * 2 if doubled_first else plain
+        np.testing.assert_array_equal(Combined().read_array(h5simple_path), expected)
+        source = replace(patch._source, format=Combined.name)
+        np.testing.assert_array_equal(source[1:3].load(), expected[1:3])
+        np.testing.assert_array_equal(Combined().read(h5simple_path)[0].data, expected)
+
+    def test_compatible_array_hook_is_kept(
+        self, h5simple_path, source_registry, monkeypatch
+    ):
+        """A subclass pairing its own array hook with its read_array keeps it."""
+        prepared = []
+
+        class Compatible(H5Simple):
+            name = "_test_h5simple_compatible"
+
+            def read_array(self, resource: H5Reader, windows=(), key=""):
+                return self._prepare_array_reader(resource, key=key)(windows)
+
+            def _prepare_array_reader(self, resource, *, key=""):
+                prepared.append(key)
+                read = super()._prepare_array_reader(resource, key=key)
+                return lambda windows: read(windows) * 2
+
+        original = h5py.Group.items
+        traversals = []
+
+        def items(group):
+            if group.name == "/":
+                traversals.append(1)
+            return original(group)
+
+        patch = dc.read(h5simple_path, file_format=H5Simple.name)[0]
+        expected = np.array(patch.data)[:6] * 2
+        source = replace(patch._source, format=Compatible.name)
+        array = LazyArray.from_sources([source[0:2], source[2:4], source[4:6]])
+        monkeypatch.setattr(h5py.Group, "items", items)
+        np.testing.assert_array_equal(array.load(), expected)
+        assert prepared == [""] and len(traversals) == 1
+
+    def test_subclass_keeps_prepared_read(self, h5simple_path, monkeypatch):
+        """A subclass which overrides nothing still reuses the parsed layout."""
+        monkeypatch.setattr(H5Simple, "manager", copy.deepcopy(H5Simple.manager))
+
+        class Plain(H5Simple):
+            name = "_test_h5simple_plain_subclass"
+
+        original = h5py.Group.items
+        calls = []
+
+        def items(group):
+            if group.name == "/":
+                calls.append(1)
+            return original(group)
+
+        monkeypatch.setattr(h5py.Group, "items", items)
+        assert Plain().read(h5simple_path)[0].size
+        assert len(calls) == 1
 
     def test_no_snap(self, h5simple_path):
         """Ensure when snap is not used it still reads patch."""

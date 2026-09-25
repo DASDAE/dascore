@@ -717,8 +717,8 @@ class FiberIO:
 
     manager = _FiberIOManager(FIBER_IO_GROUP)
 
-    # The public methods each private hook a class defines was written
-    # against, as the class had them; see `_paired_hook`.
+    # The public methods each private hook this class itself defines was
+    # written against, as the class had them; see `_paired_hook`.
     _hook_pairs: FrozenDict = FrozenDict()
 
     # Methods using automatic type casting and the parameter index to cast.
@@ -1046,8 +1046,8 @@ class FiberIO:
             for hook, names in _HOOK_METHODS.items()
             if hook in cls.__dict__
         }
-        if own:
-            cls._hook_pairs = FrozenDict({**cls._hook_pairs, **own})
+        # Only the class's own hooks: another base may supply the rest.
+        cls._hook_pairs = FrozenDict(own)
 
 
 # The public methods each private FiberIO hook is paired with.
@@ -1065,8 +1065,11 @@ def _paired_hook(fiber_io: FiberIO, hook: str) -> Callable:
 
     A reader's hook is valid only for the public methods it was written
     against; a subclass or runtime override of one must not be bypassed.
+    The record checked is the one kept by the class which defines the
+    selected hook, whichever base that is.
     """
-    paired = fiber_io._hook_pairs.get(hook, {})
+    owner = next(x for x in type(fiber_io).__mro__ if hook in x.__dict__)
+    paired = owner.__dict__.get("_hook_pairs", {}).get(hook, {})
     if any(
         getattr(getattr(fiber_io, name), "__func__", None) is not expected
         for name, expected in paired.items()
