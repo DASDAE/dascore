@@ -3329,6 +3329,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         if "segments" in kwargs:
             units = kwargs.get("units", self.units)
             return get_coord(segments=kwargs["segments"], units=units)
+        if kwargs.get("dtype") is not None and np.dtype(kwargs["dtype"]) == self.dtype:
+            kwargs = {k: v for k, v in kwargs.items() if k != "dtype"}
         if not kwargs:
             return self
         if set(kwargs) <= {"units"}:

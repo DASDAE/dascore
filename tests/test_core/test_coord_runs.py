@@ -321,7 +321,9 @@ class TestFractionalGaps:
     def test_new_keeps_labels(self, full):
         """Rebuilding a joined fractional coordinate keeps its labels."""
         coord = concat_coords(full[:5], full[6:])
-        np.testing.assert_array_equal(coord.new(dtype=coord.dtype).values, coord.values)
+        assert coord.new(dtype=coord.dtype) == coord
+        rebuilt = coord.new(dtype=coord.dtype, units="s")
+        np.testing.assert_array_equal(rebuilt.values, coord.values)
 
     def test_long_outage_labels(self):
         """A weeks-long hole on a fractional grid keeps ordered end labels."""
