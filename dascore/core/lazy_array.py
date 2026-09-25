@@ -114,13 +114,15 @@ class _Column:
     @classmethod
     def of(cls, values: Sequence) -> _Column:
         """Encode a sequence of values."""
-        if isinstance(values, np.ndarray) and values.dtype.kind == "U":
+        if not isinstance(values, list | tuple):
+            # Positional, whatever the index, and python str for numpy text.
             values = np.asarray(values, object)
         many = len(values) >= _FACTORIZE_ROWS
         if many and infer_dtype(values, skipna=False) == "string":
             codes, distinct = pd.factorize(np.asarray(values, object), sort=False)
-            # A missing value gets no code; the loop keeps it as a value.
-            if codes.min() >= 0:
+            # A missing value gets no code, and hashing stops at a NUL, so
+            # either keeps the loop, which encodes both exactly.
+            if codes.min() >= 0 and "\0" not in "".join(distinct):
                 return cls([str(x) for x in distinct], codes)
         if len(values) and values[0] is None and all(x is None for x in values):
             return cls.constant(None, len(values))
@@ -627,7 +629,9 @@ class LazyArray:
         columns |= {"origin_id": origin_id, "source_dtype": source_dtype}
         columns["cast_via"] = cast_via
         listed = [len(x) for x in columns.values() if is_list_like(x)]
-        rows = listed[0] if listed else len(np.atleast_2d(lengths))
+        windows = (np.asarray(x) for x in (lengths, start, extent) if x is not None)
+        listed += [len(x) for x in windows if x.ndim == 2]
+        rows = listed[0] if listed else 1
         if not rows:
             msg = "A lazy array takes at least one member."
             raise ParameterError(msg)

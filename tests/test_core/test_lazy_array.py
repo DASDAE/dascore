@@ -2344,6 +2344,24 @@ class TestStringColumns:
         )
         assert all(type(x) is str for x in column.values)
 
+    def test_nul_strings_stay_distinct(self):
+        """Strings which differ after a NUL byte stay distinct at any length."""
+        values = ["a\0b", "a\0c"] * 200
+        column = lazy_module._Column.of(values)
+        assert (list(column.values), column.codes.tolist()) == reference_encoding(
+            values
+        )
+
+    @pytest.mark.parametrize("count", [3, 300])
+    def test_series_index_ignored(self, count):
+        """A series is read by position, whatever its index."""
+        values = [f"k{x % 2}" for x in range(count)]
+        series = pd.Series(values, index=np.arange(count) + 10)
+        column = lazy_module._Column.of(series)
+        assert (list(column.values), column.codes.tolist()) == reference_encoding(
+            values
+        )
+
     def test_all_none(self):
         """A column of None is one value."""
         column = lazy_module._Column.of([None] * 5)
@@ -2467,6 +2485,15 @@ class TestFromColumns:
         array = LazyArray.from_columns("/a.h5", (2,), key=["a", "b"], **FORMAT)
         assert array.shape == (4,)
         assert [x.key for x in array.sources] == ["a", "b"]
+
+    @pytest.mark.parametrize("name", ["start", "extent"])
+    def test_rows_from_windows(self, name):
+        """Per member windows of one resource set the member count too."""
+        windows = {"start": [[0], [2]], "extent": 4}
+        if name == "extent":
+            windows = {"extent": [[4], [4]]}
+        array = LazyArray.from_columns("/a.h5", (2,), **windows, **FORMAT)
+        assert array.shape == (4,) and len(array) == 2
 
     def test_spellings_of_one_dtype(self):
         """Two spellings of one dtype or cast are one value."""
