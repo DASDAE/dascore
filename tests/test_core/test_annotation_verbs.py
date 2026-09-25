@@ -597,6 +597,20 @@ class TestSelect:
         """Bases are kept whatever is selected."""
         assert based.select(feature_id="nothing").bases == based.bases
 
+    @pytest.mark.parametrize(
+        "query", [{"k": 1}, {"k": (0, 5)}, {"k_min": 0}, {"k_max": 5}]
+    )
+    def test_nullable_column(self, query):
+        """A blank in a nullable column fails a filter rather than raising."""
+        frame = pd.DataFrame({"time": [1.0, 2.0]})
+        frame["k"] = pd.array([1, None], "Int64")
+        assert len(AnnotationSet(frame, dims=DIMS).select(**query)) == 1
+
+    def test_seq_range(self, tracks):
+        """Seq is blank off paths, and a range over it still filters."""
+        out = tracks.select(seq=(0, 1))
+        assert list(out.annotations["id"]) == ["v0", "v1"]
+
     def test_dimension_refused(self, picks):
         """A dimension is overlapping's to select."""
         with pytest.raises(ParameterError, match="overlapping"):
@@ -734,6 +748,13 @@ class TestOverlapping:
         """A range row starting where the query ends does not overlap."""
         frame = pd.DataFrame({"time_min": [6.0], "time_max": [9.0]})
         assert len(AnnotationSet(frame, dims=DIMS).overlapping(time=(5.0, 6.0))) == 0
+
+    def test_duration_nanoseconds(self):
+        """A duration keeps its nanoseconds through bounds and queries."""
+        frame = pd.DataFrame({"time": [pd.Timedelta(2500, "ns")]})
+        out = AnnotationSet(frame, dims=DIMS)
+        assert out.bounds().iloc[0]["time_min"] == pd.Timedelta(2500, "ns")
+        assert len(out.overlapping(time=(pd.Timedelta(2500, "ns"), None))) == 1
 
     def test_unknown_dim(self, tracks):
         """Only declared dimensions are queried."""
@@ -1013,6 +1034,22 @@ class TestMerge:
         ]
         assert len(sets[0].merge(sets[1])) == 2
 
+    def test_empty_set_keeps_dtypes(self):
+        """Merging or adding nothing widens no column."""
+        frame = pd.DataFrame({"time": [1.0], "n": [1], "flag": [True]})
+        plain = AnnotationSet(frame, dims=DIMS)
+        for out in (plain.merge(AnnotationSet(dims=DIMS)), plain.add(pd.DataFrame())):
+            assert out == plain
+            assert out.annotations["n"].dtype == np.int64
+            assert out.annotations["flag"].dtype == bool
+
+    def test_empty_frame_columns_kept(self):
+        """A column only an empty frame names is kept, blank."""
+        plain = AnnotationSet(pd.DataFrame({"time": [1.0], "n": [1]}), dims=DIMS)
+        out = plain.add(pd.DataFrame(columns=["n", "note"]))
+        assert out.annotations["n"].dtype == np.int64
+        assert out.annotations["note"].isna().all()
+
     def test_nothing_to_merge(self, picks):
         """Merging nothing is the same set."""
         assert picks.merge() == picks
@@ -1063,6 +1100,17 @@ class TestBasisClearing:
     def test_whole_path_kept(self, based):
         """Overlapping keeps a path whole, so its basis stays."""
         assert based.overlapping(distance=(0.0, 10.0))["near"].basis == _moveout()
+
+    def test_untouched_path_keeps_across_new_columns(self, based):
+        """A time range column arriving elsewhere leaves the path's basis."""
+        frame = pd.DataFrame({"time_min": [TIMES[0]], "time_max": [TIMES[1]]})
+        assert based.add(frame)["near"].basis == _moveout()
+        other = AnnotationSet(frame, dims=DIMS)
+        assert based.merge(other)["near"].basis == _moveout()
+
+    def test_restating_feature_is_no_move(self, based):
+        """Setting a row's feature_id to its own feature changes nothing."""
+        assert based.update(annotation="m0", feature_id="near") == based
 
     def test_feature_edit_keeps(self, based):
         """Editing the feature's own row leaves its members, and its basis."""
@@ -1128,6 +1176,12 @@ class TestCollections:
         flipped = other.merge(collection)
         assert out.attrs == flipped.attrs
         assert len(out.annotations) == len(flipped.annotations) == 8
+
+    def test_select_skips_blank_labels(self, collection):
+        """A collection-level row matches no child label, only a blank one."""
+        added = collection.add(pd.DataFrame({"id": ["new"], "time": [9.0]}))
+        assert "new" not in set(added.select(set="hand").annotations["id"])
+        assert list(added.select(set="").annotations["id"]) == ["new"]
 
     def test_colliding_labels(self, collection, tmp_path):
         """A child label in both collections is refused."""

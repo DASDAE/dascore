@@ -1227,8 +1227,9 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         Rows follow iteration order: the features table's, then lone rows.
         Columns are ``feature_id`` (blank for a lone row), ``annotation``
         (a lone row's index label), ``kind``, then ``<dim>_min`` and
-        ``<dim>_max`` per dimension, blank (NaN or NaT) where the feature
-        spans it; numbers are floats. A group's bounds envelope its
+        ``<dim>_max`` per dimension, blank where the feature spans it (NaT
+        where the set states a time somewhere along that dimension, NaN
+        otherwise); numbers are floats. A group's bounds envelope its
         members', a path's or polygon's its vertices, and a path drawn only
         from its basis its curve, exactly. A range row's maximum is
         excluded, as its half-open range says; a value's is included, and a
@@ -1356,21 +1357,22 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
             query[found].update(_query(name, value, table))
         frame, table = self._df, self._features
         if on_features:
-            passed = np.asarray(filter_df(features, **on_features), dtype=bool)
+            passed = _passes(features, on_features)
             kept = set(features["id"][passed].map(_text))
             frame = frame[frame["feature_id"].map(_text).isin(kept)]
             table = table[passed]
         if on_labels:
             # One label test on both tables; a lone row answers for itself.
+            # A blank label is "", so set="" selects the collection's own rows.
             if "set" in table.columns:
-                table = table[np.asarray(filter_df(table, **on_labels), dtype=bool)]
+                table = table[_passes(_labels(table), on_labels)]
             ids = frame["feature_id"].map(_text)
             member = ids.isin(set(table["id"].map(_text))) | (ids == "")
-            labeled = np.asarray(filter_df(frame, **on_labels), dtype=bool)
+            labeled = _passes(_labels(frame), on_labels)
             frame = frame[labeled & member.to_numpy()]
         if on_rows:
             view = rows.loc[frame.index]
-            frame = frame[np.asarray(filter_df(view, **on_rows), dtype=bool)]
+            frame = frame[_passes(view, on_rows)]
         return self._dropped(frame, table)
 
     def overlapping(self, **bounds) -> AnnotationSet:
@@ -1563,6 +1565,8 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         if "feature_id" not in columns:
             return {}
         target = _identity(columns["feature_id"]) or ""
+        if target == _text(self._df["feature_id"].iloc[position]):
+            return {}
         kinds = dict(
             zip(
                 self._features["id"].map(_text), self._features["geometry"], strict=True
@@ -1847,9 +1851,18 @@ def _with_rows(frames: Mapping[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
 
 
 def _concat(frames) -> pd.DataFrame | None:
-    """Stack tables, or None where there are none."""
+    """
+    Stack tables, or None where there are none. An empty table adds only
+    its columns, blank: concatenated, pandas would widen the others' dtypes.
+    """
     frames = list(frames)
-    return pd.concat(frames, ignore_index=True, sort=False) if frames else None
+    if not frames:
+        return None
+    full = [x for x in frames if len(x)] or frames
+    out = pd.concat(full, ignore_index=True, sort=False)
+    names = dict.fromkeys(x for frame in frames for x in frame.columns)
+    missing = {x: _blank_column(out.index) for x in names if x not in out.columns}
+    return _assign(out, missing)
 
 
 def _prepared(data, what: str, attrs: AnnotationSetAttrs, table="annotations"):
@@ -2051,10 +2064,23 @@ def _set_cells(frame: pd.DataFrame, position: int, columns: Mapping) -> pd.DataF
     return _assign(frame, changed)
 
 
+def _passes(frame: pd.DataFrame, query: Mapping) -> np.ndarray:
+    """Which rows pass a `filter_df` query, a blank cell failing."""
+    mask = pd.Series(np.asarray(filter_df(frame, **query), dtype=object))
+    return mask.fillna(False).astype(bool).to_numpy()
+
+
+def _labels(frame: pd.DataFrame) -> pd.DataFrame:
+    """The table with each set label as text, a blank one as ""."""
+    return _assign(frame, {"set": frame["set"].map(_text).astype(object)})
+
+
 def _members(frame: pd.DataFrame, identity: str, columns) -> pd.DataFrame:
     """A feature's member rows, in table order, as comparable objects."""
     rows = frame[frame["feature_id"].map(_text) == identity]
-    return rows.reindex(columns=columns).reset_index(drop=True).astype(object)
+    rows = rows.reindex(columns=columns).reset_index(drop=True).astype(object)
+    # Blank as None, whether the column held NaN, NaT or NA.
+    return rows.where(rows.notna(), None)
 
 
 # Filter names select routes to one table whatever the tables hold.
@@ -3260,8 +3286,10 @@ def _scalar(value):
     """
     if isinstance(value, datetime.datetime | datetime.date):
         return to_datetime64(value)
+    if isinstance(value, pd.Timedelta):
+        # Its own conversion keeps nanoseconds; numpy's takes microseconds.
+        return value.to_timedelta64()
     if isinstance(value, datetime.timedelta):
-        # pd.Timedelta is one of these, and so is the stdlib's own.
         return np.timedelta64(value)
     if isinstance(value, np.generic) and value.dtype.kind not in "mM":
         return value.item()
