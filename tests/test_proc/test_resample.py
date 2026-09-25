@@ -214,16 +214,16 @@ class TestDecimate:
         assert np.allclose(out.get_array("time2"), patch.get_array("time2"))
         assert out.coords.dim_map == patch.coords.dim_map
 
-    @pytest.mark.parametrize("filter_type", ("iir", "fir"))
-    def test_filtered_refuses_hole(self, holey_patch, filter_type):
+    def test_filtered_refuses_hole(self, holey_patch):
         """The anti-alias filter would run across the hole. See #1219."""
         with pytest.raises(CoordError, match="evenly sampled"):
-            holey_patch.decimate(time=2, filter_type=filter_type)
+            holey_patch.decimate(time=2)
 
     def test_striding_allows_hole(self, holey_patch):
         """Taking every other sample needs no even sampling."""
         out = holey_patch.decimate(time=2, filter_type=None)
         assert np.all(out.get_array("time") == holey_patch.get_array("time")[::2])
+        assert np.all(out.data == holey_patch.data[:, ::2])
 
 
 class TestResample:

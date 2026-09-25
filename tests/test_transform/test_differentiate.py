@@ -106,9 +106,10 @@ class TestDifferentiateOrder2:
     def test_across_hole(self, holey_patch):
         """The gradient uses the label spacing across a hole. See #1219."""
         out = holey_patch.differentiate("time")
-        labels = holey_patch.get_array("time")
-        expected = np.gradient(holey_patch.data, labels, axis=1, edge_order=2)
-        assert np.allclose(out.data, expected)
+        # Labels 58, 59, 100: second-order weights give 1 / (1 * 41 * 42).
+        expected = np.zeros(120)
+        expected[[59, 60]] = 1 / 1722
+        assert np.allclose(out.data[0], expected)
 
 
 class TestStep:
