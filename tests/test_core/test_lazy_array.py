@@ -2039,6 +2039,33 @@ class TestCoalescedReads:
         array = concat([plain, turned])
         assert len(lazy_module._coalesced(array._block())) == 2
 
+    def test_a_run_turning_is_cut(self):
+        """Tiles which join along one axis, then another, are two runs."""
+        whole = ArraySource(path="/a.h5", format="DASDAE", version="1").describe(
+            (3, 2), "f4"
+        )
+        boxes = [(0, 1, 0, 1), (0, 2, 1, 2), (1, 2, 0, 1), (2, 3, 0, 1), (2, 3, 1, 2)]
+        array = LazyArray.from_sources(
+            [whole[a:b, c:d] for a, b, c, d in boxes],
+            starts=[(a, c) for a, _, c, _ in boxes],
+        )
+        block = array.validate()._block()
+        stops = lazy_module._coalesced(block).axes["out_stop"].tolist()
+        assert stops == [[1, 1], [2, 2], [3, 1], [3, 2]]
+
+    def test_string_casts_are_read_apart(self):
+        """A cast to text, whose width the samples decide, keeps members apart."""
+        array = LazyArray.from_columns(
+            ["/a.h5", "/a.h5"],
+            (1,),
+            start=[[0], [1]],
+            extent=2,
+            cast_via="U",
+            **{**FORMAT, "source_dtype": "u1"},
+            dtype="u1",
+        )
+        assert len(lazy_module._coalesced(array._block())) == 2
+
     @pytest.mark.parametrize(("dtype", "merged"), [("f4", 1), ("S10", 2)])
     def test_only_numbers_merge(self, dtype, merged):
         """Text, whose casts may take their unit from the samples, is read apart."""
@@ -2061,13 +2088,15 @@ class TestCoalescedReads:
     def test_reads_stop_at_the_byte_budget(
         self, two_sources, patch, reads, monkeypatch
     ):
-        """A run is cut so no read holds more than the budget."""
+        """A run is cut where a member starts a budget or more into it."""
         source = two_sources[0]
         itemsize = np.dtype(patch.dtype).itemsize
         monkeypatch.setattr(lazy_module, "_RUN_BYTES", 30 * patch.shape[1] * itemsize)
-        array = LazyArray.from_sources([source[x : x + 10] for x in range(0, 100, 10)])
+        spans = [(0, 10), (10, 20), (20, 50), (50, 60), (60, 100)]
+        array = LazyArray.from_sources([source[a:b] for a, b in spans])
         assert np.array_equal(array.load(), patch.data[:100])
-        assert [x.windows[0] for x in reads] == [(0, 30), (30, 60), (60, 90), (90, 100)]
+        # Cut where members start in another 30 rows: 0-29, 30-59, 60-89.
+        assert [x.windows[0] for x in reads] == [(0, 50), (50, 60), (60, 100)]
 
     def test_members_over_the_budget_stay_apart(self, two_sources, monkeypatch):
         """Members each bigger than the budget are read one at a time."""

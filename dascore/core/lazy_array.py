@@ -75,8 +75,12 @@ _FACTORIZE_ROWS = 256
 # when the layout changes, so ids from two layouts cannot meet.
 DIGEST_LAYOUT = 3
 
-# The most bytes one merged read of abutting windows holds.
+# Merged reads of abutting windows are cut where a member starts this many
+# bytes into its run, so one holds at most this and one member more.
 _RUN_BYTES = 1 << 24
+
+# The dtype kinds whose casts keep no state from one sample to the next.
+_NUMERIC = "biufc"
 
 # The most axes one array may be cut on; each one doubles the corners.
 MAX_CUT_AXES = 16
@@ -1334,20 +1338,24 @@ def _coalesced(block: _Block) -> _Block:
     Return the block with abutting windows of one source merged into one member.
 
     Neighbours in placement order merge when they read one stored numeric
-    source through one cast and axis map, abut along one axis in both output
-    and source, and match on every other axis. A run stops at `_RUN_BYTES`.
+    source through one numeric cast and axis map, abut along one axis in both
+    output and source, and match on every other axis. A run grows along one
+    axis and is cut every `_RUN_BYTES` by where its members start.
     """
     count = len(block)
-    if count < 2:
+    if count < 2 or np.dtype(block.dtype).kind not in _NUMERIC:
         return block
     axes, members = block.axes, block.members
     start, stop, src_axis = axes["out_start"], axes["out_stop"], axes["src_axis"]
     rows, dtypes = members.source_row, members.sources.dtype
     offset = start - axes["src_start"]
     # A cast which takes its unit from the samples must see each window alone.
-    numeric = np.array([_dtype_of(x).kind in "biufc" for x in dtypes.values])
+    numeric = np.array([_dtype_of(x).kind in _NUMERIC for x in dtypes.values])
+    casts = members.cast
+    plain = np.array([not x or _dtype_of(x).kind in _NUMERIC for x in casts.values])
     alike = (rows[1:] == rows[:-1]) & numeric[dtypes.codes[rows[1:]]]
-    alike &= ~members.filled[1:] & (members.cast.codes[1:] == members.cast.codes[:-1])
+    alike &= ~members.filled[1:] & (casts.codes[1:] == casts.codes[:-1])
+    alike &= plain[casts.codes[1:]]
     alike &= np.all(src_axis[1:] == src_axis[:-1], axis=1)
     alike &= np.all(offset[1:] == offset[:-1], axis=1)
     alike &= np.all(axes["src_extent"][1:] == axes["src_extent"][:-1], axis=1)
@@ -1358,18 +1366,19 @@ def _coalesced(block: _Block) -> _Block:
     along, pick = np.argmax(differs, axis=1), np.arange(count - 1)
     joins = alike & (differs.sum(axis=1) == 1) & (src_axis[1:][pick, along] >= 0)
     joins &= (start[1:] == stop[:-1])[pick, along]
-    # Canonical order and full cover leave no run turning to another axis.
-    assert not np.any(joins[1:] & joins[:-1] & (along[1:] != along[:-1]))
+    # A run grows along one axis; turning to another starts a new one.
+    joins[1:] &= ~(joins[:-1] & (along[1:] != along[:-1]))
     itemsize = max(
         np.dtype(block.dtype).itemsize,
-        *[_dtype_of(x).itemsize for x in (*dtypes.values, *members.cast.values) if x],
+        *[_dtype_of(x).itemsize for x in (*dtypes.values, *casts.values) if x],
     )
-    # Bytes read so far in each member's run, cut into reads of `_RUN_BYTES`.
+    # Where each member starts in its run, so a read holds at most the budget
+    # and one member more.
     size = np.prod(stop - start, axis=1) * itemsize
-    total = np.cumsum(size)
+    before = np.cumsum(size) - size
     new = np.r_[True, ~joins]
-    held = total - (total - size)[np.flatnonzero(new)][np.cumsum(new) - 1]
-    piece = (held - 1) // _RUN_BYTES
+    offset = before - before[np.flatnonzero(new)][np.cumsum(new) - 1]
+    piece = offset // _RUN_BYTES
     joins &= piece[1:] == piece[:-1]
     firsts = np.flatnonzero(np.r_[True, ~joins])
     if len(firsts) == count:
