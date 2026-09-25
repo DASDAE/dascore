@@ -38,6 +38,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
+from numpy.typing import ArrayLike, DTypeLike
 from pandas.api.types import infer_dtype, is_list_like
 
 from dascore.core.source import ArraySource
@@ -532,7 +533,7 @@ class LazyArray:
         if not sources:
             msg = "A lazy array takes at least one source."
             raise ParameterError(msg)
-        block = _block_of_sources(sources, base_uri, cast_via or None)
+        block = _block_of_sources(sources, base_uri, cast_via)
         return LazyArray._placed(block, starts, axis, shape, dtype)
 
     @staticmethod
@@ -565,20 +566,20 @@ class LazyArray:
     @classmethod
     def from_columns(
         cls,
-        path,
-        shape,
+        path: str | ArrayLike,
+        shape: ArrayLike,
         *,
-        format: str,
-        version: str,
-        source_dtype,
-        key="",
-        origin_id="",
-        start=None,
-        extent=None,
+        format: str | ArrayLike,
+        version: str | ArrayLike,
+        source_dtype: DTypeLike | ArrayLike,
+        key: str | ArrayLike = "",
+        origin_id: str | ArrayLike = "",
+        start: ArrayLike | None = None,
+        extent: ArrayLike | None = None,
         axis: int = 0,
         base_uri: str = "",
-        dtype=None,
-        cast_via=None,
+        dtype: DTypeLike | None = None,
+        cast_via: DTypeLike | ArrayLike | None = None,
     ) -> LazyArray:
         """
         Return an array which reads one member per row, laid end to end.
@@ -625,8 +626,8 @@ class LazyArray:
         if ndim > 64:  # the most axes numpy gives an array
             msg = f"A shape of {ndim} axes; give per member lengths as (n, ndim)."
             raise ParameterError(msg)
-        columns = {"path": path, "format": format, "version": version, "key": key}
-        columns |= {"origin_id": origin_id, "source_dtype": source_dtype}
+        columns: dict[str, Any] = {"path": path, "format": format, "version": version}
+        columns |= {"key": key, "origin_id": origin_id, "source_dtype": source_dtype}
         columns["cast_via"] = cast_via
         listed = [len(x) for x in columns.values() if is_list_like(x)]
         windows = (np.asarray(x) for x in (lengths, start, extent) if x is not None)
@@ -635,7 +636,7 @@ class LazyArray:
         if not rows:
             msg = "A lazy array takes at least one member."
             raise ParameterError(msg)
-        if any(np.any(np.asarray(x) == "") for x in (path, format)):
+        if any(np.any(pd.isna(x) | (np.asarray(x) == "")) for x in (path, format)):
             msg = "Every member needs a path and a format to be read from."
             raise ParameterError(msg)
         block = _block_of_columns(
@@ -1038,6 +1039,9 @@ def _block_of_sources(
     fields = ("path", "format", "version", "key", "origin_id", "filled", "value")
     columns: dict[str, Any] = {x: [getattr(y, x) for y in sources] for x in fields}
     columns["source_dtype"] = [np.dtype(x.dtype) for x in sources]
+    if casts is not None and is_list_like(casts):
+        # Normalized first, since a structured spec is a list, which no key is.
+        casts = [None if x is None else np.dtype(x) for x in casts] or None
     columns["cast_via"] = casts
     lengths = np.array([x.shape for x in sources], np.int64)
     start = np.array([[w[0] for w in x.windows] for x in sources], np.int64)
@@ -1067,7 +1071,7 @@ def _block_of_columns(
     source = _zip_columns([path, format_, version])
     split = [(*_split_path(p, base_uri), f, v) for p, f, v in source.values]
     dtypes = _broadcast(columns["source_dtype"], count, "source_dtype")
-    if any(x is None for x in dtypes.values):
+    if any(x is None or x is pd.NA or x != x for x in dtypes.values):
         msg = "Every member needs a source_dtype."
         raise ParameterError(msg)
     axes = {

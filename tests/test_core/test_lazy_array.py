@@ -2523,6 +2523,25 @@ class TestFromColumns:
         assert first.data_id == second.data_id
         assert first.dtype == np.dtype(spec)
 
+    def test_structured_cast(self):
+        """A cast given as a field list is named as numpy names it."""
+        spec = [("x", "i4"), ("y", "f8")]
+        source = ArraySource(path="/a", format="DASDAE", dtype=spec).describe(
+            (2,), spec
+        )
+        first, second = (
+            LazyArray.from_sources([source], cast_via=[x])
+            for x in (spec, np.dtype(spec))
+        )
+        pd.testing.assert_frame_equal(first.to_frame(), second.to_frame())
+        assert first.data_id == second.data_id
+
+    def test_cast_array(self):
+        """Casts given as an array apply one per source."""
+        sources = [ArraySource.full((2,), 1.0), ArraySource.full((3,), 2.0)]
+        array = LazyArray.from_sources(sources, cast_via=np.array(["f4", "f4"]))
+        assert array.to_frame()["cast"].tolist() == ["<f4", "<f4"]
+
     def test_caller_arrays_stay_writable(self):
         """The array keeps copies, never the caller's own arrays."""
         shape = np.array([[2, 3]])
@@ -2570,7 +2589,9 @@ class TestFromColumnsRefuses:
                 "/a", [1], key=["x", "y"], origin_id=["o"] * 3, **self.kwargs
             )
 
-    @pytest.mark.parametrize("source_dtype", [None, ["f4", None]])
+    @pytest.mark.parametrize(
+        "source_dtype", [None, ["f4", None], ["f4", np.nan], ["f4", pd.NA]]
+    )
     def test_missing_dtype(self, source_dtype):
         """Every member states the dtype it is stored at."""
         with pytest.raises(ParameterError, match="source_dtype"):
@@ -2603,8 +2624,9 @@ class TestFromColumnsRefuses:
             LazyArray.from_columns("/a", **window, **self.kwargs)
 
     @pytest.mark.parametrize("empty", ["path", "format"])
-    def test_unloadable(self, empty):
+    @pytest.mark.parametrize("missing", ["", None, np.nan])
+    def test_unloadable(self, empty, missing):
         """A member needs a path and a format to be read."""
-        kwargs = {**self.kwargs, "path": "/a", empty: ""}
+        kwargs = {**self.kwargs, "path": ["/a", "/b"], empty: ["x", missing]}
         with pytest.raises(ParameterError, match="path and a format"):
             LazyArray.from_columns(shape=(2,), **kwargs)
