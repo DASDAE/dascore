@@ -25,7 +25,7 @@ Shared objects such as interrogators, cables, enclosures, and measurements live 
 
 An optical path has four independent tracks along optical distance:
 
-- `optical_components`: fiber segments, splices, connectors, and terminators. These tile the complete path and define its extent.
+- `optical_components`: fiber segments, splices, connectors, amplifiers, and terminators. These tile the complete path and define its extent.
 - `geometry`: measured quantities along the fiber, including coordinates named by the inventory's coordinate reference system.
 - `coupling`: how each interval of cable meets its surroundings.
 - `labels`: interval names such as borehole, drift, or zone.

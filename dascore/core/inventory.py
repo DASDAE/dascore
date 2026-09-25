@@ -92,6 +92,7 @@ CouplingType = Literal[
     "surface",
     "aerial",
     "coiled",
+    "grouted",
     "other",
 ]
 VALID_COUPLING_TYPES = get_args(CouplingType)
@@ -634,8 +635,24 @@ class Terminator(_PointComponent):
     )
 
 
+class Amplifier(_PointComponent):
+    """
+    Optical amplifier, such as a subsea repeater, in an optical path.
+
+    Gain is negative ``loss_db``.
+    """
+
+    object_type: Literal["Amplifier"] = _object_type_tag("Amplifier")
+    container: Enclosure | str | None = Field(
+        default=None, description="Enclosure housing this amplifier."
+    )
+    amplifier_type: str = Field(
+        default="", description="Amplifier type, such as edfa or raman."
+    )
+
+
 OpticalComponent: TypeAlias = Annotated[
-    FiberSegment | Connector | Splice | Terminator,
+    FiberSegment | Connector | Splice | Terminator | Amplifier,
     Field(discriminator="object_type"),
 ]
 
@@ -2175,6 +2192,7 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
             Connector: {"container": (Enclosure,), **measurement_refs},
             Splice: {"container": (Enclosure,), **measurement_refs},
             Terminator: {"container": (Enclosure,), **measurement_refs},
+            Amplifier: {"container": (Enclosure,), **measurement_refs},
             Cable: {
                 "container": (Enclosure, Cable),
                 "specification": (ExternalResource,),

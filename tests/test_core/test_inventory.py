@@ -7,6 +7,7 @@ import pickle
 import re
 from collections.abc import Mapping
 from pathlib import Path
+from typing import get_args
 
 import numpy as np
 import pytest
@@ -103,6 +104,13 @@ def build_full_inventory() -> inv.Inventory:
                 distance_max=500.0,
                 container=cable,
             ),
+            inv.Amplifier(
+                name="repeater",
+                distance_min=500.0,
+                container=enclosure,
+                amplifier_type="edfa",
+                loss_db=-10.0,
+            ),
             inv.Terminator(name="end", distance_min=500.0, container=enclosure),
         ),
         geometry=(
@@ -123,6 +131,12 @@ def build_full_inventory() -> inv.Inventory:
                 coupling_type="trench",
                 medium="soil",
                 depth=1.0,
+            ),
+            inv.CouplingCondition(
+                distance_min=250.0,
+                distance_max=400.0,
+                coupling_type="grouted",
+                medium="cement-bentonite grout",
             ),
         ),
         labels=(
@@ -1438,6 +1452,24 @@ class TestResourcePool:
         )
         assert stored.container == "cable-01"
         assert inventory.get_resource("cable-01") == cable
+
+    @pytest.mark.parametrize(
+        "cls",
+        [
+            x
+            for x in get_args(get_args(inv.OpticalComponent)[0])
+            if x is not inv.FiberSegment
+        ],
+    )
+    def test_point_component_enclosure_normalizes(self, cls):
+        """Every point component's inline enclosure moves to the pool."""
+        enclosure = inv.Enclosure(resource_id="box-1")
+        inventory = self._inventory_with(cls(distance_min=0.0, container=enclosure))
+        stored = (
+            inventory.networks[0].fiber_arrays[0].optical_paths[0].optical_components[0]
+        )
+        assert stored.container == "box-1"
+        assert inventory.get_resource("box-1") == enclosure
 
     def test_shared_resource_registered_once(self):
         """Two components sharing one enclosure yield one pool entry."""
