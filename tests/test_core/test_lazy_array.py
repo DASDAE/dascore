@@ -2284,6 +2284,10 @@ def sources_of_columns(kwargs):
     return out
 
 
+# The format arguments every from_columns test shares.
+FORMAT = MappingProxyType({"format": "DASDAE", "version": "1", "source_dtype": "f4"})
+
+
 def reference_encoding(values):
     """Return the distinct values in first-seen order and each one's code."""
     index = {}
@@ -2316,9 +2320,29 @@ class TestStringColumns:
         assert type(column.codes) is np.ndarray
 
     def test_scalars_keep_their_type(self):
-        """Values which are not all strings keep their type and sign."""
+        """Equal values of another type or sign stay distinct."""
         column = lazy_module._Column.of([1, True, 1.0, -0.0, 0.0, None, "1"])
         assert len(column.values) == 7
+
+    @pytest.mark.parametrize("repeats", [1, 100])
+    def test_missing_strings_stay_distinct(self, repeats):
+        """A missing value among strings is a value of its own."""
+        keys = pd.Series(["k1", None, "k2"] * repeats)
+        array = LazyArray.from_columns("/a", (2,), key=keys, **FORMAT)
+        key = array.table.members.key
+        assert key.codes.tolist() == [0, 1, 2] * repeats
+        assert key.values[0] == "k1" and key.values[2] == "k2"
+        assert pd.isna(key.values[1])
+
+    @pytest.mark.parametrize("count", [1, 5, 255, 256, 500])
+    def test_any_length(self, count):
+        """Short and long columns encode alike, in first-seen order."""
+        values = [f"v{-x % 7}" for x in range(count)]
+        column = lazy_module._Column.of(values)
+        assert (list(column.values), column.codes.tolist()) == reference_encoding(
+            values
+        )
+        assert all(type(x) is str for x in column.values)
 
     def test_all_none(self):
         """A column of None is one value."""
@@ -2354,6 +2378,30 @@ class TestFromColumns:
         corners = array.table.axes["out_start"].reshape(lengths.shape)[:, axis]
         expected_corners = np.cumsum(lengths[:, axis]) - lengths[:, axis]
         assert corners.tolist() == expected_corners.tolist()
+
+    def test_many_members(self):
+        """Hundreds of members, past the dict loop, match their sources."""
+        rng = np.random.default_rng(0)
+        count, pool = 300, ["/root/a.h5", "/root/b.h5", "/c.h5"]
+        kwargs = {
+            "path": [pool[x] for x in rng.integers(0, 3, count)],
+            "shape": np.tile([2, 3], (count, 1)),
+            "start": np.zeros((count, 2), np.int64),
+            "extent": np.tile([2, 3], (count, 1)),
+            "format": [["DASDAE", "H5Simple"][x] for x in rng.integers(0, 2, count)],
+            "version": "1",
+            "key": [f"k{x}" for x in rng.integers(0, 4, count)],
+            "origin_id": "",
+            "source_dtype": np.dtype("f4"),
+            "axis": 1,
+            "base_uri": "/root/",
+        }
+        sources = sources_of_columns(kwargs)
+        array = LazyArray.from_columns(**kwargs)
+        expected = LazyArray.from_sources(sources, axis=1, base_uri="/root/")
+        assert array.sources == tuple(sources)
+        pd.testing.assert_frame_equal(array.to_frame(), expected.to_frame())
+        assert array.data_id == expected.data_id
 
     def test_loads_files(self, two_sources, joined):
         """Windows of files load as the sources' array does."""
@@ -2414,6 +2462,40 @@ class TestFromColumns:
         )
         assert [x.path for x in array.sources] == ["/root/a.h5", "/other/b.h5"]
 
+    def test_rows_from_any_column(self):
+        """A per member key sets the member count when path and shape are shared."""
+        array = LazyArray.from_columns("/a.h5", (2,), key=["a", "b"], **FORMAT)
+        assert array.shape == (4,)
+        assert [x.key for x in array.sources] == ["a", "b"]
+
+    def test_spellings_of_one_dtype(self):
+        """Two spellings of one dtype or cast are one value."""
+        array = LazyArray.from_columns(
+            ["/a", "/b"],
+            (2,),
+            format="DASDAE",
+            version="1",
+            source_dtype=["f4", np.dtype("float32")],
+            cast_via=["f8", np.float64],
+        )
+        members = array.table.members
+        assert members.dtype.values == ("<f4",)
+        assert members.cast.values == ("<f8",)
+        assert members.dtype.codes.tolist() == members.cast.codes.tolist() == [0, 0]
+
+    def test_structured_source_dtype(self):
+        """A source whose dtype is a field list names it as numpy does."""
+        spec = [("x", "i4"), ("y", "f8")]
+        listed, typed = (
+            ArraySource(path="/a", format="DASDAE", dtype=x).describe((2,), x)
+            for x in (spec, np.dtype(spec))
+        )
+        listed = replace(listed, dtype=spec)
+        first, second = (LazyArray.from_sources([x]) for x in (listed, typed))
+        pd.testing.assert_frame_equal(first.to_frame(), second.to_frame())
+        assert first.data_id == second.data_id
+        assert first.dtype == np.dtype(spec)
+
     def test_caller_arrays_stay_writable(self):
         """The array keeps copies, never the caller's own arrays."""
         shape = np.array([[2, 3]])
@@ -2426,13 +2508,11 @@ class TestFromColumns:
 class TestFromColumnsRefuses:
     """Columns which cannot describe an array are refused."""
 
-    kwargs = MappingProxyType(
-        {"format": "DASDAE", "version": "1", "source_dtype": "f4"}
-    )
+    kwargs = FORMAT
 
     def test_no_members(self):
         """An array needs at least one member."""
-        with pytest.raises(ParameterError, match="at least one source"):
+        with pytest.raises(ParameterError, match="at least one member"):
             LazyArray.from_columns([], (2,), **self.kwargs)
 
     def test_no_axes(self):
@@ -2445,14 +2525,35 @@ class TestFromColumnsRefuses:
         with pytest.raises(ParameterError, match="shape"):
             LazyArray.from_columns("/a.h5", [[[1]]], **self.kwargs)
 
+    def test_too_many_axes(self):
+        """A flat shape is one shape, so per member lengths are refused."""
+        with pytest.raises(ParameterError, match=r"\(n, ndim\)"):
+            LazyArray.from_columns(["/a"] * 65, np.arange(1, 66), **self.kwargs)
+
     def test_mismatched_rows(self):
         """Per member columns must all have a row per member."""
         with pytest.raises(ParameterError, match="shape"):
             LazyArray.from_columns(["/a", "/b"], [[1], [2], [3]], **self.kwargs)
         with pytest.raises(ParameterError, match="key"):
             LazyArray.from_columns(["/a", "/b"], [1], key=["x"], **self.kwargs)
-        with pytest.raises(ParameterError, match="every source"):
+        with pytest.raises(ParameterError, match="cast_via"):
             LazyArray.from_columns(["/a", "/b"], [1], cast_via=["f8"], **self.kwargs)
+        with pytest.raises(ParameterError, match="origin_id"):
+            LazyArray.from_columns(
+                "/a", [1], key=["x", "y"], origin_id=["o"] * 3, **self.kwargs
+            )
+
+    @pytest.mark.parametrize("source_dtype", [None, ["f4", None]])
+    def test_missing_dtype(self, source_dtype):
+        """Every member states the dtype it is stored at."""
+        with pytest.raises(ParameterError, match="source_dtype"):
+            LazyArray.from_columns(
+                ["/a", "/b"],
+                (2,),
+                format="DASDAE",
+                version="1",
+                source_dtype=source_dtype,
+            )
 
     def test_ndim_disagrees(self):
         """Starts and extents have one number per axis of the shape."""
@@ -2465,17 +2566,14 @@ class TestFromColumnsRefuses:
             {"start": (1, 0)},
             {"start": (-1, 0), "extent": (5, 2)},
             {"start": (2, 0), "extent": (3, 2)},
+            {"shape": (-1, 2), "extent": (0, 2)},
         ],
     )
     def test_window_outside(self, window):
-        """A window must lie inside its stored array; the default is exact."""
+        """A window must be of positive length and inside its stored array."""
+        window = {"shape": (2, 2), **window}
         with pytest.raises(ParameterError, match="outside"):
-            LazyArray.from_columns("/a", (2, 2), **window, **self.kwargs)
-
-    def test_negative_shape(self):
-        """A member cannot have a negative length."""
-        with pytest.raises(ParameterError, match="outside"):
-            LazyArray.from_columns("/a", (-1, 2), extent=(0, 2), **self.kwargs)
+            LazyArray.from_columns("/a", **window, **self.kwargs)
 
     @pytest.mark.parametrize("empty", ["path", "format"])
     def test_unloadable(self, empty):

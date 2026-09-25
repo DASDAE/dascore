@@ -53,8 +53,8 @@ AXIS_FIELDS = ("out_start", "out_stop", "src_axis", "src_start", "src_extent")
 # The fields of the sources dictionary, which is the sources table.
 SOURCE_FIELDS = ("base_uri", "path", "format", "version")
 
-# The fields of a source which from_sources reads as columns.
-_COLUMNS = ("path", "format", "version", "key", "origin_id", "dtype", "filled", "value")
+# Below this many rows a dict encodes a column faster than a hash pass.
+_FACTORIZE_ROWS = 256
 
 # The dictionary encoded member columns; `filled` is a plain bool array.
 MEMBER_FIELDS = ("source", "key", "origin_id", "dtype", "cast", "value")
@@ -81,7 +81,7 @@ def _dict_key(value: Any) -> Any:
     return value
 
 
-def _dtype_text(dtype: np.dtype) -> str:
+def _dtype_text(dtype: Any) -> str:
     """Return the text a dtype is stored and named by, fields and all."""
     description = dtype_description(dtype)
     return description if isinstance(description, str) else json.dumps(description)
@@ -114,10 +114,15 @@ class _Column:
     @classmethod
     def of(cls, values: Sequence) -> _Column:
         """Encode a sequence of values."""
-        if len(values) and infer_dtype(values, skipna=False) == "string":
+        if isinstance(values, np.ndarray) and values.dtype.kind == "U":
+            values = np.asarray(values, object)
+        many = len(values) >= _FACTORIZE_ROWS
+        if many and infer_dtype(values, skipna=False) == "string":
             codes, distinct = pd.factorize(np.asarray(values, object), sort=False)
-            return cls([str(x) for x in distinct], codes)
-        if len(values) and all(x is None for x in values):
+            # A missing value gets no code; the loop keeps it as a value.
+            if codes.min() >= 0:
+                return cls([str(x) for x in distinct], codes)
+        if len(values) and values[0] is None and all(x is None for x in values):
             return cls.constant(None, len(values))
         index: dict = {}
         distinct: list = []
@@ -154,13 +159,16 @@ def _broadcast(values: Any, rows: int, name: str) -> _Column:
     if not is_list_like(values):
         return _Column.constant(values, rows)
     if len(values) != rows:
-        msg = f"A {name} must be given for every source, or one for all."
+        msg = f"Give one {name} for every source or member, or one for all."
         raise ParameterError(msg)
     return _Column.of(values)
 
 
 def _zip_columns(columns: Sequence[_Column]) -> _Column:
-    """Return the column of the tuple each row of several columns makes."""
+    """Return a column of each row's tuple across several columns."""
+    if len(columns[0].codes) < _FACTORIZE_ROWS:
+        rows = [[x.values[c] for c in x.codes.tolist()] for x in columns]
+        return _Column.of(list(zip(*rows)))
     key = np.zeros(len(columns[0].codes), np.int64)
     for column in columns:
         if len(column.values) > 1:
@@ -527,7 +535,7 @@ class LazyArray:
 
     @staticmethod
     def _placed(block: _Block, starts=None, axis=0, shape=None, dtype=None):
-        """Return the array which lays a block's members out, as documented."""
+        """Return the array laying out a block's members, as `from_sources` does."""
         if dtype is not None:
             block = replace(block, dtype=np.dtype(dtype))
         ndim = block.ndim
@@ -573,17 +581,20 @@ class LazyArray:
         """
         Return an array which reads one member per row, laid end to end.
 
-        What `from_sources` builds from the equivalent sources, id and all,
-        with no object made per member. Every argument but `shape`, `start`
-        and `extent` is one value per member, or one which all share.
+        The array and `data_id` `from_sources` builds from the equivalent
+        sources, with no object made per member. `axis`, `base_uri` and
+        `dtype` are single values; every other argument is one per member,
+        or one all share. The member count is the length of any per member
+        argument, else the rows of `shape`.
 
         Parameters
         ----------
         path
             Where each member is stored.
         shape
-            Each member's window lengths as an `(n, ndim)` array, or one
-            shape which every member shares.
+            Each member's window lengths as an `(n, ndim)` array. A flat
+            `shape` is one shape every member shares, so the lengths of 1-D
+            members are given as `(n, 1)`.
         format, version
             The FiberIO which reads the members, and its version.
         source_dtype
@@ -608,13 +619,21 @@ class LazyArray:
         >>> assert array.shape == (300, 10) and len(array) == 3
         """
         lengths = np.atleast_1d(np.asarray(shape, np.int64))
-        rows = len(path) if is_list_like(path) else len(np.atleast_2d(lengths))
-        if not rows:
-            msg = "A lazy array takes at least one source."
-            raise ParameterError(msg)
         ndim = lengths.shape[-1]
+        if ndim > 64:  # the most axes numpy gives an array
+            msg = f"A shape of {ndim} axes; give per member lengths as (n, ndim)."
+            raise ParameterError(msg)
         columns = {"path": path, "format": format, "version": version, "key": key}
-        columns |= {"origin_id": origin_id, "dtype": source_dtype, "cast": cast_via}
+        columns |= {"origin_id": origin_id, "source_dtype": source_dtype}
+        columns["cast_via"] = cast_via
+        listed = [len(x) for x in columns.values() if is_list_like(x)]
+        rows = listed[0] if listed else len(np.atleast_2d(lengths))
+        if not rows:
+            msg = "A lazy array takes at least one member."
+            raise ParameterError(msg)
+        if any(np.any(np.asarray(x) == "") for x in (path, format)):
+            msg = "Every member needs a path and a format to be read from."
+            raise ParameterError(msg)
         block = _block_of_columns(
             columns,
             _rows_of(lengths, rows, ndim, "shape"),
@@ -1012,8 +1031,10 @@ def _block_of_sources(
         if len(source.extent) != ndim:
             msg = f"{source} does not state the extent of its whole array."
             raise ParameterError(msg)
-    columns: dict[str, Any] = {x: [getattr(y, x) for y in sources] for x in _COLUMNS}
-    columns["cast"] = casts
+    fields = ("path", "format", "version", "key", "origin_id", "filled", "value")
+    columns: dict[str, Any] = {x: [getattr(y, x) for y in sources] for x in fields}
+    columns["source_dtype"] = [np.dtype(x.dtype) for x in sources]
+    columns["cast_via"] = casts
     lengths = np.array([x.shape for x in sources], np.int64)
     start = np.array([[w[0] for w in x.windows] for x in sources], np.int64)
     extent = np.array([x.extent for x in sources], np.int64)
@@ -1032,20 +1053,19 @@ def _block_of_columns(
     if ndim == 0:
         msg = "A lazy array takes sources of at least one dimension."
         raise ParameterError(msg)
-    if np.any(lengths < 0) or np.any(start < 0) or np.any(start + lengths > extent):
-        msg = "Some windows fall outside the source they read."
+    if ((lengths < 0) | (start < 0) | (start + lengths > extent)).any():
+        msg = "Some windows have a negative length or fall outside the array they read."
         raise ParameterError(msg)
     path, format_, version = (
         _broadcast(columns[x], count, x) for x in SOURCE_FIELDS[1:]
     )
-    filled = np.array(np.broadcast_to(columns.get("filled", False), count), bool)
-    # from_sources refused its unloadable sources one at a time already.
-    if not filled.any() and ("" in path.values or "" in format_.values):
-        msg = "Every member needs a path and a format to be read from."
-        raise ParameterError(msg)
+    filled = np.zeros(count, bool) | columns.get("filled", False)
     source = _zip_columns([path, format_, version])
     split = [(*_split_path(p, base_uri), f, v) for p, f, v in source.values]
-    dtypes = _broadcast(columns["dtype"], count, "dtype")
+    dtypes = _broadcast(columns["source_dtype"], count, "source_dtype")
+    if any(x is None for x in dtypes.values):
+        msg = "Every member needs a source_dtype."
+        raise ParameterError(msg)
     axes = {
         "out_start": np.zeros((count, ndim), np.int64),
         "out_stop": lengths,
@@ -1057,8 +1077,10 @@ def _block_of_columns(
         source=_Column(split, source.codes),
         key=_broadcast(columns["key"], count, "key"),
         origin_id=_broadcast(columns["origin_id"], count, "origin_id"),
-        dtype=dtypes.map(lambda x: _dtype_text(np.dtype(x))),
-        cast=_broadcast(columns["cast"], count, "cast").map(_cast_text),
+        dtype=dtypes.map(_dtype_text),
+        cast=_broadcast(columns["cast_via"], count, "cast_via").map(
+            lambda x: "" if x is None else _dtype_text(x)
+        ),
         filled=filled,
         value=_broadcast(columns.get("value"), count, "value"),
     )
@@ -1067,16 +1089,11 @@ def _block_of_columns(
     return _Block((0,) * ndim, dtype, NEW_AXIS, members, axes)
 
 
-def _cast_text(dtype) -> str:
-    """The text a member's intermediate dtype is stored as, "" for none."""
-    return "" if dtype is None else _dtype_text(np.dtype(dtype))
-
-
 def _rows_of(values, rows: int, ndim: int, name: str) -> np.ndarray:
-    """Return a copy of one row of integers per member, or one row for all."""
+    """Return a new `(rows, ndim)` integer array from a scalar or rows."""
     array = np.asarray(values, np.int64)
     if array.shape not in ((), (ndim,), (rows, ndim)):
-        msg = f"The {name} must be {ndim} integers, or one row of them per member."
+        msg = f"The {name} must be a scalar, or of shape ({ndim},) or ({rows}, {ndim})."
         raise ParameterError(msg)
     return np.array(np.broadcast_to(array, (rows, ndim)))
 
