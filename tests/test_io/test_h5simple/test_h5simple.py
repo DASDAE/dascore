@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import copy
 import shutil
+from dataclasses import replace
 from functools import wraps
+from pathlib import Path
 
 import h5py
 import numpy as np
@@ -13,6 +15,7 @@ import pytest
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.exceptions import UnknownFiberFormatError
+from dascore.io import FiberIO
 from dascore.io.h5simple.core import H5Simple
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import H5Reader
@@ -133,6 +136,61 @@ class TestH5Simple:
             np.testing.assert_array_equal(actual.data, expected.data * 2)
         else:
             assert actual.attrs.tag == "wrapped"
+
+    @pytest.fixture
+    def source_registry(self, monkeypatch):
+        """Register temporary subclasses where sources find their format."""
+        monkeypatch.setattr(FiberIO, "manager", copy.deepcopy(FiberIO.manager))
+
+    def test_subclass_array_override_loads_sources(
+        self, h5simple_path, source_registry
+    ):
+        """A source loads through a subclass's read_array, not the parent's."""
+
+        class Custom(H5Simple):
+            name = "_test_h5simple_custom_source"
+
+            def read_array(self, resource: H5Reader, windows=(), key=""):
+                return super().read_array(resource, windows, key=key) * 2
+
+        patch = dc.read(h5simple_path, file_format=H5Simple.name)[0]
+        source = replace(patch._source, format=Custom.name)
+        np.testing.assert_array_equal(source[1:3].load(), patch.data[1:3] * 2)
+
+    def test_override_annotation_loads_sources(self, h5simple_path, source_registry):
+        """A source's resource is the type the effective read_array asks for."""
+        seen = []
+
+        class Custom(H5Simple):
+            name = "_test_h5simple_custom_path"
+
+            def read_array(self, resource: Path, windows=(), key=""):
+                seen.append(resource)
+                return H5Simple().read_array(resource, windows, key=key)
+
+        patch = dc.read(h5simple_path, file_format=H5Simple.name)[0]
+        source = replace(patch._source, format=Custom.name)
+        np.testing.assert_array_equal(source.load(), patch.data)
+        assert isinstance(seen[0], Path)
+
+    @pytest.mark.parametrize("on_class", [False, True])
+    def test_runtime_array_wrapper_loads_sources(
+        self, h5simple_path, monkeypatch, on_class, source_registry
+    ):
+        """A source loads through a wrapped read_array, not the prepared node."""
+        # The registry is a copy, so no wrapper outlives the test in it.
+        patch = dc.read(h5simple_path, file_format=H5Simple.name)[0]
+        expected = np.array(patch.data)
+        reader = FiberIO.manager.get_fiberio(format=H5Simple.name, version="1")
+        owner = H5Simple if on_class else reader
+        original = owner.read_array
+
+        @wraps(original)
+        def wrapped(*args, **kwargs):
+            return original(*args, **kwargs) * 2
+
+        monkeypatch.setattr(owner, "read_array", wrapped)
+        np.testing.assert_array_equal(patch._source.load(), expected * 2)
 
     def test_no_snap(self, h5simple_path):
         """Ensure when snap is not used it still reads patch."""

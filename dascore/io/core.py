@@ -16,7 +16,7 @@ from collections.abc import (
     Iterator,
     Sequence,
 )
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from dataclasses import replace
 from functools import cached_property, wraps
 from pathlib import Path
@@ -717,9 +717,11 @@ class FiberIO:
 
     manager = _FiberIOManager(FIBER_IO_GROUP)
 
-    # Methods using automatic type casting and the parameter index to cast.
-    _prepared_read_hooks = None
+    # The public methods each private hook a class defines was written
+    # against, as the class had them; see `_paired_hook`.
+    _hook_pairs: FrozenDict = FrozenDict()
 
+    # Methods using automatic type casting and the parameter index to cast.
     _automatic_type_casters = FrozenDict(
         {
             "read_array": 1,
@@ -767,6 +769,27 @@ class FiberIO:
         msg = f"FiberIO: {self.name} has no read_array method"
         raise NotImplementedError(msg)
 
+    def _prepare_array_reader(
+        self, resource, *, key: str = ""
+    ) -> Callable[[windows_type], np.ndarray]:
+        """Return a reader of `key`'s windows in a borrowed, open resource.
+
+        `resource` is already the type `read_array` asks for, and the
+        caller owns it: the reader, and anything it retains such as a
+        dataset, is valid only until the caller closes it. The reader
+        takes and returns what `read_array` does. A reader may resolve
+        what it needs to find or decode the array here, but must not read
+        the payload. This default calls `read_array` for every request.
+        """
+        array_func = cast(_TypeCasterMethod, self.read_array)
+        seek = getattr(resource, "seek", lambda x: None)
+
+        def read(windows):
+            seek(0)
+            return array_func(resource, windows, key=key, _pre_cast=True)
+
+        return read
+
     def _prepare_read(self, manager, snap):
         """Return metadata and a loader for ordered ``(windows, key)`` requests.
 
@@ -780,13 +803,15 @@ class FiberIO:
         getattr(resource, "seek", lambda x: None)(0)
 
         def load(requests):
+            prepare = _paired_hook(self, "_prepare_array_reader")
+            readers = {}
             for windows, key in requests:
-                resource = manager.get_resource(
-                    _required_resource_type(self.read_array)
-                )
-                getattr(resource, "seek", lambda x: None)(0)
-                array_func = cast(_TypeCasterMethod, self.read_array)
-                yield array_func(resource, windows, key=key, _pre_cast=True)
+                if (read := readers.get(key)) is None:
+                    resource = manager.get_resource(
+                        _required_resource_type(self.read_array)
+                    )
+                    read = readers[key] = prepare(resource, key=key)
+                yield read(windows)
 
         return patches, load
 
@@ -818,14 +843,7 @@ class FiberIO:
         relative = select.pop("relative", False)
         out = []
         with IOResourceManager(resource) as manager:
-            prepare = self._prepare_read
-            hooks = self._prepared_read_hooks
-            if hooks is not None and any(
-                getattr(getattr(self, name), "__func__", None) is not expected
-                for name, expected in zip(("get_metadata", "read_array"), hooks)
-            ):
-                prepare = FiberIO._prepare_read.__get__(self)
-            patches, load = prepare(manager, snap)
+            patches, load = _paired_hook(self, "_prepare_read")(manager, snap)
             patches = [_validate_metadata(patch) for patch in patches]
             origins = [patch._source or ArraySource() for patch in patches]
             if provenance_source is not None:
@@ -1021,9 +1039,40 @@ class FiberIO:
             required_type = get_type_hints(method).get(arg_name)
             method_wrapped = _type_caster(method, sig, required_type, arg_name)
             setattr(cls, name, method_wrapped)
-        if "_prepare_read" in cls.__dict__:
-            # Keep the original hooks so subclass and runtime wrappers take effect.
-            cls._prepared_read_hooks = (cls.get_metadata, cls.read_array)
+        # Keep the methods each hook was written against, so subclass and
+        # runtime wrappers of them take effect.
+        own = {
+            hook: {name: getattr(cls, name) for name in names}
+            for hook, names in _HOOK_METHODS.items()
+            if hook in cls.__dict__
+        }
+        if own:
+            cls._hook_pairs = FrozenDict({**cls._hook_pairs, **own})
+
+
+# The public methods each private FiberIO hook is paired with.
+_HOOK_METHODS = FrozenDict(
+    {
+        "_prepare_read": ("get_metadata", "read_array"),
+        "_prepare_array_reader": ("read_array",),
+    }
+)
+
+
+def _paired_hook(fiber_io: FiberIO, hook: str) -> Callable:
+    """
+    Return a private hook, or FiberIO's own if a method it pairs with changed.
+
+    A reader's hook is valid only for the public methods it was written
+    against; a subclass or runtime override of one must not be bypassed.
+    """
+    paired = fiber_io._hook_pairs.get(hook, {})
+    if any(
+        getattr(getattr(fiber_io, name), "__func__", None) is not expected
+        for name, expected in paired.items()
+    ):
+        return getattr(FiberIO, hook).__get__(fiber_io)
+    return getattr(fiber_io, hook)
 
 
 class H5ArrayMixin:
@@ -1192,9 +1241,15 @@ def source_identity(source) -> tuple[str, int | None, int | None]:
     return path, *_source_stats(path)
 
 
-def _read_open_resource(fiberio, resource, windows, key: str) -> np.ndarray:
-    """Read windows of an open resource, answering an absolute HDF5 path here."""
-    getattr(resource, "seek", lambda x: None)(0)
+def _array_reader(
+    fiberio: FiberIO, resource, key: str
+) -> Callable[[windows_type], np.ndarray]:
+    """
+    Return a reader of `key`'s windows in an open resource.
+
+    An absolute HDF5 path is answered here, with the stored values; any
+    other key goes to the format's prepared reader.
+    """
     if key.startswith("/") and isinstance(resource, _ManagedH5pyFile):
         stored = resource[key] if key in resource else None
         if not isinstance(stored, H5pyDataset):
@@ -1202,24 +1257,50 @@ def _read_open_resource(fiberio, resource, windows, key: str) -> np.ndarray:
             # own default array, so the path is refused here instead.
             msg = f"'{key}' names no stored array in {resource.filename}."
             raise PatchAttributeError(msg)
-        return np.asarray(slice_dataset(stored, windows))
-    reader = cast(_TypeCasterMethod, fiberio.read_array)
-    return reader(resource, windows, key=key, _pre_cast=True)
+        return lambda windows: np.asarray(slice_dataset(stored, windows))
+    return _paired_hook(fiberio, "_prepare_array_reader")(resource, key=key)
+
+
+@contextmanager
+def _open_array_reader(
+    source: ArraySource,
+) -> Iterator[Callable[[ArraySource], np.ndarray]]:
+    """
+    Open the resource a source names, and yield a loader of sources in it.
+
+    The loader takes any source of the same path, format and version, and
+    checks what it reads against the source's description. The resource is
+    opened once, a reader is prepared once per key, and all are released
+    when the context exits, however it exits; the arrays stay valid.
+    """
+    fiberio = FiberIO.manager.get_fiberio(format=source.format, version=source.version)
+    readers = {}
+
+    def load(source: ArraySource) -> np.ndarray:
+        if (read := readers.get(source.key)) is None:
+            read = readers[source.key] = _array_reader(fiberio, resource, source.key)
+        out = read(source.windows)
+        if out.shape != source.shape or np.dtype(out.dtype) != np.dtype(source.dtype):
+            msg = (
+                f"{source.path} gave {out.shape}/{out.dtype}; its source declared "
+                f"{source.shape}/{source.dtype}. The resource may have changed."
+            )
+            raise InvalidFiberIOError(msg)
+        return out
+
+    with IOResourceManager(source.path) as manager:
+        resource = manager.get_resource(_required_resource_type(fiberio.read_array))
+        try:
+            yield load
+        finally:
+            # A retained dataset must not outlive the handle it was found in.
+            readers.clear()
 
 
 def _load_array_source(source: ArraySource) -> np.ndarray:
     """Read the array a source describes, checking it against the description."""
-    fiberio = FiberIO.manager.get_fiberio(format=source.format, version=source.version)
-    with IOResourceManager(source.path) as manager:
-        resource = manager.get_resource(_required_resource_type(fiberio.read_array))
-        out = _read_open_resource(fiberio, resource, source.windows, source.key)
-    if out.shape != source.shape or np.dtype(out.dtype) != np.dtype(source.dtype):
-        msg = (
-            f"{source.path} gave {out.shape}/{out.dtype}; its source declared "
-            f"{source.shape}/{source.dtype}. The resource may have changed."
-        )
-        raise InvalidFiberIOError(msg)
-    return out
+    with _open_array_reader(source) as load:
+        return load(source)
 
 
 def _selected_read_attrs(
@@ -1496,7 +1577,7 @@ def read_array(
     with remote_cache_scope("read"), IOResourceManager(path) as man:
         fiber_io, _ = _resolve_read_fiberio(man, file_format, file_version)
         resource = man.get_resource(_required_resource_type(fiber_io.read_array))
-        out = _read_open_resource(fiber_io, resource, reads, key)
+        out = _array_reader(fiber_io, resource, key)(reads)
     if any(x != slice(None) for x in residual):
         out = _apply_union_indexers(residual, out)
     return out

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+from functools import partial
 
 import numpy as np
 
@@ -107,8 +108,11 @@ class DASDAEV1(FiberIO):
         is the waveform group name `scan` reports; a positional index is
         not accepted, because DASDAE never synthesizes one.
         """
-        group = _get_patch_group(resource, key)
-        return slice_dataset(group["data"], windows)
+        return self._prepare_array_reader(resource, key=key)(windows)
+
+    def _prepare_array_reader(self, resource: H5Reader, *, key: str = ""):
+        """Find the patch's data dataset once, for any number of windows."""
+        return partial(slice_dataset, _get_patch_group(resource, key)["data"])
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True

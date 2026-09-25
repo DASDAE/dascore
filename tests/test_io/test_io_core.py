@@ -7,6 +7,7 @@ import io
 import os
 import shutil
 import threading
+from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
 from typing import ClassVar, TypeVar
@@ -104,6 +105,17 @@ class _FiberImplementer(FiberIO):
 
     def get_version(self, resource, **kwargs) -> str | None:
         """Dummy get_format."""
+
+
+class _ScaledH5(FiberIO):
+    """A reader whose logical array is the stored one, doubled."""
+
+    name = "_test_scaled_h5"
+    version = "1"
+
+    def read_array(self, resource: H5Reader, windows=(), key=""):
+        """Decode the stored array by doubling it."""
+        return slice_dataset(resource["raw"], windows) * 2
 
 
 class _FiberCaster(FiberIO):
@@ -2153,6 +2165,60 @@ class TestH5ArrayMixin:
         """A key naming nothing in the file is h5py's to refuse."""
         with pytest.raises(KeyError):
             mixin_io.read_array(path, (), key="/group/nope")
+
+
+class TestOpenArrayReader:
+    """One loading context reads many sources of one resource."""
+
+    @pytest.fixture
+    def array(self):
+        """The values the file stores."""
+        return np.arange(24, dtype=np.float64).reshape(6, 4)
+
+    @pytest.fixture
+    def source(self, tmp_path, array):
+        """A source of the logical array of a small file."""
+        path = tmp_path / "scaled.h5"
+        with h5py.File(path, "w") as h5:
+            h5["raw"] = array
+        source = ArraySource(path=str(path), format=_ScaledH5.name, version="1")
+        return source.describe(array.shape, array.dtype)
+
+    def test_stored_and_decoded_keys(self, source, array):
+        """An absolute path gives stored values; any other key is decoded."""
+        raw = replace(source, key="/raw")
+        with io_core._open_array_reader(source) as load:
+            decoded, stored, again = load(source[1:3]), load(raw[1:3]), load(source[4:])
+        assert np.array_equal(decoded, 2 * array[1:3])
+        assert np.array_equal(stored, array[1:3])
+        assert np.array_equal(again, 2 * array[4:])
+
+    def test_one_reader_per_key(self, source, monkeypatch):
+        """A key is prepared once, however many windows read it."""
+        prepared = []
+        original = FiberIO._prepare_array_reader
+
+        def counted(self, resource, *, key=""):
+            prepared.append(key)
+            return original(self, resource, key=key)
+
+        monkeypatch.setattr(FiberIO, "_prepare_array_reader", counted)
+        with io_core._open_array_reader(source) as load:
+            for start in range(5):
+                load(source[start : start + 1])
+            load(replace(source, key="other"))
+        assert prepared == ["", "other"]
+
+    def test_missing_stored_key_raises(self, source):
+        """An absolute path naming nothing is refused, as dc.read_array does."""
+        with pytest.raises(PatchAttributeError, match="names no stored array"):
+            replace(source, key="/nope").load()
+
+    def test_stale_shape_raises(self, source, array):
+        """A source which no longer describes the file is refused."""
+        stale = source.describe((6, 5), array.dtype)
+        with pytest.raises(InvalidFiberIOError, match="may have changed"):
+            stale.load()
 
 
 class TestWindowsToSlices:

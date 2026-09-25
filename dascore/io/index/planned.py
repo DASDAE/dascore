@@ -30,7 +30,7 @@ from dascore.core.source import ArraySource
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io.core import (
     FiberIO,
-    _read_open_resource,
+    _array_reader,
     _required_resource_type,
 )
 from dascore.io.index.backend import get_backend
@@ -834,7 +834,7 @@ class PlanResolver(PatchResolver):
             resource = manager.get_resource(
                 _required_resource_type(fiber_io.read_array)
             )
-            return _read_open_resource(fiber_io, resource, positional, key)
+            return _array_reader(fiber_io, resource, key)(positional)
 
     def can_read_array(self, row: Mapping) -> bool:
         """

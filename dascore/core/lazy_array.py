@@ -39,6 +39,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+import dascore as dc
 from dascore.core.source import ArraySource
 from dascore.exceptions import ParameterError
 from dascore.utils.identity import DIGEST_SIZE, H, dtype_description
@@ -723,6 +724,8 @@ class LazyArray:
         The rules are checked first, so no sample of the result is left
         uninitialized; see
         [`validate`](`dascore.core.lazy_array.LazyArray.validate`).
+        Members are read a resource at a time: each resource is opened
+        once for all of its members, and closed before the next is opened.
         """
         block = self._block()
         _validate(block)
@@ -733,11 +736,20 @@ class LazyArray:
         stop = block.axes["out_stop"].tolist()
         src_axis = block.axes["src_axis"].tolist()
         casts = block.members.cast
-        for row, source in enumerate(_sources_of(block)):
-            data = _to_output(source.load(), src_axis[row])
+        sources = _sources_of(block)
+
+        def place(row: int, data: np.ndarray):
+            data = _to_output(data, src_axis[row])
             if via := casts[row]:
                 data = data.astype(_dtype_of(via), copy=False)
             out[tuple(map(slice, start[row], stop[row]))] = data
+
+        for row in np.flatnonzero(block.members.filled).tolist():
+            place(row, sources[row].load())
+        for rows in _source_groups(block):
+            with dc.io.core._open_array_reader(sources[rows[0]]) as load:
+                for row in rows:
+                    place(row, load(sources[row]))
         return out
 
     def __array__(self, dtype=None, copy=None) -> np.ndarray:
@@ -990,6 +1002,25 @@ def _sources_of(block: _Block) -> list[ArraySource]:
             )
         )
     return out
+
+
+def _source_groups(block: _Block) -> list[list[int]]:
+    """Return the stored members of each resource, each in placement order."""
+    members = block.members
+    rows = np.flatnonzero(~members.filled)
+    if not len(rows):
+        return []
+    index, inverse = _distinct((members.source,), rows)
+    # A path split under two base uris is one resource, opened once.
+    names: dict[tuple[str, str, str], int] = {}
+    codes = []
+    for row in rows[index].tolist():
+        base_uri, path, format_, version = members.source[row]
+        codes.append(names.setdefault((base_uri + path, format_, version), len(names)))
+    group = np.array(codes, np.int64)[inverse]
+    order = np.argsort(group, kind="stable")
+    cuts = np.flatnonzero(np.diff(group[order])) + 1
+    return [x.tolist() for x in np.split(rows[order], cuts)]
 
 
 def _member_source(block: _Block, member: int) -> ArraySource:

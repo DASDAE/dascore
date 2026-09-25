@@ -13,6 +13,7 @@ import random
 import threading
 import warnings
 from concurrent.futures import ProcessPoolExecutor
+from contextlib import contextmanager
 from datetime import timedelta
 from itertools import accumulate, pairwise
 from unittest import mock
@@ -2628,11 +2629,15 @@ class TestChunkFromIndex:
 
         expected = dasdae_directory_spool.chunk(time=None)[0]
 
-        def changed(source):
+        def refuse(source):
             msg = f"{source.path} gave a different array than it declared."
             raise InvalidFiberIOError(msg)
 
-        monkeypatch.setattr(io_core, "_load_array_source", changed)
+        @contextmanager
+        def changed(source):
+            yield refuse
+
+        monkeypatch.setattr(io_core, "_open_array_reader", changed)
         route.counts.update(patch=0, array=0)
         out = dasdae_directory_spool.chunk(time=None)[0]
         assert route.counts["patch"] == len(dasdae_directory_spool)
