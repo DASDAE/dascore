@@ -22,6 +22,11 @@ A set holds three parts:
 - ``bases``: keyed curves (`Line`, `Moveout`) a path may be drawn from, so a
   path may exist as a curve alone.
 
+Provenance (``acquisition_key``, ``data_id``) belongs to features: a feature
+states its own, else takes its child set's (by ``set`` label), else the
+set's. A member row inherits its feature's and may not state one; a lone row
+is its own feature, so it may.
+
 Any other column is an extra carried untouched, except a column whose name
 begins with an underscore: that is the author's own, and a set never holds it.
 """
@@ -641,10 +646,17 @@ class Feature(_AnnotationModel):
     acquisition_key: AcquisitionKey = Field(
         default="",
         max_length=max_lens["acquisition_key"],
-        description="Inventory identity of the annotated data, after fallback.",
+        description=(
+            "Inventory identity of the annotated data: the feature's own, "
+            "else its child set's, else the set's."
+        ),
     )
     data_id: str = Field(
-        default="", description="Identity of the annotated data, after fallback."
+        default="",
+        description=(
+            "Identity of the annotated data: the feature's own, else its "
+            "child set's, else the set's."
+        ),
     )
     set: str = Field(
         default="", description="The set this feature was read from, in a collection."
@@ -693,14 +705,14 @@ class AnnotationSetAttrs(_AnnotationModel):
         description=(
             "Inventory identity of the data these annotations were made on, "
             "spelled network.fiber_array.location.acquisition. The set-level "
-            "default; a row may name its own."
+            "default; a feature, or a lone row, may name its own."
         ),
     )
     data_id: str = Field(
         default="",
         description=(
             "Identity of the data the annotations were made on. The set-level "
-            "default; a row may name its own."
+            "default; a feature, or a lone row, may name its own."
         ),
     )
     annotation_columns: FrozenDictType[str, AnnotationColumn] = Field(
@@ -1062,7 +1074,9 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         members
             Existing rows to adopt, as a boolean mask over ``annotations`` or
             a sequence of annotation ids. Each must belong to no feature. A
-            path or polygon takes their order from the mask or the ids.
+            path or polygon takes their order from the mask or the ids. The
+            provenance the rows resolve to moves onto the feature, and rows
+            resolving to two different values are refused.
         **columns
             An array-like (list, tuple, array, Series) is an annotations
             column of new member rows, all one length; ``seq``, ``part`` and
@@ -1165,8 +1179,9 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         joined; a column two sets give different dtypes loses its
         declaration, as in a loaded collection. Where every set states the
         same ``acquisition_key`` (or ``data_id``) it stays; otherwise the
-        result states none, and each row is stamped with the value it had,
-        so the result does not depend on the order the sets are given in.
+        result states none, and each feature and lone row is stamped with
+        the value it had (members inherit theirs), so the result does not
+        depend on the order the sets are given in.
 
         Examples
         --------
@@ -1200,7 +1215,8 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
             for field in ("annotation_columns", "feature_columns")
         }
         attrs["sets"] = _joined_sets(sources)
-        # Provenance the sets disagree on moves from the set into its rows.
+        # Provenance the sets disagree on moves from the set into its
+        # features and lone rows; a member inherits from its feature.
         stamp = [
             field
             for field in ("acquisition_key", "data_id")
@@ -1209,7 +1225,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         attrs.update({field: "" for field in stamp})
         parts = {
             name: _Tables(
-                _stamped(one._df, one._attrs, stamp),
+                _stamped(one._df, one._attrs, stamp, one._lone().to_numpy()),
                 _stamped(one._features, one._attrs, stamp),
                 one._bases,
             )
@@ -1316,7 +1332,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         filters. An annotations filter drops the rows failing it and any
         feature left with no members, and refuses to leave a path or polygon
         too few vertices. ``acquisition_key`` and ``data_id`` filter rows on
-        the value each inherits. ``set`` filters both tables by label.
+        the value their feature resolves. ``set`` filters both tables by label.
         Dimensions are filtered with `overlapping`.
 
         Examples
@@ -1335,7 +1351,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         on_rows: dict = {}
         on_features: dict = {}
         on_labels: dict = {}
-        rows = _provenance_view(self._df, self._attrs)
+        rows = _provenance_view(self._df, self._features, self._attrs)
         features = _kind_view(self._features)
         for name, value in filters.items():
             if name in spelled:
@@ -1453,7 +1469,9 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
             The cells to set. An ``id`` does not change, nor does a feature's
             kind. An annotation's coordinates and ``feature_id`` may: a row
             moved into a path or polygon is appended to its part 0, a group
-            it leaves empty is dropped. Any edit to the members of a path
+            it leaves empty is dropped. A row joins only a feature of the
+            same provenance, and one leaving for no feature keeps its old
+            feature's as its own. Any edit to the members of a path
             drawn from a basis clears the path's basis, since the members no
             longer come from it; every verb follows that rule.
 
@@ -1567,18 +1585,74 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         target = _identity(columns["feature_id"]) or ""
         if target == _text(self._df["feature_id"].iloc[position]):
             return {}
+        moved = self._moved_provenance(position, target)
         kinds = dict(
             zip(
                 self._features["id"].map(_text), self._features["geometry"], strict=True
             )
         )
         if _text(kinds.get(target)) not in _LEAST:
-            return {x: None for x in ORDINAL_COLUMNS if x in self._df.columns}
+            blank = {x: None for x in ORDINAL_COLUMNS if x in self._df.columns}
+            return {**blank, **moved}
         ids = self._df["feature_id"].map(_text).to_numpy()
         part = (ids == target) & (self._df["part"] == 0).to_numpy(bool, na_value=False)
         part[position] = False
         seq = self._df["seq"][part]
-        return {"seq": int(seq.max()) + 1 if len(seq) else 0, "part": 0, "ring": 0}
+        order = {"seq": int(seq.max()) + 1 if len(seq) else 0, "part": 0, "ring": 0}
+        return {**order, **moved}
+
+    def _moved_provenance(self, position: int, target: str) -> dict:
+        """
+        The provenance cells a moving row takes: none inside a feature, which
+        must agree with it; its old feature's value when it leaves for lone.
+        """
+        row = self._df.iloc[[position]]
+        owner = _text(row["feature_id"].iloc[0])
+        out = {}
+        for field in _PROVENANCE:
+            have = self._provenance_at(owner, row, field)
+            bare = _assign(row, {field: _blank_column(row.index)})
+            fallback = _resolved(bare, self._attrs, field).iloc[0]
+            if target:
+                # A new feature is implied with the row's set, so falls back as it.
+                known = target in set(self._features["id"].map(_text))
+                want = self._provenance_at(target, row, field) if known else fallback
+                if have != want:
+                    _refuse_acquisitions(field, have, want)
+                if field in row.columns:
+                    out[field] = None
+            elif have != fallback:
+                out[field] = have or None
+            elif field in row.columns:
+                out[field] = None
+        return out
+
+    def _provenance_at(self, owner: str, row: pd.DataFrame, field: str) -> str:
+        """A feature's resolved provenance, or a lone row's where owner is blank."""
+        if not owner:
+            return _resolved(row, self._attrs, field).iloc[0]
+        feature = self._features.iloc[[self._feature_position(owner)]]
+        return _resolved(feature, self._attrs, field).iloc[0]
+
+    def _lifted(self, positions: np.ndarray, feature: Mapping) -> dict:
+        """
+        The provenance a new feature takes from the rows it adopts: the one
+        value they resolve to, blanks agreeing with anything.
+        """
+        rows = self._df.iloc[positions]
+        out = {}
+        for field in _PROVENANCE:
+            given = _text(feature.get(field))
+            stated = [given, *_resolved(rows, self._attrs, field)]
+            values = list(dict.fromkeys(x for x in stated if x))
+            if len(values) > 1:
+                _refuse_acquisitions(field, values[0], values[1])
+            if not values or given:
+                continue
+            default = _resolved(pd.DataFrame([feature]), self._attrs, field).iloc[0]
+            if values[0] != default:
+                out[field] = values[0]
+        return out
 
     def _feature_position(self, feature_id) -> int:
         """Return where a feature sits in the features table."""
@@ -1630,7 +1704,8 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
                 row["basis"], bases = identity, {identity: basis}
         frame = self._df
         if members is not None:
-            frame = self._adopted(members, identity, kind)
+            frame, positions = self._adopted(members, identity, kind)
+            scalars = {**scalars, **self._lifted(positions, {**row, **scalars})}
         elif rows is not None:
             rows = _assign(rows, {"feature_id": identity})
         parts = {
@@ -1643,8 +1718,11 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         }
         return self._settled(_combine(parts, self.dims, attrs=self._attrs))
 
-    def _adopted(self, members, identity: str, kind: str) -> pd.DataFrame:
-        """Return the annotations with existing rows made a feature's members."""
+    def _adopted(self, members, identity: str, kind: str):
+        """
+        Return the annotations with existing rows made a feature's members,
+        their own provenance blanked, and where those rows are.
+        """
         frame = self._df
         mask = np.asarray(members)
         if mask.dtype == bool:
@@ -1682,7 +1760,11 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
                 )
                 column.iloc[positions] = values
                 changed[name] = column
-        return _assign(frame, changed)
+        for field in (x for x in _PROVENANCE if x in frame.columns):
+            column = frame[field].astype(object)
+            column.iloc[positions] = None
+            changed[field] = column
+        return _assign(frame, changed), positions
 
     def _lone(self) -> pd.Series:
         """Which rows are their own feature."""
@@ -1715,7 +1797,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         )
 
     def _fallback(self, row, field: str) -> str:
-        """Return a row's provenance, else its set's, else the collection's."""
+        """Return a feature's provenance, else its set's, else the collection's."""
         if stated := _text(row.get(field)):
             return stated
         child = self._attrs.sets.get(_text(row.get("set")))
@@ -1996,18 +2078,25 @@ def _joined_sets(sources: Mapping[str, AnnotationSet]) -> dict:
     return out
 
 
-def _stamped(frame: pd.DataFrame, attrs, fields: Sequence[str]) -> pd.DataFrame:
-    """Write each row's resolved provenance into it, a blank one blank."""
+def _stamped(
+    frame: pd.DataFrame, attrs, fields: Sequence[str], rows: np.ndarray | None = None
+) -> pd.DataFrame:
+    """Write resolved provenance into the given rows (all by default)."""
+    rows = np.ones(len(frame), dtype=bool) if rows is None else rows
     changed = {}
     for field in fields:
         resolved = _resolved(frame, attrs, field)
-        if (resolved != "").any():
-            changed[field] = resolved.astype(object).where(resolved != "", None)
+        write = (resolved != "").to_numpy() & rows
+        if write.any():
+            changed[field] = resolved.astype(object).where(write, None)
     return _assign(frame, changed)
 
 
 def _resolved(frame: pd.DataFrame, attrs: AnnotationSetAttrs, field: str):
-    """Each row's provenance: its own, else its set's, else the collection's."""
+    """
+    Each row's provenance: its own, else its set's, else the collection's.
+    The chain of a features row or a lone row; a member takes its feature's.
+    """
     blank = pd.Series("", index=frame.index, dtype=object)
     own = frame[field].map(_text) if field in frame.columns else blank
     labels = frame["set"].map(_text) if "set" in frame.columns else blank
@@ -2064,6 +2153,15 @@ def _set_cells(frame: pd.DataFrame, position: int, columns: Mapping) -> pd.DataF
     return _assign(frame, changed)
 
 
+def _refuse_acquisitions(field: str, one: str, other: str) -> None:
+    """Refuse grouping rows of two provenances into one feature."""
+    msg = (
+        f"The rows resolve {field} {one!r} and {other!r}; a feature spans one "
+        "acquisition."
+    )
+    raise ParameterError(msg)
+
+
 def _passes(frame: pd.DataFrame, query: Mapping) -> np.ndarray:
     """Which rows pass a `filter_df` query, a blank cell failing."""
     mask = pd.Series(np.asarray(filter_df(frame, **query), dtype=object))
@@ -2088,9 +2186,21 @@ _PROVENANCE = ("acquisition_key", "data_id")
 _KIND_COLUMNS = ("geometry", "basis")
 
 
-def _provenance_view(frame: pd.DataFrame, attrs) -> pd.DataFrame:
-    """The annotations with each row's provenance as it resolves."""
-    return _assign(frame, {x: _resolved(frame, attrs, x) for x in _PROVENANCE})
+def _provenance_view(frame: pd.DataFrame, features: pd.DataFrame, attrs):
+    """The annotations with each row's provenance: a member's is its feature's."""
+    ids = frame["feature_id"].map(_text)
+    changed = {}
+    for field in _PROVENANCE:
+        owned = dict(
+            zip(
+                features["id"].map(_text),
+                _resolved(features, attrs, field),
+                strict=True,
+            )
+        )
+        inherited = ids.map(lambda x: owned.get(x, ""))
+        changed[field] = _resolved(frame, attrs, field).where(ids == "", inherited)
+    return _assign(frame, changed)
 
 
 def _kind_view(features: pd.DataFrame) -> pd.DataFrame:
@@ -2225,7 +2335,25 @@ def _read_annotations(data, attrs: AnnotationSetAttrs):
     _check_keys(frame, "annotations")
     if "feature_id" not in frame.columns:
         frame = _assign(frame, {"feature_id": _blank_column(frame.index)})
+    _refuse_member_provenance(frame)
     return frame, spellings
+
+
+def _refuse_member_provenance(frame: pd.DataFrame) -> None:
+    """Refuse provenance on a member row, which inherits its feature's."""
+    member = frame["feature_id"].map(_text) != ""
+    for field in _PROVENANCE:
+        if field not in frame.columns:
+            continue
+        stated = member & (frame[field].map(_text) != "")
+        if stated.any():
+            row = frame.index[stated.to_numpy()][0]
+            msg = (
+                f"Row {row} states {field} {frame.loc[row, field]!r} but belongs "
+                f"to the feature {frame.loc[row, 'feature_id']!r}; provenance "
+                "belongs on the feature, which its members inherit."
+            )
+            raise ParameterError(msg)
 
 
 def _read_features(data, attrs: AnnotationSetAttrs) -> pd.DataFrame:

@@ -8,7 +8,7 @@ import pytest
 
 import dascore as dc
 from dascore.core.annotations import AnnotationSet, Line, Moveout
-from dascore.exceptions import ParameterError
+from dascore.exceptions import InvalidAnnotationError, ParameterError
 
 DIMS = ("time", "distance")
 
@@ -978,6 +978,25 @@ class TestMerge:
         with pytest.raises(ParameterError, match="annotation id a"):
             picks.merge(picks)
 
+    def test_members_never_stamped(self):
+        """Stamping writes features and lone rows, never a member."""
+        frame = pd.DataFrame(
+            {"time": [1.0, 2.0, 3.0], "feature_id": ["ev", "ev", None]}
+        )
+        grouped = AnnotationSet(frame, dims=DIMS, data_id="aaa")
+        other = AnnotationSet(pd.DataFrame({"time": [9.0]}), dims=DIMS)
+        for out in (grouped.merge(other), other.merge(grouped)):
+            assert out.attrs.data_id == ""
+            rows = out.annotations.set_index("time")
+            assert pd.isna(rows.loc[1.0, "data_id"]) and pd.isna(
+                rows.loc[2.0, "data_id"]
+            )
+            assert rows.loc[3.0, "data_id"] == "aaa" and pd.isna(
+                rows.loc[9.0, "data_id"]
+            )
+            assert out["ev"].data_id == "aaa"
+            assert len(out.select(data_id="aaa").annotations) == 3
+
     def test_agreeing_provenance_kept(self, picks):
         """A value every set states stays set-level."""
         other = AnnotationSet(
@@ -1117,6 +1136,91 @@ class TestBasisClearing:
         assert based.update(feature="near", note="x")["near"].basis == _moveout()
 
 
+@pytest.fixture(scope="module")
+def stamped():
+    """Lone rows stating their own data_id beside a group whose feature states one."""
+    frame = pd.DataFrame(
+        {
+            "id": ["a", "b", "c", "m0", "m1"],
+            "time": [1.0, 2.0, 3.0, 4.0, 5.0],
+            "data_id": ["x", "x", "y", None, None],
+            "feature_id": [None, None, None, "ev", "ev"],
+        }
+    )
+    features = pd.DataFrame({"id": ["ev"], "data_id": ["x"]})
+    return AnnotationSet(frame, features=features, dims=DIMS)
+
+
+class TestProvenanceLifting:
+    """Grouping rows lifts their provenance onto the feature, never inventing it."""
+
+    def test_adopt_agreeing(self, stamped):
+        """Rows which agree give the feature their value, and blank their own."""
+        out = stamped.add_feature("g", members=["a", "b"])
+        assert out["g"].data_id == "x"
+        assert out.annotations.set_index("id").loc[["a", "b"], "data_id"].isna().all()
+
+    def test_adopt_disagreeing(self, stamped):
+        """Rows from two acquisitions do not make one feature."""
+        with pytest.raises(ParameterError, match=r"'x' and 'y'.*one acquisition"):
+            stamped.add_feature("g", members=["a", "c"])
+
+    def test_adopt_against_given(self, stamped):
+        """A stated value the rows contradict is refused."""
+        with pytest.raises(ParameterError, match="one acquisition"):
+            stamped.add_feature("g", members=["a", "b"], data_id="z")
+
+    def test_adopt_with_given(self, stamped):
+        """A stated value the rows agree with is the feature's."""
+        out = stamped.add_path("p", members=["a", "b"], data_id="x")
+        assert out["p"].data_id == "x"
+
+    def test_move_into_agreeing(self, stamped):
+        """A row moving into a feature it agrees with gives up its own cell."""
+        out = stamped.update(annotation="a", feature_id="ev")
+        assert pd.isna(out.annotations.set_index("id").loc["a", "data_id"])
+        assert out["ev"].data_id == "x"
+
+    def test_move_into_disagreeing(self, stamped):
+        """A row from another acquisition may not join a feature."""
+        with pytest.raises(ParameterError, match=r"'y' and 'x'.*one acquisition"):
+            stamped.update(annotation="c", feature_id="ev")
+
+    def test_move_out_keeps_value(self, stamped):
+        """A member moving out takes its feature's value as its own."""
+        out = stamped.update(annotation="m0", feature_id=None)
+        assert out.annotations.set_index("id").loc["m0", "data_id"] == "x"
+
+    def test_move_out_to_same_fallback(self):
+        """A member whose value the set already gives needs no cell of its own."""
+        frame = pd.DataFrame(
+            {
+                "id": ["a", "m0"],
+                "time": [1.0, 2.0],
+                "data_id": ["own", None],
+                "feature_id": [None, "ev"],
+            }
+        )
+        base = AnnotationSet(frame, dims=DIMS, data_id="set")
+        out = base.update(annotation="m0", feature_id=None)
+        assert pd.isna(out.annotations.set_index("id").loc["m0", "data_id"])
+        assert [x.data_id for x in out] == ["own", "set"]
+
+    def test_after_merge(self):
+        """Rows a merge stamped regroup under a feature holding their value."""
+        first = AnnotationSet(
+            pd.DataFrame({"id": ["a", "b"], "time": [1.0, 2.0]}),
+            dims=DIMS,
+            data_id="d-a",
+        )
+        second = AnnotationSet(
+            pd.DataFrame({"id": ["z"], "time": [3.0]}), dims=DIMS, data_id="d-b"
+        )
+        out = first.merge(second).add_feature("g", members=["a", "b"])
+        assert out["g"].data_id == "d-a"
+        assert [x.data_id for x in out] == ["d-a", "d-b"]
+
+
 class TestMoves:
     """Moving a row between features behaves as removing and adding it."""
 
@@ -1182,6 +1286,27 @@ class TestCollections:
         added = collection.add(pd.DataFrame({"id": ["new"], "time": [9.0]}))
         assert "new" not in set(added.select(set="hand").annotations["id"])
         assert list(added.select(set="").annotations["id"]) == ["new"]
+
+    def test_flat_save_writes_no_member_provenance(self, collection, tmp_path):
+        """A flat save leaves member rows' provenance to their features."""
+        stamped = collection.merge(
+            AnnotationSet(pd.DataFrame({"time": [9.0]}), dims=DIMS, data_id="z")
+        )
+        reloaded = _round_trip(stamped, tmp_path / "flat")
+        assert reloaded == stamped
+        members = reloaded.annotations["feature_id"].notna()
+        assert reloaded.annotations.loc[members, "data_id"].isna().all()
+        assert reloaded["ev_hand"].data_id == "hand"
+
+    def test_legacy_member_provenance_refused(self, collection, tmp_path):
+        """A flat file whose member rows carry provenance is refused."""
+        flat = collection.io.save(tmp_path / "flat")
+        table = flat / "annotations.csv"
+        frame = pd.read_csv(table)
+        frame["data_id"] = frame["set"]
+        frame.to_csv(table, index=False)
+        with pytest.raises(InvalidAnnotationError, match="belongs on the feature"):
+            dc.annotations(flat)
 
     def test_colliding_labels(self, collection, tmp_path):
         """A child label in both collections is refused."""
