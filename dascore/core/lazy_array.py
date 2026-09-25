@@ -52,14 +52,24 @@ NEW_AXIS = -1
 # The per member per axis matrices, in the order the digest takes them.
 AXIS_FIELDS = ("out_start", "out_stop", "src_axis", "src_start", "src_extent")
 
-# The fields of the sources dictionary, which is the sources table.
-SOURCE_FIELDS = ("base_uri", "path", "format", "version")
+# The columns of the sources table besides `filled`, in the frame's order.
+SOURCE_FIELDS = (
+    "base_uri",
+    "path",
+    "format",
+    "version",
+    "key",
+    "origin_id",
+    "dtype",
+    "value",
+)
+
+# The sources columns stored as strings; one value a file or patch, so no
+# dictionary would be smaller.
+_STRING_FIELDS = ("path", "origin_id")
 
 # Below this many rows a dict encodes a column faster than a hash pass.
 _FACTORIZE_ROWS = 256
-
-# The dictionary encoded member columns; `filled` is a plain bool array.
-MEMBER_FIELDS = ("source", "key", "origin_id", "dtype", "cast", "value")
 
 # The version of the byte layout the data_id digest is taken over. Bump it
 # when the layout changes, so ids from two layouts cannot meet.
@@ -153,6 +163,11 @@ class _Column:
         """Return the value of one row."""
         return self.values[self.codes[row]]
 
+    def at(self, rows) -> list:
+        """Return the values of a selection of rows."""
+        values = self.values
+        return [values[x] for x in self.codes[rows].tolist()]
+
     def take(self, rows) -> _Column:
         """Return the column of a selection of rows; the values are kept."""
         return _Column(self.values, self.codes[rows])
@@ -168,19 +183,27 @@ def _broadcast(values: Any, rows: int, name: str) -> _Column:
     return _Column.of(values)
 
 
-def _zip_columns(columns: Sequence[_Column]) -> _Column:
-    """Return a column of each row's tuple across several columns."""
-    if len(columns[0].codes) < _FACTORIZE_ROWS:
-        rows = [[x.values[c] for c in x.codes.tolist()] for x in columns]
-        return _Column.of(list(zip(*rows)))
-    key = np.zeros(len(columns[0].codes), np.int64)
+def _combine(columns: Sequence[_Column]) -> tuple[np.ndarray, np.ndarray]:
+    """Return the first row of each distinct combination of columns, and each row's."""
+    count = len(columns[0].codes)
+    # A column of one value can split no rows.
+    columns = [x for x in columns if len(x.values) > 1]
+    if count < _FACTORIZE_ROWS:
+        index: dict = {}
+        first: list[int] = []
+        codes = []
+        rows = zip(*[x.codes.tolist() for x in columns]) if columns else [()] * count
+        for row, combination in enumerate(rows):
+            codes.append(code := index.setdefault(combination, len(index)))
+            if code == len(first):
+                first.append(row)
+        return np.array(first, np.intp), np.array(codes, np.int32)
+    key = np.zeros(count, np.int64)
     for column in columns:
-        if len(column.values) > 1:
-            key = pd.factorize(key * len(column.values) + column.codes)[0]
+        key = pd.factorize(key * len(column.values) + column.codes)[0]
     # Codes number values as they are first met, so each new one is a new max.
     first = np.flatnonzero(np.diff(np.maximum.accumulate(key), prepend=-1))
-    picks = [[x.values[c] for c in x.codes[first].tolist()] for x in columns]
-    return _Column(list(zip(*picks)), key)
+    return first, key.astype(np.int32)
 
 
 def _merge_columns(columns: Sequence[_Column]) -> _Column:
@@ -212,38 +235,145 @@ def _merge_columns(columns: Sequence[_Column]) -> _Column:
     return _Column(values, codes)
 
 
-@dataclass(frozen=True, eq=False)
-class _Members:
-    """The columns which say what each member reads."""
+class _Strings:
+    """A column of strings: one utf-8 buffer, and where each string starts."""
 
-    source: _Column
+    __slots__ = ("data", "offsets")
+
+    def __init__(self, data: np.ndarray, offsets: np.ndarray):
+        self.data = data
+        self.offsets = offsets
+
+    @classmethod
+    def of(cls, values: Sequence[str]) -> _Strings:
+        """Encode a sequence of strings."""
+        text = "".join(values)
+        data = text.encode("utf-8", "surrogatepass")
+        # When each character is one byte, the strings' lengths are the bytes'.
+        sized: Sequence = values
+        if len(data) != len(text):
+            sized = [x.encode("utf-8", "surrogatepass") for x in values]
+        ends = itertools.accumulate(map(len, sized), initial=0)
+        offsets = np.fromiter(ends, np.int64, len(values) + 1)
+        return cls(np.frombuffer(data, np.uint8), offsets)
+
+    def at(self, rows) -> list[str]:
+        """Return the strings of a selection of rows."""
+        view = memoryview(self.data)
+        starts, stops = self.offsets[rows].tolist(), self.offsets[rows + 1].tolist()
+        return [str(view[a:b], "utf-8", "surrogatepass") for a, b in zip(starts, stops)]
+
+    def take(self, rows: np.ndarray) -> _Strings:
+        """Return the column of a selection of rows."""
+        starts = self.offsets[rows]
+        lengths = self.offsets[rows + 1] - starts
+        offsets = _offsets(lengths)
+        gather = np.repeat(starts - offsets[:-1], lengths) + np.arange(offsets[-1])
+        return _Strings(self.data[gather], offsets)
+
+
+def _join_strings(columns: Sequence[_Strings]) -> _Strings:
+    """Concatenate string columns."""
+    starts = _offsets(np.array([len(x.data) for x in columns], np.int64))
+    parts = [x.offsets[:-1] + start for x, start in zip(columns, starts.tolist())]
+    data = [np.empty(0, np.uint8), *[x.data for x in columns]]
+    return _Strings(np.concatenate(data), np.concatenate([*parts, starts[-1:]]))
+
+
+@dataclass(frozen=True, eq=False)
+class _Sources:
+    """One row per distinct stored array or constant which members read."""
+
+    base_uri: _Column
+    path: _Strings
+    format: _Column
+    version: _Column
     key: _Column
-    origin_id: _Column
+    origin_id: _Strings
     dtype: _Column
-    cast: _Column
-    filled: np.ndarray
     value: _Column
+    filled: np.ndarray
 
     def __len__(self) -> int:
         return len(self.filled)
 
+    def take(self, rows: np.ndarray) -> _Sources:
+        """Return the sources of a selection of rows."""
+        columns = {x: getattr(self, x).take(rows) for x in SOURCE_FIELDS}
+        return _Sources(filled=self.filled[rows], **columns)
+
+
+def _join_sources(tables: Sequence[_Sources]) -> _Sources:
+    """Concatenate sources tables, merging the dictionaries of their columns."""
+    columns: dict[str, Any] = {
+        x: (_join_strings if x in _STRING_FIELDS else _merge_columns)(
+            [getattr(t, x) for t in tables]
+        )
+        for x in SOURCE_FIELDS
+    }
+    filled = np.concatenate([np.empty(0, bool), *[x.filled for x in tables]])
+    return _Sources(filled=filled, **columns)
+
+
+@dataclass(frozen=True, eq=False)
+class _Members:
+    """Which source row each member reads, and the dtype it passes through."""
+
+    sources: _Sources
+    source_row: np.ndarray
+    cast: _Column
+
+    def __len__(self) -> int:
+        return len(self.source_row)
+
+    @property
+    def filled(self) -> np.ndarray:
+        """Whether each member is a constant."""
+        return self.sources.filled[self.source_row]
+
     def take(self, rows) -> _Members:
-        """Return the members of a selection of rows."""
-        columns = {x: getattr(self, x).take(rows) for x in MEMBER_FIELDS}
-        return _Members(filled=self.filled[rows], **columns)
+        """Return the members of a selection of rows; the sources are kept."""
+        return _Members(self.sources, self.source_row[rows], self.cast.take(rows))
+
+
+def _members_of_columns(
+    columns: Mapping[str, _Column], filled: np.ndarray, cast: _Column
+) -> _Members:
+    """Return members whose sources are the distinct rows of member columns."""
+    first, source_row = _combine([*columns.values(), _Column((False, True), filled)])
+    # Members which all differ are the sources, in order, as they stand.
+    fields: dict[str, Any] = {
+        x: y if len(first) == len(filled) else y.take(first) for x, y in columns.items()
+    }
+    for name in _STRING_FIELDS:
+        fields[name] = _Strings.of(fields[name].at(slice(None)))
+    return _Members(_Sources(filled=filled[first], **fields), source_row, cast)
 
 
 def _merge_members(members: Sequence[_Members]) -> _Members:
-    """Concatenate members, merging every dictionary in one pass."""
+    """Concatenate members; members which read one sources table still share it."""
     if len(members) == 1:
         return members[0]
-    columns = {
-        name: _merge_columns([getattr(x, name) for x in members])
-        for name in MEMBER_FIELDS
-    }
-    filled = [x.filled for x in members]
-    stacked = np.concatenate(filled) if filled else np.empty(0, bool)
-    return _Members(filled=stacked, **columns)
+    groups: dict[int, list[int]] = {}
+    for index, member in enumerate(members):
+        groups.setdefault(id(member.sources), []).append(index)
+    rows = [x.source_row for x in members]
+    tables, start = [], 0
+    for indices in groups.values():
+        sources = members[indices[0]].sources
+        used = np.concatenate([rows[x] for x in indices])
+        if len(sources) > len(used):
+            # A table far bigger than the rows read from it is cut down to them.
+            kept, used = np.unique(used, return_inverse=True)
+            sources = sources.take(kept)
+        cuts = np.cumsum([len(rows[x]) for x in indices])[:-1]
+        for index, part in zip(indices, np.split(used + start, cuts)):
+            rows[index] = part
+        tables.append(sources)
+        start += len(sources)
+    source_row = np.concatenate([np.empty(0, np.int32), *rows]).astype(np.int32)
+    sources = tables[0] if len(tables) == 1 else _join_sources(tables)
+    return _Members(sources, source_row, _merge_columns([x.cast for x in members]))
 
 
 @dataclass(frozen=True, eq=False)
@@ -347,6 +477,8 @@ class LazyTable:
     def __post_init__(self):
         """Freeze the storage; each flag is set once, whatever the size."""
         members = self.members
+        sources = members.sources
+        strings = [getattr(sources, x) for x in _STRING_FIELDS]
         for array in (
             self.member_offsets,
             self.axis_offsets,
@@ -354,14 +486,22 @@ class LazyTable:
             self.shapes,
             self.concat_axes,
             self.dtypes.codes,
-            members.filled,
+            members.source_row,
+            members.cast.codes,
+            sources.filled,
             *self.axes.values(),
-            *[getattr(members, x).codes for x in MEMBER_FIELDS],
+            *[
+                getattr(sources, x).codes
+                for x in SOURCE_FIELDS
+                if x not in _STRING_FIELDS
+            ],
+            *[x.data for x in strings],
+            *[x.offsets for x in strings],
         ):
             # A view can be written through whatever it is a view of.
             array.setflags(write=False)
             base = array.base
-            while base is not None:
+            while isinstance(base, np.ndarray):
                 base.setflags(write=False)
                 base = base.base
         object.__setattr__(self, "axes", MappingProxyType(dict(self.axes)))
@@ -396,14 +536,14 @@ class LazyTable:
 
 def _members_of(frame: pd.DataFrame) -> _Members:
     """Return the members one array's rows of a member frame describe."""
-    # A frame written before members stated a cast has none.
     columns = {
-        x: _Column.of(frame[x].to_numpy(object) if x in frame else [""] * len(frame))
-        for x in MEMBER_FIELDS[1:]
+        x: _Column.of(frame[x].astype(str).to_numpy(object)) for x in SOURCE_FIELDS[:4]
     }
-    source = [_Column.of(frame[x].astype(str).to_numpy(object)) for x in SOURCE_FIELDS]
-    columns["source"] = _zip_columns(source)
-    return _Members(filled=frame["filled"].to_numpy(bool, copy=True), **columns)
+    columns |= {x: _Column.of(frame[x].to_numpy(object)) for x in SOURCE_FIELDS[4:]}
+    # A frame written before members stated a cast has none.
+    cast = frame["cast"].to_numpy(object) if "cast" in frame else [""] * len(frame)
+    filled = frame["filled"].to_numpy(bool)
+    return _members_of_columns(columns, filled, _Column.of(cast))
 
 
 def _table(blocks: Sequence[_Block]) -> LazyTable:
@@ -960,21 +1100,28 @@ class LazyArray:
             "out_axis": np.tile(np.arange(ndim, dtype=np.int64), count),
             **{name: block.axes[name].reshape(-1) for name in AXIS_FIELDS},
         }
-        source = members.source
-        for index, name in enumerate(SOURCE_FIELDS):
-            out[name] = _spread(source, [x[index] for x in source.values], ndim)
-        for name in ("key", "origin_id", "dtype", "cast"):
-            column = getattr(members, name)
-            out[name] = _spread(column, column.values, ndim)
+        sources, rows = members.sources, members.source_row
+        # Only the strings of the rows this array reads are decoded.
+        used, inverse = np.unique(rows, return_inverse=True)
+        for name in SOURCE_FIELDS[:-1]:
+            column = getattr(sources, name)
+            if name in _STRING_FIELDS:
+                out[name] = _spread(inverse, column.at(used), ndim)
+            else:
+                out[name] = _spread(column.codes[rows], column.values, ndim)
+        out["cast"] = _spread(members.cast.codes, members.cast.values, ndim)
         out["filled"] = np.repeat(members.filled, ndim)
         # The values are python scalars of several types, which stay objects.
-        out["value"] = _spread(members.value, members.value.values, ndim, object)
+        value = sources.value
+        out["value"] = _spread(value.codes[rows], value.values, ndim, object)
         return pd.DataFrame(out)
 
 
-def _spread(column: _Column, values: Sequence, ndim: int, dtype=None) -> np.ndarray:
+def _spread(codes: np.ndarray, values: Sequence, ndim: int, dtype=None) -> np.ndarray:
     """Return one row per member per output axis of a column's values."""
-    return np.asarray(values, dtype)[np.repeat(column.codes, ndim)]
+    # An array of no members still has text columns, whatever it was cut from.
+    dtype = dtype or (None if values else str)
+    return np.asarray(values, dtype)[np.repeat(codes, ndim)]
 
 
 def _array(block: _Block) -> LazyArray:
@@ -1076,12 +1223,10 @@ def _block_of_columns(
     if ((lengths < 0) | (start < 0) | (start + lengths > extent)).any():
         msg = "Some windows have a negative length or fall outside the array they read."
         raise ParameterError(msg)
-    path, format_, version = (
-        _broadcast(columns[x], count, x) for x in SOURCE_FIELDS[1:]
-    )
+    path = _broadcast(columns["path"], count, "path")
     filled = np.zeros(count, bool) | columns.get("filled", False)
-    source = _zip_columns([path, format_, version])
-    split = [(*_split_path(p, base_uri), f, v) for p, f, v in source.values]
+    split = [_split_path(x, base_uri) for x in path.values]
+    base = _Column.of([x[0] for x in split])
     dtypes = _broadcast(columns["source_dtype"], count, "source_dtype")
     if any(x is None or x is pd.NA or x != x for x in dtypes.values):
         msg = "Every member needs a source_dtype."
@@ -1093,18 +1238,18 @@ def _block_of_columns(
         "src_start": start,
         "src_extent": extent,
     }
-    members = _Members(
-        source=_Column(split, source.codes),
-        key=_broadcast(columns["key"], count, "key"),
-        origin_id=_broadcast(columns["origin_id"], count, "origin_id"),
-        dtype=dtypes.map(_dtype_text),
-        cast=_broadcast(columns["cast_via"], count, "cast_via").map(
-            lambda x: "" if x is None else _dtype_text(x)
-        ),
-        filled=filled,
-        value=_broadcast(columns.get("value"), count, "value"),
+    fields = {
+        "base_uri": _Column(base.values, base.codes[path.codes]),
+        "path": _Column([x[1] for x in split], path.codes),
+        **{x: _broadcast(columns[x], count, x) for x in SOURCE_FIELDS[2:6]},
+        "dtype": dtypes.map(_dtype_text),
+        "value": _broadcast(columns.get("value"), count, "value"),
+    }
+    cast = _broadcast(columns["cast_via"], count, "cast_via").map(
+        lambda x: "" if x is None else _dtype_text(x)
     )
-    _flatten_constants(axes, members.filled)
+    members = _members_of_columns(fields, filled, cast)
+    _flatten_constants(axes, filled)
     dtype = np.result_type(*[np.dtype(x) for x in dtypes.values])
     return _Block((0,) * ndim, dtype, NEW_AXIS, members, axes)
 
@@ -1137,15 +1282,15 @@ def _split_path(path: str, base_uri: str) -> tuple[str, str]:
 
 def _sources_of(block: _Block) -> list[ArraySource]:
     """Return the source each member of a block reads, in placement order."""
-    members = block.members
+    sources, rows = block.members.sources, block.members.source_row
+    at = {x: getattr(sources, x).at(rows) for x in SOURCE_FIELDS}
     src_axis = block.axes["src_axis"].tolist()
     src_start = block.axes["src_start"].tolist()
     lengths = (block.axes["out_stop"] - block.axes["out_start"]).tolist()
     extent = block.axes["src_extent"].tolist()
-    filled = members.filled.tolist()
+    filled = sources.filled[rows].tolist()
     out = []
     for member in range(len(block)):
-        base_uri, path, format_, version = members.source[member]
         axes, starts = src_axis[member], src_start[member]
         spans, sizes = lengths[member], extent[member]
         windows: list = [()] * sum(1 for axis in axes if axis >= 0)
@@ -1158,17 +1303,17 @@ def _sources_of(block: _Block) -> list[ArraySource]:
             stored[axis] = sizes[out_axis]
         out.append(
             ArraySource(
-                path=base_uri + path,
-                format=format_,
-                version=version,
-                key=members.key[member],
+                path=at["base_uri"][member] + at["path"][member],
+                format=at["format"][member],
+                version=at["version"][member],
+                key=at["key"][member],
                 windows=tuple(windows),
                 shape=tuple(stop - start for start, stop in windows),
-                dtype=_dtype_of(members.dtype[member]),
-                origin_id=members.origin_id[member],
+                dtype=_dtype_of(at["dtype"][member]),
+                origin_id=at["origin_id"][member],
                 extent=tuple(stored),
                 filled=filled[member],
-                value=members.value[member],
+                value=at["value"][member],
             )
         )
     return out
@@ -1180,14 +1325,12 @@ def _source_groups(block: _Block) -> list[list[int]]:
     rows = np.flatnonzero(~members.filled)
     if not len(rows):
         return []
-    index, inverse = _distinct((members.source,), rows)
+    used, inverse = np.unique(members.source_row[rows], return_inverse=True)
+    at = [getattr(members.sources, x).at(used) for x in SOURCE_FIELDS[:4]]
     # A path split under two base uris is one resource, opened once.
     names: dict[tuple[str, str, str], int] = {}
-    codes = []
-    for row in rows[index].tolist():
-        base_uri, path, format_, version = members.source[row]
-        codes.append(names.setdefault((base_uri + path, format_, version), len(names)))
-    group = np.array(codes, np.int64)[inverse]
+    codes = [names.setdefault((b + p, f, v), len(names)) for b, p, f, v in zip(*at)]
+    group = np.array(codes, np.int64)[inverse.reshape(-1)]
     order = np.argsort(group, kind="stable")
     cuts = np.flatnonzero(np.diff(group[order])) + 1
     return [x.tolist() for x in np.split(rows[order], cuts)]
@@ -1513,91 +1656,39 @@ class _Signature:
     signs: np.ndarray
 
 
-def _group_codes(columns: Sequence[_Column], rows: np.ndarray) -> np.ndarray | None:
-    """Return one code per row for the combination of several columns."""
-    out = None
-    for column in columns:
-        codes = column.codes[rows]
-        if codes.max() == codes.min():
-            continue
-        codes = codes.astype(np.int64)
-        if out is None:
-            out = codes
-            continue
-        # Renumbered each time, so the packed key stays well inside int64.
-        width = int(codes.max()) + 1
-        out = np.unique(out * width + codes, return_inverse=True)[1].reshape(-1)
-    return out
-
-
-def _distinct(columns: Sequence[_Column], rows: np.ndarray) -> tuple[np.ndarray, ...]:
-    """Return one row of each distinct combination, and which one each row is."""
-    keys = _group_codes(columns, rows)
-    if keys is None:
-        return np.zeros(1, np.int64), np.zeros(len(rows), np.int64)
-    _, index, inverse = np.unique(keys, return_index=True, return_inverse=True)
-    return index, inverse.reshape(-1)
-
-
-def _base_ids(block: _Block, rows: np.ndarray) -> tuple[list[str], np.ndarray]:
-    """Return the id each stored member builds on, and which one it uses."""
-    members = block.members
-    columns = (members.key, members.source, members.origin_id, members.cast)
-    index, inverse = _distinct(columns, rows)
-    # One row per distinct source, key and origin, so none is worked twice.
-    out = []
-    for row in rows[index].tolist():
-        origin = members.origin_id[row]
-        if not origin:
-            base_uri, path, format_, version = members.source[row]
-            location = {
-                "path": base_uri + path,
-                "format": format_,
-                "version": version,
-                "key": members.key[row],
-            }
-            origin = H("location", location)
-        # samples put through another dtype on the way are other samples
-        if via := members.cast[row]:
-            origin = H("cast", [origin, via])
-        out.append(origin)
-    return out, inverse
-
-
-def _constant_ids(block: _Block, rows: np.ndarray) -> tuple[list[str], np.ndarray]:
-    """Return the id of each distinct constant, and which one each row is."""
-    members = block.members
-    index, inverse = _distinct((members.value, members.dtype, members.cast), rows)
-    out = []
-    for row in rows[index].tolist():
-        # The shape is the region, which the corners hold, so it is not here.
-        content = {"value": members.value[row], "dtype": members.dtype[row]}
-        name = H("constant", content)
-        if via := members.cast[row]:
-            name = H("cast", [name, via])
-        out.append(name)
-    return out, inverse
-
-
 def _group_names(block: _Block) -> tuple[list[tuple[int, str]], np.ndarray]:
     """Return the id of each distinct source, and which one each member reads."""
     members = block.members
-    code = np.zeros(len(block), np.int64)
+    sources, casts = members.sources, members.cast
+    width = len(casts.values)
+    # Each source row read is named once for each cast it is read through.
+    pairs = members.source_row.astype(np.int64) * width + casts.codes
+    pairs, code = np.unique(pairs, return_inverse=True)
+    rows, vias = np.divmod(pairs, width)
+    at = {x: getattr(sources, x).at(rows) for x in SOURCE_FIELDS}
+    filled = sources.filled[rows].tolist()
     names: list[tuple[int, str]] = []
-    rows = np.flatnonzero(~members.filled)
-    if len(rows):
-        found, inverse = _base_ids(block, rows)
-        code[rows] = inverse
-        names += [(0, x) for x in found]
-    rows = np.flatnonzero(members.filled)
-    if len(rows):
-        found, inverse = _constant_ids(block, rows)
-        code[rows] = inverse + len(names)
-        names += [(1, x) for x in found]
+    for index, via in enumerate([casts.values[x] for x in vias.tolist()]):
+        if filled[index]:
+            # The shape is the region, which the corners hold, so it is not here.
+            content = {"value": at["value"][index], "dtype": at["dtype"][index]}
+            name = H("constant", content)
+        else:
+            location = {
+                "path": at["base_uri"][index] + at["path"][index],
+                "format": at["format"][index],
+                "version": at["version"][index],
+                "key": at["key"][index],
+            }
+            name = at["origin_id"][index] or H("location", location)
+        # samples put through another dtype on the way are other samples
+        if via:
+            name = H("cast", [name, via])
+        names.append((int(filled[index]), name))
     # One id reached two ways is one source, and the order is the ids' own.
     ranks = {name: rank for rank, name in enumerate(sorted(set(names)))}
     lookup = np.array([ranks[x] for x in names], np.int64)
-    return list(ranks), lookup[code]
+    return list(ranks), lookup[code.reshape(-1)]
 
 
 def _placement(block: _Block) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
@@ -1846,14 +1937,16 @@ def _whole_source_id(block: _Block, signature: _Signature) -> str | None:
     if signature.starts[0].any():
         return None
     row = int(signature.rows[0])
-    if block.dtype != _dtype_of(block.members.dtype[row]):
+    members = block.members
+    sources, source = members.sources, int(members.source_row[row])
+    if block.dtype != _dtype_of(sources.dtype[source]):
         return None
     kind, name = signature.names[int(signature.name_code[0])]
     if kind:
         # A constant is the array of its value, and a cast makes it another.
-        if block.members.cast[row]:
+        if members.cast[row]:
             return None
-        value = block.members.value[row]
+        value = sources.value[source]
         source = ArraySource(filled=True, value=value)
         return source.describe(block.shape, block.dtype).data_id
     src_axis, offset, extent = signature.fields[0, 1:].reshape(3, ndim)

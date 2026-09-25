@@ -18,7 +18,6 @@ from dascore.core import lazy_array as lazy_module
 from dascore.core.lazy_array import (
     AXIS_FIELDS,
     MAX_CUT_AXES,
-    MEMBER_FIELDS,
     NEW_AXIS,
     LazyArray,
     LazyTable,
@@ -335,6 +334,9 @@ def layouts(shape):
 
 def storage(table):
     """Return every array a table holds."""
+    sources = table.members.sources
+    coded = ("base_uri", "format", "version", "key", "dtype", "value")
+    strings = [sources.path, sources.origin_id]
     return [
         table.member_offsets,
         table.axis_offsets,
@@ -342,9 +344,13 @@ def storage(table):
         table.shapes,
         table.concat_axes,
         table.dtypes.codes,
-        table.members.filled,
+        table.members.source_row,
+        table.members.cast.codes,
+        sources.filled,
         *table.axes.values(),
-        *[getattr(table.members, x).codes for x in MEMBER_FIELDS],
+        *[getattr(sources, x).codes for x in coded],
+        *[x.data for x in strings],
+        *[x.offsets for x in strings],
     ]
 
 
@@ -2456,8 +2462,9 @@ class TestStringColumns:
         """A missing value among strings is a value of its own."""
         keys = pd.Series(["k1", None, "k2"] * repeats)
         array = LazyArray.from_columns("/a", (2,), key=keys, **FORMAT)
-        key = array.table.members.key
-        assert key.codes.tolist() == [0, 1, 2] * repeats
+        members = array.table.members
+        key = members.sources.key
+        assert key.codes[members.source_row].tolist() == [0, 1, 2] * repeats
         assert key.values[0] == "k1" and key.values[2] == "k2"
         assert pd.isna(key.values[1])
 
@@ -2589,7 +2596,13 @@ class TestFromColumns:
             "/a.h5", [[2, 3], [4, 3]], format="DASDAE", version="1", source_dtype="f4"
         )
         assert array.shape == (6, 3) and len(array) == 2
-        assert array.table.members.source.values == (("", "/a.h5", "DASDAE", "1"),)
+        sources = array.table.members.sources
+        assert len(sources) == 1 and sources.path.at(np.arange(1)) == ["/a.h5"]
+        assert (sources.base_uri[0], sources.format[0], sources.version[0]) == (
+            "",
+            "DASDAE",
+            "1",
+        )
 
     def test_paths_split_under_base(self):
         """A path under the base uri is stored relative to it; others whole."""
@@ -2601,10 +2614,10 @@ class TestFromColumns:
             source_dtype="f4",
             base_uri="/root/",
         )
-        assert array.table.members.source.values == (
-            ("/root/", "a.h5", "DASDAE", "1"),
-            ("", "/other/b.h5", "DASDAE", "1"),
-        )
+        sources = array.table.members.sources
+        rows = np.arange(2)
+        assert [sources.base_uri[x] for x in rows] == ["/root/", ""]
+        assert sources.path.at(rows) == ["a.h5", "/other/b.h5"]
         assert [x.path for x in array.sources] == ["/root/a.h5", "/other/b.h5"]
 
     def test_rows_from_any_column(self):
@@ -2633,9 +2646,11 @@ class TestFromColumns:
             cast_via=["f8", np.float64],
         )
         members = array.table.members
-        assert members.dtype.values == ("<f4",)
+        dtype = members.sources.dtype
+        assert dtype.values == ("<f4",)
         assert members.cast.values == ("<f8",)
-        assert members.dtype.codes.tolist() == members.cast.codes.tolist() == [0, 0]
+        codes = dtype.codes[members.source_row].tolist()
+        assert codes == members.cast.codes.tolist() == [0, 0]
 
     def test_structured_source_dtype(self):
         """A source whose dtype is a field list names it as numpy does."""
@@ -2757,3 +2772,174 @@ class TestFromColumnsRefuses:
         kwargs = {**self.kwargs, "path": ["/a", "/b"], empty: ["x", missing]}
         with pytest.raises(ParameterError, match="path and a format"):
             LazyArray.from_columns(shape=(2,), **kwargs)
+
+
+def mixed_sources():
+    """Files under and outside a base, keys, origins, casts and constants."""
+    whole = ArraySource(path="/root/a.h5", format="DASDAE", version="1")
+    return [
+        whole.describe((3, 2), "f4"),
+        replace(whole, key="k1").describe((5, 2), "i2")[1:3],
+        ArraySource(path="/elsewhere/é.h5", format="H5Simple", version="2").describe(
+            (2, 2), "u1"
+        ),
+        replace(whole, path="/root/b.h5", origin_id="a" * 32).describe((4, 2), "f4")[
+            0:2
+        ],
+        ArraySource.full((2, 2), 1),
+        ArraySource(filled=True, value=True).describe((1, 2), "f8"),
+        ArraySource(filled=True, value=-0.0).describe((1, 2), "f8"),
+        ArraySource(filled=True, value=float("nan")).describe((1, 2), "f8"),
+    ]
+
+
+def mixed():
+    """Return an array of every kind of member, some cast on the way."""
+    casts = [None, "f8", None, "f4", None, None, "f4", None]
+    return LazyArray.from_sources(mixed_sources(), base_uri="/root/", cast_via=casts)
+
+
+def many_members(count=300):
+    """Return an array of many members over a few files, some paths repeated."""
+    return LazyArray.from_columns(
+        [f"/root/f{x % 97:03d}.h5" for x in range(count)],
+        (2, 3),
+        format="DASDAE",
+        version="1",
+        source_dtype=["f4", "i2"] * (count // 2),
+        key=[["", "k"][x % 3 == 0] for x in range(count)],
+        base_uri="/root/",
+    )
+
+
+class TestPinnedSourceIds:
+    """Ids of arrays of every kind of member, fixed before the sources table."""
+
+    def test_mixed(self):
+        """Files, windows, keys, origins, casts and constants in one array."""
+        assert mixed().data_id == "0245b01f48f15b03f3b6668e4d368609"
+
+    def test_window(self):
+        """A window of it, cut on both axes."""
+        assert mixed()[2:9, 1:2].data_id == "2b9c9eb1b8ace37cd1c5ea42619018a3"
+
+    def test_rechunked(self):
+        """A piece of many members rechunked, some reading one file."""
+        piece = many_members().rechunk([0, 7, 333, 600])[1]
+        assert piece.data_id == "693468130b8439f00c157a8151c94d8e"
+
+    def test_joined_apart(self):
+        """Arrays built apart, joined."""
+        array = concat([many_members()[590:600, 0:2], mixed()[0:4]])
+        assert array.data_id == "808b817683b4f79b94f3711b8d38a11d"
+
+    def test_stacked_round_trip(self):
+        """Two windows stacked, through a frame."""
+        array = stack([mixed()[1:5], mixed()[6:10]], axis=1)
+        back = LazyArray.from_frame(array.to_frame(), array.shape, array.dtype)
+        assert back.data_id == "f3ddaf77e1e762dff63826dc6f4054cf"
+
+    def test_table_row(self):
+        """A transposed array in a table with another."""
+        table = LazyTable.from_arrays([many_members(), mixed().transpose()])
+        assert table[1].data_id == "ae86d8d67f0e9341aee19c042d7d8d49"
+
+
+class TestSourceTable:
+    """Members read rows of one sources table, which every view shares."""
+
+    def test_views_share_it(self):
+        """Slicing, joining and rechunking keep the one sources table."""
+        array = many_members()
+        sources = array.table.members.sources
+        half = array.shape[0] // 2
+        views = [
+            array[10:500],
+            concat([array[:half], array[half:]]),
+            *array.rechunk([0, 7, 333, 600]),
+            LazyTable.from_arrays([array[:half], array[half:]])[1],
+        ]
+        assert all(x.table.members.sources is sources for x in views)
+
+    def test_built_apart_is_built_together(self):
+        """Arrays built apart and joined are the array built from all of them."""
+        sources = [*mixed_sources(), *mixed_sources()[::-1]]
+        together = LazyArray.from_sources(sources)
+        apart = concat([LazyArray.from_sources(x) for x in (sources[:5], sources[5:])])
+        assert apart.data_id == together.data_id
+        # A nan is not equal to itself, so the sources are compared as written.
+        assert repr(apart.sources) == repr(together.sources)
+        pd.testing.assert_frame_equal(apart.to_frame(), together.to_frame())
+
+    def test_compacted_when_little_is_read(self):
+        """A join of a few members of a big table keeps only the rows read."""
+        array = many_members()
+        parts = [array[0:4], array[-6:]]
+        joined = concat(parts)
+        assert len(joined.table.members.sources) < len(array.table.members.sources)
+        assert len(joined.table.members.sources) <= 5
+        sources = [*parts[0].sources, *parts[1].sources]
+        rebuilt = LazyArray.from_sources(sources, base_uri="/root/")
+        assert joined.data_id == rebuilt.data_id
+        assert joined.sources == rebuilt.sources
+        pd.testing.assert_frame_equal(joined.to_frame(), rebuilt.to_frame())
+
+    def test_strings_round_trip(self):
+        """Paths and origins of any text are read back exactly."""
+        texts = ["/root/日本/é.h5", "/root/b.h5", "/a.h5", "/root/"]
+        origins = ["", "ü" * 3, "", "a" * 32]
+        sources = [
+            ArraySource(path=x, format="DASDAE", origin_id=y).describe((2,), "f4")
+            for x, y in zip(texts, origins)
+        ]
+        sources.insert(2, ArraySource.full((2,), 0.0))
+        array = LazyArray.from_sources(sources, base_uri="/root/")
+        assert array.sources == tuple(sources)
+        assert array.sources[2].path == ""
+        back = LazyArray.from_frame(array.to_frame(), array.shape, array.dtype)
+        assert back.sources == tuple(sources)
+        assert back.data_id == array.data_id
+        first = LazyArray.from_sources(sources[:2], base_uri="/root/")
+        joined = concat([array[4:], first, array[8:]])
+        assert joined.sources == (*sources[2:], *sources[:2], sources[-1])
+
+    def test_undecodable_path(self):
+        """A path holding an escaped undecodable byte is read back as it was."""
+        source = stored((2,), path="/root/\udcff.h5")
+        array = LazyArray.from_sources([source, source], base_uri="/root/")
+        assert array.sources == (source, source)
+        joined = concat([array, LazyArray.from_source(source), array[2:]])
+        assert joined.sources == (source,) * 4
+
+    def test_constant_values_stay_apart(self):
+        """Constants of one dtype whose values compare equal keep their ids."""
+        values = [1, True, 1.0, -0.0, 0.0, float("nan")]
+        sources = [
+            ArraySource(filled=True, value=x).describe((1, 2), "f8") for x in values
+        ]
+        file = stored((1, 2), dtype="f8")
+        array = LazyArray.from_sources([file, *sources])
+        assert [type(x.value) for x in array.sources[1:]] == [type(x) for x in values]
+        assert [repr(x) for x in array.to_frame()["value"][2::2]] == [
+            repr(x) for x in values
+        ]
+        ids = [array[0 : x + 2].data_id for x in range(len(values))]
+        apart = [
+            LazyArray.from_sources([file, *sources[: x + 1]]).data_id
+            for x in range(len(values))
+        ]
+        assert ids == apart
+        assert len(set(ids)) == len(values)
+
+    def test_one_source_two_casts(self):
+        """Members of one source row keep their own casts."""
+        source = stored((2,), path="/a/c.h5")
+        casts = [None, "f4", "f8"]
+        together = LazyArray.from_sources([source] * 3, cast_via=casts, dtype="f8")
+        assert len(together.table.members.sources) == 1
+        apart = [
+            LazyArray.from_sources([source], cast_via=[x], dtype="f8") for x in casts
+        ]
+        assert together.data_id == concat(apart).data_id
+        uncast = LazyArray.from_sources([source] * 3, dtype="f8")
+        assert together.data_id != uncast.data_id
