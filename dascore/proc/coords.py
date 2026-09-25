@@ -1365,15 +1365,21 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
             if not isinstance(coord, NumericCoord):
                 out.append(patch)
                 continue
-            starts = {*np.cumsum([len(x) for x in coord.segments])[:-1].tolist()}
-            # a dense stored run may hold holes of its declared step too
-            if holes := [first for first, _ in coord.missing().iter_runs()]:
-                values = np.asarray(coord.values)
-                if coord.reverse_sorted:
-                    after = np.searchsorted(values[::-1], holes, side="right")
-                    starts.update((len(values) - after).tolist())
-                else:
-                    starts.update(np.searchsorted(values, holes).tolist())
+            starts, offset = set(), 0
+            for seg in coord.segments:
+                starts.add(offset)
+                # a dense stored run may hold holes of the declared step too;
+                # only its own labels are read to place them
+                if holes := [first for first, _ in seg.missing().iter_runs()]:
+                    values = np.asarray(seg.values)
+                    found = np.searchsorted(values, holes)
+                    if seg.reverse_sorted:
+                        found = len(values) - np.searchsorted(
+                            values[::-1], holes, side="right"
+                        )
+                    starts.update((offset + found).tolist())
+                offset += len(seg)
+            starts.discard(0)
             for start, stop in itertools.pairwise([0, *sorted(starts), len(coord)]):
                 # Typed as the selector it is: the key is a dimension
                 # name, so it never lands on select's own bool fields.
