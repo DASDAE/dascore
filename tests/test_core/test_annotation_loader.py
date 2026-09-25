@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import datetime
 import json
 import tempfile
 from decimal import Decimal
@@ -287,6 +288,35 @@ class TestRoundTrip:
         loaded = dc.annotations(out.io.save(tmp_path / "picks"))
         assert loaded.bases["l"] == line
         assert loaded == out
+
+    def test_a_line_of_python_datetimes(self, tmp_path):
+        """Python datetimes are held as numpy times, so a reload is equal."""
+        start = datetime.datetime(2020, 1, 1)
+        line = Line(
+            start={"distance": 0.0, "time": start},
+            end={"distance": 50.0, "time": start + datetime.timedelta(seconds=2)},
+        )
+        assert line.vertices(3)["time"].dtype == np.dtype("datetime64[ns]")
+        features = pd.DataFrame({"id": ["p1"], "geometry": ["path"], "basis": ["l"]})
+        out = dc.AnnotationSet(None, features=features, bases={"l": line}, dims=DIMS)
+        loaded = dc.annotations(out.io.save(tmp_path / "picks"))
+        assert loaded.bases["l"] == line
+        assert loaded == out
+
+    def test_reserved_text_columns_of_numbers(self, tmp_path):
+        """A name or data_id written as numbers is text on both sides of a save."""
+        frame = pd.DataFrame(
+            {
+                "feature_id": ["a", None],
+                "time": [1.0, 2.0],
+                "name": [1, 2],
+                "data_id": [10, 20],
+            }
+        )
+        features = pd.DataFrame({"id": ["a"], "name": [3], "data_id": [30]})
+        out = dc.AnnotationSet(frame, features=features, dims=DIMS)
+        assert list(out.annotations["name"]) == ["1", "2"]
+        assert dc.annotations(out.io.save(tmp_path / "picks")) == out
 
     def test_a_duration_basis(self, tmp_path):
         """A line over an offset reads back from bases.json as durations."""
@@ -1051,6 +1081,12 @@ class TestWriting:
         text = dc.AnnotationSet(frame, dims=("distance",)).io.to_csv()
         assert '{""a"": {""b"": [1]}}' in text
 
+    def test_a_sequence_extra_is_comma_separated(self):
+        """A sequence cell, held as a tuple, is written as comma-separated text."""
+        frame = pd.DataFrame({"distance": [1.0], "codes": [["x", "y"]]})
+        text = dc.AnnotationSet(frame, dims=("distance",)).io.to_csv()
+        assert '"x, y"' in text
+
     def test_an_extra_json_cannot_spell(self):
         """A nested value with no json type is written as its text."""
         frame = pd.DataFrame({"distance": [1.0], "meta": [{"s": Decimal("1.5")}]})
@@ -1176,6 +1212,22 @@ class TestCollections:
         assert list(flat.features["code"]) == ["001", "001"]
         assert list(flat.annotations["label"]) == ["002", "002"]
         assert flat == loaded
+
+    def test_child_text_declarations_survive_a_bare_table(self, tmp_path):
+        """A collection written bare reads its children's text columns as text."""
+        root = tmp_path / "sets"
+        for name, code in (("a", "001"), ("b", "002")):
+            frame = pd.DataFrame({"time": [1.0], "station": [code]})
+            dc.AnnotationSet(
+                frame,
+                dims=("time",),
+                annotation_columns={"station": {"dtype": "string"}},
+            ).io.save(root / name)
+        loaded = dc.annotations(root)
+        path = tmp_path / "bare.csv"
+        loaded.io.to_csv(path)
+        bare = dc.annotations(path, dims=loaded.dims, attrs=loaded.attrs)
+        assert list(bare.annotations["station"]) == ["001", "002"]
 
     def test_a_basis_key_naming_two_curves(self, with_features, tmp_path):
         """One key names one curve across the sets loaded together."""

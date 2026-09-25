@@ -1049,7 +1049,9 @@ def _load_file(path: Path, dims, **kwargs) -> AnnotationSet:
         "no annotations",
         ordered=True,
         skip=skip,
-        text=_text_columns(columns),
+        text=_stated_text(
+            {**given, "annotation_columns": columns}, "annotation_columns"
+        ),
     )
     return AnnotationSet(_restore_dtypes(frame, columns, path), dims=stated, **kwargs)
 

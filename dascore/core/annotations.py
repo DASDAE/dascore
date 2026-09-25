@@ -233,10 +233,19 @@ def _read_coordinates(value):
 
 
 def _read_place(value):
-    """Read a mapping of one coordinate per dimension."""
+    """Read a mapping of one coordinate per dimension, times at nanoseconds."""
     if not isinstance(value, Mapping):
         return value
-    return {k: _coordinate(v) for k, v in value.items()}
+    return {k: _nanoseconds(_scalar(_coordinate(v))) for k, v in value.items()}
+
+
+def _nanoseconds(value):
+    """Hold a numpy time or duration at nanoseconds; leave anything else."""
+    if isinstance(value, np.datetime64):
+        return value.astype(_NS_TIME)
+    if isinstance(value, np.timedelta64):
+        return value.astype(_NS_SPAN)
+    return value
 
 
 _freeze_map = AfterValidator(lambda x: FrozenDict(x))
@@ -1068,7 +1077,8 @@ def _read_annotations(data, attrs: AnnotationSetAttrs):
     # Blanks first: a blank cell beside times written as text is unset.
     frame = _normalize_times(_normalize_blanks(frame, declared), attrs.dims)
     spellings = _read_spellings(frame, attrs.dims)
-    frame = _normalize_identities(frame, ("id", "feature_id"), declared)
+    text = [x for x in ANNOTATION_COLUMNS if x not in ORDINAL_COLUMNS]
+    frame = _normalize_identities(frame, text, declared)
     _check_columns(frame, attrs, "annotations")
     _check_ranges(frame, spellings)
     _check_locations(frame, spellings)
@@ -1085,7 +1095,7 @@ def _read_features(data, attrs: AnnotationSetAttrs) -> pd.DataFrame:
     frame = _coerce_frame(data, "features")
     declared = _declared_dtypes(attrs.feature_columns)
     frame = _normalize_times(_normalize_blanks(frame, declared))
-    frame = _normalize_identities(frame, ("id", "basis"), declared)
+    frame = _normalize_identities(frame, FEATURE_COLUMNS, declared)
     _check_columns(frame, attrs, "features")
     if len(frame) and "id" not in frame.columns:
         msg = "The features state no id column; annotations name a feature by id."
@@ -2154,13 +2164,9 @@ def _text(value) -> str:
 
 def _stated(value) -> bool:
     """Whether a cell states anything at all."""
-    if value is None:
-        return False
-    try:
-        return not bool(pd.isnull(value))
-    except (TypeError, ValueError):
-        # An array-like cell; it is stated by being there.
-        return True
+    # Nested cells are frozen to tuples and FrozenDicts, which pandas
+    # reads as one object rather than element by element.
+    return value is not None and not bool(pd.isnull(value))
 
 
 def annotation_set_to_csv(
