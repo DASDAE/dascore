@@ -1221,6 +1221,169 @@ class TestProvenanceLifting:
         assert [x.data_id for x in out] == ["d-a", "d-b"]
 
 
+# Two child sets of different provenance, for label checks.
+TWO_CHILDREN = {
+    "dims": DIMS,
+    "sets": {
+        "a": {"dims": ("time",), "data_id": "d-a"},
+        "b": {"dims": ("time",), "data_id": "d-b"},
+    },
+}
+
+
+class TestOneBlankRule:
+    """Adopting and moving follow one rule: a blank agrees, a value lands."""
+
+    @pytest.fixture
+    def rows(self):
+        """A stated row, a blank one, and one stating another value."""
+        frame = pd.DataFrame(
+            {
+                "id": ["a", "b", "c"],
+                "time": [1.0, 2.0, 3.0],
+                "data_id": ["x", None, "y"],
+            }
+        )
+        return AnnotationSet(frame, dims=DIMS)
+
+    def test_either_order(self, rows):
+        """Growing a feature row by row equals adopting the rows at once."""
+        together = rows.add_feature("g", members=["a", "b"])
+        stated_first = rows.add_feature("g", members=["a"]).update(
+            annotation="b", feature_id="g"
+        )
+        blank_first = rows.add_feature("g", members=["b"]).update(
+            annotation="a", feature_id="g"
+        )
+        assert stated_first == together
+        assert blank_first == together
+        assert together["g"].data_id == "x"
+
+    def test_two_values_refused(self, rows):
+        """A stated row moving into a feature of another value is refused."""
+        grouped = rows.add_feature("g", members=["a"])
+        with pytest.raises(ParameterError, match="one acquisition"):
+            grouped.update(annotation="c", feature_id="g")
+
+    def test_move_into_implied_feature(self):
+        """A merged row moving into a new feature lifts its value onto it."""
+        first = AnnotationSet(
+            pd.DataFrame({"id": ["a", "b"], "time": [1.0, 2.0]}),
+            dims=DIMS,
+            data_id="d-a",
+        )
+        second = AnnotationSet(
+            pd.DataFrame({"id": ["z"], "time": [3.0]}), dims=DIMS, data_id="d-b"
+        )
+        merged = first.merge(second)
+        out = merged.update(annotation="a", feature_id="g").update(
+            annotation="b", feature_id="g"
+        )
+        assert out["g"].data_id == "d-a"
+        assert out.annotations.set_index("id").loc[["a", "b"], "data_id"].isna().all()
+        assert out == merged.add_feature("g", members=["a", "b"])
+
+
+class TestMemberLabels:
+    """A member's own set label may not disagree with its feature."""
+
+    def test_disagreeing_label_refused(self):
+        """Members labeled with two children of different provenance."""
+        frame = pd.DataFrame(
+            {
+                "id": ["r1", "r2"],
+                "time": [1.0, 2.0],
+                "set": ["a", "b"],
+                "feature_id": "e",
+            }
+        )
+        with pytest.raises(ParameterError, match=r"Row 1.*'b'.*'e'"):
+            AnnotationSet(frame, attrs=TWO_CHILDREN)
+
+    def test_blank_label_accepted(self):
+        """A member with no label takes its feature's provenance."""
+        frame = pd.DataFrame(
+            {
+                "id": ["r1", "r2"],
+                "time": [1.0, 2.0],
+                "set": ["a", None],
+                "feature_id": "e",
+            }
+        )
+        out = AnnotationSet(frame, attrs=TWO_CHILDREN)
+        assert out["e"].data_id == "d-a"
+
+    def test_add_refused(self):
+        """Add is held to the same rule."""
+        frame = pd.DataFrame(
+            {"id": ["r1"], "time": [1.0], "set": ["a"], "feature_id": "e"}
+        )
+        base = AnnotationSet(frame, attrs=TWO_CHILDREN)
+        extra = pd.DataFrame({"time": [2.0], "set": ["b"], "feature_id": ["e"]})
+        with pytest.raises(ParameterError, match="'e'"):
+            base.add(extra)
+
+    @staticmethod
+    def _overridden(feature_of_r=None, features=None) -> AnnotationSet:
+        """Lone r and member m in child b; f in b overrides its data_id."""
+        frame = pd.DataFrame(
+            {
+                "id": ["r", "m"],
+                "time": [1.0, 2.0],
+                "set": ["b", "b"],
+                "feature_id": [feature_of_r, "f"],
+            }
+        )
+        stated = pd.DataFrame({"id": ["f"], "set": ["b"], "data_id": ["feat"]})
+        tables = stated if features is None else pd.concat([stated, features])
+        return AnnotationSet(frame, features=tables, attrs=TWO_CHILDREN)
+
+    def test_same_label_joins_override(self):
+        """A row of the feature's own child joins it, whatever it overrides."""
+        out = self._overridden().update(annotation="r", feature_id="f")
+        assert out == self._overridden("f")
+        assert out["f"].data_id == "feat"
+
+    def test_same_label_adopted_under_override(self):
+        """Adopting a row of the new feature's child takes the override too."""
+        out = self._overridden().add_feature(
+            "g", members=["r"], set="b", data_id="feat"
+        )
+        extra = pd.DataFrame({"id": ["g"], "set": ["b"], "data_id": ["feat"]})
+        assert out == self._overridden("g", extra)
+
+    def test_other_label_still_refused(self):
+        """A row of another child does not join the override."""
+        base = self._overridden().update(annotation="r", set="a")
+        with pytest.raises(ParameterError, match="one acquisition"):
+            base.update(annotation="r", feature_id="f")
+
+    @pytest.fixture
+    def labeled(self):
+        """r1 a member of e in child a; r2 lone in child b."""
+        frame = pd.DataFrame(
+            {
+                "id": ["r1", "r2"],
+                "time": [1.0, 2.0],
+                "set": ["a", "b"],
+                "feature_id": ["e", None],
+            }
+        )
+        return AnnotationSet(frame, attrs=TWO_CHILDREN)
+
+    def test_relabel_while_moving_in(self, labeled):
+        """A row relabeled to agree with the feature it joins is accepted."""
+        out = labeled.update(annotation="r2", feature_id="e", set="a")
+        assert len(out["e"].geometry.regions) == 2
+
+    def test_relabel_while_moving_out(self, labeled):
+        """A row leaving under another label keeps the value it had."""
+        out = labeled.update(annotation="r1", feature_id=None, set="b")
+        rows = out.annotations.set_index("id")
+        assert rows.loc["r1", "data_id"] == "d-a"
+        assert [x.data_id for x in out] == ["d-a", "d-b"]
+
+
 class TestMoves:
     """Moving a row between features behaves as removing and adding it."""
 
