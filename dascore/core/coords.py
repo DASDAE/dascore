@@ -4365,7 +4365,8 @@ def _same_step(step, other) -> bool:
 
 def _grid_coord(terms, units=None, **spec) -> BaseCoord:
     """The range ``spec`` states on an exact grid of ``_EXACT_GRID_FIELDS`` terms."""
-    shape = spec.get("shape")
+    if (shape := spec.get("shape")) is not None:
+        spec["shape"] = shape = tuple(np.atleast_1d(shape).tolist())
     if shape is not None and (len(shape) != 1 or not shape[0]):
         return get_coord(**spec, units=units)  # no range holds it: a partial
     return _range_coord({**spec, **dict(zip(_EXACT_GRID_FIELDS, terms))}, units)

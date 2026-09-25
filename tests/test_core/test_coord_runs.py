@@ -1127,6 +1127,11 @@ class TestRefactorParity:
         coord = get_coord(start=start, step=Fraction(3, 2), shape=(10,))
         assert isinstance(coord.update(shape=(0,)), CoordPartial)
 
+    def test_new_scalar_shape(self):
+        """An exact grid takes a scalar shape, as get_coord does."""
+        coord = get_coord(start=0, step=1, shape=5).new(shape=3)
+        assert coord.shape == (3,)
+
     def test_odd_phase_hole_ends(self):
         """A hole on a fractional lattice ends on its floored label."""
         full = get_coord(start=0, step=(3, 2), shape=(20,))
