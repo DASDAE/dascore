@@ -73,6 +73,10 @@ def decimate(
       it: taking every nth value of a dimension takes every nth value of
       everything indexed by it.
 
+    - With a filter, missing samples (holes in the step) raise; use
+      [split_gaps](`dascore.Patch.split_gaps`) or
+      [fill_gaps](`dascore.Patch.fill_gaps`) first.
+
     See Also
     --------
     [resample](`dascore.proc.resample.resample`)

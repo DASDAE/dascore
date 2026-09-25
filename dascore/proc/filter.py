@@ -181,6 +181,13 @@ class SobelFilter(PatchProcessor):
     cval
         Fill value when mode="constant".
 
+    Notes
+    -----
+    The kernel smooths along every dimension, so missing samples (holes
+    in a step) in any of them raise; use
+    [split_gaps](`dascore.Patch.split_gaps`) or
+    [fill_gaps](`dascore.Patch.fill_gaps`) first.
+
     Examples
     --------
     >>> import dascore

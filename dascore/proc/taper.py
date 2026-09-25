@@ -91,6 +91,12 @@ def taper(
     -------
     The tapered patch.
 
+    Notes
+    -----
+    A dimension with missing samples (holes in its step) raises; use
+    [split_gaps](`dascore.Patch.split_gaps`) or
+    [fill_gaps](`dascore.Patch.fill_gaps`) first.
+
     See Also
     --------
     [Patch.taper_range](`dascore.Patch.taper_range`)

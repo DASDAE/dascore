@@ -120,6 +120,10 @@ def integrate(
     cannot name all the way through clears `data_type` rather than
     leaving a stale one on it.
 
+    A dimension with missing samples (holes in its step) raises; use
+    [split_gaps](`dascore.Patch.split_gaps`) or
+    [fill_gaps](`dascore.Patch.fill_gaps`) first.
+
     Examples
     --------
     >>> import dascore as dc
