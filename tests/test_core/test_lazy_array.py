@@ -80,6 +80,15 @@ def two_sources(two_files):
 
 
 @pytest.fixture(scope="module")
+def square_source(patch, tmp_path_factory):
+    """The source of a DASDAE file holding a square array."""
+    path = tmp_path_factory.mktemp("lazy_square") / "square.h5"
+    square = patch.select(distance=(0, 20), time=(0, 20), samples=True)
+    dc.write(square, path, "dasdae")
+    return dc.read(path)[0]._source
+
+
+@pytest.fixture(scope="module")
 def two_keys(patch, tmp_path_factory):
     """Two patches of different data in one DASDAE file, read back."""
     path = tmp_path_factory.mktemp("lazy_keys") / "keys.h5"
@@ -2029,59 +2038,48 @@ class TestCoalescedReads:
         assert np.array_equal(concat([plain, turned]).load(), expected)
         assert len(reads) == 2
 
-    def test_square_transpose_is_not_merged(self):
+    def test_square_transpose_is_not_merged(self, square_source, reads):
         """A transposed window of a square source is not merged with a plain one."""
-        whole = ArraySource(path="/a.h5", format="DASDAE", version="1").describe(
-            (10, 10), "f4"
-        )
-        plain = LazyArray.from_source(whole[0:5, 0:5])
-        turned = LazyArray.from_source(whole[0:5, 5:10]).transpose()
-        array = concat([plain, turned])
-        assert len(lazy_module._coalesced(array._block())) == 2
+        data = square_source.load()
+        reads.clear()
+        plain = LazyArray.from_source(square_source[0:5, 0:5])
+        turned = LazyArray.from_source(square_source[0:5, 5:10]).transpose()
+        expected = np.concatenate([data[0:5, 0:5], data[0:5, 5:10].T])
+        assert np.array_equal(concat([plain, turned]).load(), expected)
+        assert len(reads) == 2
 
-    def test_a_run_turning_is_cut(self):
-        """Tiles which join along one axis, then another, are two runs."""
-        whole = ArraySource(path="/a.h5", format="DASDAE", version="1").describe(
-            (3, 2), "f4"
-        )
+    def test_a_run_turning_is_cut(self, two_sources, patch, reads):
+        """Tiles which join along one axis, then another, are read as two runs."""
+        whole = two_sources[0]
         boxes = [(0, 1, 0, 1), (0, 2, 1, 2), (1, 2, 0, 1), (2, 3, 0, 1), (2, 3, 1, 2)]
         array = LazyArray.from_sources(
             [whole[a:b, c:d] for a, b, c, d in boxes],
             starts=[(a, c) for a, _, c, _ in boxes],
         )
-        block = array.validate()._block()
-        stops = lazy_module._coalesced(block).axes["out_stop"].tolist()
-        assert stops == [[1, 1], [2, 2], [3, 1], [3, 2]]
+        assert np.array_equal(array.load(), patch.data[0:3, 0:2])
+        windows = [x.windows for x in reads]
+        assert windows == [
+            ((0, 1), (0, 1)),
+            ((0, 2), (1, 2)),
+            ((1, 3), (0, 1)),
+            ((2, 3), (1, 2)),
+        ]
 
     @pytest.mark.parametrize(
-        ("dtype", "cast", "merged"),
-        [("f8", None, 1), ("u4", None, 2), ("f8", "u4", 2), ("f8", "f8", 1)],
+        ("dtype", "cast", "count"),
+        [("f8", None, 1), ("u4", None, 2), ("f8", "u4", 2), ("f8", "U", 2)],
     )
-    def test_float_to_int_is_read_apart(self, dtype, cast, merged):
-        """A float read into integers, whose invalid values vary, is read apart."""
-        array = LazyArray.from_columns(
-            ["/a.h5", "/a.h5"],
-            (1,),
-            start=[[0], [1]],
-            extent=2,
-            cast_via=cast,
-            **FORMAT,
-            dtype=dtype,
+    def test_conversions_which_vary_are_read_apart(
+        self, two_sources, reads, dtype, cast, count
+    ):
+        """Floats read into integers, or through text, are read a window at a time."""
+        source = two_sources[0]
+        array = LazyArray.from_sources(
+            [source[0:1], source[1:2]], dtype=dtype, cast_via=[cast, cast]
         )
-        assert len(lazy_module._coalesced(array._block())) == merged
-
-    def test_string_casts_are_read_apart(self):
-        """A cast to text, whose width the samples decide, keeps members apart."""
-        array = LazyArray.from_columns(
-            ["/a.h5", "/a.h5"],
-            (1,),
-            start=[[0], [1]],
-            extent=2,
-            cast_via="U",
-            **{**FORMAT, "source_dtype": "u1"},
-            dtype="u1",
-        )
-        assert len(lazy_module._coalesced(array._block())) == 2
+        with np.errstate(invalid="ignore"):
+            array.load()
+        assert len(reads) == count
 
     @pytest.mark.parametrize(("dtype", "merged"), [("f4", 1), ("S10", 2)])
     def test_only_numbers_merge(self, dtype, merged):
@@ -2115,12 +2113,12 @@ class TestCoalescedReads:
         # Cut where members start in another 30 rows: 0-29, 30-59, 60-89.
         assert [x.windows[0] for x in reads] == [(0, 50), (50, 60), (60, 100)]
 
-    def test_members_over_the_budget_stay_apart(self, two_sources, monkeypatch):
+    def test_members_over_the_budget_stay_apart(self, two_sources, reads, monkeypatch):
         """Members each bigger than the budget are read one at a time."""
         monkeypatch.setattr(lazy_module, "_RUN_BYTES", 1)
         array = LazyArray.from_sources([two_sources[0][0:10], two_sources[0][10:20]])
-        block = array._block()
-        assert lazy_module._coalesced(block) is block
+        array.load()
+        assert len(reads) == 2
 
     @pytest.mark.parametrize("seed", range(20))
     def test_random_cuts_load_alike(self, two_sources, monkeypatch, seed):
