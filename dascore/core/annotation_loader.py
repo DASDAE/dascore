@@ -146,7 +146,21 @@ def _read_attrs(directory: Path) -> dict[str, Any]:
             f"an annotation set declare {_SET_TAG!r}."
         )
         raise ParameterError(msg)
+    if retired := sorted(set(_RETIRED_ATTRS) & set(data)):
+        replaced = ", ".join(f"{x} (now {_RETIRED_ATTRS[x]})" for x in retired)
+        msg = (
+            f"{quote_path(path)} states {replaced}, which an earlier layout "
+            "wrote; rewrite the set with io.save."
+        )
+        raise InvalidAnnotationError(msg)
     return data
+
+
+# Attributes an earlier layout wrote, and what states them now.
+_RETIRED_ATTRS = {
+    "history": "data_id",
+    "columns": "annotation_columns and feature_columns",
+}
 
 
 def _read_dimension(series: pd.Series, path: Path) -> pd.Series:
@@ -916,14 +930,18 @@ def _load_set(directory: Path, attrs: Mapping, dims, **kwargs) -> AnnotationSet:
         "no annotations",
         ordered=True,
         skip=skip,
-        text=_text_columns(columns),
+        text=_stated_text(attrs, "annotation_columns"),
     )
     frame = _restore_dtypes(frame, columns, table)
     features = None
     if (path := _one_spelling(directory, FEATURE_STEM, TABLE_SUFFIXES)) is not None:
         columns = attrs.get("feature_columns")
         features = _read_set_table(
-            path, (), "no features", skip=_undeclared(path), text=_text_columns(columns)
+            path,
+            (),
+            "no features",
+            skip=_undeclared(path),
+            text=_stated_text(attrs, "feature_columns"),
         )
         features = _restore_dtypes(features, columns, path)
     return AnnotationSet(
@@ -991,6 +1009,18 @@ def _text_columns(columns: Mapping | None) -> frozenset[str]:
         for name, dtype in _declared_dtypes(columns).items()
         if _is_text_dtype(dtype)
     )
+
+
+def _stated_text(attrs: Mapping, key: str) -> frozenset[str]:
+    """The text columns a set, or any set saved flat into it, declares."""
+    children = (attrs.get("sets") or {}).values()
+    stated = [attrs.get(key), *(_child_field(x, key) for x in children)]
+    return frozenset().union(*(_text_columns(x) for x in stated))
+
+
+def _child_field(child, key: str):
+    """Read one field of a child's attributes, a document or a model."""
+    return child.get(key) if isinstance(child, Mapping) else getattr(child, key, None)
 
 
 def _load_file(path: Path, dims, **kwargs) -> AnnotationSet:

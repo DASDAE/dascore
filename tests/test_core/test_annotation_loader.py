@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import tempfile
+from decimal import Decimal
 from pathlib import Path
 
 import numpy as np
@@ -587,6 +588,14 @@ class TestSavingOverASet:
         assert not (directory / "bases.json").exists()
         assert dc.annotations(directory) == regions
 
+    def test_a_retired_vertices_table_is_superseded(self, regions, tmp_path):
+        """Saving over an old set clears its vertices table, so it reads back."""
+        directory = regions.io.save(tmp_path / "picks")
+        (directory / "vertices.csv").write_text("id,seq,distance\na,0,1.0\n")
+        regions.io.save(directory)
+        assert not (directory / "vertices.csv").exists()
+        assert dc.annotations(directory) == regions
+
     def test_a_hand_authored_yaml_is_superseded(self, tmp_path):
         """Saving a set read from YAML does not leave two attrs files."""
         directory = tmp_path / "picks"
@@ -753,13 +762,17 @@ class TestDeclaringDimensions:
         with pytest.raises(InvalidAnnotationError, match="Extra inputs"):
             dc.annotations(directory)
 
-    def test_a_retired_attrs_field(self, regions, tmp_path):
-        """A set written with history is refused rather than read without it."""
+    @pytest.mark.parametrize(
+        "field, value, now",
+        [("history", ["decimate"], "data_id"), ("columns", {}, "annotation_columns")],
+    )
+    def test_a_retired_attrs_field(self, regions, tmp_path, field, value, now):
+        """A set written with a retired field names what replaced it."""
         directory = regions.io.save(tmp_path / "picks")
         document = json.loads((directory / "attrs.json").read_text())
-        document["history"] = ["decimate"]
+        document[field] = value
         (directory / "attrs.json").write_text(json.dumps(document))
-        with pytest.raises(InvalidAnnotationError, match="history"):
+        with pytest.raises(InvalidAnnotationError, match=f"{field}.*{now}"):
             dc.annotations(directory)
 
     def test_a_directory_which_states_them_refuses_others(self, regions, tmp_path):
@@ -1032,11 +1045,17 @@ class TestWriting:
         text = dc.AnnotationSet(frame, dims=("distance",)).io.to_csv()
         assert '{""n"": 1}' in text
 
+    def test_a_frozen_nested_extra_is_one_document(self):
+        """A mapping held frozen inside another is written as JSON, not as text."""
+        frame = pd.DataFrame({"distance": [1.0], "meta": [{"a": {"b": [1]}}]})
+        text = dc.AnnotationSet(frame, dims=("distance",)).io.to_csv()
+        assert '{""a"": {""b"": [1]}}' in text
+
     def test_an_extra_json_cannot_spell(self):
         """A nested value with no json type is written as its text."""
-        frame = pd.DataFrame({"distance": [1.0], "meta": [{"s": {1}}]})
+        frame = pd.DataFrame({"distance": [1.0], "meta": [{"s": Decimal("1.5")}]})
         text = dc.AnnotationSet(frame, dims=("distance",)).io.to_csv()
-        assert '{""s"": ""1""}' in text
+        assert '{""s"": ""1.5""}' in text
 
     def test_the_attrs_name_their_model(self, regions, tmp_path):
         """The document says what it holds, as every stored object does."""
@@ -1136,6 +1155,27 @@ class TestCollections:
         assert list(loaded.features["set"]) == ["auto", "hand", "hand"]
         assert loaded.bases == {"arrival": curve}
         assert loaded["p2"].set == "hand"
+
+    def test_child_text_declarations_survive_a_flat_save(self, tmp_path):
+        """A flattened collection reads its children's text columns as text."""
+        root = tmp_path / "sets"
+        for name in ("a", "b"):
+            frame = pd.DataFrame(
+                {"feature_id": [f"f{name}"], "time": [1.0], "label": ["002"]}
+            )
+            features = pd.DataFrame({"id": [f"f{name}"], "code": ["001"]})
+            dc.AnnotationSet(
+                frame,
+                features=features,
+                dims=("time",),
+                annotation_columns={"label": {"dtype": "str"}},
+                feature_columns={"code": {"dtype": "str"}},
+            ).io.save(root / name)
+        loaded = dc.annotations(root)
+        flat = dc.annotations(loaded.io.save(tmp_path / "flat"))
+        assert list(flat.features["code"]) == ["001", "001"]
+        assert list(flat.annotations["label"]) == ["002", "002"]
+        assert flat == loaded
 
     def test_a_basis_key_naming_two_curves(self, with_features, tmp_path):
         """One key names one curve across the sets loaded together."""
@@ -1932,6 +1972,15 @@ class TestParquet:
         loaded = dc.annotations(directory)
         assert loaded == with_features
         assert loaded["p2"].basis == curve
+
+    def test_nested_feature_cells(self, tmp_path):
+        """A nested feature cell, held frozen, reads back equal."""
+        frame = pd.DataFrame({"feature_id": ["a"], "time": [1.0]})
+        features = pd.DataFrame({"id": ["a"], "meta": [{"values": [1, 2]}]})
+        out = dc.AnnotationSet(frame, features=features, dims=DIMS)
+        loaded = dc.annotations(out.io.save(tmp_path / "picks", format="parquet"))
+        assert loaded == out
+        assert loaded.features.loc[0, "meta"] == {"values": (1, 2)}
 
     def test_a_collection(self, regions, picks, tmp_path):
         """A set is a set whichever encoding it is written in."""

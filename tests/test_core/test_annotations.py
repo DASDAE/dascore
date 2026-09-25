@@ -571,6 +571,26 @@ class TestColumns:
                 feature_columns={"magnitude": {"dtype": "float64"}},
             )
 
+    def test_an_implied_feature_must_fit_a_declared_dtype(self):
+        """An implied feature leaves a column blank, which int64 cannot hold."""
+        frame = pd.DataFrame({"feature_id": ["a", "b"], "time": [1.0, 2.0]})
+        features = pd.DataFrame({"id": ["a"], "rank": [1]})
+        with pytest.raises(ParameterError, match="which feature_id implies"):
+            AnnotationSet(
+                frame,
+                features=features,
+                dims=DIMS,
+                feature_columns={"rank": {"dtype": "int64"}},
+            )
+        nullable = features.astype({"rank": "Int64"})
+        out = AnnotationSet(
+            frame,
+            features=nullable,
+            dims=DIMS,
+            feature_columns={"rank": {"dtype": "Int64"}},
+        )
+        assert out.features["rank"].dtype.name == "Int64"
+
     @pytest.mark.parametrize(
         ("dtype", "values"),
         [("str", ["a", "b"]), ("category", ["a", "b"]), ("Int64", [1, 2])],
@@ -788,6 +808,14 @@ class TestFeatures:
         with pytest.raises(ParameterError, match="coordinate column"):
             AnnotationSet(frame, features=features, dims=DIMS)
 
+    @pytest.mark.parametrize("column", ["feature_id", "seq"])
+    def test_row_columns_on_features_refused(self, column):
+        """What names and orders a row within a feature is not a feature's."""
+        features = pd.DataFrame({"id": ["a"], column: ["x"]})
+        frame = pd.DataFrame({"feature_id": ["a"], "time": [1.0]})
+        with pytest.raises(ParameterError, match="which an annotation states"):
+            AnnotationSet(frame, features=features, dims=DIMS)
+
     def test_a_feature_locating_nothing_refused(self):
         """No members and no basis is nowhere."""
         features = pd.DataFrame({"id": ["a"]})
@@ -861,6 +889,15 @@ class TestPaths:
         features = pd.DataFrame({"id": ["p"], "geometry": ["path"]})
         path = AnnotationSet(frame, features=features, dims=DIMS).geometry("p")
         assert [x["distance"] for x in path.vertices] == [(0.0, 1.0), (5.0, 6.0)]
+
+    def test_large_ordinals_stay_exact(self):
+        """Seq values past a float's integer precision are neither rounded
+        together nor taken for a repeat.
+        """
+        big = [2**53 + 2, 2**53 + 1]
+        out = self._path(distance=[2.0, 1.0], seq=big)
+        assert list(out.annotations["seq"]) == big
+        assert out.geometry("p").vertices[0]["distance"] == (1.0, 2.0)
 
     def test_text_ordinals_sort_as_numbers(self):
         """A seq written as text orders as the number it says."""
@@ -1011,6 +1048,17 @@ class TestOrderColumns:
         assert list(frame["part"]) == [0, 0, 0, pd.NA, pd.NA, pd.NA]
         assert list(frame["ring"][:3]) == [0, 0, 0]
 
+    def test_present_for_a_path_with_no_members(self):
+        """A basis-only path is still a path, so the columns are there."""
+        features = pd.DataFrame({"id": ["p"], "geometry": ["path"], "basis": ["m"]})
+        frame = pd.DataFrame({"time": [1.0]})
+        out = AnnotationSet(
+            frame, features=features, bases={"m": _moveout()}, dims=DIMS
+        ).annotations
+        for name in ("seq", "part", "ring"):
+            assert out[name].dtype.name == "Int64"
+            assert out[name].isna().all()
+
     @pytest.mark.parametrize("name", ["seq", "part", "ring"])
     def test_on_a_group_member_refused(self, name):
         """Ordering a member of an unordered feature says nothing."""
@@ -1072,10 +1120,17 @@ class TestBases:
             AnnotationSet(frame, features=features, bases={"m": _moveout()}, dims=DIMS)
 
     def test_dims_must_match_the_members(self):
-        """A curve over distance and time does not draw a path in distance."""
+        """A curve in distance alone does not draw a path in distance and time."""
         line = Line(start={"distance": 0.0}, end={"distance": 1.0})
         with pytest.raises(ParameterError, match="its basis in"):
             self._path(line)
+
+    def test_basis_over_more_dims_than_members_refused(self):
+        """A curve over distance and time does not draw a path in distance."""
+        frame = pd.DataFrame({"feature_id": ["p", "p"], "distance": [0.0, 100.0]})
+        features = pd.DataFrame({"id": ["p"], "geometry": ["path"], "basis": ["m"]})
+        with pytest.raises(ParameterError, match="its basis in"):
+            AnnotationSet(frame, features=features, bases={"m": _moveout()}, dims=DIMS)
 
     def test_basis_only_path_samples(self):
         """A path with a curve and no members is drawn on demand."""
@@ -1133,6 +1188,25 @@ class TestFrames:
         frame = tracks.features
         frame.loc[0, "vehicle_type"] = "changed"
         assert tracks.features.loc[0, "vehicle_type"] == "train"
+
+    def test_nested_annotation_cells_are_frozen(self):
+        """A nested cell handed out cannot change the set."""
+        frame = pd.DataFrame({"time": [1.0], "meta": [{"values": [1]}]})
+        out = AnnotationSet(frame, dims=DIMS)
+        with pytest.raises(AttributeError):
+            out.annotations.loc[0, "meta"]["values"].append(2)
+        with pytest.raises(TypeError):
+            out.annotations.loc[0, "meta"]["values"] = None
+        assert out.annotations.loc[0, "meta"] == {"values": (1,)}
+
+    def test_nested_feature_cells_are_frozen(self):
+        """The same holds for the features table."""
+        frame = pd.DataFrame({"feature_id": ["a"], "time": [1.0]})
+        features = pd.DataFrame({"id": ["a"], "meta": [{"values": [1]}]})
+        out = AnnotationSet(frame, features=features, dims=DIMS)
+        with pytest.raises(AttributeError):
+            out.features.loc[0, "meta"]["values"].append(2)
+        assert out.features.loc[0, "meta"] == {"values": (1,)}
 
     def test_extras_are_frozen(self):
         """A mutable cell cannot be edited through the feature holding it."""

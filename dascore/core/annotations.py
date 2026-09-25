@@ -823,7 +823,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         frame, self._spellings = _read_annotations(annotations, self._attrs)
         table = _read_features(features, self._attrs)
         self._bases = _read_bases(bases, self._attrs.dims)
-        self._features = _add_implicit(frame, table)
+        self._features = _add_implicit(frame, table, self._attrs.feature_columns)
         self._df = _check_members(frame, self._features, self._spellings, self._bases)
 
     # --- what the set is
@@ -1129,7 +1129,9 @@ def _read_bases(bases, dims) -> FrozenDict:
     return FrozenDict(out)
 
 
-def _add_implicit(frame: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
+def _add_implicit(
+    frame: pd.DataFrame, features: pd.DataFrame, columns: Mapping
+) -> pd.DataFrame:
     """Append a group for every feature_id naming no features row."""
     ids = frame["feature_id"].map(_text)
     known = set(features["id"].map(_text))
@@ -1143,7 +1145,17 @@ def _add_implicit(frame: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
     out = pd.concat([features, pd.DataFrame(rows)], ignore_index=True, sort=False)
     # Concatenation fills text columns with NaN; blank is None here.
     text = {x: out[x] for x in out.columns if out[x].dtype == object}
-    return _assign(out, {k: v.where(v.notna(), None) for k, v in text.items()})
+    out = _assign(out, {k: v.where(v.notna(), None) for k, v in text.items()})
+    try:
+        _check_declared(out, columns)
+    except ParameterError as error:
+        msg = (
+            f"The feature(s) {', '.join(new[:5])}, which feature_id implies, "
+            f"leave a declared features column unstated: {error} Declare a "
+            "dtype which holds a blank, such as Int64, or state the features."
+        )
+        raise ParameterError(msg) from error
+    return out
 
 
 def _check_members(frame, features, spellings, bases) -> pd.DataFrame:
@@ -1160,7 +1172,8 @@ def _check_members(frame, features, spellings, bases) -> pd.DataFrame:
         )
     )
     ordered = ids.map(lambda x: kinds.get(x, "group") in _LEAST).to_numpy(bool)
-    frame = _read_ordinals(frame, ordered, ids)
+    drawn = any(x in _LEAST for x in kinds.values())
+    frame = _read_ordinals(frame, ordered, ids, drawn)
     members = frame.groupby(ids.values, sort=False).indices
     keys = features["basis"] if "basis" in features.columns else [None] * len(features)
     for identity, key in zip(features["id"].map(_text), keys, strict=True):
@@ -1190,8 +1203,11 @@ def _check_members(frame, features, spellings, bases) -> pd.DataFrame:
     return frame
 
 
-def _read_ordinals(frame, ordered: np.ndarray, ids: pd.Series) -> pd.DataFrame:
-    """Read seq, part and ring: whole numbers, only on ordered members."""
+def _read_ordinals(frame, ordered: np.ndarray, ids: pd.Series, drawn: bool):
+    """
+    Read seq, part and ring: whole numbers, only on ordered members, and
+    held only where the set has a path or polygon.
+    """
     present = [x for x in ORDINAL_COLUMNS if x in frame.columns]
     for name in present:
         stray = _stated_cells(frame[name]) & ~ordered
@@ -1202,14 +1218,17 @@ def _read_ordinals(frame, ordered: np.ndarray, ids: pd.Series) -> pd.DataFrame:
                 "or polygon; their feature is neither."
             )
             raise ParameterError(msg)
-    if not ordered.any():
+    if not drawn:
         return frame.drop(columns=present)
     changed = {}
     for name in ORDINAL_COLUMNS:
         series = frame[name] if name in frame.columns else _blank_column(frame.index)
         stated = _stated_cells(series)
-        values = read_ordinal(series).astype("float64")
-        bad = stated & ~((values % 1 == 0) & (values >= 0)).to_numpy(bool)
+        values = read_ordinal(series)
+        # Only a float can be fractional; integers stay integers, however big.
+        whole = values % 1 == 0 if values.dtype.kind == "f" else True
+        valid = (whole & (values >= 0)).fillna(False).to_numpy(bool)
+        bad = stated & ~valid
         if bad.any():
             row = frame.index[bad][0]
             msg = (
@@ -1217,11 +1236,12 @@ def _read_ordinals(frame, ordered: np.ndarray, ids: pd.Series) -> pd.DataFrame:
                 "non-negative whole number."
             )
             raise ParameterError(msg)
+        values = values.astype("Int64")
         if name != "seq":
-            values = values.where(stated | ~ordered, 0.0)
+            values = values.where(stated | ~ordered, 0)
         changed[name] = values
     seq = changed["seq"]
-    keys = [ids.values, changed["part"].values, changed["ring"].values]
+    keys = [ids, changed["part"], changed["ring"]]
     blank = pd.Series(~_stated_cells(seq) & ordered, index=frame.index)
     groups = blank.groupby(keys, sort=False)
     if (groups.any() & ~groups.all()).any():
@@ -1230,10 +1250,10 @@ def _read_ordinals(frame, ordered: np.ndarray, ids: pd.Series) -> pd.DataFrame:
             "state it on all of them, or on none to take row order."
         )
         raise ParameterError(msg)
-    order = blank.groupby(keys, sort=False).cumcount().astype("float64")
+    order = blank.groupby(keys, sort=False).cumcount()
     changed["seq"] = seq.where(~blank, order)
     keep = pd.Series(ordered, index=frame.index)
-    held = {k: v.where(keep).astype("Int64") for k, v in changed.items()}
+    held = {k: v.where(keep, pd.NA) for k, v in changed.items()}
     return _assign(frame, held)
 
 
@@ -1388,7 +1408,20 @@ def _coerce_frame(data, what: str) -> pd.DataFrame:
         if len(frame.columns):
             msg += " Every column they state is private, so none is theirs."
         raise ParameterError(msg)
-    return kept
+    return _freeze_cells(kept)
+
+
+def _freeze_cells(frame: pd.DataFrame) -> pd.DataFrame:
+    """Hold nested cells immutably, so a shallow copy cannot reach them."""
+    nested = list | tuple | set | dict | Mapping | np.ndarray
+    changed = {}
+    for name in frame.columns:
+        series = frame[name]
+        if series.dtype != object or not any(isinstance(x, nested) for x in series):
+            continue
+        cells = [_freeze(x) if isinstance(x, nested) else x for x in series]
+        changed[name] = pd.Series(cells, index=series.index, dtype=object)
+    return _assign(frame, changed)
 
 
 def _read_spellings(frame: pd.DataFrame, dims) -> dict[str, _Spelling]:
@@ -1428,6 +1461,13 @@ def _check_columns(frame: pd.DataFrame, attrs: AnnotationSetAttrs, table: str):
             msg = (
                 f"The features state the coordinate column(s) {', '.join(coords)}; "
                 "a feature is located by its annotations, which hold coordinates."
+            )
+            raise ParameterError(msg)
+        rows_only = ("feature_id", *ORDINAL_COLUMNS)
+        if misplaced := sorted(set(rows_only) & set(frame.columns)):
+            msg = (
+                f"The features state {', '.join(misplaced)}, which an annotation "
+                "states to name and order itself within a feature."
             )
             raise ParameterError(msg)
         _check_declared(frame, attrs.feature_columns)
@@ -2054,6 +2094,8 @@ def _json_default(value):
     its text: a bare `ValueError: Circular reference detected` names
     neither the cell nor the file it was being written to.
     """
+    if isinstance(value, Mapping):
+        return dict(value)
     spelled = _writable_cell(value)
     return spelled if spelled is not value else str(value)
 
@@ -2225,7 +2267,10 @@ def _refuse_unwritable_durations(annotations: AnnotationSet) -> None:
 
 def _refuse_bare(annotations: AnnotationSet) -> None:
     """Refuse to write a set a bare annotations table cannot rebuild."""
-    implied = _add_implicit(annotations._df, _read_features(None, annotations.attrs))
+    attrs = annotations.attrs
+    implied = _add_implicit(
+        annotations._df, _read_features(None, attrs), attrs.feature_columns
+    )
     features = _ordered_columns(annotations._features)
     if annotations._bases or not features.equals(_ordered_columns(implied)):
         msg = (
@@ -2295,11 +2340,13 @@ def save_annotation_set(
         *(directory / f"{x}{json_suffix}" for x in documents),
         *(directory / f"{x}{suffix}" for x in tables),
     }
+    # The retired vertices table is claimed so saving over an old set clears it.
     claimed = {
         ATTRS_STEM: OBJECT_SUFFIXES,
         BASES_STEM: OBJECT_SUFFIXES,
         ANNOTATION_STEM: TABLE_SUFFIXES,
         FEATURE_STEM: TABLE_SUFFIXES,
+        "vertices": TABLE_SUFFIXES,
     }
     superseded = [
         x
