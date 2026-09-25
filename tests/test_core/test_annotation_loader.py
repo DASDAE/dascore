@@ -1474,7 +1474,7 @@ class TestCollections:
         directory = root / "hand"
         directory.mkdir(parents=True)
         (directory / "annotations.csv").write_text("set,note,time\nother,noise,1.0\n")
-        with pytest.raises(InvalidAnnotationError, match="states a set column"):
+        with pytest.raises(InvalidAnnotationError, match="no set loaded together"):
             dc.annotations(root, dims=("time",))
 
     def test_sets_stated_twice(self, collection):
@@ -1687,10 +1687,10 @@ class TestCollections:
         assert sorted(loaded.attrs.sets) == ["auto", "hand"]
 
     def test_a_set_column_on_a_set_of_its_own(self):
-        """A set which states no sets is not a collection, so its labels are its own."""
+        """A set which states no sets has no label to give a row."""
         frame = pd.DataFrame({"set": ["whatever"], "time": [1.0]})
-        (feature,) = list(dc.AnnotationSet(frame, dims=("time",)))
-        assert feature.set == "whatever"
+        with pytest.raises(ParameterError, match="no set loaded together"):
+            dc.AnnotationSet(frame, dims=("time",))
 
     def test_a_set_with_no_annotations(self, picks, tmp_path):
         """A set which states nothing is still one of the sets loaded."""

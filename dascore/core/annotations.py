@@ -2822,11 +2822,21 @@ def _check_set_labels(frame: pd.DataFrame, attrs: AnnotationSetAttrs, table: str
     """
     Refuse a row whose set label names none of the sets stated.
 
-    Only checked where sets are stated: a set on its own may carry a `set`
-    column meaning whatever it means. A blank label is a row of the
-    collection itself, such as one added after loading.
+    A label reaches back to a set's attributes, so a set stating none holds
+    no label: a stray one would take a child's provenance once merged into
+    a collection. A blank label is a row of the collection itself, such as
+    one added after loading.
     """
-    if not attrs.sets or frame.empty:
+    if frame.empty:
+        return
+    if not attrs.sets:
+        labels = frame["set"].map(_text) if "set" in frame.columns else []
+        if stray := sorted(set(labels) - {""}):
+            msg = (
+                f"The {table} states the set {stray[0]!r}, which no set loaded "
+                "together states; a set of its own labels no row."
+            )
+            raise ParameterError(msg)
         return
     stated = ", ".join(sorted(attrs.sets))
     if "set" not in frame.columns:

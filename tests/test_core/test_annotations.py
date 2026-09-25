@@ -507,9 +507,29 @@ class TestColumns:
 
     def test_the_set_column_is_a_label(self):
         """A row read with others says which set it came from."""
-        out = AnnotationSet(pd.DataFrame({"time": [1.0], "set": ["p"]}), dims=DIMS)
+        frame = pd.DataFrame({"time": [1.0], "set": ["p"]})
+        attrs = {"dims": DIMS, "sets": {"p": {"dims": ("time",)}}}
+        out = AnnotationSet(frame, attrs=attrs)
         assert _first(out).set == "p"
         assert "set" not in _first(out).extra
+
+    def test_a_label_without_sets_refused(self):
+        """A label names a set loaded together, so a plain set holds none."""
+        frame = pd.DataFrame({"time": [2.0], "id": ["p"], "set": ["x"]})
+        with pytest.raises(ParameterError, match="states the set 'x'"):
+            AnnotationSet(frame, dims=DIMS)
+
+    def test_a_feature_label_without_sets_refused(self):
+        """The features table's labels are held to the same rule."""
+        frame = pd.DataFrame({"time": [2.0], "feature_id": ["f"]})
+        features = pd.DataFrame({"id": ["f"], "set": ["x"]})
+        with pytest.raises(ParameterError, match="states the set 'x'"):
+            AnnotationSet(frame, features=features, dims=DIMS)
+
+    def test_blank_labels_allowed(self):
+        """A blank label is no label, in a plain set too."""
+        frame = pd.DataFrame({"time": [2.0], "set": [None]})
+        assert len(AnnotationSet(frame, dims=DIMS)) == 1
 
     def test_private_column_is_not_an_extra(self):
         """An underscore says the column is the author's, not the set's."""
