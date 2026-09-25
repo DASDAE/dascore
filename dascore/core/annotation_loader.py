@@ -1,19 +1,20 @@
 """Read annotation sets from storage.
 
-A set is either a directory containing ``annotations.csv``, optional
-attributes, and any required ``vertices.csv``; or a bare table whose dimensions
-the caller supplies. A directory of set directories loads as one set with a
-``set`` column. Per-set dimensions, provenance, and documented columns remain
-under ``attrs.sets``. IDs remain global, so duplicate IDs across sets are
-rejected.
+A set is either a directory holding an ``annotations`` table, optional
+``attrs``, a ``features`` table where the set has features, and ``bases.json``
+where it has bases; or a bare annotations table whose dimensions the caller
+supplies. A directory of set directories loads as one set with a ``set``
+column on both tables. Per-set dimensions, provenance, and documented columns
+remain under ``attrs.sets``. Feature ids, and annotation ids where stated, are
+unique across the sets loaded together.
 
 A table may declare dimensions in a ``# dims: distance, time`` comment above
 its header. Data directories may store annotations under ``.annotations``.
 Columns beginning with an underscore are ignored.
 
-CSV cells are typed before validation. ``basis`` contains its curve's JSON
-document, while dimension columns use the set's normal reader. Table errors
-are exposed as annotation errors.
+CSV cells are typed before validation: dimension columns use the set's
+reader, order columns are numbers, and reserved columns stay text. Table
+errors are exposed as annotation errors.
 """
 
 from __future__ import annotations
@@ -31,19 +32,18 @@ from pydantic import ValidationError
 from dascore.core.annotations import (
     _MAX,
     _MIN,
-    _VERTEX_COLUMNS,
     ANNOTATION_STEM,
     ATTRS_STEM,
+    BASES_STEM,
     DIMS_KEY,
+    FEATURE_STEM,
     OBJECT_SUFFIXES,
+    ORDINAL_COLUMNS,
     RESERVED_COLUMNS,
     TABLE_SUFFIXES,
     TEXT_DTYPES,
-    VERTEX_STEM,
     AnnotationSet,
     _text,
-    annotation_set_to_dataframe,
-    annotation_set_to_vertices,
     read_dimension,
     read_ordinal,
 )
@@ -63,15 +63,9 @@ from dascore.utils.tables import (
 # What an attrs file declares itself to be; the model writes its own tag.
 _SET_TAG = "AnnotationSetAttrs"
 
-# Columns whose cells stay text however they are spelled: an id which
-# looks like a number is still the label the vertices name it by. Derived
-# rather than listed, so a column added to the reserved set is text by
-# default rather than silently falling through to `parse_cell`. `value`
-# holds whichever kind its group holds, and `basis` holds a document.
-_TEXT_COLUMNS = frozenset(RESERVED_COLUMNS) - {"value", "basis"}
-
-# The column a vertex states its place in the order by; a number.
-_ORDINAL = _VERTEX_COLUMNS[1]
+# Reserved columns stay text however they are spelled: an id which looks
+# like a number is still a label. The order columns are numbers.
+_TEXT_COLUMNS = frozenset(RESERVED_COLUMNS) - set(ORDINAL_COLUMNS)
 
 # What a table may carry above its header: comment lines, one of which may
 # declare the dimensions the table is stated in.
@@ -90,7 +84,7 @@ PARQUET_SUFFIX = TABLE_SUFFIXES[1]
 BLESSED_NAME = ".annotations"
 
 
-def _read_object(path: Path) -> dict[str, Any]:
+def _read_object(path: Path, holds: str = "states no attributes") -> dict[str, Any]:
     """Parse one YAML or JSON object file into a mapping."""
     # The suffix is casefolded, as the inventory casefolds its own: an
     # attrs.JSON is the file attrs.json would be, and reading it as YAML
@@ -102,7 +96,7 @@ def _read_object(path: Path) -> dict[str, Any]:
         path,
         "json" if is_json else "yaml",
         error=ParameterError,
-        holds="states no attributes",
+        holds=holds,
     )
 
 
@@ -152,7 +146,21 @@ def _read_attrs(directory: Path) -> dict[str, Any]:
             f"an annotation set declare {_SET_TAG!r}."
         )
         raise ParameterError(msg)
+    if retired := sorted(set(_RETIRED_ATTRS) & set(data)):
+        replaced = ", ".join(f"{x} (now {_RETIRED_ATTRS[x]})" for x in retired)
+        msg = (
+            f"{quote_path(path)} states {replaced}, which an earlier layout "
+            "wrote; rewrite the set with io.save."
+        )
+        raise InvalidAnnotationError(msg)
     return data
+
+
+# Attributes an earlier layout wrote, and what states them now.
+_RETIRED_ATTRS = {
+    "history": "data_id",
+    "columns": "annotation_columns and feature_columns",
+}
 
 
 def _read_dimension(series: pd.Series, path: Path) -> pd.Series:
@@ -161,26 +169,16 @@ def _read_dimension(series: pd.Series, path: Path) -> pd.Series:
 
 
 def _read_ordinal(series: pd.Series, path: Path) -> pd.Series:
-    """Read the vertex order column as the set reads one, naming the table."""
+    """Read an order column as the set reads one, naming the table."""
     return read_ordinal(series, f" of {quote_path(path)}")
 
 
-def _read_basis(series: pd.Series, path: Path) -> pd.Series:
-    """Read a basis column as the documents its cells hold."""
-
-    def read(cell):
-        if not isinstance(cell, str):
-            return cell
-        try:
-            return json.loads(cell)
-        except ValueError as error:
-            msg = (
-                f"A basis in {quote_path(path)} is not a JSON document: {error}. "
-                "A stored basis is what its curve dumps."
-            )
-            raise ParameterError(msg) from error
-
-    return series.map(read)
+def _read_bases(directory: Path) -> dict[str, Any] | None:
+    """Return the curve documents a set directory states, or None."""
+    path = _one_spelling(directory, BASES_STEM, OBJECT_SUFFIXES)
+    if path is None:
+        return None
+    return _read_object(path, holds="states no bases")
 
 
 def _dimension_spellings(dims: Sequence[str]) -> frozenset[str]:
@@ -207,16 +205,14 @@ def _read_cells(
     A column the set declares as text is left as the text it states:
     "001" read as a number would not be the label it was written as.
 
-    Only the vertices are ordered, so only they read ``seq`` as the number
-    it is: the annotations table does not reserve that name, and an
-    annotation carrying its own ``seq`` means whatever it says.
+    Only the annotations table is ordered, so only it reads ``seq``,
+    ``part`` and ``ring`` as numbers.
 
     A typed table -- parquet -- states what each column holds, so only its
-    text columns are read further, and only as far as a dimension or a
-    basis: text elsewhere is text, since a format with a boolean of its own
-    would have used one. Stating a type is not the same as stating a usable
-    one, so a dimension or a vertex order which arrives as something a
-    coordinate cannot be is refused rather than trusted.
+    text columns are read further, and only as far as a dimension: text
+    elsewhere is text, since a format with a boolean of its own would have
+    used one. A dimension or order column which arrives as a type it cannot
+    hold is refused rather than trusted.
     """
     spellings = _dimension_spellings(dims)
     out = {}
@@ -228,15 +224,13 @@ def _read_cells(
             # states is a thing the column is allowed to hold.
             if str(name) in spellings:
                 _check_kind(series, name, path, "iufMm", "numbers, times or durations")
-            elif ordered and str(name) == _ORDINAL:
+            elif ordered and str(name) in ORDINAL_COLUMNS:
                 _check_kind(series, name, path, "iuf", "a number")
             out[name] = series
         elif str(name) in spellings:
             out[name] = _read_dimension(series, path)
-        elif ordered and str(name) == _ORDINAL:
+        elif ordered and str(name) in ORDINAL_COLUMNS:
             out[name] = _read_ordinal(series, path)
-        elif str(name) == "basis":
-            out[name] = _read_basis(series, path)
         elif str(name) in text:
             out[name] = series
         elif typed:
@@ -463,7 +457,7 @@ def _refuse_stray_tables(directory: Path, known: Collection[str], what: str) -> 
     """
     Refuse a table whose name names no part of what a directory holds.
 
-    A ``vertexes.csv`` beside an ``annotations.csv`` claims to participate
+    A ``feature.csv`` beside an ``annotations.csv`` claims to participate
     in this convention and gets it wrong, which is worth more than being
     quietly skipped.
     """
@@ -525,7 +519,7 @@ def _given_attrs(kwargs: Mapping) -> Mapping:
 
 def _refuse_stated(directory: Path, kwargs: dict) -> None:
     """
-    Refuse attributes or vertices given for a directory which states them.
+    Refuse attributes, features or bases given for a directory which states them.
 
     Refused for a directory which holds a set or the sets, not for one
     carrying a bare `.annotations.csv`: that table states neither, so a
@@ -536,7 +530,8 @@ def _refuse_stated(directory: Path, kwargs: dict) -> None:
     _refuse_overrides(
         f"{quote_path(directory)}, which states them",
         attrs=kwargs.pop("attrs", None),
-        vertices=kwargs.pop("vertices", None),
+        features=kwargs.pop("features", None),
+        bases=kwargs.pop("bases", None),
     )
 
 
@@ -636,8 +631,8 @@ def _child_sets(directory: Path) -> list[Path]:
     annotations is half a set and says so, and one holding sets of its own
     is refused, since sets loaded together are one collection rather than a
     tree. Anything else is left alone -- the data the sets describe, a
-    folder of figures -- as is a directory holding only vertices, which is
-    never looked for without the annotations it belongs to.
+    folder of figures -- as is a directory holding only features, which are
+    never looked for without the annotations they belong to.
     """
     # Hidden names are skipped as the file scanner skips them: a
     # `.inventory` beside the sets describes the data, not the annotations.
@@ -752,50 +747,61 @@ def _declares_dims(directory: Path, attrs: Mapping) -> bool:
 def _merge_sets(
     loaded: Mapping[str, AnnotationSet], attrs: Mapping, **kwargs
 ) -> AnnotationSet:
-    """Build the one set the sets loaded together make."""
+    """Build the one set the sets loaded together make, table by table."""
     stated = [str(x) for x in iterate(attrs.get("dims") or ())]
-    # The collection's own dimensions first, then each set's in the order
-    # the sets were read, which is their names' -- so the order is stable
-    # for one directory, though renaming a set can change it.
+    # The collection's own dimensions first, then each set's in name order.
     dims = tuple(
         dict.fromkeys([*stated, *(x for one in loaded.values() for x in one.dims)])
     )
-    frames = {name: _labeled(one, name) for name, one in loaded.items()}
-    _refuse_undeclared_dims(loaded, frames, dims)
-    _refuse_mixed_spellings(frames, dims)
-    _refuse_mixed_kinds(frames, dims, "an annotation")
-    frame = pd.concat(frames.values(), ignore_index=True, sort=False)
-    _refuse_shared_ids(frame)
-    vertices = {
-        name: drawn
+    frames = {name: _labeled(one.annotations, name) for name, one in loaded.items()}
+    tables = {
+        name: _labeled(one.features, name)
         for name, one in loaded.items()
-        if not (drawn := annotation_set_to_vertices(one)).empty
+        if len(one.features)
     }
-    _refuse_mixed_vertices(vertices)
-    _refuse_mixed_kinds(vertices, dims, "a vertex")
+    _refuse_undeclared_dims(loaded, frames, dims)
+    _refuse_mixed_kinds(frames, dims)
+    frame = pd.concat(frames.values(), ignore_index=True, sort=False)
+    _refuse_shared_ids(frame, "annotation")
+    features = None
+    if tables:
+        features = pd.concat(tables.values(), ignore_index=True, sort=False)
+        _refuse_shared_ids(features, "feature")
     document = dict(attrs)
     document["dims"] = dims
     document["sets"] = {name: one.attrs for name, one in loaded.items()}
     return AnnotationSet(
         frame,
-        vertices=pd.concat(vertices.values(), ignore_index=True, sort=False)
-        if vertices
-        else None,
+        features=features,
+        bases=_merge_bases(loaded),
         attrs=document,
         **kwargs,
     )
 
 
-def _labeled(one: AnnotationSet, name: str) -> pd.DataFrame:
-    """
-    Return one set's annotations, saying which set each row came from.
+def _merge_bases(loaded: Mapping[str, AnnotationSet]) -> dict:
+    """Return every set's bases in one mapping; one key names one curve."""
+    out: dict[str, Any] = {}
+    owner: dict[str, str] = {}
+    for name, one in loaded.items():
+        for key, basis in one.bases.items():
+            if key in out and out[key] != basis:
+                msg = (
+                    f"The basis {key!r} names different curves in {owner[key]} "
+                    f"and {name}, so the sets cannot be read together."
+                )
+                raise ParameterError(msg)
+            out[key], owner[key] = basis, owner.get(key, name)
+    return out
 
-    Only the label is added. What the set states for itself stays in its
-    attributes, where `attrs.sets` keeps it and a row reads it back through
-    the label -- writing any of it into every row would store one fact
-    twice, in two places which can then disagree.
+
+def _labeled(frame: pd.DataFrame, name: str) -> pd.DataFrame:
     """
-    frame = annotation_set_to_dataframe(one)
+    Return one set's table, saying which set each row came from.
+
+    Only the label is added: what the set states for itself stays in
+    ``attrs.sets``, which a row reaches through the label.
+    """
     if "set" in frame.columns:
         msg = (
             f"The set {name!r} states a set column, so it is already a "
@@ -816,8 +822,7 @@ def _refuse_undeclared_dims(
 
     The collection's dimensions are the union of its sets', so a set which
     holds a column another set declares as a dimension would have that
-    column read as a coordinate it never claimed: its extra would stop
-    being an extra and start bounding a region.
+    column read as a coordinate it never claimed.
     """
     for name, frame in frames.items():
         undeclared = set(dims) - set(loaded[name].dims)
@@ -836,77 +841,28 @@ def _refuse_undeclared_dims(
             raise ParameterError(msg)
 
 
-def _refuse_mixed_spellings(frames: Mapping[str, pd.DataFrame], dims) -> None:
-    """
-    Refuse a dimension two sets spell differently.
-
-    A set holds one spelling of a dimension, so a merged table cannot hold
-    both a bare ``time`` and a ``time_min``/``time_max`` pair; the
-    constructor refuses that too, but without naming the sets. Neither
-    spelling stands in for the other: a half-open range of no width holds
-    nothing, so a point is not a range and cannot be rewritten as one.
-    """
-    for dim in dims:
-        points = [name for name, x in frames.items() if dim in x.columns]
-        ranges = [name for name, x in frames.items() if f"{dim}{_MIN}" in x.columns]
-        if points and ranges:
-            msg = (
-                f"The dimension {dim!r} is spelled as a point in "
-                f"{', '.join(points)} and as a range in {', '.join(ranges)}, so "
-                "the sets state one thing two ways and cannot be read together."
-            )
-            raise ParameterError(msg)
-
-
-def _refuse_mixed_vertices(vertices: Mapping[str, pd.DataFrame]) -> None:
-    """
-    Refuse sets which draw their vertices in different dimensions.
-
-    A vertex states every dimension its table names, so a curve drawn in
-    distance and time cannot sit in one table beside one drawn in distance
-    alone: the second would leave a column empty and be half a shape. The
-    annotations merge because a bound may be unstated; a vertex may not.
-    """
-    spelled = {
-        name: tuple(sorted(set(map(str, frame.columns)) - set(_VERTEX_COLUMNS)))
-        for name, frame in vertices.items()
-    }
-    if len(set(spelled.values())) < 2:
-        return
-    listed = "; ".join(f"{name} in {', '.join(dims)}" for name, dims in spelled.items())
-    msg = (
-        f"The sets loaded together draw their vertices in different dimensions "
-        f"({listed}). A vertex states every dimension its table names, so these "
-        "cannot be read as one table."
-    )
-    raise ParameterError(msg)
-
-
-def _refuse_mixed_kinds(frames: Mapping[str, pd.DataFrame], dims, what: str) -> None:
+def _refuse_mixed_kinds(frames: Mapping[str, pd.DataFrame], dims) -> None:
     """
     Refuse a dimension two sets state in different kinds of value.
 
-    Each set is read in its own dimensions, so one may state ``time`` as
-    seconds and another as dates; concatenating those gives a column of
-    both, which every later comparison -- a bound against a bound, a sort,
-    a select -- either refuses far from here or gets wrong quietly. The
-    kinds are compared rather than the dtypes: a column of whole numbers
-    and one of floats say the same kind of thing.
+    One set may state ``time`` as seconds and another as dates; merged, the
+    dimension would hold both. The merged set refuses that too, but without
+    naming the sets. Kinds, not dtypes: whole numbers and floats agree.
     """
-    kinds: dict[str, dict[str, str]] = {}
-    for name, frame in frames.items():
-        for dim in dims:
+    for dim in dims:
+        seen: dict[str, str] = {}
+        for name, frame in frames.items():
             for column in (dim, f"{dim}{_MIN}", f"{dim}{_MAX}"):
                 if column not in frame.columns:
                     continue
                 kind = _kind(frame[column])
-                seen = kinds.setdefault(column, {})
                 if kind != "nothing" and seen and kind not in seen:
                     stated, first = next(iter(seen.items()))
                     msg = (
-                        f"The sets state {what}'s {column} in different kinds of "
-                        f"value: {kind} in {name}, {stated} in {first}. One column "
-                        "holds one kind, so the sets cannot be read together."
+                        f"The sets state the dimension {dim!r} in different kinds "
+                        f"of value: {kind} in {name}, {stated} in {first}. One "
+                        "dimension holds one kind, so the sets cannot be read "
+                        "together."
                     )
                     raise ParameterError(msg)
                 if kind != "nothing":
@@ -917,27 +873,22 @@ def _kind(series: pd.Series) -> str:
     """Name the kind of value a column holds, as a reader would say it."""
     kind = getattr(series.dtype, "kind", "O")
     if series.isna().all():
-        # A column no row states says nothing about its kind, so it agrees
-        # with whatever the other sets state.
+        # A column no row states agrees with whatever the others state.
         return "nothing"
     return {"M": "times", "m": "durations", "O": "text", "T": "text", "U": "text"}.get(
         kind, "numbers"
     )
 
 
-def _refuse_shared_ids(frame: pd.DataFrame) -> None:
+def _refuse_shared_ids(frame: pd.DataFrame, what: str) -> None:
     """
     Refuse an id which names a row in more than one set.
 
-    Each set was built before this, so its own ids are already unique;
-    what is left is a collision between sets, which would make the id no
-    longer an address into the collection. The merged set would refuse it
-    anyway, but without saying which sets collided.
+    Each set's own ids are already unique; this names the sets a collision
+    between them came from.
     """
     if "id" not in frame.columns:
         return
-    # Blank spelled as the set spells it, so this cannot drift from what
-    # `_check_ids` counts as an unstated id.
     ids = frame["id"].map(_text)
     shared = (ids != "") & ids.duplicated(keep=False)
     if not shared.any():
@@ -945,24 +896,22 @@ def _refuse_shared_ids(frame: pd.DataFrame) -> None:
     first = ids[shared].iloc[0]
     named = sorted(set(frame.loc[ids == first, "set"]))
     msg = (
-        f"The annotation id {first} names a row in {' and '.join(named)}. Ids are "
-        "unique across the sets loaded together, so one id names one annotation."
+        f"The {what} id {first} names a row in {' and '.join(named)}. Ids are "
+        f"unique across the sets loaded together, so one id names one {what}."
     )
     raise ParameterError(msg)
 
 
 def _load_set(directory: Path, attrs: Mapping, dims, **kwargs) -> AnnotationSet:
     """Load the set a directory holds."""
-    # Dimensions are the directory's once it has stated them: reading the
-    # cells against other dimensions would type them differently and
-    # build a set which is not the one stored here.
+    # A directory which states its dimensions is read in them only.
     if attrs.get("dims"):
         _refuse_overrides("a directory stating its own dimensions", dims=dims)
     _refuse_stray_tables(
         directory,
-        (ANNOTATION_STEM, VERTEX_STEM),
+        (ANNOTATION_STEM, FEATURE_STEM),
         f"which name no part of a set. A set states {ANNOTATION_STEM} and, "
-        f"where it has vertices, {VERTEX_STEM}, each as a "
+        f"where it has features, {FEATURE_STEM}, each as a "
         f"{' or a '.join(TABLE_SUFFIXES)} table.",
     )
     table = _one_spelling(directory, ANNOTATION_STEM, TABLE_SUFFIXES)
@@ -974,31 +923,38 @@ def _load_set(directory: Path, attrs: Mapping, dims, **kwargs) -> AnnotationSet:
         raise ParameterError(msg)
     declared, skip = _read_table_dims(table)
     stated = _declared_dims(attrs, dims, directory, declared, table)
-    columns = attrs.get("columns")
+    own, inherited = _stated_dtypes(attrs, "annotation_columns")
     frame = _read_set_table(
-        table, stated, "no annotations", skip=skip, text=_text_columns(columns)
+        table,
+        stated,
+        "no annotations",
+        ordered=True,
+        skip=skip,
+        text=_text_columns(own, inherited),
     )
-    frame = _restore_dtypes(frame, columns, table)
-    # Found as the annotations table is: a set spells each of its parts
-    # once, and a `vertices.CSV` beside a `vertices.csv` is two spellings of
-    # one part rather than a table nobody reads.
-    vertex_path = _one_spelling(directory, VERTEX_STEM, TABLE_SUFFIXES)
-    vertices = None
-    if vertex_path is not None:
-        vertices = _read_set_table(
-            vertex_path,
-            stated,
-            "no vertices",
-            ordered=True,
-            skip=_vertex_declaration(vertex_path),
+    frame = _settle_dtypes(frame, own, inherited, table)
+    features = None
+    if (path := _one_spelling(directory, FEATURE_STEM, TABLE_SUFFIXES)) is not None:
+        own, inherited = _stated_dtypes(attrs, "feature_columns")
+        features = _read_set_table(
+            path,
+            (),
+            "no features",
+            skip=_undeclared(path),
+            text=_text_columns(own, inherited),
         )
-    # The read dimensions rather than the given ones: they are the same
-    # names, already a tuple, so a file spelling one dimension as a bare
-    # string builds the set the same way the constructor would.
-    return AnnotationSet(frame, dims=stated, vertices=vertices, attrs=attrs, **kwargs)
+        features = _settle_dtypes(features, own, inherited, path)
+    return AnnotationSet(
+        frame,
+        features=features,
+        bases=_read_bases(directory),
+        dims=stated,
+        attrs=attrs,
+        **kwargs,
+    )
 
 
-def _restore_dtypes(frame, columns: Mapping | None, path: Path):
+def _restore_dtypes(frame, dtypes: Mapping[str, str], path: Path):
     """
     Give each column back the dtype the set declares for it.
 
@@ -1011,7 +967,7 @@ def _restore_dtypes(frame, columns: Mapping | None, path: Path):
     which is not one is left for the set's own validation to refuse.
     """
     restored = {}
-    for name, dtype in _declared_dtypes(columns).items():
+    for name, dtype in dtypes.items():
         if frame is None or name not in frame.columns or _is_text_dtype(dtype):
             continue
         try:
@@ -1046,13 +1002,72 @@ def _is_text_dtype(dtype: str) -> bool:
     return False
 
 
-def _text_columns(columns: Mapping | None) -> frozenset[str]:
-    """The columns a set declares as text, which a table leaves as it reads them."""
-    return frozenset(
-        name
-        for name, dtype in _declared_dtypes(columns).items()
-        if _is_text_dtype(dtype)
-    )
+def _text_columns(own: Mapping, inherited: Mapping) -> frozenset[str]:
+    """The columns declared as text, which a table leaves as it reads them."""
+    dtypes = {**{k: v for k, (v, _) in inherited.items()}, **own}
+    return frozenset(k for k, v in dtypes.items() if _is_text_dtype(v))
+
+
+def _stated_dtypes(attrs: Mapping, key: str, own=None) -> tuple[dict, dict]:
+    """
+    Return the set's own declared dtypes, and those the sets saved flat
+    into it agree on, each with the names of the sets declaring it.
+    Children which disagree leave the column to inference; two spellings
+    of text agree.
+    """
+    stated = _declared_dtypes(attrs.get(key) if own is None else own)
+    merged: dict[str, tuple[str, set[str]]] = {}
+    clashing = set()
+    for label, child in (attrs.get("sets") or {}).items():
+        for name, dtype in _declared_dtypes(_child_field(child, key)).items():
+            first, owners = merged.setdefault(name, (dtype, set()))
+            if first != dtype and not (_is_text_dtype(first) and _is_text_dtype(dtype)):
+                clashing.add(name)
+            owners.add(label)
+    inherited = {
+        k: v for k, v in merged.items() if k not in clashing and k not in stated
+    }
+    return stated, inherited
+
+
+def _settle_dtypes(frame, own: Mapping, inherited: Mapping, path: Path):
+    """
+    Restore declared dtypes. A child's declaration holds for a column only
+    where every row stating it came from a child declaring it, and the
+    other children's blanks fit the dtype; otherwise the column is read as
+    an undeclared one would be.
+    """
+    if frame is None:
+        return frame
+    applied = dict(own)
+    reread = {}
+    for name, (dtype, owners) in inherited.items():
+        if name not in frame.columns:
+            continue
+        labels = frame["set"].map(_text) if "set" in frame.columns else None
+        stated = frame[name].notna()
+        if labels is not None and set(labels[stated]) <= owners:
+            # Other children's rows hold blanks, which the dtype must too.
+            if set(labels) <= owners or _holds_blank(dtype):
+                applied[name] = dtype
+                continue
+        if _is_text_dtype(dtype) and not _is_parquet(path):
+            reread[name] = frame[name].map(_read_extra)
+    frame = frame.assign(**reread) if reread else frame
+    return _restore_dtypes(frame, applied, path)
+
+
+def _holds_blank(dtype: str) -> bool:
+    """Whether a dtype holds a missing value; int64 and bool do not."""
+    try:
+        return bool(pd.Series([None], dtype=dtype).isna().all())
+    except (TypeError, ValueError):
+        return False
+
+
+def _child_field(child, key: str):
+    """Read one field of a child's attributes, a document or a model."""
+    return child.get(key) if isinstance(child, Mapping) else getattr(child, key, None)
 
 
 def _load_file(path: Path, dims, **kwargs) -> AnnotationSet:
@@ -1061,7 +1076,7 @@ def _load_file(path: Path, dims, **kwargs) -> AnnotationSet:
         named = " or ".join(TABLE_SUFFIXES)
         msg = (
             f"{quote_path(path)} is not a table an annotation set is read from. "
-            f"A bare set is a {named} file; a set with vertices is a directory."
+            f"A bare set is a {named} file; a set with features is a directory."
         )
         raise ParameterError(msg)
     declared, skip = _read_table_dims(path)
@@ -1072,24 +1087,28 @@ def _load_file(path: Path, dims, **kwargs) -> AnnotationSet:
     stated = _declared_dims(given, dims, path, declared, path)
     # An empty mapping is an override which clears the declarations, as
     # the set reads it, so only an absent one falls back to the attrs.
-    columns = kwargs.get("columns")
+    columns = kwargs.get("annotation_columns")
     if columns is None:
-        columns = given.get("columns")
+        columns = given.get("annotation_columns")
+    own, inherited = _stated_dtypes(given, "annotation_columns", own=columns or {})
     frame = _read_set_table(
-        path, stated, "no annotations", skip=skip, text=_text_columns(columns)
+        path,
+        stated,
+        "no annotations",
+        ordered=True,
+        skip=skip,
+        text=_text_columns(own, inherited),
     )
-    return AnnotationSet(_restore_dtypes(frame, columns, path), dims=stated, **kwargs)
+    frame = _settle_dtypes(frame, own, inherited, path)
+    return AnnotationSet(frame, dims=stated, **kwargs)
 
 
-def _vertex_declaration(path: Path) -> int:
+def _undeclared(path: Path) -> int:
     """
-    Refuse a vertices table which declares dimensions, and return the lines
-    above its header -- which, since it declares none, is none of them.
+    Refuse a features table which declares dimensions, and return the lines
+    above its header -- none, since it declares none.
 
-    Vertices are read in the dimensions of the set they belong to, whether
-    they would declare them above a header or in a footer. The lines above a
-    header are skipped only where a declaration is among them, so a vertices
-    table has no preamble to skip.
+    Features hold no coordinates, so a declaration there is misplaced.
     """
     declared, skip = _read_table_dims(path)
     if declared is not None:
@@ -1099,8 +1118,8 @@ def _vertex_declaration(path: Path) -> int:
             else f"declares {_DIMS_PRAGMA} above its header"
         )
         msg = (
-            f"{quote_path(path)} {where}. Vertices are read in the dimensions "
-            "of the set they belong to, which states them once."
+            f"{quote_path(path)} {where}. Features hold no coordinates; the "
+            "set states its dimensions once, with its annotations."
         )
         raise ParameterError(msg)
     return skip
@@ -1181,14 +1200,14 @@ def annotations(
     **kwargs
         Passed to [`AnnotationSet`](`dascore.core.annotations.AnnotationSet`).
         A source already holding what one states -- a set, or a directory
-        holding its own attributes and vertices -- refuses it rather than
+        holding its own attributes, features or bases -- refuses it rather than
         dropping it.
 
     Examples
     --------
     >>> import pandas as pd
     >>> import dascore as dc
-    >>> frame = pd.DataFrame({"group": ["event"], "distance": [10.0]})
+    >>> frame = pd.DataFrame({"phase": ["P"], "distance": [10.0]})
     >>> picks = dc.annotations(frame, dims=("distance",))
     >>> len(picks)
     1
@@ -1209,8 +1228,8 @@ def annotations(
     ...     _ = picks.io.save(root / "hand")
     ...     _ = picks.io.save(root / "phasenet")
     ...     together = dc.annotations(root)
-    >>> len(together), together[0].set, sorted(together.attrs.sets)
-    (2, 'hand', ['hand', 'phasenet'])
+    >>> len(together), sorted(together.annotations["set"])
+    (2, ['hand', 'phasenet'])
 
     A directory of data is read as the annotations it carries, so the
     directory a spool was opened on is a path this takes too.

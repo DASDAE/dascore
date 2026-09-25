@@ -21,9 +21,7 @@ from dascore.utils.hdf5 import (
 )
 from dascore.core.annotations import (
     annotation_set_to_csv,
-    annotation_set_to_dataframe,
     annotation_set_to_parquet,
-    annotation_set_to_vertices,
     save_annotation_set,
 )
 from dascore.core.inventory import inventory_to_yaml
@@ -67,8 +65,6 @@ class InventoryIO(InventoryNameSpace):
 class AnnotationIO(AnnotationNameSpace):
     name = "io"
 
-    to_dataframe = annotation_set_to_dataframe
-    to_vertices = annotation_set_to_vertices
     to_csv = annotation_set_to_csv
     to_parquet = annotation_set_to_parquet
     save = save_annotation_set
