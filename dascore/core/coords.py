@@ -2793,14 +2793,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
                 out.append(self._promoted_labels(run.window(first, stride, count)))
         # a backwards range reads the runs from the last one
         runs = out if stride > 0 else out[::-1]
-        # A stride multiplies every spacing: the step is the widened one
-        # where the kept samples sit on it, else the declared one where no
-        # grid run contradicts it, else whatever the runs share.
-        step = self.step
-        candidates = () if _is_null(step) else (step * abs(stride), step)
-        for candidate in candidates:
+        # A stride multiplies every spacing, so the declared step is kept
+        # widened where the kept samples sit on it, else the runs restate one.
+        if not _is_null(step := self.step):
             with suppress(CoordError, ValidationError):
-                return self._with_runs(runs, step=candidate)
+                return self._with_runs(runs, step=step * abs(stride))
         return self._with_runs(runs, step=None)
 
     def _promoted_labels(self, window: Labels) -> Grid | Labels:
@@ -3144,8 +3141,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         runs, dtypes = zip(*result)
         # A re-fit spaces its labels evenly, which integers and coarse
         # times cannot always hold; the fit says what dtype they need.
-        # A re-fit run may leave the declared step, and a step inferred
-        # from one fractional lattice is always inferred afresh.
+        # Keep the declared step only where the re-fit runs still sit on it;
+        # a step inferred from a fractional lattice is inferred afresh.
         dtype = np.result_type(*dtypes)
         grid = _common_grid(self.runs)
         if grid is None or grid.step_den == 1:

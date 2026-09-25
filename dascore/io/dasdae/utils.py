@@ -7,8 +7,11 @@ coord serialization and string-serialization design notes used here.
 from __future__ import annotations
 
 import json
+from contextlib import suppress
+from functools import partial
 
 import numpy as np
+from pydantic import ValidationError
 
 import dascore as dc
 from dascore.core.attrs import PatchAttrs
@@ -22,7 +25,11 @@ from dascore.core.coords import (
 )
 from dascore.core.source import ArraySource
 from dascore.core.summary import normalize_source_patch_key
-from dascore.exceptions import InvalidFiberFileError, PatchAttributeError
+from dascore.exceptions import (
+    CoordError,
+    InvalidFiberFileError,
+    PatchAttributeError,
+)
 from dascore.io.core import STORED_ORIGIN_ID
 from dascore.io.dasdae._compat import (
     NOT_DECODED,
@@ -403,16 +410,11 @@ def _read_segment(node):
 
 
 def _shared_step(segments):
-    """The step the stored segments declare, or None."""
-    # grid segments restate their shared step exactly; a rounded one would
-    # misstate a fractional grid, or a lattice the runs do not share
+    """The step the stored label segments declare, or None."""
+    # grids carry their step exactly, so the coordinate infers it from them;
+    # their rounded `.step` would misstate a fractional grid
     steps = {x.step for x in segments if not x.evenly_sampled}
-    if len(steps) != 1:
-        return None
-    step = steps.pop()
-    # older files may pair a declared step with grids a stride widened
-    grids = (x for x in segments if x.evenly_sampled and len(x) > 1)
-    return None if any(x.step != step for x in grids) else step
+    return steps.pop() if len(steps) == 1 else None
 
 
 def _read_coord(node, name, attrs2, snap):
@@ -424,13 +426,17 @@ def _read_coord(node, name, attrs2, snap):
         segments = [_read_segment(node[str(i)]) for i in range(len(node))]
         # The runs are rebuilt in the order they were written, which is the
         # order the data sits in; concat_coords would sort them by value.
-        return NumericCoord(
+        build = partial(
+            NumericCoord,
             runs=tuple(run for x in segments for run in x.runs),
             sources={k: v for x in segments for k, v in x.sources.items()},
             dtype=np.result_type(*[x.dtype for x in segments]),
             units=units or segments[0].units,
-            step=_shared_step(segments),
         )
+        # older files may pair a declared step with grids a stride widened
+        with suppress(CoordError, ValidationError):
+            return build(step=_shared_step(segments))
+        return build(step=None)
     if object_type == _RANGE and "start" in node_attrs:
         return _read_range(node, units)
     # any other class, a range too wide to describe, and every version 1

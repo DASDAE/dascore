@@ -693,9 +693,10 @@ class TestReviewRoundTwo:
         (run,) = missing.iter_runs()
         assert run[1] == pytest.approx(0.2) and run[1] == missing.positions()[-1]
 
-    def test_segmented_strided_index_keeps_the_step(self, design_case):
-        """A strided selection of runs still states the grid."""
-        assert design_case[::2].step == 1
+    def test_segmented_strided_index_widens_the_step(self, design_case):
+        """A strided selection states the widened grid, or none it leaves."""
+        assert design_case[::2].step is None
+        assert design_case[::-1].step == -1
         assert design_case[[3, 0, 1]].step is None
 
     def test_segments_with_a_contradicting_step_raise(self, design_case):
@@ -1117,6 +1118,13 @@ class TestStepContract:
         out = coord[::2]
         assert out.step == 2.0
         assert out.missing().positions().tolist() == [12.0, 14.0, 16.0, 18.0, 24.0]
+
+    def test_stride_agrees_across_the_dense_guard(self):
+        """Runs and the guarded array answer a stride the same way."""
+        for size in (300, 3000):
+            values = np.arange(size)[np.arange(size) % 5 != 4]
+            out = get_coord(data=values, step=1)[::2]
+            assert out.step is None and out.missing().complete
 
     def test_declared_step_a_grid_contradicts_raises(self):
         """A declared step other than the one the grid runs sit on raises."""
