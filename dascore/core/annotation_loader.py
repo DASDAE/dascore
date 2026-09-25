@@ -1031,8 +1031,9 @@ def _stated_dtypes(attrs: Mapping, key: str, own=None) -> tuple[dict, dict]:
 def _settle_dtypes(frame, own: Mapping, inherited: Mapping, path: Path):
     """
     Restore declared dtypes. A child's declaration holds for a column only
-    where every row stating it came from a child declaring it; otherwise
-    the column is read as an undeclared one would be.
+    where every row stating it came from a child declaring it, and the
+    other children's blanks fit the dtype; otherwise the column is read as
+    an undeclared one would be.
     """
     if frame is None:
         return frame
@@ -1041,14 +1042,25 @@ def _settle_dtypes(frame, own: Mapping, inherited: Mapping, path: Path):
     for name, (dtype, owners) in inherited.items():
         if name not in frame.columns:
             continue
+        labels = frame["set"].map(_text) if "set" in frame.columns else None
         stated = frame[name].notna()
-        labels = frame.loc[stated, "set"] if "set" in frame.columns else None
-        if labels is not None and set(labels.map(_text)) <= owners:
-            applied[name] = dtype
-        elif _is_text_dtype(dtype) and not _is_parquet(path):
+        if labels is not None and set(labels[stated]) <= owners:
+            # Other children's rows hold blanks, which the dtype must too.
+            if set(labels) <= owners or _holds_blank(dtype):
+                applied[name] = dtype
+                continue
+        if _is_text_dtype(dtype) and not _is_parquet(path):
             reread[name] = frame[name].map(_read_extra)
     frame = frame.assign(**reread) if reread else frame
     return _restore_dtypes(frame, applied, path)
+
+
+def _holds_blank(dtype: str) -> bool:
+    """Whether a dtype holds a missing value; int64 and bool do not."""
+    try:
+        return bool(pd.Series([None], dtype=dtype).isna().all())
+    except (TypeError, ValueError):
+        return False
 
 
 def _child_field(child, key: str):

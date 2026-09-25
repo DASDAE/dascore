@@ -1196,6 +1196,11 @@ class TestFrames:
         frame.loc[0, "vehicle_type"] = "changed"
         assert tracks.features.loc[0, "vehicle_type"] == "train"
 
+    def test_a_zero_dimensional_array_cell(self):
+        """A 0-d array is one value, not a sequence."""
+        frame = pd.DataFrame({"time": [1.0], "m": [np.array(5)]})
+        assert AnnotationSet(frame, dims=DIMS).annotations["m"][0] == 5
+
     def test_nested_annotation_cells_are_frozen(self):
         """A nested cell handed out cannot change the set."""
         frame = pd.DataFrame({"time": [1.0], "meta": [{"values": [1]}]})
@@ -1458,6 +1463,14 @@ class TestBasisModels:
         """An endpoint naming no dimension is nowhere."""
         with pytest.raises(ValidationError, match="states no dimension"):
             Line(start={}, end={})
+
+    def test_a_time_beyond_nanoseconds(self):
+        """A time nanoseconds cannot hold is a validation error naming it."""
+        with pytest.raises(ValidationError, match="3000"):
+            Line(
+                start={"time": np.datetime64("3000-01-01")},
+                end={"time": np.datetime64("3001-01-01")},
+            )
 
     def test_line_of_no_length(self):
         """A line beginning where it ends is a point."""

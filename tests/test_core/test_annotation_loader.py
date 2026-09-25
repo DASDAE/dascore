@@ -20,7 +20,7 @@ except ImportError:
     pyarrow = None
 
 import dascore as dc
-from dascore.core.annotation_loader import find_annotations
+from dascore.core.annotation_loader import _holds_blank, find_annotations
 from dascore.core.annotations import DIMS_KEY, Line, Moveout, _one_file
 from dascore.exceptions import InvalidAnnotationError, ParameterError
 from dascore.utils.tables import DOCUMENT_KEY, write_parquet
@@ -1286,6 +1286,43 @@ class TestCollections:
         flat = dc.annotations(loaded.io.save(tmp_path / "flat"))
         assert flat.annotations["code"][0] == "001"
         assert flat == loaded
+
+    @pytest.mark.parametrize(("values", "dtype"), [([2], "int64"), ([True], "bool")])
+    @pytest.mark.parametrize("encoding", ["csv", "parquet", "bare"])
+    def test_a_dtype_other_childs_blanks_cannot_hold(
+        self, tmp_path, values, dtype, encoding
+    ):
+        """A child's int64 or bool is not forced onto another child's blanks."""
+        if encoding != "csv":
+            pytest.importorskip("pyarrow")
+        loaded = self._children(
+            tmp_path / "sets", {"count": values}, {}, {"count": {"dtype": dtype}}
+        )
+        assert pd.isna(loaded.annotations["count"][1])
+        if encoding == "bare":
+            path = tmp_path / "bare.csv"
+            loaded.io.to_csv(path)
+            back = dc.annotations(path, dims=loaded.dims, attrs=loaded.attrs)
+        else:
+            saved = loaded.io.save(tmp_path / "flat", format=encoding)
+            back = dc.annotations(saved)
+        assert back.annotations["count"][0] == values[0]
+        assert pd.isna(back.annotations["count"][1])
+        assert back == loaded
+
+    @pytest.mark.parametrize(
+        ("dtype", "holds"),
+        [
+            *[(x, True) for x in ("str", "string", "object", "float64", "Int64")],
+            *[(x, True) for x in ("Float64", "boolean", "category")],
+            ("datetime64[ns]", True),
+            ("int64", False),
+            ("bool", False),
+        ],
+    )
+    def test_which_dtypes_hold_a_blank(self, dtype, holds):
+        """The dtypes another child's blanks can be restored into."""
+        assert _holds_blank(dtype) is holds
 
     def test_a_declared_column_no_child_holds(self, tmp_path):
         """A child may document a column the merged table never has."""

@@ -241,11 +241,14 @@ def _read_place(value):
 
 def _nanoseconds(value):
     """Hold a numpy time or duration at nanoseconds; leave anything else."""
-    if isinstance(value, np.datetime64):
-        return value.astype(_NS_TIME)
-    if isinstance(value, np.timedelta64):
-        return value.astype(_NS_SPAN)
-    return value
+    dtype = {np.datetime64: _NS_TIME, np.timedelta64: _NS_SPAN}.get(type(value))
+    if dtype is None:
+        return value
+    try:
+        return value.astype(dtype)
+    except OverflowError as error:
+        msg = f"The coordinate {value} is beyond what nanoseconds can hold."
+        raise ValueError(msg) from error
 
 
 _freeze_map = AfterValidator(lambda x: FrozenDict(x))
@@ -1780,6 +1783,8 @@ def _freeze(value):
     """
     if isinstance(value, Mapping):
         return FrozenDict({k: _freeze(v) for k, v in value.items()})
+    if isinstance(value, np.ndarray) and value.ndim == 0:
+        return _scalar(value.item())
     if isinstance(value, list | set | tuple | np.ndarray):
         return tuple(_freeze(x) for x in value)
     return _scalar(value)
