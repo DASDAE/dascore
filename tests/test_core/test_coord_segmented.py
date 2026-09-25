@@ -973,6 +973,11 @@ class TestSplitGapsAndWrite:
         assert len(spool) == coord.missing().count + 1 == 500
         assert all(x.get_coord("time").evenly_sampled for x in spool)
         assert np.shares_memory(spool[1].data, patch.data)
+        backwards = get_coord(data=coord.values[::-1], step=-1)
+        assert backwards.runs_count == 1
+        data = np.zeros(len(backwards))
+        patch = dc.Patch(data=data, coords={"time": backwards}, dims=("time",))
+        assert len(patch.split_gaps()) == 500
 
     @pytest.mark.parametrize(
         ("coord", "count"),
@@ -1000,6 +1005,12 @@ class TestSplitGapsAndWrite:
         assert not any(x.get_coord("time").missing().count for x in spool)
         values = np.concatenate([x.get_coord("time").values for x in spool])
         assert np.array_equal(values, coord.values)
+
+    def test_split_gaps_string_dim(self):
+        """A dimension labelled by strings has no gaps to split."""
+        coords = {"station": np.array(["a", "b"]), "time": np.arange(4.0)}
+        patch = dc.Patch(data=np.zeros((2, 4)), coords=coords, dims=("station", "time"))
+        assert len(patch.split_gaps()) == 1
 
     def test_split_gaps_irregular_labels(self):
         """Labels with no step and one run name no holes: one patch."""

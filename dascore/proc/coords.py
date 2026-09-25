@@ -1372,11 +1372,11 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
                 # only its own labels are read to place them
                 if holes := [first for first, _ in seg.missing().iter_runs()]:
                     values = np.asarray(seg.values)
-                    found = np.searchsorted(values, holes)
                     if seg.reverse_sorted:
-                        found = len(values) - np.searchsorted(
-                            values[::-1], holes, side="right"
-                        )
+                        after = np.searchsorted(values[::-1], holes, side="right")
+                        found = len(values) - after
+                    else:
+                        found = np.searchsorted(values, holes)
                     starts.update((offset + found).tolist())
                 offset += len(seg)
             starts.discard(0)
