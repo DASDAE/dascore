@@ -2773,7 +2773,7 @@ def mixed_sources():
         replace(whole, path="/root/b.h5", origin_id="a" * 32).describe((4, 2), "f4")[
             0:2
         ],
-        ArraySource.full((2, 2), 1),
+        ArraySource.full((2, 2), 1, dtype="i8"),  # int64 on every platform
         ArraySource(filled=True, value=True).describe((1, 2), "f8"),
         ArraySource(filled=True, value=-0.0).describe((1, 2), "f8"),
         ArraySource(filled=True, value=float("nan")).describe((1, 2), "f8"),
