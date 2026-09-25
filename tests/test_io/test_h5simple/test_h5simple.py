@@ -229,6 +229,30 @@ class TestH5Simple:
         np.testing.assert_array_equal(source[1:3].load(), expected[1:3])
         np.testing.assert_array_equal(Combined().read(h5simple_path)[0].data, expected)
 
+    def test_mixin_array_hook_cannot_bypass_override(
+        self, h5simple_path, source_registry
+    ):
+        """A plain mixin's array hook, paired with nothing, is not trusted."""
+
+        class StaleHook:
+            def _prepare_array_reader(self, resource, *, key=""):
+                return H5Simple()._prepare_array_reader(resource, key=key)
+
+        class Reader(StaleHook, H5Simple):
+            name = "_test_h5simple_mixin_reader"
+
+        class Scaled(Reader):
+            name = "_test_h5simple_mixin_scaled"
+
+            def read_array(self, resource: H5Reader, windows=(), key=""):
+                return super().read_array(resource, windows, key=key) * 2
+
+        patch = dc.read(h5simple_path, file_format=H5Simple.name)[0]
+        expected = np.array(patch.data)[1:3] * 2
+        source = replace(patch._source, format=Scaled.name)[1:3]
+        np.testing.assert_array_equal(Scaled().read_array(h5simple_path)[1:3], expected)
+        np.testing.assert_array_equal(source.load(), expected)
+
     def test_compatible_array_hook_is_kept(
         self, h5simple_path, source_registry, monkeypatch
     ):

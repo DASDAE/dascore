@@ -1066,11 +1066,12 @@ def _paired_hook(fiber_io: FiberIO, hook: str) -> Callable:
     A reader's hook is valid only for the public methods it was written
     against; a subclass or runtime override of one must not be bypassed.
     The record checked is the one kept by the class which defines the
-    selected hook, whichever base that is.
+    selected hook, whichever base that is; a hook with no record, such as
+    one a plain mixin supplies, is not trusted.
     """
     owner = next(x for x in type(fiber_io).__mro__ if hook in x.__dict__)
-    paired = owner.__dict__.get("_hook_pairs", {}).get(hook, {})
-    if any(
+    paired = owner.__dict__.get("_hook_pairs", {}).get(hook)
+    if paired is None or any(
         getattr(getattr(fiber_io, name), "__func__", None) is not expected
         for name, expected in paired.items()
     ):
