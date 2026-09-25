@@ -1133,6 +1133,13 @@ class TestStepContract:
             NumericCoord(runs=runs, dtype="int64", step=1)
         assert NumericCoord(runs=runs, dtype="int64", step=2).missing().count == 5
 
+    def test_fit_keeps_a_step_it_leaves_intact(self):
+        """A fuse which refits nothing keeps the declared step."""
+        labels = NumericCoord.from_labels(np.array([12.0, 13.0, 15.0]), step=1.0)
+        coord = concat_coords(get_coord(start=0.0, stop=10.0, step=1.0), labels)
+        out = coord.fuse(tolerance=0.1)
+        assert out.step == 1.0 and out.missing().count == 3
+
     def test_partial_fit_drops_a_contradicted_step(self):
         """A re-fit run the declared step no longer fits leaves no step."""
         coord = concat_coords(
