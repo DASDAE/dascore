@@ -169,10 +169,13 @@ class GapTolerance:
             margin = np.where(pd.isnull(step), 0, step) + self.excess
         if is_timedelta64(margin) and np.isfinite(self.count or 0):
             # Time labels floor exact positions to whole nanoseconds and a
-            # stated step rounds to one, so allow a nanosecond per step,
-            # but never half a step, which could hide a whole sample.
+            # stated step rounds to one, so allow a nanosecond per step, but
+            # stay short of the next whole sample.
             cap = np.timedelta64(2 + math.ceil(self.count or 1), "ns")
-            margin = margin + np.where(pd.isnull(step), cap, np.minimum(cap, step // 2))
+            with np.errstate(divide="ignore", invalid="ignore"):
+                room = (margin // step + 1) * step - margin - np.timedelta64(1, "ns")
+            slack = np.minimum(cap, np.maximum(room, np.timedelta64(0, "ns")))
+            margin = margin + np.where(pd.isnull(step), cap, slack)
         return delta > margin
 
 

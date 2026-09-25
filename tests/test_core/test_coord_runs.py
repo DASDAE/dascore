@@ -313,6 +313,15 @@ class TestFractionalGaps:
         # a whole extra sample is never within the allowance
         step = np.timedelta64(10_000, "ns")
         assert GapTolerance.samples(10_000).is_gap(10_001 * step, step)
+        # nor at steps of a few nanoseconds
+        step = np.timedelta64(4, "ns")
+        assert GapTolerance.samples(1.5).is_gap(2 * step, step)
+        assert GapTolerance.samples(1.9).is_gap(2 * step, step)
+
+    def test_new_keeps_labels(self, full):
+        """Rebuilding a joined fractional coordinate keeps its labels."""
+        coord = concat_coords(full[:5], full[6:])
+        np.testing.assert_array_equal(coord.new(dtype=coord.dtype).values, coord.values)
 
     def test_long_outage_labels(self):
         """A weeks-long hole on a fractional grid keeps ordered end labels."""

@@ -3335,7 +3335,10 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             return self.set_units(kwargs["units"])
         info: dict[str, Any] = dict(units=self.units)
         if (grid := self._grid) is None:
-            info.update(data=self.values, step=self.step)
+            # floored labels do not sit on a fractional lattice's rounded step
+            common = _common_grid(self.runs)
+            fractional = common is not None and common.step_den != 1
+            info.update(data=self.values, step=None if fractional else self.step)
             return get_coord(**{**info, **kwargs})
         info["start"] = grid.labels(0, self.dtype)[()]
         info["stop"] = grid.labels(len(self), self.dtype)[()]
