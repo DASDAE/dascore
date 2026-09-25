@@ -10,6 +10,7 @@ own spelling, converts it here, and gets one verdict for one
 
 from __future__ import annotations
 
+import math
 import warnings
 from dataclasses import dataclass
 from datetime import timedelta
@@ -163,8 +164,13 @@ class GapTolerance:
         step = np.abs(np.asarray(step))
         if self.count is not None:
             with np.errstate(invalid="ignore"):
-                return delta > step * self.count
-        margin = np.where(pd.isnull(step), 0, step) + self.excess
+                margin = step * self.count
+        else:
+            margin = np.where(pd.isnull(step), 0, step) + self.excess
+        if is_timedelta64(margin) and np.isfinite(self.count or 0):
+            # Time labels floor exact positions to whole nanoseconds and a
+            # stated step rounds to one, so allow a nanosecond per step.
+            margin = margin + np.timedelta64(2 + math.ceil(self.count or 1), "ns")
         return delta > margin
 
 
@@ -290,7 +296,11 @@ def get_gap_edges(coord, tolerance: GapTolerance | None = None):
         step = np.median(np.abs(diffs))
     gap_mask = np.zeros(len(diffs), dtype=bool)
     if tolerance is not None:
-        gap_mask = tolerance.is_gap(numeric_diffs, _to_numeric([step])[0])
+        # datetimes keep whole-nanosecond spacings, which the tolerance allows for
+        timed = is_datetime64(values)
+        gap_mask = tolerance.is_gap(
+            diffs if timed else numeric_diffs, step if timed else _to_numeric([step])[0]
+        )
     if not np.any(gap_mask):
         edges = np.concatenate(
             (
