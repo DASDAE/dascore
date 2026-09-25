@@ -1011,6 +1011,7 @@ class LazyArray:
         """
         block = self._block()
         _validate(block)
+        block = _coalesced(block)
         out = np.empty(self.shape, self.dtype)
         # The placement is taken apart once rather than a row at a time,
         # which numpy charges for however few samples a member holds.
@@ -1322,6 +1323,49 @@ def _sources_of(block: _Block) -> list[ArraySource]:
             )
         )
     return out
+
+
+def _coalesced(block: _Block) -> _Block:
+    """
+    Return the block with each run of abutting windows of one source as one member.
+
+    Members next to each other in placement order merge when they read one
+    source through one cast and axis map, meet along one axis in the output
+    as their windows meet in the source, and match on every other axis. The
+    array is the same, so only how many reads load it changes.
+    """
+    count = len(block)
+    if count < 2:
+        return block
+    axes, members = block.axes, block.members
+    start, stop, src_start = axes["out_start"], axes["out_stop"], axes["src_start"]
+    src_axis, rows = axes["src_axis"], members.source_row
+    stored = ~members.filled
+    alike = (
+        (rows[1:] == rows[:-1])
+        & (members.cast.codes[1:] == members.cast.codes[:-1])
+        & np.all(src_axis[1:] == src_axis[:-1], axis=1)
+        & stored[1:]
+        & stored[:-1]
+    )
+    same = (start[1:] == start[:-1]) & (stop[1:] == stop[:-1])
+    same &= src_start[1:] == src_start[:-1]
+    meets = (start[1:] == stop[:-1]) & (src_axis[1:] >= 0)
+    meets &= src_start[1:] == src_start[:-1] + stop[:-1] - start[:-1]
+    # The axis each member continues its predecessor along, or -1.
+    along = np.full(count - 1, NEW_AXIS)
+    for axis in range(block.ndim):
+        others = np.delete(same, axis, axis=1).all(axis=1)
+        along[alike & meets[:, axis] & others & (along < 0)] = axis
+    joins = along >= 0
+    # A run grows along one axis; turning to another starts a new one.
+    joins[1:] &= ~(joins[:-1] & (along[1:] != along[:-1]))
+    firsts = np.flatnonzero(np.r_[True, ~joins])
+    if len(firsts) == count:
+        return block
+    lasts = np.r_[firsts[1:], count] - 1
+    out = block.take(firsts)
+    return replace(out, axes={**out.axes, "out_stop": stop[lasts]})
 
 
 def _source_groups(block: _Block) -> list[list[int]]:

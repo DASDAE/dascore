@@ -1957,6 +1957,81 @@ class TestLoad:
             array.load()
 
 
+class TestCoalescedReads:
+    """Abutting windows of one source are read as one window."""
+
+    def test_windows_of_one_file(self, two_sources, patch, reads):
+        """Consecutive windows of one file take one read."""
+        source = two_sources[0]
+        many = LazyArray.from_sources([source[x : x + 10] for x in range(0, 100, 10)])
+        assert np.array_equal(many.load(), patch.data[:100])
+        assert len(reads) == 1 and reads[0].windows[0] == (0, 100)
+
+    def test_breaks_split_runs(self, two_sources, patch, reads):
+        """A gap, a reordering, a constant or a file change starts a new read."""
+        first, second = two_sources
+        width = patch.shape[1]
+        parts = [first[0:10], first[10:20], first[30:40], first[20:30]]
+        parts += [ArraySource.full((2, width), 0.0, dtype=patch.dtype)]
+        parts += [first[40:50], second[0:10], second[10:20]]
+        expected = [patch.data[a:b] for a, b in [(0, 20), (30, 40), (20, 30)]]
+        expected += [np.zeros((2, width)), patch.data[40:50], patch.data[100:120]]
+        out = LazyArray.from_sources(parts).load()
+        assert np.array_equal(out, np.concatenate(expected))
+        assert [x.windows[0] for x in reads] == [
+            (0, 20),
+            (30, 40),
+            (20, 30),
+            (40, 50),
+            (0, 20),
+        ]
+
+    def test_casts_split_runs(self, two_sources, patch, reads):
+        """Members cast through different dtypes are read apart."""
+        source = two_sources[0]
+        parts = [source[0:10], source[10:20], source[20:30]]
+        array = LazyArray.from_sources(parts, dtype="f8", cast_via=[None, "f4", "f4"])
+        expected = np.concatenate(
+            [patch.data[0:10], patch.data[10:30].astype("f4")]
+        ).astype("f8")
+        assert np.array_equal(array.load(), expected)
+        assert [x.windows[0] for x in reads] == [(0, 10), (10, 30)]
+
+    def test_tiles_merge_along_one_axis(self, two_sources, patch, reads):
+        """A grid of windows merges along its rows, never into a box of runs."""
+        source = two_sources[0]
+        tile = LazyArray.from_source
+        rows = [
+            concat([tile(source[a:b, 0:5]), tile(source[a:b, 5:10])], axis=1)
+            for a, b in ((0, 50), (50, 100))
+        ]
+        grid = concat(rows)
+        assert np.array_equal(grid.load(), patch.data[:100, :10])
+        assert [x.windows for x in reads] == [((0, 50), (0, 10)), ((50, 100), (0, 10))]
+
+    @pytest.mark.parametrize("seed", range(20))
+    def test_random_cuts_load_alike(self, two_sources, monkeypatch, seed):
+        """Any cutting of the files loads what reading each member would."""
+        rng = np.random.default_rng(seed)
+        parts = []
+        for source in two_sources:
+            size = source.shape[0]
+            cuts = np.unique(rng.integers(1, size, rng.integers(0, 8)))
+            pieces = list(pairwise([0, *cuts.tolist(), size]))
+            if rng.random() < 0.3:
+                rng.shuffle(pieces)
+            parts += [source[a:b, 2:7] for a, b in pieces]
+            if rng.random() < 0.3:
+                parts.append(ArraySource.full((3, 5), 1.0, dtype=source.dtype))
+        array = LazyArray.from_sources(parts)
+        window = array[int(rng.integers(0, 20)) :]
+        got = [array.load(), window.load()]
+        monkeypatch.setattr(lazy_module, "_coalesced", lambda block: block)
+        assert all(
+            np.array_equal(x, y) for x, y in zip(got, [array.load(), window.load()])
+        )
+
+
 class TestStatedDtype:
     """A caller which must match another promotion order states the dtype."""
 
