@@ -2053,6 +2053,23 @@ class TestCoalescedReads:
         stops = lazy_module._coalesced(block).axes["out_stop"].tolist()
         assert stops == [[1, 1], [2, 2], [3, 1], [3, 2]]
 
+    @pytest.mark.parametrize(
+        ("dtype", "cast", "merged"),
+        [("f8", None, 1), ("u4", None, 2), ("f8", "u4", 2), ("f8", "f8", 1)],
+    )
+    def test_float_to_int_is_read_apart(self, dtype, cast, merged):
+        """A float read into integers, whose invalid values vary, is read apart."""
+        array = LazyArray.from_columns(
+            ["/a.h5", "/a.h5"],
+            (1,),
+            start=[[0], [1]],
+            extent=2,
+            cast_via=cast,
+            **FORMAT,
+            dtype=dtype,
+        )
+        assert len(lazy_module._coalesced(array._block())) == merged
+
     def test_string_casts_are_read_apart(self):
         """A cast to text, whose width the samples decide, keeps members apart."""
         array = LazyArray.from_columns(

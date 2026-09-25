@@ -79,7 +79,7 @@ DIGEST_LAYOUT = 3
 # bytes into its run, so one holds at most this and one member more.
 _RUN_BYTES = 1 << 24
 
-# The dtype kinds whose casts keep no state from one sample to the next.
+# The dtype kinds a merged read may convert between.
 _NUMERIC = "biufc"
 
 # The most axes one array may be cut on; each one doubles the corners.
@@ -1337,25 +1337,32 @@ def _coalesced(block: _Block) -> _Block:
     """
     Return the block with abutting windows of one source merged into one member.
 
-    Neighbours in placement order merge when they read one stored numeric
-    source through one numeric cast and axis map, abut along one axis in both
-    output and source, and match on every other axis. A run grows along one
+    Neighbours in placement order merge when they read one stored source
+    through one cast and axis map, abut along one axis in both output and
+    source, and match on every other axis. Only numeric conversions of one
+    kind or wider merge. A run grows along one
     axis and is cut every `_RUN_BYTES` by where its members start.
     """
     count = len(block)
-    if count < 2 or np.dtype(block.dtype).kind not in _NUMERIC:
+    if count < 2:
         return block
     axes, members = block.axes, block.members
     start, stop, src_axis = axes["out_start"], axes["out_stop"], axes["src_axis"]
     rows, dtypes = members.source_row, members.sources.dtype
     offset = start - axes["src_start"]
-    # A cast which takes its unit from the samples must see each window alone.
-    numeric = np.array([_dtype_of(x).kind in _NUMERIC for x in dtypes.values])
-    casts = members.cast
-    plain = np.array([not x or _dtype_of(x).kind in _NUMERIC for x in casts.values])
-    alike = (rows[1:] == rows[:-1]) & numeric[dtypes.codes[rows[1:]]]
+    casts, target = members.cast, np.dtype(block.dtype)
+    # A conversion whose result may depend on how many samples it sees, as a
+    # unit taken from text or a float out of an integer's range, must see
+    # each window alone.
+    via = [_dtype_of(x) if x else target for x in casts.values]
+    smooth = np.array(
+        [
+            [_smooth(x, y) and _smooth(y, target) for y in via]
+            for x in map(_dtype_of, dtypes.values)
+        ]
+    )
+    alike = (rows[1:] == rows[:-1]) & smooth[dtypes.codes[rows[1:]], casts.codes[1:]]
     alike &= ~members.filled[1:] & (casts.codes[1:] == casts.codes[:-1])
-    alike &= plain[casts.codes[1:]]
     alike &= np.all(src_axis[1:] == src_axis[:-1], axis=1)
     alike &= np.all(offset[1:] == offset[:-1], axis=1)
     alike &= np.all(axes["src_extent"][1:] == axes["src_extent"][:-1], axis=1)
@@ -1386,6 +1393,12 @@ def _coalesced(block: _Block) -> _Block:
     lasts = np.r_[firsts[1:], count] - 1
     out = block.take(firsts)
     return replace(out, axes={**out.axes, "out_stop": stop[lasts]})
+
+
+def _smooth(source: np.dtype, target: np.dtype) -> bool:
+    """Whether a numeric conversion treats every sample alike, however many."""
+    kinds = source.kind in _NUMERIC and target.kind in _NUMERIC
+    return kinds and bool(np.can_cast(source, target, "same_kind"))
 
 
 def _source_groups(block: _Block) -> list[list[int]]:
