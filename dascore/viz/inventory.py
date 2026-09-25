@@ -32,6 +32,7 @@ COMPONENT_COLORS = {
     "Splice": "#E69F00",
     "Connector": "#009E73",
     "Terminator": "#CC79A7",
+    "Amplifier": "#D55E00",
 }
 
 

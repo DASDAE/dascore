@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import get_args
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -737,6 +738,11 @@ class TestPath:
         )
         assert shown
         assert np.allclose(_boxes(ax)[0].get_facecolors()[0][:3], [0, 0, 0])
+
+    def test_every_component_has_a_color(self):
+        """Each component type in the model has a pinned color."""
+        types = get_args(get_args(inv.OpticalComponent)[0])
+        assert {x.__name__ for x in types} == set(COMPONENT_COLORS)
 
     def test_components_keep_their_own_colors(self, site):
         """The component vocabulary is closed, so its colors are pinned."""
