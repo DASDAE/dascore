@@ -923,27 +923,27 @@ def _load_set(directory: Path, attrs: Mapping, dims, **kwargs) -> AnnotationSet:
         raise ParameterError(msg)
     declared, skip = _read_table_dims(table)
     stated = _declared_dims(attrs, dims, directory, declared, table)
-    dtypes = _stated_dtypes(attrs, "annotation_columns")
+    own, inherited = _stated_dtypes(attrs, "annotation_columns")
     frame = _read_set_table(
         table,
         stated,
         "no annotations",
         ordered=True,
         skip=skip,
-        text=_text_columns(dtypes),
+        text=_text_columns(own, inherited),
     )
-    frame = _restore_dtypes(frame, dtypes, table)
+    frame = _settle_dtypes(frame, own, inherited, table)
     features = None
     if (path := _one_spelling(directory, FEATURE_STEM, TABLE_SUFFIXES)) is not None:
-        dtypes = _stated_dtypes(attrs, "feature_columns")
+        own, inherited = _stated_dtypes(attrs, "feature_columns")
         features = _read_set_table(
             path,
             (),
             "no features",
             skip=_undeclared(path),
-            text=_text_columns(dtypes),
+            text=_text_columns(own, inherited),
         )
-        features = _restore_dtypes(features, dtypes, path)
+        features = _settle_dtypes(features, own, inherited, path)
     return AnnotationSet(
         frame,
         features=features,
@@ -1002,26 +1002,53 @@ def _is_text_dtype(dtype: str) -> bool:
     return False
 
 
-def _text_columns(dtypes: Mapping[str, str]) -> frozenset[str]:
+def _text_columns(own: Mapping, inherited: Mapping) -> frozenset[str]:
     """The columns declared as text, which a table leaves as it reads them."""
+    dtypes = {**{k: v for k, (v, _) in inherited.items()}, **own}
     return frozenset(k for k, v in dtypes.items() if _is_text_dtype(v))
 
 
-def _stated_dtypes(attrs: Mapping, key: str, own=None) -> dict[str, str]:
+def _stated_dtypes(attrs: Mapping, key: str, own=None) -> tuple[dict, dict]:
     """
-    The dtype each column is declared as: the set's own, else the one every
-    set saved flat into it agrees on. Children which disagree leave the
-    column to inference.
+    Return the set's own declared dtypes, and those the sets saved flat
+    into it agree on, each with the names of the sets declaring it.
+    Children which disagree leave the column to inference.
     """
-    merged: dict[str, str] = {}
+    stated = _declared_dtypes(attrs.get(key) if own is None else own)
+    merged: dict[str, tuple[str, set[str]]] = {}
     clashing = set()
-    for child in (attrs.get("sets") or {}).values():
+    for label, child in (attrs.get("sets") or {}).items():
         for name, dtype in _declared_dtypes(_child_field(child, key)).items():
-            if merged.setdefault(name, dtype) != dtype:
-                clashing.add(name)
-    out = {k: v for k, v in merged.items() if k not in clashing}
-    out.update(_declared_dtypes(attrs.get(key) if own is None else own))
-    return out
+            first, owners = merged.setdefault(name, (dtype, set()))
+            clashing |= {name} if first != dtype else set()
+            owners.add(label)
+    inherited = {
+        k: v for k, v in merged.items() if k not in clashing and k not in stated
+    }
+    return stated, inherited
+
+
+def _settle_dtypes(frame, own: Mapping, inherited: Mapping, path: Path):
+    """
+    Restore declared dtypes. A child's declaration holds for a column only
+    where every row stating it came from a child declaring it; otherwise
+    the column is read as an undeclared one would be.
+    """
+    if frame is None:
+        return frame
+    applied = dict(own)
+    reread = {}
+    for name, (dtype, owners) in inherited.items():
+        if name not in frame.columns:
+            continue
+        stated = frame[name].notna()
+        labels = frame.loc[stated, "set"] if "set" in frame.columns else None
+        if labels is not None and set(labels.map(_text)) <= owners:
+            applied[name] = dtype
+        elif _is_text_dtype(dtype) and not _is_parquet(path):
+            reread[name] = frame[name].map(_read_extra)
+    frame = frame.assign(**reread) if reread else frame
+    return _restore_dtypes(frame, applied, path)
 
 
 def _child_field(child, key: str):
@@ -1049,16 +1076,17 @@ def _load_file(path: Path, dims, **kwargs) -> AnnotationSet:
     columns = kwargs.get("annotation_columns")
     if columns is None:
         columns = given.get("annotation_columns")
-    dtypes = _stated_dtypes(given, "annotation_columns", own=columns or {})
+    own, inherited = _stated_dtypes(given, "annotation_columns", own=columns or {})
     frame = _read_set_table(
         path,
         stated,
         "no annotations",
         ordered=True,
         skip=skip,
-        text=_text_columns(dtypes),
+        text=_text_columns(own, inherited),
     )
-    return AnnotationSet(_restore_dtypes(frame, dtypes, path), dims=stated, **kwargs)
+    frame = _settle_dtypes(frame, own, inherited, path)
+    return AnnotationSet(frame, dims=stated, **kwargs)
 
 
 def _undeclared(path: Path) -> int:

@@ -1246,6 +1246,72 @@ class TestCollections:
         assert flat.annotations["count"].dtype.name == "Int64"
         assert flat == loaded
 
+    @staticmethod
+    def _children(root, first, second, declared):
+        """Save two children; only the first declares its extra columns."""
+        for name, extra, columns in (
+            ("a", first, declared),
+            ("b", second, None),
+        ):
+            frame = pd.DataFrame({"time": [1.0], **extra})
+            dc.AnnotationSet(frame, dims=("time",), annotation_columns=columns).io.save(
+                root / name
+            )
+        return dc.annotations(root)
+
+    def test_a_declaration_does_not_reach_another_children_rows(self, tmp_path):
+        """One child's int64 does not truncate another child's 1.5."""
+        loaded = self._children(
+            tmp_path / "sets",
+            {"count": [2]},
+            {"count": [1.5]},
+            {"count": {"dtype": "int64"}},
+        )
+        flat = dc.annotations(loaded.io.save(tmp_path / "flat"))
+        assert list(flat.annotations["count"]) == [2.0, 1.5]
+        assert flat == loaded
+        path = tmp_path / "bare.csv"
+        loaded.io.to_csv(path)
+        bare = dc.annotations(path, dims=loaded.dims, attrs=loaded.attrs)
+        assert list(bare.annotations["count"]) == [2.0, 1.5]
+
+    def test_a_text_column_only_one_child_holds(self, tmp_path):
+        """A child's text declaration holds where no other child states the column."""
+        loaded = self._children(
+            tmp_path / "sets",
+            {"code": ["001"]},
+            {},
+            {"code": {"dtype": "str"}},
+        )
+        flat = dc.annotations(loaded.io.save(tmp_path / "flat"))
+        assert flat.annotations["code"][0] == "001"
+        assert flat == loaded
+
+    def test_a_declared_column_no_child_holds(self, tmp_path):
+        """A child may document a column the merged table never has."""
+        loaded = self._children(
+            tmp_path / "sets", {}, {}, {"count": {"dtype": "Int64"}}
+        )
+        flat = dc.annotations(loaded.io.save(tmp_path / "flat"))
+        assert "count" not in flat.annotations.columns
+        assert flat == loaded
+
+    def test_a_text_column_another_child_states(self, tmp_path):
+        """
+        Where an undeclaring child states the column too, it is inferred as an
+        undeclared column is. The merged set held "001" beside 7; a table
+        cannot keep that apart, so the reload reads both cells as numbers.
+        """
+        loaded = self._children(
+            tmp_path / "sets",
+            {"code": ["001"]},
+            {"code": [7]},
+            {"code": {"dtype": "str"}},
+        )
+        assert list(loaded.annotations["code"]) == ["001", 7]
+        flat = dc.annotations(loaded.io.save(tmp_path / "flat"))
+        assert list(flat.annotations["code"]) == [1, 7]
+
     def test_children_disagreeing_on_a_dtype(self, tmp_path):
         """Where children declare different dtypes the column is inferred."""
         root = tmp_path / "sets"
