@@ -196,6 +196,18 @@ class TestStridedStep:
         assert out.step is None
         assert np.array_equal(out.values, coord.values[::2])
 
+    def test_stored_label_runs(self):
+        """Stored label runs take the stride's step as grid runs do."""
+        runs = (np.arange(0, 4), np.arange(8, 12))
+        out = NumericCoord(runs=runs, dtype="int64", step=1)[::2]
+        assert out.step == 2
+        assert out.missing().positions().tolist() == [4, 6]
+        labels = NumericCoord.from_labels(
+            np.r_[np.arange(6), np.arange(10, 16)], step=1
+        )
+        assert labels[::-1].step == -1
+        assert labels[0:6:2].step == 2
+
     @pytest.mark.parametrize("rate", [1024, 3000])
     def test_fractional_rate(self, rate):
         """A stride over a fractional-rate grid keeps an exact step."""
