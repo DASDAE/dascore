@@ -1652,22 +1652,21 @@ class TestCollections:
             dc.annotations(flat)
 
     def test_a_row_with_no_label(self, collection, tmp_path):
-        """A row loaded with others says which of them it came from."""
+        """A row with a blank label belongs to the collection itself."""
         flat = dc.annotations(collection).io.save(tmp_path / "flat")
         table = flat / "annotations.csv"
         table.write_text(table.read_text().replace(",hand", ",", 1))
-        with pytest.raises(InvalidAnnotationError, match="state no set"):
-            dc.annotations(flat)
+        loaded = dc.annotations(flat)
+        assert loaded.annotations["set"].isna().sum() == 1
 
     def test_a_feature_with_no_label(self, tmp_path):
-        """The features table of a collection labels its rows too."""
+        """A feature with a blank label belongs to the collection too."""
         root = tmp_path / "sets"
         _path_set().io.save(root / "auto")
         flat = dc.annotations(root).io.save(tmp_path / "flat")
         table = flat / "features.csv"
         table.write_text(table.read_text().replace(",auto", ","))
-        with pytest.raises(InvalidAnnotationError, match="of the features state no"):
-            dc.annotations(flat)
+        assert dc.annotations(flat).features["set"].isna().all()
 
     def test_a_table_with_no_label_column(self, collection, tmp_path):
         """Sets stated with no column to name them leave every row adrift."""

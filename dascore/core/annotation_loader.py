@@ -756,13 +756,18 @@ def _merge_sets(
         dict.fromkeys([*stated, *(x for one in loaded.values() for x in one.dims)])
     )
     frames = {name: _labeled(one.annotations, name) for name, one in loaded.items()}
-    tables = {name: _labeled(one.features, name) for name, one in loaded.items()}
+    # Features only where a set has some, so none leaves the table bare.
+    tables = {
+        name: _labeled(one.features, name)
+        for name, one in loaded.items()
+        if len(one.features)
+    }
     _refuse_undeclared_dims(loaded, frames, dims)
     document = dict(attrs)
     document["dims"] = dims
     document["sets"] = {name: one.attrs for name, one in loaded.items()}
     parts = {
-        name: _Tables(frames[name], tables[name], one.bases)
+        name: _Tables(frames[name], tables.get(name), one.bases)
         for name, one in loaded.items()
     }
     return _combine(parts, dims, attrs=document, **kwargs)

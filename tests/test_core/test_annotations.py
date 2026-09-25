@@ -1520,6 +1520,8 @@ class TestBasisModels:
         with pytest.raises(NotImplementedError):
             AnnotationBasis().vertices()
         with pytest.raises(NotImplementedError):
+            AnnotationBasis().extent()
+        with pytest.raises(NotImplementedError):
             AnnotationBasis().dims
 
     def test_a_curve_over_an_offset_dimension(self):

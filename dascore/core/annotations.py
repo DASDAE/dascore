@@ -335,6 +335,10 @@ class AnnotationBasis(_AnnotationModel):
         """Return ``count`` points along the curve, keyed by dimension."""
         raise NotImplementedError
 
+    def extent(self) -> dict[str, tuple[Any, Any]]:
+        """Return the curve's exact lowest and highest value per dimension."""
+        raise NotImplementedError
+
     @staticmethod
     def _fractions(count: int) -> np.ndarray:
         """Return where along the curve to sample, from one end to the other."""
@@ -386,6 +390,16 @@ class Line(AnnotationBasis):
         fraction = self._fractions(count)
         return {
             dim: _interpolate(self.start[dim], self.end[dim], fraction)
+            for dim in self.start
+        }
+
+    def extent(self) -> dict[str, tuple[Any, Any]]:
+        """Return the line's endpoints, lowest first, per dimension."""
+        return {
+            dim: (
+                min(self.start[dim], self.end[dim]),
+                max(self.start[dim], self.end[dim]),
+            )
             for dim in self.start
         }
 
@@ -452,12 +466,26 @@ class Moveout(AnnotationBasis):
         distance = self.distance_min + fraction * (
             self.distance_max - self.distance_min
         )
+        return {DISTANCE_DIM: distance, TIME_DIM: self._arrival(distance)}
+
+    def extent(self) -> dict[str, tuple[Any, Any]]:
+        """
+        Return the span, and the earliest and latest arrival along it: the
+        apex where the span holds it, else the nearer end.
+        """
+        ends = self._arrival(np.array([self.distance_min, self.distance_max]))
+        inside = self.distance_min <= self.apex_distance <= self.distance_max
+        first = self.apex_time if inside else ends.min()
+        return {
+            DISTANCE_DIM: (self.distance_min, self.distance_max),
+            TIME_DIM: (first, ends.max()),
+        }
+
+    def _arrival(self, distance: np.ndarray) -> np.ndarray:
+        """Return when the wavefront reaches each fiber distance."""
         along = np.hypot(self.standoff, distance - self.apex_distance)
         seconds = (along - self.standoff) / self.velocity
-        return {
-            DISTANCE_DIM: distance,
-            TIME_DIM: self.apex_time + to_timedelta64(seconds),
-        }
+        return self.apex_time + to_timedelta64(seconds)
 
 
 Basis = Annotated[Line | Moveout, Field(discriminator="object_type")]
@@ -1007,7 +1035,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
             "this set": _Tables(self._df, self._features, self._bases),
             "the added tables": _Tables(frame, table, bases),
         }
-        return _combine(parts, self.dims, attrs=self._attrs)
+        return self._settled(_combine(parts, self.dims, attrs=self._attrs))
 
     def add_feature(
         self,
@@ -1129,14 +1157,16 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         """
         Return this set combined with others.
 
-        The sets share dimensions. Feature ids, and annotation ids where
-        stated, are unique across all of them, and a basis key shared
-        between them names one curve. The attributes are this set's, with
-        each set's column documentation joined; a column documented with two
-        dtypes is refused. Where another set's ``acquisition_key`` or
-        ``data_id`` differs from this one's, it is written into that set's
-        rows, so each row keeps the provenance it had. A set stating none
-        cannot write a blank, so its rows take this set's.
+        The sets share dimensions, in any order; the result keeps this
+        set's. Feature ids, and annotation ids where stated, are unique
+        across all of them, and a basis key shared between them names one
+        curve. Each set's ``sets`` join, a label in two sets refused. The
+        attributes are otherwise this set's, with column documentation
+        joined; a column two sets give different dtypes loses its
+        declaration, as in a loaded collection. Where every set states the
+        same ``acquisition_key`` (or ``data_id``) it stays; otherwise the
+        result states none, and each row is stamped with the value it had,
+        so the result does not depend on the order the sets are given in.
 
         Examples
         --------
@@ -1149,14 +1179,10 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         ...     pd.DataFrame({"time": [2.0]}), dims=("time",), data_id="b"
         ... )
         >>> merged = hand.merge(auto)
-        >>> [x.data_id for x in merged]
-        ['a', 'b']
+        >>> merged.attrs.data_id, [x.data_id for x in merged]
+        ('', ['a', 'b'])
         """
-        parts = {"this set": _Tables(self._df, self._features, self._bases)}
-        columns = {
-            "annotation_columns": dict(self._attrs.annotation_columns),
-            "feature_columns": dict(self._attrs.feature_columns),
-        }
+        sources = {"this set": self}
         for number, other in enumerate(others, start=1):
             name = f"set {number} merged in"
             if not isinstance(other, AnnotationSet):
@@ -1168,15 +1194,29 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
                     f"{list(self.dims)}; sets merge in the same dimensions."
                 )
                 raise ParameterError(msg)
-            for field, declared in columns.items():
-                _join_columns(declared, getattr(other.attrs, field), name)
-            parts[name] = _Tables(
-                self._stamped(other._df, other),
-                self._stamped(other._features, other),
-                other._bases,
+            sources[name] = other
+        attrs: dict[str, Any] = {
+            field: _joined_columns([getattr(x.attrs, field) for x in sources.values()])
+            for field in ("annotation_columns", "feature_columns")
+        }
+        attrs["sets"] = _joined_sets(sources)
+        # Provenance the sets disagree on moves from the set into its rows.
+        stamp = [
+            field
+            for field in ("acquisition_key", "data_id")
+            if len({getattr(x.attrs, field) for x in sources.values()}) > 1
+        ]
+        attrs.update({field: "" for field in stamp})
+        parts = {
+            name: _Tables(
+                _stamped(one._df, one._attrs, stamp),
+                _stamped(one._features, one._attrs, stamp),
+                one._bases,
             )
-        attrs = _build_attrs(self._attrs, **columns)
-        return _combine(parts, self.dims, attrs=attrs)
+            for name, one in sources.items()
+        }
+        merged = _combine(parts, self.dims, attrs=_build_attrs(self._attrs, **attrs))
+        return self._settled(merged)
 
     # --- reading
 
@@ -1187,9 +1227,12 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         Rows follow iteration order: the features table's, then lone rows.
         Columns are ``feature_id`` (blank for a lone row), ``annotation``
         (a lone row's index label), ``kind``, then ``<dim>_min`` and
-        ``<dim>_max`` per dimension, blank where the feature spans it. A
-        group's bounds envelope its members', a path's or polygon's its
-        vertices, and a path drawn only from its basis its sampled curve.
+        ``<dim>_max`` per dimension, blank (NaN or NaT) where the feature
+        spans it; numbers are floats. A group's bounds envelope its
+        members', a path's or polygon's its vertices, and a path drawn only
+        from its basis its curve, exactly. A range row's maximum is
+        excluded, as its half-open range says; a value's is included, and a
+        value alone gives equal minimum and maximum: a point.
 
         Examples
         --------
@@ -1241,16 +1284,15 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
                     shut.append(bool(shut_at[identity]))
                     continue
                 # A path drawn only from its curve is where the curve is.
-                drawn = self._bases[key].vertices(64) if key else {}
-                lows.append(np.min(drawn[dim]) if dim in drawn else None)
-                highs.append(np.max(drawn[dim]) if dim in drawn else None)
+                reach = self._bases[key].extent() if key else {}
+                lows.append(reach[dim][0] if dim in reach else None)
+                highs.append(reach[dim][1] if dim in reach else None)
                 shut.append(True)
             lows += list(low[~member])
             highs += list(high[~member])
             shut += list(value[~member])
-            dtype = low.dtype if low.dtype.kind in "fMm" else None
-            out[f"{dim}{_MIN}"] = pd.Series([_scalar(x) for x in lows], dtype=dtype)
-            out[f"{dim}{_MAX}"] = pd.Series([_scalar(x) for x in highs], dtype=dtype)
+            out[f"{dim}{_MIN}"] = _bound_column(lows)
+            out[f"{dim}{_MAX}"] = _bound_column(highs)
             closed[dim] = np.array(shut, dtype=bool)
         return pd.DataFrame(out), closed
 
@@ -1260,15 +1302,21 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         """
         Return the set filtered on its columns.
 
-        Each name is a column of the annotations or the features table. A
-        value matches equal cells, a string is a glob, a list or set is
-        membership, a ``(low, high)`` tuple is an inclusive range with
-        either end ``None``, and ``<name>_min``/``<name>_max`` bound one end.
+        Each name is a column of the annotations or the features table; a
+        name on both is refused, ``id`` always. A value matches equal cells,
+        a string is a glob, a list or set is membership, a ``(low, high)``
+        tuple is an inclusive range with either end ``None`` (numbers, times
+        and durations only), and ``<name>_min``/``<name>_max`` bound one
+        end.
+
         A features filter drops the features failing it, members and all; a
-        lone row, whose features columns are blank, fails one. An
-        annotations filter drops the rows failing it and any feature left
-        with no members, and refuses to leave a path or polygon too few
-        vertices. Dimensions are filtered with `overlapping`.
+        lone row, whose features columns are blank, fails one. ``geometry``
+        (spelling a group ``group``) and ``basis`` are always features
+        filters. An annotations filter drops the rows failing it and any
+        feature left with no members, and refuses to leave a path or polygon
+        too few vertices. ``acquisition_key`` and ``data_id`` filter rows on
+        the value each inherits. ``set`` filters both tables by label.
+        Dimensions are filtered with `overlapping`.
 
         Examples
         --------
@@ -1283,7 +1331,11 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         1
         """
         spelled = {x for d in self.dims for x in (d, f"{d}{_MIN}", f"{d}{_MAX}")}
-        queries: tuple[dict, dict] = ({}, {})
+        on_rows: dict = {}
+        on_features: dict = {}
+        on_labels: dict = {}
+        rows = _provenance_view(self._df, self._attrs)
+        features = _kind_view(self._features)
         for name, value in filters.items():
             if name in spelled:
                 msg = (
@@ -1291,45 +1343,46 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
                     "overlapping selects where features are."
                 )
                 raise ParameterError(msg)
-            # An empty features table claims no name; it always holds id.
-            found = [_names(self._df, name), _names(self._features, name)]
-            found[1] = found[1] and len(self._features) > 0
-            if all(found):
+            if name == "id":
                 msg = (
-                    f"{name} is a column of both the annotations and the "
-                    "features, so which rows it filters is ambiguous."
+                    "id names rows of both tables, so select does not take it: "
+                    "use feature_id= for a feature's members, and update or "
+                    "remove for one row."
                 )
                 raise ParameterError(msg)
-            if not any(found):
-                msg = f"{name} is a column of neither the annotations nor the features."
-                raise ParameterError(msg)
-            query = queries[0] if found[0] else queries[1]
-            table = self._df if found[0] else self._features
-            if name in table.columns and isinstance(value, tuple) and len(value) == 2:
-                # A tuple is a range, as a dimension's is.
-                low, high = (None if x is ... else x for x in value)
-                query.update({f"{name}{_MIN}": low, f"{name}{_MAX}": high})
-            else:
-                query[name] = value
-        on_rows, on_features = queries
-        frame, features = self._df, self._features
+            found = _table_of(name, rows, features)
+            table = {"rows": rows, "features": features, "labels": rows}[found]
+            query = {"rows": on_rows, "features": on_features, "labels": on_labels}
+            query[found].update(_query(name, value, table))
+        frame, table = self._df, self._features
         if on_features:
             passed = np.asarray(filter_df(features, **on_features), dtype=bool)
             kept = set(features["id"][passed].map(_text))
             frame = frame[frame["feature_id"].map(_text).isin(kept)]
-            features = features[passed]
+            table = table[passed]
+        if on_labels:
+            # One label test on both tables; a lone row answers for itself.
+            if "set" in table.columns:
+                table = table[np.asarray(filter_df(table, **on_labels), dtype=bool)]
+            ids = frame["feature_id"].map(_text)
+            member = ids.isin(set(table["id"].map(_text))) | (ids == "")
+            labeled = np.asarray(filter_df(frame, **on_labels), dtype=bool)
+            frame = frame[labeled & member.to_numpy()]
         if on_rows:
-            frame = frame[np.asarray(filter_df(frame, **on_rows), dtype=bool)]
-        return self._dropped(frame, features, "The selection")
+            view = rows.loc[frame.index]
+            frame = frame[np.asarray(filter_df(view, **on_rows), dtype=bool)]
+        return self._dropped(frame, table)
 
     def overlapping(self, **bounds) -> AnnotationSet:
         """
         Return the features whose bounds overlap the given ones.
 
         Each keyword names a dimension, as ``(low, high)`` with either end
-        ``None``, or a single value. Ranges are half-open, and a feature
-        spanning a dimension overlaps anything along it. Nothing is trimmed:
-        a feature is kept or dropped whole.
+        ``None``, or a single value; ``(v, v)`` is the same point query as
+        ``v``. A query range is half-open, as is a feature's range, except
+        where its maximum is a stated value (see `bounds`). A feature
+        spanning a dimension overlaps anything along it. Nothing is
+        trimmed: a feature is kept or dropped whole.
 
         Examples
         --------
@@ -1396,9 +1449,11 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
             named, so it cannot be edited.
         **columns
             The cells to set. An ``id`` does not change, nor does a feature's
-            kind. Coordinates of an annotation may; changing one on a member
-            of a path drawn from a basis clears the path's basis, since the
-            members no longer come from it.
+            kind. An annotation's coordinates and ``feature_id`` may: a row
+            moved into a path or polygon is appended to its part 0, a group
+            it leaves empty is dropped. Any edit to the members of a path
+            drawn from a basis clears the path's basis, since the members no
+            longer come from it; every verb follows that rule.
 
         Examples
         --------
@@ -1428,16 +1483,9 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
             features = _set_cells(self._features, position, columns)
             return self._rebuilt(self._df, features)
         position = self._annotation_position(annotation)
-        frame = _set_cells(self._df, position, columns)
-        features = self._features
-        owner = _text(self._df["feature_id"].iloc[position])
-        spelled = _spelled_columns(self._spellings)
-        if owner and spelled & set(columns):
-            place = self._feature_position(owner)
-            keys = self._features.get("basis")
-            if keys is not None and _text(keys.iloc[place]):
-                features = _set_cells(features, place, {"basis": None})
-        return self._rebuilt(frame, features)
+        # Stated order columns win over the ones a move implies.
+        columns = {**self._moved(position, columns), **columns}
+        return self._dropped(_set_cells(self._df, position, columns), self._features)
 
     def remove(self, *, feature=None, annotation=None) -> AnnotationSet:
         """
@@ -1467,25 +1515,66 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
             return self._rebuilt(frame, features)
         position = self._annotation_position(annotation)
         frame = self._df.drop(index=self._df.index[position])
-        return self._dropped(frame, self._features, "Removing it")
+        return self._dropped(frame, self._features)
 
     # --- verb helpers
 
-    def _rebuilt(self, frame, features, bases=None) -> AnnotationSet:
+    def _rebuilt(self, frame, features) -> AnnotationSet:
         """Build a set from edited tables, in this set's attributes."""
-        bases = self._bases if bases is None else bases
-        return AnnotationSet(frame, features=features, bases=bases, attrs=self._attrs)
+        built = AnnotationSet(
+            frame, features=features, bases=self._bases, attrs=self._attrs
+        )
+        return self._settled(built)
 
-    def _dropped(self, frame, features, what: str) -> AnnotationSet:
-        """Rebuild after rows were dropped, removing features they emptied."""
+    def _dropped(self, frame, features) -> AnnotationSet:
+        """Rebuild after rows were dropped or moved, removing emptied features."""
         before = set(self._df["feature_id"].map(_text)) - {""}
         emptied = before - set(frame["feature_id"].map(_text))
-        features = features[~features["id"].map(_text).isin(emptied)]
-        try:
-            return self._rebuilt(frame, features)
-        except ParameterError as error:
-            msg = f"{what} leaves a feature short of its members: {error}"
-            raise ParameterError(msg) from error
+        return self._rebuilt(frame, features[~features["id"].map(_text).isin(emptied)])
+
+    def _settled(self, result: AnnotationSet) -> AnnotationSet:
+        """Clear the basis of each path of this set whose members a verb changed."""
+        keys = result._features.get("basis")
+        if keys is None:
+            return result
+        spelled = _spelled_columns(self._spellings) | _spelled_columns(
+            result._spellings
+        )
+        columns = ["feature_id", *ORDINAL_COLUMNS, *sorted(spelled)]
+        known = set(self._features["id"].map(_text))
+        ids = result._features["id"].map(_text)
+        stale = [
+            _text(key) != ""
+            and identity in known
+            and not _members(self._df, identity, columns).equals(
+                _members(result._df, identity, columns)
+            )
+            for identity, key in zip(ids, keys, strict=True)
+        ]
+        if not any(stale):
+            return result
+        features = _assign(result._features, {"basis": keys.where(~np.array(stale))})
+        return AnnotationSet(
+            result._df, features=features, bases=result._bases, attrs=result._attrs
+        )
+
+    def _moved(self, position: int, columns: Mapping) -> dict:
+        """The order columns a row takes when its feature_id changes."""
+        if "feature_id" not in columns:
+            return {}
+        target = _identity(columns["feature_id"]) or ""
+        kinds = dict(
+            zip(
+                self._features["id"].map(_text), self._features["geometry"], strict=True
+            )
+        )
+        if _text(kinds.get(target)) not in _LEAST:
+            return {x: None for x in ORDINAL_COLUMNS if x in self._df.columns}
+        ids = self._df["feature_id"].map(_text).to_numpy()
+        part = (ids == target) & (self._df["part"] == 0).to_numpy(bool, na_value=False)
+        part[position] = False
+        seq = self._df["seq"][part]
+        return {"seq": int(seq.max()) + 1 if len(seq) else 0, "part": 0, "ring": 0}
 
     def _feature_position(self, feature_id) -> int:
         """Return where a feature sits in the features table."""
@@ -1548,7 +1637,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
                 bases,
             ),
         }
-        return _combine(parts, self.dims, attrs=self._attrs)
+        return self._settled(_combine(parts, self.dims, attrs=self._attrs))
 
     def _adopted(self, members, identity: str, kind: str) -> pd.DataFrame:
         """Return the annotations with existing rows made a feature's members."""
@@ -1576,35 +1665,19 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
                 f"{', '.join(taken)}; a row belongs to one feature."
             )
             raise ParameterError(msg)
-        changed = {"feature_id": frame["feature_id"].copy()}
+        # Copy-on-write: setting cells leaves the frame's columns alone.
+        changed = {"feature_id": frame["feature_id"]}
         changed["feature_id"].iloc[positions] = identity
         if kind in _LEAST:
             order = {"seq": np.arange(len(positions)), "part": 0, "ring": 0}
             for name, values in order.items():
                 column = (
-                    frame[name].copy()
+                    frame[name]
                     if name in frame.columns
                     else pd.Series(pd.NA, index=frame.index, dtype="Int64")
                 )
                 column.iloc[positions] = values
                 changed[name] = column
-        return _assign(frame, changed)
-
-    def _stamped(self, frame: pd.DataFrame, source: AnnotationSet) -> pd.DataFrame:
-        """Write a merged set's provenance into rows where this set's would differ."""
-        changed = {}
-        for field in ("acquisition_key", "data_id"):
-            theirs = _resolved(frame, source._attrs, field)
-            ours = _resolved(frame, self._attrs, field)
-            write = ((theirs != ours) & (theirs != "")).to_numpy()
-            if not write.any():
-                continue
-            own = (
-                frame[field].astype(object)
-                if field in frame.columns
-                else _blank_column(frame.index)
-            )
-            changed[field] = own.where(~write, theirs.astype(object))
         return _assign(frame, changed)
 
     def _lone(self) -> pd.Series:
@@ -1748,12 +1821,13 @@ def _combine(parts: Mapping[str, _Tables], dims, **kwargs) -> AnnotationSet:
     Refuses a dimension in two kinds of value, an id in two sources, and a
     basis key naming two curves; ``kwargs`` go to `AnnotationSet`.
     """
-    frames = _with_rows({k: v.annotations for k, v in parts.items()})
-    tables = _with_rows({k: v.features for k, v in parts.items()})
-    _refuse_mixed_kinds(frames, dims)
-    _refuse_shared_ids(frames, "annotation")
-    _refuse_shared_ids(tables, "feature")
+    frames = _given({k: v.annotations for k, v in parts.items()})
+    tables = _given({k: v.features for k, v in parts.items()})
+    _refuse_mixed_kinds(_with_rows(frames), dims)
+    _refuse_shared_ids(_with_rows(frames), "annotation")
+    _refuse_shared_ids(_with_rows(tables), "feature")
     bases = _merge_bases({k: _read_bases(v.bases, dims) for k, v in parts.items()})
+    # Empty tables too, so their columns survive.
     return AnnotationSet(
         _concat(frames.values()),
         features=_concat(tables.values()),
@@ -1762,9 +1836,14 @@ def _combine(parts: Mapping[str, _Tables], dims, **kwargs) -> AnnotationSet:
     )
 
 
-def _with_rows(frames: Mapping[str, pd.DataFrame | None]) -> dict[str, pd.DataFrame]:
-    """Keep the tables which are given and hold rows."""
-    return {k: v for k, v in frames.items() if v is not None and len(v)}
+def _given(frames: Mapping[str, pd.DataFrame | None]) -> dict[str, pd.DataFrame]:
+    """Keep the tables which are given."""
+    return {k: v for k, v in frames.items() if v is not None}
+
+
+def _with_rows(frames: Mapping[str, pd.DataFrame]) -> dict[str, pd.DataFrame]:
+    """Keep the tables which hold rows."""
+    return {k: v for k, v in frames.items() if len(v)}
 
 
 def _concat(frames) -> pd.DataFrame | None:
@@ -1870,17 +1949,48 @@ def _is_text_dtype(dtype: str) -> bool:
     return False
 
 
-def _join_columns(declared: dict, other: Mapping, name: str) -> None:
-    """Add another set's column documentation, refusing a clashing dtype."""
-    for column, spec in other.items():
-        mine = declared.setdefault(column, spec)
-        clash = mine.dtype and spec.dtype and mine.dtype != spec.dtype
-        if clash and not (_is_text_dtype(mine.dtype) and _is_text_dtype(spec.dtype)):
-            msg = (
-                f"The column {column!r} is declared {mine.dtype} in this set and "
-                f"{spec.dtype} in the {name}; one column holds one dtype."
-            )
-            raise ParameterError(msg)
+def _joined_columns(declared: Sequence[Mapping]) -> dict:
+    """
+    Join several sets' column documentation, the first spelling of each
+    kept; a column given different dtypes loses its declaration.
+    """
+    specs: dict[str, list] = {}
+    for columns in declared:
+        for name, spec in columns.items():
+            specs.setdefault(name, []).append(spec)
+    out = {}
+    for name, stated in specs.items():
+        dtypes = {x.dtype for x in stated if x.dtype}
+        if len(dtypes) > 1 and not all(_is_text_dtype(x) for x in dtypes):
+            continue
+        out[name] = next((x for x in stated if x.dtype), stated[0])
+    return out
+
+
+def _joined_sets(sources: Mapping[str, AnnotationSet]) -> dict:
+    """Join the child sets several sets hold, a label in two refused."""
+    out: dict[str, AnnotationSetAttrs] = {}
+    owner: dict[str, str] = {}
+    for name, one in sources.items():
+        for label, child in one.attrs.sets.items():
+            if label in out:
+                msg = (
+                    f"The set label {label!r} is in {owner[label]} and {name}; "
+                    "a label names one set."
+                )
+                raise ParameterError(msg)
+            out[label], owner[label] = child, name
+    return out
+
+
+def _stamped(frame: pd.DataFrame, attrs, fields: Sequence[str]) -> pd.DataFrame:
+    """Write each row's resolved provenance into it, a blank one blank."""
+    changed = {}
+    for field in fields:
+        resolved = _resolved(frame, attrs, field)
+        if (resolved != "").any():
+            changed[field] = resolved.astype(object).where(resolved != "", None)
+    return _assign(frame, changed)
 
 
 def _resolved(frame: pd.DataFrame, attrs: AnnotationSetAttrs, field: str):
@@ -1927,15 +2037,81 @@ def _set_cells(frame: pd.DataFrame, position: int, columns: Mapping) -> pd.DataF
     changed = {}
     for name, value in columns.items():
         new = name not in frame.columns
-        column = _blank_column(frame.index) if new else frame[name].copy()
+        # Copy-on-write: setting a cell leaves the frame's column alone.
+        column = _blank_column(frame.index) if new else frame[name]
         try:
             column.iloc[position] = value
         except (TypeError, ValueError):
-            # A value the column's dtype cannot hold widens it.
+            # A value the column's dtype cannot hold widens it, as little
+            # as it can: an integer column taking 2.5 becomes floats.
             column = column.astype(object)
             column.iloc[position] = value
+            new = True
         changed[name] = column.infer_objects() if new else column
     return _assign(frame, changed)
+
+
+def _members(frame: pd.DataFrame, identity: str, columns) -> pd.DataFrame:
+    """A feature's member rows, in table order, as comparable objects."""
+    rows = frame[frame["feature_id"].map(_text) == identity]
+    return rows.reindex(columns=columns).reset_index(drop=True).astype(object)
+
+
+# Filter names select routes to one table whatever the tables hold.
+_PROVENANCE = ("acquisition_key", "data_id")
+_KIND_COLUMNS = ("geometry", "basis")
+
+
+def _provenance_view(frame: pd.DataFrame, attrs) -> pd.DataFrame:
+    """The annotations with each row's provenance as it resolves."""
+    return _assign(frame, {x: _resolved(frame, attrs, x) for x in _PROVENANCE})
+
+
+def _kind_view(features: pd.DataFrame) -> pd.DataFrame:
+    """The features with a group's kind spelled out, and a basis column."""
+    kinds = features["geometry"].map(lambda x: _text(x) or "group").astype(object)
+    changed = {"geometry": kinds}
+    if "basis" not in features.columns:
+        changed["basis"] = _blank_column(features.index)
+    return _assign(features, changed)
+
+
+def _table_of(name: str, rows: pd.DataFrame, features: pd.DataFrame) -> str:
+    """Name the table a select filter reads: rows, features, or labels."""
+    stem = name.removesuffix(_MIN).removesuffix(_MAX)
+    if name == "set" and "set" in rows.columns:
+        return "labels"
+    if stem in _PROVENANCE:
+        return "rows"
+    if stem in _KIND_COLUMNS:
+        return "features"
+    # An empty features table claims no name; it always holds some.
+    found = (_names(rows, name), len(features) > 0 and _names(features, name))
+    if all(found):
+        msg = (
+            f"{name} is a column of both the annotations and the features, so "
+            "which rows it filters is ambiguous."
+        )
+        raise ParameterError(msg)
+    if not any(found):
+        msg = f"{name} is a column of neither the annotations nor the features."
+        raise ParameterError(msg)
+    return "rows" if found[0] else "features"
+
+
+def _query(name: str, value, table: pd.DataFrame) -> dict:
+    """Spell one select filter as `filter_df` reads it."""
+    if not (isinstance(value, tuple) and len(value) == 2):
+        return {name: value}
+    kind = getattr(table[name].dtype, "kind", "") if name in table.columns else ""
+    if kind not in "iufMm" or not kind:
+        msg = (
+            f"{name} is given a tuple, which is a range, and its values are "
+            "not numbers or times; use a list for membership."
+        )
+        raise ParameterError(msg)
+    low, high = (None if x is ... else x for x in value)
+    return {f"{name}{_MIN}": low, f"{name}{_MAX}": high}
 
 
 def _names(frame: pd.DataFrame, name: str) -> bool:
@@ -1964,6 +2140,12 @@ def _row_extents(frame: pd.DataFrame, spelling: _Spelling):
         low = low.where(~value, frame[spelling.point])
         high = high.where(~value, frame[spelling.point])
     return low, high, value
+
+
+def _bound_column(values: list) -> pd.Series:
+    """Build a bounds column: times stay times, numbers become floats."""
+    series = pd.Series([_scalar(x) if _stated(x) else None for x in values])
+    return series if series.dtype.kind in "Mm" else series.astype(np.float64)
 
 
 def _query_bound(value, column: pd.Series):
@@ -2615,7 +2797,8 @@ def _check_set_labels(frame: pd.DataFrame, attrs: AnnotationSetAttrs, table: str
     Refuse a row whose set label names none of the sets stated.
 
     Only checked where sets are stated: a set on its own may carry a `set`
-    column meaning whatever it means.
+    column meaning whatever it means. A blank label is a row of the
+    collection itself, such as one added after loading.
     """
     if not attrs.sets or frame.empty:
         return
@@ -2627,14 +2810,7 @@ def _check_set_labels(frame: pd.DataFrame, attrs: AnnotationSetAttrs, table: str
         )
         raise ParameterError(msg)
     labels = frame["set"].map(_text)
-    if not labels.all():
-        rows = ", ".join(str(x) for x in frame.index[labels == ""][:5])
-        msg = (
-            f"Row(s) {rows} of the {table} state no set, where the sets {stated} "
-            "are stated. A row loaded with others says which of them it came from."
-        )
-        raise ParameterError(msg)
-    if unknown := sorted(set(labels) - set(attrs.sets)):
+    if unknown := sorted(set(labels) - set(attrs.sets) - {""}):
         msg = (
             f"The set label(s) {', '.join(unknown)} name no set stated here, "
             f"which states {stated}. A label reaches back to what its set says "

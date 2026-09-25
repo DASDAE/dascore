@@ -71,13 +71,14 @@ def tracks():
 
 @pytest.fixture(scope="module")
 def based():
-    """A path drawn through two members from a basis, and a basis-only path."""
+    """A path drawn through three members from a basis, and a basis-only path."""
     frame = pd.DataFrame(
         {
-            "id": ["m0", "m1"],
-            "feature_id": ["near", "near"],
-            "time": TIMES[:2],
-            "distance": [0.0, 50.0],
+            "id": ["m0", "m1", "m2"],
+            "feature_id": ["near", "near", "near"],
+            "time": TIMES,
+            "distance": [0.0, 25.0, 50.0],
+            "q": [1, 2, 3],
         }
     )
     features = pd.DataFrame(
@@ -99,6 +100,30 @@ def square():
     hole = {"time": [2.0, 4.0, 2.0], "distance": [2.0, 2.0, 4.0]}
     empty = AnnotationSet(dims=DIMS)
     return empty.add_polygon("sq", rings=[outer, hole], note="noise")
+
+
+def _collection(root, names, data_ids=None) -> AnnotationSet:
+    """Save one small set per name under root and load them together."""
+    for number, name in enumerate(names):
+        frame = pd.DataFrame(
+            {
+                "id": [f"{name}0", f"{name}1"],
+                "time": [1.0 + 2 * number, 2.0 + 2 * number],
+                "feature_id": [f"ev_{name}", None],
+            }
+        )
+        columns = {"note": {"description": f"remark by {name}"}}
+        stated = AnnotationSet(
+            frame, dims=DIMS, data_id=name, annotation_columns=columns
+        )
+        stated.io.save(root / name)
+    return dc.annotations(root)
+
+
+@pytest.fixture(scope="module")
+def collection(tmp_path_factory):
+    """Two sets, hand and auto, loaded together."""
+    return _collection(tmp_path_factory.mktemp("sets"), ("hand", "auto"))
 
 
 class TestFromPatch:
@@ -231,6 +256,17 @@ class TestAddFeature:
         )
         assert len(out["p"].geometry.vertices) == 2
         assert list(out.annotations["seq"]) == [0, 1, 0, 1]
+
+    def test_ring_arrays(self):
+        """Ring arrays make a polygon with a hole."""
+        out = AnnotationSet(dims=DIMS).add_feature(
+            "p",
+            "polygon",
+            time=[0.0, 9.0, 9.0, 0.0, 2.0, 4.0, 2.0],
+            distance=[0.0, 0.0, 9.0, 9.0, 2.0, 2.0, 4.0],
+            ring=[0, 0, 0, 0, 1, 1, 1],
+        )
+        assert [len(x["time"]) for x in out["p"].geometry.vertices[0]] == [4, 3]
 
     def test_adopt_by_mask(self, picks):
         """A mask adopts rows, in row order."""
@@ -469,6 +505,34 @@ class TestBounds:
         row = based.bounds().set_index("feature_id").loc["near"]
         assert (row["distance_min"], row["distance_max"]) == (0.0, 50.0)
 
+    def test_moveout_apex(self):
+        """A curve's bounds are exact, so its apex time is its earliest."""
+        out = AnnotationSet(dims=DIMS).add_path("m", basis=_moveout())
+        assert out.bounds().iloc[0]["time_min"] == TIMES[0]
+        assert len(out.overlapping(time=TIMES[0])) == 1
+
+    def test_moveout_apex_outside(self):
+        """With its apex off the span, a curve is earliest at the nearer end."""
+        curve = _moveout(apex_distance=-100.0)
+        out = AnnotationSet(dims=DIMS).add_path("m", basis=curve)
+        row = out.bounds().iloc[0]
+        assert row["time_min"] == curve.vertices(2)["time"][0]
+        assert row["time_max"] == curve.vertices(2)["time"][1]
+
+    def test_nullable_integer_dim(self):
+        """A nullable integer dimension bounds as floats, blanks spanning."""
+        frame = pd.DataFrame({"time": [1.0, 2.0]})
+        frame["distance"] = pd.array([10, None], "Int64")
+        out = AnnotationSet(frame, dims=DIMS)
+        assert out.bounds()["distance_min"].dtype == np.float64
+        assert len(out.overlapping(distance=(0, 20))) == 2
+        assert len(out.overlapping(distance=(30, 40))) == 1
+
+    def test_value_bound_inclusive(self):
+        """A value bound is a point: min equals max."""
+        out = AnnotationSet(pd.DataFrame({"time": [3.0]}), dims=DIMS).bounds()
+        assert out.iloc[0]["time_min"] == out.iloc[0]["time_max"] == 3.0
+
     def test_empty(self):
         """An empty set has no bounds rows."""
         assert AnnotationSet(dims=DIMS).bounds().empty
@@ -495,7 +559,7 @@ class TestSelect:
     def test_glob_and_membership(self, picks):
         """A string is a glob; a list is membership."""
         assert len(picks.select(phase="[S]")) == 1
-        assert len(picks.select(id=["a", "c"])) == 2
+        assert len(picks.select(confidence=[0.9, 0.3])) == 2
 
     def test_glob_skips_blank(self):
         """A blank cell does not match a glob."""
@@ -539,9 +603,60 @@ class TestSelect:
             picks.select(time=(1.0, 2.0))
 
     def test_ambiguous(self, tracks):
-        """A column on both tables is refused; id is, where features exist."""
+        """A column on both tables is refused."""
         with pytest.raises(ParameterError, match="ambiguous"):
-            tracks.select(id="t1")
+            tracks.update(feature="t1", name="a").update(
+                annotation="v0", name="b"
+            ).select(name="x")
+
+    def test_id_refused(self, picks):
+        """Id is ambiguous even with no features, and says what to use."""
+        with pytest.raises(ParameterError, match="feature_id="):
+            picks.select(id="a")
+
+    def test_range_spelling_refused(self, picks):
+        """A dimension's range spelling is overlapping's too."""
+        with pytest.raises(ParameterError, match="overlapping"):
+            picks.select(time_min=1.0)
+
+    def test_text_tuple_refused(self, picks):
+        """A tuple on a text column is not a range; a list is membership."""
+        with pytest.raises(ParameterError, match="list"):
+            picks.select(phase=("P", "S"))
+
+    def test_resolved_provenance(self, picks):
+        """A provenance filter matches rows inheriting the set's value."""
+        assert len(picks.select(data_id="patch-1")) == 3
+        assert len(picks.select(data_id="other")) == 0
+
+    @pytest.mark.parametrize("name", ["geometry", "basis"])
+    def test_feature_columns_without_features(self, picks, name):
+        """Geometry and basis filter features, even where there are none."""
+        assert len(picks.select(**{name: "path"})) == 0
+
+    def test_geometry(self, tracks):
+        """Geometry selects features by kind."""
+        assert list(tracks.select(geometry="path").features["id"]) == ["t1"]
+
+    def test_basis_filter(self, based):
+        """A basis key selects the paths drawn from it."""
+        assert set(based.select(basis="curve").features["id"]) == {"near", "far"}
+
+    def test_group_kind(self, tracks):
+        """A group's kind is spelled group, though stored blank."""
+        assert list(tracks.select(geometry="group").features["id"]) == ["e1"]
+
+    def test_set_label(self, collection):
+        """Set filters both tables by label."""
+        out = collection.select(set="hand")
+        assert set(out.annotations["set"]) == {"hand"}
+        assert set(out.features["set"]) == {"hand"}
+
+    def test_clears_basis_of_trimmed_path(self, based):
+        """Dropping some of a basis path's members clears its basis."""
+        out = based.select(q_min=2)
+        assert out["near"].basis is None
+        assert out["far"].basis == _moveout()
 
     def test_unknown(self, picks):
         """A column on neither table is refused."""
@@ -615,6 +730,11 @@ class TestOverlapping:
         )
         assert out.annotations["offset"].tolist() == [pd.Timedelta(5, "s")]
 
+    def test_half_open_upper_end(self):
+        """A range row starting where the query ends does not overlap."""
+        frame = pd.DataFrame({"time_min": [6.0], "time_max": [9.0]})
+        assert len(AnnotationSet(frame, dims=DIMS).overlapping(time=(5.0, 6.0))) == 0
+
     def test_unknown_dim(self, tracks):
         """Only declared dimensions are queried."""
         with pytest.raises(ParameterError, match="velocity"):
@@ -681,6 +801,19 @@ class TestUpdate:
         """An unknown feature id is a missing key."""
         with pytest.raises(KeyError, match="No feature"):
             tracks.update(feature="zz", note="x")
+
+    @pytest.mark.parametrize("verb", ["update", "remove"])
+    def test_unknown_annotation(self, picks, verb):
+        """An annotation id naming no row is a missing key."""
+        with pytest.raises(KeyError, match="No annotation"):
+            getattr(picks, verb)(annotation="zz")
+
+    def test_integer_column_widens(self, tmp_path):
+        """A float set into an integer column makes it float, not object."""
+        frame = pd.DataFrame({"id": ["a", "b"], "time": [1.0, 2.0], "n": [1, 2]})
+        out = AnnotationSet(frame, dims=DIMS).update(annotation="b", n=2.5)
+        assert out.annotations["n"].dtype == np.float64
+        assert _round_trip(out, tmp_path / "set") == out
 
     def test_row_without_id(self):
         """A row with no id cannot be named."""
@@ -761,9 +894,31 @@ class TestMerge:
             pd.DataFrame({"time": [9.0]}), dims=DIMS, data_id="patch-2"
         )
         out = picks.merge(other)
-        assert out.attrs.data_id == "patch-1"
+        assert out.attrs.data_id == ""
         assert [x.data_id for x in out] == ["patch-1"] * 3 + ["patch-2"]
-        assert out.annotations["data_id"].tolist()[-1] == "patch-2"
+        assert out.annotations["data_id"].tolist() == ["patch-1"] * 3 + ["patch-2"]
+
+    def test_provenance_order_independent(self, picks):
+        """Either order gives the same rows, and no value is invented."""
+        other = AnnotationSet(pd.DataFrame({"time": [9.0]}), dims=DIMS)
+        ahead, behind = picks.merge(other), other.merge(picks)
+        for out in (ahead, behind):
+            assert out.attrs.data_id == ""
+            # Every row is lone here, so features iterate in row order.
+            stamped = dict(zip(out.annotations["time"], out, strict=True))
+            assert {k: v.data_id for k, v in stamped.items()} == {
+                1.0: "patch-1",
+                2.0: "patch-1",
+                3.0: "patch-1",
+                9.0: "",
+            }
+
+    def test_other_unchanged(self, picks):
+        """The sets merged in are not changed."""
+        other = AnnotationSet(pd.DataFrame({"time": [9.0]}), dims=DIMS, data_id="x")
+        copy = AnnotationSet(other.annotations, attrs=other.attrs)
+        picks.merge(other)
+        assert other == copy
 
     def test_same_provenance_not_written(self, picks):
         """Where provenance agrees, nothing is written."""
@@ -802,6 +957,13 @@ class TestMerge:
         with pytest.raises(ParameterError, match="annotation id a"):
             picks.merge(picks)
 
+    def test_agreeing_provenance_kept(self, picks):
+        """A value every set states stays set-level."""
+        other = AnnotationSet(
+            pd.DataFrame({"time": [9.0]}), dims=DIMS, data_id="patch-1"
+        )
+        assert picks.merge(other).attrs.data_id == "patch-1"
+
     def test_dims_differ(self, picks):
         """Sets merge in the same dimensions."""
         other = AnnotationSet(pd.DataFrame({"time": [1.0]}), dims=("time",))
@@ -827,7 +989,7 @@ class TestMerge:
             based.merge(clash)
 
     def test_columns_join(self, picks):
-        """Column documentation joins; a clashing dtype is refused."""
+        """Column documentation joins; a clashing dtype drops the declaration."""
         declared = {"score": {"dtype": "float64", "description": "how sure"}}
         frame = pd.DataFrame({"time": [9.0], "score": [0.5]})
         other = AnnotationSet(frame, dims=DIMS, annotation_columns=declared)
@@ -839,8 +1001,8 @@ class TestMerge:
             dims=DIMS,
             annotation_columns=clash,
         )
-        with pytest.raises(ParameterError, match="declared int64"):
-            mine.merge(other)
+        assert "score" not in mine.merge(other).attrs.annotation_columns
+        assert "score" not in other.merge(mine).attrs.annotation_columns
 
     def test_text_dtypes_agree(self):
         """Two spellings of text do not clash."""
@@ -861,6 +1023,137 @@ class TestMerge:
         other = AnnotationSet(times, dims=DIMS, data_id="x")
         out = tracks.merge(other)
         assert _round_trip(out, tmp_path / "set") == out
+
+
+class TestBasisClearing:
+    """Any edit to a basis path's members clears its basis."""
+
+    def test_remove_member(self, based):
+        """Removing a member clears it."""
+        assert based.remove(annotation="m1")["near"].basis is None
+
+    def test_update_seq(self, based):
+        """Reordering a member clears it."""
+        assert based.update(annotation="m2", seq=7)["near"].basis is None
+
+    def test_move_member_out(self, based):
+        """Moving a member out clears it, and the row is lone again."""
+        out = based.update(annotation="m2", feature_id=None)
+        assert out["near"].basis is None
+        assert pd.isna(out.annotations.set_index("id").loc["m2", "seq"])
+
+    def test_move_row_in(self, based):
+        """Moving a row in appends it to part 0 and clears the basis."""
+        later = TIMES[2] + np.timedelta64(1, "s")
+        frame = pd.DataFrame({"id": ["x"], "time": [later], "distance": [75.0]})
+        added = based.add(frame)
+        assert added["near"].basis == _moveout()
+        out = added.update(annotation="x", feature_id="near")
+        assert out["near"].basis is None
+        assert out.annotations.set_index("id").loc["x", "seq"] == 3
+
+    def test_add_member(self, based):
+        """Adding a row to the path clears it."""
+        later = TIMES[2] + np.timedelta64(1, "s")
+        frame = pd.DataFrame(
+            {"feature_id": ["near"], "time": [later], "distance": [75.0], "seq": [3]}
+        )
+        assert based.add(frame)["near"].basis is None
+
+    def test_whole_path_kept(self, based):
+        """Overlapping keeps a path whole, so its basis stays."""
+        assert based.overlapping(distance=(0.0, 10.0))["near"].basis == _moveout()
+
+    def test_feature_edit_keeps(self, based):
+        """Editing the feature's own row leaves its members, and its basis."""
+        assert based.update(feature="near", note="x")["near"].basis == _moveout()
+
+
+class TestMoves:
+    """Moving a row between features behaves as removing and adding it."""
+
+    def test_emptied_group_dropped(self):
+        """A group whose last member moves out is dropped."""
+        frame = pd.DataFrame(
+            {"id": ["h0", "z"], "feature_id": ["h", None], "time": [1.0, 2.0]}
+        )
+        out = AnnotationSet(frame, dims=DIMS).update(annotation="h0", feature_id="")
+        assert out.features.empty
+        assert len(out) == 2
+
+    def test_into_group(self, tracks):
+        """A row moved into a group needs no order."""
+        out = tracks.update(annotation="box", feature_id="e1")
+        assert len(out["e1"].geometry.regions) == 3
+
+
+class TestCollections:
+    """Verbs on a set loaded from several, whose rows carry set labels."""
+
+    def test_add(self, collection, tmp_path):
+        """A new row belongs to the collection, and saves flat."""
+        out = collection.add(pd.DataFrame({"time": [9.0]}))
+        assert pd.isna(out.annotations["set"].iloc[-1])
+        assert [x.data_id for x in out][-1] == ""
+        assert _round_trip(out, tmp_path / "flat") == out
+
+    def test_add_feature(self, collection, tmp_path):
+        """A new feature belongs to the collection."""
+        out = collection.add_feature("ev", time=[9.0], magnitude=1.0)
+        assert out["ev"].set == ""
+        assert _round_trip(out, tmp_path / "flat") == out
+
+    def test_merge_plain(self, collection, tmp_path):
+        """A plain set merges into a collection."""
+        plain = AnnotationSet(pd.DataFrame({"time": [9.0]}), dims=DIMS)
+        out = collection.merge(plain)
+        assert out.attrs.sets == collection.attrs.sets
+        assert _round_trip(out, tmp_path / "flat") == out
+
+    def test_plain_merges_collection(self, collection):
+        """Merging a collection into a plain set keeps every child."""
+        plain = AnnotationSet(pd.DataFrame({"time": [9.0]}), dims=DIMS)
+        out = plain.merge(collection)
+        assert out.attrs.sets == collection.attrs.sets
+        hand = out.attrs.sets["hand"].annotation_columns["note"]
+        assert hand.description == "remark by hand"
+        assert set(out.select(data_id="hand").annotations["time"]) == {1.0, 2.0}
+        assert set(out.select(data_id="").annotations["time"]) == {9.0}
+
+    def test_two_collections(self, collection, tmp_path):
+        """Two collections merge into one holding all four children."""
+        other = _collection(tmp_path / "other", ("x", "y"))
+        out = collection.merge(other)
+        assert set(out.attrs.sets) == {"hand", "auto", "x", "y"}
+        flipped = other.merge(collection)
+        assert out.attrs == flipped.attrs
+        assert len(out.annotations) == len(flipped.annotations) == 8
+
+    def test_colliding_labels(self, collection, tmp_path):
+        """A child label in both collections is refused."""
+        other = _collection(tmp_path / "other", ("hand2", "auto"))
+        with pytest.raises(ParameterError, match="set label 'auto'"):
+            collection.merge(other.remove(annotation="auto0"))
+
+    def test_header_only_child_keeps_columns(self, tmp_path):
+        """A child holding only a header still contributes its columns."""
+        root = tmp_path / "sets"
+        empty = pd.DataFrame(
+            {"time": pd.Series([], dtype=float), "phase": pd.Series([], dtype=str)}
+        )
+        AnnotationSet(empty, dims=DIMS).io.save(root / "empty")
+        AnnotationSet(pd.DataFrame({"time": [1.0]}), dims=DIMS).io.save(root / "full")
+        assert "phase" in dc.annotations(root).annotations.columns
+
+    def test_basis_only_children_keep_label(self, tmp_path):
+        """Children holding only curves still label the annotations table."""
+        root = tmp_path / "sets"
+        for name in ("a", "b"):
+            AnnotationSet(dims=DIMS).add_path(f"m_{name}", basis=_moveout()).io.save(
+                root / name
+            )
+        loaded = dc.annotations(root)
+        assert "set" in loaded.annotations.columns
 
 
 # One call of each verb on the tracks fixture.
