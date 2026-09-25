@@ -233,6 +233,14 @@ class TestSobelFilter:
         with pytest.raises(CoordError, match="evenly sampled"):
             holey_patch.sobel_filter(dim="time")
 
+    def test_refuses_hole_across_axis(self, holey_patch):
+        """Filtering along distance still smooths across the time hole."""
+        coords = {"distance": np.arange(3), "time": holey_patch.get_coord("time")}
+        data = np.tile(holey_patch.data, (3, 1))
+        patch = dc.Patch(data=data, coords=coords, dims=holey_patch.dims)
+        with pytest.raises(CoordError, match="evenly sampled"):
+            patch.sobel_filter(dim="distance")
+
 
 @pytest.mark.parametrize("name", ["median_filter", "notch_filter", "savgol_filter"])
 def test_filters_validate_their_dims(random_patch, name):

@@ -181,8 +181,8 @@ class TestTaperBasics:
         patch = holey_patch.update(data=np.ones_like(holey_patch.data))
         out = patch.taper(time=(0.45, None))
         labels = patch.get_array("time")
-        # 45% of the 159 label span reaches past the hole, so the whole
-        # first run tapers and none of the second does.
+        # 45% of the 159 label span ends at 71.55, inside the hole, so the
+        # whole first run tapers and none of the second does.
         assert np.all(out.data[0, labels < 60] < 1)
         assert np.all(out.data[0, labels >= 100] == 1)
 
