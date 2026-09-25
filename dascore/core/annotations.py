@@ -1067,8 +1067,8 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
             Existing rows to adopt, as a boolean mask over ``annotations`` or
             a sequence of annotation ids. Each must belong to no feature. A
             path or polygon takes their order from the mask or the ids. Each
-            must resolve to the feature's provenance or to none, the feature
-            first taking the one value the rows state.
+            must resolve to the feature's provenance or to none; a feature
+            given none first takes the one value the rows state.
         **columns
             An array-like (list, tuple, array, Series) is an annotations
             column of new member rows, all one length; ``seq``, ``part`` and
@@ -1625,14 +1625,17 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         return cells, features
 
     def _admitted(self, frame, positions, feature: Mapping, created: bool) -> dict:
-        """Refuse entering rows of other provenance; a new feature takes theirs."""
+        """Refuse rows of other provenance; a new feature given none takes theirs."""
         view = _provenance_view(frame, self._features, self._attrs).iloc[positions]
         taken = {}
         for field in _PROVENANCE:
             want = _resolved(pd.DataFrame([feature]), self._attrs, field).iloc[0]
             stated = set(view[field]) - {""}
-            if created and len(stated) == 1 and (value := stated.pop()) != want:
-                want = taken[field] = value
+            given = _text(feature.get(field))
+            if created and not given and len(stated) == 1:
+                value = stated.pop()
+                if value != want:
+                    want = taken[field] = value
             if (bad := (view[field] != "") & (view[field] != want)).any():
                 row = view[bad].iloc[0]
                 msg = (
@@ -2142,7 +2145,8 @@ def _passes(frame: pd.DataFrame, query: Mapping) -> np.ndarray:
 
 def _labels(frame: pd.DataFrame, features: pd.DataFrame | None = None):
     """Set labels as text, "" if blank; given features, a member takes its feature's."""
-    labels = frame["set"].map(_text).astype(object)
+    blank = pd.Series(None, index=frame.index, dtype=object)
+    labels = frame.get("set", blank).map(_text).astype(object)
     if features is not None and "set" in features.columns:
         owned = dict(zip(features["id"].map(_text), features["set"].map(_text)))
         ids = frame["feature_id"].map(_text)

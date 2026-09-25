@@ -701,6 +701,13 @@ class TestSelect:
         assert list(base.select(set="a").annotations["id"]) == ["r1", "r2"]
         assert len(base.select(set="").annotations) == 0
 
+    def test_label_without_feature_labels(self):
+        """Lone rows of a collection with no features select by label."""
+        frame = pd.DataFrame({"time": [1.0, 2.0], "set": ["a", None]})
+        attrs = {"dims": DIMS, "sets": {"a": {"dims": ("time",)}}}
+        out = AnnotationSet(frame, attrs=attrs).select(set="a")
+        assert out.annotations["time"].tolist() == [1.0]
+
     def test_set_label(self, collection):
         """Set filters both tables by label."""
         out = collection.select(set="hand")
@@ -1204,6 +1211,12 @@ class TestGroupedProvenance:
             ParameterError, match="Row 'a' resolves data_id 'x'; feature 'g'"
         ):
             stamped.add_feature("g", members=["a", "c"])
+
+    def test_given_value_wins(self, stamped):
+        """A value the caller gives is the feature's; rows must agree with it."""
+        with pytest.raises(ParameterError, match="feature 'g' resolves 'other'"):
+            stamped.add_feature("g", members=["a"], data_id="other")
+        assert stamped.add_feature("g", members=["a"], data_id="x")["g"].data_id == "x"
 
     def test_move_in(self, stamped):
         """A row joins a feature of its value, and not one of another."""
