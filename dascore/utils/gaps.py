@@ -169,8 +169,10 @@ class GapTolerance:
             margin = np.where(pd.isnull(step), 0, step) + self.excess
         if is_timedelta64(margin) and np.isfinite(self.count or 0):
             # Time labels floor exact positions to whole nanoseconds and a
-            # stated step rounds to one, so allow a nanosecond per step.
-            margin = margin + np.timedelta64(2 + math.ceil(self.count or 1), "ns")
+            # stated step rounds to one, so allow a nanosecond per step,
+            # but never half a step, which could hide a whole sample.
+            cap = np.timedelta64(2 + math.ceil(self.count or 1), "ns")
+            margin = margin + np.where(pd.isnull(step), cap, np.minimum(cap, step // 2))
         return delta > margin
 
 
@@ -296,11 +298,12 @@ def get_gap_edges(coord, tolerance: GapTolerance | None = None):
         step = np.median(np.abs(diffs))
     gap_mask = np.zeros(len(diffs), dtype=bool)
     if tolerance is not None:
-        # datetimes keep whole-nanosecond spacings, which the tolerance allows for
-        timed = is_datetime64(values)
-        gap_mask = tolerance.is_gap(
-            diffs if timed else numeric_diffs, step if timed else _to_numeric([step])[0]
-        )
+        raw = np.asarray(getattr(coord, "values", coord))
+        if tolerance.count is not None and raw.dtype.kind in "mM":
+            # in whole nanoseconds, whose rounding the tolerance allows for
+            gap_mask = tolerance.is_gap(np.diff(raw), to_timedelta64(step))
+        else:
+            gap_mask = tolerance.is_gap(numeric_diffs, _to_numeric([step])[0])
     if not np.any(gap_mask):
         edges = np.concatenate(
             (

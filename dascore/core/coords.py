@@ -2741,7 +2741,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     @property
     def step_exact(self) -> Fraction | None:
         """The exact spacing in coordinate units (seconds for time), or None."""
-        if (grid := self._grid or _common_grid(self.runs)) is not None and grid.exact:
+        grid = self._grid or _common_grid(self.runs)
+        if grid is not None and grid.exact and grid.step(self.dtype) == self.step:
             return grid.step_exact(self.dtype)
         return super().step_exact
 
@@ -3140,7 +3141,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         runs, dtypes = zip(*result)
         # A re-fit spaces its labels evenly, which integers and coarse
         # times cannot always hold; the fit says what dtype they need.
-        return self._with_runs(runs, dtype=np.result_type(*dtypes))
+        # a step inferred from one fractional lattice is inferred afresh,
+        # since a re-fit run leaves that lattice
+        grid = _common_grid(self.runs)
+        step = None if grid is not None and grid.step_den != 1 else ...
+        return self._with_runs(runs, dtype=np.result_type(*dtypes), step=step)
 
     def _fit_tolerance(self, tolerance):
         """
@@ -3202,10 +3207,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """
         steps = [x.step(self.dtype) if isinstance(x, Grid) else self.step for x in runs]
         for num in range(1, len(runs)):
-            if _common_grid(runs[num - 1 : num + 1]) is not None:
-                if runs[num - 1]._position(runs[num]) > len(runs[num - 1]):
-                    return False
-                continue
+            grid = _common_grid(runs[num - 1 : num + 1])
+            if grid is not None and grid._position(runs[num]) > len(grid):
+                return False
             step = steps[num - 1] if not _is_null(steps[num - 1]) else steps[num]
             if _is_null(step):
                 continue  # no grid stated, so no position to have skipped
@@ -3453,11 +3457,17 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         rows = list(self._run_holes(self.runs[0], step))
         pairs = zip(self._seams(), self.runs, self.runs[1:])
         for (_, before, after, _), prev, run in pairs:
-            if _common_grid((prev, run)) is not None:
-                assert isinstance(prev, Grid) and isinstance(run, Grid)
-                count = int(prev._position(run)) - len(prev)
-                grid = prev.sliced(len(prev), 1, count)
-                hole = (*grid.labels([0, count - 1], self.dtype), count, grid)
+            grid = _common_grid((prev, run))
+            if grid is not None and grid.step(self.dtype) == step:
+                assert isinstance(run, Grid)  # a common grid is all grids
+                count = int(grid._position(run)) - len(grid)
+                grid = grid.sliced(len(grid), 1, count)
+                # Python integers, as a long outage overflows int64 ticks
+                ends = [
+                    int(grid.origin) + (grid.phase + k * grid.step_num) // grid.step_den
+                    for k in (0, count - 1)
+                ]
+                hole = (*np.asarray(ends).astype(self.dtype), count, grid)
             else:
                 count = int(_on_grid(np.asarray([after - before]), step)[0]) - 1
                 hole = _hole(before, step, count)
