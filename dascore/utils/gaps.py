@@ -10,6 +10,7 @@ own spelling, converts it here, and gets one verdict for one
 
 from __future__ import annotations
 
+import math
 import warnings
 from dataclasses import dataclass
 from datetime import timedelta
@@ -163,8 +164,18 @@ class GapTolerance:
         step = np.abs(np.asarray(step))
         if self.count is not None:
             with np.errstate(invalid="ignore"):
-                return delta > step * self.count
-        margin = np.where(pd.isnull(step), 0, step) + self.excess
+                margin = step * self.count
+        else:
+            margin = np.where(pd.isnull(step), 0, step) + self.excess
+        if is_timedelta64(margin) and np.isfinite(self.count or 0):
+            # Time labels floor exact positions to whole nanoseconds and a
+            # stated step rounds to one, so allow a nanosecond per step, but
+            # stay short of the next whole sample.
+            cap = np.timedelta64(2 + math.ceil(self.count or 1), "ns")
+            with np.errstate(divide="ignore", invalid="ignore"):
+                room = (margin // step + 1) * step - margin - np.timedelta64(1, "ns")
+            slack = np.minimum(cap, np.maximum(room, np.timedelta64(0, "ns")))
+            margin = margin + np.where(pd.isnull(step), cap, slack)
         return delta > margin
 
 
@@ -290,7 +301,12 @@ def get_gap_edges(coord, tolerance: GapTolerance | None = None):
         step = np.median(np.abs(diffs))
     gap_mask = np.zeros(len(diffs), dtype=bool)
     if tolerance is not None:
-        gap_mask = tolerance.is_gap(numeric_diffs, _to_numeric([step])[0])
+        raw = np.asarray(getattr(coord, "values", coord))
+        if tolerance.count is not None and raw.dtype.kind in "mM":
+            # in whole nanoseconds, whose rounding the tolerance allows for
+            gap_mask = tolerance.is_gap(np.diff(raw), to_timedelta64(step))
+        else:
+            gap_mask = tolerance.is_gap(numeric_diffs, _to_numeric([step])[0])
     if not np.any(gap_mask):
         edges = np.concatenate(
             (

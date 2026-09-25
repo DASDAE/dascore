@@ -245,6 +245,183 @@ class TestMissing:
         )
 
 
+class TestFractionalGaps:
+    """Gap consumers retain the cadence and phase of fractional grids."""
+
+    @pytest.fixture(params=[1024, 3000])
+    def full(self, request):
+        """A fractional grid whose rounded labels alternate spacings."""
+        return get_coord(start=T0, step=Fraction(1, request.param), shape=(30,))
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_missing_labels(self, full, reverse):
+        """Holes are slices of the original grid, including after reversal."""
+        if reverse:
+            full = full[::-1]
+        coord = concat_coords(full[2:7], full[11:18], full[22:])
+        missing = coord.missing()
+        assert coord.step_exact == full.step_exact
+        assert missing.count == 8
+        assert missing == Missing(missing.step, missing.runs, missing.dtype)
+        np.testing.assert_array_equal(
+            missing.positions(), np.concatenate([full.values[7:11], full.values[18:22]])
+        )
+
+    def test_one_verdict(self, full):
+        """A one-sample hole meets a two-step spacing limit everywhere."""
+        coord = concat_coords(full[:5], full[6:])
+        assert coord.get_discontinuities("gaps", tolerance=float(full.step_exact)).empty
+        assert coord.get_discontinuities("gaps", pd.Timedelta(milliseconds=1)).empty
+        assert coord.get_discontinuities("gaps", GapTolerance.samples(2)).empty
+        assert len(coord.get_discontinuities("gaps", GapTolerance.samples(1.5))) == 1
+        assert not get_gap_edges(coord, GapTolerance.samples(2))[1].any()
+        assert get_gap_edges(coord, GapTolerance.samples(1.5))[1].sum() == 1
+
+    @pytest.mark.parametrize("one_patch", [False, True])
+    @pytest.mark.parametrize("selected", [False, True])
+    def test_spool(self, full, one_patch, selected):
+        """Indexed run seams and boundaries between patches agree."""
+        coords = (full[:5], full[6:])
+        if one_patch:
+            coords = (concat_coords(*coords),)
+        patches = [
+            dc.Patch(data=np.ones(len(c)), coords={"time": c}, dims=("time",))
+            for c in coords
+        ]
+        spool = dc.spool(patches)
+        if selected:
+            spool = spool.select(time=(full.values[2], full.values[-3]))
+            full = full[2:-2]
+        assert spool.get_gaps(tolerance=2).empty
+        assert spool.get_gaps(tolerance=np.inf).empty
+        absolute = GapTolerance.absolute(float(full.step_exact))
+        assert spool.get_gaps(tolerance=absolute).empty
+        assert len(spool.get_gaps(tolerance=1.5)) == 1
+        assert len(spool.chunk(time=None, tolerance=1.5)) == 2
+        out = spool.chunk(time=None, tolerance=2, fill_value=np.nan)
+        assert len(out) == 1
+        np.testing.assert_array_equal(out[0].get_coord("time").values, full.values)
+        assert np.flatnonzero(np.isnan(out[0].data)).tolist() == [3 if selected else 5]
+        between = full.values[0] + np.array([10, 20], dtype="timedelta64[ns]")
+        assert spool.select(time=tuple(between)).get_gaps().empty
+
+    def test_allowance_is_bounded(self, full):
+        """The rounding allowance is a few nanoseconds, not a looser tolerance."""
+        tolerance, step = GapTolerance.samples(2), full.step
+        assert not tolerance.is_gap(2 * step + np.timedelta64(4, "ns"), step)
+        assert tolerance.is_gap(2 * step + np.timedelta64(5, "ns"), step)
+        # a whole extra sample is never within the allowance
+        step = np.timedelta64(10_000, "ns")
+        assert GapTolerance.samples(10_000).is_gap(10_001 * step, step)
+        # nor at steps of a few nanoseconds
+        step = np.timedelta64(4, "ns")
+        assert GapTolerance.samples(1.5).is_gap(2 * step, step)
+        assert GapTolerance.samples(1.9).is_gap(2 * step, step)
+
+    def test_new_keeps_labels(self, full):
+        """Rebuilding a joined fractional coordinate keeps its labels."""
+        coord = concat_coords(full[:5], full[6:])
+        assert coord.new(dtype=coord.dtype) == coord
+        rebuilt = coord.new(dtype=coord.dtype, units="s")
+        np.testing.assert_array_equal(rebuilt.values, coord.values)
+
+    def test_long_outage_labels(self):
+        """A weeks-long hole on a fractional grid keeps ordered end labels."""
+        start = np.datetime64("2024-01-01", "ns")
+        a = get_coord(start=start, step=Fraction(1, 3001), shape=(5,))
+        b = get_coord(
+            start=start + np.timedelta64(60, "D"), step=a.step_exact, shape=(5,)
+        )
+        ((first, last, count),) = concat_coords(a, b).missing().runs
+        assert first < last < b.min()
+        assert count == 60 * 86_400 * 3001 - 5
+
+    def test_declared_finer_step(self):
+        """A declared step finer than the runs' grid names the holes."""
+        coord = NumericCoord(
+            runs=(Grid(0, 2, 1, 1), Grid(4, 2, 1, 1)), dtype="int64", step=1
+        )
+        assert coord.missing().positions().tolist() == [1, 2, 3]
+        assert coord.step_exact == 1
+
+    def test_elapsed_time_edges(self):
+        """Elapsed-time seams get the same verdict as the coordinate report."""
+        full = get_coord(
+            start=np.timedelta64(0, "ns"), step=Fraction(1, 3000), shape=(30,)
+        )
+        coord = concat_coords(full[:5], full[6:])
+        assert coord.get_discontinuities("gaps", GapTolerance.samples(2)).empty
+        assert not get_gap_edges(coord, GapTolerance.samples(2))[1].any()
+
+    def test_off_lattice_runs(self):
+        """Runs whose origins fall between each other's positions share no grid."""
+        full = get_coord(start=100, step=Fraction(10, 3), shape=(5,), dtype="int64")
+        other = get_coord(start=121, step=Fraction(10, 3), shape=(5,), dtype="int64")
+        assert concat_coords(full, other).step_exact is None
+
+    def test_metadata_only(self, monkeypatch):
+        """A long outage is counted without allocating the coordinate labels."""
+        full = get_coord(start=T0, step=Fraction(1, 1024), shape=(2_000_000_000,))
+        coord = concat_coords(full[:5], full[-5:])
+
+        def refuse_values(self):
+            raise AssertionError("materialized the coordinate")
+
+        monkeypatch.setattr(NumericCoord, "values", property(refuse_values))
+        assert coord.missing().count == 1_999_999_990
+
+    def test_index_round_trip(self, tmp_path):
+        """A reopened file index retains fractional run phases after selection."""
+        full = get_coord(start=T0, step=Fraction(1, 3000), shape=(30,))
+        coord = concat_coords(full[:8], full[9:])
+        patch = dc.Patch(
+            data=np.ones(len(coord)), coords={"time": coord}, dims=("time",)
+        )
+        dc.write(patch, tmp_path / "gapped.h5", "dasdae")
+        dc.spool(tmp_path).update()
+        spool = dc.spool(tmp_path).select(time=(full.values[2], full.values[-3]))
+        assert spool.get_gaps(tolerance=2).empty
+        assert len(spool.get_gaps(tolerance=1.5)) == 1
+        assert len(spool.chunk(time=None, tolerance=1.5)) == 2
+
+    def test_fuse_keeps_hole(self, full):
+        """Fusing with keep_step leaves a whole-sample hole in place."""
+        coord = concat_coords(full[:5], full[7:])
+        fused = coord.fuse(GapTolerance.samples(3), keep_step=True)
+        assert fused.missing().count == 2
+
+    def test_partial_fuse(self, full):
+        """Fusing some runs off the lattice keeps the others as they were."""
+        coord = concat_coords(full[:5], full[6:10], full[25:])
+        fused = coord.fuse(GapTolerance.samples(1))
+        assert fused.runs_count == 2
+        np.testing.assert_array_equal(fused.values[-5:], full.values[25:])
+
+    @pytest.mark.parametrize("rate", [1024, 3000])
+    def test_independent_files(self, rate):
+        """Files whose start times were rounded apart still meet a tolerance."""
+        patches, position = [], 0
+        for dropped in (0, 1, 0, 2, 0):
+            start = T0 + np.timedelta64(round(position * 10**9 / rate), "ns")
+            coord = get_coord(start=start, step=Fraction(1, rate), shape=(50,))
+            patches.append(
+                dc.Patch(data=np.ones(50), coords={"time": coord}, dims=("time",))
+            )
+            position += 50 + dropped
+        spool = dc.spool(patches)
+        found = [len(spool.get_gaps(tolerance=x)) for x in (1.5, 2, 3)]
+        assert found == [2, 1, 0]
+        assert [len(spool.chunk(time=None, tolerance=x)) for x in (2, 3)] == [2, 1]
+
+    @pytest.mark.parametrize("step", [Fraction(10, 3), -3])
+    def test_integer_grid(self, step):
+        """Fractional grids of integer labels also retain their exact holes."""
+        full = get_coord(start=100, step=step, shape=(30,), dtype="int64")
+        coord = concat_coords(full[:5], full[9:])
+        assert coord.step_exact == full.step_exact
+        np.testing.assert_array_equal(coord.missing().positions(), full.values[5:9])
+
+
 class TestDiscontinuities:
     """One frame builder and one predicate for every representation."""
 

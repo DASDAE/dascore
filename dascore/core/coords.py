@@ -12,7 +12,7 @@ import math
 import re
 from collections.abc import Mapping, Sequence, Sized
 from contextlib import suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from fractions import Fraction
 from functools import cache
 from types import EllipsisType
@@ -420,6 +420,8 @@ class Missing:
     # each hole as (first missing label, last missing label, how many)
     runs: tuple[tuple[Any, Any, int], ...]
     dtype: Any = None
+    # the exact grid of each hole, where one is known
+    _grids: tuple = field(default=(), compare=False, repr=False)
 
     @property
     def count(self) -> int:
@@ -451,8 +453,14 @@ class Missing:
             raise ParameterError(msg)
         if not self.runs:
             return np.array([], dtype=self.dtype)
+        grids = self._grids or (None,) * len(self.runs)
         return np.concatenate(
-            [first + np.arange(n) * self.step for first, _, n in self.runs]
+            [
+                first + np.arange(n) * self.step
+                if grid is None
+                else grid.labels(np.arange(n), self.dtype)
+                for (first, _, n), grid in zip(self.runs, grids)
+            ]
         )
 
     def __str__(self):
@@ -1130,7 +1138,9 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         >>> assert get_coord(data=[1.0, 2.5, 7.0]).missing().complete
         """
         holes = () if _is_null(self.step) else tuple(self._holes())
-        return Missing(step=self.step, runs=holes, dtype=self.dtype)
+        grids = tuple(x[3] if len(x) > 3 else None for x in holes)
+        runs = tuple(x[:3] for x in holes)
+        return Missing(step=self.step, runs=runs, dtype=self.dtype, _grids=grids)
 
     def _holes(self) -> list[tuple]:
         """Each hole as ``(first missing label, last missing label, count)``."""
@@ -1982,6 +1992,11 @@ class Grid:
         """The ideal position of the first sample, in ticks."""
         return Fraction(self.origin * self.step_den + self.phase, self.step_den)
 
+    def _position(self, other: Grid) -> Fraction:
+        """The other run's ideal origin, in positions on this exact grid."""
+        step = Fraction(self.step_num, self.step_den)
+        return (other.ideal_origin - self.ideal_origin) / step
+
     def labels(self, indices, dtype) -> np.ndarray:
         """The labels at these indices, which may lie outside the run."""
         indices = np.asarray(indices)
@@ -2726,7 +2741,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     @property
     def step_exact(self) -> Fraction | None:
         """The exact spacing in coordinate units (seconds for time), or None."""
-        if (grid := self._grid) is not None and grid.exact:
+        grid = self._grid or _common_grid(self.runs)
+        if grid is not None and grid.exact and grid.step(self.dtype) == self.step:
             return grid.step_exact(self.dtype)
         return super().step_exact
 
@@ -3125,7 +3141,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         runs, dtypes = zip(*result)
         # A re-fit spaces its labels evenly, which integers and coarse
         # times cannot always hold; the fit says what dtype they need.
-        return self._with_runs(runs, dtype=np.result_type(*dtypes))
+        # a step inferred from one fractional lattice is inferred afresh,
+        # since a re-fit run leaves that lattice
+        grid = _common_grid(self.runs)
+        step = None if grid is not None and grid.step_den != 1 else ...
+        return self._with_runs(runs, dtype=np.result_type(*dtypes), step=step)
 
     def _fit_tolerance(self, tolerance):
         """
@@ -3187,6 +3207,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """
         steps = [x.step(self.dtype) if isinstance(x, Grid) else self.step for x in runs]
         for num in range(1, len(runs)):
+            grid = _common_grid(runs[num - 1 : num + 1])
+            if grid is not None and grid._position(runs[num]) > len(grid):
+                return False
             step = steps[num - 1] if not _is_null(steps[num - 1]) else steps[num]
             if _is_null(step):
                 continue  # no grid stated, so no position to have skipped
@@ -3306,13 +3329,18 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         if "segments" in kwargs:
             units = kwargs.get("units", self.units)
             return get_coord(segments=kwargs["segments"], units=units)
+        if kwargs.get("dtype") is not None and np.dtype(kwargs["dtype"]) == self.dtype:
+            kwargs = {k: v for k, v in kwargs.items() if k != "dtype"}
         if not kwargs:
             return self
         if set(kwargs) <= {"units"}:
             return self.set_units(kwargs["units"])
         info: dict[str, Any] = dict(units=self.units)
         if (grid := self._grid) is None:
-            info.update(data=self.values, step=self.step)
+            # floored labels do not sit on a fractional lattice's rounded step
+            common = _common_grid(self.runs)
+            fractional = common is not None and common.step_den != 1
+            info.update(data=self.values, step=None if fractional else self.step)
             return get_coord(**{**info, **kwargs})
         info["start"] = grid.labels(0, self.dtype)[()]
         info["stop"] = grid.labels(len(self), self.dtype)[()]
@@ -3432,10 +3460,24 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """Each hole as ``(first missing label, last missing label, count)``."""
         step = self.step  # signed with the runs' direction
         rows = list(self._run_holes(self.runs[0], step))
-        for (_, before, after, _), run in zip(self._seams(), self.runs[1:]):
-            count = int(_on_grid(np.asarray([after - before]), step)[0]) - 1
+        pairs = zip(self._seams(), self.runs, self.runs[1:])
+        for (_, before, after, _), prev, run in pairs:
+            grid = _common_grid((prev, run))
+            if grid is not None and grid.step(self.dtype) == step:
+                assert isinstance(run, Grid)  # a common grid is all grids
+                count = int(grid._position(run)) - len(grid)
+                grid = grid.sliced(len(grid), 1, count)
+                # Python integers, as a long outage overflows int64 ticks
+                ends = [
+                    int(grid.origin) + (grid.phase + k * grid.step_num) // grid.step_den
+                    for k in (0, count - 1)
+                ]
+                hole = (*np.asarray(ends).astype(self.dtype), count, grid)
+            else:
+                count = int(_on_grid(np.asarray([after - before]), step)[0]) - 1
+                hole = _hole(before, step, count)
             if count:
-                rows.append(_hole(before, step, count))
+                rows.append(hole)
             rows.extend(self._run_holes(run, step))
         return rows
 
@@ -3513,6 +3555,20 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         )
 
 
+def _common_grid(runs) -> Grid | None:
+    """The first run when every run is an exact grid continuing its lattice."""
+    first = runs[0]
+    if not (isinstance(first, Grid) and first.exact and first.step_num):
+        return None
+    for prev, run in itertools.pairwise(runs):
+        if not isinstance(run, Grid) or run.canonical()[1:3] != first.canonical()[1:3]:
+            return None
+        position = prev._position(run)
+        if position.denominator != 1 or position < len(prev):
+            return None
+    return first
+
+
 def _runs_step(runs, declared, dtype, sources):
     """
     The grid every label of a coordinate sits on, or None.
@@ -3524,6 +3580,11 @@ def _runs_step(runs, declared, dtype, sources):
     if len(runs) == 1 and isinstance(runs[0], Grid):
         return runs[0].step(dtype)
     strict = not _is_null(declared)
+    # floored labels on one fractional lattice need not divide the seams
+    if (grid := _common_grid(runs)) is not None:
+        step = grid.step(dtype)
+        if not strict or _declared_step(declared, dtype) == step:
+            return step
     if strict:
         step = _declared_step(declared, dtype)
     else:
