@@ -1077,9 +1077,10 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
             a sequence of annotation ids. Each must belong to no feature. A
             path or polygon takes their order from the mask or the ids. The
             provenance the rows resolve to moves onto the feature, and rows
-            resolving to two different values are refused. A row of the
-            feature's own ``set``, stating nothing, inherits whatever the
-            feature states.
+            resolving to two different values are refused. Without a ``set``
+            keyword, rows all labeled with one set give the feature that
+            label. A row of the feature's own ``set``, stating nothing,
+            inherits whatever the feature states.
         **columns
             An array-like (list, tuple, array, Series) is an annotations
             column of new member rows, all one length; ``seq``, ``part`` and
@@ -1334,8 +1335,10 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         (spelling a group ``group``) and ``basis`` are always features
         filters. An annotations filter drops the rows failing it and any
         feature left with no members, and refuses to leave a path or polygon
-        too few vertices. ``acquisition_key`` and ``data_id`` filter rows on
-        the value their feature resolves. ``set`` filters both tables by label.
+        too few vertices. ``set``, ``acquisition_key`` and ``data_id``
+        filter both tables: a feature (a path with no members too) on its
+        own label or resolved value, dropping its members, and a lone row
+        on its own.
         Dimensions are filtered with `overlapping`.
 
         Examples
@@ -1353,7 +1356,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         spelled = {x for d in self.dims for x in (d, f"{d}{_MIN}", f"{d}{_MAX}")}
         on_rows: dict = {}
         on_features: dict = {}
-        on_labels: dict = {}
+        joint: dict[str, dict] = {"labels": {}, "provenance": {}}
         rows = _provenance_view(self._df, self._features, self._attrs)
         features = _kind_view(self._features)
         for name, value in filters.items():
@@ -1371,8 +1374,8 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
                 )
                 raise ParameterError(msg)
             found = _table_of(name, rows, features)
-            table = {"rows": rows, "features": features, "labels": rows}[found]
-            query = {"rows": on_rows, "features": on_features, "labels": on_labels}
+            table = features if found == "features" else rows
+            query = {"rows": on_rows, "features": on_features, **joint}
             query[found].update(_query(name, value, table))
         frame, table = self._df, self._features
         if on_features:
@@ -1380,15 +1383,22 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
             kept = set(features["id"][passed].map(_text))
             frame = frame[frame["feature_id"].map(_text).isin(kept)]
             table = table[passed]
-        if on_labels:
-            # One label test on both tables; a lone row answers for itself.
-            # A blank label is "", so set="" selects the collection's own rows.
-            if "set" in table.columns:
-                table = table[_passes(_labels(table), on_labels)]
+        for kind, query in joint.items():
+            if not query:
+                continue
+            # One test on both tables: a feature on its own value, dropping
+            # its members; a lone row answers for itself. A blank label or
+            # provenance is "", so set="" selects the collection's own rows.
+            if kind == "labels":
+                own, held = _labels(table), _labels(frame)
+            else:
+                resolved = {x: _resolved(table, self._attrs, x) for x in _PROVENANCE}
+                own, held = _assign(table, resolved), rows.loc[frame.index]
+            if kind != "labels" or "set" in table.columns:
+                table = table[_passes(own, query)]
             ids = frame["feature_id"].map(_text)
             member = ids.isin(set(table["id"].map(_text))) | (ids == "")
-            labeled = _passes(_labels(frame), on_labels)
-            frame = frame[labeled & member.to_numpy()]
+            frame = frame[_passes(held, query) & member.to_numpy()]
         if on_rows:
             view = rows.loc[frame.index]
             frame = frame[_passes(view, on_rows)]
@@ -1644,7 +1654,14 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
                 if field in row.columns:
                     cells[field] = None
             elif have != fallback:
-                cells[field] = have or None
+                if not have:
+                    msg = (
+                        f"The row's blank {field} cannot be kept under the label "
+                        f"{label!r}, whose {field} is {fallback!r}; a blank cell "
+                        "falls back to it."
+                    )
+                    raise ParameterError(msg)
+                cells[field] = have
             elif field in row.columns:
                 cells[field] = None
         features = self._features
@@ -1659,6 +1676,21 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         """A feature's resolved provenance."""
         feature = self._features.iloc[[self._feature_position(owner)]]
         return _resolved(feature, self._attrs, field).iloc[0]
+
+    def _shared_label(self, positions: np.ndarray) -> str:
+        """
+        The one set label every adopted row carries, as an implied feature
+        takes its rows'; blank where any has none, refused where two differ.
+        """
+        labels = [_label(x) for x in _records(self._df.iloc[positions])]
+        stated = sorted(set(labels) - {""})
+        if len(stated) > 1:
+            msg = (
+                f"The adopted rows are labeled {', '.join(map(repr, stated))}, so "
+                "no one set is the feature's; give set= for it."
+            )
+            raise ParameterError(msg)
+        return stated[0] if stated and all(labels) else ""
 
     def _lifted(self, positions: np.ndarray, feature: Mapping) -> dict:
         """
@@ -1733,6 +1765,8 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         frame = self._df
         if members is not None:
             frame, positions = self._adopted(members, identity, kind)
+            if "set" not in scalars and (label := self._shared_label(positions)):
+                scalars = {**scalars, "set": label}
             scalars = {**scalars, **self._lifted(positions, {**row, **scalars})}
         elif rows is not None:
             rows = _assign(rows, {"feature_id": identity})
@@ -2288,12 +2322,12 @@ def _kind_view(features: pd.DataFrame) -> pd.DataFrame:
 
 
 def _table_of(name: str, rows: pd.DataFrame, features: pd.DataFrame) -> str:
-    """Name the table a select filter reads: rows, features, or labels."""
+    """Name what a select filter reads: rows, features, labels or provenance."""
     stem = name.removesuffix(_MIN).removesuffix(_MAX)
     if name == "set" and "set" in rows.columns:
         return "labels"
     if stem in _PROVENANCE:
-        return "rows"
+        return "provenance"
     if stem in _KIND_COLUMNS:
         return "features"
     # An empty features table claims no name; it always holds some.

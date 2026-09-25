@@ -660,6 +660,34 @@ class TestSelect:
         """A group's kind is spelled group, though stored blank."""
         assert list(tracks.select(geometry="group").features["id"]) == ["e1"]
 
+    def test_provenance_on_basis_only_paths(self):
+        """A feature with no rows is judged on its own provenance."""
+        features = pd.DataFrame(
+            {"id": ["p", "q"], "geometry": "path", "basis": "c", "data_id": ["x", "y"]}
+        )
+        out = AnnotationSet(features=features, bases={"c": _moveout()}, dims=DIMS)
+        assert list(out.select(data_id="x").features["id"]) == ["p"]
+
+    def test_provenance_mixed(self):
+        """Features, their members and lone rows filter on one resolved value."""
+        frame = pd.DataFrame(
+            {
+                "id": ["m", "a", "b"],
+                "time": [1.0, 2.0, 3.0],
+                "feature_id": ["e", None, None],
+                "data_id": [None, "x", "y"],
+            }
+        )
+        features = pd.DataFrame(
+            {"id": ["e", "p"], "geometry": [None, "path"], "basis": [None, "c"]}
+        )
+        features["data_id"] = ["x", "y"]
+        out = AnnotationSet(
+            frame, features=features, bases={"c": _moveout()}, dims=DIMS
+        ).select(data_id="x")
+        assert list(out.features["id"]) == ["e"]
+        assert list(out.annotations["id"]) == ["m", "a"]
+
     def test_set_label(self, collection):
         """Set filters both tables by label."""
         out = collection.select(set="hand")
@@ -1357,6 +1385,44 @@ class TestMemberLabels:
         base = self._overridden().update(annotation="r", set="a")
         with pytest.raises(ParameterError, match="one acquisition"):
             base.update(annotation="r", feature_id="f")
+
+    def test_adopted_rows_give_their_label(self):
+        """Rows of one child give a new feature that child, as a move does."""
+        frame = pd.DataFrame({"id": ["r"], "time": [1.0], "set": ["a"]})
+        base = AnnotationSet(frame, attrs=TWO_CHILDREN)
+        out = base.add_feature("g", members=["r"])
+        assert out == base.update(annotation="r", feature_id="g")
+        assert out["g"].data_id == "d-a"
+
+    def test_adopted_rows_of_two_labels(self):
+        """Rows of two children name no one child for the feature."""
+        frame = pd.DataFrame({"id": ["r", "s"], "time": [1.0, 2.0], "set": ["a", "b"]})
+        base = AnnotationSet(frame, attrs=TWO_CHILDREN)
+        with pytest.raises(ParameterError, match=r"'a', 'b'"):
+            base.add_feature("g", members=["r", "s"])
+
+    @pytest.fixture
+    def unlabeled(self):
+        """A collection-level group e, which resolves no data_id."""
+        frame = pd.DataFrame(
+            {
+                "id": ["m0", "m1"],
+                "time": [1.0, 2.0],
+                "feature_id": ["e", "e"],
+                "set": [None, None],
+            }
+        )
+        return AnnotationSet(frame, attrs=TWO_CHILDREN)
+
+    def test_blank_cannot_leave_under_label(self, unlabeled):
+        """A blank value cannot be kept on a row labeled with a stated child."""
+        with pytest.raises(ParameterError, match="cannot be kept under the label 'a'"):
+            unlabeled.update(annotation="m0", feature_id=None, set="a")
+
+    def test_blank_leaves_unlabeled(self, unlabeled):
+        """The same move without a label keeps the blank."""
+        out = unlabeled.update(annotation="m0", feature_id=None)
+        assert [x.data_id for x in out] == ["", ""]
 
     @pytest.fixture
     def labeled(self):
