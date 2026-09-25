@@ -244,11 +244,14 @@ def _nanoseconds(value):
     dtype = {np.datetime64: _NS_TIME, np.timedelta64: _NS_SPAN}.get(type(value))
     if dtype is None:
         return value
-    try:
-        return value.astype(dtype)
-    except OverflowError as error:
-        msg = f"The coordinate {value} is beyond what nanoseconds can hold."
-        raise ValueError(msg) from error
+    # Checked by converting back: numpy raises on overflow on some platforms
+    # and wraps silently on others (WebAssembly).
+    with suppress(OverflowError):
+        held = value.astype(dtype)
+        if np.isnat(value) or held.astype(value.dtype) == value:
+            return held
+    msg = f"The coordinate {value} is beyond what nanoseconds can hold."
+    raise ValueError(msg)
 
 
 _freeze_map = AfterValidator(lambda x: FrozenDict(x))
