@@ -961,6 +961,25 @@ class TestSplitGapsAndWrite:
         )
         assert np.array_equal(combined, gapped_patch.get_coord("distance").values)
 
+    def test_split_gaps_dense_holes(self):
+        """Holes inside one dense stored run still split, sharing the data."""
+        values = np.arange(1500)
+        coord = get_coord(data=values[values % 3 != 2], step=1)
+        assert coord.runs_count == 1
+        coords = {"distance": [0, 1], "time": coord}
+        data = np.zeros((2, len(coord)))
+        patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+        spool = patch.split_gaps("time")
+        assert len(spool) == coord.missing().count + 1 == 500
+        assert all(x.get_coord("time").evenly_sampled for x in spool)
+        assert np.shares_memory(spool[1].data, patch.data)
+
+    def test_split_gaps_irregular_labels(self):
+        """Labels with no step and one run name no holes: one patch."""
+        values = np.sort(np.random.default_rng(1).random(50))
+        patch = dc.Patch(data=np.zeros(50), coords={"time": values}, dims=("time",))
+        assert len(patch.split_gaps()) == 1
+
     def test_split_gaps_no_gaps(self):
         """Contiguous patches come back unchanged in a length 1 spool."""
         patch = dc.get_example_patch()

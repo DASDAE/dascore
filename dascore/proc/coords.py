@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import warnings
 from functools import partial
 from typing import Any, ClassVar, Self
@@ -1317,10 +1318,11 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
     """
     Split the patch into contiguous patches at coordinate gaps.
 
-    A dimensional coordinate holding more than one run (e.g. produced by
-    concatenating nearly-contiguous data) marks where the patch is not
-    contiguous. This splits the patch at every run boundary so each output
-    patch has a plain, contiguous coordinate.
+    A coordinate with a declared step splits at every hole, the positions
+    [missing](`dascore.core.coords.BaseCoord.missing`) reports, however the
+    labels are stored. A coordinate with no step splits where its runs
+    (e.g. from concatenating nearly-contiguous data) break. Each output is
+    a view of the patch's data.
 
     Parameters
     ----------
@@ -1328,8 +1330,8 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
         The Patch object.
     dim
         The dimension to split along. If None (default), split along every
-        dimension with a segmented coordinate. Patches without segmented
-        coordinates come back unchanged (as a length 1 spool).
+        dimension. A patch with no holes comes back unchanged (as a length 1
+        spool).
 
     Examples
     --------
@@ -1361,17 +1363,20 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
         out: list[dc.Patch] = []
         for patch in patches:
             coord = patch.get_coord(dname)
-            if not isinstance(coord, NumericCoord) or coord.runs_count < 2:
+            if not isinstance(coord, NumericCoord):
                 out.append(patch)
                 continue
-            offset = 0
-            for seg in coord.segments:
-                stop = offset + len(seg)
+            # A declared step splits at its holes, which a dense stored run
+            # may hold too; without one, the runs are the contiguous pieces.
+            if coord.step is None:
+                starts = np.cumsum([len(x) for x in coord.segments])[:-1].tolist()
+            else:
+                starts = coord.get_discontinuities("gaps")["index"].tolist()
+            for start, stop in itertools.pairwise([0, *starts, len(coord)]):
                 # Typed as the selector it is: the key is a dimension
                 # name, so it never lands on select's own bool fields.
-                window: dict[str, Any] = {dname: (offset, stop)}
+                window: dict[str, Any] = {dname: (start, stop)}
                 out.append(Select(samples=True, **window).run(patch))
-                offset = stop
         patches = out
     return dc.spool(patches)
 
