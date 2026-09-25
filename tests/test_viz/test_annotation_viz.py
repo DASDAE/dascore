@@ -8,7 +8,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
-from matplotlib.patches import Polygon, Rectangle
+from matplotlib.patches import PathPatch, Rectangle
 
 import dascore as dc
 from dascore.exceptions import ParameterError
@@ -98,10 +98,25 @@ class TestDrawing:
         lengths = sorted(len(x.get_xdata()) for x in shapes.viz.plot().lines)
         assert lengths == [2, 64]
 
-    def test_polygon(self, shapes):
-        """A polygon is filled; its hole is an outline."""
-        polygons = [x for x in shapes.viz.plot().patches if isinstance(x, Polygon)]
-        assert [x.get_fill() for x in polygons] == [True, False]
+    def test_polygon_hole(self):
+        """A polygon is filled and its hole left empty, whichever way rings wind."""
+        outer = {"time": [0.0, 10.0, 10.0, 0.0], "distance": [0.0, 0.0, 10.0, 10.0]}
+        hole = {"time": [4.0, 6.0, 6.0, 4.0], "distance": [4.0, 4.0, 6.0, 6.0]}
+        ann = dc.AnnotationSet(dims=DIMS).add_polygon("p", rings=[outer, hole])
+        ax = ann.viz.plot(color="red")
+        assert isinstance(ax.patches[0], PathPatch)
+        # Path.contains_point ignores winding, so check what is rendered.
+        ax.figure.canvas.draw()
+        pixels = np.asarray(ax.figure.canvas.buffer_rgba())
+        col, row = ax.transData.transform([(1, 1), (5, 5)]).astype(int).T
+        outside, hole = pixels[pixels.shape[0] - row, col].tolist()
+        assert hole == [255, 255, 255, 255] != outside
+
+    def test_skipped_row_keeps_label(self):
+        """A row drawing nothing leaves its label to the next row that draws."""
+        rows = [{"depth": 1.0, "note": "a"}, {"time": 1.0, "note": "a"}]
+        ann = _set(rows, dims=("distance", "time", "depth"))
+        assert _legend(ann.viz.plot(x="time", y="distance", label="note")) == ["a"]
 
 
 class TestAxes:
@@ -184,6 +199,21 @@ class TestColor:
         """An ordered feature takes its first member's value of a row column."""
         ann = shapes.add(pd.DataFrame({"time": [T0], "speed": [3.0]}))
         assert _legend(ann.viz.plot(color="speed")) == ["2.0", "3.0"]
+
+    def test_blank_feature_cell(self):
+        """A feature's blank cell on a column of both tables reads its member."""
+        empty = dc.AnnotationSet(dims=DIMS)
+        ann = empty.add_path("t", time=[1.0, 2.0], distance=[1, 2.0], phase=["P", "P"])
+        ann = ann.add_feature("g", time=[3.0], distance=[3.0], phase="S")
+        assert _legend(ann.viz.plot(color="phase")) == ["P", "S"]
+
+    def test_colorless_cycle(self):
+        """A property cycle with no colors falls back to matplotlib's."""
+        ann = _set({"time": [1.0], "distance": [5.0], "phase": ["P"]})
+        with plt.rc_context({"axes.prop_cycle": plt.cycler(linestyle=["-", ":"])}):
+            assert ann.viz.plot(color="red").lines[0].get_color() == "red"
+            line = ann.viz.plot(color="phase").lines[0]
+        assert mcolors.to_rgba(line.get_color()) == mcolors.to_rgba("tab:blue")
 
     def test_blank_is_grey(self):
         """A blank value is grey and takes no palette color."""

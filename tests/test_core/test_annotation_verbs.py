@@ -795,6 +795,14 @@ class TestOverlapping:
         ann = AnnotationSet(frame, dims=("distance", "time", "depth"))
         assert len(ann.overlapping(patch)) == 1
 
+    def test_empty_patch(self):
+        """A patch with no samples along a queried dimension overlaps nothing."""
+        patch = dc.get_example_patch()
+        after = patch.get_coord("time").max() + np.timedelta64(1, "s")
+        frame = pd.DataFrame({"distance": [1.0]})  # spans time
+        ann = AnnotationSet.from_patch(patch, frame)
+        assert len(ann.overlapping(patch.select(time=(after, None)))) == 0
+
     def test_patch_keyword_wins(self):
         """A keyword replaces the patch's query for its dimension."""
         patch = dc.get_example_patch()

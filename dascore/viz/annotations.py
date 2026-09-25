@@ -9,8 +9,9 @@ from typing import Any
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.patches import Polygon as PolygonArtist
-from matplotlib.patches import Rectangle
+from matplotlib.colors import TABLEAU_COLORS
+from matplotlib.patches import PathPatch, Rectangle
+from matplotlib.path import Path as MplPath
 
 from dascore.core.annotations import AnnotationSet, Group, Path, Region
 from dascore.exceptions import ParameterError
@@ -51,16 +52,16 @@ def _column(annotations: AnnotationSet, name: str):
         msg = f"{name!r} is a column of neither the annotations nor the features."
         raise ParameterError(msg)
     ids = frame["feature_id"].fillna("")
-    rows = frame[name] if name in frame.columns else ids.map(features[name])
+    own = features[name] if name in features.columns else pd.Series(dtype=object)
+    cells = ids.map(own)  # a blank row cell reads its feature's, and back
+    rows = frame[name].where(frame[name].notna(), cells) if name in frame else cells
 
     def value(where):
-        if isinstance(where, str) and name in features.columns:
-            out = features[name][where]
-        elif isinstance(where, str):  # an ordered feature's first member
+        if not isinstance(where, str):
+            out = rows[where]
+        elif pd.isna(out := own.get(where)):
             members = rows[ids == where]
             out = members.iloc[0] if len(members) else None
-        else:
-            out = rows[where]
         return None if pd.isna(out) else out
 
     return value
@@ -89,6 +90,14 @@ def _draw_region(ax, bounds, x, y, style: dict[str, Any]):
         else:
             corner, size = (xs[0], ys[0]), (xs[1] - xs[0], ys[1] - ys[0])
             ax.add_patch(Rectangle(corner, *size, **fill))
+
+
+def _ring(ring, x, y, outer: bool) -> MplPath:
+    """A closed ring, wound counterclockwise if outer and clockwise if a hole."""
+    xy = np.column_stack([_get_plot_values(ring[d]) for d in (x, y)])
+    area = np.sum(xy[:, 0] * np.roll(xy[:, 1], -1) - np.roll(xy[:, 0], -1) * xy[:, 1])
+    xy = xy if (area > 0) == outer else xy[::-1]
+    return MplPath(np.vstack([xy, xy[:1]]), closed=True)
 
 
 def _fill_style(style: dict[str, Any]) -> dict[str, Any]:
@@ -122,7 +131,8 @@ def plot(
         A set of more dimensions names both.
     color
         A matplotlib color, or a column of either table whose values are
-        colored from the property cycle, with a legend; a blank value is grey.
+        colored from the property cycle, with a legend. A row blank on both
+        tables is grey; a feature blank on both reads its first member.
     label
         A column whose values label the artists in a legend; a blank value
         is left out of it.
@@ -136,7 +146,7 @@ def plot(
     where it states one axis, a segment where it states a value and a range,
     and a box for two ranges; a row stating neither axis is not drawn. A
     group draws its members, a path a line per part, and a polygon a filled
-    patch per part with its holes outlined, not cut out. A path or polygon
+    patch per part with its holes left empty. A path or polygon
     not drawn in both axes is skipped.
 
     Examples
@@ -160,7 +170,8 @@ def plot(
     )
     color_of = _column(annotations, color) if by_color else None
     label_of = _column(annotations, label) if label is not None else color_of
-    cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+    cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color")
+    cycle = cycle or list(TABLEAU_COLORS.values())
     palette, seen = {}, set()
 
     def styled(where):
@@ -181,25 +192,25 @@ def plot(
         geometry = feature.geometry
         if isinstance(geometry, Region):
             where = int(next(lone))
-            _draw_region(ax, geometry.bounds, x, y, styled(where))
+            if x in geometry.bounds or y in geometry.bounds:
+                _draw_region(ax, geometry.bounds, x, y, styled(where))
         elif isinstance(geometry, Group):
             members = frame.index[ids == feature.id]
             for where, region in zip(members, geometry.regions, strict=True):
-                _draw_region(ax, region.bounds, x, y, styled(int(where)))
+                if x in region.bounds or y in region.bounds:
+                    _draw_region(ax, region.bounds, x, y, styled(int(where)))
         elif isinstance(geometry, Path):
             for part in geometry.vertices:
                 if x in part and y in part:
                     xy = (_get_plot_values(part[d]) for d in (x, y))
                     ax.plot(*xy, **styled(feature.id))
         else:
-            for part in geometry.vertices:
-                for number, ring in enumerate(part):
-                    if x in ring and y in ring:
-                        xy = np.column_stack(
-                            [_get_plot_values(ring[d]) for d in (x, y)]
-                        )
-                        kwargs = _fill_style(styled(feature.id))
-                        ax.add_patch(PolygonArtist(xy, fill=number == 0, **kwargs))
+            for part in (p for p in geometry.vertices if p[0].keys() >= {x, y}):
+                rings = [
+                    _ring(ring, x, y, number == 0) for number, ring in enumerate(part)
+                ]
+                path = MplPath.make_compound_path(*rings)
+                ax.add_patch(PathPatch(path, **_fill_style(styled(feature.id))))
     ax.autoscale_view()
     kinds = annotations.bounds().dtypes
     for dim, axis in ((x, "x"), (y, "y")):

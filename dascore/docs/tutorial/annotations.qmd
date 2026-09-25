@@ -49,12 +49,13 @@ ann = dc.AnnotationSet.from_patch(patch, picks)
 ann.annotations
 ```
 
-A set of only annotations writes as one bare file, CSV or Parquet. The file holds the annotations table alone; Parquet also keeps the dimensions, while the set's attributes, such as `data_id`, need the directory form described under [Saving and loading](#saving-and-loading).
+A set of only annotations writes as one bare file. The file holds the annotations table alone. A CSV does not record the dimensions, so they are stated again on reading; `io.to_parquet` writes a Parquet file that keeps them, and needs pyarrow. The set's attributes, such as `data_id`, need the directory form described under [Saving and loading](#saving-and-loading).
 
 ```{python}
 folder = Path(tempfile.mkdtemp())
-path = ann.io.to_parquet(folder / "picks.parquet")
-assert dc.annotations(path).annotations.equals(ann.annotations)
+path = folder / "picks.csv"
+ann.io.to_csv(path)
+assert dc.annotations(path, dims=patch.dims).annotations.equals(ann.annotations)
 ```
 
 # Building features
