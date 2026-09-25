@@ -3234,10 +3234,12 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         for num in range(1, len(runs)):
             previous, following = runs[num - 1], runs[num]
             grid = _common_grid((previous, following))
-            if grid is not None and grid.step_den != 1:
-                if previous._position(following) > len(previous):
-                    return False
-                continue
+            if (
+                grid is not None
+                and grid.step_den != 1
+                and previous._position(following) > len(previous)
+            ):
+                return False
             step = steps[num - 1] if not _is_null(steps[num - 1]) else steps[num]
             if _is_null(step):
                 continue  # no grid stated, so no position to have skipped

@@ -293,12 +293,17 @@ class TestFractionalGaps:
             spool = spool.select(time=(full.values[2], full.values[-3]))
             full = full[2:-2]
         assert spool.get_gaps(tolerance=2).empty
+        assert spool.get_gaps(tolerance=np.inf).empty
+        absolute = GapTolerance.absolute(float(full.step_exact))
+        assert spool.get_gaps(tolerance=absolute).empty
         assert len(spool.get_gaps(tolerance=1.5)) == 1
         assert len(spool.chunk(time=None, tolerance=1.5)) == 2
         out = spool.chunk(time=None, tolerance=2, fill_value=np.nan)
         assert len(out) == 1
         np.testing.assert_array_equal(out[0].get_coord("time").values, full.values)
         assert np.flatnonzero(np.isnan(out[0].data)).tolist() == [3 if selected else 5]
+        between = full.values[0] + np.array([10, 20], dtype="timedelta64[ns]")
+        assert spool.select(time=tuple(between)).get_gaps().empty
 
     def test_fill_limit(self, full):
         """An absolute fill limit retains its fractional nanosecond."""
@@ -337,6 +342,20 @@ class TestFractionalGaps:
         assert spool.get_gaps(tolerance=2).empty
         assert len(spool.get_gaps(tolerance=1.5)) == 1
         assert len(spool.chunk(time=None, tolerance=1.5)) == 2
+
+    @pytest.mark.parametrize("step", [Fraction(10, 3), -3])
+    def test_integer_grid(self, step):
+        """Fractional grids of integer labels also retain their exact gaps."""
+        full = get_coord(start=100, step=step, shape=(30,), dtype="int64")
+        coord = concat_coords(full[:5], full[6:])
+        np.testing.assert_array_equal(coord.missing().positions(), full.values[5:6])
+        patches = [
+            dc.Patch(data=np.ones(len(c)), coords={"distance": c}, dims=("distance",))
+            for c in (full[:5], full[6:])
+        ]
+        spool = dc.spool(patches)
+        assert spool.get_gaps(dim="distance", tolerance=2).empty
+        assert len(spool.get_gaps(dim="distance", tolerance=1.5)) == 1
 
 
 class TestDiscontinuities:
