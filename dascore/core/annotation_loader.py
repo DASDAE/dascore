@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import os
 from collections.abc import Collection, Mapping, Sequence
-from contextlib import contextmanager, suppress
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
@@ -41,8 +41,10 @@ from dascore.core.annotations import (
     ORDINAL_COLUMNS,
     RESERVED_COLUMNS,
     TABLE_SUFFIXES,
-    TEXT_DTYPES,
     AnnotationSet,
+    _combine,
+    _is_text_dtype,
+    _Tables,
     _text,
     read_dimension,
     read_ordinal,
@@ -754,45 +756,16 @@ def _merge_sets(
         dict.fromkeys([*stated, *(x for one in loaded.values() for x in one.dims)])
     )
     frames = {name: _labeled(one.annotations, name) for name, one in loaded.items()}
-    tables = {
-        name: _labeled(one.features, name)
-        for name, one in loaded.items()
-        if len(one.features)
-    }
+    tables = {name: _labeled(one.features, name) for name, one in loaded.items()}
     _refuse_undeclared_dims(loaded, frames, dims)
-    _refuse_mixed_kinds(frames, dims)
-    frame = pd.concat(frames.values(), ignore_index=True, sort=False)
-    _refuse_shared_ids(frame, "annotation")
-    features = None
-    if tables:
-        features = pd.concat(tables.values(), ignore_index=True, sort=False)
-        _refuse_shared_ids(features, "feature")
     document = dict(attrs)
     document["dims"] = dims
     document["sets"] = {name: one.attrs for name, one in loaded.items()}
-    return AnnotationSet(
-        frame,
-        features=features,
-        bases=_merge_bases(loaded),
-        attrs=document,
-        **kwargs,
-    )
-
-
-def _merge_bases(loaded: Mapping[str, AnnotationSet]) -> dict:
-    """Return every set's bases in one mapping; one key names one curve."""
-    out: dict[str, Any] = {}
-    owner: dict[str, str] = {}
-    for name, one in loaded.items():
-        for key, basis in one.bases.items():
-            if key in out and out[key] != basis:
-                msg = (
-                    f"The basis {key!r} names different curves in {owner[key]} "
-                    f"and {name}, so the sets cannot be read together."
-                )
-                raise ParameterError(msg)
-            out[key], owner[key] = basis, owner.get(key, name)
-    return out
+    parts = {
+        name: _Tables(frames[name], tables[name], one.bases)
+        for name, one in loaded.items()
+    }
+    return _combine(parts, dims, attrs=document, **kwargs)
 
 
 def _labeled(frame: pd.DataFrame, name: str) -> pd.DataFrame:
@@ -839,67 +812,6 @@ def _refuse_undeclared_dims(
                 "together until they agree on what it is."
             )
             raise ParameterError(msg)
-
-
-def _refuse_mixed_kinds(frames: Mapping[str, pd.DataFrame], dims) -> None:
-    """
-    Refuse a dimension two sets state in different kinds of value.
-
-    One set may state ``time`` as seconds and another as dates; merged, the
-    dimension would hold both. The merged set refuses that too, but without
-    naming the sets. Kinds, not dtypes: whole numbers and floats agree.
-    """
-    for dim in dims:
-        seen: dict[str, str] = {}
-        for name, frame in frames.items():
-            for column in (dim, f"{dim}{_MIN}", f"{dim}{_MAX}"):
-                if column not in frame.columns:
-                    continue
-                kind = _kind(frame[column])
-                if kind != "nothing" and seen and kind not in seen:
-                    stated, first = next(iter(seen.items()))
-                    msg = (
-                        f"The sets state the dimension {dim!r} in different kinds "
-                        f"of value: {kind} in {name}, {stated} in {first}. One "
-                        "dimension holds one kind, so the sets cannot be read "
-                        "together."
-                    )
-                    raise ParameterError(msg)
-                if kind != "nothing":
-                    seen.setdefault(kind, name)
-
-
-def _kind(series: pd.Series) -> str:
-    """Name the kind of value a column holds, as a reader would say it."""
-    kind = getattr(series.dtype, "kind", "O")
-    if series.isna().all():
-        # A column no row states agrees with whatever the others state.
-        return "nothing"
-    return {"M": "times", "m": "durations", "O": "text", "T": "text", "U": "text"}.get(
-        kind, "numbers"
-    )
-
-
-def _refuse_shared_ids(frame: pd.DataFrame, what: str) -> None:
-    """
-    Refuse an id which names a row in more than one set.
-
-    Each set's own ids are already unique; this names the sets a collision
-    between them came from.
-    """
-    if "id" not in frame.columns:
-        return
-    ids = frame["id"].map(_text)
-    shared = (ids != "") & ids.duplicated(keep=False)
-    if not shared.any():
-        return
-    first = ids[shared].iloc[0]
-    named = sorted(set(frame.loc[ids == first, "set"]))
-    msg = (
-        f"The {what} id {first} names a row in {' and '.join(named)}. Ids are "
-        f"unique across the sets loaded together, so one id names one {what}."
-    )
-    raise ParameterError(msg)
 
 
 def _load_set(directory: Path, attrs: Mapping, dims, **kwargs) -> AnnotationSet:
@@ -993,13 +905,6 @@ def _declared_dtypes(columns: Mapping | None) -> dict[str, str]:
         if dtype:
             out[name] = dtype
     return out
-
-
-def _is_text_dtype(dtype: str) -> bool:
-    """Whether a declared dtype is a spelling of text; an unreadable one is not."""
-    with suppress(TypeError):
-        return pd.api.types.pandas_dtype(dtype).name in TEXT_DTYPES
-    return False
 
 
 def _text_columns(own: Mapping, inherited: Mapping) -> frozenset[str]:
