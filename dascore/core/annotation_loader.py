@@ -1012,7 +1012,8 @@ def _stated_dtypes(attrs: Mapping, key: str, own=None) -> tuple[dict, dict]:
     """
     Return the set's own declared dtypes, and those the sets saved flat
     into it agree on, each with the names of the sets declaring it.
-    Children which disagree leave the column to inference.
+    Children which disagree leave the column to inference; two spellings
+    of text agree.
     """
     stated = _declared_dtypes(attrs.get(key) if own is None else own)
     merged: dict[str, tuple[str, set[str]]] = {}
@@ -1020,7 +1021,8 @@ def _stated_dtypes(attrs: Mapping, key: str, own=None) -> tuple[dict, dict]:
     for label, child in (attrs.get("sets") or {}).items():
         for name, dtype in _declared_dtypes(_child_field(child, key)).items():
             first, owners = merged.setdefault(name, (dtype, set()))
-            clashing |= {name} if first != dtype else set()
+            if first != dtype and not (_is_text_dtype(first) and _is_text_dtype(dtype)):
+                clashing.add(name)
             owners.add(label)
     inherited = {
         k: v for k, v in merged.items() if k not in clashing and k not in stated

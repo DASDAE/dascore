@@ -1349,6 +1349,20 @@ class TestCollections:
         flat = dc.annotations(loaded.io.save(tmp_path / "flat"))
         assert list(flat.annotations["code"]) == [1, 7]
 
+    def test_children_spelling_text_two_ways(self, tmp_path):
+        """A str and a string declaration agree, so text stays text."""
+        root = tmp_path / "sets"
+        for name, dtype, code in (("a", "str", "001"), ("b", "string", "002")):
+            dc.AnnotationSet(
+                pd.DataFrame({"time": [1.0], "code": [code]}),
+                dims=("time",),
+                annotation_columns={"code": {"dtype": dtype}},
+            ).io.save(root / name)
+        loaded = dc.annotations(root)
+        flat = dc.annotations(loaded.io.save(tmp_path / "flat"))
+        assert list(flat.annotations["code"]) == ["001", "002"]
+        assert flat == loaded
+
     def test_children_disagreeing_on_a_dtype(self, tmp_path):
         """Where children declare different dtypes the column is inferred."""
         root = tmp_path / "sets"
