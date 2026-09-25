@@ -1707,6 +1707,21 @@ class TestFillGaps:
         last = get_coord(start=self.t0 + 30 * self.ms, step=self.ms, shape=(2,))
         return _gapped_patch(concat_coords(coord, last))
 
+    @pytest.mark.parametrize("unit", ["s", "ms", "us"])
+    def test_coarse_time_unit(self, unit):
+        """Fill works on a datetime grid of any unit, with or without a limit."""
+        step = np.timedelta64(4, unit)
+        full = get_coord(
+            start=np.datetime64("2020-01-01", unit), step=step, shape=(50,)
+        )
+        patch = _gapped_patch(concat_coords(full[:20], full[30:]))
+        out = patch.fill_gaps("time")
+        assert np.array_equal(out.get_coord("time").values, full.values)
+        assert patch.fill_gaps(time=5 * step).shape == patch.shape
+        assert patch.fill_gaps(time=10 * step).shape == out.shape
+        chunked = dc.spool([patch]).chunk(time=None, tolerance=100, fill_value=np.nan)
+        assert chunked[0].shape == out.shape
+
     def test_fills_hole(self, gapped):
         """The hole becomes NaN and each run lands at its grid position."""
         out = gapped.fill_gaps("time")
