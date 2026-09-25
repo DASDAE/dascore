@@ -364,8 +364,25 @@ class Patch(NamespaceOwner, PatchMeta):
     fill_gaps = dascore.proc.coords.fill_gaps
     add_distance_to = dascore.proc.coords.add_distance_to
     enrich = dascore.proc.enrich
-    radians_to_strain = dascore.transform.radians_to_strain
-    full = dascore.proc.full
+
+    def radians_to_strain(
+        self,
+        gauge_length: Any = None,
+        wave_length: float = 1550.0 * 10 ** (-9),
+        stress_constant: float = 0.79,
+        refractive_index: float = 1.445,
+    ) -> Self:
+        """Convert phase data to strain or strain rate."""
+        return transform.RadiansToStrain(
+            gauge_length=gauge_length,
+            wave_length=wave_length,
+            stress_constant=stress_constant,
+            refractive_index=refractive_index,
+        ).run(self)
+
+    def full(self, fill_value: Any) -> Self:
+        """Return a patch filled with the given value."""
+        return dascore.proc.basic.Full(fill_value=fill_value).run(self)
 
     # The operations written as `PatchProcessor` subclasses which compute
     # data. Written here rather than attached at import so that a reader, an
@@ -440,9 +457,13 @@ class Patch(NamespaceOwner, PatchMeta):
         # The module-level function, not this method.
         return apply_ufunc(ufunc, self, *args, **kwargs)
 
-    set_units = dascore.proc.set_units
-    convert_units = dascore.proc.convert_units
-    simplify_units = dascore.proc.simplify_units
+    def convert_units(self, data_units: Any = None, **kwargs) -> Self:
+        """Convert the data or coordinate units."""
+        return dascore.proc.ConvertUnits(data_units=data_units, **kwargs).run(self)
+
+    def simplify_units(self) -> Self:
+        """Convert data and coordinate units to base metric units."""
+        return dascore.proc.SimplifyUnits().run(self)
 
     # --- processing funcs
 
@@ -503,13 +524,28 @@ class Patch(NamespaceOwner, PatchMeta):
     correlate = dascore.proc.correlate
     correlate_shift = dascore.proc.correlate_shift
     decimate = dascore.proc.decimate
-    demedian = dascore.proc.demedian
-    detrend = dascore.proc.detrend
+
+    def demedian(self, dim: str = "time") -> Self:
+        """Remove the median along a dimension."""
+        return dascore.proc.basic.Demedian(dim=dim).run(self)
+
+    def detrend(self, dim: str, type: Literal["linear", "constant"] = "linear") -> Self:
+        """Remove a linear or constant trend along a dimension."""
+        return dascore.proc.Detrend(dim=dim, type=type).run(self)
+
     dropna = dascore.proc.dropna
-    fillna = dascore.proc.fillna
+
+    def fillna(self, value: Any, include_inf: bool = True) -> Self:
+        """Replace nullish data with a value."""
+        return dascore.proc.basic.Fillna(value=value, include_inf=include_inf).run(self)
+
     pass_filter = dascore.proc.pass_filter
     hampel_filter = dascore.proc.hampel_filter
-    sobel_filter = dascore.proc.sobel_filter
+
+    def sobel_filter(self, dim: Any, mode: Any = "reflect", cval: Any = 0.0) -> Self:
+        """Apply a Sobel filter along a dimension."""
+        return dascore.proc.SobelFilter(dim=dim, mode=mode, cval=cval).run(self)
+
     median_filter = dascore.proc.median_filter
     notch_filter = dascore.proc.notch_filter
     savgol_filter = dascore.proc.savgol_filter
@@ -517,12 +553,26 @@ class Patch(NamespaceOwner, PatchMeta):
     slope_filter = dascore.proc.slope_filter
     wiener_filter = dascore.proc.wiener_filter
     reassemble = dascore.proc.reassemble
-    angle = dascore.proc.angle
+
+    def angle(self) -> Self:
+        """Return the phase angle of the data."""
+        return dascore.proc.basic.Angle().run(self)
+
     resample = dascore.proc.resample
     pad = dascore.proc.pad
-    roll = dascore.proc.roll
+
+    def roll(self, samples: bool = False, update_coord: bool = False, **kwargs) -> Self:
+        """Roll the data and optionally the coordinates along a dimension."""
+        return dascore.proc.basic.Roll(
+            samples=samples, update_coord=update_coord, **kwargs
+        ).run(self)
+
     where = dascore.proc.where
-    flip = dascore.proc.flip
+
+    def flip(self, *dims, flip_coords: bool = True) -> Self:
+        """Flip data and optionally coordinates along dimensions."""
+        return dascore.proc.basic.Flip(dims=dims, flip_coords=flip_coords).run(self)
+
     align_to_coord = dascore.proc.align_to_coord
 
     interpolate = dascore.proc.interpolate
@@ -656,13 +706,26 @@ class Patch(NamespaceOwner, PatchMeta):
     istft = transform.istft
     integrate = transform.integrate
     stalta = transform.stalta
-    kurtosis = transform.kurtosis
+
+    def kurtosis(self, samples: bool = False, recursive: bool = True, **kwargs) -> Self:
+        """Compute windowed or recursive kurtosis along a dimension."""
+        return transform.Kurtosis(samples=samples, recursive=recursive, **kwargs).run(
+            self
+        )
+
     velocity_to_strain_rate = transform.velocity_to_strain_rate
     velocity_to_strain_rate_edgeless = transform.velocity_to_strain_rate_edgeless
     dispersion_phase_shift = transform.dispersion_phase_shift
     tau_p = transform.tau_p
-    hilbert = transform.hilbert
-    envelope = transform.envelope
+
+    def hilbert(self, dim: str) -> Self:
+        """Return the analytic signal along a dimension."""
+        return transform.Hilbert(dim=dim).run(self)
+
+    def envelope(self, dim: str) -> Self:
+        """Return the magnitude of the analytic signal."""
+        return transform.Envelope(dim=dim).run(self)
+
     phase_weighted_stack = transform.phase_weighted_stack
     median_frequency = transform.median_frequency
     spectral_centroid = transform.spectral_centroid

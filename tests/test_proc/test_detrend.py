@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import numpy as np
 import pytest
+from pydantic import ValidationError
 
 from dascore.exceptions import ParameterError
 
@@ -23,3 +24,8 @@ class TestDetrend:
         """A dim not in the patch should raise ParameterError."""
         with pytest.raises(ParameterError, match="not in patch dim"):
             random_patch.detrend(dim="not_a_dim")
+
+    def test_bad_type_raises(self, random_patch):
+        """Only the fit types scipy supports are accepted."""
+        with pytest.raises(ValidationError, match="type"):
+            random_patch.detrend(dim="time", type="quadratic")

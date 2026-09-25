@@ -425,6 +425,11 @@ class PatchMeta(NodeRepr):
     # way of metadata running it.
     set_dims = dascore.proc.set_dims
     get_coord = dascore.proc.get_coord
+
+    def set_units(self, data_units: Any = None, **kwargs) -> Self:
+        """Set the units of the data or coordinates without conversion."""
+        return dascore.proc.SetUnits(data_units=data_units, **kwargs).run(self)
+
     get_axis = dascore.proc.get_axis
     pipe = dascore.proc.pipe
     get_patch_names = get_patch_names

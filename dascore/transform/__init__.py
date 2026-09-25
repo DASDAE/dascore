@@ -8,13 +8,13 @@ from __future__ import annotations
 from .differentiate import differentiate
 from .fourier import dft, idft, stft, istft
 from .integrate import integrate
-from .hilbert import hilbert, envelope, phase_weighted_stack
-from .strain import velocity_to_strain_rate, velocity_to_strain_rate_edgeless, radians_to_strain
+from .hilbert import Hilbert, Envelope, phase_weighted_stack
+from .strain import velocity_to_strain_rate, velocity_to_strain_rate_edgeless, RadiansToStrain
 from .dispersion import dispersion_phase_shift
 from .taup import tau_p
 from .stalta import stalta
 from .fbe import fbe
-from .kurtosis import kurtosis
+from .kurtosis import Kurtosis
 from .spectral_descriptors import (
     median_frequency,
     spectral_centroid,

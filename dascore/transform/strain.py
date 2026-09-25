@@ -5,11 +5,13 @@ from __future__ import annotations
 import math
 import warnings
 from numbers import Real
+from typing import Any
 
 import numpy as np
 
 import dascore as dc
 from dascore.constants import PatchType
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError, UnitError
 from dascore.transform.differentiate import differentiate
 from dascore.units import convert_units, get_factor_and_unit, get_unit
@@ -235,14 +237,7 @@ def _get_gauge_length(patch: PatchType, gauge_length) -> float:
     raise ParameterError(msg)
 
 
-@patch_function(version="1.1")
-def radians_to_strain(
-    patch: PatchType,
-    gauge_length=None,
-    wave_length: float = 1550.0 * 10 ** (-9),
-    stress_constant: float = 0.79,
-    refractive_index: float = 1.445,
-):
+class RadiansToStrain(PatchProcessor):
     r"""
     Convert data in radians to strain (rate).
 
@@ -287,40 +282,54 @@ def radians_to_strain(
     "strain_rate" when they are strain per unit time (eg rad/s becomes
     strain/s) and "strain" otherwise.
     """
-    # If units doesn't contain radians just return so function is idempotent
-    quant = dc.get_quantity(patch.attrs.data_units)
-    if str(dc.get_unit("radians")) not in str(quant):
-        msg = (
-            f"Patch {patch} has no radians in its data_units, "
-            f"skipping strain conversion."
+
+    __version__ = "1.1"
+    gauge_length: Any = None
+    wave_length: float = 1550.0 * 10 ** (-9)
+    stress_constant: float = 0.79
+    refractive_index: float = 1.445
+
+    def get_metadata(self, meta):
+        """Return strain metadata and the factor for phase units."""
+        # If units doesn't contain radians just return so function is idempotent
+        quant = dc.get_quantity(meta.attrs.data_units)
+        if str(dc.get_unit("radians")) not in str(quant):
+            msg = (
+                f"Patch {meta} has no radians in its data_units, "
+                f"skipping strain conversion."
+            )
+            warnings.warn(msg)
+            return meta, {}
+        # Normalize prefixed units before computing the physical conversion.
+        data_units = meta.attrs.get("data_units", None)
+        d_factor, d_units = get_factor_and_unit(data_units, simplify=True)
+        units = get_unit(d_units)
+        dimensions = units.dimensionality
+        supported = ("rad", "rad/s", "rad/m", "rad/m/s")
+        if dimensions not in [get_unit(unit).dimensionality for unit in supported]:
+            msg = f"radians to strain failed to convert {data_units} to strain."
+            raise UnitError(msg)
+        normalized = dimensions.get("[length]", 0) == -1
+        const = self.wave_length / (
+            4 * np.pi * self.refractive_index * self.stress_constant
         )
-        warnings.warn(msg)
-        return patch
-    # Normalize prefixed units before computing the physical conversion.
-    data_units = patch.attrs.get("data_units", None)
-    d_factor, d_units = get_factor_and_unit(data_units, simplify=True)
-    units = get_unit(d_units)
-    dimensions = units.dimensionality
-    supported = ("rad", "rad/s", "rad/m", "rad/m/s")
-    if dimensions not in [get_unit(unit).dimensionality for unit in supported]:
-        msg = f"radians to strain failed to convert {data_units} to strain."
-        raise UnitError(msg)
-    normalized = dimensions.get("[length]", 0) == -1
-    const = wave_length / (4 * np.pi * refractive_index * stress_constant)
-    new_units = units * get_unit("strain/radians")
-    if normalized:
-        # For example, OptoDAS files can contain rad/(m*s): phase is already
-        # normalized per metre, so dividing by gauge length again is incorrect.
-        new_units = new_units * get_unit("m")
-    else:
-        const = const / _get_gauge_length(patch, gauge_length)
-    # Radians wasn't eliminated from the output units. Something went wrong.
-    if str(dc.get_unit("radians")) in str(new_units):
-        msg = f"radians to strain failed to convert {data_units} to strain."
-        raise UnitError(msg)
-    # Build output patch
-    new_attrs = patch.attrs.update(
-        data_units=new_units, data_type=_get_strain_data_type(new_units)
-    )
-    new_data = patch.data * const * d_factor
-    return patch.update(data=new_data, attrs=new_attrs)
+        new_units = units * get_unit("strain/radians")
+        if normalized:
+            # For example, OptoDAS files can contain rad/(m*s): phase is already
+            # normalized per metre, so dividing by gauge length again is incorrect.
+            new_units = new_units * get_unit("m")
+        else:
+            const = const / _get_gauge_length(meta, self.gauge_length)
+        # Radians wasn't eliminated from the output units. Something went wrong.
+        if str(dc.get_unit("radians")) in str(new_units):
+            msg = f"radians to strain failed to convert {data_units} to strain."
+            raise UnitError(msg)
+        # Build output meta
+        new_attrs = meta.attrs.update(
+            data_units=new_units, data_type=_get_strain_data_type(new_units)
+        )
+        return meta.new(attrs=new_attrs), {"const": const, "factor": d_factor}
+
+    def kernel(self, data, *, const=None, factor=None):
+        """Return scaled strain data, or unchanged non-phase data."""
+        return data if const is None else data * const * factor

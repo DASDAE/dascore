@@ -813,9 +813,18 @@ class TestDataless:
     def test_processing_raises(self, described):
         """A bare call, which no missing method stops, is refused."""
         with pytest.raises(PatchDataError, match="holds no data"):
-            dc.proc.set_units(described, "m")
+            dc.proc.detrend(described, "time")
         with pytest.raises(PatchDataError):
             dc.proc.pass_filter(described, time=(1, 10))
+
+    def test_set_units_without_data(self, described):
+        """Setting units changes metadata without needing an array."""
+        out = described.set_units("m", distance="km")
+        assert type(out) is dc.PatchMeta
+        assert out.attrs.data_units == dc.get_quantity("m")
+        assert out.get_coord("distance").units == dc.get_quantity("km")
+        assert out.shape == described.shape
+        assert out.dtype == described.dtype
 
     def test_to_patch_fills_it(self, described, source):
         """`to_patch` is `drop_data` run backwards."""

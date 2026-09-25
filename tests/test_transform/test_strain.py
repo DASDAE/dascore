@@ -343,3 +343,14 @@ class TestRadianToStrain:
         """Unsupported dimensions must not silently produce non-strain units."""
         with pytest.raises(UnitError, match="failed to convert"):
             rad_patch.update_attrs(data_units=units).radians_to_strain()
+
+
+class TestRadiansToStrainScale:
+    """The data scale with the radians' prefix."""
+
+    def test_milliradians(self):
+        """A milliradian is a thousandth of a radian, in strain too."""
+        patch = dc.get_example_patch().update_attrs(gauge_length=10)
+        rad = patch.update_attrs(data_units="rad").radians_to_strain()
+        mrad = patch.update_attrs(data_units="mrad").radians_to_strain()
+        assert np.allclose(mrad.data, np.asarray(rad.data) / 1000)

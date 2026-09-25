@@ -9,17 +9,21 @@ from typing import NamedTuple
 
 import numpy as np
 import pytest
+from scipy.signal import hilbert as sp_hilbert
 
 import dascore as dc
 from dascore.utils.array_api import (
+    array_namespace,
     asarray_like,
     backend_name,
     can_nan_reduce,
+    device,
     is_numpy,
     nan_reduce,
     to_numpy,
 )
 from dascore.utils.misc import suppress_warnings
+from dascore.warnings import NumpyFallbackWarning
 
 
 @pytest.fixture(scope="module")
@@ -145,10 +149,17 @@ class TestPatchBackends:
         assert "distance" not in out.dims
 
     def test_numpy_only_function_does_not_warn(self, backend_patch):
-        """Nothing converts or warns for a numpy-only function; its body decides."""
-        # detrend hands the array to scipy, which gives numpy data back.
+        """Nothing converts or warns for a plain numpy-only function."""
+        # median_filter hands the array to scipy, which gives numpy data back.
         with warnings_as_errors():
+            out = backend_patch.median_filter(time=3, samples=True)
+        assert out.shape == backend_patch.shape
+
+    def test_numpy_kernel_falls_back_with_a_warning(self, backend_patch):
+        """A processor's numpy kernel runs on numpy copies, and says so."""
+        with pytest.warns(NumpyFallbackWarning, match="detrend"):
             out = backend_patch.detrend("time")
+        assert backend_name(out.data) == backend_name(backend_patch.data)
         assert out.shape == backend_patch.shape
 
     def test_to_numpy_array(self, backend_patch):
@@ -398,3 +409,206 @@ class TestNanReduce:
         array = np.arange(12, dtype="int64").reshape(3, 4)
         out = np.asarray(nan_reduce(name, to_array(array), axis=0))
         assert np.allclose(out, getattr(np, f"nan{name}")(array, axis=0))
+
+
+def _units(patch, units="rad"):
+    """Return the patch with data units a strain conversion can take."""
+    return patch.update_attrs(data_units=units, gauge_length=10)
+
+
+def _signed(patch):
+    """Return the patch with negative values, NaNs and infinities in it."""
+    data = np.asarray(patch.data) - 0.5
+    data[0, :3] = [np.nan, np.inf, -np.inf]
+    return patch.new(data=data)
+
+
+def _single(patch):
+    """Return the patch in single precision."""
+    return patch.new(data=np.asarray(patch.data, dtype=np.float32))
+
+
+# One call per operation converted to a processor, and the numpy patch it is
+# given (on each backend too); the results must match numpy's.
+_CONVERTED = {
+    "angle": (lambda p: p.angle(), _signed),
+    "demedian": (lambda p: p.demedian("time"), None),
+    "fillna": (lambda p: p.fillna(0), _signed),
+    "fillna_no_inf": (lambda p: p.fillna(0, include_inf=False), _signed),
+    "full": (lambda p: p.full(2.0), None),
+    "flip": (lambda p: p.flip("time"), None),
+    "roll": (lambda p: p.roll(time=3, samples=True), None),
+    "squeeze": (lambda p: p.isel(time=slice(0, 1)).squeeze(), None),
+    "squeeze_one": (
+        lambda p: p.isel(time=slice(0, 1)).append_dims("new").squeeze("time"),
+        None,
+    ),
+    "append_dims": (lambda p: p.append_dims(new=2), None),
+    "make_broadcastable_to": (
+        lambda p: p.append_dims("new").make_broadcastable_to((*p.shape, 3)),
+        None,
+    ),
+    "drop_coords": (
+        lambda p: p.update_coords(extra=("time", np.ones(p.shape[1]))).drop_coords(
+            "extra"
+        ),
+        None,
+    ),
+    "drop_private_coords": (lambda p: p.drop_private_coords(), None),
+    "update_coords": (lambda p: p.update_coords(time_min=0), None),
+    "set_units": (lambda p: p.set_units("m/s"), None),
+    "convert_units": (lambda p: p.set_units("m/s").convert_units("mm/s"), None),
+    "convert_units_offset": (lambda p: p.set_units("degC").convert_units("K"), None),
+    "simplify_units": (lambda p: p.set_units("km/s").simplify_units(), None),
+    "detrend": (lambda p: p.detrend("time"), None),
+    "sobel_filter": (lambda p: p.sobel_filter("time"), None),
+    "hilbert": (lambda p: p.hilbert("time"), None),
+    "hilbert_single": (lambda p: p.hilbert("time"), _single),
+    "envelope": (lambda p: p.envelope("time"), None),
+    "kurtosis": (lambda p: p.kurtosis(time=8, samples=True), None),
+    "radians_to_strain": (lambda p: _units(p, "mrad").radians_to_strain(), None),
+}
+
+
+# The converted operations which have only a numpy kernel, so fall back.
+_NUMPY_ONLY = {"demedian", "detrend", "sobel_filter", "kurtosis"}
+
+
+class TestConvertedProcessorsOnBackends:
+    """Every converted operation runs on every backend, or warns it falls back."""
+
+    @pytest.mark.parametrize("name", sorted(_CONVERTED))
+    def test_runs_or_falls_back(self, random_patch, to_backend, name):
+        """
+        Native kernels are silent, numpy kernels warn, the backend comes back,
+        and the values, dtype and shape are numpy's.
+        """
+        call, prepare = _CONVERTED[name]
+        numpy_patch = prepare(random_patch) if prepare else random_patch
+        patch = to_backend(numpy_patch)
+        operation = name.split("_single")[0].split("_offset")[0]
+        operation = {"fillna_no_inf": "fillna", "squeeze_one": "squeeze"}.get(
+            operation, operation
+        )
+        cls = getattr(dc.Patch, operation).__processor__
+        backend = backend_name(patch.data)
+        # A kernel registered for the backend (dask's lazy median) is native.
+        registered = backend in cls.__dict__.get("_kernels", {})
+        if operation not in _NUMPY_ONLY or registered:
+            with warnings_as_errors():
+                out = call(patch)
+        else:
+            with pytest.warns(NumpyFallbackWarning, match=cls.name):
+                out = call(patch)
+        assert backend_name(out.data) == backend
+        expected = call(numpy_patch)
+        values = np.asarray(out.data)
+        assert values.dtype == np.asarray(expected.data).dtype
+        assert out.dims == expected.dims
+        # Single precision agrees to its own rounding, not float64's.
+        single = values.dtype in (np.float32, np.complex64)
+        atol = 1e-5 if single else 1e-8
+        assert np.allclose(values, expected.data, atol=atol, equal_nan=True)
+
+
+class TestArrayApiKernelBranches:
+    """The array API kernels' branches, on a backend which is not numpy."""
+
+    def test_angle_of_complex_data(self, backend_patch):
+        """The phase of complex data is atan2 of its parts."""
+        xp = array_namespace(backend_patch.data)
+        data = xp.astype(backend_patch.data, xp.complex128) * (1 + 2j)
+        out = backend_patch.new(data=data).angle()
+        positive = np.asarray(backend_patch.data) > 0
+        assert np.allclose(np.asarray(out.data)[positive], np.arctan2(2, 1))
+
+    def test_fillna_fills(self, backend_patch):
+        """Non-finite values are replaced by the value."""
+        xp = array_namespace(backend_patch.data)
+        data = xp.where(backend_patch.data > 0.5, xp.nan, backend_patch.data)
+        out = backend_patch.new(data=data).fillna(-1.0)
+        numpy_out = np.asarray(out.data)
+        assert np.isfinite(numpy_out).all()
+        assert (numpy_out[np.asarray(backend_patch.data) > 0.5] == -1).all()
+
+    def test_fillna_of_finite_data_is_a_no_op(self, backend_patch):
+        """With nothing to fill the patch comes back untouched."""
+        out = backend_patch.fillna(-1.0)
+        assert out is backend_patch
+
+    def test_hilbert_of_odd_length(self, backend_patch):
+        """Odd and even lengths weight the spectrum differently."""
+        odd = backend_patch.isel(time=slice(0, 99))
+        out = odd.hilbert("time")
+        expected = sp_hilbert(np.asarray(odd.data), axis=odd.get_axis("time"))
+        assert np.allclose(np.asarray(out.data), expected)
+
+    def test_hilbert_keeps_single_precision(self, backend_patch):
+        """float32 in, complex64 out; the envelope float32."""
+        xp = array_namespace(backend_patch.data)
+        single = backend_patch.new(data=xp.astype(backend_patch.data, xp.float32))
+        assert single.hilbert("time").data.dtype == xp.complex64
+        assert single.envelope("time").data.dtype == xp.float32
+
+    def test_hilbert_refuses_complex(self, backend_patch):
+        """As scipy does: the analytic signal is of real data."""
+        xp = array_namespace(backend_patch.data)
+        data = xp.astype(backend_patch.data, xp.complex128)
+        with pytest.raises(ValueError, match="must be real"):
+            backend_patch.new(data=data).hilbert("time")
+
+    def test_full_with_a_numpy_scalar(self, backend_patch):
+        """A numpy scalar fill keeps its dtype, on the patch's backend."""
+        out = backend_patch.full(np.float32(2))
+        assert backend_name(out.data) == backend_name(backend_patch.data)
+        assert np.asarray(out.data).dtype == np.float32
+
+
+class TestDaskChunks:
+    """A dask array chunked along the transformed axis."""
+
+    def test_hilbert_across_chunks(self, random_patch):
+        """The chunks along the axis are joined before the transform."""
+        da = pytest.importorskip("dask.array")
+        data = np.asarray(random_patch.data)
+        chunked = random_patch.new(data=da.from_array(data, chunks=(50, 100)))
+        expected = np.asarray(random_patch.hilbert("time").data)
+        assert np.allclose(np.asarray(chunked.hilbert("time").data), expected)
+
+
+class TestDevices:
+    """Arrays built by a kernel live on the data's device."""
+
+    def test_fillna_and_full_keep_the_device(self, random_patch):
+        """array_api_strict refuses to mix devices, so this would raise."""
+        xp = pytest.importorskip("array_api_strict")
+        other = xp.__array_namespace_info__().devices()[1]
+        data = xp.asarray(np.where(np.asarray(random_patch.data) > 0.5, np.nan, 1.0))
+        patch = random_patch.new(data=xp.asarray(data, device=other))
+        assert device(patch.fillna(2.0).data) == other
+        assert device(patch.full(2.0).data) == other
+
+
+class TestDaskLaziness:
+    """Operations dask implements itself stay lazy."""
+
+    def test_demedian_stays_lazy(self, random_patch):
+        """No numpy copy, no warning, and the chunks kept."""
+        da = pytest.importorskip("dask.array")
+        data = da.from_array(np.asarray(random_patch.data), chunks=(50, 100))
+        with warnings_as_errors():
+            out = random_patch.new(data=data).demedian("time")
+        assert isinstance(out.data, da.Array)
+        assert np.allclose(np.asarray(out.data), random_patch.demedian("time").data)
+
+
+class TestFallbackWarningLocation:
+    """The fallback warning points at the caller, not at dascore."""
+
+    def test_points_at_the_call(self, random_patch):
+        """Whichever way the operation is reached."""
+        xp = pytest.importorskip("array_api_strict")
+        patch = random_patch.new(data=xp.asarray(np.asarray(random_patch.data)))
+        with pytest.warns(NumpyFallbackWarning) as record:
+            patch.detrend("time")
+        assert record[0].filename == __file__

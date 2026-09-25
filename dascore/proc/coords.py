@@ -1158,7 +1158,9 @@ class AppendDims(PatchProcessor):
         """Return the data stretched over the dimensions which were added."""
         if not axes:
             return data
-        return np.broadcast_to(np.expand_dims(data, axes), shape)
+        xp = array_namespace(data)
+        added = (1,) * len(axes)
+        return xp.broadcast_to(xp.reshape(data, (*data.shape, *added)), shape)
 
 
 class Squeeze(PatchProcessor):

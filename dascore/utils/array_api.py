@@ -12,6 +12,7 @@ lives in [compat](`dascore.compat`).
 from __future__ import annotations
 
 import warnings
+from pathlib import Path
 from typing import Any, TypeGuard
 
 import array_api_compat.numpy as np_namespace
@@ -107,7 +108,9 @@ def is_foreign(array: Any) -> bool:
     return is_array_api_obj(array)
 
 
-def warn_numpy_fallback(name: str, backend: str, stacklevel: int = 3) -> None:
+def warn_numpy_fallback(
+    name: str, backend: str, stacklevel: int = 3, skip_dascore: bool = False
+) -> None:
     """
     Warn that name has no implementation for the given array backend.
 
@@ -120,12 +123,19 @@ def warn_numpy_fallback(name: str, backend: str, stacklevel: int = 3) -> None:
     stacklevel
         The stack level, as understood by warnings.warn, of the function
         calling this one.
+    skip_dascore
+        Point the warning at the first frame outside dascore instead, for a
+        caller whose depth varies.
     """
     msg = (
         f"{name} has no {backend} implementation; the data were converted "
         "to numpy and the output converted back. Silence this with "
         "dascore.utils.misc.suppress_warnings(NumpyFallbackWarning)."
     )
+    if skip_dascore:
+        prefix = str(Path(__file__).parent.parent)
+        warnings.warn(msg, NumpyFallbackWarning, skip_file_prefixes=(prefix,))
+        return
     warnings.warn(msg, NumpyFallbackWarning, stacklevel=stacklevel + 1)
 
 

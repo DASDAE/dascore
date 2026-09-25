@@ -50,10 +50,17 @@ from pydantic import ConfigDict
 from pydantic.alias_generators import to_snake
 
 import dascore as dc
+from dascore.compat import is_array_like
 from dascore.config import get_config
 from dascore.constants import PatchMetaType, PatchType
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel, model_values
+from dascore.utils.array_api import (
+    asarray_like,
+    backend_name,
+    to_numpy,
+    warn_numpy_fallback,
+)
 from dascore.utils.attrs import _values_equal
 from dascore.utils.identity import (
     _without_ids,
@@ -103,8 +110,11 @@ class PatchProcessor(DascoreBaseModel):
       usually computes the other.
     - `kernel(data, **plan)`: the array computation. None of it may see a
       patch, so a chain of kernels can be compiled.
-    - `reconcile(data, out)`: the one hook which sees both halves, for what
-      only the computed data can say.
+    - `numpy_kernel(data, **plan)`: a numpy, scipy or numba computation.
+      NumPy data prefer it; other backends use `kernel` if available,
+      otherwise convert through NumPy with a `NumpyFallbackWarning`.
+    - `reconcile(result, out)`: the one hook which sees both halves. Return
+      metadata to attach the result, or a patch holding the final data.
 
     Each subclass is registered under `name` (snake case of the class name
     unless set). One of DASCore's own is reached through a method of that
@@ -292,7 +302,8 @@ class PatchProcessor(DascoreBaseModel):
         Return the kernel this class runs for a backend, or None.
 
         Each class in the MRO is asked for a kernel registered for the
-        backend, then for its own `kernel`, before moving up: a subclass
+        backend, then `numpy_kernel` for NumPy or `kernel` for other arrays,
+        with a NumPy fallback if needed, before moving up: a subclass
         which wrote its own kernel means it, and a backend kernel
         registered against its parent must not answer for it.
         """
@@ -300,8 +311,13 @@ class PatchProcessor(DascoreBaseModel):
             contents = klass.__dict__
             if (found := contents.get("_kernels", {}).get(backend)) is not None:
                 return found
+            numpy_only = contents.get("numpy_kernel")
+            if numpy_only is not None and backend == "numpy":
+                return numpy_only
             if (generic := contents.get("kernel")) is not None:
                 return generic
+            if numpy_only is not None:
+                return _via_numpy(numpy_only, cls.name or cls.__name__)
         return None
 
     def check(self, patch: PatchMetaType) -> PatchMetaType:
@@ -339,7 +355,7 @@ class PatchProcessor(DascoreBaseModel):
         return meta, {}
 
     def reconcile(self, data, out: dc.PatchMeta) -> dc.PatchMeta:
-        """Return the result's metadata once the data are known; default as is."""
+        """Return metadata or a patch holding the final data; default as is."""
         return out
 
     @overload
@@ -395,7 +411,7 @@ class PatchProcessor(DascoreBaseModel):
             # metadata has none to show.
             unchanged = patch._data if isinstance(patch, dc.Patch) else None
             out = self.reconcile(unchanged, out)
-            attrs = out.attrs if not record else self._record(patch, out)
+            attrs = self._result_attrs(out) if not record else self._record(patch, out)
             # The data are whatever they were: a patch puts its own back,
             # and metadata has none to put.
             return patch._reattach(out, attrs)
@@ -409,9 +425,9 @@ class PatchProcessor(DascoreBaseModel):
         if out is meta and result is data:
             return self._unchanged(patch, record)
         out = self.reconcile(result, out)
-        if record:
-            out = out.update(attrs=self._record(patch, out))
-        new = out.to_patch(result)
+        attrs = self._record(patch, out) if record else self._result_attrs(out)
+        out = out.update(attrs=attrs)
+        new = out if isinstance(out, dc.Patch) else out.to_patch(result)
         # Only an operation which set a source of its own says it loads the result.
         if out._source is not meta._source:
             new._source = out._source
@@ -421,15 +437,20 @@ class PatchProcessor(DascoreBaseModel):
         """Return the patch an operation did nothing to; nothing is recorded."""
         # A declared data_type still applies, as it does for a decorated
         # patch function.
-        if self.data_type is None or not record:
+        if self.data_type is None:
             return patch
         return patch.update_attrs(data_type=self.data_type)
 
+    def _result_attrs(self, out: dc.PatchMeta) -> PatchAttrs:
+        """Return the result metadata, including the type on bypass calls."""
+        attrs = out.attrs
+        return (
+            attrs if self.data_type is None else attrs.update(data_type=self.data_type)
+        )
+
     def _record(self, patch: dc.PatchMeta, out: dc.PatchMeta) -> PatchAttrs:
         """Return attrs carrying the data_type, history and ids of this call."""
-        attrs = out.attrs
-        if self.data_type is not None:
-            attrs = attrs.update(data_type=self.data_type)
+        attrs = self._result_attrs(out)
         name = self.name or type(self).__name__
         if self.history is not None and get_config().patch_history != "disabled":
             spelled = _call_str(name, self.kwargs) if self.history == "full" else name
@@ -475,7 +496,9 @@ _HOSTS: list[type] = []
 def _has_kernel(cls: type[PatchProcessor]) -> bool:
     """Whether anything in the MRO computes data; see `kernel_for`."""
     return any(
-        x.__dict__.get("kernel") is not None or x.__dict__.get("_kernels")
+        x.__dict__.get("kernel") is not None
+        or x.__dict__.get("numpy_kernel") is not None
+        or x.__dict__.get("_kernels")
         for x in cls.__mro__
     )
 
@@ -525,7 +548,7 @@ def _check_patch_listing(cls) -> None:
     # documented URL, and `dascore.proc.select` is how a body holding no
     # patch reaches it. Set here because the method is written in a class
     # which cannot exist when either module is read.
-    for module in (cls.__module__, "dascore.proc"):
+    for module in (cls.__module__, cls.__module__.rsplit(".", 1)[0]):
         setattr(sys.modules[module], cls.name, cls.patch_function)
 
 
@@ -889,3 +912,25 @@ def _is_plain(value) -> bool:
     if isinstance(value, tuple | list):
         return all(_is_plain(x) for x in value)
     return isinstance(value, np.ndarray) and value.dtype.kind in "biufc"
+
+
+def _via_numpy(numpy_kernel, name: str):
+    """Return `numpy_kernel` run on numpy copies, its result sent back."""
+
+    def run_on_numpy(processor, data, **plan):
+        warn_numpy_fallback(name, backend_name(data), skip_dascore=True)
+        numpy_data = to_numpy(data)
+        result = numpy_kernel(processor, numpy_data, **plan)
+        # Handed back unchanged is still "nothing to do".
+        return data if result is numpy_data else _back_to(result, data)
+
+    return run_on_numpy
+
+
+def _back_to(result, like):
+    """Return a numpy kernel's result on the backend of `like`, tuples included."""
+    if isinstance(result, tuple):
+        return tuple(_back_to(x, like) for x in result)
+    if is_array_like(result) or isinstance(result, np.generic):
+        return asarray_like(result, like)
+    return result

@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+from typing import Any
+
+from pydantic import ConfigDict
+
 import dascore as dc
-from dascore.constants import PatchType
-from dascore.units import Quantity, Unit, get_factor_and_unit, units_match
-from dascore.units import convert_units as u_covert_units
-from dascore.utils.patch import patch_function
+from dascore.core.processor import PatchProcessor
+from dascore.units import conversion_factors, get_factor_and_unit, units_match
 
 
 def _replace_data_units(
@@ -23,10 +25,7 @@ def _replace_data_units(
     return dc.PatchAttrs.from_dict(out)
 
 
-@patch_function()
-def set_units(
-    patch: PatchType, data_units: str | Quantity | Unit | None = None, **kwargs
-) -> PatchType:
+class SetUnits(PatchProcessor):
     """
     Set the units of a patch's data or coordinates.
 
@@ -58,18 +57,23 @@ def set_units(
     >>> # remove data units
     >>> patch_removed_units = patch_with_units.set_units(None)
     """
-    new_coords = patch.coords.set_units(**kwargs)
-    # data_units=None means "clear them", which units_match reports as a change.
-    if new_coords is patch.coords and units_match(patch.attrs.data_units, data_units):
-        return patch
-    new_attrs = _replace_data_units(patch.attrs, data_units)
-    return patch.new(attrs=new_attrs, coords=new_coords)
+
+    data_units: Any = None
+
+    model_config = ConfigDict(extra="allow")
+
+    def get_metadata(self, meta):
+        """Return the coordinates and data units with the units set."""
+        coords = meta.coords.set_units(**(self.model_extra or {}))
+        if coords is meta.coords and units_match(
+            meta.attrs.data_units, self.data_units
+        ):
+            return meta, {}
+        attrs = _replace_data_units(meta.attrs, self.data_units)
+        return meta.new(attrs=attrs, coords=coords), {}
 
 
-@patch_function()
-def convert_units(
-    patch: PatchType, data_units: str | Quantity | Unit | None = None, **kwargs
-) -> PatchType:
+class ConvertUnits(PatchProcessor):
     """
     Convert the patch data or coordinate units.
 
@@ -109,34 +113,38 @@ def convert_units(
     >>> # Convert coordinate units
     >>> converted_coords = patch_with_units.convert_units(distance="km")
     """
-    coords = patch.coords.convert_units(**kwargs)
-    # Nothing to convert.
-    if coords is patch.coords and (
-        data_units is None or units_match(patch.attrs.data_units, data_units)
-    ):
-        return patch
-    # convert data
-    if data_units is not None:
-        current_units = patch.attrs.data_units
-        data = u_covert_units(patch.data, data_units, current_units)
-        attrs = patch.attrs.model_dump(exclude_unset=True)
-        attrs["data_units"] = data_units
-    else:
-        data = patch.data
-        attrs = None
-    # then update attrs
-    attrs = _replace_data_units(
-        patch.attrs,
-        attrs.get("data_units") if attrs else None,
-        preserve_existing_data_units=True,
-    )
-    return patch.new(data=data, coords=coords, attrs=attrs)
+
+    data_units: Any = None
+
+    model_config = ConfigDict(extra="allow")
+
+    def get_metadata(self, meta):
+        """Return converted metadata and the affine factors for the data."""
+        coords = meta.coords.convert_units(**(self.model_extra or {}))
+        data_units = self.data_units
+        if coords is meta.coords and (
+            data_units is None or units_match(meta.attrs.data_units, data_units)
+        ):
+            return meta, {}
+        attrs = _replace_data_units(
+            meta.attrs, data_units, preserve_existing_data_units=True
+        )
+        factors = (
+            None
+            if data_units is None
+            else conversion_factors(meta.attrs.data_units, data_units)
+        )
+        plan = {} if factors is None else dict(zip(("mult1", "add", "mult2"), factors))
+        return meta.new(coords=coords, attrs=attrs), plan
+
+    def kernel(self, data, *, mult1=None, add=None, mult2=None):
+        """Return the data converted; the data if their units stand."""
+        if mult1 is None:
+            return data
+        return (data * mult1 + add) * mult2
 
 
-@patch_function()
-def simplify_units(
-    patch: PatchType,
-) -> PatchType:
+class SimplifyUnits(PatchProcessor):
     """
     Simplify the units contained by the patch to base metric units.
 
@@ -154,17 +162,17 @@ def simplify_units(
     >>> # Simplify to base units (m/s, m, s)
     >>> simplified = complex_units.simplify_units()
     """
-    # get data and data units
-    attrs = patch.attrs
-    d_factor, d_units = get_factor_and_unit(attrs.get("data_units"), simplify=True)
-    data = patch.data * d_factor if d_factor != 1 else patch.data
-    # update coords and coord units in attrs
-    coords = patch.coords.simplify_units()
-    if (
-        data is patch.data
-        and coords is patch.coords
-        and units_match(attrs.get("data_units"), d_units)
-    ):
-        return patch
-    new_attrs = _replace_data_units(patch.attrs, d_units)
-    return patch.new(data=data, coords=coords, attrs=new_attrs, dims=patch.dims)
+
+    def get_metadata(self, meta):
+        """Return base-unit metadata and the factor which scales the data."""
+        attrs = meta.attrs
+        factor, units = get_factor_and_unit(attrs.get("data_units"), simplify=True)
+        coords = meta.coords.simplify_units()
+        out = meta
+        if coords is not meta.coords or not units_match(attrs.get("data_units"), units):
+            out = meta.new(coords=coords, attrs=_replace_data_units(attrs, units))
+        return out, {"factor": factor}
+
+    def kernel(self, data, *, factor):
+        """Return the data scaled; the data themselves for a factor of one."""
+        return data * factor if factor != 1 else data

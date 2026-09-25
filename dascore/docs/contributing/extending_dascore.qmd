@@ -101,6 +101,8 @@ An operation whose metadata changes, or whose kernel needs numbers read from the
 
 - `get_metadata(meta)` gets a [`PatchMeta`](`dascore.PatchMeta`) -- the coords, attrs, dtype and backend of the data, without the data -- and returns two things: the result's metadata, built through the coord manager and `meta.new`, and what the kernel needs as ints, floats, bools, slices, `None`, `Ellipsis`, sequences of those, or numeric arrays. Deriving the one usually computes the other, so they come back together.
 - `kernel(data, **plan)` computes the array; it never sees a patch.
+- `numpy_kernel(data, **plan)` may be supplied alongside or instead of `kernel` for NumPy, SciPy or Numba implementations. NumPy inputs prefer it. Other backends use `kernel` if available, otherwise run on NumPy copies with a `NumpyFallbackWarning` and convert the result back to the input backend.
+- `reconcile(result, out)` can use the kernel result to finalize metadata. Return a `PatchMeta` to attach the result array, or call `out.to_patch(data)` to return a patch with value-dependent data and coordinates.
 
 ```{python}
 class RemoveMean(dc.PatchProcessor):
@@ -161,6 +163,6 @@ def _abs_mybackend(processor, data):
     return np.abs(data)
 ```
 
-The data backend selects the kernel; unregistered backends use the processor's own `kernel`.
+The data backend selects the kernel. A registered kernel takes precedence over the same class's `numpy_kernel` and `kernel`; a subclass's own implementation takes precedence over its parent's registrations.
 
 See [Contributing](contributing.qmd), [Testing](testing.qmd), and [Documentation](documentation.qmd) for package conventions.
