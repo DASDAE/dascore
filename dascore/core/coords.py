@@ -2751,6 +2751,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     def _slice_runs(self, indices: range) -> BaseCoord:
         """The coordinate holding the samples a range of positions names."""
         stride = indices.step
+        # a stride leaves the step to what the runs it keeps share
+        step = self.step if abs(stride) == 1 else None
         out = []
         for run, offset in zip(self.runs, self._run_offsets()):
             first, count = _run_span(indices, int(offset), len(run))
@@ -2763,22 +2765,18 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             elif isinstance(run, Grid):
                 out.append(run.sliced(first, stride, count))
             else:
-                out.append(self._promoted_labels(run.window(first, stride, count)))
+                window = run.window(first, stride, count)
+                out.append(self._promoted_labels(window, step))
         # a backwards range reads the runs from the last one
         runs = out if stride > 0 else out[::-1]
-        # A stride multiplies every spacing, so a step declared over the
-        # samples it skips is kept only where the ones it keeps still sit
-        # on it; a widened seam says they do not.
-        with suppress(CoordError, ValidationError):
-            return self._with_runs(runs)
-        return self._with_runs(runs, step=None)
+        return self._with_runs(runs, step=step)
 
-    def _promoted_labels(self, window: Labels) -> Grid | Labels:
+    def _promoted_labels(self, window: Labels, step) -> Grid | Labels:
         """A trimmed window as the grid it is, unless it contradicts the step."""
         run = _promoted(self._run_labels(window), self.dtype)
         if run is None:
             return window
-        if not _is_null(step := self.step):
+        if not _is_null(step):
             # a grid on another spacing would restate the step and swallow
             # the positions the declared one says are missing
             spacing = abs(_maybe_unpack(run.step(self.dtype)))
@@ -3528,6 +3526,10 @@ def _runs_step(runs, declared, dtype, sources):
     )
     ascending = len(edges) < 2 or edges[-1] > edges[0]
     step = magnitude if ascending else -magnitude
+    spacings = [abs(x.step(dtype)) for x in runs if isinstance(x, Grid) and len(x) > 1]
+    if strict and (bad := [x for x in spacings if not _same_step(x, magnitude)]):
+        msg = f"Step {magnitude} contradicts a run spaced {bad[0]}."
+        raise CoordError(msg)
     try:
         for run, values in stored:
             if len(run) > 1 and not is_strictly_monotonic(values):

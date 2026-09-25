@@ -165,6 +165,66 @@ class TestDeclaredStep:
         assert coord.step is None and coord.missing().complete
 
 
+class TestStridedStep:
+    """A stride multiplies the step; a coordinate never contradicts its runs."""
+
+    @pytest.fixture
+    def gapped(self):
+        """Samples 0-9 and 16-25 on a step-1 grid."""
+        return concat_coords(
+            get_coord(start=0, stop=10, step=1), get_coord(start=16, stop=26, step=1)
+        )
+
+    def test_stride_takes_the_stride_step(self, gapped):
+        """Kept samples on the coarser lattice give its step and its holes."""
+        out = gapped[::2]
+        assert out.step == 2 == out.runs[0].step(out.dtype)
+        assert out.missing().positions().tolist() == [10, 12, 14]
+
+    def test_backwards_stride(self, gapped):
+        """A negative stride states the same magnitude, signed by the labels."""
+        out = gapped[::-2]
+        assert out.step == -2
+        assert out.missing().count == 3
+
+    def test_off_lattice_seam_drops_the_step(self):
+        """A seam that is not a whole number of new steps leaves no grid."""
+        coord = concat_coords(
+            get_coord(start=0, stop=10, step=1), get_coord(start=15, stop=25, step=1)
+        )
+        out = coord[::2]
+        assert out.step is None
+        assert np.array_equal(out.values, coord.values[::2])
+
+    @pytest.mark.parametrize("rate", [1024, 3000])
+    def test_fractional_rate(self, rate):
+        """A stride over a fractional-rate grid keeps an exact step."""
+        base = get_coord(start=T0, step=(1, rate), shape=(100,))
+        out = concat_coords(base[:10], base[12:30])[::2]
+        assert out.step_exact == Fraction(2, rate)
+        assert out.missing().count == 1
+
+    def test_declared_step_a_grid_run_contradicts(self):
+        """Grid runs spaced 2 cannot sit under a declared step of 1."""
+        runs = (Grid(0, 2, 1, 5), Grid(16, 2, 1, 5))
+        with pytest.raises(ValidationError, match="contradicts a run spaced 2"):
+            NumericCoord(runs=runs, dtype="int64", step=1)
+        assert NumericCoord(runs=runs, dtype="int64", step=2).missing().count == 3
+
+    def test_raw_decimate(self):
+        """A raw decimation of a gapped patch reports the decimated step."""
+        patch = dc.get_example_patch()
+        time = patch.get_coord("time")
+        half = len(time) // 2
+        first = get_coord(start=time.min(), step=time.step, shape=(half,))
+        start = time.min() + time.step * (half + 6)
+        second = get_coord(start=start, step=time.step, shape=(len(time) - half,))
+        gapped = patch.update_coords(time=concat_coords(first, second))
+        out = gapped.decimate(time=2, filter_type=None).get_coord("time")
+        assert out.step == 2 * time.step == out.runs[0].step(out.dtype)
+        assert out.missing().count == 3
+
+
 class TestFusion:
     """Array segments fuse only when nothing says they should not."""
 
@@ -702,9 +762,9 @@ class TestReviewRoundTwo:
         (run,) = missing.iter_runs()
         assert run[1] == pytest.approx(0.2) and run[1] == missing.positions()[-1]
 
-    def test_segmented_strided_index_keeps_the_step(self, design_case):
-        """A strided selection of runs still states the grid."""
-        assert design_case[::2].step == 1
+    def test_segmented_strided_index_drops_an_off_lattice_step(self, design_case):
+        """A stride whose kept samples leave its lattice states no step."""
+        assert design_case[::2].step is None
         assert design_case[[3, 0, 1]].step is None
 
     def test_segments_with_a_contradicting_step_raise(self, design_case):
