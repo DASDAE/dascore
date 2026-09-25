@@ -11,8 +11,10 @@ from dascore.core.coords import NumericCoord
 from dascore.core.source import ArraySource
 from dascore.exceptions import InvalidFiberFileError, InvalidFiberIOError
 from dascore.io import FiberIO, H5Reader
+from dascore.io import core as io_core
 from dascore.io.dasdae.core import DASDAEV2
 from dascore.io.utils import slice_dataset
+from dascore.utils.io import BinaryReader, IOResourceManager
 
 
 class _ArrayReader(FiberIO):
@@ -51,6 +53,17 @@ class _ArrayReader(FiberIO):
         """Record the requested bounding window and return its cells."""
         self.calls.append((windows, key))
         return slice_dataset(self.data, windows)
+
+
+class _StreamReader(FiberIO):
+    """A reader which reads its stream from wherever it was left."""
+
+    name = "_interface_contract_stream"
+    version = "1"
+
+    def read_array(self, resource: BinaryReader, windows=(), key="") -> np.ndarray:
+        """Decode the rest of the stream, then slice it."""
+        return slice_dataset(np.frombuffer(resource.read(), np.int16), windows)
 
 
 class TestDerivedRead:
@@ -158,6 +171,54 @@ class TestDerivedRead:
         reader.version = ""
         assert reader.get_format("memory") == (reader.name, "")
         assert reader.get_format("other") is False
+
+
+class TestSourceLoading:
+    """A reader with only read_array serves every source of a resource."""
+
+    def test_default_read_prepares_each_key_once(self, monkeypatch):
+        """The default loader reuses one reader for repeated windows of a key."""
+        prepared = []
+        original = FiberIO._prepare_array_reader
+
+        def counted(self, resource, *, key=""):
+            prepared.append(key)
+            return original(self, resource, key=key)
+
+        monkeypatch.setattr(FiberIO, "_prepare_array_reader", counted)
+        reader = _ArrayReader()
+        requests = [(((0, 2),), "part"), (((2, 6), (1, 3)), "part"), ((), "other")]
+        with IOResourceManager("memory") as manager:
+            _, load = reader._prepare_read(manager, True)
+            out = list(load(requests))
+        np.testing.assert_array_equal(out[0], reader.data[0:2])
+        np.testing.assert_array_equal(out[1], reader.data[2:6, 1:3])
+        np.testing.assert_array_equal(out[2], reader.data)
+        assert reader.calls == requests
+        assert prepared == ["part", "other"]
+
+    def test_windows_reach_read_array(self):
+        """Each source's windows reach read_array as they are."""
+        reader = FiberIO.manager.get_fiberio(format=_ArrayReader.name, version="1")
+        reader.calls.clear()
+        source = ArraySource(path="memory", format=reader.name, version="1", key="part")
+        source = source.describe(reader.data.shape, reader.data.dtype)
+        with io_core._open_array_reader(source) as load:
+            first, second = load(source[0:2]), load(source[2:6, 1:3])
+        np.testing.assert_array_equal(first, reader.data[0:2])
+        np.testing.assert_array_equal(second, reader.data[2:6, 1:3])
+        assert reader.calls == [(((0, 2), (0, 8)), "part"), (((2, 6), (1, 3)), "part")]
+
+    def test_stream_rewound_for_each_read(self, tmp_path):
+        """A shared stream is rewound before each read."""
+        path = tmp_path / "stream.bin"
+        data = np.arange(10, dtype=np.int16)
+        path.write_bytes(data.tobytes())
+        source = ArraySource(path=str(path), format=_StreamReader.name, version="1")
+        source = source.describe(data.shape, data.dtype)
+        with io_core._open_array_reader(source) as load:
+            parts = [load(source[0:4]), load(source[4:])]
+        np.testing.assert_array_equal(np.concatenate(parts), data)
 
 
 class TestBorrowedHandles:

@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
+import dascore as dc
 from dascore.core.lazy_array import LazyArray, concat, stack
 from dascore.core.source import ArraySource
 
@@ -54,6 +55,16 @@ def deep():
         path="/data/deep.h5", format="DASDAE", version="1", origin_id="b" * 32
     ).describe((1000, *[2] * 11), np.float32)
     return LazyArray.from_sources([whole[x : x + 1] for x in range(1000)])
+
+
+@pytest.fixture(scope="module")
+def fragments(tmp_path_factory):
+    """One small stored file, read as 256 one-row members."""
+    path = tmp_path_factory.mktemp("lazy_load") / "fragments.h5"
+    patch = dc.get_example_patch("random_das", shape=(256, 1024))
+    dc.write(patch, path, "DASDAE")
+    source = dc.read(path)[0]._source
+    return LazyArray.from_sources([source[x : x + 1] for x in range(256)])
 
 
 @pytest.fixture(scope="module")
@@ -124,3 +135,12 @@ class TestTableBenchmarks:
     def test_to_frame(self, array):
         """Time the long frame of a big table."""
         array.to_frame()
+
+
+class TestLoadBenchmarks:
+    """Benchmarks of reading members from storage."""
+
+    @pytest.mark.benchmark
+    def test_load_members_of_one_file(self, fragments):
+        """Time loading many small members of one file."""
+        fragments.load()

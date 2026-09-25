@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import hashlib
+from contextlib import contextmanager
 from dataclasses import replace
 from itertools import pairwise, product
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
@@ -25,10 +27,11 @@ from dascore.core.lazy_array import (
     stack,
 )
 from dascore.core.source import ArraySource
-from dascore.exceptions import ParameterError
+from dascore.exceptions import InvalidFiberIOError, ParameterError
 from dascore.io import core as io_core
 from dascore.utils.array_api import backend_name
 from dascore.utils.downloader import fetch
+from dascore.utils.hdf5 import H5Reader
 from dascore.utils.identity import H
 
 
@@ -77,6 +80,15 @@ def two_sources(two_files):
 
 
 @pytest.fixture(scope="module")
+def two_keys(patch, tmp_path_factory):
+    """Two patches of different data in one DASDAE file, read back."""
+    path = tmp_path_factory.mktemp("lazy_keys") / "keys.h5"
+    small = patch.select(distance=(0, 20), time=(0, 30), samples=True)
+    dc.write(dc.spool([small, small.new(data=small.data * 2)]), path, "dasdae")
+    return list(dc.read(path))
+
+
+@pytest.fixture(scope="module")
 def joined(two_sources):
     """The two files, joined along their first axis."""
     return LazyArray.from_sources(two_sources)
@@ -84,12 +96,45 @@ def joined(two_sources):
 
 @pytest.fixture()
 def reads(monkeypatch):
-    """Count the arrays the loader reads."""
+    """Record each source the loader reads, whatever reads it."""
     calls = []
-    original = io_core._load_array_source
-    monkeypatch.setattr(
-        io_core, "_load_array_source", lambda x: calls.append(x) or original(x)
-    )
+    original = io_core._open_array_reader
+
+    @contextmanager
+    def recorded(source):
+        with original(source) as load:
+            yield lambda x: calls.append(x) or load(x)
+
+    monkeypatch.setattr(io_core, "_open_array_reader", recorded)
+    return calls
+
+
+@pytest.fixture()
+def handles(monkeypatch):
+    """Record every HDF5 handle opened, and how many others were open then."""
+    opened, busy = [], []
+    original = H5Reader.get_handle.__func__
+
+    def get_handle(cls, resource):
+        busy.append(sum(x.id.valid for x in opened))
+        opened.append(out := original(cls, resource))
+        return out
+
+    monkeypatch.setattr(H5Reader, "get_handle", classmethod(get_handle))
+    return SimpleNamespace(opened=opened, busy=busy)
+
+
+@pytest.fixture()
+def lookups(monkeypatch):
+    """Count the HDF5 objects looked up by name."""
+    calls = []
+    original = h5py.Group.__getitem__
+
+    def getitem(group, name):
+        calls.append(name)
+        return original(group, name)
+
+    monkeypatch.setattr(h5py.Group, "__getitem__", getitem)
     return calls
 
 
@@ -1229,11 +1274,12 @@ class TestIdentity:
         values = {"a": 0, "b": 10, "c": 20, "d": 30}
         first = LazyArray.from_sources(sources[:2])
         second = LazyArray.from_sources(sources[2:])
-        monkeypatch.setattr(
-            io_core,
-            "_load_array_source",
-            lambda x: np.array([values[x.path]], "i8"),
-        )
+
+        @contextmanager
+        def fake(source):
+            yield lambda x: np.array([values[x.path]], "i8")
+
+        monkeypatch.setattr(io_core, "_open_array_reader", fake)
         assert first.load().tolist() == [0, 10]
         assert second.load().tolist() == [20, 30]
         assert first.data_id != second.data_id
@@ -1818,6 +1864,87 @@ class TestLoad:
         """Each member is read once, through its own source."""
         assert np.array_equal(joined.load(), patch.data)
         assert len(reads) == 2
+
+    def test_one_open_for_many_members(self, two_sources, patch, handles, lookups):
+        """Members of one file share its handle and its dataset lookups."""
+        source = two_sources[0]
+        many = LazyArray.from_sources([source[x : x + 10] for x in range(0, 100, 10)])
+        LazyArray.from_source(source[0:10]).load()
+        alone = len(handles.opened), len(lookups)
+        assert np.array_equal(many.load(), patch.data[:100])
+        assert (len(handles.opened), len(lookups)) == (2 * alone[0], 2 * alone[1])
+        assert not any(x.id.valid for x in handles.opened)
+
+    def test_interleaved_files(self, two_sources, patch, handles):
+        """Members alternating between files are read a file at a time."""
+        first, second = two_sources
+        parts = [
+            part
+            for start in range(0, 100, 25)
+            for part in (first[start : start + 25], second[start : start + 25])
+        ]
+        # The second file starts at row 100 of the patch.
+        expected = np.concatenate(
+            [
+                patch.data[offset + start : offset + start + 25]
+                for start in range(0, 100, 25)
+                for offset in (0, 100)
+            ]
+        )
+        assert np.array_equal(LazyArray.from_sources(parts).load(), expected)
+        assert handles.busy == [0, 0]
+        assert not any(x.id.valid for x in handles.opened)
+
+    def test_keys_of_one_file(self, two_keys, handles, reads):
+        """Several keys, logical or stored, are read through one handle."""
+        first, second = (x._source for x in two_keys)
+        one, two = (x.data for x in two_keys)
+        raw = replace(first, key=f"/waveforms/{first.key}/data")
+        parts = [first[0:4], second[4:8], raw[8:12], second[12:16], first[16:]]
+        expected = [one[0:4], two[4:8], one[8:12], two[12:16], one[16:]]
+        out = LazyArray.from_sources(parts).load()
+        assert np.array_equal(out, np.concatenate(expected))
+        assert len(handles.opened) == 1 and len(reads) == len(parts)
+
+    def test_constants_transposes_and_casts(self, two_sources, patch, handles):
+        """Stored members of one file are grouped around constants and casts."""
+        source = two_sources[0][0:4, 0:6]
+        data = patch.data[0:4, 0:6]
+        pieces = [source[0:2], source[2:4]]
+        rounded = LazyArray.from_sources(pieces, cast_via=["float16", None])
+        array = concat(
+            [
+                LazyArray.from_source(source).transpose(),
+                constant((6, 4), 7.0),
+                rounded.transpose(),
+            ],
+            axis=0,
+        )
+        half = np.concatenate([data[0:2].astype(np.float16), data[2:4]])
+        expected = np.concatenate([data.T, np.full((6, 4), 7.0), half.T])
+        assert np.array_equal(array.load(), expected.astype(array.dtype))
+        assert len(handles.opened) == 1
+
+    def test_changed_resource_raises_and_closes(self, two_sources, handles):
+        """A member which no longer matches its source is refused, not cast."""
+        stale = replace(two_sources[0], dtype=np.dtype(np.float32))
+        array = LazyArray.from_sources([stale[0:10], stale[10:20]])
+        with pytest.raises(InvalidFiberIOError, match="may have changed"):
+            array.load()
+        assert len(handles.opened) == 1 and not handles.opened[0].id.valid
+
+    @pytest.mark.parametrize("error", [ValueError, KeyboardInterrupt])
+    def test_placing_failure_closes(self, two_sources, handles, monkeypatch, error):
+        """A failure between reads still releases the open resource."""
+
+        def fail(data, axes):
+            raise error("placing failed")
+
+        monkeypatch.setattr(lazy_module, "_to_output", fail)
+        array = LazyArray.from_sources([two_sources[0][0:10], two_sources[0][10:20]])
+        with pytest.raises(error, match="placing failed"):
+            array.load()
+        assert len(handles.opened) == 1 and not handles.opened[0].id.valid
 
     def test_numpy_asks_for_it(self, lazy, patch):
         """Numpy can ask for the array, with or without a dtype."""

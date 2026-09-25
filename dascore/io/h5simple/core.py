@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 import numpy as np
 
 import dascore as dc
@@ -38,8 +40,12 @@ class H5Simple(FiberIO):
 
         The node is found by name; no coordinate values are read.
         """
+        return self._prepare_array_reader(resource, key=key)(windows)
+
+    def _prepare_array_reader(self, resource: H5Reader, *, key: str = ""):
+        """Find the data node once, for any number of windows."""
         data_node, _, _ = _get_nodes(resource)
-        return slice_dataset(data_node, windows)
+        return partial(slice_dataset, data_node)
 
     def _prepare_read(self, manager, snap):
         """Reuse the data node found while reading metadata."""
