@@ -20,12 +20,70 @@ import numpy as np
 import pandas as pd
 
 from dascore.exceptions import ParameterError, UnitError
-from dascore.units import Quantity, is_data_size, is_percent
-from dascore.utils.time import is_datetime64, is_timedelta64, to_float, to_timedelta64
+from dascore.units import (
+    DimensionalityError,
+    Quantity,
+    convert_units,
+    get_quantity,
+    is_data_size,
+    is_percent,
+)
+from dascore.utils.time import (
+    dtype_time_like,
+    is_datetime64,
+    is_timedelta64,
+    to_float,
+    to_timedelta64,
+)
 
 # The default continuity tolerance, in samples; looser values warn when
 # they force merges (#662).
 DEFAULT_TOLERANCE = 1.5
+
+
+def _quantity_to_dim_value(quant, dtype, units, prefix):
+    """
+    Convert a (non-size) length quantity into a dimension's own scalar.
+
+    ``units`` are the dimension's units; ``...`` means none were recorded.
+    ``prefix`` opens the error messages.
+    """
+    if dtype_time_like(dtype):
+        try:
+            seconds = quant.to("s").magnitude
+        except DimensionalityError:
+            msg = (
+                f"{prefix}: the coordinate is time-like, so the "
+                "value must have units of time."
+            )
+            raise UnitError(msg) from None
+        try:
+            return to_timedelta64(seconds)
+        except OverflowError:
+            msg = f"{prefix}: it is too large to express as a time."
+            raise ParameterError(msg) from None
+    if units is ...:
+        # envelopes are native magnitudes, so there is nothing to convert to
+        msg = (
+            f"{prefix}: the frame records no units for the coordinate, "
+            "so a unit-bearing length is ambiguous."
+        )
+        raise UnitError(msg)
+    if units is None or pd.isnull(units) or units == "":
+        msg = (
+            f"{prefix}: the coordinate has no units, so a "
+            "unit-bearing length is ambiguous."
+        )
+        raise UnitError(msg)
+    try:
+        # A length is a DELTA: converting through two anchor points cancels
+        # an affine unit's offset (20 degC of extent is 36 degF, never 68).
+        magnitude, from_units = float(quant.magnitude), str(quant.units)
+        anchor = convert_units(0.0, to_units=units, from_units=from_units)
+        return convert_units(magnitude, to_units=units, from_units=from_units) - anchor
+    except (DimensionalityError, UnitError):
+        msg = f"{prefix}: incompatible with the coordinate's units of {units}."
+        raise UnitError(msg) from None
 
 
 def _check_tolerance_value(value, name, shown=None, *, allow_infinite=False):
@@ -73,10 +131,9 @@ class GapTolerance:
     Two constructors, one predicate. ``samples(k)`` allows ``k`` steps
     between neighbouring samples (``k = 1`` is contiguity); ``absolute(q)``
     allows one step plus ``q`` in the coordinate's own units, so the excess
-    over the step is what is bounded. An absolute quantity or timedelta is
-    converted into the coordinate's own scalar by the caller which knows
-    the units (a coordinate's ``_gap_tolerance``, a chunk cell's
-    ``_cell_tolerance``); until then `is_gap` cannot be asked of it.
+    over the step is what is bounded. `resolve` converts an absolute
+    quantity or timedelta into a coordinate's own scalar; until then
+    `is_gap` cannot be asked of it.
 
     Examples
     --------
@@ -150,6 +207,25 @@ class GapTolerance:
             tolerance = float(tolerance.m_as("dimensionless"))
         _check_tolerance_value(tolerance, name, allow_infinite=True)
         return cls(count=float(tolerance))
+
+    def resolve(self, dtype, units, name: str = "tolerance") -> GapTolerance:
+        """
+        Convert an absolute excess into a coordinate's own scalar.
+
+        A plain number is already in coordinate units (seconds for time);
+        a timedelta against a numeric coordinate is a length in seconds.
+        """
+        excess, time_like = self.excess, dtype_time_like(dtype)
+        if self.count is not None:
+            return self
+        if is_timedelta64(excess) and not time_like:
+            excess = get_quantity(f"{to_float(excess)} s")
+        if isinstance(excess, Quantity):
+            prefix = f"Cannot use a tolerance of {excess} for {name!r}"
+            excess = _quantity_to_dim_value(excess, dtype, units, prefix)
+        elif time_like:
+            excess = to_timedelta64(excess)
+        return GapTolerance.absolute(excess)
 
     def is_gap(self, delta, step):
         """
@@ -301,12 +377,11 @@ def get_gap_edges(coord, tolerance: GapTolerance | None = None):
         step = np.median(np.abs(diffs))
     gap_mask = np.zeros(len(diffs), dtype=bool)
     if tolerance is not None:
+        # time in whole nanoseconds, whose rounding the tolerance allows for
         raw = np.asarray(getattr(coord, "values", coord))
-        if tolerance.count is not None and raw.dtype.kind in "mM":
-            # in whole nanoseconds, whose rounding the tolerance allows for
-            gap_mask = tolerance.is_gap(np.diff(raw), to_timedelta64(step))
-        else:
-            gap_mask = tolerance.is_gap(numeric_diffs, _to_numeric([step])[0])
+        raw_step = to_timedelta64(step) if raw.dtype.kind in "mM" else step
+        tolerance = tolerance.resolve(raw.dtype, getattr(coord, "unit_str", None))
+        gap_mask = tolerance.is_gap(np.diff(raw), raw_step)
     if not np.any(gap_mask):
         edges = np.concatenate(
             (

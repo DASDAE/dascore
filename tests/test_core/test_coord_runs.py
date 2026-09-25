@@ -617,6 +617,13 @@ class TestReviewFindings:
         assert len(seams) == 2 and pd.isnull(seams["excess"].iloc[0])
         assert coord.get_discontinuities("gaps")["index"].tolist() == [4]
 
+    def test_seam_after_stored_labels_uses_declared_step(self):
+        """Stored labels expect the declared step across a seam."""
+        first = NumericCoord.from_labels(np.array([0, 1, 2]), step=1)
+        second = NumericCoord.from_labels(np.array([5, 6]), step=1)
+        seams = concat_coords(first, second).get_discontinuities()
+        assert seams["excess"].tolist() == [2]
+
     def test_waterfall_paints_gaps_by_declared_step(self):
         """The mesh opens a band wherever the declared step says a sample is missing."""
         pytest.importorskip("matplotlib")

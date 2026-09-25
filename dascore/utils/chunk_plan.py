@@ -37,9 +37,7 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.units import (
-    DimensionalityError,
     Quantity,
-    carries_units,
     convert_units,
     get_byte_count,
     get_quantity,
@@ -50,7 +48,12 @@ from dascore.utils.attrs import known_only, validate_conflict
 from dascore.utils.chunk import get_intervals
 from dascore.utils.docs import compose_docstring
 from dascore.utils.explicit_ranges import ExplicitRanges, explicit_ranges
-from dascore.utils.gaps import DEFAULT_TOLERANCE, GapTolerance, gap_boundaries
+from dascore.utils.gaps import (
+    DEFAULT_TOLERANCE,
+    GapTolerance,
+    _quantity_to_dim_value,
+    gap_boundaries,
+)
 from dascore.utils.misc import (
     _CanonicalRange,
     express_range_for_coord,
@@ -550,28 +553,8 @@ def _sampling_group(step: pd.Series, tolerance: float) -> pd.Series:
 
 def _cell_tolerance(tolerance: GapTolerance, sub, name) -> GapTolerance:
     """Resolve an absolute tolerance into one cell's own units."""
-    excess = tolerance.excess
-    if tolerance.count is not None:
-        return tolerance
-    start, _, _ = get_interval_columns(sub, name)
-    time_like = is_datetime64(start.dtype) or is_timedelta64(start.dtype)
-    if not carries_units(excess):
-        # already in coordinate units, which for time are seconds
-        return GapTolerance.absolute(to_timedelta64(excess)) if time_like else tolerance
-    if isinstance(excess, Quantity):
-        shown = excess
-    else:
-        # said in seconds, which is what a timedelta measures and how
-        # the message reads back
-        shown = f"{to_float(excess)} s"
-        if time_like:
-            return tolerance
-        # A numeric coordinate can still be measured in time (a relative
-        # time axis, say), so the timedelta converts like any quantity.
-        excess = get_quantity(f"{to_float(excess)} s")
-    prefix = f"Cannot use a tolerance of {shown} for {name!r}"
-    value = _quantity_to_dim_value(excess, sub, name, start.dtype, prefix=prefix)
-    return GapTolerance.absolute(value)
+    units = sub[f"_{name}_units"].iloc[0] if f"_{name}_units" in sub else ...
+    return tolerance.resolve(sub[f"{name}_min"].dtype, units, name)
 
 
 def _continuity_group(start, stop, step, tolerance: GapTolerance) -> pd.Series:
@@ -1022,60 +1005,6 @@ def _packing_factor(sub: pd.DataFrame, name: str, step_float: float) -> float:
     return 1.0 if packing < 1 + 1e-9 else packing
 
 
-def _quantity_to_dim_value(quant, sub, name, start_dtype, prefix=None):
-    """
-    Convert a (non-size) quantity into the chunked dimension's units.
-
-    `prefix` opens the error messages; it names what the quantity was
-    for, since the same conversion serves a chunk length and a
-    continuity tolerance alike.
-    """
-    prefix = prefix if prefix is not None else f"Cannot chunk {name!r} by {quant}"
-    if is_datetime64(start_dtype) or is_timedelta64(start_dtype):
-        try:
-            seconds = quant.to("s").magnitude
-        except DimensionalityError:
-            msg = (
-                f"{prefix}: the coordinate is time-like, so the "
-                "value must have units of time."
-            )
-            raise UnitError(msg) from None
-        try:
-            return to_timedelta64(seconds)
-        except OverflowError:
-            msg = f"{prefix}: it is too large to express as a time."
-            raise ParameterError(msg) from None
-    units_col = f"_{name}_units"
-    if units_col in sub.columns:
-        units = sub[units_col].iloc[0]
-        if units is None or pd.isnull(units) or units == "":
-            msg = (
-                f"{prefix}: the coordinate has no units, so a "
-                "unit-bearing length is ambiguous."
-            )
-            raise UnitError(msg)
-        try:
-            # A length is a DELTA: converting through two anchor points
-            # cancels an affine unit's offset (20 degC of extent is 36
-            # degF, never 68), and convert_units also accepts scaled
-            # unit spellings that pint's .to() rejects.
-            magnitude = float(quant.magnitude)
-            from_units = str(quant.units)
-            anchor = convert_units(0.0, to_units=units, from_units=from_units)
-            end = convert_units(magnitude, to_units=units, from_units=from_units)
-            return end - anchor
-        except (DimensionalityError, UnitError):
-            msg = f"{prefix}: incompatible with the coordinate's units of {units}."
-            raise UnitError(msg) from None
-    # A frame with no units column states no units at all; envelopes are
-    # native magnitudes, so there is nothing to convert the quantity to.
-    msg = (
-        f"{prefix}: the frame records no units for the coordinate, "
-        "so a unit-bearing length is ambiguous."
-    )
-    raise UnitError(msg)
-
-
 def _resolve_partition_length(value, overlap, sub, name, size_step, start_dtype):
     """
     Resolve one partition's chunk length and overlap.
@@ -1104,7 +1033,10 @@ def _resolve_partition_length(value, overlap, sub, name, size_step, start_dtype)
                 "or the coordinate's units."
             )
             raise UnitError(msg)
-        return _quantity_to_dim_value(val, sub, name, start_dtype)
+        units_col = f"_{name}_units"
+        units = sub[units_col].iloc[0] if units_col in sub.columns else ...
+        prefix = f"Cannot chunk {name!r} by {val}"
+        return _quantity_to_dim_value(val, start_dtype, units, prefix)
 
     value_out = _resolve(value, False)
     overlap_out = _resolve(overlap, True)

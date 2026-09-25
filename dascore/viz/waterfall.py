@@ -109,7 +109,7 @@ def _insert_gap_bands(data, gap_mask, axis):
     return out
 
 
-def _plot_with_mesh(ax, data, dims, coords, cmap, gap_color, gap_factor):
+def _plot_with_mesh(ax, data, dims, coords, cmap, gap_color, tolerance):
     """Plot irregularly sampled data using a quadrilateral mesh.
 
     Returns the mesh and, per dimension, the cell edges it was drawn from
@@ -119,9 +119,6 @@ def _plot_with_mesh(ax, data, dims, coords, cmap, gap_color, gap_factor):
     mesh_data = np.ma.asarray(data)
     edges = {}
     cells = {}
-    # a gap is a spacing past gap_factor steps, measured against the
-    # coordinate's declared step where it has one
-    tolerance = GapTolerance.samples(gap_factor) if gap_color is not None else None
     for axis, dim in enumerate(dims):
         dim_edges, gap_mask = get_gap_edges(coords[dim], tolerance)
         if gap_color is not None:
@@ -166,7 +163,7 @@ def _bounds_fit_image(coords, dims):
     return True
 
 
-def _plot_with_bounds(ax, data, patch, cmap, gap_color, gap_factor):
+def _plot_with_bounds(ax, data, patch, cmap, gap_color, tolerance):
     """Draw explicit cells individually, leaving unstated positions uncovered."""
     cells = {}
     for dim in patch.dims:
@@ -186,9 +183,6 @@ def _plot_with_bounds(ax, data, patch, cmap, gap_color, gap_factor):
                 len(patch.get_coord(dim)),
             )
         else:
-            tolerance = (
-                GapTolerance.samples(gap_factor) if gap_color is not None else None
-            )
             cells[dim] = mesh_cell_edges(
                 *get_gap_edges(patch.get_coord(dim), tolerance)
             )
@@ -336,6 +330,9 @@ def waterfall(
     # Validate inputs
     patch = _validate_patch_dims(patch)
     _validate_gap_factor(gap_factor)
+    # a gap is a spacing past gap_factor steps, measured against the
+    # coordinate's declared step where it has one
+    tolerance = GapTolerance.samples(gap_factor) if gap_color is not None else None
     dims = patch.dims
     dims_r = tuple(reversed(dims))
     # Before an axes exists, so a refused label_coord leaves no figure
@@ -364,7 +361,7 @@ def waterfall(
         not use_image or not _bounds_fit_image(patch.coords, dims)
     )
     if explicit_cells:
-        im, cells = _plot_with_bounds(ax, data, patch, cmap, gap_color, gap_factor)
+        im, cells = _plot_with_bounds(ax, data, patch, cmap, gap_color, tolerance)
         if plan is not None:
             label_edges = cells[plan.dim]
     elif use_image or not all(is_monotonic_and_finite(x) for x in coords.values()):
@@ -399,7 +396,7 @@ def waterfall(
             dim_coords,
             cmap,
             gap_color=gap_color,
-            gap_factor=gap_factor,
+            tolerance=tolerance,
         )
         if plan is not None:
             label_edges = mesh_cell_edges(*cells[plan.dim])

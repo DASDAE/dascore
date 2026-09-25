@@ -1748,7 +1748,7 @@ class Spool(NodeRepr, NamespaceOwner):
             # a sample or relative selection resolves against the whole
             # patch at load, so its runs cannot be planned apart
             if not patch_local:
-                working = self._runs_as_members(working, dim)
+                working = self._with_runs(working, dim, modified=True)
                 base = base[base["_patch_row"].isin(working["_patch_row"])]
         return base.reset_index(drop=True), working.reset_index(drop=True)
 
@@ -1881,41 +1881,26 @@ class Spool(NodeRepr, NamespaceOwner):
         split = split[split[min_col] <= split[max_col]]
         return split[df.columns].reset_index(drop=True), list(runs[key].unique())
 
-    def _with_runs(self, df: pd.DataFrame, dim: str) -> pd.DataFrame:
+    def _with_runs(self, df: pd.DataFrame, dim: str, modified=False) -> pd.DataFrame:
         """
         The relation with each patch split into the runs its index states.
 
         A segmented coordinate is linked to its runs, so a patch holding a
-        hole becomes one row per run and the reports see the hole as they
-        see one between patches. Patches without runs of one step, which
-        is nearly all of them, pass through untouched.
+        hole becomes one row per run and reports and plans see the hole as
+        they see one between patches. Patches without runs of one step, which
+        is nearly all of them, pass through untouched. ``modified`` marks run
+        rows to load as selections of their patch; `coalesce_runs` reads the
+        runs landing in one output back as one member.
         """
         split, ids = self._run_rows(df, dim)
         if not ids:
             return df
-        whole = df[~df["_patch_row"].isin(ids)]  # reports carry no `_index_row`
-        return pd.concat([whole, split], ignore_index=True)
-
-    def _runs_as_members(self, working: pd.DataFrame, dim: str) -> pd.DataFrame:
-        """
-        Plan each run of a patch as a member of its own.
-
-        A run row keeps its patch's id, states the run's envelope and step,
-        and is marked modified so it loads as a selection of the patch. A
-        hole wider than the tolerance then ends an output as a gap between
-        patches does; `coalesce_runs` reads the runs landing in one output
-        back as one member.
-        """
-        split, ids = self._run_rows(working, dim)
-        if not ids:
-            return working
-        kept = working[~working["_index_row"].isin(ids)]
-        working = pd.concat(
-            [kept, split.assign(_modified=True)],
-            ignore_index=True,
-        )
-        working["_modified"] = working["_modified"].fillna(False).astype(bool)
-        return working
+        key = "_index_row" if "_index_row" in df.columns else "_patch_row"
+        split = split.assign(_modified=True) if modified else split
+        out = pd.concat([df[~df[key].isin(ids)], split], ignore_index=True)
+        if modified:
+            out["_modified"] = out["_modified"].fillna(False).astype(bool)
+        return out
 
     def get_gaps(
         self,
