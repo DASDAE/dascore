@@ -245,6 +245,96 @@ class TestMissing:
         )
 
 
+class TestFractionalGaps:
+    """Gap consumers retain the cadence and phase of fractional grids."""
+
+    @pytest.fixture(params=[1024, 3000])
+    def full(self, request):
+        """A fractional grid whose rounded labels alternate spacings."""
+        return get_coord(start=T0, step=Fraction(1, request.param), shape=(30,))
+
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_missing_labels(self, full, reverse):
+        """Holes are slices of the original grid, including after reversal."""
+        if reverse:
+            full = full[::-1]
+        coord = concat_coords(full[2:7], full[11:18], full[22:])
+        missing = coord.missing()
+        assert coord.step_exact == full.step_exact
+        assert missing.count == 8
+        np.testing.assert_array_equal(
+            missing.positions(), np.concatenate([full.values[7:11], full.values[18:22]])
+        )
+
+    def test_one_verdict(self, full):
+        """A one-sample hole meets a two-step spacing limit everywhere."""
+        coord = concat_coords(full[:5], full[6:])
+        assert coord.get_discontinuities("gaps", tolerance=float(full.step_exact)).empty
+        assert coord.get_discontinuities("gaps", pd.Timedelta(milliseconds=1)).empty
+        assert coord.get_discontinuities("gaps", GapTolerance.samples(2)).empty
+        assert len(coord.get_discontinuities("gaps", GapTolerance.samples(1.5))) == 1
+        assert not get_gap_edges(coord, GapTolerance.samples(2))[1].any()
+        assert get_gap_edges(coord, GapTolerance.samples(1.5))[1].sum() == 1
+
+    @pytest.mark.parametrize("one_patch", [False, True])
+    @pytest.mark.parametrize("selected", [False, True])
+    def test_spool(self, full, one_patch, selected):
+        """Indexed run seams and boundaries between patches agree."""
+        coords = (full[:5], full[6:])
+        if one_patch:
+            coords = (concat_coords(*coords),)
+        patches = [
+            dc.Patch(data=np.ones(len(c)), coords={"time": c}, dims=("time",))
+            for c in coords
+        ]
+        spool = dc.spool(patches)
+        if selected:
+            spool = spool.select(time=(full.values[2], full.values[-3]))
+            full = full[2:-2]
+        assert spool.get_gaps(tolerance=2).empty
+        assert len(spool.get_gaps(tolerance=1.5)) == 1
+        assert len(spool.chunk(time=None, tolerance=1.5)) == 2
+        out = spool.chunk(time=None, tolerance=2, fill_value=np.nan)
+        assert len(out) == 1
+        np.testing.assert_array_equal(out[0].get_coord("time").values, full.values)
+        assert np.flatnonzero(np.isnan(out[0].data)).tolist() == [3 if selected else 5]
+
+    def test_fill_limit(self, full):
+        """An absolute fill limit retains its fractional nanosecond."""
+        coord = concat_coords(full[:5], full[6:])
+        patch = dc.Patch(
+            data=np.ones(len(coord)), coords={"time": coord}, dims=("time",)
+        )
+        filled = patch.fill_gaps(time=float(full.step_exact))
+        np.testing.assert_array_equal(filled.get_coord("time").values, full.values)
+        assert patch.fill_gaps(time=float(full.step_exact) * 0.99) is patch
+
+    def test_metadata_only(self, monkeypatch):
+        """A long outage is counted without allocating the coordinate labels."""
+        full = get_coord(start=T0, step=Fraction(1, 1024), shape=(3_000_000_000,))
+        coord = concat_coords(full[:5], full[-5:])
+
+        def refuse_values(self):
+            raise AssertionError("materialized the coordinate")
+
+        monkeypatch.setattr(NumericCoord, "values", property(refuse_values))
+        assert coord.missing().count == 2_999_999_990
+
+    def test_index_round_trip(self, tmp_path):
+        """A reopened file index retains fractional run phases after selection."""
+        full = get_coord(start=T0, step=Fraction(1, 3000), shape=(30,))
+        coord = concat_coords(full[:8], full[9:])
+        patch = dc.Patch(
+            data=np.ones(len(coord)), coords={"time": coord}, dims=("time",)
+        )
+        dc.write(patch, tmp_path / "gapped.h5", "dasdae")
+        dc.spool(tmp_path).update()
+        spool = dc.spool(tmp_path).select(time=(full.values[2], full.values[-3]))
+        assert spool.get_gaps(tolerance=2).empty
+        assert len(spool.get_gaps(tolerance=1.5)) == 1
+        assert len(spool.chunk(time=None, tolerance=1.5)) == 2
+
+
 class TestDiscontinuities:
     """One frame builder and one predicate for every representation."""
 

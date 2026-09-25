@@ -10,9 +10,11 @@ own spelling, converts it here, and gets one verdict for one
 
 from __future__ import annotations
 
+import math
 import warnings
 from dataclasses import dataclass
 from datetime import timedelta
+from fractions import Fraction
 from typing import Any
 
 import numpy as np
@@ -20,11 +22,54 @@ import pandas as pd
 
 from dascore.exceptions import ParameterError, UnitError
 from dascore.units import Quantity, is_data_size, is_percent
-from dascore.utils.time import is_datetime64, is_timedelta64, to_float, to_timedelta64
+from dascore.utils.time import (
+    is_datetime64,
+    is_timedelta64,
+    to_datetime64,
+    to_exact_fraction,
+    to_float,
+    to_timedelta64,
+)
 
 # The default continuity tolerance, in samples; looser values warn when
 # they force merges (#662).
 DEFAULT_TOLERANCE = 1.5
+
+
+def _exact_value(value) -> Fraction:
+    """A scalar in coordinate units, with temporal values measured in seconds."""
+    if is_datetime64(value) or is_timedelta64(value):
+        scalar = to_datetime64(value) if is_datetime64(value) else to_timedelta64(value)
+        kind = "datetime64" if is_datetime64(value) else "timedelta64"
+        ticks = np.asarray(scalar).astype(f"{kind}[ns]").astype(np.int64)
+        return Fraction(int(ticks), 1_000_000_000)
+    value = value.item() if isinstance(value, np.generic) else value
+    return to_exact_fraction(value) or Fraction(value)
+
+
+def _grid_interval(low, high, grid, *, bounds=None):
+    """Ideal bounds and cadence from an indexed exact-grid descriptor."""
+    if not isinstance(grid, tuple):
+        return None
+    num, den, phase, count = grid
+    if den == 1 and phase == 0:
+        return None  # the envelope already describes this grid exactly
+    scale = 1_000_000_000 if is_datetime64(low) or is_timedelta64(low) else 1
+    first = _exact_value(high if num < 0 else low) + Fraction(phase, den * scale)
+    step = Fraction(num, den * scale)
+    last = first + (count - 1) * step
+    low, high, step = min(first, last), max(first, last), abs(step)
+    if bounds is not None:
+        # Labels are floors in ticks. Select the ideal positions whose
+        # floored labels lie inside the requested closed interval.
+        lower = Fraction(math.ceil(_exact_value(bounds[0]) * scale), scale)
+        upper = Fraction(math.floor(_exact_value(bounds[1]) * scale) + 1, scale)
+        begin = max(0, math.ceil((lower - low) / step))
+        end = min(count - 1, math.ceil((upper - low) / step) - 1)
+        if end < begin:
+            return None
+        low, high = low + begin * step, low + end * step
+    return low, high, step
 
 
 def _check_tolerance_value(value, name, shown=None, *, allow_infinite=False):
@@ -90,6 +135,8 @@ class GapTolerance:
     # exactly one is set: the allowed spacing in steps, or in units
     count: float | None = None
     excess: Any = None
+    # Keep the user's sub-tick excess when the compatibility scalar is rounded.
+    exact_excess: Fraction | None = None
 
     def __post_init__(self):
         if (self.count is None) == (self.excess is None):
@@ -113,9 +160,9 @@ class GapTolerance:
         return cls(count=float(count))
 
     @classmethod
-    def absolute(cls, excess) -> GapTolerance:
+    def absolute(cls, excess, *, exact=None) -> GapTolerance:
         """A spacing is a gap past one step plus ``excess``, in coordinate units."""
-        return cls(excess=excess)
+        return cls(excess=excess, exact_excess=exact)
 
     @classmethod
     def from_user(cls, tolerance, name: str = "tolerance") -> GapTolerance:
@@ -150,7 +197,7 @@ class GapTolerance:
         _check_tolerance_value(tolerance, name, allow_infinite=True)
         return cls(count=float(tolerance))
 
-    def is_gap(self, delta, step):
+    def is_gap(self, delta, step, *, exact_delta=None, exact_step=None):
         """
         Whether each spacing ``delta`` is a gap against sampling ``step``.
 
@@ -159,6 +206,18 @@ class GapTolerance:
         (NaN) is never a gap against a sample count, and against an
         absolute excess the step counts as nothing.
         """
+        if exact_step is not None:
+            step = abs(exact_step)
+            delta = abs(_exact_value(delta) if exact_delta is None else exact_delta)
+            if self.count is not None:
+                return (
+                    False
+                    if np.isinf(self.count)
+                    else delta > step * _exact_value(self.count)
+                )
+            excess = self.exact_excess
+            excess = _exact_value(self.excess) if excess is None else excess
+            return delta > step + excess
         delta = np.abs(np.asarray(delta))
         step = np.abs(np.asarray(step))
         if self.count is not None:
@@ -168,7 +227,7 @@ class GapTolerance:
         return delta > margin
 
 
-def gap_boundaries(start, stop, step, tolerance: GapTolerance):
+def gap_boundaries(start, stop, step, tolerance: GapTolerance, *, exact=None):
     """
     Locate the gaps between value-ordered runs.
 
@@ -184,6 +243,8 @@ def gap_boundaries(start, stop, step, tolerance: GapTolerance):
     ``reach`` is a reported value, not just a comparand.
     """
     start, stop, step = (np.asarray(x) for x in (start, stop, step))
+    if exact is not None:
+        return _exact_boundaries(start, stop, step, tolerance, exact)
     order = np.argsort(start)
     starts, stops = start[order], stop[order]
     # runs are value-ordered regardless of coordinate orientation, so
@@ -204,6 +265,37 @@ def gap_boundaries(start, stop, step, tolerance: GapTolerance):
         has_gap[ahead] = tolerance.is_gap(starts[ahead] - reach[ahead], steps[ahead])
     has_gap[:1] = False
     return order, reach, has_gap
+
+
+def _exact_boundaries(start, stop, step, tolerance, exact):
+    """Sweep ideal endpoints when quantized labels cannot settle a boundary."""
+    intervals = [
+        interval
+        or (
+            _exact_value(lo),
+            _exact_value(hi),
+            None if pd.isnull(cadence) else _exact_value(cadence),
+        )
+        for lo, hi, cadence, interval in zip(start, stop, step, exact)
+    ]
+    order = np.argsort([x[0] for x in intervals], kind="stable")
+    reach = np.empty_like(stop)
+    gaps = np.zeros(len(start), dtype=bool)
+    furthest = int(order[0])
+    for position, i in enumerate(order):
+        lo, hi, exact_step = intervals[i]
+        end = intervals[furthest][1]
+        reach[position] = stop[furthest]
+        if position and lo > end:
+            gaps[position] = tolerance.is_gap(
+                start[i] - stop[furthest],
+                step[i],
+                exact_delta=lo - end,
+                exact_step=exact_step,
+            )
+        if hi > end:
+            furthest = int(i)
+    return order, reach, gaps
 
 
 # --- mesh edges for plotting
@@ -291,6 +383,20 @@ def get_gap_edges(coord, tolerance: GapTolerance | None = None):
     gap_mask = np.zeros(len(diffs), dtype=bool)
     if tolerance is not None:
         gap_mask = tolerance.is_gap(numeric_diffs, _to_numeric([step])[0])
+        exact = getattr(coord, "step_exact", None)
+        if exact is not None:
+            dtype = np.dtype(getattr(coord, "dtype", values.dtype))
+            scale = 1_000_000_000 if dtype.kind in "mM" else 1
+            if (exact * scale).denominator != 1:
+                # A fractional grid alternates rounded spacings even without
+                # a hole. Judge its regular interior and its seams separately.
+                gap_mask[:] = tolerance.is_gap(
+                    0, step, exact_delta=exact, exact_step=exact
+                )
+                for index, before, after, expected, delta, cadence in coord._seams():
+                    gap_mask[index - 1] = tolerance.is_gap(
+                        after - before, expected, exact_delta=delta, exact_step=cadence
+                    )
     if not np.any(gap_mask):
         edges = np.concatenate(
             (

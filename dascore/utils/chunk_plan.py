@@ -50,7 +50,13 @@ from dascore.utils.attrs import known_only, validate_conflict
 from dascore.utils.chunk import get_intervals
 from dascore.utils.docs import compose_docstring
 from dascore.utils.explicit_ranges import ExplicitRanges, explicit_ranges
-from dascore.utils.gaps import DEFAULT_TOLERANCE, GapTolerance, gap_boundaries
+from dascore.utils.gaps import (
+    DEFAULT_TOLERANCE,
+    GapTolerance,
+    _exact_value,
+    _grid_interval,
+    gap_boundaries,
+)
 from dascore.utils.misc import (
     _CanonicalRange,
     express_range_for_coord,
@@ -555,9 +561,16 @@ def _cell_tolerance(tolerance: GapTolerance, sub, name) -> GapTolerance:
         return tolerance
     start, _, _ = get_interval_columns(sub, name)
     time_like = is_datetime64(start.dtype) or is_timedelta64(start.dtype)
+    exact = tolerance.exact_excess
+    if time_like and exact is None and not isinstance(excess, Quantity):
+        exact = _exact_value(excess)
     if not carries_units(excess):
         # already in coordinate units, which for time are seconds
-        return GapTolerance.absolute(to_timedelta64(excess)) if time_like else tolerance
+        return (
+            GapTolerance.absolute(to_timedelta64(excess), exact=exact)
+            if time_like
+            else tolerance
+        )
     if isinstance(excess, Quantity):
         shown = excess
     else:
@@ -565,18 +578,47 @@ def _cell_tolerance(tolerance: GapTolerance, sub, name) -> GapTolerance:
         # the message reads back
         shown = f"{to_float(excess)} s"
         if time_like:
-            return tolerance
+            return GapTolerance.absolute(excess, exact=exact)
         # A numeric coordinate can still be measured in time (a relative
         # time axis, say), so the timedelta converts like any quantity.
         excess = get_quantity(f"{to_float(excess)} s")
     prefix = f"Cannot use a tolerance of {shown} for {name!r}"
     value = _quantity_to_dim_value(excess, sub, name, start.dtype, prefix=prefix)
-    return GapTolerance.absolute(value)
+    if time_like and exact is None and isinstance(excess, Quantity):
+        exact = _exact_value(excess.m_as("s"))
+    return GapTolerance.absolute(value, exact=exact)
 
 
-def _continuity_group(start, stop, step, tolerance: GapTolerance) -> pd.Series:
+def _gap_intervals(frame, name):
+    """Exact grid endpoints where a row's rounded envelope is insufficient."""
+    grid_col, interval_col = f"_{name}_grid", f"_{name}_gap_interval"
+    grids = frame.get(grid_col)
+    if interval_col not in frame and (grids is None or not grids.notna().any()):
+        return None
+    intervals = []
+    for row in frame.to_dict("records"):
+        saved = row.get(interval_col)
+        if isinstance(saved, tuple):
+            intervals.append(saved)
+            continue
+        source = row.get(f"_{name}_source_envelope")
+        source = source if isinstance(source, dict) else row
+        intervals.append(
+            _grid_interval(
+                source[f"{name}_min"],
+                source[f"{name}_max"],
+                row.get(grid_col),
+                bounds=(row[f"{name}_min"], row[f"{name}_max"]),
+            )
+        )
+    return intervals if any(x is not None for x in intervals) else None
+
+
+def _continuity_group(
+    start, stop, step, tolerance: GapTolerance, *, exact=None
+) -> pd.Series:
     """Label maximal near-contiguous runs (spec 2.4)."""
-    order, _, has_gap = gap_boundaries(start, stop, step, tolerance)
+    order, _, has_gap = gap_boundaries(start, stop, step, tolerance, exact=exact)
     out = pd.Series(0, index=start.index, dtype=np.int64)
     out.iloc[order] = np.cumsum(has_gap)
     return out
@@ -650,6 +692,9 @@ def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
                 steps = df.loc[idx, step_name].to_numpy(dtype=float)
                 stepped = convert_units(mins + steps, to_units=target, from_units=unit)
                 df.loc[idx, step_name] = stepped - new_min
+            for col in (f"_{name}_grid", f"_{name}_gap_interval"):
+                if col in df.columns:
+                    df.loc[idx, col] = None
         df.loc[rows, unit_col] = target
     return df
 
@@ -803,7 +848,8 @@ def _partition(
         sub = df.loc[index]
         s, e, st = get_interval_columns(sub, name)
         tol = _cell_tolerance(tolerance, sub, name)
-        labels = _continuity_group(s, e, st, tol).astype(np.int64)
+        exact = _gap_intervals(sub, name)
+        labels = _continuity_group(s, e, st, tol, exact=exact).astype(np.int64)
         cont.loc[index] = labels
         if forced_merge or not (absolute or tolerance.count > DEFAULT_TOLERANCE):
             continue
@@ -816,7 +862,7 @@ def _partition(
         # By containment, not by count: a partition holding more than one
         # of the default's is one the tolerance forced together, even
         # when the counts match.
-        by_default = _continuity_group(s, e, st, default)
+        by_default = _continuity_group(s, e, st, default, exact=exact)
         forced_merge = bool(by_default.groupby(labels).nunique().gt(1).any())
     return cell + "_" + cont.astype(str), forced_merge
 
@@ -1441,7 +1487,9 @@ def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance):
         sub = df.loc[groups[label]]
         start, stop, step = get_interval_columns(sub, name)
         tol = _cell_tolerance(tolerance, sub, name)
-        row_order, reach, has_gap = gap_boundaries(start, stop, step, tol)
+        row_order, reach, has_gap = gap_boundaries(
+            start, stop, step, tol, exact=_gap_intervals(sub, name)
+        )
         found = np.flatnonzero(has_gap)
         # the row opening each gap states the step, signed as the
         # coordinate is -- only the continuity margin needs a magnitude

@@ -112,6 +112,7 @@ from dascore.utils.explicit_ranges import (
     known_coordinates,
     looks_explicit,
 )
+from dascore.utils.gaps import _grid_interval
 from dascore.utils.misc import (
     _spool_map,
     deep_equality_check,
@@ -1879,7 +1880,29 @@ class Spool(NodeRepr, NamespaceOwner):
             }
         )
         split = split[split[min_col] <= split[max_col]]
-        return split[df.columns].reset_index(drop=True), list(runs[key].unique())
+        interval_col = f"_{dim}_gap_interval"
+        intervals = [
+            _grid_interval(low, high, grid, bounds=(left, right))
+            for low, high, grid, left, right in zip(
+                split["_env_min"],
+                split["_env_max"],
+                split["_grid"],
+                split[min_col],
+                split[max_col],
+            )
+        ]
+        columns = list(df.columns)
+        if any(x is not None for x in intervals):
+            split[interval_col] = intervals
+            if interval_col not in columns:
+                columns.append(interval_col)
+        grid_col = f"_{dim}_grid"
+        if grid_col in df.columns:
+            whole = (split[min_col] == split["_env_min"]) & (
+                split[max_col] == split["_env_max"]
+            )
+            split[grid_col] = split["_grid"].where(whole, None)
+        return split[columns].reset_index(drop=True), list(runs[key].unique())
 
     def _with_runs(self, df: pd.DataFrame, dim: str) -> pd.DataFrame:
         """

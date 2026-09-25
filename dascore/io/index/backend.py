@@ -1414,7 +1414,8 @@ class SQLiteIndexBackend:
         0), and a partial index holds just those links, so an archive of
         contiguous patches answers from an empty index. Columns are
         ``patch_row``, ``run_index`` and ``_env_min``/``_env_max``/
-        ``_env_step``; no row for a patch means it states no runs.
+        ``_env_step``, plus ``_grid`` for exact grid descriptors; no row
+        for a patch means it states no runs.
         """
         sql = (
             "SELECT pc.patch_row, pc.run_index, cd.def_key, cd.data_id, "
@@ -1442,7 +1443,10 @@ class SQLiteIndexBackend:
         if runs.empty:
             return runs
         runs = self._add_envelope_objects(runs.reset_index(drop=True))
-        return runs[["patch_row", "run_index", *_ENVELOPE_COLUMNS]]
+        grids = self._grids(runs["def_key"].unique())
+        runs["_grid"] = runs["def_key"].map(grids).astype(object)
+        runs["_grid"] = runs["_grid"].where(runs["_grid"].notna(), None)
+        return runs[["patch_row", "run_index", *_ENVELOPE_COLUMNS, "_grid"]]
 
     def patch_runs(self, patch_rows) -> dict[int, list[CoordRecord]]:
         """

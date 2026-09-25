@@ -71,7 +71,7 @@ from dascore.utils.display import (
     span_text,
 )
 from dascore.utils.docs import compose_docstring, get_docstring
-from dascore.utils.gaps import GapTolerance
+from dascore.utils.gaps import GapTolerance, _exact_value
 from dascore.utils.identity import H
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
@@ -420,6 +420,7 @@ class Missing:
     # each hole as (first missing label, last missing label, how many)
     runs: tuple[tuple[Any, Any, int], ...]
     dtype: Any = None
+    _grids: tuple[Grid, ...] = ()
 
     @property
     def count(self) -> int:
@@ -451,6 +452,10 @@ class Missing:
             raise ParameterError(msg)
         if not self.runs:
             return np.array([], dtype=self.dtype)
+        if self._grids:
+            return np.concatenate(
+                [grid.labels(np.arange(grid.count), self.dtype) for grid in self._grids]
+            )
         return np.concatenate(
             [first + np.arange(n) * self.step for first, _, n in self.runs]
         )
@@ -478,7 +483,10 @@ def _discontinuity_frame(rows, kind: str, tolerance) -> pd.DataFrame:
     keeps the rows the tolerance calls gaps.
     """
     columns = ["index", "before", "after", "delta", "excess"]
-    df = pd.DataFrame(rows, columns=["index", "before", "after", "expected"])
+    df = pd.DataFrame(
+        rows,
+        columns=["index", "before", "after", "expected", "exact_delta", "exact_step"],
+    )
     # signed even for unsigned labels, which would wrap under subtraction
     df["delta"] = [_diffs([b, a])[0] for b, a in zip(df["before"], df["after"])]
     df["excess"] = [
@@ -492,6 +500,17 @@ def _discontinuity_frame(rows, kind: str, tolerance) -> pd.DataFrame:
             delta = df["delta"].to_numpy()[stated]
             step = df["expected"].to_numpy()[stated]
             keep[stated] = tolerance.is_gap(delta, step)
+        exact_rows = df[["delta", "expected", "exact_delta", "exact_step"]]
+        for i, (delta, step, exact_delta, exact_step) in enumerate(
+            exact_rows.itertuples(index=False, name=None)
+        ):
+            if isinstance(exact_step, Fraction):
+                keep[i] = tolerance.is_gap(
+                    delta,
+                    step,
+                    exact_delta=exact_delta,
+                    exact_step=exact_step,
+                )
         df = df[keep]
     return df[columns].reset_index(drop=True)
 
@@ -1067,7 +1086,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         return _discontinuity_frame(self._seams(), kind, tolerance)
 
     def _seams(self) -> list[tuple]:
-        """The ``(index, before, after, expected)`` rows of every discontinuity."""
+        """Boundary rows: index, labels, expected step, exact delta and step."""
         return []
 
     def _gap_tolerance(self, tolerance) -> GapTolerance:
@@ -1080,9 +1099,11 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         `GapTolerance` counting samples is returned unchanged, and one
         stating an excess has that excess converted likewise.
         """
+        exact = None
         if isinstance(tolerance, GapTolerance):
             if tolerance.count is not None:
                 return tolerance
+            exact = tolerance.exact_excess
             tolerance = tolerance.excess
         if tolerance is None:
             tolerance = 0
@@ -1101,6 +1122,13 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             anchor = convert_units(0.0, target, from_units)
             tolerance = convert_units(magnitude, target, from_units) - anchor
         if dtype_time_like(self.dtype):
+            # Preserve the stated excess before the timedelta view rounds it.
+            if (
+                exact is None
+                and np.ndim(tolerance) == 0
+                and np.isfinite(to_float(tolerance))
+            ):
+                exact = _exact_value(tolerance)
             tolerance = dc.to_timedelta64(tolerance)
             zero = dc.to_timedelta64(0)
         else:
@@ -1108,7 +1136,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         if tolerance < zero:
             msg = "tolerance must not be negative."
             raise ParameterError(msg)
-        return GapTolerance.absolute(tolerance)
+        return GapTolerance.absolute(tolerance, exact=exact)
 
     def missing(self) -> Missing:
         """
@@ -1982,6 +2010,12 @@ class Grid:
         """The ideal position of the first sample, in ticks."""
         return Fraction(self.origin * self.step_den + self.phase, self.step_den)
 
+    def _position(self, other: Grid) -> Fraction:
+        """The other run's ideal origin, in positions on this exact grid."""
+        return (other.ideal_origin - self.ideal_origin) / Fraction(
+            self.step_num, self.step_den
+        )
+
     def labels(self, indices, dtype) -> np.ndarray:
         """The labels at these indices, which may lie outside the run."""
         indices = np.asarray(indices)
@@ -2726,9 +2760,18 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     @property
     def step_exact(self) -> Fraction | None:
         """The exact spacing in coordinate units (seconds for time), or None."""
-        if (grid := self._grid) is not None and grid.exact:
+        if (grid := self._common_grid) is not None:
             return grid.step_exact(self.dtype)
         return super().step_exact
+
+    @property
+    @cached_method
+    def _common_grid(self) -> Grid | None:
+        """The exact grid shared by every run, including its sub-tick phase."""
+        grid = _common_grid(self.runs)
+        if grid is not None and grid.step(self.dtype) == self.step:
+            return grid
+        return None
 
     # --- indexing and selection
 
@@ -3187,6 +3230,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """
         steps = [x.step(self.dtype) if isinstance(x, Grid) else self.step for x in runs]
         for num in range(1, len(runs)):
+            previous, following = runs[num - 1], runs[num]
+            if _common_grid((previous, following)) is not None:
+                if previous._position(following) > len(previous):
+                    return False
+                continue
             step = steps[num - 1] if not _is_null(steps[num - 1]) else steps[num]
             if _is_null(step):
                 continue  # no grid stated, so no position to have skipped
@@ -3396,7 +3444,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         return median if self.sorted else -median
 
     def _seams(self) -> list[tuple]:
-        """The ``(index, before, after, expected)`` rows of every discontinuity."""
+        """Boundary rows: index, labels, expected step, exact delta and step."""
         if not self._direction() or self.ndim != 1:
             return []
         if self.runs_count == 1:
@@ -3406,7 +3454,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             diffs = _diffs(values)
             expected = self._expected_spacing()
             return [
-                (int(i) + 1, values[i], values[i + 1], expected)
+                (int(i) + 1, values[i], values[i + 1], expected, None, None)
                 for i in np.flatnonzero(diffs != expected)
             ]
         rows, offsets = [], self._run_offsets()
@@ -3414,8 +3462,43 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             prev, nxt = self.runs[num - 1], self.runs[num]
             before = self._run_labels(prev, [len(prev) - 1])[0]
             after = self._run_labels(nxt, [0])[0]
-            rows.append((int(offsets[num]), before, after, self._run_step(prev)))
+            delta = step = None
+            if (
+                isinstance(prev, Grid)
+                and isinstance(nxt, Grid)
+                and prev.exact
+                and nxt.exact
+                and (prev.step_den != 1 or nxt.step_den != 1)
+            ):
+                scale = _NS_PER_S if dtype_time_like(self.dtype) else 1
+                step = prev.step_exact(self.dtype)
+                delta = (nxt.ideal_origin - prev.ideal_origin) / scale - (
+                    len(prev) - 1
+                ) * step
+            rows.append(
+                (int(offsets[num]), before, after, self._run_step(prev), delta, step)
+            )
         return rows
+
+    def missing(self) -> Missing:
+        """The missing positions, evaluated on the original exact grid."""
+        if (grid := self._common_grid) is None or not grid.step_num:
+            return super().missing()
+        holes = []
+        for left, right in itertools.pairwise(self.runs):
+            assert isinstance(left, Grid) and isinstance(right, Grid)
+            count = int(left._position(right)) - len(left)
+            if count > 0:
+                holes.append(left.sliced(len(left), 1, count))
+        rows = tuple(
+            (
+                hole.labels(0, self.dtype)[()],
+                hole.labels(len(hole) - 1, self.dtype)[()],
+                len(hole),
+            )
+            for hole in holes
+        )
+        return Missing(self.step, rows, self.dtype, tuple(holes))
 
     def _run_step(self, run):
         """The spacing a run expects after itself, or None."""
@@ -3432,7 +3515,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """Each hole as ``(first missing label, last missing label, count)``."""
         step = self.step  # signed with the runs' direction
         rows = list(self._run_holes(self.runs[0], step))
-        for (_, before, after, _), run in zip(self._seams(), self.runs[1:]):
+        for (_, before, after, _, _, _), run in zip(self._seams(), self.runs[1:]):
             count = int(_on_grid(np.asarray([after - before]), step)[0]) - 1
             if count:
                 rows.append(_hole(before, step, count))
@@ -3513,6 +3596,23 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         )
 
 
+def _common_grid(runs) -> Grid | None:
+    """The first exact grid when every run continues its lattice in order."""
+    first = runs[0]
+    if not isinstance(first, Grid) or not first.exact:
+        return None
+    step = Fraction(first.step_num, first.step_den)
+    for prev, run in itertools.pairwise(runs):
+        if not isinstance(run, Grid) or not run.exact or not step:
+            return None
+        if Fraction(run.step_num, run.step_den) != step:
+            return None
+        position = prev._position(run)
+        if position.denominator != 1 or position < len(prev):
+            return None
+    return first
+
+
 def _runs_step(runs, declared, dtype, sources):
     """
     The grid every label of a coordinate sits on, or None.
@@ -3524,6 +3624,12 @@ def _runs_step(runs, declared, dtype, sources):
     if len(runs) == 1 and isinstance(runs[0], Grid):
         return runs[0].step(dtype)
     strict = not _is_null(declared)
+    if (grid := _common_grid(runs)) is not None:
+        scalar = grid.step(dtype)
+        if not strict or declared == scalar:
+            return scalar
+    elif not strict and all(isinstance(x, Grid) and x.exact for x in runs):
+        return None
     if strict:
         step = _declared_step(declared, dtype)
     else:
@@ -3861,6 +3967,10 @@ def _fill_same_step(coord: NumericCoord, first: Grid, other: Grid) -> bool:
 
 def _fill_position(coord: NumericCoord, anchor: Grid, piece: Grid) -> int:
     """The position on the anchor's grid nearest the piece's first label."""
+    if anchor.exact and piece.exact:
+        position = anchor._position(piece)
+        if position.denominator == 1:
+            return int(position)
     label = coord._run_labels(piece, [0])[0]
     if not anchor.exact:
         start = anchor.labels(0, coord.dtype)[()]
@@ -3889,10 +3999,16 @@ def _fill_limit(coord: NumericCoord, step: Grid, limit, samples: bool):
     excess = tolerance.excess
     if step.exact:
         exact = step.step_exact(coord.dtype)
-        if is_timedelta64(excess):
-            # the limit was rounded to whole nanoseconds; allow that rounding
+        if step.step_den == 1 and is_timedelta64(excess):
+            # Whole-tick grids retain the existing rounding of time limits.
             excess = Fraction(2 * int(to_int(excess)) + 1, 2 * _NS_PER_S)
-        return int(Fraction(excess) // abs(exact))
+            return int(excess // abs(exact))
+        excess = (
+            tolerance.exact_excess
+            if tolerance.exact_excess is not None
+            else _exact_value(excess)
+        )
+        return int(excess // abs(exact))
     scalar = step.step(coord.dtype)
     return math.floor(float(excess) / abs(float(scalar)) * (1 + _GRID_RTOL))
 
