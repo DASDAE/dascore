@@ -75,6 +75,9 @@ _FACTORIZE_ROWS = 256
 # when the layout changes, so ids from two layouts cannot meet.
 DIGEST_LAYOUT = 3
 
+# The most bytes one merged read of abutting windows holds.
+_RUN_BYTES = 1 << 24
+
 # The most axes one array may be cut on; each one doubles the corners.
 MAX_CUT_AXES = 16
 
@@ -1006,8 +1009,9 @@ class LazyArray:
         The rules are checked first, so no sample of the result is left
         uninitialized; see
         [`validate`](`dascore.core.lazy_array.LazyArray.validate`).
-        Members are read a resource at a time: each resource is opened
-        once for all of its members, and closed before the next is opened.
+        Abutting windows of one source are read as one. Members are read a
+        resource at a time: each resource is opened once for all of its
+        members, and closed before the next is opened.
         """
         block = self._block()
         _validate(block)
@@ -1327,39 +1331,46 @@ def _sources_of(block: _Block) -> list[ArraySource]:
 
 def _coalesced(block: _Block) -> _Block:
     """
-    Return the block with each run of abutting windows of one source as one member.
+    Return the block with abutting windows of one source merged into one member.
 
-    Members next to each other in placement order merge when they read one
-    source through one cast and axis map, meet along one axis in the output
-    as their windows meet in the source, and match on every other axis. The
-    array is the same, so only how many reads load it changes.
+    Neighbours in placement order merge when they read one stored numeric
+    source through one cast and axis map, abut along one axis in both output
+    and source, and match on every other axis. A run stops at `_RUN_BYTES`.
     """
     count = len(block)
     if count < 2:
         return block
     axes, members = block.axes, block.members
-    start, stop, src_start = axes["out_start"], axes["out_stop"], axes["src_start"]
-    src_axis, rows = axes["src_axis"], members.source_row
-    stored = ~members.filled
-    alike = (
-        (rows[1:] == rows[:-1])
-        & (members.cast.codes[1:] == members.cast.codes[:-1])
-        & np.all(src_axis[1:] == src_axis[:-1], axis=1)
-        & stored[1:]
-        & stored[:-1]
+    start, stop, src_axis = axes["out_start"], axes["out_stop"], axes["src_axis"]
+    rows, dtypes = members.source_row, members.sources.dtype
+    offset = start - axes["src_start"]
+    # A cast which takes its unit from the samples must see each window alone.
+    numeric = np.array([_dtype_of(x).kind in "biufc" for x in dtypes.values])
+    alike = (rows[1:] == rows[:-1]) & numeric[dtypes.codes[rows[1:]]]
+    alike &= ~members.filled[1:] & (members.cast.codes[1:] == members.cast.codes[:-1])
+    alike &= np.all(src_axis[1:] == src_axis[:-1], axis=1)
+    alike &= np.all(offset[1:] == offset[:-1], axis=1)
+    alike &= np.all(axes["src_extent"][1:] == axes["src_extent"][:-1], axis=1)
+    if not alike.any():
+        return block
+    # Boxes are never empty, so neighbours which meet differ on that axis alone.
+    differs = (start[1:] != start[:-1]) | (stop[1:] != stop[:-1])
+    along, pick = np.argmax(differs, axis=1), np.arange(count - 1)
+    joins = alike & (differs.sum(axis=1) == 1) & (src_axis[1:][pick, along] >= 0)
+    joins &= (start[1:] == stop[:-1])[pick, along]
+    # Canonical order and full cover leave no run turning to another axis.
+    assert not np.any(joins[1:] & joins[:-1] & (along[1:] != along[:-1]))
+    itemsize = max(
+        np.dtype(block.dtype).itemsize,
+        *[_dtype_of(x).itemsize for x in (*dtypes.values, *members.cast.values) if x],
     )
-    same = (start[1:] == start[:-1]) & (stop[1:] == stop[:-1])
-    same &= src_start[1:] == src_start[:-1]
-    meets = (start[1:] == stop[:-1]) & (src_axis[1:] >= 0)
-    meets &= src_start[1:] == src_start[:-1] + stop[:-1] - start[:-1]
-    # The axis each member continues its predecessor along, or -1.
-    along = np.full(count - 1, NEW_AXIS)
-    for axis in range(block.ndim):
-        others = np.delete(same, axis, axis=1).all(axis=1)
-        along[alike & meets[:, axis] & others & (along < 0)] = axis
-    joins = along >= 0
-    # A run grows along one axis; turning to another starts a new one.
-    joins[1:] &= ~(joins[:-1] & (along[1:] != along[:-1]))
+    # Bytes read so far in each member's run, cut into reads of `_RUN_BYTES`.
+    size = np.prod(stop - start, axis=1) * itemsize
+    total = np.cumsum(size)
+    new = np.r_[True, ~joins]
+    held = total - (total - size)[np.flatnonzero(new)][np.cumsum(new) - 1]
+    piece = (held - 1) // _RUN_BYTES
+    joins &= piece[1:] == piece[:-1]
     firsts = np.flatnonzero(np.r_[True, ~joins])
     if len(firsts) == count:
         return block

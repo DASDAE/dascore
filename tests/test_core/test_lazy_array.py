@@ -1858,10 +1858,13 @@ class TestLoad:
     def test_one_open_for_many_members(self, two_sources, patch, handles, lookups):
         """Members of one file share its handle and its dataset lookups."""
         source = two_sources[0]
-        many = LazyArray.from_sources([source[x : x + 10] for x in range(0, 100, 10)])
+        # Windows with gaps between them, so each is its own read.
+        spans = [(x, x + 5) for x in range(0, 100, 10)]
+        many = LazyArray.from_sources([source[a:b] for a, b in spans])
         LazyArray.from_source(source[0:10]).load()
         alone = len(handles.opened), len(lookups)
-        assert np.array_equal(many.load(), patch.data[:100])
+        expected = np.concatenate([patch.data[a:b] for a, b in spans])
+        assert np.array_equal(many.load(), expected)
         assert (len(handles.opened), len(lookups)) == (2 * alone[0], 2 * alone[1])
         assert not any(x.id.valid for x in handles.opened)
 
@@ -1918,7 +1921,7 @@ class TestLoad:
     def test_changed_resource_raises_and_closes(self, two_sources, handles):
         """A member which no longer matches its source is refused, not cast."""
         stale = replace(two_sources[0], dtype=np.dtype(np.float32))
-        array = LazyArray.from_sources([stale[0:10], stale[10:20]])
+        array = LazyArray.from_sources([stale[0:10], stale[20:30]])
         with pytest.raises(InvalidFiberIOError, match="may have changed"):
             array.load()
         assert len(handles.opened) == 1 and not handles.opened[0].id.valid
@@ -1931,7 +1934,7 @@ class TestLoad:
             raise error("placing failed")
 
         monkeypatch.setattr(lazy_module, "_to_output", fail)
-        array = LazyArray.from_sources([two_sources[0][0:10], two_sources[0][10:20]])
+        array = LazyArray.from_sources([two_sources[0][0:10], two_sources[0][20:30]])
         with pytest.raises(error, match="placing failed"):
             array.load()
         assert len(handles.opened) == 1 and not handles.opened[0].id.valid
@@ -1961,7 +1964,7 @@ class TestCoalescedReads:
     """Abutting windows of one source are read as one window."""
 
     def test_windows_of_one_file(self, two_sources, patch, reads):
-        """Consecutive windows of one file take one read."""
+        """Abutting windows of one file take one read."""
         source = two_sources[0]
         many = LazyArray.from_sources([source[x : x + 10] for x in range(0, 100, 10)])
         assert np.array_equal(many.load(), patch.data[:100])
@@ -1998,7 +2001,7 @@ class TestCoalescedReads:
         assert [x.windows[0] for x in reads] == [(0, 10), (10, 30)]
 
     def test_tiles_merge_along_one_axis(self, two_sources, patch, reads):
-        """A grid of windows merges along its rows, never into a box of runs."""
+        """Tiles merge along one axis only, so each row of tiles takes one read."""
         source = two_sources[0]
         tile = LazyArray.from_source
         rows = [
@@ -2009,9 +2012,73 @@ class TestCoalescedReads:
         assert np.array_equal(grid.load(), patch.data[:100, :10])
         assert [x.windows for x in reads] == [((0, 50), (0, 10)), ((50, 100), (0, 10))]
 
+    def test_other_axes_must_match(self, two_sources, patch, reads):
+        """Windows which meet on one axis but differ on another are read apart."""
+        source = two_sources[0]
+        array = LazyArray.from_sources([source[0:10, 0:5], source[10:20, 100:105]])
+        expected = np.concatenate([patch.data[0:10, 0:5], patch.data[10:20, 100:105]])
+        assert np.array_equal(array.load(), expected)
+        assert len(reads) == 2
+
+    def test_axis_maps_must_match(self, two_sources, patch, reads):
+        """A transposed member is not merged with a plain one of its file."""
+        source = two_sources[0]
+        plain = LazyArray.from_source(source[0:10, 0:10])
+        turned = LazyArray.from_source(source[0:10, 10:20]).transpose()
+        expected = np.concatenate([patch.data[0:10, 0:10], patch.data[0:10, 10:20].T])
+        assert np.array_equal(concat([plain, turned]).load(), expected)
+        assert len(reads) == 2
+
+    def test_square_transpose_is_not_merged(self):
+        """A transposed window of a square source is not merged with a plain one."""
+        whole = ArraySource(path="/a.h5", format="DASDAE", version="1").describe(
+            (10, 10), "f4"
+        )
+        plain = LazyArray.from_source(whole[0:5, 0:5])
+        turned = LazyArray.from_source(whole[0:5, 5:10]).transpose()
+        array = concat([plain, turned])
+        assert len(lazy_module._coalesced(array._block())) == 2
+
+    @pytest.mark.parametrize(("dtype", "merged"), [("f4", 1), ("S10", 2)])
+    def test_only_numbers_merge(self, dtype, merged):
+        """Text, whose casts may take their unit from the samples, is read apart."""
+        array = LazyArray.from_columns(
+            ["/a.h5", "/a.h5"],
+            (1,),
+            start=[[0], [1]],
+            extent=2,
+            **{**FORMAT, "source_dtype": dtype},
+        )
+        assert len(lazy_module._coalesced(array._block())) == merged
+
+    def test_extents_must_match(self):
+        """Windows of one source which state different extents are read apart."""
+        array = LazyArray.from_columns(
+            ["/a.h5", "/a.h5"], (4,), start=[[0], [4]], extent=[[8], [9]], **FORMAT
+        )
+        assert len(lazy_module._coalesced(array._block())) == 2
+
+    def test_reads_stop_at_the_byte_budget(
+        self, two_sources, patch, reads, monkeypatch
+    ):
+        """A run is cut so no read holds more than the budget."""
+        source = two_sources[0]
+        itemsize = np.dtype(patch.dtype).itemsize
+        monkeypatch.setattr(lazy_module, "_RUN_BYTES", 30 * patch.shape[1] * itemsize)
+        array = LazyArray.from_sources([source[x : x + 10] for x in range(0, 100, 10)])
+        assert np.array_equal(array.load(), patch.data[:100])
+        assert [x.windows[0] for x in reads] == [(0, 30), (30, 60), (60, 90), (90, 100)]
+
+    def test_members_over_the_budget_stay_apart(self, two_sources, monkeypatch):
+        """Members each bigger than the budget are read one at a time."""
+        monkeypatch.setattr(lazy_module, "_RUN_BYTES", 1)
+        array = LazyArray.from_sources([two_sources[0][0:10], two_sources[0][10:20]])
+        block = array._block()
+        assert lazy_module._coalesced(block) is block
+
     @pytest.mark.parametrize("seed", range(20))
     def test_random_cuts_load_alike(self, two_sources, monkeypatch, seed):
-        """Any cutting of the files loads what reading each member would."""
+        """Random cuts load the same array with or without coalescing."""
         rng = np.random.default_rng(seed)
         parts = []
         for source in two_sources:
