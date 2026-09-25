@@ -10,7 +10,7 @@ import pytest
 
 import dascore as dc
 from dascore.compat import random_state
-from dascore.exceptions import FilterValueError, ParameterError
+from dascore.exceptions import CoordError, FilterValueError, ParameterError
 from dascore.units import Hz, m, s
 from dascore.utils.patch import get_start_stop_step
 from dascore.warnings import DASCoreWarning
@@ -117,6 +117,11 @@ class TestInterpolate:
         assert out.coords.dim_map["quality"] == ("distance", "time")
         assert out.get_array("quality").shape == out.shape
 
+    def test_interpolate_into_hole(self, holey_patch):
+        """Values inside a hole come from the labels either side. See #1219."""
+        out = holey_patch.interpolate(time=np.array([70.0, 80.0]))
+        assert np.allclose(out.data, [[11 / 41, 21 / 41]])
+
 
 class TestDecimate:
     """Ensure Patch can be decimated."""
@@ -208,6 +213,17 @@ class TestDecimate:
         assert np.allclose(out.get_array("quality"), patch.get_array("quality")[::2])
         assert np.allclose(out.get_array("time2"), patch.get_array("time2"))
         assert out.coords.dim_map == patch.coords.dim_map
+
+    @pytest.mark.parametrize("filter_type", ("iir", "fir"))
+    def test_filtered_refuses_hole(self, holey_patch, filter_type):
+        """The anti-alias filter would run across the hole. See #1219."""
+        with pytest.raises(CoordError, match="evenly sampled"):
+            holey_patch.decimate(time=2, filter_type=filter_type)
+
+    def test_striding_allows_hole(self, holey_patch):
+        """Taking every other sample needs no even sampling."""
+        out = holey_patch.decimate(time=2, filter_type=None)
+        assert np.all(out.get_array("time") == holey_patch.get_array("time")[::2])
 
 
 class TestResample:

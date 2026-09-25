@@ -137,6 +137,12 @@ class TestDefiniteIntegration:
         out = wacky_dim_patch.integrate(dim="time", definite=True)
         assert isinstance(out, dc.Patch)
 
+    def test_integrate_across_hole(self, holey_patch):
+        """The trapezoid spans the hole between labels 59 and 100. See #1219."""
+        out = holey_patch.integrate(dim="time", definite=True)
+        # The irregular-grid answer: 20.5 across the hole, 59 over the ones.
+        assert np.allclose(out.data, 79.5)
+
 
 class TestDataType:
     """An integral is a derivative read backwards, data_type included."""

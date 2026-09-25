@@ -173,7 +173,7 @@ class SobelFilter(PatchProcessor):
     patch
         The patch to filter
     dim
-        The dimension along which to apply
+        The dimension along which to apply. It must be evenly sampled.
     mode
         Determines how the input array is extended when the filter
         overlaps with a border.
@@ -203,6 +203,7 @@ class SobelFilter(PatchProcessor):
     def get_metadata(self, meta):
         """Return the axis to filter along, once the arguments are checked."""
         dim, _, _ = _check_sobel_args(self.dim, self.mode, self.cval)
+        meta.get_coord(dim, require_evenly_sampled=True)
         return meta, {"axis": meta.get_axis(dim)}
 
     def numpy_kernel(self, data, *, axis):

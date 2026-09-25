@@ -12,6 +12,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import (
     CoordDataError,
+    CoordError,
     FilterValueError,
     ParameterError,
     UnitError,
@@ -226,6 +227,11 @@ class TestSobelFilter:
         out = random_patch.sobel_filter(dim="time")
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
+
+    def test_refuses_hole(self, holey_patch):
+        """The kernel would treat the samples either side of a hole as adjacent."""
+        with pytest.raises(CoordError, match="evenly sampled"):
+            holey_patch.sobel_filter(dim="time")
 
 
 @pytest.mark.parametrize("name", ["median_filter", "notch_filter", "savgol_filter"])

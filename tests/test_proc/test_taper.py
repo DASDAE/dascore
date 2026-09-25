@@ -176,6 +176,16 @@ class TestTaperBasics:
         # The taper should have covered all the data
         assert np.all(out.data < 1)
 
+    def test_taper_across_hole(self, holey_patch):
+        """Taper widths are measured on the labels, hole included. See #1219."""
+        patch = holey_patch.update(data=np.ones_like(holey_patch.data))
+        out = patch.taper(time=(0.45, None))
+        labels = patch.get_array("time")
+        # 45% of the 159 label span reaches past the hole, so the whole
+        # first run tapers and none of the second does.
+        assert np.all(out.data[0, labels < 60] < 1)
+        assert np.all(out.data[0, labels >= 100] == 1)
+
 
 class TestTaperRange:
     """Test for tapering a range of values."""

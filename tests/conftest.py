@@ -23,6 +23,7 @@ from dascore.compat import random_state
 from dascore.config import get_config, set_config
 from dascore.constants import SpoolType
 from dascore.core import Patch
+from dascore.core.coords import concat_coords, get_coord
 from dascore.core.spool import Spool
 from dascore.examples import get_example_patch, get_example_spool
 from dascore.io.core import read
@@ -518,6 +519,24 @@ def range_patch_3d():
 def wacky_dim_patch():
     """Fetch event patch 1."""
     return dc.get_example_patch("wacky_dim_coords_patch")
+
+
+@pytest.fixture(scope="session", params=["two_runs", "labels"])
+def holey_patch(request):
+    """
+    A patch whose time labels are 0..59 then 100..159, data 0 then 1.
+
+    Once as two evenly sampled runs, once as step-less labels. See #1219.
+    """
+    first = get_coord(start=0.0, step=1.0, shape=(60,))
+    second = get_coord(start=100.0, step=1.0, shape=(60,))
+    if request.param == "two_runs":
+        time = concat_coords(first, second)
+    else:
+        time = get_coord(data=np.r_[first.values, second.values])
+    data = np.r_[np.zeros(60), np.ones(60)][None]
+    coords = {"distance": np.array([0]), "time": time}
+    return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
 
 
 @pytest.fixture(scope="class", params=PATCH_FIXTURES)

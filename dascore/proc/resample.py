@@ -63,7 +63,8 @@ def decimate(
     Notes
     -----
     - Uses `scipy.signal.decimate` when `filter_type` is specified; otherwise,
-      takes every nth sample along the dimension.
+      takes every nth sample along the dimension. Filtering requires an
+      evenly sampled dimension; taking every nth sample does not.
 
     - If the decimation dimension is small, this can fail due to lack of
       padding values.
@@ -90,6 +91,7 @@ def decimate(
     dim, axis, factor = get_dim_axis_value(patch, kwargs=kwargs)[0]
     coords, slices = patch.coords.decimate(**{dim: int(factor)})
     if filter_type:
+        patch.get_coord(dim, require_evenly_sampled=True)
         coords = coords._update_grid(dim)
         data = _apply_scipy_decimation(patch, factor, ftype=filter_type, axis=axis)
     else:
