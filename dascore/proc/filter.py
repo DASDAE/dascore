@@ -39,6 +39,7 @@ from dascore.utils.patch import (
     get_dim_axis_value,
     get_dim_sampling_rate,
     patch_function,
+    require_no_holes,
 )
 from dascore.utils.time import to_float
 from dascore.utils.window import resolve_window
@@ -203,6 +204,7 @@ class SobelFilter(PatchProcessor):
     def get_metadata(self, meta):
         """Return the axis to filter along, once the arguments are checked."""
         dim, _, _ = _check_sobel_args(self.dim, self.mode, self.cval)
+        require_no_holes(meta, dim, "sobel_filter")
         return meta, {"axis": meta.get_axis(dim)}
 
     def numpy_kernel(self, data, *, axis):

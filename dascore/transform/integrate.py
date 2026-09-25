@@ -15,6 +15,7 @@ from dascore.utils.patch import (
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
     patch_function,
+    require_no_holes,
 )
 
 _TRAP_FUNC = getattr(np, "trapezoid" if hasattr(np, "trapezoid") else "trapz")
@@ -131,6 +132,7 @@ def integrate(
     >>> all_integrated = patch.integrate(dim=None, definite=False)
     """
     dims = iterate(dim if dim is not None else patch.dims)
+    require_no_holes(patch, dims, "integrate")
     dxs_or_vals, axes = _get_dx_or_spacing_and_axes(patch, dims)
     array = patch.data
     if axes and array.dtype.kind in "biu":

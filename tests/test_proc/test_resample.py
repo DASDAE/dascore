@@ -10,7 +10,7 @@ import pytest
 
 import dascore as dc
 from dascore.compat import random_state
-from dascore.exceptions import FilterValueError, ParameterError
+from dascore.exceptions import CoordError, FilterValueError, ParameterError
 from dascore.units import Hz, m, s
 from dascore.utils.patch import get_start_stop_step
 from dascore.warnings import DASCoreWarning
@@ -396,3 +396,22 @@ class TestResample:
         """Tests for resample rft axis. See #272."""
         out = random_patch.dft("time", real="time").resample(ft_time=1)
         assert isinstance(out, dc.Patch)
+
+
+class TestDecimateHoles:
+    """Filtered decimation must not filter across a coordinate hole."""
+
+    def test_filtered_refuses_holes(self, holed_patch):
+        """A declared step with missing samples refuses the filter."""
+        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
+            holed_patch.decimate(time=2)
+
+    def test_stepless_runs(self, stepless_seam_patch):
+        """Step-less labels are an irregular grid and still decimate."""
+        out = stepless_seam_patch.decimate(time=2)
+        assert out.shape == (1, 60)
+
+    def test_raw_striding_runs(self, holed_patch):
+        """Striding without a filter still takes every nth sample."""
+        out = holed_patch.decimate(time=2, filter_type=None)
+        assert np.array_equal(out.data, holed_patch.data[:, ::2])

@@ -17,6 +17,7 @@ from dascore.utils.patch import (
     get_dim_axis_value,
     get_start_stop_step,
     patch_function,
+    require_no_holes,
 )
 from dascore.utils.time import dtype_time_like, to_int, to_timedelta64
 
@@ -90,6 +91,7 @@ def decimate(
     dim, axis, factor = get_dim_axis_value(patch, kwargs=kwargs)[0]
     coords, slices = patch.coords.decimate(**{dim: int(factor)})
     if filter_type:
+        require_no_holes(patch, dim, "filtered decimate")
         coords = coords._update_grid(dim)
         data = _apply_scipy_decimation(patch, factor, ftype=filter_type, axis=axis)
     else:
@@ -165,6 +167,9 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     with it where they are numbers, and dropped otherwise: a label has
     nothing between its values, and a time does not survive the trip
     through floating point.
+
+    Interpolation fills across coordinate holes: samples requested inside
+    a gap are interpolated from the samples on either side of it.
 
     See Also
     --------
