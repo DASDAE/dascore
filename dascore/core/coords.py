@@ -3141,10 +3141,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         runs, dtypes = zip(*result)
         # A re-fit spaces its labels evenly, which integers and coarse
         # times cannot always hold; the fit says what dtype they need.
-        # a step inferred from one fractional lattice is inferred afresh,
-        # since a re-fit run leaves that lattice
-        grid = _common_grid(self.runs)
-        step = None if grid is not None and grid.step_den != 1 else ...
+        # a run re-fit at another cadence no longer sits on the old step
+        kept = all(
+            not isinstance(x, Grid) or x.step(self.dtype) == self.step for x in runs
+        )
+        step = ... if kept else None
         return self._with_runs(runs, dtype=np.result_type(*dtypes), step=step)
 
     def _fit_tolerance(self, tolerance):
@@ -3580,11 +3581,6 @@ def _runs_step(runs, declared, dtype, sources):
     if len(runs) == 1 and isinstance(runs[0], Grid):
         return runs[0].step(dtype)
     strict = not _is_null(declared)
-    # floored labels on one fractional lattice need not divide the seams
-    if (grid := _common_grid(runs)) is not None:
-        step = grid.step(dtype)
-        if not strict or _declared_step(declared, dtype) == step:
-            return step
     if strict:
         step = _declared_step(declared, dtype)
     else:
@@ -3612,6 +3608,11 @@ def _runs_step(runs, declared, dtype, sources):
                     raise CoordError(msg)
                 _on_grid(_diffs(values), step)
         for num in range(1, len(runs)):
+            prev, run = runs[num - 1], runs[num]
+            # floored labels of one fractional lattice need not divide a seam
+            grid = _common_grid((prev, run))
+            if grid is not None and grid.step_den != 1 and grid.step(dtype) == step:
+                continue
             seam = edges[2 * num] - edges[2 * num - 1]
             _on_grid(np.asarray([seam]), step)
     except CoordError:
