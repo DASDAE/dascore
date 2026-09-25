@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import string
+from collections.abc import Sequence
 from typing import Any
 
 import matplotlib.pyplot as plt
@@ -17,6 +18,11 @@ from dascore.utils.plotting import _format_time_axis, _get_ax, _get_plot_values
 
 # Spans, boxes and polygons sit over data, so they are see-through.
 _FILL_ALPHA = 0.3
+# Keys only a line takes; a span, box or polygon refuses them.
+_LINE_KEYS = {"marker", "markersize", "markeredgecolor", "markerfacecolor"}
+_LINE_KEYS |= {"linestyle", "linewidth"}
+# A blank color value, which takes no palette color.
+_BLANK_COLOR = "grey"
 
 
 def _axes(dims, x, y):
@@ -24,6 +30,8 @@ def _axes(dims, x, y):
     if bad := [d for d in (x, y) if d is not None and d not in dims]:
         msg = f"{bad[0]!r} is not a dimension of the set; it has {list(dims)}."
         raise ParameterError(msg)
+    if len(dims) == 1 and x is None and y is not None:
+        return None, y  # across the y axis, e.g. time over a transposed waterfall
     if len(dims) <= 2:
         x = x or (dims[-1] if y != dims[-1] else dims[0])
         y = y or next((d for d in dims if d != x), None)
@@ -61,7 +69,7 @@ def _column(annotations: AnnotationSet, name: str):
 def _draw_region(ax, bounds, x, y, style: dict[str, Any]):
     """Draw one row: a marker, line, span, segment or box."""
     xs, ys = (_get_plot_values(bounds[d]) if d in bounds else None for d in (x, y))
-    fill: dict[str, Any] = {"alpha": _FILL_ALPHA, **style}
+    fill = _fill_style(style)
     if xs is not None and ys is None:
         if xs[0] == xs[1]:
             ax.axvline(xs[0], **style)
@@ -75,7 +83,7 @@ def _draw_region(ax, bounds, x, y, style: dict[str, Any]):
     elif xs is not None and ys is not None:
         x_point, y_point = xs[0] == xs[1], ys[0] == ys[1]
         if x_point and y_point:
-            ax.plot(xs[:1], ys[:1], marker="o", linestyle="none", **style)
+            ax.plot(xs[:1], ys[:1], **{"marker": "o", "linestyle": "none", **style})
         elif x_point or y_point:
             ax.plot(xs, ys, **style)
         else:
@@ -83,12 +91,18 @@ def _draw_region(ax, bounds, x, y, style: dict[str, Any]):
             ax.add_patch(Rectangle(corner, *size, **fill))
 
 
+def _fill_style(style: dict[str, Any]) -> dict[str, Any]:
+    """The style of a filled artist: see-through, without line-only keys."""
+    kept = {k: v for k, v in style.items() if k not in _LINE_KEYS}
+    return {"alpha": _FILL_ALPHA, **kept}
+
+
 def plot(
     annotations: AnnotationSet,
     ax: plt.Axes | None = None,
     x: str | None = None,
     y: str | None = None,
-    color: str | None = None,
+    color: str | Sequence[float] | None = None,
     label: str | None = None,
     **style,
 ) -> plt.Axes:
@@ -103,16 +117,18 @@ def plot(
         The axis to draw on; one is made if None.
     x, y
         Dimensions for the axes; default ``dims[-1]`` and ``dims[0]``, as
-        `waterfall` puts them. A one-dimensional set draws along ``x`` only.
+        `waterfall` puts them. A one-dimensional set draws along ``x``, or
+        along ``y`` when only ``y`` is named.
         A set of more dimensions names both.
     color
         A matplotlib color, or a column of either table whose values are
-        colored from the property cycle, with a legend.
+        colored from the property cycle, with a legend; a blank value is grey.
     label
         A column whose values label the artists in a legend; a blank value
         is left out of it.
     **style
-        Passed to every artist, e.g. ``alpha`` or ``linewidth``.
+        Passed to every artist, e.g. ``alpha``; line keys such as ``marker``
+        or ``linewidth`` reach only lines and markers.
 
     Notes
     -----
@@ -139,7 +155,7 @@ def plot(
     ax = _get_ax(ax)
     frame = annotations.annotations
     ids = frame["feature_id"].fillna("")
-    by_color = color is not None and (
+    by_color = isinstance(color, str) and (
         color in frame.columns or color in annotations.features.columns
     )
     color_of = _column(annotations, color) if by_color else None
@@ -149,9 +165,10 @@ def plot(
 
     def styled(where):
         """The style of an artist for a row index or a feature id."""
-        out: dict[str, Any] = {**style, "color": color or cycle[0]}
-        if color_of is not None:
-            value = color_of(where)
+        out: dict[str, Any] = {**style, "color": cycle[0] if color is None else color}
+        if color_of is not None and (value := color_of(where)) is None:
+            out["color"] = _BLANK_COLOR
+        elif color_of is not None:
             out["color"] = palette.setdefault(value, cycle[len(palette) % len(cycle)])
         text = None if label_of is None else label_of(where)
         if text is not None and str(text) not in seen:
@@ -181,8 +198,7 @@ def plot(
                         xy = np.column_stack(
                             [_get_plot_values(ring[d]) for d in (x, y)]
                         )
-                        kwargs: dict[str, Any] = {"alpha": _FILL_ALPHA}
-                        kwargs |= styled(feature.id)
+                        kwargs = _fill_style(styled(feature.id))
                         ax.add_patch(PolygonArtist(xy, fill=number == 0, **kwargs))
     ax.autoscale_view()
     kinds = annotations.bounds().dtypes

@@ -112,14 +112,28 @@ confident_p.annotations
 ```{python}
 early = ann.overlapping(time=(0.0, 0.02))
 in_patch = ann.overlapping(patch.select(distance=(600, 800)))
-[x.id for x in in_patch]
+[x.id for x in early], [x.id for x in in_patch]
 ```
+
+Three interval rules meet here: a row's `_min`/`_max` range is half-open, a `select` tuple includes both ends, and `overlapping` given a patch includes the patch's last sample.
 
 [`bounds`](`dascore.core.annotations.AnnotationSet.bounds`) gives each feature's extent, one row per feature:
 
 ```{python}
 ann.bounds()
 ```
+
+# Plotting
+
+[`ann.viz.plot`](`dascore.viz.annotations.plot`) draws every feature on an axis, putting dimensions where [`waterfall`](`dascore.viz.waterfall.waterfall`) puts them. Draw the patch first and the annotations over it. `color` may name a column, giving one color per value and a legend; features with no value, here the paths, the polygon and a trigger time added across the fiber, are grey:
+
+```{python}
+ann = ann.add(pd.DataFrame({"time": [0.08], "note": ["trigger"]}))
+ax = patch.viz.waterfall()
+ax = ann.viz.plot(ax=ax, color="phase")
+```
+
+A pick is a marker, a path a line, a polygon a filled shape, and a row spanning one axis a line or band across it.
 
 # Editing
 
@@ -128,17 +142,6 @@ ann.bounds()
 ```{python}
 ann = ann.update(feature="event_1", magnitude=1.2).remove(feature="noise")
 ```
-
-# Plotting
-
-[`ann.viz.plot`](`dascore.viz.annotations.plot`) draws every feature on an axis, putting dimensions where [`waterfall`](`dascore.viz.waterfall.waterfall`) puts them. Draw the patch first and the annotations over it. `color` may name a column, giving one color per value and a legend:
-
-```{python}
-ax = patch.viz.waterfall()
-ax = ann.viz.plot(ax=ax, color="phase")
-```
-
-A pick is a marker, a path a line, a polygon a filled outline, and a row spanning one axis a line or band across it.
 
 # Saving and loading
 

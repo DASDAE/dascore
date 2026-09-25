@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import matplotlib.colors as mcolors
 import matplotlib.dates as mdates
+import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import pytest
@@ -64,7 +66,8 @@ class TestDrawing:
         rows += [{"distance_min": 3.0, "distance_max": 4.0}]
         ax = _set(rows).viz.plot()
         assert sorted(tuple(x.get_xdata()) for x in ax.lines) == [(0, 1), (1, 1)]
-        assert len(ax.patches) == 2
+        boxes = sorted(tuple(x.get_bbox().extents) for x in ax.patches)
+        assert boxes == [(0, 3, 1, 4), (1, 0, 2, 1)]  # axhspan, axvspan
 
     def test_box(self):
         """Two ranges are a rectangle."""
@@ -73,12 +76,22 @@ class TestDrawing:
         (box,) = _set(frame).viz.plot().patches
         assert isinstance(box, Rectangle)
         assert (box.get_x(), box.get_y(), box.get_width()) == (1.0, 3.0, 1.0)
+        assert box.get_alpha() == 0.3
 
     def test_segment(self):
         """A value and a range are a segment."""
         frame = {"time": [1.0], "distance_min": [3.0], "distance_max": [5.0]}
         (line,) = _set(frame).viz.plot().lines
         assert list(line.get_ydata()) == [3.0, 5.0]
+
+    def test_line_keys(self):
+        """Line keys override the marker defaults and skip spans and boxes."""
+        ax = _set({"time": [1.0], "distance": [5.0]}).viz.plot(marker="x")
+        assert ax.lines[0].get_marker() == "x"
+        rows = [{"time_min": 1.0, "time_max": 2.0}, {"time": 1.0, "distance": 2.0}]
+        ax = _set(rows).viz.plot(markersize=10)
+        assert ax.lines[0].get_markersize() == 10
+        assert len(ax.patches) == 1
 
     def test_paths(self, shapes):
         """A path is a polyline, and a curve-only path is its sampled curve."""
@@ -113,12 +126,25 @@ class TestAxes:
         formatter = ax.xaxis.get_major_formatter()
         assert isinstance(formatter, mdates.ConciseDateFormatter)
         assert ax.lines[0].get_xdata()[0] == mdates.date2num(T0)
-        assert ann.viz.plot(y="time").yaxis_inverted()
+        ax = ann.viz.plot(y="time")
+        assert ax.yaxis_inverted()
+        assert isinstance(ax.yaxis.get_major_formatter(), mdates.ConciseDateFormatter)
 
     def test_one_dim(self):
         """A one-dimensional set draws along x only."""
         ax = _set({"time": [1.0, 2.0]}, dims=("time",)).viz.plot()
         assert [list(x.get_xdata()) for x in ax.lines] == [[1, 1], [2, 2]]
+
+    def test_one_dim_on_y(self):
+        """A one-dimensional set named on y draws across it, x untouched."""
+        patch = dc.get_example_patch().transpose("time", "distance")
+        ax = patch.viz.waterfall()
+        xlim = ax.get_xlim()
+        picks = pd.DataFrame({"time": [patch.get_coord("time").min()]})
+        one = dc.AnnotationSet.from_patch(patch, picks, dims=("time",))
+        (line,) = one.viz.plot(ax=ax, y="time").lines
+        assert list(line.get_xdata()) == [0, 1]
+        assert ax.get_xlim() == xlim
 
     @pytest.mark.parametrize(
         ("axes", "match"),
@@ -159,10 +185,18 @@ class TestColor:
         ann = shapes.add(pd.DataFrame({"time": [T0], "speed": [3.0]}))
         assert _legend(ann.viz.plot(color="speed")) == ["2.0", "3.0"]
 
-    def test_plain_color(self):
+    def test_blank_is_grey(self):
+        """A blank value is grey and takes no palette color."""
+        frame = {"time": [1.0, 2.0, 3.0], "distance": [1.0, 2.0, 3.0]}
+        ax = _set(frame | {"phase": [None, "P", "S"]}).viz.plot(color="phase")
+        cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+        assert [x.get_color() for x in ax.lines] == ["grey", *cycle[:2]]
+
+    @pytest.mark.parametrize("color", ["red", [1, 0, 0]])
+    def test_plain_color(self, color):
         """A matplotlib color colors everything, with no legend."""
-        ax = _set({"time": [1.0], "distance": [5.0]}).viz.plot(color="red")
-        assert ax.lines[0].get_color() == "red"
+        ax = _set({"time": [1.0], "distance": [5.0]}).viz.plot(color=color)
+        assert mcolors.to_rgba(ax.lines[0].get_color()) == (1, 0, 0, 1)
         assert ax.get_legend() is None
 
     def test_label(self):
