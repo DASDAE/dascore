@@ -38,7 +38,7 @@ DEFAULT_TOLERANCE = 1.5
 
 def _exact_value(value) -> Fraction:
     """A scalar in coordinate units, with temporal values measured in seconds."""
-    if is_datetime64(value) or is_timedelta64(value):
+    if is_datetime64(value) or is_timedelta64(value) or isinstance(value, timedelta):
         scalar = to_datetime64(value) if is_datetime64(value) else to_timedelta64(value)
         kind = "datetime64" if is_datetime64(value) else "timedelta64"
         ticks = np.asarray(scalar).astype(f"{kind}[ns]").astype(np.int64)
@@ -54,12 +54,13 @@ def _grid_interval(low, high, grid, *, bounds=None):
     num, den, phase, count = grid
     if den == 1 and phase == 0:
         return None  # the envelope already describes this grid exactly
+    clipped = bounds is not None and bounds != (low, high)
     scale = 1_000_000_000 if is_datetime64(low) or is_timedelta64(low) else 1
     first = _exact_value(high if num < 0 else low) + Fraction(phase, den * scale)
     step = Fraction(num, den * scale)
     last = first + (count - 1) * step
     low, high, step = min(first, last), max(first, last), abs(step)
-    if bounds is not None:
+    if clipped:
         # Labels are floors in ticks. Select the ideal positions whose
         # floored labels lie inside the requested closed interval.
         lower = Fraction(math.ceil(_exact_value(bounds[0]) * scale), scale)

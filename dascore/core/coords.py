@@ -12,7 +12,8 @@ import math
 import re
 from collections.abc import Mapping, Sequence, Sized
 from contextlib import suppress
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
+from datetime import timedelta
 from fractions import Fraction
 from functools import cache
 from types import EllipsisType
@@ -420,7 +421,7 @@ class Missing:
     # each hole as (first missing label, last missing label, how many)
     runs: tuple[tuple[Any, Any, int], ...]
     dtype: Any = None
-    _grids: tuple[Grid, ...] = ()
+    _grids: tuple[Grid, ...] = field(default=(), compare=False, repr=False)
 
     @property
     def count(self) -> int:
@@ -1125,6 +1126,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             # Preserve the stated excess before the timedelta view rounds it.
             if (
                 exact is None
+                and not (is_timedelta64(tolerance) or isinstance(tolerance, timedelta))
                 and np.ndim(tolerance) == 0
                 and np.isfinite(to_float(tolerance))
             ):
@@ -3231,7 +3233,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         steps = [x.step(self.dtype) if isinstance(x, Grid) else self.step for x in runs]
         for num in range(1, len(runs)):
             previous, following = runs[num - 1], runs[num]
-            if _common_grid((previous, following)) is not None:
+            grid = _common_grid((previous, following))
+            if grid is not None and grid.step_den != 1:
                 if previous._position(following) > len(previous):
                     return False
                 continue
@@ -3482,7 +3485,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
 
     def missing(self) -> Missing:
         """The missing positions, evaluated on the original exact grid."""
-        if (grid := self._common_grid) is None or not grid.step_num:
+        if (
+            (grid := self._common_grid) is None
+            or grid.step_den == 1
+            or not grid.step_num
+        ):
             return super().missing()
         holes = []
         for left, right in itertools.pairwise(self.runs):
@@ -3626,7 +3633,7 @@ def _runs_step(runs, declared, dtype, sources):
     strict = not _is_null(declared)
     if (grid := _common_grid(runs)) is not None:
         scalar = grid.step(dtype)
-        if not strict or declared == scalar:
+        if grid.step_den != 1 and (not strict or declared == scalar):
             return scalar
     elif not strict and all(isinstance(x, Grid) and x.exact for x in runs):
         return None
@@ -3999,8 +4006,10 @@ def _fill_limit(coord: NumericCoord, step: Grid, limit, samples: bool):
     excess = tolerance.excess
     if step.exact:
         exact = step.step_exact(coord.dtype)
-        if step.step_den == 1 and is_timedelta64(excess):
-            # Whole-tick grids retain the existing rounding of time limits.
+        if is_timedelta64(excess) and (
+            step.step_den == 1 or tolerance.exact_excess is None
+        ):
+            # A timedelta is already rounded; keep its half-tick allowance.
             excess = Fraction(2 * int(to_int(excess)) + 1, 2 * _NS_PER_S)
             return int(excess // abs(exact))
         excess = (

@@ -262,6 +262,7 @@ class TestFractionalGaps:
         missing = coord.missing()
         assert coord.step_exact == full.step_exact
         assert missing.count == 8
+        assert missing == Missing(missing.step, missing.runs, missing.dtype)
         np.testing.assert_array_equal(
             missing.positions(), np.concatenate([full.values[7:11], full.values[18:22]])
         )
@@ -307,6 +308,9 @@ class TestFractionalGaps:
         )
         filled = patch.fill_gaps(time=float(full.step_exact))
         np.testing.assert_array_equal(filled.get_coord("time").values, full.values)
+        np.testing.assert_array_equal(
+            patch.fill_gaps(time=full.step).get_coord("time").values, full.values
+        )
         assert patch.fill_gaps(time=float(full.step_exact) * 0.99) is patch
 
     def test_metadata_only(self, monkeypatch):

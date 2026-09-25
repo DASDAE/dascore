@@ -589,14 +589,51 @@ def _cell_tolerance(tolerance: GapTolerance, sub, name) -> GapTolerance:
     return GapTolerance.absolute(value, exact=exact)
 
 
-def _gap_intervals(frame, name):
+def _needs_exact_gap_bounds(frame, name, tolerance):
+    """Whether rounding could change a sample-count verdict on time envelopes."""
+    if tolerance.count is None:
+        return True
+    if any(f"_{name}_{x}" in frame for x in ("source_envelope", "gap_interval")):
+        return True  # clipped bounds may lie between samples
+    start, stop, step = get_interval_columns(frame, name)
+    if not (is_datetime64(start.dtype) or is_timedelta64(start.dtype)):
+        return True
+    order, reach, _ = gap_boundaries(start, stop, step, tolerance)
+    starts = start.to_numpy()[order]
+    ahead = starts >= reach
+    delta = (starts[ahead] - reach[ahead]) / np.timedelta64(1, "ns")
+    steps = np.abs(step.to_numpy()[order][ahead] / np.timedelta64(1, "ns"))
+    # Each ideal endpoint is less than one tick from its label; a step's
+    # rounding error also scales with the count. Include floating arithmetic
+    # error in the bound. Anything near it still gets the exact comparison.
+    # Planning also compares against the default to decide whether to warn.
+    for count in (tolerance.count, DEFAULT_TOLERANCE):
+        if np.isinf(count):
+            continue
+        margin = steps * count
+        uncertainty = 2 + count + 4 * np.spacing(margin)
+        if np.any(np.abs(delta - margin) <= uncertainty):
+            return True
+    return False
+
+
+def _gap_intervals(frame, name, tolerance):
     """Exact grid endpoints where a row's rounded envelope is insufficient."""
     grid_col, interval_col = f"_{name}_grid", f"_{name}_gap_interval"
     grids = frame.get(grid_col)
     if interval_col not in frame and (grids is None or not grids.notna().any()):
         return None
+    if not _needs_exact_gap_bounds(frame, name, tolerance):
+        return None
     intervals = []
-    for row in frame.to_dict("records"):
+    columns = [
+        f"{name}_min",
+        f"{name}_max",
+        grid_col,
+        interval_col,
+        f"_{name}_source_envelope",
+    ]
+    for row in frame[[x for x in columns if x in frame]].to_dict("records"):
         saved = row.get(interval_col)
         if isinstance(saved, tuple):
             intervals.append(saved)
@@ -848,7 +885,7 @@ def _partition(
         sub = df.loc[index]
         s, e, st = get_interval_columns(sub, name)
         tol = _cell_tolerance(tolerance, sub, name)
-        exact = _gap_intervals(sub, name)
+        exact = _gap_intervals(sub, name, tol)
         labels = _continuity_group(s, e, st, tol, exact=exact).astype(np.int64)
         cont.loc[index] = labels
         if forced_merge or not (absolute or tolerance.count > DEFAULT_TOLERANCE):
@@ -1488,7 +1525,7 @@ def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance):
         start, stop, step = get_interval_columns(sub, name)
         tol = _cell_tolerance(tolerance, sub, name)
         row_order, reach, has_gap = gap_boundaries(
-            start, stop, step, tol, exact=_gap_intervals(sub, name)
+            start, stop, step, tol, exact=_gap_intervals(sub, name, tol)
         )
         found = np.flatnonzero(has_gap)
         # the row opening each gap states the step, signed as the
