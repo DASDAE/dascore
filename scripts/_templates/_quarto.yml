@@ -145,6 +145,9 @@ website:
         - text: Inventory
           href: tutorial/inventory.qmd
 
+        - text: Annotations
+          href: tutorial/annotations.qmd
+
     - id: Recipes
       title: 'Recipes'
       collapse-level: 1

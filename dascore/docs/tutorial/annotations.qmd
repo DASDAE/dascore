@@ -1,0 +1,150 @@
+---
+title: Annotations
+execute:
+  warning: false
+---
+
+An [`AnnotationSet`](`dascore.core.annotations.AnnotationSet`) records where things are in a patch's dimensions: phase picks, boxes around noise, vehicle tracks, outlines of a region. It is a dataframe first. A picker's output is one table, and the same set can grow into grouped events, paths and polygons without changing what it already holds.
+
+Annotations describe data but never hold it. They are stated in coordinates, not sample indices, so they stay valid when the data is decimated, trimmed or re-chunked.
+
+# The model
+
+A set has three parts:
+
+- **annotations**: one row per located thing. For each dimension a row states a single value (`time`), a half-open range (`time_min`, `time_max`), or nothing, in which case it spans that dimension. A row stating only `time` is an instant across the whole fiber.
+- **features**: what rows compose. Every row belongs to one feature, named by its `feature_id`; a row with none is its own feature. A feature is a `group` (unordered, the default), a `path` (vertices ordered by `seq`), or a `polygon` (rings ordered by `seq`, `ring` 0 outside, holes after). `part` numbers the pieces of a multipart shape.
+- **bases**: named curves, such as a line or a moveout, that a path is drawn from. A path may state only its basis and is sampled when needed.
+
+Any other column, such as `phase`, `confidence` or `note`, is yours and is kept as written. Features hold no coordinates; their bounds come from their rows.
+
+| time | distance_min | distance_max | phase | feature_id | reads as |
+|---|---|---|---|---|---|
+| 0.01 | | | P | | an instant across the fiber |
+| 0.01 | 650 | 750 | P | event_1 | a pick on a stretch, part of `event_1` |
+| | 400 | 450 | | | a stretch of fiber at all times |
+
+# Picks
+
+A picker's output is a single table. [`AnnotationSet.from_patch`](`dascore.core.annotations.AnnotationSet.from_patch`) takes the dimensions from the patch and stamps its `acquisition_key` and `data_id`, so the set records which data it was made on.
+
+```{python}
+import tempfile
+from pathlib import Path
+
+import pandas as pd
+
+import dascore as dc
+
+patch = dc.get_example_patch("example_event_2")
+picks = pd.DataFrame(
+    {
+        "time": [0.018, 0.010, 0.017, 0.052, 0.026, 0.045],
+        "distance": [600.0, 700.0, 800.0, 600.0, 700.0, 800.0],
+        "phase": ["P", "P", "P", "S", "S", "S"],
+        "confidence": [0.9, 0.95, 0.8, 0.7, 0.9, 0.4],
+    }
+)
+ann = dc.AnnotationSet.from_patch(patch, picks)
+ann.annotations
+```
+
+A set of only annotations writes as one bare file, CSV or Parquet. The file holds the annotations table alone; Parquet also keeps the dimensions, while the set's attributes, such as `data_id`, need the directory form described under [Saving and loading](#saving-and-loading).
+
+```{python}
+folder = Path(tempfile.mkdtemp())
+path = ann.io.to_parquet(folder / "picks.parquet")
+assert dc.annotations(path).annotations.equals(ann.annotations)
+```
+
+# Building features
+
+Picks become an event by sharing a `feature_id`. A `feature_id` naming no feature creates a group, so the picker never writes a features table:
+
+```{python}
+event = dc.AnnotationSet.from_patch(patch, picks.assign(feature_id="event_1"))
+event.features
+```
+
+Builders return new sets. In [`add_path`](`dascore.core.annotations.AnnotationSet.add_path`) an array keyword is an annotations column, one value per vertex, and a scalar keyword is a features column:
+
+```{python}
+ann = event.add_path(
+    "s_wave",
+    time=[0.026, 0.06, 0.09],
+    distance=[700.0, 580.0, 470.0],
+    amplitude=[20.0, 12.0, 6.0],
+    wave="S",
+)
+ann["s_wave"].kind, ann["s_wave"].extra
+```
+
+A path can also be drawn from a basis, given as a model or its document, and no vertices:
+
+```{python}
+line = {
+    "object_type": "Line",
+    "start": {"time": 0.01, "distance": 700.0},
+    "end": {"time": 0.04, "distance": 900.0},
+}
+ann = ann.add_path("p_wave", basis=line, wave="P")
+```
+
+[`add_polygon`](`dascore.core.annotations.AnnotationSet.add_polygon`) takes rings, the outer ring first and then any holes, each a table of vertices in order. Closure is implied:
+
+```{python}
+outer = {"time": [0.06, 0.1, 0.1, 0.06], "distance": [400.0, 400.0, 450.0, 450.0]}
+ann = ann.add_polygon("noise", rings=[outer], note="traffic")
+ann
+```
+
+# Querying
+
+[`select`](`dascore.core.annotations.AnnotationSet.select`) filters on columns of either table. A value matches, a list is membership, and a tuple is an inclusive range:
+
+```{python}
+confident_p = ann.select(phase="P", confidence=(0.85, None))
+confident_p.annotations
+```
+
+[`overlapping`](`dascore.core.annotations.AnnotationSet.overlapping`) selects by location and keeps or drops each feature whole. Given a patch, it queries that patch's extent:
+
+```{python}
+early = ann.overlapping(time=(0.0, 0.02))
+in_patch = ann.overlapping(patch.select(distance=(600, 800)))
+[x.id for x in in_patch]
+```
+
+[`bounds`](`dascore.core.annotations.AnnotationSet.bounds`) gives each feature's extent, one row per feature:
+
+```{python}
+ann.bounds()
+```
+
+# Editing
+
+[`update`](`dascore.core.annotations.AnnotationSet.update`) changes the columns of one feature or one annotation, and [`remove`](`dascore.core.annotations.AnnotationSet.remove`) drops one. [`merge`](`dascore.core.annotations.AnnotationSet.merge`) combines sets stated in the same dimensions, such as hand and automatic picks.
+
+```{python}
+ann = ann.update(feature="event_1", magnitude=1.2).remove(feature="noise")
+```
+
+# Plotting
+
+[`ann.viz.plot`](`dascore.viz.annotations.plot`) draws every feature on an axis, putting dimensions where [`waterfall`](`dascore.viz.waterfall.waterfall`) puts them. Draw the patch first and the annotations over it. `color` may name a column, giving one color per value and a legend:
+
+```{python}
+ax = patch.viz.waterfall()
+ax = ann.viz.plot(ax=ax, color="phase")
+```
+
+A pick is a marker, a path a line, a polygon a filled outline, and a row spanning one axis a line or band across it.
+
+# Saving and loading
+
+A set with features or bases is saved as a directory holding `attrs.json`, the annotations and features tables, and `bases.json`. [`dc.annotations`](`dascore.annotations`) reads it back, and also reads bare tables and collections of sets:
+
+```{python}
+directory = ann.io.save(folder / "event_1")
+assert dc.annotations(directory) == ann
+```

@@ -1387,7 +1387,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
             frame = frame[_passes(view, on_rows)]
         return self._dropped(frame, table)
 
-    def overlapping(self, **bounds) -> AnnotationSet:
+    def overlapping(self, patch=None, /, **bounds) -> AnnotationSet:
         """
         Return the features whose bounds overlap the given ones.
 
@@ -1397,6 +1397,10 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         where its maximum is a stated value (see `bounds`). A feature
         spanning a dimension overlaps anything along it. Nothing is
         trimmed: a feature is kept or dropped whole.
+
+        A patch, given first, queries its coordinate limits along each
+        dimension of the set it has, its last sample included; a keyword
+        for the same dimension wins.
 
         Examples
         --------
@@ -1413,6 +1417,12 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
                 f"one; the set declares {list(self.dims)}."
             )
             raise ParameterError(msg)
+        # A patch's last sample is inside it, so its queries close above.
+        shut = set()
+        if patch is not None:
+            coords = patch.coords.coord_map
+            shut = {x for x in self.dims if x in coords} - set(bounds)
+            bounds = {**{x: (coords[x].min(), coords[x].max()) for x in shut}, **bounds}
         extents, closed = self._extents()
         keep = np.ones(len(extents), dtype=bool)
         for dim, query in bounds.items():
@@ -1432,7 +1442,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
                 below = (
                     True
                     if high is None
-                    else (starts <= high if point else starts < high)
+                    else (starts <= high if point or dim in shut else starts < high)
                 )
                 above = (
                     True

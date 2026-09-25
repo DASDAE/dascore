@@ -779,6 +779,32 @@ class TestOverlapping:
         out = based.overlapping(distance=(60.0, 70.0))
         assert list(out.features["id"]) == ["far"]
 
+    def test_patch(self):
+        """A patch queries its limits; its last sample is inside it."""
+        patch = dc.get_example_patch()
+        time = patch.get_coord("time")
+        after = time.max() + np.timedelta64(1, "s")
+        frame = pd.DataFrame({"time": [time.min(), time.max(), after]})
+        out = AnnotationSet.from_patch(patch, frame).overlapping(patch)
+        assert out.annotations["time"].tolist() == [time.min(), time.max()]
+
+    def test_patch_lacks_dim(self):
+        """A dimension the patch lacks is not queried."""
+        patch = dc.get_example_patch().select(distance=(0, 0)).squeeze()
+        frame = pd.DataFrame({"distance": [1e6], "time": [pd.NaT]})
+        ann = AnnotationSet(frame, dims=("distance", "time", "depth"))
+        assert len(ann.overlapping(patch)) == 1
+
+    def test_patch_keyword_wins(self):
+        """A keyword replaces the patch's query for its dimension."""
+        patch = dc.get_example_patch()
+        time = patch.get_coord("time")
+        frame = pd.DataFrame({"time": [time.min(), time.max()]})
+        out = AnnotationSet.from_patch(patch, frame).overlapping(
+            patch, time=(time.max(), None)
+        )
+        assert out.annotations["time"].tolist() == [time.max()]
+
     def test_dim_nobody_states(self, picks):
         """Where every feature spans the dimension, every feature overlaps."""
         assert picks.overlapping(distance=(0.0, 1.0)) == picks
