@@ -1318,11 +1318,10 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
     """
     Split the patch into contiguous patches at coordinate gaps.
 
-    A coordinate with a declared step splits at every hole, the positions
+    The patch splits wherever its coordinate's runs break (e.g. from
+    concatenating nearly-contiguous data) and at every hole
     [missing](`dascore.core.coords.BaseCoord.missing`) reports, however the
-    labels are stored. A coordinate with no step splits where its runs
-    (e.g. from concatenating nearly-contiguous data) break. Each output is
-    a view of the patch's data.
+    labels are stored. Each output is a view of the patch's data.
 
     Parameters
     ----------
@@ -1366,13 +1365,16 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
             if not isinstance(coord, NumericCoord):
                 out.append(patch)
                 continue
-            # A declared step splits at its holes, which a dense stored run
-            # may hold too; without one, the runs are the contiguous pieces.
-            if coord.step is None:
-                starts = np.cumsum([len(x) for x in coord.segments])[:-1].tolist()
-            else:
-                starts = coord.get_discontinuities("gaps")["index"].tolist()
-            for start, stop in itertools.pairwise([0, *starts, len(coord)]):
+            starts = {*np.cumsum([len(x) for x in coord.segments])[:-1].tolist()}
+            # a dense stored run may hold holes of its declared step too
+            if holes := [first for first, _ in coord.missing().iter_runs()]:
+                values = np.asarray(coord.values)
+                if coord.reverse_sorted:
+                    after = np.searchsorted(values[::-1], holes, side="right")
+                    starts.update((len(values) - after).tolist())
+                else:
+                    starts.update(np.searchsorted(values, holes).tolist())
+            for start, stop in itertools.pairwise([0, *sorted(starts), len(coord)]):
                 # Typed as the selector it is: the key is a dimension
                 # name, so it never lands on select's own bool fields.
                 window: dict[str, Any] = {dname: (start, stop)}

@@ -974,6 +974,33 @@ class TestSplitGapsAndWrite:
         assert all(x.get_coord("time").evenly_sampled for x in spool)
         assert np.shares_memory(spool[1].data, patch.data)
 
+    @pytest.mark.parametrize(
+        ("coord", "count"),
+        [
+            # a dense stored run with holes beside another run
+            (
+                concat_coords(
+                    get_coord(data=np.delete(np.arange(9), [2, 5]), step=1),
+                    get_coord(start=20, step=1, shape=(3,)),
+                ),
+                4,
+            ),
+            (get_coord(data=np.array([9, 8, 7, 4, 3, 1, 0]), step=-1), 3),
+            (get_coord(data=np.round(np.arange(10) * 0.1, 1), step=0.1), 1),
+            (get_coord(data=(np.arange(10) * 0.1)[::-1], step=-0.1), 1),
+        ],
+    )
+    def test_split_gaps_agrees_with_missing(self, coord, count):
+        """The pieces are the runs between holes and none holds a hole."""
+        patch = dc.Patch(
+            data=np.zeros(len(coord)), coords={"time": coord}, dims=("time",)
+        )
+        spool = patch.split_gaps()
+        assert len(spool) == count
+        assert not any(x.get_coord("time").missing().count for x in spool)
+        values = np.concatenate([x.get_coord("time").values for x in spool])
+        assert np.array_equal(values, coord.values)
+
     def test_split_gaps_irregular_labels(self):
         """Labels with no step and one run name no holes: one patch."""
         values = np.sort(np.random.default_rng(1).random(50))
