@@ -1343,14 +1343,6 @@ class TestProvenance:
         members = collected.select(feature_id="f")
         assert len(members.select(data_id="feat").annotations) == 1
 
-    def test_an_implied_feature_takes_its_set(self):
-        """A member of an implied feature resolves through the feature's set."""
-        frame = pd.DataFrame({"time": [1.0], "set": ["a"], "feature_id": ["e"]})
-        attrs = {"dims": DIMS, "sets": {"a": {"dims": ("time",), "data_id": "d-a"}}}
-        out = AnnotationSet(frame, attrs=attrs)
-        assert out["e"].data_id == "d-a"
-        assert len(out.select(data_id="d-a").annotations) == 1
-
     def test_a_row_key_is_validated(self):
         """A row's key is checked like the set's, when the set is built."""
         frame = pd.DataFrame({"time": [1.0], "acquisition_key": ["nope"]})
