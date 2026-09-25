@@ -204,7 +204,8 @@ class SobelFilter(PatchProcessor):
     def get_metadata(self, meta):
         """Return the axis to filter along, once the arguments are checked."""
         dim, _, _ = _check_sobel_args(self.dim, self.mode, self.cval)
-        require_no_holes(meta, dim, "sobel_filter")
+        # the kernel smooths along every other axis too
+        require_no_holes(meta, meta.dims, "sobel_filter")
         return meta, {"axis": meta.get_axis(dim)}
 
     def numpy_kernel(self, data, *, axis):

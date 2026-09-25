@@ -232,6 +232,9 @@ class TestSobelFilter:
         """A declared step with missing samples refuses."""
         with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
             holed_patch.sobel_filter("time")
+        # the kernel also smooths along time when filtering distance
+        with pytest.raises(CoordError, match="not evenly sampled"):
+            holed_patch.sobel_filter("distance")
 
     def test_stepless_runs(self, stepless_seam_patch):
         """Step-less labels are an irregular grid and still filter."""
