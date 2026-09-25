@@ -1078,9 +1078,9 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
             path or polygon takes their order from the mask or the ids. The
             provenance the rows resolve to moves onto the feature, and rows
             resolving to two different values are refused. Without a ``set``
-            keyword, rows all labeled with one set give the feature that
-            label. A row of the feature's own ``set``, stating nothing,
-            inherits whatever the feature states.
+            keyword, the one set label the rows state is the feature's; two
+            different labels are refused. A row of the feature's own ``set``,
+            stating nothing, inherits whatever the feature states.
         **columns
             An array-like (list, tuple, array, Series) is an annotations
             column of new member rows, all one length; ``seq``, ``part`` and
@@ -1390,7 +1390,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
             # its members; a lone row answers for itself. A blank label or
             # provenance is "", so set="" selects the collection's own rows.
             if kind == "labels":
-                own, held = _labels(table), _labels(frame)
+                own, held = _labels(table), _labels(frame, self._features)
             else:
                 resolved = {x: _resolved(table, self._attrs, x) for x in _PROVENANCE}
                 own, held = _assign(table, resolved), rows.loc[frame.index]
@@ -1679,8 +1679,8 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
 
     def _shared_label(self, positions: np.ndarray) -> str:
         """
-        The one set label every adopted row carries, as an implied feature
-        takes its rows'; blank where any has none, refused where two differ.
+        The one set label the adopted rows state, as an implied feature takes
+        its rows'; blanks agree with it, two different labels are refused.
         """
         labels = [_label(x) for x in _records(self._df.iloc[positions])]
         stated = sorted(set(labels) - {""})
@@ -1690,7 +1690,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
                 "no one set is the feature's; give set= for it."
             )
             raise ParameterError(msg)
-        return stated[0] if stated and all(labels) else ""
+        return stated[0] if stated else ""
 
     def _lifted(self, positions: np.ndarray, feature: Mapping) -> dict:
         """
@@ -1700,7 +1700,9 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         rows = self._df.iloc[positions]
         # A row of the feature's own child, stating nothing, inherits from it.
         label = _label(feature)
-        kin = np.array([label != "" and _label(x) == label for x in _records(rows)])
+        kin = np.array(
+            [label != "" and _label(x) == label for x in _records(rows)], dtype=bool
+        )
         out = {}
         for field in _PROVENANCE:
             given = _text(feature.get(field))
@@ -2277,9 +2279,17 @@ def _passes(frame: pd.DataFrame, query: Mapping) -> np.ndarray:
     return mask.fillna(False).astype(bool).to_numpy()
 
 
-def _labels(frame: pd.DataFrame) -> pd.DataFrame:
-    """The table with each set label as text, a blank one as ""."""
-    return _assign(frame, {"set": frame["set"].map(_text).astype(object)})
+def _labels(frame: pd.DataFrame, features: pd.DataFrame | None = None):
+    """
+    The table with each set label as text, a blank one as "". Given the
+    features, a member answers with its feature's label, as with provenance.
+    """
+    labels = frame["set"].map(_text).astype(object)
+    if features is not None and "set" in features.columns:
+        owned = dict(zip(features["id"].map(_text), features["set"].map(_text)))
+        ids = frame["feature_id"].map(_text)
+        labels = labels.where(ids == "", ids.map(lambda x: owned.get(x, "")))
+    return _assign(frame, {"set": labels})
 
 
 def _members(frame: pd.DataFrame, identity: str, columns) -> pd.DataFrame:

@@ -297,6 +297,17 @@ class TestAddFeature:
         with pytest.raises(ParameterError, match="twice"):
             picks.add_feature("ev", members=["a", "a"])
 
+    def test_no_members_with_basis(self, picks):
+        """Adopting no rows leaves a path its curve alone."""
+        out = picks.add_path("p", basis=_moveout(), members=[])
+        assert out["p"].basis == _moveout()
+        assert out.bounds().set_index("feature_id").loc["p", "distance_max"] == 100.0
+
+    def test_empty_mask(self, picks):
+        """A mask matching nothing is a feature with nothing to locate it."""
+        with pytest.raises(ParameterError, match="no annotations and no basis"):
+            picks.add_feature("g", members=np.zeros(3, dtype=bool))
+
     def test_mask_length(self, picks):
         """A mask the wrong length is refused."""
         with pytest.raises(ParameterError, match="one truth value per"):
@@ -1400,6 +1411,33 @@ class TestMemberLabels:
         base = AnnotationSet(frame, attrs=TWO_CHILDREN)
         with pytest.raises(ParameterError, match=r"'a', 'b'"):
             base.add_feature("g", members=["r", "s"])
+
+    def test_select_label_through_feature(self):
+        """An unlabeled member answers set= with its feature's label."""
+        frame = pd.DataFrame(
+            {
+                "id": ["r1", "r2"],
+                "time": [1.0, 2.0],
+                "set": ["a", None],
+                "feature_id": "e",
+            }
+        )
+        base = AnnotationSet(frame, attrs=TWO_CHILDREN)
+        out = base.select(set="a")
+        assert list(out.features["id"]) == ["e"]
+        assert list(out.annotations["id"]) == ["r1", "r2"]
+        assert len(base.select(set="").annotations) == 0
+
+    def test_adopted_blank_label_agrees(self):
+        """An unlabeled row does not stop the others' label reaching the feature."""
+        frame = pd.DataFrame({"id": ["r", "u"], "time": [1.0, 2.0], "set": ["a", None]})
+        base = AnnotationSet(frame, attrs=TWO_CHILDREN)
+        out = base.add_feature("g", members=["r", "u"])
+        moved = base.update(annotation="r", feature_id="g").update(
+            annotation="u", feature_id="g"
+        )
+        assert out == moved
+        assert out["g"].set == "a"
 
     @pytest.fixture
     def unlabeled(self):
