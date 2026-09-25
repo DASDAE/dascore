@@ -13,10 +13,11 @@ from rich.text import Text
 
 import dascore as dc
 from dascore.core.annotations import (
-    Annotation,
     AnnotationBasis,
     AnnotationSet,
     AnnotationSetAttrs,
+    Feature,
+    Group,
     Line,
     Moveout,
     Path,
@@ -34,13 +35,47 @@ TIMES = np.array(
 )
 
 
+def _bounds(annotations: AnnotationSet) -> list[dict]:
+    """Return the bounds of every lone row, in row order."""
+    return [dict(x.geometry.bounds) for x in annotations if not x.id]
+
+
+def _first(annotations: AnnotationSet) -> Feature:
+    """Return the first feature a set iterates."""
+    return next(iter(annotations))
+
+
+def _moveout(**kwargs) -> Moveout:
+    """A moveout over distance and time."""
+    stated = {
+        "apex_distance": 50.0,
+        "apex_time": TIMES[0],
+        "velocity": 3000.0,
+        "distance_min": 0.0,
+        "distance_max": 100.0,
+    }
+    return Moveout(**{**stated, **kwargs})
+
+
 @pytest.fixture(scope="module")
-def region_set():
-    """A set of plain regions, the common case."""
+def picks():
+    """Time-only picks, which span the whole fiber."""
     frame = pd.DataFrame(
         {
-            "group": ["event", "event", "noisy"],
-            "value": ["car", "truck", None],
+            "time": TIMES[:2],
+            "phase": ["P", "S"],
+            "confidence": [0.9, 0.4],
+        }
+    )
+    return AnnotationSet(frame, dims=DIMS)
+
+
+@pytest.fixture(scope="module")
+def boxes():
+    """Plain regions, one row each."""
+    frame = pd.DataFrame(
+        {
+            "note": ["car", "truck", None],
             "distance_min": [10.0, 30.0, 0.0],
             "distance_max": [80.0, 90.0, 100.0],
         }
@@ -49,58 +84,61 @@ def region_set():
 
 
 @pytest.fixture(scope="module")
-def path_set():
-    """A set holding one path beside one region."""
+def tracks():
+    """A path, a group of picks, and a lone box in one set."""
     frame = pd.DataFrame(
         {
-            "id": ["p1", "e1"],
-            "group": ["pick", "pick"],
-            "value": ["car", "truck"],
-            "geometry": ["path", "region"],
-            "distance_min": [np.nan, 10.0],
-            "distance_max": [np.nan, 80.0],
+            "feature_id": ["t1", "t1", "t1", "e1", "e1", None],
+            "time": [*TIMES, TIMES[0], TIMES[1], pd.NaT],
+            "distance": [1.0, 5.0, 9.0, np.nan, np.nan, np.nan],
+            "distance_min": [np.nan] * 5 + [10.0],
+            "distance_max": [np.nan] * 5 + [80.0],
+            "velocity": [3.0, 4.0, 5.0, np.nan, np.nan, np.nan],
         }
     )
-    vertices = pd.DataFrame(
-        {"id": ["p1"] * 3, "seq": [0, 1, 2], "time": TIMES, "distance": [1.0, 5.0, 9.0]}
+    features = pd.DataFrame(
+        {"id": ["t1"], "geometry": ["path"], "vehicle_type": ["train"]}
     )
-    return AnnotationSet(frame, dims=DIMS, vertices=vertices)
+    return AnnotationSet(frame, features=features, dims=DIMS)
 
 
-def _polygon_set(count: int = 3):
-    """Build a set holding one polygon of ``count`` vertices."""
-    frame = pd.DataFrame({"id": ["g1"], "geometry": ["polygon"]})
-    vertices = pd.DataFrame(
-        {
-            "id": ["g1"] * count,
-            "seq": list(range(count)),
-            "distance": [float(x) for x in range(count)],
-        }
-    )
-    return AnnotationSet(frame, dims=DIMS, vertices=vertices)
+def _polygon(rings: dict, feature: str = "g1", **kwargs) -> AnnotationSet:
+    """Build a set holding one polygon from ``{(part, ring): [(t, d), ...]}``."""
+    rows = [
+        {"feature_id": feature, "part": p, "ring": r, "time": t, "distance": d}
+        for (p, r), points in rings.items()
+        for t, d in points
+    ]
+    features = pd.DataFrame({"id": [feature], "geometry": ["polygon"]})
+    return AnnotationSet(pd.DataFrame(rows), features=features, dims=DIMS, **kwargs)
+
+
+TRIANGLE = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0)]
+SQUARE = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0), (0.0, 10.0)]
 
 
 class TestConstruction:
     """A set is built from a frame and the dimensions it is stated in."""
 
-    def test_len_and_iteration(self, region_set):
-        """Every row is one annotation."""
-        assert len(region_set) == 3
-        assert [x.group for x in region_set] == ["event", "event", "noisy"]
+    def test_picks_are_one_frame(self, picks):
+        """A picker's frame is the whole set: each row is its own feature."""
+        assert len(picks) == 2
+        assert [x.extra["phase"] for x in picks] == ["P", "S"]
+        assert picks.features.empty
 
-    def test_rows_are_annotations(self, region_set):
-        """Indexing builds the row's model."""
-        assert isinstance(region_set[0], Annotation)
+    def test_time_only_picks_broadcast(self, picks):
+        """A row stating only time spans the whole fiber."""
+        assert _bounds(picks)[0] == {"time": (TIMES[0], TIMES[0])}
 
     def test_dims_required(self):
         """A set which names no dimension states nothing about where."""
         with pytest.raises(ParameterError, match="states its dimensions"):
-            AnnotationSet(pd.DataFrame({"group": ["a"]}))
+            AnnotationSet(pd.DataFrame({"time": [1.0]}))
 
     def test_dims_from_attrs(self):
         """Dimensions may come from an attrs object instead of the keyword."""
         attrs = AnnotationSetAttrs(dims=DIMS)
-        assert AnnotationSet(pd.DataFrame({"group": ["a"]}), attrs=attrs).dims == DIMS
+        assert AnnotationSet(pd.DataFrame({"time": [1.0]}), attrs=attrs).dims == DIMS
 
     def test_keyword_overrides_attrs(self):
         """An explicit keyword wins over what attrs states."""
@@ -113,10 +151,11 @@ class TestConstruction:
         out = AnnotationSet(None, dims=DIMS)
         assert len(out) == 0
         assert list(out) == []
+        assert list(out.annotations.columns) == ["feature_id"]
 
     def test_records(self):
         """Anything a frame can be built from works."""
-        out = AnnotationSet([{"group": "a"}, {"group": "b"}], dims=DIMS)
+        out = AnnotationSet([{"time": 1.0}, {"time": 2.0}], dims=DIMS)
         assert len(out) == 2
 
     def test_unreadable_data(self):
@@ -126,131 +165,161 @@ class TestConstruction:
 
     def test_duplicate_columns_refused(self):
         """Pandas allows a repeated name; every reader here expects one column."""
-        frame = pd.DataFrame([["g", "g", 1]], columns=["group", "group", "value"])
+        frame = pd.DataFrame([["g", "g", 1.0]], columns=["note", "note", "time"])
         with pytest.raises(ParameterError, match="more than once"):
             AnnotationSet(frame, dims=DIMS)
 
-    def test_repr_names_contents(self, region_set):
-        """The repr says how many annotations and over which dimensions."""
-        out = repr(region_set)
-        assert "3 Annotations" in out
-        assert "time" in out and "distance" in out
-        assert "event: 2" in out  # the groups it holds, and how many of each
+    def test_equality(self, tracks):
+        """Two sets built from the same tables are equal."""
+        same = AnnotationSet(
+            tracks.annotations, features=tracks.features, attrs=tracks.attrs
+        )
+        assert same == tracks
+        assert tracks != AnnotationSet(None, dims=DIMS)
 
-    def test_repr_states_dimension_extent(self, region_set):
+    def test_equality_sees_features(self, tracks):
+        """A features column is part of what a set says."""
+        features = tracks.features.assign(vehicle_type=["car", None])
+        other = AnnotationSet(tracks.annotations, features=features, attrs=tracks.attrs)
+        assert other != tracks
+
+    def test_equality_sees_bases(self):
+        """Bases are part of what a set says, used or not."""
+        frame = pd.DataFrame({"time": [1.0]})
+        plain = AnnotationSet(frame, dims=DIMS)
+        based = AnnotationSet(frame, dims=DIMS, bases={"m": _moveout()})
+        assert plain != based
+
+    def test_not_equal_to_other_types(self, boxes):
+        """A set is not equal to something which is not one."""
+        assert boxes != "not a set"
+
+
+class TestRepr:
+    """What a set says about itself."""
+
+    def test_counts(self, tracks):
+        """Annotations, features by kind, and bases are counted."""
+        out = repr(tracks)
+        assert "annotations: 6" in out
+        assert "features: 3 (groups: 2, paths: 1, polygons: 0)" in out
+        assert "bases: 0" in out
+
+    def test_columns_of_each_table(self, tracks):
+        """Both tables name their columns."""
+        out = repr(tracks)
+        assert "annotation columns:" in out and "velocity" in out
+        assert "feature columns:" in out and "vehicle_type" in out
+
+    def test_dimension_extent(self, boxes):
         """A dimension the set states is shown by what it spans."""
-        out = repr(region_set)
+        out = repr(boxes)
         assert "min: 0.000 max: 100.000" in out
-        # A dimension no column spells has no extent to state.
-        assert "unstated" in out
+        assert "unstated" in out  # time is spelled by no column
 
-    def test_repr_of_empty_set(self):
+    def test_extent_spans_values_and_ranges(self, tracks):
+        """Both spellings of a dimension count toward its extent."""
+        out = repr(tracks)
+        assert "min: 1.000 max: 80.000" in out
+        assert "(value, range)" in out
+
+    def test_empty_set(self):
         """An empty set still has a repr, and claims no contents."""
         out = repr(AnnotationSet(None, dims=DIMS))
-        assert "0 Annotations" in out
+        assert "AnnotationSet" in out
         assert "Contents" not in out
 
-    def test_repr_counts_default_geometry(self):
-        """A row which spells no geometry is a region, and is counted as one."""
-        frame = pd.DataFrame(
-            {
-                "id": ["a", "b", "c"],
-                "geometry": ["path", "", None],
-                "distance_min": [np.nan, 10.0, 20.0],
-                "distance_max": [np.nan, 80.0, 90.0],
-            }
-        )
-        vertices = pd.DataFrame(
-            {"id": ["a"] * 3, "seq": [0, 1, 2], "distance": [1.0, 5.0, 9.0]}
-        )
-        annotations = AnnotationSet(frame, dims=DIMS, vertices=vertices)
-        kinds = [type(x.geometry).__name__ for x in annotations]
-        assert kinds == ["Path", "Region", "Region"]
-        assert "geometry: region: 2, path: 1" in repr(annotations)
-
-    def test_repr_counts_geometry_without_the_column(self, region_set):
-        """A frame which never spells geometry holds regions all the same."""
-        assert "geometry: region: 3" in repr(region_set)
-
-    def test_repr_counts_vertices(self, path_set):
-        """A set holding a path names its geometry kinds and its vertices."""
-        out = repr(path_set)
-        assert "path: 1" in out and "region: 1" in out
-        assert "vertices: 3" in out
-
-    def test_repr_shows_attributes(self):
+    def test_attributes(self):
         """What the set says of itself is shown, and defaults are not."""
         out = repr(AnnotationSet(None, dims=DIMS, acquisition_key="XT.TUN1.00.DAS"))
         assert "acquisition_key: XT.TUN1.00.DAS" in out
-        assert "history" not in out  # unset, so it states nothing
+        assert "data_id" not in out
 
-    def test_rich(self, region_set):
+    def test_rich(self, boxes):
         """Annotation sets have a rich representation."""
-        assert isinstance(region_set.__rich__(), Text)
+        assert isinstance(boxes.__rich__(), Text)
 
-    def test_dimension_values_not_styled_as_keys(self, region_set):
+    def test_dimension_values_not_styled_as_keys(self, boxes):
         """A dimension's extent is a value, not the label in front of it."""
-        text = region_set.__rich__()
+        text = boxes.__rich__()
         assert text.style == ""
         start = text.plain.index("100.000")
         assert not [x for x in text.spans if x.start <= start < x.end]
 
-    def test_annotation_repr(self, region_set):
-        """One annotation names its class and what it states."""
-        out = repr(region_set[0])
-        assert out.startswith("Annotation(")
-        assert "group: event" in out
-
-    def test_equality(self, region_set):
-        """Two sets built the same way are equal."""
-        same = AnnotationSet(region_set.io.to_dataframe(), attrs=region_set.attrs)
-        assert same == region_set
-        assert region_set != AnnotationSet(None, dims=DIMS)
-
-    def test_not_equal_to_other_types(self, region_set):
-        """A set is not equal to something which is not one."""
-        assert region_set != "not a set"
+    def test_feature_repr(self, tracks):
+        """One feature names its class and what it states."""
+        assert repr(tracks["t1"]).startswith("Feature(")
 
 
 class TestDimensionSpelling:
-    """A dimension is a point, a range, or unconstrained."""
+    """A dimension is a value, a range, or unconstrained."""
 
-    def test_range_columns(self, region_set):
-        """A start/end pair is a half-open range."""
-        assert region_set[0].region.bounds["distance"] == (10.0, 80.0)
+    def test_range_columns(self, boxes):
+        """A min/max pair is a half-open range."""
+        assert _bounds(boxes)[0]["distance"] == (10.0, 80.0)
 
     def test_bare_column_is_a_point(self):
-        """A bare dimension column states a point, which is a zero-width range."""
-        out = AnnotationSet(pd.DataFrame({"distance": [5.0]}), dims=DIMS)
-        assert out[0].region.bounds["distance"] == (5.0, 5.0)
-        assert out[0].region.is_point("distance")
+        """A bare dimension column states a value, a zero-width range."""
+        region = _first(AnnotationSet(pd.DataFrame({"distance": [5.0]}), dims=DIMS))
+        assert region.geometry.bounds["distance"] == (5.0, 5.0)
+        assert region.geometry.is_point("distance")
 
-    def test_region_names_its_dims(self, region_set):
+    def test_values_and_ranges_in_one_frame(self):
+        """One dimension may be a value on one row and a range on the next."""
+        frame = pd.DataFrame(
+            {
+                "time": [1.0, np.nan],
+                "time_min": [np.nan, 2.0],
+                "time_max": [np.nan, 3.0],
+            }
+        )
+        out = _bounds(AnnotationSet(frame, dims=DIMS))
+        assert out == [{"time": (1.0, 1.0)}, {"time": (2.0, 3.0)}]
+
+    def test_a_row_stating_both_refused(self):
+        """One row states a dimension one way."""
+        frame = pd.DataFrame({"time": [1.0], "time_min": [1.0], "time_max": [2.0]})
+        with pytest.raises(ParameterError, match="as a value and as a range"):
+            AnnotationSet(frame, dims=DIMS)
+
+    def test_a_row_stating_nothing_refused(self):
+        """Every annotation is somewhere along at least one dimension."""
+        frame = pd.DataFrame({"time": [1.0, np.nan], "note": ["a", "b"]})
+        with pytest.raises(ParameterError, match=r"Row\(s\) 1 state no dimension"):
+            AnnotationSet(frame, dims=DIMS)
+
+    def test_a_frame_of_no_dimension_refused(self):
+        """A column of extras locates nothing."""
+        with pytest.raises(ParameterError, match="state no dimension"):
+            AnnotationSet(pd.DataFrame({"score": [0.9]}), dims=DIMS)
+
+    def test_one_kind_per_dimension(self):
+        """A value column of numbers beside a range of times is two kinds."""
+        frame = pd.DataFrame(
+            {
+                "time": [1.0, np.nan],
+                "time_min": [pd.NaT, TIMES[0]],
+                "time_max": [pd.NaT, TIMES[1]],
+            }
+        )
+        with pytest.raises(ParameterError, match="one kind of coordinate"):
+            AnnotationSet(frame, dims=DIMS)
+
+    def test_region_names_its_dims(self, boxes):
         """A region says which dimensions it constrains."""
-        assert region_set[0].region.dims == ("distance",)
+        assert _first(boxes).geometry.dims == ("distance",)
 
     def test_timedelta_endpoints_keep_their_type(self):
         """A bound on a lag dimension is a duration, not the integer behind it."""
         lags = np.array([1, 5], dtype="timedelta64[s]")
         frame = pd.DataFrame({"time_min": lags[:1], "time_max": lags[1:]})
-        start, end = AnnotationSet(frame, dims=DIMS)[0].region.bounds["time"]
+        start, end = _bounds(AnnotationSet(frame, dims=DIMS))[0]["time"]
         assert isinstance(start, np.timedelta64)
         assert isinstance(end, np.timedelta64)
 
-    def test_unconstrained_dim_absent(self, region_set):
+    def test_unconstrained_dim_absent(self, boxes):
         """A dimension no column names does not appear in the bounds."""
-        assert "time" not in region_set[0].region.bounds
-
-    def test_unstated_cell_is_unconstrained(self):
-        """A blank cell constrains nothing, even where the column exists."""
-        frame = pd.DataFrame({"distance_min": [np.nan], "distance_max": [np.nan]})
-        assert AnnotationSet(frame, dims=DIMS)[0].region.bounds == {}
-
-    def test_both_spellings_refused(self):
-        """One dimension is spelled one way."""
-        frame = pd.DataFrame({"time": [1], "time_min": [1], "time_max": [2]})
-        with pytest.raises(ParameterError, match="both as a point"):
-            AnnotationSet(frame, dims=DIMS)
+        assert "time" not in _bounds(boxes)[0]
 
     def test_half_a_range_refused(self):
         """A start with no end does not bound anything."""
@@ -272,7 +341,9 @@ class TestDimensionSpelling:
     @pytest.mark.parametrize("side", ["distance_min", "distance_max"])
     def test_half_a_range_cell_refused(self, side):
         """A row states both ends or neither; one end bounds nothing."""
-        frame = pd.DataFrame({"distance_min": [np.nan], "distance_max": [np.nan]})
+        frame = pd.DataFrame(
+            {"time": [1.0], "distance_min": [np.nan], "distance_max": [np.nan]}
+        )
         frame[side] = [1.0]
         with pytest.raises(ParameterError, match="half a distance range"):
             AnnotationSet(frame, dims=DIMS)
@@ -296,11 +367,15 @@ class TestDimensionSpelling:
     def test_numeric_text_in_a_dimension_is_read_as_numbers(self):
         """Read as a stored table reads it, so the two cannot disagree."""
         frame = pd.DataFrame(
-            {"distance_min": ["1.5", None], "distance_max": ["2", None]}
+            {
+                "time": [np.nan, 1.0],
+                "distance_min": ["1.5", None],
+                "distance_max": ["2", None],
+            }
         )
-        out = AnnotationSet(frame, dims=DIMS)
-        assert out[0].region.bounds["distance"] == (1.5, 2.0)
-        assert "distance" not in out[1].region.bounds
+        out = _bounds(AnnotationSet(frame, dims=DIMS))
+        assert out[0]["distance"] == (1.5, 2.0)
+        assert "distance" not in out[1]
 
     @pytest.mark.parametrize(
         "text", ["2020-01-01 10:00:00", "2020-01-01T10:00:00Z", "2020-01-01T10:00:00"]
@@ -308,7 +383,7 @@ class TestDimensionSpelling:
     def test_time_text_in_any_spelling_is_a_time(self, text):
         """What `to_csv` writes and `read_csv` hands back is a time here too."""
         out = AnnotationSet(pd.DataFrame({"time": [text]}), dims=DIMS)
-        assert out[0].region.bounds["time"][0] == np.datetime64("2020-01-01T10:00:00")
+        assert _bounds(out)[0]["time"][0] == np.datetime64("2020-01-01T10:00:00")
 
     def test_a_malformed_date_is_refused_not_a_value_error(self):
         """Shaped like a date without being one is text, and said to be."""
@@ -335,7 +410,7 @@ class TestDimensionSpelling:
     def test_a_dimension_of_objects_still_reads(self, cell):
         """A frame may hold coordinates in an object column; they are read."""
         frame = pd.DataFrame({"offset": pd.Series([cell], dtype=object)})
-        held = AnnotationSet(frame, dims=("offset",)).io.to_dataframe()["offset"]
+        held = AnnotationSet(frame, dims=("offset",)).annotations["offset"]
         assert held.dtype.kind in "Mm"
 
     def test_a_dimension_of_python_durations(self):
@@ -343,7 +418,7 @@ class TestDimensionSpelling:
         cells = pd.Series([datetime.timedelta(seconds=1)], dtype=object)
         held = AnnotationSet(
             pd.DataFrame({"offset": cells}), dims=("offset",)
-        ).io.to_dataframe()["offset"]
+        ).annotations["offset"]
         assert held.dtype == np.dtype("timedelta64[ns]")
 
     def test_a_duration_dimension_is_a_coordinate(self):
@@ -351,7 +426,7 @@ class TestDimensionSpelling:
         spans = np.array([1, 3], dtype="timedelta64[s]")
         frame = pd.DataFrame({"offset_min": spans[:1], "offset_max": spans[1:]})
         out = AnnotationSet(frame, dims=("offset",))
-        assert out.io.to_dataframe()["offset_min"].dtype == "timedelta64[ns]"
+        assert out.annotations["offset_min"].dtype == "timedelta64[ns]"
 
     def test_a_dimension_mixing_numbers_and_times(self):
         """A number already read as one is not re-read as an epoch."""
@@ -360,12 +435,7 @@ class TestDimensionSpelling:
             AnnotationSet(pd.DataFrame({"time": cells}), dims=DIMS)
 
     def test_a_dimension_no_coordinate_could_hold(self):
-        """A year no coordinate holds is refused, never raised past the set.
-
-        Whether the conversion overflows or quietly wraps is numpy's to
-        decide, and its versions decide differently; what is pinned here is
-        that neither reaches the caller as an implementation error.
-        """
+        """A year no coordinate holds is refused, never raised past the set."""
         frame = pd.DataFrame({"time": ["1000", "2020-01-01"]})
         with suppress(ParameterError):
             AnnotationSet(frame, dims=DIMS)
@@ -379,7 +449,7 @@ class TestDimensionSpelling:
     def test_datetime_endpoints_keep_their_type(self):
         """A time bound is a time, not the integer behind it."""
         frame = pd.DataFrame({"time_min": TIMES[:1], "time_max": TIMES[2:]})
-        start, end = AnnotationSet(frame, dims=DIMS)[0].region.bounds["time"]
+        start, end = _bounds(AnnotationSet(frame, dims=DIMS))[0]["time"]
         assert isinstance(start, np.datetime64)
         assert isinstance(end, np.datetime64)
 
@@ -387,63 +457,73 @@ class TestDimensionSpelling:
 class TestColumns:
     """Unknown columns carry; near-misses do not."""
 
-    def test_unknown_column_is_an_extra(self):
-        """A column the set does not model rides along with its row."""
-        out = AnnotationSet(pd.DataFrame({"score": [0.9]}), dims=DIMS)
-        assert out[0].extra["score"] == 0.9
+    def test_arbitrary_columns_round_trip(self):
+        """Any column and dtype rides along untouched."""
+        frame = pd.DataFrame(
+            {
+                "time": [1.0, 2.0],
+                "phase": ["P", "S"],
+                "confidence": [0.5, 0.75],
+                "count": [1, 2],
+                "checked": [True, False],
+                "group": ["a", "b"],
+                "value": [3, None],
+                "tags": ["x, y", None],
+                "parent": ["e1", None],
+            }
+        )
+        out = AnnotationSet(frame, dims=DIMS).annotations
+        pd.testing.assert_frame_equal(out[frame.columns[:5]], frame[frame.columns[:5]])
+        assert _first(AnnotationSet(frame, dims=DIMS)).extra["group"] == "a"
 
     def test_unstated_extra_dropped(self):
-        """A blank extra states nothing, so the row does not carry it."""
-        out = AnnotationSet(pd.DataFrame({"score": [np.nan]}), dims=DIMS)
-        assert "score" not in out[0].extra
+        """A blank extra states nothing, so the feature does not carry it."""
+        out = AnnotationSet(pd.DataFrame({"time": [1.0], "score": [np.nan]}), dims=DIMS)
+        assert "score" not in _first(out).extra
+
+    @pytest.mark.parametrize("column", ["geometry", "basis"])
+    def test_a_feature_column_on_annotations_refused(self, column):
+        """Geometry and basis are what a feature states, not a row."""
+        frame = pd.DataFrame({"time": [1.0], column: ["path"]})
+        with pytest.raises(ParameterError, match="features table"):
+            AnnotationSet(frame, dims=DIMS)
 
     def test_a_retired_range_spelling_says_what_to_write(self):
-        """A set written before the rename is told its columns' new names.
-
-        Left alone, `<dim>_start`/`<dim>_end` read as two unrelated extras
-        and the annotation covers everything instead of what it states --
-        a wrong answer rather than a refusal.
-        """
-        frame = pd.DataFrame({"group": ["quiet"], "time_start": [0], "time_end": [1]})
+        """A set written before the rename is told its columns' new names."""
+        frame = pd.DataFrame({"distance": [1.0], "time_start": [0], "time_end": [1]})
         with pytest.raises(ParameterError, match="now spells _min/_max"):
             AnnotationSet(frame, dims=DIMS)
 
     def test_undeclared_range_pair_refused(self):
         """A range naming no declared dimension is a forgotten dimension."""
-        frame = pd.DataFrame({"depth_min": [1], "depth_max": [2]})
+        frame = pd.DataFrame({"time": [1.0], "depth_min": [1], "depth_max": [2]})
         with pytest.raises(ParameterError, match="name no declared dimension"):
             AnnotationSet(frame, dims=DIMS)
 
     def test_lone_range_column_is_an_extra(self):
         """One half of a range names no dimension, so it is just a column."""
-        out = AnnotationSet(pd.DataFrame({"depth_min": [1]}), dims=DIMS)
-        assert out[0].extra["depth_min"] == 1
+        out = AnnotationSet(pd.DataFrame({"time": [1.0], "depth_min": [1]}), dims=DIMS)
+        assert _first(out).extra["depth_min"] == 1
 
     def test_the_set_column_is_a_label(self):
         """A row read with others says which set it came from."""
-        out = AnnotationSet(pd.DataFrame({"set": ["picks"]}), dims=DIMS)
-        assert out[0].set == "picks"
-        assert "set" not in out[0].extra
-
-    def test_no_set_column_is_no_label(self):
-        """A set read on its own is not in a collection, so it names none."""
-        out = AnnotationSet(pd.DataFrame({"group": ["a"]}), dims=DIMS)
-        assert out[0].set == ""
+        out = AnnotationSet(pd.DataFrame({"time": [1.0], "set": ["p"]}), dims=DIMS)
+        assert _first(out).set == "p"
+        assert "set" not in _first(out).extra
 
     def test_private_column_is_not_an_extra(self):
         """An underscore says the column is the author's, not the set's."""
-        frame = pd.DataFrame({"score": [0.9], "_crew": ["north crew"]})
+        frame = pd.DataFrame({"time": [1.0], "_crew": ["north crew"]})
         out = AnnotationSet(frame, dims=DIMS)
-        assert "_crew" not in out[0].extra
-        assert "_crew" not in out.io.to_dataframe().columns
+        assert "_crew" not in _first(out).extra
+        assert "_crew" not in out.annotations.columns
 
     def test_a_private_column_states_no_dimension(self):
         """Underscoring a range column makes it nothing, not a bound."""
         frame = pd.DataFrame(
-            {"group": ["a"], "_distance_min": [1.0], "_distance_max": [2.0]}
+            {"time": [1.0], "_distance_min": [1.0], "_distance_max": [2.0]}
         )
-        out = AnnotationSet(frame, dims=DIMS)
-        assert out[0].region.bounds == {}
+        assert "distance" not in _bounds(AnnotationSet(frame, dims=DIMS))[0]
 
     def test_a_private_dimension(self):
         """A dimension is a column, and no set reads a private one."""
@@ -465,20 +545,30 @@ class TestColumns:
     def test_declared_column_documents_only(self):
         """Documenting a column does not gate any other one."""
         out = AnnotationSet(
-            pd.DataFrame({"score": [0.9], "other": [1]}),
+            pd.DataFrame({"time": [1.0], "score": [0.9], "other": [1]}),
             dims=DIMS,
-            columns={"score": {"description": "Confidence", "units": "dimensionless"}},
+            annotation_columns={"score": {"description": "Confidence"}},
         )
-        assert out.attrs.columns["score"].description == "Confidence"
-        assert "other" in out[0].extra
+        assert out.attrs.annotation_columns["score"].description == "Confidence"
+        assert "other" in _first(out).extra
 
     def test_stated_dtype_checked(self):
         """A column which says what it holds must hold it."""
         with pytest.raises(ParameterError, match="states dtype"):
             AnnotationSet(
-                pd.DataFrame({"score": ["high"]}),
+                pd.DataFrame({"time": [1.0], "score": ["high"]}),
                 dims=DIMS,
-                columns={"score": {"dtype": "float64"}},
+                annotation_columns={"score": {"dtype": "float64"}},
+            )
+
+    def test_feature_dtype_checked(self):
+        """The features table checks its own declarations."""
+        with pytest.raises(ParameterError, match="states dtype"):
+            AnnotationSet(
+                pd.DataFrame({"time": [1.0], "feature_id": ["e"]}),
+                features=pd.DataFrame({"id": ["e"], "magnitude": ["big"]}),
+                dims=DIMS,
+                feature_columns={"magnitude": {"dtype": "float64"}},
             )
 
     @pytest.mark.parametrize(
@@ -488,676 +578,669 @@ class TestColumns:
     def test_extension_dtypes_declarable(self, dtype, values):
         """Pandas gives plain text a `str` dtype, which numpy cannot name."""
         frame = pd.DataFrame({"note": values}).astype(dtype)
-        out = AnnotationSet(frame, dims=DIMS, columns={"note": {"dtype": dtype}})
+        frame["time"] = [1.0, 2.0]
+        columns = {"note": {"dtype": dtype}}
+        out = AnnotationSet(frame, dims=DIMS, annotation_columns=columns)
         assert len(out) == 2
 
     @pytest.mark.parametrize("declared", ["str", "string", "object"])
     def test_a_text_dtype_matches_any_text_spelling(self, declared):
-        """
-        Pandas spells text as `object`, `str` or `string` depending on its
-        version and on what built the column; a declaration of any of them
-        is a declaration of text.
-        """
+        """A declaration of any text spelling is a declaration of text."""
+        columns = {"note": {"dtype": declared}}
         for frame in (
-            pd.DataFrame({"note": pd.Series(["a"], dtype=object)}),
-            pd.DataFrame({"note": pd.Series(["a"], dtype="string")}),
+            pd.DataFrame({"time": [1.0], "note": pd.Series(["a"], dtype=object)}),
+            pd.DataFrame({"time": [1.0], "note": pd.Series(["a"], dtype="string")}),
         ):
-            out = AnnotationSet(frame, dims=DIMS, columns={"note": {"dtype": declared}})
+            out = AnnotationSet(frame, dims=DIMS, annotation_columns=columns)
             assert len(out) == 1
         with pytest.raises(ParameterError, match="states dtype"):
             AnnotationSet(
-                pd.DataFrame({"note": [1.0]}),
+                pd.DataFrame({"time": [1.0], "note": [1.0]}),
                 dims=DIMS,
-                columns={"note": {"dtype": declared}},
+                annotation_columns=columns,
             )
 
     def test_an_object_column_is_text_only_if_its_cells_are(self):
         """`object` may hold anything, so a text declaration reads its cells."""
-        frame = pd.DataFrame({"note": pd.Series(["a", {"x": 1}], dtype=object)})
+        frame = pd.DataFrame(
+            {"time": [1.0, 2.0], "note": pd.Series(["a", {"x": 1}], dtype=object)}
+        )
         with pytest.raises(ParameterError, match="states dtype"):
-            AnnotationSet(frame, dims=DIMS, columns={"note": {"dtype": "string"}})
-        # Declared as what it is, an object column holding anything is fine.
-        out = AnnotationSet(frame, dims=DIMS, columns={"note": {"dtype": "object"}})
-        assert len(out) == 2
+            AnnotationSet(
+                frame, dims=DIMS, annotation_columns={"note": {"dtype": "string"}}
+            )
+        columns = {"note": {"dtype": "object"}}
+        assert len(AnnotationSet(frame, dims=DIMS, annotation_columns=columns)) == 2
 
     def test_an_extra_holding_timedeltas_is_held_at_nanoseconds(self):
         """Every time is held at DASCore's resolution, an extra's too."""
-        frame = pd.DataFrame({"lag": np.array([1, 5], dtype="timedelta64[s]")})
-        out = AnnotationSet(frame, dims=DIMS)
-        held = out.io.to_dataframe()["lag"]
+        lags = np.array([1, 5], dtype="timedelta64[s]")
+        frame = pd.DataFrame({"time": [1.0, 2.0], "lag": lags})
+        held = AnnotationSet(frame, dims=DIMS).annotations["lag"]
         assert held.dtype == np.dtype("timedelta64[ns]")
         assert held.iloc[0] == np.timedelta64(1, "s")
 
     def test_a_categorical_column_builds(self):
         """A categorical extra is carried like any other, blank cells and all."""
         frame = pd.DataFrame(
-            {
-                "distance_min": [0.0, 1.0],
-                "distance_max": [1.0, 2.0],
-                "note": pd.Series(["a", ""], dtype="category"),
-            }
+            {"time": [1.0, 2.0], "note": pd.Series(["a", ""], dtype="category")}
         )
-        out = AnnotationSet(frame, dims=DIMS)
-        assert out[0].extra["note"] == "a"
-        assert "note" not in out[1].extra
+        extras = [x.extra for x in AnnotationSet(frame, dims=DIMS)]
+        assert extras[0]["note"] == "a"
+        assert "note" not in extras[1]
 
     def test_a_column_named_by_something_other_than_a_string(self):
         """A table names a column by a string, so a set does too."""
-        frame = pd.DataFrame({"distance_min": [0.0], "distance_max": [1.0], 1: ["x"]})
+        frame = pd.DataFrame({"time": [1.0], 1: ["x"]})
         with pytest.raises(ParameterError, match="other than a string"):
             AnnotationSet(frame, dims=DIMS)
 
-    def test_category_needs_no_categories(self):
-        """A column documented as categorical says so, not which categories."""
-        frame = pd.DataFrame({"note": ["a", "b"]}).astype("category")
-        assert (
-            len(
-                AnnotationSet(frame, dims=DIMS, columns={"note": {"dtype": "category"}})
-            )
-            == 2
-        )
-
     def test_datetime_unit_is_always_nanoseconds(self):
-        """A set holds times at nanoseconds, so another unit names no column
-        it could hold, and the error says so rather than blaming the data.
-        """
-        frame = pd.DataFrame({"when": np.array(["2020-01-01"], dtype="datetime64[us]")})
+        """Another unit names no column a set could hold, and says so."""
+        when = np.array(["2020-01-01"], dtype="datetime64[us]")
         with pytest.raises(ParameterError, match="every time at nanoseconds"):
             AnnotationSet(
-                frame, dims=DIMS, columns={"when": {"dtype": "datetime64[us]"}}
+                pd.DataFrame({"time": [1.0], "when": when}),
+                dims=DIMS,
+                annotation_columns={"when": {"dtype": "datetime64[us]"}},
             )
-
-    def test_a_declared_nanosecond_column(self):
-        """The unit a set does hold is the one which may be declared."""
-        frame = pd.DataFrame({"when": np.array(["2020-01-01"], dtype="datetime64[us]")})
-        out = AnnotationSet(
-            frame, dims=DIMS, columns={"when": {"dtype": "datetime64[ns]"}}
-        )
-        assert out.io.to_dataframe()["when"].dtype == np.dtype("datetime64[ns]")
 
     def test_unreadable_dtype_refused(self):
         """A dtype naming nothing says so, rather than raising numpy's error."""
         with pytest.raises(ParameterError, match="declares the dtype"):
             AnnotationSet(
-                pd.DataFrame({"score": [1.0]}),
+                pd.DataFrame({"time": [1.0]}),
                 dims=DIMS,
-                columns={"score": {"dtype": "not-a-dtype"}},
+                annotation_columns={"time": {"dtype": "not-a-dtype"}},
             )
 
     def test_stated_dtype_absent_column(self):
         """Documenting a column the frame lacks is not an error."""
-        out = AnnotationSet(None, dims=DIMS, columns={"score": {"dtype": "float64"}})
-        assert "score" in out.attrs.columns
-
-
-class TestValues:
-    """A group holds one kind of value."""
-
-    def test_mixed_kinds_refused(self):
-        """A membership and a number in one group are two variables."""
-        frame = pd.DataFrame({"group": ["g", "g"], "value": [None, 3]})
-        with pytest.raises(ParameterError, match="mixes"):
-            AnnotationSet(frame, dims=DIMS)
-
-    def test_unnamed_group_is_still_a_group(self):
-        """Pandas drops a null grouping key; the unnamed group is checked anyway."""
-        frame = pd.DataFrame({"group": [None, None], "value": [None, 1]})
-        with pytest.raises(ParameterError, match="mixes"):
-            AnnotationSet(frame, dims=DIMS)
-
-    def test_int_and_float_are_one_kind(self):
-        """Numbers are numbers; the model reads them alike."""
-        frame = pd.DataFrame({"group": ["g", "g"], "value": [1.5, 3]})
-        assert len(AnnotationSet(frame, dims=DIMS)) == 2
-
-    def test_groups_are_independent(self):
-        """Two groups may hold different kinds."""
-        frame = pd.DataFrame({"group": ["a", "b"], "value": [None, "car"]})
-        assert len(AnnotationSet(frame, dims=DIMS)) == 2
-
-    def test_overlap_is_not_checked(self):
-        """Non-overlap only means anything at projection, so it is deferred."""
-        frame = pd.DataFrame(
-            {
-                "group": ["g", "g"],
-                "value": ["a", "b"],
-                "distance_min": [0.0, 5.0],
-                "distance_max": [10.0, 15.0],
-            }
-        )
-        assert len(AnnotationSet(frame, dims=DIMS)) == 2
-
-    def test_no_value_states_membership(self):
-        """An annotation with no value states membership, and the value stays unset."""
-        assert AnnotationSet(pd.DataFrame({"group": ["a"]}), dims=DIMS)[0].value is None
-
-    @pytest.mark.parametrize("value", [True, False, np.bool_(True)])
-    def test_boolean_refused(self, value):
-        """Membership has a spelling already, so true and false state nothing."""
-        frame = pd.DataFrame({"group": ["a"], "value": [value]})
-        with pytest.raises(ParameterError, match=r"group 'a'.*true and false are not"):
-            AnnotationSet(frame, dims=DIMS)
-
-    @pytest.mark.parametrize("blank", [None, np.nan])
-    def test_a_blank_cell_in_a_valued_group_is_refused(self, blank):
-        """A blank cell states membership, which a valued group cannot hold."""
-        frame = pd.DataFrame({"group": ["amp", "amp"], "value": [3.0, blank]})
-        with pytest.raises(ParameterError, match="blank cell states membership"):
-            AnnotationSet(frame, dims=DIMS)
-
-    def test_non_finite_value_refused(self):
-        """A value which cannot survive a round trip is not a value."""
-        frame = pd.DataFrame({"group": ["a"], "value": [np.inf]})
-        with pytest.raises(ParameterError, match="must be finite"):
-            AnnotationSet(frame, dims=DIMS)
-
-
-class TestTags:
-    """Tags are multi-membership labels."""
-
-    def test_comma_separated_text(self):
-        """A tag cell written as text splits on commas."""
-        out = AnnotationSet(pd.DataFrame({"tags": ["a, b"]}), dims=DIMS)
-        assert out[0].tags == ("a", "b")
-
-    def test_sequence(self):
-        """A cell holding a sequence is taken as it is."""
-        out = AnnotationSet(pd.DataFrame({"tags": [["a", "b"]]}), dims=DIMS)
-        assert out[0].tags == ("a", "b")
-
-    def test_scalar_is_one_tag(self):
-        """A label which happens to be a number is still one label."""
-        assert AnnotationSet(pd.DataFrame({"tags": [5]}), dims=DIMS)[0].tags == ("5",)
-
-    def test_absent(self):
-        """No tags is an empty tuple, not None."""
-        assert AnnotationSet(pd.DataFrame({"group": ["a"]}), dims=DIMS)[0].tags == ()
-
-    def test_a_padded_tag_is_held_stripped(self):
-        """Tags are held as they read back, so padding does not survive."""
-        out = AnnotationSet(pd.DataFrame({"tags": [(" a", "b ")]}), dims=DIMS)
-        assert out.io.to_dataframe()["tags"][0] == ("a", "b")
-
-    def test_an_empty_tag_is_no_tag(self):
-        """A tag holding nothing cannot be written down, so it is not held."""
-        out = AnnotationSet(pd.DataFrame({"tags": [("", "b")]}), dims=DIMS)
-        assert out[0].tags == ("b",)
-
-    def test_a_tag_holding_a_comma(self):
-        """A comma separates tags, so a tag holding one would become two."""
-        frame = pd.DataFrame({"tags": [("a,b", "c")]})
-        with pytest.raises(ParameterError, match="hold a comma"):
-            AnnotationSet(frame, dims=DIMS)
+        columns = {"score": {"dtype": "float64"}}
+        out = AnnotationSet(None, dims=DIMS, annotation_columns=columns)
+        assert "score" in out.attrs.annotation_columns
 
 
 class TestIdentity:
-    """Ids are the producer's, and nothing here invents one."""
+    """Annotation ids are optional; feature ids are required."""
 
-    def test_absent_id_is_blank(self, region_set):
-        """A set without ids is fine; identity-needing operations are not."""
-        assert region_set[0].id == ""
+    def test_annotation_ids_are_optional(self, boxes):
+        """A set without ids is fine, and nothing invents one."""
+        assert "id" not in boxes.annotations.columns
 
-    def test_duplicate_ids_refused(self):
-        """An id names one row."""
-        with pytest.raises(ParameterError, match="more than one row"):
-            AnnotationSet(pd.DataFrame({"id": ["a", "a"]}), dims=DIMS)
-
-    def test_blank_ids_may_repeat(self):
-        """Unstated identity is not a clash."""
-        frame = pd.DataFrame({"id": [None, None], "group": ["a", "b"]})
-        assert len(AnnotationSet(frame, dims=DIMS)) == 2
-
-    def test_parent_must_exist(self):
-        """A parent names an annotation of this set."""
-        frame = pd.DataFrame({"id": ["a"], "parent": ["z"]})
-        with pytest.raises(ParameterError, match="name no annotation"):
+    def test_duplicate_annotation_ids_refused(self):
+        """A stated annotation id names one row."""
+        frame = pd.DataFrame({"id": ["a", "a"], "time": [1.0, 2.0]})
+        with pytest.raises(ParameterError, match=r"annotation id.*more than one row"):
             AnnotationSet(frame, dims=DIMS)
 
-    def test_parent_resolves(self):
-        """A pick group points at its parent by id."""
-        frame = pd.DataFrame({"id": ["a", "b"], "parent": ["", "a"]})
-        assert AnnotationSet(frame, dims=DIMS)[1].parent == "a"
+    def test_blank_annotation_ids_may_repeat(self):
+        """Unstated identity is not a clash."""
+        frame = pd.DataFrame({"id": [None, None], "time": [1.0, 2.0]})
+        assert len(AnnotationSet(frame, dims=DIMS)) == 2
 
     def test_whole_number_ids_are_their_own_text(self):
         """An id of 1 is named `1`, not the `1.0` a blank beside it makes."""
-        frame = pd.DataFrame({"id": [1, 2], "parent": [None, 1]})
+        frame = pd.DataFrame(
+            {"id": [1.0, 2.0], "feature_id": [7.0, np.nan], "time": [1.0, 2.0]}
+        )
         out = AnnotationSet(frame, dims=DIMS)
-        assert [x.id for x in out] == ["1", "2"]
-        assert out[1].parent == "1"
-
-    def test_a_whole_number_is_named_the_same_in_every_column(self):
-        """A blank in one identity column does not rename what another means."""
-        frame = pd.DataFrame({"id": [1.0, 2.5], "parent": [None, 1.0]})
-        out = AnnotationSet(frame, dims=DIMS)
-        assert [x.id for x in out] == ["1", "2.5"]
-        assert out[1].parent == "1"
-
-    def test_a_vertex_names_the_row_it_belongs_to(self):
-        """The vertex frame's ids are spelled as the annotations' are."""
-        frame = pd.DataFrame({"id": [1.0, None], "geometry": ["path", "region"]})
-        vertices = pd.DataFrame({"id": [1, 1], "seq": [0, 1], "distance": [0.0, 1.0]})
-        out = AnnotationSet(frame, dims=DIMS, vertices=vertices)
-        assert out[0].geometry.vertices["distance"] == (0.0, 1.0)
+        assert list(out.annotations["id"]) == ["1", "2"]
+        assert list(out.features["id"]) == ["7"]
 
     def test_an_id_beyond_where_a_float_counts_by_ones(self):
         """A float that large names no one integer, so it keeps its own text."""
-        frame = pd.DataFrame({"id": [1e20, None]})
-        assert AnnotationSet(frame, dims=DIMS)[0].id == "1e+20"
+        frame = pd.DataFrame({"id": [1e20, None], "time": [1.0, 2.0]})
+        assert AnnotationSet(frame, dims=DIMS).annotations["id"][0] == "1e+20"
 
-    def test_an_id_is_not_read_from_a_row(self):
-        """A row of a frame holds one dtype; an id does not take the float
-        bounds beside it.
-        """
+    def test_feature_ids_required(self):
+        """Annotations reference a feature by id, so each has one."""
+        features = pd.DataFrame({"id": ["a", None], "geometry": [None, None]})
+        frame = pd.DataFrame({"feature_id": ["a"], "time": [1.0]})
+        with pytest.raises(ParameterError, match="state no id"):
+            AnnotationSet(frame, features=features, dims=DIMS)
+
+    def test_features_without_an_id_column_refused(self):
+        """A features table names what it holds."""
+        features = pd.DataFrame({"name": ["train"]})
+        with pytest.raises(ParameterError, match="no id column"):
+            AnnotationSet(None, features=features, dims=DIMS)
+
+    def test_duplicate_feature_ids_refused(self):
+        """A feature id names one feature."""
+        features = pd.DataFrame({"id": ["a", "a"]})
+        frame = pd.DataFrame({"feature_id": ["a"], "time": [1.0]})
+        with pytest.raises(ParameterError, match=r"feature id.*more than one row"):
+            AnnotationSet(frame, features=features, dims=DIMS)
+
+
+class TestFeatures:
+    """Every annotation belongs to one feature."""
+
+    def test_feature_id_creates_a_group(self):
+        """A feature_id naming no features row creates one, stated explicitly."""
+        frame = pd.DataFrame({"feature_id": ["e1", "e1", "e2"], "time": [1.0, 2, 3]})
+        out = AnnotationSet(frame, dims=DIMS)
+        assert list(out.features["id"]) == ["e1", "e2"]
+        assert out.features["geometry"].isna().all()
+        assert len(out) == 2
+        assert [len(x.geometry.regions) for x in out] == [2, 1]
+
+    def test_explicit_features_frame(self):
+        """Feature columns ride on the features table and reach the view."""
+        frame = pd.DataFrame({"feature_id": ["e1", "e1"], "time": [1.0, 2.0]})
+        features = pd.DataFrame({"id": ["e1"], "name": ["quake"], "magnitude": [2.5]})
+        out = AnnotationSet(frame, features=features, dims=DIMS)["e1"]
+        assert out.name == "quake"
+        assert out.extra == {"magnitude": 2.5}
+        assert out.kind == "group" and isinstance(out.geometry, Group)
+
+    def test_iteration_order(self):
+        """Features in table order, then each lone row in row order."""
         frame = pd.DataFrame(
-            {"id": [1], "value": [1], "distance_min": [0.0], "distance_max": [1.0]}
+            {"feature_id": [None, "b", "a", None], "time": [1.0, 2.0, 3.0, 4.0]}
         )
-        out = AnnotationSet(frame, dims=DIMS)[0]
-        assert out.id == "1"
-        assert out.value == 1 and isinstance(out.value, int)
+        features = pd.DataFrame({"id": ["a"]})
+        out = AnnotationSet(frame, features=features, dims=DIMS)
+        assert [x.id for x in out] == ["a", "b", "", ""]
+        assert [x.geometry.bounds["time"][0] for x in out if not x.id] == [1.0, 4.0]
 
+    def test_a_lone_row_is_a_region(self, boxes):
+        """A row naming no feature is its own group, located by its region."""
+        feature = _first(boxes)
+        assert (feature.id, feature.kind) == ("", "group")
+        assert isinstance(feature.geometry, Region)
+        assert feature.extra == {"note": "car"}
 
-class TestAcquisitionKeyColumn:
-    """A set may span acquisitions, so a row may name its own."""
+    def test_lookup_by_id(self, tracks):
+        """A feature is reached by its id."""
+        assert tracks["t1"].kind == "path"
+        with pytest.raises(KeyError, match="No feature"):
+            tracks["nope"]
 
-    def test_row_takes_the_set_key(self):
-        """A row naming none is addressed by the set."""
-        out = AnnotationSet(
-            pd.DataFrame({"group": ["a"]}), dims=DIMS, acquisition_key="N.A.L.ACQ"
-        )
-        assert out[0].acquisition_key == "N.A.L.ACQ"
+    def test_a_lone_row_has_no_id(self, boxes):
+        """The empty id names no feature."""
+        with pytest.raises(KeyError):
+            boxes[""]
 
-    def test_row_overrides_the_set_key(self):
-        """A row naming one overrides the set-level address."""
-        frame = pd.DataFrame({"acquisition_key": ["N.A.L.OTHER"]})
-        out = AnnotationSet(frame, dims=DIMS, acquisition_key="N.A.L.ACQ")
-        assert out[0].acquisition_key == "N.A.L.OTHER"
+    @pytest.mark.parametrize("spelling", ["region", "group", ""])
+    def test_group_spellings(self, spelling):
+        """A group may be spelled blank, group or region."""
+        frame = pd.DataFrame({"feature_id": ["a"], "time": [1.0]})
+        features = pd.DataFrame({"id": ["a"], "geometry": [spelling]})
+        out = AnnotationSet(frame, features=features, dims=DIMS)
+        assert out.features["geometry"].isna().all()
 
-    def test_blank_row_key_falls_back(self):
-        """An empty cell states nothing, so the set's key stands."""
-        frame = pd.DataFrame({"acquisition_key": [None]})
-        out = AnnotationSet(frame, dims=DIMS, acquisition_key="N.A.L.ACQ")
-        assert out[0].acquisition_key == "N.A.L.ACQ"
-
-    def test_row_key_validated(self):
-        """A row's key is checked like the set's."""
-        frame = pd.DataFrame({"acquisition_key": ["nope"]})
-        with pytest.raises(ValidationError, match="Invalid acquisition_key"):
-            AnnotationSet(frame, dims=DIMS)[0]
-
-    def test_key_column_is_not_an_extra(self):
-        """The column is modelled, so it does not also ride along as an extra."""
-        frame = pd.DataFrame({"acquisition_key": ["N.A.L.ACQ"]})
-        assert "acquisition_key" not in AnnotationSet(frame, dims=DIMS)[0].extra
-
-
-class TestGeometryKinds:
-    """A row states which geometry it is."""
-
-    def test_default_is_region(self, region_set):
-        """A set naming no geometry is a set of regions."""
-        assert isinstance(region_set[0].geometry, Region)
-
-    def test_unknown_kind_refused(self):
+    def test_unknown_geometry_refused(self):
         """A geometry this format has no meaning for is refused."""
-        with pytest.raises(ParameterError, match="is not one of"):
-            AnnotationSet(pd.DataFrame({"geometry": ["blob"]}), dims=DIMS)
+        features = pd.DataFrame({"id": ["a"], "geometry": ["blob"]})
+        frame = pd.DataFrame({"feature_id": ["a"], "time": [1.0]})
+        with pytest.raises(ParameterError, match="blob is not one of"):
+            AnnotationSet(frame, features=features, dims=DIMS)
 
-    def test_path_requires_id(self):
-        """Vertices are grouped by id, so a path without one binds to nothing."""
-        with pytest.raises(ParameterError, match="no id"):
-            AnnotationSet(pd.DataFrame({"geometry": ["path"]}), dims=DIMS)
+    @pytest.mark.parametrize("column", ["time", "distance_min"])
+    def test_coordinates_on_features_refused(self, column):
+        """Features hold no coordinates; their members do."""
+        features = pd.DataFrame({"id": ["a"], column: [1.0]})
+        if column == "distance_min":
+            features["distance_max"] = [2.0]
+        frame = pd.DataFrame({"feature_id": ["a"], "time": [1.0]})
+        with pytest.raises(ParameterError, match="coordinate column"):
+            AnnotationSet(frame, features=features, dims=DIMS)
 
-    def test_path_geometry(self, path_set):
-        """A path row builds a Path holding its vertices."""
-        geometry = path_set[0].geometry
-        assert isinstance(geometry, Path)
-        assert len(geometry) == 3
-        assert geometry.vertices["distance"] == (1.0, 5.0, 9.0)
+    def test_a_feature_locating_nothing_refused(self):
+        """No members and no basis is nowhere."""
+        features = pd.DataFrame({"id": ["a"]})
+        with pytest.raises(ParameterError, match="nothing locates it"):
+            AnnotationSet(None, features=features, dims=DIMS)
 
-    def test_polygon_geometry(self):
-        """A polygon row builds a Polygon."""
-        assert isinstance(_polygon_set()[0].geometry, Polygon)
-
-    def test_region_beside_a_path(self, path_set):
-        """A set may mix geometries; each row is read as what it says."""
-        assert isinstance(path_set[1].geometry, Region)
-
-    def test_vertex_dims(self, path_set):
-        """The vertices name the dimensions they are stated in."""
-        assert set(path_set[0].geometry.dims) == set(DIMS)
-
-    def test_datetime_vertices_keep_their_type(self, path_set):
-        """A vertex on the time dimension is a time."""
-        assert isinstance(path_set[0].geometry.vertices["time"][0], np.datetime64)
-
-    def test_region_property_for_every_geometry(self, path_set):
-        """Every annotation has a bounding region, whatever its geometry."""
-        assert isinstance(path_set[0].region, Region)
-        assert isinstance(path_set[1].region, Region)
-
-
-class TestVertices:
-    """The vertices frame is checked against the rows which need it."""
-
-    def test_seq_is_read_as_a_number(self):
-        """Text ordinals order '10' before '2'; a vertex states a number."""
-        frame = pd.DataFrame({"id": ["p1"], "geometry": ["path"]})
-        vertices = pd.DataFrame(
-            {"id": ["p1"] * 3, "seq": ["10", "2", "1"], "distance": [3.0, 2.0, 1.0]}
-        )
-        out = AnnotationSet(frame, dims=DIMS, vertices=vertices)
-        vertices = out.io.to_vertices()
-        assert vertices["seq"].tolist() == [1, 2, 10]
-        assert vertices["distance"].tolist() == [1.0, 2.0, 3.0]
-
-    @pytest.mark.parametrize(
-        "seq", [["first", "second"], [True, False], [np.True_, np.False_]]
-    )
-    def test_non_numeric_seq_refused(self, seq):
-        """What the loader refuses to read, the set refuses to hold -- a truth
-        value included, which `to_numeric` would otherwise count as 1 or 0.
-        """
-        frame = pd.DataFrame({"id": ["p1"], "geometry": ["path"]})
-        vertices = pd.DataFrame(
-            {
-                "id": ["p1"] * 2,
-                "seq": pd.Series(seq, dtype=object),
-                "distance": [1.0, 2.0],
-            }
-        )
-        with pytest.raises(ParameterError, match="non-numeric seq"):
-            AnnotationSet(frame, dims=DIMS, vertices=vertices)
-
-    def test_text_in_a_vertex_dimension_refused(self):
-        """A vertex places a shape, so its dimensions are numbers or times too."""
-        frame = pd.DataFrame({"id": ["p1"], "geometry": ["path"]})
-        vertices = pd.DataFrame(
-            {"id": ["p1"] * 2, "seq": [0, 1], "distance": ["here", "there"]}
-        )
-        with pytest.raises(ParameterError, match="neither numbers, times"):
-            AnnotationSet(frame, dims=DIMS, vertices=vertices)
-
-    def test_a_blank_seq_is_no_seq(self):
-        """The empty string is how a table spells an unset cell, here too."""
-        frame = pd.DataFrame({"id": ["p1"], "geometry": ["path"]})
-        vertices = pd.DataFrame(
-            {"id": ["p1"] * 2, "seq": ["", "1"], "distance": [1.0, 2.0]}
-        )
-        with pytest.raises(ParameterError, match="state no seq"):
-            AnnotationSet(frame, dims=DIMS, vertices=vertices)
-
-    def test_bounds_derived_from_vertices(self, path_set):
-        """A path's bounding region is the box its vertices fill."""
-        assert path_set[0].region.bounds["distance"] == (1.0, 9.0)
-
-    def test_derived_bounds_reach_the_frame(self, path_set):
-        """The derived box is a real column, so table operations see it."""
-        row = path_set.io.to_dataframe().iloc[0]
-        assert (row["distance_min"], row["distance_max"]) == (1.0, 9.0)
-
-    def test_stated_bounds_must_agree(self):
-        """The vertices are the shape; a box which disagrees is refused."""
+    def test_mixed_dimension_subsets(self):
+        """Features in one set may be drawn in different dimensions."""
         frame = pd.DataFrame(
             {
-                "id": ["x"],
-                "geometry": ["path"],
-                "distance_min": [99.0],
-                "distance_max": [100.0],
+                "feature_id": ["a", "a", "b", "b"],
+                "time": [0.0, 1.0, np.nan, np.nan],
+                "distance": [np.nan, np.nan, 0.0, 5.0],
             }
         )
-        vertices = pd.DataFrame(
-            {"id": ["x", "x"], "seq": [0, 1], "distance": [1.0, 2.0]}
-        )
-        with pytest.raises(ParameterError, match="disagrees with their vertices"):
-            AnnotationSet(frame, dims=DIMS, vertices=vertices)
+        features = pd.DataFrame({"id": ["a", "b"], "geometry": ["path", "path"]})
+        out = AnnotationSet(frame, features=features, dims=DIMS)
+        assert out.geometry("a").dims == ("time",)
+        assert out.geometry("b").dims == ("distance",)
 
-    def test_path_spanning_a_point_dimension_refused(self):
-        """A set spelling a dimension as a point holds no geometry spanning it."""
-        frame = pd.DataFrame({"id": ["x"], "geometry": ["path"], "distance": [np.nan]})
-        vertices = pd.DataFrame(
-            {"id": ["x", "x"], "seq": [0, 1], "distance": [1.0, 2.0]}
-        )
-        with pytest.raises(ParameterError, match="spells as a point"):
-            AnnotationSet(frame, dims=DIMS, vertices=vertices)
-
-    def test_degenerate_path_on_a_point_dimension(self):
-        """Vertices which do not move along a point dimension fill it in."""
-        frame = pd.DataFrame({"id": ["x"], "geometry": ["path"], "distance": [np.nan]})
-        vertices = pd.DataFrame(
-            {"id": ["x", "x"], "seq": [0, 1], "distance": [2.0, 2.0]}
-        )
-        out = AnnotationSet(frame, dims=DIMS, vertices=vertices)
-        assert out[0].region.bounds["distance"] == (2.0, 2.0)
-
-    def test_stated_point_must_agree(self):
-        """A stated point which the vertices contradict is refused."""
-        frame = pd.DataFrame({"id": ["x"], "geometry": ["path"], "distance": [99.0]})
-        vertices = pd.DataFrame(
-            {"id": ["x", "x"], "seq": [0, 1], "distance": [2.0, 2.0]}
-        )
-        with pytest.raises(ParameterError, match="disagrees with their vertices"):
-            AnnotationSet(frame, dims=DIMS, vertices=vertices)
-
-    def test_missing_vertices_refused(self):
-        """A path with no vertices states no shape."""
-        frame = pd.DataFrame({"id": ["x"], "geometry": ["path"]})
-        with pytest.raises(ParameterError, match="state no vertices"):
-            AnnotationSet(frame, dims=DIMS)
-
-    def test_one_path_without_vertices_refused(self):
-        """Every path needs vertices, not just one of them."""
-        frame = pd.DataFrame({"id": ["x", "y"], "geometry": ["path", "path"]})
-        vertices = pd.DataFrame(
-            {"id": ["x", "x"], "seq": [0, 1], "distance": [1.0, 2.0]}
-        )
-        with pytest.raises(ParameterError, match="y state no vertices"):
-            AnnotationSet(frame, dims=DIMS, vertices=vertices)
-
-    def test_stray_vertices_refused(self):
-        """Vertices belong to a path or polygon of this set."""
-        frame = pd.DataFrame({"id": ["x"], "geometry": ["region"]})
-        vertices = pd.DataFrame({"id": ["y"], "seq": [0], "distance": [1.0]})
-        with pytest.raises(ParameterError, match="name no path or polygon"):
-            AnnotationSet(frame, dims=DIMS, vertices=vertices)
-
-    def test_scaffolding_columns_required(self):
-        """Vertices are grouped by id and ordered by seq."""
-        frame = pd.DataFrame({"id": ["x"], "geometry": ["path"]})
-        vertices = pd.DataFrame({"id": ["x", "x"], "distance": [1.0, 2.0]})
-        with pytest.raises(ParameterError, match="state no seq"):
-            AnnotationSet(frame, dims=DIMS, vertices=vertices)
-
-    def test_undeclared_vertex_dim_refused(self):
-        """A vertex column names a declared dimension."""
-        frame = pd.DataFrame({"id": ["x"], "geometry": ["path"]})
-        vertices = pd.DataFrame({"id": ["x", "x"], "seq": [0, 1], "depth": [1.0, 2.0]})
-        with pytest.raises(ParameterError, match="name no declared dimension"):
-            AnnotationSet(frame, dims=DIMS, vertices=vertices)
-
-    def test_vertices_place_something(self):
-        """Vertices with no dimension column place nothing."""
-        frame = pd.DataFrame({"id": ["x"], "geometry": ["path"]})
-        vertices = pd.DataFrame({"id": ["x", "x"], "seq": [0, 1]})
-        with pytest.raises(ParameterError, match="no dimension column"):
-            AnnotationSet(frame, dims=DIMS, vertices=vertices)
-
-    def test_blank_seq_refused(self):
-        """A vertex with no seq has no place in the order."""
-        frame = pd.DataFrame({"id": ["x"], "geometry": ["path"]})
-        vertices = pd.DataFrame(
-            {"id": ["x", "x"], "seq": [0, None], "distance": [1.0, 2.0]}
-        )
-        with pytest.raises(ParameterError, match="state no seq"):
-            AnnotationSet(frame, dims=DIMS, vertices=vertices)
-
-    def test_blank_vertex_dimension_refused(self):
-        """A vertex leaving a dimension empty places nothing there."""
-        frame = pd.DataFrame({"id": ["x"], "geometry": ["path"]})
-        vertices = pd.DataFrame(
-            {"id": ["x", "x"], "seq": [0, 1], "distance": [np.nan, 1.0]}
-        )
-        with pytest.raises(ParameterError, match="leave a dimension empty"):
-            AnnotationSet(frame, dims=DIMS, vertices=vertices)
-
-    def test_repeated_seq_refused(self):
-        """Two vertices in one place do not say which comes first."""
-        frame = pd.DataFrame({"id": ["x"], "geometry": ["path"]})
-        vertices = pd.DataFrame(
-            {"id": ["x", "x"], "seq": [0, 0], "distance": [1.0, 2.0]}
-        )
-        with pytest.raises(ParameterError, match="repeat a seq"):
-            AnnotationSet(frame, dims=DIMS, vertices=vertices)
-
-    def test_vertices_ordered_by_seq(self):
-        """Vertices are read in seq order, not the order they were written."""
-        frame = pd.DataFrame({"id": ["x"], "geometry": ["path"]})
-        vertices = pd.DataFrame(
-            {"id": ["x", "x"], "seq": [1, 0], "distance": [9.0, 1.0]}
-        )
-        out = AnnotationSet(frame, dims=DIMS, vertices=vertices)
-        assert out[0].geometry.vertices["distance"] == (1.0, 9.0)
-
-    @pytest.mark.parametrize(("kind", "least"), [("path", 2), ("polygon", 3)])
-    def test_too_few_vertices_refused(self, kind, least):
-        """A shape needs enough points to be one."""
-        frame = pd.DataFrame({"id": ["x"], "geometry": [kind]})
-        count = least - 1
-        vertices = pd.DataFrame(
+    def test_members_may_mix_spellings(self):
+        """A group's members may be values, ranges and broadcasts together."""
+        frame = pd.DataFrame(
             {
-                "id": ["x"] * count,
-                "seq": list(range(count)),
-                "distance": [float(x) for x in range(count)],
+                "feature_id": ["e"] * 3,
+                "time": [1.0, np.nan, 2.0],
+                "distance_min": [np.nan, 0.0, np.nan],
+                "distance_max": [np.nan, 5.0, np.nan],
             }
         )
-        with pytest.raises(ParameterError, match="at least"):
-            AnnotationSet(frame, dims=DIMS, vertices=vertices)
-
-    def test_to_vertices_round_trips(self, path_set):
-        """The vertices come back out whole: order, coordinates and types."""
-        out = path_set.io.to_vertices()
-        assert list(out["id"]) == ["p1"] * 3
-        assert list(out["seq"]) == [0, 1, 2]
-        assert list(out["distance"]) == [1.0, 5.0, 9.0]
-        assert out["time"].dtype == np.dtype("datetime64[ns]")
-        assert list(out["time"]) == list(pd.Series(TIMES))
-
-    def test_empty_vertices_frame(self, region_set):
-        """A set with no vertex geometry has an empty vertices frame."""
-        assert region_set.io.to_vertices().empty
+        regions = AnnotationSet(frame, dims=DIMS)["e"].geometry.regions
+        bounds = [x.bounds for x in regions]
+        assert bounds == [
+            {"time": (1.0, 1.0)},
+            {"distance": (0.0, 5.0)},
+            {"time": (2.0, 2.0)},
+        ]
 
 
-class TestReadingOne:
-    """An annotation is reached by its position."""
+class TestPaths:
+    """A path is ordered by seq within part."""
 
-    def test_negative_position(self, region_set):
-        """Counting from the end reads the last annotation."""
-        assert region_set[-1].group == region_set[len(region_set) - 1].group
+    def test_vertices_follow_seq(self):
+        """Members are read in seq order, not row order."""
+        frame = pd.DataFrame(
+            {"feature_id": ["p"] * 3, "seq": [2, 0, 1], "distance": [9.0, 1.0, 5.0]}
+        )
+        features = pd.DataFrame({"id": ["p"], "geometry": ["path"]})
+        path = AnnotationSet(frame, features=features, dims=DIMS).geometry("p")
+        assert isinstance(path, Path)
+        assert path.vertices[0]["distance"] == (1.0, 5.0, 9.0)
 
-    @pytest.mark.parametrize("position", [slice(0, 2), "a", 1.0])
-    def test_what_is_not_a_position(self, region_set, position):
-        """Anything else says so, rather than building a nonsense row."""
-        with pytest.raises(TypeError, match="read by its position"):
-            region_set[position]
+    def test_blank_seq_is_row_order(self, tracks):
+        """A path stating no seq takes the order its rows are in."""
+        assert list(tracks.annotations["seq"][:3]) == [0, 1, 2]
+        assert tracks.geometry("t1").vertices[0]["distance"] == (1.0, 5.0, 9.0)
 
+    def test_datetime_vertices_keep_their_type(self, tracks):
+        """A vertex on the time dimension is a time."""
+        assert isinstance(tracks.geometry("t1").vertices[0]["time"][0], np.datetime64)
 
-class TestVertexOrder:
-    """A vertex states its place in the order as a number."""
+    def test_multipart(self):
+        """Disconnected parts are numbered by part."""
+        frame = pd.DataFrame(
+            {
+                "feature_id": ["p"] * 4,
+                "part": [1, 1, 0, 0],
+                "distance": [5.0, 6.0, 0.0, 1.0],
+            }
+        )
+        features = pd.DataFrame({"id": ["p"], "geometry": ["path"]})
+        path = AnnotationSet(frame, features=features, dims=DIMS).geometry("p")
+        assert [x["distance"] for x in path.vertices] == [(0.0, 1.0), (5.0, 6.0)]
+
+    def test_text_ordinals_sort_as_numbers(self):
+        """A seq written as text orders as the number it says."""
+        frame = pd.DataFrame(
+            {"feature_id": ["p"] * 3, "seq": ["10", "2", "1"], "distance": [3.0, 2, 1]}
+        )
+        features = pd.DataFrame({"id": ["p"], "geometry": ["path"]})
+        out = AnnotationSet(frame, features=features, dims=DIMS)
+        assert out.geometry("p").vertices[0]["distance"] == (1.0, 2.0, 3.0)
+        assert out.annotations["seq"].dtype == "Int64"
 
     @staticmethod
-    def _frame():
-        """One path, whose vertices are stated below."""
-        return pd.DataFrame({"id": ["p"], "geometry": ["path"]})
+    def _path(**columns):
+        """Build a one-path set from annotation columns."""
+        count = len(next(iter(columns.values())))
+        frame = pd.DataFrame({"feature_id": ["p"] * count, **columns})
+        features = pd.DataFrame({"id": ["p"], "geometry": ["path"]})
+        return AnnotationSet(frame, features=features, dims=DIMS)
 
-    def test_text_order_reads_as_numbers(self):
-        """A seq written as text orders as the number it says."""
-        vertices = pd.DataFrame(
-            {
-                "id": ["p"] * 4,
-                "seq": ["0", "1", "2", "10"],
-                "distance": [0.0, 1.0, 2.0, 10.0],
-            }
+    def test_a_range_member_refused(self):
+        """A path is drawn through values."""
+        with pytest.raises(ParameterError, match="drawn through values"):
+            self._path(
+                time=[1.0, 2.0], distance_min=[0.0, 1.0], distance_max=[1.0, 2.0]
+            )
+
+    def test_members_in_different_dims_refused(self):
+        """Every vertex states the same dimensions."""
+        with pytest.raises(ParameterError, match="different dimensions"):
+            self._path(time=[1.0, 2.0], distance=[1.0, np.nan])
+
+    def test_one_member_refused(self):
+        """Each part needs two vertices."""
+        frame = pd.DataFrame({"feature_id": ["p"], "distance": [1.0]})
+        features = pd.DataFrame({"id": ["p"], "geometry": ["path"]})
+        with pytest.raises(ParameterError, match="at least 2"):
+            AnnotationSet(frame, features=features, dims=DIMS)
+
+    def test_a_part_of_one_refused(self):
+        """The count is per part, not per path."""
+        with pytest.raises(ParameterError, match="part 1"):
+            self._path(distance=[1.0, 2.0, 3.0], part=[0, 0, 1])
+
+    def test_a_ring_refused(self):
+        """Only a polygon has rings."""
+        with pytest.raises(ParameterError, match="only a polygon has rings"):
+            self._path(distance=[1.0, 2.0], ring=[1, 1])
+
+    def test_a_repeated_seq_refused(self):
+        """Two members in one place do not say which comes first."""
+        with pytest.raises(ParameterError, match="repeats a seq"):
+            self._path(distance=[1.0, 2.0], seq=[0, 0])
+
+    def test_seq_on_some_members_refused(self):
+        """Seq is stated on every member of a part, or on none."""
+        with pytest.raises(ParameterError, match="some members and not others"):
+            self._path(distance=[1.0, 2.0], seq=[0, None])
+
+    @pytest.mark.parametrize("seq", [[-1, 0], [0.5, 1]])
+    def test_an_ordinal_is_a_whole_number(self, seq):
+        """An order is a non-negative whole number."""
+        with pytest.raises(ParameterError, match="non-negative whole number"):
+            self._path(distance=[1.0, 2.0], seq=seq)
+
+    @pytest.mark.parametrize(
+        "seq",
+        [["first", "second"], [True, False], [np.True_, np.False_], [1 + 2j, 3j]],
+    )
+    def test_non_numeric_seq_refused(self, seq):
+        """A truth value is not counted as 1 or 0, nor a word as anything."""
+        with pytest.raises(ParameterError, match="is not numeric"):
+            self._path(distance=[1.0, 2.0], seq=pd.Series(seq, dtype=object))
+
+    def test_a_blank_seq_cell_is_no_seq(self):
+        """The empty string is how a table spells an unset cell, here too."""
+        out = self._path(distance=[2.0, 1.0], seq=["", ""])
+        assert out.geometry("p").vertices[0]["distance"] == (2.0, 1.0)
+
+
+class TestPolygons:
+    """A polygon is ordered by seq within (part, ring)."""
+
+    def test_a_polygon(self):
+        """Rings of three or more members close an area."""
+        polygon = _polygon({(0, 0): TRIANGLE}).geometry("g1")
+        assert isinstance(polygon, Polygon)
+        assert polygon.vertices[0][0]["time"] == (0.0, 1.0, 0.0)
+
+    def test_a_hole(self):
+        """Ring 0 is the outer boundary; a later ring is a hole."""
+        inner = [(1.0, 1.0), (2.0, 1.0), (1.0, 2.0)]
+        polygon = _polygon({(0, 0): SQUARE, (0, 1): inner}).geometry("g1")
+        assert len(polygon.vertices) == 1
+        assert [len(x["time"]) for x in polygon.vertices[0]] == [4, 3]
+
+    def test_multipolygon(self):
+        """Parts are disconnected polygons, each with its own rings."""
+        far = [(20.0, 20.0), (21.0, 20.0), (20.0, 21.0)]
+        polygon = _polygon({(0, 0): SQUARE, (1, 0): far}).geometry("g1")
+        assert len(polygon.vertices) == 2
+
+    def test_too_few_distinct_vertices_refused(self):
+        """A ring of repeated points bounds no area."""
+        with pytest.raises(ParameterError, match="3 distinct"):
+            _polygon({(0, 0): [(0.0, 0.0), (1.0, 0.0), (1.0, 0.0)]})
+
+    def test_a_closing_repeat_refused(self):
+        """Closure is implied, so the first vertex is not written again."""
+        with pytest.raises(ParameterError, match="closure is implied"):
+            _polygon({(0, 0): [*TRIANGLE, TRIANGLE[0]]})
+
+    def test_a_part_without_an_outer_ring_refused(self):
+        """A hole is a hole in something."""
+        with pytest.raises(ParameterError, match="no ring 0"):
+            _polygon({(0, 0): SQUARE, (1, 1): TRIANGLE})
+
+    def test_one_dimension_refused(self):
+        """An area needs two dimensions."""
+        frame = pd.DataFrame({"feature_id": ["g"] * 3, "distance": [0.0, 1.0, 2.0]})
+        features = pd.DataFrame({"id": ["g"], "geometry": ["polygon"]})
+        with pytest.raises(ParameterError, match="an area needs two"):
+            AnnotationSet(frame, features=features, dims=DIMS)
+
+
+class TestOrderColumns:
+    """seq, part and ring belong to ordered features only."""
+
+    def test_absent_without_an_ordered_feature(self, picks):
+        """A picker's frame never sees them."""
+        assert set(picks.annotations.columns) == {
+            "time",
+            "phase",
+            "confidence",
+            "feature_id",
+        }
+
+    def test_blank_columns_are_dropped(self):
+        """A column of blanks states nothing, so a picks set holds none."""
+        frame = pd.DataFrame({"time": [1.0], "seq": [None], "part": [np.nan]})
+        assert list(AnnotationSet(frame, dims=DIMS).annotations.columns) == [
+            "time",
+            "feature_id",
+        ]
+
+    def test_present_once_a_path_exists(self, tracks):
+        """Blank on everything but the path, and zero-filled there."""
+        frame = tracks.annotations
+        assert list(frame["part"]) == [0, 0, 0, pd.NA, pd.NA, pd.NA]
+        assert list(frame["ring"][:3]) == [0, 0, 0]
+
+    @pytest.mark.parametrize("name", ["seq", "part", "ring"])
+    def test_on_a_group_member_refused(self, name):
+        """Ordering a member of an unordered feature says nothing."""
+        frame = pd.DataFrame({"time": [1.0], name: [0]})
+        with pytest.raises(ParameterError, match="orders the members of a path"):
+            AnnotationSet(frame, dims=DIMS)
+
+
+class TestBases:
+    """Keyed curves a path may be drawn from."""
+
+    @staticmethod
+    def _path(basis, key="m", members=True, **kwargs):
+        """Build a set with one path naming ``key``."""
+        frame = None
+        if members:
+            frame = pd.DataFrame(
+                {
+                    "feature_id": ["p", "p"],
+                    "distance": [0.0, 100.0],
+                    "time": TIMES[:2],
+                }
+            )
+        features = pd.DataFrame({"id": ["p"], "geometry": ["path"], "basis": [key]})
+        return AnnotationSet(
+            frame, features=features, bases={"m": basis}, dims=DIMS, **kwargs
         )
-        out = AnnotationSet(self._frame(), dims=DIMS, vertices=vertices)
-        assert out[0].geometry.vertices["distance"] == (0.0, 1.0, 2.0, 10.0)
 
-    def test_an_imaginary_order(self):
-        """`to_numeric` hands a complex column back; it places nothing."""
-        vertices = pd.DataFrame(
-            {"id": ["p"] * 2, "seq": [1 + 2j, 3 + 4j], "distance": [0.0, 1.0]}
+    def test_a_model(self):
+        """A basis may be the model itself."""
+        curve = _moveout()
+        assert self._path(curve)["p"].basis == curve
+
+    def test_a_document(self):
+        """A basis may be its plain dict, normalized to the model."""
+        curve = _moveout()
+        out = self._path(curve.model_dump(mode="json"))
+        assert out.bases["m"] == curve
+
+    def test_an_unknown_key_refused(self):
+        """A key names one of the bases."""
+        with pytest.raises(ParameterError, match="not among the bases"):
+            self._path(_moveout(), key="other")
+
+    def test_an_unused_key_is_allowed(self):
+        """A basis nothing names is still a basis."""
+        frame = pd.DataFrame({"time": [1.0]})
+        out = AnnotationSet(frame, dims=DIMS, bases={"spare": _moveout()})
+        assert list(out.bases) == ["spare"]
+
+    @pytest.mark.parametrize("kind", [None, "polygon"])
+    def test_only_a_path_names_one(self, kind):
+        """A group or polygon is not drawn from a curve."""
+        frame = pd.DataFrame(
+            {"feature_id": ["g"] * 3, "time": [0.0, 1, 0], "distance": [0.0, 0, 1]}
         )
-        with pytest.raises(ParameterError, match="non-numeric seq"):
-            AnnotationSet(self._frame(), dims=DIMS, vertices=vertices)
+        features = pd.DataFrame({"id": ["g"], "geometry": [kind], "basis": ["m"]})
+        with pytest.raises(ParameterError, match="only a path"):
+            AnnotationSet(frame, features=features, bases={"m": _moveout()}, dims=DIMS)
 
-    def test_a_blank_vertex_cell_says_so(self):
-        """An empty cell leaves a dimension unplaced, and is named as that."""
-        vertices = pd.DataFrame({"id": ["p"] * 2, "seq": [0, 1], "distance": ["", 1.0]})
-        with pytest.raises(ParameterError, match="leave a dimension empty"):
-            AnnotationSet(self._frame(), dims=DIMS, vertices=vertices)
+    def test_dims_must_match_the_members(self):
+        """A curve over distance and time does not draw a path in distance."""
+        line = Line(start={"distance": 0.0}, end={"distance": 1.0})
+        with pytest.raises(ParameterError, match="its basis in"):
+            self._path(line)
+
+    def test_basis_only_path_samples(self):
+        """A path with a curve and no members is drawn on demand."""
+        out = self._path(_moveout(), members=False)
+        assert out.annotations.empty
+        path = out.geometry("p", count=5)
+        assert len(path.vertices[0]["distance"]) == 5
+        assert path.basis == _moveout()
+        assert len(out["p"].geometry.vertices[0]["time"]) == 64
+
+    def test_members_are_authoritative(self):
+        """With both, the members are the shape and the curve rides along."""
+        path = self._path(_moveout()).geometry("p", count=5)
+        assert path.vertices[0]["distance"] == (0.0, 100.0)
+
+    def test_bases_are_immutable(self):
+        """The mapping handed out cannot change the set."""
+        out = self._path(_moveout())
+        with pytest.raises(TypeError):
+            out.bases["m"] = None
+
+    def test_unreadable_basis(self):
+        """An entry naming no curve says so."""
+        with pytest.raises(ParameterError, match="Could not read the basis 'm'"):
+            AnnotationSet(None, dims=DIMS, bases={"m": {"object_type": "Nope"}})
+
+    def test_basis_dims_must_be_declared(self):
+        """A curve in an unrelated frame draws nothing here."""
+        line = Line(start={"depth": 0.0}, end={"depth": 1.0})
+        with pytest.raises(ParameterError, match="does not declare"):
+            AnnotationSet(None, dims=DIMS, bases={"m": line})
+
+    def test_a_blank_key_refused(self):
+        """A key is what a feature names a basis by, so it says something."""
+        with pytest.raises(ParameterError, match="nonblank key"):
+            AnnotationSet(None, dims=DIMS, bases={"": _moveout()})
+
+    def test_bases_are_a_mapping(self):
+        """A list of curves has no keys to name them by."""
+        with pytest.raises(ParameterError, match="mapping of key to curve"):
+            AnnotationSet(None, dims=DIMS, bases=[_moveout()])
 
 
 class TestFrames:
-    """The frames the set hands back are copies of its own."""
+    """What a set hands back is a copy of its own."""
 
-    def test_to_dataframe_is_a_copy(self, region_set):
+    def test_annotations_are_a_copy(self, boxes):
         """Mutating what a set handed out does not reach the set."""
-        frame = region_set.io.to_dataframe()
-        frame.loc[0, "group"] = "changed"
-        assert region_set[0].group == "event"
+        frame = boxes.annotations
+        frame.loc[0, "note"] = "changed"
+        assert boxes.annotations.loc[0, "note"] == "car"
 
-    def test_to_vertices_is_a_copy(self, path_set):
-        """The same holds for the vertices."""
-        vertices = path_set.io.to_vertices()
-        vertices.loc[0, "distance"] = 999.0
-        assert path_set[0].geometry.vertices["distance"][0] == 1.0
+    def test_features_are_a_copy(self, tracks):
+        """The same holds for the features."""
+        frame = tracks.features
+        frame.loc[0, "vehicle_type"] = "changed"
+        assert tracks.features.loc[0, "vehicle_type"] == "train"
 
     def test_extras_are_frozen(self):
-        """A mutable cell cannot be edited through the annotation holding it."""
-        out = AnnotationSet(pd.DataFrame({"note": [[1, 2]]}), dims=DIMS)
-        assert out[0].extra["note"] == (1, 2)
+        """A mutable cell cannot be edited through the feature holding it."""
+        frame = pd.DataFrame({"time": [1.0], "n": [[1]]})
+        out = _first(AnnotationSet(frame, dims=DIMS))
+        assert out.extra["n"] == (1,)
         with pytest.raises(AttributeError):
-            out[0].extra["note"].append(3)
+            out.extra["n"].append(3)
 
     def test_nested_extras_are_frozen(self):
         """Freezing reaches inside a mapping cell too."""
-        out = AnnotationSet(pd.DataFrame({"note": [{"a": [1]}]}), dims=DIMS)
+        frame = pd.DataFrame({"time": [1.0], "n": [{"a": [1]}]})
         with pytest.raises(TypeError):
-            out[0].extra["note"]["a"] = 2
+            _first(AnnotationSet(frame, dims=DIMS)).extra["n"]["a"] = 2
 
-    def test_column_order_is_not_what_a_set_says(self, region_set):
-        """Two frames stating the same thing in a different order are one set."""
-        frame = region_set.io.to_dataframe()
+    def test_column_order_is_not_what_a_set_says(self, tracks):
+        """Two tables stating the same thing in a different order are one set."""
+        frame = tracks.annotations
         shuffled = frame[list(reversed(frame.columns))]
-        assert AnnotationSet(shuffled, attrs=region_set.attrs) == region_set
+        rebuilt = AnnotationSet(shuffled, features=tracks.features, attrs=tracks.attrs)
+        assert rebuilt == tracks
 
     def test_a_column_stating_nothing_has_one_dtype(self):
         """A column no row states arrives as whatever each reader inferred."""
-        frame = pd.DataFrame({"group": ["a"], "note": [None]})
-        held = AnnotationSet(frame, dims=DIMS).io.to_dataframe()
-        assert held["note"].dtype == object
+        frame = pd.DataFrame({"time": [1.0], "note": [None]})
+        assert AnnotationSet(frame, dims=DIMS).annotations["note"].dtype == object
 
     def test_a_declared_dtype_is_not_overruled(self):
         """A column saying what it holds is not canonicalized out of it."""
-        frame = pd.DataFrame({"group": ["a"], "note": [np.nan]})
-        out = AnnotationSet(frame, dims=DIMS, columns={"note": {"dtype": "float64"}})
-        assert out.io.to_dataframe()["note"].dtype == np.dtype("float64")
-
-    def test_a_categorical_column_carries(self):
-        """A category column is text, blanks and all."""
-        frame = pd.DataFrame({"group": pd.Categorical(["a", ""])})
-        out = AnnotationSet(frame, dims=DIMS)
-        assert out[0].group == "a" and out[1].group == ""
+        frame = pd.DataFrame({"time": [1.0], "note": [np.nan]})
+        columns = {"note": {"dtype": "float64"}}
+        out = AnnotationSet(frame, dims=DIMS, annotation_columns=columns)
+        assert out.annotations["note"].dtype == np.dtype("float64")
 
     def test_a_categorical_column_is_held_as_text(self):
         """Only a frame has a category; every table reads the text back."""
-        frame = pd.DataFrame({"group": pd.Categorical(["a", "b"])})
-        held = AnnotationSet(frame, dims=DIMS).io.to_dataframe()["group"]
-        assert held.dtype == object
+        frame = pd.DataFrame({"time": [1.0, 2.0], "kind": pd.Categorical(["a", "b"])})
+        assert AnnotationSet(frame, dims=DIMS).annotations["kind"].dtype == object
 
-    def test_round_trip(self, region_set):
-        """A set rebuilt from its own frame holds the same annotations."""
-        rebuilt = AnnotationSet(region_set.io.to_dataframe(), attrs=region_set.attrs)
-        assert [x.group for x in rebuilt] == [x.group for x in region_set]
-        assert rebuilt == region_set
+
+class TestProvenance:
+    """A row names its own provenance, else its set's, else the collection's."""
+
+    @pytest.fixture
+    def collected(self):
+        """Two sets loaded together, rows and features stating some of it."""
+        frame = pd.DataFrame(
+            {
+                "time": [1.0, 2.0, 3.0, 4.0],
+                "set": ["a", "a", "b", "b"],
+                "feature_id": [None, None, None, "f"],
+                "acquisition_key": ["N.ROW.00.das", None, None, None],
+                "data_id": ["row", None, None, None],
+            }
+        )
+        features = pd.DataFrame({"id": ["f"], "set": ["b"], "data_id": ["feat"]})
+        sets = {
+            "a": {"dims": ("time",), "acquisition_key": "N.SETA.00.das"},
+            "b": {"dims": ("time",), "data_id": "set-b"},
+        }
+        return AnnotationSet(
+            frame,
+            features=features,
+            dims=DIMS,
+            acquisition_key="N.COLL.00.das",
+            data_id="coll",
+            attrs={"dims": DIMS, "sets": sets},
+        )
+
+    def test_rows(self, collected):
+        """A lone row falls back row, then its set, then the collection."""
+        lone = [x for x in collected if not x.id]
+        keys = [x.acquisition_key for x in lone]
+        assert keys == ["N.ROW.00.das", "N.SETA.00.das", "N.COLL.00.das"]
+        assert [x.data_id for x in lone] == ["row", "coll", "set-b"]
+
+    def test_features(self, collected):
+        """A feature's own row states its provenance first."""
+        feature = collected["f"]
+        assert feature.data_id == "feat"
+        assert feature.acquisition_key == "N.COLL.00.das"
+        assert feature.set == "b"
+
+    def test_an_implied_feature_takes_its_rows_set(self):
+        """A feature a collection's rows imply is labeled as their set."""
+        frame = pd.DataFrame({"time": [1.0], "set": ["a"], "feature_id": ["e"]})
+        attrs = {"dims": DIMS, "sets": {"a": {"dims": ("time",)}}}
+        out = AnnotationSet(frame, attrs=attrs)
+        assert list(out.features["set"]) == ["a"]
+
+    def test_a_row_key_is_validated(self):
+        """A row's key is checked like the set's, when the set is built."""
+        frame = pd.DataFrame({"time": [1.0], "acquisition_key": ["nope"]})
+        with pytest.raises(ParameterError, match="Invalid acquisition_key"):
+            AnnotationSet(frame, dims=DIMS)
+
+    def test_the_key_column_is_not_an_extra(self):
+        """The column is modelled, so it does not also ride along as an extra."""
+        frame = pd.DataFrame({"time": [1.0], "acquisition_key": ["N.A.L.ACQ"]})
+        assert "acquisition_key" not in _first(AnnotationSet(frame, dims=DIMS)).extra
+
+    def test_a_feature_label_naming_no_set(self):
+        """The features table's labels reach back to a set too."""
+        frame = pd.DataFrame({"time": [1.0], "set": ["a"], "feature_id": ["f"]})
+        features = pd.DataFrame({"id": ["f"], "set": ["zz"]})
+        attrs = {"dims": DIMS, "sets": {"a": {"dims": ("time",)}}}
+        with pytest.raises(ParameterError, match="name no set stated here"):
+            AnnotationSet(frame, features=features, attrs=attrs)
 
 
 class TestAttrs:
@@ -1178,49 +1261,44 @@ class TestAttrs:
         with pytest.raises(ValidationError, match="spelled like the range column"):
             AnnotationSetAttrs(dims=("distance", "distance_min"))
 
-    def test_dim_may_not_shadow_a_reserved_column(self):
-        """A dimension named `group` would collide with the group column."""
+    @pytest.mark.parametrize("dim", ["feature_id", "seq", "geometry"])
+    def test_dim_may_not_shadow_a_reserved_column(self, dim):
+        """A dimension may not take a column either table reserves."""
         with pytest.raises(ValidationError, match="reserved column"):
-            AnnotationSetAttrs(dims=("group", "time"))
+            AnnotationSetAttrs(dims=(dim, "time"))
 
     def test_creation_info_default(self):
         """A set carries provenance even when nothing was said."""
         assert AnnotationSetAttrs(dims=DIMS).creation_info.author == ""
-
-    def test_acquisition_key_carries(self):
-        """Provenance is an acquisition key, not a file pointer."""
-        attrs = AnnotationSetAttrs(dims=DIMS, acquisition_key="NET.ARRAY.LOC.ACQ")
-        assert attrs.acquisition_key == "NET.ARRAY.LOC.ACQ"
 
     def test_acquisition_key_validated(self):
         """The key is spelled as PatchAttrs spells it, and checked alike."""
         with pytest.raises(ValidationError, match="Invalid acquisition_key"):
             AnnotationSetAttrs(dims=DIMS, acquisition_key="nope")
 
-    def test_provenance_defaults_to_unset(self):
-        """Phase 2 cannot know a patch, so the producer supplies these."""
-        attrs = AnnotationSetAttrs(dims=DIMS)
-        assert attrs.acquisition_key == ""
-        assert attrs.history == ()
+    def test_data_id_replaces_history(self):
+        """The data a set was made on is named by its id, not its lineage."""
+        attrs = AnnotationSetAttrs(dims=DIMS, data_id="abc123")
+        assert attrs.data_id == "abc123"
+        with pytest.raises(ValidationError, match="Extra inputs"):
+            AnnotationSetAttrs(dims=DIMS, history=("decimate",))
 
-    def test_history_keeps_the_lineage(self):
-        """Picks made on decimated data only mean anything against that."""
-        attrs = AnnotationSetAttrs(dims=DIMS, history=("decimate(8)", "pass_filter"))
-        assert attrs.history == ("decimate(8)", "pass_filter")
-
-    def test_lone_history_entry(self):
-        """PatchAttrs.history may be one string; that is a history of one."""
-        attrs = AnnotationSetAttrs(dims=DIMS, history="decimate(8)")
-        assert attrs.history == ("decimate(8)",)
+    def test_columns_per_table(self):
+        """Each table documents its own columns."""
+        attrs = AnnotationSetAttrs(
+            dims=DIMS,
+            annotation_columns={"phase": {"description": "P or S"}},
+            feature_columns={"magnitude": {"units": "dimensionless"}},
+        )
+        assert attrs.annotation_columns["phase"].description == "P or S"
+        assert "magnitude" in attrs.feature_columns
 
     def test_creation_info_identifies_the_producer(self):
         """A picker names itself the way the inventory names any process."""
         attrs = AnnotationSetAttrs(
-            dims=DIMS,
-            creation_info={"author": "phasenet", "version": "2.1"},
+            dims=DIMS, creation_info={"author": "phasenet", "version": "2.1"}
         )
         assert attrs.creation_info.author == "phasenet"
-        assert attrs.creation_info.version == "2.1"
 
     def test_attrs_are_frozen(self):
         """Attributes are immutable, like every DASCore model."""
@@ -1239,7 +1317,7 @@ class TestAttrs:
             AnnotationSetAttrs(dims=("time",), sets={"picks": {"dims": ("depth",)}})
 
 
-class TestBasis:
+class TestBasisModels:
     """Curves regenerate vertices; they are not geometries themselves."""
 
     def test_line_walks_between_its_ends(self):
@@ -1288,98 +1366,34 @@ class TestBasis:
 
     def test_moveout_apex_is_the_earliest_arrival(self):
         """The apex anchors the curve, and nothing arrives before it."""
-        out = Moveout(
-            apex_distance=50.0,
-            apex_time=TIMES[0],
-            velocity=3000.0,
-            distance_min=0.0,
-            distance_max=100.0,
-        )
-        drawn = out.vertices(11)
+        drawn = _moveout().vertices(11)
         assert drawn["time"].min() == TIMES[0]
         assert drawn["time"][5] == TIMES[0]
 
     def test_moveout_on_the_cable_is_straight(self):
         """A source with no standoff runs both ways at its velocity."""
-        out = Moveout(
-            apex_distance=50.0,
-            apex_time=TIMES[0],
-            velocity=3000.0,
-            distance_min=0.0,
-            distance_max=100.0,
-        )
-        seconds = (out.vertices(3)["time"] - TIMES[0]) / np.timedelta64(1, "s")
+        seconds = (_moveout().vertices(3)["time"] - TIMES[0]) / np.timedelta64(1, "s")
         assert np.allclose(seconds, [50 / 3000, 0.0, 50 / 3000])
 
     def test_standoff_flattens_the_apex(self):
         """A source off the cable arrives sooner away from the apex."""
-        shared = {
-            "apex_distance": 50.0,
-            "apex_time": TIMES[0],
-            "velocity": 3000.0,
-            "distance_min": 0.0,
-            "distance_max": 100.0,
-        }
-        straight = Moveout(**shared).vertices(3)["time"]
-        curved = Moveout(**shared, standoff=40.0).vertices(3)["time"]
+        straight = _moveout().vertices(3)["time"]
+        curved = _moveout(standoff=40.0).vertices(3)["time"]
         assert curved[0] < straight[0]
         assert curved[1] == straight[1] == TIMES[0]
 
-    def test_moveout_times_are_times(self):
-        """The curve draws in the dimension's own coordinates."""
-        out = Moveout(
-            apex_distance=0.0,
-            apex_time=TIMES[0],
-            velocity=1000.0,
-            distance_min=0.0,
-            distance_max=10.0,
-        )
-        assert out.vertices(2)["time"].dtype == np.dtype("datetime64[ns]")
-
     def test_moveout_is_pinned_to_its_dims(self):
         """A moveout is physics, so it relates fiber distance to arrival time."""
-        out = Moveout(
-            apex_distance=0.0,
-            apex_time=TIMES[0],
-            velocity=1000.0,
-            distance_min=0.0,
-            distance_max=1.0,
-        )
-        assert out.dims == ("distance", "time")
+        assert _moveout().dims == ("distance", "time")
 
-    def test_moveout_velocity_positive(self):
-        """A wavefront which does not move has no moveout."""
+    @pytest.mark.parametrize(
+        "kwargs",
+        [{"velocity": 0.0}, {"standoff": -1.0}, {"distance_min": 100.0}],
+    )
+    def test_moveout_refusals(self, kwargs):
+        """No speed, a source behind the cable, or no span draws nothing."""
         with pytest.raises(ValidationError):
-            Moveout(
-                apex_distance=0.0,
-                apex_time=TIMES[0],
-                velocity=0.0,
-                distance_min=0.0,
-                distance_max=1.0,
-            )
-
-    def test_moveout_standoff_not_negative(self):
-        """A source is off the cable or on it, never behind it."""
-        with pytest.raises(ValidationError):
-            Moveout(
-                apex_distance=0.0,
-                apex_time=TIMES[0],
-                velocity=1.0,
-                standoff=-1.0,
-                distance_min=0.0,
-                distance_max=1.0,
-            )
-
-    def test_moveout_span_must_be_positive(self):
-        """A curve which ends where it starts draws nothing."""
-        with pytest.raises(ValidationError, match="must exceed"):
-            Moveout(
-                apex_distance=0.0,
-                apex_time=TIMES[0],
-                velocity=1.0,
-                distance_min=1.0,
-                distance_max=1.0,
-            )
+            _moveout(**kwargs)
 
     @pytest.mark.parametrize("count", [0, 1])
     def test_too_few_points(self, count):
@@ -1392,87 +1406,8 @@ class TestBasis:
         """The base class states the interface and implements none of it."""
         with pytest.raises(NotImplementedError):
             AnnotationBasis().vertices()
-
-    def test_base_names_no_dims(self):
-        """A curve says which dimensions it is stated in; the base cannot."""
         with pytest.raises(NotImplementedError):
             AnnotationBasis().dims
-
-    def test_carried_by_a_path(self):
-        """A path may keep the curve its vertices came from."""
-        basis = Line(start={"distance": 0.0}, end={"distance": 1.0})
-        out = Path(
-            region=Region(bounds={"distance": (0.0, 1.0)}),
-            vertices={"distance": (0.0, 1.0)},
-            basis=basis,
-        )
-        assert out.basis == basis
-
-    def test_regenerates_what_the_frame_holds(self):
-        """The point of a basis: its output is vertices, not numbers to convert."""
-        basis = Moveout(
-            apex_distance=50.0,
-            apex_time=TIMES[0],
-            velocity=3000.0,
-            standoff=40.0,
-            distance_min=0.0,
-            distance_max=100.0,
-        )
-        drawn = basis.vertices(5)
-        vertices = pd.DataFrame({"id": ["m"] * 5, "seq": range(5), **drawn})
-        frame = pd.DataFrame({"id": ["m"], "geometry": ["path"], "basis": [basis]})
-        out = AnnotationSet(frame, dims=DIMS, vertices=vertices)
-        assert out[0].geometry.vertices["time"] == tuple(drawn["time"])
-
-
-class TestGeometryModels:
-    """A geometry built straight from a document checks itself."""
-
-    def test_no_dimension_refused(self):
-        """Vertices naming no dimension place the geometry nowhere."""
-        with pytest.raises(ValidationError, match="states no dimension"):
-            Path(region=Region(bounds={}), vertices={})
-
-    def test_ragged_vertices_refused(self):
-        """Every dimension states every point, or they pair up wrongly."""
-        with pytest.raises(ValidationError, match="differ in length"):
-            Path(
-                region=Region(bounds={}),
-                vertices={"time": (1, 2, 3), "distance": (1,)},
-            )
-
-    @pytest.mark.parametrize(("model", "least"), [(Path, 2), (Polygon, 3)])
-    def test_too_few_vertices_refused(self, model, least):
-        """A shape needs enough points to be one, however it was built."""
-        with pytest.raises(ValidationError, match="at least"):
-            model(
-                region=Region(bounds={}),
-                vertices={"distance": tuple(range(least - 1))},
-            )
-
-    def test_length_is_the_vertex_count(self):
-        """Every dimension is the same length, so any of them is the count."""
-        out = Path(region=Region(bounds={}), vertices={"distance": (0.0, 1.0, 2.0)})
-        assert len(out) == 3
-
-
-class TestBasisColumn:
-    """A set carries the curve its vertices were drawn from."""
-
-    @staticmethod
-    def _vertices():
-        """Two vertices for the path every test here builds."""
-        return pd.DataFrame({"id": ["x", "x"], "seq": [0, 1], "distance": [0.0, 1.0]})
-
-    def test_basis_as_the_text_a_table_holds(self):
-        """A cell holding the curve's JSON is the curve, as a table states it."""
-        document = (
-            '{"object_type": "Line", "start": {"distance": 0.0}, '
-            '"end": {"distance": 1.0}}'
-        )
-        frame = pd.DataFrame({"id": ["x"], "geometry": ["path"], "basis": [document]})
-        out = AnnotationSet(frame, dims=DIMS, vertices=self._vertices())
-        assert isinstance(out[0].geometry.basis, Line)
 
     def test_a_curve_over_an_offset_dimension(self):
         """A duration endpoint reads back as the duration it was dumped from."""
@@ -1482,76 +1417,56 @@ class TestBasisColumn:
         )
         assert Line.model_validate(line.model_dump(mode="json")) == line
 
-    def test_basis_which_is_not_a_document(self):
-        """Text which is no document says that, not what pydantic made of it."""
-        frame = pd.DataFrame(
-            {"id": ["x"], "geometry": ["path"], "basis": ["not a curve"]}
-        )
-        with pytest.raises(ParameterError, match="not a JSON document"):
-            AnnotationSet(frame, dims=DIMS, vertices=self._vertices())
 
-    def test_basis_as_a_document(self):
-        """A cell holding the curve's document reads back as the model."""
-        document = {
-            "object_type": "Line",
-            "start": {"distance": 0.0},
-            "end": {"distance": 1.0},
-        }
-        frame = pd.DataFrame({"id": ["x"], "geometry": ["path"], "basis": [document]})
-        out = AnnotationSet(frame, dims=DIMS, vertices=self._vertices())
-        assert isinstance(out[0].geometry.basis, Line)
+class TestGeometryModels:
+    """A geometry built straight from a document checks itself."""
 
-    def test_basis_as_a_model(self):
-        """A cell holding the model itself is taken as it is."""
-        basis = Moveout(
-            apex_distance=0.0,
-            apex_time=TIMES[0],
-            velocity=2.0,
-            distance_min=0.0,
-            distance_max=1.0,
-        )
-        frame = pd.DataFrame({"id": ["x"], "geometry": ["path"], "basis": [basis]})
-        out = AnnotationSet(frame, dims=DIMS, vertices=self._vertices())
-        assert out[0].geometry.basis == basis
+    def test_no_dimension_refused(self):
+        """Vertices naming no dimension place the geometry nowhere."""
+        with pytest.raises(ValidationError, match="states no dimension"):
+            Path(vertices=({},))
 
-    def test_no_basis(self):
-        """A path without a curve is simply vertices."""
-        frame = pd.DataFrame({"id": ["x"], "geometry": ["path"]})
-        out = AnnotationSet(frame, dims=DIMS, vertices=self._vertices())
-        assert out[0].geometry.basis is None
+    def test_ragged_vertices_refused(self):
+        """Every dimension states every point, or they pair up wrongly."""
+        with pytest.raises(ValidationError, match="differ in length"):
+            Path(vertices=({"time": (1, 2, 3), "distance": (1,)},))
 
-    def test_basis_needs_vertices(self):
-        """A basis regenerates vertices, so a region has no use for one."""
-        frame = pd.DataFrame(
-            {"id": ["x"], "geometry": ["region"], "basis": [{"object_type": "Line"}]}
-        )
-        with pytest.raises(ParameterError, match="no path or polygon"):
-            AnnotationSet(frame, dims=DIMS)
+    @pytest.mark.parametrize(
+        ("build", "least"),
+        [
+            (lambda v: Path(vertices=(v,)), 2),
+            (lambda v: Polygon(vertices=((v,),)), 3),
+        ],
+    )
+    def test_too_few_vertices_refused(self, build, least):
+        """A shape needs enough points to be one, however it was built."""
+        with pytest.raises(ValidationError, match="at least"):
+            build({"distance": tuple(range(least - 1))})
 
-    def test_unreadable_basis(self):
-        """A cell naming no curve says so, when the set loads."""
-        frame = pd.DataFrame(
-            {"id": ["x"], "geometry": ["path"], "basis": [{"object_type": "Nope"}]}
-        )
-        with pytest.raises(ParameterError, match="as a curve"):
-            AnnotationSet(frame, dims=DIMS, vertices=self._vertices())
+    def test_parts_share_their_dims(self):
+        """Parts of one path are drawn in one frame."""
+        with pytest.raises(ValidationError, match="different dimensions"):
+            Path(vertices=({"time": (0, 1)}, {"distance": (0, 1)}))
 
-    def test_basis_dims_must_be_declared(self):
-        """A curve in an unrelated frame regenerates unrelated vertices."""
-        document = {
-            "object_type": "Line",
-            "start": {"depth": 0.0, "other": 1.0},
-            "end": {"depth": 1.0, "other": 2.0},
-        }
-        frame = pd.DataFrame({"id": ["x"], "geometry": ["path"], "basis": [document]})
-        with pytest.raises(ParameterError, match="does not declare"):
-            AnnotationSet(frame, dims=DIMS, vertices=self._vertices())
+    def test_polygon_parts_and_rings(self):
+        """A part states a ring, and every ring is drawn in one frame."""
+        ring = {"distance": (0.0, 1.0, 2.0), "time": (0.0, 1.0, 0.0)}
+        assert Polygon(vertices=((ring,),)).dims == ("distance", "time")
+        with pytest.raises(ValidationError, match="states no ring"):
+            Polygon(vertices=((),))
+        other = {"distance": (0.0, 1.0, 2.0), "depth": (0.0, 1.0, 0.0)}
+        with pytest.raises(ValidationError, match="different dimensions"):
+            Polygon(vertices=((ring, other),))
 
-    def test_basis_without_a_geometry_column(self):
-        """A frame naming no geometry is all regions, which carry no curve."""
-        frame = pd.DataFrame({"id": ["x"], "basis": [{"object_type": "Line"}]})
-        with pytest.raises(ParameterError, match="no path or polygon"):
-            AnnotationSet(frame, dims=DIMS)
+    def test_a_group_holds_a_region(self):
+        """An empty group locates nothing."""
+        with pytest.raises(ValidationError):
+            Group(regions=())
+
+    def test_geometry_kinds_are_distinct(self):
+        """A polygon is not a path which happens to close."""
+        ring = {"distance": (0.0, 1.0, 2.0), "time": (0.0, 1.0, 0.0)}
+        assert not isinstance(Polygon(vertices=((ring,),)), Path)
 
 
 class TestSerialization:
@@ -1559,38 +1474,23 @@ class TestSerialization:
 
     @pytest.mark.parametrize(
         "basis",
-        [
-            Line(start={"distance": 0.0}, end={"distance": 1.0}),
-            Moveout(
-                apex_distance=0.0,
-                apex_time=TIMES[0],
-                velocity=1.0,
-                distance_min=0.0,
-                distance_max=1.0,
-            ),
-        ],
+        [Line(start={"distance": 0.0}, end={"distance": 1.0}), _moveout()],
     )
     def test_basis_names_its_class(self, basis):
         """A document says which curve it holds, so the union can dispatch."""
         assert basis.model_dump(mode="json")["object_type"] == type(basis).__name__
 
-    def test_basis_round_trip(self):
+    def test_path_round_trip(self):
         """A path rebuilds its basis as the class which wrote it."""
-        basis = Moveout(
-            apex_distance=0.0,
-            apex_time=TIMES[0],
-            velocity=2.0,
-            distance_min=0.0,
-            distance_max=1.0,
-        )
-        path = Path(
-            region=Region(bounds={"distance": (0.0, 1.0)}),
-            vertices={"distance": (0.0, 1.0)},
-            basis=basis,
-        )
+        path = Path(vertices=({"distance": (0.0, 1.0)},), basis=_moveout())
         rebuilt = Path(**path.model_dump(mode="json"))
+        assert rebuilt == path
         assert isinstance(rebuilt.basis, Moveout)
-        assert rebuilt.basis.velocity == 2.0
+
+    def test_feature_round_trip(self, tracks):
+        """A feature view is a document too."""
+        feature = tracks["t1"]
+        assert Feature(**feature.model_dump(mode="json")) == feature
 
     def test_region_round_trip(self):
         """A region survives a document."""
@@ -1602,7 +1502,7 @@ class TestSerialization:
         region = Region(bounds={"time": (TIMES[0], TIMES[2])})
         written = region.model_dump(mode="json")["bounds"]["time"]
         assert written == [str(TIMES[0]), str(TIMES[2])]
-        assert all(isinstance(x, str) for x in written)
+        assert Region(**region.model_dump(mode="json")) == region
 
     def test_python_dump_keeps_the_time(self):
         """A python dump is what equality compares, so it keeps the value."""
@@ -1614,27 +1514,6 @@ class TestSerialization:
         """A numpy number is written as the number it is."""
         region = Region(bounds={"distance": (np.float64(1.5), np.float64(2.5))})
         assert region.model_dump(mode="json")["bounds"]["distance"] == [1.5, 2.5]
-
-    def test_vertices_write_a_document(self):
-        """The same holds for the vertices of a path."""
-        path = Path(region=Region(bounds={}), vertices={"time": (TIMES[0], TIMES[1])})
-        written = path.model_dump(mode="json")["vertices"]["time"]
-        assert written == [str(TIMES[0]), str(TIMES[1])]
-
-    def test_datetime_bounds_read_back_as_times(self):
-        """A time written as text is a time again, not the text."""
-        region = Region(bounds={"time": (TIMES[0], TIMES[2])})
-        assert Region(**region.model_dump(mode="json")) == region
-
-    def test_datetime_vertices_read_back_as_times(self):
-        """The same holds for a path's vertices and a line's endpoints."""
-        line = Line(start={"time": TIMES[0]}, end={"time": TIMES[2]})
-        path = Path(
-            region=Region(bounds={}),
-            vertices={"time": (TIMES[0], TIMES[1])},
-            basis=line,
-        )
-        assert Path(**path.model_dump(mode="json")) == path
 
     def test_a_label_is_not_a_time(self):
         """Only the spelling DASCore writes a datetime with is read as one."""
@@ -1652,31 +1531,16 @@ class TestSerialization:
         ["2020-01-01", "2020-01-01T12", "2020-01-01T12:30", "2020-01-01T12:30:45"],
     )
     def test_every_resolution_reads_back_as_a_time(self, spelling):
-        """Numpy writes only the fields a unit carries, and all of them read
-        back: an hour- or minute-resolution pick is an ordinary one.
-        """
+        """Numpy writes only the fields a unit carries, and all of them read back."""
         time = np.datetime64(spelling)
         region = Region(bounds={"time": (time, time)})
         assert Region(**region.model_dump(mode="json")) == region
-        assert isinstance(region.bounds["time"][0], np.datetime64)
 
     @pytest.mark.parametrize("label", ["2020", "2020-01", "spring", "12:30"])
     def test_a_partial_date_is_not_a_time(self, label):
-        """A label which is not a whole date stays the label it was; nothing
-        distinguishes a bare year from a string spelled like one.
-        """
+        """A label which is not a whole date stays the label it was."""
         region = Region(bounds={"stage": (label, label)})
         assert region.bounds["stage"] == (label, label)
-
-    def test_geometry_kinds_are_distinct(self):
-        """A polygon is not a path which happens to close."""
-        assert not isinstance(
-            Polygon(
-                region=Region(bounds={}),
-                vertices={"distance": (0.0, 1.0, 2.0)},
-            ),
-            Path,
-        )
 
 
 class TestTopLevel:
@@ -1690,26 +1554,31 @@ class TestTopLevel:
 class TestAnnotationNamespaces:
     """A set hosts method namespaces, as a patch and a spool do."""
 
-    def test_io_namespace(self, region_set):
+    def test_io_namespace(self, boxes):
         """The io namespace DASCore registers is reachable."""
-        frame = region_set.io.to_dataframe()
-        assert len(frame) == len(region_set)
-        assert list(frame["group"]) == [x.group for x in region_set]
+        assert "distance_min" in boxes.io.to_csv()
 
-    def test_local_namespace_attaches(self, region_set):
+    def test_removed_io_functions(self, boxes):
+        """The frames are properties now, not io functions."""
+        with pytest.raises(AttributeError):
+            boxes.io.to_dataframe
+        with pytest.raises(AttributeError):
+            boxes.io.to_vertices
+
+    def test_local_namespace_attaches(self, boxes):
         """A namespace defined without an entry point still attaches."""
 
         class _Local(AnnotationNameSpace):
             name = "some_local_namespace"
 
-            def group_count(annotations) -> int:  # noqa: N805
-                """Return how many distinct groups the set holds."""
-                return annotations.io.to_dataframe()["group"].nunique()
+            def note_count(annotations) -> int:  # noqa: N805
+                """Return how many distinct notes the set holds."""
+                return annotations.annotations["note"].nunique()
 
-        assert region_set.some_local_namespace.group_count() == 2
+        assert boxes.some_local_namespace.note_count() == 2
 
-    def test_unknown_attr_raises(self, region_set):
+    def test_unknown_attr_raises(self, boxes):
         """A name no namespace claims raises DASCore's message."""
         msg = "AnnotationSet has no attribute 'nope'"
         with pytest.raises(AttributeError, match=msg):
-            region_set.nope
+            boxes.nope

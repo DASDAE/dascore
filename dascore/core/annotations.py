@@ -1,24 +1,29 @@
 """
-DASCore annotations: labelled geometry over the dimensions of patch data.
+DASCore annotations: labelled locations over the dimensions of patch data.
 
 An annotation set describes *data* -- picks, events, noisy hours, vehicle
-lines -- in the frame of the patches it was made on. Facts about the fiber
+tracks -- in the frame of the patches it was made on. Facts about the fiber
 itself belong to the inventory instead, in optical distance; see
 [dascore.core.inventory](`dascore.core.inventory`).
 
-A set is dataframe-backed, one row per annotation. Columns name the
-dimensions a row constrains: ``<dim>_min``/``<dim>_max`` state a
-half-open range, a bare ``<dim>`` states a point, and a dimension no
-column names is unconstrained. Those columns hold coordinates -- numbers,
-times or durations -- since that is what a bound is compared as. Paths
-and polygons keep their vertices in a second, tidy frame keyed by
-annotation id, and every row keeps a bounding region so table operations
-work whatever its geometry is.
+A set holds three parts:
 
-Any other column is an extra the annotation carries, with one exception: a
-column whose name begins with an underscore is the author's own record
-keeping. A set never holds one, so it stays where it was written and no
-reader looks for meaning in it.
+- ``annotations``: one row per located thing. For each declared dimension a
+  row states a value (``<dim>``), a half-open range (``<dim>_min`` and
+  ``<dim>_max``), or nothing, in which case it spans the whole dimension.
+  Every row states at least one dimension, and a dimension holds one kind of
+  coordinate: numbers, times or durations.
+- ``features``: what annotations compose. Every annotation belongs to one
+  feature, named by its ``feature_id``; a blank ``feature_id`` makes the row
+  its own feature, and a ``feature_id`` naming no features row creates one.
+  A feature is a group (blank ``geometry``), a ``path`` ordered by ``seq``
+  within ``part``, or a ``polygon`` ordered by ``seq`` within ``(part,
+  ring)``, ring 0 being the outer boundary. Features hold no coordinates.
+- ``bases``: keyed curves (`Line`, `Moveout`) a path may be drawn from, so a
+  path may exist as a curve alone.
+
+Any other column is an extra carried untouched, except a column whose name
+begins with an underscore: that is the author's own, and a set never holds it.
 """
 
 from __future__ import annotations
@@ -32,7 +37,7 @@ import pathlib
 import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from contextlib import suppress
-from typing import Annotated, Any, ClassVar, Literal, NamedTuple, Self
+from typing import Annotated, Any, ClassVar, Literal, NamedTuple, Self, cast
 
 import numpy as np
 import pandas as pd
@@ -50,7 +55,7 @@ from rich.text import Text
 
 from dascore.constants import dascore_styles, max_lens
 from dascore.core.inventory import CreationInfo
-from dascore.exceptions import ParameterError
+from dascore.exceptions import InvalidInventoryError, ParameterError
 from dascore.models import (
     DascoreBaseModel,
     DateTime64,
@@ -73,11 +78,6 @@ from dascore.utils.display import (
     stated_fields,
 )
 from dascore.utils.documents import write_document
-from dascore.utils.intervals import (
-    interval_value_type,
-    normalize_value,
-    value_kind,
-)
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import iterate, to_str, validate_acquisition_key
 from dascore.utils.namespace import NamespaceOwner
@@ -85,95 +85,77 @@ from dascore.utils.tables import (
     PRIVATE_PREFIX,
     drop_private_columns,
     parquet_table,
-    parse_cell,
     write_parquet,
     write_parquet_table,
 )
 from dascore.utils.time import to_datetime64, to_timedelta64
 
-# Columns any set may carry, whatever dimensions it declares.
-RESERVED_COLUMNS = (
+# Columns each table models; everything else is an extra.
+ANNOTATION_COLUMNS = (
     "id",
-    "group",
-    "value",
-    "tags",
-    "parent",
+    "name",
+    "feature_id",
+    "seq",
+    "part",
+    "ring",
+    "acquisition_key",
+    "data_id",
+    "set",
+)
+FEATURE_COLUMNS = (
+    "id",
+    "name",
     "geometry",
     "basis",
     "acquisition_key",
+    "data_id",
     "set",
 )
+RESERVED_COLUMNS = tuple(dict.fromkeys((*ANNOTATION_COLUMNS, *FEATURE_COLUMNS)))
 
-# The geometries a row may declare. A region is the default: it is what
-# the dimension columns already state, so a set of boxes names nothing.
-GEOMETRY_KINDS = ("region", "path", "polygon")
+# The order columns of path and polygon members.
+ORDINAL_COLUMNS = ("seq", "part", "ring")
 
-# Geometries whose shape lives in the vertices frame rather than in the
-# dimension columns, and the fewest vertices each is a shape with.
-_VERTEX_KINDS = {"path": 2, "polygon": 3}
+# Feature kinds; a blank geometry is a group.
+FeatureKind = Literal["group", "path", "polygon"]
+GEOMETRY_KINDS = ("group", "path", "polygon")
+# Spellings read as a group on input.
+_GROUP_SPELLINGS = ("", "group", "region")
+# The fewest members each ordered kind needs per part or ring.
+_LEAST = {"path": 2, "polygon": 3}
 
-# The vertices frame's own scaffolding; every other column is a dimension.
-_VERTEX_COLUMNS = ("id", "seq")
-# The column a vertex states its place in the order by; a number.
-_ORDER = _VERTEX_COLUMNS[1]
-
-# The three parts a stored set spells itself with, and the suffixes each
-# takes. The loader reads these names; `io.save` writes them, and clears the
-# spellings it supersedes, which is why both need the whole list.
+# The parts a stored set is spelled with.
 ATTRS_STEM = "attrs"
 ANNOTATION_STEM = "annotations"
-VERTEX_STEM = "vertices"
-# The encodings a table takes, the suffix naming which one a file holds.
-# CSV is the floor: it needs nothing beyond the standard library, so a set
-# can always be written. Parquet is the same tables with their types kept,
-# for a set too big to want text; it needs pyarrow.
+FEATURE_STEM = "features"
+BASES_STEM = "bases"
+# CSV is the floor; parquet keeps types and needs pyarrow.
 TABLE_SUFFIXES = (".csv", ".parquet")
 TABLE_SUFFIX = TABLE_SUFFIXES[0]
 OBJECT_SUFFIXES = (".json", ".yaml", ".yml")
 
-# What a parquet table names its dimensions in, since it has no comment
-# line to declare them in and its footer is the place a format states what
-# its columns cannot. A JSON document, as GeoParquet's `geo` key holds one;
-# namespaced, so a file may carry both without either reading the other's.
+# Where a parquet annotations table names its dimensions.
 DIMS_KEY = "dascore:dims"
 
-# What a range column is spelled with, as every other range in DASCore
-# spells one: a patch's attrs, the spool index, and the inventory.
+# Range suffixes, as everywhere else in DASCore.
 _MIN, _MAX = "_min", "_max"
 
-# What it used to be spelled with. A set written before the rename is
-# this format's own former spelling, not a stranger's columns, so it is
-# told what to write instead -- otherwise its bounds read as extras and
-# the annotation silently covers everything rather than what it states.
+# The former range spelling, refused with a pointer to the new one.
 _RETIRED_RANGE = ("_start", "_end")
 
 # The resolution DASCore holds a time and a duration at.
 _NS_TIME = np.dtype("datetime64[ns]")
 _NS_SPAN = np.dtype("timedelta64[ns]")
 
-# The dtype kinds a coordinate may be a number in, and the ones a column
-# whose type nothing has decided yet arrives as.
+# The dtype kinds a coordinate may be a number in.
 _NUMBER_KINDS = "iuf"
-_TEXT_KINDS = "OTUS"
 
 # A moveout is physics, not geometry, so it names the dimensions it relates.
 DISTANCE_DIM, TIME_DIM = "distance", "time"
 
-
-# An annotation states membership by carrying no value, so a value, when
-# there is one, is text or a number; the same value an inventory label
-# carries, refused in this subsystem's own vocabulary.
-AnnotationValue = interval_value_type(ParameterError)
-
-
 # Spelled as PatchAttrs spells them, so a set and the data it describes
 # state their provenance the same way.
 AcquisitionKey = Annotated[str, AfterValidator(validate_acquisition_key)]
-
-# `iterate` rather than a bare tuple: PatchAttrs.history is `str |
-# tuple[str, ...]`, so copying one straight off a patch may hand over a
-# lone entry, which is a history of one rather than a history of letters.
-History = Annotated[tuple[str, ...], BeforeValidator(lambda x: tuple(iterate(x)))]
 
 
 def _document(value):
@@ -315,15 +297,14 @@ class _AnnotationModel(RichRepr, DascoreBaseModel):
 
 class AnnotationBasis(_AnnotationModel):
     """
-    Base for the curves a path's vertices may be regenerated from.
+    Base for the curves a path may be drawn from.
 
-    A basis is not a geometry: it is the fit the vertices came from, kept
-    so the curve can be redrawn at any resolution. Editing vertices drops
-    it, since they no longer describe the curve.
+    A basis is not a geometry: it is a model a path's members came from, or
+    the whole path where it has no members, sampled at any resolution.
 
     Every curve is stated in its dimensions' own coordinates -- a time is a
     time, a distance is a distance -- so it is anchored without a separate
-    origin and its vertices drop straight into the vertices frame. A curve
+    origin and its samples are annotation coordinates as they are. A curve
     parameterized in a dimension's raw numbers would put an apex at 1.6e18
     nanoseconds and a velocity in meters per nanosecond, which nobody can
     read, write or check.
@@ -471,12 +452,11 @@ Basis = Annotated[Line | Moveout, Field(discriminator="object_type")]
 
 class Region(_AnnotationModel):
     """
-    Per-dimension bounds: the box an annotation occupies.
+    Per-dimension bounds: where one annotation row is.
 
-    Each dimension the annotation constrains maps to a half-open
-    ``(start, end)`` pair; equal values are a point, and a dimension the
-    mapping omits is unconstrained. Region subsumes a point, a span and a
-    box, which differ only in how many dimensions they name.
+    Each dimension the row states maps to a half-open ``(start, end)`` pair;
+    equal values are a point, and a dimension the mapping omits is
+    unconstrained.
     """
 
     object_type: Literal["Region"] = _tag("Region")
@@ -495,126 +475,139 @@ class Region(_AnnotationModel):
         return bool(start == end)
 
 
-class _VertexGeometry(_AnnotationModel):
-    """Base for geometries whose shape is a sequence of vertices."""
+class Group(_AnnotationModel):
+    """The unordered members of a group feature, one region each."""
 
-    region: Region = Field(description="The bounding region of the vertices.")
-    vertices: Vertices = Field(description="Ordered vertex values, keyed by dimension.")
-    basis: Basis | None = Field(
-        default=None, description="The curve these vertices were generated from."
+    object_type: Literal["Group"] = _tag("Group")
+    regions: tuple[Region, ...] = Field(
+        min_length=1, description="The regions the members state, in table order."
     )
 
-    # The fewest vertices this geometry is a shape with.
-    _least: ClassVar[int] = 2
+
+def _check_line(vertices: Mapping, least: int, what: str) -> None:
+    """Refuse vertices naming no dimension, ragged, or too few."""
+    if not vertices:
+        msg = f"A {what} states no dimension, so it is nowhere."
+        raise ValueError(msg)
+    lengths = {len(x) for x in vertices.values()}
+    if len(lengths) > 1:
+        msg = (
+            f"The vertices of this {what} differ in length ({sorted(lengths)}); "
+            "every dimension states every point."
+        )
+        raise ValueError(msg)
+    if (count := lengths.pop()) < least:
+        msg = f"A {what} states {count} vertices; it is a shape with at least {least}."
+        raise ValueError(msg)
+
+
+class Path(_AnnotationModel):
+    """
+    An open sequence of vertices, e.g. a vehicle track.
+
+    ``vertices`` holds one mapping of dimension to ordered coordinates per
+    part; a single-part path holds one.
+    """
+
+    object_type: Literal["Path"] = _tag("Path")
+    vertices: tuple[Vertices, ...] = Field(
+        min_length=1, description="Ordered vertices keyed by dimension, per part."
+    )
+    basis: Basis | None = Field(
+        default=None, description="The curve the path was drawn from."
+    )
 
     @model_validator(mode="after")
-    def _check_vertices(self) -> Self:
-        """Vertices place every dimension, equally, and enough times."""
-        if not self.vertices:
-            msg = f"A {type(self).__name__} states no dimension, so it is nowhere."
-            raise ValueError(msg)
-        lengths = {len(x) for x in self.vertices.values()}
-        if len(lengths) > 1:
-            msg = (
-                f"The vertices of this {type(self).__name__} differ in length "
-                f"({sorted(lengths)}); every dimension states every point."
-            )
-            raise ValueError(msg)
-        if (count := lengths.pop()) < self._least:
-            msg = (
-                f"A {type(self).__name__} states {count} vertices; it is a "
-                f"shape with at least {self._least}."
-            )
+    def _check_parts(self) -> Self:
+        """Every part is a line in the same dimensions."""
+        for part in self.vertices:
+            _check_line(part, _LEAST["path"], "Path")
+        if len({tuple(x) for x in self.vertices}) > 1:
+            msg = "The parts of a Path are drawn in different dimensions."
             raise ValueError(msg)
         return self
 
     @property
     def dims(self) -> tuple[str, ...]:
         """The dimensions the vertices are stated in."""
-        return tuple(self.vertices)
-
-    def __len__(self) -> int:
-        """The number of vertices."""
-        return len(next(iter(self.vertices.values())))
+        return tuple(self.vertices[0])
 
 
-class Path(_VertexGeometry):
-    """An open sequence of vertices, e.g. a pick or a vehicle track."""
-
-    object_type: Literal["Path"] = _tag("Path")
-
-
-class Polygon(_VertexGeometry):
+class Polygon(_AnnotationModel):
     """
-    A closed sequence of vertices bounding an area.
+    Closed rings of vertices bounding an area.
 
-    Closure is implied rather than written: the last vertex is not the
-    first repeated, so a triangle states three points.
+    ``vertices`` holds the parts, each a tuple of rings keyed by dimension:
+    the first ring is the outer boundary, the rest are holes. Closure is
+    implied, so a triangle states three points.
     """
 
     object_type: Literal["Polygon"] = _tag("Polygon")
-    _least: ClassVar[int] = 3
+    vertices: tuple[tuple[Vertices, ...], ...] = Field(
+        min_length=1, description="Rings of vertices keyed by dimension, per part."
+    )
+
+    @model_validator(mode="after")
+    def _check_parts(self) -> Self:
+        """Every ring closes an area in the same dimensions."""
+        for part in self.vertices:
+            if not part:
+                msg = "A Polygon part states no ring."
+                raise ValueError(msg)
+            for ring in part:
+                _check_line(ring, _LEAST["polygon"], "Polygon")
+        if len({tuple(x) for part in self.vertices for x in part}) > 1:
+            msg = "The rings of a Polygon are drawn in different dimensions."
+            raise ValueError(msg)
+        return self
+
+    @property
+    def dims(self) -> tuple[str, ...]:
+        """The dimensions the vertices are stated in."""
+        return tuple(self.vertices[0][0])
 
 
-Geometry = Annotated[Region | Path | Polygon, Field(discriminator="object_type")]
+Geometry = Annotated[
+    Region | Group | Path | Polygon, Field(discriminator="object_type")
+]
 
-# Reads a basis cell, which a set may state as the model or as its document.
+# Reads a basis, stated as the model or its document.
 _BASIS_ADAPTER = TypeAdapter(Basis)
 
 
-# --- The annotation row view ----------------------------------------------
+# --- Features -------------------------------------------------------------
 
 
-class Annotation(_AnnotationModel):
+class Feature(_AnnotationModel):
     """
-    One annotation: a geometry, what it says, and who it belongs to.
+    One feature of an [AnnotationSet](`dascore.core.annotations.AnnotationSet`).
 
-    Instances are a view of a row of an
-    [AnnotationSet](`dascore.core.annotations.AnnotationSet`), built on
-    demand rather than held.
+    A view built on demand. A row with a blank ``feature_id`` is its own
+    feature: its ``id`` is empty, its kind is a group, and its geometry is
+    the row's [Region](`dascore.core.annotations.Region`).
     """
 
-    geometry: Geometry = Field(description="Where this annotation is.")
-    id: str = Field(default="", description="Producer-supplied stable identifier.")
-    group: str = Field(default="", description="Name of the annotated variable.")
-    value: AnnotationValue | None = Field(
-        default=None,
-        description=(
-            "Value of the variable over this geometry; unset for an "
-            "annotation which states membership."
-        ),
-    )
-    tags: tuple[str, ...] = Field(
-        default=(), description="Free labels; an annotation may carry many."
-    )
-    parent: str = Field(
-        default="", description="Id of the annotation this one belongs to."
+    id: str = Field(default="", description="The feature id; empty for a lone row.")
+    name: str = Field(default="", description="A human-readable name.")
+    kind: FeatureKind = Field(default="group", description="What the members compose.")
+    geometry: Geometry = Field(description="Where the feature is.")
+    basis: Basis | None = Field(
+        default=None, description="The curve a path is drawn from, if any."
     )
     acquisition_key: AcquisitionKey = Field(
         default="",
         max_length=max_lens["acquisition_key"],
-        description=(
-            "Inventory identity of the data this annotation was made on; the "
-            "set's own where the row names none."
-        ),
+        description="Inventory identity of the annotated data, after fallback.",
+    )
+    data_id: str = Field(
+        default="", description="Identity of the annotated data, after fallback."
     )
     set: str = Field(
-        default="",
-        description=(
-            "Name of the set this annotation was read from, where many were "
-            "loaded together. A label, not an identity: ids are unique across "
-            "a collection."
-        ),
+        default="", description="The set this feature was read from, in a collection."
     )
     extra: FrozenDictType[str, Any] = Field(
         default_factory=dict, description="Columns the set does not model."
     )
-
-    @property
-    def region(self) -> Region:
-        """The bounding region, whatever the geometry is."""
-        geometry = self.geometry
-        return geometry if isinstance(geometry, Region) else geometry.region
 
 
 # --- Set attributes -------------------------------------------------------
@@ -659,28 +652,27 @@ class AnnotationSetAttrs(_AnnotationModel):
             "default; a row may name its own."
         ),
     )
-    history: History = Field(
-        default=(),
+    data_id: str = Field(
+        default="",
         description=(
-            "Processing performed on the data the annotations were made on. "
-            "Picks made on decimated or filtered data have coordinates which "
-            "only mean anything against that lineage."
+            "Identity of the data the annotations were made on. The set-level "
+            "default; a row may name its own."
         ),
     )
-    columns: FrozenDictType[str, AnnotationColumn] = Field(
-        default_factory=dict, description="Documentation for columns, keyed by name."
+    annotation_columns: FrozenDictType[str, AnnotationColumn] = Field(
+        default_factory=dict,
+        description="Documentation for annotations columns, keyed by name.",
+    )
+    feature_columns: FrozenDictType[str, AnnotationColumn] = Field(
+        default_factory=dict,
+        description="Documentation for features columns, keyed by name.",
     )
     sets: FrozenDictType[str, AnnotationSetAttrs] = Field(
         default_factory=dict,
         description=(
-            "The attributes of each set loaded together, keyed by the name the "
-            "`set` column holds. What a child set declares for itself -- its "
-            "own dimensions, provenance and columns -- is kept here rather "
-            "than written into every row of it, and a row reaches it back "
-            "through its label. What it says describes its own table, not the "
-            "merged one: a column of whole numbers which another set does not "
-            "state holds them as floats once the two are one table, since that "
-            "is what a missing number makes of them."
+            "The attributes of each set loaded together, keyed by the label "
+            "the `set` column holds. What a child describes is its own table, "
+            "not the merged one."
         ),
     )
 
@@ -708,9 +700,6 @@ class AnnotationSetAttrs(_AnnotationModel):
                 f"a set may not dimension {', '.join(RESERVED_COLUMNS)}."
             )
             raise ValueError(msg)
-        # A dimension is stated by a column, and a private column is the
-        # author's own: dimensioning one would declare a coordinate no
-        # table is allowed to hold.
         if private := sorted(x for x in self.dims if x.startswith(PRIVATE_PREFIX)):
             msg = (
                 f"The dimension(s) {', '.join(private)} begin with an "
@@ -743,97 +732,99 @@ class AnnotationSetAttrs(_AnnotationModel):
 
 
 class _Spelling(NamedTuple):
-    """How one dimension is spelled in the frame."""
+    """The columns one dimension is spelled with; either or both may exist."""
 
     dim: str
-    point: str | None  # the bare column, where the dimension is a point
-    low: str | None  # the range columns, where it is a span
+    point: str | None  # the bare value column
+    low: str | None  # the range columns
     high: str | None
 
 
 class AnnotationSet(NodeRepr, NamespaceOwner):
     """
-    An immutable, dataframe-backed set of annotations over patch dimensions.
+    An immutable set of annotations, the features they compose, and bases.
 
     Parameters
     ----------
-    data
-        A dataframe, or anything a dataframe can be built from, holding one
-        row per annotation.
+    annotations
+        A dataframe, or anything one can be built from, of one row per
+        located thing. Per dimension a row states ``<dim>``, a half-open
+        ``<dim>_min``/``<dim>_max`` range, or nothing (spanning it). A
+        ``feature_id`` names the feature a row belongs to; blank, the row is
+        its own feature. ``seq``, ``part`` and ``ring`` order the members of
+        a path or polygon.
+    features
+        A dataframe of one row per feature: a required ``id``, an optional
+        ``geometry`` (blank for a group, ``path``, or ``polygon``), an
+        optional ``basis`` key, and any other columns. Features hold no
+        coordinates; a ``feature_id`` naming no row here creates a group.
+    bases
+        A mapping of key to curve, as a model or its document, e.g.
+        ``{"m1": {"object_type": "Moveout", ...}}``. Only a path names one.
     dims
-        Patch dimensions represented by the annotations. Required unless ``attrs``
-        supplies them. Dimension columns accept numbers, times, or durations;
-        numeric-looking text is refused.
-    vertices
-        A tidy frame of one row per vertex, with ``id``, ``seq`` and one
-        column per dimension. Required by every path and polygon row.
+        Patch dimensions the annotations are stated in. Required unless
+        ``attrs`` supplies them.
     attrs
         The set's attributes; ``dims`` and the keywords below override it.
     creation_info
         What produced the annotations, and when.
     acquisition_key
         Inventory identity of the annotated data.
-    history
-        Processing performed on that data, in ``PatchAttrs.history``'s shape.
-    columns
-        Documentation for columns, keyed by name.
+    data_id
+        Identity of the annotated data.
+    annotation_columns
+        Documentation for annotations columns, keyed by name.
+    feature_columns
+        Documentation for features columns, keyed by name.
 
     Examples
     --------
     >>> import pandas as pd
     >>> import dascore as dc
-    >>> frame = pd.DataFrame(
-    ...     {"group": ["event"], "distance_min": [10.0], "distance_max": [80.0]}
+    >>> picks = pd.DataFrame(
+    ...     {
+    ...         "time": [1.0, 2.5],
+    ...         "phase": ["P", "S"],
+    ...         "feature_id": ["event_1", "event_1"],
+    ...     }
     ... )
-    >>> picks = dc.AnnotationSet(frame, dims=("time", "distance"))
-    >>> len(picks), picks[0].group
-    (1, 'event')
-    >>> picks[0].region.bounds["distance"]
-    (10.0, 80.0)
+    >>> annotations = dc.AnnotationSet(picks, dims=("distance", "time"))
+    >>> len(annotations)  # one feature, created from the feature_id
+    1
+    >>> feature = annotations["event_1"]
+    >>> feature.kind, len(feature.geometry.regions)
+    ('group', 2)
     """
 
     _namespace_entry_point_group: ClassVar[str] = "dascore.annotation_namespace"
 
     def __init__(
         self,
-        data=None,
+        annotations=None,
+        features=None,
+        bases: Mapping | None = None,
         dims: Sequence[str] | None = None,
-        vertices=None,
         attrs: AnnotationSetAttrs | Mapping | None = None,
         creation_info: CreationInfo | Mapping | None = None,
         acquisition_key: str | None = None,
-        history: Sequence[str] | str | None = None,
-        columns: Mapping | None = None,
+        data_id: str | None = None,
+        annotation_columns: Mapping | None = None,
+        feature_columns: Mapping | None = None,
     ):
         self._attrs = _build_attrs(
-            attrs, dims, creation_info, acquisition_key, history, columns
+            attrs,
+            dims=tuple(iterate(dims)) if dims is not None else None,
+            creation_info=creation_info,
+            acquisition_key=acquisition_key,
+            data_id=data_id,
+            annotation_columns=annotation_columns,
+            feature_columns=feature_columns,
         )
-        frame = _coerce_frame(data, "annotations")
-        # Blanks first: a blank cell beside times written as text is unset,
-        # not a word the time column holds.
-        declared = _declared_dtypes(self._attrs)
-        frame = _normalize_times(_normalize_blanks(frame, declared), self._attrs.dims)
-        spellings = _read_spellings(frame, self._attrs.dims)
-        frame = _type_dimensions(frame, spellings)
-        frame = _normalize_identities(frame, ("id", "parent"), declared)
-        _check_columns(frame, self._attrs)
-        _check_ranges(frame, spellings)
-        _check_values(frame)
-        _check_set_labels(frame, self._attrs)
-        ids = _check_ids(frame)
-        frame = _normalize_tags(_normalize_basis(frame, self._attrs.dims))
-        vertex_frame = _normalize_times(
-            _normalize_blanks(_coerce_frame(vertices, "vertices"), declared),
-            self._attrs.dims,
-        )
-        vertex_frame = _normalize_identities(vertex_frame, ("id",), declared)
-        self._vertices = _check_vertices(vertex_frame, frame, ids, self._attrs.dims)
-        # Read again: filling a derived bounding region adds the range
-        # columns a path row had none of, which are bounds like any other,
-        # and are typed as any other.
-        filled = _fill_vertex_bounds(frame, self._vertices, spellings)
-        self._spellings = _read_spellings(filled, self._attrs.dims)
-        self._df = _type_dimensions(filled, self._spellings)
+        frame, self._spellings = _read_annotations(annotations, self._attrs)
+        table = _read_features(features, self._attrs)
+        self._bases = _read_bases(bases, self._attrs.dims)
+        self._features = _add_implicit(frame, table)
+        self._df = _check_members(frame, self._features, self._spellings, self._bases)
 
     # --- what the set is
 
@@ -849,76 +840,136 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
 
     # --- what the set holds
 
+    @property
+    def annotations(self) -> pd.DataFrame:
+        """A copy of the annotations table, ``feature_id`` included."""
+        return self._df.copy()
+
+    @property
+    def features(self) -> pd.DataFrame:
+        """A copy of the features table, implicit features included."""
+        return self._features.copy()
+
+    @property
+    def bases(self) -> FrozenDict:
+        """The curves paths may be drawn from, keyed by name."""
+        return self._bases
+
     def __len__(self) -> int:
-        """The number of annotations."""
-        return len(self._df)
+        """The number of features, lone rows included."""
+        return len(self._features) + int(self._lone().sum())
 
     def __iter__(self):
-        """Iterate the annotations, building each on demand."""
-        for position in range(len(self._df)):
-            yield self[position]
+        """Iterate the features: the table's first, then each lone row."""
+        for identity in self._features["id"]:
+            yield self[identity]
+        for row in _records(self._df[self._lone()]):
+            yield self._lone_feature(row)
 
-    def __getitem__(self, position: int) -> Annotation:
-        """Return one annotation by its position."""
-        if isinstance(position, bool) or not isinstance(position, int | np.integer):
-            msg = (
-                f"An annotation is read by its position; got {position!r}. "
-                "Iterate the set, or filter its frame, to reach many."
-            )
-            raise TypeError(msg)
-        # Read column by column rather than as a row: one row of a frame is
-        # a Series, which holds one dtype, so an id of 1 beside a float
-        # bound would be read back as '1.0'.
-        row = {str(name): self._df[name].iloc[position] for name in self._df.columns}
-        label = _text(row.get("set"))
-        return Annotation(
-            geometry=self._geometry(row),
-            id=_text(row.get("id")),
-            group=_text(row.get("group")),
-            value=row["value"] if _stated(row.get("value")) else None,
-            tags=_read_tags(row.get("tags")),
-            parent=_text(row.get("parent")),
-            acquisition_key=self._acquisition_key(row, label),
-            set=label,
-            extra=_read_extra(row, self._attrs.dims, self._spellings),
+    def __getitem__(self, feature_id: str) -> Feature:
+        """Return the feature with this id."""
+        row = self._feature_row(feature_id)
+        kind = cast(FeatureKind, _text(row.get("geometry")) or "group")
+        return Feature(
+            id=_text(row["id"]),
+            name=_text(row.get("name")),
+            kind=kind,
+            geometry=self.geometry(feature_id),
+            basis=self._basis(row),
+            acquisition_key=self._fallback(row, "acquisition_key"),
+            data_id=self._fallback(row, "data_id"),
+            set=_text(row.get("set")),
+            extra=_read_extra(row, FEATURE_COLUMNS),
         )
 
-    def _acquisition_key(self, row, label: str) -> str:
+    def geometry(self, feature_id: str, count: int = 64) -> Group | Path | Polygon:
         """
-        Return the address of the data one annotation was made on.
+        Build the geometry of one feature.
 
-        A set may span acquisitions, so a row naming one overrides the
-        set-level address rather than sitting beside it. Where sets were
-        loaded together, the row's own set answers before the collection
-        does: the collection is not what any of them was picked on, and the
-        label is what reaches back to the set which was. A collection which
-        states an address of its own still answers for a set which states
-        none, which is what makes stating it once useful.
+        Parameters
+        ----------
+        feature_id
+            The id of a feature in the features table.
+        count
+            How many points to sample a path stated only by its basis at.
         """
-        if stated := _text(row.get("acquisition_key")):
+        row = self._feature_row(feature_id)
+        kind = _text(row.get("geometry")) or "group"
+        members = self._df[self._df["feature_id"].map(_text) == _text(row["id"])]
+        rows = _records(members)
+        if kind == "group":
+            bounds = (_read_bounds(x, self._spellings) for x in rows)
+            return Group(regions=tuple(Region(bounds=x) for x in bounds))
+        dims = _drawn_dims(rows, self._spellings)
+        if kind == "path":
+            basis = self._basis(row)
+            if not rows:
+                assert basis is not None  # a memberless path is refused without one
+                drawn = basis.vertices(count)
+                sampled = {k: [_scalar(x) for x in v] for k, v in drawn.items()}
+                return Path(vertices=(sampled,), basis=basis)
+            parts = _ordered_parts(rows, dims, self._spellings, ("part",))
+            return Path(vertices=tuple(parts.values()), basis=basis)
+        rings = _ordered_parts(rows, dims, self._spellings, ("part", "ring"))
+        parts: dict[Any, list] = {}
+        for (part, _), ring in rings.items():
+            parts.setdefault(part, []).append(ring)
+        return Polygon(vertices=tuple(tuple(x) for x in parts.values()))
+
+    def _lone(self) -> pd.Series:
+        """Which rows are their own feature."""
+        return self._df["feature_id"].map(_text) == ""
+
+    def _feature_row(self, feature_id) -> dict:
+        """Return one features row by id, refusing an unknown one."""
+        ids = self._features["id"].map(_text)
+        found = self._features[ids == _text(feature_id)]
+        if not len(found) or not _text(feature_id):
+            msg = f"No feature has the id {feature_id!r}."
+            raise KeyError(msg)
+        return _records(found)[0]
+
+    def _basis(self, row) -> Line | Moveout | None:
+        """Return the curve a features row names, if any."""
+        key = _text(row.get("basis"))
+        return self._bases[key] if key else None
+
+    def _lone_feature(self, row) -> Feature:
+        """Build the feature a row with no feature_id is."""
+        known = set(ANNOTATION_COLUMNS) | _spelled_columns(self._spellings)
+        return Feature(
+            name=_text(row.get("name")),
+            geometry=Region(bounds=_read_bounds(row, self._spellings)),
+            acquisition_key=self._fallback(row, "acquisition_key"),
+            data_id=self._fallback(row, "data_id"),
+            set=_text(row.get("set")),
+            extra=_read_extra(row, known),
+        )
+
+    def _fallback(self, row, field: str) -> str:
+        """Return a row's provenance, else its set's, else the collection's."""
+        if stated := _text(row.get(field)):
             return stated
-        child = self._attrs.sets.get(label)
-        if child is not None and child.acquisition_key:
-            return child.acquisition_key
-        return self._attrs.acquisition_key
+        child = self._attrs.sets.get(_text(row.get("set")))
+        if child is not None and getattr(child, field):
+            return getattr(child, field)
+        return getattr(self._attrs, field)
 
     def __eq__(self, other) -> bool:
-        """Two sets are equal when their attributes and frames are."""
+        """Two sets are equal when their attributes, tables and bases are."""
         if not isinstance(other, AnnotationSet):
             return NotImplemented
         return (
             self._attrs == other._attrs
             and _ordered_columns(self._df).equals(_ordered_columns(other._df))
-            and _ordered_columns(self._vertices).equals(
-                _ordered_columns(other._vertices)
+            and _ordered_columns(self._features).equals(
+                _ordered_columns(other._features)
             )
+            and dict(self._bases) == dict(other._bases)
         )
 
     def _repr_node(self) -> Repr:
         """The banner, then what the set spans, holds, and says of itself."""
-        count = len(self)
-        plural = "" if count == 1 else "s"
-        name = f"AnnotationSet \U0001f3f7 ({count} Annotation{plural})"
         blocks = [self._dims_text()]
         if contents := self._contents():
             blocks.append(mapping_to_text(contents, "Contents", style="dc_red"))
@@ -926,7 +977,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         if attrs:
             blocks.append(mapping_to_text(attrs, "Attributes"))
         return Repr(
-            header=get_header_text(name),
+            header=get_header_text("AnnotationSet \U0001f3f7"),
             body=tuple(split_block(x) for x in blocks),
         )
 
@@ -937,84 +988,64 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         base += Text(" (") + Text(", ".join(self.dims), style="bold") + Text(")")
         for dim in self.dims:
             spelling = self._spellings[dim]
-            spelled = (spelling.point, spelling.low, spelling.high)
-            names = [x for x in spelled if x and x in self._df.columns]
-            columns = [self._df[x] for x in names] or [pd.Series(dtype=float)]
-            values = pd.concat(columns, ignore_index=True).dropna()
+            stated = {
+                name: self._df[name].dropna()
+                for name in (spelling.point, spelling.low, spelling.high)
+                if name
+            }
+            columns = [x for x in stated.values() if len(x)]
             base += Text.assemble("\n    *", Text(dim, style="bold"), ": ")
-            if not len(values):
+            if not columns:
                 base += Text("unstated", key_style)
                 continue
+            values = pd.concat(columns, ignore_index=True)
             low, high = values.min(), values.max()
             near, far = range_texts(low, high)
-            # Appended one at a time: a Text built as Text(x, style=...)
-            # makes that style the base of anything added to it, so the
-            # label's grey would bleed onto the value after it.
+            # Appended one at a time so the label's style does not bleed.
             base += Text("min: ", key_style)
             base += near
             base += Text(" max: ", key_style)
             base += far
             if (span := span_text(low, high)) is not None:
                 base += Text(" ") + span
-            kind = "point" if spelling.point else "range"
-            base += Text(f" ({kind})", key_style)
+            kinds = [
+                kind
+                for kind, name in (("value", spelling.point), ("range", spelling.low))
+                if name and len(stated[name])
+            ]
+            base += Text(f" ({', '.join(kinds)})", key_style)
         return base
 
     def _contents(self) -> dict:
-        """What the set holds: its kinds, its groups, and its columns."""
-        contents = {}
-        # Every row has a geometry, whether or not it spells one: a blank
-        # cell, and a frame with no such column, are regions. Counting only
-        # what the column states would hide them.
-        if len(self._df):
-            contents["geometry"] = counts_to_text(self._kinds().value_counts())
-        if "group" in self._df.columns:
-            contents["group"] = counts_to_text(self._df["group"].value_counts())
-        if len(self._df.columns):
-            contents["columns"] = ", ".join(str(x) for x in self._df.columns)
-        if len(self._vertices):
-            contents["vertices"] = len(self._vertices)
+        """What the set holds, counted from its tables."""
+        if not len(self._df) and not len(self._features) and not self._bases:
+            return {}
+        kinds = self._features["geometry"].map(lambda x: _text(x) or "group")
+        counts = {
+            "groups": int((kinds == "group").sum() + self._lone().sum()),
+            "paths": int((kinds == "path").sum()),
+            "polygons": int((kinds == "polygon").sum()),
+        }
+        contents = {
+            "annotations": len(self._df),
+            "features": Text(f"{len(self)} (") + counts_to_text(counts) + Text(")"),
+            "bases": len(self._bases),
+            "annotation columns": ", ".join(str(x) for x in self._df.columns),
+        }
+        if len(self._features):
+            contents["feature columns"] = ", ".join(
+                str(x) for x in self._features.columns
+            )
         return contents
 
-    # --- internals
 
-    def _kinds(self) -> pd.Series:
-        """The geometry kind each row states, read as ``_geometry`` reads it."""
-        if "geometry" not in self._df.columns:
-            return pd.Series("region", index=self._df.index)
-        return self._df["geometry"].map(lambda x: _text(x) or "region")
-
-    def _geometry(self, row) -> Region | Path | Polygon:
-        """Build the geometry a row states."""
-        region = Region(bounds=_read_bounds(row, self._spellings))
-        kind = _text(row.get("geometry")) or "region"
-        if kind == "region":
-            return region
-        vertices = _row_vertices(self._vertices, row["id"], self.dims)
-        model = Path if kind == "path" else Polygon
-        return model(
-            region=region,
-            vertices=vertices,
-            basis=_read_basis(row.get("basis"), self.dims),
-        )
-
-
-def _build_attrs(
-    attrs, dims, creation_info, acquisition_key, history, columns
-) -> AnnotationSetAttrs:
+def _build_attrs(attrs, **overrides) -> AnnotationSetAttrs:
     """Build the set attributes from an attrs object and its overrides."""
     stated: dict[str, Any] = {}
     if attrs is not None:
         stated = (
             attrs.model_dump() if isinstance(attrs, AnnotationSetAttrs) else dict(attrs)
         )
-    overrides = {
-        "dims": tuple(iterate(dims)) if dims is not None else None,
-        "creation_info": creation_info,
-        "acquisition_key": acquisition_key,
-        "history": history,
-        "columns": columns,
-    }
     stated.update({k: v for k, v in overrides.items() if v is not None})
     if "dims" not in stated:
         msg = (
@@ -1025,9 +1056,293 @@ def _build_attrs(
     return AnnotationSetAttrs(**stated)
 
 
-def _declared_dtypes(attrs: AnnotationSetAttrs) -> frozenset[str]:
-    """Return the columns whose dtype the set states, and so does not decide."""
-    return frozenset(k for k, v in attrs.columns.items() if v.dtype)
+def _declared_dtypes(columns: Mapping) -> frozenset[str]:
+    """Return the columns whose dtype is stated, and so not decided here."""
+    return frozenset(k for k, v in columns.items() if v.dtype)
+
+
+def _read_annotations(data, attrs: AnnotationSetAttrs):
+    """Return the checked annotations frame and each dimension's spelling."""
+    frame = _coerce_frame(data, "annotations")
+    declared = _declared_dtypes(attrs.annotation_columns)
+    # Blanks first: a blank cell beside times written as text is unset.
+    frame = _normalize_times(_normalize_blanks(frame, declared), attrs.dims)
+    spellings = _read_spellings(frame, attrs.dims)
+    frame = _normalize_identities(frame, ("id", "feature_id"), declared)
+    _check_columns(frame, attrs, "annotations")
+    _check_ranges(frame, spellings)
+    _check_locations(frame, spellings)
+    _check_set_labels(frame, attrs, "annotations")
+    _check_ids(frame, "annotation", required=False)
+    _check_keys(frame, "annotations")
+    if "feature_id" not in frame.columns:
+        frame = _assign(frame, {"feature_id": _blank_column(frame.index)})
+    return frame, spellings
+
+
+def _read_features(data, attrs: AnnotationSetAttrs) -> pd.DataFrame:
+    """Return the checked features frame, geometry normalized."""
+    frame = _coerce_frame(data, "features")
+    declared = _declared_dtypes(attrs.feature_columns)
+    frame = _normalize_times(_normalize_blanks(frame, declared))
+    frame = _normalize_identities(frame, ("id", "basis"), declared)
+    _check_columns(frame, attrs, "features")
+    if len(frame) and "id" not in frame.columns:
+        msg = "The features state no id column; annotations name a feature by id."
+        raise ParameterError(msg)
+    _check_ids(frame, "feature", required=True)
+    _check_set_labels(frame, attrs, "features")
+    _check_keys(frame, "features")
+    changed = {"geometry": _read_geometry(frame)}
+    if "id" not in frame.columns:
+        changed["id"] = _blank_column(frame.index)
+    return _assign(frame, changed)
+
+
+def _read_geometry(frame: pd.DataFrame) -> pd.Series:
+    """Return the geometry column, a group spelled blank."""
+    cells = frame["geometry"] if "geometry" in frame.columns else [None] * len(frame)
+    kinds = [_text(x) for x in cells]
+    if unknown := sorted(set(kinds) - set(_GROUP_SPELLINGS) - set(_LEAST)):
+        msg = (
+            f"The geometry {', '.join(unknown)} is not one of "
+            f"{', '.join(GEOMETRY_KINDS)}; a blank geometry is a group."
+        )
+        raise ParameterError(msg)
+    read = [x if x in _LEAST else None for x in kinds]
+    return pd.Series(read, index=frame.index, dtype=object)
+
+
+def _read_bases(bases, dims) -> FrozenDict:
+    """Return the bases as a frozen mapping of key to curve."""
+    if bases is None:
+        return FrozenDict()
+    if not isinstance(bases, Mapping):
+        msg = f"The bases are a mapping of key to curve; got {type(bases).__name__}."
+        raise ParameterError(msg)
+    out = {}
+    for key, value in bases.items():
+        if not _text(key):
+            msg = "A basis is named by a nonblank key."
+            raise ParameterError(msg)
+        out[str(key)] = _read_basis(value, dims, str(key))
+    return FrozenDict(out)
+
+
+def _add_implicit(frame: pd.DataFrame, features: pd.DataFrame) -> pd.DataFrame:
+    """Append a group for every feature_id naming no features row."""
+    ids = frame["feature_id"].map(_text)
+    known = set(features["id"].map(_text))
+    new = [x for x in dict.fromkeys(ids) if x and x not in known]
+    if not new:
+        return features
+    rows = {"id": pd.Series(new, dtype=object)}
+    if "set" in frame.columns:
+        first = frame.groupby(ids.values, sort=False)["set"].first()
+        rows["set"] = pd.Series([first[x] for x in new], dtype=object)
+    out = pd.concat([features, pd.DataFrame(rows)], ignore_index=True, sort=False)
+    # Concatenation fills text columns with NaN; blank is None here.
+    text = {x: out[x] for x in out.columns if out[x].dtype == object}
+    return _assign(out, {k: v.where(v.notna(), None) for k, v in text.items()})
+
+
+def _check_members(frame, features, spellings, bases) -> pd.DataFrame:
+    """
+    Check each feature against its members; return the annotations frame
+    with its order columns normalized.
+    """
+    ids = frame["feature_id"].map(_text)
+    kinds = dict(
+        zip(
+            features["id"].map(_text),
+            features["geometry"].map(lambda x: _text(x) or "group"),
+            strict=True,
+        )
+    )
+    ordered = ids.map(lambda x: kinds.get(x, "group") in _LEAST).to_numpy(bool)
+    frame = _read_ordinals(frame, ordered, ids)
+    members = frame.groupby(ids.values, sort=False).indices
+    keys = features["basis"] if "basis" in features.columns else [None] * len(features)
+    for identity, key in zip(features["id"].map(_text), keys, strict=True):
+        kind, key = kinds[identity], _text(key)
+        if key and key not in bases:
+            msg = (
+                f"The feature {identity!r} names the basis {key!r}, which is not "
+                f"among the bases: {', '.join(sorted(bases)) or 'none'}."
+            )
+            raise ParameterError(msg)
+        if key and kind != "path":
+            msg = (
+                f"The feature {identity!r} is a {kind} and names a basis; only a "
+                "path is drawn from a curve."
+            )
+            raise ParameterError(msg)
+        rows = members.get(identity, ())
+        if not len(rows) and not key:
+            msg = (
+                f"The feature {identity!r} has no annotations and no basis, so "
+                "nothing locates it."
+            )
+            raise ParameterError(msg)
+        if kind in _LEAST and len(rows):
+            basis = bases[key] if key else None
+            _check_drawn(frame.iloc[rows], identity, kind, spellings, basis)
+    return frame
+
+
+def _read_ordinals(frame, ordered: np.ndarray, ids: pd.Series) -> pd.DataFrame:
+    """Read seq, part and ring: whole numbers, only on ordered members."""
+    present = [x for x in ORDINAL_COLUMNS if x in frame.columns]
+    for name in present:
+        stray = _stated_cells(frame[name]) & ~ordered
+        if stray.any():
+            rows = ", ".join(str(x) for x in frame.index[stray][:5])
+            msg = (
+                f"Row(s) {rows} state {name}, which orders the members of a path "
+                "or polygon; their feature is neither."
+            )
+            raise ParameterError(msg)
+    if not ordered.any():
+        return frame.drop(columns=present)
+    changed = {}
+    for name in ORDINAL_COLUMNS:
+        series = frame[name] if name in frame.columns else _blank_column(frame.index)
+        stated = _stated_cells(series)
+        values = read_ordinal(series).astype("float64")
+        bad = stated & ~((values % 1 == 0) & (values >= 0)).to_numpy(bool)
+        if bad.any():
+            row = frame.index[bad][0]
+            msg = (
+                f"Row {row} states {name} {series[row]!r}; an ordinal is a "
+                "non-negative whole number."
+            )
+            raise ParameterError(msg)
+        if name != "seq":
+            values = values.where(stated | ~ordered, 0.0)
+        changed[name] = values
+    seq = changed["seq"]
+    keys = [ids.values, changed["part"].values, changed["ring"].values]
+    blank = pd.Series(~_stated_cells(seq) & ordered, index=frame.index)
+    groups = blank.groupby(keys, sort=False)
+    if (groups.any() & ~groups.all()).any():
+        msg = (
+            "A path or polygon ring states seq on some members and not others; "
+            "state it on all of them, or on none to take row order."
+        )
+        raise ParameterError(msg)
+    order = blank.groupby(keys, sort=False).cumcount().astype("float64")
+    changed["seq"] = seq.where(~blank, order)
+    keep = pd.Series(ordered, index=frame.index)
+    held = {k: v.where(keep).astype("Int64") for k, v in changed.items()}
+    return _assign(frame, held)
+
+
+def _check_drawn(members, identity, kind, spellings, basis) -> None:
+    """Refuse a path or polygon whose members do not draw one."""
+    rows = _records(members)
+    ranged = {
+        dim
+        for row in rows
+        for dim, spelling in spellings.items()
+        if spelling.low and _stated(row.get(spelling.low))
+    }
+    if ranged:
+        msg = (
+            f"The {kind} {identity!r} has a member stating a range of "
+            f"{', '.join(sorted(ranged))}; a {kind} is drawn through values."
+        )
+        raise ParameterError(msg)
+    drawn = {frozenset(_value_dims(row, spellings)) for row in rows}
+    if len(drawn) > 1:
+        msg = (
+            f"The members of the {kind} {identity!r} state different dimensions; "
+            "every vertex states the same ones."
+        )
+        raise ParameterError(msg)
+    dims = _drawn_dims(rows, spellings)
+    if kind == "polygon" and len(dims) < 2:
+        msg = f"The polygon {identity!r} is drawn in {list(dims)}; an area needs two."
+        raise ParameterError(msg)
+    if basis is not None and set(basis.dims) != set(dims):
+        msg = (
+            f"The path {identity!r} is drawn in {sorted(dims)}, but its basis in "
+            f"{sorted(basis.dims)}."
+        )
+        raise ParameterError(msg)
+    if kind == "path" and (members["ring"] != 0).any():
+        msg = f"The path {identity!r} states a ring; only a polygon has rings."
+        raise ParameterError(msg)
+    keys = ["part", "ring"]
+    for (part, ring), group in members.groupby(keys, sort=True):
+        where = f"part {part}" if kind == "path" else f"part {part} ring {ring}"
+        if group["seq"].duplicated().any():
+            msg = f"The {kind} {identity!r} repeats a seq in {where}."
+            raise ParameterError(msg)
+        points = [
+            tuple(_scalar(row[spellings[d].point]) for d in dims)
+            for row in _records(group.sort_values("seq", kind="stable"))
+        ]
+        distinct = kind == "polygon"
+        if len(set(points) if distinct else points) < _LEAST[kind]:
+            msg = (
+                f"The {kind} {identity!r} states {len(points)} vertices in {where}; "
+                f"it needs at least {_LEAST[kind]}{' distinct' if distinct else ''}."
+            )
+            raise ParameterError(msg)
+        if kind == "polygon" and points[0] == points[-1]:
+            msg = (
+                f"The polygon {identity!r} repeats its first vertex last in "
+                f"{where}; closure is implied."
+            )
+            raise ParameterError(msg)
+    if kind == "polygon":
+        outer = set(members.loc[members["ring"] == 0, "part"])
+        if missing := sorted(set(members["part"]) - outer):
+            msg = f"The polygon {identity!r} has part(s) {missing} with no ring 0."
+            raise ParameterError(msg)
+
+
+def _value_dims(row, spellings) -> list[str]:
+    """The dimensions a row states a value of."""
+    return [
+        dim
+        for dim, spelling in spellings.items()
+        if spelling.point and _stated(row.get(spelling.point))
+    ]
+
+
+def _drawn_dims(rows, spellings) -> tuple[str, ...]:
+    """The dimensions a path or polygon's members are drawn in."""
+    return tuple(_value_dims(rows[0], spellings)) if rows else ()
+
+
+def _ordered_parts(rows, dims, spellings, keys) -> dict:
+    """Return vertices keyed by dimension, per ``keys`` group, in seq order."""
+    ordered = sorted(rows, key=lambda x: tuple(int(x[k]) for k in (*keys, "seq")))
+    out: dict[Any, dict[str, list]] = {}
+    for row in ordered:
+        group = tuple(int(row[k]) for k in keys)
+        group = group[0] if len(group) == 1 else group
+        vertex = out.setdefault(group, {dim: [] for dim in dims})
+        for dim in dims:
+            vertex[dim].append(_scalar(row[spellings[dim].point]))
+    return out
+
+
+def _records(frame: pd.DataFrame) -> list[dict]:
+    """Return rows as mappings, each column keeping its own type."""
+    columns = {str(name): list(frame[name]) for name in frame.columns}
+    return [{k: v[i] for k, v in columns.items()} for i in range(len(frame))]
+
+
+def _blank_column(index) -> pd.Series:
+    """A column stating nothing, held as text is."""
+    return pd.Series([None] * len(index), index=index, dtype=object)
+
+
+def _spelled_columns(spellings) -> set[str]:
+    """Every column a dimension is spelled by."""
+    return {x for s in spellings.values() for x in (s.point, s.low, s.high) if x}
 
 
 def _coerce_frame(data, what: str) -> pd.DataFrame:
@@ -1078,11 +1393,10 @@ def _coerce_frame(data, what: str) -> pd.DataFrame:
 
 def _read_spellings(frame: pd.DataFrame, dims) -> dict[str, _Spelling]:
     """
-    Return how each dimension is spelled in the frame.
+    Return the columns each dimension is spelled with.
 
-    A dimension is a point where a bare column names it, a span where a
-    start/end pair does, and unconstrained where neither does. Spelling it
-    both ways states one thing twice, which has no answer.
+    A dimension may have a value column, a range pair, both, or neither; a
+    range is spelled by both of its columns or not at all.
     """
     columns = set(frame.columns)
     out = {}
@@ -1090,12 +1404,6 @@ def _read_spellings(frame: pd.DataFrame, dims) -> dict[str, _Spelling]:
         point = dim if dim in columns else None
         start = f"{dim}{_MIN}" if f"{dim}{_MIN}" in columns else None
         end = f"{dim}{_MAX}" if f"{dim}{_MAX}" in columns else None
-        if point is not None and (start is not None or end is not None):
-            msg = (
-                f"The dimension {dim!r} is spelled both as a point ({dim}) and "
-                f"as a range ({dim}{_MIN}/{dim}{_MAX}); it is one or the other."
-            )
-            raise ParameterError(msg)
         if (start is None) != (end is None):
             stated = start or end
             missing = f"{dim}{_MAX}" if start is not None else f"{dim}{_MIN}"
@@ -1105,17 +1413,33 @@ def _read_spellings(frame: pd.DataFrame, dims) -> dict[str, _Spelling]:
     return out
 
 
-def _check_columns(frame: pd.DataFrame, attrs: AnnotationSetAttrs) -> None:
+def _check_columns(frame: pd.DataFrame, attrs: AnnotationSetAttrs, table: str):
     """
     Refuse a column which nearly names something, and check stated dtypes.
 
-    An undeclared ``<name>_min``/``<name>_max`` pair is a dimension the
-    set forgot to declare rather than two unrelated extras, and reading it
-    as extras would quietly drop the constraint it states.
+    On annotations an undeclared ``<name>_min``/``<name>_max`` pair is a
+    forgotten dimension, and ``geometry`` or ``basis`` belong to features.
+    On features any dimension column is refused: features hold no
+    coordinates.
     """
-    known = set(RESERVED_COLUMNS) | set(attrs.dims)
-    known |= {f"{dim}{end}" for dim in attrs.dims for end in (_MIN, _MAX)}
-    extras = [str(x) for x in frame.columns if x not in known]
+    spelled = {x for dim in attrs.dims for x in (dim, f"{dim}{_MIN}", f"{dim}{_MAX}")}
+    if table == "features":
+        if coords := sorted(spelled & set(frame.columns)):
+            msg = (
+                f"The features state the coordinate column(s) {', '.join(coords)}; "
+                "a feature is located by its annotations, which hold coordinates."
+            )
+            raise ParameterError(msg)
+        _check_declared(frame, attrs.feature_columns)
+        return
+    if misplaced := sorted({"geometry", "basis"} & set(frame.columns)):
+        msg = (
+            f"The annotations state {', '.join(misplaced)}, which a feature "
+            "states: put it on the features table, and name the feature with "
+            "feature_id."
+        )
+        raise ParameterError(msg)
+    extras = [str(x) for x in frame.columns if x not in set(RESERVED_COLUMNS) | spelled]
     low, high = _RETIRED_RANGE
     retired = {x[: -len(low)] for x in extras if x.endswith(low)}
     retired &= {x[: -len(high)] for x in extras if x.endswith(high)}
@@ -1135,27 +1459,22 @@ def _check_columns(frame: pd.DataFrame, attrs: AnnotationSetAttrs) -> None:
             f"dimension. The set declares {list(attrs.dims)}."
         )
         raise ParameterError(msg)
-    for name, column in attrs.columns.items():
+    _check_declared(frame, attrs.annotation_columns)
+
+
+def _check_declared(frame: pd.DataFrame, columns: Mapping) -> None:
+    """Refuse a column which does not hold the dtype it declares."""
+    for name, column in columns.items():
         if not column.dtype or name not in frame.columns:
             continue
         actual = frame[name].dtype
-        # Resolved and compared through pandas rather than numpy: an
-        # annotation column may hold an extension dtype -- `str`, which is
-        # what pandas gives plain text, or `category`, or `Int64` -- and
-        # `np.dtype` knows none of them.
+        # Through pandas: a column may hold an extension dtype numpy lacks.
         try:
             declared = pd.api.types.pandas_dtype(column.dtype)
         except TypeError as error:
             msg = f"The column {name!r} declares the dtype {column.dtype!r}: {error}."
             raise ParameterError(msg) from error
-        # Compared by name rather than by identity: a column documented as
-        # `category` says it is categorical, not which categories it holds,
-        # and the two dtypes are otherwise unequal.
         if not _dtype_matches(declared, frame[name]):
-            # A time is held at nanoseconds whatever it arrived as, so
-            # another unit is not a column this set could ever hold, and
-            # saying it "holds datetime64[ns]" reads as a mistake the
-            # caller could correct by supplying different data.
             if declared.kind in "Mm":
                 msg = (
                     f"The column {name!r} states dtype {column.dtype}, but a set "
@@ -1164,6 +1483,85 @@ def _check_columns(frame: pd.DataFrame, attrs: AnnotationSetAttrs) -> None:
                 raise ParameterError(msg)
             msg = f"The column {name!r} states dtype {column.dtype} but holds {actual}."
             raise ParameterError(msg)
+
+
+def _check_locations(frame: pd.DataFrame, spellings) -> None:
+    """
+    Refuse a row stating a dimension two ways or none at all, and a
+    dimension holding two kinds of coordinate.
+    """
+    somewhere = np.zeros(len(frame), dtype=bool)
+    for dim, spelling in spellings.items():
+        value = _stated_mask(frame, spelling.point)
+        ranged = _stated_mask(frame, spelling.low)
+        if (both := value & ranged).any():
+            row = frame.index[both][0]
+            msg = (
+                f"Row {row} states {dim} as a value and as a range; a row states "
+                "one or the other."
+            )
+            raise ParameterError(msg)
+        somewhere |= value | ranged
+        names = (spelling.point, spelling.low, spelling.high)
+        kinds = {
+            _coordinate_kind(frame[x])
+            for x in names
+            if x and _stated_cells(frame[x]).any()
+        }
+        if len(kinds) > 1:
+            msg = (
+                f"The dimension {dim!r} holds {' and '.join(sorted(kinds))}; a "
+                "dimension holds one kind of coordinate."
+            )
+            raise ParameterError(msg)
+    if len(frame) and not somewhere.all():
+        rows = ", ".join(str(x) for x in frame.index[~somewhere][:5])
+        msg = (
+            f"Row(s) {rows} state no dimension; an annotation states where it is "
+            "along at least one."
+        )
+        raise ParameterError(msg)
+
+
+def _stated_mask(frame: pd.DataFrame, column: str | None) -> np.ndarray:
+    """Which cells of a column state anything; none where there is no column."""
+    if column is None:
+        return np.zeros(len(frame), dtype=bool)
+    return _stated_cells(frame[column])
+
+
+def _coordinate_kind(series: pd.Series) -> str:
+    """Name the kind of coordinate a dimension column holds."""
+    kind = getattr(series.dtype, "kind", "")
+    return {"M": "times", "m": "durations"}.get(kind, "numbers")
+
+
+def _check_ids(frame: pd.DataFrame, what: str, required: bool) -> None:
+    """Refuse a repeated id, and a blank one where ids are required."""
+    if "id" not in frame.columns:
+        return
+    ids = frame["id"].map(_text)
+    if required and (ids == "").any():
+        rows = ", ".join(str(x) for x in frame.index[ids == ""][:5])
+        msg = f"Row(s) {rows} of the {what}s state no id; every {what} has one."
+        raise ParameterError(msg)
+    stated = ids[ids != ""]
+    if stated.duplicated().any():
+        repeated = sorted(set(stated[stated.duplicated()]))
+        msg = f"The {what} id(s) {', '.join(repeated)} name more than one row."
+        raise ParameterError(msg)
+
+
+def _check_keys(frame: pd.DataFrame, table: str) -> None:
+    """Refuse a row-level acquisition key which is not one."""
+    if "acquisition_key" not in frame.columns:
+        return
+    for row, key in zip(frame.index, frame["acquisition_key"], strict=True):
+        try:
+            validate_acquisition_key(_text(key))
+        except InvalidInventoryError as error:
+            msg = f"Row {row} of the {table}: {error}"
+            raise ParameterError(msg) from error
 
 
 TEXT_DTYPES = frozenset({"object", "str", "string"})
@@ -1229,32 +1627,28 @@ def _check_ranges(frame: pd.DataFrame, spellings) -> None:
             raise ParameterError(msg)
 
 
-def _check_set_labels(frame: pd.DataFrame, attrs: AnnotationSetAttrs) -> None:
+def _check_set_labels(frame: pd.DataFrame, attrs: AnnotationSetAttrs, table: str):
     """
     Refuse a row whose set label names none of the sets stated.
 
-    Sets loaded together keep their rows in one table and what each of them
-    states in ``attrs.sets``; a row whose label names no set -- or names
-    nothing at all -- has lost that half, and would quietly answer with the
-    collection's provenance rather than its own. Only checked where sets are
-    stated: a set on its own may carry a `set` column meaning whatever it
-    means, and a collection which happens to hold no rows labels none.
+    Only checked where sets are stated: a set on its own may carry a `set`
+    column meaning whatever it means.
     """
     if not attrs.sets or frame.empty:
         return
     stated = ", ".join(sorted(attrs.sets))
     if "set" not in frame.columns:
         msg = (
-            f"This states the sets {stated} and no set column, so no row says "
-            "which of them it came from."
+            f"This states the sets {stated} and its {table} have no set column, "
+            "so no row says which of them it came from."
         )
         raise ParameterError(msg)
     labels = frame["set"].map(_text)
     if not labels.all():
         rows = ", ".join(str(x) for x in frame.index[labels == ""][:5])
         msg = (
-            f"Row(s) {rows} state no set, where the sets {stated} are stated. A "
-            "row loaded with others says which of them it came from."
+            f"Row(s) {rows} of the {table} state no set, where the sets {stated} "
+            "are stated. A row loaded with others says which of them it came from."
         )
         raise ParameterError(msg)
     if unknown := sorted(set(labels) - set(attrs.sets)):
@@ -1266,269 +1660,13 @@ def _check_set_labels(frame: pd.DataFrame, attrs: AnnotationSetAttrs) -> None:
         raise ParameterError(msg)
 
 
-def _check_values(frame: pd.DataFrame) -> None:
-    """
-    Refuse a group whose values are not all one kind.
-
-    A group's kind decides its shape -- a group whose annotations carry no
-    value states membership and may overlap, others are single valued --
-    so a group holding both is two variables sharing a name. Overlap itself
-    is not checked here: it only means anything where the set is projected
-    onto a coordinate. A boolean never reaches this check: `normalize_value`
-    refuses it.
-    """
-    if "value" not in frame.columns:
-        return
-    # Mapped to text first: pandas drops a null grouping key, which would
-    # take every unnamed row out of the check that its group holds one kind.
-    groups = (
-        frame["group"].map(_text)
-        if "group" in frame.columns
-        else pd.Series([""] * len(frame))
-    )
-    for name, index in frame.groupby(groups.values, sort=True).groups.items():
-        values = [x if _stated(x) else None for x in frame.loc[index, "value"]]
-        try:
-            kinds = {value_kind(normalize_value(x, ParameterError)) for x in values}
-        except ParameterError as error:
-            msg = f"The annotation group {str(name)!r}: {error}"
-            raise ParameterError(msg) from error
-        if len(kinds) > 1:
-            msg = (
-                f"The annotation group {str(name)!r} mixes {sorted(kinds)} values; "
-                "a group states membership or holds one kind of value, and a "
-                "blank cell states membership."
-            )
-            raise ParameterError(msg)
-
-
-def _check_ids(frame: pd.DataFrame) -> pd.Series:
-    """
-    Check the identity columns and return the id of every row.
-
-    Ids are the producer's: nothing is generated here, so an operation
-    needing identity is available exactly where one was supplied.
-    """
-    if "id" not in frame.columns:
-        ids = pd.Series([""] * len(frame), dtype=object)
-    else:
-        ids = frame["id"].map(_text)
-    stated = ids[ids != ""]
-    if stated.duplicated().any():
-        repeated = sorted(set(stated[stated.duplicated()]))
-        msg = f"The annotation id(s) {', '.join(repeated)} name more than one row."
-        raise ParameterError(msg)
-    kinds = frame["geometry"].map(_text) if "geometry" in frame.columns else None
-    if kinds is not None:
-        if unknown := sorted(set(kinds) - set(GEOMETRY_KINDS) - {""}):
-            msg = (
-                f"The geometry {', '.join(unknown)} is not one of "
-                f"{', '.join(GEOMETRY_KINDS)}."
-            )
-            raise ParameterError(msg)
-        needs_id = kinds.isin(list(_VERTEX_KINDS)) & (ids == "")
-        if needs_id.any():
-            rows = ", ".join(str(x) for x in frame.index[needs_id][:5])
-            msg = (
-                f"Row(s) {rows} state a path or polygon but no id; vertices are "
-                "grouped by id, so one is required."
-            )
-            raise ParameterError(msg)
-    if "basis" in frame.columns:
-        has_basis = frame["basis"].map(_stated)
-        # No geometry column means every row is a region, which is exactly
-        # the case a basis does not belong to.
-        is_vertex = (
-            kinds.isin(list(_VERTEX_KINDS))
-            if kinds is not None
-            else pd.Series(False, index=frame.index)
-        )
-        stray = has_basis & ~is_vertex
-        if stray.any():
-            rows = ", ".join(str(x) for x in frame.index[stray][:5])
-            msg = (
-                f"Row(s) {rows} state a basis but no path or polygon; a basis "
-                "is the curve vertices were generated from."
-            )
-            raise ParameterError(msg)
-    if "parent" in frame.columns:
-        parents = frame["parent"].map(_text)
-        orphans = sorted(set(parents[parents != ""]) - set(stated))
-        if orphans:
-            msg = (
-                f"The parent id(s) {', '.join(orphans)} name no annotation in this set."
-            )
-            raise ParameterError(msg)
-    return ids
-
-
-def _check_vertices(vertices, frame, ids, dims) -> pd.DataFrame:
-    """Check that every vertex geometry has vertices, and only those do."""
-    kinds = frame["geometry"].map(_text) if "geometry" in frame.columns else None
-    wanted = (
-        {}
-        if kinds is None
-        else dict(
-            zip(
-                ids[kinds.isin(list(_VERTEX_KINDS))],
-                kinds[kinds.isin(list(_VERTEX_KINDS))],
-                strict=True,
-            )
-        )
-    )
-    if vertices.empty:
-        if wanted:
-            named = ", ".join(sorted(wanted))
-            msg = f"The path or polygon id(s) {named} state no vertices."
-            raise ParameterError(msg)
-        return pd.DataFrame(columns=[*_VERTEX_COLUMNS, *dims])
-    missing = [x for x in _VERTEX_COLUMNS if x not in vertices.columns]
-    if missing:
-        msg = f"The vertices state no {', '.join(missing)} column."
-        raise ParameterError(msg)
-    vertex_dims = [str(x) for x in vertices.columns if x not in _VERTEX_COLUMNS]
-    if unknown := sorted(set(vertex_dims) - set(dims)):
-        msg = (
-            f"The vertices state the column(s) {', '.join(unknown)}, which name "
-            f"no declared dimension. The set declares {list(dims)}."
-        )
-        raise ParameterError(msg)
-    if not vertex_dims:
-        msg = "The vertices state no dimension column, so they place nothing."
-        raise ParameterError(msg)
-    vertices = _type_vertices(vertices, vertex_dims)
-    if vertices["seq"].isnull().any():
-        rows = ", ".join(str(x) for x in vertices.index[vertices["seq"].isnull()][:5])
-        msg = f"Vertex row(s) {rows} state no seq, so they have no place in the order."
-        raise ParameterError(msg)
-    vertices = vertices.assign(seq=read_ordinal(vertices["seq"]))
-    blank = vertices[vertex_dims].isnull().any(axis=1)
-    if blank.any():
-        rows = ", ".join(str(x) for x in vertices.index[blank][:5])
-        msg = (
-            f"Vertex row(s) {rows} leave a dimension empty; a vertex states "
-            "every dimension its frame names."
-        )
-        raise ParameterError(msg)
-    vertex_ids = vertices["id"].map(_text)
-    if stray := sorted(set(vertex_ids) - set(wanted)):
-        msg = (
-            f"The vertex id(s) {', '.join(stray)} name no path or polygon in this set."
-        )
-        raise ParameterError(msg)
-    for name, group in vertices.groupby(vertex_ids.values, sort=True):
-        if group["seq"].duplicated().any():
-            msg = f"The vertices of {str(name)!r} repeat a seq, so they have no order."
-            raise ParameterError(msg)
-        least = _VERTEX_KINDS[wanted[name]]
-        if len(group) < least:
-            msg = (
-                f"The {wanted[name]} {str(name)!r} states {len(group)} vertices; "
-                f"it is a shape with at least {least}."
-            )
-            raise ParameterError(msg)
-    if bare := sorted(set(wanted) - set(vertex_ids)):
-        msg = f"The path or polygon id(s) {', '.join(bare)} state no vertices."
-        raise ParameterError(msg)
-    return vertices.sort_values(["id", "seq"], kind="stable").reset_index(drop=True)
-
-
-def _type_vertices(vertices: pd.DataFrame, vertex_dims) -> pd.DataFrame:
-    """
-    Read a vertex frame's coordinates as the values they state.
-
-    The dimensions are read as the set's own are, so a frame and the table
-    it was written to draw one curve. The order is `read_ordinal`'s.
-    """
-    changed = {}
-    for name in vertex_dims:
-        read = read_dimension(vertices[name])
-        if read is not vertices[name]:
-            changed[name] = read
-    return _assign(vertices, changed)
-
-
-def _fill_vertex_bounds(frame, vertices, spellings) -> pd.DataFrame:
-    """
-    Give every path and polygon row the bounding region of its vertices.
-
-    The vertices are the shape and the box is a cache of them, so a row
-    which states one that disagrees is refused rather than quietly
-    corrected. Rows stating none get theirs filled in, which is what lets
-    a table operation treat every geometry alike.
-    """
-    if vertices.empty:
-        return frame
-    out = frame.copy()
-    ids = out["id"].map(_text)
-    for dim, spelling in spellings.items():
-        if dim not in vertices.columns:
-            continue
-        bounds = vertices.groupby(vertices["id"].map(_text))[dim].agg(["min", "max"])
-        if spelling.point is not None:
-            _fill_point_bounds(out, ids, bounds, dim, spelling.point)
-            continue
-        for column, side, suffix in (
-            (spelling.low, "min", _MIN),
-            (spelling.high, "max", _MAX),
-        ):
-            if column is None:
-                out[f"{dim}{suffix}"] = pd.Series(
-                    ids.map(bounds[side]), index=out.index
-                )
-                continue
-            derived = ids.map(bounds[side])
-            stated = out[column]
-            clash = derived.notna() & stated.notna() & (derived != stated)
-            if clash.any():
-                rows = ", ".join(str(x) for x in out.index[clash][:5])
-                msg = (
-                    f"Row(s) {rows} state a {column} which disagrees with their "
-                    "vertices; a bounding region is derived from them."
-                )
-                raise ParameterError(msg)
-            out[column] = stated.where(derived.isna(), derived)
-    return out
-
-
-def _fill_point_bounds(out, ids, bounds, dim: str, column: str) -> None:
-    """
-    Give a point-spelled dimension the value its vertices sit at.
-
-    A set spelling a dimension as a bare column says every annotation is a
-    point along it, so a path which spans that dimension contradicts the
-    set rather than merely bounding itself oddly.
-    """
-    spanning = bounds["min"] != bounds["max"]
-    if spanning.any():
-        named = ", ".join(str(x) for x in bounds.index[spanning][:5])
-        msg = (
-            f"The path or polygon id(s) {named} span {dim}, which this set "
-            f"spells as a point ({column}); a spanning geometry needs "
-            f"{dim}{_MIN}/{dim}{_MAX}."
-        )
-        raise ParameterError(msg)
-    derived = ids.map(bounds["min"])
-    stated = out[column]
-    clash = derived.notna() & stated.notna() & (derived != stated)
-    if clash.any():
-        rows = ", ".join(str(x) for x in out.index[clash][:5])
-        msg = (
-            f"Row(s) {rows} state a {column} which disagrees with their "
-            "vertices; a bounding region is derived from them."
-        )
-        raise ParameterError(msg)
-    out[column] = stated.where(derived.isna(), derived)
-
-
 def _read_bounds(row, spellings) -> dict[str, tuple[Any, Any]]:
     """Return the half-open bounds a row states, per dimension."""
     out = {}
     for dim, spelling in spellings.items():
-        if spelling.point is not None:
-            value = row.get(spelling.point)
-            if _stated(value):
-                out[dim] = (_scalar(value), _scalar(value))
+        value = row.get(spelling.point) if spelling.point else None
+        if _stated(value):
+            out[dim] = (_scalar(value), _scalar(value))
             continue
         start = row.get(spelling.low) if spelling.low else None
         end = row.get(spelling.high) if spelling.high else None
@@ -1537,22 +1675,31 @@ def _read_bounds(row, spellings) -> dict[str, tuple[Any, Any]]:
     return out
 
 
-def _row_vertices(vertices, identity, dims) -> dict[str, tuple]:
-    """Return one annotation's vertices, ordered by seq, keyed by dimension."""
-    rows = vertices[vertices["id"].map(_text) == _text(identity)]
-    stated = [x for x in dims if x in rows.columns]
-    return {dim: tuple(_scalar(x) for x in rows[dim]) for dim in stated}
-
-
-def _read_extra(row, dims, spellings) -> dict[str, Any]:
-    """Return the columns a row states which the set does not model."""
-    known = set(RESERVED_COLUMNS)
-    for spelling in spellings.values():
-        known |= {x for x in (spelling.point, spelling.low, spelling.high) if x}
-    known |= set(dims)
+def _read_extra(row, known: Collection[str]) -> dict[str, Any]:
+    """Return the stated cells of a row the set does not model."""
     return {
         str(k): _freeze(v) for k, v in row.items() if str(k) not in known and _stated(v)
     }
+
+
+def _read_basis(value, dims, key: str) -> Line | Moveout:
+    """Return the curve a basis entry states, as the model or its document."""
+    if isinstance(value, Line | Moveout):
+        basis = value
+    else:
+        try:
+            basis = _BASIS_ADAPTER.validate_python(value)
+        except ValidationError as error:
+            named = ", ".join(sorted(x.__name__ for x in (Line, Moveout)))
+            msg = f"Could not read the basis {key!r} as a {named}: {error}."
+            raise ParameterError(msg) from error
+    if foreign := sorted(set(basis.dims) - set(dims)):
+        msg = (
+            f"The basis {key!r} names the dimension(s) {', '.join(foreign)}, which "
+            f"the set does not declare. It declares {list(dims)}."
+        )
+        raise ParameterError(msg)
+    return basis
 
 
 def _freeze(value):
@@ -1568,21 +1715,6 @@ def _freeze(value):
     if isinstance(value, list | set | tuple | np.ndarray):
         return tuple(_freeze(x) for x in value)
     return _scalar(value)
-
-
-def _normalize_basis(frame, dims) -> pd.DataFrame:
-    """
-    Replace every basis cell with the curve it states.
-
-    Reading them at load is what catches a bad one before a row is asked
-    for; keeping what was read is what makes a set hold one spelling of a
-    curve, so a set written out and read back is the set it was rather
-    than the same curves spelled as documents.
-    """
-    if "basis" not in frame.columns:
-        return frame
-    read = [_read_basis(x, dims) for x in frame["basis"]]
-    return frame.assign(basis=pd.Series(read, index=frame.index, dtype=object))
 
 
 def read_dimension(series: pd.Series, where: str = "") -> pd.Series:
@@ -1679,7 +1811,7 @@ def read_dimension(series: pd.Series, where: str = "") -> pd.Series:
 
 
 def read_ordinal(series: pd.Series, where: str = "") -> pd.Series:
-    """Read the vertex order column as the numbers it states."""
+    """Read an order column (seq, part or ring) as the numbers it states."""
     # Refused before `to_numeric`, which would count a truth value as 1 or 0.
     if getattr(series.dtype, "kind", "") == "b" or any(_is_bool(x) for x in series):
         error = "it holds truth values"
@@ -1689,14 +1821,13 @@ def read_ordinal(series: pd.Series, where: str = "") -> pd.Series:
         except (TypeError, ValueError) as exc:
             error = str(exc)
         else:
-            # As a dimension is read: `to_numeric` hands a complex column
-            # straight back, and an imaginary place is no place in an order.
+            # `to_numeric` hands a complex column straight back.
             if order.dtype.kind in _NUMBER_KINDS:
                 return order
             error = f"it holds {order.dtype}"
     msg = (
-        f"The vertices{where} state a non-numeric {_VERTEX_COLUMNS[1]}: "
-        f"{error}. A vertex states its place in the order as a number."
+        f"The column {series.name!r}{where} is not numeric: {error}. It "
+        "states a member's place in an order, which is a number."
     )
     raise ParameterError(msg)
 
@@ -1718,19 +1849,6 @@ def _is_number(value) -> bool:
     return isinstance(value, numbers.Number | np.bool_)
 
 
-def _type_dimensions(frame: pd.DataFrame, spellings) -> pd.DataFrame:
-    """Read every column which spells a dimension as the coordinates it states."""
-    named = {x for one in spellings.values() for x in (one.point, one.low, one.high)}
-    changed = {}
-    for name in frame.columns:
-        if name not in named:
-            continue
-        read = read_dimension(frame[name])
-        if read is not frame[name]:
-            changed[name] = read
-    return _assign(frame, changed)
-
-
 def _normalize_identities(
     frame: pd.DataFrame, columns, declared: Collection[str] = ()
 ) -> pd.DataFrame:
@@ -1743,7 +1861,7 @@ def _normalize_identities(
 
     A whole number is named without a `.0` wherever one appears, since a
     blank beside it is all it takes for pandas to spell the column in
-    floats -- and an id, a parent and a vertex's id are read from three
+    floats -- and a feature's id and a row's feature_id are read from
     columns which need not each hold a blank. Naming them from what each
     column happens to hold would let one name `1` where another names
     `1.0`, and the row they both mean would be an orphan.
@@ -1820,35 +1938,6 @@ def _normalize_times(frame: pd.DataFrame, dims: Sequence[str] = ()) -> pd.DataFr
     return frame.assign(**changed) if changed else frame
 
 
-def _normalize_tags(frame) -> pd.DataFrame:
-    """
-    Replace every tags cell with the tags it states, one spelling.
-
-    A comma is what separates one tag from the next, so a tag holding one
-    is refused rather than quietly becoming two the next time the set is
-    read.
-    """
-    if "tags" not in frame.columns:
-        return frame
-    read = [_read_tags(x) or None for x in frame["tags"]]
-    split = sorted({x for tags in read if tags for x in tags if "," in x})
-    # Held as `_read_tags` will read them back: the writer joins with a
-    # comma and the reader strips and drops the empties, so a tag padded
-    # with spaces or a tag holding nothing would not survive being
-    # written down.
-    read = [
-        tuple(y.strip() for y in x if y.strip()) or None if x else None for x in read
-    ]
-    if split:
-        listed = ", ".join(repr(x) for x in split)
-        msg = (
-            f"The tag(s) {listed} hold a comma, which is what separates one "
-            "tag from the next; a tag is one label."
-        )
-        raise ParameterError(msg)
-    return frame.assign(tags=pd.Series(read, index=frame.index, dtype=object))
-
-
 def _stated_cells(series: pd.Series) -> np.ndarray:
     """Return which cells of a column state anything, as a plain mask."""
     # Not `Series.map`: on a categorical column it returns a categorical,
@@ -1893,84 +1982,6 @@ def _normalize_blanks(
     return _assign(frame, changed)
 
 
-def _read_basis(value, dims):
-    """
-    Return the curve a cell states, which may be the model or its document.
-
-    A set carries a basis so the curve survives a round trip through a
-    frame; the vertices remain the shape, and this is what drew them.
-    """
-    if not _stated(value):
-        return None
-    if isinstance(value, AnnotationBasis):
-        basis = value
-    else:
-        # Text is the document a table holds a curve as, which is what
-        # this module writes, so a frame read straight back from one is a
-        # frame this can read.
-        if isinstance(value, str):
-            try:
-                value = json.loads(value)
-            except ValueError as error:
-                msg = (
-                    f"Could not read {value!r} as a curve: it is not a JSON "
-                    "document. A stored basis is what its curve dumps."
-                )
-                raise ParameterError(msg) from error
-        try:
-            basis = _BASIS_ADAPTER.validate_python(value)
-        except ValidationError as error:
-            named = ", ".join(sorted(x.__name__ for x in (Line, Moveout)))
-            msg = f"Could not read {value!r} as a curve; one is a {named}: {error}."
-            raise ParameterError(msg) from error
-    if foreign := sorted(set(basis.dims) - set(dims)):
-        msg = (
-            f"The curve names the dimension(s) {', '.join(foreign)}, which the "
-            f"set does not declare. It declares {list(dims)}."
-        )
-        raise ParameterError(msg)
-    return basis
-
-
-def _read_tags(value) -> tuple[str, ...]:
-    """Return the tags a cell states, which may be text or a sequence."""
-    if not _stated(value):
-        return ()
-    if isinstance(value, str):
-        return tuple(x.strip() for x in value.split(",") if x.strip())
-    if isinstance(value, Iterable):
-        return tuple(str(x) for x in value)
-    # A lone value is one tag; a cell holding a number is not a mistake,
-    # it is a label which happens to be spelled as one.
-    return (str(value),)
-
-
-def _refuse_ambiguous_values(frame: pd.DataFrame) -> None:
-    """
-    Refuse a value a table would read back as a different kind.
-
-    An extra losing its type is a documented cost of a format with none,
-    but `value` is a column the set models and checks: a string reading
-    back as a number can make a group mix kinds, and one reading back as
-    true or false is refused outright, leaving a directory this library
-    wrote and then refuses to read. Better to refuse the write.
-    """
-    if "value" not in frame.columns:
-        return
-    ambiguous = sorted(
-        {x for x in frame["value"] if isinstance(x, str) and parse_cell(x) != x}
-    )
-    if ambiguous:
-        listed = ", ".join(repr(x) for x in ambiguous)
-        msg = (
-            f"The value(s) {listed} are text a table would read back as a "
-            "boolean or a number, neither of which is the value written. A "
-            "table has no way to mark a cell as text; spell the value as "
-            "something only text can be."
-        )
-        raise ParameterError(msg)
-
-
 def _table_suffix(format: str) -> str:
     """Return the suffix an encoding is named by, refusing an unknown one."""
     suffix = f".{str(format).lower().lstrip('.')}"
@@ -2007,7 +2018,6 @@ def _write_spelled(payload, path) -> None:
 
 def _write_table(frame: pd.DataFrame, path=None) -> str:
     """Return a frame as CSV text, optionally writing it to a path."""
-    _refuse_ambiguous_values(frame)
     spelled = pd.DataFrame({name: _writable(frame[name]) for name in frame.columns})
     text = spelled.to_csv(index=False)
     if path is not None:
@@ -2053,9 +2063,8 @@ def _writable_cell(value):
     Spell one cell the way a table holds it.
 
     A value a CSV has no column shape for is written as its own document:
-    a basis as the JSON its curve dumps, a sequence as the comma-separated
-    list `tags` is read from. An extra holding a nested object survives as
-    that text rather than as the object, which is what a table can say.
+    a mapping as its JSON, a sequence as comma-separated text. An extra
+    holding a nested object survives as that text rather than as the object.
 
     The same holds for an extra holding a time: only a declared dimension
     is known to hold times, so only it is read back as one, and an extra
@@ -2069,8 +2078,6 @@ def _writable_cell(value):
     value = _scalar(value)
     if isinstance(value, np.datetime64 | np.timedelta64):
         return to_str(value)
-    if isinstance(value, AnnotationBasis):
-        return json.dumps(value.model_dump(mode="json"))
     if isinstance(value, str):
         return value
     if isinstance(value, Mapping):
@@ -2114,75 +2121,23 @@ def _stated(value) -> bool:
         return True
 
 
-def annotation_set_to_dataframe(annotations: AnnotationSet) -> pd.DataFrame:
-    """
-    Return the annotations as a dataframe.
-
-    Reached as ``annotation_set.io.to_dataframe``.
-
-    Parameters
-    ----------
-    annotations
-        The set to read.
-
-    Examples
-    --------
-    >>> import pandas as pd
-    >>> import dascore as dc
-    >>> frame = pd.DataFrame(
-    ...     {"group": ["event"], "distance_min": [10.0], "distance_max": [80.0]}
-    ... )
-    >>> annotations = dc.AnnotationSet(frame, dims=("time", "distance"))
-    >>> list(annotations.io.to_dataframe()["group"])
-    ['event']
-    """
-    return annotations._df.copy()
-
-
-def annotation_set_to_vertices(annotations: AnnotationSet) -> pd.DataFrame:
-    """
-    Return the vertices of every path and polygon as a tidy dataframe.
-
-    Reached as ``annotation_set.io.to_vertices``.
-
-    Parameters
-    ----------
-    annotations
-        The set to read.
-
-    Examples
-    --------
-    >>> import pandas as pd
-    >>> import dascore as dc
-    >>> frame = pd.DataFrame(
-    ...     {"group": ["event"], "distance_min": [10.0], "distance_max": [80.0]}
-    ... )
-    >>> annotations = dc.AnnotationSet(frame, dims=("time", "distance"))
-    >>> annotations.io.to_vertices().empty  # a region states no vertices
-    True
-    """
-    return annotations._vertices.copy()
-
-
 def annotation_set_to_csv(
     annotations: AnnotationSet, path: str | pathlib.Path | None = None
 ) -> str:
     """
-    Return the annotations as CSV text, optionally writing it to a path.
+    Return the annotations table as CSV text, optionally writing it to a path.
 
     Reached as ``annotation_set.io.to_csv``.
 
-    A bare table states one grain, so a set holding vertices is written
-    with [save](`dascore.core.annotations.save_annotation_set`) instead;
-    this is the spelling for a set of regions. A duration dimension is
-    refused: a CSV has no spelling for one which reads back, where parquet
-    has a type for it.
+    A bare table holds only annotations, so a set with features beyond the
+    groups its ``feature_id`` column implies, or with bases, is written with
+    [save](`dascore.core.annotations.save_annotation_set`) instead. A
+    duration dimension is refused: CSV has no spelling for one which reads
+    back, where parquet has a type for it.
 
-    The dimensions are not written: they are not a column, and the only
-    place a CSV has for them is a comment line, which a reader not told
-    to expect one takes for the header. Reading such a table back states
-    them again, in the call or in a ``# dims: distance, time`` line
-    written above the header by hand.
+    The dimensions are not written. Reading the table back states them
+    again, in the call or in a ``# dims: distance, time`` line written above
+    the header by hand.
 
     Parameters
     ----------
@@ -2196,13 +2151,13 @@ def annotation_set_to_csv(
     >>> import pandas as pd
     >>> import dascore as dc
     >>> frame = pd.DataFrame(
-    ...     {"group": ["event"], "distance_min": [10.0], "distance_max": [80.0]}
+    ...     {"phase": ["P"], "distance_min": [10.0], "distance_max": [80.0]}
     ... )
     >>> annotations = dc.AnnotationSet(frame, dims=("time", "distance"))
-    >>> "group" in annotations.io.to_csv()
+    >>> "phase" in annotations.io.to_csv()
     True
     """
-    _refuse_bare_vertices(annotations)
+    _refuse_bare(annotations)
     _refuse_unwritable_durations(annotations)
     return _write_table(annotations._df, path)
 
@@ -2211,22 +2166,15 @@ def annotation_set_to_parquet(
     annotations: AnnotationSet, path: str | pathlib.Path
 ) -> pathlib.Path:
     """
-    Write the annotations as one parquet file.
+    Write the annotations table as one parquet file.
 
     Reached as ``annotation_set.io.to_parquet``.
 
     The parquet spelling of
-    [to_csv](`dascore.core.annotations.annotation_set_to_csv`), for a
-    set too big to want text. It keeps what a CSV cannot: a column
-    parquet has a type for comes back as that type rather than as a
-    spelling to be guessed at, and the dimensions travel in the file's
-    own metadata rather than having to be stated again. A column with
-    no one type is written as JSON, which keeps the value of each cell
-    but not every python type it may have been held in -- a tuple comes
-    back as a list.
-
-    Needs pyarrow, which CSV does not; a set of regions can always be
-    written as a table, whatever is installed.
+    [to_csv](`dascore.core.annotations.annotation_set_to_csv`): columns keep
+    their types, and the dimensions travel in the file's metadata. A column
+    with no one type is written as JSON, which keeps each cell's value but
+    not every python type -- a tuple comes back as a list. Needs pyarrow.
 
     Parameters
     ----------
@@ -2244,36 +2192,25 @@ def annotation_set_to_parquet(
     >>> import pandas as pd
     >>> import dascore as dc
     >>> frame = pd.DataFrame(
-    ...     {"group": ["event"], "distance_min": [10.0], "distance_max": [80.0]}
+    ...     {"phase": ["P"], "distance_min": [10.0], "distance_max": [80.0]}
     ... )
     >>> annotations = dc.AnnotationSet(frame, dims=("time", "distance"))
     >>> path = annotations.io.to_parquet("picks.parquet")  # doctest: +SKIP
     >>> dc.annotations(path) == annotations  # doctest: +SKIP
     True
     """
-    _refuse_bare_vertices(annotations)
+    _refuse_bare(annotations)
     dims = json.dumps(list(annotations.dims))
     write_parquet(annotations._df, path, {DIMS_KEY: dims})
     return pathlib.Path(path)
 
 
 def _refuse_unwritable_durations(annotations: AnnotationSet) -> None:
-    """
-    Refuse to write a duration dimension as CSV, which cannot state one.
-
-    A duration is written as the text numpy spells it with -- `5000000000
-    nanoseconds` -- and nothing reads that back: the reader types a
-    dimension as numbers or times, so the set would be one this library
-    wrote and then refuses to load. Parquet has a type for a duration and
-    keeps it, so the set is storable; it is CSV which has nowhere to put
-    this.
-    """
-    spelled = {
-        x for dim in annotations.dims for x in (dim, f"{dim}{_MIN}", f"{dim}{_MAX}")
-    }
+    """Refuse to write a duration dimension as CSV, which nothing reads back."""
+    spelled = _spelled_columns(annotations._spellings)
+    frame = annotations._df
     named = sorted(
         str(name)
-        for frame in (annotations._df, annotations._vertices)
         for name in frame.columns
         if str(name) in spelled and getattr(frame[name].dtype, "kind", "") == "m"
     )
@@ -2286,13 +2223,14 @@ def _refuse_unwritable_durations(annotations: AnnotationSet) -> None:
         raise ParameterError(msg)
 
 
-def _refuse_bare_vertices(annotations: AnnotationSet) -> None:
-    """Refuse to write a set of shapes as one table, which has one grain."""
-    if not annotations._vertices.empty:
+def _refuse_bare(annotations: AnnotationSet) -> None:
+    """Refuse to write a set a bare annotations table cannot rebuild."""
+    implied = _add_implicit(annotations._df, _read_features(None, annotations.attrs))
+    features = _ordered_columns(annotations._features)
+    if annotations._bases or not features.equals(_ordered_columns(implied)):
         msg = (
-            "This set holds vertices, which a bare table has no row for. "
-            "Save it as a directory, which states its vertices beside its "
-            "annotations."
+            "This set holds features or bases, which a bare annotations table "
+            "has no row for. Save it as a directory with io.save."
         )
         raise ParameterError(msg)
 
@@ -2303,12 +2241,12 @@ def save_annotation_set(
     """
     Write the set to a directory, creating it if needed.
 
-    Reached as ``annotation_set.io.save``. The directory stores attributes,
-    annotations, and any required vertices, and reads through
-    [dascore.annotations](`dascore.annotations`). Attributes use JSON; tables use
-    CSV by default or Parquet when requested. Combined sets remain in one table.
-    Duration dimensions require Parquet. Saving replaces stale alternate-format
-    files and obsolete vertices.
+    Reached as ``annotation_set.io.save``. The directory holds
+    ``attrs.json``, the ``annotations`` table, a ``features`` table when the
+    set has features, and ``bases.json`` when it has bases; it reads back
+    through [dascore.annotations](`dascore.annotations`). Tables are CSV by
+    default or parquet when requested; duration dimensions require parquet.
+    Saving replaces stale parts and alternate-format files.
 
     Parameters
     ----------
@@ -2328,59 +2266,55 @@ def save_annotation_set(
     >>> import pandas as pd
     >>> import dascore as dc
     >>> frame = pd.DataFrame(
-    ...     {"group": ["event"], "distance_min": [10.0], "distance_max": [80.0]}
+    ...     {"phase": ["P"], "distance_min": [10.0], "distance_max": [80.0]}
     ... )
     >>> annotations = dc.AnnotationSet(frame, dims=("time", "distance"))
     >>> directory = annotations.io.save("picks")  # doctest: +SKIP
     >>> dc.annotations(directory) == annotations  # doctest: +SKIP
     True
     """
-    # Everything is spelled out before the directory is touched: a
-    # table which refuses to be written -- an ambiguous value does --
-    # would otherwise raise with the stale parts already deleted and
-    # the attributes already replaced, leaving half a set behind.
-    # Defaults are dropped from the document, so it says what the set
-    # says; dims has no default, so it is always written, and the
-    # attributes name their own model, which is what the file holds.
+    # Everything is spelled before the directory is touched, so a refusal
+    # leaves the stored set whole.
     suffix = _table_suffix(format)
     if suffix == TABLE_SUFFIX:
         _refuse_unwritable_durations(annotations)
-    document = annotations._attrs.model_dump(mode="json", exclude_defaults=True)
-    dims = annotations.dims
-    spelled = {ANNOTATION_STEM: _spell_table(annotations._df, suffix, dims)}
-    if not annotations._vertices.empty:
-        spelled[VERTEX_STEM] = _spell_table(annotations._vertices, suffix)
+    tables = {ANNOTATION_STEM: _spell_table(annotations._df, suffix, annotations.dims)}
+    if len(annotations._features):
+        tables[FEATURE_STEM] = _spell_table(annotations._features, suffix)
+    documents = {
+        ATTRS_STEM: annotations._attrs.model_dump(mode="json", exclude_defaults=True)
+    }
+    if annotations._bases:
+        documents[BASES_STEM] = {
+            k: v.model_dump(mode="json") for k, v in annotations._bases.items()
+        }
     directory = pathlib.Path(path)
     directory.mkdir(parents=True, exist_ok=True)
-    attrs_file = directory / f"{ATTRS_STEM}{OBJECT_SUFFIXES[0]}"
-    writing = {attrs_file, *(directory / f"{x}{suffix}" for x in spelled)}
-    # Only the spellings this format claims: a notes.txt or an
-    # attrs.bak beside them participates in no convention and is not
-    # this function's to delete. The suffix is matched without regard
-    # to case, as the loader matches it.
+    json_suffix = OBJECT_SUFFIXES[0]
+    writing = {
+        *(directory / f"{x}{json_suffix}" for x in documents),
+        *(directory / f"{x}{suffix}" for x in tables),
+    }
     claimed = {
         ATTRS_STEM: OBJECT_SUFFIXES,
+        BASES_STEM: OBJECT_SUFFIXES,
         ANNOTATION_STEM: TABLE_SUFFIXES,
-        VERTEX_STEM: TABLE_SUFFIXES,
+        FEATURE_STEM: TABLE_SUFFIXES,
     }
     superseded = [
         x
         for x in directory.iterdir()
         if x.suffix.casefold() in claimed.get(x.stem, ()) and x not in writing
     ]
-    # Written before the superseded parts are cleared, not after: a
-    # write which fails partway -- a full disk, a permission changed
-    # under it -- then leaves the set it was replacing still in the
-    # directory, and a reader finds two spellings of one part and says
-    # so, rather than finding the set gone.
-    write_document(document, attrs_file, "json")
-    for stem, payload in spelled.items():
+    # Written before stale parts are cleared, so a failed write leaves the
+    # old set readable rather than gone.
+    for stem, document in documents.items():
+        write_document(document, directory / f"{stem}{json_suffix}", "json")
+    for stem, payload in tables.items():
         _write_spelled(payload, directory / f"{stem}{suffix}")
     for stale in superseded:
-        # A part just written is not stale under another name: a
-        # case-insensitive filesystem holds `attrs.JSON` and the
-        # `attrs.json` written over it in one file, and unlinking the
-        # older spelling there would take the set with it.
+        # On a case-insensitive filesystem a shouted name is the file just
+        # written, and unlinking it would take the part with it.
         if any(_one_file(stale, x) for x in writing):
             continue
         stale.unlink(missing_ok=True)

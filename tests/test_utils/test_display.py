@@ -277,8 +277,8 @@ class TestStatedFields:
     def test_mapping_of_models_counted(self):
         """A pool of models says how many it holds, not what each one is."""
         columns = {"pick": AnnotationColumn(description="a pick")}
-        attrs = AnnotationSetAttrs(dims=("time",), columns=columns)
-        assert "columns: 1" in str(model_to_line(attrs))
+        attrs = AnnotationSetAttrs(dims=("time",), annotation_columns=columns)
+        assert "annotation_columns: 1" in str(model_to_line(attrs))
 
 
 class TestModelToLine:
