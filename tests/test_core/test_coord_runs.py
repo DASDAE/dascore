@@ -1126,6 +1126,17 @@ class TestStepContract:
             out = get_coord(data=values, step=1)[::2]
             assert out.step is None and out.missing().complete
 
+    def test_stride_promotes_a_regular_window(self):
+        """Stored labels a stride leaves evenly spaced become the widened grid."""
+        out = NumericCoord.from_labels(np.arange(6), step=1)[::2]
+        assert out.evenly_sampled and out.step == 2
+
+    def test_fractional_grid_contradicts_a_whole_step(self):
+        """A whole-tick step cannot be declared over a fractional grid run."""
+        runs = (Grid(0, 12, 5, 4), Grid(20, 2, 1, 3))
+        with pytest.raises(ValidationError, match="contradicts"):
+            NumericCoord(runs=runs, dtype="int64", step=2)
+
     def test_declared_step_a_grid_contradicts_raises(self):
         """A declared step other than the one the grid runs sit on raises."""
         runs = (Grid(0, 2, 1, 5), Grid(20, 2, 1, 5))

@@ -2778,6 +2778,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     def _slice_runs(self, indices: range) -> BaseCoord:
         """The coordinate holding the samples a range of positions names."""
         stride = indices.step
+        # a stride multiplies every spacing, the declared step included
+        step = None if _is_null(self.step) else self.step * abs(stride)
         out = []
         for run, offset in zip(self.runs, self._run_offsets()):
             first, count = _run_span(indices, int(offset), len(run))
@@ -2790,22 +2792,23 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             elif isinstance(run, Grid):
                 out.append(run.sliced(first, stride, count))
             else:
-                out.append(self._promoted_labels(run.window(first, stride, count)))
+                window = run.window(first, stride, count)
+                out.append(self._promoted_labels(window, step))
         # a backwards range reads the runs from the last one
         runs = out if stride > 0 else out[::-1]
-        # A stride multiplies every spacing, so the declared step is kept
-        # widened where the kept samples sit on it, else the runs restate one.
-        if not _is_null(step := self.step):
+        # the widened step holds where the kept samples sit on it, else the
+        # runs restate one
+        if step is not None:
             with suppress(CoordError, ValidationError):
-                return self._with_runs(runs, step=step * abs(stride))
+                return self._with_runs(runs, step=step)
         return self._with_runs(runs, step=None)
 
-    def _promoted_labels(self, window: Labels) -> Grid | Labels:
+    def _promoted_labels(self, window: Labels, step) -> Grid | Labels:
         """A trimmed window as the grid it is, unless it contradicts the step."""
         run = _promoted(self._run_labels(window), self.dtype)
         if run is None:
             return window
-        if not _is_null(step := self.step):
+        if step is not None:
             # a grid on another spacing would restate the step and swallow
             # the positions the declared one says are missing
             spacing = abs(_maybe_unpack(run.step(self.dtype)))
@@ -3627,8 +3630,13 @@ def _runs_step(runs, declared, dtype, sources):
 
 def _check_grid_spacings(runs, step, dtype):
     """Raise where a grid run of several samples is spaced other than the step."""
-    spacings = [x.step(dtype) for x in runs if isinstance(x, Grid) and len(x) > 1]
-    if spacings and np.any(np.abs(_on_grid(np.asarray(spacings), step)) != 1):
+    grids = [x for x in runs if isinstance(x, Grid) and len(x) > 1]
+    # a fractional grid's rounded step names no whole-tick spacing
+    fractional = any(x.exact and x.step_num % x.step_den for x in grids)
+    spacings = [x.step(dtype) for x in grids]
+    if fractional or (
+        spacings and np.any(np.abs(_on_grid(np.asarray(spacings), step)) != 1)
+    ):
         msg = f"The declared step {step} contradicts a grid run's spacing."
         raise CoordError(msg)
 
