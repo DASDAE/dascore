@@ -1269,7 +1269,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         return self._extents()[0]
 
     def _extents(self) -> tuple[pd.DataFrame, dict[str, np.ndarray]]:
-        """Return `bounds`, and per dimension which maxima are values, not ends."""
+        """Return `bounds`, and per bound column which ends are values."""
         frame, ids = self._df, self._df["feature_id"].map(_text)
         member = (ids != "").to_numpy()
         lone = self._df.index[~member]
@@ -1295,25 +1295,31 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
             # A maximum which is some member's value is inside the feature.
             reached = high[member] == most.reindex(group).to_numpy()
             shut_at = (reached & value[member]).groupby(group).any()
-            lows, highs, shut = [], [], []
+            began = low[member] == least.reindex(group).to_numpy()
+            open_at = (began & value[member]).groupby(group).any()
+            lows, highs, shut, opens = [], [], [], []
             for identity, key in zip(feature_ids, keys, strict=True):
                 if identity in spans.index:
                     spanned = bool(spans[identity])
                     lows.append(None if spanned else least[identity])
                     highs.append(None if spanned else most[identity])
                     shut.append(bool(shut_at[identity]))
+                    opens.append(bool(open_at[identity]))
                     continue
                 # A path drawn only from its curve is where the curve is.
                 reach = self._bases[key].extent() if key else {}
                 lows.append(reach[dim][0] if dim in reach else None)
                 highs.append(reach[dim][1] if dim in reach else None)
                 shut.append(True)
+                opens.append(True)
             lows += list(low[~member])
             highs += list(high[~member])
             shut += list(value[~member])
+            opens += list(value[~member])
             out[f"{dim}{_MIN}"] = _bound_column(lows)
             out[f"{dim}{_MAX}"] = _bound_column(highs)
-            closed[dim] = np.array(shut, dtype=bool)
+            closed[f"{dim}{_MIN}"] = np.array(opens, dtype=bool)
+            closed[f"{dim}{_MAX}"] = np.array(shut, dtype=bool)
         return pd.DataFrame(out), closed
 
     # --- selecting
@@ -1462,7 +1468,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
                 above = (
                     True
                     if low is None
-                    else np.where(closed[dim], ends >= low, ends > low)
+                    else np.where(closed[f"{dim}{_MAX}"], ends >= low, ends > low)
                 )
             keep &= spans | (below & above)
         explicit = extents["annotation"].isna().to_numpy()

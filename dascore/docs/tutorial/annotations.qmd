@@ -126,7 +126,7 @@ ann.bounds()
 
 # Cutting data
 
-[`Spool.cut`](`dascore.core.spool.Spool.cut`) returns one lazy patch per feature, cut to its bounds and merged across the files it crosses. A range is cut to its ends, both included; a feature at a single value needs a pad, `(before, after)` offsets along that dimension; a dimension the feature spans is kept whole. Each patch states `feature_id` (blank for a lone row) and, for a lone row, `annotation`, its row label, so the contents join back to the set:
+[`Spool.cut`](`dascore.core.spool.Spool.cut`) returns one lazy patch per feature, cut to its bounds and merged across the files it crosses. A range is cut to its ends, both included. A pad, `(before, after)` offsets along a dimension, extends the ends that are stated values, and a feature at a single value needs one. A dimension the feature spans is kept whole. Each patch states `feature_id` (blank for a lone row) and `annotation` (a lone row's label, blank for a feature), so the contents join back to the set:
 
 ```{python}
 spool = dc.get_example_spool()

@@ -1009,8 +1009,7 @@ class PlanResolver(PatchResolver):
         """
         if not self.stamped:
             return patch
-        # a blank stamp (a lone row's feature_id) is not in the row
-        return patch.update_attrs(**{x: row[x] for x in self.stamped if x in row})
+        return patch.update_attrs(**{x: row[x] for x in self.stamped})
 
 
 def _trimmed_dims(residuals, coord_dims_map: Mapping) -> frozenset[str]:
@@ -1128,7 +1127,7 @@ def derived_catalog(
     merge_kwargs: Mapping,
     mode: str = "chunk",
     origin_path=None,
-    stamped: tuple[str, ...] = (),
+    stamped: tuple[str, ...] | Mapping[str, str] = (),
     lossy: bool = False,
 ) -> PatchCatalog:
     """
@@ -1138,7 +1137,7 @@ def derived_catalog(
     identity plus envelopes and attrs) keyed by ``_patch_row`` matching
     ``plan.members``; ``parent`` supplies the resolver (live registry,
     file root, nested plans) and the residual selections its view
-    carried, which member loading re-applies.
+    carried, which member loading re-applies; ``stamped`` may map to dtypes.
     """
     token = secrets.token_hex(8)
     name = plan.dim
@@ -1211,7 +1210,7 @@ def derived_catalog(
         mode=mode,
         aux_coords=aux_coords,
         origin_path=origin_path,
-        stamped=stamped,
+        stamped=tuple(stamped),
         lossy=lossy,
         output_rows=plan.outputs,
         anchor_rows=anchors,
@@ -1240,7 +1239,8 @@ def derived_catalog(
     if parent is not None:
         records = _with_parent_runs(records, parent.backend, trims, sources, name)
     backend.write_sources(records)
-    return PatchCatalog(backend=backend, resolver=resolver)
+    stamps = stamped if isinstance(stamped, Mapping) else None
+    return PatchCatalog(backend=backend, resolver=resolver, stamps=stamps)
 
 
 def _aux_info_for_unfed(

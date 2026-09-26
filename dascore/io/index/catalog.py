@@ -667,8 +667,11 @@ class PatchCatalog:
         order: tuple | None = None,
         ids: tuple | None = None,
         default_order: tuple | None = None,
+        stamps: Mapping | None = None,
     ):
         self._backend = backend
+        # attrs an operation stamped on every row, name -> presented dtype
+        self._stamps = dict(stamps or {})
         self.resolver = resolver
         self._syncer = syncer
         self._queries = tuple(queries)
@@ -717,7 +720,8 @@ class PatchCatalog:
         on the result for exact envelopes.
         """
         resolver = CompositeResolver()
-        out = cls(resolver=resolver)
+        stamps = {k: v for x in catalogs for k, v in x._stamps.items()}
+        out = cls(resolver=resolver, stamps=stamps)
         backend = out.backend
         # Collect and merge every member's records before writing:
         # write_sources replaces at (base_uri, source_path) grain, so
@@ -898,6 +902,7 @@ class PatchCatalog:
             order=self._order if isinstance(order, _Keep) else order,
             ids=self._ids if isinstance(ids, _Keep) else ids,
             default_order=self._default_order,
+            stamps=self._stamps,
         )
         return out
 
@@ -1199,6 +1204,10 @@ class PatchCatalog:
             df = _forget_what_a_trim_invalidates(df, self._residuals).reset_index(
                 drop=True
             )
+            # the index drops blanks, so a stamp's column may be partial or absent
+            for name, dtype in self._stamps.items():
+                column = df.get(name, pd.Series(None, index=df.index, dtype=object))
+                df[name] = column.fillna("") if dtype == "str" else column.astype(dtype)
             # Re-read the revision: bootstrapping the backend above can
             # bump it, and this frame reflects the state after that.
             return self._df_cache.set(df, self._revision.value)

@@ -164,6 +164,18 @@ class _InventoryQuery(NamedTuple):
 _TIMES = _TIME_TYPES
 
 
+def _has_samples(rows: pd.DataFrame, window: Mapping) -> np.ndarray:
+    """Whether each trimmed row keeps a sample along every windowed dim."""
+    keep = np.ones(len(rows), dtype=bool)
+    for dim in (x for x in window if f"_{x}_source_envelope" in rows):
+        low, high, step = rows[f"{dim}_min"], rows[f"{dim}_max"], rows[f"{dim}_step"]
+        step = step.abs()  # a descending grid also holds its minimum
+        origin = rows[f"_{dim}_source_envelope"].str.get(f"{dim}_min").astype(low.dtype)
+        first = origin + np.ceil(((low - origin) / step).astype(float) - 1e-9) * step
+        keep &= ~(first > high).to_numpy()  # an unknown step keeps the row
+    return keep
+
+
 def _spool_input_message(data) -> str:
     """Say what a spool was handed and what it needed instead."""
     members = data if isinstance(data, list | tuple) else [data]
@@ -1674,7 +1686,7 @@ class Spool(NodeRepr, NamespaceOwner):
         catalog = self._catalog
         return self._materialize_lossy() if catalog.transfer_is_lossy() else catalog
 
-    def _materialize_lossy(self, stamp: Mapping | None = None):
+    def _materialize_lossy(self, stamp=None, dtypes=None):
         """
         Bake residual trims and presentation order into a derived catalog.
 
@@ -1682,7 +1694,7 @@ class Spool(NodeRepr, NamespaceOwner):
         row (in presentation order, so ordinals record the order spec),
         with trimmed envelopes as the output envelopes and the trims
         themselves re-applied at load through the plan resolver. `stamp`
-        maps attrs to record on every output.
+        maps attrs to record on every output, `dtypes` their presented dtypes.
         """
         from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
 
@@ -1709,7 +1721,7 @@ class Spool(NodeRepr, NamespaceOwner):
             merge_kwargs={},
             mode="identity",
             origin_path=self.spool_path,
-            stamped=tuple(stamp or ()),
+            stamped=dtypes or tuple(stamp or ()),
         )
 
     # --- restructuring (materializing) operations -----------------------
@@ -2263,26 +2275,27 @@ class Spool(NodeRepr, NamespaceOwner):
 
         Each feature, lone rows included, is cut to its bounds (see
         `AnnotationSet.bounds`) and merged across source patches along
-        every dimension it constrains, as `chunk` merges, so a gap still
-        leaves several patches. Selection includes both ends, so the
-        sample at a range's (half-open) maximum is kept. A feature
-        spanning a dimension keeps the spool's full extent along it, one
-        overlapping no data gives nothing, and overlapping features
+        every dimension, as `chunk` merges, so a gap still leaves several
+        patches. Selection includes both ends, so the sample at a range's
+        (half-open) maximum is kept; an empty range gives nothing. A
+        feature spanning a dimension keeps the spool's full extent along
+        it, one holding no samples gives nothing, and overlapping features
         duplicate data. Nothing is loaded.
 
-        Each output states a `feature_id` attr (blank for a lone row) and,
-        for a lone row, `annotation` (its index label), so `get_contents`
-        joins back to the set.
+        Each output states `feature_id` (blank for a lone row) and
+        `annotation` (a lone row's index label, blank for a feature), as
+        attrs and as `get_contents` columns, which join back to the set.
 
         Parameters
         ----------
         annotations
             The set to cut by.
         **pads
-            `dim=(before, after)`: offsets from a feature's single value
-            along `dim`, which such a feature needs; `before` is usually
-            negative. Time offsets are timedeltas, strings such as "-1s",
-            or numbers of seconds.
+            `dim=(before, after)`: offsets added to a feature's ends along
+            `dim` which are stated values, `before` (usually negative) to
+            its minimum and `after` to its maximum; range ends are kept. A
+            feature at a single value needs one. Time offsets are
+            timedeltas, strings with units such as "-1s", or seconds.
 
         Examples
         --------
@@ -2298,14 +2311,29 @@ class Spool(NodeRepr, NamespaceOwner):
         from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
         present = self._catalog.backend.coord_names()
-        if unknown := sorted(set(pads) - (set(annotations.dims) & present)):
-            msg = f"cut pads {unknown} are not dimensions of both set and spool."
-            raise ParameterError(msg)
-        pieces = []
-        for row in annotations.bounds().to_dict("records"):
+        dtypes = {"feature_id": "str", "annotation": "Int64"}  # as presented
+        bounds, closed = annotations._extents()
+        for dim, pad in pads.items():
+            known = dim in set(annotations.dims) & present
+            timed = known and bounds[f"{dim}_min"].dtype.kind in "mM"
+            pair = isinstance(pad, tuple | list) and len(pad) == 2
+            texts = [x for x in pad if isinstance(x, str)] if pair else []
+            if not (known and pair) or not all(
+                timed and any(c.isalpha() for c in x) for x in texts
+            ):
+                msg = f"cut pad {dim}= must be (before, after) along a dimension of "
+                msg += "set and spool; a string is a time offset with units, as '-1s'."
+                raise ParameterError(msg)
+            if timed:
+                pads[dim] = [
+                    to_timedelta64(pd.Timedelta(x) if isinstance(x, str) else x)
+                    for x in pad
+                ]
+        windows = []  # every refusal comes before any selection
+        for number, row in enumerate(bounds.to_dict("records")):
             lone = not pd.isna(row["annotation"])
             name = f"annotation {row['annotation']}" if lone else row["feature_id"]
-            window = {}
+            window: dict | None = {}
             for dim in annotations.dims:
                 low, high = row[f"{dim}_min"], row[f"{dim}_max"]
                 if pd.isna(low):  # spanned
@@ -2313,26 +2341,29 @@ class Spool(NodeRepr, NamespaceOwner):
                 if dim not in present:
                     msg = f"{name} constrains {dim!r}, which the spool lacks."
                     raise ParameterError(msg)
-                if low == high:  # a single value: pad around it
-                    if dim not in pads:
-                        msg = f"{name} is a single {dim}; pass {dim}=(before, after)."
-                        raise ParameterError(msg)
+                shut = closed[f"{dim}_max"][number]
+                if low == high and shut and dim not in pads:
+                    msg = f"{name} is a single {dim}; pass {dim}=(before, after)."
+                    raise ParameterError(msg)
+                if dim in pads:  # extend the ends which are values
                     before, after = pads[dim]
-                    if isinstance(low, _TIMES):
-                        before, after = (
-                            to_timedelta64(pd.Timedelta(x) if isinstance(x, str) else x)
-                            for x in (before, after)
-                        )
-                    low, high = low + before, low + after
-                window[dim] = (low, high)
+                    low = low + before if closed[f"{dim}_min"][number] else low
+                    high = high + after if shut else high
+                if window is not None:
+                    window = window | {dim: (low, high)} if low < high or shut else None
+            stamp = {"feature_id": row["feature_id"] or ""}
+            stamp["annotation"] = int(row["annotation"]) if lone else None
+            if window is not None:  # None: an empty range
+                windows.append((window, stamp))
+        pieces = []
+        for window, stamp in windows:
             piece = self.select(_coords=window)
-            for dim in window:
+            keep = _has_samples(piece._df, window)
+            piece = piece._restrict_to_rows(piece._df["_patch_row"][keep])
+            for dim in piece._df["dims"].iloc[0].split(",") if len(piece) else ():
                 piece = piece.chunk(**{dim: None}) if len(piece) > 1 else piece
             if len(piece):
-                stamp = {"feature_id": row["feature_id"] or ""}
-                if lone:
-                    stamp["annotation"] = int(row["annotation"])
-                pieces.append(piece._materialize_lossy(stamp))
+                pieces.append(piece._materialize_lossy(stamp, dtypes))
         if not pieces:
             return self._restrict_to_rows([])
         return self._new_from_catalog(PatchCatalog.union(pieces))
