@@ -1231,8 +1231,9 @@ def _resolved(view: _View | None) -> LazyTable:
     if any(starts) or stops != block.shape:
         block = _clip(block.take(view.rows), np.array(starts), np.array(stops))
     elif identity:
-        # The whole block, unmoved: copied, so the base's storage can go.
-        block = block.take(np.arange(len(block)))
+        # The whole block, unmoved: copied, so the base's storage can go, and
+        # put in placement order as a transpose would.
+        block = _canonical(block.take(np.arange(len(block))))
     # A window of the whole block clips nothing, so a bare transpose keeps
     # each member as it is stored.
     return _table([block if identity else _transposed(block, order)])

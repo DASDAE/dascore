@@ -842,6 +842,14 @@ class TestViews:
         # Windows are stated in the source's own axis order, so they stand.
         assert array.transpose().sources == array.sources
 
+    def test_turned_back_is_in_order(self):
+        """A transpose and its inverse put members out of order back in order."""
+        frame = concat([constant((2, 3), 1.0), constant((2, 3), 2.0)]).to_frame()
+        frame["ordinal"] = 1 - frame["ordinal"]
+        array = LazyArray.from_frame(frame, (4, 3), "f8")
+        expected = np.concatenate([np.full((2, 3), 1.0), np.full((2, 3), 2.0)])
+        assert np.array_equal(array.transpose().transpose().load(), expected)
+
     def test_transpose_keeps_refusing(self):
         """A transpose does not hide a member outside its array."""
         array = LazyArray.from_sources([ArraySource.full((4, 3), 7.0)], shape=(2, 3))
