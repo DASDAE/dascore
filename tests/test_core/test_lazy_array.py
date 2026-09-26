@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import gc
 import hashlib
+import sys
 import time
 import weakref
 from concurrent.futures import ThreadPoolExecutor
@@ -817,6 +818,9 @@ class TestViews:
         gc.collect()
         assert base() is None
 
+    @pytest.mark.skipif(
+        sys.platform == "emscripten", reason="emscripten does not support threads"
+    )
     def test_threads_share_one_table(self, monkeypatch):
         """Threads resolving one view at once all get the one table."""
         clip, calls = lazy_module._clip, []

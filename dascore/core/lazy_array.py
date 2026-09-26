@@ -89,9 +89,6 @@ MAX_CUT_AXES = 16
 # The bytes the digest starts with, so no other payload can read alike.
 _DIGEST_TAG = b"dascore-lazy-blocks\0"
 
-# Held while a view builds its table, so every thread gets the one table.
-_RESOLVING = threading.Lock()
-
 # The name the array api reports for a lazy array.
 BACKEND_NAME = "lazy"
 
@@ -636,13 +633,15 @@ class LazyArray:
     >>> assert np.isnan(window.load()).all()
     """
 
-    # A view clips and permutes its base's members only when they are needed.
-    __slots__ = ("_row", "_table", "_view")
+    # A view clips and permutes its base's members only when they are needed;
+    # its lock makes every thread asking at once get the one table.
+    __slots__ = ("_lock", "_row", "_table", "_view")
 
     def __init__(self, table: LazyTable, row: int):
         self._table: LazyTable | None = table
         self._row = int(row)
         self._view: _View | None = None
+        self._lock: threading.Lock | None = None
 
     @classmethod
     def from_source(cls, source: ArraySource, base_uri: str = "") -> LazyArray:
@@ -858,7 +857,8 @@ class LazyArray:
     def table(self) -> LazyTable:
         """The table which holds this array."""
         if self._table is None:
-            with _RESOLVING:
+            assert self._lock is not None, "only a view has no table"
+            with self._lock:
                 if self._table is None:
                     self._table = _resolved(self._view)
                     # The members are resolved, so the base they came from can go.
@@ -940,6 +940,7 @@ class LazyArray:
         """Return the array a view names, whose members are clipped on demand."""
         out = LazyArray.__new__(LazyArray)
         out._table, out._row, out._view = None, 0, view
+        out._lock = threading.Lock()
         return out
 
     def source(self, member: int) -> ArraySource:
