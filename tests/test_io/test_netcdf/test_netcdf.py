@@ -660,6 +660,12 @@ class TestNetCDFEdgeCases:
             original_patch.data, recovered_patch.data, decimal=6
         )
 
+    def test_compression_level_written(self, compressed_netcdf_file):
+        """compression_opts sets the gzip level of the written data."""
+        path, _ = compressed_netcdf_file
+        with h5py.File(path) as h5:
+            assert h5["data"].compression_opts == 9
+
 
 class TestNetCDFUtilsAdvanced:
     """Additional tests for NetCDF utility functions."""

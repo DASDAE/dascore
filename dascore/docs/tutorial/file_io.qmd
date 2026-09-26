@@ -38,6 +38,29 @@ remote_patch = dc.spool(remote_path)[0]
 
 Format support varies by backend: a formatter that requires a local seekable file may use the remote cache, while formats built on fsspec-compatible stores can operate directly.
 
+## Compression and chunking
+
+DASDAE files can be compressed and chunked through the `storage` option. A preset name is the shortest form; `"compressed"` applies gzip with HDF5's shuffle filter:
+
+```{python}
+patch.io.write(path, "DASDAE", storage="compressed")
+```
+
+A dict (or a [`DASDAEStorage`](`dascore.io.dasdae.DASDAEStorage`)) sets the options directly. `chunks` gives the samples per chunk for each dimension name; unnamed dimensions stay whole, and sizes past an array's length are clamped. Without `chunks`, h5py picks the chunk shape. Options apply to the data and to coordinates stored as arrays. The other fields pass straight to h5py, so `compression` accepts whatever h5py does, including [hdf5plugin](https://pypi.org/project/hdf5plugin/) filters:
+
+```{python}
+storage = {"chunks": {"time": 1000}, "compression": "lzf", "shuffle": True}
+patch.io.write(path, "DASDAE", storage=storage)
+round_trip = dc.spool(path)[0]
+```
+
+```{python}
+#| echo: false
+path.unlink(missing_ok=True)
+```
+
+[`get_storage`](`dascore.io.get_storage`) returns the storage options class for a format, or None if it has none. Write options the writer does not accept, unknown presets, and chunk dimensions the patch lacks raise a [`ParameterError`](`dascore.exceptions.ParameterError`); an invalid storage field raises pydantic's `ValidationError`, a `ValueError`.
+
 # Scanning metadata
 
 [`dc.scan`](`dascore.scan`) returns [`PatchSummary`](`dascore.PatchSummary`) objects without loading patch arrays.

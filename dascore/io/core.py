@@ -23,8 +23,10 @@ from pathlib import Path
 from threading import RLock
 from typing import (
     Any,
+    ClassVar,
     Literal,
     Protocol,
+    Self,
     TypeVar,
     cast,
     get_type_hints,
@@ -33,6 +35,7 @@ from typing import (
 import numpy as np
 import pandas as pd
 from h5py import Dataset as H5pyDataset
+from pydantic import ConfigDict
 
 import dascore as dc
 from dascore.compat import Progress, UPath
@@ -60,6 +63,7 @@ from dascore.exceptions import (
     UnknownFiberFormatError,
 )
 from dascore.io.utils import selection_windows, slice_dataset, validate_windows
+from dascore.models.base import DascoreBaseModel
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.hdf5 import H5Reader, _ManagedH5pyFile
 from dascore.utils.identity import (
@@ -207,6 +211,35 @@ def _get_reloadable_source_path(
         if isinstance(candidate, str | Path | UPath):
             return coerce_to_upath(candidate)
     return ""
+
+
+class BaseStorage(DascoreBaseModel):
+    """
+    Base class for a format's write storage options, such as compression.
+
+    A FiberIO offering storage options sets ``storage_cls`` to a subclass
+    and coerces its writer's ``storage`` parameter with ``_coerce``; see
+    [`get_storage`](`dascore.io.get_storage`).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    # Named option sets, e.g. {"compressed": {"compression": "gzip"}}.
+    presets: ClassVar[dict[str, dict]] = {}
+
+    @classmethod
+    def _coerce(cls, value) -> Self:
+        """Build options from an instance, a preset name, a dict, or None."""
+        if isinstance(value, str):
+            if value not in cls.presets:
+                msg = (
+                    f"Unknown storage preset {value!r} for {cls.__name__}; "
+                    f"valid presets are {sorted(cls.presets)}."
+                )
+                raise ParameterError(msg)
+            value = cls.presets[value]
+        # An instance validates to itself.
+        return cls.model_validate(value or {})
 
 
 class _FiberIOManager:
@@ -714,6 +747,8 @@ class FiberIO:
     # True when a written patch may keep gapped (segmented) dimensional
     # coordinates; otherwise write splits or refuses them.
     segmented_write: bool = False
+    # The write storage options class, if any; see get_storage.
+    storage_cls: type[BaseStorage] | None = None
 
     manager = _FiberIOManager(FIBER_IO_GROUP)
 
@@ -985,11 +1020,16 @@ class FiberIO:
 
     @classmethod
     def get_supported_io_table(cls):
-        """Return the supported formats, versions, and optional write capability."""
+        """Return the supported formats, versions, write and storage-option support."""
         cls.manager.load_plugins()
         return pd.DataFrame(
             [
-                {"name": name, "version": version, "write": io.implements_write}
+                {
+                    "name": name,
+                    "version": version,
+                    "write": io.implements_write,
+                    "storage": io.storage_cls is not None,
+                }
                 for name, versions in cls.manager._format_version.items()
                 for version, io in versions.items()
             ]
@@ -2152,6 +2192,53 @@ def _maybe_split_gapped_patches(spool, fiber_io, split):
     return dc.spool(patches)
 
 
+def get_storage(
+    file_format: str, file_version: str | None = None
+) -> type[BaseStorage] | None:
+    """
+    Return the storage options class a format writes with, if any.
+
+    Parameters
+    ----------
+    file_format
+        The format name.
+    file_version
+        The format version; the latest if None.
+
+    Raises
+    ------
+    [`UnknownFiberFormatError`](`dascore.exceptions.UnknownFiberFormatError`)
+        - The format or version is not known.
+
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> from dascore.io import get_storage
+    >>>
+    >>> storage_cls = get_storage("DASDAE")
+    >>> storage = storage_cls(compression="gzip", chunks={"time": 1000})
+    >>> # Formats without storage options return None.
+    >>> assert get_storage("PICKLE") is None
+    """
+    return FiberIO.manager.get_fiberio(
+        format=file_format, version=file_version
+    ).storage_cls
+
+
+def _check_write_kwargs(fiber_io, kwargs):
+    """Refuse options the format's writer does not name."""
+    # The first two parameters are the spool and the resource.
+    params = list(inspect.signature(fiber_io.write).parameters.values())[2:]
+    named = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
+    allowed = sorted(x.name for x in params if x.kind in named)
+    if unknown := sorted(set(kwargs) - set(allowed)):
+        msg = (
+            f"The {fiber_io.name} writer does not accept option(s) {unknown}; "
+            f"it accepts {allowed}."
+        )
+        raise ParameterError(msg)
+
+
 # write hands back the path it was given, so the return follows the
 # argument rather than collapsing to the union: a Path in, a Path out.
 _PathT = TypeVar("_PathT", bound=path_types)
@@ -2187,6 +2274,10 @@ def write(
         a format which stores gapped patches (DASDAE version 2) writes them
         whole and any other raises a
         [`ParameterError`](`dascore.exceptions.ParameterError`).
+    **kwargs
+        Options the format's writer names, such as ``storage`` (an instance,
+        preset name, or dict) for formats where
+        [`get_storage`](`dascore.io.get_storage`) is not None.
 
     Raises
     ------
@@ -2194,6 +2285,10 @@ def write(
         - Could not determine the fiber format.
     [`ParameterError`](`dascore.exceptions.ParameterError`)
         - The path is an ``examples://`` name, which is read-only.
+        - An option the format's writer does not accept.
+        - An unknown storage preset.
+    ValueError
+        - An invalid storage field (pydantic's ``ValidationError``).
 
     Examples
     --------
@@ -2218,6 +2313,7 @@ def write(
         )
         raise ParameterError(msg)
     fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=file_version)
+    _check_write_kwargs(fiber_io, kwargs)
     if not isinstance(patch_or_spool, dc.Spool):
         patch_or_spool = dc.spool([patch_or_spool])
     patch_or_spool = _maybe_split_gapped_patches(patch_or_spool, fiber_io, split)
