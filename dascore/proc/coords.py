@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import warnings
 from functools import partial
 from typing import Any, ClassVar, Self
@@ -1317,10 +1318,10 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
     """
     Split the patch into contiguous patches at coordinate gaps.
 
-    A dimensional coordinate holding more than one run (e.g. produced by
-    concatenating nearly-contiguous data) marks where the patch is not
-    contiguous. This splits the patch at every run boundary so each output
-    patch has a plain, contiguous coordinate.
+    The patch splits wherever its coordinate's runs break (e.g. from
+    concatenating nearly-contiguous data) and at every hole
+    [missing](`dascore.core.coords.BaseCoord.missing`) reports, however the
+    labels are stored. Each output is a view of the patch's data.
 
     Parameters
     ----------
@@ -1328,8 +1329,8 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
         The Patch object.
     dim
         The dimension to split along. If None (default), split along every
-        dimension with a segmented coordinate. Patches without segmented
-        coordinates come back unchanged (as a length 1 spool).
+        dimension. A patch with no holes comes back unchanged (as a length 1
+        spool).
 
     Examples
     --------
@@ -1361,17 +1362,29 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
         out: list[dc.Patch] = []
         for patch in patches:
             coord = patch.get_coord(dname)
-            if not isinstance(coord, NumericCoord) or coord.runs_count < 2:
+            if not isinstance(coord, NumericCoord):
                 out.append(patch)
                 continue
-            offset = 0
+            starts, offset = set(), 0
             for seg in coord.segments:
-                stop = offset + len(seg)
+                starts.add(offset)
+                # a dense stored run may hold holes of the declared step too;
+                # only its own labels are read to place them
+                if holes := [first for first, _ in seg.missing().iter_runs()]:
+                    values = np.asarray(seg.values)
+                    if seg.reverse_sorted:
+                        after = np.searchsorted(values[::-1], holes, side="right")
+                        found = len(values) - after
+                    else:
+                        found = np.searchsorted(values, holes)
+                    starts.update((offset + found).tolist())
+                offset += len(seg)
+            starts.discard(0)
+            for start, stop in itertools.pairwise([0, *sorted(starts), len(coord)]):
                 # Typed as the selector it is: the key is a dimension
                 # name, so it never lands on select's own bool fields.
-                window: dict[str, Any] = {dname: (offset, stop)}
+                window: dict[str, Any] = {dname: (start, stop)}
                 out.append(Select(samples=True, **window).run(patch))
-                offset = stop
         patches = out
     return dc.spool(patches)
 

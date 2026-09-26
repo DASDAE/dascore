@@ -877,7 +877,7 @@ class TestReviewFindings:
 
     def test_quantity_tolerance_bad_dimensionality(self, time_gap_coord):
         """Dimensionality mismatches raise."""
-        with pytest.raises(Exception, match=r"(?i)cannot convert|dimensionality"):
+        with pytest.raises(Exception, match=r"(?i)cannot convert|units of time"):
             time_gap_coord.fuse(get_quantity("1 m"))
 
     def test_select_never_materializes(self, monkeypatch):
@@ -960,6 +960,63 @@ class TestSplitGapsAndWrite:
             [p1.get_coord("distance").values, p2.get_coord("distance").values]
         )
         assert np.array_equal(combined, gapped_patch.get_coord("distance").values)
+
+    def test_split_gaps_dense_holes(self):
+        """Holes inside one dense stored run still split, sharing the data."""
+        values = np.arange(1500)
+        coord = get_coord(data=values[values % 3 != 2], step=1)
+        assert coord.runs_count == 1
+        coords = {"distance": [0, 1], "time": coord}
+        data = np.zeros((2, len(coord)))
+        patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+        spool = patch.split_gaps("time")
+        assert len(spool) == coord.missing().count + 1 == 500
+        assert all(x.get_coord("time").evenly_sampled for x in spool)
+        assert np.shares_memory(spool[1].data, patch.data)
+        backwards = get_coord(data=coord.values[::-1], step=-1)
+        assert backwards.runs_count == 1
+        data = np.zeros(len(backwards))
+        patch = dc.Patch(data=data, coords={"time": backwards}, dims=("time",))
+        assert len(patch.split_gaps()) == 500
+
+    @pytest.mark.parametrize(
+        ("coord", "count"),
+        [
+            # a dense stored run with holes beside another run
+            (
+                concat_coords(
+                    get_coord(data=np.delete(np.arange(9), [2, 5]), step=1),
+                    get_coord(start=20, step=1, shape=(3,)),
+                ),
+                4,
+            ),
+            (get_coord(data=np.array([9, 8, 7, 4, 3, 1, 0]), step=-1), 3),
+            (get_coord(data=np.round(np.arange(10) * 0.1, 1), step=0.1), 1),
+            (get_coord(data=(np.arange(10) * 0.1)[::-1], step=-0.1), 1),
+        ],
+    )
+    def test_split_gaps_agrees_with_missing(self, coord, count):
+        """The pieces are the runs between holes and none holds a hole."""
+        patch = dc.Patch(
+            data=np.zeros(len(coord)), coords={"time": coord}, dims=("time",)
+        )
+        spool = patch.split_gaps()
+        assert len(spool) == count
+        assert not any(x.get_coord("time").missing().count for x in spool)
+        values = np.concatenate([x.get_coord("time").values for x in spool])
+        assert np.array_equal(values, coord.values)
+
+    def test_split_gaps_string_dim(self):
+        """A dimension labelled by strings has no gaps to split."""
+        coords = {"station": np.array(["a", "b"]), "time": np.arange(4.0)}
+        patch = dc.Patch(data=np.zeros((2, 4)), coords=coords, dims=("station", "time"))
+        assert len(patch.split_gaps()) == 1
+
+    def test_split_gaps_irregular_labels(self):
+        """Labels with no step and one run name no holes: one patch."""
+        values = np.sort(np.random.default_rng(1).random(50))
+        patch = dc.Patch(data=np.zeros(50), coords={"time": values}, dims=("time",))
+        assert len(patch.split_gaps()) == 1
 
     def test_split_gaps_no_gaps(self):
         """Contiguous patches come back unchanged in a length 1 spool."""

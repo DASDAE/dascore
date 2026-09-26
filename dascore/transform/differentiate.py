@@ -16,6 +16,7 @@ from dascore.utils.patch import (
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
     patch_function,
+    require_no_holes,
 )
 
 
@@ -132,6 +133,10 @@ def differentiate(
     quantity with no label here, and clears `data_type` rather than
     leaving a stale one on it.
 
+    A dimension with missing samples (holes in its step) raises; use
+    [split_gaps](`dascore.Patch.split_gaps`) or
+    [fill_gaps](`dascore.Patch.fill_gaps`) first.
+
     Examples
     --------
     >>> import dascore as dc
@@ -151,6 +156,7 @@ def differentiate(
     >>> patch_diff_3 = patch.differentiate(dim="distance", step=3, order=2)
     """
     dims = iterate(dim if dim is not None else patch.dims)
+    require_no_holes(patch, dims, "differentiate")
     dx_or_spacing, axes = _get_dx_or_spacing_and_axes(patch, dims)
     if step > 1:
         new_data = _strided_diff(order, patch, axes, dx_or_spacing, step)

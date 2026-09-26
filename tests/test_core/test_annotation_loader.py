@@ -310,7 +310,7 @@ class TestRoundTrip:
                 "feature_id": ["a", None],
                 "time": [1.0, 2.0],
                 "name": [1, 2],
-                "data_id": [10, 20],
+                "data_id": [None, 20],
             }
         )
         features = pd.DataFrame({"id": ["a"], "name": [3], "data_id": [30]})

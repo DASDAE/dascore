@@ -7,6 +7,7 @@ import pytest
 
 import dascore as dc
 import dascore.proc.coords
+from dascore.exceptions import CoordError
 from dascore.transform.integrate import integrate
 from dascore.units import get_quantity
 from dascore.utils.misc import broadcast_for_index
@@ -262,3 +263,18 @@ class TestNumericalIntegrals:
         patch = dc.Patch(data=np.ones((4, 3)), coords={"x": x, "y": y}, dims=("x", "y"))
         out = patch.integrate(None)
         np.testing.assert_array_equal(out.data, x[:, None] * y[None, :])
+
+
+class TestHoles:
+    """Integration must not integrate across a coordinate hole."""
+
+    @pytest.mark.parametrize("definite", [True, False])
+    def test_refuses_holes(self, holed_patch, definite):
+        """A declared step with missing samples refuses."""
+        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
+            holed_patch.integrate("time", definite=definite)
+
+    def test_stepless_runs(self, stepless_seam_patch):
+        """Step-less labels are an irregular grid and use label spacing."""
+        out = stepless_seam_patch.integrate("time", definite=True)
+        assert np.allclose(out.data, 79.5)

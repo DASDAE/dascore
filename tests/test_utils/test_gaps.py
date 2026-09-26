@@ -82,6 +82,13 @@ class TestGetGapEdges:
         expected = t0 + np.array([-1, 1, 3, 9, 11, 13]) * half
         np.testing.assert_array_equal(edges, expected.astype("datetime64[ns]"))
 
+    def test_absolute_seconds_on_datetime(self):
+        """An absolute tolerance in seconds measures datetime spacings."""
+        t0 = np.datetime64("2020-01-01T00:00:00")
+        values = t0 + np.array([0, 1, 2, 4]) * np.timedelta64(1, "s")
+        _, gaps = get_gap_edges(values, GapTolerance.absolute(0.001))
+        np.testing.assert_array_equal(gaps, [False, False, True])
+
     def test_singleton_datetime(self):
         """Singleton datetimes warn and receive a one-day default cell width."""
         with pytest.warns(UserWarning, match="Singleton coordinate"):

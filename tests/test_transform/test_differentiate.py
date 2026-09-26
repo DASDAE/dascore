@@ -7,7 +7,7 @@ import pytest
 
 import dascore as dc
 import dascore.proc.coords
-from dascore.exceptions import ParameterError
+from dascore.exceptions import CoordError, ParameterError
 from dascore.transform.differentiate import differentiate
 from dascore.units import get_quantity
 from dascore.utils.time import to_float
@@ -262,3 +262,17 @@ class TestDataType:
         """Velocity over both dims is a derivative no word here states."""
         patch = random_patch.update_attrs(data_type="velocity")
         assert patch.differentiate(None).attrs.data_type == ""
+
+
+class TestHoles:
+    """Differentiation must not difference across a coordinate hole."""
+
+    def test_refuses_holes(self, holed_patch):
+        """A declared step with missing samples refuses."""
+        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
+            holed_patch.differentiate("time")
+
+    def test_stepless_runs(self, stepless_seam_patch):
+        """Step-less labels are an irregular grid and use label spacing."""
+        out = stepless_seam_patch.differentiate("time")
+        assert out.shape == stepless_seam_patch.shape

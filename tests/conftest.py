@@ -520,6 +520,28 @@ def wacky_dim_patch():
     return dc.get_example_patch("wacky_dim_coords_patch")
 
 
+def _seam_patch(step):
+    """Two 60-sample time runs separated by a 40-sample outage."""
+    time = dc.get_coord(
+        data=np.r_[np.arange(0.0, 60.0), np.arange(100.0, 160.0)], step=step
+    )
+    data = np.r_[np.zeros(60), np.ones(60)][None]
+    coords = {"distance": np.array([0]), "time": time}
+    return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+
+@pytest.fixture(scope="session")
+def holed_patch():
+    """A patch whose time coordinate declares a step and misses samples."""
+    return _seam_patch(step=1.0)
+
+
+@pytest.fixture(scope="session")
+def stepless_seam_patch():
+    """The same labels as holed_patch with no declared step (irregular)."""
+    return _seam_patch(step=None)
+
+
 @pytest.fixture(scope="class", params=PATCH_FIXTURES)
 def patch(request):
     """A meta-fixtures for collecting all patches used in testing."""
