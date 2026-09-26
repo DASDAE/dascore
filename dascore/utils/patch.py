@@ -1231,6 +1231,22 @@ def _get_dx_or_spacing_and_axes(
     return tuple(out), tuple(axes)
 
 
+def require_no_holes(patch, dims, operation: str) -> None:
+    """
+    Raise CoordError if a dimension's declared step has missing samples.
+
+    A coordinate with no declared step is an irregular grid, not a hole.
+    """
+    for dim in iterate(dims):
+        if not patch.get_coord(dim).missing().complete:
+            msg = (
+                f"Coordinate {dim} is not evenly sampled as required by "
+                f"{operation}; it has missing samples. Use Patch.split_gaps, "
+                "Patch.fill_gaps or Spool.chunk(fill_value=...) first."
+            )
+            raise CoordError(msg)
+
+
 def align_patch_coords(
     patch1: PatchType, patch2: PatchType
 ) -> tuple[PatchType, PatchType]:

@@ -13,7 +13,7 @@ from dascore.exceptions import ParameterError
 from dascore.units import Quantity
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import broadcast_for_index
-from dascore.utils.patch import get_dim_axis_value, patch_function
+from dascore.utils.patch import get_dim_axis_value, patch_function, require_no_holes
 from dascore.utils.signal import WINDOW_NAMES, get_ramp
 from dascore.utils.time import to_float
 
@@ -21,6 +21,7 @@ from dascore.utils.time import to_float
 def _get_taper_slices(patch, kwargs):
     """Get slice for start/end of patch."""
     dim, axis, value = get_dim_axis_value(patch, kwargs=kwargs)[0]
+    require_no_holes(patch, dim, "taper")
     coord = patch.coords.coord_map[dim]
     if isinstance(value, Sequence | np.ndarray):
         if len(value) != 2:
@@ -89,6 +90,12 @@ def taper(
     Returns
     -------
     The tapered patch.
+
+    Notes
+    -----
+    A dimension with missing samples (holes in its step) raises; use
+    [split_gaps](`dascore.Patch.split_gaps`) or
+    [fill_gaps](`dascore.Patch.fill_gaps`) first.
 
     See Also
     --------

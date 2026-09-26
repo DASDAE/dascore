@@ -12,6 +12,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import (
     CoordDataError,
+    CoordError,
     FilterValueError,
     ParameterError,
     UnitError,
@@ -226,6 +227,19 @@ class TestSobelFilter:
         out = random_patch.sobel_filter(dim="time")
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
+
+    def test_refuses_holes(self, holed_patch):
+        """A declared step with missing samples refuses."""
+        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
+            holed_patch.sobel_filter("time")
+        # the kernel also smooths along time when filtering distance
+        with pytest.raises(CoordError, match="not evenly sampled"):
+            holed_patch.sobel_filter("distance")
+
+    def test_stepless_runs(self, stepless_seam_patch):
+        """Step-less labels are an irregular grid and still filter."""
+        out = stepless_seam_patch.sobel_filter("time")
+        assert out.shape == stepless_seam_patch.shape
 
 
 @pytest.mark.parametrize("name", ["median_filter", "notch_filter", "savgol_filter"])
