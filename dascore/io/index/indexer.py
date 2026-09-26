@@ -71,15 +71,11 @@ def _directory_signature(path: Path) -> tuple[int, int]:
 
 def scan_unit_stats(path) -> tuple[int | None, int | None]:
     """
-    Return the (mtime_ns, size_bytes) the index records for one scan unit.
+    Return the (mtime_ns, size_bytes) used to detect source changes.
 
-    This is the one definition of "has this source changed": the index
-    stores what this returns, and a reader checking a source it is about
-    to trust calls the same function, so the two cannot disagree. A file
-    answers with its own stat; a directory-format unit, which is one
-    source made of many files, answers with its manifest fingerprint,
-    since its own stat moves for neither a rewritten nor a resized
-    member. A source the filesystem will not answer for states nothing.
+    Index writers and readers share this check. Files return their stat values;
+    directory formats return a manifest fingerprint because directory stats miss member
+    content and size changes. Return (None, None) when filesystem access fails.
     """
     try:
         status = os.stat(path)
@@ -123,14 +119,12 @@ def _scan_with_client(paths, client, progress):
 
 
 def _path_digest(path) -> str:
-    """Stable per-path digest (hash() of a str/Path is per-process random).
+    """
+    Return a stable SHA-256 path digest; Python's hash varies by process.
 
-    Uses the full sha256 so distinct paths never collide (a collision
-    would make two read-only directories share one index file). Prefer
-    os.fsencode so local filesystem paths (including non-UTF-8 filename
-    bytes) digest exactly; fall back to a plain string encoding for inputs
-    os.fsencode rejects, e.g. remote URL/UPath directories we may support
-    later.
+    Use the full digest to minimize collisions that would make directories share an
+    index. ``os.fsencode`` preserves filesystem bytes, including non-UTF-8 names;
+    unsupported inputs fall back to string encoding, allowing future remote paths.
     """
     try:
         encoded = os.fsencode(path)
@@ -146,12 +140,11 @@ def _map_entry_path(directory, map_dir) -> Path:
 
 def _get_mapped_index_path(directory, map_dir) -> Path | None:
     """
-    Return the index path recorded for a data directory, or None.
+    Return a directory's recorded index path, or None.
 
-    Each directory's mapping is its own small JSON file. A corrupt or
-    unreadable entry simply reads as a miss; the next atomic write for
-    that directory self-heals it. Reads never delete the entry, which
-    would otherwise race a concurrent writer's repair. See #508.
+    Each mapping has its own JSON file. Treat corrupt or unreadable entries as misses;
+    the next atomic write repairs them. Reads never delete entries, which could race a
+    writer's repair. See #508.
     """
     entry = _map_entry_path(directory, map_dir)
     try:
@@ -172,12 +165,10 @@ def _get_mapped_index_path(directory, map_dir) -> Path | None:
 
 def _set_mapped_index_path(directory, index_path, map_dir) -> None:
     """
-    Record a data directory's external index location.
+    Record a directory's external index location atomically.
 
-    The entry is written to a sibling temp file and swapped into place, so
-    a concurrent reader never sees a half-written file. Different
-    directories use different files, so concurrent writers to distinct
-    directories cannot clobber one another.
+    Replace the entry with a sibling temporary file so readers see complete files.
+    Separate entries let writers update different directories independently.
     """
     entry = _map_entry_path(directory, map_dir)
     entry.parent.mkdir(exist_ok=True, parents=True)
