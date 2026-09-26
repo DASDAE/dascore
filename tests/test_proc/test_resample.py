@@ -117,6 +117,11 @@ class TestInterpolate:
         assert out.coords.dim_map["quality"] == ("distance", "time")
         assert out.get_array("quality").shape == out.shape
 
+    def test_interpolate_into_hole(self, holed_patch):
+        """Values inside a hole come from the labels either side. See #1219."""
+        out = holed_patch.interpolate(time=np.array([70.0, 80.0]))
+        assert np.allclose(out.data, [[11 / 41, 21 / 41]])
+
 
 class TestDecimate:
     """Ensure Patch can be decimated."""

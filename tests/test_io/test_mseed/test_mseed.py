@@ -60,7 +60,7 @@ def _write_mseed(
             data_samples=data,
             sample_type="i",
             sample_rate=sample_rate,
-            start_time=start,
+            starttime=start,
         )
     traces.to_file(
         str(path),
@@ -1058,7 +1058,7 @@ class TestDecodedArrayContract:
                 data_samples=data,
                 sample_type=sample_type,
                 sample_rate=10.0,
-                start_time=pymseed.timestr2nstime("2024-01-01T00:00:00Z"),
+                starttime=pymseed.timestr2nstime("2024-01-01T00:00:00Z"),
             )
             part = tmp_path / f"{index}.mseed"
             traces.to_file(
