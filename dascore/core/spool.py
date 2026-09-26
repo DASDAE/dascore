@@ -168,8 +168,10 @@ _TIMES = _TIME_TYPES
 def _has_samples(rows: pd.DataFrame, window: Mapping) -> np.ndarray:
     """Whether each trimmed row keeps a sample along every windowed dim."""
     keep = np.ones(len(rows), dtype=bool)
-    for dim in (x for x in window if f"_{x}_source_envelope" in rows):
+    for dim in window:
         low, high, step = rows[f"{dim}_min"], rows[f"{dim}_max"], rows[f"{dim}_step"]
+        if f"_{dim}_source_envelope" not in rows or step.dtype == object:
+            continue  # no known grid (a segmented coordinate) keeps the row
         step = step.abs()  # a descending grid also holds its minimum
         origin = rows[f"_{dim}_source_envelope"].str.get(f"{dim}_min").astype(low.dtype)
         first = origin + np.ceil(((low - origin) / step).astype(float) - 1e-9) * step
@@ -2336,9 +2338,10 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> cut = spool.cut(picks, time=("-1s", "3s"))
         >>> assert len(cut) == 1
         """
+        # circular import: the catalog's module imports this one
         from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
-        present = self._catalog.backend.coord_names()
+        present = {x for dims in self._df["dims"] for x in dims.split(",")}
         dtypes = {"feature_id": "str", "annotation": "Int64"}  # as presented
         bounds, closed = annotations._extents()
         for dim, pad in pads.items():
@@ -2376,8 +2379,15 @@ class Spool(NodeRepr, NamespaceOwner):
             piece = self.select(_coords=window)
             keep = _has_samples(piece._df, window)
             piece = piece._restrict_to_rows(piece._df["_patch_row"][keep])
-            for dim in piece._df["dims"].iloc[0].split(",") if len(piece) else ():
-                piece = piece.chunk(**{dim: None}) if len(piece) > 1 else piece
+            # merge along the dims every row has; chunk also splits holes
+            dims = [set(x.split(",")) for x in piece._df["dims"]]
+            shared = sorted(set.intersection(*dims)) if dims else []
+            # one row on known grids holds no hole, so it needs no merge
+            steps = piece._df[[f"{x}_step" for x in shared]]
+            if len(piece) == 1 and steps.notna().all(axis=None):
+                shared = []
+            for dim in shared:
+                piece = piece.chunk(**{dim: None})
             if len(piece):
                 pieces.append(piece._materialize_lossy(stamp, dtypes))
         empty = self._restrict_to_rows([])._materialize_lossy({}, dtypes)

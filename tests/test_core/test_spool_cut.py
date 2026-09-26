@@ -202,6 +202,23 @@ class TestCut:
         stated = dc.AnnotationSet(frame, dims=("depth", "time"))
         with pytest.raises(ParameterError, match="the spool lacks"):
             spool.cut(stated)
+        # a coordinate which is no presented patch's dimension
+        lat = dc.spool(dc.get_example_patch("random_patch_with_lat_lon"))
+        frame = pd.DataFrame({"latitude_min": [0.0], "latitude_max": [1.0]})
+        with pytest.raises(ParameterError, match="the spool lacks"):
+            lat.cut(dc.AnnotationSet(frame, dims=("latitude", "time")))
+
+    def test_mixed_dims(self, spool, start):
+        """Patches with different dimensions are cut, merging shared dims."""
+        patch = spool[0]
+        squeezed = patch.select(distance=0, samples=True).squeeze("distance")
+        assert len(dc.spool([patch, squeezed]).cut(_ranges(start, (1, 2)))) == 2
+
+    def test_hole_in_one_patch(self, holed_patch):
+        """A hole inside one patch splits a window across it; inside it, none."""
+        frame = pd.DataFrame({"time_min": [50.0, 70.0], "time_max": [110.0, 90.0]})
+        cut = dc.spool(holed_patch).cut(dc.AnnotationSet(frame, dims=DIMS))
+        assert [_span(x) for x in cut] == [[50, 59], [100, 110]]
 
     def test_lazy(self, spool, start, tmp_path):
         """Cutting and reading contents load nothing; iterating does."""
