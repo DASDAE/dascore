@@ -3550,9 +3550,9 @@ def _check_grid_spacings(runs, step, dtype):
     grids = [x for x in runs if isinstance(x, Grid) and len(x) > 1]
     spacings = [x.step(dtype) for x in grids]
     # a fractional grid holds only its own rounded step, on one shared lattice
-    cadences = {Fraction(x.step_num, x.step_den) for x in grids if x.exact}
-    fractional = any(x.denominator != 1 for x in cadences) and (
-        len(cadences) > 1 or not _same_step(spacings[0], step)
+    fractional = any(x.exact and x.step_num % x.step_den for x in grids) and (
+        (grid := _common_grid(runs)) is None
+        or not _same_step(np.abs(grid.step(dtype)), np.abs(step))
     )
     if fractional or (
         spacings and np.any(np.abs(_on_grid(np.asarray(spacings), step)) != 1)

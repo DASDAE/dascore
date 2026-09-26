@@ -1146,6 +1146,19 @@ class TestStepContract:
         with pytest.raises(ValidationError, match="contradicts"):
             NumericCoord(runs=runs, dtype="int64", step=2)
 
+    def test_fractional_grids_off_one_lattice_raise(self):
+        """Fractional runs of one cadence but another phase share no step."""
+        runs = (Grid(0, 3, 2, 3), Grid(7, 3, 2, 3))
+        with pytest.raises(ValidationError, match="contradicts"):
+            NumericCoord(runs=runs, dtype="int64", step=2)
+
+    def test_descending_fractional_grids_keep_the_step(self):
+        """A positive declared step holds over descending runs of one lattice."""
+        runs = (Grid(12, -3, 2, 3), Grid(3, -3, 2, 3))
+        coord = NumericCoord(runs=runs, dtype="int64", step=2)
+        assert coord.step == -2
+        assert coord.missing().positions().tolist() == [7, 6, 4]
+
     def test_declared_step_a_grid_contradicts_raises(self):
         """A declared step other than the one the grid runs sit on raises."""
         runs = (Grid(0, 2, 1, 5), Grid(20, 2, 1, 5))
