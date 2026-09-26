@@ -5286,6 +5286,8 @@ dascore.viz	/api/dascore/viz.qmd
 dascore.viz.InventoryNameSpace	/api/dascore/utils/namespace/InventoryNameSpace.qmd
 dascore.viz.PatchNameSpace	/api/dascore/utils/namespace/PatchNameSpace.qmd
 dascore.viz.SpoolNameSpace	/api/dascore/utils/namespace/SpoolNameSpace.qmd
+dascore.viz.VizAnnotationNameSpace	/api/dascore/viz/VizAnnotationNameSpace.qmd
+dascore.viz.VizAnnotationNameSpace.plot	/api/dascore/viz/annotations/plot.qmd
 dascore.viz.VizInventoryNameSpace	/api/dascore/viz/VizInventoryNameSpace.qmd
 dascore.viz.VizInventoryNameSpace.map	/api/dascore/viz/inventory/map_path.qmd
 dascore.viz.VizInventoryNameSpace.path	/api/dascore/viz/inventory/path.qmd
@@ -5313,6 +5315,13 @@ dascore.viz._lanes.legend_column_points	/api/dascore/viz/_lanes/legend_column_po
 dascore.viz._lanes.numeric_scale	/api/dascore/viz/_lanes/numeric_scale.qmd
 dascore.viz._lanes.plot_lanes	/api/dascore/viz/_lanes/plot_lanes.qmd
 dascore.viz._lanes.string_colors	/api/dascore/viz/_lanes/string_colors.qmd
+dascore.viz.annotations	/api/dascore/viz/annotations.qmd
+dascore.viz.annotations.AnnotationSet	/api/dascore/core/annotations/AnnotationSet.qmd
+dascore.viz.annotations.Group	/api/dascore/core/annotations/Group.qmd
+dascore.viz.annotations.ParameterError	/api/dascore/exceptions/ParameterError.qmd
+dascore.viz.annotations.Path	/api/dascore/core/annotations/Path.qmd
+dascore.viz.annotations.Region	/api/dascore/core/annotations/Region.qmd
+dascore.viz.annotations.plot	/api/dascore/viz/annotations/plot.qmd
 dascore.viz.calendar	/api/dascore/viz/spool/calendar.qmd
 dascore.viz.coverage	/api/dascore/viz/spool/coverage.qmd
 dascore.viz.inventory	/api/dascore/viz/inventory.qmd

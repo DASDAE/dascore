@@ -41,7 +41,16 @@ import pathlib
 import re
 from collections.abc import Collection, Iterable, Mapping, Sequence
 from contextlib import suppress
-from typing import Annotated, Any, ClassVar, Literal, NamedTuple, Self, cast
+from typing import (
+    TYPE_CHECKING,
+    Annotated,
+    Any,
+    ClassVar,
+    Literal,
+    NamedTuple,
+    Self,
+    cast,
+)
 
 import numpy as np
 import pandas as pd
@@ -94,6 +103,9 @@ from dascore.utils.tables import (
     write_parquet_table,
 )
 from dascore.utils.time import to_datetime64, to_timedelta64
+
+if TYPE_CHECKING:
+    from dascore.core.patch import Patch
 
 # Columns each table models; everything else is an extra.
 ANNOTATION_COLUMNS = (
@@ -1387,7 +1399,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
             frame = frame[_passes(view, on_rows)]
         return self._dropped(frame, table)
 
-    def overlapping(self, **bounds) -> AnnotationSet:
+    def overlapping(self, patch: Patch | None = None, /, **bounds) -> AnnotationSet:
         """
         Return the features whose bounds overlap the given ones.
 
@@ -1397,6 +1409,11 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
         where its maximum is a stated value (see `bounds`). A feature
         spanning a dimension overlaps anything along it. Nothing is
         trimmed: a feature is kept or dropped whole.
+
+        A patch, given first, queries its coordinate limits along each
+        dimension of the set it has, its last sample included; a keyword
+        for the same dimension wins. A patch with no samples along one
+        overlaps nothing.
 
         Examples
         --------
@@ -1413,6 +1430,14 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
                 f"one; the set declares {list(self.dims)}."
             )
             raise ParameterError(msg)
+        # A patch's last sample is inside it, so its queries close above.
+        shut = set()
+        if patch is not None:
+            coords = patch.coords.coord_map
+            shut = {x for x in self.dims if x in coords} - set(bounds)
+            bounds = {**{x: (coords[x].min(), coords[x].max()) for x in shut}, **bounds}
+            if any(not len(coords[x]) for x in shut):
+                return self._rebuilt(self._df.iloc[:0], self._features.iloc[:0])
         extents, closed = self._extents()
         keep = np.ones(len(extents), dtype=bool)
         for dim, query in bounds.items():
@@ -1432,7 +1457,7 @@ class AnnotationSet(NodeRepr, NamespaceOwner):
                 below = (
                     True
                     if high is None
-                    else (starts <= high if point else starts < high)
+                    else (starts <= high if point or dim in shut else starts < high)
                 )
                 above = (
                     True
