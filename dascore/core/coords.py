@@ -3862,7 +3862,7 @@ def _fill_same_step(coord: NumericCoord, first: Grid, other: Grid) -> bool:
     """
     if first.exact and other.exact:
         return first.step_exact(coord.dtype) == other.step_exact(coord.dtype)
-    ratio = float(other.step(coord.dtype)) / float(first.step(coord.dtype))
+    ratio = float(np.divide(other.step(coord.dtype), first.step(coord.dtype)))
     return bool(abs(ratio - 1) * max(len(other) - 1, 1) <= _GRID_RTOL)
 
 
@@ -3901,7 +3901,7 @@ def _fill_limit(coord: NumericCoord, step: Grid, limit, samples: bool):
             excess = Fraction(2 * int(to_int(excess)) + 1, 2 * _NS_PER_S)
         return int(Fraction(excess) // abs(exact))
     scalar = step.step(coord.dtype)
-    return math.floor(float(excess) / abs(float(scalar)) * (1 + _GRID_RTOL))
+    return math.floor(float(np.divide(excess, np.abs(scalar))) * (1 + _GRID_RTOL))
 
 
 def _raise_string_coord_error(operation: str) -> NoReturn:
