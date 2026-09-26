@@ -644,6 +644,157 @@ class TestTranspose:
             lazy.transpose((0, 5))
 
 
+def random_chain(rng, ndim, length):
+    """Return random slices, some open, negative or empty, and transposes."""
+    ops = []
+    for _ in range(length):
+        if rng.random() < 0.3:
+            order = None if rng.random() < 0.3 else tuple(rng.permutation(ndim))
+            ops.append(("transpose", order))
+            continue
+        bounds = [None, *range(-4, 12)]
+        count = int(rng.integers(0, ndim + 1))
+        items = [slice(*rng.choice(bounds, 2).tolist()) for _ in range(count)]
+        ops.append(("slice", tuple(items)))
+    return ops
+
+
+def run_chain(array, ops, eager):
+    """Apply a chain to an array, materializing after each step if eager."""
+    for name, argument in ops:
+        array = array.transpose(argument) if name == "transpose" else array[argument]
+        if eager:
+            array = lazy_module._array(array._block())
+    return array
+
+
+def assert_same_array(view, eager, loadable):
+    """Assert a view is the array the eager chain made."""
+    assert view.shape == eager.shape and view.ndim == eager.ndim
+    assert view.dtype == eager.dtype and view.size == eager.size
+    assert len(view) == len(eager)
+    assert view.data_id == eager.data_id
+    assert view.sources == eager.sources
+    pd.testing.assert_frame_equal(view.to_frame(), eager.to_frame())
+    assert view.validate() is view
+    if loadable:
+        assert np.array_equal(view.load(), eager.load())
+
+
+class TestViews:
+    """Slices and transposes wait to clip and permute the members."""
+
+    @pytest.fixture()
+    def cases(self, joined, lazy):
+        """Arrays of several layouts, and whether each can be loaded."""
+        pieces = [constant((3, 4), float(x)) for x in range(4)]
+        mixed = [stored((3, 4), path=f"/a/{x}.h5") for x in range(3)]
+        return [
+            (concat(pieces, axis=0), True),
+            (concat(pieces, axis=1), True),
+            (LazyArray.from_sources([*mixed, ArraySource.full((3, 4), 2.0)]), False),
+            (stack(pieces, axis=1), True),
+            (concat([concat(pieces[:2]), concat(pieces[2:])], axis=1), True),
+            (
+                boxed([((0, 0), (2, 1)), ((0, 1), (1, 2)), ((1, 1), (2, 2))], (2, 2)),
+                True,
+            ),
+            (
+                tiling_array(random_boxes(np.random.default_rng(5), (5, 6), 7), (5, 6)),
+                True,
+            ),
+            (concat([constant((5,), 1.0), constant((4,), 2.0)]), True),
+            (concat([constant((2, 3, 4), 1.0), constant((3, 3, 4), 2.0)]), True),
+            (stack([concat(pieces[:2], axis=1)] * 2, axis=2), True),
+            (joined, True),
+            (lazy, True),
+            (concat([joined, constant(joined.shape, 3.0)], axis=1), True),
+        ]
+
+    def test_chains_match_eager(self, cases):
+        """Random chains of views give the arrays eager steps give."""
+        rng = np.random.default_rng(42)
+        for array, loadable in cases:
+            for _ in range(25):
+                ops = random_chain(rng, array.ndim, int(rng.integers(1, 5)))
+                view = run_chain(array, ops, eager=False)
+                assert_same_array(view, run_chain(array, ops, eager=True), loadable)
+
+    def test_members_untouched(self, monkeypatch):
+        """Views of a large array clip nothing until the members are needed."""
+        paths = np.char.add("/a/f", np.arange(10_000).astype(str))
+        array = LazyArray.from_columns(
+            paths, (4, 3), format="DASDAE", version="1", source_dtype="f4"
+        )
+
+        def refuse(*args):
+            raise AssertionError("the members were touched")
+
+        monkeypatch.setattr(lazy_module, "_clip", refuse)
+        monkeypatch.setattr(lazy_module, "_transposed", refuse)
+        view = array[10:-10, 1:].transpose()[:, 5:9]
+        assert view.shape == (2, 4) and view.dtype == np.float32
+        assert view.ndim == 2 and view.size == 8
+        with pytest.raises(AssertionError, match="touched"):
+            view.data_id
+
+    def test_clips_only_candidates(self, monkeypatch):
+        """Resolving a view clips only the members its window can touch."""
+        array = concat([constant((4, 3), float(x)) for x in range(100)])
+        sizes = []
+        clip = lazy_module._clip
+        monkeypatch.setattr(
+            lazy_module, "_clip", lambda x, *y: sizes.append(len(x)) or clip(x, *y)
+        )
+        assert len(array.transpose()[:, 2:][:, 3:13]) == 3
+        assert len(array[:, 1:]) == 100
+        assert sizes == [3, 100]
+
+    def test_resolves_once(self, monkeypatch, joined):
+        """A view clips its members once, however often they are asked for."""
+        calls = []
+        clip = lazy_module._clip
+        monkeypatch.setattr(
+            lazy_module, "_clip", lambda *x: calls.append(1) or clip(*x)
+        )
+        view = joined[90:110].transpose()
+        assert not calls
+        for _ in range(2):
+            view.data_id, view.load(), len(view), view.table, view.sources
+        assert len(calls) == 1
+        # A view of a resolved view starts again from the base.
+        assert view[1:].data_id == joined[90:110, 1:].transpose().data_id
+        assert len(calls) == 3
+
+    def test_table_holds_the_view(self, joined):
+        """A view's table and row are those of the array it resolves to."""
+        view = joined[90:110]
+        assert view.table.n_members == 2 and view.row == 0
+        assert view.table[view.row].data_id == view.data_id
+        assert len(LazyTable.from_arrays([view, joined.transpose()])) == 2
+
+    def test_views_compose(self, joined, patch):
+        """Views of views agree with numpy."""
+        view = joined.transpose()[2:9].transpose((1, 0))[95:120][:, 1:]
+        assert np.array_equal(view.load(), patch.data.T[2:9].T[95:120][:, 1:])
+        assert view.data_id == joined[95:120, 3:9].data_id
+        assert view[:] is view
+
+    @pytest.mark.parametrize("bad", [slice(None, None, 2), 3])
+    def test_view_refuses_other_indexes(self, joined, bad):
+        """A view refuses what the array refuses."""
+        with pytest.raises(ParameterError, match="step of one"):
+            joined.transpose()[1:][bad]
+
+    def test_view_refuses_bad_axes(self, joined):
+        """A view refuses too many indexes and orders which are not a permutation."""
+        view = joined.transpose()[1:]
+        with pytest.raises(ParameterError, match="dimensional array"):
+            view[0:1, 0:1, 0:1]
+        with pytest.raises(ParameterError, match="permutation"):
+            view.transpose((1, 1))
+
+
 class TestConstants:
     """A member which stores no data generates it instead."""
 
