@@ -720,7 +720,9 @@ class PatchCatalog:
         on the result for exact envelopes.
         """
         resolver = CompositeResolver()
-        stamps = {k: v for x in catalogs for k, v in x._stamps.items()}
+        # stamps hold only when every member states the same ones
+        stamps = catalogs[0]._stamps if catalogs else {}
+        stamps = stamps if all(x._stamps == stamps for x in catalogs) else {}
         out = cls(resolver=resolver, stamps=stamps)
         backend = out.backend
         # Collect and merge every member's records before writing:
@@ -1207,7 +1209,8 @@ class PatchCatalog:
             # the index drops blanks, so a stamp's column may be partial or absent
             for name, dtype in self._stamps.items():
                 column = df.get(name, pd.Series(None, index=df.index, dtype=object))
-                df[name] = column.fillna("") if dtype == "str" else column.astype(dtype)
+                filled = column.fillna("") if dtype == "str" else column
+                df[name] = filled.astype(dtype)
             # Re-read the revision: bootstrapping the backend above can
             # bump it, and this frame reflects the state after that.
             return self._df_cache.set(df, self._revision.value)

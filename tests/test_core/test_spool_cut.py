@@ -56,7 +56,9 @@ class TestCut:
         (patch,) = cut  # a pad leaves range ends alone
         assert _span(patch) == _seconds(start, 1, 2)
         assert patch.attrs.feature_id == "" and patch.attrs.annotation == 0
-        assert list(cut.get_contents()["feature_id"]) == [""]
+        contents = cut.get_contents()
+        assert contents["feature_id"].tolist() == [""]
+        assert contents["feature_id"].dtype == "str"
 
     def test_value_with_pad(self, spool, start):
         """A value is cut around by its pad, in any time spelling."""
@@ -122,6 +124,7 @@ class TestCut:
         )
         cut = spool.cut(dc.AnnotationSet(frame, dims=DIMS), time=("-1s", "1s"))
         contents = cut.get_contents()
+        stamped = contents[["feature_id", "annotation"]]
         assert list(contents["feature_id"]) == ["ev", ""]
         assert contents["annotation"].dtype == "Int64"
         assert contents["annotation"].isna().tolist() == [True, False]
@@ -137,6 +140,21 @@ class TestCut:
         (patch,) = spool.cut(_ranges(start, (3, 4))).cut(ann)
         assert patch.attrs.feature_id == "new" and patch.attrs.annotation is None
         assert _span(lone) == _seconds(start, 3, 4)
+        # a plan over a cut keeps its stamps
+        chunked = cut.chunk(time=None)
+        assert chunked.get_contents()[["feature_id", "annotation"]].equals(stamped)
+        assert [(x.attrs.feature_id, x.attrs.annotation) for x in chunked] == [
+            ("ev", None),
+            ("", 1),
+        ]
+
+    def test_union(self, spool, start):
+        """A union keeps stamps only when every member has the same ones."""
+        cut = spool.cut(_ranges(start, (3, 4)))
+        assert (cut + cut).get_contents()["annotation"].dtype == "Int64"
+        other = dc.spool([x.update_attrs(annotation="foo") for x in spool])
+        contents = (cut + other).get_contents()
+        assert contents["annotation"].tolist() == [0, "foo", "foo", "foo"]
 
     def test_overlapping_features(self, spool, start):
         """Two features with one window give two patches."""
@@ -144,7 +162,9 @@ class TestCut:
 
     def test_nothing(self, spool, start):
         """No data, no samples, an empty range, or an empty set give nothing."""
-        assert not len(spool.cut(_ranges(start, (100, 200))))
+        contents = spool.cut(_ranges(start, (100, 200))).get_contents()
+        dtypes = contents[["feature_id", "annotation"]].dtypes
+        assert not len(contents) and list(dtypes) == ["str", "Int64"]
         assert not len(spool.cut(_ranges(start, (1.001, 1.003), (7.997, 7.999))))
         assert not len(spool.cut(_ranges(start, (2, 2)), time=("-1s", "1s")))
         frame = pd.DataFrame({"distance_min": [10.2], "distance_max": [10.7]})
@@ -153,7 +173,16 @@ class TestCut:
 
     @pytest.mark.parametrize(
         "pads",
-        [{"time": "1s"}, {"time": ("-1", "1s")}, {"distance": ("1m", 2)}],
+        [
+            {"time": "1s"},
+            {"time": ("-1", "1s")},
+            {"distance": ("1m", 2)},
+            {"time": ("1s", "-1s")},
+            {"time": (None, 1)},
+            {"time": ("-1x", "1s")},
+            {"time": (np.datetime64("2020-01-01"), np.datetime64("2020-01-02"))},
+            {"distance": (-np.timedelta64(1, "s"), np.timedelta64(1, "s"))},
+        ],
     )
     def test_bad_pad(self, spool, start, pads):
         """A malformed pad is refused, naming its keyword, before selecting."""

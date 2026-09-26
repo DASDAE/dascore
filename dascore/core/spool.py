@@ -8,6 +8,7 @@ import warnings
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import replace
+from datetime import timedelta
 from functools import singledispatch
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, Self, TypeVar, overload
@@ -174,6 +175,32 @@ def _has_samples(rows: pd.DataFrame, window: Mapping) -> np.ndarray:
         first = origin + np.ceil(((low - origin) / step).astype(float) - 1e-9) * step
         keep &= ~(first > high).to_numpy()  # an unknown step keeps the row
     return keep
+
+
+def _cut_pad(dim: str, pad, known: bool, timed: bool) -> list:
+    """Normalize a cut pad to [before, after], refusing any other spelling."""
+
+    def _text(x):
+        return isinstance(x, str) and any(c.isalpha() for c in x)
+
+    def _fine(x):
+        if isinstance(x, np.timedelta64 | timedelta) or _text(x):
+            return timed
+        return isinstance(x, numbers.Real) and not isinstance(x, bool)
+
+    ends = list(pad) if isinstance(pad, tuple | list) else []
+    with suppress(ValueError):
+        if known and len(ends) == 2 and all(map(_fine, ends)):
+            if timed:  # seconds, timedeltas, or strings with units
+                ends = [
+                    to_timedelta64(pd.Timedelta(x) if _text(x) else x) for x in ends
+                ]
+            if ends[0] <= ends[1]:
+                return ends
+    msg = f"cut pad {dim}= must be (before, after), before <= after, along a "
+    msg += "dimension of set and spool: numbers or, on a time dimension, "
+    msg += "timedeltas or strings with units such as '-1s'."
+    raise ParameterError(msg)
 
 
 def _spool_input_message(data) -> str:
@@ -2280,7 +2307,8 @@ class Spool(NodeRepr, NamespaceOwner):
         (half-open) maximum is kept; an empty range gives nothing. A
         feature spanning a dimension keeps the spool's full extent along
         it, one holding no samples gives nothing, and overlapping features
-        duplicate data. Nothing is loaded.
+        duplicate data. On a coordinate with no fixed step, a window
+        between samples may yield an empty patch. Nothing is loaded.
 
         Each output states `feature_id` (blank for a lone row) and
         `annotation` (a lone row's index label, blank for a feature), as
@@ -2316,19 +2344,7 @@ class Spool(NodeRepr, NamespaceOwner):
         for dim, pad in pads.items():
             known = dim in set(annotations.dims) & present
             timed = known and bounds[f"{dim}_min"].dtype.kind in "mM"
-            pair = isinstance(pad, tuple | list) and len(pad) == 2
-            texts = [x for x in pad if isinstance(x, str)] if pair else []
-            if not (known and pair) or not all(
-                timed and any(c.isalpha() for c in x) for x in texts
-            ):
-                msg = f"cut pad {dim}= must be (before, after) along a dimension of "
-                msg += "set and spool; a string is a time offset with units, as '-1s'."
-                raise ParameterError(msg)
-            if timed:
-                pads[dim] = [
-                    to_timedelta64(pd.Timedelta(x) if isinstance(x, str) else x)
-                    for x in pad
-                ]
+            pads[dim] = _cut_pad(dim, pad, known, timed)
         windows = []  # every refusal comes before any selection
         for number, row in enumerate(bounds.to_dict("records")):
             lone = not pd.isna(row["annotation"])
@@ -2364,9 +2380,8 @@ class Spool(NodeRepr, NamespaceOwner):
                 piece = piece.chunk(**{dim: None}) if len(piece) > 1 else piece
             if len(piece):
                 pieces.append(piece._materialize_lossy(stamp, dtypes))
-        if not pieces:
-            return self._restrict_to_rows([])
-        return self._new_from_catalog(PatchCatalog.union(pieces))
+        empty = self._restrict_to_rows([])._materialize_lossy({}, dtypes)
+        return self._new_from_catalog(PatchCatalog.union(pieces or [empty]))
 
     @compose_docstring(conflict_desc=attr_conflict_description)
     def concatenate(
