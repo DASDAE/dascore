@@ -44,14 +44,9 @@ from dascore.utils.time import to_datetime64, to_int, to_timedelta64
 
 _SANITIZE_RE = re.compile(r"[^a-z0-9_]+")
 
-# Attrs handled structurally rather than indexed: history is a list, so
-# never a scalar column, and dims and coords are structure.
-#
-# Neither id is here. `origin_id` is indexed so a spool can find a
-# patch by the id it carries rather than by loading every patch to look;
-# `data_id` because a provenance query needs to reach it. Both are
-# lineage rather than describing attrs, so the planner keeps them out of
-# merge conflicts (see `_SOURCE_COLUMNS`).
+# History, dims, and coords are structural, not scalar index columns.
+# Index origin_id for patch lookup without loading data, and data_id for
+# provenance queries. Exclude both from merge conflicts (see _SOURCE_COLUMNS).
 _SKIPPED_ATTRS = frozenset({"history", "dims", "coords"})
 
 

@@ -36,10 +36,9 @@ def iter_rows(df: pd.DataFrame, row_type: type[_RowType]) -> Iterator[_RowType]:
     df
         The dataframe to iterate.
     row_type
-        A NamedTuple declaring the columns the caller reads. Pandas builds
-        the row tuple dynamically, so this only names the shape for
-        readers (and type checkers); it is never instantiated. The frame's
-        index is left out so the declared fields line up with the row's.
+        A NamedTuple describing the columns for readers and type checkers; it is never
+        instantiated. Pandas builds the tuples and omits the index so fields align with
+        columns.
     """
     return cast(Iterator[_RowType], df.itertuples(index=False))
 
@@ -48,20 +47,13 @@ def present_units_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     Expose private ``_{name}_units`` columns under public names.
 
-    Coordinate envelopes are stored and presented in each coordinate's
-    original units, so the unit belongs beside the values it scales:
-    ``distance_min`` of 65.6 is self-explaining only with
-    ``distance_units`` of ``ft`` in view. The private spellings exist
-    for the planners (public columns are conflict-policed on merge), so
-    only the presented frame renames them.
+    Coordinate bounds retain their original units, so ``distance_min=65.6`` needs
+    ``distance_units=ft`` alongside it. Planners keep units private to avoid merge
+    conflicts; only the public view renames them.
 
-    An existing public column is never overwritten. For frames the index
-    builds this cannot happen: an attr whose name would claim a
-    coordinate's public units column is omitted from the flat view with
-    a warning, the same rule that protects envelope columns. A frame
-    assembled some other way keeps whatever it already had, and its
-    private column simply stays private rather than silently replacing
-    a value this function cannot vouch for.
+    Existing public columns are preserved, leaving conflicting private columns
+    unchanged. Index-generated frames avoid this conflict by warning and omitting
+    attributes that claim coordinate units or envelope columns.
     """
     renames = {}
     for col in df.columns:
@@ -86,10 +78,8 @@ def present_dtype_column(df: pd.DataFrame) -> pd.DataFrame:
     """
     Expose ``_dtype`` as ``dtype``.
 
-    The element type of a patch's data is private in the relation
-    because chunk groups and polices every public column, and patches of
-    different element types must still merge. It is worth showing: with
-    ``data_size`` it is what the patch costs to load.
+    Keeping dtype private lets chunk merge patches with different element types. The
+    public value, together with ``data_size``, indicates loading cost.
     """
     return _present_private_column(df, "_dtype")
 
@@ -98,15 +88,11 @@ def present_data_size_column(df: pd.DataFrame) -> pd.DataFrame:
     """
     Expose ``_data_size`` as ``data_size``.
 
-    The sample count is private for the same reason ``_dtype`` is, and
-    more sharply: patches of different lengths are the ordinary case,
-    and a public column would keep chunk from merging any of them.
+    Keeping sample counts private lets chunk merge patches of different lengths. Counts
+    are unknown for merged or subdivided chunks and patches trimmed by selection.
 
-    A row states no size when it does not know one: a merged or
-    subdivided chunk output, or a patch a selection trims. The column
-    follows the index's convention
-    of staying nullable (Int64) only when it holds nulls; a column of
-    nothing else arrives from SQL untyped.
+    Use nullable Int64 when any count is missing, including columns returned untyped by
+    SQL; otherwise use int.
     """
     out = _present_private_column(df, "_data_size")
     if "data_size" not in out.columns or out is df:
@@ -121,11 +107,8 @@ def drop_private_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.drop(columns=private) if private else df
 
 
-# What `present_columns` runs, in order. Each step but the last gives one
-# private column (or family) back its public spelling; dropping the rest
-# is always last, so a private column no step claims simply does not
-# leave. Add a step here to publish another one -- and only when a caller
-# can act on it, since every column added is one more to read past.
+# Publish useful private columns in this order, then drop all others.
+# Add a presenter only for columns callers can act on.
 PRESENTERS = (
     present_units_columns,
     present_dtype_column,
@@ -138,12 +121,9 @@ def present_columns(df: pd.DataFrame) -> pd.DataFrame:
     """
     Return the public view of a flat relation.
 
-    The relation carries private columns the spool needs and a caller
-    does not: the row number, per-coordinate identity keys, the raw path
-    attrs. A leading underscore means private everywhere else in
-    DASCore, so a frame handed out publicly should not carry them. A few
-    are private only because the planners police public columns, and
-    those are renamed rather than dropped; `PRESENTERS` is the list.
+    `PRESENTERS` renames useful private columns kept out of planner merge checks, then
+    drops the rest, including row numbers, coordinate identity keys, and raw path
+    attributes.
     """
     for present in PRESENTERS:
         df = present(df)
