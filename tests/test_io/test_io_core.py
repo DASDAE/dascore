@@ -34,6 +34,7 @@ from dascore.exceptions import (
     UnknownFiberFormatError,
 )
 from dascore.io import core as io_core
+from dascore.io import get_storage
 from dascore.io.core import (
     STORED_ORIGIN_ID,
     FiberIO,
@@ -50,6 +51,7 @@ from dascore.io.core import (
     _source_stats,
     is_directory_format,
 )
+from dascore.io.dasdae import DASDAEStorage
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.utils import (
     convert_attr_units,
@@ -1514,10 +1516,37 @@ class TestGetSupportedIOTable:
     def test_only_optional_write_capability_is_reported(self):
         """All readers expose the three hooks; writing remains optional."""
         table = FiberIO.get_supported_io_table()
-        assert set(table.columns) == {"name", "version", "write"}
-        flags = table.groupby("name")["write"].any()
-        assert flags["DASDAE"] and flags["PICKLE"]
-        assert not flags["TDMS"]
+        assert set(table.columns) == {"name", "version", "write", "storage"}
+        flags = table.groupby("name")[["write", "storage"]].any()
+        assert flags["write"]["DASDAE"] and flags["write"]["PICKLE"]
+        assert not flags["write"]["TDMS"]
+        assert flags["storage"]["DASDAE"] and not flags["storage"]["PICKLE"]
+
+
+class TestStorage:
+    """Tests for format storage options and their discovery."""
+
+    def test_get_storage(self):
+        """DASDAE names its storage class; a storage-less format gives None."""
+        assert get_storage("DASDAE") is DASDAEStorage
+        assert get_storage("DASDAE", "1") is DASDAEStorage
+        assert get_storage("PICKLE") is None
+
+
+class TestWriteKwargs:
+    """Tests for the options dc.write accepts."""
+
+    def test_unknown_kwarg(self, random_patch, tmp_path):
+        """An option the writer does not name raises, naming the writer."""
+        match = r"PICKLE writer does not accept option\(s\) \['storage'\]"
+        with pytest.raises(ParameterError, match=match):
+            dc.write(random_patch, tmp_path / "out.pkl", "PICKLE", storage="compressed")
+
+    def test_declared_kwarg_passes(self, random_patch, tmp_path):
+        """A named writer option still reaches the writer."""
+        path = tmp_path / "out.wav"
+        dc.write(random_patch, path, "WAV", resample_frequency=500)
+        assert path.exists()
 
 
 class TestMissingInstallName:

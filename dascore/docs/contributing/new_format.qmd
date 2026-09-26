@@ -43,7 +43,7 @@ class JingleV1(FiberIO):
 
 Every reader implements these three hooks. The base class derives `get_format`, `scan`, and `read`; keep those inherited for new formats. Sintela protobuf retains a specialized `read` because its fast scan inspects only the endpoints, while loading samples also collects META records occurring in the middle. This avoids making directory indexing walk every packet. `get_version` detects the family and may return a version other than the class's own version, allowing the manager to select the matching implementation. `None` means the resource belongs to another family; an empty version string is valid.
 
-Writing is optional: implement `write(self, spool, resource, **kwargs)` when supported. Two class attributes describe what a writer can hold: `multi_patch_write` when one file takes several patches, and `segmented_write` when a patch may keep gapped dimensional coordinates; without it, `dc.write` splits or refuses such patches.
+Writing is optional: implement `write(self, spool, resource, **kwargs)` when supported. Writer options must be named parameters of `write`; `dc.write` refuses any others. A format offering storage options (compression, chunking) defines a [`BaseStorage`](`dascore.io.BaseStorage`) subclass, sets it as the class's `storage_cls`, takes a `storage` parameter, and coerces it with `storage_cls._coerce(storage)`. Two class attributes describe what a writer can hold: `multi_patch_write` when one file takes several patches, and `segmented_write` when a patch may keep gapped dimensional coordinates; without it, `dc.write` splits or refuses such patches.
 
 ## Metadata and coordinates
 

@@ -15,6 +15,7 @@ from dascore.utils.hdf5 import H5Reader, H5Writer
 from dascore.utils.misc import unbyte
 from dascore.utils.patch import get_patch_names
 
+from .storage import DASDAEStorage
 from .utils import (
     _get_contents_from_patch_groups_generic,
     _get_patch_group,
@@ -50,11 +51,13 @@ class DASDAEV1(FiberIO):
     multi_patch_write = True
     # Version 2 writes ranges and segments as descriptions, not values.
     _compact_coords = False
+    storage_cls = DASDAEStorage
 
     def write(
         self,
         spool: dc.Patch | dc.Spool,
         resource: H5Writer,
+        storage: DASDAEStorage | dict | str | None = None,
         **kwargs,
     ):
         """
@@ -66,7 +69,13 @@ class DASDAEV1(FiberIO):
             A collection of patches or a spool (same thing).
         resource
             The path to the file.
+        storage
+            Chunking and compression options: a
+            [`DASDAEStorage`](`dascore.io.dasdae.DASDAEStorage`), a dict of
+            its fields, or a preset name such as "compressed".
         """
+        options = DASDAEStorage._coerce(storage)
+        options._check(dc.spool(spool))
         # write out patches
         _write_meta(resource, self.version)
         # get an iterable of patches and save them
@@ -85,7 +94,7 @@ class DASDAEV1(FiberIO):
             num = counts.get(name, 0)
             counts[name] = num + 1
             unique_name = name if num == 0 else f"{name}__{num}"
-            _save_patch(patch, waveforms, unique_name, compact=self._compact_coords)
+            _save_patch(patch, waveforms, unique_name, self._compact_coords, options)
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
