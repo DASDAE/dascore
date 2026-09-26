@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import gc
 import hashlib
+import weakref
 from contextlib import contextmanager
 from dataclasses import replace
 from itertools import pairwise, product
@@ -719,6 +721,9 @@ class TestViews:
                 ops = random_chain(rng, array.ndim, int(rng.integers(1, 5)))
                 view = run_chain(array, ops, eager=False)
                 assert_same_array(view, run_chain(array, ops, eager=True), loadable)
+                if loadable:
+                    expected = run_chain(array.load(), ops, eager=False)
+                    assert np.array_equal(view.load(), expected)
 
     def test_members_untouched(self, monkeypatch):
         """Views of a large array clip nothing until the members are needed."""
@@ -748,7 +753,10 @@ class TestViews:
         )
         assert len(array.transpose()[:, 2:][:, 3:13]) == 3
         assert len(array[:, 1:]) == 100
-        assert sizes == [3, 100]
+        # Edges on member boundaries, and a slice of a slice keeping both.
+        assert len(array[4:8]) == 1
+        assert len(array[2:30][2:6]) == 1
+        assert sizes == [3, 100, 1, 1]
 
     def test_resolves_once(self, monkeypatch, joined):
         """A view clips its members once, however often they are asked for."""
@@ -762,7 +770,7 @@ class TestViews:
         for _ in range(2):
             view.data_id, view.load(), len(view), view.table, view.sources
         assert len(calls) == 1
-        # A view of a resolved view starts again from the base.
+        # A view of a resolved view starts from its resolved members.
         assert view[1:].data_id == joined[90:110, 1:].transpose().data_id
         assert len(calls) == 3
 
@@ -779,6 +787,34 @@ class TestViews:
         assert np.array_equal(view.load(), patch.data.T[2:9].T[95:120][:, 1:])
         assert view.data_id == joined[95:120, 3:9].data_id
         assert view[:] is view
+
+    def test_resolved_view_lets_its_base_go(self):
+        """Once a view is resolved, the array it was cut from can be freed."""
+        array = concat([constant((4, 3), float(x)) for x in range(50)])
+        owner = array.table.axes["out_start"]
+        while owner.base is not None:
+            owner = owner.base
+        base = weakref.ref(owner)
+        window = array[5:9]
+        assert window.load().shape == (4, 3)
+        del array, owner
+        gc.collect()
+        assert base() is None
+
+    def test_bare_transpose_keeps_members(self):
+        """A transpose with no window keeps each member as it is stored."""
+        frame = LazyArray.from_source(ArraySource.full((4, 3), 1.0)).to_frame()
+        frame["src_start"] += 2
+        frame["src_extent"] += 2
+        array = LazyArray.from_frame(frame, (4, 3), "f8")
+        # Windows are stated in the source's own axis order, so they stand.
+        assert array.transpose().sources == array.sources
+
+    def test_transpose_keeps_refusing(self):
+        """A transpose does not hide a member outside its array."""
+        array = LazyArray.from_sources([ArraySource.full((4, 3), 7.0)], shape=(2, 3))
+        with pytest.raises(ParameterError):
+            array.transpose().load()
 
     @pytest.mark.parametrize("bad", [slice(None, None, 2), 3])
     def test_view_refuses_other_indexes(self, joined, bad):

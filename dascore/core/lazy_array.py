@@ -606,6 +606,8 @@ class LazyArray:
     An array which says where each of its members is read from.
 
     A view of one row of a [`LazyTable`](`dascore.core.lazy_array.LazyTable`).
+    Slicing and transposing keep a window and an axis order instead, and
+    the members are clipped to them only when something needs them.
     The shape, ndim and dtype are stored rather than derived, so an array
     which selects nothing still knows what it is. Boxes may not overlap and
     must cover the whole output; a hole is an explicit constant member.
@@ -851,20 +853,24 @@ class LazyArray:
     @property
     def table(self) -> LazyTable:
         """The table which holds this array."""
-        if self._table is None:
-            view = self._view
-            assert view is not None
-            block = view.block.take(view.rows)
-            block = _clip(block, np.array(view.starts), np.array(view.stops))
+        if self._table is None and (view := self._view) is not None:
+            block, starts, stops = view.block, view.starts, view.stops
+            # A window of the whole block clips nothing, so a bare transpose
+            # keeps each member as it is stored.
+            if any(starts) or stops != block.shape:
+                block = _clip(block.take(view.rows), np.array(starts), np.array(stops))
             if view.order != tuple(range(len(view.order))):
                 block = _transposed(block, view.order)
             self._table = _table([block])
+            # The members are resolved, so the base they came from can go.
+            self._view = None
+        assert self._table is not None
         return self._table
 
     @property
     def row(self) -> int:
         """Which row of the table this array is."""
-        return self._row if self._view is None else 0
+        return self._row
 
     @property
     def shape(self) -> tuple[int, ...]:
@@ -1239,7 +1245,12 @@ def _concat_axis_of(axes: dict[str, np.ndarray]) -> int:
 
 
 def _candidates(block: _Block, starts, stops, rows: slice) -> slice:
-    """Return the rows of a run a request can touch, by binary search where it can."""
+    """
+    Return the members of a run which a window can touch.
+
+    The run is narrowed by binary search on the axis the members are laid
+    along; a block laid along no one axis keeps the whole run.
+    """
     axis = block.concat_axis
     if axis < 0:
         return rows
