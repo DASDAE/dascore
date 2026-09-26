@@ -1127,7 +1127,7 @@ def derived_catalog(
     merge_kwargs: Mapping,
     mode: str = "chunk",
     origin_path=None,
-    stamped: tuple[str, ...] = (),
+    stamped: tuple[str, ...] | Mapping[str, str] = (),
     lossy: bool = False,
 ) -> PatchCatalog:
     """
@@ -1137,10 +1137,13 @@ def derived_catalog(
     identity plus envelopes and attrs) keyed by ``_patch_row`` matching
     ``plan.members``; ``parent`` supplies the resolver (live registry,
     file root, nested plans) and the residual selections its view
-    carried, which member loading re-applies.
+    carried, which member loading re-applies; ``stamped`` may map to dtypes.
     """
     token = secrets.token_hex(8)
     name = plan.dim
+    # a plan over stamped rows keeps stating the stamps
+    stamps = dict(parent._stamps) if parent is not None else {}
+    stamps |= stamped if isinstance(stamped, Mapping) else {}
     trims = plan.members
     trim_cols = [c for c in trims.columns if c not in ("_patch_row",)]
     sources = source_rows.copy(deep=False)
@@ -1210,7 +1213,7 @@ def derived_catalog(
         mode=mode,
         aux_coords=aux_coords,
         origin_path=origin_path,
-        stamped=stamped,
+        stamped=tuple(dict.fromkeys([*stamped, *stamps])),
         lossy=lossy,
         output_rows=plan.outputs,
         anchor_rows=anchors,
@@ -1239,7 +1242,7 @@ def derived_catalog(
     if parent is not None:
         records = _with_parent_runs(records, parent.backend, trims, sources, name)
     backend.write_sources(records)
-    return PatchCatalog(backend=backend, resolver=resolver)
+    return PatchCatalog(backend=backend, resolver=resolver, stamps=stamps)
 
 
 def _aux_info_for_unfed(
