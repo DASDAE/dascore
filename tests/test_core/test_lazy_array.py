@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import gc
 import hashlib
+import time
 import weakref
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import replace
 from itertools import pairwise, product
@@ -800,6 +802,36 @@ class TestViews:
         del array, owner
         gc.collect()
         assert base() is None
+
+    def test_turned_back_lets_its_base_go(self):
+        """A view which shows its whole base unmoved does not keep the base."""
+        big = concat([constant((4, 3), float(x)) for x in range(50)])
+        table = LazyTable.from_arrays([constant((4, 3)), big])
+        owner = table.axes["out_start"]
+        while owner.base is not None:
+            owner = owner.base
+        base = weakref.ref(owner)
+        view = table[0].transpose().transpose()
+        assert view.load().shape == (4, 3)
+        del big, table, owner
+        gc.collect()
+        assert base() is None
+
+    def test_threads_share_one_table(self, monkeypatch):
+        """Threads resolving one view at once all get the one table."""
+        clip, calls = lazy_module._clip, []
+
+        def slow(*args):
+            calls.append(1)
+            time.sleep(0.05)
+            return clip(*args)
+
+        monkeypatch.setattr(lazy_module, "_clip", slow)
+        view = concat([constant((4, 3), float(x)) for x in range(20)])[5:30]
+        with ThreadPoolExecutor(8) as pool:
+            tables = list(pool.map(lambda _: view.table, range(8)))
+        assert all(x is tables[0] for x in tables) and len(calls) == 1
+        assert view.ndim == 2 and view.dtype == np.float64
 
     def test_bare_transpose_keeps_members(self):
         """A transpose with no window keeps each member as it is stored."""

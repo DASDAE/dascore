@@ -31,6 +31,7 @@ import itertools
 import json
 import math
 import struct
+import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType, SimpleNamespace
@@ -87,6 +88,9 @@ MAX_CUT_AXES = 16
 
 # The bytes the digest starts with, so no other payload can read alike.
 _DIGEST_TAG = b"dascore-lazy-blocks\0"
+
+# Held while a view builds its table, so every thread gets the one table.
+_RESOLVING = threading.Lock()
 
 # The name the array api reports for a lazy array.
 BACKEND_NAME = "lazy"
@@ -853,18 +857,12 @@ class LazyArray:
     @property
     def table(self) -> LazyTable:
         """The table which holds this array."""
-        if self._table is None and (view := self._view) is not None:
-            block, starts, stops = view.block, view.starts, view.stops
-            # A window of the whole block clips nothing, so a bare transpose
-            # keeps each member as it is stored.
-            if any(starts) or stops != block.shape:
-                block = _clip(block.take(view.rows), np.array(starts), np.array(stops))
-            if view.order != tuple(range(len(view.order))):
-                block = _transposed(block, view.order)
-            self._table = _table([block])
-            # The members are resolved, so the base they came from can go.
-            self._view = None
-        assert self._table is not None
+        if self._table is None:
+            with _RESOLVING:
+                if self._table is None:
+                    self._table = _resolved(self._view)
+                    # The members are resolved, so the base they came from can go.
+                    self._view = None
         return self._table
 
     @property
@@ -884,16 +882,16 @@ class LazyArray:
     @property
     def ndim(self) -> int:
         """The number of dimensions of the array."""
-        if self._view is not None:
-            return len(self._view.order)
+        if (view := self._view) is not None:
+            return len(view.order)
         offsets = self.table.shape_offsets
         return int(offsets[self._row + 1] - offsets[self._row])
 
     @property
     def dtype(self) -> np.dtype:
         """The dtype of the loaded array."""
-        if self._view is not None:
-            return self._view.block.dtype
+        if (view := self._view) is not None:
+            return view.block.dtype
         return np.dtype(self.table.dtypes[self._row])
 
     @property
@@ -931,8 +929,8 @@ class LazyArray:
 
     def _viewed(self) -> _View:
         """Return the view this array is; an array which is none views itself."""
-        if self._view is not None:
-            return self._view
+        if (view := self._view) is not None:
+            return view
         block, ndim = self._block(), self.ndim
         rows = slice(0, len(block))
         return _View(block, (0,) * ndim, self.shape, tuple(range(ndim)), rows)
@@ -1223,6 +1221,21 @@ def _clip(block: _Block, starts: np.ndarray, stops: np.ndarray) -> _Block:
     # Stacked along the first axis, only one corner can be clipped, so the
     # members stay in order; any other placement may tie two of them.
     return out if block.concat_axis == 0 else _canonical(out)
+
+
+def _resolved(view: _View | None) -> LazyTable:
+    """Return the table of the members a view shows, in no storage of its base's."""
+    assert view is not None, "an array is a table row or a view"
+    block, starts, stops, order = view.block, view.starts, view.stops, view.order
+    identity = order == tuple(range(len(order)))
+    if any(starts) or stops != block.shape:
+        block = _clip(block.take(view.rows), np.array(starts), np.array(stops))
+    elif identity:
+        # The whole block, unmoved: copied, so the base's storage can go.
+        block = block.take(np.arange(len(block)))
+    # A window of the whole block clips nothing, so a bare transpose keeps
+    # each member as it is stored.
+    return _table([block if identity else _transposed(block, order)])
 
 
 def _transposed(block: _Block, order: tuple[int, ...]) -> _Block:
