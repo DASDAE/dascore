@@ -31,10 +31,11 @@ import itertools
 import json
 import math
 import struct
+import threading
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from types import MappingProxyType, SimpleNamespace
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -408,6 +409,16 @@ class _Block:
         return replace(self, members=self.members.take(rows), axes=axes)
 
 
+class _View(NamedTuple):
+    """A window, in a base block's samples, and the order its axes are shown in."""
+
+    block: _Block
+    starts: tuple[int, ...]
+    stops: tuple[int, ...]
+    order: tuple[int, ...]
+    rows: slice  # the run of members the window can touch
+
+
 def _check_axis(axis: int, ndim: int) -> int:
     """Return a positive axis number, refusing one outside the array."""
     out = int(axis)
@@ -596,6 +607,8 @@ class LazyArray:
     An array which says where each of its members is read from.
 
     A view of one row of a [`LazyTable`](`dascore.core.lazy_array.LazyTable`).
+    Slicing and transposing keep a window and an axis order instead, and
+    the members are clipped to them only when something needs them.
     The shape, ndim and dtype are stored rather than derived, so an array
     which selects nothing still knows what it is. Boxes may not overlap and
     must cover the whole output; a hole is an explicit constant member.
@@ -620,11 +633,15 @@ class LazyArray:
     >>> assert np.isnan(window.load()).all()
     """
 
-    __slots__ = ("_row", "_table")
+    # A view clips and permutes its base's members only when they are needed;
+    # its lock makes every thread asking at once get the one table.
+    __slots__ = ("_lock", "_row", "_table", "_view")
 
     def __init__(self, table: LazyTable, row: int):
-        self._table = table
+        self._table: LazyTable | None = table
         self._row = int(row)
+        self._view: _View | None = None
+        self._lock: threading.Lock | None = None
 
     @classmethod
     def from_source(cls, source: ArraySource, base_uri: str = "") -> LazyArray:
@@ -839,6 +856,13 @@ class LazyArray:
     @property
     def table(self) -> LazyTable:
         """The table which holds this array."""
+        if self._table is None:
+            assert self._lock is not None, "only a view has no table"
+            with self._lock:
+                if self._table is None:
+                    self._table = _resolved(self._view)
+                    # The members are resolved, so the base they came from can go.
+                    self._view = None
         return self._table
 
     @property
@@ -849,20 +873,26 @@ class LazyArray:
     @property
     def shape(self) -> tuple[int, ...]:
         """The shape of the array the members cover."""
-        table = self._table
+        if (view := self._view) is not None:
+            return tuple(view.stops[x] - view.starts[x] for x in view.order)
+        table = self.table
         start, stop = table.shape_offsets[self._row : self._row + 2]
         return tuple(table.shapes[start:stop].tolist())
 
     @property
     def ndim(self) -> int:
         """The number of dimensions of the array."""
-        offsets = self._table.shape_offsets
+        if (view := self._view) is not None:
+            return len(view.order)
+        offsets = self.table.shape_offsets
         return int(offsets[self._row + 1] - offsets[self._row])
 
     @property
     def dtype(self) -> np.dtype:
         """The dtype of the loaded array."""
-        return np.dtype(self._table.dtypes[self._row])
+        if (view := self._view) is not None:
+            return view.block.dtype
+        return np.dtype(self.table.dtypes[self._row])
 
     @property
     def size(self) -> int:
@@ -871,8 +901,8 @@ class LazyArray:
 
     def __len__(self) -> int:
         """The number of members."""
-        offsets = self._table.member_offsets
-        return int(offsets[self._row + 1] - offsets[self._row])
+        offsets, row = self.table.member_offsets, self.row
+        return int(offsets[row + 1] - offsets[row])
 
     def __repr__(self) -> str:
         name = type(self).__name__
@@ -880,7 +910,7 @@ class LazyArray:
 
     def _block(self) -> _Block:
         """Return this array's storage, as views of the table's arrays."""
-        table, row = self._table, self._row
+        table, row = self.table, self.row
         first, last = table.member_offsets[row : row + 2]
         start = int(table.axis_offsets[row])
         count, ndim = int(last - first), self.ndim
@@ -896,6 +926,22 @@ class LazyArray:
             members=table.members.take(slice(int(first), int(last))),
             axes=axes,
         )
+
+    def _viewed(self) -> _View:
+        """Return the view this array is; an array which is none views itself."""
+        if (view := self._view) is not None:
+            return view
+        block, ndim = self._block(), self.ndim
+        rows = slice(0, len(block))
+        return _View(block, (0,) * ndim, self.shape, tuple(range(ndim)), rows)
+
+    @staticmethod
+    def _of_view(view: _View) -> LazyArray:
+        """Return the array a view names, whose members are clipped on demand."""
+        out = LazyArray.__new__(LazyArray)
+        out._table, out._row, out._view = None, 0, view
+        out._lock = threading.Lock()
+        return out
 
     def source(self, member: int) -> ArraySource:
         """
@@ -919,7 +965,8 @@ class LazyArray:
 
         Only slices with a step of one are taken, and trailing axes may be
         left out. Each box is clipped to the request, its window moved by
-        what was clipped, and members the request misses are dropped.
+        what was clipped, and members the request misses are dropped; the
+        clipping waits until something needs the members.
         """
         index = index if isinstance(index, tuple) else (index,)
         shape = self.shape
@@ -932,7 +979,15 @@ class LazyArray:
         stops = np.array([x[1] for x in spans], np.int64)
         if not starts.any() and np.array_equal(stops, np.asarray(shape)):
             return self
-        return _array(_clip(self._block(), starts, stops))
+        view = self._viewed()
+        low, high = list(view.starts), list(view.stops)
+        for axis, (start, stop) in enumerate(spans):
+            base = view.order[axis]
+            low[base], high[base] = view.starts[base] + start, view.starts[base] + stop
+        rows = _candidates(view.block, low, high, view.rows)
+        return self._of_view(
+            view._replace(starts=tuple(low), stops=tuple(high), rows=rows)
+        )
 
     def transpose(self, order: Sequence[int] | None = None) -> LazyArray:
         """
@@ -950,13 +1005,9 @@ class LazyArray:
         if sorted(order) != list(range(ndim)):
             msg = f"{order} is not a permutation of {ndim} axes."
             raise ParameterError(msg)
-        block = self._block()
-        shape = tuple(self.shape[x] for x in order)
-        concat_axis = block.concat_axis
-        concat_axis = order.index(concat_axis) if concat_axis >= 0 else NEW_AXIS
-        axes = {name: matrix[:, order] for name, matrix in block.axes.items()}
-        moved = replace(block, shape=shape, concat_axis=concat_axis, axes=axes)
-        return _array(_canonical(moved))
+        view = self._viewed()
+        order = tuple(view.order[x] for x in order)
+        return self._of_view(view._replace(order=order))
 
     def rechunk(self, bounds, axis: int = 0) -> LazyTable:
         """
@@ -1079,10 +1130,10 @@ class LazyArray:
         >>> array = LazyArray.from_source(ArraySource.full((8, 2), 1.0))
         >>> assert array[0:4].data_id == array[0:8][0:4].data_id
         """
-        cache = self._table._ids
-        out = cache.get(self._row)
+        cache, row = self.table._ids, self.row
+        out = cache.get(row)
         if out is None:
-            cache[self._row] = out = self._data_id()
+            cache[row] = out = self._data_id()
         return out
 
     def _identity(self) -> tuple[str, str]:
@@ -1157,13 +1208,11 @@ def _resolve(item, size: int) -> tuple[int, int]:
 
 def _clip(block: _Block, starts: np.ndarray, stops: np.ndarray) -> _Block:
     """Return the members a request selects, each clipped to it."""
-    rows = _candidates(block, starts, stops)
-    start = np.maximum(block.axes["out_start"][rows], starts)
-    stop = np.minimum(block.axes["out_stop"][rows], stops)
+    start = np.maximum(block.axes["out_start"], starts)
+    stop = np.minimum(block.axes["out_stop"], stops)
     keep = np.flatnonzero(np.all(stop > start, axis=1))
     start, stop = start[keep], stop[keep]
-    # The candidates are one run, so every column is gathered once.
-    out = block.take(keep + (rows.start or 0))
+    out = block.take(keep)
     axes = out.axes
     axes["src_start"] += np.where(axes["src_axis"] >= 0, start - axes["out_start"], 0)
     axes["out_start"] = start - starts
@@ -1175,6 +1224,32 @@ def _clip(block: _Block, starts: np.ndarray, stops: np.ndarray) -> _Block:
     return out if block.concat_axis == 0 else _canonical(out)
 
 
+def _resolved(view: _View | None) -> LazyTable:
+    """Return the table of the members a view shows, in no storage of its base's."""
+    assert view is not None, "an array is a table row or a view"
+    block, starts, stops, order = view.block, view.starts, view.stops, view.order
+    identity = order == tuple(range(len(order)))
+    if any(starts) or stops != block.shape:
+        block = _clip(block.take(view.rows), np.array(starts), np.array(stops))
+    elif identity:
+        # The whole block, unmoved: copied, so the base's storage can go, and
+        # put in placement order as a transpose would.
+        block = _canonical(block.take(np.arange(len(block))))
+    # A window of the whole block clips nothing, so a bare transpose keeps
+    # each member as it is stored.
+    return _table([block if identity else _transposed(block, order)])
+
+
+def _transposed(block: _Block, order: tuple[int, ...]) -> _Block:
+    """Return the block with its output axes permuted."""
+    shape = tuple(block.shape[x] for x in order)
+    concat_axis = block.concat_axis
+    concat_axis = order.index(concat_axis) if concat_axis >= 0 else NEW_AXIS
+    axes = {name: matrix[:, order] for name, matrix in block.axes.items()}
+    moved = replace(block, shape=shape, concat_axis=concat_axis, axes=axes)
+    return _canonical(moved)
+
+
 def _concat_axis_of(axes: dict[str, np.ndarray]) -> int:
     """Return an axis the members are laid along, which _candidates needs."""
     start, stop = axes["out_start"], axes["out_stop"]
@@ -1184,13 +1259,23 @@ def _concat_axis_of(axes: dict[str, np.ndarray]) -> int:
     return int(ordered[0]) if len(ordered) else NEW_AXIS
 
 
-def _candidates(block: _Block, starts: np.ndarray, stops: np.ndarray) -> slice:
-    """Return the rows a request can touch, by binary search where it can."""
+def _candidates(block: _Block, starts, stops, rows: slice) -> slice:
+    """
+    Return the members of a run which a window can touch.
+
+    The run is narrowed by binary search on the axis the members are laid
+    along; a block laid along no one axis keeps the whole run.
+    """
     axis = block.concat_axis
-    if axis < 0 or len(block) == 0:
-        return slice(None)
-    first = np.searchsorted(block.axes["out_stop"][:, axis], starts[axis], "right")
-    last = np.searchsorted(block.axes["out_start"][:, axis], stops[axis], "left")
+    if axis < 0:
+        return rows
+    low, high = rows.start, rows.stop
+    first = low + np.searchsorted(
+        block.axes["out_stop"][low:high, axis], starts[axis], "right"
+    )
+    last = low + np.searchsorted(
+        block.axes["out_start"][low:high, axis], stops[axis], "left"
+    )
     return slice(int(first), int(max(first, last)))
 
 
