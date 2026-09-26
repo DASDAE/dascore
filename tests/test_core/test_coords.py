@@ -1865,6 +1865,48 @@ class TestPartialCoord:
         with pytest.raises(ValidationError, match="only run"):
             NumericCoord(runs=(grid, Blank((2,))), dtype=np.float64)
 
+    def test_update_keeps_and_clears_metadata(self):
+        """An update states what it passes and keeps the rest."""
+        coord = get_coord(shape=4, units="m", dtype="float32", step=2)
+        assert coord.update(values=np.arange(4.0)).units == get_quantity("m")
+        assert coord.update(dtype="float64").dtype == np.float64
+        assert coord.update(units=None).units is None
+        assert coord.update(step=None).step is None
+
+    def test_pickle_after_values_stays_small(self):
+        """Reading the values caches no array a pickle would carry."""
+        coord = get_coord(shape=10_000)
+        before = len(pickle.dumps(coord))
+        assert not coord.values.flags.writeable
+        restored = pickle.loads(pickle.dumps(coord))
+        assert len(pickle.dumps(coord)) == before
+        assert not restored.values.flags.writeable
+
+    def test_dumped_full_range_canonicalizes(self):
+        """A dump stating a whole range rebuilds as that range."""
+        partial = _blank_coord(shape=(4,), start=0, stop=4, step=1)
+        out = get_coord(**partial.model_dump())
+        assert out.evenly_sampled
+        assert out == get_coord(start=0, stop=4, step=1)
+
+    def test_datetime_start_sets_dtype(self):
+        """Unstated, the dtype follows a time-like end."""
+        start = np.datetime64("2020-01-01T00:00:00", "ns")
+        coord = get_coord(shape=4, start=start)
+        assert coord._partial and coord.dtype == start.dtype
+        assert coord.to_summary().min == start
+
+    def test_timedelta_step_sets_dtype(self):
+        """A time-like step alone still makes a time coordinate."""
+        one = get_coord(shape=(5,), step=np.timedelta64(1, "s"))
+        assert one.dtype.kind == "m"
+        assert one.data_id != get_coord(shape=(5,), step=1.0).data_id
+
+    def test_update_limits_keeps_length(self):
+        """Unknown labels have no limits to move; only a step is applied."""
+        coord = get_coord(shape=(5,), step=1.0)
+        assert coord.update_limits(min=0.0, max=2.0).shape == (5,)
+
     def test_known_ends_survive_dump(self):
         """A dump keeps the ends a partial coord states."""
         coord = get_coord(shape=(4,), start=1.0, units="m")

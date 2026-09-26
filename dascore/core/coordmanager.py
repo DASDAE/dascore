@@ -55,7 +55,6 @@ from rich.text import Text
 from dascore.constants import dascore_styles, select_values_description
 from dascore.core.coords import (
     BaseCoord,
-    Blank,
     CoordSummary,
     Labels,
     NumericCoord,
@@ -1525,12 +1524,6 @@ def _get_coord_dim_map(coords, dims):
             # Rebuilding from the run would hand back the same labels, so
             # the values are read again for the inference to see them.
             coord = dict(data=coord.values, units=coord.units, step=coord.step)
-        elif stored and isinstance(blank := coord.runs[0], Blank):
-            # get_coord reads a range from the shape and whichever ends are known
-            ends = dict(start=blank.start, stop=blank.stop, step=coord.step)
-            coord = dict(
-                shape=coord.shape, units=coord.units, dtype=coord.dtype, **ends
-            )
         elif hasattr(coord, "model_dump"):
             coord = coord.model_dump(exclude_defaults=True)
         if isinstance(coord, Mapping):  # input is a dict

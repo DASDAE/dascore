@@ -2408,7 +2408,12 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             if not stored and blank is None:
                 msg = "A coordinate built only from grids must state its dtype."
                 raise CoordError(msg)
-            dtype = np.result_type(*[sources[x.id].dtype for x in stored] or [float])
+            known = () if blank is None else (blank.start, blank.stop, data.get("step"))
+            dtypes = [np.asarray(x).dtype for x in known]
+            times = [x for x in dtypes if x.kind in "mM"]
+            dtype = np.result_type(
+                *[sources[x.id].dtype for x in stored] or times or [float]
+            )
         dtype = np.dtype(dtype)
         for run in runs:
             if isinstance(run, Grid) and run.exact:
@@ -2508,16 +2513,20 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     # --- evaluation
 
     @property
-    @cached_method
     def values(self) -> ArrayLike:
         """Return the labels of the coordinate as an array."""
+        if not self._partial:
+            return self._labels()
+        # A read-only broadcast, uncached, so a long blank allocates nothing.
+        null = np.asarray(_get_nullish(self.dtype))
+        if self.dtype.kind == "f":  # NaN is a float64 unless told otherwise
+            null = null.astype(self.dtype)
+        return np.broadcast_to(null, self.shape)
+
+    @cached_method
+    def _labels(self) -> ArrayLike:
+        """The labels of every run, joined."""
         runs = self.runs
-        if self._partial:
-            # A read-only broadcast, so a long blank allocates nothing.
-            null = np.asarray(_get_nullish(self.dtype))
-            if self.dtype.kind == "f":  # NaN is a float64 unless told otherwise
-                null = null.astype(self.dtype)
-            return np.broadcast_to(null, self.shape)
         if len(runs) == 1:
             return array(self._run_labels(runs[0]))
         out = np.concatenate([self._run_labels(x) for x in runs])
@@ -3120,11 +3129,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         {doc}
         """
         if self._partial:
-            # unknown labels have no limits to move, so what is passed is stated
-            limits = dict(start=min, stop=max, step=step)
-            return self.new(
-                **{k: v for k, v in limits.items() if v is not None}, **kwargs
-            )
+            # unknown labels have no limits to move; only a step is stated
+            return self.new(**({} if step is None else {"step": step}), **kwargs)
         if (grid := self._grid) is not None:
             return self._range_limits(grid, min, max, step, **kwargs)
         if self.runs_count > 1 and min is not None and max is not None:
@@ -3219,6 +3225,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         exact = any(isinstance(x, Grid) and x.exact for x in self.runs)
         dtype = self.dtype if exact else np.asarray(self.min() + delta).dtype
         return self._with_runs(runs, dtype=dtype)
+
+    def update(self, **kwargs):
+        """Update parts of the coordinate."""
+        # a blank has no labels for an update to keep in step
+        return self.new(**kwargs) if self._partial else super().update(**kwargs)
 
     def new(self, **kwargs):
         """Update coordinate; the runs are kept unless the labels change."""
@@ -3711,7 +3722,12 @@ def _fill_layout(
     stay as seams. An off-grid run moves to the nearest position, and two
     runs on one position raise.
     """
-    if not isinstance(coord, NumericCoord) or coord.evenly_sampled or len(coord) < 2:
+    if (
+        not isinstance(coord, NumericCoord)
+        or coord.evenly_sampled
+        or coord._partial
+        or len(coord) < 2
+    ):
         return None
     pieces = _fill_pieces(coord)
     first = pieces[0][1]
@@ -4199,9 +4215,11 @@ def get_coord(
             raise CoordError(msg)
         return out
     if runs is not None:
-        return NumericCoord(
+        out = NumericCoord(
             runs=runs, sources=sources or {}, units=units, dtype=dtype, step=step
         )
+        # a blank stating a whole range is that range, as the shape path reads
+        return out.new(shape=out.shape) if out._partial else out
 
     data = _get_array(data, values)
     shape = _get_shape(shape)
