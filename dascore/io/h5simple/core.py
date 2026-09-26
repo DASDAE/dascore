@@ -13,8 +13,8 @@ from dascore.io.utils import slice_dataset
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import (
+    DATA_ARRAY_NAMES,
     _get_attrs_coords_and_data,
-    _get_nodes,
     _is_h5simple,
 )
 
@@ -38,13 +38,21 @@ class H5Simple(FiberIO):
         """
         Slice the data node directly.
 
-        The node is found by name; no coordinate values are read.
+        A dataset key takes precedence over candidate names ("raw" and "data").
         """
         return self._prepare_array_reader(resource, key=key)(windows)
 
     def _prepare_array_reader(self, resource: H5Reader, *, key: str = ""):
         """Find the data node once, for any number of windows."""
-        data_node, _, _ = _get_nodes(resource)
+        if key and key in resource and hasattr(node := resource[key], "shape"):
+            return partial(slice_dataset, node)
+        nodes = [
+            node
+            for name in DATA_ARRAY_NAMES
+            if name in resource and hasattr(node := resource[name], "shape")
+        ]
+        assert len(nodes) == 1, f"{resource} doesn't have exactly one data node."
+        data_node = nodes[0]
         return partial(slice_dataset, data_node)
 
     def _prepare_read(self, manager, snap):

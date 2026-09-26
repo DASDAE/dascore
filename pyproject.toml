@@ -226,6 +226,7 @@ viz = "dascore.viz:VizInventoryNameSpace"
 
 [project.entry-points."dascore.annotation_namespace"]
 io = "dascore.io:AnnotationIO"
+viz = "dascore.viz:VizAnnotationNameSpace"
 
 
 # --- External tool configuration

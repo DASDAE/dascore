@@ -23,7 +23,6 @@ from dascore.compat import random_state
 from dascore.config import get_config, set_config
 from dascore.constants import SpoolType
 from dascore.core import Patch
-from dascore.core.coords import concat_coords, get_coord
 from dascore.core.spool import Spool
 from dascore.examples import get_example_patch, get_example_spool
 from dascore.io.core import read
@@ -521,22 +520,26 @@ def wacky_dim_patch():
     return dc.get_example_patch("wacky_dim_coords_patch")
 
 
-@pytest.fixture(scope="session", params=["two_runs", "labels"])
-def holey_patch(request):
-    """
-    A patch whose time labels are 0..59 then 100..159, data 0 then 1.
-
-    Once as two evenly sampled runs, once as step-less labels. See #1219.
-    """
-    first = get_coord(start=0.0, step=1.0, shape=(60,))
-    second = get_coord(start=100.0, step=1.0, shape=(60,))
-    if request.param == "two_runs":
-        time = concat_coords(first, second)
-    else:
-        time = get_coord(data=np.r_[first.values, second.values])
+def _seam_patch(step):
+    """Two 60-sample time runs separated by a 40-sample outage."""
+    time = dc.get_coord(
+        data=np.r_[np.arange(0.0, 60.0), np.arange(100.0, 160.0)], step=step
+    )
     data = np.r_[np.zeros(60), np.ones(60)][None]
     coords = {"distance": np.array([0]), "time": time}
     return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+
+@pytest.fixture(scope="session")
+def holed_patch():
+    """A patch whose time coordinate declares a step and misses samples."""
+    return _seam_patch(step=1.0)
+
+
+@pytest.fixture(scope="session")
+def stepless_seam_patch():
+    """The same labels as holed_patch with no declared step (irregular)."""
+    return _seam_patch(step=None)
 
 
 @pytest.fixture(scope="class", params=PATCH_FIXTURES)

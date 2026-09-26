@@ -228,18 +228,18 @@ class TestSobelFilter:
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
-    def test_refuses_hole(self, holey_patch):
-        """The kernel would treat the samples either side of a hole as adjacent."""
-        with pytest.raises(CoordError, match="evenly sampled"):
-            holey_patch.sobel_filter(dim="time")
+    def test_refuses_holes(self, holed_patch):
+        """A declared step with missing samples refuses."""
+        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
+            holed_patch.sobel_filter("time")
+        # the kernel also smooths along time when filtering distance
+        with pytest.raises(CoordError, match="not evenly sampled"):
+            holed_patch.sobel_filter("distance")
 
-    def test_refuses_hole_across_axis(self, holey_patch):
-        """Filtering along distance still smooths across the time hole."""
-        coords = {"distance": np.arange(3), "time": holey_patch.get_coord("time")}
-        data = np.tile(holey_patch.data, (3, 1))
-        patch = dc.Patch(data=data, coords=coords, dims=holey_patch.dims)
-        with pytest.raises(CoordError, match="evenly sampled"):
-            patch.sobel_filter(dim="distance")
+    def test_stepless_runs(self, stepless_seam_patch):
+        """Step-less labels are an irregular grid and still filter."""
+        out = stepless_seam_patch.sobel_filter("time")
+        assert out.shape == stepless_seam_patch.shape
 
 
 @pytest.mark.parametrize("name", ["median_filter", "notch_filter", "savgol_filter"])

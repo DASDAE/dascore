@@ -3,6 +3,7 @@ Module for static, matplotlib-based visualizations and figure generation.
 """
 from __future__ import annotations
 from dascore.utils.namespace import (
+    AnnotationNameSpace,
     InventoryNameSpace,
     PatchNameSpace,
     SpoolNameSpace,
@@ -15,6 +16,7 @@ from .wiggle import wiggle
 from .map_fiber import map_fiber
 from .inventory import map_path, path, timeline
 from .spool import calendar, coverage
+from .annotations import plot
 
 
 class VizPatchNameSpace(PatchNameSpace):
@@ -37,6 +39,14 @@ class VizInventoryNameSpace(InventoryNameSpace):
     path = path
     map = map_path
     timeline = timeline
+
+
+class VizAnnotationNameSpace(AnnotationNameSpace):
+    """The plots an annotation set can draw of itself."""
+
+    name = "viz"
+
+    plot = plot
 
 
 class VizSpoolNameSpace(SpoolNameSpace):

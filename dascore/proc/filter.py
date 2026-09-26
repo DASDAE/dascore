@@ -39,6 +39,7 @@ from dascore.utils.patch import (
     get_dim_axis_value,
     get_dim_sampling_rate,
     patch_function,
+    require_no_holes,
 )
 from dascore.utils.time import to_float
 from dascore.utils.window import resolve_window
@@ -173,14 +174,19 @@ class SobelFilter(PatchProcessor):
     patch
         The patch to filter
     dim
-        The dimension along which to apply. Every dimension longer than one
-        sample must be evenly sampled, since the kernel smooths across the
-        others.
+        The dimension along which to apply
     mode
         Determines how the input array is extended when the filter
         overlaps with a border.
     cval
         Fill value when mode="constant".
+
+    Notes
+    -----
+    The kernel smooths along every dimension, so missing samples (holes
+    in a step) in any of them raise; use
+    [split_gaps](`dascore.Patch.split_gaps`) or
+    [fill_gaps](`dascore.Patch.fill_gaps`) first.
 
     Examples
     --------
@@ -205,10 +211,8 @@ class SobelFilter(PatchProcessor):
     def get_metadata(self, meta):
         """Return the axis to filter along, once the arguments are checked."""
         dim, _, _ = _check_sobel_args(self.dim, self.mode, self.cval)
-        # The kernel also smooths across every other axis.
-        for name, size in zip(meta.dims, meta.shape):
-            if size > 1:
-                meta.get_coord(name, require_evenly_sampled=True)
+        # the kernel smooths along every other axis too
+        require_no_holes(meta, meta.dims, "sobel_filter")
         return meta, {"axis": meta.get_axis(dim)}
 
     def numpy_kernel(self, data, *, axis):
