@@ -27,7 +27,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.core.coordmanager import CoordManager, get_coord_manager
-from dascore.core.coords import _EXACT_GRID_FIELDS, get_coord
+from dascore.core.coords import _grid_coord, get_coord
 from dascore.core.lazy_array import LazyArray
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
@@ -396,12 +396,7 @@ def coord_from_row(row: Mapping, dim: str, units=None):
     if isinstance(grid, tuple) and ticks and not _units_converted(row, dim):
         *terms, length = grid
         start = hi if terms[0] < 0 else lo
-        return get_coord(
-            start=start,
-            shape=(length,),
-            units=units,
-            **dict(zip(_EXACT_GRID_FIELDS, terms)),
-        )
+        return _grid_coord(terms, units, start=start, shape=(length,))
     if step < np.zeros((), dtype=np.asarray(step).dtype):
         return None
     return get_coord(start=lo, stop=hi + step, step=step, units=units)

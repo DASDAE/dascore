@@ -15,6 +15,7 @@ from dascore.core.coords import (
     CoordSummary,
     Grid,
     NumericCoord,
+    _grid_coord,
     concat_coords,
     get_coord,
 )
@@ -385,13 +386,7 @@ class TestSlicing:
             offset = int(rng.integers(0, den))
             count = int(rng.integers(1, 60))
             start = int(rng.integers(-1000, 1000))
-            coord = get_coord(
-                start=start,
-                shape=(count,),
-                step_numerator=num,
-                step_denominator=den,
-                origin_offset=offset,
-            )
+            coord = _grid_coord((num, den, offset), start=start, shape=(count,))
             values = _floor_labels(start, num, den, offset, count)
             assert np.array_equal(coord.values, values)
             for _ in range(3):
@@ -797,9 +792,7 @@ class TestSegments:
         b = get_coord(start=6, step=(3, 2), shape=(4,))[:]
         fused = concat_coords(a, b)
         assert _is_exact(fused)
-        shifted = get_coord(
-            start=6, shape=(4,), step_numerator=3, step_denominator=2, origin_offset=1
-        )
+        shifted = _grid_coord((3, 2, 1), start=6, shape=(4,))
         out = concat_coords(a, shifted)
         assert out.runs_count > 1
 
@@ -877,15 +870,9 @@ class TestValidationErrors:
         with pytest.raises(CoordError, match="start, stop, and step"):
             get_coord(start=0, step=1)
         with pytest.raises(CoordError, match="positive"):
-            get_coord(start=0, shape=(3,), step_numerator=1, step_denominator=-2)
+            _grid_coord((1, -2, 0), start=0, shape=(3,))
         with pytest.raises(CoordError, match="origin_offset"):
-            get_coord(
-                start=0,
-                shape=(3,),
-                step_numerator=3,
-                step_denominator=2,
-                origin_offset=2,
-            )
+            _grid_coord((3, 2, 2), start=0, shape=(3,))
         under_specified = [
             dict(step=1, shape=(3,)),
             dict(start=0, step=1, shape=(2, 3)),

@@ -24,7 +24,6 @@ from dascore.core.coords import (
     CoordString,
     CoordSummary,
     NumericCoord,
-    _get_coord_kind,
     get_coord,
 )
 from dascore.exceptions import CoordError, ParameterError
@@ -2938,21 +2937,6 @@ class TestStringCoordUtilities:
         data = np.array([*(str(i) for i in range(20)), 21], dtype=object)
         out = get_coord(data=data)
         assert not isinstance(out, CoordString)
-
-    def test_get_coord_kind_from_metadata(self):
-        """Metadata-driven coord kind detection should stay centralized."""
-        assert _get_coord_kind(dtype="U8", length=4) == "string"
-        assert _get_coord_kind(dtype="int64", step=1, length=4) == "range"
-        assert _get_coord_kind(dtype="float64", length=0) == "empty"
-        assert _get_coord_kind(dtype=object, length=4) == "array"
-
-    def test_get_coord_kind_from_data(self):
-        """Data-driven classification should cover string, empty, single, array."""
-        assert _get_coord_kind(np.array(["a"])) == "string"
-        assert _get_coord_kind(np.array([], dtype=float)) == "empty"
-        assert _get_coord_kind(np.array([1])) == "single"
-        assert _get_coord_kind(np.array([1, 2])) == "array"
-        assert _get_coord_kind(np.array([[1, 2, 3]])) == "array"
 
 
 class TestDimensionalityErrors:

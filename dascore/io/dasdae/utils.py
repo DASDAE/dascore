@@ -17,6 +17,7 @@ from dascore.core.coords import (
     _EXACT_GRID_FIELDS,
     Grid,
     NumericCoord,
+    _grid_coord,
     _scalar_dtype,
     get_coord,
 )
@@ -349,15 +350,8 @@ def _read_range(node, units):
     start = np.asarray(attrs["start"]).astype(dtype)[()]
     shape = (int(attrs["length"]),)
     if "step_numerator" in attrs:
-        num, den, phase = (int(attrs[name]) for name in _EXACT_GRID_FIELDS)
-        return get_coord(
-            start=start,
-            shape=shape,
-            units=units,
-            step_numerator=num,
-            step_denominator=den,
-            origin_offset=phase,
-        )
+        terms = (int(attrs[name]) for name in _EXACT_GRID_FIELDS)
+        return _grid_coord(terms, units, start=start, shape=shape)
     if "parent_count" in attrs:
         start = np.asarray(attrs["grid_origin"]).astype(dtype)[()]
     step = attrs.get("grid_step", attrs["step"])

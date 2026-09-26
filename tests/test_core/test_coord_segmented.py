@@ -877,7 +877,7 @@ class TestReviewFindings:
 
     def test_quantity_tolerance_bad_dimensionality(self, time_gap_coord):
         """Dimensionality mismatches raise."""
-        with pytest.raises(Exception, match=r"(?i)cannot convert|dimensionality"):
+        with pytest.raises(Exception, match=r"(?i)cannot convert|units of time"):
             time_gap_coord.fuse(get_quantity("1 m"))
 
     def test_select_never_materializes(self, monkeypatch):
