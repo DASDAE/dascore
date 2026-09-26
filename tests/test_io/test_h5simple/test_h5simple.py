@@ -15,6 +15,7 @@ import pytest
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.core.lazy_array import LazyArray
+from dascore.core.source import ArraySource
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io import FiberIO
 from dascore.io.h5simple.core import H5Simple
@@ -284,7 +285,7 @@ class TestH5Simple:
         array = LazyArray.from_sources([source[0:2], source[2:4], source[4:6]])
         monkeypatch.setattr(h5py.Group, "items", items)
         np.testing.assert_array_equal(array.load(), expected)
-        assert prepared == [""] and len(traversals) == 1
+        assert prepared == [""] and not traversals
 
     def test_subclass_keeps_prepared_read(self, h5simple_path, monkeypatch):
         """A subclass which overrides nothing still reuses the parsed layout."""
@@ -402,3 +403,98 @@ class TestSingletonCoordinates:
             **kwargs,
         )[0]
         np.testing.assert_array_equal(bounded.data, data[:1, :1])
+
+
+class TestArrayLookup:
+    """Array reads only need the named dataset, regardless of root layout."""
+
+    @pytest.fixture(params=["raw", "data", "extra"])
+    def array_file(self, tmp_path, request):
+        """Store deterministic samples and optional unrelated root nodes."""
+        path = tmp_path / "array.h5"
+        data = np.arange(24, dtype=np.float32).reshape(6, 4)
+        with h5py.File(path, "w") as resource:
+            resource["data" if request.param == "data" else "raw"] = data
+            resource["time"] = np.arange(6, dtype=float)
+            resource["distance"] = np.arange(4)
+            resource.attrs["dims"] = "time,distance"
+            if request.param == "extra":
+                resource.create_group("data")
+                resource["unrelated"] = np.arange(4)
+        return path, data
+
+    def test_arrays(self, array_file):
+        """Direct and lazy windows return the same stored samples."""
+        path, data = array_file
+        source = ArraySource(path=str(path), format="H5Simple", version="1").describe(
+            data.shape, data.dtype
+        )
+        assert source.key == ""
+        np.testing.assert_array_equal(
+            H5Simple().read_array(path, ((1, 4), (1, 3))), data[1:4, 1:3]
+        )
+        lazy = LazyArray.from_source(source)
+        np.testing.assert_array_equal(lazy[1:4, 1:3].load(), data[1:4, 1:3])
+
+    def test_no_walk(self, array_file, monkeypatch):
+        """Neither direct nor lazy loading enumerates the root group."""
+        path, data = array_file
+        source = ArraySource(path=str(path), format="H5Simple", version="1").describe(
+            data.shape, data.dtype
+        )
+
+        def refuse(*args, **kwargs):
+            raise AssertionError("array reading must not walk the file")
+
+        monkeypatch.setattr(h5py.Group, "items", refuse)
+        monkeypatch.setattr(h5py.Group, "__iter__", refuse)
+        np.testing.assert_array_equal(H5Simple().read_array(path), data)
+        np.testing.assert_array_equal(LazyArray.from_source(source).load(), data)
+
+    @pytest.mark.parametrize("names", [(), ("raw", "data"), ("group",)])
+    def test_invalid_data_nodes(self, tmp_path, names):
+        """Missing, ambiguous, and group-only layouts keep the same error."""
+        path = tmp_path / "invalid.h5"
+        with h5py.File(path, "w") as resource:
+            resource["time"] = np.arange(6)
+            for name in names:
+                if name == "group":
+                    resource.create_group("data")
+                else:
+                    resource[name] = np.zeros((6, 4))
+            with pytest.raises(AssertionError) as error:
+                H5Simple().read_array(resource, _pre_cast=True)
+            assert str(error.value) == f"{resource} doesn't have exactly one data node."
+
+    @pytest.mark.parametrize("key", ["other", "/other"])
+    def test_explicit_key(self, array_file, key):
+        """An explicit dataset key takes precedence over the default name."""
+        path, data = array_file
+        with h5py.File(path, "a") as resource:
+            resource["other"] = -data
+        np.testing.assert_array_equal(
+            H5Simple().read_array(path, ((1, 4),), key=key), -data[1:4]
+        )
+
+    @pytest.mark.parametrize("key", ["missing", "group"])
+    def test_key_fallback(self, array_file, key):
+        """A key which is not a dataset falls back to candidate names."""
+        path, data = array_file
+        with h5py.File(path, "a") as resource:
+            resource.create_group("group")
+        np.testing.assert_array_equal(H5Simple().read_array(path, key=key), data)
+
+    def test_stable_ids(self, array_file, monkeypatch):
+        """With fixed file identity, patch and lazy ids match the dev baseline."""
+        path, _ = array_file
+        with h5py.File(path, "a") as resource:
+            if "unrelated" in resource:
+                del resource["unrelated"]
+        monkeypatch.setattr(
+            "dascore.io.core.source_identity",
+            lambda source: ("/fixed/h5simple.h5", 4096, 123456789),
+        )
+        patch = dc.read(path)[0]
+        lazy = LazyArray.from_source(patch._source)
+        assert patch._source.key == ""
+        assert patch.attrs.data_id == lazy.data_id == "af8aa5c7443693b5f6af5dd541cc83d4"
