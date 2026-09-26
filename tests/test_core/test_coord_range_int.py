@@ -11,7 +11,6 @@ from pydantic import ValidationError
 
 import dascore as dc
 from dascore.core.coords import (
-    CoordPartial,
     CoordSummary,
     Grid,
     NumericCoord,
@@ -167,8 +166,8 @@ class TestDispatch:
 
     def test_partial_fallbacks(self):
         """Under-specified inputs are partial coordinates, as before."""
-        assert isinstance(get_coord(start=10, shape=10), CoordPartial)
-        assert isinstance(get_coord(shape=10, step=1), CoordPartial)
+        assert get_coord(start=10, shape=10)._partial
+        assert get_coord(shape=10, step=1)._partial
 
 
 class TestConstruction:
@@ -227,13 +226,13 @@ class TestConstruction:
     def test_zero_count_is_partial(self):
         """A zero-length shape is a partial coordinate."""
         coord = get_coord(start=0, step=1, shape=(0,))
-        assert isinstance(coord, CoordPartial)
+        assert coord._partial
 
     def test_negative_count_raises(self):
         """A negative length is no grid; zero stays a partial coordinate."""
         with pytest.raises(CoordError, match="cannot hold"):
             get_coord(start=0, step=1, shape=(-1,))
-        assert isinstance(get_coord(shape=(0,)), CoordPartial)
+        assert get_coord(shape=(0,))._partial
 
     @pytest.mark.parametrize("ms", [10_020, 10_060, 9_990])
     def test_stop_rounding_parity(self, ms):
@@ -252,7 +251,7 @@ class TestConstruction:
         coord = get_coord(start=5, stop=5, step=0)
         assert np.array_equal(coord.values, [5])
         assert np.array_equal(coord.select((4, 6))[0].values, [5])
-        assert isinstance(coord.select((6, 7))[0], CoordPartial)
+        assert coord.select((6, 7))[0]._partial
 
     def test_overflow_raises(self):
         """A grid past its dtype's range is refused at construction."""
@@ -354,7 +353,7 @@ class TestSlicing:
             sub = coord[sl]
             expected = coord.values[sl]
             if len(expected) == 0:
-                assert isinstance(sub, CoordPartial)
+                assert sub._partial
                 continue
             assert _is_exact(sub)
             assert np.array_equal(sub.values, expected)
@@ -414,7 +413,7 @@ class TestSlicing:
     def test_empty_slice_is_partial(self, hz_1024):
         """An empty slice is a typed partial coordinate."""
         out = hz_1024[5:5]
-        assert isinstance(out, CoordPartial)
+        assert out._partial
         assert out.dtype == hz_1024.dtype
 
     def test_array_getitem(self, int_frac):
@@ -487,7 +486,7 @@ class TestSelect:
         """A window past the coordinate is degenerate."""
         sub, sl = int_frac.select((1000, 2000))
         assert sl == slice(0, 0)
-        assert isinstance(sub, CoordPartial)
+        assert sub._partial
 
     def test_open_ended(self, hz_1024):
         """None and Ellipsis open a side."""
@@ -880,7 +879,7 @@ class TestValidationErrors:
             dict(start=0, shape=(3,)),
         ]
         for kwargs in under_specified:
-            assert isinstance(get_coord(**kwargs), CoordPartial)
+            assert get_coord(**kwargs)._partial
         coarse = get_coord(start=np.datetime64("2020-01-01"), step=ONE_S, shape=(3,))
         assert not _is_exact(coarse)
 
@@ -910,7 +909,7 @@ class TestValidationErrors:
     def test_float_range_failure_is_still_partial(self):
         """A float range that cannot validate stays a partial, as before."""
         out = get_coord(start=0.0, stop=10.0, step=-1.0, shape=(10,))
-        assert isinstance(out, CoordPartial)
+        assert out._partial
 
 
 class TestUnitHelpers:
@@ -954,7 +953,7 @@ class TestFloatRepresentation:
         """Fewer than three of start, stop, step, shape is an error or a partial."""
         with pytest.raises(CoordError, match="start, stop, and step"):
             get_coord(start=0.0, step=1.0)
-        assert isinstance(get_coord(start=0.0, step=1.0, shape=(2, 3)), CoordPartial)
+        assert get_coord(start=0.0, step=1.0, shape=(2, 3))._partial
         from_stop = get_coord(stop=10.0, step=1.0, shape=(10,))
         assert from_stop[0] == 0.0
 
@@ -1117,9 +1116,9 @@ class TestSecondReviewRound:
         """Bounds past the int64 range select the whole coordinate or nothing."""
         coord = get_coord(start=0, stop=10, step=1)
         sub, _ = coord.select((np.uint64(2**63 + 1), None))
-        assert isinstance(sub, CoordPartial)
+        assert sub._partial
         sub, _ = coord.select((2**70, None))
-        assert isinstance(sub, CoordPartial)
+        assert sub._partial
         sub, _ = coord.select((-(2**70), 2**70))
         assert sub == coord
 
