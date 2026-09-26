@@ -1009,7 +1009,8 @@ class PlanResolver(PatchResolver):
         """
         if not self.stamped:
             return patch
-        return patch.update_attrs(**{x: row[x] for x in self.stamped})
+        # a blank stamp (a lone row's feature_id) is not in the row
+        return patch.update_attrs(**{x: row[x] for x in self.stamped if x in row})
 
 
 def _trimmed_dims(residuals, coord_dims_map: Mapping) -> frozenset[str]:
