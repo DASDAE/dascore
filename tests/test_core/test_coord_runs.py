@@ -702,9 +702,10 @@ class TestReviewRoundTwo:
         (run,) = missing.iter_runs()
         assert run[1] == pytest.approx(0.2) and run[1] == missing.positions()[-1]
 
-    def test_segmented_strided_index_keeps_the_step(self, design_case):
-        """A strided selection of runs still states the grid."""
-        assert design_case[::2].step == 1
+    def test_segmented_strided_index_widens_the_step(self, design_case):
+        """A strided selection states the widened grid, or none it leaves."""
+        assert design_case[::2].step is None
+        assert design_case[::-1].step == -1
         assert design_case[[3, 0, 1]].step is None
 
     def test_segments_with_a_contradicting_step_raise(self, design_case):
@@ -1080,6 +1081,108 @@ class TestReviewRoundSix:
         pair = (pico, nano) if flip else (nano, pico)
         with pytest.raises(CoordError, match="compatible dtypes"):
             concat_coords(*pair)
+
+
+class TestStepContract:
+    """A coordinate's step is the one its grid runs share, at any rate."""
+
+    @pytest.fixture(params=[1000, 1024, 3000])
+    def full(self, request):
+        """A time grid at a whole or a fractional rate."""
+        return get_coord(start=T0, step=Fraction(1, request.param), shape=(60,))
+
+    @pytest.mark.parametrize("stride", [2, 3])
+    def test_stride_restates_the_step(self, full, stride):
+        """A strided slice states its runs' step and counts holes on it."""
+        coord = concat_coords(full[:12], full[12 + 2 * stride :])
+        out = coord[::stride]
+        assert out.runs_count == 2
+        assert out.step == out.runs[0].step(out.dtype)
+        assert out.step_exact == full.step_exact * stride
+        missing = out.missing()
+        assert missing.count == 2
+        expected = full.values[12 : 12 + 2 * stride : stride]
+        np.testing.assert_array_equal(missing.positions(), expected)
+
+    def test_decimate_restates_the_step(self, full):
+        """Decimating without a filter states the decimated grid's step."""
+        time = concat_coords(full[:20], full[24:])
+        patch = dc.Patch(data=np.ones(len(time)), coords={"time": time}, dims=("time",))
+        out = patch.decimate(time=2, filter_type=None).get_coord("time")
+        assert out.step == out.runs[0].step(out.dtype)
+        assert out.step_exact == full.step_exact * 2
+        assert out.missing().count == 2
+
+    def test_off_lattice_stride_states_no_step(self, full):
+        """A stride which leaves the runs on different lattices states nothing."""
+        out = concat_coords(full[:10], full[15:])[::2]
+        assert out.runs_count == 2 and out.step is None
+
+    def test_stride_widens_a_declared_step(self):
+        """Stored labels beside a grid keep the declared step times the stride."""
+        labels = NumericCoord.from_labels(
+            np.array([20.0, 21, 22, 23, 26, 27]), step=1.0
+        )
+        coord = concat_coords(get_coord(start=0.0, stop=12.0, step=1.0), labels)
+        out = coord[::2]
+        assert out.step == 2.0
+        assert out.missing().positions().tolist() == [12.0, 14.0, 16.0, 18.0, 24.0]
+
+    def test_stride_agrees_across_the_dense_guard(self):
+        """Runs and the guarded array answer a stride the same way."""
+        for size in (300, 3000):
+            values = np.arange(size)[np.arange(size) % 5 != 4]
+            out = get_coord(data=values, step=1)[::2]
+            assert out.step is None and out.missing().complete
+
+    def test_stride_promotes_a_regular_window(self):
+        """Stored labels a stride leaves evenly spaced become the widened grid."""
+        out = NumericCoord.from_labels(np.arange(6), step=1)[::2]
+        assert out.evenly_sampled and out.step == 2
+
+    def test_fractional_grid_contradicts_a_whole_step(self):
+        """A whole-tick step cannot be declared over a fractional grid run."""
+        runs = (Grid(0, 12, 5, 4), Grid(20, 2, 1, 3))
+        with pytest.raises(ValidationError, match="contradicts"):
+            NumericCoord(runs=runs, dtype="int64", step=2)
+
+    def test_fractional_grids_off_one_lattice_raise(self):
+        """Fractional runs of one cadence but another phase share no step."""
+        runs = (Grid(0, 3, 2, 3), Grid(7, 3, 2, 3))
+        with pytest.raises(ValidationError, match="contradicts"):
+            NumericCoord(runs=runs, dtype="int64", step=2)
+
+    def test_descending_fractional_grids_keep_the_step(self):
+        """A positive declared step holds over descending runs of one lattice."""
+        runs = (Grid(12, -3, 2, 3), Grid(3, -3, 2, 3))
+        coord = NumericCoord(runs=runs, dtype="int64", step=2)
+        assert coord.step == -2
+        assert coord.missing().positions().tolist() == [7, 6, 4]
+
+    def test_declared_step_a_grid_contradicts_raises(self):
+        """A declared step other than the one the grid runs sit on raises."""
+        runs = (Grid(0, 2, 1, 5), Grid(20, 2, 1, 5))
+        with pytest.raises(ValidationError, match="contradicts"):
+            NumericCoord(runs=runs, dtype="int64", step=1)
+        assert NumericCoord(runs=runs, dtype="int64", step=2).missing().count == 5
+
+    def test_fit_keeps_a_step_it_leaves_intact(self):
+        """A fuse which refits nothing keeps the declared step."""
+        labels = NumericCoord.from_labels(np.array([12.0, 13.0, 15.0]), step=1.0)
+        coord = concat_coords(get_coord(start=0.0, stop=10.0, step=1.0), labels)
+        out = coord.fuse(tolerance=0.1)
+        assert out.step == 1.0 and out.missing().count == 3
+
+    def test_partial_fit_drops_a_contradicted_step(self):
+        """A re-fit run the declared step no longer fits leaves no step."""
+        coord = concat_coords(
+            get_coord(start=0.0, stop=10.0, step=1.0),
+            get_coord(start=11.0, stop=16.0, step=1.0),
+            get_coord(start=40.0, stop=45.0, step=1.0),
+        )
+        out = coord.fuse(tolerance=1.0)
+        assert out.runs_count == 2 and out.step is None
+        np.testing.assert_array_equal(out.values[-5:], coord.values[-5:])
 
 
 class TestRefactorParity:
