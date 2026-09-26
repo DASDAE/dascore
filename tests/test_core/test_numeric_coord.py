@@ -356,6 +356,13 @@ class TestBaseCoordFallbacks:
         """A declared step with no values skips no position."""
         assert partial.missing().complete
 
+    def test_string_coords_keep_base_fallbacks(self):
+        """Text has no grid to snap to, runs to fuse, or holes."""
+        coord = get_coord(data=np.array(["a", "b", "c"]))
+        assert coord.snap() is coord
+        assert coord.fuse(1.0) is coord
+        assert coord._holes() == []
+
     def test_string_coords_state_no_seams(self):
         """Text has no spacing to be discontinuous in."""
         coord = get_coord(data=np.array(["a", "b", "c"]))

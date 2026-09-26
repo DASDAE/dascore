@@ -206,8 +206,6 @@ def _conformed(value, dtype: np.dtype):
     difference truncated away, and two coordinates which are not equal
     would share an identity.
     """
-    if pd.isnull(value):
-        return value
     with suppress(TypeError, ValueError, OverflowError):
         original = np.asarray(value)
         converted = original.astype(dtype)
@@ -530,8 +528,6 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
 
     _rich_style = dascore_styles["default_coord"]
     _evenly_sampled = False
-    _sorted = False
-    _reverse_sorted = False
     _partial = False
 
     @model_validator(mode="before")
@@ -943,14 +939,14 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         return self._evenly_sampled
 
     @property
+    @abc.abstractmethod
     def sorted(self) -> bool:
         """Returns True if the coord in sorted."""
-        return self._sorted
 
     @property
+    @abc.abstractmethod
     def reverse_sorted(self) -> bool:
         """Returns True if the coord in sorted in reverse order."""
-        return self._reverse_sorted
 
     @property
     def degenerate(self) -> bool:
@@ -1968,7 +1964,16 @@ class Blank:
     stop: Any = None
 
     def __post_init__(self):
-        object.__setattr__(self, "shape", tuple(int(x) for x in iterate(self.shape)))
+        shape = tuple(iterate(self.shape))
+        bad = [
+            x
+            for x in shape
+            if isinstance(x, bool) or not isinstance(x, int | np.integer)
+        ]
+        if bad or any(x < 0 for x in shape):
+            msg = f"A shape holds non-negative integers, not {shape}."
+            raise CoordError(msg)
+        object.__setattr__(self, "shape", tuple(int(x) for x in shape))
         for name in ("start", "stop"):
             if _is_null(getattr(self, name)):
                 object.__setattr__(self, name, None)
@@ -2637,7 +2642,14 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     def __getitem__(self, item):
         if self._partial:
             # Index the broadcast view without allocating the full coordinate.
-            return self._with_runs((Blank(self.values[item].shape),), step=None)
+            shape = self.values[item].shape
+            if (
+                shape == self.shape
+                and isinstance(item, slice)
+                and item.step in (None, 1)
+            ):
+                return self  # every sample, in order
+            return self._with_runs((Blank(shape),), step=None)
         if isinstance(item, int | np.integer) and self.ndim == 1:
             if item >= len(self) or item < -len(self):
                 raise IndexError(f"{item} exceeds coord length of {self}")
@@ -3296,11 +3308,13 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     def _converted_run(self, run, units) -> tuple[Grid | Labels | Blank, Any]:
         """One run's labels in new units, and the dtype they take."""
         if isinstance(run, Blank):
-            ends = (run.start, run.stop)
-            new = (
-                None if x is None else convert_units(x, units, self.units) for x in ends
-            )
-            return Blank(run.shape, *new), self.dtype
+            ends = [
+                None if x is None else convert_units(x, units, self.units)
+                for x in (run.start, run.stop)
+            ]
+            # a converted end can need a wider dtype, as an int in cm does in m
+            known = [np.asarray(x).dtype for x in ends if x is not None]
+            return Blank(run.shape, *ends), np.result_type(self.dtype, *known)
         if isinstance(run, Labels):
             # a genuinely new array: it enters a store of its own, hashed once
             values = convert_units(self._run_labels(run), units, self.units)

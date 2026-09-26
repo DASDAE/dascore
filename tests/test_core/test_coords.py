@@ -1907,6 +1907,25 @@ class TestPartialCoord:
         coord = get_coord(shape=(5,), step=1.0)
         assert coord.update_limits(min=0.0, max=2.0).shape == (5,)
 
+    @pytest.mark.parametrize("shape", [-2, 1.5, (3, -1), True])
+    def test_bad_shape_raises(self, shape):
+        """A length is a non-negative integer, never rounded into one."""
+        with pytest.raises(CoordError, match="non-negative integers"):
+            get_coord(shape=shape)
+
+    def test_full_slice_keeps_metadata(self):
+        """Selecting every sample changes nothing."""
+        coord = _blank_coord(shape=(4,), start=10, step=1)
+        assert coord[:] is coord
+        assert coord[::2].shape == (2,)
+
+    def test_convert_units_widens_dtype(self):
+        """An end which is no longer whole widens an integer dtype."""
+        coord = get_coord(shape=3, start=1, dtype="int64", units="cm")
+        out = coord.convert_units("m")
+        assert out.dtype.kind == "f"
+        assert out.to_summary().min == pytest.approx(0.01)
+
     def test_known_ends_survive_dump(self):
         """A dump keeps the ends a partial coord states."""
         coord = get_coord(shape=(4,), start=1.0, units="m")
