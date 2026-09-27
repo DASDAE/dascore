@@ -218,6 +218,7 @@ class TestFailedWrite:
             dc.write(new, path, "DASDAE", file_version=version, encoding=encoding)
         with h5py.File(path) as h5:
             assert list(h5["waveforms"]) == [random_patch.get_patch_name()]
+            assert "_dascore_partial" not in h5
         spool = dc.spool(path)
         assert len(spool) == 1 and spool[0] == random_patch
 
@@ -230,8 +231,8 @@ class TestKilledWrite:
         path = tmp_path / "killed.h5"
         dc.write(random_patch, path, "DASDAE")
         with h5py.File(path, "a") as h5:
-            h5["waveforms"].create_group("__dascore_partial__")
+            h5.create_group("_dascore_partial")
         dc.write(random_patch, path, "DASDAE")
         with h5py.File(path, "r") as h5:
-            assert "__dascore_partial__" not in h5["waveforms"]
+            assert "_dascore_partial" not in h5
         assert dc.spool(path)[0] == random_patch

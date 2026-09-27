@@ -268,9 +268,10 @@ def _check_storable(patch):
             raise NotImplementedError(msg)
 
 
-# Patches are built under this name, which DASCore never gives a patch, then
-# moved onto their own, so a failed write leaves the file as it was.
-_PARTIAL = "__dascore_partial__"
+# Patches are built in this root group, outside the waveforms group so no
+# patch name can collide with it, then moved onto their own name; a failed
+# write leaves the file as it was.
+_PARTIAL = "/_dascore_partial"
 
 
 def _save_patch(patch, wave_group, name, compact: bool = False, options=None):
@@ -278,9 +279,10 @@ def _save_patch(patch, wave_group, name, compact: bool = False, options=None):
     if not compact:
         _check_storable(patch)
     options = options or {}
-    if _PARTIAL in wave_group:  # left by a write that was killed
-        del wave_group[_PARTIAL]
-    patch_group = wave_group.create_group(_PARTIAL)
+    h5 = wave_group.file
+    if _PARTIAL in h5:  # left by a write that was killed
+        del h5[_PARTIAL]
+    patch_group = h5.create_group(_PARTIAL)
     try:
         # Per-group marker: groups appended to a legacy file are still written
         # in the separated-attrs form and must not be legacy-stripped on read.
@@ -289,12 +291,12 @@ def _save_patch(patch, wave_group, name, compact: bool = False, options=None):
         _save_coords(patch, patch_group, compact, options)
         _save_array(patch.data, "data", patch_group, options.get("data"))
     except BaseException:
-        del wave_group[_PARTIAL]
+        del h5[_PARTIAL]
         raise
     if name in wave_group:
         # Replace the entire patch group so stale datasets/attrs can't survive.
         del wave_group[name]
-    wave_group.move(_PARTIAL, name)
+    h5.move(_PARTIAL, f"{wave_group.name}/{name}")
 
 
 # --- Functions for reading
