@@ -19,6 +19,7 @@ from dascore.io.index.backend import get_backend
 from dascore.io.index.ingest import patch_record, summaries_to_records
 from dascore.io.index.query import Query
 from dascore.io.index.schema import PatchCoordRow
+from tests.conftest import join_patches
 
 MS = np.timedelta64(1, "ms")
 HOLE = pd.Timedelta(12, "ms")
@@ -31,7 +32,7 @@ def gapped_patch():
     t0 = patch.get_coord("time").min()
     first = patch.select(time=(None, t0 + 1000 * MS))
     second = patch.select(time=(t0 + 1012 * MS, None))
-    (out,) = dc.spool([first, second]).chunk(time=None, tolerance=5, snap_coords=False)
+    out = join_patches([first, second])
     assert out.get_coord("time").runs_count > 1
     return out
 
@@ -93,15 +94,15 @@ class TestIndexedRuns:
         """Each run is a trimmed member; runs in one output are read once."""
         members = indexed_runs.chunk_plan(time=None).members
         assert len(members) == 3 and members["_modified"].sum() == 2
-        bridged = indexed_runs.chunk_plan(time=None, tolerance=5).members
-        assert len(bridged) == 2
+        bridged = indexed_runs.chunk_plan(time=None, tolerance=5, fill_value=np.nan)
+        assert len(bridged.members) == 2
 
     def test_chunked_view_keeps_the_hole(self, indexed_runs):
         """A plan's outputs carry the runs of the member they hold."""
-        chunked = indexed_runs.chunk(time=None, tolerance=5)
+        chunked = indexed_runs.chunk(time=None)
         assert chunked.get_gaps()["gap_size"].iloc[0] == HOLE
         # an output joined along time takes no member's runs of it
-        joined = indexed_runs.chunk(time=None, tolerance=10_000)
+        joined = indexed_runs.chunk(time=None, tolerance=10_000, fill_value=np.nan)
         assert joined.get_gaps().empty
 
     def test_query_candidacy(self, indexed_runs, gapped_patch):
@@ -299,7 +300,7 @@ class TestReports:
 
     def test_loose_tolerance_merges_across_runs(self, gapped_directory):
         """A tolerance wider than every gap merges the runs and the patches."""
-        merged = gapped_directory.chunk(time=None, tolerance=10_000)
+        merged = gapped_directory.chunk(time=None, tolerance=10_000, fill_value=0)
         assert len(merged) == 1
 
     def test_window_inside_the_hole_selects_nothing(
@@ -435,13 +436,13 @@ class TestChunkPlansRuns:
             np.testing.assert_array_equal(out.data, half.data)
 
     @pytest.mark.parametrize("snap_coords", [True, False])
-    def test_tolerance_bridges_the_hole(self, gapped_patch, snap_coords):
-        """Runs bridged into one output are the patch as stored, hole and all."""
+    def test_tolerance_keeps_the_hole(self, gapped_patch, snap_coords):
+        """Without fill_value a tolerance spanning the hole leaves it a gap."""
         chunked = dc.spool([gapped_patch]).chunk(
             time=None, tolerance=5, snap_coords=snap_coords
         )
-        (merged,) = chunked
-        assert merged.equals(gapped_patch)
+        assert len(chunked) == 2
+        assert chunked.get_gaps()["gap_size"].tolist() == [HOLE]
 
     def test_run_joins_a_contiguous_neighbour(self, gapped_patch, halves):
         """The run next to a patch merges with it, as patches do."""
@@ -541,10 +542,9 @@ class TestChunkPlansRuns:
         ends = [p.get_coord("distance").max() for p in chained]
         assert ends == [4.0, 19.0]
 
-    def test_stricter_rechunk_splits_a_bridged_hole(self, gapped_patch):
-        """A re-chunk with a smaller tolerance splits what a looser one bridged."""
-        bridged = dc.spool([gapped_patch]).chunk(time=None, tolerance=5)
-        assert len(bridged) == 1
-        assert len(bridged.chunk(time=None)) == 2
-        windows = bridged.chunk(time=1)
+    def test_rechunk_keeps_the_hole(self, gapped_patch):
+        """A re-chunk of a chunk that kept the hole keeps it too."""
+        kept = dc.spool([gapped_patch]).chunk(time=None, tolerance=5)
+        assert len(kept.chunk(time=None, tolerance=5)) == 2
+        windows = kept.chunk(time=1)
         assert not any(p.get_coord("time").runs_count > 1 for p in windows)

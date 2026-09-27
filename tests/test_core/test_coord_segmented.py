@@ -1037,24 +1037,35 @@ class TestSplitGapsAndWrite:
         coords = np.concatenate([p.get_coord("distance").values for p in patches])
         assert np.array_equal(coords, gapped_patch.get_coord("distance").values)
 
-    def test_single_patch_format_refuses_the_pieces(self, gapped_patch, tmp_path):
-        """A format holding one patch per file refuses a gapped patch's pieces."""
-        with pytest.raises(ParameterError, match="Only single patch spools"):
-            dc.write(gapped_patch, tmp_path / "gapped.wav", "wav")
+    @pytest.mark.parametrize(
+        ("name", "ext"), [("wav", "wav"), ("rsf", "rsf"), ("prodml", "h5")]
+    )
+    def test_single_patch_format_refuses_the_pieces(
+        self, gapped_patch, tmp_path, name, ext
+    ):
+        """A format holding one patch per file refuses several, and writes nothing."""
+        chunked = dc.spool([gapped_patch]).chunk(distance=None, tolerance=100)
+        for num, item in enumerate((gapped_patch, chunked)):
+            path = tmp_path / f"out{num}.{ext}"
+            with pytest.raises(ParameterError, match="one patch per file"):
+                dc.write(item, path, name)
+            assert not path.exists()
+
+    def test_pickle_writes_the_pieces(self, gapped_patch, tmp_path):
+        """A multi-patch format takes the pieces and reads them back."""
+        chunked = dc.spool([gapped_patch]).chunk(distance=None, tolerance=100)
+        for num, item in enumerate((gapped_patch, chunked)):
+            path = dc.write(item, tmp_path / f"out{num}.pkl", "pickle")
+            back = sorted(dc.spool(path), key=lambda x: x.get_coord("distance").min())
+            assert len(back) == 2
+            data = np.concatenate([x.data for x in back])
+            assert np.array_equal(data, gapped_patch.data)
 
     def test_write_contiguous_unaffected(self, tmp_path):
         """Normal patches write exactly as before."""
         patch = dc.get_example_patch()
         path = dc.write(patch, tmp_path / "normal.h5", "dasdae")
         assert path.exists()
-
-    def test_write_file_backed_spool_unaffected(self, tmp_path):
-        """Non-memory spools skip the gap inspection (never gapped)."""
-        path1 = dc.write(dc.get_example_patch(), tmp_path / "a.h5", "dasdae")
-        file_spool = dc.spool(path1)
-        assert not file_spool.has_live_patches
-        path2 = dc.write(file_spool, tmp_path / "b.h5", "dasdae")
-        assert path2.exists()
 
 
 class TestFromArray:
@@ -1138,7 +1149,7 @@ class TestPlannedSpoolWrite:
 
     @pytest.fixture(scope="class")
     def gapped_planned_spool(self, tmp_path_factory):
-        """A file-backed planned spool whose output spans a real gap."""
+        """A file-backed planned spool asked to merge across a real gap."""
         src = tmp_path_factory.mktemp("gapped_planned") / "src"
         src.mkdir()
         p1 = dc.get_example_patch()
@@ -1153,8 +1164,8 @@ class TestPlannedSpoolWrite:
                 .update(progress=None)
                 .chunk(time=None, tolerance=5, snap_coords=False, conflict="drop")
             )
-        assert planned[0].get_coord("time").runs_count > 1
-        assert not planned.has_live_patches
+        # without fill_value the hole ends an output
+        assert len(planned) == 2
         return planned
 
     @pytest.mark.parametrize("version", ["1", "2"])

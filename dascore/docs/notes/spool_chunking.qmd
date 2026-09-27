@@ -140,38 +140,26 @@ Assembly builds the chunked dimension's coordinate by exact concatenation of the
 patch = dc.spool([p1, p2]).chunk(time=None)[0]
 assert patch.get_coord("time").evenly_sampled
 
-# A gap forced together by a loose tolerance warns, and the output keeps
-# the exact coordinate, holes and all: those samples are absent either way.
+# Without fill_value a hole always ends an output, however loose the
+# tolerance: a chunk never yields a patch holding a hole.
 gap_start = time.max() + 3 * time.step
 p_gap = dc.get_example_patch(time_min=gap_start, acquisition_key="XX1.R2D1..RAW")
-with pytest.warns(UserWarning, match="force merging"):
-    forced = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5)[0]
-coord = forced.get_coord("time")
-assert coord.runs_count == 2
-assert len(coord.get_discontinuities("gaps")) == 1
+assert len(dc.spool([p1, p_gap]).chunk(time=None, tolerance=5)) == 2
 
-# snap_coords only ever absorbs sub-sample jitter, so here it changes
-# nothing: no label moves, whether it runs or not.
-with pytest.warns(UserWarning, match="force merging"):
-    exact = dc.spool([p1, p_gap]).chunk(
-        time=None, tolerance=5, snap_coords=False
-    )[0]
-assert np.array_equal(exact.get_coord("time").values, coord.values)
-
-# An absolute tolerance -- a quantity, or a timedelta -- spans the same
-# gap, stated in the coordinate's units rather than in samples.
-with pytest.warns(UserWarning, match="force merging"):
-    absolute = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5 * time.step)[0]
-assert absolute.get_coord("time") == coord
-
-# fill_value writes the missing samples, so the merge comes back evenly
-# sampled rather than segmented.
+# fill_value writes the missing samples, so a tolerance spanning the hole
+# merges the patches into one evenly sampled output. An absolute
+# tolerance -- a quantity, or a timedelta -- says the same in the
+# coordinate's units.
 filled = dc.spool([p1, p_gap]).chunk(time=None, tolerance=5, fill_value=np.nan)[0]
 assert filled.get_coord("time").evenly_sampled
 assert np.isnan(filled.data).any()
+absolute = dc.spool([p1, p_gap]).chunk(
+    time=None, tolerance=5 * time.step, fill_value=np.nan
+)[0]
+assert absolute.get_coord("time") == filled.get_coord("time")
 ```
 
-Coordinates with holes are an in-memory representation only: a spool row never holds one, so putting such a patch in a spool, or writing it, splits it into one contiguous patch per run ([`Patch.split_gaps`](`dascore.Patch.split_gaps`) returns those pieces).
+Coordinates with holes are an in-memory representation only: a spool row never holds one. A patch put in a spool enters as one row per contiguous piece ([`Patch.split_gaps`](`dascore.Patch.split_gaps`) returns them), and a chunk output holds a hole only once `fill_value` has filled it.
 
 ## Union spools
 
@@ -192,7 +180,7 @@ assert len(dc.spool([p1]) + dc.spool([p1])) == 1
 
 Pass a rectangular `(n, 2)` array as the chunked dimension to request bounded absolute coordinate windows. Each row is independent and inclusive. Input order is preserved, including overlapping and duplicate rows; compatible source groups within a row follow deterministic group order. `chunk_plan` accepts the same form and retains original request-row numbers in private `_request_row` plan metadata. One selected range may yield several source pieces while the same chunk window assembles them into one patch.
 
-An explicit request is complete when its inward-aligned first and last sampled positions are supplied by one compatible output under the existing continuity and tolerance rules. A tolerated internal gap can remain segmented; `fill_value` may fill a permitted hole, even when a window is entirely inside it. Filling does not extend an acquisition beyond its overall envelope. Unknown or uneven sample steps use the source coordinates where available. `overlap` cannot be combined with explicit windows. Bare numeric bounds use the planner's normalized coordinate units, while quantity bounds convert as absolute points. An empty `(0, 2)` array returns an empty plan or spool.
+An explicit request is complete when its inward-aligned first and last sampled positions are supplied by one compatible output under the existing continuity and tolerance rules. A hole ends an output unless `fill_value` fills it, even when a window is entirely inside it. Filling does not extend an acquisition beyond its overall envelope. Unknown or uneven sample steps use the source coordinates where available. `overlap` cannot be combined with explicit windows. Bare numeric bounds use the planner's normalized coordinate units, while quantity bounds convert as absolute points. An empty `(0, 2)` array returns an empty plan or spool.
 
 By default, an unmet request raises `ChunkError`. Set `on_incomplete="warn"` to report and skip unmet request/group outputs, or `"ignore"` to skip them silently. With `keep_partial=True`, nonempty available pieces within a request are retained first; the policy then handles requests still wholly absent. These rules apply to each applicable compatibility group whose overall envelope intersects a window. The `conflict` setting remains the separate policy for attributes of members that actually contribute to an accepted output. Planning uses coordinate metadata and keeps measurement-array loading deferred; source changes and unrelated read failures remain runtime errors.
 

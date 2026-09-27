@@ -89,7 +89,7 @@ segmented = concat_coords(first, second)
 print(segmented.get_discontinuities("gaps"))
 ```
 
-Pass `snap=False` to preserve an exact monotonic array. It returns the simplest truthful coordinate, so uniform input becomes one evenly sampled run. A coordinate of several runs reports a `step` only when every run sits on the same one, and `None` otherwise. `fuse(tolerance=...)` may reduce the number of runs within an error bound, while `snap()` replaces values with one evenly sampled run. A spool row never holds several runs: putting such a patch in a spool, or writing it, splits it into one contiguous patch per run, which `patch.split_gaps()` also returns.
+Pass `snap=False` to preserve an exact monotonic array. It returns the simplest truthful coordinate, so uniform input becomes one evenly sampled run. A coordinate of several runs reports a `step` only when every run sits on the same one, and `None` otherwise. `fuse(tolerance=...)` may reduce the number of runs within an error bound, while `snap()` replaces values with one evenly sampled run. A spool row never holds a hole: putting a patch with one in a spool, or writing it, splits it into one contiguous patch per piece, which `patch.split_gaps()` also returns. Irregular labels with no shared step are not gapped and stay whole.
 
 ```{python}
 values = np.array([0.0, 1.0, 2.0, 7.0, 8.0, 9.0])

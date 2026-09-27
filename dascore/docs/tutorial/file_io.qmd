@@ -38,6 +38,15 @@ remote_patch = dc.spool(remote_path)[0]
 
 Format support varies by backend: a formatter that requires a local seekable file may use the remote cache, while formats built on fsspec-compatible stores can operate directly.
 
+## Compression and chunking
+
+DASDAE, PRODML, and NETCDF_CF writers take an `encoding` dict as xarray's [`to_netcdf`](https://docs.xarray.dev/en/stable/generated/xarray.Dataset.to_netcdf.html) does: keys are variable names (`"data"` or a coordinate name; PRODML takes only `"data"` and `"time"`), values are options such as `zlib`, `complevel`, `shuffle`, `chunksizes`, and `fletcher32`. NETCDF_CF passes it to xarray; DASDAE and PRODML translate it for h5py as xarray's h5netcdf engine does, clamping `chunksizes` to each array's length. A write option the writer does not accept raises a [`ParameterError`](`dascore.exceptions.ParameterError`).
+
+```{python}
+encoding = {"data": {"zlib": True, "complevel": 4, "chunksizes": (50, 1000)}}
+patch.io.write(UPath("memory://dascore/tutorial/small.h5"), "DASDAE", encoding=encoding)
+```
+
 # Scanning metadata
 
 [`dc.scan`](`dascore.scan`) returns [`PatchSummary`](`dascore.PatchSummary`) objects without loading patch arrays.

@@ -171,7 +171,7 @@ def _has_samples(rows: pd.DataFrame, window: Mapping) -> np.ndarray:
     for dim in window:
         low, high, step = rows[f"{dim}_min"], rows[f"{dim}_max"], rows[f"{dim}_step"]
         if f"_{dim}_source_envelope" not in rows or step.dtype == object:
-            continue  # no known grid (a segmented coordinate) keeps the row
+            continue  # no known grid (irregular labels) keeps the row
         step = step.abs()  # a descending grid also holds its minimum
         origin = rows[f"_{dim}_source_envelope"].str.get(f"{dim}_min").astype(low.dtype)
         first = origin + np.ceil(((low - origin) / step).astype(float) - 1e-9) * step
@@ -1957,7 +1957,7 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Return a dataframe with one row per gap along a dimension.
 
-        Each row is a boundary that ``chunk`` would refuse to merge under the
+        Each row is a boundary that ``chunk`` would refuse to fill under the
         same grouping and tolerance rules. A patch with holes enters a spool
         as its contiguous pieces, so its holes are gaps like any other.
 
@@ -2075,9 +2075,8 @@ class Spool(NodeRepr, NamespaceOwner):
         when the span is zero, meaning a single sample). `group_id`
         matches the gap frame's, so the two join on it.
 
-        Coverage is measured from the envelopes the index records for
-        each patch; a patch with holes is a row per contiguous piece, so a
-        hole inside it counts like one between patches. A hole is not visible in a
+        Coverage is measured from the envelopes the index records for each
+        row. A hole is not visible in a
         group whose step is unknown: a sample-count tolerance has nothing
         to scale there, so the group reports no gaps and counts as fully
         covered. An absolute tolerance does measure it.
@@ -2150,8 +2149,8 @@ class Spool(NodeRepr, NamespaceOwner):
             own units (eg `tolerance=1 * s` admits a spacing of one step
             plus a second), which also works for patches whose sampling
             interval is unknown. Either way a boundary of one sample is
-            contiguous. A patch with holes is a row per contiguous piece, so
-            each piece can end an output or join a neighbouring patch. See
+            contiguous. Without `fill_value` a missing sample always ends an
+            output, so a looser tolerance only matters with one. See
             `dascore.utils.gaps.GapTolerance`.
         conflict
             {conflict_desc}
@@ -2177,10 +2176,8 @@ class Spool(NodeRepr, NamespaceOwner):
             modes retain their existing behavior.
         fill_value
             If given, the value written into the samples missing from a
-            merge, so an output spanning a hole is evenly sampled rather
-            than segmented. `tolerance` still decides which holes are
-            bridged at all: a hole it does not span separates patches as
-            before, and nothing is filled across it. The value has to
+            merge, so an output may span a hole `tolerance` spans. Without
+            it no output holds a hole. The value has to
             survive a cast to the data's own dtype, so `np.nan` needs
             float data; fill integer data with an integer, or cast it
             first.
@@ -2359,13 +2356,9 @@ class Spool(NodeRepr, NamespaceOwner):
             piece = self.select(_coords=window)
             keep = _has_samples(piece._df, window)
             piece = piece._restrict_to_rows(piece._df["_patch_row"][keep])
-            # merge along the dims every row has; chunk also splits holes
+            # a lone row needs no merge; others merge along the dims all have
             dims = [set(x.split(",")) for x in piece._df["dims"]]
-            shared = sorted(set.intersection(*dims)) if dims else []
-            # one row on known grids holds no hole, so it needs no merge
-            steps = piece._df[[f"{x}_step" for x in shared]]
-            if len(piece) == 1 and steps.notna().all(axis=None):
-                shared = []
+            shared = sorted(set.intersection(*dims)) if len(dims) > 1 else []
             for dim in shared:
                 piece = piece.chunk(**{dim: None})
             if len(piece):
@@ -2562,11 +2555,6 @@ class Spool(NodeRepr, NamespaceOwner):
         if self._file_path is not None:
             return self._file_path
         return getattr(self._catalog.resolver, "origin_path", None)
-
-    @property
-    def has_live_patches(self) -> bool:
-        """True when any of this spool's patches live in memory."""
-        return bool(self._catalog.resolver.live_entries())
 
     @compose_docstring(progress_desc=progress_description)
     def update(

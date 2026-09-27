@@ -7,7 +7,7 @@ import os
 import shutil
 import tempfile
 from collections.abc import Sequence
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -520,3 +520,56 @@ def extract_h5_attrs(
         value = _maybe_unpack(unbyte(obj.attrs[attr]))
         out[out_name] = fill_values.get(value, value)
     return out
+
+
+# h5netcdf's encoding keys; xarray drops "source" and "original_shape" on write.
+_ENCODING_KEYS = {"chunksizes", "complevel", "compression", "compression_opts"}
+_ENCODING_KEYS |= {"fletcher32", "shuffle", "zlib"}
+
+
+def h5_encoding(encoding: dict | None, variables=None) -> dict[str, dict]:
+    """Translate an xarray-style encoding to h5py options, as h5netcdf does."""
+    out = {}
+    for name, enc in (encoding or {}).items():
+        opts = {k: v for k, v in enc.items() if k not in ("source", "original_shape")}
+        if unknown := sorted(set(opts) - _ENCODING_KEYS):
+            msg = f"Unexpected encoding parameters for variable {name!r}: {unknown}."
+            raise ValueError(f"{msg} Valid encodings are: {sorted(_ENCODING_KEYS)}.")
+        if opts.pop("zlib", False):
+            if opts.get("compression") not in (None, "gzip"):
+                raise ValueError("'zlib' and 'compression' encodings mismatch")
+            opts["compression"] = "gzip"
+        level = opts.pop("complevel", None)
+        if level is not None and opts.get("compression_opts", level) != level:
+            raise ValueError("'complevel' and 'compression_opts' encodings mismatch")
+        if level:
+            opts.setdefault("compression_opts", level)
+        if isinstance(opts.get("compression_opts"), list):  # as JSON gives
+            opts["compression_opts"] = tuple(opts["compression_opts"])
+        opts["chunks"] = opts.pop("chunksizes", None)
+        out[name] = opts
+    if variables is not None and (unknown := sorted(set(out) - set(variables))):
+        raise KeyError(f"Encoding names variables not in the patch: {unknown}")
+    return out
+
+
+def create_dataset(group, name, data, options=None):
+    """Create a dataset with h5py options, clamping chunks to its shape."""
+    shape = data.shape  # h5py refuses filters on empty or scalar arrays
+    options = dict(options or {}) if shape and all(shape) else {}
+    if len(chunks := options.get("chunks") or ()) == len(shape) > 0:
+        options["chunks"] = tuple(map(min, chunks, shape))
+    return group.create_dataset(name, data=data, **options)
+
+
+@contextmanager
+def staged_group(h5, dest: str):
+    """Yield a root group which replaces ``dest`` once the block succeeds."""
+    staging = "/_dascore_partial"
+    h5.pop(staging, None)  # left by a killed write
+    try:
+        yield h5.create_group(staging)
+        h5.pop(dest, None)
+        h5.move(staging, dest)
+    finally:
+        h5.pop(staging, None)

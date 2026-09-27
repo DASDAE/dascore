@@ -2682,7 +2682,12 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         # a stride multiplies every spacing, the declared step included
         step = None if _is_null(self.step) else self.step * abs(stride)
         out = []
-        for run, offset in zip(self.runs, self._run_offsets()):
+        offsets = self._run_offsets()
+        # only the runs the positions reach, found by bisection
+        ends = (indices[0], indices[-1]) if len(indices) else (0, -1)
+        lo = max(int(np.searchsorted(offsets, min(ends), side="right")) - 1, 0)
+        hi = int(np.searchsorted(offsets, max(ends), side="right"))
+        for run, offset in zip(self.runs[lo:hi], offsets[lo:hi], strict=True):
             first, count = _run_span(indices, int(offset), len(run))
             if not count:
                 continue
@@ -3434,6 +3439,12 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             terms = grid.canonical()[1:]
             return summary.model_copy(
                 update=dict(zip(_EXACT_GRID_FIELDS, terms, strict=True))
+            )
+        if self.runs_count == 1 and not _is_null(self.step):
+            # labels on a declared grid state its step when none is missing
+            complete = self.missing().complete
+            return (
+                summary.model_copy(update={"step": self.step}) if complete else summary
             )
         if self.runs_count < 2 or self.runs_count > _MAX_SUMMARY_RUNS:
             return summary

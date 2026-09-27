@@ -17,6 +17,7 @@ from dascore.exceptions import ChunkError, ParameterError, UnitError
 
 ONE_SECOND = np.timedelta64(1, "s")
 ONE_MS = np.timedelta64(1, "ms")
+DIMS = ("distance", "time")
 
 
 @pytest.fixture(scope="module")
@@ -334,6 +335,18 @@ class TestGappedPatchRows:
         assert len(spool.get_gaps()) == 999
         assert all(x.get_coord("time").evenly_sampled for x in spool)
 
+    def test_float_labels_keep_their_step(self):
+        """Pieces of float labels with a declared step index that step."""
+        values = np.array([0, 1, 2, 4, 5, 6, 9, 10]) * 0.001 - 0.022
+        time = get_coord(data=values, step=0.001)
+        coords = {"distance": [0], "time": time}
+        patch = dc.Patch(data=np.arange(8.0)[None], coords=coords, dims=DIMS)
+        spool = dc.spool([patch])
+        assert spool.get_contents()["time_step"].tolist() == [0.001] * 3
+        assert len(spool.get_gaps()) == 2
+        assert spool.get_coverage()["coverage"].iloc[0] < 1
+        assert len(spool.chunk(time=None)) == 3
+
     def test_filled_output_reports_no_gap(self):
         """A filled chunk output is one grid, and the spool says so (#1216)."""
         spool = dc.spool([_time_runs_patch(2, samples=100)])
@@ -370,6 +383,18 @@ class TestGappedPatchRows:
         spool._catalog.add(patch)
         assert len(spool) == 3
 
+    def test_pieces_keep_their_identity(self):
+        """A piece taken from a spool is the same entry when given back."""
+        spool = dc.spool([_time_runs_patch(2)])
+        assert len(spool + dc.spool(list(spool))) == 2
+        spool._catalog.add(spool[0])
+        assert len(spool) == 2
+
+    def test_plain_patch_is_its_own_row(self):
+        """A patch without holes is stored as itself."""
+        patch = _time_runs_patch(1)
+        assert dc.spool([patch])[0] is patch
+
     def test_split_gaps_is_the_spool(self):
         """split_gaps gives exactly the rows a spool of the patch holds."""
         patch = _time_runs_patch(4)
@@ -377,3 +402,65 @@ class TestGappedPatchRows:
         assert len(split) == len(spool) == 4
         for one, two in zip(split, spool, strict=True):
             assert one == two
+
+
+class TestChunkKeepsHoles:
+    """Without fill_value, chunk never yields an output holding a hole."""
+
+    def test_tolerance_does_not_bridge(self):
+        """A wide tolerance leaves patches a hole apart as two outputs (#1217)."""
+        first, second = _time_runs_patch(1, samples=100), _time_runs_patch(1)
+        later = second.update_coords(
+            time_min=first.get_coord("time").max() + 60 * ONE_SECOND
+        )
+        spool = dc.spool([first, later])
+        merged = spool.chunk(time=None, tolerance=100_000)
+        assert len(merged) == 2
+        assert len(merged.get_gaps()) == 1
+        assert len(dc.spool(list(merged)).get_gaps()) == 1
+
+    def test_fill_value_bridges(self):
+        """With fill_value the same tolerance joins them into one grid."""
+        spool = dc.spool([_time_runs_patch(2, samples=100)])
+        (merged,) = spool.chunk(time=None, tolerance=100_000, fill_value=np.nan)
+        assert merged.get_coord("time").evenly_sampled
+
+    def test_descending_pieces_untouched(self):
+        """Descending runs a hole apart come back as they went in."""
+        first = get_coord(start=5.0, step=-1.0, shape=(3,))
+        second = get_coord(start=0.0, step=-1.0, shape=(2,))
+        coords = {"distance": [0], "time": concat_coords(first, second)}
+        patch = dc.Patch(data=np.arange(5.0)[None], coords=coords, dims=DIMS)
+        out = list(dc.spool([patch]).chunk(time=None, tolerance=10))
+        assert out == list(dc.spool([patch]))[::-1]
+
+    def test_off_lattice_pieces_untouched(self):
+        """Runs sharing a step but not a lattice keep their true labels."""
+        t0 = np.datetime64("2020-01-01T00:00:00.000000000")
+        ms = np.timedelta64(1_000_000, "ns")
+        time = concat_coords(
+            get_coord(start=t0, step=ms, shape=(3,)),
+            get_coord(start=t0 + np.timedelta64(6_370_000, "ns"), step=ms, shape=(3,)),
+        )
+        coords = {"distance": [0], "time": time}
+        patch = dc.Patch(data=np.arange(6.0)[None], coords=coords, dims=DIMS)
+        out = list(dc.spool([patch]).chunk(time=None, tolerance=10))
+        assert out == list(dc.spool([patch]))
+
+    @pytest.mark.parametrize("seed", range(20))
+    def test_rows_are_what_chunk_yields(self, seed):
+        """Every output is one run per dim, and the plan counts what it yields."""
+        rng = np.random.default_rng(seed)
+        count = int(rng.integers(1, 5))
+        gaps = rng.integers(1, 8, size=count)
+        starts = np.cumsum(np.r_[0, 20 + gaps[:-1]])
+        pieces = [get_coord(start=float(x), step=1.0, shape=(20,)) for x in starts]
+        coords = {"distance": [0], "time": concat_coords(*pieces)}
+        data = rng.random((1, 20 * count))
+        patch = dc.Patch(data=data, coords=coords, dims=DIMS)
+        length = [None, 5.0, 13.0][int(rng.integers(3))]
+        tolerance = float(rng.choice([1.5, 10.0, 100.0]))
+        chunked = dc.spool([patch]).chunk(time=length, tolerance=tolerance)
+        yielded = list(chunked)
+        assert all(x.get_coord(d).runs_count == 1 for x in yielded for d in x.dims)
+        assert len(chunked) == len(yielded) == len(dc.spool(yielded))

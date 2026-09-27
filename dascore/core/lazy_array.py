@@ -89,6 +89,9 @@ MAX_CUT_AXES = 16
 # The bytes the digest starts with, so no other payload can read alike.
 _DIGEST_TAG = b"dascore-lazy-blocks\0"
 
+# The fewest rows a column of one value must have to be kept as that value.
+_FOLD_ROWS = 256
+
 # The name the array api reports for a lazy array.
 BACKEND_NAME = "lazy"
 
@@ -294,6 +297,8 @@ class _Sources:
     dtype: _Column
     value: _Column
     filled: np.ndarray
+    # Whether the columns of one value have been folded; see LazyTable.
+    folded: bool = field(default=False, repr=False)
 
     def __len__(self) -> int:
         return len(self.filled)
@@ -495,7 +500,23 @@ class LazyTable:
     _ids: dict[int, str] = field(default_factory=dict, repr=False)
 
     def __post_init__(self):
-        """Freeze the storage; each flag is set once, whatever the size."""
+        """Fold and freeze the storage; each flag is set once, whatever the size."""
+        members, sources = self.members, self.members.sources
+        # Columns which hold one value throughout keep only that value. The
+        # columns may be shared with other tables, which see the same values.
+        axes = {name: _folded(array) for name, array in self.axes.items()}
+        object.__setattr__(self, "axes", axes)
+        members.cast.codes = _folded(members.cast.codes)
+        # A sources table is shared by the tables cut from it: folded once.
+        if not sources.folded:
+            object.__setattr__(sources, "filled", _folded(sources.filled))
+            for name in SOURCE_FIELDS:
+                column = getattr(sources, name)
+                if name in _STRING_FIELDS:
+                    column.offsets = _folded(column.offsets)
+                else:
+                    column.codes = _folded(column.codes)
+            object.__setattr__(sources, "folded", True)
         for array in self._storage():
             # A view can be written through whatever it is a view of.
             array.setflags(write=False)
@@ -593,6 +614,14 @@ def _table(blocks: Sequence[_Block]) -> LazyTable:
         members=_merge_members([x.members for x in blocks]),
         axes=axes,
     )
+
+
+def _folded(array: np.ndarray) -> np.ndarray:
+    """Return an array of one value throughout as that value, broadcast."""
+    # A short column costs more to check than folding it saves.
+    if len(array) < _FOLD_ROWS or not array.strides[-1] or (array != array[0]).any():
+        return array
+    return np.broadcast_to(array[:1].copy(), array.shape)
 
 
 def _offsets(counts: np.ndarray) -> np.ndarray:

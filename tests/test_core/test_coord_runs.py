@@ -417,7 +417,8 @@ class TestFractionalGaps:
         spool = dc.spool(patches)
         found = [len(spool.get_gaps(tolerance=x)) for x in (1.5, 2, 3)]
         assert found == [2, 1, 0]
-        assert [len(spool.chunk(time=None, tolerance=x)) for x in (2, 3)] == [2, 1]
+        kwargs = {"time": None, "fill_value": np.nan}
+        assert [len(spool.chunk(tolerance=x, **kwargs)) for x in (2, 3)] == [2, 1]
 
     @pytest.mark.parametrize("step", [Fraction(10, 3), -3])
     def test_integer_grid(self, step):
@@ -559,8 +560,9 @@ class TestReviewFindings:
         dist = first.get_coord("distance")
         second = first.update_coords(distance_min=dist.max() + 2.4 * dist.step)
         spool = dc.spool([first, second])
-        assert len(spool.chunk(distance=None, tolerance=GapTolerance.absolute(2))) == 1
-        assert len(spool.chunk(distance=None, tolerance=GapTolerance.absolute(1))) == 2
+        kwargs = {"distance": None, "fill_value": np.nan}
+        assert len(spool.chunk(tolerance=GapTolerance.absolute(2), **kwargs)) == 1
+        assert len(spool.chunk(tolerance=GapTolerance.absolute(1), **kwargs)) == 2
 
     @pytest.mark.parametrize("version", ["1", "2"])
     def test_dasdae_round_trip(self, tmp_path, version):
@@ -608,10 +610,11 @@ class TestReviewFindings:
         time = first.get_coord("time")
         second = first.update_coords(time_min=time.max() + 2.4 * time.step)
         spool = dc.spool([first, second])
+        kwargs = {"time": None, "fill_value": np.nan}
         wide = float(2 * time.step / np.timedelta64(1, "s"))
-        assert len(spool.chunk(time=None, tolerance=GapTolerance.absolute(wide))) == 1
+        assert len(spool.chunk(tolerance=GapTolerance.absolute(wide), **kwargs)) == 1
         narrow = float(time.step / np.timedelta64(1, "s"))
-        assert len(spool.chunk(time=None, tolerance=GapTolerance.absolute(narrow))) == 2
+        assert len(spool.chunk(tolerance=GapTolerance.absolute(narrow), **kwargs)) == 2
 
     def test_seam_after_an_undeclared_singleton(self):
         """A seam whose run states no spacing reports no excess and no gap."""
@@ -1203,7 +1206,7 @@ class TestRefactorParity:
         assert coord.fuse(1.0, keep_step=True).step == 0.001
 
     def test_merged_float_patches_fill(self):
-        """Merged float patches keep a step, so their holes can be filled."""
+        """Float pieces keep their step, so a chunk can fill their holes."""
 
         def patch(values):
             dist = get_coord(data=values, step=0.1, units="m")
@@ -1214,9 +1217,11 @@ class TestRefactorParity:
 
         first = np.delete(np.arange(10) * 0.1 + 0.3, 4)
         second = np.arange(10, 20) * 0.1 + 0.3
-        out = dc.spool([patch(first), patch(second)]).chunk(distance=None)
-        assert out[0].get_coord("distance").step == 0.1
-        assert out[0].fill_gaps("distance").shape == (20, 4)
+        spool = dc.spool([patch(first), patch(second)])
+        assert len(spool.chunk(distance=None)) == 2
+        (out,) = spool.chunk(distance=None, tolerance=2, fill_value=np.nan)
+        assert out.get_coord("distance").step == pytest.approx(0.1)
+        assert out.shape == (20, 4)
 
     def test_lossless_fuse_keeps_stated_step(self):
         """Fusing without re-fitting keeps a step finer than the runs'."""

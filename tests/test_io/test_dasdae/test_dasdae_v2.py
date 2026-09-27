@@ -11,10 +11,12 @@ import pytest
 import dascore as dc
 from dascore.core.coords import (
     CoordString,
+    NumericCoord,
     concat_coords,
     get_coord,
 )
 from dascore.io.dasdae.utils import _read_coord, _save_coord
+from tests.conftest import join_patches
 
 T0 = np.datetime64("2020-01-01T00:00:00")
 
@@ -34,8 +36,7 @@ def gapped_patch():
     t0 = patch.get_coord("time").min()
     first = patch.select(time=(None, t0 + np.timedelta64(1, "s")))
     second = patch.select(time=(t0 + np.timedelta64(1012, "ms"), None))
-    spool = dc.spool([first, second]).chunk(time=None, tolerance=5, snap_coords=False)
-    (out,) = spool
+    out = join_patches([first, second])
     assert out.get_coord("time").runs_count > 1
     return out
 
@@ -102,6 +103,14 @@ class TestNodeCodec:
         """An irregular coordinate still writes its values."""
         _save_coord(CASES["array"], "arr", h5, compact=True)
         assert h5["arr"].shape == (4,)
+
+    def test_array_runs_stay_exact(self, h5):
+        """Near-uniform labels in several runs are not snapped on read."""
+        jitter = NumericCoord.from_labels(np.array([0.0, 1.0, 2.0005, 3.0, 4.0]))
+        coord = concat_coords(jitter, get_coord(start=10.0, stop=15.0, step=1.0))
+        _save_coord(coord, "jitter", h5, compact=True)
+        back = _read_coord(h5["jitter"], "jitter", {}, snap=True)
+        np.testing.assert_array_equal(back.values, coord.values)
 
     @pytest.mark.parametrize(
         "indexer",
@@ -187,6 +196,23 @@ class TestVersion2Files:
         assert len(leaves) == len(pieces)
         for leaf, piece in zip(leaves, pieces, strict=True):
             assert np.array_equal(leaf["data"].values, piece.data)
+
+    @pytest.mark.parametrize(
+        "runs",
+        [
+            (np.array([0.0, 1.0, 2.0005]), np.array([3.0, 4.0005, 5.0])),
+            (np.array([10.0, 12.0, 15.0]), np.array([0.0, 2.0, 5.0])),
+            (np.array([0.0, 5.0, 2.0]), np.array([10.0, 12.0, 15.0])),
+        ],
+    )
+    def test_irregular_runs_read_back_exactly(self, runs, tmp_path):
+        """Irregular runs are one row, and their labels are read back unsnapped."""
+        coord = NumericCoord(runs=runs)
+        data = np.arange(float(len(coord)))
+        patch = dc.Patch(data=data, coords={"x": coord}, dims=("x",))
+        (back,) = dc.spool(dc.write(patch, tmp_path / "runs.h5", "dasdae"))
+        np.testing.assert_array_equal(back.get_coord("x").values, coord.values)
+        np.testing.assert_array_equal(back.data, data)
 
     def test_append_keeps_the_higher_version(self, random_patch, tmp_path):
         """Appending version 1 patches to a version 2 file leaves it version 2."""

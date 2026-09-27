@@ -2085,6 +2085,15 @@ def is_directory_format(path) -> bool:
     return True
 
 
+def _check_write_kwargs(fiber_io, kwargs):
+    """Refuse options the format's writer does not name."""
+    params = list(inspect.signature(fiber_io.write).parameters.values())[2:]
+    allowed = [x.name for x in params if x.kind != x.VAR_KEYWORD]
+    if unknown := sorted(set(kwargs) - set(allowed)):
+        msg = f"The {fiber_io.name} writer does not accept option(s) {unknown}"
+        raise ParameterError(f"{msg}; it accepts {allowed}.")
+
+
 # write hands back the path it was given, so the return follows the
 # argument rather than collapsing to the union: a Path in, a Path out.
 _PathT = TypeVar("_PathT", bound=path_types)
@@ -2111,6 +2120,8 @@ def write(
     file_version
         Optionally specify the version of the file, else use the latest
         version for the format.
+    **kwargs
+        Options the format's writer names, such as ``encoding``.
 
     Raises
     ------
@@ -2118,6 +2129,7 @@ def write(
         - Could not determine the fiber format.
     [`ParameterError`](`dascore.exceptions.ParameterError`)
         - The path is an ``examples://`` name, which is read-only.
+        - An option the format's writer does not accept.
 
     Examples
     --------
@@ -2142,9 +2154,17 @@ def write(
         )
         raise ParameterError(msg)
     fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=file_version)
+    _check_write_kwargs(fiber_io, kwargs)
     if not isinstance(patch_or_spool, dc.Spool):
-        # a patch with holes is written as its contiguous pieces
+        # dc.spool splits a patch with holes into its pieces
         patch_or_spool = dc.spool([patch_or_spool])
+    if not fiber_io.multi_patch_write and (count := len(patch_or_spool)) > 1:
+        msg = (
+            f"Format {fiber_io.name} writes one patch per file, but there are "
+            f"{count} (a patch with holes is one per contiguous piece). Write "
+            "each patch to its own file."
+        )
+        raise ParameterError(msg)
     with IOResourceManager(path) as man:
         func = fiber_io.write
         required_type = _required_resource_type(func)

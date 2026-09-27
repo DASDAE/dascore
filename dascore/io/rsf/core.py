@@ -60,7 +60,6 @@ class RSFV1(FiberIO):
         - Patch datatype is converted to float32 for compatibility with
         Madagascar (may be able to keep dtype in the future)
         """
-        assert len(spool) == 1
         patch = spool[0]
         axis_lengths = patch.shape
         axis_origs = [to_float(patch.get_coord(x).values[0]) for x in patch.dims]

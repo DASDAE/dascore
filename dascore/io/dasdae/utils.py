@@ -16,6 +16,7 @@ from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import (
     _EXACT_GRID_FIELDS,
     Grid,
+    NumericCoord,
     _grid_coord,
     _scalar_dtype,
     get_coord,
@@ -40,6 +41,7 @@ from dascore.utils.array import (
     convert_strings_to_bytes,
     is_string_byte_serializable_array,
 )
+from dascore.utils.hdf5 import create_dataset, staged_group
 from dascore.utils.misc import unbyte
 from dascore.utils.time import to_int
 
@@ -127,7 +129,7 @@ def _save_attrs_and_dims(patch, patch_group):
     patch_group.attrs["_dims"] = ",".join(patch.dims)
 
 
-def _save_array(data, name, group):
+def _save_array(data, name, group, options=None):
     """Save an array to a group, handling datetime and string values."""
     data = np.asarray(data)
     is_dt = np.issubdtype(data.dtype, np.datetime64)
@@ -141,7 +143,7 @@ def _save_array(data, name, group):
     if name in group:
         # Overwrite the dataset in place when callers resave the same array node.
         del group[name]
-    array_node = group.create_dataset(name, data=data)
+    array_node = create_dataset(group, name, data, options)
     array_node.attrs["is_datetime64"] = is_dt
     array_node.attrs["is_timedelta64"] = is_td
     array_node.attrs["is_string"] = is_str
@@ -176,9 +178,11 @@ def _extended_float(coord) -> bool:
 _OBJECT_TYPE = "object_type"
 # The shapes a version 2 node can hold, as the format has always named them.
 _RANGE = "CoordRange"
+# An array node whose labels are read as written.
+_EXACT = "exact"
 
 
-def _save_coord(coord, name, group, compact: bool):
+def _save_coord(coord, name, group, compact: bool, options=None):
     """
     Save one coordinate node.
 
@@ -186,8 +190,7 @@ def _save_coord(coord, name, group, compact: bool):
     its description, so a long acquisition costs a few numbers; anything
     else, and version 1 throughout, writes its values.
 
-    The names are the format's own -- they are what files written before
-    the coordinate classes were unified state -- not a class's tag.
+    `CoordRange` is the format's own name, not a class's tag.
     """
     grid = coord.runs[0] if getattr(coord, "evenly_sampled", False) else None
     object_type = get_model_tag(type(coord))
@@ -224,7 +227,7 @@ def _save_coord(coord, name, group, compact: bool):
                 node.attrs["k0"] = grid.k0
                 node.attrs["stride"] = grid.stride
     else:
-        node = _save_array(coord.values, name, group)
+        node = _save_array(coord.values, name, group, options)
         # Version 1 reads an array's step as a range to rebuild from its
         # first value, so only a range may state one there; version 2
         # reads it as the grid an array declares.
@@ -233,17 +236,19 @@ def _save_coord(coord, name, group, compact: bool):
             is_td = np.issubdtype(np.asarray(step).dtype, np.timedelta64)
             node.attrs["step"] = to_int(step) if is_td else step
             node.attrs["step_is_timedelta64"] = is_td
+        if compact and getattr(coord, "runs_count", 1) > 1:
+            node.attrs[_EXACT] = True  # irregular runs are never snapped
     if compact:
         node.attrs[_OBJECT_TYPE] = object_type
     if coord.units is not None:
         node.attrs["units"] = str(coord.units)
 
 
-def _save_coords(patch, patch_group, compact: bool):
+def _save_coords(patch, patch_group, compact: bool, options):
     """Save coordinates and their dimensions."""
     cm = patch.coords
     for name, coord in cm.coord_map.items():
-        _save_coord(coord, f"_coord_{name}", patch_group, compact)
+        _save_coord(coord, f"_coord_{name}", patch_group, compact, options.get(name))
         patch_group.attrs[f"_cdims_{name}"] = ",".join(cm.dim_map[name])
 
 
@@ -261,21 +266,18 @@ def _check_storable(patch):
             raise NotImplementedError(msg)
 
 
-def _save_patch(patch, wave_group, name, compact: bool = False):
-    """Save the patch to disk."""
+def _save_patch(patch, wave_group, name, compact: bool = False, options=None):
+    """Save the patch to disk, replacing any group of the same name."""
     if not compact:
         _check_storable(patch)
-    if name in wave_group:
-        # Replace the entire patch group so stale datasets/attrs can't survive.
-        del wave_group[name]
-    patch_group = wave_group.create_group(name)
-    # Per-group marker: groups appended to a legacy file are still written
-    # in the separated-attrs form and must not be legacy-stripped on read.
-    patch_group.attrs[_SEPARATE_ATTRS_KEY] = True
-    _save_attrs_and_dims(patch, patch_group)
-    _save_coords(patch, patch_group, compact)
-    # add data
-    _save_array(patch.data, "data", patch_group)
+    options = options or {}
+    with staged_group(wave_group.file, f"{wave_group.name}/{name}") as patch_group:
+        # Per-group marker: groups appended to a legacy file are still written
+        # in the separated-attrs form and must not be legacy-stripped on read.
+        patch_group.attrs[_SEPARATE_ATTRS_KEY] = True
+        _save_attrs_and_dims(patch, patch_group)
+        _save_coords(patch, patch_group, compact, options)
+        _save_array(patch.data, "data", patch_group, options.get("data"))
 
 
 # --- Functions for reading
@@ -392,6 +394,8 @@ def _read_coord(node, name, attrs2, snap):
         # a version 2 array holds exactly its values; a step on it is the
         # grid it declares, never a range to rebuild
         array = _read_array(node)
+        if node_attrs.get(_EXACT, False):
+            return NumericCoord.from_labels(array, units=units, step=node_step)
         if node_step is not None:
             return get_coord(data=array, units=units, step=node_step)
         if snap or np.ndim(array) != 1:

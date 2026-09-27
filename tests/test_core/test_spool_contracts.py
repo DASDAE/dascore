@@ -182,15 +182,6 @@ class TestTypeSurface:
         for spool in (live, dir_spool, file_spool, live.chunk(time=2)):
             assert type(spool) is dc.Spool
 
-    def test_live_patch_predicate(self, patches, tmp_path):
-        """has_live_patches distinguishes memory content, not class."""
-        assert dc.spool(patches).has_live_patches
-        file_path = tmp_path / "pred.h5"
-        dc.write(patches[0], file_path, "dasdae")
-        assert not dc.spool(file_path).has_live_patches
-        mixed = dc.spool(file_path) + dc.spool(patches[:1])
-        assert mixed.has_live_patches
-
 
 class TestEqualityOverEffectiveRows:
     """Equality compares contents, not representation (2026-07-18)."""

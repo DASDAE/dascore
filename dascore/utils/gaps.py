@@ -307,7 +307,7 @@ def contiguous_windows(coord) -> list[tuple[int, int]]:
     jittered times) are irregular rather than gapped, so they are one window.
     """
     numeric = hasattr(type(coord), "segments")
-    if not numeric or coord.evenly_sampled or coord._partial:
+    if not numeric or coord.evenly_sampled:
         return [(0, len(coord))]
     segments = coord.segments
     if pd.isnull(coord.step) and not all(x.evenly_sampled for x in segments):
