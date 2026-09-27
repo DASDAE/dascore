@@ -20,6 +20,7 @@ dascore.BaseSpool.chunk	/api/dascore/core/spool/Spool/chunk.qmd
 dascore.BaseSpool.chunk_plan	/api/dascore/core/spool/Spool/chunk_plan.qmd
 dascore.BaseSpool.concatenate	/api/dascore/core/spool/Spool/concatenate.qmd
 dascore.BaseSpool.conform_to_inventory	/api/dascore/core/spool/Spool/conform_to_inventory.qmd
+dascore.BaseSpool.cut	/api/dascore/core/spool/Spool/cut.qmd
 dascore.BaseSpool.enrich	/api/dascore/core/spool/Spool/enrich.qmd
 dascore.BaseSpool.expand_by	/api/dascore/core/spool/Spool/expand_by.qmd
 dascore.BaseSpool.get_contents	/api/dascore/core/spool/Spool/get_contents.qmd
@@ -211,6 +212,7 @@ dascore.Spool.chunk	/api/dascore/core/spool/Spool/chunk.qmd
 dascore.Spool.chunk_plan	/api/dascore/core/spool/Spool/chunk_plan.qmd
 dascore.Spool.concatenate	/api/dascore/core/spool/Spool/concatenate.qmd
 dascore.Spool.conform_to_inventory	/api/dascore/core/spool/Spool/conform_to_inventory.qmd
+dascore.Spool.cut	/api/dascore/core/spool/Spool/cut.qmd
 dascore.Spool.enrich	/api/dascore/core/spool/Spool/enrich.qmd
 dascore.Spool.expand_by	/api/dascore/core/spool/Spool/expand_by.qmd
 dascore.Spool.get_contents	/api/dascore/core/spool/Spool/get_contents.qmd
@@ -1495,6 +1497,7 @@ dascore.core.spool.BaseSpool.chunk	/api/dascore/core/spool/Spool/chunk.qmd
 dascore.core.spool.BaseSpool.chunk_plan	/api/dascore/core/spool/Spool/chunk_plan.qmd
 dascore.core.spool.BaseSpool.concatenate	/api/dascore/core/spool/Spool/concatenate.qmd
 dascore.core.spool.BaseSpool.conform_to_inventory	/api/dascore/core/spool/Spool/conform_to_inventory.qmd
+dascore.core.spool.BaseSpool.cut	/api/dascore/core/spool/Spool/cut.qmd
 dascore.core.spool.BaseSpool.enrich	/api/dascore/core/spool/Spool/enrich.qmd
 dascore.core.spool.BaseSpool.expand_by	/api/dascore/core/spool/Spool/expand_by.qmd
 dascore.core.spool.BaseSpool.get_contents	/api/dascore/core/spool/Spool/get_contents.qmd
@@ -1535,6 +1538,7 @@ dascore.core.spool.Spool.chunk	/api/dascore/core/spool/Spool/chunk.qmd
 dascore.core.spool.Spool.chunk_plan	/api/dascore/core/spool/Spool/chunk_plan.qmd
 dascore.core.spool.Spool.concatenate	/api/dascore/core/spool/Spool/concatenate.qmd
 dascore.core.spool.Spool.conform_to_inventory	/api/dascore/core/spool/Spool/conform_to_inventory.qmd
+dascore.core.spool.Spool.cut	/api/dascore/core/spool/Spool/cut.qmd
 dascore.core.spool.Spool.enrich	/api/dascore/core/spool/Spool/enrich.qmd
 dascore.core.spool.Spool.expand_by	/api/dascore/core/spool/Spool/expand_by.qmd
 dascore.core.spool.Spool.from_directory	/api/dascore/core/spool/Spool/from_directory.qmd

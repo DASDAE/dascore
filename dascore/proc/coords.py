@@ -1362,7 +1362,7 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
         out: list[dc.Patch] = []
         for patch in patches:
             coord = patch.get_coord(dname)
-            if not isinstance(coord, NumericCoord):
+            if not isinstance(coord, NumericCoord) or coord._partial:
                 out.append(patch)
                 continue
             starts, offset = set(), 0

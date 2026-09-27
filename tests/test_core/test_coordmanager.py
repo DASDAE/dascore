@@ -17,8 +17,8 @@ from dascore.core.coordmanager import (
 )
 from dascore.core.coords import (
     BaseCoord,
-    CoordPartial,
     NumericCoord,
+    _blank_coord,
     get_coord,
 )
 from dascore.exceptions import (
@@ -1078,16 +1078,16 @@ class TestPreserveBaseCoord:
             assert out.coord_map[name] is coord
 
     def test_full_partial_canonicalizes_to_range(self, cm_non_coord_dim):
-        """A fully-specified CoordPartial must still become an evenly sampled coord.
+        """A fully specified partial coord must still become an evenly sampled coord.
 
         Regression guard: only an evenly sampled coord is short-circuited, so
-        a CoordPartial that carries complete start/stop/step is re-inferred
+        a partial coord that carries complete start/stop/step is re-inferred
         into one (otherwise value-based selection on it would wrongly raise).
         """
         cm = cm_non_coord_dim
-        assert isinstance(cm.coord_map["time"], CoordPartial)
+        assert cm.coord_map["time"]._partial
         size = cm.shape[cm.get_axis("time")]
-        full_partial = CoordPartial(shape=(size,), start=0, stop=size, step=1)
+        full_partial = _blank_coord(shape=(size,), start=0, stop=size, step=1)
         out = cm.update(time=full_partial)
         assert out.coord_map["time"].evenly_sampled
         # value-based selection must work on the canonicalized coord.
@@ -1368,7 +1368,7 @@ class TestSetUnits:
             {"time": get_coord(shape=(10,)), "distance": np.arange(4) * 1.0},
             dims=("time", "distance"),
         )
-        assert isinstance(cm.coord_map["time"], CoordPartial)
+        assert cm.coord_map["time"]._partial
         out = cm.set_units(time="s")
         assert out.coord_map["time"].units == get_quantity("s")
 

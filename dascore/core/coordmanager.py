@@ -55,7 +55,6 @@ from rich.text import Text
 from dascore.constants import dascore_styles, select_values_description
 from dascore.core.coords import (
     BaseCoord,
-    CoordPartial,
     CoordSummary,
     Labels,
     NumericCoord,
@@ -814,7 +813,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
                         np.empty(new_coord.shape, dtype=coord.dtype),
                         units=coord.units,
                     )
-            elif isinstance(coord, CoordPartial) and new_dims:
+            elif coord._partial and new_dims:
                 shape = tuple(
                     len(range(*ind.indices(size)))
                     if isinstance(ind, slice)
@@ -1497,9 +1496,9 @@ def _canonicalization_moved_values(original, out) -> bool:
     # sampled coord cannot reach here; the caller returns it first.
     if original is None or not out.evenly_sampled:
         return False
-    # A CoordPartial is a placeholder whose values are all NaN, so it has
-    # nothing to lose; canonicalizing it is the whole point.
-    if isinstance(original, CoordPartial):
+    # A partial coord's values are all NaN, so it has nothing to lose;
+    # canonicalizing it is the whole point.
+    if original._partial:
         return False
     # Canonicalization re-labels a coordinate, it never resamples one.
     assert original.shape == out.shape
@@ -1515,8 +1514,8 @@ def _get_coord_dim_map(coords, dims):
         # representation), so re-parsing it via model_dump -> get_coord is pure
         # overhead; return it directly. Other coords are NOT short-circuited:
         # stored labels can be left non-canonical by slicing (e.g. an evenly
-        # spaced subset that should collapse to a grid), and a fully-specified
-        # CoordPartial should canonicalize to one -- get_coord infers that.
+        # spaced subset that should collapse to a grid), and a partial coord
+        # stating a whole range should canonicalize to one.
         if isinstance(coord, BaseCoord) and coord.evenly_sampled:
             return coord
         original = coord if isinstance(coord, BaseCoord) else None

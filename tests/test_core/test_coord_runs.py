@@ -14,7 +14,6 @@ from pydantic import ValidationError
 
 import dascore as dc
 from dascore.core.coords import (
-    CoordPartial,
     Grid,
     Labels,
     Missing,
@@ -1222,13 +1221,13 @@ class TestRefactorParity:
     def test_new_shape_not_a_range(self, shape):
         """A shape no range can hold still gives a partial coordinate."""
         coord = get_coord(start=0, step=4, shape=(5,))
-        assert isinstance(coord.new(shape=shape), CoordPartial)
+        assert coord.new(shape=shape)._partial
 
     @pytest.mark.parametrize("start", [0, T0])
     def test_update_to_empty_range(self, start):
         """An exact range updated to no samples is a partial coordinate."""
         coord = get_coord(start=start, step=Fraction(3, 2), shape=(10,))
-        assert isinstance(coord.update(shape=(0,)), CoordPartial)
+        assert coord.update(shape=(0,))._partial
 
     def test_new_scalar_shape(self):
         """An exact grid takes a scalar shape, as get_coord does."""
@@ -1248,7 +1247,7 @@ class TestRefactorParity:
     def test_reversed_unsigned_empty(self):
         """An empty reversed unsigned grid does not overflow."""
         coord = get_coord(start=np.uint32(0), step=np.uint32(2), shape=(5,))[::-1]
-        assert isinstance(coord.new(shape=(0,)), CoordPartial)
+        assert coord.new(shape=(0,))._partial
 
     def test_dimensionless_quantity_is_a_number(self):
         """A dimensionless quantity tolerance reads as a plain excess."""

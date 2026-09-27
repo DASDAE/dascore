@@ -12,7 +12,6 @@ from pydantic import ValidationError
 
 import dascore as dc
 from dascore.core.coords import (
-    CoordPartial,
     NumericCoord,
     concat_coords,
     get_coord,
@@ -431,7 +430,7 @@ class TestGetItem:
     def test_empty_slice(self, float_gap_coord):
         """Empty slices produce an empty coordinate."""
         out = float_gap_coord[5:5]
-        assert isinstance(out, CoordPartial)
+        assert out._partial
         assert len(out) == 0
 
     def test_fancy_indexing_materializes(self, float_gap_coord):
@@ -730,7 +729,7 @@ class TestEdgeCases:
 
     def test_unsupported_run_input_raises(self):
         """A run is a grid, a window, or the labels one is made from."""
-        with pytest.raises(ValidationError, match="must be a Grid or Labels"):
+        with pytest.raises(ValidationError, match="must be a Grid, Labels or Blank"):
             NumericCoord(runs=("not a run",), dtype=np.float64)
 
     def test_no_runs_raises(self):

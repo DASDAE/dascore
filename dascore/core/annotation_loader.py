@@ -78,21 +78,15 @@ _DIMS_PRAGMA = "dims"
 # a table rather than merely find one.
 PARQUET_SUFFIX = TABLE_SUFFIXES[1]
 
-# The name a directory of data carries its annotations under, in either
-# form: the directory `.annotations/`, holding a set or a directory of sets,
-# or the bare table `.annotations.csv`. Hidden, like the `.inventory` which
-# may sit beside it -- a companion the directory keeps rather than content it
-# holds, and what keeps the file scanner from reading it as data.
+# Store a data directory's annotations in `.annotations/` (a set or
+# collection of sets) or `.annotations.csv`. Hidden names keep the default
+# file scanner from treating annotations as data.
 BLESSED_NAME = ".annotations"
 
 
 def _read_object(path: Path, holds: str = "states no attributes") -> dict[str, Any]:
     """Parse one YAML or JSON object file into a mapping."""
-    # The suffix is casefolded, as the inventory casefolds its own: an
-    # attrs.JSON is the file attrs.json would be, and reading it as YAML
-    # for its spelling would fail on a document which is not wrong. The
-    # stem is not: the part names are exact, as every other name a format
-    # reserves is.
+    # Suffixes are case-insensitive, as in inventories; reserved stems are exact.
     is_json = path.suffix.casefold() == OBJECT_SUFFIXES[0]
     return read_document(
         path,
@@ -104,12 +98,10 @@ def _read_object(path: Path, holds: str = "states no attributes") -> dict[str, A
 
 def _entries(directory: Path) -> list[Path]:
     """
-    Return what a directory holds, as this format's own error.
+    List directory entries, wrapping OSError as ParameterError.
 
-    ``iterdir`` and the ``exists`` calls in the scans raise ``OSError`` -- a
-    directory whose permissions were tightened is the ordinary case -- and
-    that would leave `annotations` unwrapped, where every other failure to
-    read a stored set arrives as an annotation error.
+    The loader translates this into an annotation error, as it does other failures to
+    read stored sets.
     """
     try:
         return sorted(directory.iterdir())
@@ -1122,8 +1114,7 @@ def annotations(
     >>> len(picks)
     1
 
-    A set is handed straight back, so a function taking either a set or a
-    path may simply call this on whatever it was given.
+    Existing sets are returned unchanged, so callers can accept sets or paths.
 
     >>> dc.annotations(picks) is picks
     True

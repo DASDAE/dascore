@@ -206,8 +206,6 @@ def _conformed(value, dtype: np.dtype):
     difference truncated away, and two coordinates which are not equal
     would share an identity.
     """
-    if pd.isnull(value):
-        return value
     with suppress(TypeError, ValueError, OverflowError):
         original = np.asarray(value)
         converted = original.astype(dtype)
@@ -530,8 +528,6 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
 
     _rich_style = dascore_styles["default_coord"]
     _evenly_sampled = False
-    _sorted = False
-    _reverse_sorted = False
     _partial = False
 
     @model_validator(mode="before")
@@ -684,6 +680,8 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             If True, the array is of dtype in and refers to samples in the
             coordinate.
         """
+        if self._partial and (relative or not samples):
+            raise CoordError(_BLANK_QUERY_MSG)
         array = np.atleast_1d(array)
         if samples:
             coord, inds = self._order_by_sample_array(array)
@@ -723,7 +721,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         if self.ndim != 1:
             msg = "can only align 1D coords."
             raise CoordError(msg)
-        if isinstance(self, CoordPartial) or isinstance(other, CoordPartial):
+        if self._partial or other._partial:
             valid_non_coord(self, other)
             return self, other, slice(None), slice(None)
         data1, data2 = self.values, other.values
@@ -941,14 +939,14 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         return self._evenly_sampled
 
     @property
+    @abc.abstractmethod
     def sorted(self) -> bool:
         """Returns True if the coord in sorted."""
-        return self._sorted
 
     @property
+    @abc.abstractmethod
     def reverse_sorted(self) -> bool:
         """Returns True if the coord in sorted in reverse order."""
-        return self._reverse_sorted
 
     @property
     def degenerate(self) -> bool:
@@ -1545,164 +1543,6 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         return new_coord
 
 
-class CoordPartial(BaseCoord):
-    """
-    A coordinate which only contains partial information.
-    """
-
-    # Redeclared without a default: a partial coord is nothing but its
-    # shape, and it is the one coord which cannot re-derive it on the way
-    # back from a model_dump(exclude_defaults=True).
-    shape: tuple[int, ...]
-    start: Any = np.nan
-    stop: Any = np.nan
-    step: Any = np.nan
-    _rich_style = dascore_styles["coord_non"]
-    _partial = True
-
-    @field_validator("start", "stop", "step", mode="before")
-    @classmethod
-    def _validate_nullish_to_nan(cls, value, info):
-        """Ensure nullish values are actually set as NaN"""
-        if pd.isnull(value):
-            return np.nan
-        return value
-
-    def __getitem__(self, item):
-        # Index the broadcast view without allocating the full coordinate.
-        selected = self.values[item]
-        return self.__class__(shape=selected.shape, units=self.units, dtype=self.dtype)
-
-    def _max(self):
-        """Dummy funct to do nothing but raise."""
-        return self.stop
-
-    def _min(self):
-        return self.start
-
-    def update(self, **kwargs):
-        """No values to change so update can just call new."""
-        return self.new(**kwargs)
-
-    # update_limits is spelled out rather than aliased to update so it keeps
-    # the signature its base declares. It must forward only what the caller
-    # supplied: a None reaching _validate_nullish_to_nan would overwrite the
-    # stored start, stop or step with nan.
-    def update_limits(self, min=None, max=None, step=None, **kwargs) -> BaseCoord:
-        """No values to limit, so only what was passed is applied."""
-        bounds = {"min": min, "max": max, "step": step}
-        passed = {i: v for i, v in bounds.items() if v is not None}
-        return self.update(**passed, **kwargs)
-
-    def _convert_units(self, units) -> Self:
-        """Convert scalar metadata units, or set units if none exist."""
-        out = self.model_dump(exclude_unset=True, exclude_defaults=True)
-        out["units"] = units
-        if self.units is None or dtype_time_like(self.dtype):
-            return self.__class__(**out)
-        for name in ("start", "stop", "step"):
-            value = getattr(self, name)
-            out[name] = (
-                value
-                if pd.isnull(value)
-                else convert_units(value, to_units=units, from_units=self.units)
-            )
-        return self.__class__(**out)
-
-    def sort(self, reverse=False):
-        """Sort dummy array. Does nothing."""
-        return self, slice(None, None)
-
-    def __len__(self):
-        return self.shape[0]
-
-    @property
-    def values(self):
-        """Return the internal data. Same as values attribute."""
-        null_val = np.asarray(_get_nullish(self.dtype))
-        # NaN is a plain python float, so a narrower floating dtype has to
-        # be asked for by name or the values contradict the recorded dtype.
-        if self.dtype is not None and np.dtype(self.dtype).kind == "f":
-            null_val = null_val.astype(self.dtype)
-        data = np.broadcast_to(null_val, self.shape)
-        return data
-
-    def _check_order_and_select(self, relative, samples):
-        """Check that samples is True and relative false else raise msg."""
-        if relative or not samples:
-            msg = (
-                "UnCoord does not support relative and samples must be True "
-                "for both select and order methods."
-            )
-            raise CoordError(msg)
-
-    def select(
-        self, args, relative=False, samples=False
-    ) -> tuple[BaseCoord, slice | ArrayLike]:
-        """
-        Select new values inside coord.
-
-        For partial, samples==True or raise.
-        """
-        # Need to ensure relative is used OR the select has no effect.
-        try:
-            self._check_order_and_select(relative, samples)
-        except CoordError as e:
-            if not is_array(args):
-                args = self._get_slice_tuple(args, relative=False)
-                # Check if the select has no effect and return self or raise.
-                if all(pd.isnull(x) for x in args):
-                    return self, slice(None)
-            raise e
-        if is_array(args):
-            return self._select_by_array(args, relative=relative, samples=samples)
-        return self._select_by_samples(args)
-
-    @compose_docstring(doc=get_docstring(BaseCoord.order))
-    def order(
-        self, array, relative=False, samples=False
-    ) -> tuple[BaseCoord, slice | ArrayLike]:
-        """
-        {doc}.
-        """
-        self._check_order_and_select(relative, samples)
-        return super().order(array, relative=relative, samples=samples)
-
-    @compose_docstring(doc=get_docstring(BaseCoord.change_length))
-    def change_length(self, length: int) -> Self:
-        """
-        {doc}
-        """
-        if self.ndim != 1:
-            msg = "change_length only works on 1D coords."
-            raise CoordError(msg)
-        # A shape-only coord is always partial, so this really is Self; the
-        # factory's declared BaseCoord return is just wider than the case.
-        return cast("Self", get_coord(shape=(_validate_new_length(length),)))
-
-    def to_summary(self, dims=()) -> CoordSummary:
-        """Get the summary info about the coord."""
-        return CoordSummary(
-            min=np.nan,
-            max=np.nan,
-            step=np.nan,
-            dtype=self.dtype,
-            units=None,
-            dims=dims,
-            data_id=self.data_id,
-        )
-
-    def _id_components(self) -> tuple[Any, ...]:
-        """Return the scalar payload identifying partial coords."""
-        return (
-            self.shape,
-            str(np.dtype(self.dtype)),
-            self._hash_scalar(self.start, "start"),
-            self._hash_scalar(self.stop, "stop"),
-            self._hash_scalar(self.step, "step"),
-        )
-
-
 _EXACT_GRID_FIELDS = ("step_numerator", "step_denominator", "origin_offset")
 # Nanoseconds per second: the tick of every exact time grid.
 _NS_PER_S = 10**9
@@ -1718,6 +1558,7 @@ _MAX_RUN_FRACTION = 0.1
 # A coordinate's summary carries its runs only up to this many, since each
 # becomes an index row; past it the summary is an envelope.
 _MAX_SUMMARY_RUNS = 256
+_BLANK_QUERY_MSG = "A coordinate without labels selects only by samples."
 
 
 def _fraction_step(step) -> Fraction | None:
@@ -2108,6 +1949,39 @@ class Labels:
         return Labels(self.id, count, offset, self.stride * stride)
 
 
+@dataclass(frozen=True, slots=True)
+class Blank:
+    """
+    Samples whose labels are unknown.
+
+    It keeps what is still known of them: their shape and, where stated,
+    the first and last label. A blank run is always its coordinate's only
+    run.
+    """
+
+    shape: tuple[int, ...]
+    start: Any = None
+    stop: Any = None
+
+    def __post_init__(self):
+        shape = tuple(iterate(self.shape))
+        bad = [
+            x
+            for x in shape
+            if isinstance(x, bool) or not isinstance(x, int | np.integer)
+        ]
+        if bad or any(x < 0 for x in shape):
+            msg = f"A shape holds non-negative integers, not {shape}."
+            raise CoordError(msg)
+        object.__setattr__(self, "shape", tuple(int(x) for x in shape))
+        for name in ("start", "stop"):
+            if _is_null(getattr(self, name)):
+                object.__setattr__(self, name, None)
+
+    def __len__(self) -> int:
+        return self.shape[0] if self.shape else 1
+
+
 def _store(sources: dict, values) -> Labels:
     """Add an array of labels to a store; the window names all of it."""
     # Always copied: a read-only view of a writable array would otherwise
@@ -2295,14 +2169,15 @@ def _range_run(values) -> tuple[Grid, np.dtype]:
     return _exact_run(values, dtype), dtype
 
 
-def _coerce_run(run, sources: dict) -> Grid | Labels:
+def _coerce_run(run, sources: dict) -> Grid | Labels | Blank:
     """Coerce a run input (a run, an array of labels, or a dump) to a run."""
     if isinstance(run, np.ndarray):
         return _store(sources, run)
     if isinstance(run, Mapping):
-        run = Labels(**run) if "id" in run else Grid(**run)
-    elif not isinstance(run, Grid | Labels):
-        msg = f"Runs must be a Grid or Labels, got {type(run)}."
+        kind = Labels if "id" in run else Blank if "shape" in run else Grid
+        run = kind(**run)
+    elif not isinstance(run, Grid | Labels | Blank):
+        msg = f"Runs must be a Grid, Labels or Blank, got {type(run)}."
         raise CoordError(msg)
     if isinstance(run, Labels):
         if run.id not in sources:
@@ -2344,7 +2219,7 @@ def _grid_holds(grid: Grid, values, dtype) -> bool:
     return len(grid) == len(values) and bool(np.array_equal(labels, values))
 
 
-def _fuse_runs(runs: tuple[Grid | Labels, ...]) -> tuple[Grid | Labels, ...]:
+def _fuse_runs(runs: tuple) -> tuple:
     """
     Fuse each run which is exactly the next samples of its predecessor.
 
@@ -2444,7 +2319,7 @@ class NumericCoord(BaseCoord):
 get_coord(start=0.0, stop=20.0, step=1.0)
     """
 
-    runs: tuple[Grid | Labels, ...]
+    runs: tuple[Grid | Labels | Blank, ...]
     # The arrays the stored runs window, each under the id it was hashed
     # with; a window is only ever a view of one of them. An id is never
     # recomputed, so supplied sources are trusted to be the labels they
@@ -2489,13 +2364,15 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """
         out = self.model_dump(exclude={"runs", "sources"})
         out["runs"] = tuple(
-            x if isinstance(x, Grid) else self._run_labels(x) for x in self.runs
+            self._run_labels(x) if isinstance(x, Labels) else x for x in self.runs
         )
         return out
 
     @property
     def _rich_style(self) -> str:
         """Colour the shape the coordinate has, not the class it is."""
+        if self._partial:
+            return dascore_styles["coord_non"]
         if self.runs_count > 1:
             return dascore_styles["coord_segmented"]
         if self.evenly_sampled:
@@ -2522,6 +2399,10 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             raise CoordError(msg)
         if len(runs) > 1:  # an empty run states nothing, not even a seam
             runs = tuple(x for x in runs if len(x)) or runs[:1]
+        blank = runs[0] if isinstance(runs[0], Blank) else None
+        if len(runs) > 1 and any(isinstance(x, Blank) for x in runs):
+            msg = "A blank run must be its coordinate's only run."
+            raise CoordError(msg)
         runs = _fuse_runs(runs)
         stored = [x for x in runs if isinstance(x, Labels)]
         # An entry no window reads is let go of, so the store never
@@ -2529,16 +2410,26 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         data["sources"] = {x.id: sources[x.id] for x in stored}
         dtype = data.get("dtype")
         if _is_null(dtype) or dtype == "":
-            if not stored:
+            if not stored and blank is None:
                 msg = "A coordinate built only from grids must state its dtype."
                 raise CoordError(msg)
-            dtype = np.result_type(*[sources[x.id].dtype for x in stored])
+            known = () if blank is None else (blank.start, blank.stop, data.get("step"))
+            dtypes = [np.asarray(x).dtype for x in known]
+            times = [x for x in dtypes if x.kind in "mM"]
+            dtype = np.result_type(
+                *[sources[x.id].dtype for x in stored] or times or [float]
+            )
         dtype = np.dtype(dtype)
         for run in runs:
             if isinstance(run, Grid) and run.exact:
                 _check_grid(run, dtype)
         data["runs"] = runs
         data["dtype"] = dtype
+        if blank is not None:
+            data["shape"] = blank.shape
+            # unknown labels cannot contradict a step, so it is kept as stated
+            data["step"] = None if _is_null(step := data.get("step")) else step
+            return data
         if len(runs) == 1 and isinstance(runs[0], Labels):
             data["shape"] = _source(sources, runs[0]).shape
         else:
@@ -2587,6 +2478,17 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             return runs[0]
         return None
 
+    @property
+    def _blank(self) -> Blank | None:
+        """The blank run the coordinate is, or None."""
+        run = self.runs[0]
+        return run if isinstance(run, Blank) else None
+
+    @property
+    def _partial(self) -> bool:  # type: ignore[override]
+        """Whether the coordinate's labels are unknown."""
+        return self._blank is not None
+
     @cached_method
     def _run_offsets(self) -> np.ndarray:
         """The first sample index of each run."""
@@ -2616,9 +2518,19 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     # --- evaluation
 
     @property
-    @cached_method
     def values(self) -> ArrayLike:
         """Return the labels of the coordinate as an array."""
+        if not self._partial:
+            return self._labels()
+        # A read-only broadcast, uncached, so a long blank allocates nothing.
+        null = np.asarray(_get_nullish(self.dtype))
+        if self.dtype.kind == "f":  # NaN is a float64 unless told otherwise
+            null = null.astype(self.dtype)
+        return np.broadcast_to(null, self.shape)
+
+    @cached_method
+    def _labels(self) -> ArrayLike:
+        """The labels of every run, joined."""
         runs = self.runs
         if len(runs) == 1:
             return array(self._run_labels(runs[0]))
@@ -2656,11 +2568,15 @@ get_coord(start=0.0, stop=20.0, step=1.0)
 
     def _min(self):
         """Return min value."""
+        if (blank := self._blank) is not None:
+            return _get_nullish(self.dtype) if blank.start is None else blank.start
         bounds = self._bounds()
         return np.nanmin(bounds) if bounds.size else _get_nullish(self.dtype)
 
     def _max(self):
         """Return max value."""
+        if (blank := self._blank) is not None:
+            return _get_nullish(self.dtype) if blank.stop is None else blank.stop
         bounds = self._bounds()
         return np.nanmax(bounds) if bounds.size else _get_nullish(self.dtype)
 
@@ -2683,6 +2599,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
 
     def _run_direction(self, run) -> int:
         """1 if one run ascends, -1 if it descends, 0 if it does neither."""
+        if isinstance(run, Blank):
+            return 0
         if isinstance(run, Grid):
             step = run.step(self.dtype)
             zero = _TD64_ZERO if is_timedelta64(step) else 0
@@ -2722,6 +2640,16 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     # --- indexing and selection
 
     def __getitem__(self, item):
+        if self._partial:
+            # Index the broadcast view without allocating the full coordinate.
+            shape = self.values[item].shape
+            if (
+                shape == self.shape
+                and isinstance(item, slice)
+                and item.step in (None, 1)
+            ):
+                return self  # every sample, in order
+            return self._with_runs((Blank(shape),), step=None)
         if isinstance(item, int | np.integer) and self.ndim == 1:
             if item >= len(self) or item < -len(self):
                 raise IndexError(f"{item} exceeds coord length of {self}")
@@ -2765,6 +2693,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             elif isinstance(run, Grid):
                 out.append(run.sliced(first, stride, count))
             else:
+                assert isinstance(run, Labels)  # a blank is indexed whole
                 window = run.window(first, stride, count)
                 out.append(self._promoted_labels(window, step))
         # a backwards range reads the runs from the last one
@@ -2799,6 +2728,13 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         self, args, relative=False, samples=False
     ) -> tuple[BaseCoord, slice | ArrayLike]:
         """Apply select, return selected coords and index for selecting data."""
+        if self._partial and (relative or not samples):
+            # unknown labels answer no value query, only one bounding nothing
+            if is_array(args) or not all(
+                _is_null(x) for x in self._get_slice_tuple(args)
+            ):
+                raise CoordError(_BLANK_QUERY_MSG)
+            return self, slice(None)
         if is_array(args):
             return self._select_by_array(args, relative=relative, samples=samples)
         if samples:
@@ -3034,6 +2970,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
 
     def sort(self, reverse=False) -> tuple[BaseCoord, slice | ArrayLike]:
         """Sort the contents of the coord. Return new coord and slice for sorting."""
+        if self._partial:
+            return self, slice(None)
         direction = self._direction()
         if direction:
             if (direction < 0) == reverse:
@@ -3050,6 +2988,12 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """
         {doc}
         """
+        if (blank := self._blank) is not None:
+            if self.ndim != 1:
+                msg = "change_length only works on 1D coords."
+                raise CoordError(msg)
+            new = Blank((_validate_new_length(length),), blank.start)
+            return self._with_runs((new,))
         if (grid := self._grid) is None:
             return super().change_length(length)
         length = _validate_new_length(length)
@@ -3073,7 +3017,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         The min and max remain unchanged; every interior value may move
         without bound.
         """
-        if self.evenly_sampled:
+        if self.evenly_sampled or self._partial:
             return self
         min_v, max_v = self.min(), self.max()
         if len(self) == 1:
@@ -3199,6 +3143,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """
         {doc}
         """
+        if self._partial:
+            # unknown labels have no limits to move; only a step is stated
+            return self.new(**({} if step is None else {"step": step}), **kwargs)
         if (grid := self._grid) is not None:
             return self._range_limits(grid, min, max, step, **kwargs)
         if self.runs_count > 1 and min is not None and max is not None:
@@ -3270,6 +3217,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """Every label moved by delta; the runs move with them."""
         runs = []
         for run in self.runs:
+            assert not isinstance(run, Blank)  # update_limits states its ends
             if isinstance(run, Labels):
                 runs.append(self._run_labels(run) + delta)
             elif run.exact:
@@ -3293,6 +3241,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         dtype = self.dtype if exact else np.asarray(self.min() + delta).dtype
         return self._with_runs(runs, dtype=dtype)
 
+    def update(self, **kwargs):
+        """Update parts of the coordinate."""
+        # a blank has no labels for an update to keep in step
+        return self.new(**kwargs) if self._partial else super().update(**kwargs)
+
     def new(self, **kwargs):
         """Update coordinate; the runs are kept unless the labels change."""
         if "data" in kwargs or "values" in kwargs:
@@ -3311,6 +3264,10 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         if set(kwargs) <= {"units"}:
             return self.set_units(kwargs["units"])
         info: dict[str, Any] = dict(units=self.units)
+        if (blank := self._blank) is not None:
+            known = dict(start=blank.start, stop=blank.stop, step=self.step)
+            info.update(shape=self.shape, dtype=self.dtype, **known)
+            return get_coord(**{**info, **kwargs})
         if (grid := self._grid) is None:
             # floored labels do not sit on a fractional lattice's rounded step
             common = _common_grid(self.runs)
@@ -3351,8 +3308,16 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         runs = tuple(x for x, _ in pieces)
         return self.__class__(runs=runs, units=units, dtype=dtype, step=step)
 
-    def _converted_run(self, run, units) -> tuple[Grid | Labels, np.dtype]:
+    def _converted_run(self, run, units) -> tuple[Grid | Labels | Blank, Any]:
         """One run's labels in new units, and the dtype they take."""
+        if isinstance(run, Blank):
+            ends = [
+                None if x is None else convert_units(x, units, self.units)
+                for x in (run.start, run.stop)
+            ]
+            # a converted end can need a wider dtype, as an int in cm does in m
+            known = [np.asarray(x).dtype for x in ends if x is not None]
+            return Blank(run.shape, *ends), np.result_type(self.dtype, *known)
         if isinstance(run, Labels):
             # a genuinely new array: it enters a store of its own, hashed once
             values = convert_units(self._run_labels(run), units, self.units)
@@ -3433,6 +3398,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
 
     def _run_identity(self, run) -> tuple:
         """The payload naming one run's labels."""
+        if isinstance(run, Blank):
+            ends = (self._hash_scalar(run.start), self._hash_scalar(run.stop, "stop"))
+            return ("blank", *ends)
         if isinstance(run, Labels):
             return ("labels", run.id, run.count, run.offset, run.stride)
         origin, num, den, extra, *window = run.canonical()
@@ -3788,7 +3756,12 @@ def _fill_layout(
     stay as seams. An off-grid run moves to the nearest position, and two
     runs on one position raise.
     """
-    if not isinstance(coord, NumericCoord) or coord.evenly_sampled or len(coord) < 2:
+    if (
+        not isinstance(coord, NumericCoord)
+        or coord.evenly_sampled
+        or coord._partial
+        or len(coord) < 2
+    ):
         return None
     pieces = _fill_pieces(coord)
     first = pieces[0][1]
@@ -4276,9 +4249,11 @@ def get_coord(
             raise CoordError(msg)
         return out
     if runs is not None:
-        return NumericCoord(
+        out = NumericCoord(
             runs=runs, sources=sources or {}, units=units, dtype=dtype, step=step
         )
+        # a blank stating a whole range is that range, as the shape path reads
+        return out.new(shape=out.shape) if out._partial else out
 
     data = _get_array(data, values)
     shape = _get_shape(shape)
@@ -4292,7 +4267,7 @@ def get_coord(
         # fails to validate is an error, not a partial.
         stated = sum(not _is_null(x) for x in (start, stop, step))
         if len(shape) != 1 or shape[0] == 0 or stated < 2:
-            return CoordPartial(**attrs)
+            return _blank_coord(**attrs)
         try:
             return _range_coord(spec, units)
         except (ValidationError, CoordError):
@@ -4300,7 +4275,7 @@ def get_coord(
             # always was; an exact grid raises only for what is wrong.
             if _exact_dtype(start, stop, step, shape) is not None:
                 raise
-            return CoordPartial(**attrs)
+            return _blank_coord(**attrs)
 
     # maybe convert min/max to start stop.
     if start is None and min is not None:
@@ -4315,7 +4290,7 @@ def get_coord(
         data, maybe_units = data.magnitude, data.units
         units = units if units is not None else maybe_units
     if isinstance(data, (int | np.integer)):
-        return CoordPartial(
+        return _blank_coord(
             shape=_get_shape(data),
             start=start,
             stop=stop,
@@ -4335,7 +4310,7 @@ def get_coord(
             _raise_string_coord_error("range operations")
         return CoordString(values=data)
     if not data.size:
-        return CoordPartial(
+        return _blank_coord(
             shape=data.shape, units=units, step=step, dtype=dtype or data.dtype
         )
     if data.size == 1:
@@ -4366,8 +4341,14 @@ def get_coord(
         # then contradicts.
         if dtype is None and data.dtype.kind in "fmM":
             dtype = data.dtype
-        return CoordPartial(shape=data.shape, units=units, dtype=dtype)
+        return _blank_coord(shape=data.shape, units=units, dtype=dtype)
     return NumericCoord.from_labels(data, units=units)
+
+
+def _blank_coord(shape, start=None, stop=None, step=None, units=None, dtype=None):
+    """The coordinate of samples whose labels are unknown."""
+    run = Blank(shape, start, stop)
+    return NumericCoord(runs=(run,), step=step, units=units, dtype=dtype)
 
 
 def _range_coord(spec: dict, units) -> BaseCoord:

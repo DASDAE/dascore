@@ -1687,6 +1687,25 @@ def _gapped_patch(coord, dim="time", dtype=np.float64):
     return dc.Patch(data=data, coords=coords, dims=("distance", dim))
 
 
+class TestPartialDimension:
+    """Gap operations on a dimension whose labels are unknown."""
+
+    @pytest.fixture()
+    def patch(self):
+        """A patch whose only dimension states a step but no labels."""
+        coord = get_coord(shape=4, step=1)
+        return dc.Patch(data=np.ones(4), coords={"x": coord}, dims=("x",))
+
+    def test_fill_gaps_is_a_no_op(self, patch):
+        """Unknown labels hold no holes to fill."""
+        assert patch.fill_gaps("x") == patch
+
+    def test_split_gaps_keeps_step(self, patch):
+        """Nothing is split, so nothing is lost."""
+        (out,) = patch.split_gaps()
+        assert out.get_coord("x").step == 1
+
+
 class TestFillGaps:
     """Tests for filling holes along a dimension."""
 

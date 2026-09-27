@@ -67,15 +67,10 @@ _OBJECT_SUFFIXES = (".yaml", ".yml", ".json")
 _ATTRS_STEM = "attrs"
 _ENVELOPE_STEM = "inventory"
 
-# The name a data directory carries its own inventory under, in either
-# form: the directory `.inventory/` or a file naming its format --
-# `.inventory.yaml`, `.inventory.yml`, or `.inventory.json`. Hidden,
-# like `.dascore_index.sqlite3` beside it -- a companion the directory
-# keeps rather than content it holds -- which is also what keeps the file
-# scanner (whose `skip_hidden` defaults to True) from reading it as data.
-# The visible spelling is deliberately not accepted: `inventory.yaml` is
-# the envelope of the authoring format, so a data directory holding one
-# would be claiming to be an inventory directory itself.
+# Store a data directory's inventory in `.inventory/` or
+# `.inventory.{yaml,yml,json}`. Hidden names keep the default file scanner
+# from treating it as data. Visible `inventory.yaml` is reserved for the
+# authoring format's root envelope.
 BLESSED_NAME = ".inventory"
 
 # Separates an entity's name from the epoch it starts.
@@ -102,9 +97,8 @@ class _Container(NamedTuple):
     # names a field of the model states that field; the rest are
     # _ADDRESS_LEVELS naming the entity which contains it.
     identity: tuple[str, ...]
-    # Collections whose members are addressed by their own names, in their
-    # own container. A file here may not state them: assembly would replace
-    # whatever it said, so stating them is a fact the format cannot keep.
+    # Collections loaded from separate containers. Reject them in object
+    # files because assembly would overwrite their values.
     supplied: tuple[str, ...] = ()
 
     @property
@@ -141,17 +135,14 @@ class _Entry(NamedTuple):
 
 def _model_names() -> frozenset[str]:
     """
-    Return the name of every inventory model.
+    Return all DASCore inventory model names.
 
-    A file declaring one of these is claiming to be part of an inventory,
-    which is what makes it a near-miss rather than field material when it
-    turns up somewhere unrecognized.
+    Files declaring these types are inventory objects; an unrecognized location makes
+    them misplaced objects rather than unrelated files.
     """
 
     def walk(model):
-        # Scoped to dascore's own models, so that what a caller happens to
-        # have subclassed and imported cannot change which files this
-        # format calls a near-miss.
+        # User subclasses must not change which files count as misplaced objects.
         if model.__module__.startswith("dascore."):
             yield model.__name__
         for sub in model.__subclasses__():
@@ -162,11 +153,7 @@ def _model_names() -> frozenset[str]:
 
 def _object_suffix(path: Path) -> str | None:
     """
-    Return a path's object-file suffix, or None if it has none.
-
-    Matched without regard to case: a shouted ``DAS.L001.YAML`` is the file
-    ``DAS.L001.yaml`` would be, and skipping it for its spelling would load
-    an inventory silently missing whatever it named.
+    Return a YAML or JSON suffix, matched case-insensitively, or None.
     """
     suffix = path.suffix.casefold()
     return suffix if suffix in _OBJECT_SUFFIXES else None
@@ -174,10 +161,10 @@ def _object_suffix(path: Path) -> str | None:
 
 def _entry_name(path: Path) -> str:
     """
-    Return the address an entry's name states.
+    Return an entry's address, removing only recognized file suffixes.
 
-    ``Path.stem`` cannot be used: an address is full of dots, so it would
-    read ``DAS.L001`` as the stem ``DAS`` with a suffix.
+    Directory addresses contain dots: ``Path.stem`` would incorrectly shorten
+    ``DAS.L001`` to ``DAS``.
     """
     if path.is_dir() or (suffix := _object_suffix(path)) is None:
         return path.name
@@ -186,10 +173,7 @@ def _entry_name(path: Path) -> str:
 
 def _read_object(path: Path) -> dict[str, Any]:
     """
-    Parse one YAML or JSON object file into a mapping.
-
-    Both spellings share one data model, so the suffix picks the parser
-    and decides nothing else.
+    Parse a YAML or JSON object into a mapping using the same data model.
     """
     return read_document(
         path,
@@ -201,13 +185,11 @@ def _read_object(path: Path) -> dict[str, Any]:
 
 def _declared_type(path: Path) -> str | None:
     """
-    Return the model type a file declares, or None if it declares none.
+    Return a file's declared model type, or None if absent or unreadable.
 
-    This tells field material from a misfiled object, so a file which does
-    not parse simply is not an object: a YAML-suffixed file under a photos
-    directory owes this format nothing. Nor does an unreadable one make an
-    inventory unloadable -- without PyYAML installed, a JSON inventory must
-    still load past whatever YAML happens to lie beside it.
+    This distinguishes misplaced inventory objects from unrelated files. Unreadable or
+    invalid files elsewhere must not prevent loading an inventory, including a JSON
+    inventory with unrelated YAML files when PyYAML is unavailable.
     """
     try:
         data = _read_object(path)
@@ -224,10 +206,9 @@ _EPOCH_RE = re.compile(r"(?P<date>\d{4}-\d{2}-\d{2})(?:T(?P<time>\d{6}(?:\.\d+)?
 
 def _parse_epoch(text: str, source: Path):
     """
-    Parse the timestamp an entity name states after its ``@``.
+    Parse the timestamp after ``@`` in an entity name.
 
-    All inventory timestamps are UTC, so a designator saying so -- or
-    saying otherwise -- is refused rather than ignored.
+    Inventory timestamps are UTC; reject all timezone designators, including ``Z``.
     """
     where = f"in the name of {_quote(source)}"
     date, _, time = text.partition("T")

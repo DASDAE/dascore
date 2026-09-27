@@ -124,6 +124,27 @@ Three interval rules meet here: a row's `_min`/`_max` range is half-open, a `sel
 ann.bounds()
 ```
 
+# Cutting data
+
+[`Spool.cut`](`dascore.core.spool.Spool.cut`) returns one lazy patch per feature, cut to its bounds and merged across the files it crosses. A range is cut to its ends, both included. A pad, `(before, after)` offsets along a dimension, extends the ends that are stated values, and a feature at a single value needs one. A dimension the feature spans is kept whole. Each patch states `feature_id` (blank for a lone row) and `annotation` (a lone row's label, blank for a feature), so the contents join back to the set:
+
+```{python}
+spool = dc.get_example_spool()
+start = spool.get_contents()["time_min"].min()
+second = pd.Timedelta("1s")
+windows = pd.DataFrame(
+    {
+        "time": [start + 10 * second, None],
+        "time_min": [None, start + 2 * second],
+        "time_max": [None, start + 4 * second],
+        "feature_id": ["event_1", None],
+    }
+)
+windows = dc.AnnotationSet(windows, dims=("time", "distance"))
+cut = spool.cut(windows, time=("-1s", "1s"))
+len(cut), cut.get_contents()[["feature_id", "time_min", "time_max"]]
+```
+
 # Plotting
 
 [`ann.viz.plot`](`dascore.viz.annotations.plot`) draws every feature on an axis, putting dimensions where [`waterfall`](`dascore.viz.waterfall.waterfall`) puts them. Draw the patch first and the annotations over it. `color` may name a column, giving one color per value and a legend; features with no value, here the paths, the polygon and a trigger time added across the fiber, are grey:
