@@ -630,6 +630,12 @@ class TestNetCDFEdgeCases:
         with pytest.raises(ParameterError, match="one patch per file"):
             dc.write(multi_patch_spool, path, file_format="netcdf_cf")
 
+    def test_direct_multi_patch_write_error(self, multi_patch_spool, tmp_path):
+        """The writer itself refuses a multi-patch spool."""
+        path = tmp_path / "multi_direct.nc"
+        with pytest.raises(NotImplementedError, match="Multi-patch spools"):
+            netcdf_core.NetCDFCFV18().write(multi_patch_spool, path)
+
     def test_compression_options(self, compressed_netcdf_file):
         """Test NetCDF file creation with compression options."""
         path, original_patch = compressed_netcdf_file

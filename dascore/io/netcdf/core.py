@@ -228,4 +228,7 @@ class NetCDFCFV18(FiberIO):
         if len(patches) == 0:
             msg = "Cannot write empty spool"
             raise ValueError(msg)
+        if len(patches) > 1:
+            msg = "Multi-patch spools not yet supported for NetCDF output"
+            raise NotImplementedError(msg)
         return patches[0]
