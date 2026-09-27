@@ -2202,8 +2202,8 @@ def write(
         whole and any other raises a
         [`ParameterError`](`dascore.exceptions.ParameterError`).
     **kwargs
-        Options the format's writer names, such as ``encoding`` for DASDAE
-        and NETCDF_CF.
+        Options the format's writer names, such as ``encoding`` for DASDAE,
+        PRODML, and NETCDF_CF.
 
     Raises
     ------

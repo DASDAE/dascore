@@ -71,6 +71,20 @@ class ProdMLV2_1(ProdMLV2_0):  # noqa
 
     version = "2.1"
 
-    def write(self, spool: dc.Patch | dc.Spool, resource: H5Writer, **kwargs) -> None:
-        """Write one raw Patch to a standalone ProdML HDF5 file."""
-        _write_prodml(spool, resource)
+    def write(
+        self,
+        spool: dc.Patch | dc.Spool,
+        resource: H5Writer,
+        encoding: dict | None = None,
+        **kwargs,
+    ) -> None:
+        """
+        Write one raw Patch to a standalone ProdML HDF5 file.
+
+        Parameters
+        ----------
+        encoding
+            Per-variable storage options, as DASDAE takes them: "data" sets
+            the RawData array and "time" the RawDataTime array.
+        """
+        _write_prodml(spool, resource, encoding)

@@ -520,3 +520,73 @@ def extract_h5_attrs(
         value = _maybe_unpack(unbyte(obj.attrs[attr]))
         out[out_name] = fill_values.get(value, value)
     return out
+
+
+# The h5netcdf encoding keys which map onto h5py's create_dataset.
+_ENCODING_KEYS = (
+    "chunksizes",
+    "complevel",
+    "compression",
+    "compression_opts",
+    "fletcher32",
+    "shuffle",
+    "zlib",
+)
+# Keys xarray drops on write, which an opened dataset's encoding holds.
+_DROPPED_ENCODING_KEYS = ("source", "original_shape")
+
+
+def _translate_encoding(name, encoding) -> dict:
+    """Translate one variable's encoding as xarray's h5netcdf backend does."""
+    out = {k: v for k, v in encoding.items() if k not in _DROPPED_ENCODING_KEYS}
+    if unknown := sorted(set(out) - set(_ENCODING_KEYS)):
+        msg = (
+            f"Unexpected encoding parameters for variable {name!r}: {unknown}. "
+            f"Valid encodings are: {list(_ENCODING_KEYS)}."
+        )
+        raise ValueError(msg)
+    if out.pop("zlib", False):
+        if out.get("compression") not in (None, "gzip"):
+            raise ValueError("'zlib' and 'compression' encodings mismatch")
+        out.setdefault("compression", "gzip")
+    level, opts = out.get("complevel"), out.get("compression_opts")
+    if "complevel" in out and "compression_opts" in out and level != opts:
+        raise ValueError("'complevel' and 'compression_opts' encodings mismatch")
+    if complevel := out.pop("complevel", 0):
+        out.setdefault("compression_opts", complevel)
+    # JSON and YAML give lists; h5py filters need tuples.
+    if isinstance(out.get("compression_opts"), list):
+        out["compression_opts"] = tuple(out["compression_opts"])
+    if (chunks := out.pop("chunksizes", None)) is not None:
+        out["chunks"] = tuple(chunks)
+    return out
+
+
+def h5_encoding(encoding: dict | None) -> dict[str, dict]:
+    """
+    Translate an xarray-style write encoding into h5py dataset options.
+
+    Keys are variable names; each value becomes ``create_dataset`` kwargs,
+    translated as xarray's h5netcdf engine does. Unknown keys raise
+    ``ValueError``.
+    """
+    return {k: _translate_encoding(k, v) for k, v in (encoding or {}).items()}
+
+
+def check_encoding_variables(options: dict, names) -> None:
+    """Refuse an encoding naming a variable not in ``names``, as xarray does."""
+    if unknown := sorted(set(options) - set(names)):
+        raise KeyError(f"Encoding names variables not in the patch: {unknown}")
+
+
+def h5_dataset_kwargs(options: dict | None, shape: tuple[int, ...]) -> dict:
+    """Return create_dataset kwargs for an array, clamping chunks to its shape."""
+    if not (options and shape and all(shape)):  # h5py refuses filters on these
+        return {}
+    chunks = options.get("chunks")
+    if chunks is None or len(chunks) != len(shape):  # h5py reports a bad rank
+        return options
+    return {
+        **options,
+        "chunks": tuple(min(c, n) for c, n in zip(chunks, shape, strict=True)),
+    }

@@ -652,17 +652,23 @@ class TestNetCDFEdgeCases:
             assert h5["data"].compression_opts == 9
             assert h5["data"].chunks == (10, 20)
 
-    def test_encoding_shared_with_dasdae(self, tmp_path):
-        """One encoding dict writes the same data layout in both formats."""
+    def test_encoding_shared_across_formats(self, tmp_path):
+        """One encoding dict writes the same data layout in every format."""
         _require_xarray_netcdf_engine()
         patch = dc.get_example_patch("random_das")
         opts = {"zlib": True, "complevel": 5, "shuffle": True, "chunksizes": (10, 20)}
         encoding = {"data": opts}
         nc = dc.write(patch, tmp_path / "out.nc", "netcdf_cf", encoding=encoding)
         h5 = dc.write(patch, tmp_path / "out.h5", "DASDAE", encoding=encoding)
-        with h5py.File(nc) as nc_file, h5py.File(h5) as h5_file:
+        pml = dc.write(patch, tmp_path / "pml.h5", "PRODML", encoding=encoding)
+        with (
+            h5py.File(nc) as nc_file,
+            h5py.File(h5) as h5_file,
+            h5py.File(pml) as pml_file,
+        ):
             group = h5_file["waveforms"][next(iter(h5_file["waveforms"]))]
-            for data in (nc_file["data"], group["data"]):
+            pml_data = pml_file["Acquisition/Raw[0]/RawData"]
+            for data in (nc_file["data"], group["data"], pml_data):
                 assert (data.compression, data.compression_opts) == ("gzip", 5)
                 assert data.shuffle and data.chunks == (10, 20)
 

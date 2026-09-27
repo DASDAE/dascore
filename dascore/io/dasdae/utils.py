@@ -31,7 +31,6 @@ from dascore.io.dasdae._compat import (
     strip_legacy_coord_fields,
     translate_legacy_attrs,
 )
-from dascore.io.dasdae._encoding import _dataset_kwargs
 from dascore.io.utils import resolve_keyed_source, should_snap
 from dascore.models.registry import get_model_tag, resolve_tagged_model
 from dascore.utils.array import (
@@ -39,6 +38,7 @@ from dascore.utils.array import (
     convert_strings_to_bytes,
     is_string_byte_serializable_array,
 )
+from dascore.utils.hdf5 import h5_dataset_kwargs
 from dascore.utils.misc import unbyte
 from dascore.utils.time import to_int
 
@@ -140,7 +140,7 @@ def _save_array(data, name, group, options=None):
     if name in group:
         # Overwrite the dataset in place when callers resave the same array node.
         del group[name]
-    options = _dataset_kwargs(options, data.shape)
+    options = h5_dataset_kwargs(options, data.shape)
     array_node = group.create_dataset(name, data=data, **options)
     array_node.attrs["is_datetime64"] = is_dt
     array_node.attrs["is_timedelta64"] = is_td
