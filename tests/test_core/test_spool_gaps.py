@@ -447,8 +447,55 @@ class TestChunkKeepsHoles:
         out = list(dc.spool([patch]).chunk(time=None, tolerance=10))
         assert out == list(dc.spool([patch]))
 
-    @pytest.mark.parametrize("seed", range(20))
-    def test_rows_are_what_chunk_yields(self, seed):
+    def test_off_lattice_members_stay_apart(self, tmp_path):
+        """Members on grids a fraction of a step apart never share a row."""
+        first = dc.Patch(
+            data=np.zeros((1, 3)),
+            coords={"distance": [0], "time": [0.0, 1, 2]},
+            dims=DIMS,
+        )
+        second = first.update_coords(time=np.array([3.4, 4.4, 5.4]))
+        chunked = dc.spool([first, second]).chunk(time=None, snap_coords=False)
+        assert len(chunked) == 2
+        # overlapping members still merge
+        overlapping = first.update_coords(time=np.array([1.0, 2, 3]))
+        merged = dc.spool([first, overlapping]).chunk(time=None, snap_coords=False)
+        assert len(merged) == 1
+        # labels with no step name no lattice, so they still join
+        t0 = np.datetime64("2020-01-01T00:00:00.000000000")
+        times = (t0 + np.array([0, 3, 4]) * ONE_MS, t0 + np.array([5, 9, 10]) * ONE_MS)
+        uneven = [first.update_coords(time=x) for x in times]
+        assert len(dc.spool(uneven).chunk(time=None, snap_coords=False)) == 1
+        assert all(x.get_coord("time").runs_count == 1 for x in chunked)
+        pytest.importorskip("xarray")
+        with pytest.raises(ParameterError, match="one patch per file"):
+            dc.write(chunked, tmp_path / "out.nc", "NETCDF_CF")
+
+    @pytest.mark.parametrize(
+        ("step", "cuts", "count"),
+        [
+            ((1, 1024), (30, 30), 1),
+            ((1, 1024), (30, 31), 2),
+            ((3, 2 * 10**9), (3, 4), 2),
+        ],
+    )
+    def test_exact_grids_join_on_their_lattice(self, step, cuts, count):
+        """Without snapping, exact grids join only where no position is missing."""
+        t0 = np.datetime64("2020-01-01T00:00:00")
+        full = get_coord(start=t0, step=step, shape=(60,))
+        pieces = full[: cuts[0]], full[cuts[1] :]
+        patches = [
+            dc.Patch(data=np.zeros(len(x)), coords={"time": x}, dims=("time",))
+            for x in pieces
+        ]
+        chunked = dc.spool(patches).chunk(time=None, snap_coords=False)
+        assert len(chunked) == count
+        assert all(x.get_coord("time").runs_count == 1 for x in chunked)
+
+    @pytest.mark.parametrize("snap", [True, False])
+    @pytest.mark.parametrize("shift", [0.0, 0.3, 0.6])
+    @pytest.mark.parametrize("seed", range(8))
+    def test_rows_are_what_chunk_yields(self, seed, shift, snap):
         """Every output is one run per dim, and the plan counts what it yields."""
         rng = np.random.default_rng(seed)
         count = int(rng.integers(1, 5))
@@ -458,9 +505,13 @@ class TestChunkKeepsHoles:
         coords = {"distance": [0], "time": concat_coords(*pieces)}
         data = rng.random((1, 20 * count))
         patch = dc.Patch(data=data, coords=coords, dims=DIMS)
+        # a member shifted a fraction of a step lies on another lattice
+        later = patch.update_coords(time_min=float(starts[-1]) + 20 + shift)
         length = [None, 5.0, 13.0][int(rng.integers(3))]
         tolerance = float(rng.choice([1.5, 10.0, 100.0]))
-        chunked = dc.spool([patch]).chunk(time=length, tolerance=tolerance)
+        chunked = dc.spool([patch, later]).chunk(
+            time=length, tolerance=tolerance, snap_coords=snap
+        )
         yielded = list(chunked)
         assert all(x.get_coord(d).runs_count == 1 for x in yielded for d in x.dims)
         assert len(chunked) == len(yielded) == len(dc.spool(yielded))

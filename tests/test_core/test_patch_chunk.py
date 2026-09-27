@@ -1571,12 +1571,14 @@ class TestQuantityTolerance:
         ).update_attrs(history="")
         spool = dc.spool((base, after))
         snapped = spool.chunk(time=None)[0].get_coord("time")
-        exact = spool.chunk(time=None, snap_coords=False)[0].get_coord("time")
+        # without snapping the lattices differ, so the patches stay apart
+        exact = spool.chunk(time=None, snap_coords=False)
         assert snapped.evenly_sampled
-        assert _is_segmented(exact)
+        assert len(exact) == 2
+        values = np.concatenate([x.get_coord("time").values for x in exact])
         # no sample moved far enough to land on another grid position,
         # and none moved past the tolerance the merge was given either
-        deviation = abs(snapped.values - exact.values).max()
+        deviation = abs(snapped.values - values).max()
         assert deviation < coord.step
         assert deviation <= 1.5 * coord.step
 

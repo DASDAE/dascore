@@ -2506,13 +2506,15 @@ get_coord(start=0.0, stop=20.0, step=1.0)
 
     def _with_runs(self, runs, dtype=None, step: Any = ...) -> Self:
         """A coordinate holding these runs, with this one's metadata."""
+        runs = tuple(runs)
         return self.__class__(
-            runs=tuple(runs),
+            runs=runs,
             units=self.units,
             dtype=self.dtype if dtype is None else dtype,
             # a step passed here is a caller saying what the runs now sit on
             step=self.step if step is ... else step,
-            sources=self.sources,
+            # only the arrays these runs read, so a segment copies no others
+            sources={x.id: self.sources[x.id] for x in runs if isinstance(x, Labels)},
         )
 
     # --- evaluation

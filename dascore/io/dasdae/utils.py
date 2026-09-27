@@ -178,7 +178,7 @@ def _extended_float(coord) -> bool:
 _OBJECT_TYPE = "object_type"
 # The shapes a version 2 node can hold, as the format has always named them.
 _RANGE = "CoordRange"
-# An array node whose labels are read as written.
+# An array node's run lengths, whose labels are read as written.
 _EXACT = "exact"
 
 
@@ -237,7 +237,8 @@ def _save_coord(coord, name, group, compact: bool, options=None):
             node.attrs["step"] = to_int(step) if is_td else step
             node.attrs["step_is_timedelta64"] = is_td
         if compact and getattr(coord, "runs_count", 1) > 1:
-            node.attrs[_EXACT] = True  # irregular runs are never snapped
+            # irregular runs are read back as the runs they are, unsnapped
+            node.attrs[_EXACT] = [len(x) for x in coord.runs]
     if compact:
         node.attrs[_OBJECT_TYPE] = object_type
     if coord.units is not None:
@@ -394,8 +395,9 @@ def _read_coord(node, name, attrs2, snap):
         # a version 2 array holds exactly its values; a step on it is the
         # grid it declares, never a range to rebuild
         array = _read_array(node)
-        if node_attrs.get(_EXACT, False):
-            return NumericCoord.from_labels(array, units=units, step=node_step)
+        if (lengths := node_attrs.get(_EXACT)) is not None:
+            runs = np.split(array, np.cumsum(lengths)[:-1])
+            return NumericCoord(runs=tuple(runs), units=units, step=node_step)
         if node_step is not None:
             return get_coord(data=array, units=units, step=node_step)
         if snap or np.ndim(array) != 1:

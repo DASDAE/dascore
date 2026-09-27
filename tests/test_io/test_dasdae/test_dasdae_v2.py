@@ -214,6 +214,22 @@ class TestVersion2Files:
         np.testing.assert_array_equal(back.get_coord("x").values, coord.values)
         np.testing.assert_array_equal(back.data, data)
 
+    @pytest.mark.parametrize(
+        "runs",
+        [
+            (np.array([0.0, 1.0, 2.0005]), np.array([3.0, 4.0005, 5.0])),
+            (np.array([0.0, 1.0, 2.0005, 3.0]), np.arange(10.0, 13.0)),
+        ],
+    )
+    def test_irregular_runs_survive_a_rewrite(self, runs, tmp_path):
+        """Labels read back exactly stay exact when written again."""
+        coord = NumericCoord(runs=runs)
+        data = np.arange(float(len(coord)))
+        patch = dc.Patch(data=data, coords={"x": coord}, dims=("x",))
+        (once,) = dc.spool(dc.write(patch, tmp_path / "one.h5", "dasdae"))
+        (twice,) = dc.spool(dc.write(once, tmp_path / "two.h5", "dasdae"))
+        np.testing.assert_array_equal(twice.get_coord("x").values, coord.values)
+
     def test_append_keeps_the_higher_version(self, random_patch, tmp_path):
         """Appending version 1 patches to a version 2 file leaves it version 2."""
         path = dc.write(random_patch, tmp_path / "both.h5", "dasdae")
