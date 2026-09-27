@@ -6,6 +6,7 @@ import gc
 import hashlib
 import sys
 import time
+import tracemalloc
 import weakref
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
@@ -684,6 +685,54 @@ def assert_same_array(view, eager, loadable):
     assert view.validate() is view
     if loadable:
         assert np.array_equal(view.load(), eager.load())
+
+
+class TestFoldedColumns:
+    """Columns of one value throughout cost one value, not one per member."""
+
+    @staticmethod
+    def many(count=2000):
+        """Return many members over a few files, with one-valued columns."""
+        return LazyArray.from_columns(
+            [f"/data/f{x % 97:03d}.h5" for x in range(count)],
+            (2, 3),
+            key=[["", "k"][x % 3 == 0] for x in range(count)],
+            **FORMAT,
+        )
+
+    def test_memory_per_member(self):
+        """A large array of like members keeps well under a column per field."""
+        paths = [f"/data/f{x:05d}.h5" for x in range(20_000)]
+        tracemalloc.start()
+        try:
+            LazyArray.from_columns(paths, (1000, 100), **FORMAT)
+            held = tracemalloc.get_traced_memory()[0]
+        finally:
+            tracemalloc.stop()
+        assert held / len(paths) < 120
+
+    def test_folding_changes_nothing(self, monkeypatch):
+        """Folded and unfolded tables give the same arrays."""
+
+        def views():
+            array = self.many()
+            half = array.shape[0] // 2
+            return [
+                array,
+                array[5:900, 1:],
+                concat([array[:half], array[half:]]),
+                concat([array, constant(array.shape, 2.0)], axis=1),
+                *array.rechunk([0, 7, 333, 600]),
+            ]
+
+        folded = views()
+        monkeypatch.setattr(lazy_module, "_FOLD_ROWS", 10**9)
+        for got, expected in zip(folded, views(), strict=True):
+            assert got.data_id == expected.data_id
+            assert got.sources == expected.sources
+            pd.testing.assert_frame_equal(got.to_frame(), expected.to_frame())
+            if got.table.members.filled.all():
+                assert np.array_equal(got.load(), expected.load())
 
 
 class TestViews:
