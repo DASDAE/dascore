@@ -13,13 +13,14 @@ from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.planned import derived_catalog
 from dascore.utils.chunk_plan import (
     _ensure_patch_row,
+    _stated_units,
     _window_samples,
     build_subdivision_plan,
+    refuse_riders,
 )
 from dascore.utils.explicit_ranges import (
     ExplicitRanges,
     known_coordinates,
-    refuse_riders,
 )
 
 
@@ -82,7 +83,11 @@ class ExplicitSelectCatalog:
             ]
             ids = {x for frame in candidate_frames for x in frame["_patch_row"]}
             candidates = source[source["_patch_row"].isin(ids)]
-            known = {x: known_coordinates(self.parent, candidates, x) for x in names}
+            known = {
+                x: known_coordinates(self.parent, candidates, x)
+                for x, ranges in self.ranges.items()
+                if ranges.constrains
+            }
             rows = []
             pieces: dict[str, list] = {name: [] for name in names}
             requests = []
@@ -105,8 +110,7 @@ class ExplicitSelectCatalog:
                                 "is unavailable."
                             )
                             raise MissingPatchError(msg)
-                        unit = row.get(f"_{name}_units")
-                        unit = None if pd.isnull(unit) or unit == "" else str(unit)
+                        unit = _stated_units(row.get(f"_{name}_units"))
                         # exact labels only, so the grid is not consulted
                         window = (bounds, low, high, np.nan, unit, (coord,))
                         actual.append(_window_samples(*window))

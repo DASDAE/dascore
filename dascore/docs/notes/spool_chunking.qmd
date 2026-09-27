@@ -213,7 +213,7 @@ assert len(accepted) == 1
 assert len(source.chunk_plan(distance=windows, on_incomplete="ignore").outputs) == 1
 ```
 
-Several dimensions can take windows at once, with the same number of rows on each: row `i` of every array is one rectangular window. The first is chunked as above and the others trim each output, following the same completeness, `keep_partial` and `on_incomplete` rules (a trimmed dimension holding no samples is an unmet request). `None`, NaN or NaT leaves a bound open, taking the data's own edge, and a row open at both ends spans that dimension; on the chunked dimension it gives each contiguous segment whole, as `chunk(time=None)` would. `select` takes the same form. An explicit dimension cannot be combined with a chunk size on another, and several explicit dimensions do not accept `fill_value`.
+Several dimensions can take windows at once, with the same number of rows on each: row `i` of every array is one rectangular window. The first is chunked as above and the others trim each output, following the same completeness, `keep_partial` and `on_incomplete` rules (a trimmed dimension holding no samples is an unmet request). `None`, NaN or NaT leaves a bound open, taking the data's own edge, and a row open at both ends spans that dimension; on the chunked dimension it gives each contiguous segment whole, as `chunk(time=None)` would. A trim window missing a group of patches passes it by, and a row open at both ends keeps patches lacking that dimension. `select` takes the same form. With several windows each must name a dimension, an explicit dimension cannot be combined with a chunk size on another, and several explicit dimensions do not accept `fill_value`.
 
 ```{python}
 spool = dc.get_example_spool()

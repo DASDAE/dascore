@@ -1,4 +1,4 @@
-"""Validation of bounded absolute windows shared by spool operations."""
+"""Validation of absolute windows shared by spool operations."""
 
 from __future__ import annotations
 
@@ -19,6 +19,11 @@ class ExplicitRanges:
     """Immutable requested windows, retaining their original row numbers."""
 
     rows: tuple[tuple[object, object], ...]
+
+    @property
+    def constrains(self) -> bool:
+        """Whether any row bounds its dimension."""
+        return any(x is not None for row in self.rows for x in row)
 
 
 def looks_explicit(value) -> bool:
@@ -59,13 +64,13 @@ def explicit_ranges(value) -> ExplicitRanges | None:
             if isinstance(magnitude, bool | np.bool_) or np.ndim(magnitude):
                 msg = f"Explicit range row {index} has a non-scalar bound."
                 raise ParameterError(msg)
-            infinite = isinstance(magnitude, (int, float, np.number)) and (
-                not np.isfinite(magnitude)
-            )
+            missing = bool(pd.isna(magnitude))  # NaN and NaT, before infinities
+            infinite = not missing and isinstance(magnitude, (int, float, np.number))
+            infinite = infinite and not np.isfinite(magnitude)
             if infinite and (float(magnitude) > 0) == (not bounds):
                 msg = f"Explicit range row {index} has a reversed infinite bound."
                 raise ParameterError(msg)
-            bounds.append(None if pd.isna(magnitude) or infinite else bound)
+            bounds.append(None if missing or infinite else bound)
         # a lone closed end is checked against itself; open ends never reverse
         pair = [x for x in bounds if x is not None]
         pair = pair * 2 if len(pair) == 1 else pair
@@ -110,7 +115,7 @@ def explicit_ranges(value) -> ExplicitRanges | None:
 
 
 def explicit_windows(values: Mapping) -> dict[str, ExplicitRanges]:
-    """Return the explicit ranges among ``values``, one row per request each."""
+    """Return the explicit ranges in ``values``; each needs one row per request."""
     out = {k: r for k, v in values.items() if (r := explicit_ranges(v)) is not None}
     counts = {name: len(ranges.rows) for name, ranges in out.items()}
     if len(set(counts.values())) > 1:
@@ -120,20 +125,6 @@ def explicit_windows(values: Mapping) -> dict[str, ExplicitRanges]:
         )
         raise ParameterError(msg)
     return out
-
-
-def refuse_riders(windows: Mapping, rows: pd.DataFrame) -> None:
-    """Refuse a window after the first on a coordinate some row does not dim."""
-    dims = rows["dims"].fillna("").astype(str).str.split(",")
-    for name in list(windows)[1:]:
-        held = rows.get(f"{name}_min", pd.Series(dtype=float)).notna()
-        if (held & ~dims.map(lambda x, name=name: name in x)).any():
-            msg = (
-                f"Patches carry {name!r} only as a non-dimensional coordinate; "
-                "trimming is defined on dimensions, so only the first "
-                "explicit window may name it."
-            )
-            raise ParameterError(msg)
 
 
 def file_source_coords(resolver, row, files=None):

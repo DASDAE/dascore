@@ -2373,6 +2373,19 @@ def _structural(df: pd.DataFrame, coord: str) -> np.ndarray:
     return dims.apply(lambda d: coord in d).to_numpy(dtype=bool)
 
 
+def refuse_riders(windows: Mapping, rows: pd.DataFrame) -> None:
+    """Refuse windows on several coordinates when one is not always a dimension."""
+    for name in list(windows) if len(windows) > 1 else ():
+        held = rows.get(f"{name}_min", pd.Series(np.nan, index=rows.index)).notna()
+        if (held.to_numpy() & ~_structural(rows, name)).any():
+            msg = (
+                f"Some patches carry {name!r} as a non-dimensional coordinate; "
+                "trimming is defined on dimensions, so it can take an explicit "
+                "window only alone."
+            )
+            raise ParameterError(msg)
+
+
 def _member_key_digests(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
     """
     A "cat:" identity per output, digesting the identities it joins.
@@ -2521,6 +2534,18 @@ def _snapped_cuts(cuts, start, step) -> list:
     return sorted(out)
 
 
+def _stated_units(value) -> str | None:
+    """Return a unit string, or None when the row states none.
+
+    Row values arrive from dataframes, so an absent unit is NaN rather
+    than None — and NaN never equals itself, which would make an unstated
+    unit look like a mismatch.
+    """
+    if value is None or value == "" or pd.isnull(value):
+        return None
+    return str(value)
+
+
 def _dim_columns(df: pd.DataFrame, name: str) -> tuple[str, str, str]:
     """Return the envelope columns of one dimension, checked present."""
     columns = (f"{name}_min", f"{name}_max", f"{name}_step")
@@ -2629,7 +2654,7 @@ def build_subdivision_plan(
                 box = tuple(dim_pieces[position][index])
                 boxes[dim].append(box)
                 full = (df.at[position, f"{dim}_min"], df.at[position, f"{dim}_max"])
-                changed = changed or box != full
+                changed = changed or (box != full and not pd.isnull(full[0]))
             modified.append(changed)
     ids = np.arange(len(positions), dtype=np.int64)
     # Outputs are not file rows: source bookkeeping stays on the members,
@@ -2677,12 +2702,15 @@ def _report_incomplete(failures, behavior: WARN_LEVELS) -> None:
 
 
 def _explicit_bounds_for_partition(bounds, start, unit, stop):
-    """Express absolute requested points in one partition's coordinate units."""
+    """
+    Express absolute requested bounds in one partition's units; an open end
+    takes the partition's edge.
+    """
     out = []
     time = is_datetime64(start)
     duration = is_timedelta64(start)
     for bound, edge in zip(bounds, (start, stop)):
-        if bound is None:  # an open end takes the partition's own
+        if bound is None:
             out.append(edge)
         elif isinstance(bound, Quantity):
             if time:
@@ -3004,21 +3032,27 @@ def _trim_explicit(outputs, members, sources, windows, exact, keep_partial, beha
     labels = members["output_id"].map(by_output["_compat_group"]).to_numpy()
     keys = list(zip(requests, labels))  # an unmet group skips only itself
     keep = np.ones(len(members), dtype=bool)
-    failures, emptied = {}, {}
+    failures, emptied, missed = {}, {}, {}
     members = members.copy()
     for dim, ranges in windows.items():
         starts, stops, steps = (src[x].to_numpy() for x in _dim_columns(src, dim))
         units = src.get(f"_{dim}_units", pd.Series(None, index=src.index)).to_numpy()
         lows, highs = starts.copy(), stops.copy()
         for pos, (start, stop, step) in enumerate(zip(starts, stops, steps)):
-            request, unit = requests[pos], units[pos]
-            unit = None if pd.isnull(unit) or unit == "" else str(unit)
+            request, unit = requests[pos], _stated_units(units[pos])
             bounds, reason = ranges.rows[request], "contains no source samples"
             where = f"{labels[pos]}, dim {dim}"
-            if pd.isnull(start) or pd.isnull(stop):  # without the dim: skipped
-                keep[pos] = False
-                continue
             if all(x is None for x in bounds):  # spans the dim: no trim
+                continue
+            wanted = (None, None)
+            if not (pd.isnull(start) or pd.isnull(stop)):
+                wanted = _explicit_bounds_for_partition(bounds, start, unit, stop)
+            if wanted[0] is None or wanted[0] > stop or wanted[1] < start:
+                # a window missing a member (or its dim) passes it by
+                keep[pos], missed[request] = (
+                    False,
+                    (bounds, where, "outside source coverage"),
+                )
                 continue
             coord = exact.get(dim, {}).get(members["_patch_row"].iloc[pos])
             gridded = not pd.isnull(step) and bool(step)
@@ -3032,7 +3066,6 @@ def _trim_explicit(outputs, members, sources, windows, exact, keep_partial, beha
                 keep[pos], emptied[keys[pos]] = False, (bounds, where, reason)
                 continue
             lows[pos], highs[pos] = actual
-            wanted = _explicit_bounds_for_partition(bounds, start, unit, stop)
             short = (
                 _short_of(wanted, actual, step)
                 if gridded
@@ -3042,9 +3075,11 @@ def _trim_explicit(outputs, members, sources, windows, exact, keep_partial, beha
                 failures[keys[pos]] = (bounds, where, "sampled bounds are incomplete")
         members[f"{dim}_min"], members[f"{dim}_max"] = lows, highs
         members["_modified"] |= (lows != starts) | (highs != stops)
-    wanted = set(zip(outputs["_request_row"], outputs["_compat_group"]))
-    for key in (wanted - {x for x, kept in zip(keys, keep) if kept}) & set(emptied):
-        failures[key] = emptied[key]
+    kept = {x for x, held in zip(keys, keep) if held}
+    lost = set(zip(outputs["_request_row"], outputs["_compat_group"])) - kept
+    failures |= {x: emptied[x] for x in lost if x in emptied}
+    served = {x[0] for x in kept} | {x[0] for x in failures}
+    failures |= {(x, None): missed[x] for x in missed if x not in served}
     order = sorted(failures, key=lambda x: (x[0], str(x[1])))
     _report_incomplete([(x[0], *failures[x]) for x in order], behavior)
     members = members[keep & np.array([x not in failures for x in keys], bool)]

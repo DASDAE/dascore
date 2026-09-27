@@ -3,6 +3,7 @@
 import pickle
 import threading
 from dataclasses import replace
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -12,9 +13,12 @@ from dascore.core.coords import concat_coords, get_coord
 from dascore.examples import inventory_patch_pair
 from dascore.exceptions import ChunkError, MissingPatchError, ParameterError, UnitError
 from dascore.io.dasdae.core import DASDAEV1, DASDAEV2
+from dascore.io.index import explicit as explicit_module
 from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.planned import PlanResolver
 from dascore.units import get_quantity, m, s
+from dascore.utils.chunk_plan import _ensure_patch_row
+from dascore.utils.explicit_ranges import known_coordinates
 
 
 def _patch(values):
@@ -1542,16 +1546,6 @@ class TestExplicitBoxes:
         assert first == _boxes(one.chunk(distance=distance, time=time))
         assert first == [((t0, end), (10, 299))]
 
-    def test_non_dimension_trim_raises(self):
-        """Only the first window may name a coordinate which is not a dim."""
-        patch = dc.get_example_patch("random_patch_with_lat_lon")
-        time = patch.get_coord("time").values
-        latitude = np.array([[-109.85, -109.84]])
-        kwargs = dict(time=np.array([[time[10], time[100]]]), latitude=latitude)
-        for method in (dc.spool([patch]).select, dc.spool([patch]).chunk):
-            with pytest.raises(ParameterError, match="non-dimensional"):
-                len(method(**kwargs))
-
     def test_unmet_trim_skips_only_its_group(self):
         """A trim incomplete in one compatible group leaves the other's output."""
         patch = dc.get_example_patch()
@@ -1563,18 +1557,76 @@ class TestExplicitBoxes:
         out = spool.chunk(on_incomplete="ignore", **kwargs)
         assert [x[1] for x in _boxes(out)] == [(50, 150)] and out[0].attrs.tag == "a"
 
-    def test_mixed_dimension_trim_raises(self):
-        """A coordinate which is a dim on only some patches cannot trim."""
-        patch = dc.get_example_patch()
-        rider = patch.rename_coords(distance="channel").update_coords(
-            distance=("channel", patch.get_coord("distance").values)
-        )
-        spool = dc.spool([patch, rider])
-        start = patch.get_coord("time").min()
-        time = np.array([[start, start + np.timedelta64(1, "s")]])
+    @pytest.mark.parametrize("case", ["trim", "first", "mixed"])
+    def test_non_dimension_window_raises(self, case):
+        """Beside other windows, each must name a coordinate always a dim."""
+        patch = dc.get_example_patch("random_patch_with_lat_lon")
+        time = np.array([patch.get_coord("time").values[[10, 100]]])
+        latitude, distance = np.array([[-109.85, -109.84]]), np.array([[10, 20]])
+        windows = {
+            "trim": dict(time=time, latitude=latitude),
+            "first": dict(latitude=latitude, distance=distance),
+            "mixed": dict(time=time, distance=distance),
+        }[case]
+        patches = [patch]
+        if case == "mixed":  # distance is a dimension on one patch only
+            values = patch.get_coord("distance").values
+            rider = patch.rename_coords(distance="channel")
+            patches.append(rider.update_coords(distance=("channel", values)))
+        spool = dc.spool(patches)
         for method in (spool.select, spool.chunk):
             with pytest.raises(ParameterError, match="non-dimensional"):
-                len(method(time=time, distance=np.array([[10, 20]])))
+                len(method(**windows))
+
+    def test_missing_bounds_are_open(self, spool, t0):
+        """NaN and NaT leave either end open, whatever the coordinate's kind."""
+        time = np.array([[t0, t0 + np.timedelta64(1, "s")]])
+        out = spool.chunk(time=time, distance=np.array([[290, np.nan]]))
+        assert _boxes(out)[0][1] == (290, 299)
+        lags = np.arange(5).astype("timedelta64[s]")
+        lag = dc.spool(dc.Patch(data=lags, coords={"time": lags}, dims=("time",)))
+        span = np.array([[1, "NaT"], ["NaT", 2]], dtype="timedelta64[s]")
+        got = [x[0] for x in _boxes(lag.chunk(time=span), ("time",))]
+        assert got == [(lags[1], lags[4]), (lags[0], lags[2])]
+
+    def test_trim_missing_a_group_is_skipped(self, spool, t0):
+        """A trim window missing a whole group passes it by, in either order."""
+        sec = np.timedelta64(1, "s")
+        time, distance = np.array([[t0 + sec, t0 + 2 * sec]]), np.array([[10, 20]])
+        expected = _boxes(spool.chunk(time=time, distance=distance))
+        assert _boxes(spool.chunk(distance=distance, time=time)) == expected
+        split = spool.chunk(distance=150).chunk(time=time, distance=distance)
+        assert _boxes(split) == expected
+
+    def test_open_trim_keeps_patches_without_the_dim(self, spool, t0):
+        """An open trim row keeps a patch lacking the dim; a bounded one drops it."""
+        lone = spool[0].select(distance=(0, 0)).squeeze("distance")
+        mixed = dc.spool([spool[0], lone])
+        time = np.array([[t0, t0 + np.timedelta64(1, "s")]])
+        for distance, dims in (([[None, None]], 2), ([[10, 20]], 1)):
+            for method in (mixed.select, mixed.chunk):
+                out = method(time=time, distance=np.array(distance))
+                assert len({p.dims for p in out}) == len(out) == dims
+
+    def test_open_trim_reads_no_coordinates(self, spool, t0, monkeypatch):
+        """A dim whose windows are all open needs no coordinate lookups."""
+        spy = Mock(wraps=known_coordinates)
+        for module in (dc.core.spool, explicit_module):
+            monkeypatch.setattr(module, "known_coordinates", spy)
+        time = np.array([[t0, t0 + np.timedelta64(1, "s")]])
+        kwargs = dict(time=time, distance=np.array([[None, None]]))
+        assert len(spool.chunk(**kwargs)) == len(spool.select(**kwargs)) == 1
+        assert {x.args[2] for x in spy.call_args_list} == {"time"}
+
+    def test_trim_metadata_describes_trimmed_coords(self):
+        """Recovered coords and rider identities follow the trim, not the source."""
+        patch = dc.get_example_patch("random_patch_with_lat_lon")
+        time = np.array([patch.get_coord("time").values[[10, 100]]])
+        out = dc.spool([patch]).chunk(time=time, distance=np.array([[10, 20]]))
+        rows = _ensure_patch_row(out._catalog.to_df())
+        assert rows["_latitude_def_key"].isna().all()
+        (coord,) = known_coordinates(out._catalog, rows, "distance").values()
+        assert (coord.min(), coord.max()) == (10, 20)
 
     def test_spanning_trim_keeps_identity(self, spool, t0):
         """A trim row open at both ends changes nothing, not even the id."""
@@ -1603,6 +1655,7 @@ class TestExplicitBoxes:
         assert _boxes(narrowed.chunk(**window))[0][1] == (50, 60)
         gapped = dc.spool([spool[0], spool[2]])
         assert len(gapped.chunk(time=np.array([[None, None]]))) == 2
+        assert len(gapped.chunk(time=np.array([[None, t0 + sec]]))) == 1
         with pytest.raises(ChunkError, match="split by a gap"):
             gapped.chunk(time=np.array([[None, end]]))
 
@@ -1610,7 +1663,7 @@ class TestExplicitBoxes:
     def test_empty_trim_window_follows_policy(self, spool, t0, policy):
         """A window holding no samples on a trimmed dim is an unmet request."""
         time = np.array([[t0, t0 + np.timedelta64(1, "s")]] * 2)
-        kwargs = dict(time=time, distance=np.array([[0, 5], [400, 500]]))
+        kwargs = dict(time=time, distance=np.array([[0, 5], [10.2, 10.8]]))
         if policy == "raise":
             with pytest.raises(ChunkError, match="dim distance: contains no source"):
                 spool.chunk(**kwargs)
@@ -1665,7 +1718,12 @@ class TestExplicitBoxes:
         ]
         uneven = np.array([0.0, 1.0, 3.0, 6.0, 9.0])
         spanned = dict(time=kwargs["time"], distance=np.array([[None, None]]))
-        assert len(make(uneven).chunk_plan(**spanned).outputs) == 1
+        assert len(make(uneven).chunk_plan(**spanned).outputs) == 2
+        past = dict(time=kwargs["time"], distance=np.array([[3.0, 20.0]]))
+        with pytest.raises(ChunkError, match="incomplete"):
+            make(uneven, clear=False).chunk(**past)
+        partial = make(uneven, clear=False).chunk(keep_partial=True, **past)[0]
+        assert partial.get_coord("distance").values.tolist() == [3.0, 6.0, 9.0]
         with pytest.raises(ChunkError, match="coordinates are unavailable"):
             make(uneven).chunk_plan(**kwargs)
         assert _boxes(make(uneven, clear=False).chunk(**kwargs))[0][1] == (1.0, 1.0)

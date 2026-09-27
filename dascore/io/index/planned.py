@@ -57,6 +57,7 @@ from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     _concatenated_steps,
     _ensure_patch_row,
+    _stated_units,
     patch_local_adjusted_envelopes,
 )
 from dascore.utils.explicit_ranges import _select_manager, _source_manager
@@ -79,18 +80,6 @@ _READ_KWARGS = ("path", "file_format", "file_version")
 PLAN_SCHEME = "plan://"
 # columns that are structural/positional rather than patch attributes
 _NON_ATTR = {"output_id", "dims", "coord_names", "patch"}
-
-
-def _stated_units(value) -> str | None:
-    """Return a unit string, or None when the row states none.
-
-    Row values arrive from dataframes, so an absent unit is NaN rather
-    than None — and NaN never equals itself, which would make an unstated
-    unit look like a mismatch.
-    """
-    if value is None or value == "" or pd.isnull(value):
-        return None
-    return str(value)
 
 
 def _source_units_column(name: str) -> str:
@@ -1026,20 +1015,16 @@ def _trimmed_dims(residuals, coord_dims_map: Mapping) -> frozenset[str]:
     )
 
 
-def stale_def_keys(
-    residuals, coord_dims_map: Mapping, columns, trim_dims=()
-) -> list[str]:
+def stale_def_keys(trimmed, coord_dims_map: Mapping, columns) -> list[str]:
     """
-    The def-key columns which describe coordinates a residual will trim.
-
-    ``trim_dims`` are dimensions a plan's explicit windows trim, likewise.
+    The def-key columns which describe coordinates on ``trimmed`` dims.
 
     A residual selection is applied when a patch is loaded, so until then
     the identity claims (def keys) of coordinates on the trimmed
     dimensions describe the untrimmed values and must not be compared or
-    published.
+    published. The same holds for the dimensions a plan's explicit
+    windows trim.
     """
-    trimmed = _trimmed_dims(residuals, coord_dims_map) | set(trim_dims)
     return [
         f"_{c}_def_key"
         for c, dims_str in coord_dims_map.items()
@@ -1235,9 +1220,7 @@ def derived_catalog(
     trimmed_dims = _trimmed_dims(parent_residuals, coord_dims_map)
     trimmed_dims |= frozenset(plan.trim_dims)
     outputs = plan.outputs
-    stale_keys = stale_def_keys(
-        parent_residuals, coord_dims_map, outputs.columns, plan.trim_dims
-    )
+    stale_keys = stale_def_keys(trimmed_dims, coord_dims_map, outputs.columns)
     if stale_keys:
         outputs = outputs.drop(columns=stale_keys)
     aux_info = _aux_coord_info(

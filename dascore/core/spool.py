@@ -89,6 +89,7 @@ from dascore.utils.chunk_plan import (
     build_gap_frame,
     build_subdivision_plan,
     coalesce_runs,
+    refuse_riders,
     subdivision_pieces,
 )
 from dascore.utils.concurrency import _prefetch
@@ -112,7 +113,6 @@ from dascore.utils.explicit_ranges import (
     explicit_windows,
     known_coordinates,
     looks_explicit,
-    refuse_riders,
 )
 from dascore.utils.misc import (
     _spool_map,
@@ -595,7 +595,7 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> import numpy as np
         >>> ranges = np.array([[0, 10], [20, 30]])
         >>> pieces = spool.select(distance=ranges)
-        >>> # one box per row across two dimensions, the last open-ended
+        >>> # one box per row on two dimensions; row two's time end is open
         >>> times = np.array([[time[0], time[1]], [time[0], None]])
         >>> boxes = spool.select(distance=ranges, time=times)
         """
@@ -1800,7 +1800,9 @@ class Spool(NodeRepr, NamespaceOwner):
         windows = explicit_windows(dim_kwargs)
         refuse_riders(windows, source_rows)
         exact = {
-            dim: known_coordinates(self._catalog, source_rows, dim) for dim in windows
+            dim: known_coordinates(self._catalog, source_rows, dim)
+            for dim, ranges in windows.items()
+            if ranges.constrains
         }
         plan = build_chunk_plan(working, _exact_coords=exact, **params, **dim_kwargs)
         return source_rows, coalesce_runs(plan, working)

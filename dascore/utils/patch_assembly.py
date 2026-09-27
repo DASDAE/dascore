@@ -158,13 +158,14 @@ def _plan_trim_kwargs(patch, kwargs, plan_dims) -> dict:
     Keep only the trims the plan actually narrows.
 
     A member row is its source row with the *planned* dimensions'
-    envelopes replaced by the member's trim ranges (a trim which spans
-    the patch is dropped); every other range column still describes the
-    whole source. Selecting on those would
+    envelopes replaced by the member's trim ranges; every other range
+    column still describes the whole source. Selecting on those would
     re-select a coordinate to its own extent, which is a no-op for a
     sorted numeric range but not for a string coordinate (a range of
     labels), one holding NaN (missing values fall outside every range),
-    or one which cannot be range-selected at all.
+    or one which cannot be range-selected at all. A trim-dimension range
+    spanning the whole patch (or naming a dim it lacks) is also dropped,
+    keeping the patch's id.
     """
     first, *others = plan_dims
     if first not in kwargs:  # an unmodified member states no range
@@ -173,9 +174,10 @@ def _plan_trim_kwargs(patch, kwargs, plan_dims) -> dict:
     assert first in coord_map, "the plan's dimension is on every member"
     out = {first: kwargs[first]}
     for dim in others:
-        # a trim spanning the patch is skipped, so it keeps the patch's id
-        (low, high), coord = kwargs[dim], coord_map.get(dim)
-        if coord is not None and not (low <= coord.min() and high >= coord.max()):
+        (low, high), coord = kwargs.get(dim, (None, None)), coord_map.get(dim)
+        if coord is None or low is None:
+            continue
+        if not (low <= coord.min() and high >= coord.max()):
             out[dim] = kwargs[dim]
     return out
 
@@ -607,8 +609,8 @@ class PatchAssembler:
     selections included); ``merge_kwargs`` carries the merge behavior;
     ``plan_dim`` names the dimension whose range the plan narrowed, and
     ``trim_dims`` any others, which are the only ones a member needs
-    trimming on. The plan resolver
-    hands this the joined member frame for one output at a time.
+    trimming on. The plan resolver hands this the joined member frame for
+    one output at a time.
     """
 
     load_patch: Callable[[Mapping], dc.Patch]
@@ -669,8 +671,8 @@ class PatchAssembler:
         # skip selection. This is important for missing coordinates
         # (NaN values) to not get trimmed out.
         source_kwargs = kwargs if kwargs.get("_modified") else {}
-        # attr-style entries filter rows above, and the plan only ever
-        # narrows its own dimension; everything else loads untouched.
+        # attr-style entries filter rows above; only the plan's dimension
+        # and its trim dims are narrowed, everything else loads untouched.
         dims = (self.plan_dim, *self.trim_dims)
         if select_kwargs := _plan_trim_kwargs(patch, source_kwargs, dims):
             patch = patch.select(**_as_plan_units(patch, select_kwargs, patch_kwargs))
