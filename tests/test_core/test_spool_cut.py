@@ -9,9 +9,9 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+import dascore.io.core as io_core
 from dascore.core.spool import Spool
 from dascore.exceptions import ParameterError
-from dascore.io.index.catalog import FileResolver
 from dascore.io.index.planned import PlanResolver
 
 DIMS = ("distance", "time")
@@ -90,6 +90,15 @@ class TestCut:
         """A window crossing a file boundary is one patch."""
         (patch,) = spool.cut(_ranges(start, (5, 12)))
         assert _span(patch) == _seconds(start, 5, 12)
+
+    def test_tiled(self, spool, start):
+        """Patches split along two dims merge along both, in feature order."""
+        tiles = [x.select(distance=d) for x in spool for d in ((0, 149), (150, 299))]
+        ann = _ranges(start, (5, 12), (0, 1))
+        ann = dc.AnnotationSet(ann.annotations.assign(feature_id=["z", "a"]), dims=DIMS)
+        cut, whole = dc.spool(tiles).cut(ann), spool.cut(ann)
+        assert cut.get_contents()["feature_id"].tolist() == ["z", "a"]
+        assert all(x.equals(y) for x, y in zip(cut, whole, strict=True))
 
     def test_spanned_dim(self, spool, start):
         """A dimension the feature spans keeps its full extent."""
@@ -214,6 +223,33 @@ class TestCut:
         squeezed = patch.select(distance=0, samples=True).squeeze("distance")
         assert len(dc.spool([patch, squeezed]).cut(_ranges(start, (1, 2)))) == 2
 
+    def test_box(self, spool, start):
+        """A feature bounded in time and distance is the box select gives."""
+        ann = _ranges(start, (5, 12))
+        ann = ann.add_path("box", time=_seconds(start, 5, 12), distance=[10.0, 50.0])
+        patch, _ = spool.cut(ann)  # features come before lone rows
+        times = tuple(_seconds(start, 5, 12))
+        expected = spool.select(time=times, distance=(10, 50)).chunk(time=None)[0]
+        assert patch.equals(expected.update_attrs(feature_id="box", annotation=None))
+
+    def test_many_in_one_plan(self, spool, start):
+        """Many features are planned once, one output each in their order."""
+        times = [start + x * SECOND / 10 for x in range(10, 210)]
+        ann = dc.AnnotationSet(pd.DataFrame({"time": times}), dims=DIMS)
+        wrapped = mock.patch.object(
+            Spool, "_build_chunk_plan", autospec=True, wraps=Spool._build_chunk_plan
+        )
+        with wrapped as plans:
+            contents = spool.cut(ann, time=("-1s", "1s")).get_contents()
+        assert plans.call_count == 1
+        assert contents["annotation"].tolist() == list(range(200))
+
+    def test_stamps_after_dropped(self, spool, start):
+        """Features holding no data are dropped, the rest keep their stamps."""
+        cut = spool.cut(_ranges(start, (100, 101), (1, 2), (1.001, 1.003), (3, 4)))
+        stamps = cut.get_contents()["annotation"].tolist()
+        assert stamps == [1, 3] and [x.attrs.annotation for x in cut] == stamps
+
     def test_hole_in_one_patch(self, holed_patch):
         """A hole inside one patch splits a window across it; inside it, none."""
         frame = pd.DataFrame({"time_min": [50.0, 70.0], "time_max": [110.0, 90.0]})
@@ -221,17 +257,17 @@ class TestCut:
         assert [_span(x) for x in cut] == [[50, 59], [100, 110]]
 
     def test_lazy(self, spool, start, tmp_path):
-        """Cutting and reading contents load nothing; iterating does."""
+        """Cutting and reading contents load nothing; the data does."""
         dc.examples.spool_to_directory(spool, path=tmp_path)
         directory = dc.spool(tmp_path).update()
-        plan, file = (
-            mock.patch.object(x, "resolve", autospec=True, side_effect=x.resolve)
-            for x in (PlanResolver, FileResolver)
+        plan = mock.patch.object(
+            PlanResolver, "resolve", autospec=True, side_effect=PlanResolver.resolve
         )
+        file = mock.patch.object(io_core, "_array_reader", wraps=io_core._array_reader)
         with plan as calls, file as reads:
             cut = directory.cut(_ranges(start, (5, 12)))
             cut.get_contents()
             assert calls.call_count == reads.call_count == 0
             (patch,) = cut
-            assert calls.call_count and reads.call_count
+            assert calls.call_count and patch.data.size and reads.call_count
         assert _span(patch) == _seconds(start, 5, 12)

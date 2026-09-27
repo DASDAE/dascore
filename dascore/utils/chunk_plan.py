@@ -1130,7 +1130,8 @@ def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str
     # Add the step so consecutive sources do not share one sample; the
     # roll artifact at each partition's first row is masked out.
     overlaps = (start <= prev_stop) & ~is_first
-    corrected = np.where(overlaps, prev_stop + prev_step, start)
+    # an object step (a run row's) must not turn the starts into objects
+    corrected = np.where(overlaps, prev_stop + prev_step, start).astype(start.dtype)
     modified = corrected != start
     if "_modified" in sorted_df.columns:
         modified = sorted_df["_modified"].to_numpy() | modified
@@ -1721,7 +1722,7 @@ def build_chunk_plan(
                     ]
                     if _exact_coords.get(row_id) is not None
                 ]
-                if _exact_coords and not pd.isnull(part_step) and part_step != 0
+                if _exact_coords and not pd.isnull(part_step) and bool(part_step)
                 else []
             )
             starts_list, stops_list, requests_p = [], [], []
@@ -2813,7 +2814,7 @@ def _finish_explicit_plan(
                 )
                 continue
             all_known = len(coords) == sum(part["count"] for part in relevant)
-            no_grid = pd.isnull(step) or step == 0
+            no_grid = pd.isnull(step) or not step
             if no_grid and not all_known:
                 failures.append(
                     (request, bounds, label, "exact source coordinates are unavailable")
@@ -3085,7 +3086,7 @@ def exact_coordinate_bounds(coord, bounds, plan_unit=None):
     if (
         step is not None
         and not pd.isnull(step)
-        and step != 0
+        and bool(step)
         and all(isinstance(x, (float, np.floating)) for x in in_native)
     ):
         assert step is not None
