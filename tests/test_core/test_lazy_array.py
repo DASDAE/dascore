@@ -705,8 +705,9 @@ class TestFoldedColumns:
         paths = [f"/data/f{x:05d}.h5" for x in range(20_000)]
         tracemalloc.start()
         try:
-            LazyArray.from_columns(paths, (1000, 100), **FORMAT)
+            array = LazyArray.from_columns(paths, (1000, 100), **FORMAT)
             held = tracemalloc.get_traced_memory()[0]
+            assert len(array) == len(paths)
         finally:
             tracemalloc.stop()
         assert held / len(paths) < 120
