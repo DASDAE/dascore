@@ -153,23 +153,24 @@ def _drop_associated_ranges(row, kwargs, plan_dim) -> dict:
     return {k: v for k, v in kwargs.items() if k not in drop}
 
 
-def _plan_trim_kwargs(patch, kwargs, plan_dim) -> dict:
+def _plan_trim_kwargs(patch, kwargs, plan_dims) -> dict:
     """
-    Keep only the trim the plan actually narrows.
+    Keep only the trims the plan actually narrows.
 
-    A member row is its source row with the *planned* dimension's
-    envelope replaced by the member's trim range; every other range
+    A member row is its source row with the *planned* dimensions'
+    envelopes (the chunked one, then any trimmed) replaced by the
+    member's trim ranges; every other range
     column still describes the whole source. Selecting on those would
     re-select a coordinate to its own extent, which is a no-op for a
     sorted numeric range but not for a string coordinate (a range of
     labels), one holding NaN (missing values fall outside every range),
     or one which cannot be range-selected at all.
     """
-    if plan_dim not in kwargs:  # an unmodified member states no range
+    if plan_dims[0] not in kwargs:  # an unmodified member states no range
         return {}
     coord_map = patch.coords.coord_map
-    assert plan_dim in coord_map, "the plan's dimension is on every member"
-    return {plan_dim: kwargs[plan_dim]}
+    assert set(plan_dims) <= set(coord_map), "the plan's dims are on every member"
+    return {x: kwargs[x] for x in plan_dims}
 
 
 def _as_plan_units(patch, kwargs, row) -> dict:
@@ -597,8 +598,9 @@ class PatchAssembler:
 
     ``load_patch`` resolves one member row to its source patch (residual
     selections included); ``merge_kwargs`` carries the merge behavior;
-    ``plan_dim`` names the one dimension whose range the plan narrowed,
-    and so the only one a member needs trimming on. The plan resolver
+    ``plan_dim`` names the dimension whose range the plan narrowed, and
+    ``trim_dims`` any others, which are the only ones a member needs
+    trimming on. The plan resolver
     hands this the joined member frame for one output at a time.
     """
 
@@ -617,6 +619,7 @@ class PatchAssembler:
     # Takes the joined member frame; the caller keeps what was recorded.
     # Only a source measured now and found unchanged keeps the recipe.
     sources_unchanged: Callable[[pd.DataFrame], bool] | None = None
+    trim_dims: tuple[str, ...] = ()
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
@@ -661,7 +664,8 @@ class PatchAssembler:
         source_kwargs = kwargs if kwargs.get("_modified") else {}
         # attr-style entries filter rows above, and the plan only ever
         # narrows its own dimension; everything else loads untouched.
-        if select_kwargs := _plan_trim_kwargs(patch, source_kwargs, self.plan_dim):
+        dims = (self.plan_dim, *self.trim_dims)
+        if select_kwargs := _plan_trim_kwargs(patch, source_kwargs, dims):
             patch = patch.select(**_as_plan_units(patch, select_kwargs, patch_kwargs))
         return patch
 

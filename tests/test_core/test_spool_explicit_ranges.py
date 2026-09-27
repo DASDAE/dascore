@@ -13,6 +13,7 @@ from dascore.examples import inventory_patch_pair
 from dascore.exceptions import ChunkError, MissingPatchError, ParameterError, UnitError
 from dascore.io.dasdae.core import DASDAEV1, DASDAEV2
 from dascore.io.index.catalog import PatchCatalog
+from dascore.io.index.planned import PlanResolver
 from dascore.units import get_quantity, m, s
 
 
@@ -192,12 +193,13 @@ class TestExplicitSelect:
         ].to_numpy().tolist() == [[2, 4]]
         assert selected[0].coords["distance"].values.tolist() == [2, 3, 4]
 
-    def test_two_array_coordinates_raise(self):
-        """One call cannot define two independent window dimensions."""
+    def test_mismatched_window_counts_raise(self):
+        """Windows on several dimensions need one row each per request."""
         spool = dc.spool(dc.get_example_patch())
-        windows = np.array([[0, 1]])
-        with pytest.raises(ParameterError, match="Only one coordinate"):
-            spool.select(distance=windows, time=windows)
+        one, two = np.array([[0, 1]]), np.array([[0, 1], [2, 3]])
+        for method in (spool.select, spool.chunk):
+            with pytest.raises(ParameterError, match="same number"):
+                method(distance=one, time=two)
 
     @pytest.mark.concurrency
     def test_concurrent_add_keeps_a_coherent_parent_snapshot(self, monkeypatch):
@@ -534,11 +536,8 @@ class TestExplicitChunk:
     @pytest.mark.parametrize(
         "bounds",
         [
-            (None, 2),
-            (Ellipsis, 2),
             (True, 2),
             ([1], 2),
-            (-np.inf, 2),
             (3, 1),
             (3 * m, 1 * s),
         ],
@@ -554,7 +553,9 @@ class TestExplicitChunk:
         spool = dc.spool(_patch(np.arange(10)))
         assert len(spool.chunk(distance=np.empty((0, 2)))) == 0
         assert len(spool.select(distance=np.empty((0, 2)))) == 0
-        for value in (np.array([1, 2]), np.ones((2, 3)), np.array([[np.nan, 2]])):
+        open_low = spool.chunk(distance=np.array([[np.nan, 2]]))
+        assert open_low[0].coords["distance"].values.tolist() == [0, 1, 2]
+        for value in (np.array([1, 2]), np.ones((2, 3))):
             with pytest.raises(ParameterError):
                 spool.chunk(distance=value)
         with pytest.raises(ParameterError, match="on_incomplete"):
@@ -1455,3 +1456,168 @@ class TestReviewRegressions:
         """NumPy scalar arrays still name a chunk length."""
         source = dc.get_example_spool()
         assert len(source.chunk(time=np.array(4.0))) == len(source.chunk(time=4.0))
+
+
+def _boxes(spool, dims=("time", "distance")):
+    """Return each output's (min, max) per dim, checking catalog against data."""
+    listed = [
+        tuple((row[f"{d}_min"], row[f"{d}_max"]) for d in dims)
+        for row in spool.get_contents().to_dict("records")
+    ]
+    loaded = [
+        tuple((p.get_coord(d).min(), p.get_coord(d).max()) for d in dims) for p in spool
+    ]
+    assert listed == loaded
+    return loaded
+
+
+class TestExplicitBoxes:
+    """Row i of every explicit dimension is one rectangular window."""
+
+    @pytest.fixture(scope="class")
+    def spool(self):
+        """The example spool: three patches adjacent in time."""
+        return dc.get_example_spool()
+
+    @pytest.fixture(scope="class")
+    def t0(self, spool):
+        """The spool's first time sample."""
+        return spool.get_contents()["time_min"].min().to_datetime64()
+
+    def test_select_boxes(self, spool, t0):
+        """Pieces are trimmed on both dims, in request order, duplicates kept."""
+        sec = np.timedelta64(1, "s")
+        time = np.array([[t0 + sec, t0 + 2 * sec], [t0 + 7 * sec, t0 + 9 * sec]] * 2)
+        out = spool.select(
+            time=time[:3], distance=np.array([[10, 20], [100, 150], [10, 20]])
+        )
+        first = ((t0 + sec, t0 + 2 * sec), (10, 20))
+        assert _boxes(out) == [
+            first,
+            ((t0 + 7 * sec, spool[0].get_coord("time").max()), (100, 150)),
+            ((t0 + 8 * sec, t0 + 9 * sec), (100, 150)),
+            first,
+        ]
+
+    def test_chunk_boxes_across_files(self, spool, t0, tmp_path, monkeypatch):
+        """Each window merges across files, trims both dims, and loads lazily."""
+        for number, patch in enumerate(spool):
+            patch.io.write(tmp_path / f"{number}.h5", "DASDAE")
+        files = dc.spool(tmp_path).update(progress=None)
+        sec = np.timedelta64(1, "s")
+        time = np.array([[t0 + 7 * sec, t0 + 9 * sec], [t0 + 15 * sec, t0 + 17 * sec]])
+        distance = np.array([[10, 20], [200, 299]])
+        original = PlanResolver._load_member
+
+        def forbidden(*_args, **_kwargs):
+            raise AssertionError("a source loaded before iteration")
+
+        monkeypatch.setattr(PlanResolver, "_load_member", forbidden)
+        out = files.chunk(time=time, distance=distance)
+        contents = out.get_contents()
+        monkeypatch.setattr(PlanResolver, "_load_member", original)
+        assert len(contents) == 2
+        assert _boxes(out) == [
+            ((t0 + 7 * sec, t0 + 9 * sec), (10, 20)),
+            ((t0 + 15 * sec, t0 + 17 * sec), (200, 299)),
+        ]
+        whole = spool.chunk(time=None)[0]
+        expected = whole.select(time=tuple(time[0]), distance=(10, 20))
+        np.testing.assert_array_equal(out[0].data, expected.data)
+        # a chained selection narrows the trimmed outputs further
+        assert _boxes(out.select(distance=(12, 15)))[0][1] == (12, 15)
+
+    def test_open_bounds(self, spool, t0):
+        """Open ends take the data's own extent; a fully open row spans it."""
+        sec = np.timedelta64(1, "s")
+        end = spool[-1].get_coord("time").max()
+        nat = np.datetime64("NaT", "ns")
+        time = np.array([[None, t0 + sec], [t0 + 23 * sec, nat], [None, None]])
+        distance = np.array([[None, None], [290, np.inf], [-np.inf, 3]], dtype=object)
+        expected = [
+            ((t0, t0 + sec), (0, 299)),
+            ((t0 + 23 * sec, end), (290, 299)),
+            ((t0, end), (0, 3)),
+        ]
+        assert _boxes(spool.chunk(time=time, distance=distance)) == expected
+        selected = spool.select(time=time, distance=distance)
+        assert _boxes(selected)[:2] == expected[:2]
+
+    @pytest.mark.parametrize("policy", ["raise", "warn", "ignore"])
+    def test_empty_trim_window_follows_policy(self, spool, t0, policy):
+        """A window holding no samples on a trimmed dim is an unmet request."""
+        time = np.array([[t0, t0 + np.timedelta64(1, "s")]] * 2)
+        kwargs = dict(time=time, distance=np.array([[0, 5], [400, 500]]))
+        if policy == "raise":
+            with pytest.raises(ChunkError, match="contains no source samples"):
+                spool.chunk(**kwargs)
+            return
+        if policy == "warn":
+            with pytest.warns(UserWarning, match="row 1"):
+                out = spool.chunk(on_incomplete=policy, **kwargs)
+        else:
+            out = spool.chunk(on_incomplete=policy, **kwargs)
+        assert [x[1] for x in _boxes(out)] == [(0, 5)]
+
+    def test_partial_trim_window(self, spool, t0):
+        """A trim window past the data needs keep_partial, as the main dim does."""
+        kwargs = dict(
+            time=np.array([[t0, t0 + np.timedelta64(1, "s")]]),
+            distance=np.array([[250, 400]]),
+        )
+        with pytest.raises(ChunkError, match="incomplete"):
+            spool.chunk(**kwargs)
+        assert _boxes(spool.chunk(keep_partial=True, **kwargs))[0][1] == (250, 299)
+
+    def test_refusals(self, spool, t0):
+        """A chunk size or fill beside several windows, or an absent dim, fails."""
+        time = np.array([[t0, t0 + np.timedelta64(1, "s")]])
+        with pytest.raises(ParameterError, match="chunk size"):
+            spool.chunk(time=time, distance=10)
+        with pytest.raises(ParameterError, match="fill_value"):
+            spool.chunk(time=time, distance=np.array([[0, 5]]), fill_value=0)
+        with pytest.raises(ChunkError, match="'depth' dimension"):
+            spool.chunk(time=time, depth=np.array([[0, 5]]))
+
+    def test_trim_without_coordinate_metadata(self):
+        """A regular trim grid plans from the index alone; uneven or absent cannot."""
+
+        def make(distance, clear=True):
+            coords = {"distance": distance, "time": np.arange(4)}
+            data = np.ones((len(distance), 4))
+            patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+            lone = dc.Patch(
+                data=np.ones(4), coords={"time": np.arange(4)}, dims=("time",)
+            )
+            out = dc.spool([patch, lone])
+            out.get_contents()
+            if clear:
+                out._catalog.resolver._registry.clear()
+            return out
+
+        kwargs = dict(time=np.array([[1, 2]]), distance=np.array([[0.5, 2.5]]))
+        plan = make(np.arange(5.0)).chunk_plan(**kwargs)
+        assert plan.outputs[["distance_min", "distance_max"]].values.tolist() == [
+            [1.0, 2.0]
+        ]
+        uneven = np.array([0.0, 1.0, 3.0, 6.0, 9.0])
+        with pytest.raises(ChunkError, match="coordinates are unavailable"):
+            make(uneven).chunk_plan(**kwargs)
+        assert _boxes(make(uneven, clear=False).chunk(**kwargs))[0][1] == (1.0, 1.0)
+
+    def test_three_dims(self):
+        """Three explicit dims select and merge one box from a 3-D spool."""
+        data = np.arange(4 * 5 * 12).reshape(4, 5, 12)
+        coords = {"a": np.arange(4), "b": np.arange(5), "c": np.arange(12)}
+        whole = dc.Patch(data=data, coords=coords, dims=("a", "b", "c"))
+        spool = dc.spool([whole.select(c=(0, 5)), whole.select(c=(6, 11))])
+        windows = dict(c=np.array([[1, 7]]), a=np.array([[1, 2]]), b=np.array([[0, 3]]))
+        expected = whole.select(a=(1, 2), b=(0, 3), c=(1, 7))
+        chunked = spool.chunk(**windows)
+        assert _boxes(chunked, ("a", "b", "c")) == [((1, 2), (0, 3), (1, 7))]
+        np.testing.assert_array_equal(chunked[0].data, expected.data)
+        selected = spool.select(**windows)
+        assert _boxes(selected, ("a", "b", "c")) == [
+            ((1, 2), (0, 3), (1, 5)),
+            ((1, 2), (0, 3), (6, 7)),
+        ]

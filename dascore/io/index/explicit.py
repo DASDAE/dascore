@@ -41,8 +41,8 @@ class ExplicitSelectCatalog:
     """Build independent source pieces when the parent relation is requested."""
 
     parent: Any
-    name: str
-    ranges: ExplicitRanges
+    # windows per dimension; the first is subdivided, the others trim
+    ranges: dict[str, ExplicitRanges]
     operations: tuple = ()
     _cached: PatchCatalog | None = field(default=None, init=False, repr=False)
     _source_revision: int = field(default=-1, init=False, repr=False)
@@ -62,38 +62,50 @@ class ExplicitSelectCatalog:
             source = _ensure_patch_row(self.parent.to_df().reset_index(drop=True))
             assert source["_patch_row"].is_unique, "catalog rows must be unique"
             by_id = source.set_index("_patch_row", drop=False)
+            names = list(self.ranges)
+            boxes = list(zip(*(x.rows for x in self.ranges.values()), strict=True))
             candidate_frames = [
-                self.parent.select(_coords={self.name: bounds}).to_df()
-                for bounds in self.ranges.rows
+                self.parent.select(
+                    _coords={
+                        x: b
+                        for x, b in zip(names, box)
+                        if any(v is not None for v in b)
+                    }
+                ).to_df()
+                for box in boxes
             ]
             ids = {x for frame in candidate_frames for x in frame["_patch_row"]}
-            known = known_coordinates(
-                self.parent, source[source["_patch_row"].isin(ids)], self.name
-            )
+            candidates = source[source["_patch_row"].isin(ids)]
+            known = {x: known_coordinates(self.parent, candidates, x) for x in names}
             rows = []
-            pieces = []
+            pieces: dict[str, list] = {name: [] for name in names}
             requests = []
-            for request, (bounds, candidate) in enumerate(
-                zip(self.ranges.rows, candidate_frames, strict=True)
+            for request, (box, candidate) in enumerate(
+                zip(boxes, candidate_frames, strict=True)
             ):
-                for _, projected in candidate.iterrows():
-                    row = by_id.loc[projected["_patch_row"]]
-                    coord = known.get(row["_patch_row"])
-                    if coord is None:
-                        msg = (
-                            f"Cannot verify samples for {self.name!r} in source "
-                            f"{row.get('source_path')!r}: coordinate metadata "
-                            "is unavailable."
-                        )
-                        raise MissingPatchError(msg)
-                    actual = exact_coordinate_bounds(coord, bounds)
-                    if actual is None:
+                for patch_row in candidate["_patch_row"]:
+                    row = by_id.loc[patch_row]
+                    actual = []
+                    for name, bounds in zip(names, box, strict=True):
+                        coord = known[name].get(patch_row)
+                        if coord is None:
+                            msg = (
+                                f"Cannot verify samples for {name!r} in source "
+                                f"{row.get('source_path')!r}: coordinate metadata "
+                                "is unavailable."
+                            )
+                            raise MissingPatchError(msg)
+                        actual.append(exact_coordinate_bounds(coord, bounds))
+                    if any(x is None for x in actual):
                         continue
                     rows.append(row)
                     requests.append(request)
-                    pieces.append([actual])
+                    for name, bounds in zip(names, actual, strict=True):
+                        pieces[name].append([bounds])
             selected = pd.DataFrame(rows, columns=source.columns).reset_index(drop=True)
-            plan = build_subdivision_plan(selected, pieces, self.name)
+            first, *others = names
+            trims = {name: pieces[name] for name in others}
+            plan = build_subdivision_plan(selected, pieces[first], first, trims)
             if len(plan.outputs):
                 # Identity is bookkeeping, never a patch attribute.
                 plan.outputs["_request_row"] = requests

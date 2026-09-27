@@ -577,6 +577,7 @@ class PlanResolver(PatchResolver):
         lossy: bool = False,
         output_rows: pd.DataFrame | None = None,
         anchor_rows: pd.DataFrame | None = None,
+        trim_dims: tuple[str, ...] = (),
     ):
         if "output_id" not in member_rows.columns:
             msg = "member_rows must carry an output_id column."
@@ -584,6 +585,8 @@ class PlanResolver(PatchResolver):
         # plan invariant: outputs without members must never be published
         self.token = token
         self.dim = dim
+        # other dimensions each member is trimmed on (explicit windows)
+        self.trim_dims = tuple(trim_dims)
         rows = member_rows.reset_index(drop=True)
         # What the index measured of each member's source, held beside
         # the rows rather than in them: every output slices this frame,
@@ -653,6 +656,7 @@ class PlanResolver(PatchResolver):
             array_source=self._member_array_source,
             can_use_index=self._can_load_member_from_index,
             sources_unchanged=self._sources_unchanged,
+            trim_dims=self.trim_dims,
         )
 
     def _can_load_member_from_index(self, row: Mapping) -> bool:
@@ -660,6 +664,8 @@ class PlanResolver(PatchResolver):
         if self.aux_coords:
             return False
         if row.get("_modified"):
+            if self.trim_dims:
+                return False  # the index places a window on one dimension only
             # A trim is a window of the source, which is only placeable
             # when the row keeps the source's own range beside it --
             # which `_with_source_range` withholds from every row a
@@ -1020,16 +1026,20 @@ def _trimmed_dims(residuals, coord_dims_map: Mapping) -> frozenset[str]:
     )
 
 
-def stale_def_keys(residuals, coord_dims_map: Mapping, columns) -> list[str]:
+def stale_def_keys(
+    residuals, coord_dims_map: Mapping, columns, trim_dims=()
+) -> list[str]:
     """
     The def-key columns which describe coordinates a residual will trim.
+
+    ``trim_dims`` are dimensions a plan's explicit windows trim, likewise.
 
     A residual selection is applied when a patch is loaded, so until then
     the identity claims (def keys) of coordinates on the trimmed
     dimensions describe the untrimmed values and must not be compared or
     published.
     """
-    trimmed = _trimmed_dims(residuals, coord_dims_map)
+    trimmed = _trimmed_dims(residuals, coord_dims_map) | set(trim_dims)
     return [
         f"_{c}_def_key"
         for c, dims_str in coord_dims_map.items()
@@ -1217,13 +1227,17 @@ def derived_catalog(
         lossy=lossy,
         output_rows=plan.outputs,
         anchor_rows=anchors,
+        trim_dims=plan.trim_dims,
     )
     backend = get_backend(":memory:")
     # residual selections trim at load; identity claims (def keys) for
     # coordinates on the trimmed dims would describe the untrimmed values
     trimmed_dims = _trimmed_dims(parent_residuals, coord_dims_map)
+    trimmed_dims |= frozenset(plan.trim_dims)
     outputs = plan.outputs
-    stale_keys = stale_def_keys(parent_residuals, coord_dims_map, outputs.columns)
+    stale_keys = stale_def_keys(
+        parent_residuals, coord_dims_map, outputs.columns, plan.trim_dims
+    )
     if stale_keys:
         outputs = outputs.drop(columns=stale_keys)
     aux_info = _aux_coord_info(
