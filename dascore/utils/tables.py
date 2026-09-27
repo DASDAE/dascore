@@ -1,14 +1,12 @@
 """
 Utilities for reading strict CSV tables.
 
-A table written by hand is read the way it was written: every cell arrives
-as text, the reader refuses a row which is not its header wide, and the
-value of a cell is decided by what the cell says rather than by whatever
-pandas inferred from the rows it happened to see.
+Read cells as text and reject rows whose width differs from the header. Callers
+interpret cell values without pandas type inference.
 
-These raise `ParameterError` and name the file with
-[quote_path](`dascore.utils.paths.quote_path`); a format which wants its own
-error type wraps them once, at whatever boundary reads its tables.
+Errors raise `ParameterError` and identify the file with
+[quote_path](`dascore.utils.paths.quote_path`). Formats wrap these errors at their
+table-reading boundary.
 """
 
 from __future__ import annotations
@@ -38,17 +36,12 @@ PRIVATE_PREFIX = "_"
 
 def drop_private_columns(frame: pd.DataFrame) -> pd.DataFrame:
     """
-    Return a table without the columns which say they are not its own.
+    Drop columns whose names begin with an underscore.
 
-    A header beginning with an underscore declines to take part in the
-    format reading it: the column is the crew's own record keeping -- who
-    backfilled a trench, which drawing a run came from -- and no reader
-    looks for meaning in it. The name can never collide with a field a
-    model might later add, since pydantic makes a leading underscore a
-    private attribute rather than a field.
-
-    The values live in the file alone. A note which should travel with the
-    data belongs in a field the model has, `description` among them.
+    These columns hold private notes that stay in the file and are ignored by the
+    format. Their names cannot collide with model fields because pydantic treats leading
+    underscores as private attributes. Notes that should travel with the data belong in
+    a model field such as `description`.
 
     Parameters
     ----------
@@ -71,10 +64,8 @@ def read_table(path: Path, what: str = "nothing", skip: int = 0) -> pd.DataFrame
     r"""
     Read one strict CSV table.
 
-    Every cell arrives as text and the caller coerces it, so a column's
-    meaning is the field's rather than whatever pandas inferred from the
-    rows it happened to see. Only a truly empty cell is null: an empty
-    cell means unset, and a document which writes ``NA`` means the string.
+    Return cells as text for the caller to convert. Only empty cells are null; ``NA``
+    remains a string.
 
     Parameters
     ----------
@@ -83,11 +74,8 @@ def read_table(path: Path, what: str = "nothing", skip: int = 0) -> pd.DataFrame
     what
         What a table with no columns fails to state, for that error message.
     skip
-        Lines above the header, for a format which states something of its
-        own before its table. Read past before the table is parsed at all,
-        so nothing downstream has to agree about what those lines were. Row
-        numbers in errors still count from the top of the file, so they name
-        the line a reader would look at.
+        Number of lines to skip before parsing the header. Error row numbers still count
+        from the top of the file.
 
     Examples
     --------
@@ -101,17 +89,10 @@ def read_table(path: Path, what: str = "nothing", skip: int = 0) -> pd.DataFrame
     >>> list(frame.columns), frame["value"][0]
     (['group', 'value'], 'true')
     """
-    # The header is read first and by itself, for two reasons: pandas
-    # renames a repeated column rather than refusing it, so by the time a
-    # frame exists the second one is `coupling_type.1` and the clash cannot
-    # be seen; and it raises its own error for a file with no columns,
-    # which would arrive before this one could say what was expected.
-    #
-    # One open, which pandas then reads on from: `skiprows` would have it
-    # skip *rows*, and a quote in a skipped line can make one row span the
-    # rest of the file, leaving pandas a different header than was checked
-    # here. Both readers therefore also decode alike, which a locale-encoded
-    # read or a byte order mark reaching only one of them would break.
+    # Check the header before pandas renames duplicates or raises its own
+    # empty-file error. Skip physical lines first: pandas skiprows could
+    # interpret a quote in the preamble as a multiline CSV row.
+    # Reuse one decoded stream so both readers handle encoding and BOMs alike.
     try:
         with path.open(newline="", encoding="utf-8-sig") as stream:
             for _ in range(skip):
@@ -120,10 +101,7 @@ def read_table(path: Path, what: str = "nothing", skip: int = 0) -> pd.DataFrame
             reader = csv.reader(stream)
             header = next(reader, [])
             if header:
-                # Streamed rather than listed: a table is the part of this
-                # format meant to grow, and holding every cell as a python
-                # object beside the frame pandas builds would cost several
-                # times what the frame itself does.
+                # Stream validation to avoid retaining a second copy of every cell.
                 _check_widths(reader, header, path, start=skip + 2)
             _check_header(header, path, what)
             stream.seek(position)
@@ -136,9 +114,7 @@ def read_table(path: Path, what: str = "nothing", skip: int = 0) -> pd.DataFrame
                 na_values=[""],
                 index_col=False,
             )
-    # csv.Error too: a cell longer than csv.field_size_limit stops the
-    # header scan, and without this it would leave this function as a bare
-    # _csv.Error rather than as whatever the caller's format raises.
+    # Wrap csv.Error too, including cells exceeding csv.field_size_limit.
     except (OSError, UnicodeDecodeError, csv.Error) as read_error:
         msg = f"Could not read {quote_path(path)}: {read_error}."
         raise ParameterError(msg) from read_error
@@ -160,12 +136,10 @@ def _check_header(header: list[str], path: Path, what: str) -> None:
 
 def _check_widths(reader, header: list[str], path: Path, start: int = 2) -> None:
     """
-    Refuse a row which is not its header wide.
+    Reject nonempty rows whose width differs from the header.
 
-    Pandas refuses neither a wide row nor a narrow one: by default the
-    surplus cell pushes the first column into the index, so every value in
-    the row shifts one field left and lands in its neighbour's meaning. A
-    row states one cell per column or it is not a row.
+    Pandas accepts narrow rows and can interpret surplus cells as an index, shifting
+    values into the wrong columns.
     """
     for number, row in enumerate(reader, start=start):
         if row and len(row) != len(header):
@@ -220,12 +194,11 @@ def write_parquet(frame: pd.DataFrame, path, metadata: Mapping | None = None) ->
 
 def parquet_table(frame: pd.DataFrame, metadata: Mapping | None = None):
     """
-    Return a dataframe as the parquet table it is written from.
+    Convert a dataframe to a parquet table without writing it.
 
-    Spelled out before anything is written, so a caller storing several
-    tables at once can prepare them all before it touches the directory.
-    See [write_parquet](`dascore.utils.tables.write_parquet`), which is
-    this and the write together.
+    Callers can prepare several tables before changing a directory.
+    [write_parquet](`dascore.utils.tables.write_parquet`) combines conversion and
+    writing.
     """
     arrow = optional_import("pyarrow", required_for="parquet tables")
     spelled, documents = {}, []
@@ -512,7 +485,7 @@ def row_cells(row) -> dict[str, str]:
 
 def require_columns(frame: pd.DataFrame, needed, path: Path) -> None:
     """
-    Refuse a table which does not carry a column it is read by.
+    Reject tables missing required columns.
 
     Parameters
     ----------
@@ -544,12 +517,10 @@ def require_columns(frame: pd.DataFrame, needed, path: Path) -> None:
 
 def require_stated(frame: pd.DataFrame, needed, path: Path) -> None:
     """
-    Refuse a blank cell in a column the table is read by.
+    Reject blank cells in required columns.
 
-    A column which orders or groups the rows decides where each one goes,
-    so a row leaving it empty has no place. Left to pandas the row would
-    simply disappear -- a null sorts last, and a null grouping key drops
-    its row from every group.
+    Ordering and grouping keys must be present: pandas sorts nulls last and drops rows
+    with null grouping keys.
 
     Parameters
     ----------

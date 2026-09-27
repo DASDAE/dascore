@@ -24,12 +24,10 @@ from dascore.utils.paths import coerce_to_upath, is_pathlike
 
 def normalize_source_patch_key(value: Any) -> str:
     """
-    Return a source patch key as a clean string ("" when missing).
+    Return a source patch key as a string, or "" when missing.
 
-    Missing keys arrive as None, empty strings, pandas NaN/NaT, or numpy
-    scalars. pandas NaN is truthy, so a plain ``value or ""`` does not
-    normalize it — every conversion site must go through this helper to
-    avoid the NaN-truthiness bug the catalog resolver already had to fix.
+    Normalize None, empty strings, pandas NaN/NaT, and numpy scalars here: NaN is
+    truthy, so ``value or ""`` does not handle missing keys.
     """
     if value is None or value == "":
         return ""
@@ -144,16 +142,11 @@ def _normalize_coord_summary_map(
 
 def _upath_from_dump(value) -> UPath | None:
     """
-    Return the path a dumped `UPath` describes, or None if it is not one.
+    Restore a remote `UPath` from its dumped mapping, or return None.
 
-    A remote `UPath` does not survive `model_dump` as a path: it comes
-    back as its parts. Without this a summary round-tripped through a
-    dump -- which is what `new` does -- would lose its source path, and
-    then its format and version with it, because a summary with nothing
-    to reload from states no reload metadata.
-
-    A local path dumps as itself, so this is only ever reached by a
-    remote one.
+    Remote paths dump as components; local paths remain path objects. Restoring the
+    remote path preserves source format and version through `new`, which round-trips
+    summaries through a dump.
     """
     if not isinstance(value, Mapping) or "path" not in value:
         return None
@@ -164,8 +157,7 @@ def _upath_from_dump(value) -> UPath | None:
             return UPath(value["path"])
         return UPath(value["path"], protocol=protocol, **options)
     except Exception:
-        # A mapping which is not a path is simply not one; the caller
-        # drops the source metadata as it would for any other value.
+        # Invalid path mappings cause the caller to drop source metadata.
         return None
 
 
