@@ -625,8 +625,6 @@ class Spool(NodeRepr, NamespaceOwner):
                 kwargs=query.kwargs,
             )
             explicit = explicit_windows(coords)
-            if len(explicit) > 1:  # the map realizes a deferred parent
-                refuse_riders(explicit, self._catalog.backend.coord_dims_map())
         if explicit:
             if samples or relative:
                 msg = "Explicit ranges require samples=False and relative=False."
@@ -1800,7 +1798,7 @@ class Spool(NodeRepr, NamespaceOwner):
         name = next(iter(dim_kwargs), None)
         source_rows, working = self._plan_frames(name, runs=True)
         windows = explicit_windows(dim_kwargs)
-        refuse_riders(windows, self._catalog.backend.coord_dims_map())
+        refuse_riders(windows, source_rows)
         exact = {
             dim: known_coordinates(self._catalog, source_rows, dim) for dim in windows
         }

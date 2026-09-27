@@ -66,21 +66,22 @@ def explicit_ranges(value) -> ExplicitRanges | None:
                 msg = f"Explicit range row {index} has a reversed infinite bound."
                 raise ParameterError(msg)
             bounds.append(None if pd.isna(magnitude) or infinite else bound)
-        closed = all(x is not None for x in bounds)  # open ends are never reversed
-        same_kind = isinstance(bounds[0], Quantity) == isinstance(bounds[1], Quantity)
-        if closed and same_kind:
-            if isinstance(bounds[0], Quantity):
-                assert isinstance(bounds[1], Quantity)
+        # a lone closed end is checked against itself; open ends never reverse
+        pair = [x for x in bounds if x is not None]
+        pair = pair * 2 if len(pair) == 1 else pair
+        if pair and isinstance(pair[0], Quantity) == isinstance(pair[1], Quantity):
+            if isinstance(pair[0], Quantity):
+                assert isinstance(pair[1], Quantity)
                 try:
                     comparable: list[Any] = [
-                        bounds[0].magnitude,
-                        cast(Any, bounds[1]).to(bounds[0].units).magnitude,
+                        pair[0].magnitude,
+                        cast(Any, pair[1]).to(pair[0].units).magnitude,
                     ]
                 except Exception as exc:
                     msg = f"Explicit range row {index} has incompatible bound units."
                     raise ParameterError(msg) from exc
             else:
-                comparable = bounds
+                comparable = pair
             if any(isinstance(x, str) for x in comparable) and (
                 all(isinstance(x, str) for x in comparable)
                 or any(isinstance(x, (pd.Timestamp, np.datetime64)) for x in comparable)
@@ -121,10 +122,12 @@ def explicit_windows(values: Mapping) -> dict[str, ExplicitRanges]:
     return out
 
 
-def refuse_riders(windows: Mapping, coord_dims_map: Mapping) -> None:
-    """Refuse a window after the first on a coordinate which is not a dim."""
+def refuse_riders(windows: Mapping, rows: pd.DataFrame) -> None:
+    """Refuse a window after the first on a coordinate some row does not dim."""
+    dims = rows["dims"].fillna("").astype(str).str.split(",")
     for name in list(windows)[1:]:
-        if coord_dims_map.get(name, name) != name:
+        held = rows.get(f"{name}_min", pd.Series(dtype=float)).notna()
+        if (held & ~dims.map(lambda x, name=name: name in x)).any():
             msg = (
                 f"Patches carry {name!r} only as a non-dimensional coordinate; "
                 "trimming is defined on dimensions, so only the first "

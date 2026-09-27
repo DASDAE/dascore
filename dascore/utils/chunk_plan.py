@@ -3002,6 +3002,7 @@ def _trim_explicit(outputs, members, sources, windows, exact, keep_partial, beha
     by_output = outputs.set_index("output_id")
     requests = members["output_id"].map(by_output["_request_row"]).to_numpy()
     labels = members["output_id"].map(by_output["_compat_group"]).to_numpy()
+    keys = list(zip(requests, labels))  # an unmet group skips only itself
     keep = np.ones(len(members), dtype=bool)
     failures, emptied = {}, {}
     members = members.copy()
@@ -3014,9 +3015,8 @@ def _trim_explicit(outputs, members, sources, windows, exact, keep_partial, beha
             unit = None if pd.isnull(unit) or unit == "" else str(unit)
             bounds, reason = ranges.rows[request], "contains no source samples"
             where = f"{labels[pos]}, dim {dim}"
-            if pd.isnull(start) or pd.isnull(stop):  # a member without the dim
+            if pd.isnull(start) or pd.isnull(stop):  # without the dim: skipped
                 keep[pos] = False
-                emptied.setdefault(request, (bounds, where, reason))
                 continue
             if all(x is None for x in bounds):  # spans the dim: no trim
                 continue
@@ -3029,7 +3029,7 @@ def _trim_explicit(outputs, members, sources, windows, exact, keep_partial, beha
             else:
                 reason = "exact source coordinates are unavailable"
             if actual is None:
-                keep[pos], emptied[request] = False, (bounds, where, reason)
+                keep[pos], emptied[keys[pos]] = False, (bounds, where, reason)
                 continue
             lows[pos], highs[pos] = actual
             wanted = _explicit_bounds_for_partition(bounds, start, unit, stop)
@@ -3039,13 +3039,15 @@ def _trim_explicit(outputs, members, sources, windows, exact, keep_partial, beha
                 else wanted[0] < start or wanted[1] > stop
             )
             if short and not keep_partial:
-                failures[request] = (bounds, where, "sampled bounds are incomplete")
+                failures[keys[pos]] = (bounds, where, "sampled bounds are incomplete")
         members[f"{dim}_min"], members[f"{dim}_max"] = lows, highs
         members["_modified"] |= (lows != starts) | (highs != stops)
-    for request in set(outputs["_request_row"]) - set(requests[keep]):
-        failures[request] = emptied[request]
-    _report_incomplete([(x, *failures[x]) for x in sorted(failures)], behavior)
-    members = members[keep & ~np.isin(requests, list(failures))]
+    wanted = set(zip(outputs["_request_row"], outputs["_compat_group"]))
+    for key in (wanted - {x for x, kept in zip(keys, keep) if kept}) & set(emptied):
+        failures[key] = emptied[key]
+    order = sorted(failures, key=lambda x: (x[0], str(x[1])))
+    _report_incomplete([(x[0], *failures[x]) for x in order], behavior)
+    members = members[keep & np.array([x not in failures for x in keys], bool)]
     outputs = outputs[outputs["output_id"].isin(members["output_id"])]
     for dim in windows:
         grouped = members.groupby("output_id")

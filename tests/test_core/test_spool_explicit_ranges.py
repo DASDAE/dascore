@@ -530,8 +530,9 @@ class TestExplicitChunk:
     def test_unparsable_string_bounds_are_rejected(self):
         """String endpoints in explicit windows must name actual instants."""
         spool = dc.spool(_patch(np.arange(10)))
-        with pytest.raises(ParameterError, match="datetime"):
-            spool.chunk_plan(distance=np.array([["not-a-date", "later"]]))
+        for bounds in (["not-a-date", "later"], [None, "later"]):
+            with pytest.raises(ParameterError, match="datetime"):
+                spool.chunk_plan(distance=np.array([bounds], dtype=object))
 
     @pytest.mark.parametrize(
         "bounds",
@@ -1549,7 +1550,31 @@ class TestExplicitBoxes:
         kwargs = dict(time=np.array([[time[10], time[100]]]), latitude=latitude)
         for method in (dc.spool([patch]).select, dc.spool([patch]).chunk):
             with pytest.raises(ParameterError, match="non-dimensional"):
-                method(**kwargs)
+                len(method(**kwargs))
+
+    def test_unmet_trim_skips_only_its_group(self):
+        """A trim incomplete in one compatible group leaves the other's output."""
+        patch = dc.get_example_patch()
+        start = patch.get_coord("time").min()
+        narrow = patch.update_attrs(tag="b").select(distance=(0, 100))
+        spool = dc.spool([patch.update_attrs(tag="a"), narrow])
+        time = np.array([[start, start + np.timedelta64(1, "s")]])
+        kwargs = dict(time=time, distance=np.array([[50, 150]]))
+        out = spool.chunk(on_incomplete="ignore", **kwargs)
+        assert [x[1] for x in _boxes(out)] == [(50, 150)] and out[0].attrs.tag == "a"
+
+    def test_mixed_dimension_trim_raises(self):
+        """A coordinate which is a dim on only some patches cannot trim."""
+        patch = dc.get_example_patch()
+        rider = patch.rename_coords(distance="channel").update_coords(
+            distance=("channel", patch.get_coord("distance").values)
+        )
+        spool = dc.spool([patch, rider])
+        start = patch.get_coord("time").min()
+        time = np.array([[start, start + np.timedelta64(1, "s")]])
+        for method in (spool.select, spool.chunk):
+            with pytest.raises(ParameterError, match="non-dimensional"):
+                len(method(time=time, distance=np.array([[10, 20]])))
 
     def test_spanning_trim_keeps_identity(self, spool, t0):
         """A trim row open at both ends changes nothing, not even the id."""

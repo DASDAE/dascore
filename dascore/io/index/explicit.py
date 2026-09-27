@@ -16,7 +16,11 @@ from dascore.utils.chunk_plan import (
     _window_samples,
     build_subdivision_plan,
 )
-from dascore.utils.explicit_ranges import ExplicitRanges, known_coordinates
+from dascore.utils.explicit_ranges import (
+    ExplicitRanges,
+    known_coordinates,
+    refuse_riders,
+)
 
 
 class _SchemaBackend:
@@ -63,6 +67,7 @@ class ExplicitSelectCatalog:
             source = _ensure_patch_row(self.parent.to_df().reset_index(drop=True))
             assert source["_patch_row"].is_unique, "catalog rows must be unique"
             by_id = source.set_index("_patch_row", drop=False)
+            refuse_riders(self.ranges, source)
             names = list(self.ranges)
             boxes = list(zip(*(x.rows for x in self.ranges.values()), strict=True))
             candidate_frames = [
