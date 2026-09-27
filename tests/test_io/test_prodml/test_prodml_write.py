@@ -524,3 +524,23 @@ class TestProdMLWriteEncoding:
             dc.write(prodml_patch, path, "PRODML", encoding=encoding)
         with h5py.File(path, "r") as file:
             assert set(file) == {"sentinel"}
+
+    def test_refused_option_keeps_file(self, prodml_patch, tmp_path):
+        """An option h5py refuses leaves an existing file as it was."""
+        path = dc.write(prodml_patch, tmp_path / "keep.h5", "PRODML")
+        before = dc.spool(path)[0]
+        encoding = {"data": {"compression": "gzip", "compression_opts": 99}}
+        with pytest.raises(ValueError, match="GZIP"):
+            dc.write(prodml_patch, path, "PRODML", encoding=encoding)
+        with h5py.File(path, "r") as file:
+            assert set(file) == {"Acquisition"}
+        assert dc.spool(path)[0] == before
+
+    def test_leftover_is_replaced(self, prodml_patch, tmp_path):
+        """A group left by a killed write is cleared by the next write."""
+        path = dc.write(prodml_patch, tmp_path / "killed.h5", "PRODML")
+        with h5py.File(path, "a") as file:
+            file.create_group("_dascore_partial")
+        dc.write(prodml_patch, path, "PRODML")
+        with h5py.File(path, "r") as file:
+            assert set(file) == {"Acquisition"}

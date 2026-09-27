@@ -7,7 +7,7 @@ import os
 import shutil
 import tempfile
 from collections.abc import Sequence
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -560,6 +560,37 @@ def _translate_encoding(name, encoding) -> dict:
     if (chunks := out.pop("chunksizes", None)) is not None:
         out["chunks"] = tuple(chunks)
     return out
+
+
+# Writers build new content in this root group and move it into place only
+# once complete, so a failed write leaves an existing file as it was.
+PARTIAL_GROUP = "/_dascore_partial"
+
+
+@contextmanager
+def staged_group(h5):
+    """
+    Yield an empty root group to build new content in.
+
+    The caller moves what it built into place (see `move_into_place`) as the
+    block's last step. The group is removed on exit either way, so a failed
+    write leaves only what the file held before; a group left by a killed
+    write is cleared first.
+    """
+    if PARTIAL_GROUP in h5:
+        del h5[PARTIAL_GROUP]
+    try:
+        yield h5.create_group(PARTIAL_GROUP)
+    finally:
+        if PARTIAL_GROUP in h5:
+            del h5[PARTIAL_GROUP]
+
+
+def move_into_place(h5, source: str, dest: str) -> None:
+    """Move a node onto ``dest``, replacing any node there; a rename, no copy."""
+    if dest in h5:
+        del h5[dest]
+    h5.move(source, dest)
 
 
 def h5_encoding(encoding: dict | None) -> dict[str, dict]:

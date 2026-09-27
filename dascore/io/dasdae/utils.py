@@ -38,7 +38,7 @@ from dascore.utils.array import (
     convert_strings_to_bytes,
     is_string_byte_serializable_array,
 )
-from dascore.utils.hdf5 import h5_dataset_kwargs
+from dascore.utils.hdf5 import h5_dataset_kwargs, move_into_place, staged_group
 from dascore.utils.misc import unbyte
 from dascore.utils.time import to_int
 
@@ -268,35 +268,20 @@ def _check_storable(patch):
             raise NotImplementedError(msg)
 
 
-# Patches are built in this root group, outside the waveforms group so no
-# patch name can collide with it, then moved onto their own name; a failed
-# write leaves the file as it was.
-_PARTIAL = "/_dascore_partial"
-
-
 def _save_patch(patch, wave_group, name, compact: bool = False, options=None):
     """Save the patch to disk, replacing any group of the same name."""
     if not compact:
         _check_storable(patch)
     options = options or {}
     h5 = wave_group.file
-    if _PARTIAL in h5:  # left by a write that was killed
-        del h5[_PARTIAL]
-    patch_group = h5.create_group(_PARTIAL)
-    try:
+    with staged_group(h5) as patch_group:
         # Per-group marker: groups appended to a legacy file are still written
         # in the separated-attrs form and must not be legacy-stripped on read.
         patch_group.attrs[_SEPARATE_ATTRS_KEY] = True
         _save_attrs_and_dims(patch, patch_group)
         _save_coords(patch, patch_group, compact, options)
         _save_array(patch.data, "data", patch_group, options.get("data"))
-    except BaseException:
-        del h5[_PARTIAL]
-        raise
-    if name in wave_group:
-        # Replace the entire patch group so stale datasets/attrs can't survive.
-        del wave_group[name]
-    h5.move(_PARTIAL, f"{wave_group.name}/{name}")
+        move_into_place(h5, patch_group.name, f"{wave_group.name}/{name}")
 
 
 # --- Functions for reading
