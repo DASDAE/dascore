@@ -149,6 +149,22 @@ class TestValidation:
         with pytest.raises(KeyError, match="tim"):
             dc.write(random_patch, tmp_path / "o.h5", "DASDAE", encoding=encoding)
 
+    def test_variable_in_some_patches(self, random_patch, tmp_path):
+        """A coordinate only some patches carry takes the encoding in those."""
+        tagged = random_patch.update_coords(_quality=(None, np.arange(3.0) ** 2))
+        other = random_patch.update_attrs(station="other")
+        encoding = {"_quality": {"compression": "gzip"}}
+        path = tmp_path / "mixed.h5"
+        dc.write(dc.spool([other, tagged]), path, "DASDAE", encoding=encoding)
+        assert len(dc.spool(path)) == 2
+        with h5py.File(path) as h5:
+            nodes = [
+                g["_coord__quality"]
+                for g in h5["waveforms"].values()
+                if "_coord__quality" in g
+            ]
+            assert [x.compression for x in nodes] == ["gzip"]
+
     def test_attr_is_not_a_variable(self, random_patch, tmp_path):
         """An attribute ending in _min does not make a variable."""
         patch = random_patch.update_attrs(bob_min=1.0)

@@ -79,6 +79,8 @@ class DASDAEV1(FiberIO):
             ``chunksizes``, ``fletcher32``, ``zlib``, or ``complevel``.
             ``chunksizes`` is in the array's axis order and is clamped to
             its length, so one encoding fits patches of different lengths.
+            A variable no patch has raises ``KeyError`` once the patches are
+            written.
         """
         options = h5_encoding(encoding)
         # write out patches
@@ -95,12 +97,16 @@ class DASDAEV1(FiberIO):
         # loudly if the name pass and patch pass ever disagree in length.
         patch_names = get_patch_names(patches).values
         counts: dict[str, int] = {}
+        # A spool's patches may carry different coordinates, so a variable
+        # need only belong to one of them; checked in the single write pass.
+        variables = {"data"}
         for patch, name in zip(patches, patch_names, strict=True):
             num = counts.get(name, 0)
             counts[name] = num + 1
             unique_name = name if num == 0 else f"{name}__{num}"
-            check_encoding_variables(options, {"data", *patch.coords.coord_map})
+            variables.update(patch.coords.coord_map)
             _save_patch(patch, waveforms, unique_name, self._compact_coords, options)
+        check_encoding_variables(options, variables)
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
