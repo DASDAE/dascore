@@ -38,7 +38,7 @@ from dascore.utils.array import (
     convert_strings_to_bytes,
     is_string_byte_serializable_array,
 )
-from dascore.utils.hdf5 import h5_dataset_kwargs, move_into_place, staged_group
+from dascore.utils.hdf5 import create_dataset, staged_group
 from dascore.utils.misc import unbyte
 from dascore.utils.time import to_int
 
@@ -140,8 +140,7 @@ def _save_array(data, name, group, options=None):
     if name in group:
         # Overwrite the dataset in place when callers resave the same array node.
         del group[name]
-    options = h5_dataset_kwargs(options, data.shape)
-    array_node = group.create_dataset(name, data=data, **options)
+    array_node = create_dataset(group, name, data, options)
     array_node.attrs["is_datetime64"] = is_dt
     array_node.attrs["is_timedelta64"] = is_td
     array_node.attrs["is_string"] = is_str
@@ -273,15 +272,13 @@ def _save_patch(patch, wave_group, name, compact: bool = False, options=None):
     if not compact:
         _check_storable(patch)
     options = options or {}
-    h5 = wave_group.file
-    with staged_group(h5) as patch_group:
+    with staged_group(wave_group.file, f"{wave_group.name}/{name}") as patch_group:
         # Per-group marker: groups appended to a legacy file are still written
         # in the separated-attrs form and must not be legacy-stripped on read.
         patch_group.attrs[_SEPARATE_ATTRS_KEY] = True
         _save_attrs_and_dims(patch, patch_group)
         _save_coords(patch, patch_group, compact, options)
         _save_array(patch.data, "data", patch_group, options.get("data"))
-        move_into_place(h5, patch_group.name, f"{wave_group.name}/{name}")
 
 
 # --- Functions for reading

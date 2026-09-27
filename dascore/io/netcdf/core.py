@@ -140,23 +140,14 @@ class NetCDFCFV18(FiberIO):
             slices = windows_to_slices(windows, data_array.shape)
             return data_array[slices].to_numpy()
 
-    def write(
-        self,
-        spool: dc.Patch | dc.Spool,
-        resource: Path,
-        encoding: dict | None = None,
-        **kwargs,
-    ) -> None:
+    def write(self, spool, resource: Path, encoding: dict | None = None, **kwargs):
         """
         Write a Spool to NetCDF-4 through xarray.
 
         Parameters
         ----------
         encoding
-            Passed to xarray's ``Dataset.to_netcdf``: a dict keyed by "data"
-            or a coordinate name whose values are dicts of encoding options.
-            xarray's engine sets the accepted keys; ``zlib``, ``complevel``,
-            ``shuffle``, ``chunksizes``, and ``fletcher32`` suit any engine.
+            Passed to xarray's ``Dataset.to_netcdf``.
         """
         patch = self._validate_and_extract_patch(spool)
         optional_import("xarray")  # raises a helpful error if xarray is absent

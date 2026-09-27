@@ -2154,16 +2154,11 @@ def _maybe_split_gapped_patches(spool, fiber_io, split):
 
 def _check_write_kwargs(fiber_io, kwargs):
     """Refuse options the format's writer does not name."""
-    # The first two parameters are the spool and the resource.
     params = list(inspect.signature(fiber_io.write).parameters.values())[2:]
-    named = (inspect.Parameter.POSITIONAL_OR_KEYWORD, inspect.Parameter.KEYWORD_ONLY)
-    allowed = sorted(x.name for x in params if x.kind in named)
+    allowed = [x.name for x in params if x.kind != x.VAR_KEYWORD]
     if unknown := sorted(set(kwargs) - set(allowed)):
-        msg = (
-            f"The {fiber_io.name} writer does not accept option(s) {unknown}; "
-            f"it accepts {allowed}."
-        )
-        raise ParameterError(msg)
+        msg = f"The {fiber_io.name} writer does not accept option(s) {unknown}"
+        raise ParameterError(f"{msg}; it accepts {allowed}.")
 
 
 # write hands back the path it was given, so the return follows the
@@ -2202,8 +2197,7 @@ def write(
         whole and any other raises a
         [`ParameterError`](`dascore.exceptions.ParameterError`).
     **kwargs
-        Options the format's writer names, such as ``encoding`` for DASDAE,
-        PRODML, and NETCDF_CF.
+        Options the format's writer names, such as ``encoding``.
 
     Raises
     ------

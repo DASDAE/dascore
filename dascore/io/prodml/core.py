@@ -10,7 +10,7 @@ from dascore.core.source import ArraySource
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 
-from ...utils.hdf5 import H5Reader, H5Writer
+from ...utils.hdf5 import H5Reader, H5Writer, h5_encoding
 from .utils import (
     _get_data_node,
     _get_prodml_version_str,
@@ -71,20 +71,6 @@ class ProdMLV2_1(ProdMLV2_0):  # noqa
 
     version = "2.1"
 
-    def write(
-        self,
-        spool: dc.Patch | dc.Spool,
-        resource: H5Writer,
-        encoding: dict | None = None,
-        **kwargs,
-    ) -> None:
-        """
-        Write one raw Patch to a standalone ProdML HDF5 file.
-
-        Parameters
-        ----------
-        encoding
-            Per-variable storage options, as DASDAE takes them: "data" sets
-            the RawData array and "time" the RawDataTime array.
-        """
-        _write_prodml(spool, resource, encoding)
+    def write(self, spool, resource: H5Writer, encoding: dict | None = None, **kwargs):
+        """Write one raw Patch; ``encoding`` may name "data" and "time"."""
+        _write_prodml(spool, resource, h5_encoding(encoding, ("data", "time")))

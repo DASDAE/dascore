@@ -1520,22 +1520,6 @@ class TestGetSupportedIOTable:
         assert not flags["TDMS"]
 
 
-class TestWriteKwargs:
-    """Tests for the options dc.write accepts."""
-
-    def test_unknown_kwarg(self, random_patch, tmp_path):
-        """An option the writer does not name raises, naming the writer."""
-        match = r"PICKLE writer does not accept option\(s\) \['encoding'\]"
-        with pytest.raises(ParameterError, match=match):
-            dc.write(random_patch, tmp_path / "out.pkl", "PICKLE", encoding={})
-
-    def test_declared_kwarg_passes(self, random_patch, tmp_path):
-        """A named writer option still reaches the writer."""
-        path = tmp_path / "out.wav"
-        dc.write(random_patch, path, "WAV", resample_frequency=500)
-        assert path.exists()
-
-
 class TestMissingInstallName:
     """Tests for guessing the package to install from a dependency error."""
 

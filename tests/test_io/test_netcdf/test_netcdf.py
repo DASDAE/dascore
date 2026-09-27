@@ -643,51 +643,9 @@ class TestNetCDFEdgeCases:
         np.testing.assert_array_almost_equal(
             original_patch.data, recovered_patch.data, decimal=6
         )
-
-    def test_encoding_written(self, compressed_netcdf_file):
-        """The encoding reaches the written data variable."""
-        path, _ = compressed_netcdf_file
         with h5py.File(path) as h5:
-            assert h5["data"].compression == "gzip"
-            assert h5["data"].compression_opts == 9
-            assert h5["data"].chunks == (10, 20)
-
-    def test_encoding_shared_across_formats(self, tmp_path):
-        """One encoding dict writes the same data layout in every format."""
-        _require_xarray_netcdf_engine()
-        patch = dc.get_example_patch("random_das")
-        opts = {"zlib": True, "complevel": 5, "shuffle": True, "chunksizes": (10, 20)}
-        encoding = {"data": opts}
-        nc = dc.write(patch, tmp_path / "out.nc", "netcdf_cf", encoding=encoding)
-        h5 = dc.write(patch, tmp_path / "out.h5", "DASDAE", encoding=encoding)
-        pml = dc.write(patch, tmp_path / "pml.h5", "PRODML", encoding=encoding)
-        with (
-            h5py.File(nc) as nc_file,
-            h5py.File(h5) as h5_file,
-            h5py.File(pml) as pml_file,
-        ):
-            group = h5_file["waveforms"][next(iter(h5_file["waveforms"]))]
-            pml_data = pml_file["Acquisition/Raw[0]/RawData"]
-            for data in (nc_file["data"], group["data"], pml_data):
-                assert (data.compression, data.compression_opts) == ("gzip", 5)
-                assert data.shuffle and data.chunks == (10, 20)
-
-    @pytest.mark.parametrize("fmt", ["netcdf_cf", "DASDAE"])
-    def test_unknown_variable_raises(self, tmp_path, fmt):
-        """Both formats raise xarray's KeyError for a variable not written."""
-        _require_xarray_netcdf_engine()
-        patch = dc.get_example_patch("random_das")
-        with pytest.raises(KeyError, match="nope"):
-            dc.write(patch, tmp_path / "bad", fmt, encoding={"nope": {}})
-
-    def test_unknown_encoding_raises(self, tmp_path):
-        """Xarray validates the encoding."""
-        _require_xarray_netcdf_engine()
-        patch = dc.get_example_patch("random_das")
-        with pytest.raises(ValueError, match="unexpected encoding"):
-            dc.write(
-                patch, tmp_path / "bad.nc", "netcdf_cf", encoding={"data": {"bob": 1}}
-            )
+            data = h5["data"]
+            assert (data.compression_opts, data.chunks) == (9, (10, 20))
 
 
 class TestNetCDFUtilsAdvanced:

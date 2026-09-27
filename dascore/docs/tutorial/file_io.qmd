@@ -40,22 +40,12 @@ Format support varies by backend: a formatter that requires a local seekable fil
 
 ## Compression and chunking
 
-DASDAE, PRODML, and NETCDF_CF writers take an `encoding` dict shaped like the one xarray's [`to_netcdf`](https://docs.xarray.dev/en/stable/generated/xarray.Dataset.to_netcdf.html) takes: keys are variable names (`"data"` for the patch data, or a coordinate name), and values are dicts of encoding options. Variables not named are written unfiltered. This compresses the data with gzip at level 4, applies HDF5's shuffle filter, and stores it in chunks of 50 distance samples by 1000 time samples:
+DASDAE, PRODML, and NETCDF_CF writers take an `encoding` dict as xarray's [`to_netcdf`](https://docs.xarray.dev/en/stable/generated/xarray.Dataset.to_netcdf.html) does: keys are variable names (`"data"` or a coordinate name; PRODML takes only `"data"` and `"time"`), values are options such as `zlib`, `complevel`, `shuffle`, `chunksizes`, and `fletcher32`. NETCDF_CF passes it to xarray; DASDAE and PRODML translate it for h5py as xarray's h5netcdf engine does, clamping `chunksizes` to each array's length. A write option the writer does not accept raises a [`ParameterError`](`dascore.exceptions.ParameterError`).
 
 ```{python}
-encoding = {
-    "data": {"zlib": True, "complevel": 4, "shuffle": True, "chunksizes": (50, 1000)},
-}
-patch.io.write(path, "DASDAE", encoding=encoding)
-round_trip = dc.spool(path)[0]
+encoding = {"data": {"zlib": True, "complevel": 4, "chunksizes": (50, 1000)}}
+patch.io.write(UPath("memory://dascore/tutorial/small.h5"), "DASDAE", encoding=encoding)
 ```
-
-```{python}
-#| echo: false
-path.unlink(missing_ok=True)
-```
-
-DASDAE and PRODML write through h5py and accept the options xarray's h5netcdf engine maps onto it: `compression`, `compression_opts`, `shuffle`, `chunksizes`, `fletcher32`, `zlib`, and `complevel`. PRODML stores two arrays, so it takes only `"data"` and `"time"`. h5py's built-in filters (gzip, lzf, szip, shuffle, and fletcher32) need no extra package; [hdf5plugin](https://pypi.org/project/hdf5plugin/) filters such as `compression=hdf5plugin.Zstd()` are optional. The one difference from xarray: `chunksizes` is clamped to each array's length, because one encoding applies to every patch in a file and patches differ in length. NETCDF_CF hands the encoding to xarray unchanged, so its engine (netCDF4 when installed, else h5netcdf) decides which keys it accepts; `zlib`, `complevel`, `shuffle`, `chunksizes`, and `fletcher32` work in all three formats. An unknown option raises a `ValueError` and an unknown variable a `KeyError`, as in xarray; a write option the writer does not accept raises a [`ParameterError`](`dascore.exceptions.ParameterError`).
 
 # Scanning metadata
 

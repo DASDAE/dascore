@@ -522,102 +522,54 @@ def extract_h5_attrs(
     return out
 
 
-# The h5netcdf encoding keys which map onto h5py's create_dataset.
-_ENCODING_KEYS = (
-    "chunksizes",
-    "complevel",
-    "compression",
-    "compression_opts",
-    "fletcher32",
-    "shuffle",
-    "zlib",
-)
-# Keys xarray drops on write, which an opened dataset's encoding holds.
-_DROPPED_ENCODING_KEYS = ("source", "original_shape")
+# h5netcdf's encoding keys; xarray drops "source" and "original_shape" on write.
+_ENCODING_KEYS = {"chunksizes", "complevel", "compression", "compression_opts"}
+_ENCODING_KEYS |= {"fletcher32", "shuffle", "zlib"}
 
 
-def _translate_encoding(name, encoding) -> dict:
-    """Translate one variable's encoding as xarray's h5netcdf backend does."""
-    out = {k: v for k, v in encoding.items() if k not in _DROPPED_ENCODING_KEYS}
-    if unknown := sorted(set(out) - set(_ENCODING_KEYS)):
-        msg = (
-            f"Unexpected encoding parameters for variable {name!r}: {unknown}. "
-            f"Valid encodings are: {list(_ENCODING_KEYS)}."
-        )
-        raise ValueError(msg)
-    if out.pop("zlib", False):
-        if out.get("compression") not in (None, "gzip"):
-            raise ValueError("'zlib' and 'compression' encodings mismatch")
-        out.setdefault("compression", "gzip")
-    level, opts = out.get("complevel"), out.get("compression_opts")
-    if "complevel" in out and "compression_opts" in out and level != opts:
-        raise ValueError("'complevel' and 'compression_opts' encodings mismatch")
-    if complevel := out.pop("complevel", 0):
-        out.setdefault("compression_opts", complevel)
-    # JSON and YAML give lists; h5py filters need tuples.
-    if isinstance(out.get("compression_opts"), list):
-        out["compression_opts"] = tuple(out["compression_opts"])
-    if (chunks := out.pop("chunksizes", None)) is not None:
-        out["chunks"] = tuple(chunks)
+def h5_encoding(encoding: dict | None, variables=None) -> dict[str, dict]:
+    """Translate an xarray-style encoding to h5py options, as h5netcdf does."""
+    out = {}
+    for name, enc in (encoding or {}).items():
+        opts = {k: v for k, v in enc.items() if k not in ("source", "original_shape")}
+        if unknown := sorted(set(opts) - _ENCODING_KEYS):
+            msg = f"Unexpected encoding parameters for variable {name!r}: {unknown}."
+            raise ValueError(f"{msg} Valid encodings are: {sorted(_ENCODING_KEYS)}.")
+        if opts.pop("zlib", False):
+            if opts.get("compression") not in (None, "gzip"):
+                raise ValueError("'zlib' and 'compression' encodings mismatch")
+            opts["compression"] = "gzip"
+        level = opts.pop("complevel", None)
+        if level is not None and opts.get("compression_opts", level) != level:
+            raise ValueError("'complevel' and 'compression_opts' encodings mismatch")
+        if level:
+            opts.setdefault("compression_opts", level)
+        if isinstance(opts.get("compression_opts"), list):  # as JSON gives
+            opts["compression_opts"] = tuple(opts["compression_opts"])
+        opts["chunks"] = opts.pop("chunksizes", None)
+        out[name] = opts
+    if variables is not None and (unknown := sorted(set(out) - set(variables))):
+        raise KeyError(f"Encoding names variables not in the patch: {unknown}")
     return out
 
 
-# Writers build new content in this root group and move it into place only
-# once complete, so a failed write leaves an existing file as it was.
-PARTIAL_GROUP = "/_dascore_partial"
+def create_dataset(group, name, data, options=None):
+    """Create a dataset with h5py options, clamping chunks to its shape."""
+    shape = data.shape  # h5py refuses filters on empty or scalar arrays
+    options = dict(options or {}) if shape and all(shape) else {}
+    if len(chunks := options.get("chunks") or ()) == len(shape) > 0:
+        options["chunks"] = tuple(map(min, chunks, shape))
+    return group.create_dataset(name, data=data, **options)
 
 
 @contextmanager
-def staged_group(h5):
-    """
-    Yield an empty root group to build new content in.
-
-    The caller moves what it built into place (see `move_into_place`) as the
-    block's last step. The group is removed on exit either way, so a failed
-    write leaves only what the file held before; a group left by a killed
-    write is cleared first.
-    """
-    if PARTIAL_GROUP in h5:
-        del h5[PARTIAL_GROUP]
+def staged_group(h5, dest: str):
+    """Yield a root group which replaces ``dest`` once the block succeeds."""
+    staging = "/_dascore_partial"
+    h5.pop(staging, None)  # left by a killed write
     try:
-        yield h5.create_group(PARTIAL_GROUP)
+        yield h5.create_group(staging)
+        h5.pop(dest, None)
+        h5.move(staging, dest)
     finally:
-        if PARTIAL_GROUP in h5:
-            del h5[PARTIAL_GROUP]
-
-
-def move_into_place(h5, source: str, dest: str) -> None:
-    """Move a node onto ``dest``, replacing any node there; a rename, no copy."""
-    if dest in h5:
-        del h5[dest]
-    h5.move(source, dest)
-
-
-def h5_encoding(encoding: dict | None) -> dict[str, dict]:
-    """
-    Translate an xarray-style write encoding into h5py dataset options.
-
-    Keys are variable names; each value becomes ``create_dataset`` kwargs,
-    translated as xarray's h5netcdf engine does. Unknown keys raise
-    ``ValueError``.
-    """
-    return {k: _translate_encoding(k, v) for k, v in (encoding or {}).items()}
-
-
-def check_encoding_variables(options: dict, names) -> None:
-    """Refuse an encoding naming a variable not in ``names``, as xarray does."""
-    if unknown := sorted(set(options) - set(names)):
-        raise KeyError(f"Encoding names variables not in the patch: {unknown}")
-
-
-def h5_dataset_kwargs(options: dict | None, shape: tuple[int, ...]) -> dict:
-    """Return create_dataset kwargs for an array, clamping chunks to its shape."""
-    if not (options and shape and all(shape)):  # h5py refuses filters on these
-        return {}
-    chunks = options.get("chunks")
-    if chunks is None or len(chunks) != len(shape):  # h5py reports a bad rank
-        return options
-    return {
-        **options,
-        "chunks": tuple(min(c, n) for c, n in zip(chunks, shape, strict=True)),
-    }
+        h5.pop(staging, None)

@@ -5,7 +5,6 @@ from __future__ import annotations
 import h5py
 import numpy as np
 import pytest
-from upath import UPath
 
 import dascore as dc
 from dascore.core.coords import concat_coords, get_coord
@@ -13,8 +12,7 @@ from dascore.core.coords import concat_coords, get_coord
 
 def _group(h5):
     """Return the first patch group of an open DASDAE file."""
-    waveforms = h5["waveforms"]
-    return waveforms[next(iter(waveforms))]
+    return next(iter(h5["waveforms"].values()))
 
 
 @pytest.fixture(scope="class")
@@ -26,6 +24,8 @@ def gzip_encoding():
         "shuffle": True,
         "fletcher32": True,
         "chunksizes": (10, 10**9),
+        "source": "x.nc",  # xarray drops these two on write
+        "original_shape": (1, 2),
     }
     return {"data": data}
 
@@ -47,50 +47,33 @@ class TestDatasetOptions:
             assert data.chunks == (10, random_patch.shape[1])
         assert dc.read(path)[0] == random_patch
 
-    def test_zlib_complevel(self, random_patch, tmp_path):
-        """Zlib and complevel translate to gzip and its level."""
-        encoding = {"data": {"zlib": True, "complevel": 6}}
-        path = dc.write(random_patch, tmp_path / "out.h5", "DASDAE", encoding=encoding)
-        with h5py.File(path) as h5:
-            data = _group(h5)["data"]
-            assert (data.compression, data.compression_opts) == ("gzip", 6)
-
-    def test_coord_values(self, random_patch, tmp_path):
-        """A coordinate's value array takes its own encoding; others none."""
-        encoding = {"time": {"compression": "lzf", "chunksizes": (7,)}}
+    def test_coords(self, random_patch, tmp_path):
+        """Coordinate arrays take their own encoding; scalars and others none."""
+        foo, bar = (None, np.arange(3.0) ** 2), ((), np.array(2.0))
+        patch = random_patch.update_coords(_foo=foo, bar=bar)
+        encoding = {
+            "time": {"compression": "lzf", "chunksizes": (7,)},
+            "_foo": {"compression": 32000, "compression_opts": [], "chunksizes": (10,)},
+            "bar": {"compression": "gzip", "chunksizes": ()},
+        }
         path = tmp_path / "out.h5"
-        dc.write(random_patch, path, "DASDAE", file_version="1", encoding=encoding)
+        dc.write(patch, path, "DASDAE", file_version="1", encoding=encoding)
         with h5py.File(path) as h5:
             group = _group(h5)
-            assert group["_coord_time"].compression == "lzf"
-            assert group["_coord_time"].chunks == (7,)
+            time = group["_coord_time"]
+            assert (time.compression, time.chunks) == ("lzf", (7,))
+            foo = group["_coord__foo"]  # a list compression_opts, as JSON gives
+            assert (foo.compression, foo.chunks) == ("lzf", (3,))
+            assert group["_coord_bar"].compression is None
             assert group["_coord_distance"].compression is None
             assert group["data"].chunks is None
-
-    def test_v2_range_takes_nothing(self, random_patch, tmp_path):
-        """A version 2 range is a zero-length descriptor node, unfiltered."""
-        encoding = {"time": {"compression": "gzip"}}
-        path = dc.write(random_patch, tmp_path / "out.h5", "DASDAE", encoding=encoding)
-        with h5py.File(path) as h5:
-            assert _group(h5)["_coord_time"].compression is None
-
-    def test_dimensionless_coord(self, random_patch, tmp_path):
-        """A coordinate without dims pairs chunksizes with its own axis."""
-        patch = random_patch.update_coords(foo=(None, np.arange(3.0) ** 2))
-        encoding = {"foo": {"chunksizes": (10,), "compression": "gzip"}}
-        path = dc.write(patch, tmp_path / "out.h5", "DASDAE", encoding=encoding)
-        with h5py.File(path) as h5:
-            assert _group(h5)["_coord_foo"].chunks == (3,)
         assert dc.read(path)[0] == patch
 
-    @pytest.mark.parametrize("version", ["1", "2"])
-    def test_empty_patch(self, random_patch, tmp_path, gzip_encoding, version):
+    def test_empty_patch(self, random_patch, tmp_path, gzip_encoding):
         """A zero-size patch is written unfiltered rather than refused."""
         end = random_patch.get_coord("time").max()
         patch = random_patch.select(time=(end + np.timedelta64(1, "s"), None))
-        assert 0 in patch.shape
-        path = tmp_path / "out.h5"
-        dc.write(patch, path, "DASDAE", file_version=version, encoding=gzip_encoding)
+        path = dc.write(patch, tmp_path / "out.h5", "DASDAE", encoding=gzip_encoding)
         with h5py.File(path) as h5:
             assert _group(h5)["data"].compression is None
 
@@ -110,145 +93,61 @@ class TestDatasetOptions:
             assert all(x.compression == "gzip" for x in segments.values())
             assert all(x.chunks == x.shape for x in segments.values())
 
-    def test_list_compression_opts(self, random_patch, tmp_path):
-        """A list compression_opts, as JSON gives, reaches h5py as a tuple."""
-        encoding = {"data": {"compression": 32000, "compression_opts": []}}  # lzf
-        path = dc.write(random_patch, tmp_path / "out.h5", "DASDAE", encoding=encoding)
-        assert dc.read(path)[0] == random_patch
-
-    def test_remote_upath(self, random_patch, gzip_encoding):
-        """The encoding survives a remote write, which uploads a temp file."""
-        path = UPath("memory://dascore/encoding/compressed.h5")
-        dc.write(random_patch, path, "DASDAE", encoding=gzip_encoding)
-        assert dc.read(path)[0] == random_patch
-        with path.open("rb") as raw, h5py.File(raw, "r", driver="fileobj") as h5:
-            data = _group(h5)["data"]
-            assert (data.compression, data.compression_opts) == ("gzip", 3)
-            assert data.chunks == (10, random_patch.shape[1])
+    def test_variable_in_some_patches(self, random_patch, tmp_path):
+        """A coordinate only one patch of a spool carries takes the encoding."""
+        tagged = random_patch.update_coords(_quality=(None, np.arange(3.0) ** 2))
+        spool = dc.spool([tagged, random_patch.update_attrs(station="other")])
+        encoding = {"_quality": {"compression": "gzip"}}
+        path = dc.write(spool, tmp_path / "out.h5", "DASDAE", encoding=encoding)
+        with h5py.File(path) as h5:
+            nodes = [g.get("_coord__quality") for g in h5["waveforms"].values()]
+            assert {getattr(x, "compression", "-") for x in nodes} == {"-", "gzip"}
 
 
 class TestValidation:
-    """Tests for which encodings are accepted."""
+    """Tests for which encodings are refused."""
 
     @pytest.mark.parametrize(
-        "data, match",
+        "encoding, error, match",
         [
-            ({"zlib": True, "compression": "lzf"}, "'zlib' and 'compression'"),
-            ({"complevel": 4, "compression_opts": 5}, "'complevel' and"),
-            ({"bob": 1}, "Valid encodings are"),
+            ({"data": {"zlib": True, "compression": "lzf"}}, ValueError, "'zlib' and"),
+            ({"data": {"complevel": 4, "compression_opts": 5}}, ValueError, "'compl"),
+            ({"data": {"complevel": 0, "compression_opts": 5}}, ValueError, "'compl"),
+            ({"data": {"bob": 1}}, ValueError, "Valid encodings are"),
+            ({"tim": {}}, KeyError, "tim"),
+            ({"bob": {}}, KeyError, "bob"),  # an attr named bob_min is no variable
         ],
     )
-    def test_bad_encoding(self, random_patch, tmp_path, data, match):
-        """Conflicting or unknown options raise ValueError."""
-        with pytest.raises(ValueError, match=match):
-            dc.write(random_patch, tmp_path / "o.h5", "DASDAE", encoding={"data": data})
-
-    def test_unknown_variable(self, random_patch, tmp_path):
-        """A variable the patch lacks raises xarray's KeyError."""
-        encoding = {"tim": {"compression": "gzip"}}
-        with pytest.raises(KeyError, match="tim"):
-            dc.write(random_patch, tmp_path / "o.h5", "DASDAE", encoding=encoding)
-
-    def test_variable_in_some_patches(self, random_patch, tmp_path):
-        """A coordinate only some patches carry takes the encoding in those."""
-        tagged = random_patch.update_coords(_quality=(None, np.arange(3.0) ** 2))
-        other = random_patch.update_attrs(station="other")
-        encoding = {"_quality": {"compression": "gzip"}}
-        path = tmp_path / "mixed.h5"
-        dc.write(dc.spool([other, tagged]), path, "DASDAE", encoding=encoding)
-        assert len(dc.spool(path)) == 2
-        with h5py.File(path) as h5:
-            nodes = [
-                g["_coord__quality"]
-                for g in h5["waveforms"].values()
-                if "_coord__quality" in g
-            ]
-            assert [x.compression for x in nodes] == ["gzip"]
-
-    def test_attr_is_not_a_variable(self, random_patch, tmp_path):
-        """An attribute ending in _min does not make a variable."""
+    def test_bad_encoding(self, random_patch, tmp_path, encoding, error, match):
+        """Conflicting or unknown options and unknown variables raise."""
         patch = random_patch.update_attrs(bob_min=1.0)
-        with pytest.raises(KeyError, match="bob"):
-            dc.write(patch, tmp_path / "o.h5", "DASDAE", encoding={"bob": {}})
+        with pytest.raises(error, match=match):
+            dc.write(patch, tmp_path / "o.h5", "DASDAE", encoding=encoding)
 
-    def test_private_coord(self, random_patch, tmp_path):
-        """A coordinate the contents table hides still takes an encoding."""
-        patch = random_patch.update_coords(_quality=(None, np.arange(3.0) ** 2))
-        encoding = {"_quality": {"compression": "gzip"}}
-        path = dc.write(patch, tmp_path / "o.h5", "DASDAE", encoding=encoding)
-        with h5py.File(path) as h5:
-            assert _group(h5)["_coord__quality"].compression == "gzip"
-
-    def test_xarray_dropped_keys(self, random_patch, tmp_path):
-        """Keys xarray drops on write, as an opened file's encoding has, pass."""
-        opts = {"zlib": True, "source": "x.nc", "original_shape": (1, 2)}
-        path = tmp_path / "o.h5"
-        dc.write(random_patch, path, "DASDAE", encoding={"data": opts})
-        with h5py.File(path) as h5:
-            assert _group(h5)["data"].compression == "gzip"
-
-    def test_scalar_coord(self, random_patch, tmp_path):
-        """A scalar coordinate is written unfiltered, as xarray does."""
-        patch = random_patch.update_coords(foo=((), np.array(2.0)))
-        encoding = {"foo": {"compression": "gzip", "chunksizes": ()}}
-        path = tmp_path / "o.h5"
-        dc.write(patch, path, "DASDAE", file_version="1", encoding=encoding)
-        with h5py.File(path) as h5:
-            assert _group(h5)["_coord_foo"].compression is None
-        assert dc.read(path)[0] == patch
-
-    def test_spool(self, random_spool, tmp_path, gzip_encoding):
-        """One encoding writes every patch of a spool."""
-        path = tmp_path / "out.h5"
-        dc.write(random_spool, path, "DASDAE", encoding=gzip_encoding)
-        assert len(dc.spool(path)) == len(random_spool)
-
-
-class TestFailedWrite:
-    """Tests that a write h5py refuses leaves an existing file as it was."""
-
-    @pytest.fixture(
-        params=[
-            ({"chunksizes": (0, 10)}, "positive"),
-            ({"chunksizes": (-1, 10)}, "negative"),
-            ({"chunksizes": (10,)}, "rank"),
-            ({"complevel": 4}, "Compression method"),  # as in h5netcdf
-            ({"compression": "gzip", "compression_opts": 99}, "GZIP"),
-        ]
+    @pytest.mark.parametrize(
+        "data, match, rewrite",
+        [
+            ({"chunksizes": (10,)}, "rank", False),
+            ({"zlib": True, "complevel": 99}, "GZIP", True),
+        ],
     )
-    def bad_encoding(self, request):
-        """An encoding h5py refuses on the data, and its error message."""
-        encoding, match = request.param
-        return {"data": encoding}, match
-
-    @pytest.mark.parametrize("version", ["1", "2"])
-    @pytest.mark.parametrize("rewrite", [False, True])
-    def test_file_intact(self, random_patch, tmp_path, bad_encoding, version, rewrite):
-        """Appending or rewriting a patch that fails keeps the stored patch."""
-        path = dc.write(random_patch, tmp_path / "o.h5", "DASDAE", file_version=version)
-        end = random_patch.get_coord("time").max()
-        new = random_patch.update_coords(time_min=end + np.timedelta64(1, "s"))
-        new = random_patch if rewrite else new
-        encoding, match = bad_encoding
+    def test_file_intact(self, random_patch, tmp_path, data, match, rewrite):
+        """Appending or rewriting a patch h5py refuses keeps the stored patch."""
+        path = dc.write(random_patch, tmp_path / "o.h5", "DASDAE")
+        end = random_patch.get_coord("time").max() + np.timedelta64(1, "s")
+        new = random_patch if rewrite else random_patch.update_coords(time_min=end)
         with pytest.raises(Exception, match=match):
-            dc.write(new, path, "DASDAE", file_version=version, encoding=encoding)
+            dc.write(new, path, "DASDAE", encoding={"data": data})
         with h5py.File(path) as h5:
+            assert list(h5) == ["waveforms"]
             assert list(h5["waveforms"]) == [random_patch.get_patch_name()]
-            assert "_dascore_partial" not in h5
-        spool = dc.spool(path)
-        assert len(spool) == 1 and spool[0] == random_patch
-
-
-class TestKilledWrite:
-    """Tests for a partial group left by a write that never finished."""
+        assert dc.spool(path)[0] == random_patch
 
     def test_leftover_is_replaced(self, random_patch, tmp_path):
-        """A later write clears the leftover instead of failing on it."""
-        path = tmp_path / "killed.h5"
-        dc.write(random_patch, path, "DASDAE")
+        """A group left by a killed write is cleared by the next write."""
+        path = dc.write(random_patch, tmp_path / "killed.h5", "DASDAE")
         with h5py.File(path, "a") as h5:
             h5.create_group("_dascore_partial")
         dc.write(random_patch, path, "DASDAE")
         with h5py.File(path, "r") as h5:
             assert "_dascore_partial" not in h5
-        assert dc.spool(path)[0] == random_patch

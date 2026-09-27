@@ -11,12 +11,7 @@ import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
-from dascore.utils.hdf5 import (
-    H5Reader,
-    H5Writer,
-    check_encoding_variables,
-    h5_encoding,
-)
+from dascore.utils.hdf5 import H5Reader, H5Writer, h5_encoding
 from dascore.utils.misc import unbyte
 from dascore.utils.patch import get_patch_names
 
@@ -73,14 +68,7 @@ class DASDAEV1(FiberIO):
         resource
             The path to the file.
         encoding
-            Per-variable storage options, as xarray's ``to_netcdf`` takes
-            them: a dict keyed by "data" or a coordinate name whose values
-            are dicts of ``compression``, ``compression_opts``, ``shuffle``,
-            ``chunksizes``, ``fletcher32``, ``zlib``, or ``complevel``.
-            ``chunksizes`` is in the array's axis order and is clamped to
-            its length, so one encoding fits patches of different lengths.
-            A variable no patch has raises ``KeyError`` once the patches are
-            written.
+            Per-variable storage options, as xarray's ``to_netcdf`` takes.
         """
         options = h5_encoding(encoding)
         # write out patches
@@ -97,16 +85,14 @@ class DASDAEV1(FiberIO):
         # loudly if the name pass and patch pass ever disagree in length.
         patch_names = get_patch_names(patches).values
         counts: dict[str, int] = {}
-        # A spool's patches may carry different coordinates, so a variable
-        # need only belong to one of them; checked in the single write pass.
-        variables = {"data"}
+        variables = {"data"}  # a variable need only belong to one patch
         for patch, name in zip(patches, patch_names, strict=True):
             num = counts.get(name, 0)
             counts[name] = num + 1
             unique_name = name if num == 0 else f"{name}__{num}"
             variables.update(patch.coords.coord_map)
             _save_patch(patch, waveforms, unique_name, self._compact_coords, options)
-        check_encoding_variables(options, variables)
+        h5_encoding(encoding, variables)
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""

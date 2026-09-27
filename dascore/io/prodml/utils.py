@@ -21,14 +21,7 @@ from dascore.io.utils import (
 )
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.units import get_quantity_str
-from dascore.utils.hdf5 import (
-    check_encoding_variables,
-    encode_h5_strings,
-    h5_dataset_kwargs,
-    h5_encoding,
-    move_into_place,
-    staged_group,
-)
+from dascore.utils.hdf5 import create_dataset, encode_h5_strings, staged_group
 from dascore.utils.misc import iterate, maybe_get_items, register_func, unbyte
 
 # --- Getting format/version
@@ -475,34 +468,23 @@ def _prepare_prodml_write(spool):
     )
 
 
-# Encoding variable names and the datasets they set.
-_ENCODING_DATASETS = {"data": "RawData", "time": "RawDataTime"}
-
-
-def _write_prodml(spool, resource, encoding=None):
+def _write_prodml(spool, resource, options):
     """Write one raw Patch to a standalone ProdML 2.1 HDF5 file."""
-    options = h5_encoding(encoding)
-    check_encoding_variables(options, _ENCODING_DATASETS)
     prepared = _prepare_prodml_write(spool)
     data, times, file_uuid, acq_attrs, raw_attrs, data_attrs, time_attrs = prepared
     h5_file = getattr(resource, "_handle", resource)
-    with staged_group(h5_file) as staging:
-        acquisition = staging.create_group("Acquisition")
+    with staged_group(h5_file, "/Acquisition") as acquisition:
         acquisition.attrs.update(acq_attrs)
         raw = acquisition.create_group("Raw[0]")
         raw.attrs.update(raw_attrs)
-        data_kwargs = h5_dataset_kwargs(options.get("data"), data.shape)
-        raw_data = raw.create_dataset("RawData", data=data, **data_kwargs)
+        raw_data = create_dataset(raw, "RawData", data, options.get("data"))
         raw_data.attrs.update(data_attrs)
-        time_kwargs = h5_dataset_kwargs(options.get("time"), times.shape)
-        raw_time = raw.create_dataset("RawDataTime", data=times, **time_kwargs)
+        raw_time = create_dataset(raw, "RawDataTime", times, options.get("time"))
         raw_time.attrs.update(time_attrs)
-        # Replace the old contents only once the new ones are complete.
-        for key in set(h5_file) - {staging.name.lstrip("/")}:
+        for key in set(h5_file) - {acquisition.name[1:]}:
             del h5_file[key]
         h5_file.attrs.clear()
         h5_file.attrs["uuid"] = file_uuid
-        move_into_place(h5_file, acquisition.name, "/Acquisition")
 
 
 def _get_node_dims(node_info) -> tuple[str, ...]:

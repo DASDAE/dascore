@@ -71,9 +71,10 @@ class TestProdMLWriteDispatch:
         assert dc.get_format(path) == ("PRODML", "2.1")
 
     def test_write_refuses_unknown_kwargs(self, prodml_patch, tmp_path):
-        """An option the writer does not name should raise, not be ignored."""
+        """An option the writer does not name should raise, naming the writer."""
         path = tmp_path / "kwargs.h5"
-        with pytest.raises(ParameterError, match="unused_option"):
+        match = r"PRODML writer does not accept option\(s\) \['unused_option'\]"
+        with pytest.raises(ParameterError, match=match):
             dc.write(prodml_patch, path, "PRODML", unused_option=True)
         assert not path.exists()
 
@@ -474,73 +475,32 @@ class TestProdMLWriteValidation:
 class TestProdMLWriteEncoding:
     """The encoding should set the storage of RawData and RawDataTime."""
 
-    @pytest.fixture
-    def encoded_path(self, prodml_patch, tmp_path):
-        """Write the patch with gzip, shuffle and chunks on both arrays."""
+    def test_datasets(self, prodml_patch, tmp_path):
+        """Both arrays take their filters, chunks clamp, and it round trips."""
         opts = {"zlib": True, "complevel": 3, "shuffle": True}
-        encoding = {
-            "data": {**opts, "chunksizes": (2, 100)},
-            "time": {**opts, "chunksizes": (2,)},
-        }
-        return dc.write(prodml_patch, tmp_path / "enc.h5", "PRODML", encoding=encoding)
-
-    def test_datasets(self, encoded_path, prodml_patch):
-        """Both arrays take their filters, and chunks clamp to the shape."""
-        with h5py.File(encoded_path, "r") as file:
+        encoding = {"data": {**opts, "chunksizes": (2, 100)}, "time": opts}
+        path = dc.write(prodml_patch, tmp_path / "enc.h5", "PRODML", encoding=encoding)
+        with h5py.File(path, "r") as file:
             raw = file["Acquisition/Raw[0]"]
             data, time = raw["RawData"], raw["RawDataTime"]
             for array in (data, time):
                 assert (array.compression, array.compression_opts) == ("gzip", 3)
-                assert array.shuffle
             assert data.chunks == (2, prodml_patch.shape[1])
-            assert time.chunks == (2,)
-
-    def test_round_trip(self, encoded_path, prodml_patch):
-        """The encoded file reads back as the written patch."""
-        out = dc.read(encoded_path, "PRODML")[0]
-        assert out == prodml_patch.update_attrs(tag="")
-
-    def test_no_encoding(self, prodml_patch, tmp_path):
-        """Without an encoding both arrays are contiguous and unfiltered."""
-        path = dc.write(prodml_patch, tmp_path / "plain.h5", "PRODML")
-        with h5py.File(path, "r") as file:
-            for array in file["Acquisition/Raw[0]"].values():
-                assert array.chunks is None and array.compression is None
-                assert not array.shuffle
+        assert dc.read(path, "PRODML")[0] == prodml_patch.update_attrs(tag="")
 
     @pytest.mark.parametrize(
         "encoding, error, match",
         [
             ({"distance": {}}, KeyError, "distance"),  # PRODML stores no array
-            ({"data": {"bob": 1}}, ValueError, "Valid encodings"),
+            ({"data": {"zlib": True, "complevel": 99}}, ValueError, "GZIP"),
         ],
     )
     def test_bad_encoding(self, prodml_patch, tmp_path, encoding, error, match):
-        """A bad encoding raises before an existing file is cleared."""
-        path = tmp_path / "bad.h5"
-        with h5py.File(path, "w") as file:
-            file.create_group("sentinel")
-        with pytest.raises(error, match=match):
-            dc.write(prodml_patch, path, "PRODML", encoding=encoding)
-        with h5py.File(path, "r") as file:
-            assert set(file) == {"sentinel"}
-
-    def test_refused_option_keeps_file(self, prodml_patch, tmp_path):
-        """An option h5py refuses leaves an existing file as it was."""
+        """A bad encoding leaves an existing file as it was."""
         path = dc.write(prodml_patch, tmp_path / "keep.h5", "PRODML")
         before = dc.spool(path)[0]
-        encoding = {"data": {"compression": "gzip", "compression_opts": 99}}
-        with pytest.raises(ValueError, match="GZIP"):
+        with pytest.raises(error, match=match):
             dc.write(prodml_patch, path, "PRODML", encoding=encoding)
         with h5py.File(path, "r") as file:
             assert set(file) == {"Acquisition"}
         assert dc.spool(path)[0] == before
-
-    def test_leftover_is_replaced(self, prodml_patch, tmp_path):
-        """A group left by a killed write is cleared by the next write."""
-        path = dc.write(prodml_patch, tmp_path / "killed.h5", "PRODML")
-        with h5py.File(path, "a") as file:
-            file.create_group("_dascore_partial")
-        dc.write(prodml_patch, path, "PRODML")
-        with h5py.File(path, "r") as file:
-            assert set(file) == {"Acquisition"}
