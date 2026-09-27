@@ -278,3 +278,44 @@ class TestVersion2Files:
         (back,) = dc.spool(dc.write(patch, tmp_path / "runs.h5", "dasdae"))
         np.testing.assert_array_equal(back.get_coord("x").values, coord.values)
         np.testing.assert_array_equal(back.data, data)
+
+
+class TestMultiRunRoundTrip:
+    """Coordinates of several exact runs read back as they were written."""
+
+    @pytest.mark.parametrize("rate", [1000, 1024, 3000])
+    @pytest.mark.parametrize("layout", ["hole", "strided", "off_lattice"])
+    def test_round_trip(self, rate, layout, tmp_path):
+        """The runs and the step they share survive a write and a read."""
+        full = get_coord(start=T0, step=(1, rate), shape=(60,))
+        if layout == "hole":
+            coord = concat_coords(full[:10], full[11:])
+        elif layout == "strided":
+            coord = concat_coords(full[:12], full[16:])[::2]
+        else:
+            later = full.min() + np.timedelta64(1, "s") + np.timedelta64(5, "ns")
+            other = get_coord(start=later, step=(1, rate), shape=(20,))
+            coord = concat_coords(full, other)
+        patch = dc.Patch(data=np.ones(len(coord)), coords={"t": coord}, dims=("t",))
+        (back,) = dc.read(dc.write(patch, tmp_path / "runs.h5", "dasdae"))
+        out = back.get_coord("t")
+        assert out == coord
+        assert out.step == coord.step and out.step_exact == coord.step_exact
+
+    def test_older_strided_file_reads(self):
+        """A stored step beside grids a stride widened reads back stepless."""
+        h5 = h5py.File(io.BytesIO(), "w")
+        labels = np.array([0.0, 1 + 1e-12, 2.0, 3.0, 5.0])
+        segments = (
+            NumericCoord.from_labels(labels, step=1.0),
+            get_coord(start=20.0, step=2.0, shape=(5,)),
+        )
+        group = h5.create_group("x")
+        for num, segment in enumerate(segments):
+            _save_coord(segment, str(num), group, compact=True)
+        group.attrs["object_type"] = "CoordSegmented"
+        back = _read_coord(group, "x", {}, snap=True)
+        assert back.step is None
+        np.testing.assert_array_equal(
+            back.values, np.concatenate([x.values for x in segments])
+        )
