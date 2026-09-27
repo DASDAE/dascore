@@ -8,6 +8,7 @@ import warnings
 from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import replace
+from datetime import timedelta
 from functools import singledispatch
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, Self, TypeVar, overload
@@ -131,6 +132,7 @@ from dascore.utils.pd import (
     resolve_selector_namespaces,
     selector_spec_names,
 )
+from dascore.utils.time import to_timedelta64
 
 if TYPE_CHECKING:
     from dascore.io.index.catalog import PatchCatalog
@@ -161,6 +163,46 @@ class _InventoryQuery(NamedTuple):
 # neither end carries; every other dimension states its own magnitude
 # in its own units.
 _TIMES = _TIME_TYPES
+
+
+def _has_samples(rows: pd.DataFrame, window: Mapping) -> np.ndarray:
+    """Whether each trimmed row keeps a sample along every windowed dim."""
+    keep = np.ones(len(rows), dtype=bool)
+    for dim in window:
+        low, high, step = rows[f"{dim}_min"], rows[f"{dim}_max"], rows[f"{dim}_step"]
+        if f"_{dim}_source_envelope" not in rows or step.dtype == object:
+            continue  # no known grid (a segmented coordinate) keeps the row
+        step = step.abs()  # a descending grid also holds its minimum
+        origin = rows[f"_{dim}_source_envelope"].str.get(f"{dim}_min").astype(low.dtype)
+        first = origin + np.ceil(((low - origin) / step).astype(float) - 1e-9) * step
+        keep &= ~(first > high).to_numpy()  # an unknown step keeps the row
+    return keep
+
+
+def _cut_pad(dim: str, pad, known: bool, timed: bool) -> list:
+    """Normalize a cut pad to [before, after], refusing any other spelling."""
+
+    def _text(x):
+        return isinstance(x, str) and any(c.isalpha() for c in x)
+
+    def _fine(x):
+        if isinstance(x, np.timedelta64 | timedelta) or _text(x):
+            return timed
+        return isinstance(x, numbers.Real) and not isinstance(x, bool)
+
+    ends = list(pad) if isinstance(pad, tuple | list) else []
+    with suppress(ValueError):
+        if known and len(ends) == 2 and all(map(_fine, ends)):
+            if timed:  # seconds, timedeltas, or strings with units
+                ends = [
+                    to_timedelta64(pd.Timedelta(x) if _text(x) else x) for x in ends
+                ]
+            if ends[0] <= ends[1]:
+                return ends
+    msg = f"cut pad {dim}= must be (before, after), before <= after, along a "
+    msg += "dimension of set and spool: numbers or, on a time dimension, "
+    msg += "timedeltas or strings with units such as '-1s'."
+    raise ParameterError(msg)
 
 
 def _spool_input_message(data) -> str:
@@ -1673,14 +1715,15 @@ class Spool(NodeRepr, NamespaceOwner):
         catalog = self._catalog
         return self._materialize_lossy() if catalog.transfer_is_lossy() else catalog
 
-    def _materialize_lossy(self):
+    def _materialize_lossy(self, stamp=None, dtypes=None):
         """
         Bake residual trims and presentation order into a derived catalog.
 
         An identity plan over the view's presented rows: one output per
         row (in presentation order, so ordinals record the order spec),
         with trimmed envelopes as the output envelopes and the trims
-        themselves re-applied at load through the plan resolver.
+        themselves re-applied at load through the plan resolver. `stamp`
+        maps attrs to record on every output, `dtypes` their presented dtypes.
         """
         from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
 
@@ -1691,7 +1734,7 @@ class Spool(NodeRepr, NamespaceOwner):
         # members (where loading needs it), never on the derived rows
         outputs = working.drop(
             columns=["_patch_row", *_SOURCE_COLUMNS], errors="ignore"
-        ).assign(output_id=ids)
+        ).assign(output_id=ids, **(stamp or {}))
         members = pd.DataFrame(
             {
                 "output_id": ids,
@@ -1707,6 +1750,7 @@ class Spool(NodeRepr, NamespaceOwner):
             merge_kwargs={},
             mode="identity",
             origin_path=self.spool_path,
+            stamped=dtypes or tuple(stamp or ()),
         )
 
     # --- restructuring (materializing) operations -----------------------
@@ -2238,6 +2282,101 @@ class Spool(NodeRepr, NamespaceOwner):
             lossy=isinstance(plan.value, ExplicitRanges),
         )
         return self._new_from_catalog(catalog)
+
+    def cut(self, annotations: dc.AnnotationSet, /, **pads) -> Self:
+        """
+        Return one lazy patch per feature of an annotation set.
+
+        Each feature, lone rows included, is cut to its bounds (see
+        `AnnotationSet.bounds`) and merged across source patches along
+        every dimension, as `chunk` merges, so a gap still leaves several
+        patches. Selection includes both ends, so the sample at a range's
+        (half-open) maximum is kept; an empty range gives nothing. A
+        feature spanning a dimension keeps the spool's full extent along
+        it, one holding no samples gives nothing, and overlapping features
+        duplicate data. On a coordinate with no fixed step, a window
+        between samples may yield an empty patch. Nothing is loaded.
+
+        Each output states `feature_id` (blank for a lone row) and
+        `annotation` (a lone row's index label, blank for a feature), as
+        attrs and as `get_contents` columns, which join back to the set.
+
+        Parameters
+        ----------
+        annotations
+            The set to cut by.
+        **pads
+            `dim=(before, after)`: offsets added to a feature's ends along
+            `dim` which are stated values, `before` (usually negative) to
+            its minimum and `after` to its maximum; range ends are kept. A
+            feature at a single value needs one. Time offsets are
+            timedeltas, strings with units such as "-1s", or seconds.
+
+        Examples
+        --------
+        >>> import pandas as pd
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool()
+        >>> start = spool.get_contents()["time_min"].min()
+        >>> frame = pd.DataFrame({"time": [start + pd.Timedelta("10s")]})
+        >>> picks = dc.AnnotationSet(frame, dims=("distance", "time"))
+        >>> cut = spool.cut(picks, time=("-1s", "3s"))
+        >>> assert len(cut) == 1
+        """
+        # circular import: the catalog's module imports this one
+        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
+
+        present = {x for dims in self._df["dims"] for x in dims.split(",")}
+        dtypes = {"feature_id": "str", "annotation": "Int64"}  # as presented
+        bounds, closed = annotations._extents()
+        for dim, pad in pads.items():
+            known = dim in set(annotations.dims) & present
+            timed = known and bounds[f"{dim}_min"].dtype.kind in "mM"
+            pads[dim] = _cut_pad(dim, pad, known, timed)
+        windows = []  # every refusal comes before any selection
+        for number, row in enumerate(bounds.to_dict("records")):
+            lone = not pd.isna(row["annotation"])
+            name = f"annotation {row['annotation']}" if lone else row["feature_id"]
+            window: dict | None = {}
+            for dim in annotations.dims:
+                low, high = row[f"{dim}_min"], row[f"{dim}_max"]
+                if pd.isna(low):  # spanned
+                    continue
+                if dim not in present:
+                    msg = f"{name} constrains {dim!r}, which the spool lacks."
+                    raise ParameterError(msg)
+                shut = closed[f"{dim}_max"][number]
+                if low == high and shut and dim not in pads:
+                    msg = f"{name} is a single {dim}; pass {dim}=(before, after)."
+                    raise ParameterError(msg)
+                if dim in pads:  # extend the ends which are values
+                    before, after = pads[dim]
+                    low = low + before if closed[f"{dim}_min"][number] else low
+                    high = high + after if shut else high
+                if window is not None:
+                    window = window | {dim: (low, high)} if low < high or shut else None
+            stamp = {"feature_id": row["feature_id"] or ""}
+            stamp["annotation"] = int(row["annotation"]) if lone else None
+            if window is not None:  # None: an empty range
+                windows.append((window, stamp))
+        pieces = []
+        for window, stamp in windows:
+            piece = self.select(_coords=window)
+            keep = _has_samples(piece._df, window)
+            piece = piece._restrict_to_rows(piece._df["_patch_row"][keep])
+            # merge along the dims every row has; chunk also splits holes
+            dims = [set(x.split(",")) for x in piece._df["dims"]]
+            shared = sorted(set.intersection(*dims)) if dims else []
+            # one row on known grids holds no hole, so it needs no merge
+            steps = piece._df[[f"{x}_step" for x in shared]]
+            if len(piece) == 1 and steps.notna().all(axis=None):
+                shared = []
+            for dim in shared:
+                piece = piece.chunk(**{dim: None})
+            if len(piece):
+                pieces.append(piece._materialize_lossy(stamp, dtypes))
+        empty = self._restrict_to_rows([])._materialize_lossy({}, dtypes)
+        return self._new_from_catalog(PatchCatalog.union(pieces or [empty]))
 
     @compose_docstring(conflict_desc=attr_conflict_description)
     def concatenate(
