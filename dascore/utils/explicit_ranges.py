@@ -20,11 +20,6 @@ class ExplicitRanges:
 
     rows: tuple[tuple[object, object], ...]
 
-    @property
-    def constrains(self) -> bool:
-        """Whether any row bounds its dimension."""
-        return any(x is not None for row in self.rows for x in row)
-
 
 def looks_explicit(value) -> bool:
     """Flag shapes needing explicit validation before ordinary query parsing."""
@@ -119,10 +114,7 @@ def explicit_windows(values: Mapping) -> dict[str, ExplicitRanges]:
     out = {k: r for k, v in values.items() if (r := explicit_ranges(v)) is not None}
     counts = {name: len(ranges.rows) for name, ranges in out.items()}
     if len(set(counts.values())) > 1:
-        msg = (
-            "Explicit ranges must have the same number of rows on every "
-            f"dimension, got {counts}."
-        )
+        msg = f"Explicit ranges must have the same number of rows, got {counts}."
         raise ParameterError(msg)
     return out
 

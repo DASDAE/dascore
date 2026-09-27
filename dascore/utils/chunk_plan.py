@@ -33,6 +33,7 @@ from dascore.exceptions import (
     ChunkError,
     CoordMergeError,
     InvalidSpoolQueryError,
+    MissingPatchError,
     ParameterError,
     UnitError,
 )
@@ -121,8 +122,7 @@ class ChunkPlan:
         keep_partial, conflict, snap_coords, missing_dim) — recorded, not
         referencing config.
     trim_dims
-        Other dimensions whose explicit windows trim each member (the
-        members and outputs state them as `{dim}_min/max`).
+        Other dimensions explicit windows trim (as `{dim}_min/max`).
     """
 
     outputs: pd.DataFrame
@@ -1543,10 +1543,8 @@ def build_chunk_plan(
     Build a chunk plan from a flat patch relation.
 
     Parameters mirror `Spool.chunk` (see the chunking formalities spec);
-    exactly one keyword names the dimension to chunk and its length
-    (`None`/`...` merges), unless every keyword holds explicit windows:
-    the first is then chunked and the others trim each request's members.
-    `_exact_coords` maps an explicit dimension to its known coordinates.
+    one keyword names the dimension to chunk and its length (`None`/`...`
+    merges); explicit windows may name more, which trim the first's outputs.
     """
     windows = explicit_windows(kwargs)
     if len(kwargs) != 1 and (not windows or len(windows) != len(kwargs)):
@@ -1989,11 +1987,12 @@ def build_chunk_plan(
             exact_coords=_exact_coords,
             fill_value=fill_value,
         )
-        if windows:
-            outputs, members = _trim_explicit(
-                outputs, members, sorted_df, windows, exact, keep_partial, on_incomplete
-            )
-    return ChunkPlan(outputs, members, name, value, params, tuple(windows))
+    plan = ChunkPlan(outputs, members, name, value, params)
+    if windows:  # the other explicit dims trim the planned outputs
+        plan = _trim_explicit(
+            plan, sorted_df, windows, exact, keep_partial, on_incomplete
+        )
+    return plan
 
 
 @compose_docstring(conflict_desc=attr_conflict_description)
@@ -2374,14 +2373,13 @@ def _structural(df: pd.DataFrame, coord: str) -> np.ndarray:
 
 
 def refuse_riders(windows: Mapping, rows: pd.DataFrame) -> None:
-    """Refuse windows on several coordinates when one is not always a dimension."""
+    """Refuse several windows when one names a coordinate not always a dim."""
     for name in list(windows) if len(windows) > 1 else ():
-        held = rows.get(f"{name}_min", pd.Series(np.nan, index=rows.index)).notna()
-        if (held.to_numpy() & ~_structural(rows, name)).any():
+        held = rows[f"{name}_min"].notna() if f"{name}_min" in rows else False
+        if (held & ~_structural(rows, name)).any():
             msg = (
                 f"Some patches carry {name!r} as a non-dimensional coordinate; "
-                "trimming is defined on dimensions, so it can take an explicit "
-                "window only alone."
+                "only a lone explicit window may name it."
             )
             raise ParameterError(msg)
 
@@ -2534,18 +2532,6 @@ def _snapped_cuts(cuts, start, step) -> list:
     return sorted(out)
 
 
-def _stated_units(value) -> str | None:
-    """Return a unit string, or None when the row states none.
-
-    Row values arrive from dataframes, so an absent unit is NaN rather
-    than None — and NaN never equals itself, which would make an unstated
-    unit look like a mismatch.
-    """
-    if value is None or value == "" or pd.isnull(value):
-        return None
-    return str(value)
-
-
 def _dim_columns(df: pd.DataFrame, name: str) -> tuple[str, str, str]:
     """Return the envelope columns of one dimension, checked present."""
     columns = (f"{name}_min", f"{name}_max", f"{name}_step")
@@ -2601,9 +2587,7 @@ def subdivision_pieces(df: pd.DataFrame, cuts, name: str) -> list[list[tuple]]:
     return out
 
 
-def build_subdivision_plan(
-    df: pd.DataFrame, pieces, name: str, trims: Mapping | None = None
-) -> ChunkPlan:
+def build_subdivision_plan(df: pd.DataFrame, pieces, name: str) -> ChunkPlan:
     """
     Build a plan cutting each row of a relation into its own pieces.
 
@@ -2629,33 +2613,22 @@ def build_subdivision_plan(
         gives them directly.
     name
         The dimension being subdivided.
-    trims
-        Optional pieces shaped like `pieces` for other dimensions, each
-        trimming the output at the same position.
     """
-    trims = dict(trims or {})
     min_name, max_name, step_name = _dim_columns(df, name)
     # One entry per row, even where it is empty: a short sequence would
     # drop the rows past its end from the plan, and so from the spool.
     assert len(pieces) == len(df)
     df = _ensure_patch_row(df).reset_index(drop=True)
     positions, lows, highs, modified = [], [], [], []
-    boxes: dict[str, list] = {x: [] for x in trims}
     for position, row_pieces in enumerate(pieces):
         whole = (df.at[position, min_name], df.at[position, max_name])
-        for index, piece in enumerate(row_pieces):
+        for piece in row_pieces:
             positions.append(position)
             lows.append(piece[0])
             highs.append(piece[1])
             # A piece covering its whole row *is* the row, and saying so
             # is what lets it load without a trim.
-            changed = tuple(piece) != whole
-            for dim, dim_pieces in trims.items():
-                box = tuple(dim_pieces[position][index])
-                boxes[dim].append(box)
-                full = (df.at[position, f"{dim}_min"], df.at[position, f"{dim}_max"])
-                changed = changed or (box != full and not pd.isnull(full[0]))
-            modified.append(changed)
+            modified.append(tuple(piece) != whole)
     ids = np.arange(len(positions), dtype=np.int64)
     # Outputs are not file rows: source bookkeeping stays on the members,
     # and the dimension's structural identity described the whole row.
@@ -2663,14 +2636,7 @@ def build_subdivision_plan(
         columns=["_patch_row", f"_{name}_def_key", "_data_size", *_SOURCE_COLUMNS],
         errors="ignore",
     )
-    extra = {
-        f"{dim}_{end}": [box[i] for box in dim_boxes]
-        for dim, dim_boxes in boxes.items()
-        for i, end in enumerate(("min", "max"))
-    }
-    outputs = outputs.assign(
-        **{min_name: lows, max_name: highs, "output_id": ids}, **extra
-    )
+    outputs = outputs.assign(**{min_name: lows, max_name: highs, "output_id": ids})
     members = pd.DataFrame(
         {
             "output_id": ids,
@@ -2679,11 +2645,9 @@ def build_subdivision_plan(
             max_name: highs,
             step_name: df[step_name].to_numpy()[positions],
             "_modified": modified,
-            **extra,
         }
     )
-    outputs = outputs.reset_index(drop=True)
-    return ChunkPlan(outputs, members, name, None, {}, tuple(trims))
+    return ChunkPlan(outputs.reset_index(drop=True), members, name, None, {})
 
 
 def _report_incomplete(failures, behavior: WARN_LEVELS) -> None:
@@ -2702,10 +2666,7 @@ def _report_incomplete(failures, behavior: WARN_LEVELS) -> None:
 
 
 def _explicit_bounds_for_partition(bounds, start, unit, stop):
-    """
-    Express absolute requested bounds in one partition's units; an open end
-    takes the partition's edge.
-    """
+    """Express absolute bounds in a partition's units; open ends take its edges."""
     out = []
     time = is_datetime64(start)
     duration = is_timedelta64(start)
@@ -2838,11 +2799,12 @@ def _finish_explicit_plan(
             if high < start or low > stop:
                 continue
             applicable = True
+            candidates = outputs[
+                (outputs["_request_row"] == request)
+                & (outputs["_compat_group"] == label)
+            ]
             if all(x is None for x in bounds):  # every segment whole, as a merge
-                own = outputs["_request_row"] == request
-                accepted.update(
-                    outputs[own & (outputs["_compat_group"] == label)]["output_id"]
-                )
+                accepted.update(candidates["output_id"])
                 continue
             relevant = [
                 part
@@ -2863,10 +2825,6 @@ def _finish_explicit_plan(
                 )
                 continue
             requested_low, requested_high = low, high
-            candidates = outputs[
-                (outputs["_request_row"] == request)
-                & (outputs["_compat_group"] == label)
-            ]
             envelope = _exact_envelope(coords, (low, high), unit or None)
             if no_grid:
                 if envelope is None:
@@ -3006,91 +2964,81 @@ def _window_samples(bounds, start, stop, step, unit, coords=()):
     envelope = _exact_envelope(coords, (low, high), unit) if coords else None
     if envelope is not None or pd.isnull(step) or not step:
         return envelope if coords else (low, high)
-    lo, hi, present = _grid_snapped(
-        np.asarray([low]), np.asarray([high]), start, abs(step)
-    )
+    lo, hi, present = _grid_snapped(np.array([low]), np.array([high]), start, abs(step))
     return (lo[0], hi[0]) if present[0] else None
 
 
-def _short_of(requested, actual, step) -> bool:
+def _short_of(wanted, actual, step) -> bool:
     """Whether a request snapped onto the samples' grid reaches past them."""
-    low, high, _ = _grid_snapped(
-        np.repeat(np.asarray([requested[0]]), 2),
-        np.repeat(np.asarray([requested[1]]), 2),
-        np.asarray(actual),
-        abs(step),
-    )
+    lows, highs = np.full(2, wanted[0]), np.full(2, wanted[1])
+    low, high, _ = _grid_snapped(lows, highs, np.asarray(actual), abs(step))
     return bool(low[0] < actual[0] or high[1] > actual[1])
 
 
-def _trim_explicit(outputs, members, sources, windows, exact, keep_partial, behavior):
-    """Trim each member to its request's windows on the other explicit dims."""
-    by_row = sources.drop_duplicates("_patch_row").set_index("_patch_row")
-    src = by_row.loc[members["_patch_row"]]
-    by_output = outputs.set_index("output_id")
-    requests = members["output_id"].map(by_output["_request_row"]).to_numpy()
-    labels = members["output_id"].map(by_output["_compat_group"]).to_numpy()
-    keys = list(zip(requests, labels))  # an unmet group skips only itself
+def _trim_explicit(plan, sources, windows, exact, keep_partial, behavior, strict=False):
+    """Trim a plan's members to their requests' windows; `strict` needs coords."""
+    outputs, members = plan.outputs, plan.members.copy()
+    src = sources.drop_duplicates("_patch_row").set_index("_patch_row")
+    src = src.loc[members["_patch_row"]]
+    groups = outputs.get("_compat_group", outputs["output_id"])  # else each alone
+    labels = dict(zip(outputs["output_id"], zip(outputs["_request_row"], groups)))
+    keys = [labels[x] for x in members["output_id"]]
     keep = np.ones(len(members), dtype=bool)
-    failures, emptied, missed = {}, {}, {}
-    members = members.copy()
+    failures, missed = {}, {}
     for dim, ranges in windows.items():
         starts, stops, steps = (src[x].to_numpy() for x in _dim_columns(src, dim))
-        units = src.get(f"_{dim}_units", pd.Series(None, index=src.index)).to_numpy()
+        units = src.get(f"_{dim}_units", pd.Series(index=src.index)).fillna("")
         lows, highs = starts.copy(), stops.copy()
         for pos, (start, stop, step) in enumerate(zip(starts, stops, steps)):
-            request, unit = requests[pos], _stated_units(units[pos])
-            bounds, reason = ranges.rows[request], "contains no source samples"
-            where = f"{labels[pos]}, dim {dim}"
+            (request, label), unit = keys[pos], units.iloc[pos] or None
+            bounds = ranges.rows[request]
+            note = (bounds, f"{label}, dim {dim}")
             if all(x is None for x in bounds):  # spans the dim: no trim
                 continue
-            wanted = (None, None)
-            if not (pd.isnull(start) or pd.isnull(stop)):
+            wanted = None
+            if not pd.isnull(start):
                 wanted = _explicit_bounds_for_partition(bounds, start, unit, stop)
-            if wanted[0] is None or wanted[0] > stop or wanted[1] < start:
-                # a window missing a member (or its dim) passes it by
-                keep[pos], missed[request] = (
-                    False,
-                    (bounds, where, "outside source coverage"),
-                )
+            if wanted is None or wanted[0] > stop or wanted[1] < start:  # passed by
+                keep[pos], missed[request] = False, (*note, "outside source coverage")
                 continue
             coord = exact.get(dim, {}).get(members["_patch_row"].iloc[pos])
+            if coord is None and strict:
+                path = src.iloc[pos].get("source_path")
+                msg = (
+                    f"Cannot verify samples for {dim!r} in source {path!r}: "
+                    "coordinate metadata is unavailable."
+                )
+                raise MissingPatchError(msg)
             gridded = not pd.isnull(step) and bool(step)
-            known, actual = () if coord is None else (coord,), None
-            if known or gridded:  # exact labels, when known, rule out the grid
-                grid = np.nan if known else step
+            actual, reason = None, "exact source coordinates are unavailable"
+            if coord is not None or gridded:  # known labels rule out the grid
+                known, grid = ((), step) if coord is None else ((coord,), np.nan)
                 actual = _window_samples(bounds, start, stop, grid, unit, known)
-            else:
-                reason = "exact source coordinates are unavailable"
+                reason = "contains no source samples"
             if actual is None:
-                keep[pos], emptied[keys[pos]] = False, (bounds, where, reason)
+                keep[pos], failures[keys[pos]] = False, (*note, reason)
                 continue
             lows[pos], highs[pos] = actual
-            short = (
-                _short_of(wanted, actual, step)
-                if gridded
-                else wanted[0] < start or wanted[1] > stop
-            )
+            short = wanted[0] < start or wanted[1] > stop
+            short = _short_of(wanted, actual, step) if gridded else short
             if short and not keep_partial:
-                failures[keys[pos]] = (bounds, where, "sampled bounds are incomplete")
+                failures[keys[pos]] = (*note, "sampled bounds are incomplete")
         members[f"{dim}_min"], members[f"{dim}_max"] = lows, highs
         members["_modified"] |= (lows != starts) | (highs != stops)
     kept = {x for x, held in zip(keys, keep) if held}
-    lost = set(zip(outputs["_request_row"], outputs["_compat_group"])) - kept
-    failures |= {x: emptied[x] for x in lost if x in emptied}
-    served = {x[0] for x in kept} | {x[0] for x in failures}
-    failures |= {(x, None): missed[x] for x in missed if x not in served}
+    served = {x[0] for x in (*kept, *failures)}
+    failures |= {(x, None): missed[x] for x in set(missed) - served}
     order = sorted(failures, key=lambda x: (x[0], str(x[1])))
     _report_incomplete([(x[0], *failures[x]) for x in order], behavior)
     members = members[keep & np.array([x not in failures for x in keys], bool)]
     outputs = outputs[outputs["output_id"].isin(members["output_id"])]
-    for dim in windows:
-        grouped = members.groupby("output_id")
-        for column, how in ((f"{dim}_min", "min"), (f"{dim}_max", "max")):
-            outputs = outputs.assign(
-                **{column: outputs["output_id"].map(grouped[column].agg(how))}
-            )
-    return outputs.reset_index(drop=True), members.reset_index(drop=True)
+    spans = {f"{x}_{end}": end for x in windows for end in ("min", "max")}
+    if len(members):
+        agg = members.groupby("output_id").agg(spans)
+        outputs = outputs.assign(**{x: outputs["output_id"].map(agg[x]) for x in spans})
+    trims = tuple(x for x in windows if x != plan.dim)
+    outputs, members = outputs.reset_index(drop=True), members.reset_index(drop=True)
+    return replace(plan, outputs=outputs, members=members, trim_dims=trims)
 
 
 def _exact_envelope(coords, bounds, unit=None):

@@ -575,11 +575,9 @@ class Spool(NodeRepr, NamespaceOwner):
             envelopes. Exact sample selection occurs when a patch loads.
         **kwargs
             Specifies query. A coordinate accepts one ``(start, stop)`` range
-            or an ``(n, 2)`` array of absolute ranges. Array rows
-            select independently in input order, so overlaps and duplicates
-            return separate source pieces. Several coordinates may use
-            arrays with the same number of rows; row ``i`` of each is then
-            one rectangular window. ``None``, NaN or NaT leaves a bound open.
+            or an ``(n, 2)`` array of absolute ranges, alone or beside others
+            as `chunk` takes them. Array rows select independently in input
+            order, so overlaps and duplicates return separate source pieces.
             Array ranges do not support ``samples=True`` or
             ``relative=True``. Attribute selectors retain their usual meaning.
 
@@ -596,8 +594,7 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> ranges = np.array([[0, 10], [20, 30]])
         >>> pieces = spool.select(distance=ranges)
         >>> # one box per row on two dimensions; row two's time end is open
-        >>> times = np.array([[time[0], time[1]], [time[0], None]])
-        >>> boxes = spool.select(distance=ranges, time=times)
+        >>> boxes = spool.select(distance=ranges, time=[time, [time[0], None]])
         """
         # Explicit windows are independent requests, so they need separate
         # plan outputs even when they name the same source samples.
@@ -1800,9 +1797,7 @@ class Spool(NodeRepr, NamespaceOwner):
         windows = explicit_windows(dim_kwargs)
         refuse_riders(windows, source_rows)
         exact = {
-            dim: known_coordinates(self._catalog, source_rows, dim)
-            for dim, ranges in windows.items()
-            if ranges.constrains
+            dim: known_coordinates(self._catalog, source_rows, dim) for dim in windows
         }
         plan = build_chunk_plan(working, _exact_coords=exact, **params, **dim_kwargs)
         return source_rows, coalesce_runs(plan, working)
@@ -1831,9 +1826,7 @@ class Spool(NodeRepr, NamespaceOwner):
         (including the group attributes and sampling tolerance in effect).
         Accepts the same arguments as
         [`chunk`](`dascore.Spool.chunk`). A dimension can be an ``(n, 2)``
-        array of absolute inclusive windows, and several dimensions can
-        together give rectangular ones; the plan's `trim_dims` names the
-        dimensions after the first. Each requested window is checked
+        array of absolute inclusive windows. Each requested window is checked
         against compatible source groups, and ``on_incomplete`` controls
         requests that cannot produce a complete output after ``keep_partial``
         and the existing tolerance/fill rules are applied.
@@ -2203,11 +2196,9 @@ class Spool(NodeRepr, NamespaceOwner):
             endpoints, in input order. Overlapping and duplicate windows
             produce separate outputs. Explicit windows do not accept
             ``overlap``; quantities in their bounds are absolute points.
-            ``None``, NaN or NaT leaves a bound open, and a row open at both
-            ends gives each contiguous segment whole. Several dimensions may
-            take arrays with the same number of rows: row ``i`` of each is
-            one window, the first dimension is chunked and the others trim
-            it (no chunk size or ``fill_value`` alongside).
+            ``None``, NaN or NaT leaves a bound open. Several dimensions may
+            take arrays with one row per window: the first is chunked and the
+            others trim (see the chunking notes for the full rules).
 
         Examples
         --------

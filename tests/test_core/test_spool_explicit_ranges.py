@@ -3,7 +3,6 @@
 import pickle
 import threading
 from dataclasses import replace
-from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -13,12 +12,21 @@ from dascore.core.coords import concat_coords, get_coord
 from dascore.examples import inventory_patch_pair
 from dascore.exceptions import ChunkError, MissingPatchError, ParameterError, UnitError
 from dascore.io.dasdae.core import DASDAEV1, DASDAEV2
-from dascore.io.index import explicit as explicit_module
 from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.planned import PlanResolver
 from dascore.units import get_quantity, m, s
 from dascore.utils.chunk_plan import _ensure_patch_row
 from dascore.utils.explicit_ranges import known_coordinates
+
+
+def _ends(patch, dim="distance"):
+    """A loaded patch's first and last samples along `dim`."""
+    return patch.coords[dim].min(), patch.coords[dim].max()
+
+
+def _listed(frame):
+    """The distance envelopes a contents or plan-outputs frame lists."""
+    return frame[["distance_min", "distance_max"]].to_numpy().tolist()
 
 
 def _patch(values):
@@ -99,9 +107,7 @@ class TestExplicitSelect:
         windows = np.array([[5, 7], [2, 4], [5, 7], [4, 5]])
         out = spool.select(distance=windows)
         windows[0] = [0, 1]
-        assert [
-            (x.coords["distance"].min(), x.coords["distance"].max()) for x in out
-        ] == [(5, 7), (2, 4), (5, 7), (4, 5)]
+        assert [_ends(x) for x in out] == [(5, 7), (2, 4), (5, 7), (4, 5)]
 
     def test_exact_regular_and_uneven_envelopes(self):
         """Metadata states the samples the patches actually contain."""
@@ -113,10 +119,7 @@ class TestExplicitSelect:
             row = out.get_contents().iloc[0]
             patch = out[0]
             assert (row["distance_min"], row["distance_max"]) == expected
-            assert (
-                patch.coords["distance"].min(),
-                patch.coords["distance"].max(),
-            ) == expected
+            assert _ends(patch) == expected
 
     def test_uneven_empty_range_is_omitted(self):
         """A gap inside an uneven envelope has no selected piece."""
@@ -139,7 +142,7 @@ class TestExplicitSelect:
         monkeypatch.setattr(PatchCatalog, "to_df", original)
         row = out.get_contents().iloc[0]
         assert (row["distance_min"], row["distance_max"]) == (3, 5)
-        assert (out[0].coords["distance"].min(), out[0].coords["distance"].max()) == (
+        assert _ends(out[0]) == (
             3,
             5,
         )
@@ -172,7 +175,7 @@ class TestExplicitSelect:
         out = spool.select(distance=np.array([[5, 7], [1, 3]])).sort("distance")[:1]
         monkeypatch.setattr(PatchCatalog, "to_df", original)
         assert len(out) == 1
-        assert (out[0].coords["distance"].min(), out[0].coords["distance"].max()) == (
+        assert _ends(out[0]) == (
             1,
             3,
         )
@@ -192,9 +195,7 @@ class TestExplicitSelect:
         selected = dc.spool(_patch(np.arange(10))).select(distance=np.array([[2, 4]]))
         backend = selected._catalog.backend
         assert backend.coord_dims_map() == {"distance": "distance"}
-        assert selected.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[2, 4]]
+        assert _listed(selected.get_contents()) == [[2, 4]]
         assert selected[0].coords["distance"].values.tolist() == [2, 3, 4]
 
     def test_mismatched_window_counts_raise(self):
@@ -231,15 +232,11 @@ class TestExplicitSelect:
             return frame
 
         monkeypatch.setattr(PatchCatalog, "to_df", snapshot)
-        assert selected.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[5, 9]]
+        assert _listed(selected.get_contents()) == [[5, 9]]
         assert worker is not None
         worker.join(timeout=2)
         assert finished.is_set()
-        assert selected.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[5, 9], [10, 15]]
+        assert _listed(selected.get_contents()) == [[5, 9], [10, 15]]
 
     @pytest.mark.parametrize("flag", ["samples", "relative"])
     def test_array_flags_raise(self, flag):
@@ -259,9 +256,7 @@ class TestExplicitChunk:
         plan = spool.chunk_plan(distance=windows)
         out = spool.chunk(distance=windows)
         assert list(plan.outputs["_request_row"]) == [0, 1, 2]
-        assert [
-            (x.coords["distance"].min(), x.coords["distance"].max()) for x in out
-        ] == [(5, 7), (1, 3), (5, 7)]
+        assert [_ends(x) for x in out] == [(5, 7), (1, 3), (5, 7)]
 
     @pytest.mark.parametrize("policy", ["raise", "warn", "ignore"])
     def test_incomplete_policy_and_partial(self, policy):
@@ -281,9 +276,7 @@ class TestExplicitChunk:
                 plan = spool.chunk_plan(distance=windows, on_incomplete=policy)
             assert len(plan.outputs) == 1
         partial = spool.chunk(distance=windows, keep_partial=True, on_incomplete=policy)
-        assert [
-            (x.coords["distance"].min(), x.coords["distance"].max()) for x in partial
-        ] == [(2, 4), (8, 9)]
+        assert [_ends(x) for x in partial] == [(2, 4), (8, 9)]
 
     def test_uneven_coordinates_use_exact_samples(self):
         """Uneven ranges succeed when samples exist and skip empty windows."""
@@ -294,7 +287,7 @@ class TestExplicitChunk:
             plan.outputs.iloc[0]["distance_min"],
             plan.outputs.iloc[0]["distance_max"],
         ) == (3, 6)
-        assert (out[0].coords["distance"].min(), out[0].coords["distance"].max()) == (
+        assert _ends(out[0]) == (
             3,
             6,
         )
@@ -322,12 +315,8 @@ class TestExplicitChunk:
             tolerance=10,
             keep_partial=keep_partial,
         )
-        assert plan.outputs[["distance_min", "distance_max"]].to_numpy().tolist() == [
-            [3.0, 3.0]
-        ]
-        assert out.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[3.0, 3.0]]
+        assert _listed(plan.outputs) == [[3.0, 3.0]]
+        assert _listed(out.get_contents()) == [[3.0, 3.0]]
         assert out[0].coords["distance"].values.tolist() == [3.0]
         assert out[0].data.tolist() == [2]
 
@@ -399,20 +388,11 @@ class TestExplicitChunk:
         partial = spool.chunk(
             distance=np.array([[5, 9]]), tolerance=4, keep_partial=True
         )
-        assert (
-            partial[0].coords["distance"].min(),
-            partial[0].coords["distance"].max(),
-        ) == (7, 9)
+        assert _ends(partial[0]) == (7, 9)
         filled = spool.chunk(distance=np.array([[5, 9]]), tolerance=4, fill_value=0)
-        assert (
-            filled[0].coords["distance"].min(),
-            filled[0].coords["distance"].max(),
-        ) == (5, 9)
+        assert _ends(filled[0]) == (5, 9)
         fill_only = spool.chunk(distance=np.array([[5, 6]]), tolerance=4, fill_value=0)
-        assert (
-            fill_only[0].coords["distance"].min(),
-            fill_only[0].coords["distance"].max(),
-        ) == (5, 6)
+        assert _ends(fill_only[0]) == (5, 6)
 
     def test_datetime_string_array_matches_scalar_selection(self):
         """NumPy string endpoints retain datetime meaning in array form."""
@@ -505,10 +485,7 @@ class TestExplicitChunk:
         with pytest.raises(ChunkError, match="sampled bounds"):
             spool.chunk_plan(distance=np.array([[-1.0, 6.0]]))
         partial = spool.chunk(distance=np.array([[-1.0, 6.0]]), keep_partial=True)
-        assert (
-            partial[0].coords["distance"].min(),
-            partial[0].coords["distance"].max(),
-        ) == (0, 6)
+        assert _ends(partial[0]) == (0, 6)
 
     def test_unitless_coordinate_rejects_quantity_points(self):
         """A unit-bearing absolute request cannot select a unitless grid."""
@@ -638,12 +615,8 @@ class TestExplicitMetadataSources:
         monkeypatch.setattr(dc, "scan_payloads", forbidden)
         selected = derived.select(distance=np.array([[3, 5]]))
         plan = derived.chunk_plan(distance=np.array([[3, 5]]))
-        assert selected.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[3, 5]]
-        assert plan.outputs[["distance_min", "distance_max"]].to_numpy().tolist() == [
-            [3, 5]
-        ]
+        assert _listed(selected.get_contents()) == [[3, 5]]
+        assert _listed(plan.outputs) == [[3, 5]]
         monkeypatch.setattr(dc, "scan_payloads", scanner)
         assert selected[0].coords["distance"].values.tolist() == [3, 4, 5]
 
@@ -663,30 +636,18 @@ class TestExplicitMetadataSources:
 
         monkeypatch.setattr(DASDAEV1, "read_array", forbidden)
         selected = spool.select(distance=np.array([[2.0, 7.0], [4.0, 5.0]]))
-        assert selected.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[3.0, 6.0]]
+        assert _listed(selected.get_contents()) == [[3.0, 6.0]]
         plan = spool.chunk_plan(
             distance=np.array([[2.0, 7.0], [4.0, 5.0]]), on_incomplete="ignore"
         )
         chunked = spool.chunk(
             distance=np.array([[2.0, 7.0], [4.0, 5.0]]), on_incomplete="ignore"
         )
-        assert plan.outputs[["distance_min", "distance_max"]].to_numpy().tolist() == [
-            [3.0, 6.0]
-        ]
-        assert chunked.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[3.0, 6.0]]
+        assert _listed(plan.outputs) == [[3.0, 6.0]]
+        assert _listed(chunked.get_contents()) == [[3.0, 6.0]]
         monkeypatch.setattr(DASDAEV1, "read_array", read_array)
-        assert (
-            selected[0].coords["distance"].min(),
-            selected[0].coords["distance"].max(),
-        ) == (3, 6)
-        assert (
-            chunked[0].coords["distance"].min(),
-            chunked[0].coords["distance"].max(),
-        ) == (3, 6)
+        assert _ends(selected[0]) == (3, 6)
+        assert _ends(chunked[0]) == (3, 6)
 
     def test_fill_only_file_window_uses_coordinate_metadata(
         self, tmp_path, monkeypatch
@@ -724,7 +685,7 @@ class TestExplicitMetadataSources:
         assert patch.shape == (9, 3)
         assert np.all(patch.data == -1)
         assert np.array_equal(patch.coords["reference_time"].values, time)
-        assert (patch.coords["distance"].min(), patch.coords["distance"].max()) == (
+        assert _ends(patch) == (
             10_000,
             10_008,
         )
@@ -880,7 +841,7 @@ class TestExplicitMetadataSources:
             tolerance=4,
             fill_value=-1,
         )
-        assert (out[0].coords["distance"].min(), out[0].coords["distance"].max()) == (
+        assert _ends(out[0]) == (
             5,
             6,
         )
@@ -976,9 +937,7 @@ class TestExplicitMetadataSources:
         plan = nested.chunk_plan(distance=windows)
         result = nested.chunk(distance=windows)
         assert len(plan.outputs) == len(result) == len(expected) > 1
-        assert plan.outputs[["distance_min", "distance_max"]].to_numpy().tolist() == [
-            [1, 7]
-        ] * len(expected)
+        assert _listed(plan.outputs) == [[1, 7]] * len(expected)
         for loaded, wanted in zip(result, expected, strict=True):
             assert loaded.get_coord("distance").values.tolist() == list(range(1, 8))
             assert np.array_equal(
@@ -1017,18 +976,12 @@ class TestExplicitMetadataSources:
         patch = _patch(np.arange(10))
         filled = dc.spool(patch).chunk(distance=np.array([[2, 4]]), fill_value=0)
         again = filled.chunk(distance=np.array([[2, 4]]))
-        assert (
-            again[0].coords["distance"].min(),
-            again[0].coords["distance"].max(),
-        ) == (2, 4)
+        assert _ends(again[0]) == (2, 4)
         union = dc.spool(patch.select(distance=(0, 4))) + dc.spool(
             patch.select(distance=(5, 9))
         )
         joined = union.chunk(distance=np.array([[0, 9]]))
-        assert (
-            joined[0].coords["distance"].min(),
-            joined[0].coords["distance"].max(),
-        ) == (0, 9)
+        assert _ends(joined[0]) == (0, 9)
 
     def test_union_of_planned_sources_uses_source_metadata(self):
         """A union routes each plan-backed row to its own coordinate source."""
@@ -1041,24 +994,16 @@ class TestExplicitMetadataSources:
         )
         union = left + right
         selected = union.select(distance=np.array([[0, 9]]))
-        assert [
-            (x.coords["distance"].min(), x.coords["distance"].max()) for x in selected
-        ] == [(0, 4), (5, 9)]
+        assert [_ends(x) for x in selected] == [(0, 4), (5, 9)]
         joined = union.chunk(distance=np.array([[0, 9]]))
-        assert (
-            joined[0].coords["distance"].min(),
-            joined[0].coords["distance"].max(),
-        ) == (0, 9)
+        assert _ends(joined[0]) == (0, 9)
 
     def test_residual_bearing_plan_stays_clipped(self):
         """Nested windows cannot recover samples removed by parent residuals."""
         source = dc.spool(_patch(np.arange(10)))
         derived = source.select(distance=(1, 8), samples=True).chunk(distance=None)
         selected = derived.select(distance=np.array([[0, 5]]))
-        assert (
-            selected[0].coords["distance"].min(),
-            selected[0].coords["distance"].max(),
-        ) == (1, 5)
+        assert _ends(selected[0]) == (1, 5)
 
     @pytest.mark.parametrize(
         "unit,low,high", [("degC", 2, 4), ("kelvin", 275.15, 277.15)]
@@ -1074,14 +1019,10 @@ class TestExplicitMetadataSources:
         plan = spool.chunk_plan(distance=windows)
         for out in (selected, chunked):
             assert len(out) == 1
-            assert out.get_contents()[
-                ["distance_min", "distance_max"]
-            ].to_numpy().tolist() == [[2.0, 4.0]]
+            assert _listed(out.get_contents()) == [[2.0, 4.0]]
             assert out[0].coords["distance"].values.tolist() == [2, 3, 4]
             assert out[0].data.tolist() == [2, 3, 4]
-        assert plan.outputs[["distance_min", "distance_max"]].to_numpy().tolist() == [
-            [2.0, 4.0]
-        ]
+        assert _listed(plan.outputs) == [[2.0, 4.0]]
 
     def test_quantity_points_across_compatible_units(self):
         """An absolute metre window keeps its physical bounds in mixed units."""
@@ -1093,20 +1034,14 @@ class TestExplicitMetadataSources:
         chunked = spool.chunk(distance=windows)
         plan = spool.chunk_plan(distance=windows)
         assert len(chunked) == len(plan.outputs) == 1
-        assert (
-            chunked[0].coords["distance"].min(),
-            chunked[0].coords["distance"].max(),
-        ) == (20, 25)
+        assert _ends(chunked[0]) == (20, 25)
         narrower = np.array([[21 * m, 24 * m]], dtype=object)
         for derived in (
             chunked.select(distance=narrower),
             chunked.chunk(distance=narrower),
         ):
             assert len(derived) == 1
-            assert (
-                derived[0].coords["distance"].min(),
-                derived[0].coords["distance"].max(),
-            ) == (21, 24)
+            assert _ends(derived[0]) == (21, 24)
 
     def test_conflicts_only_between_contributors(self):
         """Separate windows carry different attrs; a combined one conflicts."""
@@ -1124,9 +1059,7 @@ class TestExplicitMetadataSources:
         spool = dc.spool(_patch(np.arange(10)))
         windows = np.array([[-0.2, 3.8], [1.2, 9.2]])
         out = spool.chunk(distance=windows)
-        assert [
-            (x.coords["distance"].min(), x.coords["distance"].max()) for x in out
-        ] == [(0, 3), (2, 9)]
+        assert [_ends(x) for x in out] == [(0, 3), (2, 9)]
 
 
 class TestExplicitDerivedViews:
@@ -1137,13 +1070,8 @@ class TestExplicitDerivedViews:
         source = dc.spool(_patch(np.arange(10)))
         first = source.select(distance=np.array([[1.2, 4.8]]))
         second = first.select(distance=np.array([[2.2, 3.8]]))
-        assert second.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[3, 3]]
-        assert (
-            second[0].coords["distance"].min(),
-            second[0].coords["distance"].max(),
-        ) == (3, 3)
+        assert _listed(second.get_contents()) == [[3, 3]]
+        assert _ends(second[0]) == (3, 3)
 
     def test_multi_member_irregular_rechunk_checks_actual_samples(self):
         """Rechunking a merged uneven output cannot publish a gap-only row."""
@@ -1162,9 +1090,7 @@ class TestExplicitDerivedViews:
             == 0
         )
         piece = joined.chunk(distance=np.array([[6.0, 9.0]]))
-        assert piece.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[6, 8]]
+        assert _listed(piece.get_contents()) == [[6, 8]]
 
     def test_live_parent_revision_updates_selected_pieces(self):
         """The view rebuilds its piece plan after a live parent changes."""
@@ -1172,9 +1098,7 @@ class TestExplicitDerivedViews:
         selected = source.select(distance=np.array([[5, 15]]))
         assert len(selected) == 1
         source._catalog.add(_patch(np.arange(10, 20)))
-        assert selected.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[5, 9], [10, 15]]
+        assert _listed(selected.get_contents()) == [[5, 9], [10, 15]]
 
 
 class TestReviewRegressions:
@@ -1217,9 +1141,7 @@ class TestReviewRegressions:
         empty = source.select(distance=np.array([[0, 1]]), depth=(4, 8))
         assert empty.get_contents().empty
         selected = source.select(distance=np.array([[0, 3]]), depth=(4, 8))
-        assert selected.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[2, 3]]
+        assert _listed(selected.get_contents()) == [[2, 3]]
         with pytest.raises(ChunkError, match="sampled"):
             source.select(depth=(4, 8)).chunk_plan(distance=np.array([[0, 1]]))
         if file_backed:
@@ -1259,12 +1181,8 @@ class TestReviewRegressions:
         windows = np.array([[0.5, 4.5]])
         plan = source.chunk_plan(distance=windows, tolerance=10, fill_value=-1)
         chunked = source.chunk(distance=windows, tolerance=10, fill_value=-1)
-        assert plan.outputs[["distance_min", "distance_max"]].to_numpy().tolist() == [
-            [1, 4]
-        ]
-        assert chunked.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[1, 4]]
+        assert _listed(plan.outputs) == [[1, 4]]
+        assert _listed(chunked.get_contents()) == [[1, 4]]
         assert chunked[0].coords["distance"].values.tolist() == [1, 3, 4]
         assert chunked[0].data.tolist() == [1, 2, 3]
 
@@ -1297,9 +1215,7 @@ class TestReviewRegressions:
             [0, 1, 2],
             [10, 11, 12],
         ]
-        assert out.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[0, 2], [10, 12]]
+        assert _listed(out.get_contents()) == [[0, 2], [10, 12]]
 
     def test_exact_edges_preserve_internal_overlap_cuts(self):
         """Recovering source labels cannot reintroduce clipped overlap samples."""
@@ -1326,12 +1242,8 @@ class TestReviewRegressions:
         plan = selected.chunk_plan(distance=windows)
         out = selected.chunk(distance=windows)
         assert len(plan.outputs) == len(out) == 1
-        assert plan.outputs[["distance_min", "distance_max"]].to_numpy().tolist() == [
-            [2, 6]
-        ]
-        assert out.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[2, 6]]
+        assert _listed(plan.outputs) == [[2, 6]]
+        assert _listed(out.get_contents()) == [[2, 6]]
         assert out[0].coords["distance"].values.tolist() == [2, 3, 4, 5, 6]
         assert out[0].coords["depth"].values.tolist() == [4, 6, 8, 10, 12]
 
@@ -1351,9 +1263,7 @@ class TestReviewRegressions:
         union = first + second
         selected = union.select(depth=(4, 12))
         out = selected.chunk(distance=np.array([[2, 6]]), keep_partial=True)
-        assert out.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[2, 6]]
+        assert _listed(out.get_contents()) == [[2, 6]]
         assert out[0].coords["distance"].values.tolist() == [2, 3, 4, 5, 6]
 
     def test_mixed_unit_plan_recovers_associated_selector(self):
@@ -1380,12 +1290,8 @@ class TestReviewRegressions:
         windows = np.array([[5 * m, 8 * m]], dtype=object)
         plan = selected.chunk_plan(distance=windows)
         out = selected.chunk(distance=windows)
-        assert plan.outputs[["distance_min", "distance_max"]].to_numpy().tolist() == [
-            [5, 8]
-        ]
-        assert out.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[5, 8]]
+        assert _listed(plan.outputs) == [[5, 8]]
+        assert _listed(out.get_contents()) == [[5, 8]]
         with pytest.warns(UserWarning, match="histories differ"):
             assert out[0].coords["distance"].values.tolist() == [5, 6, 7, 8]
 
@@ -1397,9 +1303,7 @@ class TestReviewRegressions:
         plan = selected.chunk_plan(time=windows)
         out = selected.chunk(time=windows)
         assert len(plan.outputs) == len(out) == 1
-        assert out.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[5, 6]]
+        assert _listed(out.get_contents()) == [[5, 6]]
         assert out[0].coords["distance"].values.tolist() == [5, 6]
         assert np.array_equal(out[0].coords["reference_time"].values, time[:2])
         assert np.all(out[0].data == -1)
@@ -1435,18 +1339,14 @@ class TestReviewRegressions:
         )
         derived = dc.spool(patch).chunk(distance=np.array([[2, 4]]), fill_value=-1)
         out = derived.select(depth=(4, 6)).chunk(distance=np.array([[2, 3]]))
-        assert out.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[2, 3]]
+        assert _listed(out.get_contents()) == [[2, 3]]
         assert out[0].coords["distance"].values.tolist() == [2, 3]
         assert out[0].coords["depth"].values.tolist() == [4, 6]
         narrowed = derived.select(depth=(6, 6))
         with pytest.raises(ChunkError, match="sampled"):
             narrowed.chunk_plan(distance=np.array([[2, 4]]))
         partial = narrowed.chunk(distance=np.array([[2, 4]]), keep_partial=True)
-        assert partial.get_contents()[
-            ["distance_min", "distance_max"]
-        ].to_numpy().tolist() == [[3, 3]]
+        assert _listed(partial.get_contents()) == [[3, 3]]
         assert partial[0].coords["depth"].values.tolist() == [6]
 
     def test_missing_fill_anchor_metadata_obeys_policy(self, filled_2d_gap):
@@ -1465,17 +1365,34 @@ class TestReviewRegressions:
         assert len(source.chunk(time=np.array(4.0))) == len(source.chunk(time=4.0))
 
 
+T0 = np.datetime64("2020-01-03T00:00:00", "ns")  # the example spool's start
+
+
+def _t(*secs):
+    """Time windows (n, 2) at offsets from `T0`; None stays open."""
+    ns = [
+        None if s is None else T0 + np.timedelta64(round(s * 1e3), "ms") for s in secs
+    ]
+    return np.array(ns, dtype=object).reshape(-1, 2)
+
+
+def _d(*values):
+    """Distance windows (n, 2)."""
+    return np.array(values, dtype=object).reshape(-1, 2)
+
+
+def _s(v):
+    """An instant as seconds from `T0`; anything else unchanged."""
+    return (v - T0) / np.timedelta64(1, "s") if isinstance(v, np.datetime64) else v
+
+
 def _boxes(spool, dims=("time", "distance")):
-    """Return each output's (min, max) per dim, checking catalog against data."""
-    listed = [
-        tuple((row[f"{d}_min"], row[f"{d}_max"]) for d in dims)
-        for row in spool.get_contents().to_dict("records")
-    ]
-    loaded = [
-        tuple((p.get_coord(d).min(), p.get_coord(d).max()) for d in dims) for p in spool
-    ]
-    assert listed == loaded
-    return loaded
+    """Each output's (min, max) per dim, checked against the loaded data."""
+    rows = spool.get_contents().to_dict("records")
+    listed = [tuple((x[f"{d}_min"], x[f"{d}_max"]) for d in dims) for x in rows]
+    ends = [[(p.get_coord(d).min(), p.get_coord(d).max()) for d in dims] for p in spool]
+    assert listed == [tuple(x) for x in ends]
+    return [tuple(tuple(map(_s, pair)) for pair in box) for box in ends]
 
 
 class TestExplicitBoxes:
@@ -1486,261 +1403,171 @@ class TestExplicitBoxes:
         """The example spool: three patches adjacent in time."""
         return dc.get_example_spool()
 
-    @pytest.fixture(scope="class")
-    def t0(self, spool):
-        """The spool's first time sample."""
-        return spool.get_contents()["time_min"].min().to_datetime64()
+    def test_boxes_and_open_ends(self, spool):
+        """Windows keep request order; open ends take the data's edge."""
+        time, distance = _t(1, 2, 7, 9, 1, 2), _d(10, 20, 100, 150, 10, 20)
+        selected = _boxes(spool.select(time=time, distance=distance))
+        box = ((1, 2), (10, 20))
+        assert selected == [box, ((7, 7.996), (100, 150)), ((8, 9), (100, 150)), box]
+        # None, NaN, NaT, inf and Ellipsis are open; a fully open row spans
+        time = _t(None, 1, 23, None, None, None)
+        distance = _d(None, None, 290, np.nan, -np.inf, 3)
+        boxes = [((0, 1), (0, 299)), ((23, 23.996), (290, 299)), ((0, 23.996), (0, 3))]
+        assert _boxes(spool.chunk(time=time, distance=distance)) == boxes
+        selected = _boxes(spool.select(time=time, distance=distance))
+        assert selected[:2] == boxes[:2] and len(selected) == 5  # a piece per source
+        narrow = spool.select(distance=(50, 299))
+        out = narrow.chunk(time=_t(0, 1), distance=_d(..., 60))
+        assert _boxes(out) == [((0, 1), (50, 60))]
+        # an open row on the chunked dim merges each segment whole
+        gapped = dc.spool([spool[0], spool[2]])
+        assert len(gapped.chunk(time=_t(None, None))) == 2
+        assert len(gapped.chunk(time=_t(None, 1))) == 1
+        with pytest.raises(ChunkError, match="split by a gap"):
+            gapped.chunk(time=_t(None, 23.996))
 
-    def test_select_boxes(self, spool, t0):
-        """Pieces are trimmed on both dims, in request order, duplicates kept."""
-        sec = np.timedelta64(1, "s")
-        time = np.array([[t0 + sec, t0 + 2 * sec], [t0 + 7 * sec, t0 + 9 * sec]] * 2)
-        out = spool.select(
-            time=time[:3], distance=np.array([[10, 20], [100, 150], [10, 20]])
-        )
-        first = ((t0 + sec, t0 + 2 * sec), (10, 20))
-        assert _boxes(out) == [
-            first,
-            ((t0 + 7 * sec, spool[0].get_coord("time").max()), (100, 150)),
-            ((t0 + 8 * sec, t0 + 9 * sec), (100, 150)),
-            first,
-        ]
+    def test_trim_matches_main_dim(self, spool):
+        """Completeness does not depend on keyword order; missed groups pass."""
+        time, distance = _t(0, 7.998), _d(10, 299.5)  # both short of a sample
+        expected = [((0, 7.996), (10, 299))]
+        assert _boxes(spool.chunk(time=time, distance=distance)) == expected
+        assert _boxes(spool.chunk(distance=distance, time=time)) == expected
+        split = spool.chunk(distance=150).chunk(time=_t(1, 2), distance=_d(10, 20))
+        assert _boxes(split) == [((1, 2), (10, 20))]
 
-    def test_chunk_boxes_across_files(self, spool, t0, tmp_path, monkeypatch):
+    def test_chunk_boxes_across_files(self, spool, tmp_path, monkeypatch):
         """Each window merges across files, trims both dims, and loads lazily."""
         for number, patch in enumerate(spool):
             patch.io.write(tmp_path / f"{number}.h5", "DASDAE")
         files = dc.spool(tmp_path).update(progress=None)
-        sec = np.timedelta64(1, "s")
-        time = np.array([[t0 + 7 * sec, t0 + 9 * sec], [t0 + 15 * sec, t0 + 17 * sec]])
-        distance = np.array([[10, 20], [200, 299]])
-        original = PlanResolver._load_member
-
-        def forbidden(*_args, **_kwargs):
-            raise AssertionError("a source loaded before iteration")
-
-        monkeypatch.setattr(PlanResolver, "_load_member", forbidden)
+        time, distance = _t(7, 9, 15, 17), _d(10, 20, 200, 299)
+        load = PlanResolver._load_member
+        monkeypatch.setattr(PlanResolver, "_load_member", pytest.fail)  # no loads
         out = files.chunk(time=time, distance=distance)
-        contents = out.get_contents()
+        assert len(out.get_contents()) == 2
         assert len(files.select(time=time, distance=distance).get_contents()) == 4
-        monkeypatch.setattr(PlanResolver, "_load_member", original)
-        assert len(contents) == 2
-        assert _boxes(out) == [
-            ((t0 + 7 * sec, t0 + 9 * sec), (10, 20)),
-            ((t0 + 15 * sec, t0 + 17 * sec), (200, 299)),
-        ]
+        monkeypatch.setattr(PlanResolver, "_load_member", load)
+        assert _boxes(out) == [((7, 9), (10, 20)), ((15, 17), (200, 299))]
         whole = spool.chunk(time=None)[0]
         expected = whole.select(time=tuple(time[0]), distance=(10, 20))
         np.testing.assert_array_equal(out[0].data, expected.data)
-        # a chained selection narrows the trimmed outputs further
+        # chained selections narrow the trimmed outputs further
         assert _boxes(out.select(distance=(12, 15)))[0][1] == (12, 15)
-        again = out.select(distance=np.array([[15, 25], [250, 400]]))
+        again = out.select(distance=_d(15, 25, 250, 400))
         assert [x[1] for x in _boxes(again)] == [(15, 20), (250, 299)]
 
-    def test_trim_completeness_matches_main_dim(self, spool, t0):
-        """Bounds short of the next grid point are complete in either order."""
-        one, end = dc.spool([spool[0]]), spool[0].get_coord("time").max()
-        time = np.array([[t0, end + np.timedelta64(2, "ms")]])
-        distance = np.array([[10, 299.5]])
-        first = _boxes(one.chunk(time=time, distance=distance))
-        assert first == _boxes(one.chunk(distance=distance, time=time))
-        assert first == [((t0, end), (10, 299))]
-
-    def test_unmet_trim_skips_only_its_group(self):
-        """A trim incomplete in one compatible group leaves the other's output."""
-        patch = dc.get_example_patch()
-        start = patch.get_coord("time").min()
-        narrow = patch.update_attrs(tag="b").select(distance=(0, 100))
-        spool = dc.spool([patch.update_attrs(tag="a"), narrow])
-        time = np.array([[start, start + np.timedelta64(1, "s")]])
-        kwargs = dict(time=time, distance=np.array([[50, 150]]))
-        out = spool.chunk(on_incomplete="ignore", **kwargs)
+    @pytest.mark.parametrize(
+        "distance, reason, partial",
+        [
+            ((10.2, 10.8), "dim distance: contains no source", []),
+            ((250, 400), "sampled bounds are incomplete", [(250, 299)]),
+            ((400, 500), "outside source coverage", []),
+        ],
+    )
+    def test_unmet_trim_follows_policy(self, spool, distance, reason, partial):
+        """An unmet trim fails its request unless the policy skips it."""
+        kwargs = dict(time=_t(0, 1, 0, 1), distance=_d(0, 5, *distance))
+        with pytest.raises(ChunkError, match=f"row 1.*{reason}"):
+            spool.chunk(**kwargs)
+        with pytest.warns(UserWarning, match="row 1"):
+            spool.chunk(on_incomplete="warn", **kwargs)
+        ignored = spool.chunk(on_incomplete="ignore", **kwargs)
+        assert [x[1] for x in _boxes(ignored)] == [(0, 5)]
+        kept = spool.chunk(keep_partial=True, on_incomplete="ignore", **kwargs)
+        assert [x[1] for x in _boxes(kept)] == [(0, 5), *partial]
+        # a trim unmet in one compatible group leaves the other's output
+        narrow = spool[0].update_attrs(tag="b").select(distance=(0, 100))
+        tagged = dc.spool([spool[0].update_attrs(tag="a"), narrow])
+        out = tagged.chunk(on_incomplete="ignore", time=_t(0, 1), distance=_d(50, 150))
         assert [x[1] for x in _boxes(out)] == [(50, 150)] and out[0].attrs.tag == "a"
 
-    @pytest.mark.parametrize("case", ["trim", "first", "mixed"])
-    def test_non_dimension_window_raises(self, case):
-        """Beside other windows, each must name a coordinate always a dim."""
+    @pytest.mark.parametrize("case", ["first", "mixed", "size", "fill", "depth"])
+    def test_refusals(self, case):
+        """Refused combinations of windows, whether selected or chunked."""
         patch = dc.get_example_patch("random_patch_with_lat_lon")
         time = np.array([patch.get_coord("time").values[[10, 100]]])
-        latitude, distance = np.array([[-109.85, -109.84]]), np.array([[10, 20]])
-        windows = {
-            "trim": dict(time=time, latitude=latitude),
-            "first": dict(latitude=latitude, distance=distance),
-            "mixed": dict(time=time, distance=distance),
+        pair, bad = dict(time=time, distance=_d(10, 20)), "non-dimensional"
+        error, match, windows = {
+            "first": (ParameterError, bad, dict(latitude=_d(-109.85, -109.84))),
+            "mixed": (ParameterError, bad, {}),
+            "size": (ParameterError, "chunk size", dict(distance=10)),
+            "fill": (ParameterError, "fill_value", dict(fill_value=0)),
+            "depth": (ChunkError, "'depth' dimension", dict(depth=_d(10, 20))),
         }[case]
-        patches = [patch]
         if case == "mixed":  # distance is a dimension on one patch only
-            values = patch.get_coord("distance").values
             rider = patch.rename_coords(distance="channel")
-            patches.append(rider.update_coords(distance=("channel", values)))
-        spool = dc.spool(patches)
-        for method in (spool.select, spool.chunk):
-            with pytest.raises(ParameterError, match="non-dimensional"):
-                len(method(**windows))
+            values = ("channel", patch.get_coord("distance").values)
+            patch = [patch, rider.update_coords(distance=values)]
+        spool = dc.spool(patch)
+        for method in (spool.chunk, spool.select)[: 1 + (match == bad)]:
+            with pytest.raises(error, match=match):
+                len(method(**{**pair, **windows}))
 
-    def test_missing_bounds_are_open(self, spool, t0):
-        """NaN and NaT leave either end open, whatever the coordinate's kind."""
-        time = np.array([[t0, t0 + np.timedelta64(1, "s")]])
-        out = spool.chunk(time=time, distance=np.array([[290, np.nan]]))
-        assert _boxes(out)[0][1] == (290, 299)
+    def test_open_trim(self, spool):
+        """An open trim keeps patches lacking the dim, and even the patch's id."""
+        lone = spool[0].select(distance=(0, 0)).squeeze("distance")
+        mixed = dc.spool([spool[0], lone])
+        for distance, count in ((_d(None, None), 2), (_d(10, 20), 1)):
+            for method in (mixed.select, mixed.chunk):
+                out = method(time=_t(0, 1), distance=distance)
+                assert len({p.dims for p in out}) == len(out) == count
+        spanned = spool.chunk(time=_t(0, 1), distance=_d(None, None))
+        assert spanned[0].attrs.data_id == spool.chunk(time=_t(0, 1))[0].attrs.data_id
+        # NaT leaves either end open on a duration coordinate too
         lags = np.arange(5).astype("timedelta64[s]")
         lag = dc.spool(dc.Patch(data=lags, coords={"time": lags}, dims=("time",)))
         span = np.array([[1, "NaT"], ["NaT", 2]], dtype="timedelta64[s]")
-        got = [x[0] for x in _boxes(lag.chunk(time=span), ("time",))]
+        got = [x[0] for x in _boxes(lag.chunk(time=span), ["time"])]
         assert got == [(lags[1], lags[4]), (lags[0], lags[2])]
 
-    def test_trim_missing_a_group_is_skipped(self, spool, t0):
-        """A trim window missing a whole group passes it by, in either order."""
-        sec = np.timedelta64(1, "s")
-        time, distance = np.array([[t0 + sec, t0 + 2 * sec]]), np.array([[10, 20]])
-        expected = _boxes(spool.chunk(time=time, distance=distance))
-        assert _boxes(spool.chunk(distance=distance, time=time)) == expected
-        split = spool.chunk(distance=150).chunk(time=time, distance=distance)
-        assert _boxes(split) == expected
-
-    def test_open_trim_keeps_patches_without_the_dim(self, spool, t0):
-        """An open trim row keeps a patch lacking the dim; a bounded one drops it."""
-        lone = spool[0].select(distance=(0, 0)).squeeze("distance")
-        mixed = dc.spool([spool[0], lone])
-        time = np.array([[t0, t0 + np.timedelta64(1, "s")]])
-        for distance, dims in (([[None, None]], 2), ([[10, 20]], 1)):
-            for method in (mixed.select, mixed.chunk):
-                out = method(time=time, distance=np.array(distance))
-                assert len({p.dims for p in out}) == len(out) == dims
-
-    def test_open_trim_reads_no_coordinates(self, spool, t0, monkeypatch):
-        """A dim whose windows are all open needs no coordinate lookups."""
-        spy = Mock(wraps=known_coordinates)
-        for module in (dc.core.spool, explicit_module):
-            monkeypatch.setattr(module, "known_coordinates", spy)
-        time = np.array([[t0, t0 + np.timedelta64(1, "s")]])
-        kwargs = dict(time=time, distance=np.array([[None, None]]))
-        assert len(spool.chunk(**kwargs)) == len(spool.select(**kwargs)) == 1
-        assert {x.args[2] for x in spy.call_args_list} == {"time"}
-
-    def test_trim_metadata_describes_trimmed_coords(self):
-        """Recovered coords and rider identities follow the trim, not the source."""
+    def test_trim_metadata(self):
+        """Trim metadata: recovered coords, rider identities, missing coords."""
         patch = dc.get_example_patch("random_patch_with_lat_lon")
         time = np.array([patch.get_coord("time").values[[10, 100]]])
-        out = dc.spool([patch]).chunk(time=time, distance=np.array([[10, 20]]))
+        out = dc.spool([patch]).chunk(time=time, distance=_d(10, 20))
         rows = _ensure_patch_row(out._catalog.to_df())
         assert rows["_latitude_def_key"].isna().all()
         (coord,) = known_coordinates(out._catalog, rows, "distance").values()
         assert (coord.min(), coord.max()) == (10, 20)
 
-    def test_spanning_trim_keeps_identity(self, spool, t0):
-        """A trim row open at both ends changes nothing, not even the id."""
-        time = np.array([[t0, t0 + np.timedelta64(1, "s")]])
-        spanned = spool.chunk(time=time, distance=np.array([[None, None]]))
-        assert spanned[0].attrs.data_id == spool.chunk(time=time)[0].attrs.data_id
-
-    def test_open_bounds(self, spool, t0):
-        """Open ends take the data's own extent; a fully open row spans it."""
-        sec = np.timedelta64(1, "s")
-        end = spool[-1].get_coord("time").max()
-        nat = np.datetime64("NaT", "ns")
-        time = np.array([[None, t0 + sec], [t0 + 23 * sec, nat], [None, None]])
-        distance = np.array([[None, None], [290, np.inf], [-np.inf, 3]], dtype=object)
-        expected = [
-            ((t0, t0 + sec), (0, 299)),
-            ((t0 + 23 * sec, end), (290, 299)),
-            ((t0, end), (0, 3)),
-        ]
-        assert _boxes(spool.chunk(time=time, distance=distance)) == expected
-        selected = spool.select(time=time, distance=distance)
-        assert _boxes(selected)[:2] == expected[:2]
-        assert len(selected) == 5  # the open time row: one piece per source
-        narrowed = spool.select(distance=(50, 299))
-        window = dict(time=time[:1], distance=np.array([[..., 60]], dtype=object))
-        assert _boxes(narrowed.chunk(**window))[0][1] == (50, 60)
-        gapped = dc.spool([spool[0], spool[2]])
-        assert len(gapped.chunk(time=np.array([[None, None]]))) == 2
-        assert len(gapped.chunk(time=np.array([[None, t0 + sec]]))) == 1
-        with pytest.raises(ChunkError, match="split by a gap"):
-            gapped.chunk(time=np.array([[None, end]]))
-
-    @pytest.mark.parametrize("policy", ["raise", "warn", "ignore"])
-    def test_empty_trim_window_follows_policy(self, spool, t0, policy):
-        """A window holding no samples on a trimmed dim is an unmet request."""
-        time = np.array([[t0, t0 + np.timedelta64(1, "s")]] * 2)
-        kwargs = dict(time=time, distance=np.array([[0, 5], [10.2, 10.8]]))
-        if policy == "raise":
-            with pytest.raises(ChunkError, match="dim distance: contains no source"):
-                spool.chunk(**kwargs)
-            return
-        if policy == "warn":
-            with pytest.warns(UserWarning, match="row 1"):
-                out = spool.chunk(on_incomplete=policy, **kwargs)
-        else:
-            out = spool.chunk(on_incomplete=policy, **kwargs)
-        assert [x[1] for x in _boxes(out)] == [(0, 5)]
-
-    def test_partial_trim_window(self, spool, t0):
-        """A trim window past the data needs keep_partial, as the main dim does."""
-        kwargs = dict(
-            time=np.array([[t0, t0 + np.timedelta64(1, "s")]]),
-            distance=np.array([[250, 400]]),
-        )
-        with pytest.raises(ChunkError, match="incomplete"):
-            spool.chunk(**kwargs)
-        assert _boxes(spool.chunk(keep_partial=True, **kwargs))[0][1] == (250, 299)
-
-    def test_refusals(self, spool, t0):
-        """A chunk size or fill beside several windows, or an absent dim, fails."""
-        time = np.array([[t0, t0 + np.timedelta64(1, "s")]])
-        with pytest.raises(ParameterError, match="chunk size"):
-            spool.chunk(time=time, distance=10)
-        with pytest.raises(ParameterError, match="fill_value"):
-            spool.chunk(time=time, distance=np.array([[0, 5]]), fill_value=0)
-        with pytest.raises(ChunkError, match="'depth' dimension"):
-            spool.chunk(time=time, depth=np.array([[0, 5]]))
-
-    def test_trim_without_coordinate_metadata(self):
-        """A regular trim grid plans from the index alone; uneven or absent cannot."""
-
         def make(distance, clear=True):
             coords = {"distance": distance, "time": np.arange(4)}
-            data = np.ones((len(distance), 4))
-            patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
-            lone = dc.Patch(
-                data=np.ones(4), coords={"time": np.arange(4)}, dims=("time",)
-            )
-            out = dc.spool([patch, lone])
+            patch = dc.Patch(np.ones((5, 4)), coords=coords, dims=("distance", "time"))
+            out = dc.spool([patch])
             out.get_contents()
-            if clear:
+            if clear:  # a regular grid plans from the index alone
                 out._catalog.resolver._registry.clear()
             return out
 
-        kwargs = dict(time=np.array([[1, 2]]), distance=np.array([[0.5, 2.5]]))
-        plan = make(np.arange(5.0)).chunk_plan(**kwargs)
-        assert plan.outputs[["distance_min", "distance_max"]].values.tolist() == [
-            [1.0, 2.0]
-        ]
-        uneven = np.array([0.0, 1.0, 3.0, 6.0, 9.0])
-        spanned = dict(time=kwargs["time"], distance=np.array([[None, None]]))
-        assert len(make(uneven).chunk_plan(**spanned).outputs) == 2
-        past = dict(time=kwargs["time"], distance=np.array([[3.0, 20.0]]))
-        with pytest.raises(ChunkError, match="incomplete"):
-            make(uneven, clear=False).chunk(**past)
-        partial = make(uneven, clear=False).chunk(keep_partial=True, **past)[0]
-        assert partial.get_coord("distance").values.tolist() == [3.0, 6.0, 9.0]
+        time, uneven, inner = (
+            np.array([[1, 2]]),
+            np.array([0.0, 1, 3, 6, 9]),
+            _d(0.5, 2.5),
+        )
+        rows = make(np.arange(5.0)).chunk_plan(time=time, distance=inner).outputs
+        assert rows[["distance_min", "distance_max"]].values.tolist() == [[1, 2]]
+        spanned = make(uneven).chunk_plan(time=time, distance=_d(None, None))
+        assert len(spanned.outputs) == 1
         with pytest.raises(ChunkError, match="coordinates are unavailable"):
-            make(uneven).chunk_plan(**kwargs)
-        assert _boxes(make(uneven, clear=False).chunk(**kwargs))[0][1] == (1.0, 1.0)
+            make(uneven).chunk_plan(time=time, distance=inner)
+        known = make(uneven, clear=False)
+        assert _boxes(known.chunk(time=time, distance=inner))[0][1] == (1, 1)
+        past = dict(time=time, distance=_d(3.0, 20.0))
+        with pytest.raises(ChunkError, match="incomplete"):
+            known.chunk(**past)
+        partial = known.chunk(keep_partial=True, **past)[0]
+        assert partial.get_coord("distance").values.tolist() == [3.0, 6.0, 9.0]
 
     def test_three_dims(self):
         """Three explicit dims select and merge one box from a 3-D spool."""
-        data = np.arange(4 * 5 * 12).reshape(4, 5, 12)
+        data, dims = np.arange(4 * 5 * 12).reshape(4, 5, 12), ("a", "b", "c")
         coords = {"a": np.arange(4), "b": np.arange(5), "c": np.arange(12)}
-        whole = dc.Patch(data=data, coords=coords, dims=("a", "b", "c"))
+        whole = dc.Patch(data=data, coords=coords, dims=dims)
         spool = dc.spool([whole.select(c=(0, 5)), whole.select(c=(6, 11))])
-        windows = dict(c=np.array([[1, 7]]), a=np.array([[1, 2]]), b=np.array([[0, 3]]))
-        expected = whole.select(a=(1, 2), b=(0, 3), c=(1, 7))
+        windows = dict(c=_d(1, 7), a=_d(1, 2), b=_d(0, 3))
         chunked = spool.chunk(**windows)
-        assert _boxes(chunked, ("a", "b", "c")) == [((1, 2), (0, 3), (1, 7))]
+        assert _boxes(chunked, dims) == [((1, 2), (0, 3), (1, 7))]
+        expected = whole.select(a=(1, 2), b=(0, 3), c=(1, 7))
         np.testing.assert_array_equal(chunked[0].data, expected.data)
-        selected = spool.select(**windows)
-        assert _boxes(selected, ("a", "b", "c")) == [
-            ((1, 2), (0, 3), (1, 5)),
-            ((1, 2), (0, 3), (6, 7)),
-        ]
+        pieces = [((1, 2), (0, 3), (1, 5)), ((1, 2), (0, 3), (6, 7))]
+        assert _boxes(spool.select(**windows), dims) == pieces

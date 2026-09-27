@@ -196,6 +196,8 @@ An explicit request is complete when its inward-aligned first and last sampled p
 
 By default, an unmet request raises `ChunkError`. Set `on_incomplete="warn"` to report and skip unmet request/group outputs, or `"ignore"` to skip them silently. With `keep_partial=True`, nonempty available pieces within a request are retained first; the policy then handles requests still wholly absent. These rules apply to each applicable compatibility group whose overall envelope intersects a window. The `conflict` setting remains the separate policy for attributes of members that actually contribute to an accepted output. Planning uses coordinate metadata and keeps measurement-array loading deferred; source changes and unrelated read failures remain runtime errors.
 
+Several dimensions can take windows at once, with the same number of rows on each: row `i` of every array is one rectangular window. The first is chunked as above and the others trim each output, following the same completeness, `keep_partial` and `on_incomplete` rules (a trimmed dimension holding no samples is an unmet request). `None`, NaN or NaT leaves a bound open, taking the data's own edge, and a row open at both ends spans that dimension; on the chunked dimension it gives each contiguous segment whole, as `chunk(time=None)` would. A trim window missing a group of patches passes it by, and a row open at both ends keeps patches lacking that dimension. `select` takes the same form. With several windows each must name a dimension, an explicit dimension cannot be combined with a chunk size on another, and several explicit dimensions do not accept `fill_value`.
+
 ```{python}
 import numpy as np
 import pytest
@@ -211,14 +213,6 @@ assert [(p.get_coord("distance").min(), p.get_coord("distance").max()) for p in 
 accepted = source.chunk(distance=windows, on_incomplete="ignore")
 assert len(accepted) == 1
 assert len(source.chunk_plan(distance=windows, on_incomplete="ignore").outputs) == 1
-```
-
-Several dimensions can take windows at once, with the same number of rows on each: row `i` of every array is one rectangular window. The first is chunked as above and the others trim each output, following the same completeness, `keep_partial` and `on_incomplete` rules (a trimmed dimension holding no samples is an unmet request). `None`, NaN or NaT leaves a bound open, taking the data's own edge, and a row open at both ends spans that dimension; on the chunked dimension it gives each contiguous segment whole, as `chunk(time=None)` would. A trim window missing a group of patches passes it by, and a row open at both ends keeps patches lacking that dimension. `select` takes the same form. With several windows each must name a dimension, an explicit dimension cannot be combined with a chunk size on another, and several explicit dimensions do not accept `fill_value`.
-
-```{python}
-spool = dc.get_example_spool()
-start = spool.get_contents()["time_min"].min()
-time = np.array([[start, start + np.timedelta64(1, "s")], [None, None]])
-boxes = spool.chunk(time=time, distance=np.array([[10, 20], [290, None]]))
-assert [p.get_coord("distance").max() for p in boxes] == [20, 299]
+boxes = source.chunk(time=np.array([[None, None]] * 2), distance=windows, keep_partial=True)
+assert [p.get_coord("distance").max() for p in boxes] == [4, 9]
 ```

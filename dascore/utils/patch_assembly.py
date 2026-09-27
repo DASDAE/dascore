@@ -153,7 +153,7 @@ def _drop_associated_ranges(row, kwargs, plan_dim) -> dict:
     return {k: v for k, v in kwargs.items() if k not in drop}
 
 
-def _plan_trim_kwargs(patch, kwargs, plan_dims) -> dict:
+def _plan_trim_kwargs(patch, kwargs, plan_dim, trim_dims=()) -> dict:
     """
     Keep only the trims the plan actually narrows.
 
@@ -163,22 +163,19 @@ def _plan_trim_kwargs(patch, kwargs, plan_dims) -> dict:
     re-select a coordinate to its own extent, which is a no-op for a
     sorted numeric range but not for a string coordinate (a range of
     labels), one holding NaN (missing values fall outside every range),
-    or one which cannot be range-selected at all. A trim-dimension range
-    spanning the whole patch (or naming a dim it lacks) is also dropped,
-    keeping the patch's id.
+    or one which cannot be range-selected at all. A trim spanning the patch
+    (or on a dim it lacks) is dropped too, so the patch keeps its id.
     """
-    first, *others = plan_dims
-    if first not in kwargs:  # an unmodified member states no range
+    if plan_dim not in kwargs:  # an unmodified member states no range
         return {}
     coord_map = patch.coords.coord_map
-    assert first in coord_map, "the plan's dimension is on every member"
-    out = {first: kwargs[first]}
-    for dim in others:
+    assert plan_dim in coord_map, "the plan's dimension is on every member"
+    out = {plan_dim: kwargs[plan_dim]}
+    for dim in trim_dims:
         (low, high), coord = kwargs.get(dim, (None, None)), coord_map.get(dim)
-        if coord is None or low is None:
-            continue
-        if not (low <= coord.min() and high >= coord.max()):
-            out[dim] = kwargs[dim]
+        if coord is not None and low is not None:
+            if low > coord.min() or high < coord.max():
+                out[dim] = kwargs[dim]
     return out
 
 
@@ -673,8 +670,8 @@ class PatchAssembler:
         source_kwargs = kwargs if kwargs.get("_modified") else {}
         # attr-style entries filter rows above; only the plan's dimension
         # and its trim dims are narrowed, everything else loads untouched.
-        dims = (self.plan_dim, *self.trim_dims)
-        if select_kwargs := _plan_trim_kwargs(patch, source_kwargs, dims):
+        trims = (self.plan_dim, self.trim_dims)
+        if select_kwargs := _plan_trim_kwargs(patch, source_kwargs, *trims):
             patch = patch.select(**_as_plan_units(patch, select_kwargs, patch_kwargs))
         return patch
 

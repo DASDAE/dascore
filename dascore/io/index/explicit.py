@@ -5,23 +5,15 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
-import numpy as np
-import pandas as pd
-
-from dascore.exceptions import MissingPatchError
 from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.planned import derived_catalog
 from dascore.utils.chunk_plan import (
     _ensure_patch_row,
-    _stated_units,
-    _window_samples,
+    _trim_explicit,
     build_subdivision_plan,
     refuse_riders,
 )
-from dascore.utils.explicit_ranges import (
-    ExplicitRanges,
-    known_coordinates,
-)
+from dascore.utils.explicit_ranges import ExplicitRanges, known_coordinates
 
 
 class _SchemaBackend:
@@ -47,8 +39,7 @@ class ExplicitSelectCatalog:
     """Build independent source pieces when the parent relation is requested."""
 
     parent: Any
-    # windows per dimension; the first is subdivided, the others trim
-    ranges: dict[str, ExplicitRanges]
+    ranges: dict[str, ExplicitRanges]  # the first dim is subdivided
     operations: tuple = ()
     _cached: PatchCatalog | None = field(default=None, init=False, repr=False)
     _source_revision: int = field(default=-1, init=False, repr=False)
@@ -69,64 +60,25 @@ class ExplicitSelectCatalog:
             assert source["_patch_row"].is_unique, "catalog rows must be unique"
             by_id = source.set_index("_patch_row", drop=False)
             refuse_riders(self.ranges, source)
-            names = list(self.ranges)
+            first = next(iter(self.ranges))
             boxes = list(zip(*(x.rows for x in self.ranges.values()), strict=True))
-            candidate_frames = [
+            frames = [
                 self.parent.select(
-                    _coords={
-                        x: b
-                        for x, b in zip(names, box)
-                        if any(v is not None for v in b)
-                    }
-                ).to_df()
+                    _coords={x: b for x, b in zip(self.ranges, box) if b != (None,) * 2}
+                ).to_df()["_patch_row"]
                 for box in boxes
             ]
-            ids = {x for frame in candidate_frames for x in frame["_patch_row"]}
-            candidates = source[source["_patch_row"].isin(ids)]
-            known = {
-                x: known_coordinates(self.parent, candidates, x)
-                for x, ranges in self.ranges.items()
-                if ranges.constrains
+            selected = by_id.loc[[x for frame in frames for x in frame]]
+            selected = selected.reset_index(drop=True)
+            spans = selected[[f"{first}_min", f"{first}_max"]].to_numpy()
+            plan = build_subdivision_plan(selected, [[tuple(x)] for x in spans], first)
+            # Identity is bookkeeping, never a patch attribute.
+            plan.outputs["_request_row"] = [n for n, x in enumerate(frames) for _ in x]
+            exact = {
+                x: known_coordinates(self.parent, selected, x) for x in self.ranges
             }
-            rows = []
-            pieces: dict[str, list] = {name: [] for name in names}
-            requests = []
-            for request, (box, candidate) in enumerate(
-                zip(boxes, candidate_frames, strict=True)
-            ):
-                for patch_row in candidate["_patch_row"]:
-                    row = by_id.loc[patch_row]
-                    actual = []
-                    for name, bounds in zip(names, box, strict=True):
-                        low, high = row[f"{name}_min"], row[f"{name}_max"]
-                        if all(x is None for x in bounds):  # spans the dim
-                            actual.append((low, high))
-                            continue
-                        coord = known[name].get(patch_row)
-                        if coord is None:
-                            msg = (
-                                f"Cannot verify samples for {name!r} in source "
-                                f"{row.get('source_path')!r}: coordinate metadata "
-                                "is unavailable."
-                            )
-                            raise MissingPatchError(msg)
-                        unit = _stated_units(row.get(f"_{name}_units"))
-                        # exact labels only, so the grid is not consulted
-                        window = (bounds, low, high, np.nan, unit, (coord,))
-                        actual.append(_window_samples(*window))
-                    if any(x is None for x in actual):
-                        continue
-                    rows.append(row)
-                    requests.append(request)
-                    for name, bounds in zip(names, actual, strict=True):
-                        pieces[name].append([bounds])
-            selected = pd.DataFrame(rows, columns=source.columns).reset_index(drop=True)
-            first, *others = names
-            trims = {name: pieces[name] for name in others}
-            plan = build_subdivision_plan(selected, pieces[first], first, trims)
-            if len(plan.outputs):
-                # Identity is bookkeeping, never a patch attribute.
-                plan.outputs["_request_row"] = requests
+            args = (selected, self.ranges, exact, True, "ignore", True)
+            plan = _trim_explicit(plan, *args)
             catalog = derived_catalog(
                 source_rows=source,
                 plan=plan,
