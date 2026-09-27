@@ -55,7 +55,7 @@ round_trip = dc.spool(path)[0]
 path.unlink(missing_ok=True)
 ```
 
-DASDAE accepts xarray's h5netcdf options which map onto h5py: `compression`, `compression_opts`, `shuffle`, `chunksizes`, `fletcher32`, `zlib`, and `complevel`. `compression` accepts whatever h5py does, including [hdf5plugin](https://pypi.org/project/hdf5plugin/) filters. One departure: `chunksizes` is clamped to each array's length, because one encoding applies to every patch in a file and patches differ in length. The same dict works for NETCDF_CF, which passes it to xarray unchanged, and for xarray's h5netcdf engine. Unknown options and variables raise a `ValueError`, as they do in xarray, and a write option the writer does not accept raises a [`ParameterError`](`dascore.exceptions.ParameterError`).
+DASDAE accepts the options xarray's h5netcdf engine maps onto h5py: `compression`, `compression_opts`, `shuffle`, `chunksizes`, `fletcher32`, `zlib`, and `complevel`. `compression` accepts whatever h5py does, including [hdf5plugin](https://pypi.org/project/hdf5plugin/) filters. Its one difference from xarray: `chunksizes` is clamped to each array's length, because one encoding applies to every patch in a file and patches differ in length. NETCDF_CF hands the encoding to xarray unchanged, so its engine (netCDF4 when installed, else h5netcdf) decides which keys it accepts; `zlib`, `complevel`, `shuffle`, `chunksizes`, and `fletcher32` work in both formats. An unknown option raises a `ValueError` and an unknown variable a `KeyError`, as in xarray; a write option the writer does not accept raises a [`ParameterError`](`dascore.exceptions.ParameterError`).
 
 # Scanning metadata
 

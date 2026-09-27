@@ -15,7 +15,7 @@ from dascore.utils.hdf5 import H5Reader, H5Writer
 from dascore.utils.misc import unbyte
 from dascore.utils.patch import get_patch_names
 
-from ._encoding import _check_chunks, _get_h5_options
+from ._encoding import _check_variables, _get_h5_options
 from .utils import (
     _get_contents_from_patch_groups_generic,
     _get_patch_group,
@@ -76,7 +76,7 @@ class DASDAEV1(FiberIO):
             ``chunksizes`` is in the array's axis order and is clamped to
             its length, so one encoding fits patches of different lengths.
         """
-        options = _get_h5_options(encoding, spool)
+        options = _get_h5_options(encoding)
         # write out patches
         _write_meta(resource, self.version)
         # get an iterable of patches and save them
@@ -95,7 +95,7 @@ class DASDAEV1(FiberIO):
             num = counts.get(name, 0)
             counts[name] = num + 1
             unique_name = name if num == 0 else f"{name}__{num}"
-            _check_chunks(options, patch)
+            _check_variables(options, patch)
             _save_patch(patch, waveforms, unique_name, self._compact_coords, options)
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:

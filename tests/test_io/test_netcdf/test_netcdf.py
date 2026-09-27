@@ -666,6 +666,14 @@ class TestNetCDFEdgeCases:
                 assert (data.compression, data.compression_opts) == ("gzip", 5)
                 assert data.shuffle and data.chunks == (10, 20)
 
+    @pytest.mark.parametrize("fmt", ["netcdf_cf", "DASDAE"])
+    def test_unknown_variable_raises(self, tmp_path, fmt):
+        """Both formats raise xarray's KeyError for a variable not written."""
+        _require_xarray_netcdf_engine()
+        patch = dc.get_example_patch("random_das")
+        with pytest.raises(KeyError, match="nope"):
+            dc.write(patch, tmp_path / "bad", fmt, encoding={"nope": {}})
+
     def test_unknown_encoding_raises(self, tmp_path):
         """Xarray validates the encoding."""
         _require_xarray_netcdf_engine()

@@ -154,8 +154,9 @@ class NetCDFCFV18(FiberIO):
         ----------
         encoding
             Passed to xarray's ``Dataset.to_netcdf``: a dict keyed by "data"
-            or a coordinate name whose values are dicts of encoding options,
-            such as ``zlib``, ``complevel``, ``shuffle``, and ``chunksizes``.
+            or a coordinate name whose values are dicts of encoding options.
+            xarray's engine sets the accepted keys; ``zlib``, ``complevel``,
+            ``shuffle``, ``chunksizes``, and ``fletcher32`` suit any engine.
         """
         patch = self._validate_and_extract_patch(spool)
         optional_import("xarray")  # raises a helpful error if xarray is absent
