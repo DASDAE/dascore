@@ -40,6 +40,12 @@ def _seconds(start, *offsets):
     return [np.datetime64(start + x * SECOND) for x in offsets]
 
 
+def _frame(lows, highs):
+    """Lone time ranges given as plain values."""
+    frame = pd.DataFrame({"time_min": lows, "time_max": highs})
+    return dc.AnnotationSet(frame, dims=DIMS)
+
+
 def _ranges(start, *pairs, dims=DIMS):
     """A set of lone time ranges, given as (low, high) seconds after start."""
     lows, highs = zip(*pairs, strict=True)
@@ -219,6 +225,22 @@ class TestCut:
         frame = pd.DataFrame({"time_min": [50.0, 70.0], "time_max": [110.0, 90.0]})
         cut = dc.spool(holed_patch).cut(dc.AnnotationSet(frame, dims=DIMS))
         assert [_span(x) for x in cut] == [[50, 59], [100, 110]]
+
+    def test_after_sample_selection(self):
+        """A pending sample selection still bounds what a cut keeps."""
+        coords = {"distance": np.arange(2.0), "time": np.arange(40.0)}
+        patch = dc.Patch(data=np.zeros((2, 40)), coords=coords, dims=DIMS)
+        view = dc.spool(patch).select(time=(2, -3), samples=True)
+        (cut,) = view.cut(_frame([0.0], [5.0]))
+        assert _span(cut) == [2.0, 5.0]
+
+    def test_irregular_patch_is_kept(self):
+        """A row with no step names no grid, so a window over it keeps it."""
+        time = np.array([0.0, 1.0, 2.5, 7.0, 8.0])
+        coords = {"distance": np.array([0]), "time": time}
+        patch = dc.Patch(data=np.ones((1, 5)), coords=coords, dims=DIMS)
+        (cut,) = dc.spool(patch).cut(_frame([2.0], [7.5]))
+        assert _span(cut) == [2.5, 7.0]
 
     def test_lazy(self, spool, start, tmp_path):
         """Cutting and reading contents load nothing; iterating does."""

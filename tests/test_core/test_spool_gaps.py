@@ -11,10 +11,12 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.core.coords import concat_coords, get_coord
 from dascore.examples import random_spool
 from dascore.exceptions import ChunkError, ParameterError, UnitError
 
 ONE_SECOND = np.timedelta64(1, "s")
+ONE_MS = np.timedelta64(1, "ms")
 
 
 @pytest.fixture(scope="module")
@@ -164,6 +166,12 @@ class TestGetGaps:
             out = getattr(spool, method)()
             assert not [x for x in out.columns if str(x).startswith("_")]
 
+    def test_irregular_numbers_report_none(self):
+        """Numeric labels with no step state none, and report no gap."""
+        time = np.array([0.0, 1.0, 2.5, 7.0, 8.0])
+        patch = dc.Patch(data=np.zeros(5), coords={"time": time}, dims=("time",))
+        assert dc.spool([patch]).get_gaps().empty
+
     def test_unknown_dim_raises(self, gappy_spool):
         """An unknown dimension names the ones which exist."""
         with pytest.raises(ParameterError, match="Cannot report on"):
@@ -282,3 +290,90 @@ class TestGetCoverage:
         populated = random_spool().get_coverage()
         measured = ["time_min", "time_max", "span", "gap_total", "covered", "coverage"]
         assert out[measured].dtypes.to_dict() == populated[measured].dtypes.to_dict()
+
+
+def _time_runs_patch(count, samples=10, seconds_apart=60):
+    """A patch whose time coordinate holds ``count`` runs a minute apart."""
+    t0 = np.datetime64("2020-01-01T00:00:00.000000000")
+    step = np.timedelta64(1_000_000, "ns")
+    runs = [
+        get_coord(
+            start=t0 + i * seconds_apart * ONE_SECOND, step=step, shape=(samples,)
+        )
+        for i in range(count)
+    ]
+    time = concat_coords(*runs)
+    data = np.arange(3 * len(time), dtype=np.float64).reshape(3, -1)
+    coords = {"distance": np.arange(3), "time": time}
+    return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+
+class TestGappedPatchRows:
+    """A spool row never holds a hole: a gapped patch enters as its pieces."""
+
+    @pytest.mark.parametrize("count", [2, 256, 257, 1440])
+    def test_one_row_per_run(self, count):
+        """Every run is a row, so gaps, coverage and chunk see every hole."""
+        spool = dc.spool([_time_runs_patch(count)])
+        assert len(spool) == count
+        assert len(spool.get_gaps()) == count - 1
+        assert spool.get_coverage()["coverage"].iloc[0] < 1
+        assert len(spool.chunk(time=None)) == count
+
+    def test_dense_labels_split_at_holes(self):
+        """One stored run with holes (every third sample missing) splits too."""
+        t0 = np.datetime64("2020-01-01T00:00:00.000000000")
+        kept = np.arange(3000)[np.arange(3000) % 3 != 2]
+        time = get_coord(data=t0 + kept.astype("timedelta64[ms]"), step=ONE_MS)
+        assert time.runs_count == 1
+        data = np.zeros((2, len(time)))
+        coords = {"distance": [0, 1], "time": time}
+        patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+        spool = dc.spool([patch])
+        assert len(spool) == time.missing().count + 1 == 1000
+        assert len(spool.get_gaps()) == 999
+        assert all(x.get_coord("time").evenly_sampled for x in spool)
+
+    def test_filled_output_reports_no_gap(self):
+        """A filled chunk output is one grid, and the spool says so (#1216)."""
+        spool = dc.spool([_time_runs_patch(2, samples=100)])
+        filled = spool.chunk(time=None, tolerance=100_000, fill_value=np.nan)
+        assert len(filled) == 1
+        assert filled.get_gaps().empty
+        assert filled[0].get_coord("time").evenly_sampled
+
+    def test_pieces_are_views(self):
+        """The pieces share the gapped patch's data and partition it."""
+        patch = _time_runs_patch(3)
+        pieces = sorted(dc.spool([patch]), key=lambda x: x.get_coord("time").min())
+        assert len(pieces) == 3
+        assert all(np.shares_memory(x.data, patch.data) for x in pieces)
+        data = np.concatenate([x.data for x in pieces], axis=1)
+        assert np.array_equal(data, patch.data)
+
+    def test_two_gapped_dims_give_the_product(self):
+        """Holes in two dimensions give one piece per pair of runs."""
+        patch = _time_runs_patch(3)
+        distance = concat_coords(
+            get_coord(start=0, step=1, shape=(2,)),
+            get_coord(start=10, step=1, shape=(1,)),
+        )
+        patch = patch.update_coords(distance=distance)
+        assert len(dc.spool([patch])) == 6
+        assert len(patch.split_gaps()) == 6
+
+    def test_same_instance_is_one_entry(self):
+        """A gapped patch given twice, or added twice, is split once."""
+        patch = _time_runs_patch(3)
+        assert len(dc.spool([patch, patch])) == 3
+        spool = dc.spool([patch])
+        spool._catalog.add(patch)
+        assert len(spool) == 3
+
+    def test_split_gaps_is_the_spool(self):
+        """split_gaps gives exactly the rows a spool of the patch holds."""
+        patch = _time_runs_patch(4)
+        split, spool = patch.split_gaps(), dc.spool([patch])
+        assert len(split) == len(spool) == 4
+        for one, two in zip(split, spool, strict=True):
+            assert one == two

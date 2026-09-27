@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import itertools
 import warnings
 from functools import partial
 from typing import Any, ClassVar, Self
@@ -14,7 +13,7 @@ from scipy.interpolate import interp1d
 
 import dascore as dc
 from dascore.constants import PatchType, select_values_description
-from dascore.core.coords import BaseCoord, NumericCoord, _fill_layout
+from dascore.core.coords import BaseCoord, _fill_layout
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import (
     CoordError,
@@ -1314,23 +1313,20 @@ def get_axis(self: PatchType, dim: str) -> int:
     return self.coords.get_axis(dim)
 
 
-def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
+def split_gaps(self: PatchType) -> dc.Spool:
     """
-    Split the patch into contiguous patches at coordinate gaps.
+    Split the patch into contiguous patches, as a spool holds it.
 
-    The patch splits wherever its coordinate's runs break (e.g. from
-    concatenating nearly-contiguous data) and at every hole
-    [missing](`dascore.core.coords.BaseCoord.missing`) reports, however the
-    labels are stored. Each output is a view of the patch's data.
+    A spool row never holds a hole, so this is ``dc.spool([patch])``: the
+    patch splits at every boundary between a dimension's runs and at every
+    hole [missing](`dascore.core.coords.BaseCoord.missing`) reports. Each
+    output is a view of the patch's data; a patch without holes comes back
+    unchanged.
 
     Parameters
     ----------
     self
         The Patch object.
-    dim
-        The dimension to split along. If None (default), split along every
-        dimension. A patch with no holes comes back unchanged (as a length 1
-        spool).
 
     Examples
     --------
@@ -1351,42 +1347,7 @@ def split_gaps(self: PatchType, dim: str | None = None) -> dc.Spool:
     >>> spool = patch.split_gaps()
     >>> assert len(spool) == 2
     """
-    if dim is not None and dim not in self.dims:
-        msg = f"split_gaps dim must be one of {self.dims}, got {dim!r}."
-        raise ParameterError(msg)
-    dims = (dim,) if dim is not None else self.dims
-    # Annotated because the list is rebuilt from its own contents each pass,
-    # which leaves the element type to be inferred from itself.
-    patches: list[dc.Patch] = [self]
-    for dname in dims:
-        out: list[dc.Patch] = []
-        for patch in patches:
-            coord = patch.get_coord(dname)
-            if not isinstance(coord, NumericCoord) or coord._partial:
-                out.append(patch)
-                continue
-            starts, offset = set(), 0
-            for seg in coord.segments:
-                starts.add(offset)
-                # a dense stored run may hold holes of the declared step too;
-                # only its own labels are read to place them
-                if holes := [first for first, _ in seg.missing().iter_runs()]:
-                    values = np.asarray(seg.values)
-                    if seg.reverse_sorted:
-                        after = np.searchsorted(values[::-1], holes, side="right")
-                        found = len(values) - after
-                    else:
-                        found = np.searchsorted(values, holes)
-                    starts.update((offset + found).tolist())
-                offset += len(seg)
-            starts.discard(0)
-            for start, stop in itertools.pairwise([0, *sorted(starts), len(coord)]):
-                # Typed as the selector it is: the key is a dimension
-                # name, so it never lands on select's own bool fields.
-                window: dict[str, Any] = {dname: (start, stop)}
-                out.append(Select(samples=True, **window).run(patch))
-        patches = out
-    return dc.spool(patches)
+    return dc.spool([self])
 
 
 def _fill_scalar(value, dtype) -> np.ndarray:

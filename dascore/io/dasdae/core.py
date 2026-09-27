@@ -48,7 +48,7 @@ class DASDAEV1(FiberIO):
     preferred_extensions = ("h5", "hdf5")
     version = "1"
     multi_patch_write = True
-    # Version 2 writes ranges and segments as descriptions, not values.
+    # Version 2 writes ranges as descriptions, not values.
     _compact_coords = False
 
     def write(
@@ -75,17 +75,19 @@ class DASDAEV1(FiberIO):
             resource.create_group("waveforms")
         waveforms = resource["waveforms"]
         # write new patches to file, ensuring unique group names within this
-        # batch so same-named patches (e.g. gap-split siblings that differ
-        # only along a non-named dimension) don't overwrite each other.
-        # strict zip keeps streaming (no spool materialization) while failing
-        # loudly if the name pass and patch pass ever disagree in length.
+        # batch so same-named patches (e.g. the pieces of a patch with holes)
+        # don't overwrite each other. strict zip keeps streaming (no spool
+        # materialization) while failing loudly if the name pass and patch
+        # pass ever disagree in length.
         patch_names = get_patch_names(patches).values
         counts: dict[str, int] = {}
         for patch, name in zip(patches, patch_names, strict=True):
-            num = counts.get(name, 0)
-            counts[name] = num + 1
-            unique_name = name if num == 0 else f"{name}__{num}"
-            _save_patch(patch, waveforms, unique_name, compact=self._compact_coords)
+            # a file never holds a hole: a patch with one is saved as its pieces
+            for piece in patch.split_gaps():
+                num = counts.get(name, 0)
+                counts[name] = num + 1
+                unique = name if num == 0 else f"{name}__{num}"
+                _save_patch(piece, waveforms, unique, compact=self._compact_coords)
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
@@ -136,11 +138,9 @@ class DASDAEV2(DASDAEV1):
     states its class (``object_type``) and describes itself: a range is stored as its
     start, extent, and step (the exact grid where the coordinate holds
     one, so a fractional sampling rate never drifts) at the cost of a few
-    attributes however long it is; a segmented coordinate as a group of
-    its segments; and only irregular coordinates as arrays of values.
-    Gapped patches are therefore stored as they are rather than split.
+    attributes however long it is, and only other coordinates as arrays
+    of values.
     """
 
     version = "2"
-    segmented_write = True
     _compact_coords = True

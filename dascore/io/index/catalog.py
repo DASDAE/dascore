@@ -17,6 +17,7 @@ Selection composes Query predicates without running SQL; realization
 from __future__ import annotations
 
 import abc
+import itertools
 import json
 import operator
 import os
@@ -48,6 +49,7 @@ from dascore.io.index.query import (
     resolve_query,
 )
 from dascore.io.index.schema import SPOOL_LATE_RENAMES
+from dascore.utils.gaps import contiguous_windows
 from dascore.utils.misc import (
     _canonical_range,
     express_range_for_coord,
@@ -173,9 +175,7 @@ class LiveResolver(PatchResolver):
     """
 
     def __init__(self, patches: Sequence[dc.Patch] = ()):
-        self._registry: dict[str, dc.Patch] = {
-            _patch_path(patch): patch for patch in patches
-        }
+        self._registry: dict[str, dc.Patch] = _live_entries(patches)
 
     def live_entries(self) -> dict[str, dc.Patch]:
         """Return the live patch registry."""
@@ -214,6 +214,25 @@ def resolve_against_root(path: str | Path, root: Path | None) -> str | Path:
 def _patch_path(patch: dc.Patch) -> str:
     """Return the synthetic source path identifying a live patch."""
     return f"memorypatch://{patch._instance_id}"
+
+
+def _live_entries(patches: Sequence[dc.Patch]) -> dict[str, dc.Patch]:
+    """
+    Key live patches by identity; a patch with holes enters as its pieces.
+
+    Each piece is a view, one per product of the dimensions' contiguous
+    windows, keyed below its patch's path so re-adding it is idempotent.
+    """
+    out = {}
+    for path, patch in {_patch_path(x): x for x in patches}.items():
+        windows = [contiguous_windows(patch.get_coord(x)) for x in patch.dims]
+        if all(len(x) == 1 for x in windows):
+            out[path] = patch
+            continue
+        for num, window in enumerate(itertools.product(*windows)):
+            select = dict(zip(patch.dims, window, strict=True))
+            out[f"{path}/{num}"] = patch.select(samples=True, **select)
+    return out
 
 
 class FileResolver(PatchResolver):
@@ -1371,7 +1390,7 @@ class PatchCatalog:
                 msg = "add() currently supports in-memory catalogs only."
                 raise NotImplementedError(msg)
             patches = [patches] if isinstance(patches, dc.Patch) else list(patches)
-            additions = {_patch_path(x): x for x in patches}
+            additions = _live_entries(patches)
             self.resolver._registry.update(additions)
             # Re-adding a patch replaces its row (same identity), so this
             # stays idempotent.

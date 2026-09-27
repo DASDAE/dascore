@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import h5py
 import numpy as np
 import pandas as pd
 import pytest
@@ -13,6 +14,7 @@ from dascore.core.coords import (
     get_coord,
 )
 from dascore.core.summary import PatchSummary
+from dascore.io.dasdae.utils import _save_patch
 from dascore.io.index.backend import get_backend
 from dascore.io.index.ingest import patch_record, summaries_to_records
 from dascore.io.index.query import Query
@@ -46,6 +48,71 @@ def gapped_directory(gapped_patch, tmp_path_factory):
 
 
 @pytest.fixture(scope="module")
+def indexed_runs(gapped_patch, tmp_path_factory):
+    """
+    A directory spool whose file holds the gapped patch whole.
+
+    No writer makes such a file, so it is saved directly; only metadata
+    questions, which read the index's runs, are asked of it.
+    """
+    path = tmp_path_factory.mktemp("indexed_runs") / "gapped.h5"
+    later = gapped_patch.get_coord("time").max() + 10 * 1000 * MS
+    dc.write(dc.get_example_patch().update_coords(time_min=later), path, "dasdae")
+    with h5py.File(path, "a") as h5:
+        _save_patch(gapped_patch, h5["waveforms"], "gapped", compact=True)
+    return dc.spool(path.parent).update()
+
+
+class TestIndexedRuns:
+    """The index's runs of a patch holding a hole answer metadata questions."""
+
+    def test_links(self, indexed_runs):
+        """The link table holds the runs beside the coordinate."""
+        back = indexed_runs._catalog.backend
+        links = back._fetch_df("SELECT * FROM patch_coords")
+        assert list(links.columns) == list(PatchCoordRow._fields)
+        runs = links[links["run_index"] > 0]
+        assert set(runs["coord_name"]) == {"time"}
+        assert len(runs) == 2
+
+    def test_flat_relation_is_one_row_per_patch(self, indexed_runs):
+        """Every query about a patch's coordinate reads the coordinate whole."""
+        contents = indexed_runs.get_contents()
+        assert len(contents) == 2
+        gapped = contents.sort_values("time_min").iloc[0]
+        assert pd.isnull(gapped["time_step"])
+
+    def test_reports(self, indexed_runs):
+        """The hole and the space after the patch are both gaps."""
+        gaps = indexed_runs.get_gaps().sort_values("time_min")
+        assert len(gaps) == 2
+        assert gaps["gap_size"].iloc[0] == HOLE
+        assert indexed_runs.get_coverage()["gap_total"].iloc[0] > HOLE
+
+    def test_plan_members_are_runs(self, indexed_runs):
+        """Each run is a trimmed member; runs in one output are read once."""
+        members = indexed_runs.chunk_plan(time=None).members
+        assert len(members) == 3 and members["_modified"].sum() == 2
+        bridged = indexed_runs.chunk_plan(time=None, tolerance=5).members
+        assert len(bridged) == 2
+
+    def test_chunked_view_keeps_the_hole(self, indexed_runs):
+        """A plan's outputs carry the runs of the member they hold."""
+        chunked = indexed_runs.chunk(time=None, tolerance=5)
+        assert chunked.get_gaps()["gap_size"].iloc[0] == HOLE
+        # an output joined along time takes no member's runs of it
+        joined = indexed_runs.chunk(time=None, tolerance=10_000)
+        assert joined.get_gaps().empty
+
+    def test_query_candidacy(self, indexed_runs, gapped_patch):
+        """A window inside the hole selects the patch holding it."""
+        t0 = gapped_patch.get_coord("time").min()
+        window = (t0 + 1003 * MS, t0 + 1008 * MS)
+        back = indexed_runs._catalog.backend
+        assert len(back.query([Query(coords={"time": window})])) == 1
+
+
+@pytest.fixture(scope="module")
 def crowded(gapped_patch):
     """The gapped patch among four contiguous ones, and its patch id."""
     later = gapped_patch.get_coord("time").max() + 10 * 1000 * MS
@@ -53,8 +120,15 @@ def crowded(gapped_patch):
         dc.get_example_patch().update_coords(time_min=later + i * 10_000 * MS)
         for i in range(4)
     ]
-    spool = dc.spool([gapped_patch, *others])
-    back = spool._catalog.backend
+    # a spool splits the gapped patch, so its record is written directly
+    summaries = [
+        PatchSummary.from_patch(x).model_copy(
+            update={"source_path": f"{i}.h5", "source_format": "DASDAE"}
+        )
+        for i, x in enumerate([gapped_patch, *others])
+    ]
+    back = get_backend(":memory:")
+    back.write_sources(summaries_to_records(summaries))
     (gapped_id,) = back._fetch_df(
         "SELECT DISTINCT patch_row FROM patch_coords WHERE run_index > 0"
     )["patch_row"]
@@ -110,21 +184,11 @@ class TestStorage:
         assert time[1].step_int == time[2].step_int == 4_000_000
         assert {c.run_index for c in record.coords if c.coord_name == "distance"} == {0}
 
-    def test_links(self, gapped_directory):
-        """The link table holds the runs beside the coordinate."""
-        back = gapped_directory._catalog.backend
-        links = back._fetch_df("SELECT * FROM patch_coords")
-        assert list(links.columns) == list(PatchCoordRow._fields)
-        runs = links[links["run_index"] > 0]
-        assert set(runs["coord_name"]) == {"time"}
-        assert len(runs) == 2
-
-    def test_flat_relation_is_one_row_per_patch(self, gapped_directory):
-        """Every query about a patch's coordinate reads the coordinate whole."""
+    def test_written_pieces_are_rows(self, gapped_directory):
+        """The gapped patch was written as its runs, each a row with a step."""
         contents = gapped_directory.get_contents()
-        assert len(contents) == 2
-        gapped = contents.sort_values("time_min").iloc[0]
-        assert pd.isnull(gapped["time_step"])
+        assert len(contents) == 3
+        assert not contents["time_step"].isnull().any()
 
     def test_export_keeps_runs(self, gapped_patch, tmp_path):
         """Records exported for a merge carry the run links."""
@@ -238,12 +302,14 @@ class TestReports:
         merged = gapped_directory.chunk(time=None, tolerance=10_000)
         assert len(merged) == 1
 
-    def test_query_candidacy_unchanged(self, gapped_directory, gapped_patch):
-        """A window inside the hole still selects the patch holding it."""
+    def test_window_inside_the_hole_selects_nothing(
+        self, gapped_directory, gapped_patch
+    ):
+        """No row spans the hole, so a window inside it matches none."""
         t0 = gapped_patch.get_coord("time").min()
         window = (t0 + 1003 * MS, t0 + 1008 * MS)
         back = gapped_directory._catalog.backend
-        assert len(back.query([Query(coords={"time": window})])) == 1
+        assert len(back.query([Query(coords={"time": window})])) == 0
 
 
 class TestDerived:
@@ -290,7 +356,7 @@ class TestDerived:
         assert chunked.get_gaps()["gap_size"].tolist() == [HOLE, HOLE]
 
     def test_merged_members_keep_shared_runs(self, gapped_patch):
-        """Merged members pass on the runs of a coordinate they all share."""
+        """Slices merge along distance once per run; the hole stays a gap."""
         distance = gapped_patch.get_coord("distance")
         mid = distance.values[len(distance) // 2]
         slices = [
@@ -298,7 +364,7 @@ class TestDerived:
             gapped_patch.select(distance=(mid + distance.step, None)),
         ]
         merged = dc.spool(slices).chunk(distance=None)
-        assert len(merged) == 1
+        assert len(merged) == 2
         assert merged.get_gaps()["gap_size"].tolist() == [HOLE]
         assert merged.get_gaps("distance").empty
 
@@ -376,7 +442,6 @@ class TestChunkPlansRuns:
         )
         (merged,) = chunked
         assert merged.equals(gapped_patch)
-        assert chunked.get_gaps()["gap_size"].tolist() == [HOLE]
 
     def test_run_joins_a_contiguous_neighbour(self, gapped_patch, halves):
         """The run next to a patch merges with it, as patches do."""
@@ -397,16 +462,17 @@ class TestChunkPlansRuns:
         assert not any(p.get_coord("time").runs_count > 1 for p in chunked)
 
     def test_plan_members_are_runs(self, gapped_patch, halves):
-        """Each run is a trimmed member; runs in one output are read once."""
+        """Each run is a whole member; bridged runs span the patch."""
         spool = dc.spool([gapped_patch])
         members = spool.chunk_plan(time=None).members
-        assert members["_modified"].all()
+        assert not members["_modified"].any()
         for (_, row), half in zip(members.iterrows(), halves, strict=True):
             coord = half.get_coord("time")
             assert (row["time_min"], row["time_max"]) == (coord.min(), coord.max())
-        (bridged,) = spool.chunk_plan(time=None, tolerance=5).members.to_dict("records")
+        bridged = spool.chunk_plan(time=None, tolerance=5).members
         time = gapped_patch.get_coord("time")
-        assert (bridged["time_min"], bridged["time_max"]) == (time.min(), time.max())
+        span = (bridged["time_min"].min(), bridged["time_max"].max())
+        assert span == (time.min(), time.max())
 
     def test_directory_loads_runs(self, gapped_directory, halves):
         """Members read from files load as selections of their patch."""
@@ -424,8 +490,8 @@ class TestChunkPlansRuns:
             pd.Timestamp(x) for x in ends[:-1]
         ]
 
-    def test_runs_past_the_cap_plan_whole(self):
-        """A coordinate with more runs than the index stores is planned whole."""
+    def test_runs_past_the_cap_plan_per_run(self):
+        """A coordinate with more runs than the index stores still plans per run."""
         runs = [
             get_coord(start=20.0 * i, step=1.0, shape=(10,), units="m")
             for i in range(_MAX_SUMMARY_RUNS + 1)
@@ -436,13 +502,13 @@ class TestChunkPlansRuns:
             coords={"distance": coord, "x": np.arange(2)},
             dims=("distance", "x"),
         )
-        assert len(dc.spool([patch]).chunk(distance=None)) == 1
+        assert len(dc.spool([patch]).chunk(distance=None)) == _MAX_SUMMARY_RUNS + 1
 
-    def test_sample_selection_plans_whole(self, gapped_patch):
-        """A sample selection resolves on the whole patch, so runs stay together."""
+    def test_sample_selection_applies_per_run(self, gapped_patch):
+        """Each run is a row, so a sample selection applies to each."""
         view = dc.spool([gapped_patch]).select(time=(-10, None), samples=True)
-        (out,) = view.chunk(time=None)
-        assert out.get_coord("time").shape == (10,)
+        outs = view.chunk(time=None)
+        assert [x.get_coord("time").shape for x in outs] == [(10,), (10,)]
 
     def test_time_after_distance(self, gapped_patch):
         """Chunking time after distance still splits at the hole."""

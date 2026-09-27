@@ -3107,10 +3107,10 @@ class TestChunkFillValue:
         first = random_patch.select(time=(0, 100), samples=True)
         second = random_patch.select(time=(600, 1000), samples=True)
         with pytest.warns(UserWarning, match="fill_value"):
-            gapped = dc.spool([first, second]).chunk(time=None, tolerance=600)[0]
+            gapped = dc.spool([first, second]).chunk(time=None, tolerance=600)
         # the selection resolves against the patch, so the plan describes
         # the whole of it rather than its runs, holes and all
-        spool = dc.spool([gapped]).select(time=(0.1, -0.1), relative=True)
+        spool = gapped.select(time=(0.1, -0.1), relative=True)
         with suppress_warnings(UserWarning):
             narrow = spool.chunk(time=None, tolerance=1, fill_value=np.nan)[0]
             wide = spool.chunk(time=None, tolerance=600, fill_value=np.nan)[0]
@@ -3134,16 +3134,6 @@ class TestChunkFillValue:
         # a hole wider than the tolerance is left as a boundary
         narrow = gapped_spool.chunk(time=None, tolerance=2 * step, fill_value=np.nan)
         assert len(narrow) == 2
-
-    def test_pending_sample_selection_still_chunks(self, random_patch):
-        """A selection the plan cannot describe leaves nothing to lend or fill."""
-        first = random_patch.select(time=(0, 100), samples=True)
-        second = random_patch.select(time=(600, 1000), samples=True)
-        with pytest.warns(UserWarning, match="fill_value"):
-            gapped = dc.spool([first, second]).chunk(time=None, tolerance=600)[0]
-        spool = dc.spool([gapped]).select(time=(0, 499), samples=True)
-        with suppress_warnings(UserWarning):
-            assert len(spool.chunk(time=None, tolerance=600, fill_value=np.nan)) == 0
 
     def test_integer_data_raises(self, gapped_spool):
         """Integers have no null, so NaN cannot be what a hole holds."""
@@ -3300,17 +3290,31 @@ class TestChunkFillWindows:
         all_fill = [bool(np.isnan(x.data).all()) for x in chunked]
         assert all_fill == [False] * 6 + [True] * 4 + [False] * 5
 
-    def test_windows_off_a_hidden_grid_are_refused(self, random_patch):
+    def test_window_shorter_than_a_step_is_refused(self):
         """A window holding no sample position is no output at all."""
-        first = random_patch.select(time=(0, 100), samples=True)
-        second = random_patch.select(time=(600, 1000), samples=True)
-        with pytest.warns(UserWarning, match="fill_value"):
-            gapped = dc.spool([first, second]).chunk(time=None, tolerance=600)[0]
-        # the selection resolves against the patch, so the partition
-        # envelope the windows are laid over is not stated on the grid
-        spool = dc.spool([gapped]).select(time=(0.1, -0.1), relative=True)
-        with suppress_warnings(UserWarning), pytest.raises(ChunkError, match="chunk"):
-            spool.chunk(time=0.5, tolerance=600, fill_value=np.nan)
+        patch = dc.Patch(
+            data=np.zeros((2, 40)),
+            coords={"distance": np.arange(2.0), "time": np.arange(40.0)},
+            dims=("distance", "time"),
+        )
+        with pytest.raises(ChunkError, match="chunk"):
+            dc.spool([patch]).chunk(time=0.3, fill_value=np.nan)
+
+    def test_one_sample_output_is_not_padded(self):
+        """An output of one descending sample states no step to pad by."""
+        time = dc.get_coord(start=39.0, step=-1.0, shape=(40,))
+        coords = {"distance": np.arange(2.0), "time": time}
+        patch = dc.Patch(
+            data=np.ones((2, 40)), coords=coords, dims=("distance", "time")
+        )
+        overlapping = patch.update_coords(time_min=time.max() - 7)
+        with suppress_warnings(UserWarning):
+            merged = dc.spool([patch, overlapping]).chunk(time=None, tolerance=50)
+            # the relative selection leaves the plan's windows off the grid
+            view = merged.select(time=(0.1, -0.1), relative=True)
+            first = view.chunk(time=2.5, tolerance=20, fill_value=np.nan)[0]
+        assert first.shape == (2, 1)
+        assert not np.isnan(first.data).any()
 
     def test_fill_window_needs_a_span_and_a_step(self, random_patch):
         """Neither the row's span nor the sibling's step can be missing."""

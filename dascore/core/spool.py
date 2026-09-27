@@ -1958,8 +1958,8 @@ class Spool(NodeRepr, NamespaceOwner):
         Return a dataframe with one row per gap along a dimension.
 
         Each row is a boundary that ``chunk`` would refuse to merge under the
-        same grouping and tolerance rules, including a hole inside a patch
-        whose coordinate is segmented.
+        same grouping and tolerance rules. A patch with holes enters a spool
+        as its contiguous pieces, so its holes are gaps like any other.
 
         Parameters
         ----------
@@ -1997,10 +1997,7 @@ class Spool(NodeRepr, NamespaceOwner):
 
         Overlapping and fully-nested patches never open a gap: each
         boundary is measured against the furthest point reached so far,
-        not the previous row. A patch whose coordinate is segmented into
-        runs of one step (such as a gapped patch merged in memory, or read
-        whole from a file) is read run by run, so the holes inside it are
-        reported too; one with more than 256 runs is read whole.
+        not the previous row.
 
         A sample-count tolerance scales the step, so patches whose step
         is unknown report no gaps. An absolute tolerance needs no step
@@ -2078,10 +2075,9 @@ class Spool(NodeRepr, NamespaceOwner):
         when the span is zero, meaning a single sample). `group_id`
         matches the gap frame's, so the two join on it.
 
-        Coverage is measured from the envelopes the index records: of
-        each patch, or of each run of a patch whose coordinate is
-        segmented into runs of one step (up to 256), so a hole inside such
-        a patch counts like one between patches. A hole is not visible in a
+        Coverage is measured from the envelopes the index records for
+        each patch; a patch with holes is a row per contiguous piece, so a
+        hole inside it counts like one between patches. A hole is not visible in a
         group whose step is unknown: a sample-count tolerance has nothing
         to scale there, so the group reports no gaps and counts as fully
         covered. An absolute tolerance does measure it.
@@ -2154,9 +2150,8 @@ class Spool(NodeRepr, NamespaceOwner):
             own units (eg `tolerance=1 * s` admits a spacing of one step
             plus a second), which also works for patches whose sampling
             interval is unknown. Either way a boundary of one sample is
-            contiguous. A hole inside a patch whose coordinate is segmented
-            into runs of one step (up to 256) is a gap like any other, so
-            each run can end an output or join a neighbouring patch. See
+            contiguous. A patch with holes is a row per contiguous piece, so
+            each piece can end an output or join a neighbouring patch. See
             `dascore.utils.gaps.GapTolerance`.
         conflict
             {conflict_desc}

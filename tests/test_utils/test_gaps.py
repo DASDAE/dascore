@@ -5,11 +5,12 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dascore.core.coords import get_coord
+from dascore.core.coords import concat_coords, get_coord
 from dascore.exceptions import ParameterError, UnitError
 from dascore.units import get_quantity
 from dascore.utils.gaps import (
     GapTolerance,
+    contiguous_windows,
     gap_boundaries,
     get_gap_edges,
     is_monotonic_and_finite,
@@ -193,7 +194,65 @@ class TestGapBoundaries:
         assert reach.tolist() == [30.0, 30.0, 30.0, 30.0]
         assert has_gap.tolist() == [False, False, False, True]
 
+    def test_unstated_steps(self):
+        """Rows stating no step (None) are measured without one."""
+        steps = np.array([None, None], dtype=object)
+        _, _, has_gap = gap_boundaries(
+            [0.0, 10.0], [5.0, 12.0], steps, GapTolerance.samples(1.5)
+        )
+        assert has_gap.tolist() == [False, False]
+
     def test_first_row_never_a_gap(self):
         """Nothing lies behind the first run."""
         _, _, has_gap = gap_boundaries([10.0], [12.0], [1.0], GapTolerance.samples(1.5))
         assert has_gap.tolist() == [False]
+
+
+class TestContiguousWindows:
+    """Positional windows between a coordinate's run boundaries and holes."""
+
+    def test_one_grid_is_one_window(self):
+        """An evenly sampled coordinate is a single window."""
+        assert contiguous_windows(get_coord(start=0, step=1, shape=(5,))) == [(0, 5)]
+
+    def test_runs_and_holes(self):
+        """Windows break at a run boundary and at each hole inside a run."""
+        coord = concat_coords(
+            get_coord(data=np.delete(np.arange(9), [2, 5]), step=1),
+            get_coord(start=20, step=1, shape=(3,)),
+        )
+        assert contiguous_windows(coord) == [(0, 2), (2, 4), (4, 7), (7, 10)]
+
+    def test_reverse_holes(self):
+        """A descending coordinate breaks at its holes too."""
+        coord = get_coord(data=np.array([9, 8, 7, 4, 3, 1, 0]), step=-1)
+        assert contiguous_windows(coord) == [(0, 3), (3, 5), (5, 7)]
+
+    def test_grids_of_differing_steps_split(self):
+        """Evenly sampled runs split even when they share no step."""
+        coord = concat_coords(
+            get_coord(start=0.0, step=1.0, shape=(3,)),
+            get_coord(start=3.0, step=1.5, shape=(3,)),
+        )
+        assert coord.runs_count == 2 and coord.step is None
+        assert contiguous_windows(coord) == [(0, 3), (3, 6)]
+
+    def test_irregular_runs_are_one_window(self):
+        """Runs including irregular labels and no shared step are not split."""
+        coord = concat_coords(
+            get_coord(start=0.0, step=1.0, shape=(3,)),
+            get_coord(data=np.array([3.0, 4.5, 7.0])),
+        )
+        assert coord.runs_count == 2 and coord.step is None
+        assert contiguous_windows(coord) == [(0, 6)]
+
+    @pytest.mark.parametrize(
+        "coord",
+        [
+            get_coord(data=np.array(["a", "b"])),
+            get_coord(data=np.sort(np.random.default_rng(1).random(9))),
+        ],
+    )
+    def test_nothing_to_split(self, coord):
+        """Strings and irregular labels without a step are one window."""
+        assert contiguous_windows(coord) == [(0, len(coord))]

@@ -43,6 +43,11 @@ def design_case():
     return get_coord(data=PRESENT, step=1)
 
 
+def _by_min(patches, dim="distance"):
+    """The patches in ascending order of a dimension's first label."""
+    return sorted(patches, key=lambda x: x.get_coord(dim).min())
+
+
 class TestDeclaredStep:
     """A step on array data declares the grid the values sit on."""
 
@@ -557,21 +562,21 @@ class TestReviewFindings:
         assert len(spool.chunk(distance=None, tolerance=GapTolerance.absolute(2))) == 1
         assert len(spool.chunk(distance=None, tolerance=GapTolerance.absolute(1))) == 2
 
-    def test_dasdae_round_trip(self, tmp_path):
-        """Version 2 stores a declared step; version 1 keeps the values alone."""
+    @pytest.mark.parametrize("version", ["1", "2"])
+    def test_dasdae_round_trip(self, tmp_path, version):
+        """Either version writes a dense coordinate with holes as its pieces."""
         dense = get_coord(data=np.arange(3000)[np.arange(3000) % 3 != 2], step=1)
         assert _is_stored(dense)
         time = dc.get_example_patch().get_coord("time")[:3]
         coords = {"distance": dense, "time": time}
         data = np.zeros((len(dense), 3))
         patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
-        back = dc.read(dc.write(patch, tmp_path / "v2.h5", "dasdae"))[0]
-        assert back.get_coord("distance") == dense
-        old = dc.read(dc.write(patch, tmp_path / "v1.h5", "dasdae", file_version="1"))[
-            0
-        ]
-        np.testing.assert_array_equal(old.get_coord("distance").values, dense.values)
-        assert old.get_coord("distance").step is None
+        path = dc.write(patch, tmp_path / "out.h5", "dasdae", file_version=version)
+        back = _by_min(dc.read(path), "distance")
+        assert len(back) == dense.missing().count + 1
+        assert all(x.get_coord("distance").evenly_sampled for x in back)
+        values = np.concatenate([x.get_coord("distance").values for x in back])
+        np.testing.assert_array_equal(values, dense.values)
 
     def test_offset_grids_share_no_step(self):
         """Runs of one step on grids half a step apart declare no common grid."""
@@ -741,15 +746,18 @@ class TestReviewRoundTwo:
         assert GapTolerance.samples(np.inf).count == np.inf
 
     def test_dasdae_keeps_declared_steps_on_array_segments(self, tmp_path):
-        """An array segment's declared step survives a version 2 round trip."""
+        """Array segments with a declared step are written as stepped pieces."""
         left = NumericCoord.from_labels(np.array([0.0, 2.0, 3.0]), step=1.0)
         right = NumericCoord.from_labels(np.array([6.0, 9.0, 11.0]), step=1.0)
         coord = concat_coords(left, right)
         base = dc.get_example_patch().select(distance=(0, 6), samples=True)
         patch = base.update_coords(distance=coord)
-        back = dc.read(dc.write(patch, tmp_path / "seg.h5", "dasdae"))[0]
-        assert back.get_coord("distance") == coord
-        assert back.get_coord("distance").step == 1.0
+        back = _by_min(dc.read(dc.write(patch, tmp_path / "seg.h5", "dasdae")))
+        pieces = list(dc.spool([patch]))
+        assert len(back) == len(pieces) == 5
+        for read, piece in zip(back, pieces, strict=True):
+            assert read.get_coord("distance") == piece.get_coord("distance")
+        assert back[1].get_coord("distance").step == 1.0
 
     def test_singleton_edges_use_the_declared_step(self, recwarn):
         """A single value with a step gets a cell of that width, without a warning."""
@@ -836,13 +844,14 @@ class TestReviewRoundThree:
         assert coord.runs_count == 1 and coord.sorted
 
     def test_descending_single_sample_segments(self, tmp_path):
-        """Segments of one sample keep the order they were written in."""
+        """Segments of one sample are written as pieces holding their data."""
         coord = get_coord(data=np.array([9, 7, 4]), step=1)
         base = dc.get_example_patch().select(distance=(0, 3), samples=True)
         patch = base.update_coords(distance=coord)
-        back = dc.read(dc.write(patch, tmp_path / "down.h5", "dasdae"))[0]
-        assert np.array_equal(back.get_coord("distance").values, [9, 7, 4])
-        assert np.array_equal(back.data, patch.data)
+        back = _by_min(dc.read(dc.write(patch, tmp_path / "down.h5", "dasdae")))[::-1]
+        values = np.concatenate([x.get_coord("distance").values for x in back])
+        assert np.array_equal(values, [9, 7, 4])
+        assert np.array_equal(np.concatenate([x.data for x in back]), patch.data)
 
     def test_unit_conversion_keeps_the_seam(self):
         """Converting units scales each run rather than re-reading the labels."""

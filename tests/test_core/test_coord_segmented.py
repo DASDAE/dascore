@@ -968,7 +968,7 @@ class TestSplitGapsAndWrite:
         coords = {"distance": [0, 1], "time": coord}
         data = np.zeros((2, len(coord)))
         patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
-        spool = patch.split_gaps("time")
+        spool = patch.split_gaps()
         assert len(spool) == coord.missing().count + 1 == 500
         assert all(x.get_coord("time").evenly_sampled for x in spool)
         assert np.shares_memory(spool[1].data, patch.data)
@@ -1024,25 +1024,11 @@ class TestSplitGapsAndWrite:
         assert len(spool) == 1
         assert spool[0] == patch
 
-    def test_split_gaps_explicit_dim(self, gapped_patch):
-        """A specific dimension can be requested."""
-        assert len(gapped_patch.split_gaps(dim="distance")) == 2
-        assert len(gapped_patch.split_gaps(dim="time")) == 1
-
-    def test_split_gaps_bad_dim(self, gapped_patch):
-        """Unknown dimensions raise."""
-        with pytest.raises(ParameterError, match="dim must be one of"):
-            gapped_patch.split_gaps(dim="bob")
-
-    def test_write_gapped_raises_by_default(self, gapped_patch, tmp_path):
-        """A format which cannot store gaps refuses a gapped patch."""
-        with pytest.raises(ParameterError, match="split=True"):
-            dc.write(gapped_patch, tmp_path / "gapped.h5", "dasdae", file_version="1")
-
-    def test_write_split_round_trip(self, gapped_patch, tmp_path):
-        """split=True writes contiguous patches that round trip exactly."""
+    @pytest.mark.parametrize("version", ["1", "2"])
+    def test_write_round_trip(self, gapped_patch, tmp_path, version):
+        """A gapped patch is written as contiguous patches that round trip."""
         path = tmp_path / "gapped.h5"
-        dc.write(gapped_patch, path, "dasdae", split=True)
+        dc.write(gapped_patch, path, "dasdae", file_version=version)
         spool = dc.spool(path)
         assert len(spool) == 2
         patches = sorted(spool, key=lambda p: p.get_coord("distance").min())
@@ -1051,15 +1037,15 @@ class TestSplitGapsAndWrite:
         coords = np.concatenate([p.get_coord("distance").values for p in patches])
         assert np.array_equal(coords, gapped_patch.get_coord("distance").values)
 
-    def test_write_split_single_patch_format_raises(self, gapped_patch, tmp_path):
-        """Formats that hold one patch per file raise cleanly."""
-        with pytest.raises(ParameterError, match="single patch per file"):
-            dc.write(gapped_patch, tmp_path / "gapped.wav", "wav", split=True)
+    def test_single_patch_format_refuses_the_pieces(self, gapped_patch, tmp_path):
+        """A format holding one patch per file refuses a gapped patch's pieces."""
+        with pytest.raises(ParameterError, match="Only single patch spools"):
+            dc.write(gapped_patch, tmp_path / "gapped.wav", "wav")
 
     def test_write_contiguous_unaffected(self, tmp_path):
-        """Normal patches write exactly as before, split flag or not."""
+        """Normal patches write exactly as before."""
         patch = dc.get_example_patch()
-        path = dc.write(patch, tmp_path / "normal.h5", "dasdae", split=True)
+        path = dc.write(patch, tmp_path / "normal.h5", "dasdae")
         assert path.exists()
 
     def test_write_file_backed_spool_unaffected(self, tmp_path):
@@ -1147,8 +1133,8 @@ class TestFromArray:
         assert get_quantity(coord.units) == get_quantity("m")
 
 
-class TestPlannedSpoolWriteGuard:
-    """The gap write guard covers plan-assembled spools (round-4 F3)."""
+class TestPlannedSpoolWrite:
+    """A plan-assembled patch with holes is written as its pieces too."""
 
     @pytest.fixture(scope="class")
     def gapped_planned_spool(self, tmp_path_factory):
@@ -1171,17 +1157,11 @@ class TestPlannedSpoolWriteGuard:
         assert not planned.has_live_patches
         return planned
 
-    def test_write_raises_without_split(self, gapped_planned_spool, tmp_path):
-        """Writing a gapped planned spool raises the documented error."""
-        with pytest.raises(ParameterError, match="split"):
-            dc.write(
-                gapped_planned_spool, tmp_path / "out.h5", "DASDAE", file_version="1"
-            )
-
-    def test_write_split_true(self, gapped_planned_spool, tmp_path):
-        """split=True writes each contiguous section as its own patch."""
+    @pytest.mark.parametrize("version", ["1", "2"])
+    def test_write_pieces(self, gapped_planned_spool, tmp_path, version):
+        """Each contiguous section is written as its own patch."""
         path = tmp_path / "out.h5"
-        dc.write(gapped_planned_spool, path, "DASDAE", split=True)
+        dc.write(gapped_planned_spool, path, "DASDAE", file_version=version)
         back = dc.spool(path)
         assert len(back) == 2
         for patch in back:
