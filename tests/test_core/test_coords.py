@@ -15,15 +15,17 @@ import numpy as np
 import pandas as pd
 import pytest
 import rich.text
+from pydantic import ValidationError
 
 import dascore as dc
 from dascore.compat import random_state
 from dascore.core.coords import (
     BaseCoord,
-    CoordPartial,
+    Blank,
     CoordString,
     CoordSummary,
     NumericCoord,
+    _blank_coord,
     get_coord,
 )
 from dascore.exceptions import CoordError, ParameterError
@@ -582,8 +584,8 @@ class TestCoordDataId:
 
     def test_metadata_which_does_not_fit_its_dtype_still_differs(self):
         """Conforming is a change of spelling, never a loss of value."""
-        first = CoordPartial(shape=(10,), dtype="int64", start=1.1, stop=11.1, step=1.0)
-        second = CoordPartial(
+        first = _blank_coord(shape=(10,), dtype="int64", start=1.1, stop=11.1, step=1.0)
+        second = _blank_coord(
             shape=(10,), dtype="int64", start=1.2, stop=11.2, step=1.0
         )
         assert first != second
@@ -646,10 +648,10 @@ class TestCoordDataId:
 
     def test_partial_coord_data_id_respects_metadata(self):
         """Partial coord ids must include scalar metadata."""
-        coord_1 = CoordPartial(
+        coord_1 = _blank_coord(
             shape=(3,), start=1, stop=4, step=1, dtype=np.dtype("int64")
         )
-        coord_2 = CoordPartial(
+        coord_2 = _blank_coord(
             shape=(3,), start=2, stop=5, step=1, dtype=np.dtype("int64")
         )
         assert coord_1 != coord_2
@@ -658,17 +660,17 @@ class TestCoordDataId:
     def test_partial_unit_spelling_is_part_of_the_id(self):
         """Partial coords are hashed in the units they state."""
         numbers = {"shape": (3,), "start": 1.0, "stop": 4.0, "step": 1.0}
-        coord_1 = CoordPartial(**numbers, units="m", dtype="float64")
-        coord_2 = CoordPartial(**numbers, units="km", dtype="float64")
-        bare = CoordPartial(**numbers, dtype="float64")
+        coord_1 = _blank_coord(**numbers, units="m", dtype="float64")
+        coord_2 = _blank_coord(**numbers, units="km", dtype="float64")
+        bare = _blank_coord(**numbers, dtype="float64")
         assert len({coord_1.data_id, coord_2.data_id, bare.data_id}) == 3
 
     def test_nearby_partial_coords_do_not_share_data_id(self):
         """Partial coords remain exact because equality for them is exact."""
-        coord_1 = CoordPartial(
+        coord_1 = _blank_coord(
             shape=(3,), start=1.0, stop=4.0, step=1.0, units="m", dtype="float64"
         )
-        coord_2 = CoordPartial(
+        coord_2 = _blank_coord(
             shape=(3,),
             start=1.0 + 1e-10,
             stop=4.0,
@@ -681,7 +683,7 @@ class TestCoordDataId:
 
     def test_partial_convert_units_preserves_null_scalars(self):
         """Null partial metadata should not be passed through conversion."""
-        coord = CoordPartial(
+        coord = _blank_coord(
             shape=(3,),
             start=np.nan,
             stop=400.0,
@@ -692,32 +694,32 @@ class TestCoordDataId:
         out = coord.convert_units("m")
         # The null start is left alone rather than converted; the two real
         # scalars are converted from cm.
-        assert np.isnan(out.start)
-        assert out.stop == 4.0
+        assert np.isnan(out.min())
+        assert out.max() == 4.0
         assert out.step == 1.0
         assert out.units == get_quantity("m")
 
     def test_partial_convert_units_without_existing_units_sets_units_only(self):
         """Unitless partial coords should take units without scalar conversion."""
-        coord = CoordPartial(
+        coord = _blank_coord(
             shape=(3,), start=1.0, stop=4.0, step=1.0, units=None, dtype="float64"
         )
         out = coord.convert_units("m")
         assert out.units == get_quantity("m")
-        assert out.start == coord.start
-        assert out.stop == coord.stop
+        assert out.min() == coord.min()
+        assert out.max() == coord.max()
         assert out.step == coord.step
 
     def test_partial_convert_units_preserves_partial_type(self):
         """Converting partial coord units should not upcast to a numeric coord."""
-        coord = CoordPartial(
+        coord = _blank_coord(
             shape=(3,), start=1.0, stop=4.0, step=1.0, units="m", dtype="float64"
         )
         out = coord.convert_units("km")
-        assert isinstance(out, CoordPartial)
+        assert out._partial
         assert out.units == get_quantity("km")
-        assert out.start == pytest.approx(0.001)
-        assert out.stop == pytest.approx(0.004)
+        assert out.min() == pytest.approx(0.001)
+        assert out.max() == pytest.approx(0.004)
         assert out.step == pytest.approx(0.001)
 
     def test_a_copy_does_not_keep_the_id_it_came_from(self):
@@ -745,7 +747,7 @@ class TestCoordDataId:
     @pytest.mark.parametrize(
         "coord",
         [
-            CoordPartial(shape=(3,), start=1, stop=4, step=1, dtype="int64"),
+            _blank_coord(shape=(3,), start=1, stop=4, step=1, dtype="int64"),
             get_coord(start=0, stop=3, step=1),
             get_coord(data=np.arange(3)),
             get_coord(data=np.array(["a", "b", "c"])),
@@ -1857,9 +1859,83 @@ class TestArrayCoord:
 class TestPartialCoord:
     """Tests for the Partial coordinate."""
 
+    def test_blank_beside_other_runs_raises(self):
+        """Unknown labels cannot sit inside a coordinate of known ones."""
+        grid = get_coord(start=0.0, stop=3.0, step=1.0).runs[0]
+        with pytest.raises(ValidationError, match="only run"):
+            NumericCoord(runs=(grid, Blank((2,))), dtype=np.float64)
+
+    def test_update_keeps_and_clears_metadata(self):
+        """An update states what it passes and keeps the rest."""
+        coord = get_coord(shape=4, units="m", dtype="float32", step=2)
+        assert coord.update(values=np.arange(4.0)).units == get_quantity("m")
+        assert coord.update(dtype="float64").dtype == np.float64
+        assert coord.update(units=None).units is None
+        assert coord.update(step=None).step is None
+
+    def test_pickle_after_values_stays_small(self):
+        """Reading the values caches no array a pickle would carry."""
+        coord = get_coord(shape=10_000)
+        before = len(pickle.dumps(coord))
+        assert not coord.values.flags.writeable
+        restored = pickle.loads(pickle.dumps(coord))
+        assert len(pickle.dumps(coord)) == before
+        assert not restored.values.flags.writeable
+
+    def test_dumped_full_range_canonicalizes(self):
+        """A dump stating a whole range rebuilds as that range."""
+        partial = _blank_coord(shape=(4,), start=0, stop=4, step=1)
+        out = get_coord(**partial.model_dump())
+        assert out.evenly_sampled
+        assert out == get_coord(start=0, stop=4, step=1)
+
+    def test_datetime_start_sets_dtype(self):
+        """Unstated, the dtype follows a time-like end."""
+        start = np.datetime64("2020-01-01T00:00:00", "ns")
+        coord = get_coord(shape=4, start=start)
+        assert coord._partial and coord.dtype == start.dtype
+        assert coord.to_summary().min == start
+
+    def test_timedelta_step_sets_dtype(self):
+        """A time-like step alone still makes a time coordinate."""
+        one = get_coord(shape=(5,), step=np.timedelta64(1, "s"))
+        assert one.dtype.kind == "m"
+        assert one.data_id != get_coord(shape=(5,), step=1.0).data_id
+
+    def test_update_limits_keeps_length(self):
+        """Unknown labels have no limits to move; only a step is applied."""
+        coord = get_coord(shape=(5,), step=1.0)
+        assert coord.update_limits(min=0.0, max=2.0).shape == (5,)
+
+    @pytest.mark.parametrize("shape", [-2, 1.5, (3, -1), True])
+    def test_bad_shape_raises(self, shape):
+        """A length is a non-negative integer, never rounded into one."""
+        with pytest.raises(CoordError, match="non-negative integers"):
+            get_coord(shape=shape)
+
+    def test_full_slice_keeps_metadata(self):
+        """Selecting every sample changes nothing."""
+        coord = _blank_coord(shape=(4,), start=10, step=1)
+        assert coord[:] is coord
+        assert coord[::2].shape == (2,)
+
+    def test_convert_units_widens_dtype(self):
+        """An end which is no longer whole widens an integer dtype."""
+        coord = get_coord(shape=3, start=1, dtype="int64", units="cm")
+        out = coord.convert_units("m")
+        assert out.dtype.kind == "f"
+        assert out.to_summary().min == pytest.approx(0.01)
+
+    def test_known_ends_survive_dump(self):
+        """A dump keeps the ends a partial coord states."""
+        coord = get_coord(shape=(4,), start=1.0, units="m")
+        rebuilt = NumericCoord(**coord.model_dump())
+        assert rebuilt == coord and rebuilt.min() == 1.0
+        assert rebuilt.data_id == coord.data_id
+
     def test_init_non_coord(self, basic_non_coord):
         """Ensure a non-coord can be created."""
-        assert isinstance(basic_non_coord, CoordPartial)
+        assert basic_non_coord._partial
 
     def test_str_repr(self, basic_non_coord):
         """Ensure NonCoord has a string repr."""
@@ -1870,7 +1946,7 @@ class TestPartialCoord:
         """Ensure update returns a new non coord."""
         out = basic_non_coord.update(shape=2)
         assert len(out) == 2
-        assert isinstance(out, CoordPartial)
+        assert out._partial
 
     def test_non_coord_eq_self(self, basic_non_coord):
         """Ensure non coords are equal to themselves."""
@@ -1878,7 +1954,7 @@ class TestPartialCoord:
 
     def test_shape_accepts_an_int(self):
         """A partial coord coerces an int shape like every other coord."""
-        assert CoordPartial(shape=5, dtype="float64").shape == (5,)
+        assert _blank_coord(shape=5, dtype="float64").shape == (5,)
 
     @pytest.mark.parametrize("unit", ["us", "ms", "s"])
     @pytest.mark.parametrize("kind", ["datetime64", "timedelta64"])
@@ -1892,7 +1968,7 @@ class TestPartialCoord:
         wrong one.
         """
         dtype = np.dtype(f"{kind}[{unit}]")
-        coord = CoordPartial(shape=(3,), dtype=dtype)
+        coord = _blank_coord(shape=(3,), dtype=dtype)
         assert coord.values.dtype == dtype
 
     @pytest.mark.parametrize("dtype", ["datetime64[ns]", "timedelta64[us]"])
@@ -1904,7 +1980,7 @@ class TestPartialCoord:
         """
         dtype = np.dtype(dtype)
         coord = get_coord(data=np.full(3, "NaT", dtype=dtype))
-        assert isinstance(coord, CoordPartial)
+        assert coord._partial
         assert coord.dtype == dtype
         assert coord.values.dtype == dtype
 
@@ -1920,7 +1996,7 @@ class TestPartialCoord:
         """
         dtype = np.dtype(dtype)
         coord = get_coord(data=np.full(3, np.nan, dtype=dtype))
-        assert isinstance(coord, CoordPartial)
+        assert coord._partial
         assert coord.dtype == dtype
         assert coord.values.dtype == dtype
 
@@ -1932,7 +2008,7 @@ class TestPartialCoord:
         saying "object" would state a dtype which `values` contradicts.
         """
         coord = get_coord(data=np.array([None, None, None]))
-        assert isinstance(coord, CoordPartial)
+        assert coord._partial
         assert coord.values.dtype == np.dtype("float64")
         assert coord.dtype in (None, np.dtype("float64"))
 
@@ -1946,7 +2022,7 @@ class TestPartialCoord:
         """Units are set the same way as on any other coord."""
         out = basic_non_coord.set_units("m")
         assert out.units == dc.get_quantity("m")
-        assert isinstance(out, CoordPartial)
+        assert out._partial
 
     def test_update_limits_only_touches_metadata(self):
         """There are no values to limit, so the stored scalars survive."""
@@ -1954,14 +2030,14 @@ class TestPartialCoord:
         out = coord.update_limits(units="m")
         assert out.units == dc.get_quantity("m")
         assert out.step == coord.step
-        assert isinstance(out, CoordPartial)
+        assert out._partial
 
     def test_dimensionless_shape_survives_dump(self):
         """A partial coord keeps its shape when defaults are excluded."""
         coord = get_coord(shape=())
         dumped = coord.model_dump(exclude_defaults=True)
-        assert dumped["shape"] == ()
-        assert CoordPartial(**dumped) == coord
+        rebuilt = get_coord(**dumped)
+        assert rebuilt.shape == () and rebuilt == coord
 
     def test_empty_update_equal(self, basic_non_coord):
         """Empty update should produce an equal coord."""
@@ -1970,7 +2046,7 @@ class TestPartialCoord:
 
     def test_bad_select_raises(self, basic_non_coord):
         """If relative or not samples NonCoord raises."""
-        match = "does not support relative and samples must"
+        match = "only by samples"
         with pytest.raises(CoordError, match=match):
             basic_non_coord.select((1, 2), relative=True)
         with pytest.raises(CoordError, match=match):
@@ -2007,7 +2083,7 @@ class TestPartialCoord:
 
     def test_bad_order_params_raise(self, basic_non_coord):
         """Ensure non coordinates cannot be ordered by value."""
-        match = "does not support relative and samples must"
+        match = "only by samples"
         with pytest.raises(CoordError, match=match):
             basic_non_coord.order((1, 2), relative=True)
         with pytest.raises(CoordError, match=match):
@@ -2046,17 +2122,17 @@ class TestPartialCoord:
         """An array of NaN should return uncoord."""
         array = np.empty(10) * np.nan
         out = get_coord(data=array)
-        assert isinstance(out, CoordPartial)
+        assert out._partial
 
     def test_start_stop(self):
         """Ensure start/stop/step are maintained in NonCoords."""
         coord = get_coord(shape=10, step=1)
-        assert isinstance(coord, CoordPartial)
+        assert coord._partial
         assert coord.step == 1
         # Test start/stop
         coord = get_coord(start=10, shape=10)
-        assert isinstance(coord, CoordPartial)
-        assert coord.start == 10
+        assert coord._partial
+        assert coord.min() == 10
         assert len(coord) == 10
 
     def test_length_zero(self):
@@ -2955,7 +3031,7 @@ class TestDimensionalityErrors:
     def partial_2d(self):
         """A 2D partial coordinate."""
         coord = get_coord(start=0, step=1, shape=(2, 3))
-        assert isinstance(coord, CoordPartial) and coord.ndim == 2
+        assert coord._partial and coord.ndim == 2
         return coord
 
     def test_select_sample_array_2d_raises(self, coord_2d):
@@ -2965,7 +3041,7 @@ class TestDimensionalityErrors:
 
     def test_select_sample_array_0d_raises(self):
         """A rank-0 coord must also be rejected, not just >1D."""
-        coord_0d = CoordPartial(shape=())
+        coord_0d = _blank_coord(shape=())
         assert coord_0d.ndim == 0
         with pytest.raises(CoordError, match="1D coords"):
             coord_0d.select(np.array([0, 1]), samples=True)
@@ -2992,7 +3068,7 @@ class TestDimensionalityErrors:
         # coord is 1D by construction; the multidimensional case can only be
         # a partial coordinate.
         coord = get_coord(start=0, step=1, shape=(2, 3))
-        assert isinstance(coord, CoordPartial)
+        assert coord._partial
         assert coord.shape == (2, 3)
 
 
@@ -3084,7 +3160,7 @@ class TestIndexCoordinate:
     @pytest.mark.parametrize("indexer", [slice(1, 4), np.array([3, 2, 1])])
     def test_partial_index_avoids_full_allocation(self, monkeypatch, indexer):
         """Selecting a few unknown positions must not allocate all their values."""
-        coord = CoordPartial(shape=(100_000_000,), units="m", dtype="float32")
+        coord = _blank_coord(shape=(100_000_000,), units="m", dtype="float32")
         original_empty = np.empty
 
         def bounded_empty(shape, *args, **kwargs):
@@ -3100,7 +3176,7 @@ class TestIndexCoordinate:
     @pytest.mark.parametrize("indexer", [0, np.int64(-1), (0,)])
     def test_partial_scalar_index(self, indexer):
         """Scalar positional indexing still returns a usable one-sample coord."""
-        coord = CoordPartial(shape=(10,), units="m", dtype="float32")
+        coord = _blank_coord(shape=(10,), units="m", dtype="float32")
         out = coord.index(indexer)
         assert out.shape == (1,)
         assert len(out) == 1
@@ -3110,7 +3186,7 @@ class TestIndexCoordinate:
 
     def test_partial_decimation_metadata(self):
         """Sample decimation preserves a partial coordinate's units and dtype."""
-        coord = CoordPartial(shape=(10,), units="m", dtype="float32")
+        coord = _blank_coord(shape=(10,), units="m", dtype="float32")
         patch = dc.Patch(
             data=np.arange(10), coords={"distance": coord}, dims=("distance",)
         )

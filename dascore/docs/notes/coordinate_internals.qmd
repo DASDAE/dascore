@@ -10,8 +10,7 @@ This note explains the current internal coordinate model in DASCore, with partic
 
 | Class | Purpose |
 |---|---|
-| `CoordPartial` | Shape and optional range metadata when coordinate values are unknown, empty, or entirely missing. |
-| [`NumericCoord`](`dascore.core.coords.NumericCoord`) | Every numeric, datetime, and timedelta coordinate, of any shape. |
+| [`NumericCoord`](`dascore.core.coords.NumericCoord`) | Every numeric, datetime, and timedelta coordinate, of any shape, including one whose labels are unknown (a single blank run). |
 | `CoordString` | String or categorical labels. |
 
 A `NumericCoord` holds its labels as an ordered tuple of *runs*, each either a [`Grid`](`dascore.core.coords.Grid`) or a [`Labels`](`dascore.core.coords.Labels`):
