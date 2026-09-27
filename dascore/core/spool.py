@@ -167,6 +167,14 @@ class _InventoryQuery(NamedTuple):
 _TIMES = _TIME_TYPES
 
 
+def _stamp_key(feature, label) -> tuple:
+    """A cut output's (feature_id, annotation), however a table spells blanks."""
+    return (
+        feature if isinstance(feature, str) else "",
+        None if pd.isna(label) else int(label),
+    )
+
+
 def _cut_pad(dim: str, pad, known: bool, timed: bool) -> list:
     """Normalize a cut pad to [before, after], refusing any other spelling."""
 
@@ -2283,8 +2291,9 @@ class Spool(NodeRepr, NamespaceOwner):
         Each feature, lone rows included, is cut to its bounds (see
         `AnnotationSet.bounds`) and merged across source patches along
         every dimension, as `chunk` merges, so a gap still leaves several
-        patches. All windows go into one chunk plan (and one more per
-        further dimension the patches are split along). Selection includes
+        patches. All windows go into one chunk plan per set of dimensions
+        the patches have, then one merge per further dimension; a patch
+        lacking a dimension a feature bounds is left out. Selection includes
         both ends, so the sample at a range's (half-open) maximum is kept;
         an empty range gives nothing. A feature spanning a dimension keeps
         the spool's full extent along it, one holding no samples gives
@@ -2316,11 +2325,11 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> cut = spool.cut(picks, time=("-1s", "3s"))
         >>> assert len(cut) == 1
         """
-        present = list(dict.fromkeys(x for y in self._df["dims"] for x in y.split(",")))
+        present = {x for dims in self._df["dims"] for x in dims.split(",")}
         dtypes = {"feature_id": "str", "annotation": "Int64"}  # as presented
         bounds, closed = annotations._extents()
         for dim, pad in pads.items():
-            known = dim in set(annotations.dims) & set(present)
+            known = dim in set(annotations.dims) & present
             timed = known and bounds[f"{dim}_min"].dtype.kind in "mM"
             pads[dim] = _cut_pad(dim, pad, known, timed)
         windows, stamps = [], []  # every refusal comes before any planning
@@ -2348,32 +2357,48 @@ class Spool(NodeRepr, NamespaceOwner):
             if window is not None:  # None: an empty range
                 windows.append(window)
                 stamps.append((row["feature_id"] or "", row["annotation"]))
-        if not windows or not present:
+        feature_ids, labels = np.array(stamps, dtype=object).reshape(-1, 2).T
+        cuts = []  # one plan per set of dims the patches have
+        for have, rows in self._df.groupby("dims", sort=False)["_patch_row"]:
+            have = str(have).split(",")
+            asks = [i for i, w in enumerate(windows) if set(w) <= set(have)]
+            if not asks:  # every window bounds a dim these patches lack
+                continue
+            part = self._restrict_to_rows(rows)
+            # the dim the patches are split along merges (ties: the dim
+            # most windows constrain); the others trim
+            split = {x: part._df[f"{x}_min"].nunique() for x in have}
+            counts = {x: sum(x in windows[i] for i in asks) for x in have}
+            main = min(have, key=lambda x: (-split[x], -counts[x]))
+            dims = [main, *(x for x in have if counts[x] and x != main)]
+            ends = [[windows[i].get(x, (None,) * 2) for i in asks] for x in dims]
+            arrays = {x: np.array(y) for x, y in zip(dims, ends, strict=True)}
+            source_rows, plan = part._build_chunk_plan(
+                arrays, keep_partial=True, on_incomplete="ignore"
+            )
+            if plan.outputs.empty:
+                continue
+            asked = np.take(asks, plan.outputs["_request_row"])
+            outputs = plan.outputs.assign(
+                feature_id=np.take(feature_ids, asked),
+                annotation=pd.array(np.take(labels, asked), "Int64"),
+            )
+            out = part._chunked(source_rows, replace(plan, outputs=outputs), dtypes)
+            # merging along the other dims too splits their holes, per feature
+            for dim in (x for x in have if x != main):
+                kinds = [x for x in dc.get_config().patch_kind_attrs if x in out._df]
+                out = out.chunk(**{dim: None}, group=[*kinds, *dtypes])
+            cuts.append(out)
+        if not cuts:
             return self._new_from_catalog(
                 self._restrict_to_rows([])._materialize_lossy({}, dtypes)
             )
-        # the dim the patches are split along merges (ties: the dim most
-        # windows constrain); the others trim
-        split = {x: self._df[f"{x}_min"].nunique() for x in present}
-        counts = {x: sum(x in w for w in windows) for x in present}
-        main = min(present, key=lambda x: (-split[x], -counts[x]))
-        dims = [main, *(x for x in present if counts[x] and x != main)]
-        arrays = {x: np.array([w.get(x, (None,) * 2) for w in windows]) for x in dims}
-        source_rows, plan = self._build_chunk_plan(
-            arrays, keep_partial=True, missing_dim="drop", on_incomplete="ignore"
-        )
-        feature_ids, labels = (np.array(x, dtype=object) for x in zip(*stamps))
-        rows = plan.outputs["_request_row"]
-        outputs = plan.outputs.assign(
-            feature_id=np.take(feature_ids, rows),
-            annotation=pd.array(np.take(labels, rows), "Int64"),
-        )
-        out = self._chunked(source_rows, replace(plan, outputs=outputs), dtypes)
-        # patches split along more dims merge along those too, per feature
-        kinds = [x for x in dc.get_config().patch_kind_attrs if x in self._df]
-        for dim in (x for x in present if split[x] > 1 and x != main):
-            out = out.chunk(**{dim: None}, group=[*kinds, *dtypes], missing_dim="drop")
-        return out
+        out = cuts[0] if len(cuts) == 1 else sum(cuts[1:], cuts[0])
+        # back into feature order, a gap's pieces together
+        rank = {_stamp_key(*x): i for i, x in enumerate(stamps)}
+        keys = out._df[list(dtypes)].astype(object).itertuples(index=False)
+        order = np.argsort([rank[_stamp_key(*x)] for x in keys], kind="stable")
+        return out._new_from_catalog(out._catalog.restrict(order))
 
     @compose_docstring(conflict_desc=attr_conflict_description)
     def concatenate(
