@@ -9,7 +9,7 @@ from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import replace
 from datetime import timedelta
-from functools import singledispatch
+from functools import partial, singledispatch
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, Self, TypeVar, overload
 
@@ -83,6 +83,7 @@ from dascore.utils.chunk_plan import (
     _ensure_patch_row,
     _resolve_group_attrs,
     _structural,
+    _trim_explicit,
     build_chunk_plan,
     build_concat_plan,
     build_coverage_frame,
@@ -575,9 +576,10 @@ class Spool(NodeRepr, NamespaceOwner):
             envelopes. Exact sample selection occurs when a patch loads.
         **kwargs
             Specifies query. A coordinate accepts one ``(start, stop)`` range
-            or an ``(n, 2)`` array of absolute ranges, alone or beside others
-            as `chunk` takes them. Array rows select independently in input
-            order, so overlaps and duplicates return separate source pieces.
+            or an ``(n, 2)`` array of absolute ranges (``None``, NaN or NaT
+            is open); arrays on several coordinates need equal row counts,
+            row ``i`` of each forming one box. Rows select independently in
+            input order, so overlaps and duplicates return separate pieces.
             Array ranges do not support ``samples=True`` or
             ``relative=True``. Attribute selectors retain their usual meaning.
 
@@ -1796,10 +1798,14 @@ class Spool(NodeRepr, NamespaceOwner):
         source_rows, working = self._plan_frames(name, runs=True)
         windows = explicit_windows(dim_kwargs)
         refuse_riders(windows, source_rows)
-        exact = {
-            dim: known_coordinates(self._catalog, source_rows, dim) for dim in windows
-        }
-        plan = build_chunk_plan(working, _exact_coords=exact, **params, **dim_kwargs)
+        exact = {}
+        if name in windows:
+            exact = known_coordinates(self._catalog, source_rows, name)
+        kwargs = dim_kwargs | windows  # validated once
+        plan = build_chunk_plan(working, _exact_coords=exact, **params, **kwargs)
+        if trims := {k: v for k, v in windows.items() if k != name}:
+            lookup = partial(known_coordinates, self._catalog)  # members' only
+            plan = _trim_explicit(plan, source_rows, trims, lookup)
         return source_rows, coalesce_runs(plan, working)
 
     def chunk_plan(
@@ -2196,9 +2202,9 @@ class Spool(NodeRepr, NamespaceOwner):
             endpoints, in input order. Overlapping and duplicate windows
             produce separate outputs. Explicit windows do not accept
             ``overlap``; quantities in their bounds are absolute points.
-            ``None``, NaN or NaT leaves a bound open. Several dimensions may
-            take arrays with one row per window: the first is chunked and the
-            others trim (see the chunking notes for the full rules).
+            ``None``, ``...``, NaN, NaT or a signed infinity is open. Arrays on
+            several dimensions need equal row counts, row ``i`` of each one
+            window: the first is chunked, the others trim (see the notes).
 
         Examples
         --------

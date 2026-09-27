@@ -585,7 +585,7 @@ class PlanResolver(PatchResolver):
         # plan invariant: outputs without members must never be published
         self.token = token
         self.dim = dim
-        self.trim_dims = tuple(trim_dims)  # other dims explicit windows trim
+        self.trim_dims = tuple(trim_dims)  # dims besides `dim` windows trim
         rows = member_rows.reset_index(drop=True)
         # What the index measured of each member's source, held beside
         # the rows rather than in them: every output slices this frame,

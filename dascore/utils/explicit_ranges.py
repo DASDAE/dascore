@@ -31,6 +31,8 @@ def looks_explicit(value) -> bool:
 
 def explicit_ranges(value) -> ExplicitRanges | None:
     """Return validated window rows, or None for an existing input form."""
+    if isinstance(value, ExplicitRanges):  # already validated
+        return value
     if not looks_explicit(value):
         if isinstance(value, np.ndarray) and value.ndim == 1:
             msg = "Explicit ranges must have shape (n, 2), not a 1D array."
@@ -110,7 +112,7 @@ def explicit_ranges(value) -> ExplicitRanges | None:
 
 
 def explicit_windows(values: Mapping) -> dict[str, ExplicitRanges]:
-    """Return the explicit ranges in ``values``; each needs one row per request."""
+    """Return the explicit ranges in ``values``; all must have one row count."""
     out = {k: r for k, v in values.items() if (r := explicit_ranges(v)) is not None}
     counts = {name: len(ranges.rows) for name, ranges in out.items()}
     if len(set(counts.values())) > 1:
@@ -242,10 +244,10 @@ def _planned_manager(plan, row, files=None, projection=None):
         if coords is None:
             return None
         coords = _select_manager(coords, plan.parent_residuals)
-        trimmed = [x for x in plan.trim_dims if x in coords.coord_map]
-        for dim in (plan.dim, *trimmed):
+        planned = (plan.dim, *plan.trim_dims)
+        for dim in [x for x in planned if x in coords.coord_map]:
             native = coords.coord_map[dim].units
-            unit = member.get(f"_{dim}_units")
+            unit = member.get(f"_{dim}_units") if dim == plan.dim else None
             if member.get("_modified"):
                 low, high = member.get(f"{dim}_min"), member.get(f"{dim}_max")
                 if native is not None and unit is not None and not pd.isnull(unit):

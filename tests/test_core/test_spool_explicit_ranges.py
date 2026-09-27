@@ -1,8 +1,10 @@
 """Independent bounded windows for spool selection and chunking."""
 
 import pickle
+import re
 import threading
 from dataclasses import replace
+from unittest.mock import Mock
 
 import numpy as np
 import pytest
@@ -13,7 +15,6 @@ from dascore.examples import inventory_patch_pair
 from dascore.exceptions import ChunkError, MissingPatchError, ParameterError, UnitError
 from dascore.io.dasdae.core import DASDAEV1, DASDAEV2
 from dascore.io.index.catalog import PatchCatalog
-from dascore.io.index.planned import PlanResolver
 from dascore.units import get_quantity, m, s
 from dascore.utils.chunk_plan import _ensure_patch_row
 from dascore.utils.explicit_ranges import known_coordinates
@@ -1434,6 +1435,17 @@ class TestExplicitBoxes:
         assert _boxes(spool.chunk(distance=distance, time=time)) == expected
         split = spool.chunk(distance=150).chunk(time=_t(1, 2), distance=_d(10, 20))
         assert _boxes(split) == [((1, 2), (10, 20))]
+        # a group the box misses on another dim needs no main-dim coverage
+        coords = {"x": np.arange(10), "y": np.arange(5)}
+        first = dc.Patch(np.ones((10, 5)), coords=coords, dims=("x", "y"))
+        rest = first.select(x=(0, 2)).update_coords(y=coords["y"] + 10)
+        pair = dc.spool([first, rest])
+        box = [((0, 8), (0, 2))]
+        assert _boxes(pair.chunk(x=_d(0, 8), y=_d(0, 2)), "xy") == box
+        assert _boxes(pair.chunk(y=_d(0, 2), x=_d(0, 8)), "xy") == box
+        # trimmed dims never merge, so a box across files needs time first
+        with pytest.raises(ChunkError, match="only the first dim merges"):
+            spool.chunk(distance=distance, time=_t(7, 9))
 
     def test_chunk_boxes_across_files(self, spool, tmp_path, monkeypatch):
         """Each window merges across files, trims both dims, and loads lazily."""
@@ -1441,12 +1453,13 @@ class TestExplicitBoxes:
             patch.io.write(tmp_path / f"{number}.h5", "DASDAE")
         files = dc.spool(tmp_path).update(progress=None)
         time, distance = _t(7, 9, 15, 17), _d(10, 20, 200, 299)
-        load = PlanResolver._load_member
-        monkeypatch.setattr(PlanResolver, "_load_member", pytest.fail)  # no loads
-        out = files.chunk(time=time, distance=distance)
-        assert len(out.get_contents()) == 2
-        assert len(files.select(time=time, distance=distance).get_contents()) == 4
-        monkeypatch.setattr(PlanResolver, "_load_member", load)
+        with monkeypatch.context() as patched:  # no data is read while planning
+            for reader in (DASDAEV1, DASDAEV2):
+                patched.setattr(reader, "read_array", pytest.fail)
+                patched.setattr(reader, "read", pytest.fail)
+            out = files.chunk(time=time, distance=distance)
+            assert len(out.get_contents()) == 2
+            assert len(files.select(time=time, distance=distance).get_contents()) == 4
         assert _boxes(out) == [((7, 9), (10, 20)), ((15, 17), (200, 299))]
         whole = spool.chunk(time=None)[0]
         expected = whole.select(time=tuple(time[0]), distance=(10, 20))
@@ -1475,11 +1488,29 @@ class TestExplicitBoxes:
         assert [x[1] for x in _boxes(ignored)] == [(0, 5)]
         kept = spool.chunk(keep_partial=True, on_incomplete="ignore", **kwargs)
         assert [x[1] for x in _boxes(kept)] == [(0, 5), *partial]
-        # a trim unmet in one compatible group leaves the other's output
+
+    def test_unmet_trim_fails_its_group(self, spool):
+        """A trim incomplete in one compatible group fails that group alone."""
         narrow = spool[0].update_attrs(tag="b").select(distance=(0, 100))
         tagged = dc.spool([spool[0].update_attrs(tag="a"), narrow])
-        out = tagged.chunk(on_incomplete="ignore", time=_t(0, 1), distance=_d(50, 150))
+        windows = dict(time=_t(0, 1), distance=_d(50, 150))
+        with pytest.raises(ChunkError) as error:
+            tagged.chunk(**windows)
+        assert re.findall(r"group \d+_\d+, dim distance", str(error.value)) != []
+        assert str(error.value).count("group") == 1
+        out = tagged.chunk(on_incomplete="ignore", **windows)
         assert [x[1] for x in _boxes(out)] == [(50, 150)] and out[0].attrs.tag == "a"
+
+    def test_trim_scans_only_touched_files(self, tmp_path, monkeypatch):
+        """A trim reads coordinates only from the files a box touches."""
+        for number, patch in enumerate(dc.get_example_spool("random_das", length=6)):
+            distance = patch.get_coord("distance").values * 1.02  # float: scanned
+            patch = patch.update_coords(distance=distance)
+            patch.io.write(tmp_path / f"{number}.h5", "DASDAE")
+        files = dc.spool(tmp_path).update(progress=None)
+        monkeypatch.setattr(dc, "scan_payloads", scan := Mock(wraps=dc.scan_payloads))
+        assert len(files.chunk(time=_t(1, 2), distance=_d(10.2, 20.4))) == 1
+        assert scan.call_count == 1
 
     @pytest.mark.parametrize("case", ["first", "mixed", "size", "fill", "depth"])
     def test_refusals(self, case):
@@ -1511,6 +1542,15 @@ class TestExplicitBoxes:
             for method in (mixed.select, mixed.chunk):
                 out = method(time=_t(0, 1), distance=distance)
                 assert len({p.dims for p in out}) == len(out) == count
+        # patches lacking an open first dim load; an untouched one keeps its size
+        mixed = dc.spool([spool[0], spool[0].select(time=(None, T0)).squeeze("time")])
+        t, d = _t(None, None), _d(1, 3)
+        outs = mixed.select(time=t, distance=d), mixed.chunk(distance=d, time=t)
+        for out in (*outs, mixed.select(distance=d, time=t)):
+            assert [p.shape for p in out] == [(3, 2000), (3,)]
+        opened = mixed.select(distance=_d(None, None), time=t)
+        sizes = [x.get_contents()["data_size"].tolist() for x in (opened, mixed)]
+        assert sizes[0] == sizes[1]
         spanned = spool.chunk(time=_t(0, 1), distance=_d(None, None))
         assert spanned[0].attrs.data_id == spool.chunk(time=_t(0, 1))[0].attrs.data_id
         # NaT leaves either end open on a duration coordinate too
@@ -1545,7 +1585,7 @@ class TestExplicitBoxes:
             _d(0.5, 2.5),
         )
         rows = make(np.arange(5.0)).chunk_plan(time=time, distance=inner).outputs
-        assert rows[["distance_min", "distance_max"]].values.tolist() == [[1, 2]]
+        assert _listed(rows) == [[1, 2]]
         spanned = make(uneven).chunk_plan(time=time, distance=_d(None, None))
         assert len(spanned.outputs) == 1
         with pytest.raises(ChunkError, match="coordinates are unavailable"):

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import Any
 
 from dascore.io.index.catalog import PatchCatalog
@@ -39,7 +40,7 @@ class ExplicitSelectCatalog:
     """Build independent source pieces when the parent relation is requested."""
 
     parent: Any
-    ranges: dict[str, ExplicitRanges]  # the first dim is subdivided
+    ranges: dict[str, ExplicitRanges]
     operations: tuple = ()
     _cached: PatchCatalog | None = field(default=None, init=False, repr=False)
     _source_revision: int = field(default=-1, init=False, repr=False)
@@ -72,13 +73,12 @@ class ExplicitSelectCatalog:
             selected = selected.reset_index(drop=True)
             spans = selected[[f"{first}_min", f"{first}_max"]].to_numpy()
             plan = build_subdivision_plan(selected, [[tuple(x)] for x in spans], first)
+            plan.members["_modified"] = False  # whole rows, even a NaN span
             # Identity is bookkeeping, never a patch attribute.
             plan.outputs["_request_row"] = [n for n, x in enumerate(frames) for _ in x]
-            exact = {
-                x: known_coordinates(self.parent, selected, x) for x in self.ranges
-            }
-            args = (selected, self.ranges, exact, True, "ignore", True)
-            plan = _trim_explicit(plan, *args)
+            lookup = partial(known_coordinates, self.parent)
+            plan.params.update(keep_partial=True, on_incomplete="ignore")
+            plan = _trim_explicit(plan, selected, self.ranges, lookup, strict=True)
             catalog = derived_catalog(
                 source_rows=source,
                 plan=plan,

@@ -164,13 +164,13 @@ def _plan_trim_kwargs(patch, kwargs, plan_dim, trim_dims=()) -> dict:
     sorted numeric range but not for a string coordinate (a range of
     labels), one holding NaN (missing values fall outside every range),
     or one which cannot be range-selected at all. A trim spanning the patch
-    (or on a dim it lacks) is dropped too, so the patch keeps its id.
+    (or on a dim it lacks) is dropped too, so the patch keeps its id; only
+    an open select window admits a patch lacking the plan's own dim.
     """
-    if plan_dim not in kwargs:  # an unmodified member states no range
-        return {}
     coord_map = patch.coords.coord_map
-    assert plan_dim in coord_map, "the plan's dimension is on every member"
-    out = {plan_dim: kwargs[plan_dim]}
+    # an unmodified member states no range
+    has_dim = plan_dim in kwargs and plan_dim in coord_map
+    out = {plan_dim: kwargs[plan_dim]} if has_dim else {}
     for dim in trim_dims:
         (low, high), coord = kwargs.get(dim, (None, None)), coord_map.get(dim)
         if coord is not None and low is not None:
@@ -921,8 +921,8 @@ class PatchAssembler:
                     return None
                 coord, span, length = placed
             else:
-                # The plan narrows its own dimension and no other, so
-                # every envelope here is its source's own.
+                # Only the plan's dimension is trimmed here (a trim-dim plan
+                # withholds the source range, so never takes this path).
                 coord = coord_at_stored_unit(
                     coord_from_row(row, dim, units=units), row, dim
                 )
