@@ -9,7 +9,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import InvalidSpoolError, PatchError, UnitError
+from dascore.exceptions import InvalidSpoolError, ParameterError, PatchError, UnitError
 from dascore.io.prodml.core import ProdMLV2_0, ProdMLV2_1
 from dascore.units import get_quantity_str
 from dascore.utils.misc import suppress_warnings, unbyte
@@ -70,12 +70,13 @@ class TestProdMLWriteDispatch:
             prodml_patch.io.write(path, "PRODML", file_version="2.1")
         assert dc.get_format(path) == ("PRODML", "2.1")
 
-    def test_write_accepts_forwarded_kwargs(self, prodml_patch, tmp_path):
-        """Format-specific keywords should follow the shared writer contract."""
-        path = dc.write(
-            prodml_patch, tmp_path / "kwargs.h5", "PRODML", unused_option=True
-        )
-        assert dc.get_format(path) == ("PRODML", "2.1")
+    def test_write_refuses_unknown_kwargs(self, prodml_patch, tmp_path):
+        """An option the writer does not name should raise, naming the writer."""
+        path = tmp_path / "kwargs.h5"
+        match = r"PRODML writer does not accept option\(s\) \['unused_option'\]"
+        with pytest.raises(ParameterError, match=match):
+            dc.write(prodml_patch, path, "PRODML", unused_option=True)
+        assert not path.exists()
 
 
 class TestProdMLWriteLayout:
@@ -469,3 +470,37 @@ class TestProdMLWriteValidation:
         patch = prodml_patch.update_coords(distance=distance)
         with pytest.raises(PatchError, match=r"locus|start|distance"):
             dc.write(patch, tmp_path / "start_locus.h5", "PRODML")
+
+
+class TestProdMLWriteEncoding:
+    """The encoding should set the storage of RawData and RawDataTime."""
+
+    def test_datasets(self, prodml_patch, tmp_path):
+        """Both arrays take their filters, chunks clamp, and it round trips."""
+        opts = {"zlib": True, "complevel": 3, "shuffle": True}
+        encoding = {"data": {**opts, "chunksizes": (2, 100)}, "time": opts}
+        path = dc.write(prodml_patch, tmp_path / "enc.h5", "PRODML", encoding=encoding)
+        with h5py.File(path, "r") as file:
+            raw = file["Acquisition/Raw[0]"]
+            data, time = raw["RawData"], raw["RawDataTime"]
+            for array in (data, time):
+                assert (array.compression, array.compression_opts) == ("gzip", 3)
+            assert data.chunks == (2, prodml_patch.shape[1])
+        assert dc.read(path, "PRODML")[0] == prodml_patch.update_attrs(tag="")
+
+    @pytest.mark.parametrize(
+        "encoding, error, match",
+        [
+            ({"distance": {}}, KeyError, "distance"),  # PRODML stores no array
+            ({"data": {"zlib": True, "complevel": 99}}, ValueError, "GZIP"),
+        ],
+    )
+    def test_bad_encoding(self, prodml_patch, tmp_path, encoding, error, match):
+        """A bad encoding leaves an existing file as it was."""
+        path = dc.write(prodml_patch, tmp_path / "keep.h5", "PRODML")
+        before = dc.spool(path)[0]
+        with pytest.raises(error, match=match):
+            dc.write(prodml_patch, path, "PRODML", encoding=encoding)
+        with h5py.File(path, "r") as file:
+            assert set(file) == {"Acquisition"}
+        assert dc.spool(path)[0] == before

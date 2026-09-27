@@ -21,7 +21,7 @@ from dascore.io.utils import (
 )
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.units import get_quantity_str
-from dascore.utils.hdf5 import encode_h5_strings
+from dascore.utils.hdf5 import create_dataset, encode_h5_strings, staged_group
 from dascore.utils.misc import iterate, maybe_get_items, register_func, unbyte
 
 # --- Getting format/version
@@ -468,23 +468,23 @@ def _prepare_prodml_write(spool):
     )
 
 
-def _write_prodml(spool, resource):
+def _write_prodml(spool, resource, options):
     """Write one raw Patch to a standalone ProdML 2.1 HDF5 file."""
     prepared = _prepare_prodml_write(spool)
     data, times, file_uuid, acq_attrs, raw_attrs, data_attrs, time_attrs = prepared
     h5_file = getattr(resource, "_handle", resource)
-    for key in list(h5_file):
-        del h5_file[key]
-    h5_file.attrs.clear()
-    h5_file.attrs["uuid"] = file_uuid
-    acquisition = h5_file.create_group("Acquisition")
-    acquisition.attrs.update(acq_attrs)
-    raw = acquisition.create_group("Raw[0]")
-    raw.attrs.update(raw_attrs)
-    raw_data = raw.create_dataset("RawData", data=data)
-    raw_data.attrs.update(data_attrs)
-    raw_time = raw.create_dataset("RawDataTime", data=times)
-    raw_time.attrs.update(time_attrs)
+    with staged_group(h5_file, "/Acquisition") as acquisition:
+        acquisition.attrs.update(acq_attrs)
+        raw = acquisition.create_group("Raw[0]")
+        raw.attrs.update(raw_attrs)
+        raw_data = create_dataset(raw, "RawData", data, options.get("data"))
+        raw_data.attrs.update(data_attrs)
+        raw_time = create_dataset(raw, "RawDataTime", times, options.get("time"))
+        raw_time.attrs.update(time_attrs)
+        for key in set(h5_file) - {acquisition.name[1:]}:
+            del h5_file[key]
+        h5_file.attrs.clear()
+        h5_file.attrs["uuid"] = file_uuid
 
 
 def _get_node_dims(node_info) -> tuple[str, ...]:

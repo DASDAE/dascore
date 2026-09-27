@@ -291,21 +291,6 @@ class TestNetCDFCoreHelpers:
         with h5py.File(path, "r") as h5file:
             assert formatter.get_format(h5file) == ("NETCDF_CF", "1.8")
 
-    def test_get_write_encoding_invalid_compression_raises(self):
-        """Write encoding should reject unsupported compression values."""
-        formatter = netcdf_core.NetCDFCFV18()
-
-        with pytest.raises(ValueError, match="only gzip compression"):
-            formatter._get_write_encoding(compression="szip")
-
-    def test_get_write_encoding_explicit_chunks(self):
-        """Write encoding should pass explicit chunk sizes through."""
-        formatter = netcdf_core.NetCDFCFV18()
-
-        out = formatter._get_write_encoding(chunks=(10, 20))
-
-        assert out["chunksizes"] == (10, 20)
-
     def test_read_returns_empty_spool_for_empty_filtered_patch(
         self, minimal_cf_netcdf_path
     ):
@@ -627,8 +612,7 @@ class TestNetCDFEdgeCases:
             patch,
             path,
             file_format="netcdf_cf",
-            compression="gzip",
-            compression_opts=9,
+            encoding={"data": {"zlib": True, "complevel": 9, "chunksizes": (10, 20)}},
         )
         return path, patch
 
@@ -659,6 +643,9 @@ class TestNetCDFEdgeCases:
         np.testing.assert_array_almost_equal(
             original_patch.data, recovered_patch.data, decimal=6
         )
+        with h5py.File(path) as h5:
+            data = h5["data"]
+            assert (data.compression_opts, data.chunks) == (9, (10, 20))
 
 
 class TestNetCDFUtilsAdvanced:

@@ -11,7 +11,7 @@ import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
-from dascore.utils.hdf5 import H5Reader, H5Writer
+from dascore.utils.hdf5 import H5Reader, H5Writer, h5_encoding
 from dascore.utils.misc import unbyte
 from dascore.utils.patch import get_patch_names
 
@@ -55,6 +55,7 @@ class DASDAEV1(FiberIO):
         self,
         spool: dc.Patch | dc.Spool,
         resource: H5Writer,
+        encoding: dict | None = None,
         **kwargs,
     ):
         """
@@ -66,7 +67,10 @@ class DASDAEV1(FiberIO):
             A collection of patches or a spool (same thing).
         resource
             The path to the file.
+        encoding
+            Per-variable storage options, as xarray's ``to_netcdf`` takes.
         """
+        options = h5_encoding(encoding)
         # write out patches
         _write_meta(resource, self.version)
         # get an iterable of patches and save them
@@ -81,11 +85,14 @@ class DASDAEV1(FiberIO):
         # loudly if the name pass and patch pass ever disagree in length.
         patch_names = get_patch_names(patches).values
         counts: dict[str, int] = {}
+        variables = {"data"}  # a variable need only belong to one patch
         for patch, name in zip(patches, patch_names, strict=True):
             num = counts.get(name, 0)
             counts[name] = num + 1
             unique_name = name if num == 0 else f"{name}__{num}"
-            _save_patch(patch, waveforms, unique_name, compact=self._compact_coords)
+            variables.update(patch.coords.coord_map)
+            _save_patch(patch, waveforms, unique_name, self._compact_coords, options)
+        h5_encoding(encoding, variables)
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""

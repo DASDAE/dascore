@@ -2152,6 +2152,15 @@ def _maybe_split_gapped_patches(spool, fiber_io, split):
     return dc.spool(patches)
 
 
+def _check_write_kwargs(fiber_io, kwargs):
+    """Refuse options the format's writer does not name."""
+    params = list(inspect.signature(fiber_io.write).parameters.values())[2:]
+    allowed = [x.name for x in params if x.kind != x.VAR_KEYWORD]
+    if unknown := sorted(set(kwargs) - set(allowed)):
+        msg = f"The {fiber_io.name} writer does not accept option(s) {unknown}"
+        raise ParameterError(f"{msg}; it accepts {allowed}.")
+
+
 # write hands back the path it was given, so the return follows the
 # argument rather than collapsing to the union: a Path in, a Path out.
 _PathT = TypeVar("_PathT", bound=path_types)
@@ -2187,6 +2196,8 @@ def write(
         a format which stores gapped patches (DASDAE version 2) writes them
         whole and any other raises a
         [`ParameterError`](`dascore.exceptions.ParameterError`).
+    **kwargs
+        Options the format's writer names, such as ``encoding``.
 
     Raises
     ------
@@ -2194,6 +2205,7 @@ def write(
         - Could not determine the fiber format.
     [`ParameterError`](`dascore.exceptions.ParameterError`)
         - The path is an ``examples://`` name, which is read-only.
+        - An option the format's writer does not accept.
 
     Examples
     --------
@@ -2218,6 +2230,7 @@ def write(
         )
         raise ParameterError(msg)
     fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=file_version)
+    _check_write_kwargs(fiber_io, kwargs)
     if not isinstance(patch_or_spool, dc.Spool):
         patch_or_spool = dc.spool([patch_or_spool])
     patch_or_spool = _maybe_split_gapped_patches(patch_or_spool, fiber_io, split)
