@@ -1728,29 +1728,14 @@ def build_chunk_plan(
                 else []
             )
             starts_list, stops_list, requests_p = [], [], []
+            coords = part_coords if fill_value is None else ()
             for request, bounds in enumerate(explicit.rows):
-                low, high = _explicit_bounds_for_partition(
-                    bounds, g_starts[part], unit, g_stops[part]
-                )
-                if high < g_starts[part] or low > g_stops[part]:
+                edges = (g_starts[part], g_stops[part])
+                window = _window_samples(bounds, *edges, part_step, unit, coords)
+                if window is None:
                     continue
-                low, high = max(low, g_starts[part]), min(high, g_stops[part])
-                if not pd.isnull(part_step) and part_step != 0:
-                    envelope = _exact_envelope(part_coords, (low, high), unit)
-                    if envelope is not None and fill_value is None:
-                        low, high = envelope
-                    else:
-                        snapped_low, snapped_high, present = _grid_snapped(
-                            np.asarray([low]),
-                            np.asarray([high]),
-                            g_starts[part],
-                            abs(part_step),
-                        )
-                        if not present[0]:
-                            continue
-                        low, high = snapped_low[0], snapped_high[0]
-                starts_list.append(low)
-                stops_list.append(high)
+                starts_list.append(window[0])
+                stops_list.append(window[1])
                 requests_p.append(request)
             if not starts_list:
                 continue
@@ -2867,13 +2852,7 @@ def _finish_explicit_plan(
                 # Another partition in the group may have a shifted origin,
                 # and a joined source may have sub-sample jitter.
                 low, high = envelope
-                expected_low, expected_high, _ = _grid_snapped(
-                    np.repeat(np.asarray([requested_low]), 2),
-                    np.repeat(np.asarray([requested_high]), 2),
-                    np.asarray([low, high]),
-                    abs(step),
-                )
-                if expected_low[0] < low or expected_high[1] > high:
+                if _short_of((requested_low, requested_high), envelope, step):
                     if not keep_partial:
                         failures.append(
                             (request, bounds, label, "sampled bounds are incomplete")
@@ -2990,12 +2969,39 @@ def _finish_explicit_plan(
     return outputs, members.reset_index(drop=True)
 
 
+def _window_samples(bounds, start, stop, step, unit, coords=()):
+    """Return a window's first and last samples in an extent, or None."""
+    low, high = _explicit_bounds_for_partition(bounds, start, unit, stop)
+    low, high = max(low, start), min(high, stop)
+    if low > high:
+        return None
+    envelope = _exact_envelope(coords, (low, high), unit) if coords else None
+    if envelope is not None or pd.isnull(step) or not step:
+        return envelope if coords else (low, high)
+    lo, hi, present = _grid_snapped(
+        np.asarray([low]), np.asarray([high]), start, abs(step)
+    )
+    return (lo[0], hi[0]) if present[0] else None
+
+
+def _short_of(requested, actual, step) -> bool:
+    """Whether a request snapped onto the samples' grid reaches past them."""
+    low, high, _ = _grid_snapped(
+        np.repeat(np.asarray([requested[0]]), 2),
+        np.repeat(np.asarray([requested[1]]), 2),
+        np.asarray(actual),
+        abs(step),
+    )
+    return bool(low[0] < actual[0] or high[1] > actual[1])
+
+
 def _trim_explicit(outputs, members, sources, windows, exact, keep_partial, behavior):
     """Trim each member to its request's windows on the other explicit dims."""
     by_row = sources.drop_duplicates("_patch_row").set_index("_patch_row")
     src = by_row.loc[members["_patch_row"]]
-    request_of = outputs.set_index("output_id")["_request_row"]
-    requests = members["output_id"].map(request_of).to_numpy()
+    by_output = outputs.set_index("output_id")
+    requests = members["output_id"].map(by_output["_request_row"]).to_numpy()
+    labels = members["output_id"].map(by_output["_compat_group"]).to_numpy()
     keep = np.ones(len(members), dtype=bool)
     failures, emptied = {}, {}
     members = members.copy()
@@ -3007,35 +3013,33 @@ def _trim_explicit(outputs, members, sources, windows, exact, keep_partial, beha
             request, unit = requests[pos], units[pos]
             unit = None if pd.isnull(unit) or unit == "" else str(unit)
             bounds, reason = ranges.rows[request], "contains no source samples"
+            where = f"{labels[pos]}, dim {dim}"
             if pd.isnull(start) or pd.isnull(stop):  # a member without the dim
                 keep[pos] = False
-                emptied.setdefault(request, (bounds, dim, reason))
+                emptied.setdefault(request, (bounds, where, reason))
                 continue
-            low, high = _explicit_bounds_for_partition(bounds, start, unit, stop)
-            gridded = not pd.isnull(step) and bool(step)
-            number = gridded and _value_family(low) == "number"
-            slack = abs(step) * _GRID_SNAP_RTOL if number else None
-            edges = (start, stop) if slack is None else (start - slack, stop + slack)
-            if not keep_partial and (low < edges[0] or high > edges[1]):
-                failures[request] = (bounds, dim, "sampled bounds are incomplete")
-            low, high = max(low, start), min(high, stop)
+            if all(x is None for x in bounds):  # spans the dim: no trim
+                continue
             coord = exact.get(dim, {}).get(members["_patch_row"].iloc[pos])
-            actual = None
-            if low > high:
-                pass
-            elif coord is not None:
-                actual = exact_coordinate_bounds(coord, (low, high), unit)
-            elif gridded:
-                lo, hi, present = _grid_snapped(
-                    np.asarray([low]), np.asarray([high]), start, abs(step)
-                )
-                actual = (lo[0], hi[0]) if present[0] else None
+            gridded = not pd.isnull(step) and bool(step)
+            known, actual = () if coord is None else (coord,), None
+            if known or gridded:  # exact labels, when known, rule out the grid
+                grid = np.nan if known else step
+                actual = _window_samples(bounds, start, stop, grid, unit, known)
             else:
                 reason = "exact source coordinates are unavailable"
             if actual is None:
-                keep[pos], emptied[request] = False, (bounds, dim, reason)
-            else:
-                lows[pos], highs[pos] = actual
+                keep[pos], emptied[request] = False, (bounds, where, reason)
+                continue
+            lows[pos], highs[pos] = actual
+            wanted = _explicit_bounds_for_partition(bounds, start, unit, stop)
+            short = (
+                _short_of(wanted, actual, step)
+                if gridded
+                else wanted[0] < start or wanted[1] > stop
+            )
+            if short and not keep_partial:
+                failures[request] = (bounds, where, "sampled bounds are incomplete")
         members[f"{dim}_min"], members[f"{dim}_max"] = lows, highs
         members["_modified"] |= (lows != starts) | (highs != stops)
     for request in set(outputs["_request_row"]) - set(requests[keep]):

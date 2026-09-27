@@ -158,19 +158,26 @@ def _plan_trim_kwargs(patch, kwargs, plan_dims) -> dict:
     Keep only the trims the plan actually narrows.
 
     A member row is its source row with the *planned* dimensions'
-    envelopes (the chunked one, then any trimmed) replaced by the
-    member's trim ranges; every other range
-    column still describes the whole source. Selecting on those would
+    envelopes replaced by the member's trim ranges (a trim which spans
+    the patch is dropped); every other range column still describes the
+    whole source. Selecting on those would
     re-select a coordinate to its own extent, which is a no-op for a
     sorted numeric range but not for a string coordinate (a range of
     labels), one holding NaN (missing values fall outside every range),
     or one which cannot be range-selected at all.
     """
-    if plan_dims[0] not in kwargs:  # an unmodified member states no range
+    first, *others = plan_dims
+    if first not in kwargs:  # an unmodified member states no range
         return {}
     coord_map = patch.coords.coord_map
-    assert set(plan_dims) <= set(coord_map), "the plan's dims are on every member"
-    return {x: kwargs[x] for x in plan_dims}
+    assert first in coord_map, "the plan's dimension is on every member"
+    out = {first: kwargs[first]}
+    for dim in others:
+        # a trim spanning the patch is skipped, so it keeps the patch's id
+        (low, high), coord = kwargs[dim], coord_map.get(dim)
+        if coord is not None and not (low <= coord.min() and high >= coord.max()):
+            out[dim] = kwargs[dim]
+    return out
 
 
 def _as_plan_units(patch, kwargs, row) -> dict:

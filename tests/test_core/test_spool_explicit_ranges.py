@@ -538,6 +538,8 @@ class TestExplicitChunk:
         [
             (True, 2),
             ([1], 2),
+            (np.inf, 2),
+            (1, -np.inf),
             (3, 1),
             (3 * m, 1 * s),
         ],
@@ -1515,6 +1517,7 @@ class TestExplicitBoxes:
         monkeypatch.setattr(PlanResolver, "_load_member", forbidden)
         out = files.chunk(time=time, distance=distance)
         contents = out.get_contents()
+        assert len(files.select(time=time, distance=distance).get_contents()) == 4
         monkeypatch.setattr(PlanResolver, "_load_member", original)
         assert len(contents) == 2
         assert _boxes(out) == [
@@ -1526,6 +1529,33 @@ class TestExplicitBoxes:
         np.testing.assert_array_equal(out[0].data, expected.data)
         # a chained selection narrows the trimmed outputs further
         assert _boxes(out.select(distance=(12, 15)))[0][1] == (12, 15)
+        again = out.select(distance=np.array([[15, 25], [250, 400]]))
+        assert [x[1] for x in _boxes(again)] == [(15, 20), (250, 299)]
+
+    def test_trim_completeness_matches_main_dim(self, spool, t0):
+        """Bounds short of the next grid point are complete in either order."""
+        one, end = dc.spool([spool[0]]), spool[0].get_coord("time").max()
+        time = np.array([[t0, end + np.timedelta64(2, "ms")]])
+        distance = np.array([[10, 299.5]])
+        first = _boxes(one.chunk(time=time, distance=distance))
+        assert first == _boxes(one.chunk(distance=distance, time=time))
+        assert first == [((t0, end), (10, 299))]
+
+    def test_non_dimension_trim_raises(self):
+        """Only the first window may name a coordinate which is not a dim."""
+        patch = dc.get_example_patch("random_patch_with_lat_lon")
+        time = patch.get_coord("time").values
+        latitude = np.array([[-109.85, -109.84]])
+        kwargs = dict(time=np.array([[time[10], time[100]]]), latitude=latitude)
+        for method in (dc.spool([patch]).select, dc.spool([patch]).chunk):
+            with pytest.raises(ParameterError, match="non-dimensional"):
+                method(**kwargs)
+
+    def test_spanning_trim_keeps_identity(self, spool, t0):
+        """A trim row open at both ends changes nothing, not even the id."""
+        time = np.array([[t0, t0 + np.timedelta64(1, "s")]])
+        spanned = spool.chunk(time=time, distance=np.array([[None, None]]))
+        assert spanned[0].attrs.data_id == spool.chunk(time=time)[0].attrs.data_id
 
     def test_open_bounds(self, spool, t0):
         """Open ends take the data's own extent; a fully open row spans it."""
@@ -1542,6 +1572,14 @@ class TestExplicitBoxes:
         assert _boxes(spool.chunk(time=time, distance=distance)) == expected
         selected = spool.select(time=time, distance=distance)
         assert _boxes(selected)[:2] == expected[:2]
+        assert len(selected) == 5  # the open time row: one piece per source
+        narrowed = spool.select(distance=(50, 299))
+        window = dict(time=time[:1], distance=np.array([[..., 60]], dtype=object))
+        assert _boxes(narrowed.chunk(**window))[0][1] == (50, 60)
+        gapped = dc.spool([spool[0], spool[2]])
+        assert len(gapped.chunk(time=np.array([[None, None]]))) == 2
+        with pytest.raises(ChunkError, match="split by a gap"):
+            gapped.chunk(time=np.array([[None, end]]))
 
     @pytest.mark.parametrize("policy", ["raise", "warn", "ignore"])
     def test_empty_trim_window_follows_policy(self, spool, t0, policy):
@@ -1549,7 +1587,7 @@ class TestExplicitBoxes:
         time = np.array([[t0, t0 + np.timedelta64(1, "s")]] * 2)
         kwargs = dict(time=time, distance=np.array([[0, 5], [400, 500]]))
         if policy == "raise":
-            with pytest.raises(ChunkError, match="contains no source samples"):
+            with pytest.raises(ChunkError, match="dim distance: contains no source"):
                 spool.chunk(**kwargs)
             return
         if policy == "warn":
@@ -1601,6 +1639,8 @@ class TestExplicitBoxes:
             [1.0, 2.0]
         ]
         uneven = np.array([0.0, 1.0, 3.0, 6.0, 9.0])
+        spanned = dict(time=kwargs["time"], distance=np.array([[None, None]]))
+        assert len(make(uneven).chunk_plan(**spanned).outputs) == 1
         with pytest.raises(ChunkError, match="coordinates are unavailable"):
             make(uneven).chunk_plan(**kwargs)
         assert _boxes(make(uneven, clear=False).chunk(**kwargs))[0][1] == (1.0, 1.0)

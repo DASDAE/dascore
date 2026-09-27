@@ -59,11 +59,13 @@ def explicit_ranges(value) -> ExplicitRanges | None:
             if isinstance(magnitude, bool | np.bool_) or np.ndim(magnitude):
                 msg = f"Explicit range row {index} has a non-scalar bound."
                 raise ParameterError(msg)
-            open_end = bool(pd.isna(magnitude)) or (
-                isinstance(magnitude, (int, float, np.number))
-                and not np.isfinite(magnitude)
+            infinite = isinstance(magnitude, (int, float, np.number)) and (
+                not np.isfinite(magnitude)
             )
-            bounds.append(None if open_end else bound)
+            if infinite and (float(magnitude) > 0) == (not bounds):
+                msg = f"Explicit range row {index} has a reversed infinite bound."
+                raise ParameterError(msg)
+            bounds.append(None if pd.isna(magnitude) or infinite else bound)
         closed = all(x is not None for x in bounds)  # open ends are never reversed
         same_kind = isinstance(bounds[0], Quantity) == isinstance(bounds[1], Quantity)
         if closed and same_kind:
@@ -117,6 +119,18 @@ def explicit_windows(values: Mapping) -> dict[str, ExplicitRanges]:
         )
         raise ParameterError(msg)
     return out
+
+
+def refuse_riders(windows: Mapping, coord_dims_map: Mapping) -> None:
+    """Refuse a window after the first on a coordinate which is not a dim."""
+    for name in list(windows)[1:]:
+        if coord_dims_map.get(name, name) != name:
+            msg = (
+                f"Patches carry {name!r} only as a non-dimensional coordinate; "
+                "trimming is defined on dimensions, so only the first "
+                "explicit window may name it."
+            )
+            raise ParameterError(msg)
 
 
 def file_source_coords(resolver, row, files=None):

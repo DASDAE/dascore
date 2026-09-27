@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 from typing import Any
 
+import numpy as np
 import pandas as pd
 
 from dascore.exceptions import MissingPatchError
@@ -12,8 +13,8 @@ from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.planned import derived_catalog
 from dascore.utils.chunk_plan import (
     _ensure_patch_row,
+    _window_samples,
     build_subdivision_plan,
-    exact_coordinate_bounds,
 )
 from dascore.utils.explicit_ranges import ExplicitRanges, known_coordinates
 
@@ -87,6 +88,10 @@ class ExplicitSelectCatalog:
                     row = by_id.loc[patch_row]
                     actual = []
                     for name, bounds in zip(names, box, strict=True):
+                        low, high = row[f"{name}_min"], row[f"{name}_max"]
+                        if all(x is None for x in bounds):  # spans the dim
+                            actual.append((low, high))
+                            continue
                         coord = known[name].get(patch_row)
                         if coord is None:
                             msg = (
@@ -95,7 +100,11 @@ class ExplicitSelectCatalog:
                                 "is unavailable."
                             )
                             raise MissingPatchError(msg)
-                        actual.append(exact_coordinate_bounds(coord, bounds))
+                        unit = row.get(f"_{name}_units")
+                        unit = None if pd.isnull(unit) or unit == "" else str(unit)
+                        # exact labels only, so the grid is not consulted
+                        window = (bounds, low, high, np.nan, unit, (coord,))
+                        actual.append(_window_samples(*window))
                     if any(x is None for x in actual):
                         continue
                     rows.append(row)

@@ -112,6 +112,7 @@ from dascore.utils.explicit_ranges import (
     explicit_windows,
     known_coordinates,
     looks_explicit,
+    refuse_riders,
 )
 from dascore.utils.misc import (
     _spool_map,
@@ -624,6 +625,8 @@ class Spool(NodeRepr, NamespaceOwner):
                 kwargs=query.kwargs,
             )
             explicit = explicit_windows(coords)
+            if len(explicit) > 1:  # the map realizes a deferred parent
+                refuse_riders(explicit, self._catalog.backend.coord_dims_map())
         if explicit:
             if samples or relative:
                 msg = "Explicit ranges require samples=False and relative=False."
@@ -1796,9 +1799,10 @@ class Spool(NodeRepr, NamespaceOwner):
         """Build and coalesce one plan from this spool's current source rows."""
         name = next(iter(dim_kwargs), None)
         source_rows, working = self._plan_frames(name, runs=True)
+        windows = explicit_windows(dim_kwargs)
+        refuse_riders(windows, self._catalog.backend.coord_dims_map())
         exact = {
-            dim: known_coordinates(self._catalog, source_rows, dim)
-            for dim in explicit_windows(dim_kwargs)
+            dim: known_coordinates(self._catalog, source_rows, dim) for dim in windows
         }
         plan = build_chunk_plan(working, _exact_coords=exact, **params, **dim_kwargs)
         return source_rows, coalesce_runs(plan, working)
