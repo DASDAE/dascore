@@ -7,4 +7,3 @@ This is an experimental format and is subject to change.
 """
 from __future__ import annotations
 from .core import DASDAEV1, DASDAEV2
-from .storage import DASDAEStorage

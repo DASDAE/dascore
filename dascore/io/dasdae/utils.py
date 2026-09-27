@@ -31,7 +31,7 @@ from dascore.io.dasdae._compat import (
     strip_legacy_coord_fields,
     translate_legacy_attrs,
 )
-from dascore.io.dasdae.storage import DASDAEStorage
+from dascore.io.dasdae._encoding import _dataset_kwargs
 from dascore.io.utils import resolve_keyed_source, should_snap
 from dascore.models.registry import get_model_tag, resolve_tagged_model
 from dascore.utils.array import (
@@ -126,10 +126,7 @@ def _save_attrs_and_dims(patch, patch_group):
     patch_group.attrs["_dims"] = ",".join(patch.dims)
 
 
-_NO_STORAGE = DASDAEStorage()
-
-
-def _save_array(data, name, group, storage=_NO_STORAGE, dims=()):
+def _save_array(data, name, group, options=None):
     """Save an array to a group, handling datetime and string values."""
     data = np.asarray(data)
     is_dt = np.issubdtype(data.dtype, np.datetime64)
@@ -143,7 +140,7 @@ def _save_array(data, name, group, storage=_NO_STORAGE, dims=()):
     if name in group:
         # Overwrite the dataset in place when callers resave the same array node.
         del group[name]
-    options = storage._dataset_kwargs(dims, data.shape)
+    options = _dataset_kwargs(options, data.shape)
     array_node = group.create_dataset(name, data=data, **options)
     array_node.attrs["is_datetime64"] = is_dt
     array_node.attrs["is_timedelta64"] = is_td
@@ -182,7 +179,7 @@ _RANGE = "CoordRange"
 _SEGMENTED = "CoordSegmented"
 
 
-def _save_coord(coord, name, group, compact: bool, storage=_NO_STORAGE, dims=()):
+def _save_coord(coord, name, group, compact: bool, options=None):
     """
     Save one coordinate node.
 
@@ -200,7 +197,7 @@ def _save_coord(coord, name, group, compact: bool, storage=_NO_STORAGE, dims=())
         object_type = _SEGMENTED
         node = group.create_group(name)
         for i, segment in enumerate(coord.segments):
-            _save_coord(segment, str(i), node, compact, storage, dims)
+            _save_coord(segment, str(i), node, compact, options)
     elif compact and grid is not None and not _extended_float(coord):
         object_type = _RANGE
         node = group.create_dataset(name, shape=(0,), dtype="int64")
@@ -234,7 +231,7 @@ def _save_coord(coord, name, group, compact: bool, storage=_NO_STORAGE, dims=())
                 node.attrs["k0"] = grid.k0
                 node.attrs["stride"] = grid.stride
     else:
-        node = _save_array(coord.values, name, group, storage, dims)
+        node = _save_array(coord.values, name, group, options)
         # Version 1 reads an array's step as a range to rebuild from its
         # first value, so only a range may state one there; version 2
         # reads it as the grid an array declares.
@@ -249,12 +246,11 @@ def _save_coord(coord, name, group, compact: bool, storage=_NO_STORAGE, dims=())
         node.attrs["units"] = str(coord.units)
 
 
-def _save_coords(patch, patch_group, compact: bool, storage):
+def _save_coords(patch, patch_group, compact: bool, options):
     """Save coordinates and their dimensions."""
     cm = patch.coords
     for name, coord in cm.coord_map.items():
-        dims = cm.dim_map[name]
-        _save_coord(coord, f"_coord_{name}", patch_group, compact, storage, dims)
+        _save_coord(coord, f"_coord_{name}", patch_group, compact, options.get(name))
         patch_group.attrs[f"_cdims_{name}"] = ",".join(cm.dim_map[name])
 
 
@@ -272,7 +268,7 @@ def _check_storable(patch):
             raise NotImplementedError(msg)
 
 
-def _save_patch(patch, wave_group, name, compact: bool = False, storage=_NO_STORAGE):
+def _save_patch(patch, wave_group, name, compact: bool = False, options=None):
     """Save the patch to disk."""
     if not compact:
         _check_storable(patch)
@@ -284,9 +280,10 @@ def _save_patch(patch, wave_group, name, compact: bool = False, storage=_NO_STOR
     # in the separated-attrs form and must not be legacy-stripped on read.
     patch_group.attrs[_SEPARATE_ATTRS_KEY] = True
     _save_attrs_and_dims(patch, patch_group)
-    _save_coords(patch, patch_group, compact, storage)
+    options = options or {}
+    _save_coords(patch, patch_group, compact, options)
     # add data
-    _save_array(patch.data, "data", patch_group, storage, patch.dims)
+    _save_array(patch.data, "data", patch_group, options.get("data"))
 
 
 # --- Functions for reading

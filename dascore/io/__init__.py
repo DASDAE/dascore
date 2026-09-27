@@ -5,10 +5,8 @@ from __future__ import annotations
 
 from dascore.core.source import ArraySource
 from dascore.io.core import (
-    BaseStorage,
     FiberIO,
     H5ArrayMixin,
-    get_storage,
     read,
     read_array,
     scan,

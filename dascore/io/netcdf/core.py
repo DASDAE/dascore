@@ -140,27 +140,11 @@ class NetCDFCFV18(FiberIO):
             slices = windows_to_slices(windows, data_array.shape)
             return data_array[slices].to_numpy()
 
-    def _get_write_encoding(self, compression=None, compression_opts=4, chunks=None):
-        """Translate explicit write options into xarray encoding hints."""
-        if compression not in ("gzip", None, False):
-            msg = "xarray netcdf4 writing currently supports only gzip compression."
-            raise ValueError(msg)
-        encoding: dict[str, object] = {}
-        if chunks not in (None, False, True):
-            encoding["chunksizes"] = tuple(chunks)
-        if compression == "gzip":
-            encoding["zlib"] = True
-            encoding["complevel"] = compression_opts
-            encoding["shuffle"] = True
-        return encoding
-
     def write(
         self,
         spool: dc.Patch | dc.Spool,
         resource: Path,
-        compression=None,
-        compression_opts=4,
-        chunks=None,
+        encoding: dict | None = None,
         **kwargs,
     ) -> None:
         """
@@ -168,13 +152,10 @@ class NetCDFCFV18(FiberIO):
 
         Parameters
         ----------
-        compression
-            'gzip', None, or False.
-        compression_opts
-            The gzip level, 1-9.
-        chunks
-            True to defer chunking to xarray/backend defaults, or an
-            explicit tuple of chunk sizes.
+        encoding
+            Passed to xarray's ``Dataset.to_netcdf``: a dict keyed by "data"
+            or a coordinate name whose values are dicts of encoding options,
+            such as ``zlib``, ``complevel``, ``shuffle``, and ``chunksizes``.
         """
         patch = self._validate_and_extract_patch(spool)
         optional_import("xarray")  # raises a helpful error if xarray is absent
@@ -189,11 +170,7 @@ class NetCDFCFV18(FiberIO):
         array.attrs = _int_for_bool(array.attrs)
         dataset = array.to_dataset()
         dataset.attrs["Conventions"] = f"CF-{self.version}"
-        encoding = self._get_write_encoding(compression, compression_opts, chunks)
-        dataset.to_netcdf(
-            resource,
-            encoding={"data": encoding} if encoding else None,
-        )
+        dataset.to_netcdf(resource, encoding=encoding)
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
