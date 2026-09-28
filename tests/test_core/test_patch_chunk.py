@@ -4567,3 +4567,79 @@ class TestSelectedRecipeMerge:
                     assert_same_patch(one, other, kwargs, per_coord=True)
         assert compared > 30
         assert recipes, "no selected spool merged from the index"
+
+
+class TestChunkMergeRegressions:
+    """Chunk assembly preserves sample order, scale, and declared sampling."""
+
+    @pytest.fixture(params=["memory", "index", "stream", "materialized"])
+    def merge_spool(self, request, tmp_path, monkeypatch):
+        """Build a spool through each assembly route."""
+        if request.param == "stream":
+            monkeypatch.setattr(
+                PatchAssembler, "_member_meta_from_index", lambda *a: None
+            )
+        elif request.param == "materialized":
+            monkeypatch.setattr(
+                assembly_module, "_estimate_merge_samples", lambda *a: None
+            )
+
+        def build(patches):
+            if request.param == "memory":
+                return dc.spool(patches)
+            return _write_spool(tmp_path, patches)
+
+        return build
+
+    @pytest.mark.parametrize("length", [None, 4])
+    @pytest.mark.parametrize("reverse", [False, True])
+    @pytest.mark.parametrize("lower", [4, 6])
+    def test_descending_sample_order(self, merge_spool, length, reverse, lower):
+        """Descending samples match their labels, including across a seam (#1248)."""
+        patches = []
+        for start in (9, lower):
+            values = np.arange(start, start - 5, -1.0)
+            patches.append(
+                dc.Patch(
+                    data=values,
+                    coords={"time": values, "sample": ("time", values * 10)},
+                    dims=("time",),
+                )
+            )
+        spool = merge_spool(patches[::-1] if reverse else patches)
+        chunks = spool.chunk(time=length, conflict="keep_first")
+        assert len(chunks) == (1 if length is None else 2)
+        for patch in chunks:
+            np.testing.assert_array_equal(patch.data, patch.get_array("time"))
+            np.testing.assert_array_equal(patch.data * 10, patch.get_array("sample"))
+
+    @pytest.mark.parametrize("conflict", ["keep_first", "drop"])
+    def test_data_units_convert(self, merge_spool, conflict):
+        """Kilometre members convert to metres as concatenate does (#1247)."""
+        patches = [
+            dc.Patch(
+                data=np.arange(1, 6, dtype=np.int16),
+                coords={"time": np.arange(start, start + 5.0)},
+                dims=("time",),
+                attrs={"data_units": units},
+            )
+            for start, units in [(0, "m"), (5, "km")]
+        ]
+        expected = dc.spool(patches).concatenate(time=None, conflict=conflict)[0]
+        actual = merge_spool(patches).chunk(time=None, conflict=conflict)[0]
+        np.testing.assert_array_equal(actual.data, expected.data)
+        assert actual.attrs.data_units == expected.attrs.data_units
+
+    def test_jitter_keeps_declared_step(self, merge_spool):
+        """A three-microsecond seam offset does not change a four-ms step."""
+        step = np.timedelta64(4_000_000, "ns")
+        patches = []
+        for num in range(2):
+            start = ORIGIN + num * (1500 * step + np.timedelta64(3000, "ns"))
+            coord = dc.core.get_coord(start=start, step=step, shape=(1500,))
+            patches.append(
+                dc.Patch(data=np.arange(1500), coords={"time": coord}, dims=("time",))
+            )
+        merged = merge_spool(patches).chunk(time=None)[0]
+        assert merged.get_coord("time").step == step
+        np.testing.assert_array_equal(merged.data, np.tile(np.arange(1500), 2))

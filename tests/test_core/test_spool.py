@@ -210,10 +210,11 @@ class TestSpoolHelpers:
         )
         assert _get_varying_dim(df) is None
 
-    def test_estimate_merge_samples_missing_columns(self):
-        """Missing range columns should disable streaming estimates."""
+    @pytest.mark.parametrize("dim", [None, "time"])
+    def test_estimate_merge_samples_missing_columns(self, dim):
+        """An unknown dimension or missing ranges disable streaming estimates."""
         df = pd.DataFrame({"time_min": [0], "time_max": [1]})
-        assert _estimate_merge_samples(df, "time") is None
+        assert _estimate_merge_samples(df, dim) is None
 
     def test_estimate_merge_samples_degenerate_step(self):
         """Non-finite sample counts should disable streaming estimates."""

@@ -54,6 +54,7 @@ from dascore.utils.identity import (
 )
 from dascore.utils.misc import broadcast_for_index, is_range
 from dascore.utils.patch import (
+    _convert_merge_data_units,
     _force_patch_merge,
     _get_merge_dim,
     _get_merged_coord,
@@ -79,6 +80,8 @@ def _get_varying_dim(df) -> str | None:
     need the fully materialized merge to sort out.
     """
     dims = get_dim_names_from_columns(df)
+    if "dims" in df:
+        dims = set(dims) & set(df["dims"].iloc[0].split(","))
     varying = []
     for dim in dims:
         mins, maxs = df.get(f"{dim}_min"), df.get(f"{dim}_max")
@@ -630,10 +633,16 @@ class PatchAssembler:
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
-        df_dict_list = self._df_to_dict_list(joined)
         expected_len = len(joined["current_index"].unique())
-        merging = len(df_dict_list) > expected_len
+        merging = len(joined) > expected_len
         merge_dim = _get_varying_dim(joined) if merging else None
+        if merge_dim is not None:
+            steps = joined[f"{merge_dim}_step"]
+            descending = (steps < steps.iloc[0] * 0).all()
+            joined = joined.sort_values(
+                f"{merge_dim}_min", ascending=not descending, kind="stable"
+            )
+        df_dict_list = self._df_to_dict_list(joined)
         if merging:
             # Several sources merge into one patch. When the output size can
             # be determined from the instructions, stream the sources into a
@@ -674,7 +683,15 @@ class PatchAssembler:
         trims = (self.plan_dim, self.trim_dims)
         if select_kwargs := _plan_trim_kwargs(patch, source_kwargs, *trims):
             patch = patch.select(**_as_plan_units(patch, select_kwargs, patch_kwargs))
-        return patch
+        units = next(
+            (
+                get_quantity(x)
+                for x in joined.get("data_units", [])
+                if not _is_missing(x)
+            ),
+            None,
+        )
+        return _convert_merge_data_units(patch, units)
 
     def _merge_patches_streaming(self, joined, df_dict_list, merge_dim, samples):
         """
@@ -708,6 +725,8 @@ class PatchAssembler:
         what the index recorded, or when a file did not deliver the array
         its row predicted, so the caller can start over on the patch path.
         """
+        if len({meta.attrs.data_units for meta in metas}) > 1:
+            return None
         dims = metas[0].dims
         axis = dims.index(merge_dim)
         recipe = self._recipe(df_dict_list, metas, dims, axis)
