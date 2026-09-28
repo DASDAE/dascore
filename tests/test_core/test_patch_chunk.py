@@ -26,7 +26,7 @@ import dascore as dc
 import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
 from dascore.config import config_context
-from dascore.core.coords import NumericCoord
+from dascore.core.coords import Grid, NumericCoord
 from dascore.core.lazy_array import LazyArray
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
@@ -4649,6 +4649,14 @@ class TestChunkMergeRegressions:
         chunked = merge_spool(patches).chunk(time=None, conflict="keep_first")
         stated = chunked.get_contents()["data_units"].iloc[0]
         assert chunked[0].attrs.data_units == get_quantity(stated)
+
+    def test_zero_shared_step_is_not_kept(self):
+        """One-sample grids declaring no spacing fuse on their span."""
+        runs = (Grid(0.0, 0.0, 0, 1), Grid(1.0, 0.0, 0, 1))
+        coord = NumericCoord(runs=runs, dtype="float64")
+        with np.errstate(all="ignore"):
+            out = coord.fuse(1.0, keep_step=True)
+        np.testing.assert_array_equal(out.values, [0.0, 1.0])
 
     def test_ulp_different_float_steps(self):
         """Float steps one ulp apart still merge on the shared step."""
