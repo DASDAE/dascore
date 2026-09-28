@@ -78,7 +78,7 @@ class TestDatasetOptions:
             assert _group(h5)["data"].compression is None
 
     def test_segment_values(self, random_patch, tmp_path):
-        """The encoding reaches each value array of a gapped coordinate."""
+        """The encoding reaches the values of an irregular multi-run coordinate."""
         size = random_patch.shape[0]
         values = np.cumsum(np.random.default_rng(0).random(size))
         values[size // 2 :] += 100  # the gap
@@ -88,10 +88,9 @@ class TestDatasetOptions:
         encoding = {"distance": {"compression": "gzip", "chunksizes": (1000,)}}
         path = dc.write(patch, tmp_path / "out.h5", "DASDAE", encoding=encoding)
         with h5py.File(path) as h5:
-            segments = _group(h5)["_coord_distance"]
-            assert len(segments) == 2
-            assert all(x.compression == "gzip" for x in segments.values())
-            assert all(x.chunks == x.shape for x in segments.values())
+            node = _group(h5)["_coord_distance"]
+            assert node.compression == "gzip"
+            assert node.chunks == node.shape
 
     def test_variable_in_some_patches(self, random_patch, tmp_path):
         """A coordinate only one patch of a spool carries takes the encoding."""

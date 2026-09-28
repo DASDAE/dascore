@@ -36,8 +36,7 @@ from dascore.utils.time import (
     to_timedelta64,
 )
 
-# The default continuity tolerance, in samples; looser values warn when
-# they force merges (#662).
+# The default continuity tolerance, in samples.
 DEFAULT_TOLERANCE = 1.5
 
 
@@ -273,6 +272,8 @@ def gap_boundaries(start, stop, step, tolerance: GapTolerance):
     ``reach`` is a reported value, not just a comparand.
     """
     start, stop, step = (np.asarray(x) for x in (start, stop, step))
+    if step.dtype == object:  # numeric rows without a step state None
+        step = pd.to_numeric(pd.Series(step), errors="coerce").to_numpy()
     order = np.argsort(start)
     starts, stops = start[order], stop[order]
     # runs are value-ordered regardless of coordinate orientation, so
@@ -293,6 +294,48 @@ def gap_boundaries(start, stop, step, tolerance: GapTolerance):
         has_gap[ahead] = tolerance.is_gap(starts[ahead] - reach[ahead], steps[ahead])
     has_gap[:1] = False
     return order, reach, has_gap
+
+
+def contiguous_windows(coord) -> list[tuple[int, int]]:
+    """
+    The positional ``(start, stop)`` windows over which a coordinate is contiguous.
+
+    A window ends where a run changes step or starts further from its
+    predecessor than the default tolerance allows, and at every hole
+    [missing](`dascore.core.coords.BaseCoord.missing`) reports; runs joined
+    by sub-sample jitter are one window. Runs holding labels with no shared
+    step (e.g. an exact array of jittered times) are irregular rather than
+    gapped, so they are one window too.
+    """
+    numeric = hasattr(type(coord), "segments")
+    if not numeric or coord.evenly_sampled:
+        return [(0, len(coord))]
+    segments = coord.segments
+    if pd.isnull(coord.step) and not all(x.evenly_sampled for x in segments):
+        return [(0, len(coord))]
+    starts, offset, last, last_step = set(), 0, None, None
+    for seg in segments:
+        step = coord.step if pd.isnull(seg.step) else seg.step
+        # endpoints only, so a long grid run is never materialized
+        first, end = seg._get_index_values([0, -1])
+        if last is not None and (
+            pd.isnull(step)
+            or step != last_step
+            or abs(to_float(first - last)) > DEFAULT_TOLERANCE * to_float(abs(step))
+        ):
+            starts.add(offset)
+        last, last_step = end, step
+        # a dense stored run may hold holes of the declared step too
+        if holes := [first for first, _ in seg.missing().iter_runs()]:
+            values = np.asarray(seg.values)
+            if seg.reverse_sorted:
+                found = len(values) - np.searchsorted(values[::-1], holes, "right")
+            else:
+                found = np.searchsorted(values, holes)
+            starts.update((offset + found).tolist())
+        offset += len(seg)
+    bounds = sorted(starts - {0})
+    return list(zip([0, *bounds], [*bounds, len(coord)], strict=True))
 
 
 # --- mesh edges for plotting

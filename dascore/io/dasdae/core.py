@@ -48,7 +48,7 @@ class DASDAEV1(FiberIO):
     preferred_extensions = ("h5", "hdf5")
     version = "1"
     multi_patch_write = True
-    # Version 2 writes ranges and segments as descriptions, not values.
+    # Version 2 writes ranges as descriptions, not values.
     _compact_coords = False
 
     def write(
@@ -143,11 +143,9 @@ class DASDAEV2(DASDAEV1):
     states its class (``object_type``) and describes itself: a range is stored as its
     start, extent, and step (the exact grid where the coordinate holds
     one, so a fractional sampling rate never drifts) at the cost of a few
-    attributes however long it is; a segmented coordinate as a group of
-    its segments; and only irregular coordinates as arrays of values.
-    Gapped patches are therefore stored as they are rather than split.
+    attributes however long it is, and other coordinates as arrays of
+    values, read back exactly when they hold several irregular runs.
     """
 
     version = "2"
-    segmented_write = True
     _compact_coords = True

@@ -1954,9 +1954,11 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Return a dataframe with one row per gap along a dimension.
 
-        Each row is a boundary that ``chunk`` would refuse to merge under the
-        same grouping and tolerance rules, including a hole inside a patch
-        whose coordinate is segmented.
+        Each row is a boundary that ``chunk`` would refuse to fill under the
+        same grouping and tolerance rules. A patch with holes enters a spool
+        as its contiguous pieces, so its holes are gaps like any other. A gap
+        a larger tolerance hides is still a chunk break unless ``fill_value``
+        is given.
 
         Parameters
         ----------
@@ -1994,10 +1996,7 @@ class Spool(NodeRepr, NamespaceOwner):
 
         Overlapping and fully-nested patches never open a gap: each
         boundary is measured against the furthest point reached so far,
-        not the previous row. A patch whose coordinate is segmented into
-        runs of one step (such as a gapped patch merged in memory, or read
-        whole from a file) is read run by run, so the holes inside it are
-        reported too; one with more than 256 runs is read whole.
+        not the previous row.
 
         A sample-count tolerance scales the step, so patches whose step
         is unknown report no gaps. An absolute tolerance needs no step
@@ -2075,16 +2074,13 @@ class Spool(NodeRepr, NamespaceOwner):
         when the span is zero, meaning a single sample). `group_id`
         matches the gap frame's, so the two join on it.
 
-        Coverage is measured from the envelopes the index records: of
-        each patch, or of each run of a patch whose coordinate is
-        segmented into runs of one step (up to 256), so a hole inside such
-        a patch counts like one between patches. A hole is not visible in a
-        group whose step is unknown: a sample-count tolerance has nothing
-        to scale there, so the group reports no gaps and counts as fully
-        covered. An absolute tolerance does measure it.
-        Gaps and coverage alike are what `chunk` would make of the data, so
-        a `coverage` of 1.0 says "nothing chunk would refuse to merge", not
-        "nothing missing".
+        Coverage is measured from the envelopes the index records for each
+        row. A hole is not visible in a group whose step is unknown: a
+        sample-count tolerance has nothing to scale there, so the group
+        reports no gaps and counts as fully covered. An absolute tolerance
+        does measure it. Gaps and coverage alike are what `chunk` would make
+        of the data with a `fill_value`, so a `coverage` of 1.0 says "nothing
+        chunk would refuse to fill", not "nothing missing".
 
         See Also
         --------
@@ -2141,9 +2137,8 @@ class Spool(NodeRepr, NamespaceOwner):
         snap_coords
             If True (default), simplify the coordinates of joined patches to
             an evenly sampled range, absorbing the sub-sample jitter of
-            labels rounded on their way to a file. A merge across a hole
-            keeps an exact segmented coordinate however wide the tolerance:
-            missing samples are absent data, not a slower sampling rate.
+            labels rounded on their way to a file. If False, joined
+            coordinates keep their exact labels.
         tolerance
             The maximum number of samples a block of data can be spaced (gap)
             and still be considered contiguous. A quantity or timedelta
@@ -2151,9 +2146,8 @@ class Spool(NodeRepr, NamespaceOwner):
             own units (eg `tolerance=1 * s` admits a spacing of one step
             plus a second), which also works for patches whose sampling
             interval is unknown. Either way a boundary of one sample is
-            contiguous. A hole inside a patch whose coordinate is segmented
-            into runs of one step (up to 256) is a gap like any other, so
-            each run can end an output or join a neighbouring patch. See
+            contiguous. Without `fill_value` a missing sample always ends an
+            output, so a looser tolerance only matters with one. See
             `dascore.utils.gaps.GapTolerance`.
         conflict
             {conflict_desc}
@@ -2179,10 +2173,8 @@ class Spool(NodeRepr, NamespaceOwner):
             modes retain their existing behavior.
         fill_value
             If given, the value written into the samples missing from a
-            merge, so an output spanning a hole is evenly sampled rather
-            than segmented. `tolerance` still decides which holes are
-            bridged at all: a hole it does not span separates patches as
-            before, and nothing is filled across it. The value has to
+            merge, so an output may span a hole `tolerance` spans. Without
+            it no output holds a hole. The value has to
             survive a cast to the data's own dtype, so `np.nan` needs
             float data; fill integer data with an integer, or cast it
             first.
@@ -2601,11 +2593,6 @@ class Spool(NodeRepr, NamespaceOwner):
         if self._file_path is not None:
             return self._file_path
         return getattr(self._catalog.resolver, "origin_path", None)
-
-    @property
-    def has_live_patches(self) -> bool:
-        """True when any of this spool's patches live in memory."""
-        return bool(self._catalog.resolver.live_entries())
 
     @compose_docstring(progress_desc=progress_description)
     def update(

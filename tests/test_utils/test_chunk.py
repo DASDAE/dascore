@@ -380,15 +380,15 @@ class TestChunkPlanToMerge:
             plan = build_chunk_plan(df, time=None, tolerance=10, group=("station",))
         assert len(plan.outputs) == 2
 
-    def test_forced_merge_warns(self, contiguous_df):
-        """A tolerance forcing a merge across a real gap warns (#662)."""
+    def test_hole_merges_only_with_a_fill_value(self, contiguous_df):
+        """A tolerance spans a real gap only when the plan may fill it (#662)."""
         df = contiguous_df.iloc[:2].copy()
         step = df["time_step"].iloc[0]
         df.loc[0, "time_max"] = df.loc[0, "time_min"] + 10 * step
         df.loc[1, "time_min"] = df.loc[0, "time_max"] + 5 * step
         df.loc[1, "time_max"] = df.loc[1, "time_min"] + 10 * step
-        with pytest.warns(UserWarning, match="force merging"):
-            plan = build_chunk_plan(df, time=None, tolerance=10)
+        assert len(build_chunk_plan(df, time=None, tolerance=10).outputs) == 2
+        plan = build_chunk_plan(df, time=None, tolerance=10, fill_value=np.nan)
         assert len(plan.outputs) == 1
 
 
