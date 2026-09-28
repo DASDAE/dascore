@@ -52,6 +52,7 @@ from dascore.core.summary import (
     normalize_source_patch_keys,
 )
 from dascore.exceptions import (
+    DASDAEUnpickleError,
     DependencyError,
     InvalidFiberFileError,
     InvalidFiberIOError,
@@ -1878,7 +1879,7 @@ def _iter_scan_results(
                         except DependencyError as exc:
                             warnings.warn(str(exc), UserWarning, stacklevel=2)
                             continue
-                        except RemoteCacheError:
+                        except (RemoteCacheError, DASDAEUnpickleError):
                             raise
                         # This happens if the file is corrupt see #346.
                         except (
@@ -1994,6 +1995,8 @@ def scan(
 
     Inaccessible files and subdirectories are skipped with a warning.
     An inaccessible root directory raises PermissionError.
+    Legacy DASDAE pickled coordinates raise DASDAEUnpickleError unless
+    ``allow_dasdae_format_unpickle=True`` is enabled for trusted files.
 
     Parameters
     ----------

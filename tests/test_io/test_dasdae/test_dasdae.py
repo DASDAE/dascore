@@ -499,6 +499,39 @@ class TestAttrsClassRoundTrip:
 class TestLegacyFixtureCompatibility:
     """Tests for the retained legacy DASDAE fixture compatibility helpers."""
 
+    @pytest.fixture
+    def legacy_path(self, tmp_path):
+        """Copy the smallest legacy registry file into an isolated directory."""
+        path = tmp_path / "legacy.hdf5"
+        shutil.copy(fetch("deformation_rate_event_1.hdf5"), path)
+        return path
+
+    @pytest.mark.parametrize("directory", [False, True])
+    @pytest.mark.parametrize("operation", [dc.scan, dc.spool])
+    def test_scan_legacy_requires_opt_in(self, legacy_path, directory, operation):
+        """File and directory scans must surface the reader's opt-in error."""
+        path = legacy_path.parent if directory else legacy_path
+        with config_context(allow_dasdae_format_unpickle=False):
+            with pytest.raises(InvalidFiberFileError) as read_error:
+                dc.read(legacy_path)
+            with pytest.raises(
+                InvalidFiberFileError, match="allow_dasdae_format_unpickle=True"
+            ) as scan_error:
+                result = operation(path)
+                if operation is dc.spool:
+                    result.update()
+        assert str(scan_error.value) == str(read_error.value)
+
+    @pytest.mark.parametrize("directory", [False, True])
+    def test_spool_legacy_with_opt_in(self, legacy_path, directory):
+        """Opted-in file and directory spools retain the legacy patch."""
+        path = legacy_path.parent if directory else legacy_path
+        with config_context(allow_dasdae_format_unpickle=True):
+            expected = dc.read(legacy_path)[0]
+            spool = dc.spool(path).update()
+            assert len(spool) == 1
+            assert spool[0].equals(expected)
+
     def test_translate_legacy_attrs_coord_manager_like_coords(self):
         """Legacy coord managers should still flatten via to_summary_dict."""
 
