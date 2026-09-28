@@ -26,7 +26,7 @@ import dascore as dc
 import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
 from dascore.config import config_context
-from dascore.core.coords import NumericCoord
+from dascore.core.coords import NumericCoord, get_coord
 from dascore.core.lazy_array import LazyArray
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
@@ -905,6 +905,72 @@ class TestDescendingChunk:
         n_time = p.shape[p.get_axis("time")]
         assert patch.shape[patch.get_axis("time")] == 2 * n_time
         assert time.min() == t.min()
+
+    @staticmethod
+    def _descending(start, size, **attrs):
+        """A one-channel patch, descending in time, whose data is its labels."""
+        coord = get_coord(start=float(start), step=-1.0, shape=(size,))
+        values = coord.values
+        coords = {"distance": [0], "time": coord, "tag": ("time", values * 10)}
+        return dc.Patch(
+            data=values[None].astype(np.float64),
+            coords=coords,
+            dims=("distance", "time"),
+            attrs=attrs,
+        )
+
+    @staticmethod
+    def _assert_data_follows_labels(patch):
+        """Data and the time-associated tag coord both follow the time labels."""
+        time = patch.get_array("time")
+        assert np.array_equal(patch.data[0], time)
+        assert np.array_equal(patch.get_array("tag"), time * 10)
+
+    def test_merged_data_follows_labels(self):
+        """Descending members merge with each sample under its own label."""
+        spool = dc.spool([self._descending(x, 3) for x in (2, 8, 5)])
+        patch = spool.chunk(time=None, conflict="keep_first")[0]
+        assert np.array_equal(patch.get_array("time"), np.arange(8.0, -1, -1))
+        self._assert_data_follows_labels(patch)
+
+    def test_merged_dim_only_follows_labels(self):
+        """Without an associated coord, descending data still follows labels."""
+        members = [self._descending(x, 3).drop_coords("tag") for x in (8, 5)]
+        patch = dc.spool(members).chunk(time=None)[0]
+        assert np.array_equal(patch.get_array("time"), np.arange(8.0, 2, -1))
+        assert np.array_equal(patch.data[0], patch.get_array("time"))
+
+    def test_chunk_length_follows_labels(self):
+        """A window straddling descending members keeps data under labels."""
+        members = [self._descending(x, 3).drop_coords("tag") for x in (8, 5, 2)]
+        out = dc.spool(members).chunk(time=4)
+        assert len(out) == 2
+        for patch in out:
+            assert np.array_equal(patch.data[0], patch.get_array("time"))
+
+    def test_single_sample_members_follow_labels(self):
+        """Windows cutting members to one sample each keep data under labels."""
+        members = [self._descending(x, 3).drop_coords("tag") for x in (8, 5, 2)]
+        for patch in dc.spool(members).chunk(time=2):
+            assert np.array_equal(patch.data[0], patch.get_array("time"))
+
+    @pytest.mark.parametrize("chunk", [None, 5])
+    def test_overlapping_members_follow_labels(self, chunk):
+        """Overlapping descending members keep each sample under its label."""
+        members = [self._descending(x, 4).drop_coords("tag") for x in (8, 5, 2)]
+        for patch in dc.spool(members).chunk(time=chunk):
+            assert np.array_equal(patch.data[0], patch.get_array("time"))
+
+    def test_fill_lands_in_the_gap(self):
+        """A bridged descending gap puts the fill between the members."""
+        members = [
+            self._descending(x, n).drop_coords("tag") for x, n in ((6, 2), (2, 3))
+        ]
+        patch = dc.spool(members).chunk(time=None, tolerance=10, fill_value=-1)[0]
+        time = patch.get_array("time")
+        assert np.array_equal(time, np.arange(6.0, -1, -1))
+        expected = np.where((time == 3) | (time == 4), -1, time)
+        assert np.array_equal(patch.data[0], expected)
 
 
 class TestMixedUnitChunk:

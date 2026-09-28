@@ -46,6 +46,7 @@ from dascore.utils.attrs import (
     warn_if_histories_differ,
 )
 from dascore.utils.chunk_plan import _SOURCE_COLUMNS
+from dascore.utils.coordmanager import merge_order
 from dascore.utils.identity import (
     ids_enabled,
     operation_context,
@@ -849,6 +850,13 @@ class PatchAssembler:
         new_coord = _get_merged_coord(
             summary_df, merge_dim, coords, drop_conflicting, **coord_kwargs
         )
+        order = merge_order(coords, merge_dim)
+        if order != sorted(order):
+            # members were laid down in plan order; put them in label order
+            axis = dims.index(merge_dim)
+            ends = list(accumulate(len(x.coord_map[merge_dim]) for x in coords))
+            blocks = np.split(data, ends[:-1], axis=axis)
+            data = np.concatenate([blocks[i] for i in order], axis=axis)
         warn_if_histories_differ(attrs, "Merging")
         new_attrs = combine_patch_attrs(
             attrs, **attr_kwargs, merge_params=self.merge_kwargs

@@ -14,6 +14,18 @@ from dascore.models import ArrayLike
 from dascore.utils.display import get_nice_text
 
 
+def merge_order(coord_managers: Sequence[dc.CoordManager], dim: str) -> list[int]:
+    """Member order along dim: by envelope, in the direction the labels run."""
+    # dascore.core.coords imports this module's importers (circular)
+    from dascore.core.coords import _concat_ascending  # noqa: PLC0415
+
+    coords = [x.coord_map[dim] for x in coord_managers]
+    order = sorted(range(len(coords)), key=lambda i: coords[i].min())
+    # the direction concat_coords gives the merged coordinate
+    ascending = _concat_ascending([x for x in coords if not x.degenerate])
+    return order if ascending else order[::-1]
+
+
 def merge_coord_managers(
     coord_managers: Sequence[dc.CoordManager],
     dim: str,
@@ -159,6 +171,6 @@ def merge_coord_managers(
 
     dims = _get_dims(coord_managers)
     coord_managers = _drop_unshared_coordinates(coord_managers)
-    sort_managers = sorted(coord_managers, key=lambda x: x.coord_map[dim].min())
+    sort_managers = [coord_managers[i] for i in merge_order(coord_managers, dim)]
     merged_coords = _get_new_coords(sort_managers)
     return dc.get_coord_manager(merged_coords, dims=dims)

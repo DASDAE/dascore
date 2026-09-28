@@ -52,7 +52,7 @@ from dascore.utils.attrs import (
     combine_patch_attrs,
     warn_if_histories_differ,
 )
-from dascore.utils.coordmanager import merge_coord_managers
+from dascore.utils.coordmanager import merge_coord_managers, merge_order
 from dascore.utils.deprecate import deprecate
 from dascore.utils.docs import compose_docstring
 from dascore.utils.gaps import GapTolerance
@@ -746,7 +746,8 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     data = [x.data for x in patches]
     coords = [x.coords for x in patches]
     attrs = [x.attrs for x in patches]
-    new_data = np.concatenate(data, axis=axis)
+    order = merge_order(coords, merge_dim)
+    new_data = np.concatenate([data[i] for i in order], axis=axis)
     # Determine if conflicting non-dimensional coords should be dropped.
     conf = attr_kwargs.get("conflict", None)
     drop_conf_coords = True if conf in {"drop", "keep_first"} else False

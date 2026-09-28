@@ -3673,11 +3673,7 @@ def concat_coords(*coords, units=None) -> BaseCoord:
         msg = "concat_coords requires at least one non-empty coordinate."
         raise CoordError(msg)
     _check_concat(flat)
-    multi = [x for x in flat if len(x) > 1]
-    # Single-sample inputs state no direction of their own, so the order
-    # they were given in states it.
-    bounds = [x.min() for x in flat]
-    ascending = multi[0].sorted if multi else len(flat) < 2 or bounds[-1] > bounds[0]
+    ascending = _concat_ascending(flat)
     step = flat[0].step
     dtype = np.result_type(*[x.dtype for x in flat])
     steps = {_maybe_unpack(x.step) for x in flat}
@@ -3701,6 +3697,15 @@ def concat_coords(*coords, units=None) -> BaseCoord:
     return NumericCoord(
         runs=runs, sources=sources, dtype=dtype, units=flat[0].units, step=step
     )
+
+
+def _concat_ascending(coords) -> bool:
+    """Whether non-empty coords concatenate into an ascending coordinate."""
+    multi = [x for x in coords if len(x) > 1]
+    # Single-sample inputs state no direction of their own, so the order
+    # they were given in states it.
+    bounds = [x.min() for x in coords]
+    return multi[0].sorted if multi else len(coords) < 2 or bounds[-1] > bounds[0]
 
 
 def _check_concat(coords) -> None:
