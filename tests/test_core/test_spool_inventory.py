@@ -1254,6 +1254,15 @@ class TestSelectSeesPendingEnrichment:
         (out,) = spool.select(gauge_length=10.000001)
         assert out.attrs.gauge_length == 10.000001
 
+    def test_keep_last_replaces_rounding_noise(self, patch, inventory):
+        """Under keep_last the inventory's value stands and is what matches."""
+        noisy = patch.update_attrs(gauge_length=10.000001)
+        spool = dc.spool(noisy).attach_inventory(inventory)
+        spool = spool.enrich(coords=False, conflict="keep_last")
+        assert not len(spool.select(gauge_length=10.000001))
+        (out,) = spool.select(gauge_length=10.0)
+        assert out.attrs.gauge_length == 10.0
+
     def test_drop_leaves_a_disagreeing_row_unselectable(self, disagreeing):
         """A dropped attr is no value at all, which no selector matches."""
         spool = disagreeing.enrich(coords=False, conflict="drop")
