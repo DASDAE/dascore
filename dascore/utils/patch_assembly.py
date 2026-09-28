@@ -65,6 +65,7 @@ from dascore.utils.pd import (
     _convert_min_max_in_kwargs,
     get_dim_names_from_columns,
 )
+from dascore.utils.time import to_float
 
 # Slack when counting whole steps between a window edge and a sample, so a
 # ratio a float rounding short of a whole number still counts it.
@@ -637,8 +638,8 @@ class PatchAssembler:
         merging = len(joined) > expected_len
         merge_dim = _get_varying_dim(joined) if merging else None
         if merge_dim is not None:
-            steps = joined[f"{merge_dim}_step"]
-            descending = (steps < steps.iloc[0] * 0).all()
+            # members go in the output coordinate's order
+            descending = bool((to_float(joined[f"{merge_dim}_step"].values) < 0).all())
             joined = joined.sort_values(
                 f"{merge_dim}_min", ascending=not descending, kind="stable"
             )
