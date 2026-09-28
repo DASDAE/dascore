@@ -143,9 +143,10 @@ class _Column:
         many = len(values) >= _FACTORIZE_ROWS
         if many and infer_dtype(values, skipna=False) == "string":
             codes, distinct = pd.factorize(np.asarray(values, object), sort=False)
-            # A missing value gets no code, and hashing stops at a NUL, so
-            # either keeps the loop, which encodes both exactly.
-            if codes.min() >= 0 and "\0" not in "".join(distinct):
+            # A missing value gets no code, and hashing stops at a NUL, which
+            # merges strings the NUL alone tells apart: either keeps the loop,
+            # which encodes both exactly.
+            if codes.min() >= 0 and "\0" not in "".join(values):
                 return cls([str(x) for x in distinct], codes)
         if len(values) and values[0] is None and all(x is None for x in values):
             return cls.constant(None, len(values))

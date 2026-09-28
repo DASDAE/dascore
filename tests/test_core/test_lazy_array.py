@@ -2929,6 +2929,14 @@ class TestStringColumns:
         )
         assert all(type(x) is str for x in column.values)
 
+    def test_a_nul_suffix_stays_distinct(self):
+        """A string is not merged with its own prefix before a NUL."""
+        values = ["a", "a\0b", *[f"v{x}" for x in range(300)]]
+        column = lazy_module._Column.of(values)
+        assert (list(column.values), column.codes.tolist()) == reference_encoding(
+            values
+        )
+
     def test_nul_strings_stay_distinct(self):
         """Strings which differ after a NUL byte stay distinct at any length."""
         values = ["a\0b", "a\0c"] * 200
