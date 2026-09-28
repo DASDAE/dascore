@@ -86,6 +86,10 @@ class PatchCoordinateError(ValueError, PatchError):
     """Raised when something is wrong with a Patch's coordinates."""
 
 
+class UnknownCoordinateError(PatchCoordinateError, ParameterError):
+    """Raised when a patch selection or ordering names an unknown coordinate."""
+
+
 class PatchBroadcastError(ValueError, PatchError):
     """Raised when patch cant be broadcast to a specified shape."""
 

@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.constants import WARN_LEVELS, attr_conflict_description
+from dascore.constants import CONFLICT, WARN_LEVELS, attr_conflict_description
 from dascore.exceptions import (
     ChunkError,
     CoordMergeError,
@@ -1531,7 +1531,7 @@ def build_chunk_plan(
     keep_partial: bool = False,
     snap_coords: bool = True,
     tolerance: float | Quantity | np.timedelta64 | GapTolerance = 1.5,
-    conflict: Literal["drop", "raise", "keep_first"] = "raise",
+    conflict: CONFLICT = "raise",
     group=None,
     missing_dim: Literal["raise", "drop"] = "raise",
     fill_value=None,
@@ -1996,7 +1996,7 @@ def build_chunk_plan(
 def build_concat_plan(
     df: pd.DataFrame,
     *,
-    conflict: Literal["drop", "raise", "keep_first"] = "raise",
+    conflict: CONFLICT = "raise",
     group=None,
     **kwargs,
 ) -> ChunkPlan:

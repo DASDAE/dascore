@@ -538,9 +538,7 @@ def fill_to_row(
     # relative selection keeps it from describing them, and the whole
     # patch arrives here with its holes intact.
     limit, samples = _fill_limit(tolerance)
-    bound = {dim: limit} if limit is not None else {}
-    args = () if bound else (dim,)
-    patch = patch.fill_gaps(*args, value=fill_value, samples=samples, **bound)
+    patch = patch.fill_gaps(**{dim: limit}, fill_value=fill_value, samples=samples)
     coord = patch.get_coord(dim)
     bounds = _row_values(row, dim)
     step = coord.step

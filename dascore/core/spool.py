@@ -23,6 +23,9 @@ from rich.text import Text
 import dascore as dc
 from dascore.compat import UPath, is_array
 from dascore.constants import (
+    CONFLICT,
+    ENRICH_CONFLICT,
+    ON_MISSING,
     PROGRESS_LEVELS,
     WARN_LEVELS,
     ExecutorType,
@@ -226,11 +229,9 @@ class Spool(NodeRepr, NamespaceOwner):
     """
     A container of patches: a view over a `PatchCatalog`.
 
-    Constructed from in-memory patches directly (or via
-    [`dascore.spool`](`dascore.spool`)), from a directory of files with
-    [`Spool.from_directory`](`dascore.core.spool.Spool.from_directory`),
-    or from a single file with
-    [`Spool.from_file`](`dascore.core.spool.Spool.from_file`).
+    Construct directly from in-memory patches, or with
+    [`dascore.spool`](`dascore.spool`) from patches, a directory of files,
+    or a single file.
 
     Parameters
     ----------
@@ -273,7 +274,7 @@ class Spool(NodeRepr, NamespaceOwner):
     # Whether this spool has already said its inventory covers only part of
     # it; the warning is worth making once, not once per patch.
     _warned_unresolved: bool = False
-    # single-file provenance (set by from_file; drives update())
+    # single-file provenance (set by _from_file; drives update())
     _file_path = None
     _file_format = None
     _file_version = None
@@ -713,6 +714,8 @@ class Spool(NodeRepr, NamespaceOwner):
         *,
         _attrs: namespace_select_type = None,
         _coords: namespace_select_type = None,
+        samples: bool = False,
+        relative: bool = False,
         **kwargs,
     ) -> Self:
         """
@@ -733,6 +736,8 @@ class Spool(NodeRepr, NamespaceOwner):
             The patches' own coordinates only to say they are refused; a
             coordinate an attached inventory defines along the fiber is
             accepted and chooses channels. See above.
+        samples, relative
+            Not supported; True raises.
         **kwargs
             The selection whose matches are removed.
 
@@ -744,6 +749,9 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> rest = spool.unselect(tag='some_tag')
         >>> assert len(rest) + len(spool.select(tag='some_tag')) == len(spool)
         """
+        if samples or relative:
+            msg = "Spool.unselect does not support samples or relative selections."
+            raise ParameterError(msg)
         query = self._classify_query(_attrs, _coords, kwargs)
         attrs, coords = resolve_selector_namespaces(
             query.known_attrs | query.selectable,
@@ -1176,9 +1184,15 @@ class Spool(NodeRepr, NamespaceOwner):
     )
     def enrich(
         self,
+        inventory: Inventory | str | os.PathLike | None = None,
         *,
+        attrs: bool | tuple[str, ...] = True,
+        coords: bool | tuple[str, ...] = True,
+        acquisition_key: str | None = None,
+        time=None,
+        on_missing: ON_MISSING = "raise",
+        conflict: ENRICH_CONFLICT = "keep_first",
         on_unresolved: WARN_LEVELS = "warn",
-        **kwargs,
     ) -> Self:
         """
         Enrich each patch this spool yields from an inventory.
@@ -1188,29 +1202,20 @@ class Spool(NodeRepr, NamespaceOwner):
         warnings or errors for unresolved patches. Use ``conform_to_inventory``
         to restrict membership.
 
-        The inventory must first be attached with ``attach_inventory``.
+        The arguments other than ``inventory`` and ``on_unresolved`` are
+        passed to [`Patch.enrich`](`dascore.proc.inventory.enrich`) for
+        each extracted patch. The policies, a None `attrs` or `coords`,
+        and the shape of `acquisition_key` are checked now; everything
+        else is checked as each patch is extracted. Calling `enrich` again
+        replaces these arguments rather than adding to them.
 
         Parameters
         ----------
-        on_unresolved
-            What to do with a patch the inventory does not describe — one
-            naming no entry, or naming one the inventory does not resolve
-            to exactly one of. "warn" (the default) leaves it un-enriched
-            and says so, "ignore" leaves it silently, and "raise" fails.
-            A patch which *straddles* two epochs is described twice rather
-            than not at all, and raises regardless: it needs subdividing.
-        **kwargs
-            Held and passed to
-            [`Patch.enrich`](`dascore.proc.inventory.enrich`) for each
-            extracted patch. The names accepted are read from its
-            signature, so the two cannot disagree. The names, the policies
-            and the shape of an `acquisition_key` are checked now — the
-            rest each patch's own enrichment checks as it is extracted.
-            Calling `enrich` again replaces these rather than adding to
-            them. They are:
-
-        Other Parameters
-        ----------------
+        inventory
+            The inventory to enrich from, or its path, which is attached
+            with [`attach_inventory`](`dascore.core.spool.Spool.attach_inventory`).
+            None uses the inventory already attached and raises if there
+            is none.
         {attrs_desc}
         {coords_desc}
         acquisition_key
@@ -1222,6 +1227,13 @@ class Spool(NodeRepr, NamespaceOwner):
             own time and passing this raises.
         {on_missing_desc}
         {conflict_desc}
+        on_unresolved
+            What to do with a patch the inventory does not describe — one
+            naming no entry, or naming one the inventory does not resolve
+            to exactly one of. "warn" (the default) leaves it un-enriched
+            and says so, "ignore" leaves it silently, and "raise" fails.
+            A patch which *straddles* two epochs is described twice rather
+            than not at all, and raises regardless: it needs subdividing.
 
         Examples
         --------
@@ -1229,18 +1241,23 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> from dascore.examples import inventory_patch_pair
         >>>
         >>> patch, inventory = inventory_patch_pair()
-        >>> spool = dc.spool(patch).attach_inventory(inventory).enrich()
+        >>> spool = dc.spool(patch).enrich(inventory)
         >>> assert spool[0].attrs.gauge_length == 10.0
         >>>
         >>> # Or name what is wanted, as with Patch.enrich.
-        >>> attached = dc.spool(patch).attach_inventory(inventory)
-        >>> spool = attached.enrich(coords=False)
+        >>> spool = dc.spool(patch).enrich(inventory, coords=False)
         """
-        # Settled now rather than on extraction: a misspelled argument
-        # should be an error here, not on some patch pulled much later.
-        enrich_kwargs = normalize_enrich_kwargs(kwargs)
-        self._check_inventory_policy(on_unresolved, "enrich")
-        new = self.__class__(self)
+        spool = self if inventory is None else self.attach_inventory(inventory)
+        enrich_kwargs = normalize_enrich_kwargs(
+            attrs=attrs,
+            coords=coords,
+            acquisition_key=acquisition_key,
+            time=time,
+            on_missing=on_missing,
+            conflict=conflict,
+        )
+        spool._check_inventory_policy(on_unresolved, "enrich")
+        new = spool.__class__(spool)
         new._enrich_kwargs = enrich_kwargs
         new._on_unresolved = on_unresolved
         # What this enrichment leaves unresolved is worth saying once more.
@@ -1814,7 +1831,7 @@ class Spool(NodeRepr, NamespaceOwner):
         keep_partial: bool = False,
         snap_coords: bool = True,
         tolerance: float | Quantity | np.timedelta64 = 1.5,
-        conflict: Literal["drop", "raise", "keep_first"] = "raise",
+        conflict: CONFLICT = "raise",
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "raise",
         fill_value=None,
@@ -2125,7 +2142,7 @@ class Spool(NodeRepr, NamespaceOwner):
         keep_partial: bool = False,
         snap_coords: bool = True,
         tolerance: float | Quantity | np.timedelta64 = 1.5,
-        conflict: Literal["drop", "raise", "keep_first"] = "raise",
+        conflict: CONFLICT = "raise",
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "raise",
         fill_value=None,
@@ -2390,7 +2407,7 @@ class Spool(NodeRepr, NamespaceOwner):
         self,
         check_behavior: WARN_LEVELS | None = None,
         *,
-        conflict: Literal["drop", "raise", "keep_first"] = "raise",
+        conflict: CONFLICT = "raise",
         group: str | Sequence[str] | None = None,
         **kwargs,
     ) -> Self:
@@ -2469,7 +2486,7 @@ class Spool(NodeRepr, NamespaceOwner):
     # --- construction --------------------------------------------------
 
     @classmethod
-    def from_directory(cls, path, index_path=None) -> Self:
+    def _from_directory(cls, path, index_path=None) -> Self:
         """
         Create a spool over a directory of fiber files.
 
@@ -2505,7 +2522,7 @@ class Spool(NodeRepr, NamespaceOwner):
         return out
 
     @classmethod
-    def from_file(
+    def _from_file(
         cls,
         path,
         file_format: str | None = None,
@@ -2642,8 +2659,8 @@ class Spool(NodeRepr, NamespaceOwner):
             getattr(formatter, "index", lambda _: None)(self._file_path)
             # Sniffed rather than reused: noticing that the file changed is
             # what update is for, and it may now hold another version.
-            refreshed = self.from_file(self._file_path)
-            # from_file builds a spool from the file alone, but an attached
+            refreshed = self._from_file(self._file_path)
+            # _from_file builds a spool from the file alone, but an attached
             # inventory is the caller's state rather than the file's, and
             # re-reading the file is no reason to stop enriching.
             refreshed._inventory = self._inventory
@@ -3069,12 +3086,12 @@ def _spool_from_str(path, **kwargs):
     # A directory was passed; index it.
     if path.is_dir():
         requires_local_directory(path, label="Directory spool")
-        return Spool.from_directory(path, **kwargs)
+        return Spool._from_directory(path, **kwargs)
     # A single file was passed. If the file format supports quick
     # scanning build a lazy file-backed spool, else read it into memory.
     elif path.exists():  # a single file path was passed.
         _format, _version = dc.get_format(path, **kwargs)
-        return Spool.from_file(path, _format, _version)
+        return Spool._from_file(path, _format, _version)
     else:
         msg = (
             f"could not get spool from argument: {path}. "

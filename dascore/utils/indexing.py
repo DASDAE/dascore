@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 
 from dascore.core.coords import BaseCoord, Grid, Labels, NumericCoord
-from dascore.exceptions import ParameterError
+from dascore.exceptions import ParameterError, UnknownCoordinateError
 from dascore.utils.time import dtype_time_like, to_timedelta64
 
 
@@ -33,7 +33,7 @@ def get_indexers(
     if missing:
         msg = f"Dimensions {sorted(missing)} do not exist. Expected one of {dims}."
         if missing_dims == "raise":
-            raise ValueError(msg)
+            raise UnknownCoordinateError(msg)
         if missing_dims == "warn":
             warnings.warn(msg, UserWarning, stacklevel=3)
         out = {key: value for key, value in out.items() if key not in missing}

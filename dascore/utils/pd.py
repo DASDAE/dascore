@@ -148,9 +148,9 @@ def normalize_range_forms(value):
     """
     Normalize the patch-level slice range form to a 2-tuple.
 
-    Only slices are converted: bare None/Ellipsis keep their own errors,
-    and a fully-open range is rejected downstream as having no usable
-    bounds (per the selector spec).
+    Only slices are converted: bare None/Ellipsis keep their own meaning.
+    A fully-open range is a no-op on a coordinate and is rejected on an
+    attribute as having no usable bounds.
     """
     if isinstance(value, slice):
         return sanitize_range_param(value)

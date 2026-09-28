@@ -421,6 +421,7 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
 def enrich(
     patch: PatchType,
     inventory: Inventory,
+    *,
     attrs: bool | tuple[str, ...] = True,
     coords: bool | tuple[str, ...] = True,
     acquisition_key: str | None = None,

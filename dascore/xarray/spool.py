@@ -12,13 +12,13 @@ from __future__ import annotations
 import typing
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 from dascore.config import get_config
-from dascore.constants import SpoolType
+from dascore.constants import CONFLICT, SpoolType
 from dascore.exceptions import PatchConversionError
 from dascore.utils.misc import optional_import
 from dascore.utils.time import to_float
@@ -414,7 +414,7 @@ def spool_to_xarray(
     dim: str = "time",
     group: str | typing.Sequence[str] | None = None,
     tolerance=1.5,
-    conflict: Literal["drop", "raise", "keep_first"] = "raise",
+    conflict: CONFLICT = "raise",
     block_size: str | int | None = None,
 ):
     """

@@ -1541,8 +1541,6 @@ dascore.core.spool.Spool.conform_to_inventory	/api/dascore/core/spool/Spool/conf
 dascore.core.spool.Spool.cut	/api/dascore/core/spool/Spool/cut.qmd
 dascore.core.spool.Spool.enrich	/api/dascore/core/spool/Spool/enrich.qmd
 dascore.core.spool.Spool.expand_by	/api/dascore/core/spool/Spool/expand_by.qmd
-dascore.core.spool.Spool.from_directory	/api/dascore/core/spool/Spool/from_directory.qmd
-dascore.core.spool.Spool.from_file	/api/dascore/core/spool/Spool/from_file.qmd
 dascore.core.spool.Spool.get_contents	/api/dascore/core/spool/Spool/get_contents.qmd
 dascore.core.spool.Spool.get_coverage	/api/dascore/core/spool/Spool/get_coverage.qmd
 dascore.core.spool.Spool.get_gaps	/api/dascore/core/spool/Spool/get_gaps.qmd
@@ -5971,10 +5969,6 @@ docs/api/dascore/core/spool/Spool/enrich	/api/dascore/core/spool/Spool/enrich.qm
 docs/api/dascore/core/spool/Spool/enrich.qmd	/api/dascore/core/spool/Spool/enrich.qmd
 docs/api/dascore/core/spool/Spool/expand_by	/api/dascore/core/spool/Spool/expand_by.qmd
 docs/api/dascore/core/spool/Spool/expand_by.qmd	/api/dascore/core/spool/Spool/expand_by.qmd
-docs/api/dascore/core/spool/Spool/from_directory	/api/dascore/core/spool/Spool/from_directory.qmd
-docs/api/dascore/core/spool/Spool/from_directory.qmd	/api/dascore/core/spool/Spool/from_directory.qmd
-docs/api/dascore/core/spool/Spool/from_file	/api/dascore/core/spool/Spool/from_file.qmd
-docs/api/dascore/core/spool/Spool/from_file.qmd	/api/dascore/core/spool/Spool/from_file.qmd
 docs/api/dascore/core/spool/Spool/get_contents	/api/dascore/core/spool/Spool/get_contents.qmd
 docs/api/dascore/core/spool/Spool/get_contents.qmd	/api/dascore/core/spool/Spool/get_contents.qmd
 docs/api/dascore/core/spool/Spool/get_coverage	/api/dascore/core/spool/Spool/get_coverage.qmd

@@ -264,6 +264,10 @@ class TestBasics:
         with pytest.raises(ValueError, match="assignment destination is read-only"):
             coord.values[0] = coord.values[1]
 
+    def test_data_is_values(self, coord):
+        """`data` is an alias of `values`."""
+        np.testing.assert_array_equal(coord.data, coord.values)
+
     def test_str(self, coord):
         """All coords should be convertible to str."""
         out = str(coord)

@@ -690,6 +690,14 @@ class TestUnselect:
         with pytest.raises(InvalidSpoolQueryError, match="neither an attribute"):
             diverse_spool.unselect(not_a_name=1)
 
+    @pytest.mark.parametrize("flag", ["samples", "relative"])
+    def test_samples_relative_are_not_attributes(self, diverse_spool, flag):
+        """The select flags are keywords, refused when True."""
+        out = diverse_spool.unselect(tag="some_tag", **{flag: False})
+        assert len(out) == len(diverse_spool.unselect(tag="some_tag"))
+        with pytest.raises(ParameterError, match="does not support samples"):
+            diverse_spool.unselect(tag="some_tag", **{flag: True})
+
     def test_composes(self, diverse_spool):
         """A spool with patches removed is a spool."""
         tags = diverse_spool.get_contents()["tag"].tolist()
@@ -955,7 +963,7 @@ class TestGetSpool:
         """
         Opening one file sniffs its format once.
 
-        from_file re-sniffed a format its caller had already resolved,
+        _from_file re-sniffed a format its caller had already resolved,
         which opens the file again; for a remote source that is a second
         round trip.
         """
@@ -975,7 +983,7 @@ class TestGetSpool:
         with mock.patch.object(
             manager, "_get_format", wraps=manager._get_format
         ) as probe:
-            assert len(Spool.from_file(terra15_das_example_path, fmt, ver))
+            assert len(Spool._from_file(terra15_das_example_path, fmt, ver))
         assert probe.call_count == 0
 
     def test_update_rereads_a_rewritten_format(self, tmp_path):
@@ -999,10 +1007,10 @@ class TestGetSpool:
         makes of the file rather than an error, which is the contract the
         other two entry points already have.
         """
-        spool = Spool.from_file(terra15_das_example_path, "DASDAE", "1")
+        spool = Spool._from_file(terra15_das_example_path, "DASDAE", "1")
         assert len(spool) == 0
         with pytest.raises(UnknownFiberFormatError):
-            Spool.from_file(terra15_das_example_path, "not_a_format", "1")
+            Spool._from_file(terra15_das_example_path, "not_a_format", "1")
 
     def test_non_existent_file_raises(self):
         """A path that doesn't exist should raise."""

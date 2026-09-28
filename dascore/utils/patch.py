@@ -20,6 +20,7 @@ from pydantic import TypeAdapter
 import dascore as dc
 from dascore.config import get_config
 from dascore.constants import (
+    CONFLICT,
     WARN_LEVELS,
     PatchMetaType,
     PatchType,
@@ -1956,7 +1957,7 @@ def concatenate_planned(
     patches: Sequence[dc.Patch],
     dim: str,
     count: int | None = None,
-    conflict: Literal["drop", "raise", "keep_first"] = "raise",
+    conflict: CONFLICT = "raise",
 ) -> dc.Patch:
     """
     Concatenate the members of one planned output, as the plan decided.

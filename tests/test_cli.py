@@ -122,7 +122,7 @@ class TestDocuments:
             root, index, "spool"
         )
 
-    @pytest.mark.parametrize("name", ["Inventory.from_yaml", "Spool.from_directory"])
+    @pytest.mark.parametrize("name", ["Inventory.from_yaml", "PatchAttrs.from_dict"])
     def test_classmethod(self, corpus, name):
         """Classmethod documentation identifies the automatically supplied class."""
         text = doc_cache.read_document(*corpus, name)

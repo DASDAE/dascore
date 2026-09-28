@@ -21,6 +21,7 @@ from dascore.exceptions import (
     ParameterError,
     PatchCoordinateError,
     PatchError,
+    UnknownCoordinateError,
 )
 from dascore.utils.array_api import array_namespace, to_numpy
 from dascore.utils.docs import compose_docstring
@@ -559,7 +560,7 @@ def _check_coord_names(patch: PatchType, kwargs) -> None:
     msg = (
         f"Coordinate(s) {sorted(invalid)} not found in patch coordinates: {valid_list}"
     )
-    raise PatchCoordinateError(msg)
+    raise UnknownCoordinateError(msg)
 
 
 def _dimension_indexers(coords, queries, **kwargs):
@@ -996,9 +997,11 @@ class Order(_Query):
 
     def get_metadata(self, meta):
         """Return the re-ordered coordinates and the indexers behind them."""
+        queries = self.model_extra or {}
+        _check_coord_names(meta, queries)
         coords, indexer = _dimension_indexers(
             meta.coords,
-            self.model_extra or {},
+            queries,
             operation="order",
             relative=self.relative,
             samples=self.samples,
@@ -1432,14 +1435,14 @@ def _place_blocks(data, axis: int, length: int, blocks, fill) -> np.ndarray:
 def fill_gaps(
     patch: PatchType,
     *args,
-    value: Any = np.nan,
+    fill_value: Any = np.nan,
     samples: bool = False,
     **kwargs,
 ) -> PatchType:
     """
     Fill the holes along a dimension with a constant value.
 
-    Places runs of samples on one evenly sampled grid and writes `value`
+    Places runs of samples on one evenly sampled grid and writes `fill_value`
     where no sample sits, so a segmented coordinate (for example from
     [`Spool.chunk`](`dascore.Spool.chunk`) with `snap_coords=False` across a
     gap) becomes a plain range, unless a limit leaves wider holes as seams.
@@ -1450,7 +1453,7 @@ def fill_gaps(
         The patch to fill.
     *args
         The dimension to fill, eg `patch.fill_gaps("time")`.
-    value
+    fill_value
         The value written at filled positions. It must fit the data's
         dtype: NaN cannot fill integer data, so pass an integer or cast
         the data to float first.
@@ -1498,7 +1501,7 @@ def fill_gaps(
     >>> assert patch.fill_gaps(distance=2, samples=True).shape == patch.shape
     >>>
     >>> # Fill with zeros instead of NaN.
-    >>> assert (patch.fill_gaps("distance", value=0).data[5:8] == 0).all()
+    >>> assert (patch.fill_gaps("distance", fill_value=0).data[5:8] == 0).all()
     """
     dim, axis, limit = get_dim_axis_value(patch, args=args, kwargs=kwargs)[0]
     layout = _fill_layout(patch.get_coord(dim), limit, samples=samples)
@@ -1506,7 +1509,7 @@ def fill_gaps(
         return patch
     coord, blocks = layout
     data = to_numpy(patch.data)
-    fill = _fill_scalar(value, data.dtype)
+    fill = _fill_scalar(fill_value, data.dtype)
     data = _place_blocks(data, axis, len(coord), blocks, fill)
     coords = drop_associated_coords(patch.coords, dim, "Filling gaps along")
     return patch.new(data=data, coords=coords._update_grid(dim, **{dim: coord}))
