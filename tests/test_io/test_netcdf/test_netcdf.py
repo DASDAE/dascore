@@ -13,7 +13,11 @@ import pytest
 from upath import UPath
 
 import dascore as dc
-from dascore.exceptions import MissingOptionalDependencyError, ParameterError
+from dascore.exceptions import (
+    InvalidFiberFileError,
+    MissingOptionalDependencyError,
+    ParameterError,
+)
 from dascore.io.netcdf import core as netcdf_core
 from dascore.io.netcdf import utils as netcdf_utils
 from dascore.io.netcdf.utils import (
@@ -917,25 +921,61 @@ class TestNamedSnap(_NamedSnapCases):
 class TestPlainNetCDF4:
     """A netCDF-4 file without CF conventions, as xarray writes one."""
 
-    @pytest.fixture(params=[True, False])
-    def snap(self, request):
-        """Read with and without snapping."""
-        return request.param
-
-    @pytest.mark.parametrize("unit", ["s", "ms", "us"])
-    def test_time_decoded(self, tmp_path, unit, snap):
-        """Time encoded as '<unit> since <date>' reads as that time."""
+    @staticmethod
+    def _write(path, time, **encoding):
+        """Write a small array with xarray's time encoding."""
         xr = pytest.importorskip("xarray")
         pytest.importorskip("h5netcdf")
-        step = np.timedelta64(4, unit)
-        time = np.datetime64("2017-09-18", "ns") + np.arange(10) * step
         array = xr.DataArray(
-            np.ones((3, 10)),
+            np.ones((3, len(time))),
             dims=("distance", "time"),
             coords={"distance": [0.0, 1.0, 2.0], "time": time},
             name="data",
         )
-        path = tmp_path / "plain.nc"
-        array.to_netcdf(path, engine="h5netcdf")
+        array.to_netcdf(path, engine="h5netcdf", encoding={"time": encoding})
+        return path
+
+    @pytest.mark.parametrize("snap", [True, False])
+    @pytest.mark.parametrize("unit", ["s", "ms", "us"])
+    def test_time_decoded(self, tmp_path, unit, snap):
+        """Time encoded as '<unit> since <date>' reads as that time."""
+        step = np.timedelta64(4, unit)
+        time = np.datetime64("2017-09-18", "ns") + np.arange(10) * step
+        path = self._write(tmp_path / "plain.nc", time)
         coord = dc.read(path, snap=snap)[0].get_coord("time")
         np.testing.assert_array_equal(coord.values, time)
+        assert coord.dtype == np.dtype("datetime64[ns]")
+
+    def test_uneven_microseconds(self, tmp_path):
+        """Uneven microsecond offsets decode to nanosecond labels."""
+        offsets = np.array([0, 1, 3, 4]) * np.timedelta64(1, "us")
+        time = np.datetime64("2017-09-18", "ns") + offsets
+        path = self._write(tmp_path / "uneven.nc", time)
+        coord = dc.read(path, snap=False)[0].get_coord("time")
+        np.testing.assert_array_equal(coord.values, time)
+        assert len(dc.read(path)[0].get_coord("time")) == 4
+
+    def test_other_calendar_refused(self, tmp_path):
+        """A calendar other than the standard one is refused, not misread."""
+        path = tmp_path / "noleap.h5"
+        with h5py.File(path, "w") as h5:
+            h5["data"] = np.ones((2, 3))
+            h5["time"] = np.array([0, 1, 2])
+            h5["time"].attrs["units"] = "days since 2000-02-28"
+            h5["time"].attrs["calendar"] = "noleap"
+        with pytest.raises(InvalidFiberFileError, match="calendar"):
+            dc.read(path)
+
+    @pytest.mark.parametrize("units", ["fortnights since 2017-09-18", np.array([b"s"])])
+    def test_units_attr_forms(self, tmp_path, units):
+        """Unknown CF time units are refused; a legacy array attr still reads."""
+        path = tmp_path / "simple.h5"
+        with h5py.File(path, "w") as h5:
+            h5["data"] = np.ones((2, 3))
+            h5["time"] = np.array([0, 1, 2])
+            h5["time"].attrs["units"] = units
+        if isinstance(units, str):
+            with pytest.raises(InvalidFiberFileError, match="time units"):
+                dc.read(path)
+        else:
+            assert len(dc.read(path)[0].get_coord("time")) == 3

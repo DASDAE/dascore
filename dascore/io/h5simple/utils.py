@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from typing import Any, cast
+
 import numpy as np
 import pandas as pd
 
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.core import get_coord
+from dascore.exceptions import InvalidFiberFileError
 from dascore.io.utils import should_snap
 from dascore.utils.misc import _maybe_unpack, unbyte
 
@@ -19,6 +22,7 @@ OTHER_COORD_ARRAY_NAMES = frozenset(("channels", "distance"))
 
 FILE_FORMAT_ATTR_NAMES = frozenset(("__format__", "file_format", "format"))
 DEFAULT_ATTRS = frozenset(("CLASS", "PYTABLES_FORMAT_VERSION", "TITLE", "VERSION"))
+_CF_CALENDARS = frozenset(("standard", "gregorian", "proleptic_gregorian"))
 
 
 def _get_attrs_coords_and_data(h5, snap):
@@ -39,11 +43,22 @@ def _get_attrs_coords_and_data(h5, snap):
 
 def _time_values(node, index=slice(None)):
     """Time labels, decoding CF units such as 'milliseconds since 2017-09-18'."""
-    unit, _, origin = unbyte(node.attrs.get("units", "")).partition(" since ")
+    units = str(unbyte(_maybe_unpack(node.attrs.get("units", ""))))
+    unit, _, origin = units.partition(" since ")
     if not origin:
         return dc.to_datetime64(node[index])
-    offsets = pd.to_timedelta(np.atleast_1d(node[index]), unit=unit.strip())
+    calendar = str(unbyte(_maybe_unpack(node.attrs.get("calendar", "standard"))))
+    if calendar.lower() not in _CF_CALENDARS:
+        msg = f"Time uses the unsupported CF calendar {calendar!r}."
+        raise InvalidFiberFileError(msg)
+    try:
+        name = cast("Any", unit.strip())  # CF names a unit pandas also knows
+        offsets = pd.to_timedelta(np.atleast_1d(node[index]), unit=name)
+    except ValueError as exc:
+        msg = f"Cannot decode the time units {units!r}."
+        raise InvalidFiberFileError(msg) from exc
     out = pd.Timestamp(origin.strip()).to_datetime64() + offsets.to_numpy()
+    out = out.astype("datetime64[ns]")
     return out if isinstance(index, slice) else out[0]
 
 
