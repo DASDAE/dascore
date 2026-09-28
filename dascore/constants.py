@@ -196,7 +196,6 @@ ON_MISSING = Literal[WARN_LEVELS, "null"]
 CONFLICT = Literal["drop", "raise", "keep_first"]
 
 # Enrichment conflicts use merge policies plus keep_last (inventory wins).
-# keep_first preserves the patch's value.
 ENRICH_CONFLICT = Literal[CONFLICT, "keep_last"]
 
 # The stdlib warning-action alias is stub-only. Omit "all", unsupported on 3.12-3.13.
@@ -311,15 +310,13 @@ on_missing
 enrich_conflict_description = f"""
 conflict
 {textwrap.indent(attr_conflict_description.strip(), "    ")}
-    Enrichment combines the inventory's values with the patch's own
-    rather than a sequence of patches, so it also accepts `keep_last`,
-    which is the inventory correcting the file. The default `keep_first`
-    keeps what the patch already stated: an attr a reader read out of the
-    file header was there first. Either way an attr the patch leaves
-    unset is filled, which is most of what enrichment does. `raise` is
-    the misresolution guard: a header disagreeing with the resolved
-    acquisition usually means the `acquisition_key` resolved to the
-    wrong place.
+    Unlike a merge, enrichment fills an attr the patch leaves unset under
+    every policy, and `raise` (the default) raises a
+    [PatchError](`dascore.exceptions.PatchError`) when a stated value
+    disagrees with the inventory, since that usually means the
+    `acquisition_key` resolved to the wrong place. `keep_first` keeps
+    the patch's value; `keep_last` takes the inventory's, correcting the
+    file.
 """.strip()
 
 

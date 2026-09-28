@@ -1191,7 +1191,7 @@ class Spool(NodeRepr, NamespaceOwner):
         acquisition_key: str | None = None,
         time=None,
         on_missing: ON_MISSING = "raise",
-        conflict: ENRICH_CONFLICT = "keep_first",
+        conflict: ENRICH_CONFLICT = "raise",
         on_unresolved: WARN_LEVELS = "warn",
     ) -> Self:
         """

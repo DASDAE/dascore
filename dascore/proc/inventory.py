@@ -427,7 +427,7 @@ def enrich(
     acquisition_key: str | None = None,
     time=None,
     on_missing: ON_MISSING = "raise",
-    conflict: ENRICH_CONFLICT = "keep_first",
+    conflict: ENRICH_CONFLICT = "raise",
 ) -> PatchType:
     """
     Copy inventory metadata onto a patch.

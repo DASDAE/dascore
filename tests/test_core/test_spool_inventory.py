@@ -902,7 +902,7 @@ class TestSpoolEnrich:
         plain = dc.spool(patch)
         attached = plain.attach_inventory(inventory)
         assert attached.enrich() == attached.enrich(
-            attrs=True, coords=True, conflict="keep_first"
+            attrs=True, coords=True, conflict="raise"
         )
 
     def test_name_collections_compare_by_content(self, patch, inventory):
@@ -1204,8 +1204,8 @@ class TestSelectSeesPendingEnrichment:
 
     Under `conflict="keep_last"` or `"drop"` the inventory rewrites a
     stated header; a selection which read the header would keep a patch
-    that comes out not matching it. The default `keep_first` leaves the
-    header standing, so there the header is what to read.
+    that comes out not matching it. `keep_first` leaves the header
+    standing, so there the header is what to read.
     """
 
     @pytest.fixture(scope="class")
@@ -1237,7 +1237,7 @@ class TestSelectSeesPendingEnrichment:
 
     def test_keep_first_judges_by_the_header(self, disagreeing):
         """The header stated it first, so it stands and is what is matched."""
-        spool = disagreeing.enrich(coords=False)
+        spool = disagreeing.enrich(coords=False, conflict="keep_first")
         selected = spool.select(gauge_length=20.0)
         assert selected.get_contents()["tag"].tolist() == ["wrong"]
         assert selected[0].attrs.gauge_length == 20.0
