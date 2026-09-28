@@ -2202,7 +2202,7 @@ def _promoted(values, dtype) -> Grid | None:
 
 
 def _simplest_between(low: Fraction, high: Fraction) -> Fraction:
-    """The fraction of least denominator strictly between low and high."""
+    """The least-denominator fraction in (low, high), the least of any tie."""
     whole = math.floor(low)
     if whole + 1 < high:
         return Fraction(whole + 1)
@@ -2212,30 +2212,40 @@ def _simplest_between(low: Fraction, high: Fraction) -> Fraction:
 
 
 def _fractional_grid(values) -> Grid | None:
-    """The grid of a fractional tick step holding these labels exactly, if any."""
+    """The simplest fractional-step grid whose labels are these exactly, if any."""
     count = len(values)
     if _exact_dtype(values[0], values[-1], None, None) is None:
         return None
     first = _to_tick(values[0])
-    if not (_to_tick(values[-1]) - first) % (count - 1):
-        return None  # a whole-tick step
-    # Label k is a floor, so k steps lie within a tick of it; the tightest
-    # such bounds (any index gives valid ones) hold the simplest step.
-    ticks = (values - values[0]).astype(np.int64)
-    k = np.arange(1, count)
-    at_low = int(np.argmax((ticks[1:] - 1) / k)) + 1
-    at_high = int(np.argmin((ticks[1:] + 1) / k)) + 1
-    low = Fraction(int(ticks[at_low]) - 1, at_low)
-    high = Fraction(int(ticks[at_high]) + 1, at_high)
-    if low >= high:  # no step holds them all
-        return None
-    step = _simplest_between(low, high)
-    num, den = step.numerator, step.denominator
-    # the least offset of the ideal origin (in 1/den ticks) each label allows
-    steps = np.arange(count, dtype=np.int64) * num
-    phase = int(np.max(den * ticks - steps))
-    grid = Grid(first, num, den, count, phase=phase)
-    return grid if _grid_holds(grid, values, values.dtype) else None
+    span = _to_tick(values[-1]) - first
+    if not span % (count - 1) or abs(first) + abs(span) >= 2**63:
+        return None  # a span the count divides admits only a whole-tick grid
+    wide = values.view(np.int64) if values.dtype.kind in "mM" else values
+    ticks = wide.astype(np.int64, copy=False) - np.int64(wide[0])
+    index = np.arange(count, dtype=np.int64)
+    offsets, scratch = np.empty_like(ticks), np.empty_like(ticks)
+    low, high = Fraction(span - 1, count - 1), Fraction(span + 1, count - 1)
+    # A step q holds every label t_k when max(t_k - kq) - min(t_k - kq) < 1.
+    # Try the simplest q in the bounds; the label pair it breaks most moves a
+    # bound past it, so the first q that holds is the simplest that does.
+    # Real rates settle in a few passes, random short grids in under 64; the
+    # cap bounds the work on any input.
+    for _ in range(256):
+        if low >= high:
+            return None
+        step = _simplest_between(low, high)
+        num, den = step.numerator, step.denominator
+        if den * (abs(span) + 1) >= 2**62:
+            return None
+        # each label's offset past k steps, in 1/den ticks
+        np.multiply(ticks, den, out=offsets)
+        offsets -= np.multiply(index, num, out=scratch)
+        top, bottom = int(np.argmax(offsets)), int(np.argmin(offsets))
+        if offsets[top] - offsets[bottom] < den:
+            return Grid(first, num, den, count, phase=int(offsets[top]))
+        bound = Fraction(int(ticks[top] - ticks[bottom]) - 1, top - bottom)
+        low, high = (bound, high) if top > bottom else (low, bound)
+    return None
 
 
 def _grid_holds(grid: Grid, values, dtype) -> bool:
@@ -4360,6 +4370,8 @@ def get_coord(
     if snap:
         start, stop, step, monotonic = _maybe_get_start_stop_step(data)
         if start is not None:
+            # labels flooring a fractional-step grid keep it; the median step
+            # below is rounded and drifts
             if (grid := _fractional_grid(data)) is not None:
                 return NumericCoord(runs=(grid,), units=units, dtype=data.dtype)
             out = _range_coord(dict(start=start, stop=stop, step=step), units)

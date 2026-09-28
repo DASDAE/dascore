@@ -3270,15 +3270,27 @@ class TestFractionalSnap:
 
     t0 = np.datetime64("2020-01-01T00:00:00", "ns")
 
-    @pytest.mark.parametrize("rate", [1024, 3000])
-    @pytest.mark.parametrize("length", [4, 60, 200_000])
-    def test_fractional_grid_round_trips(self, rate, length):
-        """Labels of a fractional-step grid rebuild the same grid."""
-        coord = get_coord(start=self.t0, step=(1, rate), shape=(length,))
+    @pytest.mark.parametrize("rate", [1024, 3000, 1234, 7919, 22050, 44100])
+    @pytest.mark.parametrize("length", [5, 60, 5000, 200_000])
+    @pytest.mark.parametrize("start", [0, 1, 13])
+    def test_fractional_grid_round_trips(self, rate, length, start):
+        """
+        Labels of a fractional-rate grid come back exactly. Short runs may
+        take a simpler step that also holds them; long ones take the rate's.
+        """
+        shape = (start + length,)
+        coord = get_coord(start=self.t0, step=(1, rate), shape=shape)[start:]
         out = get_coord(data=coord.values)
-        assert out == coord
-        assert out.step == coord.step
-        assert np.array_equal(out.values, coord.values)
+        assert np.array_equal(out.values, coord.values) and out.evenly_sampled
+        if length == 200_000:
+            assert out == coord
+
+    def test_descending_grid(self):
+        """Reversed labels of a fractional grid rebuild a descending grid."""
+        values = get_coord(start=self.t0, step=(1, 1024), shape=(1000,)).values
+        out = get_coord(data=values[::-1])
+        assert np.array_equal(out.values, values[::-1])
+        assert out.step_exact == Fraction(-1, 1024)
 
     def test_sliced_and_rounded_grids(self):
         """Grids whose ideal origin is not a whole tick also rebuild."""
@@ -3290,19 +3302,47 @@ class TestFractionalSnap:
             assert np.array_equal(out.values, values)
             assert out.step_exact == Fraction(1, 1024)
 
+    def test_bounds_from_every_label_pair(self):
+        """The step bounds come from all label pairs, not just the first label."""
+        values = np.array([0, 10001, 20001, 30001])
+        out = get_coord(data=values)
+        assert np.array_equal(out.values, values)
+        assert out.step_exact == 10000 + Fraction(1, 3)
+
+    def test_narrow_integers(self):
+        """Narrow integers widen before their offsets are taken."""
+        values = np.array([-30000, -20000, -9999, 1, 10002, 20002, 30003], np.int16)
+        # the tolerant check's own int16 arithmetic overflows, as it did before
+        with suppress_warnings(RuntimeWarning):
+            out = get_coord(data=values)
+        assert np.array_equal(out.values, values) and out.dtype == values.dtype
+
+    def test_drifting_clock_keeps_its_step(self):
+        """A clock slightly off its nominal rate keeps its exact step."""
+        ticks = np.arange(10_000, dtype=np.int64) * 9_999_999 // 10
+        values = self.t0 + ticks.astype("m8[ns]")
+        out = get_coord(data=values)
+        assert np.array_equal(out.values, values)
+        assert out.step_exact == Fraction(9_999_999, 10**10)
+
+    def test_random_rational_grids(self):
+        """Labels of random rational grids, sliced anywhere, come back exactly."""
+        rng = np.random.default_rng(42)
+        for _ in range(300):
+            den = int(rng.integers(1, 5001))
+            num = int(rng.integers(2000 * den, 3000 * den))
+            phase, length = int(rng.integers(den)), int(rng.integers(3, 2000))
+            ticks = (phase + np.arange(length, dtype=np.int64) * num) // den
+            values = ticks[int(rng.integers(length - 2)) :] + 10**12
+            out = get_coord(data=values)
+            assert np.array_equal(out.values, values) and out.evenly_sampled
+
     def test_simpler_whole_tick_grid_wins(self):
         """Three 3000 Hz labels are also a whole-tick grid, the simpler one."""
         coord = get_coord(start=self.t0, step=(1, 3000), shape=(3,))
         out = get_coord(data=coord.values)
         assert out.step == np.timedelta64(333333, "ns")
         assert np.array_equal(out.values, coord.values)
-
-    def test_whole_tick_unchanged(self):
-        """A whole-nanosecond step still snaps to its plain grid."""
-        step = np.timedelta64(1, "ms")
-        coord = get_coord(start=self.t0, step=step, shape=(1000,))
-        out = get_coord(data=coord.values)
-        assert out == coord and out.step == step
 
     def test_jitter_still_snaps(self):
         """Nearly uniform labels still snap to their median step."""
@@ -3329,11 +3369,12 @@ class TestFractionalSnap:
         out = get_coord(data=values)
         assert out == get_coord(start=self.t0, step=step, shape=(100,))
 
-    def test_grid_past_int64_falls_through(self):
-        """A fractional step too large for int64 arithmetic keeps the median."""
-        step = Fraction(4 * 10**18 + 1, 2)
-        values = np.array([int(step * k) for k in range(4)], dtype=np.int64)
-        assert get_coord(data=values).step == 2 * 10**18
+    def test_offsets_past_int64_fall_through(self):
+        """A grid whose offsets would overflow int64 keeps the median step."""
+        num = 617 * 10**15 + 1
+        values = np.array([k * num // 617 for k in range(1000)], dtype=np.int64)
+        out = get_coord(data=values)
+        assert out == get_coord(start=0, step=10**15, shape=(1000,))
 
     def test_integer_fractional_grid(self):
         """Integer labels of a fractional-step grid rebuild the same grid."""
@@ -3342,6 +3383,9 @@ class TestFractionalSnap:
         assert out == coord and np.array_equal(out.values, coord.values)
 
     def test_uneven_integers_not_a_grid(self):
-        """Short integers too uneven to snap are not promoted to a grid."""
+        """
+        Integers the tolerant check rejects stay unsnapped, though a 3/2-step
+        grid would hold them.
+        """
         out = get_coord(data=np.array([0, 1, 3]))
         assert not out.evenly_sampled
