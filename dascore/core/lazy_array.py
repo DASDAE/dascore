@@ -1264,9 +1264,11 @@ def _trims_ends(block: _Block, starts: np.ndarray, stops: np.ndarray) -> bool:
         return False
     start, stop = block.axes["out_start"], block.axes["out_stop"]
     ends = stop[0, axis] > starts[axis] and start[-1, axis] < stops[axis]
-    # Boxes of a valid array are inside it, and never empty.
+    # Boxes of a valid array are inside it, never empty, and follow one
+    # another along the axis they are stacked on.
     inside = start.min() >= 0 and (stop <= shape).all() and (stop > start).all()
-    return bool(ends and inside)
+    ordered = (start[1:, axis] >= stop[:-1, axis]).all()
+    return bool(ends and inside and ordered)
 
 
 def _clip_ends(block: _Block, starts: np.ndarray, stops: np.ndarray) -> _Block:

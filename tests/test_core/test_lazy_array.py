@@ -3652,6 +3652,17 @@ class TestClipEnds:
         empty = LazyArray.from_frame(frame, (12, 3), "f8")
         assert len(empty[1:11]) == 2
 
+    def test_overlapping_members_take_the_general_path(self, monkeypatch):
+        """Members overlapping on the stacked axis are clipped as any others."""
+        short = LazyArray.from_sources([ArraySource.full((4,), 1)], shape=(2,))
+        joined = concat([short, LazyArray.from_source(ArraySource.full((4,), 2))])
+        fast = joined[3:5]
+        fast.table
+        monkeypatch.setattr(lazy_module, "_trims_ends", lambda *_: False)
+        general = joined[3:5]
+        pd.testing.assert_frame_equal(fast.to_frame(), general.to_frame())
+        assert fast.data_id == general.data_id
+
 
 def reference_merge(columns):
     """Merge columns a dictionary value at a time, as the loop once did."""
