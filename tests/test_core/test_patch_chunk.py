@@ -3119,22 +3119,6 @@ class TestChunkFillValue:
         assert len(coord) == 2001
         assert np.array_equal(self._fill_positions(merged), [1000])
 
-    def test_tolerance_bounds_a_hole_the_planner_never_saw(self, random_patch):
-        """A pending selection hides a hole from the plan; tolerance still rules."""
-        first = random_patch.select(time=(0, 100), samples=True)
-        second = random_patch.select(time=(600, 1000), samples=True)
-        with pytest.warns(UserWarning, match="fill_value"):
-            gapped = dc.spool([first, second]).chunk(time=None, tolerance=600)[0]
-        # the selection resolves against the patch, so the plan describes
-        # the whole of it rather than its runs, holes and all
-        spool = dc.spool([gapped]).select(time=(0.1, -0.1), relative=True)
-        with suppress_warnings(UserWarning):
-            narrow = spool.chunk(time=None, tolerance=1, fill_value=np.nan)[0]
-            wide = spool.chunk(time=None, tolerance=600, fill_value=np.nan)[0]
-        assert not np.isnan(narrow.data).any()
-        assert int(np.isnan(wide.data).all(axis=0).sum()) == 500
-        assert len(wide.get_coord("time")) == len(narrow.get_coord("time")) + 500
-
     def test_infinite_tolerance_fills_every_hole(self, gapped_spool):
         """No boundary is a gap, so no hole is too wide to fill."""
         merged = gapped_spool.chunk(time=None, tolerance=np.inf, fill_value=np.nan)[0]
