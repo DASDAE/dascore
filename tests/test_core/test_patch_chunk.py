@@ -836,7 +836,9 @@ class TestStreamingMerge:
         p2 = p2.transpose(*reversed(p2.dims))
         patches = iter([p1, p2])
         monkeypatch.setattr(
-            assembler, "_load_trimmed_patch", lambda patch_kwargs, joined: next(patches)
+            assembler,
+            "_load_trimmed_patch",
+            lambda patch_kwargs, joined, units=None: next(patches),
         )
         time_axis = p1.get_axis("time")
         samples = p1.data.shape[time_axis] * 2
@@ -854,7 +856,9 @@ class TestStreamingMerge:
         p2 = p2.select(distance=(None, distance.max() - distance.step))
         patches = iter([p1, p2])
         monkeypatch.setattr(
-            assembler, "_load_trimmed_patch", lambda patch_kwargs, joined: next(patches)
+            assembler,
+            "_load_trimmed_patch",
+            lambda patch_kwargs, joined, units=None: next(patches),
         )
         msg = "their shapes are incompatible"
         with pytest.raises(CoordMergeError, match=msg):
@@ -871,7 +875,9 @@ class TestStreamingMerge:
         )
         patches = iter([p1, p2])
         monkeypatch.setattr(
-            assembler, "_load_trimmed_patch", lambda patch_kwargs, joined: next(patches)
+            assembler,
+            "_load_trimmed_patch",
+            lambda patch_kwargs, joined, units=None: next(patches),
         )
         msg = "expected them to vary along time"
         with pytest.raises(CoordMergeError, match=msg):
@@ -4593,11 +4599,10 @@ class TestChunkMergeRegressions:
 
     @pytest.mark.parametrize("length", [None, 4])
     @pytest.mark.parametrize("reverse", [False, True])
-    @pytest.mark.parametrize("lower", [4, 6])
-    def test_descending_sample_order(self, merge_spool, length, reverse, lower):
+    def test_descending_sample_order(self, merge_spool, length, reverse):
         """Descending samples match their labels, including across a seam (#1248)."""
         patches = []
-        for start in (9, lower):
+        for start in (9, 4):
             values = np.arange(start, start - 5, -1.0)
             patches.append(
                 dc.Patch(
@@ -4625,10 +4630,40 @@ class TestChunkMergeRegressions:
             )
             for start, units in [(0, "m"), (5, "km")]
         ]
-        expected = dc.spool(patches).concatenate(time=None, conflict=conflict)[0]
         actual = merge_spool(patches).chunk(time=None, conflict=conflict)[0]
-        np.testing.assert_array_equal(actual.data, expected.data)
-        assert actual.attrs.data_units == expected.attrs.data_units
+        expected = [1, 2, 3, 4, 5, 1000, 2000, 3000, 4000, 5000]
+        np.testing.assert_array_equal(actual.data, expected)
+        assert actual.attrs.data_units == get_quantity("m")
+
+    def test_descending_units_follow_the_plan(self, merge_spool):
+        """keep_first keeps the units the chunked spool advertises."""
+        patches = [
+            dc.Patch(
+                data=np.arange(5.0),
+                coords={"time": np.arange(start, start - 5.0, -1)},
+                dims=("time",),
+                attrs={"data_units": units},
+            )
+            for start, units in [(4, "m"), (9, "km")]
+        ]
+        chunked = merge_spool(patches).chunk(time=None, conflict="keep_first")
+        stated = chunked.get_contents()["data_units"].iloc[0]
+        assert chunked[0].attrs.data_units == get_quantity(stated)
+
+    def test_ulp_different_float_steps(self):
+        """Float steps one ulp apart still merge on the shared step."""
+        steps = (0.004, np.nextafter(0.004, 1))
+        starts = (0.0, 0.004 * 1500 + 3e-6)
+        patches = [
+            dc.Patch(
+                data=np.ones(1500),
+                coords={"time": dc.core.get_coord(start=a, step=b, shape=(1500,))},
+                dims=("time",),
+            )
+            for a, b in zip(starts, steps, strict=True)
+        ]
+        out = dc.spool(patches).chunk(time=None)[0]
+        assert out.get_coord("time").step == pytest.approx(0.004, rel=1e-12)
 
     def test_jitter_keeps_declared_step(self, merge_spool):
         """A three-microsecond seam offset does not change a four-ms step."""

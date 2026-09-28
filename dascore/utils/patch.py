@@ -1954,15 +1954,6 @@ def _lowest_units(coords):
     return stated[int(np.argmin(lows))].units
 
 
-def _convert_merge_data_units(patch, units):
-    """Express member data in the output units, leaving unstated values unscaled."""
-    if units is None or patch.attrs.data_units == units:
-        return patch
-    if _is_missing(patch.attrs.data_units):
-        return patch.update_attrs(data_units=units)
-    return patch.convert_units(units)
-
-
 def concatenate_planned(
     patches: Sequence[dc.Patch],
     dim: str,
@@ -2029,7 +2020,7 @@ def concatenate_planned(
     stated = [x for x in units if not _is_missing(x)]
     if stated:
         kept = stated[0]
-        patches = [_convert_merge_data_units(x, kept) for x in patches]
+        patches = [x.convert_units(kept) for x in patches]
         attrs = attrs.update(data_units=kept)
     operation = operation_id(
         "Concatenate", {"arguments": ((dim, count),), "conflict": conflict}
