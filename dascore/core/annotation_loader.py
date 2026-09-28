@@ -33,6 +33,7 @@ from dascore.core.annotations import (
     _MAX,
     _MIN,
     ANNOTATION_STEM,
+    ATTRS_KEY,
     ATTRS_STEM,
     BASES_STEM,
     DIMS_KEY,
@@ -42,6 +43,8 @@ from dascore.core.annotations import (
     RESERVED_COLUMNS,
     TABLE_SUFFIXES,
     AnnotationSet,
+    AnnotationSetAttrs,
+    _build_attrs,
     _combine,
     _is_text_dtype,
     _Tables,
@@ -51,7 +54,7 @@ from dascore.core.annotations import (
 )
 from dascore.exceptions import InvalidAnnotationError, ParameterError
 from dascore.models.registry import TAG_FIELD
-from dascore.utils.documents import read_document
+from dascore.utils.documents import parse_document, read_document
 from dascore.utils.misc import iterate
 from dascore.utils.paths import quote_path
 from dascore.utils.tables import (
@@ -132,22 +135,53 @@ def _read_attrs(directory: Path) -> dict[str, Any]:
     path = _one_spelling(directory, ATTRS_STEM, OBJECT_SUFFIXES)
     if path is None:
         return {}
-    data = _read_object(path)
+    return _checked_attrs(_read_object(path), quote_path(path))
+
+
+def _checked_attrs(data: dict[str, Any], where: str) -> dict[str, Any]:
+    """Refuse attributes another object, or an earlier layout, wrote."""
     declared = data.pop(TAG_FIELD, None)
     if declared is not None and declared != _SET_TAG:
         msg = (
-            f"{quote_path(path)} declares {declared!r}, but the attributes of "
+            f"{where} declares {declared!r}, but the attributes of "
             f"an annotation set declare {_SET_TAG!r}."
         )
         raise ParameterError(msg)
     if retired := sorted(set(_RETIRED_ATTRS) & set(data)):
         replaced = ", ".join(f"{x} (now {_RETIRED_ATTRS[x]})" for x in retired)
         msg = (
-            f"{quote_path(path)} states {replaced}, which an earlier layout "
+            f"{where} states {replaced}, which an earlier layout "
             "wrote; rewrite the set with io.save."
         )
         raise InvalidAnnotationError(msg)
     return data
+
+
+def _file_attrs(path: Path, declared) -> dict[str, Any] | None:
+    """Return the attributes a bare parquet file states, or None."""
+    if not _is_parquet(path):
+        return None
+    if (document := read_parquet_metadata(path).get(ATTRS_KEY)) is None:
+        return None
+    where = f"{ATTRS_KEY} of {quote_path(path)}"
+    data = parse_document(document, "json", label=where)
+    if not isinstance(data, Mapping):
+        msg = f"{where} holds no mapping, so it states no attributes."
+        raise ParameterError(msg)
+    data = _checked_attrs(dict(data), where)
+    return {**data, "dims": _declared_dims(data, None, path, declared, path)}
+
+
+def _refuse_restated(path: Path, stored: Mapping, kwargs: dict) -> None:
+    """Consume attributes given for a file stating its own; refuse any differing."""
+    held, differ = _build_attrs(stored), {}
+    for key in [x for x in kwargs if x in {"attrs", *AnnotationSetAttrs.model_fields}]:
+        value = kwargs.pop(key)
+        stated = {"attrs": value} if key == "attrs" else {"attrs": stored, key: value}
+        if value is not None and _build_attrs(**stated) != held:
+            differ[key] = value
+    _refuse_overrides(quote_path(path), **differ)
+    kwargs["attrs"] = stored
 
 
 # Attributes an earlier layout wrote, and what states them now.
@@ -982,10 +1016,15 @@ def _load_file(path: Path, dims, **kwargs) -> AnnotationSet:
         )
         raise ParameterError(msg)
     declared, skip = _read_table_dims(path)
-    # A bare table states no attributes of its own, so a caller may hand it
-    # some -- and the dimensions they name are the ones its cells are read
-    # in, since nothing can be read before that is known.
-    given = _given_attrs(kwargs)
+    # A bare parquet file may state its attributes, which a caller may only
+    # restate. A table stating none may be handed some -- and the dimensions
+    # they name are the ones its cells are read in, since nothing can be
+    # read before that is known.
+    if (given := _file_attrs(path, declared)) is not None:
+        declared = given["dims"]
+        _refuse_restated(path, given, kwargs)
+    else:
+        given = _given_attrs(kwargs)
     stated = _declared_dims(given, dims, path, declared, path)
     # An empty mapping is an override which clears the declarations, as
     # the set reads it, so only an absent one falls back to the attrs.

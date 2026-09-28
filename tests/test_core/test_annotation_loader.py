@@ -21,7 +21,7 @@ except ImportError:
 
 import dascore as dc
 from dascore.core.annotation_loader import _holds_blank, find_annotations
-from dascore.core.annotations import DIMS_KEY, Line, Moveout, _one_file
+from dascore.core.annotations import ATTRS_KEY, DIMS_KEY, Line, Moveout, _one_file
 from dascore.exceptions import InvalidAnnotationError, ParameterError
 from dascore.utils.tables import DOCUMENT_KEY, write_parquet
 
@@ -2080,7 +2080,7 @@ class TestParquet:
     def test_a_bare_table(self, mixed, tmp_path):
         """A set of regions is one file, and reads back as the set it was."""
         loaded = dc.annotations(mixed.io.to_parquet(tmp_path / "picks.parquet"))
-        assert loaded.annotations.equals(mixed.annotations)
+        assert loaded == mixed
 
     def test_the_dimensions_travel_with_the_file(self, mixed, tmp_path):
         """A parquet file states its dimensions where it can: its footer."""
@@ -2093,6 +2093,55 @@ class TestParquet:
         assert dc.annotations(path, dims=DIMS).dims == DIMS
         with pytest.raises(InvalidAnnotationError, match="where the two agree"):
             dc.annotations(path, dims=("depth",))
+
+    def test_the_attributes_travel_with_the_file(self, tmp_path):
+        """A set made on a patch reads back whole, column docs included."""
+        patch = dc.get_example_patch()
+        frame = pd.DataFrame({"code": ["001"], "time": [patch.get_coord("time").min()]})
+        columns = {"code": {"dtype": "str", "description": "a code"}}
+        made = dc.AnnotationSet.from_patch(
+            patch, frame, acquisition_key="N.A.00.das", annotation_columns=columns
+        )
+        loaded = dc.annotations(made.io.to_parquet(tmp_path / "picks.parquet"))
+        assert loaded == made and loaded.attrs.data_id == patch.attrs.data_id
+        assert loaded.annotations["code"][0] == "001"
+
+    def test_a_collection_saved_bare(self, regions, picks, tmp_path):
+        """Sets loaded together keep what each states for itself."""
+        regions.io.save(tmp_path / "sets" / "hand")
+        picks.io.save(tmp_path / "sets" / "phasenet")
+        loaded = dc.annotations(tmp_path / "sets")
+        back = dc.annotations(loaded.io.to_parquet(tmp_path / "flat.parquet"))
+        assert back == loaded and set(back.attrs.sets) == {"hand", "phasenet"}
+
+    def test_restating_the_attributes(self, regions, tmp_path):
+        """What the file states may be given again only where the two agree."""
+        path = regions.io.to_parquet(tmp_path / "picks.parquet")
+        assert dc.annotations(path, dims=DIMS, attrs=regions.attrs) == regions
+        with pytest.raises(InvalidAnnotationError, match="acquisition_key was given"):
+            dc.annotations(path, acquisition_key="NET.ARR.00.other")
+
+    def test_a_file_stating_only_dimensions(self, regions, tmp_path):
+        """A file written before the attributes travelled still reads."""
+        path = tmp_path / "picks.parquet"
+        write_parquet(regions.annotations, path, {DIMS_KEY: json.dumps(DIMS)})
+        assert dc.annotations(path).attrs == dc.AnnotationSet(None, dims=DIMS).attrs
+
+    @pytest.mark.parametrize(
+        ("stated", "message"),
+        [
+            ('{"dims": ["time"]}', "where the two agree"),
+            ("{oops", ATTRS_KEY),
+            ("[1]", "holds no mapping"),
+        ],
+    )
+    def test_attributes_this_cannot_read(self, regions, stated, message, tmp_path):
+        """Attributes disagreeing with the dimensions, or unreadable, are refused."""
+        path = tmp_path / "picks.parquet"
+        meta = {DIMS_KEY: json.dumps(DIMS), ATTRS_KEY: stated}
+        write_parquet(regions.annotations, path, meta)
+        with pytest.raises(InvalidAnnotationError, match=message):
+            dc.annotations(path)
 
     def test_kinds_a_csv_would_lose(self, mixed, tmp_path):
         """A column with no one type is written as documents, not as text."""

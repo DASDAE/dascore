@@ -151,8 +151,10 @@ TABLE_SUFFIXES = (".csv", ".parquet")
 TABLE_SUFFIX = TABLE_SUFFIXES[0]
 OBJECT_SUFFIXES = (".json", ".yaml", ".yml")
 
-# Where a parquet annotations table names its dimensions.
+# Where a parquet annotations table names its dimensions, and where a bare
+# one keeps the document attrs.json holds in a directory.
 DIMS_KEY = "dascore:dims"
+ATTRS_KEY = "dascore:attrs"
 
 # Range suffixes, as everywhere else in DASCore.
 _MIN, _MAX = "_min", "_max"
@@ -3463,9 +3465,9 @@ def annotation_set_to_csv(
     duration dimension is refused: CSV has no spelling for one which reads
     back, where parquet has a type for it.
 
-    The dimensions are not written. Reading the table back states them
-    again, in the call or in a ``# dims: distance, time`` line written above
-    the header by hand.
+    Neither the dimensions nor the attributes are written; parquet keeps
+    both. Reading the table back states them again, in the call or in a
+    ``# dims: distance, time`` line written above the header by hand.
 
     Parameters
     ----------
@@ -3500,7 +3502,8 @@ def annotation_set_to_parquet(
 
     The parquet spelling of
     [to_csv](`dascore.core.annotations.annotation_set_to_csv`): columns keep
-    their types, and the dimensions travel in the file's metadata. A column
+    their types, and the dimensions and attributes travel in the file's
+    metadata, so the file reads back as the set it was. A column
     with no one type is written as JSON, which keeps each cell's value but
     not every python type -- a tuple comes back as a list. Needs pyarrow.
 
@@ -3528,8 +3531,9 @@ def annotation_set_to_parquet(
     True
     """
     _refuse_bare(annotations)
-    dims = json.dumps(list(annotations.dims))
-    write_parquet(annotations._df, path, {DIMS_KEY: dims})
+    attrs = annotations._attrs.model_dump(mode="json", exclude_defaults=True)
+    metadata = {DIMS_KEY: json.dumps(list(annotations.dims))}
+    write_parquet(annotations._df, path, {**metadata, ATTRS_KEY: json.dumps(attrs)})
     return pathlib.Path(path)
 
 
