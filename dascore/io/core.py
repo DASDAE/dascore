@@ -47,7 +47,11 @@ from dascore.constants import (
 from dascore.core.coords import NumericCoord
 from dascore.core.source import ArraySource
 from dascore.core.spool import Spool
-from dascore.core.summary import PatchSummary, normalize_source_patch_key
+from dascore.core.summary import (
+    PatchSummary,
+    normalize_source_patch_key,
+    normalize_source_patch_keys,
+)
 from dascore.exceptions import (
     DependencyError,
     InvalidFiberFileError,
@@ -75,7 +79,6 @@ from dascore.utils.identity import (
 )
 from dascore.utils.io import (
     IOResourceManager,
-    _normalize_source_patch_keys,
     get_handle_from_resource,
     release_handle,
 )
@@ -839,7 +842,7 @@ class FiberIO:
         provenance_source = select.pop("_provenance_source", None)
         snap_dims = select.pop("snap_dims", True)
         snap = snap_dims if snap is None else snap
-        wanted = _normalize_source_patch_keys(source_patch_key)
+        wanted = normalize_source_patch_keys(source_patch_key)
         relative = select.pop("relative", False)
         out = []
         with IOResourceManager(resource) as manager:

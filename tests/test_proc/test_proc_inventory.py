@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import numpy as np
+import pandas as pd
 import pytest
 from pydantic import ValidationError
 
@@ -913,9 +914,10 @@ class TestEnrichContracts:
         with pytest.raises(PatchError, match="multi-valued"):
             patch.enrich(inv, attrs=False, coords=("optical_components.loss_db",))
 
-    def test_nan_attr_is_filled_not_conflicted(self, patch, inventory):
-        """NaN is how a reader spells unknown, so the inventory fills it."""
-        unknown = patch.update_attrs(gauge_length=np.nan)
+    @pytest.mark.parametrize("missing", [np.nan, np.datetime64("NaT", "ns"), pd.NA])
+    def test_nan_attr_is_filled_not_conflicted(self, patch, inventory, missing):
+        """A null is how a reader spells unknown, so the inventory fills it."""
+        unknown = patch.update_attrs(gauge_length=missing)
         out = unknown.enrich(inventory, coords=False, conflict="raise")
         assert out.attrs.gauge_length == 10.0
 

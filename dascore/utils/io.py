@@ -20,7 +20,6 @@ from dascore.exceptions import ParameterError, PatchConversionError
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.misc import (
     _maybe_make_parent_directory,
-    iterate,
     optional_import,
 )
 from dascore.utils.paths import (
@@ -94,13 +93,6 @@ def _annotate_handle_path(handle, resource):
         with suppress(AttributeError, TypeError):
             setattr(handle, "name", path_str)
     return handle
-
-
-def _normalize_source_patch_keys(source_patch_key) -> set[str]:
-    """Coerce source patch identifiers into a deduplicated set of strings."""
-    return {
-        str(value) for value in iterate(source_patch_key) if value not in (None, "")
-    }
 
 
 def _read_file_header(path, length: int) -> bytes:
