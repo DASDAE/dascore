@@ -13,6 +13,7 @@ import pytest
 
 import dascore as dc
 from dascore.compat import random_state
+from dascore.exceptions import InvalidFileHandlerError
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.units import get_quantity
 from dascore.utils.hdf5 import open_hdf5_file
@@ -327,6 +328,15 @@ class TestSeparateMetadata:
                 del group["_coord_distance"].attrs["units"]
         for patch in (dc.read(path)[0], dc.spool(path)[0]):
             assert patch.get_coord("distance").units is None
+
+    @pytest.mark.parametrize("method", ["read", "scan"])
+    def test_marked_pytables_handle(self, separate_file, method):
+        """Reject handles that cannot decode marked metadata without losing it."""
+        path, _ = separate_file
+        with open_hdf5_file(path) as handle:
+            with pytest.raises(InvalidFileHandlerError, match="pass the file path"):
+                getattr(DASDAEV1(), method)(handle)
+            assert handle.isopen
 
     def test_mixed(self, separate_file):
         """Appending a legacy patch to a marked file preserves its metadata."""

@@ -13,6 +13,7 @@ import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
+from dascore.exceptions import InvalidFileHandlerError
 from dascore.utils.hdf5 import PyTablesFile, open_hdf5_file
 from dascore.utils.misc import suppress_warnings, unbyte
 from dascore.utils.pd import filter_df
@@ -112,13 +113,20 @@ def _has_separate_metadata(h5):
 
 def _iter_patch_groups(h5):
     """Use h5py for separate metadata, retaining PyTables' legacy decoding."""
+    marker = "__attrs_coords_separate__"
     if isinstance(h5, PyTablesFile):
         # Caller-owned handles may be writable or contain unflushed changes.
+        marked_file = marker in h5.root._v_attrs._f_list()
         if "/waveforms" in h5:
             for group in h5.iter_nodes("/waveforms"):
+                if marked_file or marker in group._v_attrs._f_list():
+                    msg = (
+                        "Separate DASDAE metadata cannot be decoded through a "
+                        "PyTables handle. Close the handle and pass the file path."
+                    )
+                    raise InvalidFileHandlerError(msg)
                 yield group, False
         return
-    marker = "__attrs_coords_separate__"
     with ExitStack() as stack:
         legacy = None
         for group in h5.get("waveforms", {}).values():
