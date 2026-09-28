@@ -955,14 +955,15 @@ class Unselect(_Query):
         out, kwargs = Select(**trims, samples=True).get_metadata(meta)
         coords = out.coords
         for dim, kept in trims.items():
-            coord = meta.coords.coord_map.get(dim)
-            if not len(kept) or coord is None or not coord.evenly_sampled:
+            coord = meta.coords.coord_map[dim]
+            # nothing removed, nothing kept, or no grid to keep
+            if len(kept) in (0, len(coord)) or not coord.evenly_sampled:
                 continue
             # Rebuilt from the contiguous slices kept, so a hole keeps the step.
             runs = np.split(kept, np.flatnonzero(np.diff(kept) != 1) + 1)
             joined = concat_coords(*(coord[run[0] : run[-1] + 1] for run in runs))
             coords = coords.update(**{dim: joined})
-        return out.new(coords=coords), kwargs
+        return (out if coords is out.coords else out.new(coords=coords)), kwargs
 
 
 class Order(_Query):

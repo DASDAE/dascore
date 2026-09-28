@@ -704,6 +704,21 @@ class TestUnselect:
         assert out.missing().count == 10
         assert len(out.get_discontinuities("gaps")) == 1
 
+    def test_second_hole_keeps_step(self, random_patch):
+        """Unselecting a segmented coordinate again keeps its step."""
+        once = random_patch.unselect(time=(10, 20), samples=True)
+        twice = once.unselect(time=(40, 50), samples=True)
+        coord = twice.get_coord("time")
+        assert coord.step == random_patch.get_coord("time").step
+        assert coord.missing().count == 20
+
+    def test_no_op_keeps_metadata(self, random_patch):
+        """An unselect removing nothing leaves the patch as it was."""
+        out = random_patch.unselect(
+            time=(None, random_patch.get_coord("time").min() - 1)
+        )
+        assert out is random_patch or out.get_metadata() is random_patch.get_metadata()
+
     def test_hole_in_samples_keeps_step(self, random_patch):
         """A sample range removed from the middle keeps the step too."""
         coord = random_patch.get_coord("time")
