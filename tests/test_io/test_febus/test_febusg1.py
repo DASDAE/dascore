@@ -229,10 +229,10 @@ class TestMisc:
         directory spools.)
         """
         spool = dc.spool(g1_two_file_directory)
-        # These weren't directly adjacent files so we adjust the tolerance.
-        match = "There is a gap in the patch along dimension time"
-        with pytest.warns(UserWarning, match=match):
-            merged = spool.chunk(time=None, tolerance=3, conflict="keep_first")
+        # These weren't directly adjacent files, so the hole is filled.
+        merged = spool.chunk(
+            time=None, tolerance=3, conflict="keep_first", fill_value=np.nan
+        )
         assert len(merged) == 1
 
     def test_mtx_read_raises(self, g1_mtx_buffer):

@@ -206,7 +206,7 @@ Data-size limits cover the array only, not coordinates, metadata, or later proce
 
 ## Filling bridged holes
 
-A `tolerance` wide enough to span a hole merges the patches on either side, but the samples in between are still missing, so the merged patch is unevenly sampled and its coordinate stays segmented. `fill_value` writes those samples instead, and the output comes back as an ordinary evenly sampled patch.
+A chunk never yields a patch holding a hole: without `fill_value` a hole ends an output however wide the `tolerance`. With `fill_value`, a `tolerance` wide enough to span a hole merges the patches on either side and writes the missing samples, so the output is an ordinary evenly sampled patch.
 
 ```{python}
 import numpy as np
@@ -235,7 +235,7 @@ coverage = gappy.get_coverage()
 second_scale_gaps = gappy.get_gaps(tolerance=1 * s)
 ```
 
-`gap_size` spans from the last sample before a gap to the first after it, so subtract one sample step for the missing extent. The `tolerance` argument, shared with `chunk`, controls which boundaries count. Pass another dimension as in `get_gaps("distance")`; `time` is only the default. Coverage uses patch envelopes, and for a patch whose coordinate is segmented into runs of one step (such as a gapped patch merged in memory or read whole from a DASDAE file; one with more than 256 runs is read whole) the envelope of each run, so holes inside such a patch are visible too. `group_id` links coverage rows to their gaps.
+`gap_size` spans from the last sample before a gap to the first after it, so subtract one sample step for the missing extent. The `tolerance` argument, shared with `chunk`, controls which boundaries count. Pass another dimension as in `get_gaps("distance")`; `time` is only the default. Coverage uses patch envelopes; a patch with holes enters a spool as its contiguous pieces, so its holes are gaps like any other (and a selection by samples applies to each piece). `group_id` links coverage rows to their gaps.
 
 At the default tolerance of 1.5 samples, one missing sample counts as a gap. A quantity or timedelta bounds the excess over one step in coordinate units instead: a spacing is a gap when it exceeds `step + tolerance`. Coordinates judge their own gaps by the same rule (see [coordinates](coords.qmd#declaring-a-grid-and-finding-missing-samples)). Overlaps are not gaps; coverage calculates the union of available spans.
 

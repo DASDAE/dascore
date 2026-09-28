@@ -9,6 +9,7 @@ import dascore as dc
 from dascore.config import config_context
 from dascore.exceptions import PatchConversionError
 from dascore.io.index.planned import PlanResolver
+from tests.conftest import join_patches
 
 
 class TestSpoolToXarray:
@@ -317,7 +318,7 @@ class TestSpoolToXarray:
         )
         spool = dc.spool([random_patch, gap])
         tol = dc.get_quantity("10 m")
-        merged = spool.chunk(distance=None, tolerance=tol)[0]
+        merged = join_patches([random_patch, gap], "distance")
         tree = spool.io.to_xarray(dim="distance", tolerance=tol)
         leaves = self._leaves(tree)
         assert len(leaves) == 1

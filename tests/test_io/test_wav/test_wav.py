@@ -11,6 +11,7 @@ from upath import UPath
 import dascore as dc
 from dascore.constants import ONE_SECOND
 from dascore.exceptions import ParameterError
+from dascore.io.wav.core import WavIO
 
 
 class TestWriteWav:
@@ -100,5 +101,8 @@ class TestWriteWav:
         other = audio_patch.update_coords(time=time.values + offset)
         spool = dc.spool([audio_patch, other])
         assert len(spool) == 2
-        with pytest.raises(ParameterError, match="single patch spools"):
+        with pytest.raises(ParameterError, match="one patch per file"):
             dc.write(spool, path, "wav")
+        # the writer itself refuses too
+        with pytest.raises(ParameterError, match="single patch spools"):
+            WavIO().write(spool, path)

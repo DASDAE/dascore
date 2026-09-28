@@ -338,6 +338,25 @@ class TestCut:
         cut = dc.spool(holed_patch).cut(dc.AnnotationSet(box, dims=DIMS))
         assert [_span(x) for x in cut] == [[0, 59], [100, 159]]
 
+    @pytest.mark.parametrize(
+        ("time", "samples", "window", "span"),
+        [
+            # a pending sample selection still bounds what a cut keeps
+            (np.arange(40.0), (2, -3), [0.0, 5.0], [2.0, 5.0]),
+            # a row with no step names no grid, so a window over it keeps it
+            (np.array([0.0, 1.0, 2.5, 7.0, 8.0]), None, [2.0, 7.5], [2.5, 7.0]),
+        ],
+    )
+    def test_window_on_float_rows(self, time, samples, window, span):
+        """A cut keeps the samples a window holds, whatever the row's grid."""
+        coords = {"distance": [0.0], "time": time}
+        patch = dc.Patch(data=np.ones((1, len(time))), coords=coords, dims=DIMS)
+        view = dc.spool(patch)
+        view = view if samples is None else view.select(time=samples, samples=True)
+        frame = pd.DataFrame({"time_min": window[:1], "time_max": window[1:]})
+        (cut,) = view.cut(dc.AnnotationSet(frame, dims=DIMS))
+        assert _span(cut) == span
+
     def test_lazy(self, spool, start, tmp_path):
         """Cutting and reading contents load nothing; reading the data does."""
         dc.examples.spool_to_directory(spool, path=tmp_path)

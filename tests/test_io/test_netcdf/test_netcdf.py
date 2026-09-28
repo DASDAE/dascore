@@ -13,7 +13,7 @@ import pytest
 from upath import UPath
 
 import dascore as dc
-from dascore.exceptions import MissingOptionalDependencyError
+from dascore.exceptions import MissingOptionalDependencyError, ParameterError
 from dascore.io.netcdf import core as netcdf_core
 from dascore.io.netcdf import utils as netcdf_utils
 from dascore.io.netcdf.utils import (
@@ -638,13 +638,16 @@ class TestNetCDFEdgeCases:
             dc.write(empty_spool, path, file_format="netcdf_cf")
 
     def test_multi_patch_write_error(self, multi_patch_spool, tmp_path):
-        """Test that multi-patch spool raises NotImplementedError."""
+        """A multi-patch spool is refused before the file is written."""
         path = tmp_path / "multi.nc"
-
-        with pytest.raises(
-            NotImplementedError, match="Multi-patch spools not yet supported"
-        ):
+        with pytest.raises(ParameterError, match="one patch per file"):
             dc.write(multi_patch_spool, path, file_format="netcdf_cf")
+
+    def test_direct_multi_patch_write_error(self, multi_patch_spool, tmp_path):
+        """The writer itself refuses a multi-patch spool."""
+        path = tmp_path / "multi_direct.nc"
+        with pytest.raises(NotImplementedError, match="Multi-patch spools"):
+            netcdf_core.NetCDFCFV18().write(multi_patch_spool, path)
 
     def test_compression_options(self, compressed_netcdf_file):
         """Test NetCDF file creation with compression options."""
