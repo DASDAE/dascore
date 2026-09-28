@@ -3765,7 +3765,7 @@ def _labels_to_runs(values, step) -> tuple[tuple, np.dtype]:
     else:
         magnitude = np.abs(np.asarray(step))[()]
         steps = [magnitude if values[-1] > values[0] else -magnitude]
-        _on_grid(_diffs(values), steps[0])
+        _on_grid(_diffs(values), steps[0])  # raises where a spacing is off the step
     for spacing in steps:
         grid, _ = _range_run(dict(start=values[0], step=spacing, shape=values.shape))
         if _grid_holds(grid, values, values.dtype):
