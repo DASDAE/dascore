@@ -28,7 +28,7 @@ class NeubrexRFSPatchAttrs(dc.PatchAttrs):
 class NeubrexDASPatchAttrs(dc.PatchAttrs):
     """Patch attrs for Neubrex DAS Format files."""
 
-    gauge_length: OptionalFiniteFloat = 0
+    gauge_length: OptionalFiniteFloat = None
     index_of_reflection: OptionalFiniteFloat = 1.46
     triggered_time: np.datetime64 | None = None
     phase_to_strain: OptionalFiniteFloat = None

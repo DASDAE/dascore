@@ -120,6 +120,7 @@ from pathlib import Path
 
 import dascore as dc
 from dascore.examples import inventory_patch_pair
+from dascore.exceptions import PatchError
 
 patch, inventory = inventory_patch_pair()
 ```
@@ -178,11 +179,15 @@ The acquisition's `distance_map` performs the projection. Compatible distance un
 
 By default, scalar acquisition fields and `interrogator.*` fields become attributes, while geometry, coupling, and labels become coordinates. `data_type` and `data_units` are excluded because processing may have changed the data; `sample_rate` and `spatial_interval` are excluded because the patch coordinates already state them. They can still be requested explicitly.
 
-If a patch attribute conflicts with the inventory, `conflict` chooses the result: `keep_first` (default) keeps the patch value, `keep_last` uses the inventory, `drop` removes both, and `raise` reports the contradiction.
+Unset attributes are always filled. If a stated patch attribute conflicts with the inventory, `conflict` chooses the result: `raise` (default) reports the contradiction, since it usually means the patch resolved to the wrong acquisition; `keep_first` keeps the patch value, `keep_last` uses the inventory, and `drop` removes both.
 
 ```{python}
 stale = patch.update_attrs(gauge_length=99.0)
-assert stale.enrich(inventory).attrs.gauge_length == 99.0
+try:
+    stale.enrich(inventory)
+except PatchError as err:
+    print(err)
+assert stale.enrich(inventory, conflict="keep_first").attrs.gauge_length == 99.0
 assert stale.enrich(inventory, conflict="keep_last").attrs.gauge_length == 10.0
 ```
 

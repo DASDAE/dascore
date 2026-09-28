@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import textwrap
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import partial
 from pathlib import Path
@@ -196,7 +195,6 @@ ON_MISSING = Literal[WARN_LEVELS, "null"]
 CONFLICT = Literal["drop", "raise", "keep_first"]
 
 # Enrichment conflicts use merge policies plus keep_last (inventory wins).
-# keep_first preserves the patch's value.
 ENRICH_CONFLICT = Literal[CONFLICT, "keep_last"]
 
 # The stdlib warning-action alias is stub-only. Omit "all", unsupported on 3.12-3.13.
@@ -308,18 +306,16 @@ on_missing
 
 # One paragraph, not two: a blank line inside a parameter description
 # reads as the start of the next parameter when the API docs are built.
-enrich_conflict_description = f"""
+enrich_conflict_description = """
 conflict
-{textwrap.indent(attr_conflict_description.strip(), "    ")}
-    Enrichment combines the inventory's values with the patch's own
-    rather than a sequence of patches, so it also accepts `keep_last`,
-    which is the inventory correcting the file. The default `keep_first`
-    keeps what the patch already stated: an attr a reader read out of the
-    file header was there first. Either way an attr the patch leaves
-    unset is filled, which is most of what enrichment does. `raise` is
-    the misresolution guard: a header disagreeing with the resolved
-    acquisition usually means the `acquisition_key` resolved to the
-    wrong place.
+    What to do when an attr the patch states disagrees with the
+    inventory. An attr the patch leaves unset (None, NaN, "") is filled
+    under every policy, and numbers equal up to float rounding agree.
+    "raise" (default) raises a
+    [PatchError](`dascore.exceptions.PatchError`), since a disagreement
+    usually means the `acquisition_key` resolved to the wrong place.
+    "keep_first" keeps the patch's value, "keep_last" takes the
+    inventory's to correct the file, and "drop" removes the attr.
 """.strip()
 
 
