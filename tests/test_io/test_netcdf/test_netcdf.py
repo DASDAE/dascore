@@ -363,7 +363,7 @@ class TestNetCDFCoreHelpers:
         # the backend guard probes installed packages; this test fakes them
         monkeypatch.setattr(netcdf_core, "_require_hdf5_netcdf_backend", lambda: None)
         monkeypatch.setattr(
-            netcdf_core,
+            netcdf_utils,
             "patch_to_xarray",
             lambda patch: fake_data_array,
         )
@@ -580,7 +580,7 @@ class TestNetCDFEdgeCases:
             values: ClassVar = np.array([0.0, 1.0, 2.0, 5.0])
             attrs: ClassVar = {"units": "m"}
 
-        coord = netcdf_core.NetCDFCFV18._get_scan_coord(Coord(), snap=False)
+        coord = netcdf_utils.get_scan_coord(Coord(), snap=False)
 
         np.testing.assert_array_equal(coord.values, Coord.values)
         assert coord.units == dc.get_quantity("m")
@@ -592,7 +592,7 @@ class TestNetCDFEdgeCases:
             values: ClassVar = np.arange(4.0)
             attrs: ClassVar = {"units": "m"}
 
-        coord = netcdf_core.NetCDFCFV18._get_scan_coord(Coord(), snap=True)
+        coord = netcdf_utils.get_scan_coord(Coord(), snap=True)
 
         np.testing.assert_array_equal(coord.values, Coord.values)
         assert coord.units == dc.get_quantity("m")
@@ -604,7 +604,7 @@ class TestNetCDFEdgeCases:
             values: ClassVar = np.arange(6.0).reshape(2, 3)
             attrs: ClassVar = {"units": "m"}
 
-        out = netcdf_core.NetCDFCFV18._get_scan_coord(Coord(), snap=False)
+        out = netcdf_utils.get_scan_coord(Coord(), snap=False)
 
         assert out is Coord.values
 

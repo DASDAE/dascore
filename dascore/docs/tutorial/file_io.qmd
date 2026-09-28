@@ -47,6 +47,25 @@ encoding = {"data": {"zlib": True, "complevel": 4, "chunksizes": (50, 1000)}}
 patch.io.write(UPath("memory://dascore/tutorial/small.h5"), "DASDAE", encoding=encoding)
 ```
 
+## Zarr
+
+The ZARR format writes a patch as a zarr store (a directory) laid out as xarray's [`to_zarr`](https://docs.xarray.dev/en/stable/generated/xarray.Dataset.to_zarr.html) writes it, so any xarray user can open it, and DASCore reads stores other tools write this way. It needs the `zarr` package. `file_version` picks the zarr format (`"3"`, the default, or `"2"`), and `encoding` is passed to xarray as is: `chunks` sets the chunk shape, `shards` groups chunks into fewer files (zarr format 3 only), and `compressors` sets the codecs. A store holds one patch, and a directory of stores works as a directory spool.
+
+```{python}
+import shutil
+import tempfile
+
+zarr_path = Path(tempfile.mkdtemp()) / "patch.zarr"
+encoding = {"data": {"chunks": (50, 500), "shards": (100, 1000)}}
+patch.io.write(zarr_path, "ZARR", encoding=encoding)
+zarr_patch = dc.read(zarr_path)[0]
+```
+
+```{python}
+#| echo: false
+shutil.rmtree(zarr_path.parent)
+```
+
 # Scanning metadata
 
 [`dc.scan`](`dascore.scan`) returns [`PatchSummary`](`dascore.PatchSummary`) objects without loading patch arrays.

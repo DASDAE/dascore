@@ -1,4 +1,4 @@
-"""NetCDF helper functions for DASCore IO."""
+"""Helpers for the xarray-based NetCDF and Zarr readers and writers."""
 
 from __future__ import annotations
 
@@ -8,6 +8,10 @@ from typing import Any, Protocol
 import numpy as np
 
 import dascore as dc
+from dascore.constants import snap_type, windows_type
+from dascore.core.source import ArraySource
+from dascore.io.utils import resolve_keyed_source, should_snap, windows_to_slices
+from dascore.xarray import patch_to_xarray
 
 XDAS_PAYLOAD_VARIABLE = "__values__"
 
@@ -22,7 +26,7 @@ def get_xarray_data_var_name(dataset) -> str | None:
         return None
     if len(dataset.data_vars) == 1:
         return next(iter(dataset.data_vars))
-    msg = "No suitable data variable found in NetCDF file"
+    msg = "No suitable data variable found in the dataset"
     raise ValueError(msg)
 
 
@@ -110,3 +114,68 @@ def get_coord_manager_for_coordless_data_var(
         for dim, size in zip(dims, shape, strict=True)
     }
     return dc.get_coord_manager(coords=coords, dims=dims)
+
+
+def get_scan_coord(coord, snap=True):
+    """Return a coordinate for scanning; snap only controls exactness."""
+    values = coord.values
+    if np.ndim(values) != 1:
+        return values
+    units = coord.attrs.get("units")
+    return dc.core.get_coord(data=values, units=units, snap=snap)
+
+
+def _get_patch_key(data_var_name):
+    """Normalize the selected xarray payload name to a patch id."""
+    return XDAS_PAYLOAD_VARIABLE if data_var_name is None else data_var_name
+
+
+def dataset_to_patch_meta(dataset, snap: snap_type = True) -> list[dc.PatchMeta]:
+    """Describe the payload of an open xarray dataset without reading it."""
+    data_var_name = get_xarray_data_var_name(dataset)
+    data_array = dataset[data_var_name]
+    dims, shape = data_array.dims, data_array.shape
+    coords = {
+        name: (coord.dims, get_scan_coord(coord, snap=should_snap(snap, name)))
+        for name, coord in data_array.coords.items()
+    }
+    if coords:
+        coord_manager = dc.get_coord_manager(coords=coords, dims=dims)
+    else:
+        coord_manager = get_coord_manager_for_coordless_data_var(dataset, dims, shape)
+    meta = dc.PatchMeta(
+        attrs=dict(data_array.attrs),
+        coords=coord_manager,
+        dims=dims,
+        dtype=str(data_array.dtype),
+        source=ArraySource(key=_get_patch_key(data_var_name)),
+    )
+    return [meta]
+
+
+def read_dataset_array(dataset, windows: windows_type, key: str, where: str):
+    """
+    Slice the payload variable of an open xarray dataset.
+
+    The selection goes through xarray rather than the stored array so CF
+    decoding (scaling, offsets, fill values) applies exactly as in `read`.
+    """
+    data_var_name = get_xarray_data_var_name(dataset)
+    patch_key = _get_patch_key(data_var_name)
+    resolve_keyed_source({patch_key: data_var_name}, key, where=where)
+    data_array = dataset[data_var_name]
+    return data_array[windows_to_slices(windows, data_array.shape)].to_numpy()
+
+
+def spool_to_cf_dataset(spool, format_name: str):
+    """Return the only patch of a spool as a CF dataset with a ``data`` payload."""
+    patches = [spool] if isinstance(spool, dc.Patch) else list(spool)
+    if len(patches) == 0:
+        msg = "Cannot write empty spool"
+        raise ValueError(msg)
+    if len(patches) > 1:
+        msg = f"Multi-patch spools not yet supported for {format_name} output"
+        raise NotImplementedError(msg)
+    dataset = patch_to_xarray(patches[0]).rename("data").to_dataset()
+    dataset.attrs["Conventions"] = "CF-1.8"
+    return dataset

@@ -9,25 +9,18 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type, windows_type
-from dascore.core.source import ArraySource
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
-from dascore.io.utils import (
-    resolve_keyed_source,
-    should_snap,
-    windows_to_slices,
-)
 from dascore.utils.hdf5 import H5Reader, get_h5py_file
 from dascore.utils.misc import optional_import
-from dascore.xarray import patch_to_xarray
 
 from .utils import (
-    XDAS_PAYLOAD_VARIABLE,
+    dataset_to_patch_meta,
     get_cf_version,
-    get_coord_manager_for_coordless_data_var,
-    get_xarray_data_var_name,
     is_netcdf4_file,
     parse_cf_version,
+    read_dataset_array,
+    spool_to_cf_dataset,
 )
 
 # netCDF engines that write the HDF5-based files the reader can open.
@@ -130,15 +123,8 @@ class NetCDFCFV18(FiberIO):
         it does in `read`.
         """
         with _open_xarray_dataset(resource) as dataset:
-            data_var_name = get_xarray_data_var_name(dataset)
-            resolve_keyed_source(
-                {self._get_source_patch_key(data_var_name): data_var_name},
-                key,
-                where=str(getattr(resource, "filename", "the resource")),
-            )
-            data_array = dataset[data_var_name]
-            slices = windows_to_slices(windows, data_array.shape)
-            return data_array[slices].to_numpy()
+            where = str(getattr(resource, "filename", "the resource"))
+            return read_dataset_array(dataset, windows, key, where)
 
     def write(self, spool, resource: Path, encoding: dict | None = None, **kwargs):
         """
@@ -149,19 +135,14 @@ class NetCDFCFV18(FiberIO):
         encoding
             Passed to xarray's ``Dataset.to_netcdf``.
         """
-        patch = self._validate_and_extract_patch(spool)
         optional_import("xarray")  # raises a helpful error if xarray is absent
         _require_hdf5_netcdf_backend()
-        array = patch_to_xarray(patch).rename("data")
+        dataset = spool_to_cf_dataset(spool, "NetCDF")
         # netCDF has no boolean attribute type, so a bool attr aborts the
         # write. Inventory enrichment routinely sets one
         # (closed_fiber_loop), and CF's own convention for a flag is an
-        # integer, so they are stored as 0/1 rather than dropped. Every
-        # patch attr lands on the data variable; the dataset carries only
-        # what is set below.
-        array.attrs = _int_for_bool(array.attrs)
-        dataset = array.to_dataset()
-        dataset.attrs["Conventions"] = f"CF-{self.version}"
+        # integer, so they are stored as 0/1 rather than dropped.
+        dataset["data"].attrs = _int_for_bool(dataset["data"].attrs)
         dataset.to_netcdf(resource, encoding=encoding)
 
     def get_metadata(
@@ -174,61 +155,4 @@ class NetCDFCFV18(FiberIO):
         file is not downloaded.
         """
         with _open_xarray_dataset(resource) as dataset:
-            data_var_name = get_xarray_data_var_name(dataset)
-            data_array = dataset[data_var_name]
-            coords = {
-                name: (
-                    coord.dims,
-                    self._get_scan_coord(coord, snap=should_snap(snap, name)),
-                )
-                for name, coord in data_array.coords.items()
-            }
-            attrs = dict(data_array.attrs)
-            dims = data_array.dims
-            shape = data_array.shape
-            dtype = str(data_array.dtype)
-            source_patch_key = self._get_source_patch_key(data_var_name)
-            coord_manager = self._coord_manager_from_data_array(
-                dataset, data_array, coords, dims, shape
-            )
-        return [
-            dc.PatchMeta(
-                attrs=attrs,
-                coords=coord_manager,
-                dims=dims,
-                dtype=dtype,
-                source=ArraySource(key=source_patch_key),
-            )
-        ]
-
-    @staticmethod
-    def _get_scan_coord(coord, snap=True):
-        """Return a coordinate for scanning; snap only controls exactness."""
-        values = coord.values
-        if np.ndim(values) != 1:
-            return values
-        units = coord.attrs.get("units")
-        if snap:
-            return dc.core.get_coord(data=values, units=units)
-        return dc.core.get_coord(data=values, units=units, snap=False)
-
-    def _get_source_patch_key(self, data_var_name):
-        """Normalize the selected xarray payload name to a patch id."""
-        return XDAS_PAYLOAD_VARIABLE if data_var_name is None else data_var_name
-
-    def _coord_manager_from_data_array(self, dataset, data_array, coords, dims, shape):
-        """Return coords from xarray when present or reconstruct dim coords."""
-        if coords:
-            return dc.get_coord_manager(coords=coords, dims=dims)
-        return get_coord_manager_for_coordless_data_var(dataset, dims=dims, shape=shape)
-
-    def _validate_and_extract_patch(self, spool: dc.Patch | dc.Spool) -> dc.Patch:
-        """Validate write input and return the single supported patch."""
-        patches = [spool] if isinstance(spool, dc.Patch) else list(spool)
-        if len(patches) == 0:
-            msg = "Cannot write empty spool"
-            raise ValueError(msg)
-        if len(patches) > 1:
-            msg = "Multi-patch spools not yet supported for NetCDF output"
-            raise NotImplementedError(msg)
-        return patches[0]
+            return dataset_to_patch_meta(dataset, snap)
