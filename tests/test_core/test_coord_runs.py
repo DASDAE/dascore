@@ -47,10 +47,8 @@ class TestDeclaredStep:
     """A step on array data declares the grid the values sit on."""
 
     def test_runs_of_the_step(self, design_case):
-        """Consecutive positions become ranges, singletons included."""
-        assert design_case.runs_count == 3
-        assert all(x.evenly_sampled for x in design_case.segments)
-        assert [len(x) for x in design_case.segments] == [1, 2, 3]
+        """A declared step keeps stored labels together."""
+        assert _is_stored(design_case)
         assert design_case.step == 1
         np.testing.assert_array_equal(design_case.values, PRESENT)
 
@@ -85,7 +83,7 @@ class TestDeclaredStep:
     def test_float_grid(self):
         """Floats sit on a grid within a small tolerance of the step."""
         coord = get_coord(data=[0.0, 0.1, 0.2, 0.5, 0.6], step=0.1)
-        assert coord.runs_count == 2
+        assert _is_stored(coord)
         assert coord.missing().count == 2
 
     @pytest.mark.parametrize("step", [1, -1])
@@ -105,24 +103,24 @@ class TestDeclaredStep:
         """A time coordinate declares a timedelta step."""
         labels = T0 + np.array([0, 4, 8, 20, 24]) * MS
         coord = get_coord(data=labels, step=4 * MS)
-        assert coord.runs_count == 2
+        assert _is_stored(coord)
         missing = coord.missing()
         assert missing.count == 2
         assert list(missing.iter_runs()) == [(T0 + 12 * MS, T0 + 16 * MS)]
 
     def test_two_values(self):
-        """Two values apart by more than a step are two runs."""
+        """Two values apart by more than a step remain stored labels."""
         coord = get_coord(data=[0, 5], step=1)
-        assert coord.runs_count == 2
+        assert _is_stored(coord)
         assert coord.missing().count == 4
 
-    def test_dense_guard_keeps_the_step(self):
-        """Past the guard the values stay one array, step and missing intact."""
+    def test_stored_labels_keep_the_step(self):
+        """Short and long arrays keep their step and missing positions."""
         sparse = np.arange(300)[np.arange(300) % 3 != 2]
         dense = np.arange(3000)[np.arange(3000) % 3 != 2]
         as_runs = get_coord(data=sparse, step=1)
         as_array = get_coord(data=dense, step=1)
-        assert as_runs.runs_count > 1
+        assert _is_stored(as_runs)
         assert _is_stored(as_array)
         assert as_array.step == 1
         # the trailing removed position lies past the last sample
@@ -235,12 +233,12 @@ class TestMissing:
         assert list(missing.iter_runs()) == [(2, 4), (7, 8)]
         np.testing.assert_array_equal(missing.positions(), [2, 3, 4, 7, 8])
 
-    def test_both_sides_of_the_guard_agree(self):
-        """Runs and the guarded array answer missing the same way."""
+    def test_short_and_long_arrays_agree(self):
+        """Short and long stored arrays report the same missing positions."""
         values = np.arange(3000)[np.arange(3000) % 3 != 2]
         runs = get_coord(data=values[values < 300], step=1)
         array = get_coord(data=values, step=1)
-        assert runs.runs_count > 1 and _is_stored(array)
+        assert _is_stored(runs) and _is_stored(array)
         assert (
             list(runs.missing().iter_runs()) == list(array.missing().iter_runs())[:99]
         )
@@ -1012,7 +1010,9 @@ class TestReviewRoundFive:
 
     def test_a_partial_fit_promotes_its_kept_grids(self):
         """A fit which needs floats does not fail on the runs it left alone."""
-        out = get_coord(data=[0, 1, 2, 10, 11, 13], snap=False).fuse(0.6)
+        out = concat_coords(
+            get_coord(data=[0, 1, 2]), NumericCoord.from_labels(np.array([10, 11, 13]))
+        ).fuse(0.6)
         assert out.dtype == np.dtype("float64")
         np.testing.assert_allclose(out.values, [0, 1, 2, 10, 11.5, 13])
 
@@ -1197,7 +1197,10 @@ class TestRefactorParity:
     def test_float_fuse_keeps_step(self):
         """A float re-fit a few ULP off the step keeps the stated step."""
         values = np.delete(-7.7105 + np.arange(11) * 0.001, 2)
-        coord = get_coord(data=values, step=0.001)
+        coord = concat_coords(
+            get_coord(data=values[:2], step=0.001),
+            get_coord(data=values[2:], step=0.001),
+        )
         assert coord.fuse(1.0, keep_step=True).step == 0.001
 
     def test_merged_float_patches_fill(self):

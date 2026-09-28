@@ -1550,12 +1550,6 @@ _NS_PER_S = 10**9
 # A float spacing this close to a whole number of steps is on the grid;
 # a float grid such as 0.1 cannot be held exactly, an off-grid label can.
 _GRID_RTOL = 1e-6
-# The dense-array guard. Stored arrays often carry sub-step jitter
-# (GPS-stamped DAS time), so run detection would give roughly one run per
-# sample; at or past this many samples, an array whose runs would
-# outnumber this fraction of them keeps its labels as one stored run.
-_MIN_RUN_GUARD_SIZE = 1_000
-_MAX_RUN_FRACTION = 0.1
 # A coordinate's summary carries its runs only up to this many, since each
 # becomes an index row; past it the summary is an envelope.
 _MAX_SUMMARY_RUNS = 256
@@ -3560,7 +3554,11 @@ def _runs_step(runs, declared, dtype, sources):
     edges = np.concatenate(
         [_run_edges(x, dtype, sources) for x in runs if len(x)] or [np.empty(0)]
     )
-    ascending = len(edges) < 2 or edges[-1] > edges[0]
+    ascending = (
+        step == magnitude
+        if len(edges) < 2 or edges[-1] == edges[0]
+        else edges[-1] > edges[0]
+    )
     step = magnitude if ascending else -magnitude
     try:
         for run, values in stored:
@@ -3755,55 +3753,24 @@ def _check_chain(coords, ascending: bool) -> None:
 
 
 def _labels_to_runs(values, step) -> tuple[tuple, np.dtype]:
-    """
-    The runs a monotonic array of labels states, read exactly.
-
-    Each maximal evenly sampled stretch becomes a grid and each sampling
-    break a run boundary. A dense array whose runs would outnumber a tenth
-    of its samples keeps its labels as one stored run, which is faster to
-    build, smaller, and no less exact.
-    """
-    if len(values) < (3 if _is_null(step) else 2):
-        return (values,), values.dtype
-    diffs = _diffs(values)
-    signed = step
+    """Keep exact labels as one grid if it restates them, else one stored run."""
     if _is_null(step):
-        # A diff belongs to a uniform run when it matches a neighbouring
-        # diff; isolated diffs are seams (gaps or sampling changes).
-        eq_next = diffs[:-1] == diffs[1:]
-        in_run = np.zeros(len(diffs), dtype=bool)
-        in_run[1:] |= eq_next
-        in_run[:-1] |= eq_next
-        splits = np.flatnonzero(~in_run) + 1
-        if not np.any(in_run):
-            return (values,), values.dtype
+        if (grid := _fractional_grid(values)) is not None and _grid_holds(
+            grid, values, values.dtype
+        ):
+            return (grid,), values.dtype
+        steps = [_diffs(values)[0]]
+        if values.dtype.kind == "f":
+            steps.append((values[-1] - values[0]) / (len(values) - 1))
     else:
-        # every spacing is a whole number of steps; more than one step
-        # between neighbours is a seam with positions missing
         magnitude = np.abs(np.asarray(step))[()]
-        signed = magnitude if values[-1] > values[0] else -magnitude
-        splits = np.flatnonzero(_on_grid(diffs, signed) != 1) + 1
-    dense = len(values) >= _MIN_RUN_GUARD_SIZE
-    if dense and len(splits) + 1 > _MAX_RUN_FRACTION * len(values):
-        return (values,), values.dtype
-    runs: list[Any] = []
-    dtypes = [values.dtype]
-    for block in np.split(values, splits):
-        if _is_null(step):
-            # A block's spacings may still differ, so it becomes a grid
-            # only where one reproduces every label exactly.
-            runs.append(_promoted(block, values.dtype) or block)
-            continue
-        spec = dict(start=block[0], step=signed, shape=(len(block),))
-        grid, dtype = _range_run(spec)
-        # A declared step says which grid the labels sit on, not that one
-        # restates them; where it does not, they are kept as they are.
-        if not _grid_holds(grid, block, dtype):
-            runs.append(block)
-            continue
-        runs.append(grid)
-        dtypes.append(dtype)
-    return tuple(runs), np.result_type(*dtypes)
+        steps = [magnitude if values[-1] > values[0] else -magnitude]
+        _on_grid(_diffs(values), steps[0])
+    for spacing in steps:
+        grid, _ = _range_run(dict(start=values[0], step=spacing, shape=values.shape))
+        if _grid_holds(grid, values, values.dtype):
+            return (grid,), values.dtype
+    return (values,), values.dtype
 
 
 def _fill_layout(
@@ -4184,8 +4151,8 @@ def get_coord(
         named, not arrays of your own under its keys.
     snap
         If True (default), nearly evenly sampled data is read as one grid.
-        If False, the data is read exactly: each evenly sampled stretch
-        becomes a run of its own and no label is ever moved.
+        If False, data stays in one exact grid or one stored-label run;
+        no label is moved.
 
     Notes
     -----
@@ -4440,12 +4407,7 @@ def _grid_coord(terms, units=None, **spec) -> BaseCoord:
 
 
 def _exact_coord(values, step=None, units=None) -> BaseCoord:
-    """
-    The coordinate holding these labels exactly, runs and all.
-
-    Monotonic labels keep their runs; anything else keeps them as one
-    stored run.
-    """
+    """The coordinate holding these labels exactly as one run."""
     values = np.asarray(values)
     if not _is_null(step):
         step = _declared_step(step, values.dtype)

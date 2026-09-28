@@ -925,6 +925,8 @@ class TestScan:
             if not supports_exact_read:
                 continue
             for name in coords.coord_map:
+                assert coords.get_coord(name).runs_count == 1
+                assert patch.get_coord(name).runs_count == 1
                 np.testing.assert_array_equal(
                     coords.get_coord(name).values,
                     patch.get_coord(name).values,

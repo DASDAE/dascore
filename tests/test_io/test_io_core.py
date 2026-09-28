@@ -385,13 +385,13 @@ class TestExactCoord:
 
         np.testing.assert_array_equal(coord.values, values)
 
-    def test_piecewise_uniform_array_stays_segmented(self):
-        """Genuinely piecewise-uniform arrays keep their queryable seams."""
+    def test_piecewise_uniform_array_stays_stored(self):
+        """Piecewise-uniform arrays stay stored and report gaps."""
         values = np.concatenate([np.arange(0.0, 2_000.0), np.arange(3_000.0, 5_000.0)])
 
         coord = get_coord(data=values, units="m", snap=False)
 
-        assert coord.runs_count > 1
+        assert coord.runs_count == 1
         np.testing.assert_array_equal(coord.values, values)
         assert len(coord.get_discontinuities("gaps")) == 1
 

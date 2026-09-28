@@ -53,6 +53,8 @@ class TestTerra15:
         exact = dc.scan_payloads(terra15_v6_path, snap=False)[0].coords
         read_exact = dc.read(terra15_v6_path, snap_dims=False)[0].coords
 
+        assert exact.get_coord("time").runs_count == 1
+        assert read_exact.get_coord("time").runs_count == 1
         assert snapped.get_coord("time").evenly_sampled
         np.testing.assert_array_equal(
             exact.get_coord("time").values,

@@ -14,7 +14,7 @@ import pytest
 import dascore as dc
 from dascore.compat import random_state
 from dascore.config import config_context
-from dascore.core.coords import CoordString
+from dascore.core.coords import CoordString, Labels, NumericCoord
 from dascore.exceptions import (
     InvalidFiberFileError,
     MissingPatchError,
@@ -1205,3 +1205,24 @@ class TestLegacyCoordFields:
 
         assert "fingerprint" in _LEGACY_COORD_FIELDS
         assert "data_id" not in _LEGACY_COORD_FIELDS
+
+
+class TestExactLabels:
+    """Exact reads preserve stored coordinate labels as one run."""
+
+    @pytest.mark.parametrize("version", ["1", "2"])
+    def test_float_roundtrip(self, tmp_path, version):
+        """A late final label does not fragment the read-back coordinate."""
+        values = np.arange(20) * 0.01
+        values[-1] += 0.004
+        patch = dc.Patch(
+            data=np.zeros((20, 2)),
+            dims=("time", "distance"),
+            coords={"time": NumericCoord.from_labels(values), "distance": [0.0, 1.0]},
+        )
+        path = tmp_path / "exact.h5"
+        dc.write(patch, path, "DASDAE", file_version=version)
+        coord = dc.read(path, snap=False)[0].get_coord("time")
+        assert coord.runs_count == 1
+        assert isinstance(coord.runs[0], Labels)
+        np.testing.assert_array_equal(coord.values, values)
