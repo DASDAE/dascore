@@ -3481,3 +3481,302 @@ class TestMissingText:
         frame = array.to_frame()
         back = LazyArray.from_frame(frame.drop(columns=name), array.shape, array.dtype)
         assert back.data_id == array.data_id
+
+
+# Constant values which compare equal but are distinct sources.
+ALIKE_VALUES = (1, 1.0, True, -0.0, 0.0, float("nan"))
+
+
+def mixed_member(rng, size, axis):
+    """Return a random constant, or a window of a file with a key or origin id."""
+    kind = int(rng.integers(4))
+    if kind == 0:
+        value = ALIKE_VALUES[int(rng.integers(len(ALIKE_VALUES)))]
+        return ArraySource(filled=True, value=value).describe(tuple(size), "f8")
+    whole = ArraySource(
+        path=f"/root/f{rng.integers(4)}.h5",
+        format="DASDAE",
+        version="1",
+        key=["", "k"][kind == 2],
+        origin_id=["", "a" * 32][kind == 3],
+    )
+    extent = list(size)
+    extent[axis] += 2
+    first = int(rng.integers(3))
+    window = [slice(None)] * len(size)
+    window[axis] = slice(first, first + size[axis])
+    return whole.describe(tuple(extent), "f4")[tuple(window)]
+
+
+def mixed_stack(rng, count, axis, ndim, laid=True):
+    """Return mixed members end to end along an axis, laid there or at corners."""
+    sizes = np.full((count, ndim), 2)
+    sizes[:, axis] = rng.integers(1, 4, count)
+    sources = [mixed_member(rng, x, axis) for x in sizes.tolist()]
+    casts = [[None, "f4"][x] for x in rng.integers(0, 2, count)]
+    kwargs = {"base_uri": "/root/", "cast_via": casts, "dtype": "f8"}
+    if laid:
+        return LazyArray.from_sources(sources, axis=axis, **kwargs)
+    corners = np.zeros((count, ndim), np.int64)
+    corners[1:, axis] = np.cumsum(sizes[:-1, axis])
+    return LazyArray.from_sources(sources, starts=corners, **kwargs)
+
+
+def assert_same_members(array, expected, stored=True):
+    """Assert two arrays have the same ids, frames, sources and, maybe, storage."""
+    assert array.data_id == expected.data_id
+    pd.testing.assert_frame_equal(array.to_frame(), expected.to_frame())
+    # A nan is not equal to itself, so the sources are compared as written.
+    assert repr(array.sources) == repr(expected.sources)
+    if not stored:
+        return
+    first, second = array._block(), expected._block()
+    assert first.shape == second.shape and first.dtype == second.dtype
+    assert first.concat_axis == second.concat_axis
+    for name in AXIS_FIELDS:
+        assert first.axes[name].dtype == second.axes[name].dtype
+        assert np.array_equal(first.axes[name], second.axes[name])
+    ours, theirs = first.members, second.members
+    assert np.array_equal(ours.source_row, theirs.source_row)
+    assert ours.cast.values == theirs.cast.values
+    assert np.array_equal(ours.cast.codes, theirs.cast.codes)
+
+
+def random_window(rng, array):
+    """Return a random window, often trimming only one axis or on member edges."""
+    shape, axis = array.shape, int(rng.integers(array.ndim))
+    edges = np.unique(array.to_frame().query("out_axis == @axis")["out_start"])
+    out = []
+    for dim, size in enumerate(shape):
+        if dim != axis and rng.random() < 0.7:
+            out.append(slice(None))
+            continue
+        low, high = np.sort(rng.integers(0, size + 1, 2))
+        if rng.random() < 0.3:
+            low, high = np.sort(rng.choice([*edges.tolist(), size], 2))
+        if rng.random() < 0.1:
+            high = low
+        out.append(slice(int(low), int(high)))
+    return tuple(out)
+
+
+def takes_ends(view):
+    """Whether resolving a view should clip only its first and last member."""
+    window = view._view
+    if window is None:
+        return False
+    block, starts, stops = window.block, window.starts, window.stops
+    axis = block.concat_axis
+    rest = [x for x in range(block.ndim) if x != axis]
+    whole = all(starts[x] == 0 and stops[x] == block.shape[x] for x in rest)
+    moved = any(starts) or stops != block.shape
+    return axis >= 0 and whole and moved and starts[axis] < stops[axis]
+
+
+class TestClipEnds:
+    """A window trimming only the stacked axis clips its end members alone."""
+
+    @pytest.fixture()
+    def arrays(self):
+        """Arrays stacked along each axis, at corners, and with folded columns."""
+        rng = np.random.default_rng(20)
+        paths = [f"/root/f{x % 7}.h5" for x in range(300)]
+        return [
+            mixed_stack(rng, 40, 0, 2),
+            mixed_stack(rng, 40, 1, 2),
+            mixed_stack(rng, 30, 2, 3),
+            mixed_stack(rng, 20, 0, 1),
+            mixed_stack(rng, 40, 1, 2, laid=False),
+            mixed_stack(rng, 40, 0, 2, laid=False),
+            LazyArray.from_columns(paths, (2, 3), axis=1, base_uri="/root/", **FORMAT),
+            concat([stacked := mixed_stack(rng, 20, 0, 2), stacked], axis=1),
+        ]
+
+    def test_matches_general_path(self, arrays, monkeypatch):
+        """Random windows, chains and transposes clip as the general path does."""
+        rng = np.random.default_rng(21)
+        taken, clip_ends = [], lazy_module._clip_ends
+        monkeypatch.setattr(
+            lazy_module, "_clip_ends", lambda *x: taken.append(1) or clip_ends(*x)
+        )
+        counts = {True: 0, False: 0}
+        for array, _ in product(arrays, range(40)):
+            steps = [random_window(rng, array)]
+            turn, settle = rng.random() < 0.3, rng.random() < 0.3
+            if rng.random() < 0.4:
+                steps.append(random_window(rng, array[steps[0]]))
+
+            def run(array=array, steps=steps, turn=turn, settle=settle):
+                out = array.transpose() if turn else array
+                for step in steps:
+                    out = out[step]
+                    if settle:
+                        out.table
+                return out
+
+            view = run()
+            expected, before = takes_ends(view), len(taken)
+            view.table
+            assert len(taken) - before == int(expected)
+            counts[expected] += 1
+            with monkeypatch.context() as patch:
+                patch.setattr(lazy_module, "_trims_ends", lambda *x: False)
+                general = run()
+                general.table
+            assert_same_members(view, general)
+            view.validate()
+        assert min(counts.values()) > 40
+
+    def test_owns_its_storage(self):
+        """A clipped view shares no placement with its base but broadcast values."""
+        paths = [f"/root/f{x}.h5" for x in range(300)]
+        array = LazyArray.from_columns(paths, (4, 3), **FORMAT)
+
+        def placement(table):
+            members = table.members
+            return [*table.axes.values(), members.source_row, members.cast.codes]
+
+        mine = placement(array[3:-3].table)
+        stored = [x for x in mine if any(x.strides)]
+        assert len(stored) < len(mine)
+        for ours, theirs in product(stored, placement(array.table)):
+            assert not np.shares_memory(ours, theirs)
+
+    def test_invalid_members_take_the_general_path(self):
+        """Boxes outside the array or empty are clipped as any other window."""
+        sources = [ArraySource.full((4, 3), float(x)) for x in range(3)]
+        wide = LazyArray.from_sources(sources, shape=(12, 2))
+        assert wide[1:11].validate().shape == (10, 2)
+        frame = wide.to_frame()
+        frame.loc[frame["ordinal"] == 1, "out_stop"] = frame["out_start"]
+        empty = LazyArray.from_frame(frame, (12, 3), "f8")
+        assert len(empty[1:11]) == 2
+
+
+def reference_merge(columns):
+    """Merge columns a dictionary value at a time, as the loop once did."""
+    index, values, parts = {}, [], []
+    for column in columns:
+        codes, dictionary = column.codes, column.values
+        if len(dictionary) > len(codes):
+            used, codes = np.unique(codes, return_inverse=True)
+            dictionary = [dictionary[x] for x in used.tolist()]
+        remap = []
+        for value in dictionary:
+            key = lazy_module._dict_key(value)
+            if key not in index:
+                index[key] = len(values)
+                values.append(value)
+            remap.append(index[key])
+        parts.append(np.array(remap, np.int64)[codes])
+    return values, np.concatenate([np.empty(0, np.int64), *parts])
+
+
+class TestMergedDictionaries:
+    """Joined columns merge every dictionary in one pass, as one loop would."""
+
+    pool = (*ALIKE_VALUES, None, "a", "b", "")
+
+    def random_columns(self, rng):
+        """Return columns built apart, and cut from two big shared ones."""
+        texts = [f"t{x}" for x in range(400)]
+        shared = [
+            lazy_module._Column.of([self.pool[x] for x in rng.integers(0, 10, 50)]),
+            lazy_module._Column.of([texts[x] for x in rng.integers(0, 400, 600)]),
+        ]
+        out = []
+        for _ in range(int(rng.integers(0, 12))):
+            kind = int(rng.integers(4))
+            if kind < 2:
+                big = shared[kind]
+                rows = rng.integers(0, len(big.codes), int(rng.integers(0, 80)))
+                out.append(big.take(rows))
+            elif kind == 2:
+                picks = rng.integers(0, len(self.pool), int(rng.integers(0, 6)))
+                out.append(lazy_module._Column.of([self.pool[x] for x in picks]))
+            else:
+                picks = rng.integers(0, 400, int(rng.integers(200, 400)))
+                out.append(lazy_module._Column.of([texts[x] for x in picks]))
+        return out
+
+    def test_matches_the_loop(self):
+        """Values, their order and every code are those the loop gave."""
+        rng = np.random.default_rng(22)
+        for _ in range(300):
+            columns = self.random_columns(rng)
+            merged = lazy_module._merge_columns(columns)
+            values, codes = reference_merge(columns)
+            assert repr(list(merged.values)) == repr(values)
+            assert merged.codes.tolist() == codes.tolist()
+            assert merged.codes.dtype == np.int32
+
+    def test_selected_rows(self):
+        """Rows selected on the way merge as those rows taken first."""
+        rng = np.random.default_rng(23)
+        for _ in range(100):
+            columns = self.random_columns(rng)
+            rows = [rng.integers(0, len(x.codes), 5) for x in columns if len(x.codes)]
+            columns = [x for x in columns if len(x.codes)]
+            merged = lazy_module._merge_columns(columns, rows)
+            taken = [x.take(y) for x, y in zip(columns, rows)]
+            expected = lazy_module._merge_columns(taken)
+            assert repr(merged.values) == repr(expected.values)
+            assert np.array_equal(merged.codes, expected.codes)
+
+    def test_shared_dictionary_read_once(self, monkeypatch):
+        """Columns sharing one dictionary contribute it once, cut if it came first."""
+        big = lazy_module._Column.of([f"v{x}" for x in range(50)])
+        sizes, encode = [], lazy_module._Column.of
+        monkeypatch.setattr(
+            lazy_module._Column, "of", lambda x: sizes.append(len(x)) or encode(x)
+        )
+        cut = big.take([3, 3])
+        merged = lazy_module._merge_columns([cut, big, big, cut, big])
+        assert sizes == [1 + 50]
+        assert merged.values == big.values[3:4] + big.values[:3] + big.values[4:]
+
+    def test_joins_apart_as_built_together(self):
+        """Many arrays built apart join to the array built from all their sources."""
+        rng = np.random.default_rng(24)
+        sources = [mixed_member(rng, (2, 3), 0) for _ in range(400)]
+        casts = [[None, "f4"][x] for x in rng.integers(0, 2, len(sources))]
+        kwargs = {"base_uri": "/root/", "dtype": "f8"}
+        together = LazyArray.from_sources(sources, cast_via=casts, **kwargs)
+        bounds = [0, *np.sort(rng.choice(np.arange(1, 400), 150, replace=False)), 400]
+        apart = concat(
+            [
+                LazyArray.from_sources(sources[a:b], cast_via=casts[a:b], **kwargs)
+                for a, b in pairwise(bounds)
+            ]
+        )
+        assert_same_members(apart.validate(), together)
+        for name in SOURCE_FIELDS:
+            ours = getattr(apart.table.members.sources, name)
+            theirs = getattr(together.table.members.sources, name)
+            if name in lazy_module._STRING_FIELDS:
+                assert ours.at(slice(None)) == theirs.at(slice(None))
+            else:
+                assert repr(ours.values) == repr(theirs.values)
+                assert np.array_equal(ours.codes, theirs.codes)
+
+    def test_cut_from_one_table(self):
+        """Few members of a big table join to those members built together."""
+        sources = [
+            ArraySource.full((2, 3), float(x))
+            if x % 3 == 0
+            else replace(stored((2, 3), path=f"/root/f{x % 5}.h5"), key=f"k{x}")
+            for x in range(600)
+        ]
+        big = LazyArray.from_sources(sources, base_uri="/root/")
+        other = LazyArray.from_sources(sources[5:9], base_uri="/root/")
+        parts = [big[x : x + 6] for x in (0, 400, 1100)]
+        joined = concat([parts[0], other, parts[1], other, parts[2]])
+        rows = [*range(0, 3), *range(5, 9), *range(200, 203), *range(5, 9)]
+        rebuilt = LazyArray.from_sources(
+            [sources[x] for x in [*rows, *range(550, 553)]], base_uri="/root/"
+        )
+        # The rows read are kept in the order the big table held them.
+        assert_same_members(joined.validate(), rebuilt, stored=False)
+        # Only the values the rows read are kept.
+        kept = joined.table.members.sources
+        assert len(kept.key.values) == 1 + 9 and len(kept.value.values) == 1 + 4
