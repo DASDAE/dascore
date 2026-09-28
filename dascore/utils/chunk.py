@@ -68,6 +68,9 @@ def get_intervals(
     if overlap >= length:
         msg = "Cant chunk when overlap is greater than or equal to chunk size"
         raise ParameterError(msg)
+    if length < step:
+        msg = "Cant chunk when chunk length is shorter than one sample step."
+        raise ChunkError(msg)
     # If the step is known, we need to account for it in the total duration
     # See 474.
     _raw_duration = stop - start
