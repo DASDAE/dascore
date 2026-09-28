@@ -992,6 +992,22 @@ class TestSplitGapsAndWrite:
             (get_coord(data=np.array([9, 8, 7, 4, 3, 1, 0]), step=-1), 3),
             (get_coord(data=np.round(np.arange(10) * 0.1, 1), step=0.1), 1),
             (get_coord(data=(np.arange(10) * 0.1)[::-1], step=-0.1), 1),
+            # evenly sampled runs sharing no step still split
+            (
+                concat_coords(
+                    get_coord(start=0.0, step=1.0, shape=(3,)),
+                    get_coord(start=3.0, step=1.5, shape=(3,)),
+                ),
+                2,
+            ),
+            # irregular runs sharing no step are not gapped
+            (
+                concat_coords(
+                    get_coord(start=0.0, step=1.0, shape=(3,)),
+                    get_coord(data=np.array([3.0, 4.5, 7.0])),
+                ),
+                1,
+            ),
         ],
     )
     def test_split_gaps_agrees_with_missing(self, coord, count):
@@ -1024,11 +1040,13 @@ class TestSplitGapsAndWrite:
         assert len(spool) == 1
         assert spool[0] == patch
 
-    @pytest.mark.parametrize("version", ["1", "2"])
-    def test_write_round_trip(self, gapped_patch, tmp_path, version):
+    @pytest.mark.parametrize(
+        ("name", "version"), [("dasdae", "1"), ("dasdae", "2"), ("pickle", None)]
+    )
+    def test_write_round_trip(self, gapped_patch, tmp_path, name, version):
         """A gapped patch is written as contiguous patches that round trip."""
         path = tmp_path / "gapped.h5"
-        dc.write(gapped_patch, path, "dasdae", file_version=version)
+        dc.write(gapped_patch, path, name, file_version=version)
         spool = dc.spool(path)
         assert len(spool) == 2
         patches = sorted(spool, key=lambda p: p.get_coord("distance").min())
@@ -1040,26 +1058,12 @@ class TestSplitGapsAndWrite:
     @pytest.mark.parametrize(
         ("name", "ext"), [("wav", "wav"), ("rsf", "rsf"), ("prodml", "h5")]
     )
-    def test_single_patch_format_refuses_the_pieces(
-        self, gapped_patch, tmp_path, name, ext
-    ):
-        """A format holding one patch per file refuses several, and writes nothing."""
-        chunked = dc.spool([gapped_patch]).chunk(distance=None, tolerance=100)
-        for num, item in enumerate((gapped_patch, chunked)):
-            path = tmp_path / f"out{num}.{ext}"
-            with pytest.raises(ParameterError, match="one patch per file"):
-                dc.write(item, path, name)
-            assert not path.exists()
-
-    def test_pickle_writes_the_pieces(self, gapped_patch, tmp_path):
-        """A multi-patch format takes the pieces and reads them back."""
-        chunked = dc.spool([gapped_patch]).chunk(distance=None, tolerance=100)
-        for num, item in enumerate((gapped_patch, chunked)):
-            path = dc.write(item, tmp_path / f"out{num}.pkl", "pickle")
-            back = sorted(dc.spool(path), key=lambda x: x.get_coord("distance").min())
-            assert len(back) == 2
-            data = np.concatenate([x.data for x in back])
-            assert np.array_equal(data, gapped_patch.data)
+    def test_single_patch_format_refuses(self, gapped_patch, tmp_path, name, ext):
+        """A format holding one patch per file refuses the pieces, writing nothing."""
+        path = tmp_path / f"out.{ext}"
+        with pytest.raises(ParameterError, match="one patch per file"):
+            dc.write(gapped_patch, path, name)
+        assert not path.exists()
 
     def test_write_contiguous_unaffected(self, tmp_path):
         """Normal patches write exactly as before."""

@@ -159,7 +159,7 @@ absolute = dc.spool([p1, p_gap]).chunk(
 assert absolute.get_coord("time") == filled.get_coord("time")
 ```
 
-Coordinates with holes are an in-memory representation only: a spool row never holds one. A patch put in a spool enters as one row per contiguous piece ([`Patch.split_gaps`](`dascore.Patch.split_gaps`) returns them), and a chunk output holds a hole only once `fill_value` has filled it.
+A patch put in a spool enters as one row per contiguous piece ([`Patch.split_gaps`](`dascore.Patch.split_gaps`) returns them), so no spool row or chunk output holds a hole.
 
 ## Union spools
 

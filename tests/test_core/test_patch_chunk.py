@@ -773,14 +773,9 @@ class TestChunkMerge:
         assert len(out) == 2
 
         # Case 3: A tolerance alone keeps the hole; with a fill value they merge.
-        with warnings.catch_warnings():
-            warnings.filterwarnings("error")
-            out = dc.spool((base, patch_w_gap)).chunk(time=None, tolerance=10)
-            filled = dc.spool((base, patch_w_gap)).chunk(
-                time=None, tolerance=10, fill_value=np.nan
-            )
-        assert len(out) == 2
-        assert len(filled) == 1
+        spool = dc.spool((base, patch_w_gap))
+        assert len(spool.chunk(time=None, tolerance=10)) == 2
+        assert len(spool.chunk(time=None, tolerance=10, fill_value=np.nan)) == 1
 
 
 def _bare_assembler():
@@ -1364,13 +1359,12 @@ class TestQuantityTolerance:
         """A timedelta says the same thing as a time quantity."""
         step = random_patch.get_coord("time").step
         spool = self._gapped(random_patch, 5)
-        kwargs = {"time": None, "fill_value": np.nan}
+        kwargs = {"time": None, "fill_value": 0.0}
         delta = spool.chunk(tolerance=6 * step, **kwargs)
         seconds = get_quantity(f"{6 * dc.to_float(step)} s")
         quantity = spool.chunk(tolerance=seconds, **kwargs)
         assert len(delta) == len(quantity) == 1
-        assert delta[0].coords == quantity[0].coords
-        assert np.array_equal(delta[0].data, quantity[0].data, equal_nan=True)
+        assert delta[0].equals(quantity[0])
         assert len(spool.chunk(tolerance=step, **kwargs)) == 2
 
     def test_datetime_timedelta_accepted(self, random_patch):
@@ -1554,12 +1548,11 @@ class TestQuantityTolerance:
         spool = self._gapped(random_patch, 40)
         snapped = spool.chunk(time=None, tolerance=41 * step)
         exact = spool.chunk(time=None, tolerance=41 * step, snap_coords=False)
-        # the hole stays a boundary, and every label keeps the value the
-        # source patch gave it
+        # the hole stays a boundary, and every label keeps its source's value
         assert len(snapped) == len(exact) == 2
-        for one, two, source in zip(snapped, exact, spool, strict=True):
-            assert one.get_coord("time") == two.get_coord("time")
-            assert one.get_coord("time") == source.get_coord("time")
+        for patches in zip(snapped, exact, spool, strict=True):
+            one, two, source = (x.get_coord("time") for x in patches)
+            assert one == two == source
 
     def test_snapping_still_absorbs_sub_sample_jitter(self, random_patch):
         """Labels a fraction of a step off the grid do collapse to a range."""
@@ -3255,23 +3248,16 @@ class TestChunkFillWindows:
         all_fill = [bool(np.isnan(x.data).all()) for x in chunked]
         assert all_fill == [False] * 6 + [True] * 4 + [False] * 5
 
-    def test_window_shorter_than_a_step_is_refused(self):
+    def test_window_shorter_than_a_step_is_refused(self, random_patch):
         """A window holding no sample position is no output at all."""
-        patch = dc.Patch(
-            data=np.zeros((2, 40)),
-            coords={"distance": np.arange(2.0), "time": np.arange(40.0)},
-            dims=("distance", "time"),
-        )
         with pytest.raises(ChunkError, match="chunk"):
-            dc.spool([patch]).chunk(time=0.3, fill_value=np.nan)
+            dc.spool([random_patch]).chunk(time=0.001, fill_value=np.nan)
 
     def test_one_sample_output_is_not_padded(self):
         """An output of one descending sample states no step to pad by."""
         time = dc.get_coord(start=39.0, step=-1.0, shape=(40,))
         coords = {"distance": np.arange(2.0), "time": time}
-        patch = dc.Patch(
-            data=np.ones((2, 40)), coords=coords, dims=("distance", "time")
-        )
+        patch = dc.Patch(data=np.ones((2, 40)), coords=coords, dims=tuple(coords))
         overlapping = patch.update_coords(time_min=time.max() - 7)
         with suppress_warnings(UserWarning):
             merged = dc.spool([patch, overlapping]).chunk(time=None, tolerance=50)

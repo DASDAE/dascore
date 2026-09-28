@@ -43,7 +43,7 @@ There are two primary construction paths:
 
 [`fuse(...)`](`dascore.core.coords.BaseCoord.fuse`) and [`snap(...)`](`dascore.core.coords.BaseCoord.snap`) make different promises. `fuse` may refit runs only when no value moves more than the supplied tolerance; `snap` forces one uniform grid and has no bound on interior movement. With `tolerance=None` or `0`, `fuse` performs lossless simplification only.
 
-A patch may carry dimensional coordinates with holes in memory, but a spool row never does: putting such a patch in a spool splits it into one contiguous patch per run, a chunk output holds none unless `fill_value` filled it, and [`write(...)`](`dascore.write`) writes the pieces, so a format holding one patch per file refuses it. `patch.split_gaps()` returns the pieces. Irregular labels with no shared step are not gapped and stay one row.
+A patch may carry dimensional coordinates with holes in memory, but a spool row never does: a spool holds such a patch as its contiguous pieces (what `patch.split_gaps()` returns), and [`write(...)`](`dascore.write`) writes those pieces, so a format holding one patch per file refuses it.
 
 ## String coordinates
 

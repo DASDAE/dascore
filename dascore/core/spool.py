@@ -2080,8 +2080,7 @@ class Spool(NodeRepr, NamespaceOwner):
         matches the gap frame's, so the two join on it.
 
         Coverage is measured from the envelopes the index records for each
-        row. A gap a larger tolerance hides is still a chunk break unless
-        ``fill_value`` is given. A hole is not visible in a
+        row. A hole is not visible in a
         group whose step is unknown: a sample-count tolerance has nothing
         to scale there, so the group reports no gaps and counts as fully
         covered. An absolute tolerance does measure it.

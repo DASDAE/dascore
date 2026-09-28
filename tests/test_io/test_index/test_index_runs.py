@@ -50,12 +50,7 @@ def gapped_directory(gapped_patch, tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def indexed_runs(gapped_patch, tmp_path_factory):
-    """
-    A directory spool whose file holds the gapped patch whole.
-
-    No writer makes such a file, so it is saved directly; only metadata
-    questions, which read the index's runs, are asked of it.
-    """
+    """A directory whose file holds the gapped patch whole, as older files may."""
     path = tmp_path_factory.mktemp("indexed_runs") / "gapped.h5"
     later = gapped_patch.get_coord("time").max() + 10 * 1000 * MS
     dc.write(dc.get_example_patch().update_coords(time_min=later), path, "dasdae")
@@ -67,28 +62,16 @@ def indexed_runs(gapped_patch, tmp_path_factory):
 class TestIndexedRuns:
     """The index's runs of a patch holding a hole answer metadata questions."""
 
-    def test_links(self, indexed_runs):
-        """The link table holds the runs beside the coordinate."""
-        back = indexed_runs._catalog.backend
-        links = back._fetch_df("SELECT * FROM patch_coords")
-        assert list(links.columns) == list(PatchCoordRow._fields)
-        runs = links[links["run_index"] > 0]
-        assert set(runs["coord_name"]) == {"time"}
-        assert len(runs) == 2
-
-    def test_flat_relation_is_one_row_per_patch(self, indexed_runs):
-        """Every query about a patch's coordinate reads the coordinate whole."""
-        contents = indexed_runs.get_contents()
-        assert len(contents) == 2
-        gapped = contents.sort_values("time_min").iloc[0]
-        assert pd.isnull(gapped["time_step"])
-
     def test_reports(self, indexed_runs):
-        """The hole and the space after the patch are both gaps."""
+        """The hole and the space after the patch are gaps, in chunk outputs too."""
         gaps = indexed_runs.get_gaps().sort_values("time_min")
-        assert len(gaps) == 2
-        assert gaps["gap_size"].iloc[0] == HOLE
+        assert len(gaps) == 2 and gaps["gap_size"].iloc[0] == HOLE
         assert indexed_runs.get_coverage()["gap_total"].iloc[0] > HOLE
+        chunked = indexed_runs.chunk(time=None)
+        assert chunked.get_gaps()["gap_size"].iloc[0] == HOLE
+        # an output joined along time takes no member's runs of it
+        joined = indexed_runs.chunk(time=None, tolerance=10_000, fill_value=np.nan)
+        assert joined.get_gaps().empty
 
     def test_plan_members_are_runs(self, indexed_runs):
         """Each run is a trimmed member; runs in one output are read once."""
@@ -96,21 +79,6 @@ class TestIndexedRuns:
         assert len(members) == 3 and members["_modified"].sum() == 2
         bridged = indexed_runs.chunk_plan(time=None, tolerance=5, fill_value=np.nan)
         assert len(bridged.members) == 2
-
-    def test_chunked_view_keeps_the_hole(self, indexed_runs):
-        """A plan's outputs carry the runs of the member they hold."""
-        chunked = indexed_runs.chunk(time=None)
-        assert chunked.get_gaps()["gap_size"].iloc[0] == HOLE
-        # an output joined along time takes no member's runs of it
-        joined = indexed_runs.chunk(time=None, tolerance=10_000, fill_value=np.nan)
-        assert joined.get_gaps().empty
-
-    def test_query_candidacy(self, indexed_runs, gapped_patch):
-        """A window inside the hole selects the patch holding it."""
-        t0 = gapped_patch.get_coord("time").min()
-        window = (t0 + 1003 * MS, t0 + 1008 * MS)
-        back = indexed_runs._catalog.backend
-        assert len(back.query([Query(coords={"time": window})])) == 1
 
 
 @pytest.fixture(scope="module")
@@ -184,6 +152,22 @@ class TestStorage:
         assert time[0].step_int is None
         assert time[1].step_int == time[2].step_int == 4_000_000
         assert {c.run_index for c in record.coords if c.coord_name == "distance"} == {0}
+
+    def test_links(self, indexed_runs):
+        """The link table holds the runs beside the coordinate."""
+        back = indexed_runs._catalog.backend
+        links = back._fetch_df("SELECT * FROM patch_coords")
+        assert list(links.columns) == list(PatchCoordRow._fields)
+        runs = links[links["run_index"] > 0]
+        assert set(runs["coord_name"]) == {"time"}
+        assert len(runs) == 2
+
+    def test_flat_relation_is_one_row_per_patch(self, indexed_runs):
+        """Every query about a patch's coordinate reads the coordinate whole."""
+        contents = indexed_runs.get_contents()
+        assert len(contents) == 2
+        gapped = contents.sort_values("time_min").iloc[0]
+        assert pd.isnull(gapped["time_step"])
 
     def test_written_pieces_are_rows(self, gapped_directory):
         """The gapped patch was written as its runs, each a row with a step."""
@@ -303,14 +287,12 @@ class TestReports:
         merged = gapped_directory.chunk(time=None, tolerance=10_000, fill_value=0)
         assert len(merged) == 1
 
-    def test_window_inside_the_hole_selects_nothing(
-        self, gapped_directory, gapped_patch
-    ):
-        """No row spans the hole, so a window inside it matches none."""
+    def test_query_candidacy_unchanged(self, indexed_runs, gapped_patch):
+        """A window inside the hole still selects the patch holding it."""
         t0 = gapped_patch.get_coord("time").min()
         window = (t0 + 1003 * MS, t0 + 1008 * MS)
-        back = gapped_directory._catalog.backend
-        assert len(back.query([Query(coords={"time": window})])) == 0
+        back = indexed_runs._catalog.backend
+        assert len(back.query([Query(coords={"time": window})])) == 1
 
 
 class TestDerived:

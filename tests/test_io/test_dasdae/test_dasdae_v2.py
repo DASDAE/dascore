@@ -172,63 +172,17 @@ class TestVersion2Files:
         summary = dc.scan(path)[0].coords["time"]
         assert summary.to_coord() == hz_1024_patch.get_coord("time")
 
-    def test_gapped_patch_written_as_pieces(self, gapped_patch, tmp_path):
-        """A gapped patch is written as its contiguous pieces, which read back."""
-        path = dc.write(gapped_patch, tmp_path / "gap.h5", "dasdae")
-        pieces = list(dc.spool([gapped_patch]))
-        back = sorted(dc.spool(path), key=lambda x: x.get_coord("time").min())
-        assert len(back) == len(pieces) > 1
-        for read, piece in zip(back, pieces, strict=True):
-            assert read.get_coord("time").evenly_sampled
-            assert read.get_coord("time") == piece.get_coord("time")
-            assert np.array_equal(read.data, piece.data)
-
     def test_gapped_directory_to_xarray(self, gapped_patch, tmp_path):
         """A directory holding a written gapped patch converts (#1218)."""
         pytest.importorskip("xarray")
         pytest.importorskip("dask")
         dc.write(gapped_patch, tmp_path / "gap.h5", "dasdae")
-        spool = dc.spool(tmp_path).update()
-        assert len(spool.get_gaps()) == 1
-        tree = spool.io.to_xarray()
+        tree = dc.spool(tmp_path).update().io.to_xarray()
         leaves = [x for x in tree.subtree if "data" in x.data_vars]
         pieces = list(dc.spool([gapped_patch]))
         assert len(leaves) == len(pieces)
         for leaf, piece in zip(leaves, pieces, strict=True):
             assert np.array_equal(leaf["data"].values, piece.data)
-
-    @pytest.mark.parametrize(
-        "runs",
-        [
-            (np.array([0.0, 1.0, 2.0005]), np.array([3.0, 4.0005, 5.0])),
-            (np.array([10.0, 12.0, 15.0]), np.array([0.0, 2.0, 5.0])),
-            (np.array([0.0, 5.0, 2.0]), np.array([10.0, 12.0, 15.0])),
-        ],
-    )
-    def test_irregular_runs_read_back_exactly(self, runs, tmp_path):
-        """Irregular runs are one row, and their labels are read back unsnapped."""
-        coord = NumericCoord(runs=runs)
-        data = np.arange(float(len(coord)))
-        patch = dc.Patch(data=data, coords={"x": coord}, dims=("x",))
-        (back,) = dc.spool(dc.write(patch, tmp_path / "runs.h5", "dasdae"))
-        np.testing.assert_array_equal(back.get_coord("x").values, coord.values)
-        np.testing.assert_array_equal(back.data, data)
-
-    @pytest.mark.parametrize(
-        "runs",
-        [
-            (np.array([0.0, 1.0, 2.0005]), np.array([3.0, 4.0005, 5.0])),
-            (np.array([0.0, 1.0, 2.0005, 3.0]), np.arange(10.0, 13.0)),
-        ],
-    )
-    def test_irregular_runs_survive_a_rewrite(self, runs, tmp_path):
-        """Labels read back exactly stay exact when written again."""
-        coord = NumericCoord(runs=runs)
-        data = np.arange(float(len(coord)))
-        patch = dc.Patch(data=data, coords={"x": coord}, dims=("x",))
-        (once,) = dc.spool(dc.write(patch, tmp_path / "one.h5", "dasdae"))
-        (twice,) = dc.spool(dc.write(once, tmp_path / "two.h5", "dasdae"))
-        np.testing.assert_array_equal(twice.get_coord("x").values, coord.values)
 
     def test_append_keeps_the_higher_version(self, random_patch, tmp_path):
         """Appending version 1 patches to a version 2 file leaves it version 2."""
@@ -279,6 +233,26 @@ class TestVersion2Files:
         assert leaf["data"].shape == data.shape
         assert leaf["data"].data.compute().shape == data.shape
 
+    @pytest.mark.parametrize(
+        "runs",
+        [
+            (np.array([0.0, 1.0, 2.0005]), np.array([3.0, 4.0005, 5.0])),
+            (np.array([0.0, 1.0, 2.0005, 3.0]), np.arange(10.0, 13.0)),
+            (np.array([10.0, 12.0, 15.0]), np.array([0.0, 2.0, 5.0])),
+            (np.array([0.0, 5.0, 2.0]), np.array([10.0, 12.0, 15.0])),
+        ],
+    )
+    def test_runs_read_back_in_written_order(self, runs, tmp_path):
+        """Irregular runs are one row, read back unsnapped and unordered, twice."""
+        coord = NumericCoord(runs=runs)
+        data = np.arange(float(len(coord)))
+        patch = dc.Patch(data=data, coords={"x": coord}, dims=("x",))
+        (once,) = dc.spool(dc.write(patch, tmp_path / "one.h5", "dasdae"))
+        (twice,) = dc.spool(dc.write(once, tmp_path / "two.h5", "dasdae"))
+        for back in (once, twice):
+            np.testing.assert_array_equal(back.get_coord("x").values, coord.values)
+            np.testing.assert_array_equal(back.data, data)
+
 
 class TestMultiRunRoundTrip:
     """A coordinate of several exact runs is written as its pieces."""
@@ -299,12 +273,9 @@ class TestMultiRunRoundTrip:
         data = np.arange(float(len(coord)))
         patch = dc.Patch(data=data, coords={"time": coord}, dims=("time",))
         pieces = list(dc.spool([patch]))
-        assert len(pieces) > 1
-        back = dc.read(dc.write(patch, tmp_path / "runs.h5", "dasdae"))
-        back = sorted(back, key=lambda x: x.get_coord("time").min())
+        back = dc.read(dc.write(patch, tmp_path / "runs.h5", "dasdae")).sort("time")
         assert len(back) == len(pieces)
         for read, piece in zip(back, pieces, strict=True):
             out, expected = read.get_coord("time"), piece.get_coord("time")
-            assert out == expected
-            assert out.step_exact == expected.step_exact
+            assert out == expected and out.step_exact == expected.step_exact
             np.testing.assert_array_equal(read.data, piece.data)

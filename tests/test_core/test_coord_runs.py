@@ -43,11 +43,6 @@ def design_case():
     return get_coord(data=PRESENT, step=1)
 
 
-def _by_min(patches, dim="distance"):
-    """The patches in ascending order of a dimension's first label."""
-    return sorted(patches, key=lambda x: x.get_coord(dim).min())
-
-
 class TestDeclaredStep:
     """A step on array data declares the grid the values sit on."""
 
@@ -574,7 +569,7 @@ class TestReviewFindings:
         data = np.zeros((len(dense), 3))
         patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
         path = dc.write(patch, tmp_path / "out.h5", "dasdae", file_version=version)
-        back = _by_min(dc.read(path), "distance")
+        back = dc.read(path).sort("distance")
         assert len(back) == dense.missing().count + 1
         assert all(x.get_coord("distance").evenly_sampled for x in back)
         values = np.concatenate([x.get_coord("distance").values for x in back])
@@ -755,7 +750,7 @@ class TestReviewRoundTwo:
         coord = concat_coords(left, right)
         base = dc.get_example_patch().select(distance=(0, 6), samples=True)
         patch = base.update_coords(distance=coord)
-        back = _by_min(dc.read(dc.write(patch, tmp_path / "seg.h5", "dasdae")))
+        back = dc.read(dc.write(patch, tmp_path / "seg.h5", "dasdae")).sort("distance")
         pieces = list(dc.spool([patch]))
         assert len(back) == len(pieces) == 5
         for read, piece in zip(back, pieces, strict=True):
@@ -851,10 +846,10 @@ class TestReviewRoundThree:
         coord = get_coord(data=np.array([9, 7, 4]), step=1)
         base = dc.get_example_patch().select(distance=(0, 3), samples=True)
         patch = base.update_coords(distance=coord)
-        back = _by_min(dc.read(dc.write(patch, tmp_path / "down.h5", "dasdae")))[::-1]
+        back = dc.read(dc.write(patch, tmp_path / "down.h5", "dasdae")).sort("distance")
         values = np.concatenate([x.get_coord("distance").values for x in back])
-        assert np.array_equal(values, [9, 7, 4])
-        assert np.array_equal(np.concatenate([x.data for x in back]), patch.data)
+        assert np.array_equal(values, [4, 7, 9])
+        assert np.array_equal(np.concatenate([x.data for x in back]), patch.data[::-1])
 
     def test_unit_conversion_keeps_the_seam(self):
         """Converting units scales each run rather than re-reading the labels."""
@@ -1218,6 +1213,7 @@ class TestRefactorParity:
         first = np.delete(np.arange(10) * 0.1 + 0.3, 4)
         second = np.arange(10, 20) * 0.1 + 0.3
         spool = dc.spool([patch(first), patch(second)])
+        assert spool.get_contents()["distance_step"].tolist() == [0.1] * 3
         assert len(spool.chunk(distance=None)) == 2
         (out,) = spool.chunk(distance=None, tolerance=2, fill_value=np.nan)
         assert out.get_coord("distance").step == pytest.approx(0.1)
