@@ -144,7 +144,7 @@ Use `tracks=` to select lanes and `columns=` to select geometry columns. [`Inven
 
 # Using an inventory with a spool
 
-[`Spool.attach_inventory`](`dascore.core.spool.Spool.attach_inventory`) stores an inventory reference without changing patches or loading data. It is the only way a spool gets an inventory; `enrich` and `conform_to_inventory` always use the attached one.
+[`Spool.attach_inventory`](`dascore.core.spool.Spool.attach_inventory`) stores an inventory reference without changing patches or loading data. `enrich` can also take an inventory, which it attaches; without one it uses the attached inventory, as `conform_to_inventory` always does.
 
 ```{python}
 spool = dc.spool(patch).attach_inventory(inventory)

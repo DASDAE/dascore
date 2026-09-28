@@ -6,13 +6,13 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Mapping, Sequence
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.constants import attr_conflict_description
+from dascore.constants import CONFLICT, attr_conflict_description
 from dascore.exceptions import AttributeMergeError, ParameterError
 from dascore.utils.docs import compose_docstring
 from dascore.utils.identity import (
@@ -31,7 +31,7 @@ _DROPPED_IDS = (*_ID_FIELDS, "patch_id", "processing_id")
 _VALID_CONFLICT_VALUES = ("drop", "raise", "keep_first")
 
 
-def validate_conflict(conflict: str) -> Literal["drop", "raise", "keep_first"]:
+def validate_conflict(conflict: str) -> CONFLICT:
     """Ensure a conflict argument is a supported value."""
     if conflict not in _VALID_CONFLICT_VALUES:
         msg = f"conflict must be one of {_VALID_CONFLICT_VALUES}, got {conflict!r}."
@@ -42,7 +42,7 @@ def validate_conflict(conflict: str) -> Literal["drop", "raise", "keep_first"]:
 @compose_docstring(conflict_desc=attr_conflict_description)
 def combine_patch_attrs(
     model_list: Sequence[dc.PatchAttrs],
-    conflict: Literal["drop", "raise", "keep_first"] = "raise",
+    conflict: CONFLICT = "raise",
     drop_attrs: Sequence[str] | None = None,
     merge_params: Mapping[str, Any] | None = None,
 ) -> dc.PatchAttrs:

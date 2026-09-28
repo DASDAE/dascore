@@ -833,8 +833,10 @@ def resolve_query(
                 msg = f"Coordinate range for {name!r} must be a length 2 sequence."
                 raise ParameterError(msg)
             # canonicalize the open-end sentinel so equivalent selections
-            # (None vs ...) stay equivalent downstream (e.g. spool __eq__)
-            return tuple(None if v is Ellipsis else v for v in value)
+            # (None vs ...) stay equivalent downstream (e.g. spool __eq__);
+            # a fully open range selects everything, like Patch.select.
+            out = tuple(None if v is Ellipsis else v for v in value)
+            return None if all(v is None for v in out) else out
         msg = (
             f"Coordinate {name!r} accepts range selectors (a (start, stop) "
             "tuple or slice, None/... for open ends); scalar, membership, "

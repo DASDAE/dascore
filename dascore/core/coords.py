@@ -530,6 +530,11 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
     _evenly_sampled = False
     _partial = False
 
+    @property
+    def data(self) -> ArrayLike:
+        """The coordinate's values; an alias of `values`."""
+        return self.values
+
     @model_validator(mode="before")
     @classmethod
     def _check_time_units(cls, data: Any) -> Any:

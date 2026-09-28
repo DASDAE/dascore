@@ -514,12 +514,11 @@ class TestAttachInventoryPath:
         inventory.io.to_yaml(path)
         assert len(dc.spool(patch).attach_inventory(path).conform_to_inventory()) == 1
 
-    @pytest.mark.parametrize("verb", ["enrich", "conform_to_inventory"])
-    def test_the_verbs_take_no_inventory(self, patch, inventory, verb):
-        """Attaching is the only way in, so neither verb accepts one."""
+    def test_conform_takes_no_inventory(self, patch, inventory):
+        """Conforming reads the attached inventory and accepts none."""
         spool = dc.spool(patch).attach_inventory(inventory)
         with pytest.raises(TypeError, match="positional argument"):
-            getattr(spool, verb)(inventory)
+            spool.conform_to_inventory(inventory)
 
     def test_no_argument_needs_a_directory(self, patch):
         """There is nowhere an in-memory spool could have carried one."""
@@ -831,8 +830,25 @@ class TestSpoolEnrich:
 
     def test_unknown_kwarg_raises_now(self, patch, inventory):
         """A misspelled argument fails here, not on a patch pulled later."""
-        with pytest.raises(ParameterError, match="unknown argument"):
+        with pytest.raises(TypeError, match="attr"):
             dc.spool(patch).attach_inventory(inventory).enrich(attr=True)
+
+    def test_inventory_argument_attaches(self, patch, inventory):
+        """Passing an inventory is attaching it, then enriching."""
+        spool = dc.spool(patch)
+        out = spool.enrich(inventory, coords=False)
+        assert out == spool.attach_inventory(inventory).enrich(coords=False)
+        assert out[0].attrs.gauge_length == 10.0
+
+    def test_signature_matches_patch_enrich(self):
+        """Spool.enrich takes Patch.enrich's options, spelled the same."""
+        patch_params = dict(inspect.signature(dc.Patch.enrich).parameters)
+        spool_params = dict(inspect.signature(dc.Spool.enrich).parameters)
+        for name in ("patch", "inventory"):
+            patch_params.pop(name)
+        for name in ("self", "inventory", "on_unresolved"):
+            spool_params.pop(name)
+        assert spool_params == patch_params
 
     def test_re_enriching_replaces_arguments(self, patch, inventory):
         """The last call says what enrichment means."""
@@ -2415,6 +2431,12 @@ def _channels(spool):
 
 class TestChannelSelect:
     """Selecting on the coordinates an inventory defines along the fiber."""
+
+    @pytest.mark.parametrize("value", [(None, None), (..., ...), (None, ...)])
+    def test_open_range_selects_all(self, patch, inventory, value):
+        """A fully open range is no filter, as on a patch coordinate."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        assert spool.select(x=value) == spool
 
     def test_trims_to_the_matching_channels(self, patch, inventory):
         """

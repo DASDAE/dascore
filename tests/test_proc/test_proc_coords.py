@@ -26,6 +26,7 @@ from dascore.exceptions import (
     PatchBroadcastError,
     PatchCoordinateError,
     PatchError,
+    UnknownCoordinateError,
 )
 from dascore.units import get_quantity
 from dascore.utils.gaps import GapTolerance
@@ -761,6 +762,17 @@ class TestUnselect:
         patch = random_patch.update_coords(quality=("distance", np.arange(size)))
         out = patch.unselect(quality=(0, 9))
         assert len(out.get_array("quality")) == size - 10
+
+
+class TestUnknownCoordinate:
+    """Every patch selector refuses an unknown name the same way."""
+
+    @pytest.mark.parametrize("method", ["select", "unselect", "order", "sel", "isel"])
+    def test_raises_unknown_coordinate_error(self, random_patch, method):
+        """The error is both a coordinate and a parameter error."""
+        with pytest.raises(UnknownCoordinateError) as info:
+            getattr(random_patch, method)(bob=(1, 2))
+        assert isinstance(info.value, ParameterError)
 
 
 class TestOrder:
@@ -1794,7 +1806,7 @@ class TestFillGaps:
     def test_value_not_castable(self, gapped):
         """A value which is not a number cannot fill numeric data."""
         with pytest.raises(ParameterError, match="Cannot fill"):
-            gapped.fill_gaps("time", value="bob")
+            gapped.fill_gaps("time", fill_value="bob")
 
     @pytest.mark.parametrize("limit", [-1, 1.5])
     def test_bad_sample_limit(self, gapped, limit):
@@ -1877,8 +1889,8 @@ class TestFillGaps:
         with pytest.raises(ParameterError, match="int32"):
             patch.fill_gaps("time")
         with pytest.raises(ParameterError, match="int32"):
-            patch.fill_gaps("time", value=1.5)
-        out = patch.fill_gaps("time", value=0)
+            patch.fill_gaps("time", fill_value=1.5)
+        out = patch.fill_gaps("time", fill_value=0)
         assert out.data.dtype == np.int32 and (out.data[:, 5:8] == 0).all()
 
     def test_drops_associated_coords(self, gapped):
@@ -2043,8 +2055,8 @@ class TestFillGaps:
         """A fill value past float32's range raises; a rounded one does not."""
         patch = gapped.new(data=gapped.data.astype(np.float32))
         with pytest.raises(ParameterError, match="float32"):
-            patch.fill_gaps("time", value=1e40)
-        assert patch.fill_gaps("time", value=0.1).data.dtype == np.float32
+            patch.fill_gaps("time", fill_value=1e40)
+        assert patch.fill_gaps("time", fill_value=0.1).data.dtype == np.float32
 
     def test_sample_tolerance_raises(self, gapped):
         """A sample-count tolerance points to samples=True."""

@@ -1183,10 +1183,10 @@ class TestDirSpoolPassthrough:
     """Directory spools accept a prebuilt indexer."""
 
     def test_spool_from_indexer(self, tmp_path, random_patch):
-        """Passing an indexer instance to from_directory works."""
+        """Passing an indexer instance to _from_directory works."""
         random_patch.io.write(tmp_path / "one.hdf5", "dasdae")
         indexer = DBDirectoryIndexer(tmp_path)
-        spool = Spool.from_directory(indexer).update(progress=None)
+        spool = Spool._from_directory(indexer).update(progress=None)
         assert len(spool) == 1
 
 

@@ -118,7 +118,7 @@ A dense array whose runs would outnumber a tenth of its samples keeps its labels
 import dascore as dc
 
 patch = dc.Patch(data=np.ones(len(coord)), coords={"x": coord}, dims=("x",))
-filled = patch.fill_gaps("x", value=0)
+filled = patch.fill_gaps("x", fill_value=0)
 assert filled.shape == (12,) and filled.data.sum() == len(coord)
 ```
 

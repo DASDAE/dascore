@@ -192,9 +192,12 @@ WARN_LEVELS = Literal["warn", "raise", "ignore"]
 # Enrichment can fill missing metadata or use the standard warning policy.
 ON_MISSING = Literal[WARN_LEVELS, "null"]
 
+# How a merge settles attribute values that disagree.
+CONFLICT = Literal["drop", "raise", "keep_first"]
+
 # Enrichment conflicts use merge policies plus keep_last (inventory wins).
 # keep_first preserves the patch's value.
-ENRICH_CONFLICT = Literal["drop", "raise", "keep_first", "keep_last"]
+ENRICH_CONFLICT = Literal[CONFLICT, "keep_last"]
 
 # The stdlib warning-action alias is stub-only. Omit "all", unsupported on 3.12-3.13.
 WARNING_ACTIONS = Literal["default", "error", "ignore", "always", "module", "once"]

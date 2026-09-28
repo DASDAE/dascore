@@ -46,11 +46,11 @@ class TestBasic:
     def test_raises_bad_file(self):
         """Simply ensures a bad file will raise."""
         with pytest.raises(FileNotFoundError, match="does not exist"):
-            Spool.from_file("/not/a/directory")
+            Spool._from_file("/not/a/directory")
 
     def test_local_upath_file(self, terra15_v5_path):
-        """Ensure from_file accepts local UPath inputs."""
-        spool = Spool.from_file(UPath(terra15_v5_path))
+        """Ensure _from_file accepts local UPath inputs."""
+        spool = Spool._from_file(UPath(terra15_v5_path))
         assert isinstance(spool, Spool)
         assert len(spool)
 
@@ -71,7 +71,7 @@ class TestBasic:
         patch_2 = dc.get_example_patch()
         patch_1 = patch_2.update_coords(time=patch_2.coords.get_array("time") + 10)
         dc.write(dc.spool([patch_1, patch_2]), path, "dasdae", file_version="1")
-        spool = Spool.from_file(path).sort("time")
+        spool = Spool._from_file(path).sort("time")
         loaded_patch = spool[0]
         assert loaded_patch.get_coord("time").min() == patch_2.get_coord("time").min()
 
@@ -80,7 +80,7 @@ class TestBasic:
         path = tmp_path / "multi_patch.h5"
         spool = dc.examples.get_example_spool("random_das", length=2)
         dc.write(spool, path, "dasdae", file_version="1")
-        file_spool = Spool.from_file(path)
+        file_spool = Spool._from_file(path)
         kwargs = {
             "source_path": str(path),
             "source_format": "DASDAE",
