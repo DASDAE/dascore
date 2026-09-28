@@ -1,7 +1,8 @@
-"""Validation of bounded absolute windows shared by spool operations."""
+"""Validation of absolute windows shared by spool operations."""
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -30,6 +31,8 @@ def looks_explicit(value) -> bool:
 
 def explicit_ranges(value) -> ExplicitRanges | None:
     """Return validated window rows, or None for an existing input form."""
+    if isinstance(value, ExplicitRanges):  # already validated
+        return value
     if not looks_explicit(value):
         if isinstance(value, np.ndarray) and value.ndim == 1:
             msg = "Explicit ranges must have shape (n, 2), not a 1D array."
@@ -52,33 +55,35 @@ def explicit_ranges(value) -> ExplicitRanges | None:
             if isinstance(bound, np.str_):
                 bound = str(bound)
             if bound is None or bound is Ellipsis:
-                msg = f"Explicit range row {index} needs two closed bounds."
-                raise ParameterError(msg)
+                bounds.append(None)  # an open end
+                continue
             magnitude = bound.magnitude if isinstance(bound, Quantity) else bound
             if isinstance(magnitude, bool | np.bool_) or np.ndim(magnitude):
                 msg = f"Explicit range row {index} has a non-scalar bound."
                 raise ParameterError(msg)
-            invalid = bool(pd.isna(magnitude)) or (
-                isinstance(magnitude, (int, float, np.number))
-                and not np.isfinite(magnitude)
-            )
-            if invalid:
-                msg = f"Explicit range row {index} has a missing or nonfinite bound."
+            missing = bool(pd.isna(magnitude))  # NaN and NaT, before infinities
+            infinite = not missing and isinstance(magnitude, (int, float, np.number))
+            infinite = infinite and not np.isfinite(magnitude)
+            if infinite and (float(magnitude) > 0) == (not bounds):
+                msg = f"Explicit range row {index} has a reversed infinite bound."
                 raise ParameterError(msg)
-            bounds.append(bound)
-        if isinstance(bounds[0], Quantity) == isinstance(bounds[1], Quantity):
-            if isinstance(bounds[0], Quantity):
-                assert isinstance(bounds[1], Quantity)
+            bounds.append(None if missing or infinite else bound)
+        # a lone closed end is checked against itself; open ends never reverse
+        pair = [x for x in bounds if x is not None]
+        pair = pair * 2 if len(pair) == 1 else pair
+        if pair and isinstance(pair[0], Quantity) == isinstance(pair[1], Quantity):
+            if isinstance(pair[0], Quantity):
+                assert isinstance(pair[1], Quantity)
                 try:
                     comparable: list[Any] = [
-                        bounds[0].magnitude,
-                        cast(Any, bounds[1]).to(bounds[0].units).magnitude,
+                        pair[0].magnitude,
+                        cast(Any, pair[1]).to(pair[0].units).magnitude,
                     ]
                 except Exception as exc:
                     msg = f"Explicit range row {index} has incompatible bound units."
                     raise ParameterError(msg) from exc
             else:
-                comparable = bounds
+                comparable = pair
             if any(isinstance(x, str) for x in comparable) and (
                 all(isinstance(x, str) for x in comparable)
                 or any(isinstance(x, (pd.Timestamp, np.datetime64)) for x in comparable)
@@ -104,6 +109,16 @@ def explicit_ranges(value) -> ExplicitRanges | None:
                 raise ParameterError(msg)
         rows.append((bounds[0], bounds[1]))
     return ExplicitRanges(tuple(rows))
+
+
+def explicit_windows(values: Mapping) -> dict[str, ExplicitRanges]:
+    """Return the explicit ranges in ``values``; all must have one row count."""
+    out = {k: r for k, v in values.items() if (r := explicit_ranges(v)) is not None}
+    counts = {name: len(ranges.rows) for name, ranges in out.items()}
+    if len(set(counts.values())) > 1:
+        msg = f"Explicit ranges must have the same number of rows, got {counts}."
+        raise ParameterError(msg)
+    return out
 
 
 def file_source_coords(resolver, row, files=None):
@@ -229,21 +244,22 @@ def _planned_manager(plan, row, files=None, projection=None):
         if coords is None:
             return None
         coords = _select_manager(coords, plan.parent_residuals)
-        dim = plan.dim
-        native = coords.coord_map[dim].units
-        unit = member.get(f"_{dim}_units")
-        if member.get("_modified"):
-            low, high = member.get(f"{dim}_min"), member.get(f"{dim}_max")
+        planned = (plan.dim, *plan.trim_dims)
+        for dim in [x for x in planned if x in coords.coord_map]:
+            native = coords.coord_map[dim].units
+            unit = member.get(f"_{dim}_units") if dim == plan.dim else None
+            if member.get("_modified"):
+                low, high = member.get(f"{dim}_min"), member.get(f"{dim}_max")
+                if native is not None and unit is not None and not pd.isnull(unit):
+                    if str(native) != str(unit):
+                        low, high = (
+                            convert_units(x, to_units=native, from_units=unit)
+                            for x in (low, high)
+                        )
+                coords, _ = coords.select(**{dim: (low, high)})
             if native is not None and unit is not None and not pd.isnull(unit):
                 if str(native) != str(unit):
-                    low, high = (
-                        convert_units(x, to_units=native, from_units=unit)
-                        for x in (low, high)
-                    )
-            coords, _ = coords.select(**{dim: (low, high)})
-        if native is not None and unit is not None and not pd.isnull(unit):
-            if str(native) != str(unit):
-                coords = coords.convert_units(**{plan.dim: unit})
+                    coords = coords.convert_units(**{dim: unit})
         recovered.append(coords)
     if not recovered:
         if projected:

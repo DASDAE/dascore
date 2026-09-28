@@ -190,11 +190,13 @@ assert len(dc.spool([p1]) + dc.spool([p1])) == 1
 
 ## Explicit output windows
 
-Pass a rectangular `(n, 2)` array as the chunked dimension to request bounded absolute coordinate windows. Each row is independent and inclusive. Input order is preserved, including overlapping and duplicate rows; compatible source groups within a row follow deterministic group order. `chunk_plan` accepts the same form and retains original request-row numbers in private `_request_row` plan metadata. One selected range may yield several source pieces while the same chunk window assembles them into one patch.
+Pass a rectangular `(n, 2)` array as the chunked dimension to request absolute coordinate windows. Each row is independent and inclusive. Input order is preserved, including overlapping and duplicate rows; compatible source groups within a row follow deterministic group order. `chunk_plan` accepts the same form and retains original request-row numbers in private `_request_row` plan metadata. One selected range may yield several source pieces while the same chunk window assembles them into one patch.
 
 An explicit request is complete when its inward-aligned first and last sampled positions are supplied by one compatible output under the existing continuity and tolerance rules. A tolerated internal gap can remain segmented; `fill_value` may fill a permitted hole, even when a window is entirely inside it. Filling does not extend an acquisition beyond its overall envelope. Unknown or uneven sample steps use the source coordinates where available. `overlap` cannot be combined with explicit windows. Bare numeric bounds use the planner's normalized coordinate units, while quantity bounds convert as absolute points. An empty `(0, 2)` array returns an empty plan or spool.
 
 By default, an unmet request raises `ChunkError`. Set `on_incomplete="warn"` to report and skip unmet request/group outputs, or `"ignore"` to skip them silently. With `keep_partial=True`, nonempty available pieces within a request are retained first; the policy then handles requests still wholly absent. These rules apply to each applicable compatibility group whose overall envelope intersects a window. The `conflict` setting remains the separate policy for attributes of members that actually contribute to an accepted output. Planning uses coordinate metadata and keeps measurement-array loading deferred; source changes and unrelated read failures remain runtime errors.
+
+Several dimensions can take window arrays at once if they have equal row counts; row `i` of every array is one rectangular window. The first dimension is chunked as above and the others trim each output under the same completeness, `keep_partial` and `on_incomplete` rules, so a trimmed dimension holding no samples is an unmet request; trimmed dimensions never merge, so put the dimension to merge across patches first. A group of patches the box misses on any dimension is passed by and needs no coverage. `None`, `...`, NaN, NaT or a signed infinity leaves a bound open at the data's edge. A row open at both ends spans its dimension: on the chunked dimension it yields each contiguous segment whole, as `chunk(time=None)` would, and otherwise it keeps patches lacking that dimension. `select` takes the same form. Restrictions: a coordinate that is non-dimensional on any patch cannot share a call with another array; every other keyword must also be an array, not a chunk size or merge; and `fill_value` is refused.
 
 ```{python}
 import numpy as np
@@ -211,4 +213,6 @@ assert [(p.get_coord("distance").min(), p.get_coord("distance").max()) for p in 
 accepted = source.chunk(distance=windows, on_incomplete="ignore")
 assert len(accepted) == 1
 assert len(source.chunk_plan(distance=windows, on_incomplete="ignore").outputs) == 1
+boxes = source.chunk(time=np.array([[None, None]] * 2), distance=windows, keep_partial=True)
+assert [p.get_coord("distance").max() for p in boxes] == [4, 9]
 ```

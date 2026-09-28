@@ -577,6 +577,7 @@ class PlanResolver(PatchResolver):
         lossy: bool = False,
         output_rows: pd.DataFrame | None = None,
         anchor_rows: pd.DataFrame | None = None,
+        trim_dims: tuple[str, ...] = (),
     ):
         if "output_id" not in member_rows.columns:
             msg = "member_rows must carry an output_id column."
@@ -584,6 +585,7 @@ class PlanResolver(PatchResolver):
         # plan invariant: outputs without members must never be published
         self.token = token
         self.dim = dim
+        self.trim_dims = tuple(trim_dims)  # dims besides `dim` windows trim
         rows = member_rows.reset_index(drop=True)
         # What the index measured of each member's source, held beside
         # the rows rather than in them: every output slices this frame,
@@ -653,6 +655,7 @@ class PlanResolver(PatchResolver):
             array_source=self._member_array_source,
             can_use_index=self._can_load_member_from_index,
             sources_unchanged=self._sources_unchanged,
+            trim_dims=self.trim_dims,
         )
 
     def _can_load_member_from_index(self, row: Mapping) -> bool:
@@ -1165,7 +1168,10 @@ def derived_catalog(
         else:
             sources = sources.rename(columns={unit_col: source_unit_col})
     parent_residuals = () if parent is None else parent.residuals
-    sources = _with_source_range(sources, name, parent_residuals)
+    residuals = tuple(parent_residuals)
+    if plan.trim_dims:  # explicit windows' trims act as residuals here
+        residuals += ((dict.fromkeys(plan.trim_dims), False, False),)
+    sources = _with_source_range(sources, name, residuals)
     # Resolve source paths once before deriving both members and fill anchors.
     root = getattr(parent.resolver, "_root", None) if parent is not None else None
     if root is not None and "source_path" in sources.columns:
@@ -1217,13 +1223,14 @@ def derived_catalog(
         lossy=lossy,
         output_rows=plan.outputs,
         anchor_rows=anchors,
+        trim_dims=plan.trim_dims,
     )
     backend = get_backend(":memory:")
     # residual selections trim at load; identity claims (def keys) for
     # coordinates on the trimmed dims would describe the untrimmed values
-    trimmed_dims = _trimmed_dims(parent_residuals, coord_dims_map)
+    trimmed_dims = _trimmed_dims(residuals, coord_dims_map)
     outputs = plan.outputs
-    stale_keys = stale_def_keys(parent_residuals, coord_dims_map, outputs.columns)
+    stale_keys = stale_def_keys(residuals, coord_dims_map, outputs.columns)
     if stale_keys:
         outputs = outputs.drop(columns=stale_keys)
     aux_info = _aux_coord_info(

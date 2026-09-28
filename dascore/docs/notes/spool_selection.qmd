@@ -67,7 +67,7 @@ for bounds in [(5, -1), (5, ...)]:
 
 ## Independent coordinate windows
 
-Pass a rectangular `(n, 2)` array to select several bounded absolute ranges along one coordinate. Each row is applied to each matching source patch in input order. Overlapping, repeated, and shared-endpoint ranges retain separate pieces, so selecting two rows over a file boundary can return more than two patches. The endpoints are inclusive coordinate bounds; an empty `(0, 2)` array selects nothing. Ordinary selectors on other attributes or coordinates can accompany the array. Array windows currently require `samples=False` and `relative=False`.
+Pass a rectangular `(n, 2)` array to select several absolute ranges along a coordinate; several coordinates may take arrays with equal row counts, row `i` of each forming one box, and open bounds follow the chunking rules in the chunking notes. Each row is applied to each matching source patch in input order. Overlapping, repeated, and shared-endpoint ranges retain separate pieces, so selecting two rows over a file boundary can return more than two patches. The endpoints are inclusive coordinate bounds; an empty `(0, 2)` array selects nothing. Ordinary selectors on other attributes or coordinates can accompany the array. Array windows currently require `samples=False` and `relative=False`.
 
 The view is deferred and follows source catalog updates. Its contents report the selected sample envelopes when the source metadata holds the full coordinate values, including uneven coordinates; file scans can read coordinate payloads without loading the measurement arrays. A single `(start, stop)` selector keeps its existing semantics.
 
