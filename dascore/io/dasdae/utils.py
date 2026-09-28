@@ -13,7 +13,6 @@ import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.exceptions import InvalidFileHandlerError
 from dascore.utils.hdf5 import PyTablesFile, open_hdf5_file
 from dascore.utils.misc import suppress_warnings, unbyte
 from dascore.utils.pd import filter_df
@@ -103,42 +102,32 @@ def _save_patch(patch, wave_group, h5, name):
 # --- Functions for reading
 
 
+def _is_separate(group):
+    """Whether a patch group stores attrs and coordinate metadata separately."""
+    return bool(group.attrs.get("__attrs_coords_separate__", False))
+
+
 def _has_separate_metadata(h5):
     """Whether any patch uses metadata not fully represented by a legacy index."""
-    marker = "__attrs_coords_separate__"
-    return h5.attrs.get(marker, False) or any(
-        group.attrs.get(marker, False) for group in h5.get("waveforms", {}).values()
-    )
+    return any(_is_separate(group) for group in h5.get("waveforms", {}).values())
 
 
 def _iter_patch_groups(h5):
     """Use h5py for separate metadata, retaining PyTables' legacy decoding."""
-    marker = "__attrs_coords_separate__"
     if isinstance(h5, PyTablesFile):
-        # Caller-owned handles may be writable or contain unflushed changes.
-        marked_file = marker in h5.root._v_attrs._f_list()
+        # Caller-owned PyTables handles are read as legacy files.
         if "/waveforms" in h5:
-            for group in h5.iter_nodes("/waveforms"):
-                if marked_file or marker in group._v_attrs._f_list():
-                    msg = (
-                        "Separate DASDAE metadata cannot be decoded through a "
-                        "PyTables handle. Close the handle and pass the file path."
-                    )
-                    raise InvalidFileHandlerError(msg)
-                yield group, False
+            yield from ((group, False) for group in h5.iter_nodes("/waveforms"))
         return
     with ExitStack() as stack:
         legacy = None
         for group in h5.get("waveforms", {}).values():
-            separate = h5.attrs.get(marker, False) or group.attrs.get(marker, False)
-            # The release writer can append a PyTables group to a marked file.
-            separate = separate and unbyte(group.attrs.get("CLASS", "")) != "GROUP"
-            if separate:
+            if _is_separate(group):
                 yield group, True
-            else:
-                if legacy is None:
-                    legacy = stack.enter_context(open_hdf5_file(h5.filename))
-                yield legacy.get_node(group.name), False
+                continue
+            if legacy is None:
+                legacy = stack.enter_context(open_hdf5_file(h5.filename))
+            yield legacy.get_node(group.name), False
 
 
 def _get_h5py_attrs(group):

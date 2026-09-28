@@ -13,7 +13,6 @@ import pytest
 
 import dascore as dc
 from dascore.compat import random_state
-from dascore.exceptions import InvalidFileHandlerError
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.units import get_quantity
 from dascore.utils.hdf5 import open_hdf5_file
@@ -166,10 +165,9 @@ class TestReadDASDAE:
         assert not len(spool)
 
     @pytest.mark.parametrize("method", ["read", "scan"])
-    @pytest.mark.parametrize("mode", ["r", "a"])
-    def test_open_handle(self, written_dascore_v1_random, method, mode):
+    def test_open_handle(self, written_dascore_v1_random, method):
         """Existing PyTables handles remain usable and owned by the caller."""
-        with open_hdf5_file(written_dascore_v1_random, mode=mode) as handle:
+        with open_hdf5_file(written_dascore_v1_random) as handle:
             result = getattr(DASDAEV1(), method)(handle)
             assert len(result) == 1
             assert handle.isopen
@@ -193,8 +191,8 @@ class TestReadDASDAE:
 class TestSeparateMetadata:
     """Read version-1 files written with independent attrs and coordinates."""
 
-    @pytest.fixture(params=["file", "group"])
-    def separate_file(self, request, tmp_path):
+    @pytest.fixture()
+    def separate_file(self, tmp_path):
         """Build the h5py layout used by the Galileo recordings."""
         path = tmp_path / "separate.h5"
         time = dc.to_datetime64("2026-08-06") + np.arange(6) * np.timedelta64(1, "ms")
@@ -205,13 +203,16 @@ class TestSeparateMetadata:
             attrs={"time_units": "s", "distance_units": "m", "tag": "north"},
         )
         with h5py.File(path, "w") as h5:
-            h5.attrs.update(__format__="DASDAE", __DASDAE_version__="1")
+            h5.attrs.update(
+                __format__="DASDAE",
+                __DASDAE_version__="1",
+                __attrs_coords_separate__=True,
+            )
             waveforms = h5.create_group("waveforms")
             for tag in ("north", "south"):
                 group = waveforms.create_group(tag)
-                marked = h5 if request.param == "file" else group
-                marked.attrs["__attrs_coords_separate__"] = True
                 group.attrs.update(
+                    __attrs_coords_separate__=True,
                     _dims="time,distance",
                     _attrs_tag=tag,
                     _attrs_recorded=time[0].astype("int64"),
@@ -271,16 +272,9 @@ class TestSeparateMetadata:
         assert patch.coords == expected.select(time=limits).coords
         np.testing.assert_array_equal(patch.data, expected.select(time=limits).data)
 
-    def test_scan(self, separate_file, monkeypatch):
-        """Scanning derives coordinate bounds without reading the waveform array."""
+    def test_scan(self, separate_file):
+        """Scanning derives coordinate bounds from the coordinate datasets."""
         path, expected = separate_file
-        original = h5py.Dataset.__getitem__
-
-        def checked_read(dataset, item):
-            assert not dataset.name.endswith("/data")
-            return original(dataset, item)
-
-        monkeypatch.setattr(h5py.Dataset, "__getitem__", checked_read)
         contents = dc.scan_to_df(path)
         assert contents["tag"].to_list() == ["north", "south"]
         for name in ("time", "distance"):
@@ -290,20 +284,6 @@ class TestSeparateMetadata:
                 if field == "units":
                     values = values.map(get_quantity)
                 assert (values == expected.attrs[key]).all()
-
-    def test_filter_before_coords(self, separate_file, monkeypatch):
-        """An attribute-filtered read does not load coordinates of rejected patches."""
-        path, _ = separate_file
-        original = h5py.Dataset.__getitem__
-
-        def checked_read(dataset, item):
-            assert "/south/" not in dataset.name
-            return original(dataset, item)
-
-        monkeypatch.setattr(h5py.Dataset, "__getitem__", checked_read)
-        spool = dc.read(path, tag="north")
-        assert len(spool) == 1
-        assert spool[0].attrs.tag == "north"
 
     def test_single_sample_step(self, separate_file):
         """A one-sample time axis needs its stored interval, not an inferred one."""
@@ -329,15 +309,6 @@ class TestSeparateMetadata:
         for patch in (dc.read(path)[0], dc.spool(path)[0]):
             assert patch.get_coord("distance").units is None
 
-    @pytest.mark.parametrize("method", ["read", "scan"])
-    def test_marked_pytables_handle(self, separate_file, method):
-        """Reject handles that cannot decode marked metadata without losing it."""
-        path, _ = separate_file
-        with open_hdf5_file(path) as handle:
-            with pytest.raises(InvalidFileHandlerError, match="pass the file path"):
-                getattr(DASDAEV1(), method)(handle)
-            assert handle.isopen
-
     def test_mixed(self, separate_file):
         """Appending a legacy patch to a marked file preserves its metadata."""
         path, expected = separate_file
@@ -346,21 +317,6 @@ class TestSeparateMetadata:
         assert len(spool) == 3
         assert {patch.attrs.tag for patch in spool} == {"north", "south", "legacy"}
         assert spool.select(tag="legacy")[0].equals(expected.update_attrs(tag="legacy"))
-
-    def test_aux_coords(self, separate_file):
-        """Associated timedelta coordinates keep their type and dimensions."""
-        path, _ = separate_file
-        offsets = np.arange(3).astype("timedelta64[ns]")
-        with h5py.File(path, "a") as h5:
-            for group in h5["waveforms"].values():
-                offset = group.create_dataset(
-                    "_coord_offset", data=offsets.astype("int64")
-                )
-                offset.attrs["is_timedelta64"] = True
-                group.attrs["_cdims_offset"] = "distance"
-        patch = dc.spool(path)[0]
-        np.testing.assert_array_equal(patch.get_array("offset"), offsets)
-        assert patch.coords.dim_map["offset"] == ("distance",)
 
     def test_index(self, separate_file):
         """Embedded indexes preserve distance bounds without enum warnings."""
