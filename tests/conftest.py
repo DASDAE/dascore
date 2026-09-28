@@ -23,6 +23,7 @@ from dascore.compat import random_state
 from dascore.config import get_config, set_config
 from dascore.constants import SpoolType
 from dascore.core import Patch
+from dascore.core.coords import concat_coords
 from dascore.core.spool import Spool
 from dascore.examples import get_example_patch, get_example_spool
 from dascore.io.core import read
@@ -518,6 +519,14 @@ def range_patch_3d():
 def wacky_dim_patch():
     """Fetch event patch 1."""
     return dc.get_example_patch("wacky_dim_coords_patch")
+
+
+def join_patches(patches, dim="time"):
+    """One patch holding the patches' samples along dim, holes and all."""
+    coord = concat_coords(*(x.get_coord(dim) for x in patches))
+    axis = patches[0].get_axis(dim)
+    data = np.concatenate([np.asarray(x.data) for x in patches], axis=axis)
+    return patches[0].new(data=data, coords=patches[0].coords.update(**{dim: coord}))
 
 
 def _seam_patch(step):

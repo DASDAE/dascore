@@ -412,7 +412,8 @@ class TestFractionalGaps:
         spool = dc.spool(patches)
         found = [len(spool.get_gaps(tolerance=x)) for x in (1.5, 2, 3)]
         assert found == [2, 1, 0]
-        assert [len(spool.chunk(time=None, tolerance=x)) for x in (2, 3)] == [2, 1]
+        kwargs = {"time": None, "fill_value": np.nan}
+        assert [len(spool.chunk(tolerance=x, **kwargs)) for x in (2, 3)] == [2, 1]
 
     @pytest.mark.parametrize("step", [Fraction(10, 3), -3])
     def test_integer_grid(self, step):
@@ -554,24 +555,25 @@ class TestReviewFindings:
         dist = first.get_coord("distance")
         second = first.update_coords(distance_min=dist.max() + 2.4 * dist.step)
         spool = dc.spool([first, second])
-        assert len(spool.chunk(distance=None, tolerance=GapTolerance.absolute(2))) == 1
-        assert len(spool.chunk(distance=None, tolerance=GapTolerance.absolute(1))) == 2
+        kwargs = {"distance": None, "fill_value": np.nan}
+        assert len(spool.chunk(tolerance=GapTolerance.absolute(2), **kwargs)) == 1
+        assert len(spool.chunk(tolerance=GapTolerance.absolute(1), **kwargs)) == 2
 
-    def test_dasdae_round_trip(self, tmp_path):
-        """Version 2 stores a declared step; version 1 keeps the values alone."""
+    @pytest.mark.parametrize("version", ["1", "2"])
+    def test_dasdae_round_trip(self, tmp_path, version):
+        """Either version writes a dense coordinate with holes as its pieces."""
         dense = get_coord(data=np.arange(3000)[np.arange(3000) % 3 != 2], step=1)
         assert _is_stored(dense)
         time = dc.get_example_patch().get_coord("time")[:3]
         coords = {"distance": dense, "time": time}
         data = np.zeros((len(dense), 3))
         patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
-        back = dc.read(dc.write(patch, tmp_path / "v2.h5", "dasdae"))[0]
-        assert back.get_coord("distance") == dense
-        old = dc.read(dc.write(patch, tmp_path / "v1.h5", "dasdae", file_version="1"))[
-            0
-        ]
-        np.testing.assert_array_equal(old.get_coord("distance").values, dense.values)
-        assert old.get_coord("distance").step is None
+        path = dc.write(patch, tmp_path / "out.h5", "dasdae", file_version=version)
+        back = dc.read(path).sort("distance")
+        assert len(back) == dense.missing().count + 1
+        assert all(x.get_coord("distance").evenly_sampled for x in back)
+        values = np.concatenate([x.get_coord("distance").values for x in back])
+        np.testing.assert_array_equal(values, dense.values)
 
     def test_offset_grids_share_no_step(self):
         """Runs of one step on grids half a step apart declare no common grid."""
@@ -603,10 +605,11 @@ class TestReviewFindings:
         time = first.get_coord("time")
         second = first.update_coords(time_min=time.max() + 2.4 * time.step)
         spool = dc.spool([first, second])
+        kwargs = {"time": None, "fill_value": np.nan}
         wide = float(2 * time.step / np.timedelta64(1, "s"))
-        assert len(spool.chunk(time=None, tolerance=GapTolerance.absolute(wide))) == 1
+        assert len(spool.chunk(tolerance=GapTolerance.absolute(wide), **kwargs)) == 1
         narrow = float(time.step / np.timedelta64(1, "s"))
-        assert len(spool.chunk(time=None, tolerance=GapTolerance.absolute(narrow))) == 2
+        assert len(spool.chunk(tolerance=GapTolerance.absolute(narrow), **kwargs)) == 2
 
     def test_seam_after_an_undeclared_singleton(self):
         """A seam whose run states no spacing reports no excess and no gap."""
@@ -741,15 +744,18 @@ class TestReviewRoundTwo:
         assert GapTolerance.samples(np.inf).count == np.inf
 
     def test_dasdae_keeps_declared_steps_on_array_segments(self, tmp_path):
-        """An array segment's declared step survives a version 2 round trip."""
+        """Array segments with a declared step are written as stepped pieces."""
         left = NumericCoord.from_labels(np.array([0.0, 2.0, 3.0]), step=1.0)
         right = NumericCoord.from_labels(np.array([6.0, 9.0, 11.0]), step=1.0)
         coord = concat_coords(left, right)
         base = dc.get_example_patch().select(distance=(0, 6), samples=True)
         patch = base.update_coords(distance=coord)
-        back = dc.read(dc.write(patch, tmp_path / "seg.h5", "dasdae"))[0]
-        assert back.get_coord("distance") == coord
-        assert back.get_coord("distance").step == 1.0
+        back = dc.read(dc.write(patch, tmp_path / "seg.h5", "dasdae")).sort("distance")
+        pieces = list(dc.spool([patch]))
+        assert len(back) == len(pieces) == 5
+        for read, piece in zip(back, pieces, strict=True):
+            assert read.get_coord("distance") == piece.get_coord("distance")
+        assert back[1].get_coord("distance").step == 1.0
 
     def test_singleton_edges_use_the_declared_step(self, recwarn):
         """A single value with a step gets a cell of that width, without a warning."""
@@ -836,13 +842,14 @@ class TestReviewRoundThree:
         assert coord.runs_count == 1 and coord.sorted
 
     def test_descending_single_sample_segments(self, tmp_path):
-        """Segments of one sample keep the order they were written in."""
+        """Segments of one sample are written as pieces holding their data."""
         coord = get_coord(data=np.array([9, 7, 4]), step=1)
         base = dc.get_example_patch().select(distance=(0, 3), samples=True)
         patch = base.update_coords(distance=coord)
-        back = dc.read(dc.write(patch, tmp_path / "down.h5", "dasdae"))[0]
-        assert np.array_equal(back.get_coord("distance").values, [9, 7, 4])
-        assert np.array_equal(back.data, patch.data)
+        back = dc.read(dc.write(patch, tmp_path / "down.h5", "dasdae")).sort("distance")
+        values = np.concatenate([x.get_coord("distance").values for x in back])
+        assert np.array_equal(values, [4, 7, 9])
+        assert np.array_equal(np.concatenate([x.data for x in back]), patch.data[::-1])
 
     def test_unit_conversion_keeps_the_seam(self):
         """Converting units scales each run rather than re-reading the labels."""
@@ -1194,7 +1201,7 @@ class TestRefactorParity:
         assert coord.fuse(1.0, keep_step=True).step == 0.001
 
     def test_merged_float_patches_fill(self):
-        """Merged float patches keep a step, so their holes can be filled."""
+        """Float pieces keep their step, so a chunk can fill their holes."""
 
         def patch(values):
             dist = get_coord(data=values, step=0.1, units="m")
@@ -1205,9 +1212,12 @@ class TestRefactorParity:
 
         first = np.delete(np.arange(10) * 0.1 + 0.3, 4)
         second = np.arange(10, 20) * 0.1 + 0.3
-        out = dc.spool([patch(first), patch(second)]).chunk(distance=None)
-        assert out[0].get_coord("distance").step == 0.1
-        assert out[0].fill_gaps("distance").shape == (20, 4)
+        spool = dc.spool([patch(first), patch(second)])
+        assert spool.get_contents()["distance_step"].tolist() == [0.1] * 3
+        assert len(spool.chunk(distance=None)) == 2
+        (out,) = spool.chunk(distance=None, tolerance=2, fill_value=np.nan)
+        assert out.get_coord("distance").step == pytest.approx(0.1)
+        assert out.shape == (20, 4)
 
     def test_lossless_fuse_keeps_stated_step(self):
         """Fusing without re-fitting keeps a step finer than the runs'."""

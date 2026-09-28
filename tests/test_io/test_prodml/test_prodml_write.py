@@ -345,15 +345,17 @@ class TestProdMLWriteValidation:
         path = dc.write(dc.spool([prodml_patch]), tmp_path / "one.h5", "PRODML")
         assert dc.get_format(path) == ("PRODML", "2.1")
 
-    @pytest.mark.parametrize("count", (0, 2))
-    def test_bad_spool_cardinality(self, count, prodml_patch, tmp_path):
+    @pytest.mark.parametrize(
+        ("count", "error"), ((0, InvalidSpoolError), (2, ParameterError))
+    )
+    def test_bad_spool_cardinality(self, count, error, prodml_patch, tmp_path):
         """Empty and multi-Patch spools cannot map to one Raw[0]."""
         patches = [
             prodml_patch,
             prodml_patch.update_attrs(tag="distinct-second-patch"),
         ][:count]
         spool = dc.spool(patches)
-        with pytest.raises(InvalidSpoolError):
+        with pytest.raises(error):
             dc.write(spool, tmp_path / f"spool_{count}.h5", "PRODML")
 
     @pytest.mark.parametrize("dtype", (bool, np.float16, np.complex64, "U4", object))

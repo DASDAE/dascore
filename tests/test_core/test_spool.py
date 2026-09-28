@@ -1046,12 +1046,9 @@ class TestGetSpool:
         pickle_path = path / "patch.pkl"
         dc.write(random_spool, dasdae_path, "dasdae")
         dc.write(random_spool, pickle_path, "pickle")
-
-        dasdae_spool = dc.spool(dasdae_path)
-        assert not dasdae_spool.has_live_patches
+        assert len(dc.spool(dasdae_path)) == len(random_spool)
 
         pickle_spool = dc.spool(pickle_path)
-        assert not pickle_spool.has_live_patches
         assert len(pickle_spool) == len(random_spool)
         for loaded, expected in zip(pickle_spool, random_spool, strict=True):
             np.testing.assert_array_equal(loaded.data, expected.data)

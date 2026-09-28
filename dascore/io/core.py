@@ -44,7 +44,6 @@ from dascore.constants import (
     time_select_type,
     windows_type,
 )
-from dascore.core.coords import NumericCoord
 from dascore.core.source import ArraySource
 from dascore.core.spool import Spool
 from dascore.core.summary import (
@@ -714,9 +713,6 @@ class FiberIO:
     input_type: Literal["file", "directory"] = "file"
     # True when a single resource can hold more than one patch.
     multi_patch_write: bool = False
-    # True when a written patch may keep gapped (segmented) dimensional
-    # coordinates; otherwise write splits or refuses them.
-    segmented_write: bool = False
 
     manager = _FiberIOManager(FIBER_IO_GROUP)
 
@@ -2111,69 +2107,6 @@ def is_directory_format(path) -> bool:
     return True
 
 
-def _may_hold_gaps(spool) -> bool:
-    """
-    Return True when the spool can produce a patch with gapped coordinates.
-
-    Live patches and plan-assembled outputs can carry a segmented
-    coordinate, and so can a file read from a format which stores one
-    (`segmented_write`); every other file read is contiguous, so a spool
-    of those skips gap inspection rather than loading every patch.
-    """
-    if getattr(spool, "has_live_patches", False):
-        return True
-    catalog = getattr(spool, "_catalog", None)
-    resolver = getattr(catalog, "resolver", None)
-    if getattr(resolver, "plan_entries", dict)():
-        return True
-    df = spool.get_contents()
-    sources = set(zip(df.get("source_format", ()), df.get("source_version", ())))
-    manager = FiberIO.manager
-    return any(
-        manager.get_fiberio(format=name, version=version).segmented_write
-        for name, version in sources
-    )
-
-
-def _maybe_split_gapped_patches(spool, fiber_io, split):
-    """Handle patches whose dimensional coords contain gaps before writing."""
-    # a destination which stores gaps needs no inspection, which would
-    # otherwise load every patch of a file-backed spool at once
-    if (fiber_io.segmented_write and not split) or not _may_hold_gaps(spool):
-        return spool
-
-    def _has_gaps(patch):
-        coords = (patch.get_coord(x) for x in patch.dims)
-        return any(isinstance(x, NumericCoord) and x.runs_count > 1 for x in coords)
-
-    # Materialize once (cheap; patches are in memory) so gap detection and
-    # splitting see the same patch sequence.
-    contents = list(spool)
-    gapped = [_has_gaps(x) for x in contents]
-    if not any(gapped):
-        return spool
-    if not split:
-        msg = (
-            f"Format {fiber_io.name} cannot write patches whose dimensional "
-            "coordinates contain gaps (segmented coordinates); its patches "
-            "must be contiguous. Pass split=True to write each contiguous "
-            "section as its own patch, or split explicitly with "
-            "patch.split_gaps()."
-        )
-        raise ParameterError(msg)
-    patches = []
-    for patch, has_gaps in zip(contents, gapped, strict=True):
-        patches.extend(patch.split_gaps() if has_gaps else [patch])
-    if len(patches) > 1 and not fiber_io.multi_patch_write:
-        msg = (
-            f"Format {fiber_io.name} writes a single patch per file, so "
-            "gapped patches cannot be split into it. Use patch.split_gaps() "
-            "and write each patch to its own file."
-        )
-        raise ParameterError(msg)
-    return dc.spool(patches)
-
-
 def _check_write_kwargs(fiber_io, kwargs):
     """Refuse options the format's writer does not name."""
     params = list(inspect.signature(fiber_io.write).parameters.values())[2:]
@@ -2193,7 +2126,6 @@ def write(
     path: _PathT,
     file_format: str,
     file_version: str | None = None,
-    split: bool = False,
     **kwargs,
 ) -> _PathT:
     """
@@ -2210,14 +2142,6 @@ def write(
     file_version
         Optionally specify the version of the file, else use the latest
         version for the format.
-    split
-        If True, patches whose dimensional coordinates contain gaps
-        (segmented coordinates, e.g. from merging nearly-contiguous data)
-        are split into contiguous patches before writing; this requires a
-        format which supports multiple patches per file. If False (default)
-        a format which stores gapped patches (DASDAE version 2) writes them
-        whole and any other raises a
-        [`ParameterError`](`dascore.exceptions.ParameterError`).
     **kwargs
         Options the format's writer names, such as ``encoding``.
 
@@ -2254,8 +2178,15 @@ def write(
     fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=file_version)
     _check_write_kwargs(fiber_io, kwargs)
     if not isinstance(patch_or_spool, dc.Spool):
+        # dc.spool splits a patch with holes into its pieces
         patch_or_spool = dc.spool([patch_or_spool])
-    patch_or_spool = _maybe_split_gapped_patches(patch_or_spool, fiber_io, split)
+    if not fiber_io.multi_patch_write and (count := len(patch_or_spool)) > 1:
+        msg = (
+            f"Format {fiber_io.name} writes one patch per file, but there are "
+            f"{count} (a patch with holes is one per contiguous piece). Write "
+            "each patch to its own file."
+        )
+        raise ParameterError(msg)
     with IOResourceManager(path) as man:
         func = fiber_io.write
         required_type = _required_resource_type(func)

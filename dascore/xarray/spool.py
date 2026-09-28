@@ -565,7 +565,12 @@ def spool_to_xarray(
         raise PatchConversionError(msg)
     chunk_kwargs: dict[str, Any] = {dim: None}
     plan = build_chunk_plan(
-        working, tolerance=tolerance, conflict=conflict, group=group, **chunk_kwargs
+        working,
+        tolerance=tolerance,
+        conflict=conflict,
+        group=group,
+        _bridge_holes=True,
+        **chunk_kwargs,
     )
     outputs = plan.outputs
     group_attrs = list(plan.params["group"])

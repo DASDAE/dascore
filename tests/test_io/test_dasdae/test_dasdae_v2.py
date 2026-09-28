@@ -15,8 +15,8 @@ from dascore.core.coords import (
     concat_coords,
     get_coord,
 )
-from dascore.exceptions import ParameterError
 from dascore.io.dasdae.utils import _read_coord, _save_coord
+from tests.conftest import join_patches
 
 T0 = np.datetime64("2020-01-01T00:00:00")
 
@@ -36,8 +36,7 @@ def gapped_patch():
     t0 = patch.get_coord("time").min()
     first = patch.select(time=(None, t0 + np.timedelta64(1, "s")))
     second = patch.select(time=(t0 + np.timedelta64(1012, "ms"), None))
-    spool = dc.spool([first, second]).chunk(time=None, tolerance=5, snap_coords=False)
-    (out,) = spool
+    out = join_patches([first, second])
     assert out.get_coord("time").runs_count > 1
     return out
 
@@ -51,10 +50,6 @@ CASES = {
     "float32": get_coord(start=np.float32(0), stop=np.float32(10), step=0.1),
     "float_units": get_coord(start=0.0, stop=10.0, step=0.1, units="m"),
     "duration": get_coord(start=np.timedelta64(0, "s"), step=(3, 2), shape=(9,)),
-    "segmented": concat_coords(
-        get_coord(start=0.0, stop=5.0, step=1.0),
-        get_coord(start=8.0, stop=13.0, step=1.0),
-    ),
     "array": get_coord(data=np.array([1.0, 2.0, 4.5, 9.0]), units="m"),
     "strings": get_coord(data=np.array(["a", "b"])),
 }
@@ -85,18 +80,11 @@ class TestNodeCodec:
         back = _read_coord(h5["long"], "long", {}, snap=True)
         assert back == coord
 
-    def test_segments_are_a_group(self, h5):
-        """A segmented coordinate is a group holding one node per segment."""
-        _save_coord(CASES["segmented"], "seg", h5, compact=True)
-        assert isinstance(h5["seg"], h5py.Group)
-        assert set(h5["seg"]) == {"0", "1"}
-
     def test_every_node_states_its_class(self, h5):
         """Each node names its coordinate class in plain typed attributes."""
-        for name in ("fraction", "segmented", "array"):
+        for name in ("fraction", "array"):
             _save_coord(CASES[name], f"typed_{name}", h5, compact=True)
         assert h5["typed_fraction"].attrs["object_type"] == "CoordRange"
-        assert h5["typed_segmented"].attrs["object_type"] == "CoordSegmented"
         assert h5["typed_array"].attrs["object_type"] == "NumericCoord"
         attrs = dict(h5["typed_fraction"].attrs)
         assert attrs["step_denominator"] == 2 and attrs["length"] == 4096
@@ -116,15 +104,13 @@ class TestNodeCodec:
         _save_coord(CASES["array"], "arr", h5, compact=True)
         assert h5["arr"].shape == (4,)
 
-    def test_array_segment_stays_exact(self, h5):
-        """A near-uniform array segment is not snapped to a range on read."""
+    def test_array_runs_stay_exact(self, h5):
+        """Near-uniform labels in several runs are not snapped on read."""
         jitter = NumericCoord.from_labels(np.array([0.0, 1.0, 2.0005, 3.0, 4.0]))
         coord = concat_coords(jitter, get_coord(start=10.0, stop=15.0, step=1.0))
         _save_coord(coord, "jitter", h5, compact=True)
         back = _read_coord(h5["jitter"], "jitter", {}, snap=True)
-        assert back == coord
-        first = back.segments[0]
-        assert first.sorted and not first.evenly_sampled
+        np.testing.assert_array_equal(back.values, coord.values)
 
     @pytest.mark.parametrize(
         "indexer",
@@ -186,33 +172,17 @@ class TestVersion2Files:
         summary = dc.scan(path)[0].coords["time"]
         assert summary.to_coord() == hz_1024_patch.get_coord("time")
 
-    def test_gapped_patch_written_whole(self, gapped_patch, tmp_path):
-        """A gapped patch is stored as one patch with its segments."""
-        path = dc.write(gapped_patch, tmp_path / "gap.h5", "dasdae")
-        (back,) = dc.read(path)
-        assert back.get_coord("time").runs_count > 1
-        assert back.get_coord("time") == gapped_patch.get_coord("time")
-        assert np.array_equal(back.data, gapped_patch.data)
-        (scanned,) = dc.scan(path)
-        summary = scanned.coords["time"]
-        assert summary.step is None
-        assert summary.data_id == gapped_patch.get_coord("time").data_id
-
-    def test_split_still_honored(self, gapped_patch, tmp_path):
-        """An explicit split writes each run as its own patch."""
-        path = dc.write(gapped_patch, tmp_path / "split.h5", "dasdae", split=True)
-        spool = dc.spool(path)
-        assert len(spool) == 2
-        for patch in spool:
-            assert patch.get_coord("time").evenly_sampled
-
-    def test_gapped_file_still_guarded(self, gapped_patch, tmp_path):
-        """A gapped patch read from a file is guarded like one in memory."""
-        spool = dc.spool(dc.write(gapped_patch, tmp_path / "gap.h5", "dasdae"))
-        with pytest.raises(ParameterError, match="split=True"):
-            dc.write(spool, tmp_path / "v1.h5", "dasdae", file_version="1")
-        path = dc.write(spool, tmp_path / "split.h5", "dasdae", split=True)
-        assert len(dc.spool(path)) == 2
+    def test_gapped_directory_to_xarray(self, gapped_patch, tmp_path):
+        """A directory holding a written gapped patch converts (#1218)."""
+        pytest.importorskip("xarray")
+        pytest.importorskip("dask")
+        dc.write(gapped_patch, tmp_path / "gap.h5", "dasdae")
+        tree = dc.spool(tmp_path).update().io.to_xarray()
+        leaves = [x for x in tree.subtree if "data" in x.data_vars]
+        pieces = list(dc.spool([gapped_patch]))
+        assert len(leaves) == len(pieces)
+        for leaf, piece in zip(leaves, pieces, strict=True):
+            assert np.array_equal(leaf["data"].values, piece.data)
 
     def test_append_keeps_the_higher_version(self, random_patch, tmp_path):
         """Appending version 1 patches to a version 2 file leaves it version 2."""
@@ -266,27 +236,31 @@ class TestVersion2Files:
     @pytest.mark.parametrize(
         "runs",
         [
+            (np.array([0.0, 1.0, 2.0005]), np.array([3.0, 4.0005, 5.0])),
+            (np.array([0.0, 1.0, 2.0005, 3.0]), np.arange(10.0, 13.0)),
             (np.array([10.0, 12.0, 15.0]), np.array([0.0, 2.0, 5.0])),
             (np.array([0.0, 5.0, 2.0]), np.array([10.0, 12.0, 15.0])),
         ],
     )
     def test_runs_read_back_in_written_order(self, runs, tmp_path):
-        """Labels may not be reordered, since the data they name does not move."""
+        """Irregular runs are one row, read back unsnapped and unordered, twice."""
         coord = NumericCoord(runs=runs)
         data = np.arange(float(len(coord)))
         patch = dc.Patch(data=data, coords={"x": coord}, dims=("x",))
-        (back,) = dc.spool(dc.write(patch, tmp_path / "runs.h5", "dasdae"))
-        np.testing.assert_array_equal(back.get_coord("x").values, coord.values)
-        np.testing.assert_array_equal(back.data, data)
+        (once,) = dc.spool(dc.write(patch, tmp_path / "one.h5", "dasdae"))
+        (twice,) = dc.spool(dc.write(once, tmp_path / "two.h5", "dasdae"))
+        for back in (once, twice):
+            np.testing.assert_array_equal(back.get_coord("x").values, coord.values)
+            np.testing.assert_array_equal(back.data, data)
 
 
 class TestMultiRunRoundTrip:
-    """Coordinates of several exact runs read back as they were written."""
+    """A coordinate of several exact runs is written as its pieces."""
 
     @pytest.mark.parametrize("rate", [1000, 1024, 3000])
     @pytest.mark.parametrize("layout", ["hole", "strided", "off_lattice"])
     def test_round_trip(self, rate, layout, tmp_path):
-        """The runs and the step they share survive a write and a read."""
+        """Each piece reads back with the coordinate and data it was written with."""
         full = get_coord(start=T0, step=(1, rate), shape=(60,))
         if layout == "hole":
             coord = concat_coords(full[:10], full[11:])
@@ -296,26 +270,12 @@ class TestMultiRunRoundTrip:
             later = full.min() + np.timedelta64(1, "s") + np.timedelta64(5, "ns")
             other = get_coord(start=later, step=(1, rate), shape=(20,))
             coord = concat_coords(full, other)
-        patch = dc.Patch(data=np.ones(len(coord)), coords={"t": coord}, dims=("t",))
-        (back,) = dc.read(dc.write(patch, tmp_path / "runs.h5", "dasdae"))
-        out = back.get_coord("t")
-        assert out == coord
-        assert out.step == coord.step and out.step_exact == coord.step_exact
-
-    def test_older_strided_file_reads(self):
-        """A stored step beside grids a stride widened reads back stepless."""
-        h5 = h5py.File(io.BytesIO(), "w")
-        labels = np.array([0.0, 1 + 1e-12, 2.0, 3.0, 5.0])
-        segments = (
-            NumericCoord.from_labels(labels, step=1.0),
-            get_coord(start=20.0, step=2.0, shape=(5,)),
-        )
-        group = h5.create_group("x")
-        for num, segment in enumerate(segments):
-            _save_coord(segment, str(num), group, compact=True)
-        group.attrs["object_type"] = "CoordSegmented"
-        back = _read_coord(group, "x", {}, snap=True)
-        assert back.step is None
-        np.testing.assert_array_equal(
-            back.values, np.concatenate([x.values for x in segments])
-        )
+        data = np.arange(float(len(coord)))
+        patch = dc.Patch(data=data, coords={"time": coord}, dims=("time",))
+        pieces = list(dc.spool([patch]))
+        back = dc.read(dc.write(patch, tmp_path / "runs.h5", "dasdae")).sort("time")
+        assert len(back) == len(pieces)
+        for read, piece in zip(back, pieces, strict=True):
+            out, expected = read.get_coord("time"), piece.get_coord("time")
+            assert out == expected and out.step_exact == expected.step_exact
+            np.testing.assert_array_equal(read.data, piece.data)

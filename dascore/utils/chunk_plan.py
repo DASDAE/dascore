@@ -561,9 +561,11 @@ def _cell_tolerance(tolerance: GapTolerance, sub, name) -> GapTolerance:
     return tolerance.resolve(sub[f"{name}_min"].dtype, units, name)
 
 
-def _continuity_group(start, stop, step, tolerance: GapTolerance) -> pd.Series:
-    """Label maximal near-contiguous runs (spec 2.4)."""
-    order, _, has_gap = gap_boundaries(start, stop, step, tolerance)
+def _continuity_group(start, stop, step, *tolerances: GapTolerance) -> pd.Series:
+    """Label maximal near-contiguous runs (spec 2.4); any tolerance splits."""
+    order, _, has_gap = gap_boundaries(start, stop, step, tolerances[0])
+    for tolerance in tolerances[1:]:
+        has_gap |= gap_boundaries(start, stop, step, tolerance)[2]
     out = pd.Series(0, index=start.index, dtype=np.int64)
     out.iloc[order] = np.cumsum(has_gap)
     return out
@@ -753,59 +755,27 @@ def _cell_labels(df, name, group_attrs, sampling_tolerance) -> pd.Series:
     return base.astype(str) + "_" + samp.astype(str)
 
 
-def _may_exceed_default(tol: GapTolerance, step: pd.Series) -> bool:
-    """True when an absolute margin can exceed the default anywhere in a cell.
-
-    The margin is `step + excess` against the default's `1.5 * step`, so
-    the tolerance is looser exactly where the excess passes half a step,
-    which is at the cell's *smallest* step, since a cell may mix steps
-    within the sampling tolerance. A cell with no known step is never
-    forced: the default cannot close a boundary there at all.
-    """
-    steps = np.abs(to_float(step.to_numpy()))
-    if not np.isfinite(steps).any():
-        return False
-    return to_float(tol.excess) > (DEFAULT_TOLERANCE - 1) * np.nanmin(steps)
-
-
 def _partition(
-    df, name, group_attrs, tolerance, sampling_tolerance
-) -> tuple[pd.Series, bool]:
+    df, name, group_attrs, tolerance, sampling_tolerance, keep_holes
+) -> pd.Series:
     """
-    Return (partition labels, forced_merge): rows sharing a label may
-    combine (spec 2).
+    Return partition labels: rows sharing a label may combine (spec 2).
 
     A partition is a continuity run within a cell (see
-    [`_cell_labels`](`dascore.utils.chunk_plan._cell_labels`)).
-    `forced_merge` is True when a loosened tolerance merged patches the
-    default would have kept apart (#662); the caller owns warning about
-    it.
+    [`_cell_labels`](`dascore.utils.chunk_plan._cell_labels`)). With
+    ``keep_holes``, a boundary missing a sample stays a partition break
+    however loose the tolerance.
     """
     cell = _cell_labels(df, name, group_attrs, sampling_tolerance)
     cont = pd.Series(0, index=df.index, dtype=np.int64)
-    forced_merge = False
-    absolute = tolerance.count is None
-    default = GapTolerance.samples(DEFAULT_TOLERANCE)
+    default = (GapTolerance.samples(DEFAULT_TOLERANCE),) if keep_holes else ()
     for _, index in df.groupby(cell, sort=False).groups.items():
         sub = df.loc[index]
         s, e, st = get_interval_columns(sub, name)
         tol = _cell_tolerance(tolerance, sub, name)
-        labels = _continuity_group(s, e, st, tol).astype(np.int64)
-        cont.loc[index] = labels
-        if forced_merge or not (absolute or tolerance.count > DEFAULT_TOLERANCE):
-            continue
-        # An absolute tolerance can be looser than the default at one
-        # boundary and tighter at another, so it is checked against the
-        # default partition -- but only where it can be looser at all,
-        # since the second pass is not free.
-        if absolute and not _may_exceed_default(tol, st):
-            continue
-        # By containment, not by count: a partition holding more than one
-        # of the default's is one the tolerance forced together, even
-        # when the counts match.
-        by_default = _continuity_group(s, e, st, default)
-        forced_merge = bool(by_default.groupby(labels).nunique().gt(1).any())
-    return cell + "_" + cont.astype(str), forced_merge
+        labels = _continuity_group(s, e, st, tol, *default)
+        cont.loc[index] = labels.astype(np.int64)
+    return cell + "_" + cont.astype(str)
 
 
 def _user_stacklevel() -> int:
@@ -1538,6 +1508,7 @@ def build_chunk_plan(
     fill_value=None,
     on_incomplete: WARN_LEVELS = "raise",
     _exact_coords=None,
+    _bridge_holes=False,
     **kwargs,
 ) -> ChunkPlan:
     """
@@ -1546,6 +1517,8 @@ def build_chunk_plan(
     Parameters mirror `Spool.chunk` (see the chunking formalities spec);
     one keyword names the dimension to chunk and its length (`None`/`...`
     merges); more explicit windows exclude groups (`_trim_explicit` trims).
+    Without ``fill_value`` a missing sample always ends an output;
+    ``_bridge_holes`` lifts that for a view that may hold holes.
     """
     windows = explicit_windows(kwargs)
     if len(kwargs) != 1 and (not windows or len(windows) != len(kwargs)):
@@ -1628,20 +1601,14 @@ def build_chunk_plan(
                 df, name, params["group"], params["sampling_group_tolerance"]
             )
         )
-    labels, forced_merge = _partition(
-        df, name, params["group"], tolerance, params["sampling_group_tolerance"]
+    labels = _partition(
+        df,
+        name,
+        params["group"],
+        tolerance,
+        params["sampling_group_tolerance"],
+        keep_holes=fill_value is None and not _bridge_holes,
     )
-    if forced_merge and fill_value is None:
-        # with a fill value the holes are filled, so the outputs are
-        # evenly sampled after all and there is nothing to warn about
-        msg = (
-            f"There is a gap in the patch along dimension {name} but a "
-            f"merge tolerance of {tolerance} was used to force merging "
-            "the patches. As a result, some patches in the chunked spool "
-            "are unevenly sampled. Pass fill_value to fill the missing "
-            "samples instead."
-        )
-        warnings.warn(msg, UserWarning, stacklevel=_user_stacklevel())
     per_partition = explicit is None and _needs_partition_resolution(value, overlap)
     if not per_partition and explicit is None:
         value_c, overlap_c = _coerce_length_overlap(value, overlap, df[min_name].dtype)

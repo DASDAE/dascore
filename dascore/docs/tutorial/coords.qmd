@@ -89,7 +89,7 @@ segmented = concat_coords(first, second)
 print(segmented.get_discontinuities("gaps"))
 ```
 
-Pass `snap=False` to preserve an exact monotonic array. It returns the simplest truthful coordinate, so uniform input becomes one evenly sampled run. A coordinate of several runs reports a `step` only when every run sits on the same one, and `None` otherwise. `fuse(tolerance=...)` may reduce the number of runs within an error bound, while `snap()` replaces values with one evenly sampled run. Use `patch.split_gaps()` before writing a dimension with holes to formats that cannot represent gaps; DASDAE version 2 stores them whole.
+Pass `snap=False` to preserve an exact monotonic array. It returns the simplest truthful coordinate, so uniform input becomes one evenly sampled run. A coordinate of several runs reports a `step` only when every run sits on the same one, and `None` otherwise. `fuse(tolerance=...)` may reduce the number of runs within an error bound, while `snap()` replaces values with one evenly sampled run. A spool holds a patch with holes as its contiguous pieces, which `patch.split_gaps()` returns, and `dc.write` writes those pieces; irregular labels with no shared step are not gapped and stay whole.
 
 ```{python}
 values = np.array([0.0, 1.0, 2.0, 7.0, 8.0, 9.0])
