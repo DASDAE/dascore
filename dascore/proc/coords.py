@@ -712,7 +712,8 @@ class Isel(PatchProcessor):
     ----------
     indexers
         Mapping of dimension names to integer positions, slices, or 1D integer
-        arrays or boolean masks. Supply this or keyword indexers.
+        arrays or boolean masks. Tuples raise; use a slice or a list.
+        Supply this or keyword indexers.
     drop
         Drop coordinates made scalar by indexing. By default they are retained
         as scalar coordinates. Scalar indexers remove their dimension either way;
@@ -789,7 +790,8 @@ class Sel(PatchProcessor):
     ----------
     indexers
         Mapping of dimension names to scalar labels, slices, or 1D label arrays.
-        Supply this or keyword indexers. Quantities convert to coordinate units.
+        Tuples raise; use a slice or a list. Supply this or keyword indexers.
+        Quantities convert to coordinate units.
     method
         ``None`` requires exact matches; ``"nearest"`` selects the nearest label.
     tolerance
