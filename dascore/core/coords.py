@@ -2232,7 +2232,7 @@ def _fractional_grid(values) -> Grid | None:
     # Grids settle within a few passes; the cap only bounds the work.
     for _ in range(256):
         if low >= high:
-            return None
+            break
         step = _simplest_between(low, high)
         num, den = step.numerator, step.denominator
         if den * (abs(span) + 1) >= 2**62:
