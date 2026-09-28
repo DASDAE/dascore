@@ -246,7 +246,7 @@ class TestConflicts:
         """A float32 or unit-converted header equal up to rounding agrees."""
         noisy = patch.update_attrs(gauge_length=np.float32(10.000001))
         out = noisy.enrich(inventory, coords=False)
-        assert out.attrs.gauge_length == 10.0
+        assert out.attrs.gauge_length == noisy.attrs.gauge_length
 
     def test_keep_first_prefers_the_patch(self, patch, inventory):
         """The patch stated it first, so it keeps it. See #1043."""

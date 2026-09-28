@@ -1245,6 +1245,15 @@ class TestSelectSeesPendingEnrichment:
             "right"
         ]
 
+    @pytest.mark.parametrize("conflict", ["raise", "drop"])
+    def test_rounding_noise_keeps_the_header(self, patch, inventory, conflict):
+        """A header equal up to rounding stands, so selecting it yields it."""
+        noisy = patch.update_attrs(gauge_length=10.000001)
+        spool = dc.spool(noisy).attach_inventory(inventory)
+        spool = spool.enrich(coords=False, conflict=conflict)
+        (out,) = spool.select(gauge_length=10.000001)
+        assert out.attrs.gauge_length == 10.000001
+
     def test_drop_leaves_a_disagreeing_row_unselectable(self, disagreeing):
         """A dropped attr is no value at all, which no selector matches."""
         spool = disagreeing.enrich(coords=False, conflict="drop")

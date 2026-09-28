@@ -204,15 +204,18 @@ def _apply_conflict(patch, new_attrs, conflict) -> tuple[dict, list]:
     """
     Return the attrs to set and to drop, given the conflict policy.
 
-    Filling an empty attr is never a conflict, and neither are equal values;
-    a conflict is both sides holding different information.
+    Filling an empty attr is never a conflict, and an agreeing header is
+    kept; a conflict is both sides holding different information.
     """
     current = dict(patch.attrs)
     updates, drops = {}, []
     for name, value in new_attrs.items():
         old = current.get(name, None)
-        if _is_missing(old) or header_agrees(old, value):
+        if _is_missing(old):
             updates[name] = value
+        elif header_agrees(old, value):
+            # The header stands, so selection on it sees what comes out.
+            updates[name] = old
         elif conflict == "raise":
             msg = (
                 f"The patch's {name!r} is {old!r} but the inventory says "

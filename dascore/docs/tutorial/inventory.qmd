@@ -118,8 +118,6 @@ The examples below use an inventory and patch designed to resolve together:
 import tempfile
 from pathlib import Path
 
-import pytest
-
 import dascore as dc
 from dascore.examples import inventory_patch_pair
 from dascore.exceptions import PatchError
@@ -185,8 +183,10 @@ Unset attributes are always filled. If a stated patch attribute conflicts with t
 
 ```{python}
 stale = patch.update_attrs(gauge_length=99.0)
-with pytest.raises(PatchError, match="inventory says"):
+try:
     stale.enrich(inventory)
+except PatchError as err:
+    print(err)
 assert stale.enrich(inventory, conflict="keep_first").attrs.gauge_length == 99.0
 assert stale.enrich(inventory, conflict="keep_last").attrs.gauge_length == 10.0
 ```
