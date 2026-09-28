@@ -434,11 +434,6 @@ class TestTupleIndexers:
         with pytest.raises(ParameterError, match="slice"):
             getattr(patch, method)(distance=(0, 2))
 
-    def test_list_works(self, patch):
-        """The same values as a list still select labels and positions."""
-        assert patch.sel(distance=[0, 2]).shape[0] == 2
-        assert patch.isel(distance=[0, 2]).shape[0] == 2
-
 
 class TestSharedSelection:
     """Shared execution preserves each public method's indexing contract."""

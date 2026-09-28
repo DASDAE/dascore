@@ -45,7 +45,6 @@ def _unlabelled_array(value):
     if hasattr(value, "dims") or isinstance(value, Mapping):
         raise TypeError("Only scalar, slice, and unlabelled 1D indexers are supported.")
     if isinstance(value, tuple):
-        # select reads a tuple as a range, so refuse it here rather than guess.
         msg = (
             f"sel and isel do not accept a tuple ({value!r}); use "
             "slice(start, stop) for a range or a list for several values."
