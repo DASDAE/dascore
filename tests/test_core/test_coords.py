@@ -3326,6 +3326,11 @@ class TestFractionalSnap:
         with suppress_warnings(RuntimeWarning):  # the tolerant check's own wrap
             assert np.array_equal(get_coord(data=values).values, values)
 
+    def test_object_labels_keep_their_values(self):
+        """An object array with non-integral labels is not read as integers."""
+        values = np.array([0, 1.5, 3], dtype=object)
+        assert np.array_equal(get_coord(data=values).values, [0, 1.5, 3])
+
     def test_drifting_clock_keeps_its_step(self):
         """A clock slightly off its nominal rate keeps its exact step."""
         ticks = np.arange(10_000, dtype=np.int64) * 9_999_999 // 10

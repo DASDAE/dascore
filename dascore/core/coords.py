@@ -2214,7 +2214,11 @@ def _simplest_between(low: Fraction, high: Fraction) -> Fraction:
 def _fractional_grid(values) -> Grid | None:
     """The simplest fractional-step grid whose labels are these exactly, if any."""
     count = len(values)
-    if _exact_dtype(values[0], values[-1], None, None) is None:
+    # the array's own kind, since object arrays can hold non-integral labels
+    if (
+        values.dtype.kind not in "iumM"
+        or _exact_dtype(values[0], values[-1], None, None) is None
+    ):
         return None
     # astype, not view, honours byte order; ints and uints widen before any
     # subtraction can wrap.
