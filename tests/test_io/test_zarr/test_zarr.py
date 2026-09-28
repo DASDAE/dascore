@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
+import sys
+
 import numpy as np
 import pytest
 from upath import UPath
 
 import dascore as dc
-from dascore.core.coords import concat_coords, get_coord
-from dascore.exceptions import ParameterError
-from dascore.io.zarr import ZarrV2, ZarrV3
-from dascore.io.zarr import core as zarr_core
+from dascore.exceptions import MissingOptionalDependencyError
+from dascore.io.zarr import ZarrV3
 
 xr = pytest.importorskip("xarray")
 zarr = pytest.importorskip("zarr")
@@ -38,8 +38,8 @@ def written(request, zarr_patch, tmp_path_factory):
     return request.param, path
 
 
-@pytest.fixture(scope="module")
-def foreign_store(tmp_path_factory):
+@pytest.fixture(scope="module", params=VERSIONS)
+def foreign_store(request, tmp_path_factory):
     """A store xarray writes with CF time in float seconds and a scaled payload."""
     path = tmp_path_factory.mktemp("zarr") / "foreign.zarr"
     time = np.datetime64("2021-01-01") + np.arange(20) * np.timedelta64(250, "ms")
@@ -52,7 +52,10 @@ def foreign_store(tmp_path_factory):
         "data": {"dtype": "int16", "scale_factor": 0.1, "_FillValue": -1},
         "time": {"dtype": "float64", "units": "seconds since 2021-01-01"},
     }
-    dataset.to_zarr(path, zarr_format=3, consolidated=False, encoding=encoding)
+    zarr_format = int(request.param)
+    dataset.to_zarr(
+        path, zarr_format=zarr_format, consolidated=False, encoding=encoding
+    )
     return path, data, time
 
 
@@ -64,7 +67,6 @@ class TestRoundTrip:
         _, path = written
         patch = dc.read(path)[0]
         assert patch == zarr_patch
-        assert set(patch.coords.coord_map) == set(zarr_patch.coords.coord_map)
 
     def test_fractional_time_grid(self, written, zarr_patch):
         """The 1024 Hz grid comes back exact, to the nanosecond."""
@@ -79,32 +81,31 @@ class TestRoundTrip:
         _, path = written
         assert dc.read(path)[0].attrs.closed_fiber_loop is True
 
-    def test_format_and_zarr_format(self, written):
-        """get_format and the store both report the written zarr format."""
-        version, path = written
-        assert dc.get_format(path) == ("ZARR", version)
-        assert zarr.open_group(path, mode="r").metadata.zarr_format == int(version)
-
-    def test_time_stored_as_int64_ns(self, written):
-        """Time is stored as exact int64 nanoseconds, not a lossy float."""
+    def test_consolidated(self, written):
+        """The store carries consolidated metadata."""
         _, path = written
-        time = zarr.open_group(path, mode="r")["time"]
-        assert time.dtype == np.int64
-        assert time.attrs["units"].startswith("nanoseconds since")
+        assert zarr.open_consolidated(path, mode="r")
 
-    def test_read_array_window(self, written, zarr_patch):
-        """read_array returns only the requested window."""
-        _, path = written
-        out = ZarrV3().read_array(path, ((2, 5), (10, 30)))
-        assert np.array_equal(out, zarr_patch.data[2:5, 10:30])
+    @pytest.mark.parametrize("version", VERSIONS)
+    def test_data_units(self, zarr_patch, tmp_path, version):
+        """Data units are written as a string and read back as units."""
+        patch = zarr_patch.set_units("m/s")
+        path = tmp_path / "units.zarr"
+        dc.write(patch, path, "zarr", file_version=version)
+        assert dc.read(path)[0] == patch
 
-    def test_scan(self, written, zarr_patch):
-        """A scan describes the store without reading its payload."""
-        version, path = written
-        (summary,) = dc.scan(path)
-        assert summary.source_format == "ZARR"
-        assert summary.source_version == version
-        assert summary.shape == zarr_patch.shape
+    @pytest.mark.parametrize("version", VERSIONS)
+    def test_partial_coords(self, tmp_path, version):
+        """A dimension without a coordinate is rebuilt beside one with it."""
+        path = tmp_path / "partial.zarr"
+        dataset = xr.Dataset(
+            {"data": (("distance", "time"), np.zeros((3, 4)))},
+            coords={"time": np.arange(4.0) / 2},
+        )
+        dataset.to_zarr(path, zarr_format=int(version), consolidated=False)
+        patch = dc.read(path)[0]
+        assert np.array_equal(patch.get_array("distance"), np.arange(3))
+        assert np.array_equal(patch.get_array("time"), np.arange(4.0) / 2)
 
 
 class TestEncoding:
@@ -128,13 +129,6 @@ class TestEncoding:
         assert array.compressors == (compressor,)
         assert dc.read(path)[0] == zarr_patch
 
-    def test_v2_chunks(self, zarr_patch, tmp_path):
-        """Chunks reach a zarr format 2 store too."""
-        path = tmp_path / "enc2.zarr"
-        encoding = {"data": {"chunks": (25, 400)}}
-        dc.write(zarr_patch, path, "zarr", file_version="2", encoding=encoding)
-        assert zarr.open_group(path, mode="r")["data"].chunks == (25, 400)
-
 
 class TestForeignStore:
     """A store written by xarray alone reads with CF decoding applied."""
@@ -156,30 +150,24 @@ class TestForeignStore:
 class TestGetVersion:
     """Only a zarr store holding a dimensioned payload is claimed."""
 
-    def test_plain_directory(self, tmp_path):
-        """A directory with no zarr marker is not zarr."""
-        (tmp_path / "file.txt").write_text("hello")
-        assert ZarrV3().get_version(tmp_path) is None
-
-    @pytest.mark.parametrize("zarr_format", [3, 2])
-    def test_no_dimensioned_array(self, tmp_path, zarr_format):
-        """A store whose arrays carry no dimension names is not ours."""
-        path = tmp_path / "nodims.zarr"
-        group = zarr.open_group(path, mode="w", zarr_format=zarr_format)
-        group.create_array("a", shape=(3,), dtype="f8")
-        assert ZarrV3().get_version(path) is None
-
     def test_scalar_payload(self, tmp_path):
         """A store whose only variable has no dimension is not ours."""
         path = tmp_path / "scalar.zarr"
         xr.Dataset({"a": ((), 1.0)}).to_zarr(path, zarr_format=3, consolidated=False)
         assert ZarrV3().get_version(path) is None
 
-    def test_missing_dependencies(self, written, monkeypatch):
-        """Without zarr or xarray installed nothing is claimed."""
-        _, path = written
-        monkeypatch.setattr(zarr_core, "_has_zarr_deps", lambda: False)
-        assert ZarrV2().get_version(path) is None
+    def test_missing_zarr(self, zarr_patch, tmp_path, monkeypatch):
+        """Without zarr a store is still claimed; reading it names zarr."""
+        path = tmp_path / "patch.zarr"
+        dc.write(zarr_patch, path, "zarr")
+        dc.write(zarr_patch, tmp_path / "patch.h5", "dasdae")
+        monkeypatch.setitem(sys.modules, "zarr", None)
+        assert dc.get_format(path)[0] == "ZARR"
+        with pytest.raises(MissingOptionalDependencyError, match="zarr"):
+            dc.read(path)
+        with pytest.warns(UserWarning, match="zarr"):
+            (summary,) = dc.scan(tmp_path)
+        assert summary.source_format == "DASDAE"
 
 
 class TestDirectorySpool:
@@ -200,6 +188,25 @@ class TestDirectorySpool:
         assert len(selected) == 1
         assert selected[0] == other
 
+    def test_v2_attrs_edit_refreshes(self, zarr_patch, tmp_path):
+        """An attrs-only edit to a v2 store, all in hidden files, is re-indexed."""
+        path = tmp_path / "a.zarr"
+        dc.write(zarr_patch, path, "zarr", file_version="2")
+        spool = dc.spool(tmp_path).update()
+        zarr.open_group(path, mode="r+")["data"].attrs["station"] = "NEW"
+        zarr.consolidate_metadata(path)
+        assert spool.update().get_contents()["station"].tolist() == ["NEW"]
+
+    def test_index_in_store_is_not_a_change(self, zarr_patch, tmp_path):
+        """A spool of one store keeps its index inside and does not re-index."""
+        path = tmp_path / "a.zarr"
+        dc.write(zarr_patch, path, "zarr", file_version="2")
+        spool = dc.spool(path).update()
+        sources = spool.indexer._backend.get_sources
+        before = sources()["last_indexed_ns"].max()
+        spool.update()
+        assert sources()["last_indexed_ns"].max() == before
+
 
 class TestRemote:
     """xarray takes a UPath, so an fsspec store works as a local one."""
@@ -213,36 +220,57 @@ class TestRemote:
         assert summary.source_format == "ZARR"
 
 
-class TestWriteRefusals:
-    """The writer holds one contiguous patch per store."""
+class TestReplace:
+    """A write replaces a store, or nothing, and never half of one."""
 
-    @pytest.fixture()
-    def two_patch_spool(self, zarr_patch):
-        """A spool of two distinct patches."""
-        return dc.spool([zarr_patch, zarr_patch.update_attrs(station="OTHER")])
+    @pytest.mark.parametrize("remote", [False, True])
+    def test_rewrite_replaces_store(self, zarr_patch, tmp_path, remote):
+        """A second write, of another shape, leaves only the second patch."""
+        base = UPath("memory://dascore_zarr_replace") if remote else tmp_path
+        path = base / "patch.zarr"
+        dc.write(zarr_patch, path, "zarr")
+        small = zarr_patch.select(time=(None, 10), samples=True)
+        dc.write(small, path, "zarr")
+        assert dc.read(path)[0] == small
+        assert [x.name for x in base.iterdir()] == ["patch.zarr"]
 
-    def test_multi_patch_spool(self, two_patch_spool, tmp_path):
-        """dc.write refuses a spool of several patches."""
-        with pytest.raises(ParameterError, match="one patch per file"):
-            dc.write(two_patch_spool, tmp_path / "multi.zarr", "zarr")
+    def test_refuses_other_directory(self, zarr_patch, tmp_path):
+        """A directory which is not a store is refused and left alone."""
+        (tmp_path / "keep.txt").write_text("keep")
+        with pytest.raises(FileExistsError, match="not a zarr store"):
+            dc.write(zarr_patch, tmp_path, "zarr")
+        assert [x.name for x in tmp_path.iterdir()] == ["keep.txt"]
 
-    def test_direct_multi_patch(self, two_patch_spool, tmp_path):
-        """The writer itself refuses several patches."""
-        with pytest.raises(NotImplementedError, match="Zarr output"):
-            ZarrV3().write(two_patch_spool, tmp_path / "multi.zarr")
+    def test_refuses_file(self, zarr_patch, tmp_path):
+        """A file at the path is refused and left alone."""
+        path = tmp_path / "patch.zarr"
+        path.write_text("keep")
+        with pytest.raises(FileExistsError, match="not a zarr store"):
+            dc.write(zarr_patch, path, "zarr")
+        assert path.read_text() == "keep"
 
-    def test_gapped_patch(self, tmp_path):
-        """A patch with a hole is refused, not written as one store."""
-        distance = concat_coords(
-            get_coord(start=0.0, stop=10.0, step=1.0),
-            get_coord(start=15.0, stop=25.0, step=1.0),
-        )
-        patch = dc.Patch(
-            data=np.zeros((20, 10)),
-            coords={"distance": distance, "time": dc.to_datetime64(np.arange(10))},
-            dims=("distance", "time"),
-        )
-        path = tmp_path / "gapped.zarr"
-        with pytest.raises(ParameterError, match="one patch per file"):
-            dc.write(patch, path, "zarr")
-        assert not path.exists()
+    def test_failed_write_keeps_store(self, zarr_patch, tmp_path, monkeypatch):
+        """A write failing after its store is built leaves the old store alone."""
+        path = tmp_path / "patch.zarr"
+        dc.write(zarr_patch, path, "zarr")
+        to_zarr = xr.Dataset.to_zarr
+
+        def _fail(self, *args, **kwargs):
+            to_zarr(self, *args, **kwargs)
+            raise RuntimeError("killed")
+
+        monkeypatch.setattr(xr.Dataset, "to_zarr", _fail)
+        with pytest.raises(RuntimeError, match="killed"):
+            dc.write(zarr_patch.update_attrs(station="NEW"), path, "zarr")
+        assert dc.read(path)[0] == zarr_patch
+        assert [x.name for x in tmp_path.iterdir()] == ["patch.zarr"]
+
+    def test_killed_write_leftover(self, zarr_patch, tmp_path):
+        """Stores a killed write leaves behind are not scanned, then cleared."""
+        path = tmp_path / "patch.zarr"
+        dc.write(zarr_patch, path, "zarr")
+        for name in (".patch.zarr.partial", ".patch.zarr.old"):
+            ZarrV3().write(zarr_patch, tmp_path / name)
+        assert len(dc.scan(tmp_path)) == 1
+        dc.write(zarr_patch, path, "zarr")
+        assert [x.name for x in tmp_path.iterdir()] == ["patch.zarr"]

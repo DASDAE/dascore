@@ -137,7 +137,7 @@ class NetCDFCFV18(FiberIO):
         """
         optional_import("xarray")  # raises a helpful error if xarray is absent
         _require_hdf5_netcdf_backend()
-        dataset = spool_to_cf_dataset(spool, "NetCDF")
+        dataset = spool_to_cf_dataset(spool)
         # netCDF has no boolean attribute type, so a bool attr aborts the
         # write. Inventory enrichment routinely sets one
         # (closed_fiber_loop), and CF's own convention for a flag is an

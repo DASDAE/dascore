@@ -1896,13 +1896,14 @@ class TestSourceIds:
         spelled = dc.read(terra15_path, name.lower(), version)[0]
         assert spelled.attrs.origin_id == dc.read(terra15_path)[0].attrs.origin_id
 
-    def test_a_hidden_member_is_not_part_of_a_directory(self, tmp_path):
-        """Including one under a hidden directory, which is hidden too."""
+    def test_the_index_is_not_part_of_a_directory(self, tmp_path):
+        """A hidden member is part of a directory; its DASCore index is not."""
         (tmp_path / "member.h5").write_bytes(b"data")
         before = _source_stats(tmp_path)
-        (tmp_path / ".cache").mkdir()
-        (tmp_path / ".cache" / "member.h5").write_bytes(b"much more data")
+        (tmp_path / ".dascore_index.sqlite3-journal").write_bytes(b"index")
         assert _source_stats(tmp_path) == before
+        (tmp_path / ".zattrs").write_bytes(b"{}")
+        assert _source_stats(tmp_path) != before
 
     def test_one_file_spelled_two_ways(self, terra15_path, monkeypatch):
         """

@@ -436,6 +436,29 @@ class TestNetCDFIO:
         dc.write(patch, path, file_format="netcdf_cf")
         assert dc.read(path, file_format="netcdf_cf")[0].get_coord("time") == time
 
+    def test_data_units_round_trip(self, example_patch, tmp_path):
+        """Data units are written as a string and read back as units."""
+        _require_xarray_netcdf_engine()
+        patch = example_patch.set_units("m/s")
+        path = tmp_path / "units.nc"
+        dc.write(patch, path, file_format="netcdf_cf")
+        assert dc.read(path)[0] == patch
+
+    def test_partial_coords(self, tmp_path):
+        """A dimension without a coordinate is rebuilt beside one with it."""
+        engine = _require_xarray_netcdf_engine()
+        xr = pytest.importorskip("xarray")
+        path = tmp_path / "partial.nc"
+        dataset = xr.Dataset(
+            {"data": (("distance", "time"), np.zeros((3, 4)))},
+            coords={"time": np.arange(4.0) / 2},
+            attrs={"Conventions": "CF-1.8"},
+        )
+        dataset.to_netcdf(path, engine=engine)
+        patch = dc.read(path)[0]
+        assert np.array_equal(patch.get_array("distance"), np.arange(3))
+        assert np.array_equal(patch.get_array("time"), np.arange(4.0) / 2)
+
     def test_read_netcdf(self, netcdf_path):
         """Test reading a NetCDF file."""
         spool = dc.read(netcdf_path, file_format="netcdf_cf")
@@ -666,24 +689,6 @@ class TestNetCDFEdgeCases:
 
 class TestNetCDFUtilsAdvanced:
     """Additional tests for NetCDF utility functions."""
-
-    def test_coordless_coord_manager_falls_back_without_tie_points(self):
-        """Coord fallback should use direct vars or arange without tie points."""
-        xr = pytest.importorskip("xarray")
-        dataset = xr.Dataset(
-            data_vars={"distance": (("distance",), np.array([0.0, 2.0, 4.0]))}
-        )
-
-        coords = netcdf_utils.get_coord_manager_for_coordless_data_var(
-            dataset,
-            dims=("distance", "time"),
-            shape=(3, 4),
-        )
-
-        np.testing.assert_array_equal(
-            coords.coord_map["distance"].values, [0.0, 2.0, 4.0]
-        )
-        np.testing.assert_array_equal(coords.coord_map["time"].values, np.arange(4))
 
     @pytest.fixture
     def cf_compliant_file(self, tmp_path):

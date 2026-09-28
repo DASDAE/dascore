@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import io
 import typing
-from contextlib import suppress
+from contextlib import contextmanager, suppress
 from functools import cache
 from inspect import isfunction, ismethod
 from pathlib import Path
@@ -226,6 +226,33 @@ def release_handle(handle, abort: bool = False):
         handle.abort()
     else:
         getattr(handle, "close", lambda: None)()
+
+
+@contextmanager
+def staged_path(path: UPath):
+    """
+    Yield a hidden sibling of ``path`` which replaces it once the block succeeds.
+
+    The block must create the sibling afresh, as ``mode="w"`` writers do. A
+    failed block leaves ``path`` as it was; a killed one leaves only hidden
+    siblings, which scans skip and the next call replaces.
+    """
+    fs = path.fs
+    staging, old = (path.parent / f".{path.name}.{x}" for x in ("partial", "old"))
+
+    def _remove(target):
+        if target.exists():
+            fs.rm(target.path, recursive=True)
+
+    try:
+        yield staging
+    except BaseException:
+        _remove(staging)
+        raise
+    if path.exists():
+        fs.mv(path.path, old.path, recursive=True)
+    fs.mv(staging.path, path.path, recursive=True)
+    _remove(old)
 
 
 # Handle classes name the mode they open in. Everything else truncates or

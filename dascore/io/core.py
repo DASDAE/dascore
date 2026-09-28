@@ -37,6 +37,7 @@ from h5py import Dataset as H5pyDataset
 import dascore as dc
 from dascore.compat import Progress, UPath
 from dascore.constants import (
+    INDEX_NAME,
     PROGRESS_LEVELS,
     float_select_type,
     path_types,
@@ -1142,9 +1143,17 @@ def _source_stats(source) -> tuple[int | None, int | None]:
         return None, None
 
 
-def _is_hidden(relative) -> bool:
-    """Return True when a path, or any directory above it, is hidden."""
-    return any(part.startswith(".") for part in relative.parts)
+def _directory_members(path) -> list:
+    """
+    Return a directory-format unit's member files, sorted by relative path.
+
+    Hidden files are members (zarr format 2 keeps its metadata in them);
+    only a DASCore index inside the unit is not, or indexing would change it.
+    """
+    members = (
+        x for x in path.rglob("*") if x.is_file() and not x.name.startswith(INDEX_NAME)
+    )
+    return sorted(members, key=lambda x: x.relative_to(path).as_posix())
 
 
 def _size_and_mtime(stat) -> tuple[int | None, int | None]:
@@ -1165,16 +1174,8 @@ def _directory_stats(path) -> tuple[int, int]:
     moves the latest mtime, and one which changes length moves the total
     even if a clock does not. A directory's own stat says neither, which
     is why it is not used.
-
-    Hidden members are skipped, as they are in the index's own manifest
-    over a directory-format unit -- and so is anything under a hidden
-    directory, which is hidden for the same reason its parent is.
     """
-    stats = [
-        _size_and_mtime(x.stat())
-        for x in path.rglob("*")
-        if x.is_file() and not _is_hidden(x.relative_to(path))
-    ]
+    stats = [_size_and_mtime(x.stat()) for x in _directory_members(path)]
     return (
         sum(size or 0 for size, _ in stats),
         max((mtime or 0 for _, mtime in stats), default=0),
@@ -1862,6 +1863,9 @@ def _iter_scan_results(
                             source = fiber_io.scan(resource, **scan_kwargs)
                         except PermissionError:
                             _warn_permission_denied(patch_source)
+                            continue
+                        except MissingOptionalDependencyError as ex:
+                            missing_optional_deps[_get_missing_install_name(ex)] += 1
                             continue
                     else:
                         try:

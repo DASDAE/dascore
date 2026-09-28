@@ -2,13 +2,12 @@
 
 from __future__ import annotations
 
-import importlib.util
-
 import numpy as np
 
 import dascore as dc
 from dascore.compat import UPath
 from dascore.constants import snap_type, windows_type
+from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
 from dascore.io.netcdf.utils import (
     dataset_to_patch_meta,
@@ -16,6 +15,7 @@ from dascore.io.netcdf.utils import (
     read_dataset_array,
     spool_to_cf_dataset,
 )
+from dascore.utils.io import staged_path
 from dascore.utils.misc import optional_import, suppress_warnings
 
 # The file which marks a directory as a zarr group, by zarr format.
@@ -23,7 +23,7 @@ _MARKERS = {"3": "zarr.json", "2": ".zgroup"}
 
 
 def _open_zarr(path: UPath):
-    """Open a zarr store as a lazy xarray dataset; no chunk is read."""
+    """Open a zarr store as a lazy xarray dataset; only coordinates are read."""
     xr = optional_import("xarray")
     optional_import("zarr")
     # A store without consolidated metadata still opens, only slower.
@@ -36,13 +36,8 @@ def _marked_zarr_format(path: UPath) -> str | None:
     return next((v for v, name in _MARKERS.items() if (path / name).is_file()), None)
 
 
-def _has_zarr_deps() -> bool:
-    """Return True when xarray and zarr are both importable."""
-    return all(importlib.util.find_spec(x) for x in ("xarray", "zarr"))
-
-
 class ZarrV3(FiberIO):
-    """Zarr IO (zarr format 3); the payload is the ``data`` variable."""
+    """Zarr IO (zarr format 3); the payload is ``data``, else the only variable."""
 
     name = "ZARR"
     version = "3"
@@ -50,12 +45,18 @@ class ZarrV3(FiberIO):
     preferred_extensions = ("zarr",)
 
     def get_version(self, resource: UPath, **kwargs) -> str | None:
-        """Return the zarr format when the directory holds a dascore-readable store."""
+        """Return the zarr format of a zarr store with a dimensioned payload."""
         # Markers first: this is probed on every directory a scan meets.
         version = _marked_zarr_format(resource)
-        if version is None or not _has_zarr_deps():
+        if version is None:
             return None
-        with _open_zarr(resource) as dataset:
+        try:
+            dataset = _open_zarr(resource)
+        except MissingOptionalDependencyError:
+            # Claimed, so reading names the missing package and a scan
+            # does not walk into the store's chunks.
+            return version
+        with dataset:
             name = get_xarray_data_var_name(dataset)
             return version if dataset[name].dims else None
 
@@ -75,20 +76,32 @@ class ZarrV3(FiberIO):
 
     def write(self, spool, resource: UPath, encoding: dict | None = None, **kwargs):
         """
-        Write a single-patch spool to a zarr store through xarray.
+        Write a single-patch spool to a zarr store, replacing any store there.
+
+        The store is built beside ``resource`` and moved into place once
+        complete, so a failed write leaves the previous store intact.
 
         Parameters
         ----------
         encoding
             Passed to xarray's ``Dataset.to_zarr``, e.g.
-            ``{"data": {"chunks": (100, 1000), "shards": (100, 10000)}}``.
+            ``{"data": {"chunks": (100, 1000), "shards": (100, 10000)}}``;
+            ``shards`` needs zarr format 3.
         """
         optional_import("zarr")  # xarray is required by the conversion
-        dataset = spool_to_cf_dataset(spool, "Zarr")
-        # Consolidated metadata lets a reader open the store in one request.
-        with suppress_warnings(UserWarning, message="Consolidated metadata"):
+        dataset = spool_to_cf_dataset(spool)
+        if resource.exists() and not _marked_zarr_format(resource):
+            if resource.is_file() or any(resource.iterdir()):
+                msg = f"{resource} exists and is not a zarr store; not replacing it."
+                raise FileExistsError(msg)
+        # zarr warns that consolidated metadata is outside the format 3
+        # spec; it saves a reader one metadata request per array.
+        with (
+            staged_path(resource) as staging,
+            suppress_warnings(UserWarning, message="Consolidated metadata"),
+        ):
             dataset.to_zarr(
-                resource,
+                staging,
                 mode="w",
                 zarr_format=int(self.version),
                 consolidated=True,
