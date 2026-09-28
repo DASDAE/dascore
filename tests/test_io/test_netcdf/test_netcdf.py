@@ -423,6 +423,19 @@ class TestNetCDFIO:
             assert h5file["time"].is_scale
             assert h5file["distance"].is_scale
 
+    def test_fractional_rate_round_trip(self, example_patch, tmp_path):
+        """A 1024 Hz time coordinate reads back as the same exact grid."""
+        _require_xarray_netcdf_engine()
+        time = dc.get_coord(
+            start=np.datetime64("2020-01-01", "ns"),
+            step=(1, 1024),
+            shape=(example_patch.coord_shapes["time"][0],),
+        )
+        patch = example_patch.update_coords(time=time)
+        path = tmp_path / "fractional.nc"
+        dc.write(patch, path, file_format="netcdf_cf")
+        assert dc.read(path, file_format="netcdf_cf")[0].get_coord("time") == time
+
     def test_read_netcdf(self, netcdf_path):
         """Test reading a NetCDF file."""
         spool = dc.read(netcdf_path, file_format="netcdf_cf")

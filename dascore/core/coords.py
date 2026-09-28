@@ -2201,6 +2201,43 @@ def _promoted(values, dtype) -> Grid | None:
     return grid if _grid_holds(grid, values, dtype) else None
 
 
+def _simplest_between(low: Fraction, high: Fraction) -> Fraction:
+    """The fraction of least denominator strictly between low and high."""
+    whole = math.floor(low)
+    if whole + 1 < high:
+        return Fraction(whole + 1)
+    if low == whole:
+        return whole + Fraction(1, math.floor(1 / (high - whole)) + 1)
+    return whole + 1 / _simplest_between(1 / (high - whole), 1 / (low - whole))
+
+
+def _fractional_grid(values) -> Grid | None:
+    """The grid of a fractional tick step holding these labels exactly, if any."""
+    count = len(values)
+    if _exact_dtype(values[0], values[-1], None, None) is None:
+        return None
+    first = _to_tick(values[0])
+    if not (_to_tick(values[-1]) - first) % (count - 1):
+        return None  # a whole-tick step
+    # Label k is a floor, so k steps lie within a tick of it; the tightest
+    # such bounds (any index gives valid ones) hold the simplest step.
+    ticks = (values - values[0]).astype(np.int64)
+    k = np.arange(1, count)
+    at_low = int(np.argmax((ticks[1:] - 1) / k)) + 1
+    at_high = int(np.argmin((ticks[1:] + 1) / k)) + 1
+    low = Fraction(int(ticks[at_low]) - 1, at_low)
+    high = Fraction(int(ticks[at_high]) + 1, at_high)
+    if low >= high:  # no step holds them all
+        return None
+    step = _simplest_between(low, high)
+    num, den = step.numerator, step.denominator
+    # the least offset of the ideal origin (in 1/den ticks) each label allows
+    steps = np.arange(count, dtype=np.int64) * num
+    phase = int(np.max(den * ticks - steps))
+    grid = Grid(first, num, den, count, phase=phase)
+    return grid if _grid_holds(grid, values, values.dtype) else None
+
+
 def _grid_holds(grid: Grid, values, dtype) -> bool:
     """
     Whether a grid restates these labels exactly.
@@ -4323,6 +4360,8 @@ def get_coord(
     if snap:
         start, stop, step, monotonic = _maybe_get_start_stop_step(data)
         if start is not None:
+            if (grid := _fractional_grid(data)) is not None:
+                return NumericCoord(runs=(grid,), units=units, dtype=data.dtype)
             out = _range_coord(dict(start=start, stop=stop, step=step), units)
             # The change_length call helps with float off by one issues.
             return out.change_length(len(data))

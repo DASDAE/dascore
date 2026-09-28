@@ -6,6 +6,7 @@ import datetime
 import pickle
 import re
 from collections.abc import Mapping
+from fractions import Fraction
 from functools import partial
 from io import BytesIO
 from types import SimpleNamespace
@@ -3262,3 +3263,85 @@ class TestSummaryRoundTripUnit:
             values=(np.arange(4) * np.timedelta64(10, "ms")).astype("m8[ms]")
         )
         assert coord.to_summary().to_coord().dtype == coord.dtype
+
+
+class TestFractionalSnap:
+    """Snapping labels of an exact grid whose step is not a whole tick."""
+
+    t0 = np.datetime64("2020-01-01T00:00:00", "ns")
+
+    @pytest.mark.parametrize("rate", [1024, 3000])
+    @pytest.mark.parametrize("length", [4, 60, 200_000])
+    def test_fractional_grid_round_trips(self, rate, length):
+        """Labels of a fractional-step grid rebuild the same grid."""
+        coord = get_coord(start=self.t0, step=(1, rate), shape=(length,))
+        out = get_coord(data=coord.values)
+        assert out == coord
+        assert out.step == coord.step
+        assert np.array_equal(out.values, coord.values)
+
+    def test_sliced_and_rounded_grids(self):
+        """Grids whose ideal origin is not a whole tick also rebuild."""
+        coord = get_coord(start=self.t0, step=(1, 1024), shape=(1000,))[1:]
+        half_up = np.floor(np.arange(1000) * 976562.5 + 0.5)
+        rounded = self.t0 + half_up.astype("m8[ns]")
+        for values in (coord.values, rounded):
+            out = get_coord(data=values)
+            assert np.array_equal(out.values, values)
+            assert out.step_exact == Fraction(1, 1024)
+
+    def test_simpler_whole_tick_grid_wins(self):
+        """Three 3000 Hz labels are also a whole-tick grid, the simpler one."""
+        coord = get_coord(start=self.t0, step=(1, 3000), shape=(3,))
+        out = get_coord(data=coord.values)
+        assert out.step == np.timedelta64(333333, "ns")
+        assert np.array_equal(out.values, coord.values)
+
+    def test_whole_tick_unchanged(self):
+        """A whole-nanosecond step still snaps to its plain grid."""
+        step = np.timedelta64(1, "ms")
+        coord = get_coord(start=self.t0, step=step, shape=(1000,))
+        out = get_coord(data=coord.values)
+        assert out == coord and out.step == step
+
+    def test_jitter_still_snaps(self):
+        """Nearly uniform labels still snap to their median step."""
+        step = np.timedelta64(1, "ms")
+        values = self.t0 + np.arange(100) * step
+        values[1:-1:7] += np.timedelta64(1, "ns")
+        out = get_coord(data=values)
+        assert out == get_coord(start=self.t0, step=step, shape=(100,))
+
+    def test_off_grid_label_falls_through(self):
+        """Labels no fractional grid holds keep the rounded median step."""
+        values = get_coord(start=self.t0, step=(1, 1024), shape=(60,)).values.copy()
+        values[30] += np.timedelta64(1, "ns")
+        out = get_coord(data=values)
+        step = np.timedelta64(976562, "ns")
+        assert out == get_coord(start=self.t0, step=step, shape=(60,))
+
+    def test_inconsistent_labels_fall_through(self):
+        """Labels whose step bounds cross keep the rounded median step."""
+        step, tick = np.timedelta64(1, "ms"), np.timedelta64(1, "ns")
+        values = self.t0 + np.arange(100) * step
+        values[[1, -1]] += tick
+        values[2] -= tick
+        out = get_coord(data=values)
+        assert out == get_coord(start=self.t0, step=step, shape=(100,))
+
+    def test_grid_past_int64_falls_through(self):
+        """A fractional step too large for int64 arithmetic keeps the median."""
+        step = Fraction(4 * 10**18 + 1, 2)
+        values = np.array([int(step * k) for k in range(4)], dtype=np.int64)
+        assert get_coord(data=values).step == 2 * 10**18
+
+    def test_integer_fractional_grid(self):
+        """Integer labels of a fractional-step grid rebuild the same grid."""
+        coord = get_coord(start=0, step=(10_000, 3), shape=(100,))
+        out = get_coord(data=coord.values)
+        assert out == coord and np.array_equal(out.values, coord.values)
+
+    def test_uneven_integers_not_a_grid(self):
+        """Short integers too uneven to snap are not promoted to a grid."""
+        out = get_coord(data=np.array([0, 1, 3]))
+        assert not out.evenly_sampled
