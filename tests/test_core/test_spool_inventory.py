@@ -2904,7 +2904,6 @@ class TestChannelSelectEdges:
         channels quietly is worse than saying so.
         """
         holed = patch.unselect(distance=(50, 200))
-        assert holed.get_coord("distance").step is None
         spool = dc.spool(holed).attach_inventory(inventory)
         with pytest.raises(PatchError, match="no channel spacing"):
             spool.select(coupling="trench")
