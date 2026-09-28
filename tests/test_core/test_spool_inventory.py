@@ -2432,6 +2432,12 @@ def _channels(spool):
 class TestChannelSelect:
     """Selecting on the coordinates an inventory defines along the fiber."""
 
+    @pytest.mark.parametrize("value", [(None, None), (..., ...), (None, ...)])
+    def test_open_range_selects_all(self, patch, inventory, value):
+        """A fully open range is no filter, as on a patch coordinate."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        assert spool.select(x=value) == spool
+
     def test_trims_to_the_matching_channels(self, patch, inventory):
         """
         A track name keeps the channels it covers and no others.

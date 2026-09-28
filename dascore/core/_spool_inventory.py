@@ -501,9 +501,23 @@ def stated_channels(channels: dict) -> dict:
     inventory's, or the index would be left to complain that it has never
     heard of it. `None` is not dropped beside it: on a coordinate the
     fiber defines it spells the undefined marker, which is a statement
-    about which channels to keep rather than the absence of one.
+    about which channels to keep rather than the absence of one. A range
+    open at both ends selects everything, as it does on a patch coordinate.
     """
-    return {name: value for name, value in channels.items() if value is not Ellipsis}
+    return {
+        name: value
+        for name, value in channels.items()
+        if value is not Ellipsis and not _fully_open(value)
+    }
+
+
+def _fully_open(value) -> bool:
+    """Return True for a (start, stop) range with no bound on either end."""
+    return (
+        isinstance(value, tuple)
+        and len(value) == 2
+        and all(x is None or x is Ellipsis for x in value)
+    )
 
 
 def glob_filter(include, exclude):
