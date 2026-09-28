@@ -316,14 +316,15 @@ def contiguous_windows(coord) -> list[tuple[int, int]]:
     starts, offset, last, last_step = set(), 0, None, None
     for seg in segments:
         step = coord.step if pd.isnull(seg.step) else seg.step
+        # endpoints only, so a long grid run is never materialized
+        first, end = seg._get_index_values([0, -1])
         if last is not None and (
             pd.isnull(step)
             or step != last_step
-            or abs(to_float(seg.values[0] - last))
-            > DEFAULT_TOLERANCE * to_float(abs(step))
+            or abs(to_float(first - last)) > DEFAULT_TOLERANCE * to_float(abs(step))
         ):
             starts.add(offset)
-        last, last_step = seg.values[-1], step
+        last, last_step = end, step
         # a dense stored run may hold holes of the declared step too
         if holes := [first for first, _ in seg.missing().iter_runs()]:
             values = np.asarray(seg.values)
