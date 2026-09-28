@@ -1073,12 +1073,13 @@ class TestScan:
         assert "source_patch_key" in out.columns
         assert out["source_patch_key"].astype(bool).all()
 
-    def test_nan_source_patch_key_reads_every_patch(self, tmp_path):
-        """A NaN key is a missing key, so it selects nothing out."""
+    @pytest.mark.parametrize("missing", [np.nan, pd.NA])
+    def test_null_source_patch_key_reads_every_patch(self, tmp_path, missing):
+        """A null key is a missing key, so it selects nothing out."""
         path = tmp_path / "multi_patch.h5"
         spool = dc.examples.get_example_spool("random_das", length=2)
         dc.write(spool, path, "DASDAE")
-        assert len(dc.read(path, source_patch_key=np.nan)) == 2
+        assert len(dc.read(path, source_patch_key=missing)) == 2
 
     def test_scan_nested_directory(self, nested_directory_with_patches):
         """Ensure scan picks up files in nested directories."""

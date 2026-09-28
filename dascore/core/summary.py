@@ -10,7 +10,6 @@ from collections.abc import Mapping
 from typing import Any
 
 import numpy as np
-import pandas as pd
 from pydantic import ConfigDict, Field, SerializeAsAny, model_validator
 from upath import UPath
 
@@ -19,6 +18,7 @@ from dascore.constants import path_types
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import CoordSummary
 from dascore.models import DascoreBaseModel
+from dascore.utils.attrs import _is_missing
 from dascore.utils.misc import iterate
 from dascore.utils.paths import coerce_to_upath, is_pathlike
 
@@ -30,13 +30,8 @@ def normalize_source_patch_key(value: Any) -> str:
     Normalize None, empty strings, pandas NaN/NaT, and numpy scalars here: NaN is
     truthy, so ``value or ""`` does not handle missing keys.
     """
-    if value is None or value == "":
+    if _is_missing(value):
         return ""
-    try:
-        if pd.isnull(value):
-            return ""
-    except (TypeError, ValueError):
-        pass  # non-scalar (e.g. an array): fall through to str()
     if hasattr(value, "item"):  # numpy scalar -> python scalar
         value = value.item()
     return str(value)
