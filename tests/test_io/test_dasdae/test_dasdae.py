@@ -2,15 +2,20 @@
 
 from __future__ import annotations
 
+import json
 import shutil
+import warnings
 from pathlib import Path
 
+import h5py
 import numpy as np
 import pytest
 
 import dascore as dc
 from dascore.compat import random_state
 from dascore.io.dasdae.core import DASDAEV1
+from dascore.units import get_quantity
+from dascore.utils.hdf5 import open_hdf5_file
 from dascore.utils.misc import register_func
 from dascore.utils.time import to_datetime64
 
@@ -159,6 +164,14 @@ class TestReadDASDAE:
         spool = parser.read(generic_hdf5)
         assert not len(spool)
 
+    @pytest.mark.parametrize("method", ["read", "scan"])
+    def test_open_handle(self, written_dascore_v1_random, method):
+        """Existing PyTables handles remain usable and owned by the caller."""
+        with open_hdf5_file(written_dascore_v1_random) as handle:
+            result = getattr(DASDAEV1(), method)(handle)
+            assert len(result) == 1
+            assert handle.isopen
+
     def test_file_spool_loads_distinct_attrs(self, tmp_path, random_patch):
         """Lazy loading should materialize the patch for each DASDAE row."""
         path = tmp_path / "multi_patch.h5"
@@ -173,6 +186,148 @@ class TestReadDASDAE:
         assert spool.get_contents()["tag"].to_list() == ["S100", "S120"]
         assert [x.attrs.tag for x in spool] == ["S100", "S120"]
         assert [x.attrs.label for x in spool] == ["L100", "L120"]
+
+
+class TestSeparateMetadata:
+    """Read version-1 files written with independent attrs and coordinates."""
+
+    @pytest.fixture()
+    def separate_file(self, tmp_path):
+        """Build the h5py layout used by the Galileo recordings."""
+        path = tmp_path / "separate.h5"
+        time = dc.to_datetime64("2026-08-06") + np.arange(6) * np.timedelta64(1, "ms")
+        patch = dc.Patch(
+            data=np.arange(18).reshape(6, 3),
+            coords={"time": time, "distance": np.arange(3) * 2.0},
+            dims=("time", "distance"),
+            attrs={"time_units": "s", "distance_units": "m", "tag": "north"},
+        )
+        with h5py.File(path, "w") as h5:
+            h5.attrs.update(
+                __format__="DASDAE",
+                __DASDAE_version__="1",
+                __attrs_coords_separate__=True,
+            )
+            waveforms = h5.create_group("waveforms")
+            for tag in ("north", "south"):
+                group = waveforms.create_group(tag)
+                group.attrs.update(
+                    __attrs_coords_separate__=True,
+                    _dims="time,distance",
+                    _attrs_tag=tag,
+                    _attrs_recorded=time[0].astype("int64"),
+                    _attr_type_recorded="datetime64[ns]",
+                    _attrs_duration=1000000,
+                    _attr_type_duration="timedelta64[ns]",
+                    _attrs_optional="",
+                    _attr_type_optional="none",
+                    _attrs_history=json.dumps(["recorded"]),
+                    _attr_type_history="history_json",
+                )
+                group.create_dataset("data", data=patch.data)
+                for name, coord in patch.coords.coord_map.items():
+                    is_time = name == "time"
+                    node = group.create_dataset(
+                        f"_coord_{name}",
+                        data=coord.values.astype("int64") if is_time else coord.values,
+                    )
+                    node.attrs.update(
+                        is_datetime64=is_time,
+                        is_timedelta64=False,
+                        step=coord.step.astype("int64") if is_time else coord.step,
+                        step_is_timedelta64=is_time,
+                        units=str(coord.units),
+                    )
+                    group.attrs[f"_cdims_{name}"] = name
+        return path, patch
+
+    def test_load(self, separate_file):
+        """Direct and lazy reads restore data, coordinate metadata and typed attrs."""
+        path, expected = separate_file
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            direct = dc.read(path)[0]
+            lazy = dc.spool(path)[0]
+        assert not caught
+        for patch in (direct, lazy):
+            np.testing.assert_array_equal(patch.data, expected.data)
+            assert patch.coords == expected.coords
+            assert (
+                patch.get_array("distance").dtype
+                == expected.get_array("distance").dtype
+            )
+            assert patch.attrs.recorded == expected.attrs.time_min
+            assert patch.attrs.duration == np.timedelta64(1, "ms")
+            assert patch.attrs.optional is None
+            assert patch.attrs.history == ("recorded",)
+
+    def test_select(self, separate_file):
+        """Metadata filtering and coordinate selection agree with an in-memory patch."""
+        path, expected = separate_file
+        limits = (expected.get_array("time")[1], expected.get_array("time")[3])
+        spool = dc.spool(path).select(tag="south", time=limits)
+        assert len(spool) == 1
+        patch = spool[0]
+        assert patch.attrs.tag == "south"
+        assert patch.coords == expected.select(time=limits).coords
+        np.testing.assert_array_equal(patch.data, expected.select(time=limits).data)
+
+    def test_scan(self, separate_file):
+        """Scanning derives coordinate bounds from the coordinate datasets."""
+        path, expected = separate_file
+        contents = dc.scan_to_df(path)
+        assert contents["tag"].to_list() == ["north", "south"]
+        for name in ("time", "distance"):
+            for field in ("min", "max", "step", "units"):
+                key = f"{name}_{field}"
+                values = contents[key]
+                if field == "units":
+                    values = values.map(get_quantity)
+                assert (values == expected.attrs[key]).all()
+
+    def test_single_sample_step(self, separate_file):
+        """A one-sample time axis needs its stored interval, not an inferred one."""
+        path, expected = separate_file
+        with h5py.File(path, "a") as h5:
+            for group in h5["waveforms"].values():
+                node = group["_coord_time"]
+                values, metadata = node[:1], dict(node.attrs)
+                data = group["data"][:1]
+                del group["_coord_time"], group["data"]
+                group.create_dataset("_coord_time", data=values).attrs.update(metadata)
+                group.create_dataset("data", data=data)
+        for patch in (dc.read(path)[0], dc.spool(path)[0]):
+            assert patch.shape == (1, 3)
+            assert patch.get_coord("time").step == expected.get_coord("time").step
+
+    def test_unitless(self, separate_file):
+        """The newer writer omits the units attribute for unitless coordinates."""
+        path, _ = separate_file
+        with h5py.File(path, "a") as h5:
+            for group in h5["waveforms"].values():
+                del group["_coord_distance"].attrs["units"]
+        for patch in (dc.read(path)[0], dc.spool(path)[0]):
+            assert patch.get_coord("distance").units is None
+
+    def test_mixed(self, separate_file):
+        """Appending a legacy patch to a marked file preserves its metadata."""
+        path, expected = separate_file
+        dc.write(expected.update_attrs(tag="legacy"), path, "DASDAE")
+        spool = dc.spool(path)
+        assert len(spool) == 3
+        assert {patch.attrs.tag for patch in spool} == {"north", "south", "legacy"}
+        assert spool.select(tag="legacy")[0].equals(expected.update_attrs(tag="legacy"))
+
+    def test_index(self, separate_file):
+        """Embedded indexes preserve distance bounds without enum warnings."""
+        path, _ = separate_file
+        before = dc.spool(path).select(tag="north", distance=(0, 2))[0]
+        dc.spool(path).update()
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            after = dc.spool(path).select(tag="north", distance=(0, 2))[0]
+        assert not caught
+        assert before.equals(after)
 
 
 class TestScanDASDAE:
