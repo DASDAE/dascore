@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.xarray import xarray_to_patch
+from dascore.xarray import patch_to_xarray, xarray_to_patch
 
 
 class TestXarray:
@@ -32,6 +33,18 @@ class TestXarray:
         """Converting to xarray should be lossless."""
         out = xarray_to_patch(data_array_from_patch)
         assert out == random_patch
+
+    def test_fractional_rate_round_trip(self, random_patch):
+        """A 1024 Hz time coordinate survives an eager xarray round trip."""
+        pytest.importorskip("xarray")
+        time = dc.get_coord(
+            start=np.datetime64("2020-01-01", "ns"),
+            step=(1, 1024),
+            shape=(random_patch.coord_shapes["time"][0],),
+        )
+        patch = random_patch.update_coords(time=time)
+        out = xarray_to_patch(patch_to_xarray(patch))
+        assert out.get_coord("time") == time
 
     def test_convert_non_coord(self, random_patch):
         """Ensure a patch with non-coord can still be converted."""

@@ -6,6 +6,7 @@ import datetime
 import pickle
 import re
 from collections.abc import Mapping
+from fractions import Fraction
 from functools import partial
 from io import BytesIO
 from types import SimpleNamespace
@@ -3262,3 +3263,143 @@ class TestSummaryRoundTripUnit:
             values=(np.arange(4) * np.timedelta64(10, "ms")).astype("m8[ms]")
         )
         assert coord.to_summary().to_coord().dtype == coord.dtype
+
+
+class TestFractionalSnap:
+    """Snapping labels of an exact grid whose step is not a whole tick."""
+
+    t0 = np.datetime64("2020-01-01T00:00:00", "ns")
+
+    @pytest.mark.parametrize("rate", [1024, 3000, 1234, 7919, 22050, 44100])
+    @pytest.mark.parametrize("length", [5, 60, 5000, 200_000])
+    @pytest.mark.parametrize("start", [0, 1, 13])
+    def test_fractional_grid_round_trips(self, rate, length, start):
+        """
+        Labels of a fractional-rate grid come back exactly. Short runs may
+        take a simpler step that also holds them; long ones take the rate's.
+        """
+        shape = (start + length,)
+        coord = get_coord(start=self.t0, step=(1, rate), shape=shape)[start:]
+        out = get_coord(data=coord.values)
+        assert np.array_equal(out.values, coord.values) and out.evenly_sampled
+        if length == 200_000:
+            assert out == coord
+
+    def test_descending_grid(self):
+        """Reversed labels of a fractional grid rebuild a descending grid."""
+        values = get_coord(start=self.t0, step=(1, 1024), shape=(1000,)).values
+        out = get_coord(data=values[::-1])
+        assert np.array_equal(out.values, values[::-1])
+        assert out.step_exact == Fraction(-1, 1024)
+
+    def test_sliced_and_rounded_grids(self):
+        """Grids whose ideal origin is not a whole tick also rebuild."""
+        coord = get_coord(start=self.t0, step=(1, 1024), shape=(1000,))[1:]
+        half_up = np.floor(np.arange(1000) * 976562.5 + 0.5)
+        rounded = self.t0 + half_up.astype("m8[ns]")
+        for values in (coord.values, rounded):
+            out = get_coord(data=values)
+            assert np.array_equal(out.values, values)
+            assert out.step_exact == Fraction(1, 1024)
+
+    def test_bounds_from_every_label_pair(self):
+        """The step bounds come from all label pairs, not just the first label."""
+        values = np.array([0, 10001, 20001, 30001])
+        out = get_coord(data=values)
+        assert np.array_equal(out.values, values)
+        assert out.step_exact == 10000 + Fraction(1, 3)
+
+    def test_narrow_integers(self):
+        """Narrow integers widen before their offsets are taken."""
+        values = np.array([-30000, -20000, -9999, 1, 10002, 20002, 30003], np.int16)
+        # the tolerant check's own int16 arithmetic overflows, as it did before
+        with suppress_warnings(RuntimeWarning):
+            out = get_coord(data=values)
+        assert np.array_equal(out.values, values) and out.dtype == values.dtype
+
+    def test_byte_order_and_unsigned(self):
+        """Big-endian times and descending uints come back as stored."""
+        coord = get_coord(start=self.t0, step=(1, 1024), shape=(5,))
+        big = coord.values.astype(">M8[ns]")
+        assert np.array_equal(get_coord(data=big).values, big)
+        values = np.array([3, 2, 0], dtype=np.uint16)
+        with suppress_warnings(RuntimeWarning):  # the tolerant check's own wrap
+            assert np.array_equal(get_coord(data=values).values, values)
+
+    def test_object_labels_keep_their_values(self):
+        """An object array with non-integral labels is not read as integers."""
+        values = np.array([0, 1.5, 3], dtype=object)
+        assert np.array_equal(get_coord(data=values).values, [0, 1.5, 3])
+
+    def test_drifting_clock_keeps_its_step(self):
+        """A clock slightly off its nominal rate keeps its exact step."""
+        ticks = np.arange(10_000, dtype=np.int64) * 9_999_999 // 10
+        values = self.t0 + ticks.astype("m8[ns]")
+        out = get_coord(data=values)
+        assert np.array_equal(out.values, values)
+        assert out.step_exact == Fraction(9_999_999, 10**10)
+
+    def test_random_rational_grids(self):
+        """Labels of random rational grids, sliced anywhere, come back exactly."""
+        rng = np.random.default_rng(42)
+        for _ in range(300):
+            den = int(rng.integers(1, 5001))
+            num = int(rng.integers(2000 * den, 3000 * den))
+            phase, length = int(rng.integers(den)), int(rng.integers(3, 2000))
+            ticks = (phase + np.arange(length, dtype=np.int64) * num) // den
+            values = ticks[int(rng.integers(length - 2)) :] + 10**12
+            out = get_coord(data=values)
+            assert np.array_equal(out.values, values) and out.evenly_sampled
+
+    def test_simpler_whole_tick_grid_wins(self):
+        """Three 3000 Hz labels are also a whole-tick grid, the simpler one."""
+        coord = get_coord(start=self.t0, step=(1, 3000), shape=(3,))
+        out = get_coord(data=coord.values)
+        assert out.step == np.timedelta64(333333, "ns")
+        assert np.array_equal(out.values, coord.values)
+
+    def test_jitter_still_snaps(self):
+        """Nearly uniform labels still snap to their median step."""
+        step = np.timedelta64(1, "ms")
+        values = self.t0 + np.arange(100) * step
+        values[1:-1:7] += np.timedelta64(1, "ns")
+        out = get_coord(data=values)
+        assert out == get_coord(start=self.t0, step=step, shape=(100,))
+
+    def test_off_grid_label_falls_through(self):
+        """Labels no fractional grid holds keep the rounded median step."""
+        values = get_coord(start=self.t0, step=(1, 1024), shape=(60,)).values.copy()
+        values[30] += np.timedelta64(1, "ns")
+        out = get_coord(data=values)
+        step = np.timedelta64(976562, "ns")
+        assert out == get_coord(start=self.t0, step=step, shape=(60,))
+
+    def test_inconsistent_labels_fall_through(self):
+        """Labels whose step bounds cross keep the rounded median step."""
+        step, tick = np.timedelta64(1, "ms"), np.timedelta64(1, "ns")
+        values = self.t0 + np.arange(100) * step
+        values[[1, -1]] += tick
+        values[2] -= tick
+        out = get_coord(data=values)
+        assert out == get_coord(start=self.t0, step=step, shape=(100,))
+
+    def test_offsets_past_int64_fall_through(self):
+        """A grid whose offsets would overflow int64 keeps the median step."""
+        num = 617 * 10**15 + 1
+        values = np.array([k * num // 617 for k in range(1000)], dtype=np.int64)
+        out = get_coord(data=values)
+        assert out == get_coord(start=0, step=10**15, shape=(1000,))
+
+    def test_integer_fractional_grid(self):
+        """Integer labels of a fractional-step grid rebuild the same grid."""
+        coord = get_coord(start=0, step=(10_000, 3), shape=(100,))
+        out = get_coord(data=coord.values)
+        assert out == coord and np.array_equal(out.values, coord.values)
+
+    def test_uneven_integers_not_a_grid(self):
+        """
+        Integers the tolerant check rejects stay unsnapped, though a 3/2-step
+        grid would hold them.
+        """
+        out = get_coord(data=np.array([0, 1, 3]))
+        assert not out.evenly_sampled
