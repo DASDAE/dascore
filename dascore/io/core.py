@@ -569,10 +569,10 @@ class _FiberIOManager:
                     # raise, in which case the format doesn't belong.
                     func_input = man.get_resource(required_type)
                     format_version = func(func_input, _pre_cast=True)
-                except RemoteCacheError:
-                    # A remote fetch failure is a real error, not a "wrong
-                    # format" signal, so it must propagate rather than be
-                    # swallowed by the robustness handler below.
+                except (RemoteCacheError, PermissionError):
+                    # A remote fetch failure or denied access is a real error,
+                    # not a "wrong format" signal, so it must propagate rather
+                    # than be swallowed by the robustness handler below.
                     raise
                 # For robustness, we need to catch everything else here.
                 except Exception:
@@ -1714,6 +1714,11 @@ def _get_fiber_io_and_req_type(
     return fiber_io_hint, resource
 
 
+def _warn_permission_denied(source):
+    """Warn that an inaccessible scan source is skipped."""
+    warnings.warn(f"Permission denied; skipping {source}", UserWarning)
+
+
 def _count_generator(generator):
     """Estimate the number of updates needed."""
     # TODO: This is a but sloppy, need to think of a better way to do
@@ -1839,6 +1844,9 @@ def _iter_scan_results(
                         )
                     except UnknownFiberFormatError:  # skip bad entities
                         continue
+                    except PermissionError:
+                        _warn_permission_denied(patch_source)
+                        continue
                     # Cache this fiber io to given preferential treatment next
                     # iteration. This speeds up the common case of many files
                     # with the same format.
@@ -1854,7 +1862,11 @@ def _iter_scan_results(
                         scan_kwargs = {"_pre_cast": True}
                         if snap is not None:
                             scan_kwargs["snap"] = snap
-                        source = fiber_io.scan(resource, **scan_kwargs)
+                        try:
+                            source = fiber_io.scan(resource, **scan_kwargs)
+                        except PermissionError:
+                            _warn_permission_denied(patch_source)
+                            continue
                     else:
                         try:
                             scan_kwargs = {"_pre_cast": True}
@@ -1884,14 +1896,18 @@ def _iter_scan_results(
                     members = [_validate_metadata(patch) for patch in source]
                     indices = None
                     if fiber_io.input_type == "directory" and timestamp is not None:
-                        indices = [
-                            index
-                            for index, member in enumerate(members)
-                            if fiber_io._updated_after(
-                                (member._source or ArraySource()).path or resource,
-                                timestamp,
-                            )
-                        ]
+                        try:
+                            indices = [
+                                index
+                                for index, member in enumerate(members)
+                                if fiber_io._updated_after(
+                                    (member._source or ArraySource()).path or resource,
+                                    timestamp,
+                                )
+                            ]
+                        except PermissionError:
+                            _warn_permission_denied(patch_source)
+                            continue
                     patches = _stamp_source_ids(
                         members,
                         fiber_io.name,
@@ -1979,6 +1995,9 @@ def scan(
 ) -> list[PatchSummary]:
     """
     Scan a potential patch source and return its patch summaries.
+
+    Inaccessible files and subdirectories are skipped with a warning.
+    An inaccessible root directory raises PermissionError.
 
     Parameters
     ----------
