@@ -197,7 +197,7 @@ class TestChunk:
     def test_chunk_shorter_than_sample(self, kwargs, fill_value, keep_partial):
         """Sub-sample chunks name the request as too short (#1251)."""
         patch = dc.get_example_patch().set_units(distance="mm")
-        with pytest.raises(ChunkError, match="shorter than one sample step") as exc:
+        with pytest.raises(ChunkError, match="shorter than the sample step") as exc:
             dc.spool([patch]).chunk(
                 **kwargs, fill_value=fill_value, keep_partial=keep_partial
             )

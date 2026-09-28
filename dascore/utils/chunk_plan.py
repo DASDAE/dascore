@@ -449,11 +449,13 @@ def patch_local_adjusted_envelopes(
             if not (_usable_index(lo_idx) and _usable_index(hi_idx)):
                 continue
             mins, maxs, steps = (df[c] for c in cols)
+            if steps.isna().all():  # no step to count samples by
+                continue
             # Positions are patch-local sample indices with a stop-exclusive
             # hi, so the last included position is hi - 1. Sample 0 sits at
             # the envelope min for ascending coords and at the max for
             # descending ones.
-            abs_steps = steps.dropna().abs().reindex(df.index)
+            abs_steps = steps.abs()
             descending = to_float(steps.values) < 0
             with np.errstate(invalid="ignore", divide="ignore"):
                 ratio = to_float((maxs - mins).values) / to_float(abs_steps.values)
@@ -476,7 +478,7 @@ def patch_local_adjusted_envelopes(
             hi_off = None if hi_pos is None else (hi_pos - 1) * abs_steps
             new_min = mins if lo_off is None else mins + lo_off
             new_max = maxs if hi_off is None else mins + hi_off
-            desc_min = maxs if hi_off is None else maxs - hi_off
+            desc_min = mins if hi_off is None else maxs - hi_off
             desc_max = maxs if lo_off is None else maxs - lo_off
             new_min = new_min.where(~descending, other=desc_min)
             new_max = new_max.where(~descending, other=desc_max)
@@ -1715,7 +1717,7 @@ def build_chunk_plan(
             starts_p = g_starts[part : part + 1]
             stops_p = g_stops[part : part + 1]
         else:
-            sub_sample[part] = value_c < abs(part_step)
+            sub_sample[part] = not pd.isnull(part_step) and value_c < abs(part_step)
             try:
                 start_stop = get_intervals(
                     g_starts[part],
@@ -1891,8 +1893,9 @@ def build_chunk_plan(
     if not fed_counts.sum():
         if sub_sample.all():
             msg = (
-                f"Could not chunk. The requested chunk length is shorter than "
-                f"one sample step along {name!r}. Use a larger chunk length."
+                f"Could not chunk. The requested chunk length {value} is "
+                f"shorter than the sample step along {name!r} "
+                f"({np.abs(part_steps).min()}). Use a larger chunk length."
             )
             raise ChunkError(msg)
         msg = "Could not chunk. No segments with sufficient length found."
