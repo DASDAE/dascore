@@ -2875,6 +2875,13 @@ class TestExpandBy:
         assert set(out.get_contents()["zone"]) == {"north", "south"}
 
 
+def _uneven(patch):
+    """The patch with every other channel nudged half a step off its grid."""
+    distance = np.asarray(patch.get_coord("distance").values, dtype=float)
+    nudge = (np.arange(len(distance)) % 2) * 0.5
+    return patch.update_coords(distance=distance + nudge)
+
+
 class TestChannelSelectEdges:
     """Rows a fiber query cannot answer for, and the ways it says so."""
 
@@ -2899,12 +2906,11 @@ class TestChannelSelectEdges:
         """
         Which channels match is decided on the sample grid.
 
-        A patch with a hole in its distance coordinate records no
-        spacing, so the grid cannot be rebuilt; trimming the wrong
+        A patch with irregular channel positions records no spacing, so
+        the grid cannot be rebuilt; trimming the wrong
         channels quietly is worse than saying so.
         """
-        holed = patch.unselect(distance=(50, 200))
-        spool = dc.spool(holed).attach_inventory(inventory)
+        spool = dc.spool(_uneven(patch)).attach_inventory(inventory)
         with pytest.raises(PatchError, match="no channel spacing"):
             spool.select(coupling="trench")
 
@@ -2990,8 +2996,7 @@ class TestChannelSelectEdges:
 
     def test_splitting_an_unevenly_sampled_patch_refuses(self, patch, inventory):
         """The grid is what values are read on here too."""
-        holed = patch.unselect(distance=(50, 200))
-        spool = dc.spool(holed).attach_inventory(inventory)
+        spool = dc.spool(_uneven(patch)).attach_inventory(inventory)
         with pytest.raises(PatchError, match="no channel spacing"):
             spool.expand_by("zone")
 
