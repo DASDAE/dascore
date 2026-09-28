@@ -902,7 +902,7 @@ class TestSpoolEnrich:
         plain = dc.spool(patch)
         attached = plain.attach_inventory(inventory)
         assert attached.enrich() == attached.enrich(
-            attrs=True, coords=True, conflict="keep_first"
+            attrs=True, coords=True, conflict="raise"
         )
 
     def test_name_collections_compare_by_content(self, patch, inventory):
@@ -1204,8 +1204,8 @@ class TestSelectSeesPendingEnrichment:
 
     Under `conflict="keep_last"` or `"drop"` the inventory rewrites a
     stated header; a selection which read the header would keep a patch
-    that comes out not matching it. The default `keep_first` leaves the
-    header standing, so there the header is what to read.
+    that comes out not matching it. `keep_first` leaves the header
+    standing, so there the header is what to read.
     """
 
     @pytest.fixture(scope="class")
@@ -1237,13 +1237,31 @@ class TestSelectSeesPendingEnrichment:
 
     def test_keep_first_judges_by_the_header(self, disagreeing):
         """The header stated it first, so it stands and is what is matched."""
-        spool = disagreeing.enrich(coords=False)
+        spool = disagreeing.enrich(coords=False, conflict="keep_first")
         selected = spool.select(gauge_length=20.0)
         assert selected.get_contents()["tag"].tolist() == ["wrong"]
         assert selected[0].attrs.gauge_length == 20.0
         assert spool.select(gauge_length=10.0).get_contents()["tag"].tolist() == [
             "right"
         ]
+
+    @pytest.mark.parametrize("conflict", ["raise", "drop"])
+    def test_rounding_noise_keeps_the_header(self, patch, inventory, conflict):
+        """A header equal up to rounding stands, so selecting it yields it."""
+        noisy = patch.update_attrs(gauge_length=10.000001)
+        spool = dc.spool(noisy).attach_inventory(inventory)
+        spool = spool.enrich(coords=False, conflict=conflict)
+        (out,) = spool.select(gauge_length=10.000001)
+        assert out.attrs.gauge_length == 10.000001
+
+    def test_keep_last_replaces_rounding_noise(self, patch, inventory):
+        """Under keep_last the inventory's value stands and is what matches."""
+        noisy = patch.update_attrs(gauge_length=10.000001)
+        spool = dc.spool(noisy).attach_inventory(inventory)
+        spool = spool.enrich(coords=False, conflict="keep_last")
+        assert not len(spool.select(gauge_length=10.000001))
+        (out,) = spool.select(gauge_length=10.0)
+        assert out.attrs.gauge_length == 10.0
 
     def test_drop_leaves_a_disagreeing_row_unselectable(self, disagreeing):
         """A dropped attr is no value at all, which no selector matches."""

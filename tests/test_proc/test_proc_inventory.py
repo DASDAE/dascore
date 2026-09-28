@@ -160,8 +160,8 @@ class TestAttrs:
         """Naming one asks for it; who wins a disagreement is `conflict`."""
         processed = patch.update_attrs(data_type="strain_rate")
         kwargs = dict(attrs=("data_type",), coords=False)
-        # The patch stated it, so by default the patch keeps it.
-        assert processed.enrich(inventory, **kwargs).attrs.data_type == "strain_rate"
+        out = processed.enrich(inventory, conflict="keep_first", **kwargs)
+        assert out.attrs.data_type == "strain_rate"
         out = processed.enrich(inventory, conflict="keep_last", **kwargs)
         assert out.attrs.data_type == "velocity"
 
@@ -174,7 +174,8 @@ class TestAttrs:
         """Now that it is copied, it disagrees like any other attr."""
         stated = patch.update_attrs(data_category="DTS")
         kwargs = dict(coords=False)
-        assert stated.enrich(inventory, **kwargs).attrs.data_category == "DTS"
+        keep_first = stated.enrich(inventory, conflict="keep_first", **kwargs)
+        assert keep_first.attrs.data_category == "DTS"
         keep_last = stated.enrich(inventory, conflict="keep_last", **kwargs)
         assert keep_last.attrs.data_category == "DAS"
         dropped = stated.enrich(inventory, conflict="drop", **kwargs)
@@ -235,9 +236,22 @@ class TestAttrs:
 class TestConflicts:
     """How disagreements between patch and inventory are settled."""
 
+    def test_default_raises(self, patch, inventory):
+        """A header disagreeing with the inventory is refused by default."""
+        stale = patch.update_attrs(gauge_length=99.0)
+        with pytest.raises(PatchError, match="inventory says"):
+            stale.enrich(inventory, coords=False)
+
+    def test_rounding_noise_agrees(self, patch, inventory):
+        """A float32 or unit-converted header equal up to rounding agrees."""
+        noisy = patch.update_attrs(gauge_length=np.float32(10.000001))
+        out = noisy.enrich(inventory, coords=False)
+        assert out.attrs.gauge_length == noisy.attrs.gauge_length
+
     def test_keep_first_prefers_the_patch(self, patch, inventory):
         """The patch stated it first, so it keeps it. See #1043."""
-        out = patch.update_attrs(gauge_length=99.0).enrich(inventory, coords=False)
+        stale = patch.update_attrs(gauge_length=99.0)
+        out = stale.enrich(inventory, coords=False, conflict="keep_first")
         assert out.attrs.gauge_length == 99.0
 
     def test_keep_last_prefers_inventory(self, patch, inventory):
@@ -276,8 +290,8 @@ class TestConflicts:
         assert out.attrs.gauge_length == 10.0
 
     def test_filling_is_not_a_conflict(self, patch, inventory):
-        """An attr the patch does not have cannot disagree with one it lacks."""
-        out = patch.enrich(inventory, coords=False, conflict="raise")
+        """An unset attr is filled under the default, which raises otherwise."""
+        out = patch.enrich(inventory, coords=False)
         assert out.attrs.gauge_length == 10.0
 
     def test_re_enrich_is_a_refresh(self, patch, inventory):
