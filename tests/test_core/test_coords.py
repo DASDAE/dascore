@@ -1214,6 +1214,11 @@ class TestOrder:
         _, inds = coord.order([time[::-1][1]])
         assert np.array_equal(inds, [1])
 
+    def test_reverse_sorted_bool(self):
+        """A descending boolean coord still orders by value."""
+        _, inds = get_coord(data=np.array([True, False])).order([False])
+        assert np.array_equal(inds, [1])
+
 
 class TestEqual:
     """Tests for comparing coord equality."""

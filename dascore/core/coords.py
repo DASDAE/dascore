@@ -1660,13 +1660,13 @@ def _negate_for_search(values):
 
     Exactness matters: converting ns-precision datetimes (or large ints) to
     float collapses nearby values, so time-like values negate on their int
-    ns representation and signed numerics negate natively. Only unsigned
-    ints (which would wrap) fall back to float.
+    ns representation and signed numerics negate natively. Unsigned ints
+    (which would wrap) and booleans (which cannot negate) fall back to float.
     """
     array = np.atleast_1d(np.asarray(values))
     if dtype_time_like(array.dtype):
         return -to_int(array)
-    if array.dtype.kind == "u":
+    if array.dtype.kind in "ub":
         return -to_float(array)
     return -array
 
