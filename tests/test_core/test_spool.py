@@ -630,6 +630,17 @@ class TestSelect:
             assert isinstance(patch, dc.Patch)
             assert not np.any(pd.isnull(patch.get_array("time")))
 
+    def test_samples_on_unstepped_int_labels(self):
+        """A samples select works on integer labels which have no step."""
+        coords = {
+            "distance": np.array([3.14, 5.36, 7.49, 8.17]),
+            "time": np.array([2, 3, 5, 6, 7]),
+        }
+        patch = dc.Patch(data=np.zeros((4, 5)), coords=coords, dims=tuple(coords))
+        expected = patch.select(time=(1, 5), samples=True)
+        out = dc.spool([patch]).select(time=(1, 5), samples=True)
+        assert list(out) == [expected]
+
 
 class TestUnselect:
     """Tests for removing the patches a selection would keep."""
