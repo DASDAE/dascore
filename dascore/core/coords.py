@@ -2216,20 +2216,20 @@ def _fractional_grid(values) -> Grid | None:
     count = len(values)
     if _exact_dtype(values[0], values[-1], None, None) is None:
         return None
-    first = _to_tick(values[0])
-    span = _to_tick(values[-1]) - first
+    # astype, not view, honours byte order; ints and uints widen before any
+    # subtraction can wrap.
+    wide = values.astype(np.int64)
+    first, span = int(wide[0]), int(wide[-1]) - int(wide[0])
     if not span % (count - 1) or abs(first) + abs(span) >= 2**63:
         return None  # a span the count divides admits only a whole-tick grid
-    wide = values.view(np.int64) if values.dtype.kind in "mM" else values
-    ticks = wide.astype(np.int64, copy=False) - np.int64(wide[0])
+    ticks = wide - wide[0]
     index = np.arange(count, dtype=np.int64)
     offsets, scratch = np.empty_like(ticks), np.empty_like(ticks)
     low, high = Fraction(span - 1, count - 1), Fraction(span + 1, count - 1)
     # A step q holds every label t_k when max(t_k - kq) - min(t_k - kq) < 1.
     # Try the simplest q in the bounds; the label pair it breaks most moves a
     # bound past it, so the first q that holds is the simplest that does.
-    # Real rates settle in a few passes, random short grids in under 64; the
-    # cap bounds the work on any input.
+    # Grids settle within a few passes; the cap only bounds the work.
     for _ in range(256):
         if low >= high:
             return None

@@ -3317,6 +3317,15 @@ class TestFractionalSnap:
             out = get_coord(data=values)
         assert np.array_equal(out.values, values) and out.dtype == values.dtype
 
+    def test_byte_order_and_unsigned(self):
+        """Big-endian times and descending uints come back as stored."""
+        coord = get_coord(start=self.t0, step=(1, 1024), shape=(5,))
+        big = coord.values.astype(">M8[ns]")
+        assert np.array_equal(get_coord(data=big).values, big)
+        values = np.array([3, 2, 0], dtype=np.uint16)
+        with suppress_warnings(RuntimeWarning):  # the tolerant check's own wrap
+            assert np.array_equal(get_coord(data=values).values, values)
+
     def test_drifting_clock_keeps_its_step(self):
         """A clock slightly off its nominal rate keeps its exact step."""
         ticks = np.arange(10_000, dtype=np.int64) * 9_999_999 // 10
