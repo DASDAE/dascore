@@ -143,9 +143,10 @@ class _Column:
         many = len(values) >= _FACTORIZE_ROWS
         if many and infer_dtype(values, skipna=False) == "string":
             codes, distinct = pd.factorize(np.asarray(values, object), sort=False)
-            # A missing value gets no code, and hashing stops at a NUL, so
-            # either keeps the loop, which encodes both exactly.
-            if codes.min() >= 0 and "\0" not in "".join(distinct):
+            # A missing value gets no code, and hashing stops at a NUL, which
+            # merges strings the NUL alone tells apart: either keeps the loop,
+            # which encodes both exactly.
+            if codes.min() >= 0 and "\0" not in "".join(values):
                 return cls([str(x) for x in distinct], codes)
         if len(values) and values[0] is None and all(x is None for x in values):
             return cls.constant(None, len(values))
@@ -217,33 +218,30 @@ def _combine(columns: Sequence[_Column]) -> tuple[np.ndarray, np.ndarray]:
     return first, key.astype(np.int32)
 
 
-def _merge_columns(columns: Sequence[_Column]) -> _Column:
-    """Concatenate columns, merging their dictionaries."""
-    index: dict = {}
-    values: list = []
-    seen: dict[int, np.ndarray] = {}
-    parts = []
-    for column in columns:
-        codes, dictionary = column.codes, column.values
-        # Columns cut from one table share a dictionary, which may be far
-        # bigger than the rows which are left; both are worth skipping.
-        remap = seen.get(id(dictionary))
-        if remap is None and len(dictionary) > len(codes):
-            used, codes = np.unique(codes, return_inverse=True)
-            dictionary = [dictionary[x] for x in used.tolist()]
-        if remap is None:
-            remap = np.empty(len(dictionary), np.int32)
-            for code, value in enumerate(dictionary):
-                key = _dict_key(value)
-                if key not in index:
-                    index[key] = len(values)
-                    values.append(value)
-                remap[code] = index[key]
-            if dictionary is column.values:
-                seen[id(dictionary)] = remap
-        parts.append(remap[codes])
-    codes = np.concatenate(parts) if parts else np.empty(0, np.int32)
-    return _Column(values, codes)
+def _merge_columns(columns: Sequence[_Column], rows: Sequence | None = None) -> _Column:
+    """Concatenate columns, or a selection of each one's rows, merging dictionaries."""
+    flat: list = []
+    starts: dict[int, int] = {}
+    found, offsets = [np.empty(0, np.int32)], [0]
+    for column, taken in zip(columns, rows or itertools.repeat(slice(None))):
+        codes, dictionary = column.codes[taken], column.values
+        start = starts.get(id(dictionary))
+        if start is None:
+            start = len(flat)
+            # Columns cut from one table share a dictionary, which may be far
+            # bigger than the rows which are left; both are worth skipping.
+            if len(dictionary) > len(codes):
+                used, codes = np.unique(codes, return_inverse=True)
+                dictionary = [dictionary[x] for x in used.tolist()]
+            else:
+                starts[id(dictionary)] = start
+            flat.extend(dictionary)
+        found.append(codes)
+        offsets.append(start)
+    # Every dictionary is deduplicated at once, values first met first.
+    merged = _Column.of(flat)
+    codes = np.concatenate(found) + np.repeat(offsets, [len(x) for x in found])
+    return _Column(merged.values, merged.codes[codes])
 
 
 class _Strings:
@@ -323,13 +321,14 @@ def _join_sources(
 ) -> tuple[_Sources, np.ndarray]:
     """Return selected rows of several tables as one table, and where each went."""
     columns: dict[str, _Column] = {}
+    rows = [x for _, x in parts]
     for name in SOURCE_FIELDS:
-        found = [(getattr(x, name), rows) for x, rows in parts]
+        found = [getattr(x, name) for x, _ in parts]
         if name in _STRING_FIELDS:
-            text = itertools.chain.from_iterable(x.at(rows) for x, rows in found)
+            text = itertools.chain.from_iterable(map(_Strings.at, found, rows))
             columns[name] = _Column.of(list(text))
         else:
-            columns[name] = _merge_columns([x.take(rows) for x, rows in found])
+            columns[name] = _merge_columns(found, rows)
     filled = [x.filled[rows] for x, rows in parts]
     return _sources_of_columns(columns, np.concatenate([np.empty(0, bool), *filled]))
 
@@ -939,20 +938,20 @@ class LazyArray:
 
     def _block(self) -> _Block:
         """Return this array's storage, as views of the table's arrays."""
-        table, row = self.table, self.row
-        first, last = table.member_offsets[row : row + 2]
-        start = int(table.axis_offsets[row])
-        count, ndim = int(last - first), self.ndim
+        table, row = self.table, self._row
+        first, last = table.member_offsets[row : row + 2].tolist()
+        low, high = table.shape_offsets[row : row + 2].tolist()
+        start, count, ndim = int(table.axis_offsets[row]), last - first, high - low
         stop = start + count * ndim
         axes = {
             name: table.axes[name][start:stop].reshape(count, ndim)
             for name in AXIS_FIELDS
         }
         return _Block(
-            shape=self.shape,
-            dtype=self.dtype,
+            shape=tuple(table.shapes[low:high].tolist()),
+            dtype=np.dtype(table.dtypes[row]),
             concat_axis=int(table.concat_axes[row]),
-            members=table.members.take(slice(int(first), int(last))),
+            members=table.members.take(slice(first, last)),
             axes=axes,
         )
 
@@ -1237,6 +1236,8 @@ def _resolve(item, size: int) -> tuple[int, int]:
 
 def _clip(block: _Block, starts: np.ndarray, stops: np.ndarray) -> _Block:
     """Return the members a request selects, each clipped to it."""
+    if _trims_ends(block, starts, stops):
+        return _clip_ends(block, starts, stops)
     start = np.maximum(block.axes["out_start"], starts)
     stop = np.minimum(block.axes["out_stop"], stops)
     keep = np.flatnonzero(np.all(stop > start, axis=1))
@@ -1251,6 +1252,54 @@ def _clip(block: _Block, starts: np.ndarray, stops: np.ndarray) -> _Block:
     # Stacked along the first axis, only one corner can be clipped, so the
     # members stay in order; any other placement may tie two of them.
     return out if block.concat_axis == 0 else _canonical(out)
+
+
+def _trims_ends(block: _Block, starts: np.ndarray, stops: np.ndarray) -> bool:
+    """Whether a window cuts only the first and last of the members stacked."""
+    axis = block.concat_axis
+    if axis < 0 or not len(block) or starts[axis] >= stops[axis]:
+        return False
+    shape = np.array(block.shape)
+    rest = np.arange(block.ndim) != axis
+    if starts[rest].any() or np.any(stops[rest] != shape[rest]):
+        return False
+    start, stop = block.axes["out_start"], block.axes["out_stop"]
+    ends = stop[0, axis] > starts[axis] and start[-1, axis] < stops[axis]
+    # Boxes of a valid array are inside it, never empty, and follow one
+    # another along the axis they are stacked on.
+    inside = start.min() >= 0 and (stop <= shape).all() and (stop > start).all()
+    ordered = (start[1:, axis] >= stop[:-1, axis]).all()
+    return bool(ends and inside and ordered)
+
+
+def _clip_ends(block: _Block, starts: np.ndarray, stops: np.ndarray) -> _Block:
+    """Clip the first and last member; the rest are copied, so the base can go."""
+    axis, members, filled = block.concat_axis, block.members, block.members.filled
+    start, stop, src_axis = (block.axes[x] for x in AXIS_FIELDS[:3])
+    moved = max(int(starts[axis] - start[0, axis]), 0)
+    flat = bool(filled.any())
+    axes = {
+        "out_start": start - starts,
+        "out_stop": stop - starts,
+        "src_axis": _owned(src_axis),
+        "src_start": _owned(block.axes["src_start"], flat or bool(moved)),
+        "src_extent": _owned(block.axes["src_extent"], flat),
+    }
+    axes["out_start"][0, axis] += moved
+    axes["out_stop"][-1, axis] = min(stop[-1, axis], stops[axis]) - starts[axis]
+    if moved and src_axis[0, axis] >= 0:
+        axes["src_start"][0, axis] += moved
+    _flatten_constants(axes, filled)
+    cast = _Column(members.cast.values, _owned(members.cast.codes))
+    members = _Members(members.sources, _owned(members.source_row), cast)
+    shape = tuple((stops - starts).tolist())
+    out = replace(block, shape=shape, members=members, axes=axes)
+    return out if axis == 0 else _canonical(out)
+
+
+def _owned(array: np.ndarray, write: bool = False) -> np.ndarray:
+    """Return a copy of an array; one value broadcast is shared unless written."""
+    return array if not (write or any(array.strides)) else array.copy()
 
 
 def _resolved(view: _View | None) -> LazyTable:
