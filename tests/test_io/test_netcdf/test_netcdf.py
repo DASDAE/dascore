@@ -966,7 +966,27 @@ class TestPlainNetCDF4:
         with pytest.raises(InvalidFiberFileError, match="calendar"):
             dc.read(path)
 
-    @pytest.mark.parametrize("units", ["fortnights since 2017-09-18", np.array([b"s"])])
+    @pytest.mark.parametrize(
+        "units", ["seconds Since 2017-09-18", "seconds since 2017-09-18T00:00:00Z"]
+    )
+    def test_reference_spellings(self, tmp_path, units):
+        """The separator's case and a UTC suffix do not change the times."""
+        path = tmp_path / "simple.h5"
+        with h5py.File(path, "w") as h5:
+            h5["data"] = np.ones((2, 3))
+            h5["time"] = np.array([0, 4, 8])
+            h5["time"].attrs["units"] = units
+        start = dc.read(path)[0].get_coord("time").min()
+        assert start == np.datetime64("2017-09-18", "ns")
+
+    @pytest.mark.parametrize(
+        "units",
+        [
+            "fortnights since 2017-09-18",
+            "seconds since 2500-01-01",
+            np.array([b"s"]),
+        ],
+    )
     def test_units_attr_forms(self, tmp_path, units):
         """Unknown CF time units are refused; a legacy array attr still reads."""
         path = tmp_path / "simple.h5"

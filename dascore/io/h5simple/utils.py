@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any, cast
 
 import numpy as np
@@ -44,7 +45,8 @@ def _get_attrs_coords_and_data(h5, snap):
 def _time_values(node, index=slice(None)):
     """Time labels, decoding CF units such as 'milliseconds since 2017-09-18'."""
     units = str(unbyte(_maybe_unpack(node.attrs.get("units", ""))))
-    unit, _, origin = units.partition(" since ")
+    unit, *rest = re.split(r" since ", units, maxsplit=1, flags=re.IGNORECASE)
+    origin = rest[0] if rest else ""
     if not origin:
         return dc.to_datetime64(node[index])
     calendar = str(unbyte(_maybe_unpack(node.attrs.get("calendar", "standard"))))
@@ -54,12 +56,14 @@ def _time_values(node, index=slice(None)):
     try:
         name = cast("Any", unit.strip())  # CF names a unit pandas also knows
         offsets = pd.to_timedelta(np.atleast_1d(node[index]), unit=name)
-    except ValueError as exc:
+        # pandas raises where numpy would wrap past the nanosecond range
+        out = (pd.Timestamp(origin.strip()) + offsets).as_unit("ns")
+    except (ValueError, OverflowError) as exc:
         msg = f"Cannot decode the time units {units!r}."
         raise InvalidFiberFileError(msg) from exc
-    out = pd.Timestamp(origin.strip()).to_datetime64() + offsets.to_numpy()
-    out = out.astype("datetime64[ns]")
-    return out if isinstance(index, slice) else out[0]
+    out = out.tz_localize(None) if out.tz is not None else out
+    values = out.to_numpy()
+    return values if isinstance(index, slice) else values[0]
 
 
 def _get_coord(v, snap, name):
