@@ -151,9 +151,9 @@ TABLE_SUFFIXES = (".csv", ".parquet")
 TABLE_SUFFIX = TABLE_SUFFIXES[0]
 OBJECT_SUFFIXES = (".json", ".yaml", ".yml")
 
-# Where a parquet annotations table names its dimensions, and where a bare
-# one keeps the document attrs.json holds in a directory.
+# Where a parquet annotations table names its dimensions.
 DIMS_KEY = "dascore:dims"
+# Where a bare parquet table keeps what attrs.json holds in a directory.
 ATTRS_KEY = "dascore:attrs"
 
 # Range suffixes, as everywhere else in DASCore.
@@ -3466,8 +3466,9 @@ def annotation_set_to_csv(
     back, where parquet has a type for it.
 
     Neither the dimensions nor the attributes are written; parquet keeps
-    both. Reading the table back states them again, in the call or in a
-    ``# dims: distance, time`` line written above the header by hand.
+    both. Reading the table back states them again in the call, or the
+    dimensions in a ``# dims: distance, time`` line written above the header
+    by hand.
 
     Parameters
     ----------
@@ -3531,7 +3532,10 @@ def annotation_set_to_parquet(
     True
     """
     _refuse_bare(annotations)
-    attrs = annotations._attrs.model_dump(mode="json", exclude_defaults=True)
+    # The dimensions travel under their own key only.
+    attrs = annotations._attrs.model_dump(
+        mode="json", exclude_defaults=True, exclude={"dims"}
+    )
     metadata = {DIMS_KEY: json.dumps(list(annotations.dims))}
     write_parquet(annotations._df, path, {**metadata, ATTRS_KEY: json.dumps(attrs)})
     return pathlib.Path(path)

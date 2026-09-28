@@ -135,10 +135,10 @@ def _read_attrs(directory: Path) -> dict[str, Any]:
     path = _one_spelling(directory, ATTRS_STEM, OBJECT_SUFFIXES)
     if path is None:
         return {}
-    return _checked_attrs(_read_object(path), quote_path(path))
+    return _checked_attrs(_read_object(path), quote_path(path), "io.save")
 
 
-def _checked_attrs(data: dict[str, Any], where: str) -> dict[str, Any]:
+def _checked_attrs(data: dict[str, Any], where: str, rewrite: str) -> dict[str, Any]:
     """Refuse attributes another object, or an earlier layout, wrote."""
     declared = data.pop(TAG_FIELD, None)
     if declared is not None and declared != _SET_TAG:
@@ -151,37 +151,42 @@ def _checked_attrs(data: dict[str, Any], where: str) -> dict[str, Any]:
         replaced = ", ".join(f"{x} (now {_RETIRED_ATTRS[x]})" for x in retired)
         msg = (
             f"{where} states {replaced}, which an earlier layout "
-            "wrote; rewrite the set with io.save."
+            f"wrote; rewrite the set with {rewrite}."
         )
         raise InvalidAnnotationError(msg)
     return data
 
 
-def _file_attrs(path: Path, declared) -> dict[str, Any] | None:
-    """Return the attributes a bare parquet file states, or None."""
-    if not _is_parquet(path):
-        return None
-    if (document := read_parquet_metadata(path).get(ATTRS_KEY)) is None:
+def _table_attrs(metadata: Mapping, path: Path) -> dict[str, Any] | None:
+    """Return the attributes a parquet table's footer states, or None."""
+    if (document := metadata.get(ATTRS_KEY)) is None:
         return None
     where = f"{ATTRS_KEY} of {quote_path(path)}"
     data = parse_document(document, "json", label=where)
     if not isinstance(data, Mapping):
-        msg = f"{where} holds no mapping, so it states no attributes."
+        msg = f"{where} holds {type(data).__name__}, not a mapping of attributes."
         raise ParameterError(msg)
-    data = _checked_attrs(dict(data), where)
-    return {**data, "dims": _declared_dims(data, None, path, declared, path)}
+    return _checked_attrs(dict(data), where, "io.to_parquet")
 
 
-def _refuse_restated(path: Path, stored: Mapping, kwargs: dict) -> None:
-    """Consume attributes given for a file stating its own; refuse any differing."""
-    held, differ = _build_attrs(stored), {}
-    for key in [x for x in kwargs if x in {"attrs", *AnnotationSetAttrs.model_fields}]:
-        value = kwargs.pop(key)
-        stated = {"attrs": value} if key == "attrs" else {"attrs": stored, key: value}
-        if value is not None and _build_attrs(**stated) != held:
-            differ[key] = value
-    _refuse_overrides(quote_path(path), **differ)
-    kwargs["attrs"] = stored
+def _refuse_restated(where: str, stored: Mapping, dims, kwargs: dict) -> None:
+    """
+    Refuse attributes given for a source which states them differently.
+
+    A field the source leaves unstated is the caller's to give; the result
+    replaces the attributes in kwargs.
+    """
+    held = _build_attrs(stored, dims=tuple(iterate(stored.get("dims") or dims)))
+    given = {"dims": dims, **_given_attrs(kwargs)}
+    kwargs.pop("attrs", None)
+    fields = [x for x in kwargs if x in AnnotationSetAttrs.model_fields]
+    given.update({x: kwargs.pop(x) for x in fields})
+    given = {k: v for k, v in given.items() if v is not None}
+    # The dimensions are always stated: the cells were read in them.
+    stated = {k: v for k, v in given.items() if k in stored or k == "dims"}
+    differ = {k: v for k, v in stated.items() if _build_attrs(held, **{k: v}) != held}
+    _refuse_overrides(where, **differ)
+    kwargs["attrs"] = _build_attrs(held, **given)
 
 
 # Attributes an earlier layout wrote, and what states them now.
@@ -352,18 +357,18 @@ def _is_parquet(path: Path) -> bool:
     return path.suffix.casefold() == PARQUET_SUFFIX
 
 
-def _read_table_dims(path: Path) -> tuple[tuple[str, ...] | None, int]:
+def _read_table_dims(path: Path) -> tuple[tuple[str, ...] | None, int, Mapping]:
     """
-    Return the dimensions a table declares for itself, and the CSV lines
-    above its header.
+    Return the dimensions a table declares for itself, the CSV lines above
+    its header, and the parquet footer.
 
     Each encoding declares them where it can: a CSV in a comment above the
     header, a parquet file in the metadata its footer holds.
     """
     if not _is_parquet(path):
-        return _read_pragma(path)
+        return (*_read_pragma(path), {})
     stated = read_parquet_metadata(path)
-    return _stated_dims(stated.get(DIMS_KEY), path), 0
+    return _stated_dims(stated.get(DIMS_KEY), path), 0, stated
 
 
 def _stated_dims(document: str | None, path: Path) -> tuple[str, ...] | None:
@@ -526,19 +531,19 @@ def _load_directory(directory: Path, dims, **kwargs) -> AnnotationSet:
         # A directory which states nothing itself may still carry
         # annotations, under the hidden name, as a directory of data carries
         # its inventory. Nothing of its own is read on this path: a data
-        # directory's attrs.json is about the data, and what the caller
-        # states is the carried table's to take, since it states none of it.
+        # directory's attrs.json is about the data, so the carried set or
+        # table alone decides what the caller may state.
         if not children and (carried := find_annotations(directory)) is not None:
             return _load_path(carried, dims, **kwargs)
     _refuse_stated(directory, kwargs)
-    attrs = _read_attrs(directory)
+    stored = _read_attrs(directory)
     if children:
-        return _load_collection(directory, children, attrs, dims, **kwargs)
-    return _load_set(directory, attrs, dims, **kwargs)
+        return _load_collection(directory, children, stored, dims, **kwargs)
+    return _load_set(directory, stored, dims, **kwargs)
 
 
 def _given_attrs(kwargs: Mapping) -> Mapping:
-    """Return what a caller stated for a source which states nothing itself."""
+    """Return the attributes a caller stated, as a mapping."""
     attrs = kwargs.get("attrs")
     if attrs is None:
         return {}
@@ -547,17 +552,15 @@ def _given_attrs(kwargs: Mapping) -> Mapping:
 
 def _refuse_stated(directory: Path, kwargs: dict) -> None:
     """
-    Refuse attributes, features or bases given for a directory which states them.
+    Refuse features or bases given for a directory which states them.
 
     Refused for a directory which holds a set or the sets, not for one
-    carrying a bare `.annotations.csv`: that table states neither, so a
-    caller has the same say over what it holds as it has passing the table
-    itself. Consumed rather than merely refused, since what a directory
-    states would otherwise reach `AnnotationSet` twice as a bare TypeError.
+    carrying a bare table, which states neither. Consumed rather than merely
+    refused, since what a directory states would otherwise reach
+    `AnnotationSet` twice as a bare TypeError.
     """
     _refuse_overrides(
-        f"{quote_path(directory)}, which states them",
-        attrs=kwargs.pop("attrs", None),
+        quote_path(directory),
         features=kwargs.pop("features", None),
         bases=kwargs.pop("bases", None),
     )
@@ -710,7 +713,7 @@ def _refuse_colliding_names(directory: Path, children: Sequence[Path]) -> None:
 
 
 def _load_collection(
-    directory: Path, children: Sequence[Path], attrs: Mapping, dims, **kwargs
+    directory: Path, children: Sequence[Path], stored: Mapping, dims, **kwargs
 ) -> AnnotationSet:
     """
     Load the sets a directory of them holds, as one set.
@@ -720,7 +723,7 @@ def _load_collection(
     twice, a table beside them, and dimensions given for a set which
     declares its own.
     """
-    if attrs.get("sets"):
+    if stored.get("sets"):
         msg = (
             f"{quote_path(directory)} states sets in its attributes and holds "
             "them in directories. A collection states each of its sets once."
@@ -732,14 +735,14 @@ def _load_collection(
         "which name no set. A set is a directory here, so a table beside them "
         "states nothing; a bare table is read on its own.",
     )
-    if attrs.get("dims"):
+    if stored.get("dims"):
         _refuse_overrides("a directory of sets stating its own dimensions", dims=dims)
     # The caller's dimensions, else the ones stated beside the sets, stand in
     # for a child which declares none. A child which declares its own -- in
     # its attributes or above its table -- is read in those, and refuses the
     # standing-in dimensions as it would refuse them on its own, rather than
     # having them dropped where nobody can see it happen.
-    default = dims if dims is not None else attrs.get("dims")
+    default = dims if dims is not None else stored.get("dims")
     given = "dims" if dims is not None else "the dimensions stated beside the sets"
     loaded = {}
     for child in children:
@@ -755,7 +758,7 @@ def _load_collection(
             loaded[child.name] = _load_set(child, child_attrs, None)
             continue
         loaded[child.name] = _load_set(child, child_attrs, default)
-    return _merge_sets(loaded, attrs, **kwargs)
+    return _merge_sets(directory, loaded, stored, **kwargs)
 
 
 def _declares_dims(directory: Path, attrs: Mapping) -> bool:
@@ -773,10 +776,10 @@ def _declares_dims(directory: Path, attrs: Mapping) -> bool:
 
 
 def _merge_sets(
-    loaded: Mapping[str, AnnotationSet], attrs: Mapping, **kwargs
+    directory: Path, loaded: Mapping[str, AnnotationSet], stored: Mapping, **kwargs
 ) -> AnnotationSet:
     """Build the one set the sets loaded together make, table by table."""
-    stated = [str(x) for x in iterate(attrs.get("dims") or ())]
+    stated = [str(x) for x in iterate(stored.get("dims") or ())]
     # The collection's own dimensions first, then each set's in name order.
     dims = tuple(
         dict.fromkeys([*stated, *(x for one in loaded.values() for x in one.dims)])
@@ -789,14 +792,15 @@ def _merge_sets(
         if len(one.features)
     }
     _refuse_undeclared_dims(loaded, frames, dims)
-    document = dict(attrs)
+    document = dict(stored)
     document["dims"] = dims
     document["sets"] = {name: one.attrs for name, one in loaded.items()}
     parts = {
         name: _Tables(frames[name], tables.get(name), one.bases)
         for name, one in loaded.items()
     }
-    return _combine(parts, dims, attrs=document, **kwargs)
+    _refuse_restated(quote_path(directory), document, dims, kwargs)
+    return _combine(parts, dims, **kwargs)
 
 
 def _labeled(frame: pd.DataFrame, name: str) -> pd.DataFrame:
@@ -845,11 +849,8 @@ def _refuse_undeclared_dims(
             raise ParameterError(msg)
 
 
-def _load_set(directory: Path, attrs: Mapping, dims, **kwargs) -> AnnotationSet:
+def _load_set(directory: Path, stored: Mapping, dims, **kwargs) -> AnnotationSet:
     """Load the set a directory holds."""
-    # A directory which states its dimensions is read in them only.
-    if attrs.get("dims"):
-        _refuse_overrides("a directory stating its own dimensions", dims=dims)
     _refuse_stray_tables(
         directory,
         (ANNOTATION_STEM, FEATURE_STEM),
@@ -864,9 +865,16 @@ def _load_set(directory: Path, attrs: Mapping, dims, **kwargs) -> AnnotationSet:
             f"{BLESSED_NAME}, so it states no annotations and carries none."
         )
         raise ParameterError(msg)
-    declared, skip = _read_table_dims(table)
-    stated = _declared_dims(attrs, dims, directory, declared, table)
-    own, inherited = _stated_dtypes(attrs, "annotation_columns")
+    declared, skip, footer = _read_table_dims(table)
+    # A footer is the set's only statement where the directory makes none.
+    if (restated := _table_attrs(footer, table)) is not None and not stored:
+        stored, restated = restated, None
+    stated = _declared_dims(stored, dims, directory, declared, table)
+    _refuse_restated(quote_path(directory), stored, stated, kwargs)
+    if restated is not None:
+        where = f"{quote_path(directory)} by the {ATTRS_KEY} of {table.name}"
+        _refuse_restated(where, stored, stated, {"attrs": restated})
+    own, inherited = _stated_dtypes(stored, "annotation_columns")
     frame = _read_set_table(
         table,
         stated,
@@ -878,7 +886,7 @@ def _load_set(directory: Path, attrs: Mapping, dims, **kwargs) -> AnnotationSet:
     frame = _settle_dtypes(frame, own, inherited, table)
     features = None
     if (path := _one_spelling(directory, FEATURE_STEM, TABLE_SUFFIXES)) is not None:
-        own, inherited = _stated_dtypes(attrs, "feature_columns")
+        own, inherited = _stated_dtypes(stored, "feature_columns")
         features = _read_set_table(
             path,
             (),
@@ -892,7 +900,6 @@ def _load_set(directory: Path, attrs: Mapping, dims, **kwargs) -> AnnotationSet:
         features=features,
         bases=_read_bases(directory),
         dims=stated,
-        attrs=attrs,
         **kwargs,
     )
 
@@ -1015,17 +1022,16 @@ def _load_file(path: Path, dims, **kwargs) -> AnnotationSet:
             f"A bare set is a {named} file; a set with features is a directory."
         )
         raise ParameterError(msg)
-    declared, skip = _read_table_dims(path)
-    # A bare parquet file may state its attributes, which a caller may only
-    # restate. A table stating none may be handed some -- and the dimensions
-    # they name are the ones its cells are read in, since nothing can be
-    # read before that is known.
-    if (given := _file_attrs(path, declared)) is not None:
-        declared = given["dims"]
-        _refuse_restated(path, given, kwargs)
-    else:
-        given = _given_attrs(kwargs)
+    declared, skip, footer = _read_table_dims(path)
+    # A parquet file may state its attributes; a caller may repeat them but
+    # not change them. A table stating none may be handed some -- and the
+    # dimensions they name are the ones its cells are read in, since nothing
+    # can be read before that is known.
+    stored = _table_attrs(footer, path)
+    given = _given_attrs(kwargs) if stored is None else stored
     stated = _declared_dims(given, dims, path, declared, path)
+    if stored is not None:
+        _refuse_restated(quote_path(path), stored, stated, kwargs)
     # An empty mapping is an override which clears the declarations, as
     # the set reads it, so only an absent one falls back to the attrs.
     columns = kwargs.get("annotation_columns")
@@ -1051,7 +1057,7 @@ def _undeclared(path: Path) -> int:
 
     Features hold no coordinates, so a declaration there is misplaced.
     """
-    declared, skip = _read_table_dims(path)
+    declared, skip, _ = _read_table_dims(path)
     if declared is not None:
         where = (
             f"states {DIMS_KEY}"
@@ -1140,9 +1146,9 @@ def annotations(
         states them takes them again only if the two agree.
     **kwargs
         Passed to [`AnnotationSet`](`dascore.core.annotations.AnnotationSet`).
-        A source already holding what one states -- a set, or a directory
-        holding its own attributes, features or bases -- refuses it rather than
-        dropping it.
+        A built set refuses all of them, and a directory refuses features and
+        bases. A stored source takes a field it states again only where the
+        two agree, and one it leaves unstated as given.
 
     Examples
     --------

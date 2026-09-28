@@ -49,7 +49,7 @@ ann = dc.AnnotationSet.from_patch(patch, picks)
 ann.annotations
 ```
 
-A set of only annotations writes as one bare file. The file holds the annotations table alone. A CSV records neither the dimensions nor the set's attributes, such as `data_id`, so the dimensions are stated again on reading and the attributes are lost; `io.to_parquet` writes a Parquet file that keeps both, and needs pyarrow. The directory form described under [Saving and loading](#saving-and-loading) keeps them in either encoding.
+A set of only annotations writes as one bare file. The file holds the annotations table, with no features or bases. A CSV records neither the dimensions nor the set's attributes, such as `data_id`; reading states the dimensions again, and may state the attributes. `io.to_parquet` writes a Parquet file that keeps both, and needs pyarrow. The directory form described under [Saving and loading](#saving-and-loading) keeps them in either encoding.
 
 ```{python}
 folder = Path(tempfile.mkdtemp())

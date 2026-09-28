@@ -693,13 +693,25 @@ class TestTheDoor:
 
     @pytest.mark.parametrize(
         "given",
-        [{"attrs": {"dims": DIMS}}, {"features": pd.DataFrame()}, {"bases": {}}],
+        [
+            {"attrs": {"data_id": "other"}},
+            {"acquisition_key": "N.A.00.other"},
+            {"features": pd.DataFrame()},
+            {"bases": {}},
+        ],
     )
     def test_a_directory_refuses_what_it_states(self, regions, tmp_path, given):
         """A directory holds its own attributes, features and bases."""
         directory = regions.io.save(tmp_path / "picks")
-        with pytest.raises(InvalidAnnotationError, match="which states them"):
+        with pytest.raises(InvalidAnnotationError, match="which states it"):
             dc.annotations(directory, **given)
+
+    def test_a_directory_takes_what_agrees(self, regions, tmp_path):
+        """Restating what a directory states is allowed where the two agree."""
+        directory = regions.io.save(tmp_path / "picks")
+        key = regions.attrs.acquisition_key
+        assert dc.annotations(directory, acquisition_key=key, dims=DIMS) == regions
+        assert dc.annotations(directory, attrs={"data_id": "decimated"}) == regions
 
     def test_a_dataframe(self):
         """A frame becomes a set, as the constructor makes one."""
@@ -810,7 +822,7 @@ class TestDeclaringDimensions:
         differently and build a set which is not the one stored.
         """
         directory = regions.io.save(tmp_path / "picks")
-        with pytest.raises(InvalidAnnotationError, match="its own dimensions"):
+        with pytest.raises(InvalidAnnotationError, match="dims was given"):
             dc.annotations(directory, dims=("time", "distance"))
 
     def test_a_directory_which_states_none_takes_them(self, regions, tmp_path):
@@ -1930,8 +1942,8 @@ class TestCarriedAnnotations:
     def test_a_carried_set_directory_states_its_own(self, data, regions):
         """A carried directory holds its attributes, as any set directory does."""
         regions.io.save(data / ".annotations")
-        with pytest.raises(InvalidAnnotationError, match="which states them"):
-            dc.annotations(data, attrs={"dims": DIMS})
+        with pytest.raises(InvalidAnnotationError, match="which states it"):
+            dc.annotations(data, attrs={"dims": ("time",)})
 
     def test_carried_twice(self, data, regions):
         """A directory states what it carries once."""
@@ -2118,8 +2130,37 @@ class TestParquet:
         """What the file states may be given again only where the two agree."""
         path = regions.io.to_parquet(tmp_path / "picks.parquet")
         assert dc.annotations(path, dims=DIMS, attrs=regions.attrs) == regions
+        assert (
+            dc.annotations(path, dims=DIMS, attrs={"data_id": "decimated"}) == regions
+        )
+        assert dc.annotations(path, acquisition_key="NET.ARR.00.das") == regions
         with pytest.raises(InvalidAnnotationError, match="acquisition_key was given"):
             dc.annotations(path, acquisition_key="NET.ARR.00.other")
+        with pytest.raises(InvalidAnnotationError, match=r"^data_id was given"):
+            dc.annotations(path, attrs={"data_id": "other"})
+        with pytest.raises(InvalidAnnotationError, match="dims was given"):
+            dc.annotations(path, attrs=dc.AnnotationSet(None, dims=("time",)).attrs)
+
+    def test_what_a_source_leaves_unstated(self, picks, tmp_path):
+        """A field the stored set never stated is the caller's to give."""
+        bare = picks.io.to_parquet(tmp_path / "picks.parquet")
+        for path in (bare, picks.io.save(tmp_path / "picks", format="parquet")):
+            assert dc.annotations(path, data_id="x").attrs.data_id == "x"
+
+    def test_a_directory_of_only_a_table(self, regions, tmp_path):
+        """A footer is the only statement a directory without attrs makes."""
+        (tmp_path / "picks").mkdir()
+        regions.io.to_parquet(tmp_path / "picks" / "annotations.parquet")
+        assert dc.annotations(tmp_path / "picks") == regions
+
+    def test_a_directory_checks_its_table(self, regions, tmp_path):
+        """A table's own attributes must agree with its directory's."""
+        directory = regions.io.save(tmp_path / "picks", format="parquet")
+        (directory / "annotations.parquet").unlink()
+        other = dc.AnnotationSet(regions.annotations, dims=DIMS, data_id="other")
+        other.io.to_parquet(directory / "annotations.parquet")
+        with pytest.raises(InvalidAnnotationError, match="data_id was given"):
+            dc.annotations(directory)
 
     def test_a_file_stating_only_dimensions(self, regions, tmp_path):
         """A file written before the attributes travelled still reads."""
@@ -2130,13 +2171,14 @@ class TestParquet:
     @pytest.mark.parametrize(
         ("stated", "message"),
         [
-            ('{"dims": ["time"]}', "where the two agree"),
+            ('{"object_type": "Other"}', "declares 'Other'"),
+            ('{"history": []}', "to_parquet"),
             ("{oops", ATTRS_KEY),
-            ("[1]", "holds no mapping"),
+            ("[1]", "not a mapping"),
         ],
     )
     def test_attributes_this_cannot_read(self, regions, stated, message, tmp_path):
-        """Attributes disagreeing with the dimensions, or unreadable, are refused."""
+        """Attributes this cannot read, or an earlier layout wrote, are refused."""
         path = tmp_path / "picks.parquet"
         meta = {DIMS_KEY: json.dumps(DIMS), ATTRS_KEY: stated}
         write_parquet(regions.annotations, path, meta)
