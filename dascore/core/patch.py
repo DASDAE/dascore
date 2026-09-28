@@ -70,7 +70,7 @@ class Patch(NamespaceOwner, PatchMeta):
     ----------
     data
         The array data representing fiber optic measurements. A Patch or
-        xarray DataArray supplies its own coords, dims and attrs.
+        xarray DataArray supplies its own coords and attrs.
     coords
         The coordinates, or dimensional labels for the data.
         A few types of input are permitted. If a mapping (eg dict) the value
