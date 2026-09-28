@@ -17,12 +17,10 @@ from __future__ import annotations
 
 import hashlib
 import inspect
-import itertools
 import math
 import warnings
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from fractions import Fraction
 from pathlib import Path
 from typing import Any, Literal
 
@@ -75,7 +73,6 @@ from dascore.utils.time import (
     is_timedelta64,
     to_datetime64,
     to_float,
-    to_int,
     to_timedelta64,
 )
 
@@ -564,15 +561,11 @@ def _cell_tolerance(tolerance: GapTolerance, sub, name) -> GapTolerance:
     return tolerance.resolve(sub[f"{name}_min"].dtype, units, name)
 
 
-def _continuity_group(
-    start, stop, step, *tolerances: GapTolerance, breaks=None
-) -> pd.Series:
+def _continuity_group(start, stop, step, *tolerances: GapTolerance) -> pd.Series:
     """Label maximal near-contiguous runs (spec 2.4); any tolerance splits."""
     order, _, has_gap = gap_boundaries(start, stop, step, tolerances[0])
     for tolerance in tolerances[1:]:
         has_gap |= gap_boundaries(start, stop, step, tolerance)[2]
-    if breaks is not None:
-        has_gap |= breaks.to_numpy()[order]
     out = pd.Series(0, index=start.index, dtype=np.int64)
     out.iloc[order] = np.cumsum(has_gap)
     return out
@@ -762,33 +755,8 @@ def _cell_labels(df, name, group_attrs, sampling_tolerance) -> pd.Series:
     return base.astype(str) + "_" + samp.astype(str)
 
 
-def _ideal(value, grid, count=0) -> Fraction:
-    """An exact grid's position ``count`` steps past the label ``value``."""
-    num, den, offset, _ = grid
-    ticks = to_int(value)
-    return Fraction(ticks * den + offset, den) + count * Fraction(num, den)
-
-
-def _off_lattice(sub, name) -> pd.Series:
-    """Whether each row starts past its predecessor off the grid it continues."""
-    start, stop, step = get_interval_columns(sub, name)
-    grids = sub.get(f"_{name}_grid", pd.Series(None, index=sub.index))
-    rows = sub.assign(_a=start, _b=stop, _s=step, _g=grids).sort_values("_a")
-    out = pd.Series(False, index=sub.index)
-    records = zip(rows.index, rows["_a"], rows["_b"], rows["_s"], rows["_g"])
-    for prev, row in itertools.pairwise(records):
-        (_, start0, stop0, step0, grid0), (index, start1, _, step1, grid1) = prev, row
-        if pd.isnull(step0) or pd.isnull(step1) or not start1 > stop0:
-            continue
-        if isinstance(grid0, tuple) and isinstance(grid1, tuple) and step0 > step0 * 0:
-            out[index] = _ideal(start0, grid0, grid0[3]) != _ideal(start1, grid1)
-        else:
-            out[index] = stop0 + abs(step0) != start1
-    return out
-
-
 def _partition(
-    df, name, group_attrs, tolerance, sampling_tolerance, keep_holes, exact=False
+    df, name, group_attrs, tolerance, sampling_tolerance, keep_holes
 ) -> pd.Series:
     """
     Return partition labels: rows sharing a label may combine (spec 2).
@@ -796,8 +764,7 @@ def _partition(
     A partition is a continuity run within a cell (see
     [`_cell_labels`](`dascore.utils.chunk_plan._cell_labels`)). With
     ``keep_holes``, a boundary missing a sample stays a partition break
-    however loose the tolerance; with ``exact`` too, so does any boundary
-    off the grid its predecessor ends on.
+    however loose the tolerance.
     """
     cell = _cell_labels(df, name, group_attrs, sampling_tolerance)
     cont = pd.Series(0, index=df.index, dtype=np.int64)
@@ -806,8 +773,7 @@ def _partition(
         sub = df.loc[index]
         s, e, st = get_interval_columns(sub, name)
         tol = _cell_tolerance(tolerance, sub, name)
-        breaks = _off_lattice(sub, name) if exact else None
-        labels = _continuity_group(s, e, st, tol, *default, breaks=breaks)
+        labels = _continuity_group(s, e, st, tol, *default)
         cont.loc[index] = labels.astype(np.int64)
     return cell + "_" + cont.astype(str)
 
@@ -1550,8 +1516,8 @@ def build_chunk_plan(
     Parameters mirror `Spool.chunk` (see the chunking formalities spec);
     one keyword names the dimension to chunk and its length (`None`/`...`
     merges); more explicit windows exclude groups (`_trim_explicit` trims).
-    Without ``fill_value`` a missing sample always ends an output, unless
-    ``_bridge_holes`` (a view that may hold holes).
+    Without ``fill_value`` a missing sample always ends an output;
+    ``_bridge_holes`` lifts that for a view that may hold holes.
     """
     windows = explicit_windows(kwargs)
     if len(kwargs) != 1 and (not windows or len(windows) != len(kwargs)):
@@ -1641,7 +1607,6 @@ def build_chunk_plan(
         tolerance,
         params["sampling_group_tolerance"],
         keep_holes=fill_value is None and not _bridge_holes,
-        exact=fill_value is None and not _bridge_holes and not snap_coords,
     )
     per_partition = explicit is None and _needs_partition_resolution(value, overlap)
     if not per_partition and explicit is None:

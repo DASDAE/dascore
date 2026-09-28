@@ -50,7 +50,7 @@ def gapped_directory(gapped_patch, tmp_path_factory):
 
 @pytest.fixture(scope="module")
 def indexed_runs(gapped_patch, tmp_path_factory):
-    """A directory whose file holds the gapped patch whole, as older files may."""
+    """A directory whose file holds the gapped patch whole, written around dc.write."""
     path = tmp_path_factory.mktemp("indexed_runs") / "gapped.h5"
     later = gapped_patch.get_coord("time").max() + 10 * 1000 * MS
     dc.write(dc.get_example_patch().update_coords(time_min=later), path, "dasdae")

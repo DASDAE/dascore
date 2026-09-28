@@ -36,8 +36,7 @@ from dascore.utils.time import (
     to_timedelta64,
 )
 
-# The default continuity tolerance, in samples; looser values warn when
-# they force merges (#662).
+# The default continuity tolerance, in samples.
 DEFAULT_TOLERANCE = 1.5
 
 
@@ -301,10 +300,12 @@ def contiguous_windows(coord) -> list[tuple[int, int]]:
     """
     The positional ``(start, stop)`` windows over which a coordinate is contiguous.
 
-    A window ends at every boundary between the coordinate's runs and at
-    every hole [missing](`dascore.core.coords.BaseCoord.missing`) reports.
-    Runs holding labels with no shared step (e.g. an exact array of
-    jittered times) are irregular rather than gapped, so they are one window.
+    A window ends where a run changes step or starts further from its
+    predecessor than the default tolerance allows, and at every hole
+    [missing](`dascore.core.coords.BaseCoord.missing`) reports; runs joined
+    by sub-sample jitter are one window. Runs holding labels with no shared
+    step (e.g. an exact array of jittered times) are irregular rather than
+    gapped, so they are one window too.
     """
     numeric = hasattr(type(coord), "segments")
     if not numeric or coord.evenly_sampled:
@@ -312,9 +313,17 @@ def contiguous_windows(coord) -> list[tuple[int, int]]:
     segments = coord.segments
     if pd.isnull(coord.step) and not all(x.evenly_sampled for x in segments):
         return [(0, len(coord))]
-    starts, offset = set(), 0
+    starts, offset, last, last_step = set(), 0, None, None
     for seg in segments:
-        starts.add(offset)
+        step = coord.step if pd.isnull(seg.step) else seg.step
+        if last is not None and (
+            pd.isnull(step)
+            or step != last_step
+            or abs(to_float(seg.values[0] - last))
+            > DEFAULT_TOLERANCE * to_float(abs(step))
+        ):
+            starts.add(offset)
+        last, last_step = seg.values[-1], step
         # a dense stored run may hold holes of the declared step too
         if holes := [first for first, _ in seg.missing().iter_runs()]:
             values = np.asarray(seg.values)

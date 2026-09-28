@@ -176,7 +176,7 @@ def _extended_float(coord) -> bool:
 # Version 2 nodes state the coordinate class they hold, as every DASCore
 # model states its class in a document (see dascore.models.registry).
 _OBJECT_TYPE = "object_type"
-# The shapes a version 2 node can hold, as the format has always named them.
+# The format's own tag for a version 2 node holding a grid description.
 _RANGE = "CoordRange"
 # An array node's run lengths, whose labels are read as written.
 _EXACT = "exact"

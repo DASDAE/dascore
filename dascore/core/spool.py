@@ -2080,13 +2080,12 @@ class Spool(NodeRepr, NamespaceOwner):
         matches the gap frame's, so the two join on it.
 
         Coverage is measured from the envelopes the index records for each
-        row. A hole is not visible in a
-        group whose step is unknown: a sample-count tolerance has nothing
-        to scale there, so the group reports no gaps and counts as fully
-        covered. An absolute tolerance does measure it.
-        Gaps and coverage alike are what `chunk` would make of the data, so
-        a `coverage` of 1.0 says "nothing chunk would refuse to merge", not
-        "nothing missing".
+        row. A hole is not visible in a group whose step is unknown: a
+        sample-count tolerance has nothing to scale there, so the group
+        reports no gaps and counts as fully covered. An absolute tolerance
+        does measure it. Gaps and coverage alike are what `chunk` would make
+        of the data with a `fill_value`, so a `coverage` of 1.0 says "nothing
+        chunk would refuse to fill", not "nothing missing".
 
         See Also
         --------
@@ -2143,9 +2142,8 @@ class Spool(NodeRepr, NamespaceOwner):
         snap_coords
             If True (default), simplify the coordinates of joined patches to
             an evenly sampled range, absorbing the sub-sample jitter of
-            labels rounded on their way to a file. A merge across a hole
-            keeps an exact segmented coordinate however wide the tolerance:
-            missing samples are absent data, not a slower sampling rate.
+            labels rounded on their way to a file. If False, joined
+            coordinates keep their exact labels.
         tolerance
             The maximum number of samples a block of data can be spaced (gap)
             and still be considered contiguous. A quantity or timedelta

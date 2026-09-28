@@ -1319,9 +1319,10 @@ def split_gaps(self: PatchType) -> dc.Spool:
     """
     Split the patch into contiguous patches, as a spool holds it.
 
-    A spool row never holds a hole, so this is ``dc.spool([patch])``: the
-    patch splits at every boundary between a dimension's runs and at every
-    hole [missing](`dascore.core.coords.BaseCoord.missing`) reports. Each
+    This is ``dc.spool([patch])``: the patch splits at every boundary
+    between a dimension's evenly sampled runs and at every hole
+    [missing](`dascore.core.coords.BaseCoord.missing`) reports; irregular
+    labels sharing no step stay one piece. Each
     output is a view of the patch's data; a patch without holes comes back
     unchanged.
 

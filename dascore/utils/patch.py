@@ -700,8 +700,9 @@ def _get_merged_coord(
     simplified with bounded error: no value moves more than the tolerance
     allows, `tolerance` steps for a count or the excess itself for a
     quantity or timedelta (see `dascore.utils.gaps.GapTolerance`), and the
-    members' own step is kept, so a merge across a hole stays segmented
-    (honestly non-uniform) rather than being relabeled at a slower rate.
+    members' own step is kept, so a merge across a hole (only where a
+    caller bridges holes, as `to_xarray` does) stays segmented rather than
+    being relabeled at a slower rate.
     """
     from dascore.core.coords import concat_coords  # noqa: PLC0415
 

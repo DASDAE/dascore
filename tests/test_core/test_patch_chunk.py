@@ -1564,11 +1564,11 @@ class TestQuantityTolerance:
         ).update_attrs(history="")
         spool = dc.spool((base, after))
         snapped = spool.chunk(time=None)[0].get_coord("time")
-        # without snapping the lattices differ, so the patches stay apart
-        exact = spool.chunk(time=None, snap_coords=False)
+        # without snapping the exact labels are kept, jitter and all
+        (exact,) = spool.chunk(time=None, snap_coords=False)
         assert snapped.evenly_sampled
-        assert len(exact) == 2
-        values = np.concatenate([x.get_coord("time").values for x in exact])
+        assert exact.get_coord("time").runs_count == 2
+        values = exact.get_coord("time").values
         # no sample moved far enough to land on another grid position,
         # and none moved past the tolerance the merge was given either
         deviation = abs(snapped.values - values).max()
