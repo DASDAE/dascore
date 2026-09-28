@@ -43,7 +43,7 @@ There are two primary construction paths:
 
 [`fuse(...)`](`dascore.core.coords.BaseCoord.fuse`) and [`snap(...)`](`dascore.core.coords.BaseCoord.snap`) make different promises. `fuse` may refit runs only when no value moves more than the supplied tolerance; `snap` forces one uniform grid and has no bound on interior movement. With `tolerance=None` or `0`, `fuse` performs lossless simplification only.
 
-A patch may carry dimensional coordinates with holes in memory. Most file formats require contiguous coordinates, so [`write(...)`](`dascore.write`) rejects such patches by default. Use `patch.split_gaps()` explicitly, or `write(..., split=True)` with a multi-patch format, before persistence.
+A patch may carry dimensional coordinates with holes in memory, but a spool row never does: a spool holds such a patch as its contiguous pieces (what `patch.split_gaps()` returns), and [`write(...)`](`dascore.write`) writes those pieces, so a format holding one patch per file refuses it.
 
 ## String coordinates
 
@@ -79,7 +79,7 @@ This separation keeps directory indexing compact while allowing targeted callers
 
 ## DASDAE coordinate storage and scanning
 
-DASDAE stores coordinates separately from patch data. Format version 2, the default when writing, stores each coordinate as it is described: one grid as its start, extent, and step (the exact grid where the coordinate holds one, so a fractional sampling rate rebuilds the same labels) at the cost of a few numbers however long it is; a coordinate with holes as a group of its runs; and only irregular coordinates as arrays of values. The node tags `"CoordRange"` and `"CoordSegmented"` are the format's own names for those two shapes, kept so files written before the coordinate classes were unified still read. Gapped patches are therefore written whole rather than split. Version 1 files, and `file_version="1"` writes, store every coordinate as an array beside a whole-tick step, so version 1 refuses a fractional step rather than rounding it. Releases before version 2 existed cannot read a version 2 file; write with `file_version="1"` for them.
+DASDAE stores coordinates separately from patch data. Format version 2, the default when writing, stores each coordinate as it is described: one grid as its start, extent, and step (the exact grid where the coordinate holds one, so a fractional sampling rate rebuilds the same labels) at the cost of a few numbers however long it is, and any other coordinate as an array of values, read back without snapping when it holds several irregular runs. The node tag `"CoordRange"` is the format's own name for a grid. A patch with holes is written as its contiguous pieces. Version 1 files, and `file_version="1"` writes, store every coordinate as an array beside a whole-tick step, so version 1 refuses a fractional step rather than rounding it. Releases before version 2 existed cannot read a version 2 file; write with `file_version="1"` for them.
 
 Full reads rebuild those descriptions into a `CoordManager`. Scans also construct a real `CoordManager`, but avoid loading the data array itself; for stored arrays, `snap=False` uses the exact construction path, while explicit stored start/step metadata remains a range fast path.
 

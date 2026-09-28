@@ -11,10 +11,15 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.core.coords import concat_coords, get_coord
 from dascore.examples import random_spool
 from dascore.exceptions import ChunkError, ParameterError, UnitError
 
 ONE_SECOND = np.timedelta64(1, "s")
+ONE_NS = np.timedelta64(1, "ns")
+ONE_MS = 1_000_000 * ONE_NS
+T0 = np.datetime64("2020-01-01T00:00:00.000000000")
+DIMS = ("distance", "time")
 
 
 @pytest.fixture(scope="module")
@@ -164,6 +169,12 @@ class TestGetGaps:
             out = getattr(spool, method)()
             assert not [x for x in out.columns if str(x).startswith("_")]
 
+    def test_irregular_numbers_report_none(self):
+        """Numeric labels with no step state none, and report no gap."""
+        time = np.array([0.0, 1.0, 2.5, 7.0, 8.0])
+        patch = dc.Patch(data=np.zeros(5), coords={"time": time}, dims=("time",))
+        assert dc.spool([patch]).get_gaps().empty
+
     def test_unknown_dim_raises(self, gappy_spool):
         """An unknown dimension names the ones which exist."""
         with pytest.raises(ParameterError, match="Cannot report on"):
@@ -282,3 +293,142 @@ class TestGetCoverage:
         populated = random_spool().get_coverage()
         measured = ["time_min", "time_max", "span", "gap_total", "covered", "coverage"]
         assert out[measured].dtypes.to_dict() == populated[measured].dtypes.to_dict()
+
+
+def _time_runs_patch(count, samples=10):
+    """A patch whose time coordinate holds ``count`` runs a minute apart."""
+    runs = [
+        get_coord(start=T0 + 60 * i * ONE_SECOND, step=ONE_MS, shape=(samples,))
+        for i in range(count)
+    ]
+    data = np.arange(3.0 * count * samples).reshape(3, -1)
+    coords = {"distance": np.arange(3), "time": concat_coords(*runs)}
+    return dc.Patch(data=data, coords=coords, dims=DIMS)
+
+
+class TestGappedPatchRows:
+    """A spool row never holds a hole: a gapped patch enters as its pieces."""
+
+    @pytest.mark.parametrize("count", [2, 256, 257, 1440])
+    def test_one_row_per_run(self, count):
+        """Every run is a row, so gaps, coverage and chunk see every hole."""
+        spool = dc.spool([_time_runs_patch(count)])
+        assert len(spool) == count
+        assert len(spool.get_gaps()) == count - 1
+        assert spool.get_coverage()["coverage"].iloc[0] < 1
+        assert len(spool.chunk(time=None)) == count
+
+    def test_pieces_are_views(self):
+        """The pieces share the gapped patch's data; a plain patch is itself."""
+        patch = _time_runs_patch(3)
+        pieces = list(dc.spool([patch]).sort("time"))
+        assert len(pieces) == 3
+        assert all(np.shares_memory(x.data, patch.data) for x in pieces)
+        data = np.concatenate([x.data for x in pieces], axis=1)
+        assert np.array_equal(data, patch.data)
+        plain = _time_runs_patch(1)
+        assert dc.spool([plain])[0] is plain
+
+    def test_two_gapped_dims_give_the_product(self):
+        """Holes in two dimensions give one piece per pair of runs."""
+        distance = concat_coords(
+            get_coord(start=0, step=1, shape=(2,)),
+            get_coord(start=10, step=1, shape=(1,)),
+        )
+        patch = _time_runs_patch(3).update_coords(distance=distance)
+        assert len(dc.spool([patch])) == 6
+        assert len(patch.split_gaps()) == 6
+
+    def test_identity_is_stable(self):
+        """A gapped patch, or one of its pieces, given again is the same entry."""
+        patch = _time_runs_patch(3)
+        assert len(dc.spool([patch, patch])) == 3
+        spool = dc.spool([patch])
+        spool._catalog.add(patch)
+        spool._catalog.add(spool[0])
+        assert len(spool) == len(spool + dc.spool(list(spool))) == 3
+
+
+class TestChunkKeepsHoles:
+    """Without fill_value, chunk never yields an output holding a hole."""
+
+    def test_only_fill_value_bridges(self):
+        """A wide tolerance leaves a hole (#1217); fill_value closes it (#1216)."""
+        spool = dc.spool([_time_runs_patch(2, samples=100)])
+        kept = spool.chunk(time=None, tolerance=100_000)
+        assert len(kept) == 2
+        assert len(kept.get_gaps()) == len(dc.spool(list(kept)).get_gaps()) == 1
+        filled = spool.chunk(time=None, tolerance=100_000, fill_value=np.nan)
+        assert len(filled) == 1 and filled.get_gaps().empty
+        assert filled[0].get_coord("time").evenly_sampled
+
+    @pytest.mark.parametrize(
+        ("runs", "order"),
+        [
+            ([(5.0, -1.0, 3), (0.0, -1.0, 2)], -1),
+            ([(T0, ONE_MS, 3), (T0 + 6_370_000 * ONE_NS, ONE_MS, 3)], 1),
+        ],
+    )
+    def test_pieces_untouched(self, runs, order):
+        """Descending runs, or runs off each other's lattice, come back as given."""
+        runs = [get_coord(start=x, step=y, shape=(n,)) for x, y, n in runs]
+        time = concat_coords(*runs)
+        data = np.arange(float(len(time)))[None]
+        patch = dc.Patch(data=data, coords={"distance": [0], "time": time}, dims=DIMS)
+        out = list(dc.spool([patch]).chunk(time=None, tolerance=10))
+        assert len(out) == 2
+        assert out == list(dc.spool([patch]))[::order]
+
+    def test_overlapping_or_stepless_members_join(self):
+        """Overlapping members, or labels with no step, name no lattice to break."""
+        coords = {"distance": [0], "time": [0.0, 1, 2]}
+        first = dc.Patch(data=np.zeros((1, 3)), coords=coords, dims=DIMS)
+        overlapping = first.update_coords(time=np.array([1.0, 2, 3]))
+        times = (T0 + np.array([0, 3, 4]) * ONE_MS, T0 + np.array([5, 9, 10]) * ONE_MS)
+        uneven = [first.update_coords(time=x) for x in times]
+        for patches in ([first, overlapping], uneven):
+            assert len(dc.spool(patches).chunk(time=None, snap_coords=False)) == 1
+
+    @pytest.mark.parametrize(
+        ("step", "cuts", "count"),
+        [
+            ((1, 1024), (30, 30), 1),
+            ((1, 1024), (30, 31), 2),
+        ],
+    )
+    def test_exact_grids_join_on_their_lattice(self, step, cuts, count):
+        """Without snapping, exact grids join only where no position is missing."""
+        t0 = np.datetime64("2020-01-01T00:00:00")
+        full = get_coord(start=t0, step=step, shape=(60,))
+        pieces = full[: cuts[0]], full[cuts[1] :]
+        patches = [
+            dc.Patch(data=np.zeros(len(x)), coords={"time": x}, dims=("time",))
+            for x in pieces
+        ]
+        chunked = dc.spool(patches).chunk(time=None, snap_coords=False)
+        assert len(chunked) == count
+
+    @pytest.mark.parametrize("snap", [True, False])
+    @pytest.mark.parametrize("shift", [0.0, 0.3, 0.6])
+    @pytest.mark.parametrize("seed", range(8))
+    def test_rows_are_what_chunk_yields(self, seed, shift, snap):
+        """Snapped outputs are one run per dim; the plan counts what it yields."""
+        rng = np.random.default_rng(seed)
+        count = int(rng.integers(1, 5))
+        gaps = rng.integers(1, 8, size=count)
+        starts = np.cumsum(np.r_[0, 20 + gaps[:-1]])
+        pieces = [get_coord(start=float(x), step=1.0, shape=(20,)) for x in starts]
+        coords = {"distance": [0], "time": concat_coords(*pieces)}
+        data = rng.random((1, 20 * count))
+        patch = dc.Patch(data=data, coords=coords, dims=DIMS)
+        # a member shifted a fraction of a step lies on another lattice
+        later = patch.update_coords(time_min=float(starts[-1]) + 20 + shift)
+        length = [None, 5.0, 13.0][int(rng.integers(3))]
+        tolerance = float(rng.choice([1.5, 10.0, 100.0]))
+        chunked = dc.spool([patch, later]).chunk(
+            time=length, tolerance=tolerance, snap_coords=snap
+        )
+        yielded = list(chunked)
+        if snap:
+            assert all(x.get_coord(d).runs_count == 1 for x in yielded for d in x.dims)
+        assert len(chunked) == len(yielded) == len(dc.spool(yielded))

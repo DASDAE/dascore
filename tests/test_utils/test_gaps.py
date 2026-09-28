@@ -124,6 +124,10 @@ class TestIsMonotonicAndFinite:
 class TestGapTolerance:
     """One tolerance object, two spellings, one predicate."""
 
+    def test_str(self):
+        """Each spelling reads as what it counts."""
+        assert str(GapTolerance.samples(2)) == "2 samples"
+
     def test_from_user_forms(self):
         """Numbers count steps; quantities and timedeltas are absolute."""
         assert GapTolerance.from_user(2) == GapTolerance.samples(2.0)

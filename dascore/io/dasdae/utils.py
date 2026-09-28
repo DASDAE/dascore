@@ -7,11 +7,8 @@ coord serialization and string-serialization design notes used here.
 from __future__ import annotations
 
 import json
-from contextlib import suppress
-from functools import partial
 
 import numpy as np
-from pydantic import ValidationError
 
 import dascore as dc
 from dascore.core.attrs import PatchAttrs
@@ -27,7 +24,6 @@ from dascore.core.coords import (
 from dascore.core.source import ArraySource
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import (
-    CoordError,
     InvalidFiberFileError,
     PatchAttributeError,
 )
@@ -180,9 +176,10 @@ def _extended_float(coord) -> bool:
 # Version 2 nodes state the coordinate class they hold, as every DASCore
 # model states its class in a document (see dascore.models.registry).
 _OBJECT_TYPE = "object_type"
-# The shapes a version 2 node can hold, as the format has always named them.
+# The format's own tag for a version 2 node holding a grid description.
 _RANGE = "CoordRange"
-_SEGMENTED = "CoordSegmented"
+# An array node's run lengths, whose labels are read as written.
+_EXACT = "exact"
 
 
 def _save_coord(coord, name, group, compact: bool, options=None):
@@ -190,21 +187,14 @@ def _save_coord(coord, name, group, compact: bool, options=None):
     Save one coordinate node.
 
     Version 2 (``compact``) names each node's shape: a grid is written as
-    its description and a coordinate with holes as a group of its runs, so
-    a long acquisition costs a few numbers and no label is re-inferred on
-    read; anything else, and version 1 throughout, writes its values.
+    its description, so a long acquisition costs a few numbers; anything
+    else, and version 1 throughout, writes its values.
 
-    The names are the format's own -- they are what files written before
-    the coordinate classes were unified state -- not a class's tag.
+    `CoordRange` is the format's own name, not a class's tag.
     """
     grid = coord.runs[0] if getattr(coord, "evenly_sampled", False) else None
     object_type = get_model_tag(type(coord))
-    if compact and getattr(coord, "runs_count", 1) > 1:
-        object_type = _SEGMENTED
-        node = group.create_group(name)
-        for i, segment in enumerate(coord.segments):
-            _save_coord(segment, str(i), node, compact, options)
-    elif compact and grid is not None and not _extended_float(coord):
+    if compact and grid is not None and not _extended_float(coord):
         object_type = _RANGE
         node = group.create_dataset(name, shape=(0,), dtype="int64")
         origin, num, den, phase = grid.canonical()[:4]
@@ -246,6 +236,9 @@ def _save_coord(coord, name, group, compact: bool, options=None):
             is_td = np.issubdtype(np.asarray(step).dtype, np.timedelta64)
             node.attrs["step"] = to_int(step) if is_td else step
             node.attrs["step_is_timedelta64"] = is_td
+        if compact and getattr(coord, "runs_count", 1) > 1:
+            # irregular runs are read back as the runs they are, unsnapped
+            node.attrs[_EXACT] = [len(x) for x in coord.runs]
     if compact:
         node.attrs[_OBJECT_TYPE] = object_type
     if coord.units is not None:
@@ -388,47 +381,11 @@ def _node_step(attrs):
     return step
 
 
-def _read_segment(node):
-    """Rebuild one segment of a version-2 segmented coordinate."""
-    units = node.attrs.get("units", None)
-    if "start" in node.attrs:
-        return _read_range(node, units)
-    # the segments were settled exactly when written, so an array
-    # segment is read as the values it holds, never snapped to a range
-    values = _read_array(node)
-    # the runs were settled when written, so a stored one is read back as
-    # the labels it holds rather than split at its own spacings again
-    return NumericCoord.from_labels(values, units=units, step=_node_step(node.attrs))
-
-
-def _shared_step(segments):
-    """The step the stored label segments declare, or None."""
-    # grids carry their step exactly, so the coordinate infers it from them;
-    # their rounded `.step` would misstate a fractional grid
-    steps = {x.step for x in segments if not x.evenly_sampled}
-    return steps.pop() if len(steps) == 1 else None
-
-
 def _read_coord(node, name, attrs2, snap):
     """Rebuild one coordinate from its node."""
     node_attrs = node.attrs
     units = node_attrs.get("units", None) or attrs2.get(f"{name}_units", None)
     object_type = unbyte(node_attrs.get(_OBJECT_TYPE, ""))
-    if object_type == _SEGMENTED:
-        segments = [_read_segment(node[str(i)]) for i in range(len(node))]
-        # The runs are rebuilt in the order they were written, which is the
-        # order the data sits in; concat_coords would sort them by value.
-        build = partial(
-            NumericCoord,
-            runs=tuple(run for x in segments for run in x.runs),
-            sources={k: v for x in segments for k, v in x.sources.items()},
-            dtype=np.result_type(*[x.dtype for x in segments]),
-            units=units or segments[0].units,
-        )
-        # older files may pair a declared step with grids a stride widened
-        with suppress(CoordError, ValidationError):
-            return build(step=_shared_step(segments))
-        return build(step=None)
     if object_type == _RANGE and "start" in node_attrs:
         return _read_range(node, units)
     # any other class, a range too wide to describe, and every version 1
@@ -438,6 +395,9 @@ def _read_coord(node, name, attrs2, snap):
         # a version 2 array holds exactly its values; a step on it is the
         # grid it declares, never a range to rebuild
         array = _read_array(node)
+        if (lengths := node_attrs.get(_EXACT)) is not None:
+            runs = np.split(array, np.cumsum(lengths)[:-1])
+            return NumericCoord(runs=tuple(runs), units=units, step=node_step)
         if node_step is not None:
             return get_coord(data=array, units=units, step=node_step)
         if snap or np.ndim(array) != 1:
