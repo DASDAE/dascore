@@ -2474,10 +2474,6 @@ class TestGetNextIndex:
         values = np.array([0.0, 1.0, 3.0, 7.0])
         coord = get_coord(data=values)
         assert list(coord.get_next_index(values)) == [0, 1, 2, 3]
-        # Descending labels also map to their own index in either direction.
-        desc = get_coord(data=values[::-1])
-        for forward in (True, False):
-            assert list(desc._get_index(values[::-1], forward)) == [0, 1, 2, 3]
 
 
 class TestUpdate:

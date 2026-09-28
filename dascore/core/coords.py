@@ -1451,11 +1451,8 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         # samples should already have the answer, just return
         if samples:
             return array if input_array_like else array[0]
-        # otherwise get forward and backward inds
+        # otherwise the forward index
         forward_index = self._get_index(array, forward=True)
-        back_index = self._get_index(array, forward=False)
-        bad_for_index = pd.isnull(forward_index) | (forward_index == -9999)
-        forward_index[bad_for_index] = back_index[bad_for_index]
         return forward_index if input_array_like else forward_index[0]
 
     def approx_equal(self: BaseCoord, other: BaseCoord) -> bool:
@@ -2868,8 +2865,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         left = np.searchsorted(values, new_value, side="left")
         eq = (left < len(self)) & (values.take(left, mode="clip") == new_value)
         out = right if forward else left
-        # where equal it should also be left values, so this behaves the
-        # same way the grid path does.
+        # an exact label is its own index, as on the grid path
         out[eq] = left[eq]
         return out if is_array(value) else int(out[0])
 
