@@ -13,7 +13,7 @@ from dascore.utils.hdf5 import (
     H5Reader,
     HDFPatchIndexManager,
     NodeError,
-    PyTablesReader,
+    PyTablesFile,
     PyTablesWriter,
 )
 from dascore.utils.misc import unbyte
@@ -22,6 +22,10 @@ from dascore.utils.patch import get_patch_names
 from .utils import (
     _get_attrs,
     _get_contents_from_patch_groups,
+    _get_h5py_attrs,
+    _get_h5py_metadata,
+    _has_separate_metadata,
+    _iter_patch_groups,
     _kwargs_empty,
     _matches_attr_filters,
     _read_patch,
@@ -118,24 +122,25 @@ class DASDAEV1(FiberIO):
         version = unbyte(attrs.get("__DASDAE_version__", ""))
         return file_format, version
 
-    def read(self, resource: PyTablesReader, **kwargs) -> SpoolType:
-        """Read a dascore file."""
+    def read(self, resource: H5Reader, **kwargs) -> SpoolType:
+        """Read DASDAE files with legacy or separate coordinate metadata."""
         patches = []
-        try:
-            waveform_group = resource.root["/waveforms"]
-        except (KeyError, IndexError):
-            return dc.spool([])
-        for patch_group in waveform_group:
-            attrs = _get_attrs(patch_group)
+        for patch_group, separate in _iter_patch_groups(resource):
+            attrs = (
+                _get_h5py_attrs(patch_group) if separate else _get_attrs(patch_group)
+            )
             if not _matches_attr_filters(attrs, kwargs):
                 continue
-            patch = _read_patch(patch_group, attrs=attrs, **kwargs)
+            coords = None
+            if separate:
+                attrs, coords = _get_h5py_metadata(patch_group, attrs=attrs)
+            patch = _read_patch(patch_group, attrs=attrs, coords=coords, **kwargs)
             if not patch.data.size and not _kwargs_empty(kwargs):
                 continue
             patches.append(patch)
         return dc.spool(patches)
 
-    def scan(self, resource: PyTablesReader, **kwargs):
+    def scan(self, resource: H5Reader, **kwargs):
         """
         Get the patch info from the file.
 
@@ -148,15 +153,21 @@ class DASDAEV1(FiberIO):
         resource
             A path to the file.
         """
+        if isinstance(resource, PyTablesFile):
+            version = unbyte(resource.root._v_attrs.__DASDAE_version__)
+            return _get_contents_from_patch_groups(resource, version, self.name)
         indexer = HDFPatchIndexManager(resource.filename)
-        if indexer.has_index:
+        # Legacy indexes omit coordinate metadata from the separate layout.
+        if "metadata" in resource and not _has_separate_metadata(resource):
             # We need to change the path back to the file rather than internal
             # HDF5 path so it works with FileSpool and such.
-            records = indexer.get_index().assign(path=str(resource)).to_dict("records")
+            records = (
+                indexer.get_index().assign(path=resource.filename).to_dict("records")
+            )
             return [dc.PatchAttrs(**x) for x in records]
         else:
             file_format = self.name
-            version = resource.root._v_attrs.__DASDAE_version__
+            version = unbyte(resource.attrs["__DASDAE_version__"])
             return _get_contents_from_patch_groups(resource, version, file_format)
 
     def index(self, path):

@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import json
+from contextlib import ExitStack
+
 import numpy as np
 import pandas as pd
 from tables import NodeError
@@ -10,7 +13,8 @@ import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.utils.misc import suppress_warnings
+from dascore.utils.hdf5 import PyTablesFile, open_hdf5_file
+from dascore.utils.misc import suppress_warnings, unbyte
 from dascore.utils.pd import filter_df
 from dascore.utils.time import to_int
 
@@ -98,6 +102,81 @@ def _save_patch(patch, wave_group, h5, name):
 # --- Functions for reading
 
 
+def _has_separate_metadata(h5):
+    """Whether any patch uses metadata not fully represented by a legacy index."""
+    marker = "__attrs_coords_separate__"
+    return h5.attrs.get(marker, False) or any(
+        group.attrs.get(marker, False) for group in h5.get("waveforms", {}).values()
+    )
+
+
+def _iter_patch_groups(h5):
+    """Use h5py for separate metadata, retaining PyTables' legacy decoding."""
+    if isinstance(h5, PyTablesFile):
+        # Caller-owned handles may be writable or contain unflushed changes.
+        if "/waveforms" in h5:
+            for group in h5.iter_nodes("/waveforms"):
+                yield group, False
+        return
+    marker = "__attrs_coords_separate__"
+    with ExitStack() as stack:
+        legacy = None
+        for group in h5.get("waveforms", {}).values():
+            separate = h5.attrs.get(marker, False) or group.attrs.get(marker, False)
+            # The release writer can append a PyTables group to a marked file.
+            separate = separate and unbyte(group.attrs.get("CLASS", "")) != "GROUP"
+            if separate:
+                yield group, True
+            else:
+                if legacy is None:
+                    legacy = stack.enter_context(open_hdf5_file(h5.filename))
+                yield legacy.get_node(group.name), False
+
+
+def _get_h5py_attrs(group):
+    """Decode patch attributes without loading coordinate or waveform arrays."""
+    attrs = {}
+    for key, value in group.attrs.items():
+        if not key.startswith("_attrs_"):
+            continue
+        name = key.removeprefix("_attrs_")
+        kind = unbyte(group.attrs.get(f"_attr_type_{name}", ""))
+        if kind == "none":
+            value = None
+        elif kind in {"datetime64[ns]", "timedelta64[ns]"}:
+            value = np.asarray(value, dtype="int64").view(kind)[()]
+        elif kind == "history_json":
+            value = tuple(json.loads(unbyte(value)))
+        attrs[name] = value
+    attrs["dims"] = unbyte(group.attrs["_dims"])
+    return PatchAttrs(**attrs)
+
+
+def _get_h5py_metadata(group, attrs=None):
+    """Rebuild release-style attrs from separately stored coordinate metadata."""
+    attrs = _get_h5py_attrs(group) if attrs is None else attrs
+    coord_map = {}
+    for name, node in group.items():
+        if not name.startswith("_coord_"):
+            continue
+        name = name.removeprefix("_coord_")
+        data = node[:]
+        for flag, dtype in (
+            ("is_datetime64", "datetime64[ns]"),
+            ("is_timedelta64", "timedelta64[ns]"),
+        ):
+            if node.attrs.get(flag, False):
+                data = data.view(dtype)
+        step = node.attrs.get("step")
+        if node.attrs.get("step_is_timedelta64", False):
+            step = np.asarray(step, dtype="int64").view("timedelta64[ns]")[()]
+        coord = get_coord(data=data, units=node.attrs.get("units"), step=step)
+        cdims = unbyte(group.attrs[f"_cdims_{name}"])
+        coord_map[name] = (tuple(cdims.split(",")) if cdims else (), coord)
+    coords = get_coord_manager(coord_map, dims=attrs.dim_tuple)
+    return attrs._conform_to(coords), coords
+
+
 def _get_attrs(patch_group):
     """Get the saved attributes form the group attrs."""
     out = {}
@@ -177,11 +256,13 @@ def _matches_attr_filters(attrs, kwargs):
     return bool(filter_df(attr_df, ignore_bad_kwargs=True, **query)[0])
 
 
-def _read_patch(patch_group, attrs=None, **kwargs):
+def _read_patch(patch_group, attrs=None, coords=None, **kwargs):
     """Read a patch group, return Patch."""
     attrs = _get_attrs(patch_group) if attrs is None else attrs
-    dims = _get_dims(patch_group)
-    coords = _get_coords(patch_group, dims, attrs)
+    if coords is None:
+        dims = _get_dims(patch_group)
+        coords = _get_coords(patch_group, dims, attrs)
+    dims = coords.dims
     # Note, previously this was wrapped with try, except (Index, KeyError)
     # and the data = np.array(None) in except block. Not sure, why, removed
     # try except.
@@ -201,8 +282,12 @@ def _read_patch(patch_group, attrs=None, **kwargs):
 def _get_contents_from_patch_groups(h5, file_version, file_format="DASDAE"):
     """Get the contents from each patch group."""
     out = []
-    for group in h5.iter_nodes("/waveforms"):
-        contents = _get_patch_content_from_group(group)
+    for group, separate in _iter_patch_groups(h5):
+        if separate:
+            attrs, _ = _get_h5py_metadata(group)
+            contents = attrs.model_dump()
+        else:
+            contents = _get_patch_content_from_group(group)
         # populate file info
         contents["file_version"] = file_version
         contents["file_format"] = file_format
