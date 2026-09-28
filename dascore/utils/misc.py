@@ -228,7 +228,8 @@ def _iter_filesystem(
     Iterate contents of a filesystem like thing.
 
     Options allow for filtering and terminating early.
-    Inaccessible entries are skipped with a warning; an inaccessible root raises.
+    Inaccessible local entries are skipped with a warning; an inaccessible root
+    raises. Remote backends may propagate PermissionError.
 
     Parameters
     ----------
