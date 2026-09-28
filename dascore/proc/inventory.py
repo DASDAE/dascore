@@ -24,7 +24,6 @@ from dascore.core._spool_inventory import (
     attr_owner,
     get_coord_values,
     get_interrogator,
-    is_unset,
     map_axis_coords,
     readable_on,
     to_axis_units,
@@ -45,6 +44,7 @@ from dascore.exceptions import (
     UnresolvedPatchError,
 )
 from dascore.models import values_equal
+from dascore.utils.attrs import _is_missing
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate, validate_acquisition_key, warn_or_raise
 from dascore.utils.patch import patch_function
@@ -141,7 +141,7 @@ def _get_system_attrs(inventory, context) -> dict:
     for name in INVENTORY_ATTRS:
         owner, field = attr_owner(context, interrogator, name)
         value = getattr(owner, field, None)
-        if is_unset(value):
+        if _is_missing(value):
             continue
         out[name] = value
     return out
@@ -157,7 +157,7 @@ def _get_attr_values(inventory, context, attrs, on_missing) -> dict:
     available = dict(system)
     for name in DATA_STATE_ATTRS:
         value = getattr(context.acquisition, name)
-        if not is_unset(value):
+        if not _is_missing(value):
             available[name] = value
     out = {}
     for name in iterate(attrs):
@@ -211,7 +211,7 @@ def _apply_conflict(patch, new_attrs, conflict) -> tuple[dict, list]:
     updates, drops = {}, []
     for name, value in new_attrs.items():
         old = current.get(name, None)
-        if is_unset(old) or values_equal(old, value):
+        if _is_missing(old) or values_equal(old, value):
             updates[name] = value
         elif conflict == "raise":
             msg = (

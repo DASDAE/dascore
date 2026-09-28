@@ -37,11 +37,14 @@ from dascore.exceptions import (
     ParameterError,
     UnitError,
 )
-from dascore.io.index.ingest import _is_missing
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
 from dascore.units import get_quantity
 from dascore.utils.array_api import to_numpy
-from dascore.utils.attrs import combine_patch_attrs, warn_if_histories_differ
+from dascore.utils.attrs import (
+    _is_missing,
+    combine_patch_attrs,
+    warn_if_histories_differ,
+)
 from dascore.utils.chunk_plan import _SOURCE_COLUMNS
 from dascore.utils.identity import (
     ids_enabled,

@@ -19,6 +19,7 @@ from dascore.constants import path_types
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coords import CoordSummary
 from dascore.models import DascoreBaseModel
+from dascore.utils.misc import iterate
 from dascore.utils.paths import coerce_to_upath, is_pathlike
 
 
@@ -39,6 +40,11 @@ def normalize_source_patch_key(value: Any) -> str:
     if hasattr(value, "item"):  # numpy scalar -> python scalar
         value = value.item()
     return str(value)
+
+
+def normalize_source_patch_keys(value: Any) -> set[str]:
+    """Return one or more source patch keys as a set, dropping missing ones."""
+    return {key for x in iterate(value) if (key := normalize_source_patch_key(x))}
 
 
 def _to_coord_summary(value: Any, dims: tuple[str, ...] = ()) -> CoordSummary:

@@ -48,11 +48,11 @@ from dascore.io.index.ingest import (
     PatchRecord,
     SourceRecord,
     _coord_record,
-    _is_missing,
     typed_value,
 )
 from dascore.io.index.schema import SOURCE_STAT_COLUMNS
 from dascore.units import get_quantity
+from dascore.utils.attrs import _is_missing
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     _concatenated_steps,

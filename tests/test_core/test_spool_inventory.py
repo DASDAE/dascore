@@ -35,7 +35,6 @@ from dascore.constants import (
 from dascore.core._spool_inventory import (
     InventoryRef,
     _frame_units,
-    is_unset,
     resolve_row_epochs,
 )
 from dascore.core.inventory import (
@@ -64,6 +63,7 @@ from dascore.exceptions import (
     UnresolvedPatchError,
 )
 from dascore.units import cm, get_quantity, m
+from dascore.utils.attrs import _is_missing
 
 
 @pytest.fixture(scope="module")
@@ -1289,7 +1289,7 @@ class TestSelectSeesPendingEnrichment:
         )
         assert len(nulled.select(pulse_rate=1.25)) == 0
         assert len(nulled.unselect(pulse_rate=1.25)) == 1
-        assert is_unset(dict(nulled[0].attrs).get("pulse_rate"))
+        assert _is_missing(dict(nulled[0].attrs).get("pulse_rate"))
         # A blanket request never blanks anything.
         blanket = spool.enrich(coords=False, on_missing="null", conflict=conflict)
         assert len(blanket.select(pulse_rate=1.25)) == 1
