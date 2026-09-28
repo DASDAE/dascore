@@ -37,11 +37,14 @@ from dascore.exceptions import (
     ParameterError,
     UnitError,
 )
-from dascore.io.index.ingest import _is_missing
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
 from dascore.units import get_quantity
 from dascore.utils.array_api import to_numpy
-from dascore.utils.attrs import combine_patch_attrs, warn_if_histories_differ
+from dascore.utils.attrs import (
+    _is_missing,
+    combine_patch_attrs,
+    warn_if_histories_differ,
+)
 from dascore.utils.chunk_plan import _SOURCE_COLUMNS
 from dascore.utils.identity import (
     ids_enabled,
@@ -153,23 +156,30 @@ def _drop_associated_ranges(row, kwargs, plan_dim) -> dict:
     return {k: v for k, v in kwargs.items() if k not in drop}
 
 
-def _plan_trim_kwargs(patch, kwargs, plan_dim) -> dict:
+def _plan_trim_kwargs(patch, kwargs, plan_dim, trim_dims=()) -> dict:
     """
-    Keep only the trim the plan actually narrows.
+    Keep only the trims the plan actually narrows.
 
-    A member row is its source row with the *planned* dimension's
-    envelope replaced by the member's trim range; every other range
+    A member row is its source row with the *planned* dimensions'
+    envelopes replaced by the member's trim ranges; every other range
     column still describes the whole source. Selecting on those would
     re-select a coordinate to its own extent, which is a no-op for a
     sorted numeric range but not for a string coordinate (a range of
     labels), one holding NaN (missing values fall outside every range),
-    or one which cannot be range-selected at all.
+    or one which cannot be range-selected at all. A trim spanning the patch
+    (or on a dim it lacks) is dropped too, so the patch keeps its id; only
+    an open select window admits a patch lacking the plan's own dim.
     """
-    if plan_dim not in kwargs:  # an unmodified member states no range
-        return {}
     coord_map = patch.coords.coord_map
-    assert plan_dim in coord_map, "the plan's dimension is on every member"
-    return {plan_dim: kwargs[plan_dim]}
+    # an unmodified member states no range
+    has_dim = plan_dim in kwargs and plan_dim in coord_map
+    out = {plan_dim: kwargs[plan_dim]} if has_dim else {}
+    for dim in trim_dims:
+        (low, high), coord = kwargs.get(dim, (None, None)), coord_map.get(dim)
+        if coord is not None and low is not None:
+            if low > coord.min() or high < coord.max():
+                out[dim] = kwargs[dim]
+    return out
 
 
 def _as_plan_units(patch, kwargs, row) -> dict:
@@ -597,9 +607,10 @@ class PatchAssembler:
 
     ``load_patch`` resolves one member row to its source patch (residual
     selections included); ``merge_kwargs`` carries the merge behavior;
-    ``plan_dim`` names the one dimension whose range the plan narrowed,
-    and so the only one a member needs trimming on. The plan resolver
-    hands this the joined member frame for one output at a time.
+    ``plan_dim`` names the dimension whose range the plan narrowed, and
+    ``trim_dims`` any others, which are the only ones a member needs
+    trimming on. The plan resolver hands this the joined member frame for
+    one output at a time.
     """
 
     load_patch: Callable[[Mapping], dc.Patch]
@@ -617,6 +628,7 @@ class PatchAssembler:
     # Takes the joined member frame; the caller keeps what was recorded.
     # Only a source measured now and found unchanged keeps the recipe.
     sources_unchanged: Callable[[pd.DataFrame], bool] | None = None
+    trim_dims: tuple[str, ...] = ()
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
@@ -659,9 +671,10 @@ class PatchAssembler:
         # skip selection. This is important for missing coordinates
         # (NaN values) to not get trimmed out.
         source_kwargs = kwargs if kwargs.get("_modified") else {}
-        # attr-style entries filter rows above, and the plan only ever
-        # narrows its own dimension; everything else loads untouched.
-        if select_kwargs := _plan_trim_kwargs(patch, source_kwargs, self.plan_dim):
+        # attr-style entries filter rows above; only the plan's dimension
+        # and its trim dims are narrowed, everything else loads untouched.
+        trims = (self.plan_dim, self.trim_dims)
+        if select_kwargs := _plan_trim_kwargs(patch, source_kwargs, *trims):
             patch = patch.select(**_as_plan_units(patch, select_kwargs, patch_kwargs))
         return patch
 
@@ -911,8 +924,8 @@ class PatchAssembler:
                     return None
                 coord, span, length = placed
             else:
-                # The plan narrows its own dimension and no other, so
-                # every envelope here is its source's own.
+                # Only the plan's dimension is trimmed here (a trim-dim plan
+                # withholds the source range, so never takes this path).
                 coord = coord_at_stored_unit(
                     coord_from_row(row, dim, units=units), row, dim
                 )

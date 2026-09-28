@@ -883,9 +883,10 @@ class TestDataless:
             Patch(data=random_patch.data, coords=random_patch.coords, dtype="int8")
 
     def test_from_a_data_array(self, random_patch):
-        """A DataArray still unpacks into data, coords and attrs."""
+        """A DataArray converts as xarray_to_patch does."""
         pytest.importorskip("xarray")
         array = random_patch.io.to_xarray()
+        assert Patch(array).equals(random_patch)
         assert Patch(array, dims=array.dims).equals(random_patch)
 
     def test_a_patch_cannot_be_built_from_metadata(self, described):

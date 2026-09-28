@@ -48,6 +48,7 @@ from dascore.exceptions import (
 )
 from dascore.models import values_equal
 from dascore.units import convert_units, get_quantity_str
+from dascore.utils.attrs import _is_missing
 from dascore.utils.intervals import interval_masks, value_kind
 from dascore.utils.misc import glob_to_regex, iterate, validate_acquisition_key
 from dascore.utils.time import to_datetime64
@@ -616,18 +617,6 @@ def attr_owner(context, interrogator, name):
     return owner, field
 
 
-def is_unset(value) -> bool:
-    """
-    Return True when an attr holds no information.
-
-    NaN is how readers spell an unknown number, so a NaN placeholder is
-    filled rather than treated as a value which disagrees.
-    """
-    if value is None or (isinstance(value, str) and not value):
-        return True
-    return isinstance(value, float | np.floating) and bool(np.isnan(value))
-
-
 def _as_patch_value(value):
     """
     Return an inventory value in the spelling a patch attr would hold.
@@ -780,13 +769,13 @@ def _get_track_coord(path, track, field, distances):
     if not items:
         return None
     values = [getattr(x, field, None) for x in items]
-    if all(is_unset(x) for x in values):
+    if all(_is_missing(x) for x in values):
         # The field is misspelled, or no interval states it, or every
         # interval leaves it at its empty default. All three mean the
         # inventory defines nothing here, and on_missing then rules --
         # rather than handing back a coordinate that is blank throughout.
         return None
-    kinds = {value_kind(x) for x in values if not is_unset(x)}
+    kinds = {value_kind(x) for x in values if not _is_missing(x)}
     kind = kinds.pop() if len(kinds) == 1 else "string"
     filled = _fill_from_intervals(distances, intervals, values, kind)
     if units := _TRACK_FIELD_UNITS.get(f"{track}.{field}"):
@@ -1088,7 +1077,7 @@ def get_attr_values(inventory, contexts, name: str) -> list:
             interrogator = get_interrogator(inventory, context.acquisition)
             owner, field = attr_owner(context, interrogator, name)
             value = getattr(owner, field, None)
-            value = None if is_unset(value) else _as_patch_value(value)
+            value = None if _is_missing(value) else _as_patch_value(value)
             cache[id(context)] = value
         out.append(value)
     return out

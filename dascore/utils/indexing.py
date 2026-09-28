@@ -11,6 +11,7 @@ import numpy as np
 import pandas as pd
 
 from dascore.core.coords import BaseCoord, Grid, Labels, NumericCoord
+from dascore.exceptions import ParameterError
 from dascore.utils.time import dtype_time_like, to_timedelta64
 
 
@@ -43,6 +44,12 @@ def _unlabelled_array(value):
     """Refuse labelled/vectorized indexers instead of discarding their meaning."""
     if hasattr(value, "dims") or isinstance(value, Mapping):
         raise TypeError("Only scalar, slice, and unlabelled 1D indexers are supported.")
+    if isinstance(value, tuple):
+        msg = (
+            f"sel and isel do not accept a tuple ({value!r}); use "
+            "slice(start, stop) for a range or a list for several values."
+        )
+        raise ParameterError(msg)
     out = np.asarray(value)
     if out.ndim > 1:
         raise IndexError("Only scalar and 1D array indexers are supported.")
@@ -65,7 +72,7 @@ def positional_indexer(value: Any, size: int) -> int | slice | np.ndarray:
         return np.flatnonzero(indexer)
     # An empty Python sequence is a valid integer indexer despite numpy's
     # default float dtype. Explicitly typed float arrays remain invalid.
-    if isinstance(value, (list, tuple)) and not len(value):
+    if isinstance(value, list) and not len(value):
         indexer = indexer.astype(np.intp)
     if indexer.dtype.kind not in "iu":
         error = TypeError if indexer.ndim == 0 else IndexError

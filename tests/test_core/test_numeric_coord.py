@@ -186,9 +186,11 @@ class TestMultiRunSelect:
     def test_index_of_a_value_in_descending_labels(self):
         """Descending labels are searched by negating them, not by scanning."""
         coord = NumericCoord.from_labels(np.array([9.0, 7.5, 3.0, 1.0]))
-        # forward is the coordinate's own direction, which here descends
+        # a stored label is its own index in either direction
         assert coord._get_index(7.5, forward=False) == 1
-        assert coord._get_index(7.5, forward=True) == 2
+        assert coord._get_index(7.5, forward=True) == 1
+        # forward is the coordinate's own direction, which here descends
+        assert coord._get_index(5.0, forward=True) == 2
 
 
 class TestHoles:

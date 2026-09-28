@@ -11,6 +11,7 @@ import pytest
 import dascore as dc
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import NumericCoord, concat_coords, get_coord
+from dascore.exceptions import ParameterError
 from dascore.units import m, s
 from dascore.utils.array_api import to_numpy
 
@@ -422,6 +423,16 @@ class TestTemporalLabelErrors:
             patch.io.to_xarray().sel(time=value)
         with pytest.raises(type(expected.value)):
             patch.sel(time=value)
+
+
+class TestTupleIndexers:
+    """A tuple is a range in select, so sel and isel refuse it."""
+
+    @pytest.mark.parametrize("method", ["sel", "isel"])
+    def test_tuple_raises(self, patch, method):
+        """A tuple raises and points to a slice or a list."""
+        with pytest.raises(ParameterError, match="slice"):
+            getattr(patch, method)(distance=(0, 2))
 
 
 class TestSharedSelection:

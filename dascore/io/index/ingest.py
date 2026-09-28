@@ -37,6 +37,7 @@ from dascore.io.index.schema import (
     SourceRow,
 )
 from dascore.units import get_quantity, get_quantity_str
+from dascore.utils.attrs import _is_missing
 from dascore.utils.misc import validate_acquisition_key
 from dascore.utils.paths import parse_hive_path_attrs
 from dascore.utils.pd import iter_rows
@@ -197,16 +198,6 @@ def _to_ns(value) -> int:
     another when the same coord is read back out of an index.
     """
     return int(to_int(value))
-
-
-def _is_missing(value) -> bool:
-    """Return True for values that mean 'not present'."""
-    if value is None or (isinstance(value, str) and value == ""):
-        return True
-    try:
-        return bool(pd.isnull(value))
-    except (TypeError, ValueError):
-        return False
 
 
 def typed_value(value) -> TypedValue | None:

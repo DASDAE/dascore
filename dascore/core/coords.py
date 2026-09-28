@@ -596,9 +596,8 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             inds = self._get_value_index(coord_array, values_to_find)
             return self[inds], inds
         if self.reverse_sorted:
-            # Need to_float here because datetime can't be multiplied by -1.
             inds = self._get_value_index(
-                -to_float(coord_array), -to_float(values_to_find)
+                _negate_for_search(coord_array), _negate_for_search(values_to_find)
             )
             return self[inds], inds
         # Sort the array, then find insertion points, and map
@@ -1452,11 +1451,8 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         # samples should already have the answer, just return
         if samples:
             return array if input_array_like else array[0]
-        # otherwise get forward and backward inds
+        # otherwise the forward index
         forward_index = self._get_index(array, forward=True)
-        back_index = self._get_index(array, forward=False)
-        bad_for_index = pd.isnull(forward_index) | forward_index == -9999
-        forward_index[bad_for_index] = back_index[bad_for_index]
         return forward_index if input_array_like else forward_index[0]
 
     def approx_equal(self: BaseCoord, other: BaseCoord) -> bool:
@@ -1664,13 +1660,13 @@ def _negate_for_search(values):
 
     Exactness matters: converting ns-precision datetimes (or large ints) to
     float collapses nearby values, so time-like values negate on their int
-    ns representation and signed numerics negate natively. Only unsigned
-    ints (which would wrap) fall back to float.
+    ns representation and signed numerics negate natively. Unsigned ints
+    (which would wrap) and booleans (which cannot negate) fall back to float.
     """
     array = np.atleast_1d(np.asarray(values))
     if dtype_time_like(array.dtype):
         return -to_int(array)
-    if array.dtype.kind == "u":
+    if array.dtype.kind in "ub":
         return -to_float(array)
     return -array
 
@@ -2874,13 +2870,10 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             new_value = _negate_for_search(new_value)
         right = np.searchsorted(values, new_value, side="right")
         left = np.searchsorted(values, new_value, side="left")
-        left_ok = (left < len(self)) & (left > 0)
-        eq = left_ok & (values.take(left, mode="clip") == new_value)
+        eq = (left < len(self)) & (values.take(left, mode="clip") == new_value)
         out = right if forward else left
-        # where equal it should also be left values, so this behaves the
-        # same way the grid path does.
-        if not self.reverse_sorted:
-            out[eq] = left[eq]
+        # an exact label is its own index, as on the grid path
+        out[eq] = left[eq]
         return out if is_array(value) else int(out[0])
 
     def _get_zero_step_index(self, value, forward):

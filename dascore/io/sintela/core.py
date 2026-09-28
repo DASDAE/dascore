@@ -10,6 +10,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type, windows_type
+from dascore.core.summary import normalize_source_patch_keys
 from dascore.io import FiberIO
 from dascore.io.core import _selected_read_attrs, _stamp_source_ids
 from dascore.io.utils import selection_windows, windows_to_slices
@@ -18,7 +19,6 @@ from dascore.utils.io import (
     BinaryReader,
     IOResourceManager,
     LocalBinaryReader,
-    _normalize_source_patch_keys,
 )
 
 from .protobuf_utils import (
@@ -142,7 +142,7 @@ class SintelaProtobufV1(FiberIO):
         """
         snap_dims = kwargs.pop("snap_dims", True)
         snap = snap_dims if snap is None else snap
-        wanted = _normalize_source_patch_keys(source_patch_key)
+        wanted = normalize_source_patch_keys(source_patch_key)
         if wanted and "0" not in wanted:
             return dc.spool([])
         with IOResourceManager(resource) as manager:

@@ -166,7 +166,9 @@ def _is_missing(value) -> bool:
     policy reach that through this function; `known_only` spells the same
     predicate for frames and `get_quantity` for units.
     """
-    return value is None or (np.ndim(value) == 0 and (pd.isnull(value) or value == ""))
+    if isinstance(value, str):
+        return not value
+    return value is None or (np.ndim(value) == 0 and bool(pd.isnull(value)))
 
 
 def known_only(values: pd.DataFrame | pd.Series) -> pd.DataFrame | pd.Series:

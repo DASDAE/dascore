@@ -69,7 +69,8 @@ class Patch(NamespaceOwner, PatchMeta):
     Parameters
     ----------
     data
-        The array data representing fiber optic measurements.
+        The array data representing fiber optic measurements. A Patch or
+        xarray DataArray supplies its own coords and attrs.
     coords
         The coordinates, or dimensional labels for the data.
         A few types of input are permitted. If a mapping (eg dict) the value
@@ -124,11 +125,11 @@ class Patch(NamespaceOwner, PatchMeta):
             coords = {}
             dims = ()
             attrs = dc.PatchAttrs()
+        if isinstance(data, DataArray):
+            data = dascore.utils.io.xarray_to_patch(data)
         # Init Patch from Patch-like
         if isinstance(data, Patch):
             data, attrs, coords = data._data, data.attrs, data.coords
-        elif isinstance(data, DataArray):
-            data, attrs, coords = data.data, data.attrs, data.coords
         elif isinstance(data, PatchMeta):
             # Metadata describes data; it is not data, and no patch can be
             # made of it without an array to go with it.

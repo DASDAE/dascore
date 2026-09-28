@@ -3,17 +3,16 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
+from functools import partial
 from typing import Any
 
-import pandas as pd
-
-from dascore.exceptions import MissingPatchError
 from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.planned import derived_catalog
 from dascore.utils.chunk_plan import (
     _ensure_patch_row,
+    _trim_explicit,
     build_subdivision_plan,
-    exact_coordinate_bounds,
+    refuse_riders,
 )
 from dascore.utils.explicit_ranges import ExplicitRanges, known_coordinates
 
@@ -41,8 +40,7 @@ class ExplicitSelectCatalog:
     """Build independent source pieces when the parent relation is requested."""
 
     parent: Any
-    name: str
-    ranges: ExplicitRanges
+    ranges: dict[str, ExplicitRanges]
     operations: tuple = ()
     _cached: PatchCatalog | None = field(default=None, init=False, repr=False)
     _source_revision: int = field(default=-1, init=False, repr=False)
@@ -62,41 +60,25 @@ class ExplicitSelectCatalog:
             source = _ensure_patch_row(self.parent.to_df().reset_index(drop=True))
             assert source["_patch_row"].is_unique, "catalog rows must be unique"
             by_id = source.set_index("_patch_row", drop=False)
-            candidate_frames = [
-                self.parent.select(_coords={self.name: bounds}).to_df()
-                for bounds in self.ranges.rows
+            refuse_riders(self.ranges, source)
+            first = next(iter(self.ranges))
+            boxes = list(zip(*(x.rows for x in self.ranges.values()), strict=True))
+            frames = [
+                self.parent.select(
+                    _coords={x: b for x, b in zip(self.ranges, box) if b != (None,) * 2}
+                ).to_df()["_patch_row"]
+                for box in boxes
             ]
-            ids = {x for frame in candidate_frames for x in frame["_patch_row"]}
-            known = known_coordinates(
-                self.parent, source[source["_patch_row"].isin(ids)], self.name
-            )
-            rows = []
-            pieces = []
-            requests = []
-            for request, (bounds, candidate) in enumerate(
-                zip(self.ranges.rows, candidate_frames, strict=True)
-            ):
-                for _, projected in candidate.iterrows():
-                    row = by_id.loc[projected["_patch_row"]]
-                    coord = known.get(row["_patch_row"])
-                    if coord is None:
-                        msg = (
-                            f"Cannot verify samples for {self.name!r} in source "
-                            f"{row.get('source_path')!r}: coordinate metadata "
-                            "is unavailable."
-                        )
-                        raise MissingPatchError(msg)
-                    actual = exact_coordinate_bounds(coord, bounds)
-                    if actual is None:
-                        continue
-                    rows.append(row)
-                    requests.append(request)
-                    pieces.append([actual])
-            selected = pd.DataFrame(rows, columns=source.columns).reset_index(drop=True)
-            plan = build_subdivision_plan(selected, pieces, self.name)
-            if len(plan.outputs):
-                # Identity is bookkeeping, never a patch attribute.
-                plan.outputs["_request_row"] = requests
+            selected = by_id.loc[[x for frame in frames for x in frame]]
+            selected = selected.reset_index(drop=True)
+            spans = selected[[f"{first}_min", f"{first}_max"]].to_numpy()
+            plan = build_subdivision_plan(selected, [[tuple(x)] for x in spans], first)
+            plan.members["_modified"] = False  # whole rows, even a NaN span
+            # Identity is bookkeeping, never a patch attribute.
+            plan.outputs["_request_row"] = [n for n, x in enumerate(frames) for _ in x]
+            lookup = partial(known_coordinates, self.parent)
+            plan.params.update(keep_partial=True, on_incomplete="ignore")
+            plan = _trim_explicit(plan, selected, self.ranges, lookup, strict=True)
             catalog = derived_catalog(
                 source_rows=source,
                 plan=plan,

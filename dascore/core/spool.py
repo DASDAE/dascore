@@ -9,7 +9,7 @@ from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
 from contextlib import suppress
 from dataclasses import replace
 from datetime import timedelta
-from functools import singledispatch
+from functools import partial, singledispatch
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar, Literal, NamedTuple, Self, TypeVar, overload
 
@@ -83,12 +83,14 @@ from dascore.utils.chunk_plan import (
     _ensure_patch_row,
     _resolve_group_attrs,
     _structural,
+    _trim_explicit,
     build_chunk_plan,
     build_concat_plan,
     build_coverage_frame,
     build_gap_frame,
     build_subdivision_plan,
     coalesce_runs,
+    refuse_riders,
     subdivision_pieces,
 )
 from dascore.utils.concurrency import _prefetch
@@ -109,7 +111,7 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.explicit_ranges import (
     ExplicitRanges,
-    explicit_ranges,
+    explicit_windows,
     known_coordinates,
     looks_explicit,
 )
@@ -574,10 +576,11 @@ class Spool(NodeRepr, NamespaceOwner):
             envelopes. Exact sample selection occurs when a patch loads.
         **kwargs
             Specifies query. A coordinate accepts one ``(start, stop)`` range
-            or an ``(n, 2)`` array of bounded absolute ranges. Array rows
-            select independently in input order, so overlaps and duplicates
-            return separate source pieces. Only one coordinate may use an
-            array per call; array ranges do not support ``samples=True`` or
+            or an ``(n, 2)`` array of absolute ranges (``None``, NaN or NaT
+            is open); arrays on several coordinates need equal row counts,
+            row ``i`` of each forming one box. Rows select independently in
+            input order, so overlaps and duplicates return separate pieces.
+            Array ranges do not support ``samples=True`` or
             ``relative=True``. Attribute selectors retain their usual meaning.
 
         Examples
@@ -592,6 +595,8 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> import numpy as np
         >>> ranges = np.array([[0, 10], [20, 30]])
         >>> pieces = spool.select(distance=ranges)
+        >>> # one box per row on two dimensions; row two's time end is open
+        >>> boxes = spool.select(distance=ranges, time=[time, [time[0], None]])
         """
         # Explicit windows are independent requests, so they need separate
         # plan outputs even when they name the same source samples.
@@ -608,7 +613,7 @@ class Spool(NodeRepr, NamespaceOwner):
             and (not isinstance(value, list | tuple) or bool(value))
             for name, value in raw.items()
         )
-        explicit = []
+        explicit = {}
         if possible:
             query = self._classify_query(_attrs, _coords, kwargs)
             _, coords = resolve_selector_namespaces(
@@ -618,24 +623,15 @@ class Spool(NodeRepr, NamespaceOwner):
                 _coords=query.coords,
                 kwargs=query.kwargs,
             )
-            explicit = [
-                (name, ranges)
-                for name, value in coords.items()
-                if (ranges := explicit_ranges(value)) is not None
-            ]
+            explicit = explicit_windows(coords)
         if explicit:
-            if len(explicit) != 1:
-                msg = "Only one coordinate may use explicit ranges per selection."
-                raise ParameterError(msg)
             if samples or relative:
                 msg = "Explicit ranges require samples=False and relative=False."
                 raise ParameterError(msg)
             from dascore.io.index.explicit import ExplicitSelectCatalog  # noqa: PLC0415
 
-            name, ranges = explicit[0]
-            other_coords = drop_selector_names(_coords, {name})
-            other_kwargs = dict(kwargs)
-            other_kwargs.pop(name, None)
+            other_coords = drop_selector_names(_coords, set(explicit))
+            other_kwargs = {k: v for k, v in kwargs.items() if k not in explicit}
             base = self.select(
                 _attrs=_attrs,
                 _coords=other_coords,
@@ -644,7 +640,7 @@ class Spool(NodeRepr, NamespaceOwner):
                 **other_kwargs,
             )
             return base._new_from_catalog(
-                ExplicitSelectCatalog(base._catalog, name, ranges)
+                ExplicitSelectCatalog(base._catalog, explicit)
             )
         if self._inventory is None:
             catalog = self._catalog.select(
@@ -1800,10 +1796,16 @@ class Spool(NodeRepr, NamespaceOwner):
         """Build and coalesce one plan from this spool's current source rows."""
         name = next(iter(dim_kwargs), None)
         source_rows, working = self._plan_frames(name, runs=True)
+        windows = explicit_windows(dim_kwargs)
+        refuse_riders(windows, source_rows)
         exact = {}
-        if name is not None and explicit_ranges(dim_kwargs[name]) is not None:
+        if name in windows:
             exact = known_coordinates(self._catalog, source_rows, name)
-        plan = build_chunk_plan(working, _exact_coords=exact, **params, **dim_kwargs)
+        kwargs = dim_kwargs | windows  # validated once
+        plan = build_chunk_plan(working, _exact_coords=exact, **params, **kwargs)
+        if trims := {k: v for k, v in windows.items() if k != name}:
+            lookup = partial(known_coordinates, self._catalog)  # members' only
+            plan = _trim_explicit(plan, source_rows, trims, lookup)
         return source_rows, coalesce_runs(plan, working)
 
     def chunk_plan(
@@ -2191,10 +2193,13 @@ class Spool(NodeRepr, NamespaceOwner):
             units (`time=10 * s`) or a data size (`time=25 * megabytes`),
             which chunks so each patch's data array is about that large.
             `overlap` accepts the same forms. An ``(n, 2)`` array instead
-            requests bounded absolute coordinate windows with inclusive
+            requests absolute coordinate windows with inclusive
             endpoints, in input order. Overlapping and duplicate windows
             produce separate outputs. Explicit windows do not accept
             ``overlap``; quantities in their bounds are absolute points.
+            ``None``, ``...``, NaN, NaT or a signed infinity is open. Arrays on
+            several dimensions need equal row counts, row ``i`` of each one
+            window: the first is chunked, the others trim (see the notes).
 
         Examples
         --------
@@ -2225,6 +2230,8 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> explicit = spool.chunk(time=windows, on_incomplete="ignore")
         >>> explicit_plan = spool.chunk_plan(time=windows, on_incomplete="ignore")
         >>> assert len(explicit_plan.outputs) == len(explicit)
+        >>> # the same windows, each trimmed to distances 10 through 20
+        >>> boxes = spool.chunk(time=windows, distance=np.array([[10, 20]] * 2))
 
         Notes
         -----
