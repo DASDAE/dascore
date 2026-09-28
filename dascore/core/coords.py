@@ -3753,24 +3753,47 @@ def _check_chain(coords, ascending: bool) -> None:
 
 
 def _labels_to_runs(values, step) -> tuple[tuple, np.dtype]:
-    """Keep exact labels as one grid if it restates them, else one stored run."""
-    if _is_null(step):
-        if (grid := _fractional_grid(values)) is not None and _grid_holds(
-            grid, values, values.dtype
-        ):
-            return (grid,), values.dtype
-        steps = [_diffs(values)[0]]
-        if values.dtype.kind == "f":
-            steps.append((values[-1] - values[0]) / (len(values) - 1))
-    else:
-        magnitude = np.abs(np.asarray(step))[()]
-        steps = [magnitude if values[-1] > values[0] else -magnitude]
-        _on_grid(_diffs(values), steps[0])  # raises where a spacing is off the step
+    """
+    The runs exact labels state: one grid where one restates them, else one
+    stored run. A declared step also splits the labels at their holes.
+    """
+    if not _is_null(step):
+        return _step_runs(values, step)
+    if (grid := _fractional_grid(values)) is not None and _grid_holds(
+        grid, values, values.dtype
+    ):
+        return (grid,), values.dtype
+    steps = [_diffs(values)[0]]
+    if values.dtype.kind == "f":
+        steps.append((values[-1] - values[0]) / (len(values) - 1))
     for spacing in steps:
-        grid, _ = _range_run(dict(start=values[0], step=spacing, shape=values.shape))
-        if _grid_holds(grid, values, values.dtype):
-            return (grid,), values.dtype
+        with suppress(CoordError, OverflowError, ValueError), np.errstate(all="ignore"):
+            grid, _ = _range_run(
+                dict(start=values[0], step=spacing, shape=values.shape)
+            )
+            if _grid_holds(grid, values, values.dtype):
+                return (grid,), values.dtype
     return (values,), values.dtype
+
+
+def _step_runs(values, step) -> tuple[tuple, np.dtype]:
+    """One grid of the declared step per stretch of consecutive positions."""
+    magnitude = np.abs(np.asarray(step))[()]
+    signed = magnitude if values[-1] > values[0] else -magnitude
+    # every spacing must be a whole number of steps; more is a hole
+    splits = np.flatnonzero(_on_grid(_diffs(values), signed) != 1) + 1
+    # past a thousand samples, holes in more than a tenth of them stay stored
+    if len(values) >= 1_000 and len(splits) + 1 > len(values) // 10:
+        return (values,), values.dtype
+    runs: list[Any] = []
+    dtypes = [values.dtype]
+    for block in np.split(values, splits):
+        grid, dtype = _range_run(dict(start=block[0], step=signed, shape=block.shape))
+        # a grid of the step need not restate the labels; keep them if not
+        holds = _grid_holds(grid, block, dtype)
+        runs.append(grid if holds else block)
+        dtypes += [dtype] if holds else []
+    return tuple(runs), np.result_type(*dtypes)
 
 
 def _fill_layout(

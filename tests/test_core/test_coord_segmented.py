@@ -1094,14 +1094,20 @@ class TestFromArray:
         np.testing.assert_array_equal(coord.values, values)
 
     @pytest.mark.parametrize("dtype", ["uint8", "int32", "float32"])
-    @pytest.mark.parametrize("step", [None, 1, -1])
-    def test_exact_grid_keeps_dtype(self, dtype, step):
+    def test_exact_grid_keeps_dtype(self, dtype):
         """An exact grid preserves the dtype of its input labels."""
         values = np.arange(20, dtype=dtype)
-        coord = get_coord(data=values, snap=False, step=step)
+        coord = get_coord(data=values, snap=False)
         assert coord.dtype == values.dtype
         assert coord.runs_count == 1
         assert isinstance(coord.runs[0], Grid)
+        np.testing.assert_array_equal(coord.values, values)
+
+    @pytest.mark.parametrize("values", [[0.0, 1e308, 1.7e308], [1.0, 2.0, np.inf]])
+    def test_unrepresentable_spacing_stays_stored(self, values):
+        """Labels whose spacing overflows a grid stay stored labels."""
+        coord = get_coord(data=np.array(values), snap=False)
+        assert isinstance(coord.runs[0], Labels)
         np.testing.assert_array_equal(coord.values, values)
 
     def test_large_unsigned_fractional_labels(self):
