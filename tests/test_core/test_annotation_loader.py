@@ -1458,17 +1458,16 @@ class TestCollections:
             dc.annotations(root)
 
     def test_dimensions_stated_beside_the_sets(self, tmp_path):
-        """A collection may declare them, and then refuses a caller restating them."""
+        """A collection may declare them, and then refuses others."""
         root = tmp_path / "sets"
         directory = root / "hand"
         directory.mkdir(parents=True)
         (directory / "annotations.csv").write_text("note,time_min,time_max\nq,1,2\n")
         (root / "attrs.json").write_text('{"dims": ["time"]}')
         assert dc.annotations(root).dims == ("time",)
-        with pytest.raises(
-            InvalidAnnotationError, match="a directory of sets stating its own"
-        ):
-            dc.annotations(root, dims=("time",))
+        assert dc.annotations(root, dims=("time",)) == dc.annotations(root)
+        with pytest.raises(InvalidAnnotationError, match="dims was given"):
+            dc.annotations(root, dims=("distance",))
 
     def test_a_dimension_spelled_two_ways(self, tmp_path):
         """A set of values beside a set of ranges merges; rows keep their own."""
@@ -2146,6 +2145,15 @@ class TestParquet:
         bare = picks.io.to_parquet(tmp_path / "picks.parquet")
         for path in (bare, picks.io.save(tmp_path / "picks", format="parquet")):
             assert dc.annotations(path, data_id="x").attrs.data_id == "x"
+
+    def test_columns_a_footer_leaves_unstated(self, tmp_path):
+        """Column docs given for a file which states none type its cells."""
+        frame = pd.DataFrame({"code": ["001"], "time": [1.0]})
+        path = tmp_path / "picks.parquet"
+        dc.AnnotationSet(frame, dims=("time",)).io.to_parquet(path)
+        columns = {"code": {"dtype": "category"}}
+        loaded = dc.annotations(path, annotation_columns=columns)
+        assert loaded.annotations["code"].dtype.name == "category"
 
     def test_a_directory_of_only_a_table(self, regions, tmp_path):
         """A footer is the only statement a directory without attrs makes."""

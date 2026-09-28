@@ -735,8 +735,10 @@ def _load_collection(
         "which name no set. A set is a directory here, so a table beside them "
         "states nothing; a bare table is read on its own.",
     )
-    if stored.get("dims"):
-        _refuse_overrides("a directory of sets stating its own dimensions", dims=dims)
+    if stored.get("dims") and dims is not None:
+        own = [str(x) for x in iterate(stored["dims"])]
+        if [str(x) for x in iterate(dims)] != own:
+            _refuse_overrides(quote_path(directory), dims=dims)
     # The caller's dimensions, else the ones stated beside the sets, stand in
     # for a child which declares none. A child which declares its own -- in
     # its attributes or above its table -- is read in those, and refuses the
@@ -1032,6 +1034,7 @@ def _load_file(path: Path, dims, **kwargs) -> AnnotationSet:
     stated = _declared_dims(given, dims, path, declared, path)
     if stored is not None:
         _refuse_restated(quote_path(path), stored, stated, kwargs)
+        given = _given_attrs(kwargs)
     # An empty mapping is an override which clears the declarations, as
     # the set reads it, so only an absent one falls back to the attrs.
     columns = kwargs.get("annotation_columns")
