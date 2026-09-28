@@ -3270,6 +3270,15 @@ class TestChunkFillWindows:
         with pytest.raises(ChunkError, match="chunk"):
             dc.spool([random_patch]).chunk(time=0.001, fill_value=np.nan)
 
+    def test_window_holding_no_position_is_skipped(self):
+        """A selection between two samples leaves no position to fill."""
+        time = dc.get_coord(start=2.0, step=1.0, shape=(2,))
+        coords = {"distance": [0], "time": time}
+        patch = dc.Patch(data=np.ones((1, 2)), coords=coords, dims=tuple(coords))
+        view = dc.spool([patch]).select(time=(0.8, -0.1), relative=True)
+        with pytest.raises(ChunkError, match="chunk"):
+            view.chunk(time=2.0, keep_partial=True, fill_value=np.nan)
+
     def test_one_sample_output_is_not_padded(self):
         """An output of one descending sample states no step to pad by."""
         time = dc.get_coord(start=39.0, step=-1.0, shape=(40,))
