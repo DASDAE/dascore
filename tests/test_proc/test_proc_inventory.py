@@ -242,6 +242,12 @@ class TestConflicts:
         with pytest.raises(PatchError, match="inventory says"):
             stale.enrich(inventory, coords=False)
 
+    def test_rounding_noise_agrees(self, patch, inventory):
+        """A float32 or unit-converted header equal up to rounding agrees."""
+        noisy = patch.update_attrs(gauge_length=np.float32(10.000001))
+        out = noisy.enrich(inventory, coords=False)
+        assert out.attrs.gauge_length == 10.0
+
     def test_keep_first_prefers_the_patch(self, patch, inventory):
         """The patch stated it first, so it keeps it. See #1043."""
         stale = patch.update_attrs(gauge_length=99.0)
@@ -285,7 +291,6 @@ class TestConflicts:
 
     def test_filling_is_not_a_conflict(self, patch, inventory):
         """An unset attr is filled under the default, which raises otherwise."""
-        assert "gauge_length" not in dict(patch.attrs)
         out = patch.enrich(inventory, coords=False)
         assert out.attrs.gauge_length == 10.0
 

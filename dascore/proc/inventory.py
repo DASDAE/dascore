@@ -24,6 +24,7 @@ from dascore.core._spool_inventory import (
     attr_owner,
     get_coord_values,
     get_interrogator,
+    header_agrees,
     map_axis_coords,
     readable_on,
     to_axis_units,
@@ -43,7 +44,6 @@ from dascore.exceptions import (
     PatchError,
     UnresolvedPatchError,
 )
-from dascore.models import values_equal
 from dascore.utils.attrs import _is_missing
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate, validate_acquisition_key, warn_or_raise
@@ -211,7 +211,7 @@ def _apply_conflict(patch, new_attrs, conflict) -> tuple[dict, list]:
     updates, drops = {}, []
     for name, value in new_attrs.items():
         old = current.get(name, None)
-        if _is_missing(old) or values_equal(old, value):
+        if _is_missing(old) or header_agrees(old, value):
             updates[name] = value
         elif conflict == "raise":
             msg = (

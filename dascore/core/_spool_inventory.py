@@ -12,6 +12,7 @@ import threading
 import warnings
 from collections.abc import Sequence, Sized
 from itertools import pairwise
+from numbers import Real
 from typing import Any, NamedTuple, get_args
 
 import numpy as np
@@ -572,8 +573,8 @@ def effective_matches(
     pending enrichment rewrites the name: under `keep_last` the
     inventory's answer replaces the header where it has one, and under
     `drop` a header disagreeing with the answer comes out blank, which
-    nothing selects. `keep_first` keeps the header, so it rewrites
-    nothing and never reaches here. `resolved` is given when
+    nothing selects. `keep_first` and `raise` never rewrite the header,
+    so they never reach here. `resolved` is given when
     `on_missing="null"` is pending on a named attr: a resolved row the
     inventory has no answer for then comes out blank too. `conflict` is
     None when nothing rewrites.
@@ -587,11 +588,23 @@ def effective_matches(
     else:
         assert conflict == "drop" and headers is not None
         for row in np.flatnonzero(rewritten):
-            if not values_equal(headers[row], answers[row]):
+            if not header_agrees(headers[row], answers[row]):
                 out[row] = False
     if resolved is not None:
         out[stated & resolved & _unstated(answers)] = False
     return out
+
+
+def header_agrees(header, answer) -> bool:
+    """True if a stated header value agrees with the inventory's answer."""
+    if values_equal(header, answer):
+        return True
+    # Unit conversion and float32 headers leave rounding noise in numbers.
+    numbers = all(
+        isinstance(x, Real) and not isinstance(x, bool | np.bool_)
+        for x in (header, answer)
+    )
+    return numbers and bool(np.isclose(header, answer, rtol=1e-6, atol=0))
 
 
 # --- shared projection primitives -------------------------------------

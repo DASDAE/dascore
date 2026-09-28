@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import textwrap
 from collections.abc import Callable, Collection, Iterable, Mapping, Sequence
 from functools import partial
 from pathlib import Path
@@ -307,16 +306,16 @@ on_missing
 
 # One paragraph, not two: a blank line inside a parameter description
 # reads as the start of the next parameter when the API docs are built.
-enrich_conflict_description = f"""
+enrich_conflict_description = """
 conflict
-{textwrap.indent(attr_conflict_description.strip(), "    ")}
-    Unlike a merge, enrichment fills an attr the patch leaves unset under
-    every policy, and `raise` (the default) raises a
-    [PatchError](`dascore.exceptions.PatchError`) when a stated value
-    disagrees with the inventory, since that usually means the
-    `acquisition_key` resolved to the wrong place. `keep_first` keeps
-    the patch's value; `keep_last` takes the inventory's, correcting the
-    file.
+    What to do when an attr the patch states disagrees with the
+    inventory. An attr the patch leaves unset (None, NaN, "") is filled
+    under every policy, and numbers equal up to float rounding agree.
+    "raise" (default) raises a
+    [PatchError](`dascore.exceptions.PatchError`), since a disagreement
+    usually means the `acquisition_key` resolved to the wrong place.
+    "keep_first" keeps the patch's value, "keep_last" takes the
+    inventory's to correct the file, and "drop" removes the attr.
 """.strip()
 
 
