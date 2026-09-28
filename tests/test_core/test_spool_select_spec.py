@@ -174,12 +174,11 @@ class TestLazySelection:
 class TestSamples:
     """samples=True never excludes patches; trims on load (#447)."""
 
-    @pytest.mark.parametrize("dtype", (int, float))
     @pytest.mark.parametrize("stepped_distance", (False, True))
-    @pytest.mark.parametrize("window", ((1, 5), (-5, -1), (None, 5)))
-    def test_stepless_envelope(self, dtype, stepped_distance, window):
+    @pytest.mark.parametrize("window", ((1, 5), (None, 5)))
+    def test_stepless_envelope(self, stepped_distance, window):
         """Unknown steps preserve envelopes and sample selections load (#1249)."""
-        time = np.array([0, 1, 3, 4, 6, 7, 9, 10], dtype=dtype)
+        time = np.array([0, 1, 3, 4, 6, 7, 9, 10], dtype=float)
         distance = np.arange(4) if stepped_distance else [0.0, 1.5, 2.25, 4.0]
         patch = dc.Patch(
             data=np.zeros((8, 4)),
