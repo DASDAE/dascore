@@ -170,18 +170,12 @@ class _InventoryQuery(NamedTuple):
 _TIMES = _TIME_TYPES
 
 
-def _has_samples(rows: pd.DataFrame, window: Mapping) -> np.ndarray:
-    """Whether each trimmed row keeps a sample along every windowed dim."""
-    keep = np.ones(len(rows), dtype=bool)
-    for dim in window:
-        low, high, step = rows[f"{dim}_min"], rows[f"{dim}_max"], rows[f"{dim}_step"]
-        if f"_{dim}_source_envelope" not in rows or step.dtype == object:
-            continue  # no known grid (a segmented coordinate) keeps the row
-        step = step.abs()  # a descending grid also holds its minimum
-        origin = rows[f"_{dim}_source_envelope"].str.get(f"{dim}_min").astype(low.dtype)
-        first = origin + np.ceil(((low - origin) / step).astype(float) - 1e-9) * step
-        keep &= ~(first > high).to_numpy()  # an unknown step keeps the row
-    return keep
+def _stamp_key(feature, label) -> tuple:
+    """A cut output's (feature_id, annotation), however a table spells blanks."""
+    return (
+        feature if isinstance(feature, str) else "",
+        None if pd.isna(label) else int(label),
+    )
 
 
 def _cut_pad(dim: str, pad, known: bool, timed: bool) -> list:
@@ -1464,25 +1458,9 @@ class Spool(NodeRepr, NamespaceOwner):
         onto the sources — which would load back the samples the pieces
         left out.
         """
-        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
-
         plan = build_subdivision_plan(rows, pieces, name)
-        stamped = ()
-        if stamp is not None:
-            stamp_name, values = stamp
-            plan = replace(plan, outputs=plan.outputs.assign(**{stamp_name: values}))
-            stamped = (stamp_name,)
-        catalog = derived_catalog(
-            source_rows=sources,
-            plan=plan,
-            parent=self._catalog,
-            merge_kwargs={},
-            mode="chunk",
-            origin_path=self.spool_path,
-            stamped=stamped,
-            lossy=drops_samples(rows, pieces, name),
-        )
-        return self._new_from_catalog(catalog)
+        lossy = drops_samples(rows, pieces, name)
+        return self._chunked(sources, plan, dict([stamp] if stamp else []), lossy=lossy)
 
     def _check_inventory_policy(self, on_unresolved, method) -> None:
         """
@@ -2274,8 +2252,6 @@ class Spool(NodeRepr, NamespaceOwner):
         --------
         spool, chunking, overlapping chunks, gaps, archive
         """
-        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
-
         source_rows, plan = self._build_chunk_plan(
             kwargs,
             overlap=overlap,
@@ -2288,22 +2264,29 @@ class Spool(NodeRepr, NamespaceOwner):
             fill_value=fill_value,
             on_incomplete=on_incomplete,
         )
-        merge_kwargs = {
-            "conflict": conflict,
-            "snap_coords": snap_coords,
-            "fill_value": fill_value,
-            # the plan's copy is normalized (eg a dimensionless quantity
-            # has become the plain multiple it means)
-            "tolerance": plan.params["tolerance"],
-        }
+        return self._chunked(source_rows, plan)
+
+    def _chunked(self, source_rows, plan, stamp=None, dtypes=None, lossy=None):
+        """
+        Return the spool a chunk plan describes.
+
+        `stamp` maps attrs to record to their per-output values, `dtypes`
+        them to their presented dtypes.
+        """
+        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
+
+        # read from the plan: its values are normalized (eg a dimensionless
+        # tolerance is a plain multiple)
+        names = ("conflict", "snap_coords", "fill_value", "tolerance")
         catalog = derived_catalog(
             source_rows=source_rows,
-            plan=plan,
+            plan=replace(plan, outputs=plan.outputs.assign(**(stamp or {}))),
             parent=self._catalog,
-            merge_kwargs=merge_kwargs,
+            merge_kwargs={x: plan.params[x] for x in names if x in plan.params},
             mode="chunk",
             origin_path=self.spool_path,
-            lossy=isinstance(plan.value, ExplicitRanges),
+            stamped=dtypes or tuple(stamp or ()),
+            lossy=isinstance(plan.value, ExplicitRanges) if lossy is None else lossy,
         )
         return self._new_from_catalog(catalog)
 
@@ -2314,16 +2297,17 @@ class Spool(NodeRepr, NamespaceOwner):
         Each feature, lone rows included, is cut to its bounds (see
         `AnnotationSet.bounds`) and merged across source patches along
         every dimension, as `chunk` merges, so a gap still leaves several
-        patches. Selection includes both ends, so the sample at a range's
+        patches. A feature skips any patch lacking a dimension it bounds.
+        Selection includes both ends, so the sample at a range's
         (half-open) maximum is kept; an empty range gives nothing. A
         feature spanning a dimension keeps the spool's full extent along
         it, one holding no samples gives nothing, and overlapping features
-        duplicate data. On a coordinate with no fixed step, a window
-        between samples may yield an empty patch. Nothing is loaded.
+        duplicate data. Nothing is loaded.
 
         Each output states `feature_id` (blank for a lone row) and
         `annotation` (a lone row's index label, blank for a feature), as
         attrs and as `get_contents` columns, which join back to the set.
+        Their envelopes are the samples kept, not the window asked for.
 
         Parameters
         ----------
@@ -2347,9 +2331,6 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> cut = spool.cut(picks, time=("-1s", "3s"))
         >>> assert len(cut) == 1
         """
-        # circular import: the catalog's module imports this one
-        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
-
         present = {x for dims in self._df["dims"] for x in dims.split(",")}
         dtypes = {"feature_id": "str", "annotation": "Int64"}  # as presented
         bounds, closed = annotations._extents()
@@ -2357,7 +2338,7 @@ class Spool(NodeRepr, NamespaceOwner):
             known = dim in set(annotations.dims) & present
             timed = known and bounds[f"{dim}_min"].dtype.kind in "mM"
             pads[dim] = _cut_pad(dim, pad, known, timed)
-        windows = []  # every refusal comes before any selection
+        windows, stamps = [], []  # every refusal comes before any planning
         for number, row in enumerate(bounds.to_dict("records")):
             lone = not pd.isna(row["annotation"])
             name = f"annotation {row['annotation']}" if lone else row["feature_id"]
@@ -2379,28 +2360,57 @@ class Spool(NodeRepr, NamespaceOwner):
                     high = high + after if shut else high
                 if window is not None:
                     window = window | {dim: (low, high)} if low < high or shut else None
-            stamp = {"feature_id": row["feature_id"] or ""}
-            stamp["annotation"] = int(row["annotation"]) if lone else None
             if window is not None:  # None: an empty range
-                windows.append((window, stamp))
-        pieces = []
-        for window, stamp in windows:
-            piece = self.select(_coords=window)
-            keep = _has_samples(piece._df, window)
-            piece = piece._restrict_to_rows(piece._df["_patch_row"][keep])
-            # merge along the dims every row has; chunk also splits holes
-            dims = [set(x.split(",")) for x in piece._df["dims"]]
-            shared = sorted(set.intersection(*dims)) if dims else []
-            # one row on known grids holds no hole, so it needs no merge
-            steps = piece._df[[f"{x}_step" for x in shared]]
-            if len(piece) == 1 and steps.notna().all(axis=None):
-                shared = []
-            for dim in shared:
-                piece = piece.chunk(**{dim: None})
-            if len(piece):
-                pieces.append(piece._materialize_lossy(stamp, dtypes))
-        empty = self._restrict_to_rows([])._materialize_lossy({}, dtypes)
-        return self._new_from_catalog(PatchCatalog.union(pieces or [empty]))
+                windows.append(window)
+                stamps.append((row["feature_id"] or "", row["annotation"]))
+        feature_ids, labels = np.array(stamps, dtype=object).reshape(-1, 2).T
+        sets = self._df["dims"].map(lambda x: ",".join(sorted(x.split(","))))
+        cuts = []  # one plan per set of patch dims, then one merge per dim
+        for have, rows in self._df["_patch_row"].groupby(sets, sort=False):
+            have = str(have).split(",")
+            asks = [i for i, w in enumerate(windows) if set(w) <= set(have)]
+            if not asks:  # every window bounds a dim these patches lack
+                continue
+            part = self._restrict_to_rows(rows)
+            # the plan merges along the dim with the most distinct starts
+            # (ties: the one most windows bound); it trims the rest
+            split = {x: part._df[f"{x}_min"].nunique() for x in have}
+            counts = {x: sum(x in windows[i] for i in asks) for x in have}
+            main = min(have, key=lambda x: (-split[x], -counts[x]))
+            others = [x for x in have if x != main]
+            dims = [main, *(x for x in others if counts[x])]
+            ends = [[windows[i].get(x, (None,) * 2) for i in asks] for x in dims]
+            arrays = {x: np.array(y) for x, y in zip(dims, ends, strict=True)}
+            source_rows, plan = part._build_chunk_plan(
+                arrays, keep_partial=True, on_incomplete="ignore"
+            )
+            if plan.outputs.empty:
+                continue
+            asked = np.take(asks, plan.outputs["_request_row"])
+            stamp = {
+                "feature_id": np.take(feature_ids, asked),
+                "annotation": pd.array(np.take(labels, asked), "Int64"),
+            }
+            out = part._chunked(source_rows, plan, stamp, dtypes)
+            # merging each feature along the other dims splits their holes;
+            # after a trim, along the first again joins what it made alike
+            group = [*_resolve_group_attrs(None, set(out._df)), *dtypes]
+            for dim in [*others, *([main] if len(dims) > 1 else [])]:
+                out = out.chunk(**{dim: None}, group=group)
+            cuts.append(out)
+        if not cuts:
+            return self._new_from_catalog(
+                self._restrict_to_rows([])._materialize_lossy({}, dtypes)
+            )
+        out = sum(cuts[1:], cuts[0])
+        # back into feature order, each feature's pieces in coordinate order
+        rank = {_stamp_key(*x): i for i, x in enumerate(stamps)}
+        keys = out._df[list(dtypes)].astype(object).itertuples(index=False)
+        ranked = sorted(sorted(present), key=lambda x: -self._df[f"{x}_min"].nunique())
+        mins = [f"{x}_min" for x in ranked if f"{x}_min" in out._df]
+        frame = out._df[mins].assign(_rank=[rank[_stamp_key(*x)] for x in keys])
+        frame = frame.reset_index(drop=True).sort_values(["_rank", *mins])
+        return out._new_from_catalog(out._catalog.restrict(frame.index.to_numpy()))
 
     @compose_docstring(conflict_desc=attr_conflict_description)
     def concatenate(
