@@ -912,3 +912,30 @@ class TestNamedSnap(_NamedSnapCases):
         """Reuse the NetCDF suite's existing backend availability requirement."""
         _require_xarray_netcdf_engine()
         return self._write_jittered_file(tmp_path, "NETCDF_CF")
+
+
+class TestPlainNetCDF4:
+    """A netCDF-4 file without CF conventions, as xarray writes one."""
+
+    @pytest.fixture(params=[True, False])
+    def snap(self, request):
+        """Read with and without snapping."""
+        return request.param
+
+    @pytest.mark.parametrize("unit", ["s", "ms", "us"])
+    def test_time_decoded(self, tmp_path, unit, snap):
+        """Time encoded as '<unit> since <date>' reads as that time."""
+        xr = pytest.importorskip("xarray")
+        pytest.importorskip("h5netcdf")
+        step = np.timedelta64(4, unit)
+        time = np.datetime64("2017-09-18", "ns") + np.arange(10) * step
+        array = xr.DataArray(
+            np.ones((3, 10)),
+            dims=("distance", "time"),
+            coords={"distance": [0.0, 1.0, 2.0], "time": time},
+            name="data",
+        )
+        path = tmp_path / "plain.nc"
+        array.to_netcdf(path, engine="h5netcdf")
+        coord = dc.read(path, snap=snap)[0].get_coord("time")
+        np.testing.assert_array_equal(coord.values, time)
