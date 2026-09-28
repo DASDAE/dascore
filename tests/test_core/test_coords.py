@@ -1207,6 +1207,18 @@ class TestOrder:
         with pytest.raises(CoordError, match=msg):
             evenly_sampled_coord.order(bad_array, samples=True)
 
+    def test_reverse_sorted_datetime_ns(self):
+        """A descending datetime coord at 1 ns spacing finds one label (#1239)."""
+        time = np.datetime64("2020-01-01") + np.arange(10).astype("timedelta64[ns]")
+        coord = get_coord(data=time[::-1])
+        _, inds = coord.order([time[::-1][1]])
+        assert np.array_equal(inds, [1])
+
+    def test_reverse_sorted_bool(self):
+        """A descending boolean coord still orders by value."""
+        _, inds = get_coord(data=np.array([True, False])).order([False])
+        assert np.array_equal(inds, [1])
+
 
 class TestEqual:
     """Tests for comparing coord equality."""
@@ -2461,6 +2473,12 @@ class TestGetNextIndex:
         val = values[-test_index] - end_val
         neg_out = coord.get_next_index(val, relative=True)
         assert neg_out == len(coord) - test_index
+
+    def test_array_coord_labels(self):
+        """Each label of an array coord maps to its own index (#1240)."""
+        values = np.array([0.0, 1.0, 3.0, 7.0])
+        coord = get_coord(data=values)
+        assert list(coord.get_next_index(values)) == [0, 1, 2, 3]
 
 
 class TestUpdate:
