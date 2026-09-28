@@ -530,6 +530,11 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
     _evenly_sampled = False
     _partial = False
 
+    @property
+    def data(self) -> ArrayLike:
+        """The coordinate's values; an alias of `values`."""
+        return self.values
+
     @model_validator(mode="before")
     @classmethod
     def _check_time_units(cls, data: Any) -> Any:
@@ -2194,6 +2199,57 @@ def _promoted(values, dtype) -> Grid | None:
         return None
     grid, _ = _range_run(dict(start=values[0], step=diffs[0], shape=(len(values),)))
     return grid if _grid_holds(grid, values, dtype) else None
+
+
+def _simplest_between(low: Fraction, high: Fraction) -> Fraction:
+    """The least-denominator fraction in (low, high), the least of any tie."""
+    whole = math.floor(low)
+    if whole + 1 < high:
+        return Fraction(whole + 1)
+    if low == whole:
+        return whole + Fraction(1, math.floor(1 / (high - whole)) + 1)
+    return whole + 1 / _simplest_between(1 / (high - whole), 1 / (low - whole))
+
+
+def _fractional_grid(values) -> Grid | None:
+    """The simplest fractional-step grid whose labels are these exactly, if any."""
+    count = len(values)
+    # the array's own kind, since object arrays can hold non-integral labels
+    if (
+        values.dtype.kind not in "iumM"
+        or _exact_dtype(values[0], values[-1], None, None) is None
+    ):
+        return None
+    # astype, not view, honours byte order; ints and uints widen before any
+    # subtraction can wrap.
+    wide = values.astype(np.int64)
+    first, span = int(wide[0]), int(wide[-1]) - int(wide[0])
+    if not span % (count - 1) or abs(first) + abs(span) >= 2**63:
+        return None  # a span the count divides admits only a whole-tick grid
+    ticks = wide - wide[0]
+    index = np.arange(count, dtype=np.int64)
+    offsets, scratch = np.empty_like(ticks), np.empty_like(ticks)
+    low, high = Fraction(span - 1, count - 1), Fraction(span + 1, count - 1)
+    # A step q holds every label t_k when max(t_k - kq) - min(t_k - kq) < 1.
+    # Try the simplest q in the bounds; the label pair it breaks most moves a
+    # bound past it, so the first q that holds is the simplest that does.
+    # Grids settle within a few passes; the cap only bounds the work.
+    for _ in range(256):
+        if low >= high:
+            break
+        step = _simplest_between(low, high)
+        num, den = step.numerator, step.denominator
+        if den * (abs(span) + 1) >= 2**62:
+            return None
+        # each label's offset past k steps, in 1/den ticks
+        np.multiply(ticks, den, out=offsets)
+        offsets -= np.multiply(index, num, out=scratch)
+        top, bottom = int(np.argmax(offsets)), int(np.argmin(offsets))
+        if offsets[top] - offsets[bottom] < den:
+            return Grid(first, num, den, count, phase=int(offsets[top]))
+        bound = Fraction(int(ticks[top] - ticks[bottom]) - 1, top - bottom)
+        low, high = (bound, high) if top > bottom else (low, bound)
+    return None
 
 
 def _grid_holds(grid: Grid, values, dtype) -> bool:
@@ -4331,6 +4387,10 @@ def get_coord(
     if snap:
         start, stop, step, monotonic = _maybe_get_start_stop_step(data)
         if start is not None:
+            # labels flooring a fractional-step grid keep it; the median step
+            # below is rounded and drifts
+            if (grid := _fractional_grid(data)) is not None:
+                return NumericCoord(runs=(grid,), units=units, dtype=data.dtype)
             out = _range_coord(dict(start=start, stop=stop, step=step), units)
             # The change_length call helps with float off by one issues.
             return out.change_length(len(data))

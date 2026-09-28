@@ -228,6 +228,8 @@ def _iter_filesystem(
     Iterate contents of a filesystem like thing.
 
     Options allow for filtering and terminating early.
+    Inaccessible local entries are skipped with a warning; an inaccessible root
+    raises. Remote backends may propagate PermissionError.
 
     Parameters
     ----------
@@ -345,19 +347,22 @@ def _iter_local_filesystem(
                 return
     try:
         for entry in os.scandir(path):
-            if entry.is_file() and (ext is None or entry.name.endswith(ext)):
-                if timestamp is None or entry.stat().st_mtime >= timestamp:
-                    if entry.name[0] != "." or not skip_hidden:
-                        yield Path(entry.path)
-            elif entry.is_dir() and not (skip_hidden and entry.name[0] == "."):
-                yield from _iter_local_filesystem(
-                    Path(entry.path),
-                    ext=ext,
-                    timestamp=timestamp,
-                    skip_hidden=skip_hidden,
-                    include_directories=include_directories,
-                    warned_timestamp_paths=warned_timestamp_paths,
-                )
+            try:
+                if entry.is_file() and (ext is None or entry.name.endswith(ext)):
+                    if timestamp is None or entry.stat().st_mtime >= timestamp:
+                        if entry.name[0] != "." or not skip_hidden:
+                            yield Path(entry.path)
+                elif entry.is_dir() and not (skip_hidden and entry.name[0] == "."):
+                    yield from _iter_local_filesystem(
+                        Path(entry.path),
+                        ext=ext,
+                        timestamp=timestamp,
+                        skip_hidden=skip_hidden,
+                        include_directories=include_directories,
+                        warned_timestamp_paths=warned_timestamp_paths,
+                    )
+            except PermissionError:
+                warnings.warn(f"Permission denied; skipping {entry.path}", UserWarning)
     except NotADirectoryError:
         if _passes_iter_filesystem_filters(
             path,

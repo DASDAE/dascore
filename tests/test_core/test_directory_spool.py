@@ -39,7 +39,7 @@ def dir_spool_index_out_of_order(random_spool, tmp_path_factory):
 @pytest.fixture(scope="module")
 def one_directory_spool(one_file_dir):
     """Create a directory with a single DAS file."""
-    spool = Spool.from_directory(one_file_dir)
+    spool = Spool._from_directory(one_file_dir)
     return spool.update()
 
 
@@ -98,7 +98,7 @@ class TestDirectorySpoolBasics:
         patch_2 = dc.get_example_patch()
         patch_1 = patch_2.update_coords(time=patch_2.coords.get_array("time") + 10)
         dc.write(dc.spool([patch_1, patch_2]), path / "multi_patch.h5", "dasdae")
-        spool = Spool.from_directory(path).update().sort("time")
+        spool = Spool._from_directory(path).update().sort("time")
         patch = spool[0]
         assert patch.get_coord("time").min() == patch_2.get_coord("time").min()
 
@@ -233,7 +233,7 @@ class TestSelectedDirectorySpools:
         self, spool_dir, random_spool, first_patch_range
     ):
         """D1: any operation severs update()."""
-        spool = Spool.from_directory(spool_dir).update().select(time=first_patch_range)
+        spool = Spool._from_directory(spool_dir).update().select(time=first_patch_range)
         with pytest.raises(InvalidSpoolError, match="root spool"):
             spool.update()
 

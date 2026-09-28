@@ -80,7 +80,9 @@ _SPECTRAL_PARAMETER_DOCS = {
     "negative_frequencies": """
     negative_frequencies
         How to handle negative frequency bins. ``"auto"`` drops negative bins
-        when power is symmetric and raises otherwise, ``"drop"`` always uses
+        when power is symmetric and raises otherwise, folding a verified
+        negative Nyquist bin to positive frequency without changing its
+        power. ``"drop"`` always uses
         non-negative frequencies, ``"raise"`` rejects spectra with negative bins, and
         ``"keep"`` includes them in the calculation.
     """,
@@ -260,6 +262,24 @@ def _get_spectral_power(
                 "only non-negative bins, or 'keep' to include all bins."
             )
             raise ValueError(msg)
+        # A full even-length DFT stores its unpaired Nyquist bin at -Nyquist.
+        # Retain its existing weight, matching DASCore's real DFT outputs.
+        original_dim = freq_dim.removeprefix("ft_")
+        original_coord = patch.coords.coord_map.get(original_dim)
+        size = (
+            len(original_coord)
+            if patch.attrs.get("_dft_output") and original_coord is not None
+            else patch.attrs.get(f"_stft_mfft_{original_dim}", 0)
+        )
+        if size >= 2 and size % 2 == 0 and len(freqs) == size:
+            spacing = freqs[1] - freqs[0]
+            expected = np.arange(-size // 2, size // 2) * spacing
+            if np.allclose(freqs, expected, rtol=1e-7, atol=abs(spacing) * 1e-7):
+                freqs = freqs.copy()
+                freqs[0] = -freqs[0]
+                order = np.argsort(freqs)
+                freqs = freqs[order]
+                power = np.take(power, order, axis=freq_axis)
         mask &= freqs >= 0
     if negative_frequencies == "drop":
         mask &= freqs >= 0
@@ -731,7 +751,9 @@ def spectral_flatness(
     Compute spectral flatness from a Fourier-domain patch.
 
     Spectral flatness is the ratio between the geometric mean and
-    arithmetic mean of the power spectrum.
+    arithmetic mean of the power spectrum. It is invariant to positive
+    scaling of the power and lies in [0, 1] for finite, nonzero spectra.
+    A zero-power bin gives flatness 0; an entirely zero spectrum gives NaN.
 
     Values near 1 indicate white-noise-like spectra.
     Values near 0 indicate tonal or peaked spectra. The input patch must
@@ -758,9 +780,11 @@ def spectral_flatness(
 
     freq_axis = patch.dims.index(freq_dim)
 
-    eps = np.finfo(float).eps
-
-    geo_mean = np.exp(np.mean(np.log(power + eps), axis=freq_axis))
+    # Normalize each slice to preserve spectral shape at any power scale.
+    peak_power = np.max(power, axis=freq_axis, keepdims=True)
+    power = np.divide(power, peak_power, out=np.zeros_like(power), where=peak_power > 0)
+    log_power = np.log(power, out=np.full_like(power, -np.inf), where=power > 0)
+    geo_mean = np.exp(np.mean(log_power, axis=freq_axis))
 
     arith_mean = np.mean(power, axis=freq_axis)
 
@@ -770,6 +794,7 @@ def spectral_flatness(
         out=np.full_like(geo_mean, np.nan),
         where=arith_mean > 0,
     )
+    flatness = np.clip(flatness, 0, 1)
 
     data_units = None
     data_type = "Spectral Flatness"

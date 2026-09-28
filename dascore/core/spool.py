@@ -23,6 +23,9 @@ from rich.text import Text
 import dascore as dc
 from dascore.compat import UPath, is_array
 from dascore.constants import (
+    CONFLICT,
+    ENRICH_CONFLICT,
+    ON_MISSING,
     PROGRESS_LEVELS,
     WARN_LEVELS,
     ExecutorType,
@@ -167,18 +170,12 @@ class _InventoryQuery(NamedTuple):
 _TIMES = _TIME_TYPES
 
 
-def _has_samples(rows: pd.DataFrame, window: Mapping) -> np.ndarray:
-    """Whether each trimmed row keeps a sample along every windowed dim."""
-    keep = np.ones(len(rows), dtype=bool)
-    for dim in window:
-        low, high, step = rows[f"{dim}_min"], rows[f"{dim}_max"], rows[f"{dim}_step"]
-        if f"_{dim}_source_envelope" not in rows or step.dtype == object:
-            continue  # no known grid (irregular labels) keeps the row
-        step = step.abs()  # a descending grid also holds its minimum
-        origin = rows[f"_{dim}_source_envelope"].str.get(f"{dim}_min").astype(low.dtype)
-        first = origin + np.ceil(((low - origin) / step).astype(float) - 1e-9) * step
-        keep &= ~(first > high).to_numpy()  # an unknown step keeps the row
-    return keep
+def _stamp_key(feature, label) -> tuple:
+    """A cut output's (feature_id, annotation), however a table spells blanks."""
+    return (
+        feature if isinstance(feature, str) else "",
+        None if pd.isna(label) else int(label),
+    )
 
 
 def _cut_pad(dim: str, pad, known: bool, timed: bool) -> list:
@@ -226,11 +223,9 @@ class Spool(NodeRepr, NamespaceOwner):
     """
     A container of patches: a view over a `PatchCatalog`.
 
-    Constructed from in-memory patches directly (or via
-    [`dascore.spool`](`dascore.spool`)), from a directory of files with
-    [`Spool.from_directory`](`dascore.core.spool.Spool.from_directory`),
-    or from a single file with
-    [`Spool.from_file`](`dascore.core.spool.Spool.from_file`).
+    Construct directly from in-memory patches, or with
+    [`dascore.spool`](`dascore.spool`) from patches, a directory of files,
+    or a single file.
 
     Parameters
     ----------
@@ -273,7 +268,7 @@ class Spool(NodeRepr, NamespaceOwner):
     # Whether this spool has already said its inventory covers only part of
     # it; the warning is worth making once, not once per patch.
     _warned_unresolved: bool = False
-    # single-file provenance (set by from_file; drives update())
+    # single-file provenance (set by _from_file; drives update())
     _file_path = None
     _file_format = None
     _file_version = None
@@ -713,6 +708,8 @@ class Spool(NodeRepr, NamespaceOwner):
         *,
         _attrs: namespace_select_type = None,
         _coords: namespace_select_type = None,
+        samples: bool = False,
+        relative: bool = False,
         **kwargs,
     ) -> Self:
         """
@@ -733,6 +730,8 @@ class Spool(NodeRepr, NamespaceOwner):
             The patches' own coordinates only to say they are refused; a
             coordinate an attached inventory defines along the fiber is
             accepted and chooses channels. See above.
+        samples, relative
+            Not supported; True raises.
         **kwargs
             The selection whose matches are removed.
 
@@ -744,6 +743,9 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> rest = spool.unselect(tag='some_tag')
         >>> assert len(rest) + len(spool.select(tag='some_tag')) == len(spool)
         """
+        if samples or relative:
+            msg = "Spool.unselect does not support samples or relative selections."
+            raise ParameterError(msg)
         query = self._classify_query(_attrs, _coords, kwargs)
         attrs, coords = resolve_selector_namespaces(
             query.known_attrs | query.selectable,
@@ -1176,9 +1178,15 @@ class Spool(NodeRepr, NamespaceOwner):
     )
     def enrich(
         self,
+        inventory: Inventory | str | os.PathLike | None = None,
         *,
+        attrs: bool | tuple[str, ...] = True,
+        coords: bool | tuple[str, ...] = True,
+        acquisition_key: str | None = None,
+        time=None,
+        on_missing: ON_MISSING = "raise",
+        conflict: ENRICH_CONFLICT = "raise",
         on_unresolved: WARN_LEVELS = "warn",
-        **kwargs,
     ) -> Self:
         """
         Enrich each patch this spool yields from an inventory.
@@ -1188,29 +1196,20 @@ class Spool(NodeRepr, NamespaceOwner):
         warnings or errors for unresolved patches. Use ``conform_to_inventory``
         to restrict membership.
 
-        The inventory must first be attached with ``attach_inventory``.
+        The arguments other than ``inventory`` and ``on_unresolved`` are
+        passed to [`Patch.enrich`](`dascore.proc.inventory.enrich`) for
+        each extracted patch. The policies, a None `attrs` or `coords`,
+        and the shape of `acquisition_key` are checked now; everything
+        else is checked as each patch is extracted. Calling `enrich` again
+        replaces these arguments rather than adding to them.
 
         Parameters
         ----------
-        on_unresolved
-            What to do with a patch the inventory does not describe — one
-            naming no entry, or naming one the inventory does not resolve
-            to exactly one of. "warn" (the default) leaves it un-enriched
-            and says so, "ignore" leaves it silently, and "raise" fails.
-            A patch which *straddles* two epochs is described twice rather
-            than not at all, and raises regardless: it needs subdividing.
-        **kwargs
-            Held and passed to
-            [`Patch.enrich`](`dascore.proc.inventory.enrich`) for each
-            extracted patch. The names accepted are read from its
-            signature, so the two cannot disagree. The names, the policies
-            and the shape of an `acquisition_key` are checked now — the
-            rest each patch's own enrichment checks as it is extracted.
-            Calling `enrich` again replaces these rather than adding to
-            them. They are:
-
-        Other Parameters
-        ----------------
+        inventory
+            The inventory to enrich from, or its path, which is attached
+            with [`attach_inventory`](`dascore.core.spool.Spool.attach_inventory`).
+            None uses the inventory already attached and raises if there
+            is none.
         {attrs_desc}
         {coords_desc}
         acquisition_key
@@ -1222,6 +1221,13 @@ class Spool(NodeRepr, NamespaceOwner):
             own time and passing this raises.
         {on_missing_desc}
         {conflict_desc}
+        on_unresolved
+            What to do with a patch the inventory does not describe — one
+            naming no entry, or naming one the inventory does not resolve
+            to exactly one of. "warn" (the default) leaves it un-enriched
+            and says so, "ignore" leaves it silently, and "raise" fails.
+            A patch which *straddles* two epochs is described twice rather
+            than not at all, and raises regardless: it needs subdividing.
 
         Examples
         --------
@@ -1229,18 +1235,23 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> from dascore.examples import inventory_patch_pair
         >>>
         >>> patch, inventory = inventory_patch_pair()
-        >>> spool = dc.spool(patch).attach_inventory(inventory).enrich()
+        >>> spool = dc.spool(patch).enrich(inventory)
         >>> assert spool[0].attrs.gauge_length == 10.0
         >>>
         >>> # Or name what is wanted, as with Patch.enrich.
-        >>> attached = dc.spool(patch).attach_inventory(inventory)
-        >>> spool = attached.enrich(coords=False)
+        >>> spool = dc.spool(patch).enrich(inventory, coords=False)
         """
-        # Settled now rather than on extraction: a misspelled argument
-        # should be an error here, not on some patch pulled much later.
-        enrich_kwargs = normalize_enrich_kwargs(kwargs)
-        self._check_inventory_policy(on_unresolved, "enrich")
-        new = self.__class__(self)
+        spool = self if inventory is None else self.attach_inventory(inventory)
+        enrich_kwargs = normalize_enrich_kwargs(
+            attrs=attrs,
+            coords=coords,
+            acquisition_key=acquisition_key,
+            time=time,
+            on_missing=on_missing,
+            conflict=conflict,
+        )
+        spool._check_inventory_policy(on_unresolved, "enrich")
+        new = spool.__class__(spool)
         new._enrich_kwargs = enrich_kwargs
         new._on_unresolved = on_unresolved
         # What this enrichment leaves unresolved is worth saying once more.
@@ -1447,25 +1458,9 @@ class Spool(NodeRepr, NamespaceOwner):
         onto the sources — which would load back the samples the pieces
         left out.
         """
-        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
-
         plan = build_subdivision_plan(rows, pieces, name)
-        stamped = ()
-        if stamp is not None:
-            stamp_name, values = stamp
-            plan = replace(plan, outputs=plan.outputs.assign(**{stamp_name: values}))
-            stamped = (stamp_name,)
-        catalog = derived_catalog(
-            source_rows=sources,
-            plan=plan,
-            parent=self._catalog,
-            merge_kwargs={},
-            mode="chunk",
-            origin_path=self.spool_path,
-            stamped=stamped,
-            lossy=drops_samples(rows, pieces, name),
-        )
-        return self._new_from_catalog(catalog)
+        lossy = drops_samples(rows, pieces, name)
+        return self._chunked(sources, plan, dict([stamp] if stamp else []), lossy=lossy)
 
     def _check_inventory_policy(self, on_unresolved, method) -> None:
         """
@@ -1814,7 +1809,7 @@ class Spool(NodeRepr, NamespaceOwner):
         keep_partial: bool = False,
         snap_coords: bool = True,
         tolerance: float | Quantity | np.timedelta64 = 1.5,
-        conflict: Literal["drop", "raise", "keep_first"] = "raise",
+        conflict: CONFLICT = "raise",
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "raise",
         fill_value=None,
@@ -2121,7 +2116,7 @@ class Spool(NodeRepr, NamespaceOwner):
         keep_partial: bool = False,
         snap_coords: bool = True,
         tolerance: float | Quantity | np.timedelta64 = 1.5,
-        conflict: Literal["drop", "raise", "keep_first"] = "raise",
+        conflict: CONFLICT = "raise",
         group: str | Sequence[str] | None = None,
         missing_dim: Literal["raise", "drop"] = "raise",
         fill_value=None,
@@ -2249,8 +2244,6 @@ class Spool(NodeRepr, NamespaceOwner):
         --------
         spool, chunking, overlapping chunks, gaps, archive
         """
-        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
-
         source_rows, plan = self._build_chunk_plan(
             kwargs,
             overlap=overlap,
@@ -2263,22 +2256,29 @@ class Spool(NodeRepr, NamespaceOwner):
             fill_value=fill_value,
             on_incomplete=on_incomplete,
         )
-        merge_kwargs = {
-            "conflict": conflict,
-            "snap_coords": snap_coords,
-            "fill_value": fill_value,
-            # the plan's copy is normalized (eg a dimensionless quantity
-            # has become the plain multiple it means)
-            "tolerance": plan.params["tolerance"],
-        }
+        return self._chunked(source_rows, plan)
+
+    def _chunked(self, source_rows, plan, stamp=None, dtypes=None, lossy=None):
+        """
+        Return the spool a chunk plan describes.
+
+        `stamp` maps attrs to record to their per-output values, `dtypes`
+        them to their presented dtypes.
+        """
+        from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
+
+        # read from the plan: its values are normalized (eg a dimensionless
+        # tolerance is a plain multiple)
+        names = ("conflict", "snap_coords", "fill_value", "tolerance")
         catalog = derived_catalog(
             source_rows=source_rows,
-            plan=plan,
+            plan=replace(plan, outputs=plan.outputs.assign(**(stamp or {}))),
             parent=self._catalog,
-            merge_kwargs=merge_kwargs,
+            merge_kwargs={x: plan.params[x] for x in names if x in plan.params},
             mode="chunk",
             origin_path=self.spool_path,
-            lossy=isinstance(plan.value, ExplicitRanges),
+            stamped=dtypes or tuple(stamp or ()),
+            lossy=isinstance(plan.value, ExplicitRanges) if lossy is None else lossy,
         )
         return self._new_from_catalog(catalog)
 
@@ -2289,16 +2289,17 @@ class Spool(NodeRepr, NamespaceOwner):
         Each feature, lone rows included, is cut to its bounds (see
         `AnnotationSet.bounds`) and merged across source patches along
         every dimension, as `chunk` merges, so a gap still leaves several
-        patches. Selection includes both ends, so the sample at a range's
+        patches. A feature skips any patch lacking a dimension it bounds.
+        Selection includes both ends, so the sample at a range's
         (half-open) maximum is kept; an empty range gives nothing. A
         feature spanning a dimension keeps the spool's full extent along
         it, one holding no samples gives nothing, and overlapping features
-        duplicate data. On a coordinate with no fixed step, a window
-        between samples may yield an empty patch. Nothing is loaded.
+        duplicate data. Nothing is loaded.
 
         Each output states `feature_id` (blank for a lone row) and
         `annotation` (a lone row's index label, blank for a feature), as
         attrs and as `get_contents` columns, which join back to the set.
+        Their envelopes are the samples kept, not the window asked for.
 
         Parameters
         ----------
@@ -2322,9 +2323,6 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> cut = spool.cut(picks, time=("-1s", "3s"))
         >>> assert len(cut) == 1
         """
-        # circular import: the catalog's module imports this one
-        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
-
         present = {x for dims in self._df["dims"] for x in dims.split(",")}
         dtypes = {"feature_id": "str", "annotation": "Int64"}  # as presented
         bounds, closed = annotations._extents()
@@ -2332,7 +2330,7 @@ class Spool(NodeRepr, NamespaceOwner):
             known = dim in set(annotations.dims) & present
             timed = known and bounds[f"{dim}_min"].dtype.kind in "mM"
             pads[dim] = _cut_pad(dim, pad, known, timed)
-        windows = []  # every refusal comes before any selection
+        windows, stamps = [], []  # every refusal comes before any planning
         for number, row in enumerate(bounds.to_dict("records")):
             lone = not pd.isna(row["annotation"])
             name = f"annotation {row['annotation']}" if lone else row["feature_id"]
@@ -2354,31 +2352,64 @@ class Spool(NodeRepr, NamespaceOwner):
                     high = high + after if shut else high
                 if window is not None:
                     window = window | {dim: (low, high)} if low < high or shut else None
-            stamp = {"feature_id": row["feature_id"] or ""}
-            stamp["annotation"] = int(row["annotation"]) if lone else None
             if window is not None:  # None: an empty range
-                windows.append((window, stamp))
-        pieces = []
-        for window, stamp in windows:
-            piece = self.select(_coords=window)
-            keep = _has_samples(piece._df, window)
-            piece = piece._restrict_to_rows(piece._df["_patch_row"][keep])
-            # a lone row needs no merge; others merge along the dims all have
-            dims = [set(x.split(",")) for x in piece._df["dims"]]
-            shared = sorted(set.intersection(*dims)) if len(dims) > 1 else []
-            for dim in shared:
-                piece = piece.chunk(**{dim: None})
-            if len(piece):
-                pieces.append(piece._materialize_lossy(stamp, dtypes))
-        empty = self._restrict_to_rows([])._materialize_lossy({}, dtypes)
-        return self._new_from_catalog(PatchCatalog.union(pieces or [empty]))
+                windows.append(window)
+                stamps.append((row["feature_id"] or "", row["annotation"]))
+        feature_ids, labels = np.array(stamps, dtype=object).reshape(-1, 2).T
+        sets = self._df["dims"].map(lambda x: ",".join(sorted(x.split(","))))
+        cuts = []  # one plan per set of patch dims, then one merge per dim
+        for have, rows in self._df["_patch_row"].groupby(sets, sort=False):
+            have = str(have).split(",")
+            asks = [i for i, w in enumerate(windows) if set(w) <= set(have)]
+            if not asks:  # every window bounds a dim these patches lack
+                continue
+            part = self._restrict_to_rows(rows)
+            # the plan merges along the dim with the most distinct starts
+            # (ties: the one most windows bound); it trims the rest
+            split = {x: part._df[f"{x}_min"].nunique() for x in have}
+            counts = {x: sum(x in windows[i] for i in asks) for x in have}
+            main = min(have, key=lambda x: (-split[x], -counts[x]))
+            others = [x for x in have if x != main]
+            dims = [main, *(x for x in others if counts[x])]
+            ends = [[windows[i].get(x, (None,) * 2) for i in asks] for x in dims]
+            arrays = {x: np.array(y) for x, y in zip(dims, ends, strict=True)}
+            source_rows, plan = part._build_chunk_plan(
+                arrays, keep_partial=True, on_incomplete="ignore"
+            )
+            if plan.outputs.empty:
+                continue
+            asked = np.take(asks, plan.outputs["_request_row"])
+            stamp = {
+                "feature_id": np.take(feature_ids, asked),
+                "annotation": pd.array(np.take(labels, asked), "Int64"),
+            }
+            out = part._chunked(source_rows, plan, stamp, dtypes)
+            # merging each feature along the other dims splits their holes;
+            # after a trim, along the first again joins what it made alike
+            group = [*_resolve_group_attrs(None, set(out._df)), *dtypes]
+            for dim in [*others, *([main] if len(dims) > 1 else [])]:
+                out = out.chunk(**{dim: None}, group=group)
+            cuts.append(out)
+        if not cuts:
+            return self._new_from_catalog(
+                self._restrict_to_rows([])._materialize_lossy({}, dtypes)
+            )
+        out = sum(cuts[1:], cuts[0])
+        # back into feature order, each feature's pieces in coordinate order
+        rank = {_stamp_key(*x): i for i, x in enumerate(stamps)}
+        keys = out._df[list(dtypes)].astype(object).itertuples(index=False)
+        ranked = sorted(sorted(present), key=lambda x: -self._df[f"{x}_min"].nunique())
+        mins = [f"{x}_min" for x in ranked if f"{x}_min" in out._df]
+        frame = out._df[mins].assign(_rank=[rank[_stamp_key(*x)] for x in keys])
+        frame = frame.reset_index(drop=True).sort_values(["_rank", *mins])
+        return out._new_from_catalog(out._catalog.restrict(frame.index.to_numpy()))
 
     @compose_docstring(conflict_desc=attr_conflict_description)
     def concatenate(
         self,
         check_behavior: WARN_LEVELS | None = None,
         *,
-        conflict: Literal["drop", "raise", "keep_first"] = "raise",
+        conflict: CONFLICT = "raise",
         group: str | Sequence[str] | None = None,
         **kwargs,
     ) -> Self:
@@ -2457,7 +2488,7 @@ class Spool(NodeRepr, NamespaceOwner):
     # --- construction --------------------------------------------------
 
     @classmethod
-    def from_directory(cls, path, index_path=None) -> Self:
+    def _from_directory(cls, path, index_path=None) -> Self:
         """
         Create a spool over a directory of fiber files.
 
@@ -2493,7 +2524,7 @@ class Spool(NodeRepr, NamespaceOwner):
         return out
 
     @classmethod
-    def from_file(
+    def _from_file(
         cls,
         path,
         file_format: str | None = None,
@@ -2625,8 +2656,8 @@ class Spool(NodeRepr, NamespaceOwner):
             getattr(formatter, "index", lambda _: None)(self._file_path)
             # Sniffed rather than reused: noticing that the file changed is
             # what update is for, and it may now hold another version.
-            refreshed = self.from_file(self._file_path)
-            # from_file builds a spool from the file alone, but an attached
+            refreshed = self._from_file(self._file_path)
+            # _from_file builds a spool from the file alone, but an attached
             # inventory is the caller's state rather than the file's, and
             # re-reading the file is no reason to stop enriching.
             refreshed._inventory = self._inventory
@@ -3052,12 +3083,12 @@ def _spool_from_str(path, **kwargs):
     # A directory was passed; index it.
     if path.is_dir():
         requires_local_directory(path, label="Directory spool")
-        return Spool.from_directory(path, **kwargs)
+        return Spool._from_directory(path, **kwargs)
     # A single file was passed. If the file format supports quick
     # scanning build a lazy file-backed spool, else read it into memory.
     elif path.exists():  # a single file path was passed.
         _format, _version = dc.get_format(path, **kwargs)
-        return Spool.from_file(path, _format, _version)
+        return Spool._from_file(path, _format, _version)
     else:
         msg = (
             f"could not get spool from argument: {path}. "

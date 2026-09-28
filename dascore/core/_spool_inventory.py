@@ -8,11 +8,11 @@ so patches and index rows interpret selectors consistently.
 
 from __future__ import annotations
 
-import inspect
 import threading
 import warnings
 from collections.abc import Sequence, Sized
 from itertools import pairwise
+from numbers import Real
 from typing import Any, NamedTuple, get_args
 
 import numpy as np
@@ -249,41 +249,26 @@ def validate_enrich_selection(attrs, coords) -> None:
             raise ParameterError(msg)
 
 
-def normalize_enrich_kwargs(kwargs) -> dict:
+def normalize_enrich_kwargs(**kwargs) -> dict:
     """
-    Canonicalize enrich arguments, rejecting any Patch.enrich would.
+    Refuse Spool.enrich arguments that cannot wait, and canonicalize them.
 
-    Two spools which enrich identically have to compare equal, so an
-    argument stated explicitly at its own default, or given as a list
-    where a tuple would do, must reach the same stored form.
+    Two spools which enrich identically have to compare equal, so a
+    collection of names given as a list must reach the stored form of
+    the same names given as a tuple.
     """
-    signature = inspect.signature(dc.Patch.enrich)
-    valid = set(signature.parameters) - {"patch", "inventory"}
-    if bad := sorted(set(kwargs) - valid):
-        msg = (
-            f"Spool.enrich got unknown argument(s) {bad}; it passes "
-            f"{sorted(valid)} through to Patch.enrich."
-        )
-        raise ParameterError(msg)
-    bound = signature.bind_partial(**kwargs)
-    bound.apply_defaults()
     # Refused on this call rather than on whichever patch is pulled first;
     # selection reads the policies and the key too, so none can wait.
-    arguments = bound.arguments
-    validate_enrich_selection(
-        arguments.get("attrs", False), arguments.get("coords", False)
-    )
-    validate_enrich_conflict(arguments.get("conflict", "keep_first"))
-    if (on_missing := arguments.get("on_missing", "raise")) not in VALID_ON_MISSING:
+    validate_enrich_selection(kwargs["attrs"], kwargs["coords"])
+    validate_enrich_conflict(kwargs["conflict"])
+    if (on_missing := kwargs["on_missing"]) not in VALID_ON_MISSING:
         msg = f"on_missing must be one of {VALID_ON_MISSING}, got {on_missing!r}."
         raise ParameterError(msg)
-    if key := arguments.get("acquisition_key"):
+    if key := kwargs["acquisition_key"]:
         validate_acquisition_key(key)
-    # A collection of names means what it holds, not which container holds it.
     return {
         name: tuple(value) if isinstance(value, list) else value
-        for name, value in bound.arguments.items()
-        if name in valid
+        for name, value in kwargs.items()
     }
 
 
@@ -517,9 +502,23 @@ def stated_channels(channels: dict) -> dict:
     inventory's, or the index would be left to complain that it has never
     heard of it. `None` is not dropped beside it: on a coordinate the
     fiber defines it spells the undefined marker, which is a statement
-    about which channels to keep rather than the absence of one.
+    about which channels to keep rather than the absence of one. A range
+    open at both ends selects everything, as it does on a patch coordinate.
     """
-    return {name: value for name, value in channels.items() if value is not Ellipsis}
+    return {
+        name: value
+        for name, value in channels.items()
+        if value is not Ellipsis and not _fully_open(value)
+    }
+
+
+def _fully_open(value) -> bool:
+    """Return True for a (start, stop) range with no bound on either end."""
+    return (
+        isinstance(value, tuple)
+        and len(value) == 2
+        and all(x is None or x is Ellipsis for x in value)
+    )
 
 
 def glob_filter(include, exclude):
@@ -574,8 +573,8 @@ def effective_matches(
     pending enrichment rewrites the name: under `keep_last` the
     inventory's answer replaces the header where it has one, and under
     `drop` a header disagreeing with the answer comes out blank, which
-    nothing selects. `keep_first` keeps the header, so it rewrites
-    nothing and never reaches here. `resolved` is given when
+    nothing selects. `keep_first` and `raise` never rewrite the header,
+    so they never reach here. `resolved` is given when
     `on_missing="null"` is pending on a named attr: a resolved row the
     inventory has no answer for then comes out blank too. `conflict` is
     None when nothing rewrites.
@@ -589,11 +588,23 @@ def effective_matches(
     else:
         assert conflict == "drop" and headers is not None
         for row in np.flatnonzero(rewritten):
-            if not values_equal(headers[row], answers[row]):
+            if not header_agrees(headers[row], answers[row]):
                 out[row] = False
     if resolved is not None:
         out[stated & resolved & _unstated(answers)] = False
     return out
+
+
+def header_agrees(header, answer) -> bool:
+    """True if a stated header value agrees with the inventory's answer."""
+    if values_equal(header, answer):
+        return True
+    # Unit conversion and float32 headers leave rounding noise in numbers.
+    numbers = all(
+        isinstance(x, Real) and not isinstance(x, bool | np.bool_)
+        for x in (header, answer)
+    )
+    return numbers and bool(np.isclose(header, answer, rtol=1e-6, atol=0))
 
 
 # --- shared projection primitives -------------------------------------

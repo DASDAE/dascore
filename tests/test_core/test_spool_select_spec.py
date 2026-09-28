@@ -663,6 +663,19 @@ class TestExistingBehaviorKept:
         out = spool.select(time=(t0, t0 + np.timedelta64(2, "s")))
         assert len(out) == 1
 
+    @pytest.mark.parametrize(
+        "value", [(None, None), (..., ...), (None, ...), slice(None)]
+    )
+    def test_open_coord_range_selects_all(self, spool, value):
+        """A fully open coordinate range is no filter, like Patch.select."""
+        assert spool.select(time=value) == spool
+
+    def test_open_coord_range_keeps_patches_without_it(self, random_patch):
+        """A fully open range is no filter, so patches lacking it stay."""
+        other = random_patch.rename_coords(time="depth")
+        spool = dc.spool([random_patch, other])
+        assert len(spool.select(time=(None, None))) == 2
+
 
 class TestOriginalUnitsPresentation:
     """The index stores and presents envelopes in original units (#863)."""

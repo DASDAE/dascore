@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from unittest import mock
 
 import numpy as np
@@ -9,8 +10,9 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+import dascore.io.core as io_core
 from dascore.core.spool import Spool
-from dascore.exceptions import ParameterError
+from dascore.exceptions import CoordMergeError, ParameterError
 from dascore.io.index.catalog import FileResolver
 from dascore.io.index.planned import PlanResolver
 
@@ -38,6 +40,26 @@ def _span(patch, dim="time"):
 def _seconds(start, *offsets):
     """Absolute times offsets seconds after start."""
     return [np.datetime64(start + x * SECOND) for x in offsets]
+
+
+def _tiles(spool, count):
+    """The spool's patches split into count distance tiles each."""
+    tiles = [(x[0], x[-1]) for x in np.array_split(np.arange(300), count)]
+    return dc.spool([x.select(distance=d) for x in spool for d in tiles])
+
+
+def _boxes(start):
+    """A lone time range, then two boxes bounded in distance too."""
+    ann = _ranges(start, (5, 12))
+    ann = ann.add_path("box", time=_seconds(start, 5, 12), distance=[10.0, 250.0])
+    return ann.add_path("b2", time=_seconds(start, 5, 12), distance=[95.0, 105.0])
+
+
+def _line(time, distance=(0.0, 1.0), **attrs):
+    """A patch of ones on the given float time and distance labels."""
+    coords = {"distance": np.asarray(distance), "time": np.asarray(time)}
+    shape = tuple(len(x) for x in coords.values())
+    return dc.Patch(data=np.ones(shape), coords=coords, dims=DIMS, attrs=attrs)
 
 
 def _ranges(start, *pairs, dims=DIMS):
@@ -81,15 +103,42 @@ class TestCut:
         ends = {"time_min": [start, None], "time_max": [start + SECOND, None]}
         frame = pd.DataFrame({**ends, "time": [None, start]})
         match = r"annotation 1 is a single time.*time="
-        with mock.patch.object(Spool, "select") as select:
+        with mock.patch.object(Spool, "_build_chunk_plan") as plan:
             with pytest.raises(ParameterError, match=match):
                 spool.cut(dc.AnnotationSet(frame, dims=DIMS))
-        assert not select.call_count
+        assert not plan.call_count
 
     def test_crossing_patches(self, spool, start):
         """A window crossing a file boundary is one patch."""
         (patch,) = spool.cut(_ranges(start, (5, 12)))
         assert _span(patch) == _seconds(start, 5, 12)
+
+    def test_tiled(self, spool, start):
+        """Patches split along two dims merge along both, in feature order."""
+        cut, whole = (x.cut(ann := _boxes(start)) for x in (_tiles(spool, 2), spool))
+        assert all(x.equals(y) for x, y in zip(cut, whole, strict=True))
+        for tiled in cut, _tiles(spool, 3).cut(ann):  # 2x3 and 3x3 tiles
+            assert list(tiled.get_contents()["feature_id"]) == ["box", "b2", ""]
+        ends = {"distance_min": [100.0, 10.0], "distance_max": [200.0, 20.0]}
+        cut = _tiles(spool, 2).cut(dc.AnnotationSet(pd.DataFrame(ends), dims=DIMS))
+        assert cut.get_contents()["annotation"].tolist() == [0, 1]
+        for pairs in [(100, 101)], [(1.001, 1.003)]:  # no data, no samples
+            assert not len(_tiles(spool, 2).cut(_ranges(start, *pairs)))
+
+    def test_mixed_dims_kept(self, spool, start):
+        """A patch lacking the merged dim is cut on its own dims, not lost."""
+        lone = spool[0].select(time=0, samples=True).squeeze("time")
+        frame = pd.DataFrame({"distance_min": [10.0], "distance_max": [50.0]})
+        cut = dc.spool([*spool, lone]).cut(dc.AnnotationSet(frame, dims=DIMS))
+        assert sorted(x.shape for x in cut) == [(41,), (41, 6000)]
+        lone = spool[0].select(distance=0, samples=True).squeeze("distance")
+        cut = dc.spool([*_tiles(spool, 2), lone]).cut(_ranges(start, (1, 2)))
+        assert sorted(x.shape for x in cut) == [(251,), (300, 251)]
+        # a feature bounding distance skips the patch without it
+        ann = _ranges(start, (1, 2)).add_path("d", distance=[10.0, 50.0])
+        cut = dc.spool([*spool, lone]).cut(ann)
+        stamps = [(x.attrs.feature_id, x.attrs.annotation, x.shape) for x in cut]
+        assert stamps == [("d", None, (41, 6000)), ("", 0, (300, 251)), ("", 0, (251,))]
 
     def test_spanned_dim(self, spool, start):
         """A dimension the feature spans keeps its full extent."""
@@ -170,6 +219,10 @@ class TestCut:
         frame = pd.DataFrame({"distance_min": [10.2], "distance_max": [10.7]})
         assert not len(spool.cut(dc.AnnotationSet(frame, dims=DIMS)))
         assert not len(spool.cut(_ranges(start, (0, 1)).select(feature_id="none")))
+        # nor does a window between the samples of a coordinate with no step
+        irregular = dc.spool(_line([0.0, 1.0, 3.0, 7.0]))
+        frame = pd.DataFrame({"time_min": [4.0], "time_max": [6.0]})
+        assert not len(irregular.cut(dc.AnnotationSet(frame, dims=DIMS)))
 
     @pytest.mark.parametrize(
         "pads",
@@ -185,12 +238,12 @@ class TestCut:
         ],
     )
     def test_bad_pad(self, spool, start, pads):
-        """A malformed pad is refused, naming its keyword, before selecting."""
+        """A malformed pad is refused, naming its keyword, before planning."""
         ann = _ranges(start, (0, 1))
-        with mock.patch.object(Spool, "select") as select:
+        with mock.patch.object(Spool, "_build_chunk_plan") as plan:
             with pytest.raises(ParameterError, match=f"{next(iter(pads))}="):
                 spool.cut(ann, **pads)
-        assert not select.call_count
+        assert not plan.call_count
 
     def test_dim_spool_lacks(self, spool, start):
         """A dimension the spool lacks must be spanned, and takes no pad."""
@@ -208,17 +261,82 @@ class TestCut:
         with pytest.raises(ParameterError, match="the spool lacks"):
             lat.cut(dc.AnnotationSet(frame, dims=("latitude", "time")))
 
-    def test_mixed_dims(self, spool, start):
-        """Patches with different dimensions are cut, merging shared dims."""
-        patch = spool[0]
-        squeezed = patch.select(distance=0, samples=True).squeeze("distance")
-        assert len(dc.spool([patch, squeezed]).cut(_ranges(start, (1, 2)))) == 2
+    def test_box(self, spool, start):
+        """A feature bounded in time and distance is the box select gives."""
+        ann = _ranges(start, (5, 12))
+        ann = ann.add_path("box", time=_seconds(start, 5, 12), distance=[10.0, 50.0])
+        patch, _ = spool.cut(ann)  # features come before lone rows
+        times = tuple(_seconds(start, 5, 12))
+        expected = spool.select(time=times, distance=(10, 50)).chunk(time=None)[0]
+        assert patch.equals(expected.update_attrs(feature_id="box", annotation=None))
+
+    def test_many_in_one_plan(self, spool, start):
+        """Many features take one plan per dim, one output each in order."""
+        times = [start + x * SECOND / 10 for x in range(10, 210)]
+        ann = dc.AnnotationSet(pd.DataFrame({"time": times}), dims=DIMS)
+        wrapped = mock.patch.object(
+            Spool, "_build_chunk_plan", autospec=True, wraps=Spool._build_chunk_plan
+        )
+        with wrapped as plans:
+            contents = spool.cut(ann, time=("-1s", "1s")).get_contents()
+        assert plans.call_count == 2  # one per dimension, not per feature
+        assert contents["annotation"].tolist() == list(range(200))
+
+    def test_stamps_after_dropped(self, spool, start):
+        """Features holding no data are dropped, the rest keep their stamps."""
+        cut = spool.cut(_ranges(start, (100, 101), (1, 2), (1.001, 1.003), (3, 4)))
+        stamps = cut.get_contents()["annotation"].tolist()
+        assert stamps == [1, 3] and [x.attrs.annotation for x in cut] == stamps
+
+    def test_offset_grids(self):
+        """A window past one grid keeps the offset grid's sample in it."""
+        spool = dc.spool([_line(np.arange(0.0, 11)), _line(np.arange(0.5, 11))])
+        frame = pd.DataFrame({"time_min": [10.1], "time_max": [10.6]})
+        (patch,) = spool.cut(dc.AnnotationSet(frame, dims=DIMS))
+        (chunked,) = spool.chunk(time=np.array([[10.1, 10.6]]))
+        assert _span(patch) == _span(chunked) == [10.5, 10.5]
+
+    def test_trim_makes_alike(self):
+        """Patches whose trims agree along the other dim merge into one."""
+        first = _line(np.arange(10.0), range(101))
+        spool = dc.spool([first, _line(np.arange(10.0, 20), range(201))])
+        frame = pd.DataFrame({"distance_min": [10.0], "distance_max": [50.0]})
+        (patch,) = spool.cut(dc.AnnotationSet(frame, dims=DIMS))
+        assert patch.shape == (41, 20)
+
+    def test_nested_conflict(self):
+        """A source nested in another must still agree with it."""
+        inner = _line(np.arange(2.0, 5), instrument_id="Z")
+        spool = dc.spool([_line(np.arange(10.0), instrument_id="A"), inner])
+        frame = pd.DataFrame({"time_min": [1.0], "time_max": [5.0]})
+        with pytest.raises(CoordMergeError, match="instrument_id"):
+            spool.cut(dc.AnnotationSet(frame, dims=DIMS))
+
+    def test_piece_order(self, spool, start):
+        """A feature's pieces from unlike patches come in coordinate order."""
+        for middle in spool[1].decimate(time=2), spool[1].transpose():
+            cut = dc.spool([spool[0], middle, spool[2]]).cut(_ranges(start, (5, 20)))
+            starts = cut.get_contents()["time_min"]
+            assert len(starts) > 1 and starts.is_monotonic_increasing
+
+    def test_no_deprecation(self, spool, start):
+        """Cutting time boxes warns of nothing NumPy will remove."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DeprecationWarning)
+            assert len(spool.cut(_boxes(start)))
 
     def test_hole_in_one_patch(self, holed_patch):
         """A hole inside one patch splits a window across it; inside it, none."""
         frame = pd.DataFrame({"time_min": [50.0, 70.0], "time_max": [110.0, 90.0]})
         cut = dc.spool(holed_patch).cut(dc.AnnotationSet(frame, dims=DIMS))
         assert [_span(x) for x in cut] == [[50, 59], [100, 110]]
+        # a feature bounding the other dim too, or only it, is still split
+        box = frame.iloc[:1].assign(distance_min=-1.0, distance_max=1.0)
+        cut = dc.spool(holed_patch).cut(dc.AnnotationSet(box, dims=DIMS))
+        assert [_span(x) for x in cut] == [[50, 59], [100, 110]]
+        box = box.drop(columns=["time_min", "time_max"])
+        cut = dc.spool(holed_patch).cut(dc.AnnotationSet(box, dims=DIMS))
+        assert [_span(x) for x in cut] == [[0, 59], [100, 159]]
 
     @pytest.mark.parametrize(
         ("time", "samples", "window", "span"),
@@ -240,17 +358,20 @@ class TestCut:
         assert _span(cut) == span
 
     def test_lazy(self, spool, start, tmp_path):
-        """Cutting and reading contents load nothing; iterating does."""
+        """Cutting and reading contents load nothing; reading the data does."""
         dc.examples.spool_to_directory(spool, path=tmp_path)
         directory = dc.spool(tmp_path).update()
-        plan, file = (
-            mock.patch.object(x, "resolve", autospec=True, side_effect=x.resolve)
-            for x in (PlanResolver, FileResolver)
+        plan = mock.patch.object(
+            PlanResolver, "resolve", autospec=True, side_effect=PlanResolver.resolve
         )
-        with plan as calls, file as reads:
+        file = mock.patch.object(io_core, "_array_reader", wraps=io_core._array_reader)
+        source = mock.patch.object(
+            FileResolver, "resolve", autospec=True, side_effect=FileResolver.resolve
+        )
+        with plan as calls, file as reads, source as sources:
             cut = directory.cut(_ranges(start, (5, 12)))
             cut.get_contents()
-            assert calls.call_count == reads.call_count == 0
+            assert calls.call_count == reads.call_count == sources.call_count == 0
             (patch,) = cut
-            assert calls.call_count and reads.call_count
+            assert calls.call_count and patch.data.size and reads.call_count
         assert _span(patch) == _seconds(start, 5, 12)

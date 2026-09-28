@@ -28,7 +28,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
-from dascore.constants import WARN_LEVELS, attr_conflict_description
+from dascore.constants import CONFLICT, WARN_LEVELS, attr_conflict_description
 from dascore.exceptions import (
     ChunkError,
     CoordMergeError,
@@ -1100,7 +1100,8 @@ def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str
     # Add the step so consecutive sources do not share one sample; the
     # roll artifact at each partition's first row is masked out.
     overlaps = (start <= prev_stop) & ~is_first
-    corrected = np.where(overlaps, prev_stop + prev_step, start)
+    # an object step (a run row's) must not turn the starts into objects
+    corrected = np.where(overlaps, prev_stop + prev_step, start).astype(start.dtype)
     modified = corrected != start
     if "_modified" in sorted_df.columns:
         modified = sorted_df["_modified"].to_numpy() | modified
@@ -1501,7 +1502,7 @@ def build_chunk_plan(
     keep_partial: bool = False,
     snap_coords: bool = True,
     tolerance: float | Quantity | np.timedelta64 | GapTolerance = 1.5,
-    conflict: Literal["drop", "raise", "keep_first"] = "raise",
+    conflict: CONFLICT = "raise",
     group=None,
     missing_dim: Literal["raise", "drop"] = "raise",
     fill_value=None,
@@ -1622,10 +1623,12 @@ def build_chunk_plan(
     part_steps = np.array(  # D7: one step everywhere per partition
         [get_middle_value(step_all[a:b]) for a, b in zip(seg_starts, seg_ends)]
     )
+    start_all = sorted_df[min_name].to_numpy()
     corrected, mod_after, keep_row = _member_envelopes(sorted_df, seg_starts, name)
+    if explicit is not None:  # windows resolve their own overlaps
+        corrected, keep_row = start_all, np.ones(len(start_all), dtype=bool)
     # kept-row (member candidate) arrays; partitions stay contiguous, so
     # partition p's kept rows sit in [koffsets[p], koffsets[p + 1])
-    start_all = sorted_df[min_name].to_numpy()
     stop_all = sorted_df[max_name].to_numpy()
     src1, src2 = corrected[keep_row], stop_all[keep_row]
     korig_min, korig_max = start_all[keep_row], stop_all[keep_row]
@@ -1651,6 +1654,7 @@ def build_chunk_plan(
     out_starts, out_stops, out_ids = [], [], []
     out_requests = []
     m_out_ids, m_src, m_lo, m_hi, m_parts, dtype_parts = [], [], [], [], [], []
+    touched = []  # (output, source) pairs a window reaches, owned or not
     next_id = 0
     # An error hit while processing partition p is deferred until the
     # partitions before p have been policed for conflicts: the old
@@ -1688,7 +1692,7 @@ def build_chunk_plan(
                     ]
                     if _exact_coords.get(row_id) is not None
                 ]
-                if _exact_coords and not pd.isnull(part_step) and part_step != 0
+                if _exact_coords and not pd.isnull(part_step) and bool(part_step)
                 else []
             )
             starts_list, stops_list, requests_p = [], [], []
@@ -1746,8 +1750,13 @@ def build_chunk_plan(
         # Map each output onto the kept source rows it draws from.
         lo_k, hi_k = koffsets[part], koffsets[part + 1]
         s1, s2 = src1[lo_k:hi_k], src2[lo_k:hi_k]
-        first_src = np.maximum(np.searchsorted(s1, starts_p, side="right") - 1, 0)
-        last_src = np.minimum(np.searchsorted(s2, stops_p, side="left"), len(s1) - 1)
+        if explicit is not None:  # every source a window reaches, in order
+            first_src = np.searchsorted(pd.Series(s2).cummax().to_numpy(), starts_p)
+            last_src = np.searchsorted(s1, stops_p, side="right") - 1
+        else:
+            first_src = np.maximum(np.searchsorted(s1, starts_p, side="right") - 1, 0)
+            last_src = np.searchsorted(s2, stops_p, side="left")
+            last_src = np.minimum(last_src, len(s1) - 1)
         m_counts = np.maximum(last_src - first_src + 1, 0)
         total = int(m_counts.sum())
         rel_out = np.repeat(np.arange(n_out), m_counts)
@@ -1764,6 +1773,16 @@ def build_chunk_plan(
         if not overlap_ok.all():
             rel_src, rel_out = rel_src[overlap_ok], rel_out[overlap_ok]
             lo, hi = lo[overlap_ok], hi[overlap_ok]
+            m_counts = np.bincount(rel_out, minlength=n_out)
+            total = int(m_counts.sum())
+        if explicit is not None and total:
+            # the first source a window reaches owns an overlap inside it
+            touched.append((ids_p[rel_out], kpids[rel_src + lo_k]))
+            steps = ksteps[rel_src + lo_k]
+            clipped = {min_name: lo, max_name: hi, f"{name}_step": steps}
+            firsts = np.flatnonzero(np.r_[True, rel_out[1:] != rel_out[:-1]])
+            lo, _, own = _member_envelopes(pd.DataFrame(clipped), firsts, name)
+            rel_src, rel_out, lo, hi = rel_src[own], rel_out[own], lo[own], hi[own]
             m_counts = np.bincount(rel_out, minlength=n_out)
             total = int(m_counts.sum())
         # Plan invariant: every published output has at least one member.
@@ -1942,9 +1961,11 @@ def build_chunk_plan(
         member_parts = np.concatenate(m_parts)
         members[unit_col] = first_units.take(member_parts).reset_index(drop=True)
     if explicit is not None:
+        pairs = [np.concatenate(x) for x in zip(*touched)] or [[], []]
         outputs, members = _finish_explicit_plan(
             outputs=outputs,
             members=members,
+            touched=pd.DataFrame(dict(zip(["output_id", "_patch_row"], pairs))),
             sources=sorted_df,
             seg_starts=seg_starts,
             name=name,
@@ -1963,7 +1984,7 @@ def build_chunk_plan(
 def build_concat_plan(
     df: pd.DataFrame,
     *,
-    conflict: Literal["drop", "raise", "keep_first"] = "raise",
+    conflict: CONFLICT = "raise",
     group=None,
     **kwargs,
 ) -> ChunkPlan:
@@ -2673,6 +2694,7 @@ def _finish_explicit_plan(
     exact_coords,
     fill_value,
     skip=(),  # (request, group) pairs another dim's window misses
+    touched=None,  # every source a window reaches, owned or not
 ):
     """Keep deliverable request/group outputs and carry their actual attrs."""
     min_name, max_name, step_name = _dim_columns(sources, name)
@@ -2780,7 +2802,7 @@ def _finish_explicit_plan(
                 )
                 continue
             all_known = len(coords) == sum(part["count"] for part in relevant)
-            no_grid = pd.isnull(step) or step == 0
+            no_grid = pd.isnull(step) or not step
             if no_grid and not all_known:
                 failures.append(
                     (request, bounds, label, "exact source coordinates are unavailable")
@@ -2867,8 +2889,12 @@ def _finish_explicit_plan(
         return outputs.reset_index(drop=True), members.reset_index(drop=True)
     # Resolve all accepted outputs' contributors together, preserving
     # member order and multiplicity; fill-only outputs use their anchor.
+    # A source an overlap left without samples still has to agree.
+    reached = members if touched is None else touched
     contributors = (
-        members[["output_id", "_patch_row"]]
+        reached[reached["output_id"].isin(outputs["output_id"])][
+            ["output_id", "_patch_row"]
+        ]
         .rename(columns={"output_id": "_contributor_output"})
         .merge(sources, on="_patch_row", how="left", sort=False)
     )
@@ -3052,7 +3078,7 @@ def exact_coordinate_bounds(coord, bounds, plan_unit=None):
     if (
         step is not None
         and not pd.isnull(step)
-        and step != 0
+        and bool(step)
         and all(isinstance(x, (float, np.floating)) for x in in_native)
     ):
         assert step is not None

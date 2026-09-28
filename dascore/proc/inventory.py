@@ -24,6 +24,7 @@ from dascore.core._spool_inventory import (
     attr_owner,
     get_coord_values,
     get_interrogator,
+    header_agrees,
     map_axis_coords,
     readable_on,
     to_axis_units,
@@ -43,7 +44,6 @@ from dascore.exceptions import (
     PatchError,
     UnresolvedPatchError,
 )
-from dascore.models import values_equal
 from dascore.utils.attrs import _is_missing
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate, validate_acquisition_key, warn_or_raise
@@ -204,15 +204,19 @@ def _apply_conflict(patch, new_attrs, conflict) -> tuple[dict, list]:
     """
     Return the attrs to set and to drop, given the conflict policy.
 
-    Filling an empty attr is never a conflict, and neither are equal values;
-    a conflict is both sides holding different information.
+    Filling an empty attr is never a conflict, and an agreeing header is
+    kept unless `keep_last` asks the inventory to correct it; a conflict
+    is both sides holding different information.
     """
     current = dict(patch.attrs)
     updates, drops = {}, []
     for name, value in new_attrs.items():
         old = current.get(name, None)
-        if _is_missing(old) or values_equal(old, value):
+        if _is_missing(old) or conflict == "keep_last":
             updates[name] = value
+        elif header_agrees(old, value):
+            # The header stands, so selection on it sees what comes out.
+            updates[name] = old
         elif conflict == "raise":
             msg = (
                 f"The patch's {name!r} is {old!r} but the inventory says "
@@ -222,10 +226,6 @@ def _apply_conflict(patch, new_attrs, conflict) -> tuple[dict, list]:
             raise PatchError(msg)
         elif conflict == "drop":
             drops.append(name)
-        elif conflict == "keep_last":
-            # The inventory is asked to correct the header rather than to
-            # agree with it, so its value is the one which stands.
-            updates[name] = value
         # keep_first: the patch stated it first, so the patch keeps it.
     return updates, drops
 
@@ -421,12 +421,13 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
 def enrich(
     patch: PatchType,
     inventory: Inventory,
+    *,
     attrs: bool | tuple[str, ...] = True,
     coords: bool | tuple[str, ...] = True,
     acquisition_key: str | None = None,
     time=None,
     on_missing: ON_MISSING = "raise",
-    conflict: ENRICH_CONFLICT = "keep_first",
+    conflict: ENRICH_CONFLICT = "raise",
 ) -> PatchType:
     """
     Copy inventory metadata onto a patch.
