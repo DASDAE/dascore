@@ -22,6 +22,7 @@ from dascore.utils.misc import (
     order_range_tuple,
     sanitize_range_param,
 )
+from dascore.utils.tables import drop_private_columns
 from dascore.utils.time import to_datetime64, to_timedelta64
 
 _RowType = TypeVar("_RowType")
@@ -99,12 +100,6 @@ def present_data_size_column(df: pd.DataFrame) -> pd.DataFrame:
         return out
     sizes = out["data_size"]
     return out.assign(data_size=sizes.astype("Int64" if sizes.isna().any() else int))
-
-
-def drop_private_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Drop every remaining private (leading underscore) column."""
-    private = [col for col in df.columns if str(col).startswith("_")]
-    return df.drop(columns=private) if private else df
 
 
 # Publish useful private columns in this order, then drop all others.

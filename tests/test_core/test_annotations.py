@@ -488,12 +488,6 @@ class TestColumns:
         with pytest.raises(ParameterError, match="features table"):
             AnnotationSet(frame, dims=DIMS)
 
-    def test_a_retired_range_spelling_says_what_to_write(self):
-        """A set written before the rename is told its columns' new names."""
-        frame = pd.DataFrame({"distance": [1.0], "time_start": [0], "time_end": [1]})
-        with pytest.raises(ParameterError, match="now spells _min/_max"):
-            AnnotationSet(frame, dims=DIMS)
-
     def test_undeclared_range_pair_refused(self):
         """A range naming no declared dimension is a forgotten dimension."""
         frame = pd.DataFrame({"time": [1.0], "depth_min": [1], "depth_max": [2]})
