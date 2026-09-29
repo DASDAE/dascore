@@ -26,7 +26,7 @@ import dascore as dc
 import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
 from dascore.config import config_context
-from dascore.core.coords import NumericCoord
+from dascore.core.coords import Grid, NumericCoord
 from dascore.core.lazy_array import LazyArray
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
@@ -836,7 +836,9 @@ class TestStreamingMerge:
         p2 = p2.transpose(*reversed(p2.dims))
         patches = iter([p1, p2])
         monkeypatch.setattr(
-            assembler, "_load_trimmed_patch", lambda patch_kwargs, joined: next(patches)
+            assembler,
+            "_load_trimmed_patch",
+            lambda patch_kwargs, joined, units=None: next(patches),
         )
         time_axis = p1.get_axis("time")
         samples = p1.data.shape[time_axis] * 2
@@ -854,7 +856,9 @@ class TestStreamingMerge:
         p2 = p2.select(distance=(None, distance.max() - distance.step))
         patches = iter([p1, p2])
         monkeypatch.setattr(
-            assembler, "_load_trimmed_patch", lambda patch_kwargs, joined: next(patches)
+            assembler,
+            "_load_trimmed_patch",
+            lambda patch_kwargs, joined, units=None: next(patches),
         )
         msg = "their shapes are incompatible"
         with pytest.raises(CoordMergeError, match=msg):
@@ -871,7 +875,9 @@ class TestStreamingMerge:
         )
         patches = iter([p1, p2])
         monkeypatch.setattr(
-            assembler, "_load_trimmed_patch", lambda patch_kwargs, joined: next(patches)
+            assembler,
+            "_load_trimmed_patch",
+            lambda patch_kwargs, joined, units=None: next(patches),
         )
         msg = "expected them to vary along time"
         with pytest.raises(CoordMergeError, match=msg):
@@ -4567,3 +4573,116 @@ class TestSelectedRecipeMerge:
                     assert_same_patch(one, other, kwargs, per_coord=True)
         assert compared > 30
         assert recipes, "no selected spool merged from the index"
+
+
+class TestChunkMergeRegressions:
+    """Chunk assembly preserves sample order, scale, and declared sampling."""
+
+    @pytest.fixture(params=["memory", "index", "stream", "materialized"])
+    def merge_spool(self, request, tmp_path, monkeypatch):
+        """Build a spool through each assembly route."""
+        if request.param == "stream":
+            monkeypatch.setattr(
+                PatchAssembler, "_member_meta_from_index", lambda *a: None
+            )
+        elif request.param == "materialized":
+            monkeypatch.setattr(
+                assembly_module, "_estimate_merge_samples", lambda *a: None
+            )
+
+        def build(patches):
+            if request.param == "memory":
+                return dc.spool(patches)
+            return _write_spool(tmp_path, patches)
+
+        return build
+
+    @pytest.mark.parametrize("length", [None, 4])
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_descending_sample_order(self, merge_spool, length, reverse):
+        """Descending samples match their labels, including across a seam (#1248)."""
+        patches = []
+        for start in (9, 4):
+            values = np.arange(start, start - 5, -1.0)
+            patches.append(
+                dc.Patch(
+                    data=values,
+                    coords={"time": values, "sample": ("time", values * 10)},
+                    dims=("time",),
+                )
+            )
+        spool = merge_spool(patches[::-1] if reverse else patches)
+        chunks = spool.chunk(time=length, conflict="keep_first")
+        assert len(chunks) == (1 if length is None else 2)
+        for patch in chunks:
+            np.testing.assert_array_equal(patch.data, patch.get_array("time"))
+            np.testing.assert_array_equal(patch.data * 10, patch.get_array("sample"))
+
+    @pytest.mark.parametrize("conflict", ["keep_first", "drop"])
+    def test_data_units_convert(self, merge_spool, conflict):
+        """Kilometre members convert to metres as concatenate does (#1247)."""
+        patches = [
+            dc.Patch(
+                data=np.arange(1, 6, dtype=np.int16),
+                coords={"time": np.arange(start, start + 5.0)},
+                dims=("time",),
+                attrs={"data_units": units},
+            )
+            for start, units in [(0, "m"), (5, "km")]
+        ]
+        actual = merge_spool(patches).chunk(time=None, conflict=conflict)[0]
+        expected = [1, 2, 3, 4, 5, 1000, 2000, 3000, 4000, 5000]
+        np.testing.assert_array_equal(actual.data, expected)
+        assert actual.attrs.data_units == get_quantity("m")
+
+    def test_descending_units_follow_the_plan(self, merge_spool):
+        """keep_first keeps the units the chunked spool advertises."""
+        patches = [
+            dc.Patch(
+                data=np.arange(5.0),
+                coords={"time": np.arange(start, start - 5.0, -1)},
+                dims=("time",),
+                attrs={"data_units": units},
+            )
+            for start, units in [(4, "m"), (9, "km")]
+        ]
+        chunked = merge_spool(patches).chunk(time=None, conflict="keep_first")
+        stated = chunked.get_contents()["data_units"].iloc[0]
+        assert chunked[0].attrs.data_units == get_quantity(stated)
+
+    def test_zero_shared_step_is_not_kept(self):
+        """One-sample grids declaring no spacing fuse on their span."""
+        runs = (Grid(0.0, 0.0, 0, 1), Grid(1.0, 0.0, 0, 1))
+        coord = NumericCoord(runs=runs, dtype="float64")
+        with np.errstate(all="ignore"):
+            out = coord.fuse(1.0, keep_step=True)
+        np.testing.assert_array_equal(out.values, [0.0, 1.0])
+
+    def test_ulp_different_float_steps(self):
+        """Float steps one ulp apart still merge on the shared step."""
+        steps = (0.004, np.nextafter(0.004, 1))
+        starts = (0.0, 0.004 * 1500 + 3e-6)
+        patches = [
+            dc.Patch(
+                data=np.ones(1500),
+                coords={"time": dc.core.get_coord(start=a, step=b, shape=(1500,))},
+                dims=("time",),
+            )
+            for a, b in zip(starts, steps, strict=True)
+        ]
+        out = dc.spool(patches).chunk(time=None)[0]
+        assert out.get_coord("time").step == pytest.approx(0.004, rel=1e-12)
+
+    def test_jitter_keeps_declared_step(self, merge_spool):
+        """A three-microsecond seam offset does not change a four-ms step."""
+        step = np.timedelta64(4_000_000, "ns")
+        patches = []
+        for num in range(2):
+            start = ORIGIN + num * (1500 * step + np.timedelta64(3000, "ns"))
+            coord = dc.core.get_coord(start=start, step=step, shape=(1500,))
+            patches.append(
+                dc.Patch(data=np.arange(1500), coords={"time": coord}, dims=("time",))
+            )
+        merged = merge_spool(patches).chunk(time=None)[0]
+        assert merged.get_coord("time").step == step
+        np.testing.assert_array_equal(merged.data, np.tile(np.arange(1500), 2))

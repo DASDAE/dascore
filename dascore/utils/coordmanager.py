@@ -159,6 +159,10 @@ def merge_coord_managers(
 
     dims = _get_dims(coord_managers)
     coord_managers = _drop_unshared_coordinates(coord_managers)
-    sort_managers = sorted(coord_managers, key=lambda x: x.coord_map[dim].min())
+    sort_managers = sorted(
+        coord_managers,
+        key=lambda x: x.coord_map[dim].min(),
+        reverse=coord_managers[0].coord_map[dim].reverse_sorted,
+    )
     merged_coords = _get_new_coords(sort_managers)
     return dc.get_coord_manager(merged_coords, dims=dims)

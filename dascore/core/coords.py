@@ -3156,6 +3156,12 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         else:
             step = span / (count - 1)
             zero = 0
+        if keep_step and all(isinstance(x, Grid) for x in runs):
+            steps = [x.step(self.dtype) for x in runs]
+            shared = steps[0]
+            if shared != zero and (shared > zero) == ascending:
+                if all(_same_step(x, shared) for x in steps):
+                    step = shared
         # Strictly monotonic runs guarantee a nonzero step matching the
         # sort direction.
         assert step != zero and (step > zero) == ascending
