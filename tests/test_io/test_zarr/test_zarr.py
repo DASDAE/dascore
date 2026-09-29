@@ -235,6 +235,14 @@ class TestDirectorySpool:
             assert None not in scan_unit_stats(chunked_store)
             assert None not in source_identity(chunked_store)
 
+    def test_stray_marker_name_is_not_a_store(self, tmp_path):
+        """A folder holding a zarr metadata name, but no marker, is walked whole."""
+        (tmp_path / ".zattrs").write_text("{}")
+        (tmp_path / "a.raw").write_bytes(b"1")
+        before = scan_unit_stats(tmp_path)
+        (tmp_path / "b.raw").write_bytes(b"2")
+        assert scan_unit_stats(tmp_path) != before
+
     def test_index_in_store_is_not_a_change(self, zarr_patch, tmp_path):
         """A spool of one store keeps its index inside and does not re-index."""
         path = tmp_path / "a.zarr"
@@ -348,6 +356,24 @@ class TestReplace:
         with pytest.raises(OSError, match="no space"):
             dc.write(zarr_patch.update_attrs(station="NEW"), path, "zarr")
         assert dc.read(path)[0] == zarr_patch
+
+    def test_partial_promotion_restores_store(self, zarr_patch, tmp_path, monkeypatch):
+        """A move that copies part of the new store before failing is undone."""
+        path = tmp_path / "patch.zarr"
+        dc.write(zarr_patch, path, "zarr")
+        mv = LocalFileSystem.mv
+
+        def _fail(self, source, target, **kwargs):
+            if str(source).endswith(".partial"):
+                mv(self, source, target, **kwargs)  # the copy lands, then fails
+                raise OSError("interrupted")
+            return mv(self, source, target, **kwargs)
+
+        monkeypatch.setattr(LocalFileSystem, "mv", _fail)
+        with pytest.raises(OSError, match="interrupted"):
+            dc.write(zarr_patch.update_attrs(station="NEW"), path, "zarr")
+        assert dc.read(path)[0] == zarr_patch
+        assert not (path / ".patch.zarr.old").exists()
 
     def test_killed_write_leftover(self, zarr_patch, tmp_path):
         """Stores a killed write leaves behind are not scanned, then cleared."""

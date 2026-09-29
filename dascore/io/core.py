@@ -714,10 +714,6 @@ class FiberIO:
     input_type: Literal["file", "directory"] = "file"
     # True when a single resource can hold more than one patch.
     multi_patch_write: bool = False
-    # For a directory format, the member files (relative to the unit) whose
-    # stats stand for the whole unit when checking it for changes; empty
-    # means every member file.
-    unit_members: tuple[str, ...] = ()
 
     manager = _FiberIOManager(FIBER_IO_GROUP)
 
@@ -734,6 +730,14 @@ class FiberIO:
             "get_version": 1,
         }
     )
+
+    def unit_members(self, path) -> list | None:
+        """
+        Return the files identifying a directory unit of this format, if any.
+
+        None means the whole unit, every member file, identifies it.
+        """
+        return None
 
     def get_version(self, resource) -> str | None:
         """Return this family's file version, or None for another family."""
@@ -1151,16 +1155,15 @@ def _directory_members(path) -> list:
     """
     Return the files which identify a directory-format unit, in a fixed order.
 
-    A unit holding a format's named `unit_members` is identified by those
+    A unit whose format names its `unit_members` is identified by those
     alone, so a store of many chunks costs a few stats rather than one per
     chunk; a member rewritten in place with those untouched goes unseen.
     Otherwise every file counts, sorted by relative path. Hidden files are
     members (zarr format 2 keeps its metadata in them); only a DASCore index
     inside the unit is not, or indexing would change it.
     """
-    ios = FiberIO.manager._get_prioritized_list("directory")
-    for names in dict.fromkeys(x.unit_members for x in ios if x.unit_members):
-        if members := [x for x in (path / n for n in names) if x.is_file()]:
+    for fiber_io in FiberIO.manager._get_prioritized_list("directory"):
+        if members := fiber_io.unit_members(path):
             return members
     members = (
         x for x in path.rglob("*") if x.is_file() and not x.name.startswith(INDEX_NAME)

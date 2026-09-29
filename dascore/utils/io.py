@@ -254,6 +254,7 @@ def staged_path(path: UPath):
     try:
         fs.mv(staging.path, path.path, recursive=True)
     except BaseException:
+        _remove(path)  # a move may copy part of the store before failing
         if old.exists():
             fs.mv(old.path, path.path, recursive=True)
         raise
