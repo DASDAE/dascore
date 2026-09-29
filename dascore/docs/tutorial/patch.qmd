@@ -480,3 +480,10 @@ scaled = patch.apply_ufunc(np.multiply, 10)
 ```
 
 Named reduction removes the reduced dimension and coordinates which depend on it. Accumulation retains the original shape and dimension coordinates.
+
+Other NumPy functions also accept patches. Reductions such as `np.mean(patch, axis=1)` keep the reduced dimension at length one, with or without `keepdims=True`. `np.transpose`, `np.swapaxes`, `np.squeeze`, and `np.flip` call the matching patch methods, so the coordinates follow the data. `np.diff` labels each difference with the midpoint of the samples it compares, and `np.gradient` returns one patch per axis. `np.sort`, `np.argsort`, and the `numpy.fft` functions raise a `ParameterError`; use [`Patch.sort_coords`](`dascore.Patch.sort_coords`) or [`Patch.dft`](`dascore.Patch.dft`), or apply them to `patch.data`.
+
+```{python}
+transposed = np.transpose(patch)
+differences = np.diff(patch, axis=1)
+```

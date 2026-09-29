@@ -147,7 +147,7 @@ def double(patch: PatchType) -> PatchType:
 
 Plain NumPy-based functions may raise or return a NumPy-backed patch for other arrays. Operators and ufuncs stay in the array namespace when possible; otherwise they convert through NumPy and emit `NumpyFallbackWarning`.
 
-NumPy functions such as `np.mean(patch)` and reductions over excluded dtypes always use this fallback; `__array__`-only objects report `numpy` as their backend.
+NumPy functions such as `np.mean(patch)` and reductions over excluded dtypes always use this fallback, except `np.transpose`, `np.swapaxes`, `np.squeeze`, and `np.flip`, which run the patch methods; `__array__`-only objects report `numpy` as their backend.
 
 A backend package can give a processor its own kernel without changing the operation. The kernel takes the processor, the data, and whatever the class's `get_metadata` plans (`abs` plans nothing; `normalize` plans `axis`, and `window` when one is given):
 

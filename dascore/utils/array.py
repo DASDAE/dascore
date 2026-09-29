@@ -973,10 +973,23 @@ def _get_dims_and_inds_from_signature(
     return dims, inds
 
 
+def _diff_coords(a, n=1, axis=-1, prepend=None, append=None):
+    """Return coords for np.diff, labelling each difference by its midpoint."""
+    if prepend is not None or append is not None:
+        msg = "np.diff does not support prepend or append for patches."
+        raise ParameterError(msg)
+    coord = a.get_coord(dim := a.dims[axis])
+    start, stop = coord.values[: len(coord) - n], coord.values[n:]
+    values = start + (stop - start) / 2
+    return a.coords.update(**{dim: coord.update(values=values, units=coord.units)})
+
+
 def _reassemble_patch(result, patch, func, args, kwargs):
     """
     Method to put the patch back together.
     """
+    if func is np.diff:
+        return patch.new(data=result, coords=_diff_coords(*args, **kwargs))
     # Simple case, data shape hasn't changed.
     if result.shape == patch.shape:
         return patch.new(data=result)
@@ -995,8 +1008,9 @@ def _reassemble_patch(result, patch, func, args, kwargs):
 
     if "axis" in sig.parameters:
         dims, inds = _get_dims_and_inds_from_signature(patch, sig, args, kwargs)
-        # re-expand array.
-        result = result[inds]
+        # re-expand array, unless numpy kept the dims (keepdims=True).
+        if result.ndim != patch.ndim:
+            result = result[inds]
         new_coords = {x: patch.get_coord(x).reduce_coord() for x in dims}
         cm = patch.coords.update(**new_coords)
         return patch.new(data=result, coords=cm)
@@ -1246,7 +1260,74 @@ def patch_array_function(self, func, types, args, kwargs):
     """
     # Only handle functions involving Patches
     assert any(issubclass(t, dc.Patch) for t in types)
+    if getattr(func, "__module__", "").startswith("numpy.fft"):
+        msg = f"np.fft.{func.__name__} does not support patches; use patch.dft."
+        raise ParameterError(msg)
+    if (handler := ARRAY_FUNCTION_HANDLERS.get(func)) is not None:
+        return handler(*args, **kwargs)
     return apply_array_func(func, *args, **kwargs)
+
+
+def _axis_dims(patch, axis) -> tuple[str, ...]:
+    """Return the dimension names of a numpy axis spec; None means all."""
+    return patch.dims if axis is None else tuple(patch.dims[x] for x in iterate(axis))
+
+
+def _transpose(a, axes=None):
+    """np.transpose for patches."""
+    return a.transpose(*(a.dims[::-1] if axes is None else _axis_dims(a, axes)))
+
+
+def _swapaxes(a, axis1, axis2):
+    """np.swapaxes for patches."""
+    axes = list(range(a.ndim))
+    axes[axis1], axes[axis2] = axes[axis2], axes[axis1]
+    return _transpose(a, axes)
+
+
+def _squeeze(a, axis=None):
+    """np.squeeze for patches."""
+    return a.squeeze(None if axis is None else _axis_dims(a, axis))
+
+
+def _flip(m, axis=None):
+    """np.flip for patches; the coordinates flip with the data."""
+    return m.flip(*_axis_dims(m, axis))
+
+
+def _gradient(f, *varargs, axis=None, edge_order=1):
+    """np.gradient for patches; one patch per axis, as numpy returns."""
+    axes = tuple(range(f.ndim)) if axis is None else tuple(iterate(axis))
+    if len(axes) == 1:
+        return apply_array_func(
+            np.gradient, f, *varargs, axis=axis, edge_order=edge_order
+        )
+    spacing = [(x,) for x in varargs] if len(varargs) > 1 else [varargs] * len(axes)
+    return tuple(
+        apply_array_func(np.gradient, f, *space, axis=ax, edge_order=edge_order)
+        for ax, space in zip(axes, spacing, strict=True)
+    )
+
+
+def _refuse_sort(*args, **kwargs):
+    """Refuse np.sort and np.argsort, which leave coordinates meaningless."""
+    msg = (
+        "Sorting patch values leaves its coordinates meaningless; use "
+        "patch.sort_coords, or apply the function to patch.data."
+    )
+    raise ParameterError(msg)
+
+
+# Numpy functions whose coordinates the generic path cannot infer.
+ARRAY_FUNCTION_HANDLERS = {
+    np.transpose: _transpose,
+    np.swapaxes: _swapaxes,
+    np.squeeze: _squeeze,
+    np.flip: _flip,
+    np.gradient: _gradient,
+    np.sort: _refuse_sort,
+    np.argsort: _refuse_sort,
+}
 
 
 def hash_array(arr: np.ndarray) -> str:

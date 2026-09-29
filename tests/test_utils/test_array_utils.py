@@ -1068,6 +1068,142 @@ class TestApplyArrayFunc:
         assert np.allclose(result.data, np.abs(random_patch.data) + 1)
 
 
+class TestNumpyFunctionHandlers:
+    """Tests for numpy functions whose coordinates need special handling."""
+
+    @pytest.mark.parametrize(
+        "func", [np.mean, np.sum, np.std, np.max, np.median, np.nanmean]
+    )
+    def test_keepdims(self, random_patch, func):
+        """keepdims=True gives the same patch as the default."""
+        out = func(random_patch, axis=1, keepdims=True)
+        expected = func(random_patch, axis=1)
+        assert out.coords == expected.coords
+        assert np.allclose(out.data, expected.data)
+
+    def test_percentile_keepdims(self, random_patch):
+        """Reductions with extra positional arguments keep dims too."""
+        out = np.percentile(random_patch, 50, axis=0, keepdims=True)
+        expected = np.percentile(random_patch, 50, axis=0)
+        assert out.coords == expected.coords
+        assert np.allclose(out.data, expected.data)
+
+    def test_ufunc_reduce_keepdims(self, random_patch):
+        """So do ufunc reductions."""
+        out = np.add.reduce(random_patch, axis=1, keepdims=True)
+        expected = np.add.reduce(random_patch, axis=1)
+        assert out.coords == expected.coords
+        assert np.allclose(out.data, expected.data)
+
+    @pytest.mark.parametrize("axes", [None, (1, 0), (-1, -2)])
+    def test_transpose(self, random_patch, axes):
+        """np.transpose moves the coordinates with the data."""
+        out = np.transpose(random_patch, axes)
+        assert out.dims == random_patch.dims[::-1]
+        assert np.array_equal(out.data, random_patch.data.T)
+        assert out.get_coord("time") == random_patch.get_coord("time")
+
+    def test_swapaxes(self, random_patch):
+        """np.swapaxes is a transpose of two dimensions."""
+        out = np.swapaxes(random_patch, 0, -1)
+        assert out.dims == random_patch.dims[::-1]
+        assert np.array_equal(out.data, random_patch.data.T)
+
+    @pytest.mark.parametrize("axis", [None, 1, -1, (1,)])
+    def test_squeeze(self, random_patch, axis):
+        """np.squeeze removes length one dimensions and their coordinates."""
+        reduced = np.mean(random_patch, axis=1)
+        out = np.squeeze(reduced, axis=axis)
+        assert out.dims == ("distance",)
+        assert out.get_coord("distance") == random_patch.get_coord("distance")
+        assert np.array_equal(out.data, reduced.data[:, 0])
+
+    def test_squeeze_one_of_two(self, random_patch):
+        """np.squeeze with an axis leaves other length one dimensions."""
+        reduced = np.mean(random_patch, axis=(0, 1))
+        out = np.squeeze(reduced, axis=0)
+        assert out.dims == ("time",)
+        assert out.shape == (1,)
+
+    @pytest.mark.parametrize("axis", [None, 1, (0, 1)])
+    def test_flip(self, random_patch, axis):
+        """np.flip flips the coordinates with the data."""
+        out = np.flip(random_patch, axis=axis)
+        assert np.array_equal(out.data, np.flip(random_patch.data, axis=axis))
+        time = random_patch.get_array("time")
+        assert np.array_equal(out.get_array("time"), time[::-1])
+
+    @pytest.mark.parametrize("n", [1, 2])
+    def test_diff_time(self, random_patch, n):
+        """np.diff labels each difference with its samples' midpoint."""
+        out = np.diff(random_patch, n=n, axis=1)
+        assert np.array_equal(out.data, np.diff(random_patch.data, n=n, axis=1))
+        time = random_patch.get_coord("time")
+        values = time.values
+        expected = values[:-n] + (values[n:] - values[:-n]) / 2
+        assert np.array_equal(out.get_array("time"), expected)
+        assert out.get_coord("time").step == time.step
+        assert out.get_coord("time").min() == time.min() + n * time.step / 2
+
+    def test_diff_distance(self, random_patch):
+        """Integer coordinates get float midpoints and keep their units."""
+        out = np.diff(random_patch, axis=0)
+        distance = random_patch.get_coord("distance")
+        values = distance.values
+        assert np.array_equal(out.get_array("distance"), (values[:-1] + values[1:]) / 2)
+        assert out.get_coord("distance").units == distance.units
+        assert out.get_coord("time") == random_patch.get_coord("time")
+
+    def test_diff_associated_coords(self, random_patch_with_lat_lon):
+        """Coordinates along the differenced dimension are dropped."""
+        patch = random_patch_with_lat_lon
+        assert "latitude" not in np.diff(patch, axis=0).coords.coord_map
+        kept = np.diff(patch, axis=1).get_array("latitude")
+        assert np.array_equal(kept, patch.get_array("latitude"))
+
+    @pytest.mark.parametrize("kwarg", ["prepend", "append"])
+    def test_diff_prepend_append(self, random_patch, kwarg):
+        """Prepend and append have no coordinates, so are refused."""
+        with pytest.raises(ParameterError, match=kwarg):
+            np.diff(random_patch, axis=1, **{kwarg: 0})
+
+    def test_gradient_all_axes(self, random_patch):
+        """np.gradient returns one patch per axis, each on the input coords."""
+        out = np.gradient(random_patch, 2.0, 3.0)
+        expected = np.gradient(random_patch.data, 2.0, 3.0)
+        assert isinstance(out, tuple) and len(out) == 2
+        for patch, array in zip(out, expected, strict=True):
+            assert patch.coords == random_patch.coords
+            assert np.allclose(patch.data, array)
+
+    def test_gradient_one_axis(self, random_patch):
+        """With one axis np.gradient returns one patch."""
+        out = np.gradient(random_patch, 2.0, axis=1)
+        assert out.coords == random_patch.coords
+        assert np.allclose(out.data, np.gradient(random_patch.data, 2.0, axis=1))
+
+    def test_gradient_shared_spacing(self, random_patch):
+        """A single spacing applies to every axis."""
+        out = np.gradient(random_patch, 2.0, axis=(0, 1))
+        expected = np.gradient(random_patch.data, 2.0, axis=(0, 1))
+        for patch, array in zip(out, expected, strict=True):
+            assert np.allclose(patch.data, array)
+
+    @pytest.mark.parametrize("func", [np.sort, np.argsort])
+    def test_sort_refused(self, random_patch, func):
+        """Sorting values leaves the coordinates meaningless."""
+        with pytest.raises(ParameterError, match="sort_coords"):
+            func(random_patch, axis=1)
+
+    @pytest.mark.parametrize(
+        "func", [np.fft.fft, np.fft.rfft, np.fft.fft2, np.fft.fftshift]
+    )
+    def test_fft_refused(self, random_patch, func):
+        """numpy.fft functions point to patch.dft."""
+        with pytest.raises(ParameterError, match="dft"):
+            func(random_patch)
+
+
 class TestHashArray:
     """Tests for hash_array."""
 
@@ -1225,6 +1361,19 @@ class TestArrayBackends:
         with pytest.warns(NumpyFallbackWarning, match="mean"):
             out = np.mean(backend_patch, axis=0)
         self._assert_matches_numpy(out, np.mean(random_patch, axis=0), backend)
+
+    def test_patch_method_functions(self, backend_patch, random_patch, backend):
+        """Numpy functions with a patch method stay on the backend."""
+        with warnings_as_errors():
+            out = np.flip(np.transpose(backend_patch), axis=0)
+        expected = np.flip(np.transpose(random_patch), axis=0)
+        self._assert_matches_numpy(out, expected, backend)
+
+    def test_diff_falls_back(self, backend_patch, random_patch, backend):
+        """np.diff uses numpy and returns to the backend."""
+        with pytest.warns(NumpyFallbackWarning, match="diff"):
+            out = np.diff(backend_patch, axis=1)
+        self._assert_matches_numpy(out, np.diff(random_patch, axis=1), backend)
 
     def test_units_fall_back(self, backend_patch, random_patch, backend):
         """Units are implemented with pint, which only wraps numpy arrays."""
