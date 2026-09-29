@@ -449,6 +449,8 @@ def patch_local_adjusted_envelopes(
             if not (_usable_index(lo_idx) and _usable_index(hi_idx)):
                 continue
             mins, maxs, steps = (df[c] for c in cols)
+            if steps.isna().all():  # no step to count samples by
+                continue
             # Positions are patch-local sample indices with a stop-exclusive
             # hi, so the last included position is hi - 1. Sample 0 sits at
             # the envelope min for ascending coords and at the max for
@@ -468,7 +470,7 @@ def patch_local_adjusted_envelopes(
                 return (counts + idx).clip(lower=0)
 
             lo_pos, hi_pos = _positions(lo_idx), _positions(hi_idx)
-            unresolved = pd.Series(False, index=df.index)
+            unresolved = steps.isna()
             for pos in (lo_pos, hi_pos):
                 if pos is not None:
                     unresolved |= pos.isna()
@@ -476,7 +478,7 @@ def patch_local_adjusted_envelopes(
             hi_off = None if hi_pos is None else (hi_pos - 1) * abs_steps
             new_min = mins if lo_off is None else mins + lo_off
             new_max = maxs if hi_off is None else mins + hi_off
-            desc_min = maxs if hi_off is None else maxs - hi_off
+            desc_min = mins if hi_off is None else maxs - hi_off
             desc_max = maxs if lo_off is None else maxs - lo_off
             new_min = new_min.where(~descending, other=desc_min)
             new_max = new_max.where(~descending, other=desc_max)
@@ -1651,6 +1653,7 @@ def build_chunk_plan(
         dtype_cache: dict[str, str] = {}
     active = np.zeros(n_parts, dtype=bool)
     fed_counts = np.zeros(n_parts, dtype=np.intp)
+    sub_sample = np.zeros(n_parts, dtype=bool)
     out_starts, out_stops, out_ids = [], [], []
     out_requests = []
     m_out_ids, m_src, m_lo, m_hi, m_parts, dtype_parts = [], [], [], [], [], []
@@ -1662,6 +1665,7 @@ def build_chunk_plan(
     # next, so an earlier partition's CoordMergeError outranks a later
     # partition's resolution error.
     deferred: BaseException | None = None
+    sub_step = []  # whether each skipped partition's length is below its step
     for part in range(n_parts):
         part_step = part_steps[part]
         if per_partition and not merge_mode:
@@ -1714,6 +1718,7 @@ def build_chunk_plan(
             starts_p = g_starts[part : part + 1]
             stops_p = g_stops[part : part + 1]
         else:
+            sub_sample[part] = not pd.isnull(part_step) and value_c < abs(part_step)
             try:
                 start_stop = get_intervals(
                     g_starts[part],
@@ -1727,6 +1732,7 @@ def build_chunk_plan(
                     keep_partials=keep_partial,
                 )
             except ChunkError:  # partition too short; skip (D8)
+                sub_step.append(value_c < abs(part_step))
                 continue
             except Exception as exc:
                 deferred = exc
@@ -1887,6 +1893,13 @@ def build_chunk_plan(
         )
         return ChunkPlan(outputs, empty_members, name, value, params)
     if not fed_counts.sum():
+        if sub_sample.all():
+            msg = (
+                f"Could not chunk. The requested chunk length {value} is "
+                f"shorter than the sample step along {name!r} "
+                f"({np.abs(part_steps).min()}). Use a larger chunk length."
+            )
+            raise ChunkError(msg)
         msg = "Could not chunk. No segments with sufficient length found."
         # Say how short the data actually is, and name the two knobs which
         # make an over-long request work. Size chunks are excluded; their
@@ -1905,6 +1918,12 @@ def build_chunk_plan(
                 # name it; the request may be stated in another (#1058)
                 unit = _partition_unit(sorted_df, name, seg_starts[best])
                 longest = f"{longest} {unit}".strip()
+            if sub_step and all(sub_step):
+                msg = (
+                    f"Could not chunk. The requested chunk value of {requested} "
+                    f"is shorter than one sample step along {name!r}."
+                )
+                raise ChunkError(msg)
             msg = (
                 f"Could not chunk. The longest contiguous segment along "
                 f"{name!r} is {longest}, shorter than the requested chunk "

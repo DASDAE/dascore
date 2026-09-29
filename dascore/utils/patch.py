@@ -2020,12 +2020,7 @@ def concatenate_planned(
     stated = [x for x in units if not _is_missing(x)]
     if stated:
         kept = stated[0]
-        patches = [
-            x
-            if _is_missing(x.attrs.data_units) or x.attrs.data_units == kept
-            else x.convert_units(kept)
-            for x in patches
-        ]
+        patches = [x.convert_units(kept) for x in patches]
         attrs = attrs.update(data_units=kept)
     operation = operation_id(
         "Concatenate", {"arguments": ((dim, count),), "conflict": conflict}

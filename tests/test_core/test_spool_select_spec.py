@@ -174,6 +174,38 @@ class TestLazySelection:
 class TestSamples:
     """samples=True never excludes patches; trims on load (#447)."""
 
+    @pytest.mark.parametrize("stepped_distance", (False, True))
+    @pytest.mark.parametrize("window", ((1, 5), (None, 5)))
+    def test_stepless_envelope(self, stepped_distance, window):
+        """Unknown steps preserve envelopes and sample selections load (#1249)."""
+        time = np.array([0, 1, 3, 4, 6, 7, 9, 10], dtype=float)
+        distance = np.arange(4) if stepped_distance else [0.0, 1.5, 2.25, 4.0]
+        patch = dc.Patch(
+            data=np.zeros((8, 4)),
+            coords={"time": time, "distance": distance},
+            dims=("time", "distance"),
+        )
+        selected = dc.spool([patch]).select(time=window, samples=True)
+        row = selected.get_contents().iloc[0]
+        assert row["time_min"] == time.min()
+        assert row["time_max"] == time.max()
+        assert selected[0].equals(patch.select(time=window, samples=True))
+        # the envelope keeps its dtype, so the selection still chunks
+        assert selected.get_contents()["time_min"].dtype == np.float64
+        assert len(selected.chunk(time=None)) == 1
+
+    def test_descending_open_window(self):
+        """An open-ended window on a descending grid keeps its samples."""
+        time = dc.get_coord(start=7.0, step=-1.0, shape=(8,))
+        patch = dc.Patch(data=np.arange(8.0), coords={"time": time}, dims=("time",))
+        selected = dc.spool([patch]).select(time=(6, None), samples=True)
+        expected = patch.select(time=(6, None), samples=True)
+        assert (
+            selected.get_contents()["time_min"].iloc[0]
+            == expected.get_coord("time").min()
+        )
+        assert selected.chunk(time=None)[0].equals(expected)
+
     def test_length_preserved(self, spool):
         """The spool keeps every patch, and the window is a real trim."""
         out = spool.select(distance=(0, 10), samples=True)

@@ -1012,7 +1012,9 @@ class TestReviewRoundFive:
 
     def test_a_partial_fit_promotes_its_kept_grids(self):
         """A fit which needs floats does not fail on the runs it left alone."""
-        out = get_coord(data=[0, 1, 2, 10, 11, 13], snap=False).fuse(0.6)
+        out = concat_coords(
+            get_coord(data=[0, 1, 2]), NumericCoord.from_labels(np.array([10, 11, 13]))
+        ).fuse(0.6)
         assert out.dtype == np.dtype("float64")
         np.testing.assert_allclose(out.values, [0, 1, 2, 10, 11.5, 13])
 

@@ -25,6 +25,7 @@ from dascore.core.coords import get_coord
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
     DependencyError,
+    InvalidFiberFileError,
     InvalidFiberIOError,
     MissingOptionalDependencyError,
     MissingPatchError,
@@ -263,6 +264,8 @@ class _ScanBehaviorFormatter(FiberIO):
     def get_metadata(self, resource: Path, **kwargs):
         """Do what the file name says, rather than scanning it."""
         behavior = Path(resource).stem
+        if behavior == "invalid_file":
+            raise InvalidFiberFileError("Invalid file")
         if behavior == "os_error":
             raise OSError("Simulated OS issue")
         if behavior == "remote_cache_error":
@@ -385,13 +388,13 @@ class TestExactCoord:
 
         np.testing.assert_array_equal(coord.values, values)
 
-    def test_piecewise_uniform_array_stays_segmented(self):
-        """Genuinely piecewise-uniform arrays keep their queryable seams."""
+    def test_piecewise_uniform_array_stays_stored(self):
+        """Piecewise-uniform arrays stay stored and report gaps."""
         values = np.concatenate([np.arange(0.0, 2_000.0), np.arange(3_000.0, 5_000.0)])
 
         coord = get_coord(data=values, units="m", snap=False)
 
-        assert coord.runs_count > 1
+        assert coord.runs_count == 1
         np.testing.assert_array_equal(coord.values, values)
         assert len(coord.get_discontinuities("gaps")) == 1
 
@@ -1248,9 +1251,10 @@ class TestReloadableSourcePath:
         with pytest.raises(NotImplementedError):
             fio.scan(bad_input)
 
-    def test_bad_checksum(self, tmp_path):
+    @pytest.mark.parametrize("behavior", ["os_error", "invalid_file"])
+    def test_bad_checksum(self, tmp_path, behavior):
         """Test for when format is identified but can't read part of file #346"""
-        path = _misbehaving_scan_path(tmp_path, "os_error")
+        path = _misbehaving_scan_path(tmp_path, behavior)
         # Ensure scanning doesn't raise and warns
         msg = "Failed to scan"
         with pytest.warns(UserWarning, match=msg):

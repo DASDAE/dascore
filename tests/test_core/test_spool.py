@@ -210,10 +210,11 @@ class TestSpoolHelpers:
         )
         assert _get_varying_dim(df) is None
 
-    def test_estimate_merge_samples_missing_columns(self):
-        """Missing range columns should disable streaming estimates."""
+    @pytest.mark.parametrize("dim", [None, "time"])
+    def test_estimate_merge_samples_missing_columns(self, dim):
+        """An unknown dimension or missing ranges disable streaming estimates."""
         df = pd.DataFrame({"time_min": [0], "time_max": [1]})
-        assert _estimate_merge_samples(df, "time") is None
+        assert _estimate_merge_samples(df, dim) is None
 
     def test_estimate_merge_samples_degenerate_step(self):
         """Non-finite sample counts should disable streaming estimates."""
@@ -629,6 +630,17 @@ class TestSelect:
         for patch in out:
             assert isinstance(patch, dc.Patch)
             assert not np.any(pd.isnull(patch.get_array("time")))
+
+    def test_samples_on_unstepped_int_labels(self):
+        """A samples select works on integer labels which have no step."""
+        coords = {
+            "distance": np.array([3.14, 5.36, 7.49, 8.17]),
+            "time": np.array([2, 3, 5, 6, 7]),
+        }
+        patch = dc.Patch(data=np.zeros((4, 5)), coords=coords, dims=tuple(coords))
+        expected = patch.select(time=(1, 5), samples=True)
+        out = dc.spool([patch]).select(time=(1, 5), samples=True)
+        assert list(out) == [expected]
 
 
 class TestUnselect:

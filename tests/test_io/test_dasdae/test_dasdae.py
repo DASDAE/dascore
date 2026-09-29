@@ -14,7 +14,7 @@ import pytest
 import dascore as dc
 from dascore.compat import random_state
 from dascore.config import config_context
-from dascore.core.coords import CoordString
+from dascore.core.coords import CoordString, Labels, NumericCoord
 from dascore.exceptions import (
     InvalidFiberFileError,
     MissingPatchError,
@@ -498,6 +498,39 @@ class TestAttrsClassRoundTrip:
 
 class TestLegacyFixtureCompatibility:
     """Tests for the retained legacy DASDAE fixture compatibility helpers."""
+
+    @pytest.fixture
+    def legacy_path(self, tmp_path):
+        """Copy the smallest legacy registry file into an isolated directory."""
+        path = tmp_path / "legacy.hdf5"
+        shutil.copy(fetch("deformation_rate_event_1.hdf5"), path)
+        return path
+
+    @pytest.mark.parametrize("directory", [False, True])
+    @pytest.mark.parametrize("operation", [dc.scan, dc.spool])
+    def test_scan_legacy_requires_opt_in(self, legacy_path, directory, operation):
+        """File and directory scans must surface the reader's opt-in error."""
+        path = legacy_path.parent if directory else legacy_path
+        with config_context(allow_dasdae_format_unpickle=False):
+            with pytest.raises(InvalidFiberFileError) as read_error:
+                dc.read(legacy_path)
+            with pytest.raises(
+                InvalidFiberFileError, match="allow_dasdae_format_unpickle=True"
+            ) as scan_error:
+                result = operation(path)
+                if operation is dc.spool:
+                    result.update()
+        assert str(scan_error.value) == str(read_error.value)
+
+    @pytest.mark.parametrize("directory", [False, True])
+    def test_spool_legacy_with_opt_in(self, legacy_path, directory):
+        """Opted-in file and directory spools retain the legacy patch."""
+        path = legacy_path.parent if directory else legacy_path
+        with config_context(allow_dasdae_format_unpickle=True):
+            expected = dc.read(legacy_path)[0]
+            spool = dc.spool(path).update()
+            assert len(spool) == 1
+            assert spool[0].equals(expected)
 
     def test_translate_legacy_attrs_coord_manager_like_coords(self):
         """Legacy coord managers should still flatten via to_summary_dict."""
@@ -1205,3 +1238,24 @@ class TestLegacyCoordFields:
 
         assert "fingerprint" in _LEGACY_COORD_FIELDS
         assert "data_id" not in _LEGACY_COORD_FIELDS
+
+
+class TestExactLabels:
+    """Exact reads preserve stored coordinate labels as one run."""
+
+    @pytest.mark.parametrize("version", ["1", "2"])
+    def test_float_roundtrip(self, tmp_path, version):
+        """A late final label does not fragment the read-back coordinate."""
+        values = np.arange(20) * 0.01
+        values[-1] += 0.004
+        patch = dc.Patch(
+            data=np.zeros((20, 2)),
+            dims=("time", "distance"),
+            coords={"time": NumericCoord.from_labels(values), "distance": [0.0, 1.0]},
+        )
+        path = tmp_path / "exact.h5"
+        dc.write(patch, path, "DASDAE", file_version=version)
+        coord = dc.read(path, snap=False)[0].get_coord("time")
+        assert coord.runs_count == 1
+        assert isinstance(coord.runs[0], Labels)
+        np.testing.assert_array_equal(coord.values, values)

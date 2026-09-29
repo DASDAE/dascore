@@ -19,6 +19,10 @@ class InvalidFiberFileError(IOError, DASCoreError):
     """Raised when a fiber operation is called on an invalid file."""
 
 
+class DASDAEUnpickleError(InvalidFiberFileError):
+    """Raised when legacy DASDAE coordinates require unpickle opt-in."""
+
+
 class UnknownFiberFormatError(IOError, DASCoreError):
     """Raised when the format of an alleged fiber file is not recognized."""
 
