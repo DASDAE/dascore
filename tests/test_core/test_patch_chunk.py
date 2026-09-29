@@ -188,6 +188,22 @@ class TestChunk:
         with pytest.raises(ChunkError, match=msg):
             diverse_spool.chunk(time=10000)
 
+    @pytest.mark.parametrize("fill_value", (None, np.nan))
+    @pytest.mark.parametrize("keep_partial", (False, True))
+    @pytest.mark.parametrize(
+        "kwargs",
+        ({"time": 0.0012}, {"distance": 0.3}, {"distance": 0.3 * get_quantity("mm")}),
+    )
+    def test_chunk_shorter_than_sample(self, kwargs, fill_value, keep_partial):
+        """Sub-sample chunks name the request as too short (#1251)."""
+        patch = dc.get_example_patch().set_units(distance="mm")
+        with pytest.raises(ChunkError, match="shorter than the sample step") as exc:
+            dc.spool([patch]).chunk(
+                **kwargs, fill_value=fill_value, keep_partial=keep_partial
+            )
+        assert repr(next(iter(kwargs))) in str(exc.value)
+        assert "smaller chunk" not in str(exc.value)
+
     def test_increment_too_big_names_knobs(self, diverse_spool):
         """The error should point at tolerance and keep_partial (#1046)."""
         with pytest.raises(ChunkError) as info:
