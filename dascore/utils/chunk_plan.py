@@ -653,7 +653,7 @@ def _partition_unit(df: pd.DataFrame, name: str, row: int) -> str:
 
 
 def _validate_on_missing_dim(on_missing_dim) -> None:
-    """Reject a on_missing_dim value that is neither policy."""
+    """Reject an on_missing_dim value that is neither policy."""
     if on_missing_dim not in ("raise", "drop"):
         msg = f"on_missing_dim must be 'raise' or 'drop', got {on_missing_dim!r}"
         raise ParameterError(msg)
