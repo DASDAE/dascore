@@ -1665,6 +1665,7 @@ def build_chunk_plan(
     # next, so an earlier partition's CoordMergeError outranks a later
     # partition's resolution error.
     deferred: BaseException | None = None
+    sub_step = []  # whether each skipped partition's length is below its step
     for part in range(n_parts):
         part_step = part_steps[part]
         if per_partition and not merge_mode:
@@ -1731,6 +1732,7 @@ def build_chunk_plan(
                     keep_partials=keep_partial,
                 )
             except ChunkError:  # partition too short; skip (D8)
+                sub_step.append(value_c < abs(part_step))
                 continue
             except Exception as exc:
                 deferred = exc
@@ -1916,6 +1918,12 @@ def build_chunk_plan(
                 # name it; the request may be stated in another (#1058)
                 unit = _partition_unit(sorted_df, name, seg_starts[best])
                 longest = f"{longest} {unit}".strip()
+            if sub_step and all(sub_step):
+                msg = (
+                    f"Could not chunk. The requested chunk value of {requested} "
+                    f"is shorter than one sample step along {name!r}."
+                )
+                raise ChunkError(msg)
             msg = (
                 f"Could not chunk. The longest contiguous segment along "
                 f"{name!r} is {longest}, shorter than the requested chunk "

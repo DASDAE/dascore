@@ -1308,14 +1308,11 @@ class SQLiteIndexBackend:
             # time/distance envelopes already live on patches...
             if name in ("time", "distance"):
                 col = f"{name}_min"
-                # ...but relative-time patches leave them NULL by design;
-                # when the whole result is relative, serve timedelta
-                # envelopes so chunking on relative time works (#553).
-                if col in out.columns and out[col].isnull().all() and mins:
-                    out[f"{name}_min"] = out["patch_row"].map(mins)
-                    out[f"{name}_max"] = out["patch_row"].map(maxs)
-                    out[f"{name}_step"] = out["patch_row"].map(steps)
-                continue
+                # ...but relative-time and numeric-time patches leave them
+                # NULL; when the whole result does, serve the coord-link
+                # envelopes so chunking on them works (#553).
+                if not (col in out.columns and out[col].isnull().all() and mins):
+                    continue
             out[f"{name}_min"] = out["patch_row"].map(mins)
             out[f"{name}_max"] = out["patch_row"].map(maxs)
             out[f"{name}_step"] = out["patch_row"].map(steps)
