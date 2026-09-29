@@ -12,6 +12,8 @@ from pydantic import ValidationError
 
 import dascore as dc
 from dascore.core.coords import (
+    Grid,
+    Labels,
     NumericCoord,
     concat_coords,
     get_coord,
@@ -1075,12 +1077,76 @@ class TestSplitGapsAndWrite:
 class TestFromArray:
     """Tests for reading an array exactly, with ``get_coord(snap=False)``."""
 
+    @pytest.mark.parametrize("start", [0.0, 0.1, 1e9])
+    @pytest.mark.parametrize("direction", [1, -1])
+    @pytest.mark.parametrize("size", [20, 1200])
+    @pytest.mark.parametrize("late", [False, True])
+    def test_exact_float_labels_stay_one_run(self, size, late, start, direction):
+        """Exact float labels use one grid or one stored array."""
+        values = get_coord(
+            start=start, step=0.01 * direction, shape=(size,)
+        ).values.copy()
+        if late:
+            values[-1] += 0.004 * direction
+        coord = get_coord(data=values, snap=False)
+        assert coord.runs_count == 1
+        assert isinstance(coord.runs[0], Labels if late else Grid)
+        np.testing.assert_array_equal(coord.values, values)
+
+    @pytest.mark.parametrize("dtype", ["uint8", "int32", "float32"])
+    def test_exact_grid_keeps_dtype(self, dtype):
+        """An exact grid preserves the dtype of its input labels."""
+        values = np.arange(20, dtype=dtype)
+        coord = get_coord(data=values, snap=False)
+        assert coord.dtype == values.dtype
+        assert coord.runs_count == 1
+        assert isinstance(coord.runs[0], Grid)
+        np.testing.assert_array_equal(coord.values, values)
+
+    @pytest.mark.parametrize("values", [[0.0, 1e308, 1.7e308], [1.0, 2.0, np.inf]])
+    def test_unrepresentable_spacing_stays_stored(self, values):
+        """Labels whose spacing overflows a grid stay stored labels."""
+        coord = get_coord(data=np.array(values), snap=False)
+        assert isinstance(coord.runs[0], Labels)
+        np.testing.assert_array_equal(coord.values, values)
+
+    def test_large_unsigned_fractional_labels(self):
+        """Unsigned labels beyond int64 stay exact and do not wrap."""
+        values = np.uint64(2**64 - 100) + (np.arange(10) * 1.5).astype("uint64")
+        coord = get_coord(data=values, snap=False)
+        assert coord.runs_count == 1
+        assert isinstance(coord.runs[0], Labels)
+        assert coord.dtype == values.dtype
+        np.testing.assert_array_equal(coord.values, values)
+
+    def test_exact_fractional_time_grid(self):
+        """Fractional nanosecond grids are recovered from their exact labels."""
+        grid = get_coord(
+            start=np.datetime64("2020-01-01", "ns"), step=(1, 1024), shape=(20,)
+        )
+        coord = get_coord(data=grid.values, snap=False)
+        assert coord.runs_count == 1
+        assert isinstance(coord.runs[0], Grid)
+        np.testing.assert_array_equal(coord.values, grid.values)
+
+    @pytest.mark.parametrize("dtype", ["int64", "float64", "timedelta64[ns]"])
+    @pytest.mark.parametrize("direction", [1, -1])
+    def test_single_label_keeps_declared_step(self, dtype, direction):
+        """A singleton slice keeps the parent's declared direction."""
+        values = np.array([0, 1, 3, 4], dtype=dtype)[::direction]
+        step = np.array(direction, dtype=dtype)[()]
+        coord = NumericCoord.from_labels(values, step=step)
+        for index in range(len(coord)):
+            out = coord[index : index + 1]
+            assert out.step == step
+            np.testing.assert_array_equal(out.values, values[index : index + 1])
+
     def test_gapped_uniform_array(self):
-        """Uniform runs separated by a gap become two range segments."""
+        """A gapped array stays stored and still reports its gap."""
         values = np.array([0.0, 1, 2, 3, 10, 11, 12, 13])
         coord = get_coord(data=values, snap=False)
-        assert coord.runs_count == 2
-        assert all(x.evenly_sampled for x in coord.segments)
+        assert coord.runs_count == 1
+        assert isinstance(coord.runs[0], Labels)
         assert np.array_equal(coord.values, values)
         gaps = coord.get_discontinuities("gaps")
         assert len(gaps) == 1
@@ -1102,22 +1168,22 @@ class TestFromArray:
         assert np.array_equal(coord.values, values)
 
     def test_isolated_sample_between_gaps(self):
-        """A lone sample between gaps becomes its own segment."""
+        """A lone sample between gaps stays in the stored array."""
         values = np.array([0.0, 1, 2, 10, 20, 21, 22])
         coord = get_coord(data=values, snap=False)
-        assert coord.runs_count == 3
+        assert coord.runs_count == 1
         assert np.array_equal(coord.values, values)
         assert len(coord.get_discontinuities()) == 2
 
     def test_datetime_gap(self):
-        """Datetime arrays with internal gaps segment exactly."""
+        """Datetime arrays with gaps stay in one exact stored run."""
         one_s = np.timedelta64(1, "s")
         t0 = np.datetime64("2020-01-01", "ns")
         values = np.concatenate(
             [t0 + np.arange(5) * one_s, t0 + (np.arange(5) + 8) * one_s]
         )
         coord = get_coord(data=values, snap=False)
-        assert coord.runs_count == 2
+        assert coord.runs_count == 1
         assert np.array_equal(coord.values, values)
         assert len(coord.get_discontinuities("gaps")) == 1
 
@@ -1129,15 +1195,15 @@ class TestFromArray:
         assert np.max(np.abs(coord.values - values)) <= 2.0
 
     def test_reverse_array(self):
-        """Reverse-sorted arrays segment correctly."""
+        """Reverse-sorted arrays stay in one exact stored run."""
         values = np.array([13.0, 12, 11, 10, 3, 2, 1, 0])
         coord = get_coord(data=values, snap=False)
-        assert coord.runs_count == 2
+        assert coord.runs_count == 1
         assert coord.reverse_sorted
         assert np.array_equal(coord.values, values)
 
     def test_short_arrays_pass_through(self):
-        """Arrays too short to segment build plain coords."""
+        """Short arrays retain their sample counts."""
         assert len(get_coord(data=np.array([1.0, 2.0]), snap=False)) == 2
         assert len(get_coord(data=np.array([1.0]), snap=False)) == 1
 
