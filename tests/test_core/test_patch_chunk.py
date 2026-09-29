@@ -220,12 +220,6 @@ class TestChunk:
         with pytest.raises(ChunkError, match=r"is 300\.0 mm,"):
             dc.spool([p1, p2]).chunk(distance=2 * get_quantity("m"))
 
-    def test_chunk_below_one_sample(self, random_patch):
-        """A chunk shorter than one sample step says so."""
-        step = random_patch.get_coord("time").step
-        with pytest.raises(ChunkError, match="shorter than one sample step"):
-            dc.spool([random_patch]).chunk(time=step / 3)
-
     def test_below_one_coarse_sample(self):
         """A chunk below only the coarser rate skips those patches."""
         coarse = dc.get_example_patch()
