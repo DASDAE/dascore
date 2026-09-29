@@ -30,7 +30,6 @@ from uuid import uuid4
 import numpy as np
 import pandas as pd
 from pydantic import (
-    Field,
     ValidationError,
     field_validator,
     model_validator,
@@ -252,10 +251,6 @@ class CoordSummary(DascoreBaseModel):
     step_numerator: int | None = None
     step_denominator: int | None = None
     origin_offset: int | None = None
-    # Each run's summary, in order, for a segmented coordinate, so an index
-    # can see holes inside a patch; None otherwise, including past
-    # _MAX_SUMMARY_RUNS runs. Left out of the repr, which it would swamp.
-    runs: tuple[CoordSummary, ...] | None = Field(default=None, repr=False)
 
     @property
     def is_exact_grid(self) -> bool:
@@ -1550,9 +1545,6 @@ _NS_PER_S = 10**9
 # A float spacing this close to a whole number of steps is on the grid;
 # a float grid such as 0.1 cannot be held exactly, an off-grid label can.
 _GRID_RTOL = 1e-6
-# A coordinate's summary carries its runs only up to this many, since each
-# becomes an index row; past it the summary is an envelope.
-_MAX_SUMMARY_RUNS = 256
 _BLANK_QUERY_MSG = "A coordinate without labels selects only by samples."
 
 
@@ -3482,7 +3474,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         return components
 
     def to_summary(self, dims=()) -> CoordSummary:
-        """Get the summary info about the coord, exact grid and runs included."""
+        """Get the summary info about the coord, exact grid included."""
         summary = super().to_summary(dims=dims)
         if (grid := self._grid) is not None:
             if not grid.exact:
@@ -3493,14 +3485,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             )
         if self.runs_count == 1 and not _is_null(self.step):
             # labels on a declared grid state its step when none is missing
-            complete = self.missing().complete
-            return (
-                summary.model_copy(update={"step": self.step}) if complete else summary
-            )
-        if self.runs_count < 2 or self.runs_count > _MAX_SUMMARY_RUNS:
-            return summary
-        runs = tuple(x.to_summary(dims=dims) for x in self.segments)
-        return summary.model_copy(update={"runs": runs})
+            if self.missing().complete:
+                return summary.model_copy(update={"step": self.step})
+        return summary
 
     def _repr_fields(self) -> tuple[tuple[str, Text, bool], ...]:
         fields = super()._repr_fields()

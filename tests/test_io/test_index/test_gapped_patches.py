@@ -1,4 +1,4 @@
-"""Tests for schema 17: segmented coordinates linked to their runs."""
+"""Tests for spools of patches whose coordinates hold holes."""
 
 from __future__ import annotations
 
@@ -8,17 +8,12 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.core.coords import (
-    _MAX_SUMMARY_RUNS,
-    concat_coords,
-    get_coord,
-)
+from dascore.core.coords import concat_coords, get_coord
 from dascore.core.summary import PatchSummary
 from dascore.io.dasdae.utils import _save_patch
 from dascore.io.index.backend import get_backend
-from dascore.io.index.ingest import patch_record, summaries_to_records
+from dascore.io.index.ingest import summaries_to_records
 from dascore.io.index.query import Query
-from dascore.io.index.schema import PatchCoordRow
 from tests.conftest import join_patches
 
 MS = np.timedelta64(1, "ms")
@@ -60,155 +55,39 @@ def indexed_runs(gapped_patch, tmp_path_factory):
 
 
 class TestIndexedRuns:
-    """The index's runs of a patch holding a hole answer metadata questions."""
+    """A file-backed patch holding a hole is indexed by its envelope."""
 
-    def test_reports(self, indexed_runs):
-        """The hole and the space after the patch are gaps, in chunk outputs too."""
-        gaps = indexed_runs.get_gaps().sort_values("time_min")
-        assert len(gaps) == 2 and gaps["gap_size"].iloc[0] == HOLE
-        assert indexed_runs.get_coverage()["gap_total"].iloc[0] > HOLE
-        chunked = indexed_runs.chunk(time=None)
-        assert chunked.get_gaps()["gap_size"].iloc[0] == HOLE
-        # an output joined along time takes no member's runs of it
-        joined = indexed_runs.chunk(time=None, tolerance=10_000, fill_value=np.nan)
-        assert joined.get_gaps().empty
-
-    def test_plan_members_are_runs(self, indexed_runs):
-        """Each run is a trimmed member; runs in one output are read once."""
-        members = indexed_runs.chunk_plan(time=None).members
-        assert len(members) == 3 and members["_modified"].sum() == 2
-        bridged = indexed_runs.chunk_plan(time=None, tolerance=5, fill_value=np.nan)
-        assert len(bridged.members) == 2
-
-
-@pytest.fixture(scope="module")
-def crowded(gapped_patch):
-    """The gapped patch among four contiguous ones, and its patch id."""
-    later = gapped_patch.get_coord("time").max() + 10 * 1000 * MS
-    others = [
-        dc.get_example_patch().update_coords(time_min=later + i * 10_000 * MS)
-        for i in range(4)
-    ]
-    # a spool splits the gapped patch, so its record is written directly
-    summaries = [
-        PatchSummary.from_patch(x).model_copy(
-            update={"source_path": f"{i}.h5", "source_format": "DASDAE"}
-        )
-        for i, x in enumerate([gapped_patch, *others])
-    ]
-    back = get_backend(":memory:")
-    back.write_sources(summaries_to_records(summaries))
-    (gapped_id,) = back._fetch_df(
-        "SELECT DISTINCT patch_row FROM patch_coords WHERE run_index > 0"
-    )["patch_row"]
-    return back, int(gapped_id)
-
-
-class TestSummaries:
-    """A segmented coordinate's summary carries its runs."""
-
-    def test_runs_in_order(self, gapped_patch):
-        """Each run is summarized, first to last."""
-        coord = gapped_patch.get_coord("time")
-        summary = coord.to_summary(dims=("time",))
-        assert len(summary.runs) == coord.runs_count
-        assert summary.runs[0].min == coord.min()
-        assert summary.runs[-1].max == coord.max()
-        assert all(run.step == coord.segments[0].step for run in summary.runs)
-
-    def test_other_coordinates_have_none(self):
-        """Only segmented coordinates carry runs."""
-        assert get_coord(start=0, stop=5, step=1).to_summary().runs is None
-        assert get_coord(data=[1.0, 2.5, 7.0]).to_summary().runs is None
-
-    @pytest.mark.parametrize("count", [_MAX_SUMMARY_RUNS, _MAX_SUMMARY_RUNS + 1])
-    def test_run_cap(self, count):
-        """Up to the cap every run is summarized; past it, none is."""
-        runs = [get_coord(start=20.0 * i, step=1.0, shape=(10,)) for i in range(count)]
-        coord = concat_coords(*runs)
-        assert coord.runs_count > 1
-        summary = coord.to_summary()
-        expected = count if count <= _MAX_SUMMARY_RUNS else 0
-        assert len(summary.runs or ()) == expected
-
-    def test_flat_dump_omits_runs(self, gapped_patch):
-        """Runs are structure, never a flat column."""
-        flat = PatchSummary.from_patch(gapped_patch).flat_dump()
-        assert "time_runs" not in flat
-
-    def test_repr_omits_runs(self, gapped_patch):
-        """A summary prints its envelope, not every run."""
-        assert "runs" not in repr(gapped_patch.get_coord("time").to_summary())
-
-
-class TestStorage:
-    """The index links a segmented coordinate to each run."""
-
-    def test_records(self, gapped_patch):
-        """The whole coordinate is run 0; its runs follow, numbered from 1."""
-        record = patch_record(PatchSummary.from_patch(gapped_patch))
-        time = [c for c in record.coords if c.coord_name == "time"]
-        assert [c.run_index for c in time] == [0, 1, 2]
-        assert time[0].step_int is None
-        assert time[1].step_int == time[2].step_int == 4_000_000
-        assert {c.run_index for c in record.coords if c.coord_name == "distance"} == {0}
-
-    def test_links(self, indexed_runs):
-        """The link table holds the runs beside the coordinate."""
-        back = indexed_runs._catalog.backend
-        links = back._fetch_df("SELECT * FROM patch_coords")
-        assert list(links.columns) == list(PatchCoordRow._fields)
-        runs = links[links["run_index"] > 0]
-        assert set(runs["coord_name"]) == {"time"}
-        assert len(runs) == 2
-
-    def test_flat_relation_is_one_row_per_patch(self, indexed_runs):
-        """Every query about a patch's coordinate reads the coordinate whole."""
-        contents = indexed_runs.get_contents()
+    def test_reports_see_the_envelope(self, indexed_runs):
+        """The hole is not a gap, and the patch plans as one member."""
+        contents = indexed_runs.get_contents().sort_values("time_min")
         assert len(contents) == 2
-        gapped = contents.sort_values("time_min").iloc[0]
-        assert pd.isnull(gapped["time_step"])
+        assert pd.isnull(contents["time_step"].iloc[0])
+        assert indexed_runs.get_gaps().empty
+        members = indexed_runs.chunk_plan(time=None).members
+        assert len(members) == 2 and not members["_modified"].any()
 
-    def test_written_pieces_are_rows(self, gapped_directory):
-        """The gapped patch was written as its runs, each a row with a step."""
-        contents = gapped_directory.get_contents()
-        assert len(contents) == 3
-        assert not contents["time_step"].isnull().any()
+    def test_query_candidacy_unchanged(self, indexed_runs, gapped_patch):
+        """A window inside the hole still selects the patch holding it."""
+        t0 = gapped_patch.get_coord("time").min()
+        window = (t0 + 1003 * MS, t0 + 1008 * MS)
+        back = indexed_runs._catalog.backend
+        assert len(back.query([Query(coords={"time": window})])) == 1
 
-    def test_export_keeps_runs(self, gapped_patch, tmp_path):
-        """Records exported for a merge carry the run links."""
+    def test_export_skips_stored_run_links(self, gapped_patch, tmp_path):
+        """Run links an earlier index holds are not exported as coordinates."""
         summary = PatchSummary.from_patch(gapped_patch).model_copy(
             update={"source_path": "a.h5", "source_format": "DASDAE"}
         )
         back = get_backend(tmp_path / "runs.sqlite3")
         back.write_sources(summaries_to_records([summary]))
+        back._execute(
+            "INSERT INTO patch_coords SELECT patch_row, coord_name, 1, "
+            "coord_dims, coord_row, dtype FROM patch_coords WHERE coord_name = 'time'"
+        )
         (source,) = back.export_records()
         back.close()
-        runs = [c.run_index for c in source.patches[0].coords if c.coord_name == "time"]
-        assert runs == [0, 1, 2]
-
-
-class TestLookups:
-    """The backend finds runs by patch."""
-
-    def test_few_ids_filter_in_sql(self, crowded):
-        """Under a quarter of the patches, the ids go to the query."""
-        back, gapped_id = crowded
-        runs = back.coord_runs("time", [gapped_id])
-        assert runs["run_index"].tolist() == [1, 2]
-        assert back.coord_runs("time", [gapped_id + 1]).empty
-
-    def test_patch_runs(self, crowded):
-        """Runs come back as records, by patch."""
-        back, gapped_id = crowded
-        found = back.patch_runs([gapped_id, gapped_id + 1])
-        assert list(found) == [gapped_id]
-        assert [r.run_index for r in found[gapped_id]] == [1, 2]
-
-    def test_patch_runs_without_any(self):
-        """An index without runs answers empty."""
-        back = dc.spool([dc.get_example_patch()])._catalog.backend
-        assert back.patch_runs([1]) == {}
+        names = [c.coord_name for c in source.patches[0].coords]
+        assert names.count("time") == 1
 
 
 class TestReports:
@@ -219,6 +98,12 @@ class TestReports:
         gaps = gapped_directory.get_gaps().sort_values("time_min")
         assert len(gaps) == 2
         assert gaps["gap_size"].iloc[0] == HOLE
+
+    def test_written_pieces_are_rows(self, gapped_directory):
+        """The gapped patch was written as its runs, each a row with a step."""
+        contents = gapped_directory.get_contents()
+        assert len(contents) == 3
+        assert not contents["time_step"].isnull().any()
 
     def test_memory_gaps(self, gapped_patch):
         """An in-memory spool of the gapped patch reports its hole, once."""
@@ -287,16 +172,9 @@ class TestReports:
         merged = gapped_directory.chunk(time=None, tolerance=10_000, fill_value=0)
         assert len(merged) == 1
 
-    def test_query_candidacy_unchanged(self, indexed_runs, gapped_patch):
-        """A window inside the hole still selects the patch holding it."""
-        t0 = gapped_patch.get_coord("time").min()
-        window = (t0 + 1003 * MS, t0 + 1008 * MS)
-        back = indexed_runs._catalog.backend
-        assert len(back.query([Query(coords={"time": window})])) == 1
-
 
 class TestDerived:
-    """Plans carry their members' runs."""
+    """Derived spools report the holes their sources held."""
 
     def test_chunked_view_reports_the_hole(self, gapped_patch):
         """A hole that chunk splits at is still a gap between its outputs."""
@@ -352,12 +230,7 @@ class TestDerived:
         assert merged.get_gaps("distance").empty
 
     def test_rechunk_reports_as_the_first_chunk(self, gapped_patch):
-        """A re-chunk along the same dimension reports what the first did.
-
-        Its members stand in for the first plan's outputs, so each finds
-        the runs of the output holding it and no patch's runs reach
-        another.
-        """
+        """A re-chunk along the same dimension reports what the first did."""
         later = dc.get_example_patch().update_coords(
             time_min=gapped_patch.get_coord("time").max() + 10_000 * MS
         )
@@ -368,8 +241,8 @@ class TestDerived:
         assert twice.get_gaps()["gap_size"].tolist() == expected
         assert len(twice.get_coverage()) == 1
 
-    def test_concatenated_members_state_no_runs(self, gapped_patch):
-        """An output joined along a dimension takes no member's runs of it."""
+    def test_concatenated_members_report_no_hole(self, gapped_patch):
+        """An output joined along a dimension reports its span as covered."""
         later = gapped_patch.update_coords(
             time_min=gapped_patch.get_coord("time").max() + 4 * MS
         )
@@ -378,8 +251,8 @@ class TestDerived:
         assert coverage["gap_total"] == pd.Timedelta(0)
         assert coverage["time_max"] == later.get_coord("time").max()
 
-    def test_runs_in_other_units_are_dropped(self):
-        """A run the plan restated in other units falls back to its envelope."""
+    def test_other_units_report_envelope(self):
+        """A patch the plan restated in other units reports its envelope."""
         time = get_coord(start=0.0, step=1.0, shape=(4,), units="s")
         metres = get_coord(start=0.0, step=1.0, shape=(10,), units="m")
         centimetres = concat_coords(
@@ -473,11 +346,11 @@ class TestChunkPlansRuns:
             pd.Timestamp(x) for x in ends[:-1]
         ]
 
-    def test_runs_past_the_cap_plan_per_run(self):
-        """A coordinate with more runs than the index stores still plans per run."""
+    def test_many_runs_plan_per_run(self):
+        """A coordinate of hundreds of runs plans per run."""
         runs = [
             get_coord(start=20.0 * i, step=1.0, shape=(10,), units="m")
-            for i in range(_MAX_SUMMARY_RUNS + 1)
+            for i in range(300)
         ]
         coord = concat_coords(*runs)
         patch = dc.Patch(
@@ -485,7 +358,7 @@ class TestChunkPlansRuns:
             coords={"distance": coord, "x": np.arange(2)},
             dims=("distance", "x"),
         )
-        assert len(dc.spool([patch]).chunk(distance=None)) == _MAX_SUMMARY_RUNS + 1
+        assert len(dc.spool([patch]).chunk(distance=None)) == 300
 
     def test_sample_selection_applies_per_run(self, gapped_patch):
         """Each run is a row, so a sample selection applies to each."""
@@ -500,7 +373,7 @@ class TestChunkPlansRuns:
         assert chunked.get_gaps()["gap_size"].tolist() == [HOLE]
 
     def test_chained_chunks_keep_neighbour_samples(self):
-        """A run merged with a neighbour lends it no runs to be trimmed by."""
+        """A run merged with a neighbour keeps the neighbour's samples."""
         x = np.arange(3)
         distance = concat_coords(
             get_coord(start=0.0, step=1.0, shape=(5,), units="m"),

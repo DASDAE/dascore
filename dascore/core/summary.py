@@ -90,8 +90,7 @@ def _flatten_coord_summary(
     if dim_tuple and coord_name not in exclude:
         out[coord_name] = (summary_dict["min"], summary_dict["max"])
     for field, value in summary_dict.items():
-        # runs are structure, not a flat value; the index reads them whole
-        if field in exclude or field == "runs":
+        if field in exclude:
             continue
         if field == "dims":
             value = ",".join(value) if value else ""

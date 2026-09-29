@@ -17,7 +17,6 @@ import warnings
 import weakref
 from contextlib import contextmanager, suppress
 from pathlib import Path
-from types import SimpleNamespace
 
 import numpy as np
 import pandas as pd
@@ -30,14 +29,11 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.index.ingest import (
-    _COORD_DEF_FIELDS,
-    CoordRecord,
     SourceRecord,
     _envelope,
     assemble_source_records,
     attr_column_name,
     coord_dtype_is_stateable,
-    coord_record,
     dump_path_attrs,
     hive_typed_attrs,
 )
@@ -659,7 +655,6 @@ class SQLiteIndexBackend:
                             (
                                 patch_row,
                                 c.coord_name,
-                                c.run_index,
                                 c.coord_dims,
                                 key,
                                 c.dtype,
@@ -676,8 +671,8 @@ class SQLiteIndexBackend:
                 "patch_coords",
                 PatchCoordRow._fields,
                 [
-                    (pid, name, run, dims, def_ids[key], dtype)
-                    for pid, name, run, dims, key, dtype in link_rows
+                    (pid, name, 0, dims, def_ids[key], dtype)
+                    for pid, name, dims, key, dtype in link_rows
                 ],
             )
             # meta_data.last_indexed_ns is the initial-update-complete
@@ -1024,6 +1019,8 @@ class SQLiteIndexBackend:
                 [int(x) for x in links["coord_row"].unique()] if not links.empty else []
             )
             defs = self._fetch_in("SELECT * FROM coord_defs", "coord_row", def_ids)
+        # skip the per-run links an earlier dascore wrote
+        links = links[links["run_index"] == 0]
         return assemble_source_records(
             sources, patches, attrs, links, defs, self._attr_meta()
         )
@@ -1403,78 +1400,6 @@ class SQLiteIndexBackend:
         keys = df["source_patch_key"].astype(str)
         return dict(zip(keys, df["patch_row"].astype(int), strict=True))
 
-    def coord_runs(self, name: str, patch_rows) -> pd.DataFrame:
-        """
-        The runs one coordinate is stored as, per patch, as envelope objects.
-
-        Only a segmented coordinate is linked to runs (``run_index`` past
-        0), and a partial index holds just those links, so an archive of
-        contiguous patches answers from an empty index. Columns are
-        ``patch_row``, ``run_index`` and ``_env_min``/``_env_max``/
-        ``_env_step``; no row for a patch means it states no runs.
-        """
-        sql = (
-            "SELECT pc.patch_row, pc.run_index, cd.def_key, cd.data_id, "
-            "cd.value_kind, cd.is_relative, "
-            "cd.min_float, cd.max_float, cd.step_float, "
-            "cd.min_int, cd.max_int, cd.step_int, cd.min_str, cd.max_str "
-            "FROM patch_coords pc "
-            "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
-            "WHERE pc.coord_name = ? AND pc.run_index > 0"
-        )
-        # an archive with no run links answers from the partial index
-        # before the ids are so much as read
-        probe = "SELECT 1 FROM patch_coords WHERE coord_name = ? AND run_index > 0"
-        if self._fetch_df(probe + " LIMIT 1", [name]).empty:
-            return pd.DataFrame(columns=["patch_row", "run_index", *_ENVELOPE_COLUMNS])
-        ids = [int(x) for x in patch_rows]
-        if len(ids) * 4 >= self._patch_count():
-            # most patches asked for: read the run links whole and filter
-            runs = self._fetch_df(sql, [name])
-            runs = runs[runs["patch_row"].isin(set(ids))]
-        else:
-            # a few: let the engine drive from the ids through the key
-            sql += " AND pc.patch_row IN (SELECT value FROM json_each(?))"
-            runs = self._fetch_df(sql, [name, json.dumps(ids)])
-        if runs.empty:
-            return runs
-        runs = self._add_envelope_objects(runs.reset_index(drop=True))
-        return runs[["patch_row", "run_index", *_ENVELOPE_COLUMNS]]
-
-    def patch_runs(self, patch_rows) -> dict[int, list[CoordRecord]]:
-        """
-        The run records each of these patches links, in order, by patch row.
-
-        Patches without a segmented coordinate are absent; an index
-        without any answers from the empty runs index.
-        """
-        probe = (
-            "SELECT 1 FROM patch_coords INDEXED BY idx_pcoords_runs "
-            "WHERE run_index > 0 LIMIT 1"
-        )
-        fields = ", ".join(f"cd.{f}" for f in _COORD_DEF_FIELDS if f != "dtype")
-        sql = (
-            "SELECT pc.patch_row, pc.coord_name, pc.coord_dims, pc.run_index, "
-            f"pc.dtype, cd.data_id, {fields} FROM patch_coords pc "
-            "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
-            "WHERE pc.run_index > 0 "
-            "AND pc.patch_row IN (SELECT value FROM json_each(?)) "
-            "ORDER BY pc.patch_row, pc.coord_name, pc.run_index"
-        )
-        with self._lock:
-            if self._con.execute(probe).fetchone() is None:
-                return {}
-            # plain rows: the engine's integers are exact, and a frame
-            # would cost more than the lookup
-            cursor = self._con.execute(sql, [json.dumps([int(x) for x in patch_rows])])
-            names = [x[0] for x in cursor.description]
-            rows = cursor.fetchall()
-        out: dict[int, list[CoordRecord]] = {}
-        for values in rows:
-            row = SimpleNamespace(**dict(zip(names, values, strict=True)))
-            out.setdefault(row.patch_row, []).append(coord_record(row, row))
-        return out
-
     def coord_dims_map(self) -> dict[str, str]:
         """Return each coord name's dims string (first observed wins)."""
         df = self._fetch_df(
@@ -1485,10 +1410,6 @@ class SQLiteIndexBackend:
         for name, dims in zip(df["coord_name"], df["coord_dims"]):
             out.setdefault(str(name), str(dims))
         return out
-
-
-# the envelope object columns `_add_envelope_objects` builds
-_ENVELOPE_COLUMNS = ("_env_min", "_env_max", "_env_step")
 
 
 def get_backend(path: str | Path) -> SQLiteIndexBackend:

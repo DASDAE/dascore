@@ -107,8 +107,6 @@ class CoordRecord:
     step_denominator: int | None = None
     origin_offset: int | None = None
     data_id: str | None = None
-    # 0 for the coordinate as a whole, n for its nth run (a link field)
-    run_index: int = 0
 
     @property
     def def_key(self) -> str:
@@ -488,7 +486,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
 def _envelope(coords: tuple[CoordRecord, ...], name: str, kind: str):
     """Pull the (min, max, step) envelope for one coord if present."""
     for rec in coords:
-        if rec.run_index or rec.coord_name != name or rec.value_kind != kind:
+        if rec.coord_name != name or rec.value_kind != kind:
             continue
         if kind == "time" and not rec.is_relative:
             return rec.min_int, rec.max_int, rec.step_int
@@ -503,10 +501,6 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
     for name, csum in summary.coords.items():
         if (rec := _coord_record(name, csum)) is not None:
             coords.append(rec)
-            # a segmented coordinate's runs follow it, numbered from one
-            for index, run in enumerate(csum.runs or (), start=1):
-                if (part := _coord_record(name, run)) is not None:
-                    coords.append(replace(part, run_index=index))
     coords = tuple(coords)
     time_min, time_max, time_step = _envelope(coords, "time", "time")
     dist_min, dist_max, dist_step = _envelope(coords, "distance", "num")
@@ -639,7 +633,7 @@ def summaries_to_records(
 _COORD_DEF_FIELDS = tuple(
     f.name
     for f in fields(CoordRecord)
-    if f.name not in ("coord_name", "coord_dims", "data_id", "run_index")
+    if f.name not in ("coord_name", "coord_dims", "data_id")
 )
 _PATCH_ROW_FIELDS = tuple(
     f.name
@@ -681,7 +675,6 @@ def coord_record(link, cdef) -> CoordRecord:
     return CoordRecord(
         coord_name=link.coord_name,
         coord_dims=link.coord_dims,
-        run_index=int(link.run_index),
         data_id=_py_scalar(cdef.data_id),
         dtype=link.dtype,
         **{

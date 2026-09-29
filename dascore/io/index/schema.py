@@ -215,10 +215,9 @@ class PatchCoordRow(NamedTuple):
 
     Links a patch to its coord defs; the name and dims are patch-level
     semantics (two patches can share values under different names).
-    `run_index` 0 is the coordinate as a whole, which every query about a
-    patch's coordinate reads; a segmented coordinate is also linked to
-    each of its runs, in order, as 1, 2, ..., which gap reports read and
-    plans and exports carry.
+    `run_index` is always 0, the coordinate as a whole, which every query
+    reads; version 17 through 26 indexes may also hold links numbered from
+    1 to a coordinate's runs, which dascore no longer writes or reads.
     """
 
     patch_row: int
@@ -468,7 +467,8 @@ INDEXES = (
     # whole coordinates only, so run links never lengthen a coordinate scan
     ("idx_pcoords_name", "patch_coords", "coord_name", "run_index = 0"),
     ("idx_cdefs_grid", "coord_defs", "def_key", GRID_NEEDED),
-    # run links only, so an index without runs answers from an empty index
+    # run links, which dascore no longer writes; kept so the version 26
+    # schema stays as it was
     ("idx_pcoords_runs", "patch_coords", "coord_name", "run_index > 0"),
 )
 

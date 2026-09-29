@@ -92,7 +92,6 @@ from dascore.utils.chunk_plan import (
     build_coverage_frame,
     build_gap_frame,
     build_subdivision_plan,
-    coalesce_runs,
     refuse_riders,
     subdivision_pieces,
 )
@@ -1746,9 +1745,7 @@ class Spool(NodeRepr, NamespaceOwner):
 
     # --- restructuring (materializing) operations -----------------------
 
-    def _plan_frames(
-        self, dim: str | None = None, runs: bool = False
-    ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    def _plan_frames(self, dim: str | None = None) -> tuple[pd.DataFrame, pd.DataFrame]:
         """
         Return (source_rows, working) frames for planning along ``dim``.
 
@@ -1778,19 +1775,12 @@ class Spool(NodeRepr, NamespaceOwner):
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
         working = _drop_patch_local_empty(working)
         base = base[base["_patch_row"].isin(working["_patch_row"])]
-        patch_local = any(s or r for _, s, r in self._catalog.residuals)
-        if runs and dim is not None and "_index_row" in base.columns:
-            # a sample or relative selection resolves against the whole
-            # patch at load, so its runs cannot be planned apart
-            if not patch_local:
-                working = self._with_runs(working, dim, modified=True)
-                base = base[base["_patch_row"].isin(working["_patch_row"])]
         return base.reset_index(drop=True), working.reset_index(drop=True)
 
     def _build_chunk_plan(self, dim_kwargs, **params):
         """Build and coalesce one plan from this spool's current source rows."""
         name = next(iter(dim_kwargs), None)
-        source_rows, working = self._plan_frames(name, runs=True)
+        source_rows, working = self._plan_frames(name)
         windows = explicit_windows(dim_kwargs)
         refuse_riders(windows, source_rows)
         exact = {}
@@ -1801,7 +1791,7 @@ class Spool(NodeRepr, NamespaceOwner):
         if trims := {k: v for k, v in windows.items() if k != name}:
             lookup = partial(known_coordinates, self._catalog)  # members' only
             plan = _trim_explicit(plan, source_rows, trims, lookup)
-        return source_rows, coalesce_runs(plan, working)
+        return source_rows, plan
 
     def chunk_plan(
         self,
@@ -1871,77 +1861,6 @@ class Spool(NodeRepr, NamespaceOwner):
         base = _ensure_patch_row(self._df.reset_index(drop=True))
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
         return _drop_patch_local_empty(working)
-
-    def _run_rows(self, df: pd.DataFrame, dim: str) -> tuple[pd.DataFrame, list]:
-        """
-        One row per run of each patch whose index states runs, and the ids
-        of the patches split.
-
-        Each run row is its patch's row with the run's envelope and step.
-        Where a selection trimmed a row, each run is clipped to that row's
-        envelope, and a run left outside it is dropped. Only patches whose
-        runs share one step split: a run without its neighbours' step
-        would read as a hole beside them. The ids include a patch whose
-        runs all fell outside its row, so a selection inside a hole drops
-        it rather than keeping it whole.
-        """
-        min_col, max_col, step_col = (f"{dim}_{x}" for x in ("min", "max", "step"))
-        none = (df.iloc[:0], [])
-        if df.empty or not {min_col, max_col, step_col} <= set(df.columns):
-            return none
-        # a row with no envelope here is one neither report nor plan can
-        # place (a relative time among absolute ones), and its runs no better
-        # rows name their patch in this spool's index by `_index_row` when
-        # they are plan members, else by `_patch_row`
-        key = "_index_row" if "_index_row" in df.columns else "_patch_row"
-        placed = df[df[min_col].notna() & df[key].notna()]
-        wanted = placed[key].astype("int64").unique()
-        runs = self._catalog.backend.coord_runs(dim, wanted)
-        if runs.empty:
-            return none
-        by_patch = runs.groupby("patch_row")["_env_step"]
-        unstepped = runs["_env_step"].isna().groupby(runs["patch_row"]).transform("sum")
-        runs = runs[(unstepped == 0) & (by_patch.transform("nunique") == 1)]
-        if runs.empty:
-            return none
-        runs = runs.rename(columns={"patch_row": key})
-        placed = placed.astype({key: "int64"})
-        split = placed.merge(runs, on=key, how="inner")
-        for run_col, col in zip(
-            ("_env_min", "_env_max", "_env_step"), (min_col, max_col, step_col)
-        ):
-            if df[col].dtype != object:
-                split[run_col] = split[run_col].astype(df[col].dtype)
-        split = split.assign(
-            **{
-                min_col: split["_env_min"].clip(lower=split[min_col]),
-                max_col: split["_env_max"].clip(upper=split[max_col]),
-                step_col: split["_env_step"],
-            }
-        )
-        split = split[split[min_col] <= split[max_col]]
-        return split[df.columns].reset_index(drop=True), list(runs[key].unique())
-
-    def _with_runs(self, df: pd.DataFrame, dim: str, modified=False) -> pd.DataFrame:
-        """
-        The relation with each patch split into the runs its index states.
-
-        A segmented coordinate is linked to its runs, so a patch holding a
-        hole becomes one row per run and reports and plans see the hole as
-        they see one between patches. Patches without runs of one step, which
-        is nearly all of them, pass through untouched. ``modified`` marks run
-        rows to load as selections of their patch; `coalesce_runs` reads the
-        runs landing in one output back as one member.
-        """
-        split, ids = self._run_rows(df, dim)
-        if not ids:
-            return df
-        key = "_index_row" if "_index_row" in df.columns else "_patch_row"
-        split = split.assign(_modified=True) if modified else split
-        out = pd.concat([df[~df[key].isin(ids)], split], ignore_index=True)
-        if modified:
-            out["_modified"] = out["_modified"].fillna(False).astype(bool)
-        return out
 
     def get_gaps(
         self,
@@ -2023,7 +1942,7 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> assert random_spool().get_gaps().empty
         """
         out = build_gap_frame(
-            self._with_runs(self._report_relation(), dim),
+            self._report_relation(),
             dim,
             tolerance=tolerance,
             group=group,
@@ -2101,7 +2020,7 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> assert (random_spool().get_coverage()["coverage"] == 1).all()
         """
         out = build_coverage_frame(
-            self._with_runs(self._report_relation(), dim),
+            self._report_relation(),
             dim,
             tolerance=tolerance,
             group=group,
