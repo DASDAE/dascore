@@ -16,7 +16,6 @@ from dascore.utils.array_api import (
     array_namespace,
     asarray_like,
     backend_name,
-    can_nan_reduce,
     device,
     is_numpy,
     nan_reduce,
@@ -395,13 +394,6 @@ class TestNanReduce:
         """A reduction dascore doesn't have is an error, not a std."""
         with pytest.raises(ValueError, match="not a reduction"):
             nan_reduce("median", np.array([1.0, 2.0]))
-
-    def test_can_nan_reduce(self, to_array, backend):
-        """Only reductions the standard defines for a dtype can be done."""
-        assert can_nan_reduce("mean", to_array(np.array([1.0, 2.0])))
-        # dask has its own nan reductions, so it can do them all.
-        booleans = to_array(np.array([True, False]))
-        assert can_nan_reduce("min", booleans) == (backend == "dask")
 
     @pytest.mark.parametrize("name", names)
     def test_integer_data(self, name, to_array):

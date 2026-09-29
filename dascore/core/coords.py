@@ -258,11 +258,6 @@ class CoordSummary(DascoreBaseModel):
     runs: tuple[CoordSummary, ...] | None = Field(default=None, repr=False)
 
     @property
-    def is_exact_grid(self) -> bool:
-        """Return True when the summary states an exact integer grid."""
-        return self.step_numerator is not None
-
-    @property
     def is_range_like(self) -> bool:
         """Return True when the summary can reconstruct an evenly sampled coord."""
         return not pd.isnull(self.step)
