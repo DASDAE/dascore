@@ -15,6 +15,7 @@ import warnings
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 from datetime import timedelta
+from fractions import Fraction
 from itertools import accumulate, pairwise
 from unittest import mock
 
@@ -26,7 +27,7 @@ import dascore as dc
 import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
 from dascore.config import config_context
-from dascore.core.coords import Grid, NumericCoord
+from dascore.core.coords import Grid, NumericCoord, get_coord
 from dascore.core.lazy_array import LazyArray
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
@@ -3108,6 +3109,48 @@ class TestChunkFillValue:
         assert [x.get_coord("time").step for x in pieces] == [
             x.get_coord("time").step for x in spool
         ]
+
+    @staticmethod
+    def _two_members(step, second_offset_ns, count=3):
+        """Two members of one step, the second starting second_offset_ns on."""
+        t0 = np.datetime64("2020-01-01T00:00:00")
+        starts = (t0, t0 + np.timedelta64(second_offset_ns, "ns"))
+        patches = [
+            dc.Patch(
+                data=np.arange(float(count))[None],
+                coords={
+                    "distance": [0],
+                    "time": get_coord(start=x, step=step, shape=(count,)),
+                },
+                dims=("distance", "time"),
+            )
+            for x in starts
+        ]
+        spool = dc.spool(patches)
+        return spool.chunk(time=None, tolerance=10, fill_value=np.nan)[0], t0
+
+    def test_hole_between_offset_lattices_keeps_the_step(self):
+        """Members sharing a step on offset lattices fill at that step."""
+        ms = np.timedelta64(1, "ms")
+        # the second member sits 6.37 steps on: a 3-sample hole plus jitter
+        merged, t0 = self._two_members(ms, 6_370_000)
+        coord = merged.get_coord("time")
+        assert coord.evenly_sampled and coord.step == ms
+        # laid on the first member's lattice; the second snaps onto it
+        assert np.array_equal(coord.values, t0 + np.arange(9) * ms)
+        assert np.array_equal(self._fill_positions(merged), [3, 4, 5])
+        assert np.array_equal(merged.data[0, [0, 1, 2, 6, 7, 8]], [0, 1, 2] * 2)
+
+    def test_fractional_rate_hole_keeps_the_step(self):
+        """A one-sample hole at 6 kHz fills, though ns rounding shortens the seam."""
+        step = Fraction(1, 6000)
+        # one missing sample, the second start rounded to whole nanoseconds
+        merged, t0 = self._two_members(step, round(step * 1001 * 10**9), count=1000)
+        coord = merged.get_coord("time")
+        assert coord.evenly_sampled
+        assert coord.step == get_coord(start=t0, step=step, shape=(2,)).step
+        assert len(coord) == 2001
+        assert np.array_equal(self._fill_positions(merged), [1000])
 
     def test_infinite_tolerance_fills_every_hole(self, gapped_spool):
         """No boundary is a gap, so no hole is too wide to fill."""

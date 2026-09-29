@@ -3177,20 +3177,19 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """
         Whether any seam between these runs skips a position of their grid.
 
-        A seam a whole number of steps wider than one is a hole, which
-        re-fitting would spread over the run; any other seam is
+        A seam two steps wide or more skips a position, whether or not the
+        later run sits on the earlier one's lattice, so it is a hole which
+        re-fitting would spread over the run. The slack absorbs nanosecond
+        rounding of fractional-rate steps and starts. A narrower seam is
         misalignment, and stays the tolerance's business.
         """
         steps = [x.step(self.dtype) if isinstance(x, Grid) else self.step for x in runs]
         for num in range(1, len(runs)):
-            if (_lattice_gap(runs[num - 1], runs[num]) or 0) > 0:
-                return False
             step = steps[num - 1] if not _is_null(steps[num - 1]) else steps[num]
-            if _is_null(step):
+            if _is_null(step) or not step:
                 continue  # no grid stated, so no position to have skipped
             span = abs(labels[num][0] - labels[num - 1][-1]) / abs(step)
-            whole = np.round(span)
-            if whole > 1 and abs(span - whole) <= _GRID_RTOL * whole:
+            if span >= 2 - 1e-3:
                 return False
         return True
 
