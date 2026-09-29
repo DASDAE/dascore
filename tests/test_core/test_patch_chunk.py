@@ -711,10 +711,10 @@ class TestChunkMerge:
         patches = [random_patch.mean("time") for _ in range(3)]
         spool = dc.spool(patches)
         # Losing patches silently would be data loss; this raises by default
-        # (0.2 change) with missing_dim="drop" restoring the old behavior.
-        with pytest.raises(ChunkError, match="missing_dim"):
+        # (0.2 change) with on_missing_dim="drop" restoring the old behavior.
+        with pytest.raises(ChunkError, match="on_missing_dim"):
             spool.chunk(time=None)
-        chunked = spool.chunk(time=None, missing_dim="drop")
+        chunked = spool.chunk(time=None, on_missing_dim="drop")
         assert not len(chunked)
 
     def test_merge_with_conflicting_private_coords(

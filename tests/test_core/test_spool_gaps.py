@@ -112,7 +112,7 @@ class TestGetGaps:
         )
         assert len(trimmed.get_gaps()) == 1
 
-    def test_missing_dim_dropped(self, spool_with_non_coords):
+    def test_on_missing_dim_dropped(self, spool_with_non_coords):
         """Patches without the dimension are excluded, the rest reported."""
         contents = spool_with_non_coords.get_contents()
         assert contents["time_min"].isna().any(), "fixture has no dimensionless patch"
@@ -123,7 +123,7 @@ class TestGetGaps:
         assert spool_with_non_coords.get_gaps().empty
         # ... and the dropped ones can be made an error instead
         with pytest.raises(ChunkError, match="lack the dimension"):
-            spool_with_non_coords.get_gaps(missing_dim="raise")
+            spool_with_non_coords.get_gaps(on_missing_dim="raise")
 
     def test_plan_backed_spool(self, gappy_spool):
         """A report describes the patches the spool holds, not their sources."""
