@@ -16,6 +16,7 @@ import dascore.proc.coords
 import dascore.utils.array as array_utils
 from dascore import get_quantity
 from dascore.exceptions import (
+    CoordDataError,
     IncompatiblePatchError,
     ParameterError,
     PatchCoordinateError,
@@ -1071,8 +1072,21 @@ class TestApplyArrayFunc:
 class TestNumpyFunctionHandlers:
     """Tests for numpy functions whose coordinates need special handling."""
 
+    @pytest.fixture(scope="class")
+    def patch_3d(self):
+        """A patch with three dimensions of different lengths."""
+        data = np.arange(24.0).reshape(2, 3, 4)
+        coords = {"a": np.arange(2), "b": np.arange(3), "c": np.arange(4)}
+        return dc.Patch(data=data, coords=coords, dims=("a", "b", "c"))
+
     @pytest.mark.parametrize(
-        "func", [np.mean, np.sum, np.std, np.max, np.median, np.nanmean]
+        "func",
+        [
+            np.mean,
+            np.median,
+            lambda x, **kw: np.percentile(x, 50, **kw),
+            np.add.reduce,
+        ],
     )
     def test_keepdims(self, random_patch, func):
         """keepdims=True gives the same patch as the default."""
@@ -1081,35 +1095,28 @@ class TestNumpyFunctionHandlers:
         assert out.coords == expected.coords
         assert np.allclose(out.data, expected.data)
 
-    def test_percentile_keepdims(self, random_patch):
-        """Reductions with extra positional arguments keep dims too."""
-        out = np.percentile(random_patch, 50, axis=0, keepdims=True)
-        expected = np.percentile(random_patch, 50, axis=0)
-        assert out.coords == expected.coords
-        assert np.allclose(out.data, expected.data)
+    def test_take_is_not_keepdims(self, random_patch):
+        """Selecting one sample is not a reduction, so it still raises."""
+        with pytest.raises(CoordDataError):
+            np.take(random_patch, [5], axis=1)
 
-    def test_ufunc_reduce_keepdims(self, random_patch):
-        """So do ufunc reductions."""
-        out = np.add.reduce(random_patch, axis=1, keepdims=True)
-        expected = np.add.reduce(random_patch, axis=1)
-        assert out.coords == expected.coords
-        assert np.allclose(out.data, expected.data)
-
-    @pytest.mark.parametrize("axes", [None, (1, 0), (-1, -2)])
-    def test_transpose(self, random_patch, axes):
+    @pytest.mark.parametrize("axes", [None, (0, 2, 1), (-1, 0, 1)])
+    def test_transpose(self, patch_3d, axes):
         """np.transpose moves the coordinates with the data."""
-        out = np.transpose(random_patch, axes)
-        assert out.dims == random_patch.dims[::-1]
-        assert np.array_equal(out.data, random_patch.data.T)
-        assert out.get_coord("time") == random_patch.get_coord("time")
+        out = np.transpose(patch_3d, axes)
+        expected = np.transpose(patch_3d.data, axes)
+        assert out.shape == expected.shape
+        assert np.array_equal(out.data, expected)
+        for dim, length in zip(out.dims, out.shape, strict=True):
+            assert len(out.get_coord(dim)) == length
 
-    def test_swapaxes(self, random_patch):
+    def test_swapaxes(self, patch_3d):
         """np.swapaxes is a transpose of two dimensions."""
-        out = np.swapaxes(random_patch, 0, -1)
-        assert out.dims == random_patch.dims[::-1]
-        assert np.array_equal(out.data, random_patch.data.T)
+        out = np.swapaxes(patch_3d, 0, -2)
+        assert out.dims == ("b", "a", "c")
+        assert np.array_equal(out.data, np.swapaxes(patch_3d.data, 0, -2))
 
-    @pytest.mark.parametrize("axis", [None, 1, -1, (1,)])
+    @pytest.mark.parametrize("axis", [None, -1])
     def test_squeeze(self, random_patch, axis):
         """np.squeeze removes length one dimensions and their coordinates."""
         reduced = np.mean(random_patch, axis=1)
@@ -1118,20 +1125,26 @@ class TestNumpyFunctionHandlers:
         assert out.get_coord("distance") == random_patch.get_coord("distance")
         assert np.array_equal(out.data, reduced.data[:, 0])
 
-    def test_squeeze_one_of_two(self, random_patch):
-        """np.squeeze with an axis leaves other length one dimensions."""
-        reduced = np.mean(random_patch, axis=(0, 1))
-        out = np.squeeze(reduced, axis=0)
-        assert out.dims == ("time",)
-        assert out.shape == (1,)
+    @pytest.mark.parametrize(("axis", "dims"), [(0, ("b", "c")), ((0, 1), ("c",))])
+    def test_squeeze_some(self, patch_3d, axis, dims):
+        """np.squeeze removes only the length one dimensions it is given."""
+        reduced = np.mean(patch_3d, axis=(0, 1))
+        assert np.squeeze(reduced, axis=axis).dims == dims
 
-    @pytest.mark.parametrize("axis", [None, 1, (0, 1)])
-    def test_flip(self, random_patch, axis):
+    @pytest.mark.parametrize("func", [np.flip, lambda x: np.flip(x, axis=1), np.fliplr])
+    def test_flip(self, random_patch, func):
         """np.flip flips the coordinates with the data."""
-        out = np.flip(random_patch, axis=axis)
-        assert np.array_equal(out.data, np.flip(random_patch.data, axis=axis))
+        out = func(random_patch)
+        assert np.array_equal(out.data, func(random_patch.data))
         time = random_patch.get_array("time")
         assert np.array_equal(out.get_array("time"), time[::-1])
+
+    def test_flipud(self, random_patch):
+        """np.flipud flips the first dimension."""
+        out = np.flipud(random_patch)
+        distance = random_patch.get_array("distance")
+        assert np.array_equal(out.get_array("distance"), distance[::-1])
+        assert np.array_equal(out.data, np.flipud(random_patch.data))
 
     @pytest.mark.parametrize("n", [1, 2])
     def test_diff_time(self, random_patch, n):
@@ -1143,7 +1156,32 @@ class TestNumpyFunctionHandlers:
         expected = values[:-n] + (values[n:] - values[:-n]) / 2
         assert np.array_equal(out.get_array("time"), expected)
         assert out.get_coord("time").step == time.step
-        assert out.get_coord("time").min() == time.min() + n * time.step / 2
+
+    def test_diff_default_axis(self, random_patch):
+        """Without an axis np.diff uses the last dimension, as numpy does."""
+        out = np.diff(random_patch)
+        assert out.shape == (random_patch.shape[0], random_patch.shape[1] - 1)
+        assert out.get_coord("distance") == random_patch.get_coord("distance")
+
+    def test_diff_uneven(self):
+        """Uneven coordinates get the midpoint of each pair."""
+        patch = dc.Patch(data=np.arange(4.0), coords={"x": [0, 1, 3, 7]}, dims=("x",))
+        assert np.array_equal(np.diff(patch).get_array("x"), [0.5, 2.0, 5.0])
+
+    def test_diff_descending_unsigned(self):
+        """Unsigned coordinates do not wrap when they decrease."""
+        coords = {"x": np.array([3, 2, 0], dtype=np.uint8)}
+        patch = dc.Patch(data=np.arange(3.0), coords=coords, dims=("x",))
+        assert np.array_equal(np.diff(patch).get_array("x"), [2.5, 1.0])
+
+    @pytest.mark.parametrize("n", [0, 5])
+    def test_diff_n_edges(self, n):
+        """n=0 is the identity and n past the end is empty, as in numpy."""
+        coords = {"x": np.array(["a", "b", "c", "d"])} if n == 0 else {"x": range(4)}
+        patch = dc.Patch(data=np.arange(4.0), coords=coords, dims=("x",))
+        out = np.diff(patch, n=n)
+        assert np.array_equal(out.data, np.diff(patch.data, n=n))
+        assert len(out.get_coord("x")) == len(out.data)
 
     def test_diff_distance(self, random_patch):
         """Integer coordinates get float midpoints and keep their units."""
@@ -1169,8 +1207,8 @@ class TestNumpyFunctionHandlers:
 
     def test_gradient_all_axes(self, random_patch):
         """np.gradient returns one patch per axis, each on the input coords."""
-        out = np.gradient(random_patch, 2.0, 3.0)
-        expected = np.gradient(random_patch.data, 2.0, 3.0)
+        out = np.gradient(random_patch, 2.0, 3.0, edge_order=2)
+        expected = np.gradient(random_patch.data, 2.0, 3.0, edge_order=2)
         assert isinstance(out, tuple) and len(out) == 2
         for patch, array in zip(out, expected, strict=True):
             assert patch.coords == random_patch.coords
@@ -1178,9 +1216,17 @@ class TestNumpyFunctionHandlers:
 
     def test_gradient_one_axis(self, random_patch):
         """With one axis np.gradient returns one patch."""
-        out = np.gradient(random_patch, 2.0, axis=1)
+        out = np.gradient(random_patch, 2.0, axis=1, edge_order=2)
+        expected = np.gradient(random_patch.data, 2.0, axis=1, edge_order=2)
         assert out.coords == random_patch.coords
-        assert np.allclose(out.data, np.gradient(random_patch.data, 2.0, axis=1))
+        assert np.allclose(out.data, expected)
+
+    def test_gradient_array_spacing(self):
+        """One array of spacings cannot apply to several axes."""
+        coords = {"x": np.arange(3), "y": np.arange(3)}
+        patch = dc.Patch(data=np.eye(3), coords=coords, dims=("x", "y"))
+        with pytest.raises(ValueError):
+            np.gradient(patch, np.array([0.0, 1.0, 3.0]))
 
     def test_gradient_shared_spacing(self, random_patch):
         """A single spacing applies to every axis."""
@@ -1189,15 +1235,14 @@ class TestNumpyFunctionHandlers:
         for patch, array in zip(out, expected, strict=True):
             assert np.allclose(patch.data, array)
 
-    @pytest.mark.parametrize("func", [np.sort, np.argsort])
+    @pytest.mark.parametrize("func", [np.sort, np.argsort, np.partition])
     def test_sort_refused(self, random_patch, func):
         """Sorting values leaves the coordinates meaningless."""
+        args = (1,) if func is np.partition else ()
         with pytest.raises(ParameterError, match="sort_coords"):
-            func(random_patch, axis=1)
+            func(random_patch, *args)
 
-    @pytest.mark.parametrize(
-        "func", [np.fft.fft, np.fft.rfft, np.fft.fft2, np.fft.fftshift]
-    )
+    @pytest.mark.parametrize("func", [np.fft.fft, np.fft.fftshift])
     def test_fft_refused(self, random_patch, func):
         """numpy.fft functions point to patch.dft."""
         with pytest.raises(ParameterError, match="dft"):

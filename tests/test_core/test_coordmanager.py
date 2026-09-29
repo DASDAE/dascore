@@ -1548,6 +1548,13 @@ class TestFlip:
         q_after = flipped_cm.coord_map["quality"].values
         assert np.array_equal(q_after, q_before[:, ::-1])
 
+    def test_flip_both_dims_of_2d_coord(self):
+        """A coordinate on two flipped dims is flipped along both."""
+        aux = np.arange(6.0).reshape(2, 3)
+        coords = {"x": np.arange(2), "y": np.arange(3), "aux": (("x", "y"), aux)}
+        flipped = dc.get_coord_manager(coords, dims=("x", "y")).flip("x", "y")
+        assert np.array_equal(flipped.get_array("aux"), aux[::-1, ::-1])
+
     def test_flip_2d_coord_raises(self, cm_multidim):
         """Ensure flipping a 2D coordinate directly raises an error."""
         cm = cm_multidim

@@ -979,7 +979,13 @@ def _diff_coords(a, n=1, axis=-1, prepend=None, append=None):
         msg = "np.diff does not support prepend or append for patches."
         raise ParameterError(msg)
     coord = a.get_coord(dim := a.dims[axis])
-    start, stop = coord.values[: len(coord) - n], coord.values[n:]
+    if n == 0:
+        return a.coords
+    values = coord.values
+    # Integers become floats before subtracting so they cannot wrap.
+    if values.dtype.kind in "iu":
+        values = values.astype(np.float64)
+    start, stop = values[: max(len(values) - n, 0)], values[n:]
     values = start + (stop - start) / 2
     return a.coords.update(**{dim: coord.update(values=values, units=coord.units)})
 
@@ -1008,8 +1014,8 @@ def _reassemble_patch(result, patch, func, args, kwargs):
 
     if "axis" in sig.parameters:
         dims, inds = _get_dims_and_inds_from_signature(patch, sig, args, kwargs)
-        # re-expand array, unless numpy kept the dims (keepdims=True).
-        if result.ndim != patch.ndim:
+        # re-expand array, unless numpy kept the dims.
+        if not sig.bind_partial(*args, **kwargs).arguments.get("keepdims"):
             result = result[inds]
         new_coords = {x: patch.get_coord(x).reduce_coord() for x in dims}
         cm = patch.coords.update(**new_coords)
@@ -1261,7 +1267,10 @@ def patch_array_function(self, func, types, args, kwargs):
     # Only handle functions involving Patches
     assert any(issubclass(t, dc.Patch) for t in types)
     if getattr(func, "__module__", "").startswith("numpy.fft"):
-        msg = f"np.fft.{func.__name__} does not support patches; use patch.dft."
+        msg = (
+            f"np.fft.{func.__name__} does not support patches; use patch.dft, "
+            "or apply it to patch.data."
+        )
         raise ParameterError(msg)
     if (handler := ARRAY_FUNCTION_HANDLERS.get(func)) is not None:
         return handler(*args, **kwargs)
@@ -1298,35 +1307,40 @@ def _flip(m, axis=None):
 def _gradient(f, *varargs, axis=None, edge_order=1):
     """np.gradient for patches; one patch per axis, as numpy returns."""
     axes = tuple(range(f.ndim)) if axis is None else tuple(iterate(axis))
-    if len(axes) == 1:
-        return apply_array_func(
-            np.gradient, f, *varargs, axis=axis, edge_order=edge_order
-        )
-    spacing = [(x,) for x in varargs] if len(varargs) > 1 else [varargs] * len(axes)
-    return tuple(
+    # One scalar spacing applies to every axis; otherwise one per axis.
+    if len(varargs) == 1 and np.ndim(varargs[0]) == 0:
+        varargs = varargs * len(axes)
+    spacing = [(x,) for x in varargs] or [()] * len(axes)
+    out = tuple(
         apply_array_func(np.gradient, f, *space, axis=ax, edge_order=edge_order)
         for ax, space in zip(axes, spacing, strict=True)
     )
+    return out[0] if len(out) == 1 else out
 
 
 def _refuse_sort(*args, **kwargs):
-    """Refuse np.sort and np.argsort, which leave coordinates meaningless."""
+    """Refuse functions which reorder values, leaving coordinates meaningless."""
     msg = (
-        "Sorting patch values leaves its coordinates meaningless; use "
-        "patch.sort_coords, or apply the function to patch.data."
+        "Sorting a patch's values leaves its coordinates meaningless; apply "
+        "the function to patch.data, or use patch.sort_coords to sort by a "
+        "coordinate."
     )
     raise ParameterError(msg)
 
 
-# Numpy functions whose coordinates the generic path cannot infer.
+# Numpy functions the generic path gets wrong, mapped to patch-aware versions.
 ARRAY_FUNCTION_HANDLERS = {
     np.transpose: _transpose,
     np.swapaxes: _swapaxes,
     np.squeeze: _squeeze,
     np.flip: _flip,
+    np.flipud: lambda m: _flip(m, 0),
+    np.fliplr: lambda m: _flip(m, 1),
     np.gradient: _gradient,
     np.sort: _refuse_sort,
     np.argsort: _refuse_sort,
+    np.partition: _refuse_sort,
+    np.argpartition: _refuse_sort,
 }
 
 

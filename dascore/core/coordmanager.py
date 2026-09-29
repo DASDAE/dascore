@@ -1396,7 +1396,12 @@ class CoordManager(RichRepr, DascoreBaseModel):
                 # Don't flip dimensional coords twice!
                 if associated == name:
                     continue
-                associated_coord = self.get_coord(associated)
+                # Build on earlier flips when it depends on several flipped dims.
+                associated_coord = (
+                    out[associated][1]
+                    if associated in out
+                    else self.get_coord(associated)
+                )
                 dims = dim_map[associated]
                 axis = dims.index(name)
                 out[associated] = (dims, _flip_coord(associated_coord, axis))
