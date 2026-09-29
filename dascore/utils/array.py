@@ -1014,8 +1014,10 @@ def _reassemble_patch(result, patch, func, args, kwargs):
 
     if "axis" in sig.parameters:
         dims, inds = _get_dims_and_inds_from_signature(patch, sig, args, kwargs)
-        # re-expand array, unless numpy kept the dims.
-        if not sig.bind_partial(*args, **kwargs).arguments.get("keepdims"):
+        # re-expand array, unless numpy kept the dims. Newer ufunc.reduce
+        # signatures take keepdims through **kwargs, so check both.
+        bound = sig.bind_partial(*args, **kwargs).arguments
+        if not kwargs.get("keepdims", bound.get("keepdims")):
             result = result[inds]
         new_coords = {x: patch.get_coord(x).reduce_coord() for x in dims}
         cm = patch.coords.update(**new_coords)
