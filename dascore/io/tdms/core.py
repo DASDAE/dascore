@@ -31,11 +31,7 @@ class TDMSFormatterV4713(FiberIO):
     def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
         try:
-            version_str = _get_version_str(resource)
-            if version_str:
-                return version_str
-            else:
-                return None
+            return _get_version_str(resource) or None
         except Exception:
             return None
 

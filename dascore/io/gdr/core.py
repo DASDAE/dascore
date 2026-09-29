@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import ArraySource, FiberIO, H5ArrayMixin
+from dascore.io import FiberIO, H5ArrayMixin
 from dascore.io.gdr.utils_das import _get_attrs_coords_and_data, _get_version
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
@@ -41,11 +41,4 @@ class GDR_V1(H5ArrayMixin, FiberIO):  # noqa
     ) -> list[dc.PatchMeta]:
         """Get the attributes of a resource belong to this type."""
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
-        return [
-            dc.PatchMeta(
-                attrs=GDRPatchAttrs.from_dict(attrs),
-                coords=cm,
-                dtype=str(data.dtype),
-                source=ArraySource(key=data.name),
-            )
-        ]
+        return self._dataset_meta(GDRPatchAttrs.from_dict(attrs), cm, data)

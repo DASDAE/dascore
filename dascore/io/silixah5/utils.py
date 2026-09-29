@@ -117,18 +117,17 @@ def _get_attr_dict(resource):
     return attrs_dict, coords
 
 
-def _validate_attrs(attrs_dict, attr_cls, extras=None):
+def _validate_attrs(attrs_dict, attr_cls):
     """Validate the subset of attrs the attr class knows about."""
     expected_fields = get_attr_names(attr_cls)
     attrs_sub = {i: v for i, v in attrs_dict.items() if i in expected_fields}
-    attrs_sub.update(extras if extras else {})
     return attr_cls.model_validate(attrs_sub)
 
 
-def _get_attr(resource, attr_cls, extras=None):
+def _get_attr(resource, attr_cls):
     """Get the attribute class and coordinates."""
     attrs, coords = _get_attr_dict(resource)
-    return _validate_attrs(attrs, attr_cls, extras), coords
+    return _validate_attrs(attrs, attr_cls), coords
 
 
 # --- Carina (netCDF-shell) variant helpers.
@@ -237,7 +236,7 @@ def _get_carina_attrs_and_coords(resource):
     return attrs_dict, coords
 
 
-def _get_carina_attr(resource, attr_cls, extras=None):
+def _get_carina_attr(resource, attr_cls):
     """Get the attribute class and coordinates for a Carina-variant file."""
     attrs, coords = _get_carina_attrs_and_coords(resource)
-    return _validate_attrs(attrs, attr_cls, extras), coords
+    return _validate_attrs(attrs, attr_cls), coords

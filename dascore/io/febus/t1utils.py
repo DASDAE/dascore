@@ -40,9 +40,7 @@ def _get_time_coord(fi, snap=True):
     """Get the times from the T1 file"""
     ts = fi["Data/Time"][()].squeeze()
     times = (ts * 1e9).astype("datetime64[ns]")
-    if should_snap(snap, "time"):
-        return dc.get_coord(values=times, units="s")
-    return get_coord(data=times, units="s", snap=False)
+    return get_coord(data=times, units="s", snap=should_snap(snap, "time"))
 
 
 def _get_coords(fi, snap=True) -> dc.CoordManager:
