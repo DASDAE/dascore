@@ -687,11 +687,54 @@ class TestUnselect:
         have to cut every patch into the pieces on either side.
         """
         out = random_patch.unselect(distance=(50, 200))
-        coord = out.get_coord("distance")
-        assert coord.step is None
         values = out.get_array("distance")
         assert not ((values >= 50) & (values <= 200)).any()
         assert values.min() < 50 < 200 < values.max()
+
+    @pytest.mark.parametrize("step", [None, (1, 1024), (1, 3000)])
+    def test_hole_keeps_step(self, random_patch, step):
+        """The removed interior samples stay visible as one missing gap."""
+        coord = random_patch.get_coord("time")
+        if step is not None:
+            coord = get_coord(start=coord.min(), step=step, shape=coord.shape)
+        patch = random_patch.update_coords(time=coord)
+        out = patch.unselect(time=(coord[10], coord[19])).get_coord("time")
+        assert out.runs_count == 2
+        assert out.step_exact == coord.step_exact
+        assert out.missing().count == 10
+        assert len(out.get_discontinuities("gaps")) == 1
+
+    def test_second_hole_keeps_step(self, random_patch):
+        """Unselecting a segmented coordinate again keeps its step."""
+        once = random_patch.unselect(time=(10, 20), samples=True)
+        twice = once.unselect(time=(40, 50), samples=True)
+        coord = twice.get_coord("time")
+        assert coord.step == random_patch.get_coord("time").step
+        assert coord.missing().count == 20
+
+    def test_no_op_keeps_metadata(self, random_patch):
+        """An unselect removing nothing leaves the patch as it was."""
+        out = random_patch.unselect(
+            time=(None, random_patch.get_coord("time").min() - 1)
+        )
+        assert out is random_patch or out.get_metadata() is random_patch.get_metadata()
+
+    def test_hole_in_samples_keeps_step(self, random_patch):
+        """A sample range removed from the middle keeps the step too."""
+        coord = random_patch.get_coord("time")
+        out = random_patch.unselect(time=(10, 20), samples=True)
+        new = out.get_coord("time")
+        assert new.step == coord.step
+        assert new.missing().count == 10
+        assert np.array_equal(out.data, np.delete(random_patch.data, range(10, 20), 1))
+
+    def test_edge_stays_one_grid(self, random_patch):
+        """Removing a leading range of a fractional-rate grid keeps it exact."""
+        time = random_patch.get_coord("time")
+        coord = get_coord(start=time.min(), step=(1, 1024), shape=time.shape)
+        patch = random_patch.update_coords(time=coord)
+        out = patch.unselect(time=(..., coord[9])).get_coord("time")
+        assert out == coord[10:]
 
     def test_data_follows_the_coordinate(self, random_patch):
         """The rows removed are the rows the selection would have kept."""
