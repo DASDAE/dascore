@@ -30,5 +30,5 @@ class DASHDF5(H5ArrayMixin, FiberIO):
     ) -> list[dc.PatchMeta]:
         """Get metadata from file."""
         coords = _get_cf_coords(resource, snap=snap)
-        attrs = _get_cf_attrs(resource, coords)
+        attrs = _get_cf_attrs(resource)
         return self._dataset_meta(attrs, coords, resource["das"])

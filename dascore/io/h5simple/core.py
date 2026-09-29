@@ -28,9 +28,7 @@ class H5Simple(FiberIO):
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
-        if _is_h5simple(resource):
-            return self.version
-        return None
+        return self.version if _is_h5simple(resource) else None
 
     def read_array(
         self, resource: H5Reader, windows: windows_type = (), key: str = ""

@@ -38,16 +38,8 @@ def _get_cf_version_str(hdf_fi) -> str | Literal[False]:
 _CF_DIMS = ("channel", "time")
 
 
-def _get_cf_coords(hdf_fi, minimal=False, snap=True) -> dc.core.CoordManager:
-    """
-    Get a coordinate manager of full file range.
-
-    Parameters
-    ----------
-    minimal
-        If True, only return queryable parameters.
-
-    """
+def _get_cf_coords(hdf_fi, snap=True) -> dc.core.CoordManager:
+    """Get a coordinate manager of full file range."""
 
     def _coord(values, name, units=None):
         """Return a tolerant or exact coordinate from stored values."""
@@ -95,7 +87,7 @@ def _get_cf_dims(hdf_fi) -> tuple[str, str]:
     return _CF_DIMS if hdf_fi["das"].shape == shape else _CF_DIMS[::-1]
 
 
-def _get_cf_attrs(hdf_fi, coords=None):
+def _get_cf_attrs(hdf_fi):
     """Get attributes for CF file."""
     out = {}
     for n1, n2 in _ROOT_ATTR_MAPPING.items():

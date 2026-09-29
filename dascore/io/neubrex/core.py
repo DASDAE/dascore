@@ -50,9 +50,7 @@ class NeubrexRFSV1(H5ArrayMixin, FiberIO):
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
-        if rfs_utils._is_neubrex(resource):
-            return self.version
-        return None
+        return self.version if rfs_utils._is_neubrex(resource) else None
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
@@ -74,9 +72,7 @@ class NeubrexDASV1(H5ArrayMixin, FiberIO):
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
-        if das_utils._is_neubrex(resource):
-            return self.version
-        return None
+        return self.version if das_utils._is_neubrex(resource) else None
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True

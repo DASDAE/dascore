@@ -43,9 +43,7 @@ class AI4EPSV1(H5ArrayMixin, FiberIO):
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
-        if _is_ai4eps(resource):
-            return self.version
-        return None
+        return self.version if _is_ai4eps(resource) else None
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True

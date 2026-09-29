@@ -79,7 +79,7 @@ def _get_version_data_node(root):
     return version, data_node
 
 
-def _scan_terra15(h5_fi, data_node, snap=True) -> list[dc.PatchMeta]:
+def _scan_terra15(h5_fi, data_node, *, snap=True) -> list[dc.PatchMeta]:
     """Scan a terra15 file, return metadata."""
     out = _get_default_attrs(h5_fi.attrs)
     coords = {
