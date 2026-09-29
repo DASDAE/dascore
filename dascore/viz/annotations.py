@@ -2,28 +2,33 @@
 
 from __future__ import annotations
 
+import itertools
 import string
-from collections.abc import Sequence
+from collections import defaultdict
+from collections.abc import Mapping, Sequence
 from typing import Any
 
+import matplotlib.patheffects as pe
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-from matplotlib.colors import TABLEAU_COLORS
-from matplotlib.patches import PathPatch, Rectangle
+from matplotlib.cbook import normalize_kwargs
+from matplotlib.colors import TABLEAU_COLORS, to_rgba
+from matplotlib.lines import Line2D
+from matplotlib.patches import Patch, PathPatch, Rectangle
 from matplotlib.path import Path as MplPath
 
 from dascore.core.annotations import AnnotationSet, Group, Path, Region
 from dascore.exceptions import ParameterError
 from dascore.utils.plotting import _format_time_axis, _get_ax, _get_plot_values
 
-# Spans, boxes and polygons sit over data, so they are see-through.
-_FILL_ALPHA = 0.3
-# Keys only a line takes; a span, box or polygon refuses them.
+# Spans, boxes and polygons sit over data, so their faces are see-through.
+_FILL_ALPHA = 0.25
+# Keys only lines and markers take; spans, boxes and polygons skip them.
 _LINE_KEYS = {"marker", "markersize", "markeredgecolor", "markerfacecolor"}
-_LINE_KEYS |= {"linestyle", "linewidth"}
-# A blank color value, which takes no palette color.
-_BLANK_COLOR = "grey"
+_LINE_KEYS |= {"path_effects"}
+# Ink for a feature with no color value; lines and markers get a white halo.
+_INK = "black"
 
 
 def _axes(dims, x, y):
@@ -68,28 +73,29 @@ def _column(annotations: AnnotationSet, name: str):
 
 
 def _draw_region(ax, bounds, x, y, style: dict[str, Any]):
-    """Draw one row: a marker, line, span, segment or box."""
+    """Draw one row, a marker, line, span, segment or box; return its artist."""
     xs, ys = (_get_plot_values(bounds[d]) if d in bounds else None for d in (x, y))
     fill = _fill_style(style)
     if xs is not None and ys is None:
         if xs[0] == xs[1]:
-            ax.axvline(xs[0], **style)
+            return ax.axvline(xs[0], **style)
         else:
-            ax.axvspan(*xs, **fill)
+            return ax.axvspan(*xs, **fill)
     elif ys is not None and xs is None:
         if ys[0] == ys[1]:
-            ax.axhline(ys[0], **style)
+            return ax.axhline(ys[0], **style)
         else:
-            ax.axhspan(*ys, **fill)
+            return ax.axhspan(*ys, **fill)
     elif xs is not None and ys is not None:
         x_point, y_point = xs[0] == xs[1], ys[0] == ys[1]
         if x_point and y_point:
-            ax.plot(xs[:1], ys[:1], **{"marker": "o", "linestyle": "none", **style})
+            marker = {"marker": "o", "linestyle": "none", **style}
+            return ax.plot(xs[:1], ys[:1], **marker)[0]
         elif x_point or y_point:
-            ax.plot(xs, ys, **style)
+            return ax.plot(xs, ys, **style)[0]
         else:
             corner, size = (xs[0], ys[0]), (xs[1] - xs[0], ys[1] - ys[0])
-            ax.add_patch(Rectangle(corner, *size, **fill))
+            return ax.add_patch(Rectangle(corner, *size, **fill))
 
 
 def _ring(ring, x, y, outer: bool) -> MplPath:
@@ -101,9 +107,11 @@ def _ring(ring, x, y, outer: bool) -> MplPath:
 
 
 def _fill_style(style: dict[str, Any]) -> dict[str, Any]:
-    """The style of a filled artist: see-through, without line-only keys."""
+    """A filled artist's style: see-through face, solid edge, no marker keys or halo."""
     kept = {k: v for k, v in style.items() if k not in _LINE_KEYS}
-    return {"alpha": _FILL_ALPHA, **kept}
+    color = kept.pop("color")
+    edge = {"facecolor": to_rgba(color, _FILL_ALPHA), "edgecolor": color}
+    return {**edge, "linewidth": 1.2, **kept}
 
 
 def plot(
@@ -113,6 +121,7 @@ def plot(
     y: str | None = None,
     color: str | Sequence[float] | None = None,
     label: str | None = None,
+    palette: Mapping | None = None,
     **style,
 ) -> plt.Axes:
     """
@@ -131,14 +140,21 @@ def plot(
         A set of more dimensions names both.
     color
         A matplotlib color, or a column of either table whose values are
-        colored from the property cycle, with a legend. A row blank on both
-        tables is grey; a feature blank on both reads its first member.
+        colored from ``palette`` first, then the property cycle, with a
+        legend. A row blank on both tables is black; a feature blank on both
+        reads its first member. By default everything is black.
     label
         A column whose values label the artists in a legend; a blank value
-        is left out of it.
+        is left out of it. Without it or a color column, a legend names the
+        kinds drawn (picks, regions, paths, polygons) when there are two or
+        more.
+    palette
+        Colors for values of the ``color`` column, e.g. ``{"P": "tab:red"}``;
+        values not in it take cycle colors it does not already use.
     **style
-        Passed to every artist, e.g. ``alpha``; line keys such as ``marker``
-        or ``linewidth`` reach only lines and markers.
+        Passed to every artist, e.g. ``alpha`` or ``linewidth``, overriding
+        the defaults; marker keys and ``path_effects`` reach only lines and
+        markers.
 
     Notes
     -----
@@ -147,7 +163,8 @@ def plot(
     and a box for two ranges; a row stating neither axis is not drawn. A
     group draws its members, a path a line per part, and a polygon a filled
     patch per part with its holes left empty. A path or polygon
-    not drawn in both axes is skipped.
+    not drawn in both axes is skipped. Lines and markers have a white halo,
+    and filled artists a solid edge, to stand out over a waterfall.
 
     Examples
     --------
@@ -160,7 +177,9 @@ def plot(
     >>> ann = dc.AnnotationSet.from_patch(patch, picks)
     >>> ax = patch.viz.waterfall()
     >>> ax = ann.viz.plot(ax=ax, color="phase")
+    >>> ax = ann.viz.plot(color="phase", palette={"P": "tab:red", "S": "tab:cyan"})
     """
+    style = normalize_kwargs(style, Line2D)
     x, y = _axes(annotations.dims, x, y)
     ax = _get_ax(ax)
     frame = annotations.annotations
@@ -172,15 +191,19 @@ def plot(
     label_of = _column(annotations, label) if label is not None else color_of
     cycle = plt.rcParams["axes.prop_cycle"].by_key().get("color")
     cycle = cycle or list(TABLEAU_COLORS.values())
-    palette, seen = {}, set()
+    used = {to_rgba(c) for c in (palette or {}).values()}
+    fresh = itertools.cycle([c for c in cycle if to_rgba(c) not in used] or cycle)
+    colors, seen, drawn = defaultdict(fresh.__next__, palette or {}), set(), {}
 
     def styled(where):
         """The style of an artist for a row index or a feature id."""
-        out: dict[str, Any] = {**style, "color": cycle[0] if color is None else color}
-        if color_of is not None and (value := color_of(where)) is None:
-            out["color"] = _BLANK_COLOR
-        elif color_of is not None:
-            out["color"] = palette.setdefault(value, cycle[len(palette) % len(cycle)])
+        ink = _INK if color is None or by_color else color
+        out: dict[str, Any] = {"color": ink, **style}
+        width = float(out.get("linewidth") or plt.rcParams["lines.linewidth"])
+        halo = pe.withStroke(linewidth=width + 2, foreground="white")
+        out.setdefault("path_effects", [halo])
+        if color_of is not None and (value := color_of(where)) is not None:
+            out["color"] = colors[value]
         text = None if label_of is None else label_of(where)
         if text is not None and str(text) not in seen:
             seen.add(str(text))
@@ -190,27 +213,29 @@ def plot(
     lone = iter(frame.index[ids == ""])
     for feature in annotations:
         geometry = feature.geometry
-        if isinstance(geometry, Region):
-            where = int(next(lone))
-            if x in geometry.bounds or y in geometry.bounds:
-                _draw_region(ax, geometry.bounds, x, y, styled(where))
-        elif isinstance(geometry, Group):
-            members = frame.index[ids == feature.id]
-            for where, region in zip(members, geometry.regions, strict=True):
+        if isinstance(geometry, Region | Group):
+            lonely = isinstance(geometry, Region)
+            rows = [next(lone)] if lonely else frame.index[ids == feature.id]
+            regions = [geometry] if lonely else geometry.regions
+            for where, region in zip(rows, regions, strict=True):
                 if x in region.bounds or y in region.bounds:
-                    _draw_region(ax, region.bounds, x, y, styled(int(where)))
+                    art = _draw_region(ax, region.bounds, x, y, styled(int(where)))
+                    drawn.setdefault(
+                        "regions" if isinstance(art, Patch) else "picks", art
+                    )
         elif isinstance(geometry, Path):
             for part in geometry.vertices:
                 if x in part and y in part:
                     xy = (_get_plot_values(part[d]) for d in (x, y))
-                    ax.plot(*xy, **styled(feature.id))
+                    drawn.setdefault("paths", ax.plot(*xy, **styled(feature.id))[0])
         else:
             for part in (p for p in geometry.vertices if p[0].keys() >= {x, y}):
                 rings = [
                     _ring(ring, x, y, number == 0) for number, ring in enumerate(part)
                 ]
                 path = MplPath.make_compound_path(*rings)
-                ax.add_patch(PathPatch(path, **_fill_style(styled(feature.id))))
+                patch = PathPatch(path, **_fill_style(styled(feature.id)))
+                drawn.setdefault("polygons", ax.add_patch(patch))
     ax.autoscale_view()
     kinds = annotations.bounds().dtypes
     for dim, axis in ((x, "x"), (y, "y")):
@@ -224,6 +249,10 @@ def plot(
         # Time runs down the y axis, as waterfall draws it.
         if axis == "y" and kind in "Mm" and not ax.yaxis_inverted():
             ax.invert_yaxis()
+    if label_of is None and len(drawn) > 1:
+        for kind, art in drawn.items():
+            art.set_label(kind)
+            seen.add(kind)
     if seen:
         ax.legend()
     return ax

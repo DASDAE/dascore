@@ -70,13 +70,15 @@ class TestDrawing:
         assert boxes == [(0, 3, 1, 4), (1, 0, 2, 1)]  # axhspan, axvspan
 
     def test_box(self):
-        """Two ranges are a rectangle."""
+        """Two ranges are a rectangle, its face see-through and its edge solid."""
         frame = {"time_min": [1.0], "time_max": [2.0]}
         frame |= {"distance_min": [3.0], "distance_max": [5.0]}
         (box,) = _set(frame).viz.plot().patches
         assert isinstance(box, Rectangle)
         assert (box.get_x(), box.get_y(), box.get_width()) == (1.0, 3.0, 1.0)
-        assert box.get_alpha() == 0.3
+        assert (box.get_facecolor()[3], box.get_edgecolor()) == (0.25, (0, 0, 0, 1))
+        assert box.get_linewidth() == 1.2
+        assert box.get_path_effects() == []
 
     def test_segment(self):
         """A value and a range are a segment."""
@@ -117,6 +119,40 @@ class TestDrawing:
         rows = [{"depth": 1.0, "note": "a"}, {"time": 1.0, "note": "a"}]
         ann = _set(rows, dims=("distance", "time", "depth"))
         assert _legend(ann.viz.plot(x="time", y="distance", label="note")) == ["a"]
+
+
+class TestStyle:
+    """Defaults that read over a waterfall, and style overriding them."""
+
+    def test_ink(self, shapes):
+        """A colorless path is black with a white halo."""
+        (path, *_) = shapes.viz.plot().lines
+        assert (path.get_color(), path.get_linewidth()) == ("black", 1.5)
+        (effect,) = path.get_path_effects()
+        assert effect._gc["foreground"] == "white"  # withStroke keeps it only here
+
+    def test_style_wins(self, shapes):
+        """Style, aliases included, overrides the defaults; the halo follows it."""
+        ax = shapes.viz.plot(lw=3, ls="--", alpha=0.9)
+        (line, *_), (polygon,) = ax.lines, ax.patches
+        assert line.get_linewidth() == polygon.get_linewidth() == 3
+        assert line.get_linestyle() == polygon.get_linestyle() == "--"
+        assert line.get_path_effects()[0]._gc["linewidth"] == 5
+        assert polygon.get_alpha() == 0.9
+        assert shapes.viz.plot(linewidth=None).lines
+
+    def test_kind_legend(self, shapes):
+        """Without a color column, two kinds or more are named in a legend."""
+        assert _legend(shapes.viz.plot()) == ["paths", "polygons"]
+        assert _legend(shapes.select(feature_id="car").viz.plot()) == []
+        assert _legend(shapes.viz.plot(label="speed")) == ["2.0"]
+        rows = [{"time": 1.0, "distance": 2.0}, {"time_min": 1.0, "time_max": 2.0}]
+        assert _legend(_set(rows).viz.plot()) == ["picks", "regions"]
+        ax = plt.subplots()[1]
+        ax.plot([0, 1], [0, 1], label="trace")
+        assert _legend(shapes.viz.plot(ax=ax)) == ["trace", "paths", "polygons"]
+        ax.legend(loc="upper left")
+        assert _legend(ax) == ["trace", "paths", "polygons"]
 
 
 class TestAxes:
@@ -215,12 +251,28 @@ class TestColor:
             line = ann.viz.plot(color="phase").lines[0]
         assert mcolors.to_rgba(line.get_color()) == mcolors.to_rgba("tab:blue")
 
-    def test_blank_is_grey(self):
-        """A blank value is grey and takes no palette color."""
+    def test_blank_is_black(self):
+        """A blank value is black and takes no palette color."""
         frame = {"time": [1.0, 2.0, 3.0], "distance": [1.0, 2.0, 3.0]}
         ax = _set(frame | {"phase": [None, "P", "S"]}).viz.plot(color="phase")
         cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
-        assert [x.get_color() for x in ax.lines] == ["grey", *cycle[:2]]
+        assert [x.get_color() for x in ax.lines] == ["black", *cycle[:2]]
+
+    def test_palette(self):
+        """A palette colors its values; others take unused cycle colors."""
+        frame = {"time": [1.0, 2.0, 3.0], "distance": [1.0, 2.0, 3.0]}
+        ann = _set(frame | {"phase": ["P", "S", None]})
+        cycle = plt.rcParams["axes.prop_cycle"].by_key()["color"]
+        palette = {"P": "red"}
+        ax = ann.viz.plot(color="phase", palette=palette)
+        red, other, blank = (x.get_color() for x in ax.lines)
+        assert red == "red"
+        assert other == cycle[0]
+        assert blank == "black"
+        assert palette == {"P": "red"}
+        assert _legend(ax) == ["P", "S"]
+        ax = ann.viz.plot(color="phase", palette={"P": cycle[0]})
+        assert ax.lines[1].get_color() == cycle[1]
 
     @pytest.mark.parametrize("color", ["red", [1, 0, 0]])
     def test_plain_color(self, color):
