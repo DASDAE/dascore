@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import ArraySource, FiberIO, H5ArrayMixin
+from dascore.io import FiberIO, H5ArrayMixin
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
 
@@ -45,11 +45,4 @@ class ODH4V1(H5ArrayMixin, FiberIO):
         file_attrs = _read_attrs(resource)
         coords = _get_coords(file_attrs, resource["raw_data"].shape)
         attrs = ODH4PatchAttrs.model_validate(_get_attrs_dict(file_attrs))
-        return [
-            dc.PatchMeta(
-                attrs=attrs,
-                coords=coords,
-                dtype=str(resource["raw_data"].dtype),
-                source=ArraySource(key=resource["raw_data"].name),
-            )
-        ]
+        return self._dataset_meta(attrs, coords, resource["raw_data"])

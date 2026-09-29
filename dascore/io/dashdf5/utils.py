@@ -52,9 +52,7 @@ def _get_cf_coords(hdf_fi, minimal=False, snap=True) -> dc.core.CoordManager:
     def _coord(values, name, units=None):
         """Return a tolerant or exact coordinate from stored values."""
         values = np.asarray(values)
-        if should_snap(snap, name):
-            return get_coord(data=values, units=units)
-        return get_coord(data=values, units=units, snap=False)
+        return get_coord(data=values, units=units, snap=should_snap(snap, name))
 
     def _get_spatialcoord(hdf_fi, code):
         """Get spatial coord."""
@@ -97,10 +95,9 @@ def _get_cf_dims(hdf_fi) -> tuple[str, str]:
     return _CF_DIMS if hdf_fi["das"].shape == shape else _CF_DIMS[::-1]
 
 
-def _get_cf_attrs(hdf_fi, coords=None, extras=None):
+def _get_cf_attrs(hdf_fi, coords=None):
     """Get attributes for CF file."""
     out = {}
-    out.update(extras or {})
     for n1, n2 in _ROOT_ATTR_MAPPING.items():
         out[n1] = hdf_fi.attrs.get(n2)
     for source, target in _DAS_ATTR_MAPPING.items():

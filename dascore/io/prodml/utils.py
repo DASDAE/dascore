@@ -569,13 +569,12 @@ def _get_fbe_data(node_info):
 
 
 def _yield_prodml_attrs_coords(
-    fi, extras=None, snap=True
+    fi, snap=True
 ) -> Iterator[tuple[dc.PatchAttrs, dc.CoordManager, str]]:
     """Scan a prodML file, return metadata."""
     acq = fi["Acquisition"]
     # Get the information common to all from root attributes.
     base_info = _get_root_attrs(acq.attrs)
-    base_info.update(extras if extras is not None else {})
     d_coord = _get_distance_coord(acq)
     # Iterate the raw and processed data and return results in a list.
     for node_info in _yield_data_nodes(fi):

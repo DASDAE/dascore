@@ -34,11 +34,7 @@ def _get_coord_manager(h5fi, snap=True):
     def _get_dist_coord(h5fi):
         """Get the distance (depth) coordinate."""
         depth = h5fi["depth"][:]
-        return (
-            dc.get_coord(data=depth)
-            if should_snap(snap, "distance")
-            else get_coord(data=depth, snap=False)
-        )
+        return get_coord(data=depth, snap=should_snap(snap, "distance"))
 
     coords = {
         "time": _get_time_coord(h5fi, snap=snap),

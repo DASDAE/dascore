@@ -806,11 +806,7 @@ def _get_times(times: list[np.datetime64 | None], snap: snap_type = True):
     supported input.
     """
     values = np.asarray(times, dtype="datetime64[ns]")
-    return (
-        get_coord(data=values)
-        if should_snap(snap, "time")
-        else get_coord(data=values, snap=False)
-    )
+    return get_coord(data=values, snap=should_snap(snap, "time"))
 
 
 def _assert_float_equal(name: str, values: list[float], *, rtol: float = 1e-6):

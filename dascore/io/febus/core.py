@@ -77,10 +77,7 @@ class Febus2(FiberIO):
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
-        version_str = _get_febus_version_str(resource)
-        if version_str:
-            return version_str
-        return None
+        return _get_febus_version_str(resource) or None
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
