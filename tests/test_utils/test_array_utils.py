@@ -1221,6 +1221,19 @@ class TestNumpyFunctionHandlers:
         assert out.coords == random_patch.coords
         assert np.allclose(out.data, expected)
 
+    @pytest.mark.parametrize(
+        "func",
+        [
+            lambda x: np.gradient(x, axis=(0, 0)),
+            lambda x: np.flip(x, axis=5),
+            lambda x: np.squeeze(x, axis=(1, -1)),
+        ],
+    )
+    def test_bad_axes(self, random_patch, func):
+        """Repeated or out of range axes raise, as they do in numpy."""
+        with pytest.raises(ValueError):
+            func(random_patch)
+
     def test_gradient_array_spacing(self):
         """One array of spacings cannot apply to several axes."""
         coords = {"x": np.arange(3), "y": np.arange(3)}

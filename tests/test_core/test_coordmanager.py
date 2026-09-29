@@ -1548,6 +1548,11 @@ class TestFlip:
         q_after = flipped_cm.coord_map["quality"].values
         assert np.array_equal(q_after, q_before[:, ::-1])
 
+    def test_flip_repeated_dim(self, cm_multidim):
+        """Repeating a dim flips it, and its associated coords, once."""
+        flipped = cm_multidim.flip("distance", "distance")
+        assert flipped == cm_multidim.flip("distance")
+
     def test_flip_both_dims_of_2d_coord(self):
         """A coordinate on two flipped dims is flipped along both."""
         aux = np.arange(6.0).reshape(2, 3)

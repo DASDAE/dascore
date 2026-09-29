@@ -12,6 +12,7 @@ from collections.abc import Iterable, Mapping
 from typing import Any
 
 import numpy as np
+from numpy.lib.array_utils import normalize_axis_tuple
 
 import dascore as dc
 from dascore.compat import array, is_array
@@ -1279,9 +1280,16 @@ def patch_array_function(self, func, types, args, kwargs):
     return apply_array_func(func, *args, **kwargs)
 
 
+def _axes(patch, axis) -> tuple[int, ...]:
+    """Return the axes of a numpy axis spec, validated as numpy does; None is all."""
+    if axis is None:
+        return tuple(range(patch.ndim))
+    return normalize_axis_tuple(axis, patch.ndim)
+
+
 def _axis_dims(patch, axis) -> tuple[str, ...]:
     """Return the dimension names of a numpy axis spec; None means all."""
-    return patch.dims if axis is None else tuple(patch.dims[x] for x in iterate(axis))
+    return tuple(patch.dims[x] for x in _axes(patch, axis))
 
 
 def _transpose(a, axes=None):
@@ -1308,7 +1316,7 @@ def _flip(m, axis=None):
 
 def _gradient(f, *varargs, axis=None, edge_order=1):
     """np.gradient for patches; one patch per axis, as numpy returns."""
-    axes = tuple(range(f.ndim)) if axis is None else tuple(iterate(axis))
+    axes = _axes(f, axis)
     # One scalar spacing applies to every axis; otherwise one per axis.
     if len(varargs) == 1 and np.ndim(varargs[0]) == 0:
         varargs = varargs * len(axes)
