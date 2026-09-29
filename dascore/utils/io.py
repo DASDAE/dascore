@@ -251,7 +251,12 @@ def staged_path(path: UPath):
         raise
     if path.exists():
         fs.mv(path.path, old.path, recursive=True)
-    fs.mv(staging.path, path.path, recursive=True)
+    try:
+        fs.mv(staging.path, path.path, recursive=True)
+    except BaseException:
+        if old.exists():
+            fs.mv(old.path, path.path, recursive=True)
+        raise
     _remove(old)
 
 

@@ -714,6 +714,10 @@ class FiberIO:
     input_type: Literal["file", "directory"] = "file"
     # True when a single resource can hold more than one patch.
     multi_patch_write: bool = False
+    # For a directory format, the member files (relative to the unit) whose
+    # stats stand for the whole unit when checking it for changes; empty
+    # means every member file.
+    unit_members: tuple[str, ...] = ()
 
     manager = _FiberIOManager(FIBER_IO_GROUP)
 
@@ -1145,11 +1149,19 @@ def _source_stats(source) -> tuple[int | None, int | None]:
 
 def _directory_members(path) -> list:
     """
-    Return a directory-format unit's member files, sorted by relative path.
+    Return the files which identify a directory-format unit, in a fixed order.
 
-    Hidden files are members (zarr format 2 keeps its metadata in them);
-    only a DASCore index inside the unit is not, or indexing would change it.
+    A unit holding a format's named `unit_members` is identified by those
+    alone, so a store of many chunks costs a few stats rather than one per
+    chunk; a member rewritten in place with those untouched goes unseen.
+    Otherwise every file counts, sorted by relative path. Hidden files are
+    members (zarr format 2 keeps its metadata in them); only a DASCore index
+    inside the unit is not, or indexing would change it.
     """
+    ios = FiberIO.manager._get_prioritized_list("directory")
+    for names in dict.fromkeys(x.unit_members for x in ios if x.unit_members):
+        if members := [x for x in (path / n for n in names) if x.is_file()]:
+            return members
     members = (
         x for x in path.rglob("*") if x.is_file() and not x.name.startswith(INDEX_NAME)
     )
@@ -1173,7 +1185,7 @@ def _directory_stats(path) -> tuple[int, int]:
     the two numbers stand for all of them: a member rewritten in place
     moves the latest mtime, and one which changes length moves the total
     even if a clock does not. A directory's own stat says neither, which
-    is why it is not used.
+    is why it is not used. The members are those `_directory_members` names.
     """
     stats = [_size_and_mtime(x.stat()) for x in _directory_members(path)]
     return (
@@ -1647,8 +1659,8 @@ def scan_to_df(
     return df
 
 
-def _iterate_scan_inputs(patch_source, ext, mtime, include_directories=True, **kwargs):
-    """Yield scan candidates."""
+def _iterate_scan_inputs(patch_source, ext, mtime, **kwargs):
+    """Yield scan candidates; send "skip" after a directory to skip its contents."""
     for el in iterate(patch_source):
         el = resolve_example_uri(el)
         if isinstance(el, str | Path | UPath):
@@ -1660,7 +1672,7 @@ def _iterate_scan_inputs(patch_source, ext, mtime, include_directories=True, **k
                     path,
                     ext=ext,
                     timestamp=mtime,
-                    include_directories=include_directories,
+                    include_directories=True,
                 )
                 try:
                     candidate = next(generator)
@@ -1716,15 +1728,36 @@ def _warn_permission_denied(source):
     warnings.warn(f"Permission denied; skipping {source}", UserWarning)
 
 
-def _count_generator(generator):
-    """Estimate the number of updates needed."""
-    # TODO: This is a but sloppy, need to think of a better way to do
-    # this to avoid double iteration.
-    # First get total number of possible update-able files
-    entity_count = 0
-    for _ in generator:
-        entity_count += 1
-    return entity_count
+def _scan_candidates(path, file_format, file_version, ext, timestamp, hint) -> list:
+    """
+    Return the scan inputs, each with the format and version to read it as.
+
+    Each directory is probed here, once: a directory-format unit is kept
+    whole with the format found and its members are never walked, and any
+    other directory is dropped for its contents.
+    """
+    out = []
+    generator = _iterate_scan_inputs(path, ext=ext, mtime=timestamp)
+    signal = None
+    while True:
+        try:
+            candidate = generator.send(signal)
+        except StopIteration:
+            return out
+        signal = None
+        if candidate is None:  # the reply to a "skip" send
+            continue
+        found = (file_format, file_version)
+        if isinstance(candidate, Path | UPath) and candidate.is_dir():
+            try:
+                found = get_format(candidate, file_format, file_version, hint)
+            except UnknownFiberFormatError:
+                continue
+            except PermissionError:
+                _warn_permission_denied(candidate)
+                continue
+            signal = "skip"
+        out.append((candidate, found))
 
 
 _MISSING_MODULE_PATTERN = re.compile(r"^(\S+) is not installed")
@@ -1795,30 +1828,21 @@ def _iter_scan_results(
     fiber_io_hint: dict[str, FiberIO] = {}
     # A dict for keeping track of missing optional dependencies.
     missing_optional_deps = defaultdict(lambda: 0)
-    # A one-shot iterator (e.g. a generator) can't survive both walks
-    # below, so materialize it once up front (see #818). The cast just
-    # keeps the element type ty loses when narrowing the union.
-    if isinstance(path, Iterator):
-        path = list(cast("Iterable[path_types | dc.Patch | IOResourceManager]", path))
-    # Unfortunately, we have to iterate the scan candidates twice to get
-    # an estimate for the progress bar length. Maybe there is a better way...
-    _generator = _iterate_scan_inputs(
-        path, ext=ext, mtime=timestamp, include_directories=False
-    )
-    length = _count_generator(_generator)
-    generator = _iterate_scan_inputs(path, ext=ext, mtime=timestamp)
     # We want to avoid printing long object str reprs, so only print paths.
     resource_str = path if isinstance(path, str | Path | UPath) else ""
-    tracker = track(
-        generator,
-        f"scan {resource_str}",
-        progress=progress,
-        length=length,
-        min_length=20,
-    )
     try:
         with remote_cache_scope("metadata"):
-            for patch_source in tracker:
+            candidates = _scan_candidates(
+                path, file_format, file_version, ext, timestamp, fiber_io_hint
+            )
+            tracker = track(
+                candidates,
+                f"scan {resource_str}",
+                progress=progress,
+                length=len(candidates),
+                min_length=20,
+            )
+            for patch_source, (format_, version) in tracker:
                 input_index += 1
                 if isinstance(patch_source, dc.PatchMeta):
                     # A patch scans as the metadata describing it, which is
@@ -1835,8 +1859,8 @@ def _iter_scan_results(
                     try:
                         fiber_io, resource = _get_fiber_io_and_req_type(
                             man,
-                            file_format=file_format,
-                            file_version=file_version,
+                            file_format=format_,
+                            file_version=version,
                             fiber_io_hint=fiber_io_hint,
                         )
                     except UnknownFiberFormatError:  # skip bad entities
@@ -1848,51 +1872,32 @@ def _iter_scan_results(
                     # iteration. This speeds up the common case of many files
                     # with the same format.
                     fiber_io_hint[fiber_io.input_type] = fiber_io
-                    # Special handling of directory FiberIOs.
-                    if fiber_io.input_type == "directory":
-                        # Directory fiber_io should send skip signal back to generator
-                        # so that no files/sub directories are scanned.
-                        generator.send("skip")
-                        # Existing members can change without updating directory
-                        # mtime. Keep every member until source IDs and positional
-                        # keys are assigned; filtering first renumbers survivors.
-                        scan_kwargs = {"_pre_cast": True}
-                        if snap is not None:
-                            scan_kwargs["snap"] = snap
-                        try:
-                            source = fiber_io.scan(resource, **scan_kwargs)
-                        except PermissionError:
-                            _warn_permission_denied(patch_source)
-                            continue
-                        except MissingOptionalDependencyError as ex:
-                            missing_optional_deps[_get_missing_install_name(ex)] += 1
-                            continue
-                    else:
-                        try:
-                            scan_kwargs = {"_pre_cast": True}
-                            if snap is not None:
-                                scan_kwargs["snap"] = snap
-                            source = fiber_io.scan(resource, **scan_kwargs)
-                        except MissingOptionalDependencyError as ex:
-                            missing_optional_deps[_get_missing_install_name(ex)] += 1
-                            continue
-                        # scan() is best-effort across many resources, so surface
-                        # dependency/compatibility problems as warnings and keep
-                        # scanning the remaining files.
-                        except DependencyError as exc:
-                            warnings.warn(str(exc), UserWarning, stacklevel=2)
-                            continue
-                        except RemoteCacheError:
-                            raise
-                        # This happens if the file is corrupt see #346.
-                        except (
-                            OSError,
-                            InvalidFiberFileError,
-                            ValueError,
-                            TypeError,
-                        ):
-                            warnings.warn(f"Failed to scan {resource}", UserWarning)
-                            continue
+                    scan_kwargs = {"_pre_cast": True}
+                    if snap is not None:
+                        scan_kwargs["snap"] = snap
+                    try:
+                        source = fiber_io.scan(resource, **scan_kwargs)
+                    except MissingOptionalDependencyError as ex:
+                        missing_optional_deps[_get_missing_install_name(ex)] += 1
+                        continue
+                    # scan() is best-effort across many resources, so surface
+                    # dependency/compatibility problems as warnings and keep
+                    # scanning the remaining files.
+                    except DependencyError as exc:
+                        warnings.warn(str(exc), UserWarning, stacklevel=2)
+                        continue
+                    except RemoteCacheError:
+                        raise
+                    except PermissionError:
+                        _warn_permission_denied(patch_source)
+                        continue
+                    # This happens if the file is corrupt see #346.
+                    except (OSError, InvalidFiberFileError, ValueError, TypeError):
+                        warnings.warn(f"Failed to scan {resource}", UserWarning)
+                        continue
+                    # Existing directory members can change without updating
+                    # its mtime. Keep every member until source IDs and positional
+                    # keys are assigned; filtering first renumbers survivors.
                     members = [_validate_metadata(patch) for patch in source]
                     indices = None
                     if fiber_io.input_type == "directory" and timestamp is not None:

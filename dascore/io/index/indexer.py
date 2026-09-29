@@ -310,8 +310,9 @@ class DBDirectoryIndexer:
         unit. A directory-format unit (e.g. XMLBinary) appears as one
         entry keyed by the directory, with a 128-bit manifest fingerprint
         split across the two integer stat fields. The fingerprint covers
-        every member's relative path, mtime, and size, so member changes
-        cannot cancel each other out. Mirrors the skip protocol dc.scan
+        the relative path, mtime, and size of each member
+        `_directory_members` names, so member changes cannot cancel each
+        other out. Mirrors the skip protocol dc.scan
         uses so members are not offered individually.
         """
         files: dict[str, tuple[int, int, Path]] = {}

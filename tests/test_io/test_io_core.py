@@ -989,6 +989,30 @@ class TestScan:
         assert len(caught) == 1
         assert str(denied) in str(caught[0].message)
 
+    def test_directory_probe_denied(self, tmp_path, random_patch, monkeypatch):
+        """A directory whose format probe is denied warns; the scan goes on."""
+        fiber_io = FiberIO.manager.get_fiberio(
+            format=_FiberDirectory.name, version=_FiberDirectory.version
+        )
+        denied = tmp_path / fiber_io.name
+        denied.mkdir()
+        readable = tmp_path / "readable.h5"
+        random_patch.io.write(readable, "dasdae")
+
+        def raise_permission_error(*args, **kwargs):
+            raise PermissionError(f"Permission denied: {denied}")
+
+        monkeypatch.setattr(fiber_io, "get_format", raise_permission_error)
+        with pytest.warns(UserWarning, match="Permission denied; skipping"):
+            out = dc.scan([denied, readable], progress=None)
+        assert [Path(summary.source_path) for summary in out] == [readable]
+
+    def test_path_filtered_out(self, tmp_path, random_patch):
+        """A file its extension filter rejects scans as nothing."""
+        path = tmp_path / "patch.h5"
+        random_patch.io.write(path, "dasdae")
+        assert dc.scan(path, ext="xyz") == []
+
     @pytest.fixture(scope="class")
     def nested_directory_with_patches(self, tmpdir_factory, random_patch):
         """Return a nested directory with patch files interlaced."""

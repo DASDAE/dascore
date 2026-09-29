@@ -2,15 +2,23 @@
 
 from __future__ import annotations
 
+import os
 import sys
+from pathlib import Path
+from unittest import mock
 
 import numpy as np
 import pytest
+from fsspec.implementations.local import LocalFileSystem
 from upath import UPath
 
 import dascore as dc
 from dascore.exceptions import MissingOptionalDependencyError
+from dascore.io import core as io_core
+from dascore.io.core import source_identity
+from dascore.io.index.indexer import scan_unit_stats
 from dascore.io.zarr import ZarrV3
+from dascore.utils.misc import suppress_warnings
 
 xr = pytest.importorskip("xarray")
 zarr = pytest.importorskip("zarr")
@@ -57,6 +65,22 @@ def foreign_store(request, tmp_path_factory):
         path, zarr_format=zarr_format, consolidated=False, encoding=encoding
     )
     return path, data, time
+
+
+def _edit_attrs(path, **attrs):
+    """Set payload attrs in place and consolidate, as another zarr tool would."""
+    zarr.open_group(path, mode="r+")["data"].attrs.update(attrs)
+    with suppress_warnings(UserWarning, message="Consolidated metadata"):
+        zarr.consolidate_metadata(path)
+
+
+@pytest.fixture
+def chunked_store(zarr_patch, tmp_path):
+    """A store of hundreds of chunk files beside a DASDAE file."""
+    path = tmp_path / "a.zarr"
+    dc.write(zarr_patch, path, "zarr", encoding={"data": {"chunks": (10, 100)}})
+    dc.write(zarr_patch, tmp_path / "b.h5", "dasdae")
+    return path
 
 
 class TestRoundTrip:
@@ -188,14 +212,28 @@ class TestDirectorySpool:
         assert len(selected) == 1
         assert selected[0] == other
 
-    def test_v2_attrs_edit_refreshes(self, zarr_patch, tmp_path):
-        """An attrs-only edit to a v2 store, all in hidden files, is re-indexed."""
+    @pytest.mark.parametrize("version", VERSIONS)
+    def test_attrs_edit_refreshes(self, zarr_patch, tmp_path, version):
+        """An attrs-only edit, in v2's hidden files or v3's, is re-indexed."""
         path = tmp_path / "a.zarr"
-        dc.write(zarr_patch, path, "zarr", file_version="2")
+        dc.write(zarr_patch, path, "zarr", file_version=version)
         spool = dc.spool(tmp_path).update()
-        zarr.open_group(path, mode="r+")["data"].attrs["station"] = "NEW"
-        zarr.consolidate_metadata(path)
+        _edit_attrs(path, station="NEW")
         assert spool.update().get_contents()["station"].tolist() == ["NEW"]
+
+    def test_rewrite_refreshes(self, zarr_patch, tmp_path):
+        """A store dascore writes again is re-indexed."""
+        path = tmp_path / "a.zarr"
+        dc.write(zarr_patch, path, "zarr")
+        spool = dc.spool(tmp_path).update()
+        dc.write(zarr_patch.update_attrs(station="NEW"), path, "zarr")
+        assert spool.update().get_contents()["station"].tolist() == ["NEW"]
+
+    def test_chunks_not_walked(self, chunked_store):
+        """A store is identified by its metadata files, not by its chunks."""
+        with mock.patch.object(Path, "rglob", side_effect=AssertionError):
+            assert None not in scan_unit_stats(chunked_store)
+            assert None not in source_identity(chunked_store)
 
     def test_index_in_store_is_not_a_change(self, zarr_patch, tmp_path):
         """A spool of one store keeps its index inside and does not re-index."""
@@ -206,6 +244,36 @@ class TestDirectorySpool:
         before = sources()["last_indexed_ns"].max()
         spool.update()
         assert sources()["last_indexed_ns"].max() == before
+
+
+class TestScanDirectory:
+    """A scan of a directory takes each store whole, and survives a bad one."""
+
+    def test_sizing_skips_chunks(self, chunked_store, monkeypatch):
+        """The progress total counts a store as one and never lists its chunks."""
+        lengths, listed = [], []
+        track, scandir = io_core.track, os.scandir
+
+        def _track(*args, length, **kwargs):
+            lengths.append(length)
+            return track(*args, length=length, **kwargs)
+
+        def _scandir(path):
+            listed.append(Path(path))
+            return scandir(path)
+
+        monkeypatch.setattr(io_core, "track", _track)
+        monkeypatch.setattr(os, "scandir", _scandir)
+        assert len(dc.scan(chunked_store.parent)) == 2
+        assert lengths == [2]
+        assert chunked_store not in listed
+
+    def test_invalid_attr_warns(self, chunked_store):
+        """A store whose attrs fail validation is skipped, not fatal."""
+        _edit_attrs(chunked_store, acquisition_key="bad key")
+        with pytest.warns(UserWarning, match="Failed to scan"):
+            (summary,) = dc.scan(chunked_store.parent)
+        assert summary.source_format == "DASDAE"
 
 
 class TestRemote:
@@ -264,6 +332,22 @@ class TestReplace:
             dc.write(zarr_patch.update_attrs(station="NEW"), path, "zarr")
         assert dc.read(path)[0] == zarr_patch
         assert [x.name for x in tmp_path.iterdir()] == ["patch.zarr"]
+
+    def test_failed_promotion_restores_store(self, zarr_patch, tmp_path, monkeypatch):
+        """A failed move of the new store into place moves the old one back."""
+        path = tmp_path / "patch.zarr"
+        dc.write(zarr_patch, path, "zarr")
+        mv = LocalFileSystem.mv
+
+        def _fail(self, source, target, **kwargs):
+            if str(source).endswith(".partial"):
+                raise OSError("no space")
+            return mv(self, source, target, **kwargs)
+
+        monkeypatch.setattr(LocalFileSystem, "mv", _fail)
+        with pytest.raises(OSError, match="no space"):
+            dc.write(zarr_patch.update_attrs(station="NEW"), path, "zarr")
+        assert dc.read(path)[0] == zarr_patch
 
     def test_killed_write_leftover(self, zarr_patch, tmp_path):
         """Stores a killed write leaves behind are not scanned, then cleared."""

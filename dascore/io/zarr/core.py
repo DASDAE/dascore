@@ -43,6 +43,10 @@ class ZarrV3(FiberIO):
     version = "3"
     input_type = "directory"
     preferred_extensions = ("zarr",)
+    # The root metadata, which every dascore write renews and which holds
+    # the consolidated metadata a reader opens. Chunks rewritten in place,
+    # or array metadata edited without consolidating, go unseen.
+    unit_members = ("zarr.json", ".zgroup", ".zmetadata", ".zattrs")
 
     def get_version(self, resource: UPath, **kwargs) -> str | None:
         """Return the zarr format of a zarr store with a dimensioned payload."""
