@@ -3186,7 +3186,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         steps = [x.step(self.dtype) if isinstance(x, Grid) else self.step for x in runs]
         for num in range(1, len(runs)):
             step = steps[num - 1] if not _is_null(steps[num - 1]) else steps[num]
-            if _is_null(step):
+            if _is_null(step) or not step:
                 continue  # no grid stated, so no position to have skipped
             span = abs(labels[num][0] - labels[num - 1][-1]) / abs(step)
             if span >= 2 - 1e-3:
