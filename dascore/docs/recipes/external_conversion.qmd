@@ -45,7 +45,7 @@ From xarray 2026.9 a lazy array combines with an array whose index holds its lab
 eager = lazy.drop_indexes(["time", "distance"]).set_xindex("time").set_xindex("distance")
 ```
 
-Where the labels differ, or on xarray before 2026.9, the other way round often costs less: give the ordinary array the lazy index type instead. Its labels are already in memory, and where they equal the lazy array's the two align without reading the lazy labels at all (labels that differ are joined as ordinary indexes would be, which reads both).
+Where the labels differ, or on xarray before 2026.9, the other way round often costs less: give the ordinary array the lazy index type instead. Its labels are already in memory, and where the two are the same coordinate (one a selection of the other, say) they align without reading the lazy labels at all; equal labels stated another way, or labels that differ, are joined as ordinary indexes would be, which reads both.
 
 ```python
 from dascore.xarray.index import CoordIndex
