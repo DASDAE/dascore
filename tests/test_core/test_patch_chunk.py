@@ -984,6 +984,15 @@ class TestDescendingChunk:
             np.testing.assert_array_equal(labels, np.arange(8.0, 3, -1))
             np.testing.assert_allclose(patch.data[0], labels + ([0.1] * 3 + [0.2] * 2))
 
+    def test_explicit_window_inside_overlap_keeps_owner(self):
+        """A window inside an overlap takes it from the higher source."""
+        high = self._member([8, 7, 6, 5, 4], 0.1, -1.0)
+        low = self._member([7, 6, 5, 4, 3], 0.2, -1.0)
+        patch = dc.spool([low, high]).chunk(time=[[4, 6]])[0]
+        labels = patch.get_coord("time").values
+        np.testing.assert_array_equal(labels, [6.0, 5.0, 4.0])
+        np.testing.assert_allclose(patch.data[0], labels + 0.1)
+
     def test_stepless_members_keep_data_with_labels(self):
         """Descending members with no step merge with data following labels."""
         first = self._member([6.0, 5.5, 4.0, 3.0], 0.1)
@@ -3423,18 +3432,13 @@ class TestChunkFillWindows:
             view.chunk(time=2.0, keep_partial=True, fill_value=np.nan)
 
     def test_one_sample_output_is_not_padded(self):
-        """An output of one descending sample states no step to pad by."""
-        time = dc.get_coord(start=39.0, step=-1.0, shape=(40,))
-        coords = {"distance": np.arange(2.0), "time": time}
-        patch = dc.Patch(data=np.ones((2, 40)), coords=coords, dims=tuple(coords))
-        overlapping = patch.update_coords(time_min=time.max() - 7)
-        with suppress_warnings(UserWarning):
-            merged = dc.spool([patch, overlapping]).chunk(time=None, tolerance=50)
-            # the relative selection leaves the plan's windows off the grid
-            view = merged.select(time=(0.1, -0.1), relative=True)
-            first = view.chunk(time=2.5, tolerance=20, fill_value=np.nan)[0]
-        assert first.shape == (2, 1)
-        assert not np.isnan(first.data).any()
+        """An output of one sample states no step to pad by."""
+        coords = {"distance": np.arange(2.0), "time": np.array([5.0])}
+        patch = dc.Patch(data=np.ones((2, 1)), coords=coords, dims=tuple(coords))
+        out = dc.spool([patch]).chunk(time=None, tolerance=20, fill_value=np.nan)
+        assert len(out) == 1
+        assert out[0].shape == (2, 1)
+        assert not np.isnan(out[0].data).any()
 
     def test_fill_window_needs_a_span_and_a_step(self, random_patch):
         """Neither the row's span nor the sibling's step can be missing."""

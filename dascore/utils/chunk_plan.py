@@ -1099,7 +1099,9 @@ def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str
         # exactly as ascending ones are.
         rows = np.flatnonzero(desc)
         tie = sorted_df.get("_patch_row", pd.Series(np.arange(len(start))))
-        key = (tie.to_numpy()[rows], _negated(stop[rows]), codes[rows])
+        # a window's clip leaves sources their original max to order by
+        peak = sorted_df.get("_source_max", pd.Series(stop)).to_numpy()
+        key = (tie.to_numpy()[rows], _negated(peak[rows]), codes[rows])
         rows = rows[np.lexsort(key)]
         negated = (_negated(stop[rows]), _negated(start[rows]), step[rows], codes[rows])
         lo[desc], hi[rows] = start[desc], _negated(_owned_starts(*negated))
@@ -1784,7 +1786,9 @@ def build_chunk_plan(
             touched.append((ids_p[rel_out], kpids[rel_src + lo_k]))
             steps = ksteps[rel_src + lo_k]
             clipped = {min_name: lo, max_name: hi, f"{name}_step": steps}
-            clipped["_patch_row"] = kpids[rel_src + lo_k]  # ties as chunk(None)
+            # ordered and tied as chunk(time=None) orders the sources
+            clipped["_patch_row"] = kpids[rel_src + lo_k]
+            clipped["_source_max"] = korig_max[rel_src + lo_k]
             firsts = np.flatnonzero(np.r_[True, rel_out[1:] != rel_out[:-1]])
             lo, hi, _, own = _member_envelopes(pd.DataFrame(clipped), firsts, name)
             rel_src, rel_out, lo, hi = rel_src[own], rel_out[own], lo[own], hi[own]
