@@ -932,6 +932,46 @@ class TestDescendingChunk:
         assert patch.shape[patch.get_axis("time")] == 2 * n_time
         assert time.min() == t.min()
 
+    @staticmethod
+    def _member(values, tag, step=None):
+        """A patch whose data are its time labels plus a member tag."""
+        labels = np.asarray(values, dtype=float)
+        time = labels if step is None else get_coord(data=labels, step=step)
+        data = (labels + tag)[None]
+        coords = {"distance": [0], "time": time}
+        return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+    @pytest.fixture(params=[False, True], ids=["plan_order", "reversed"])
+    def overlapping(self, request):
+        """Descending members 8..5, 5..2, 2..0 sharing samples 5 and 2."""
+        spans = [(8, 4, 0.1), (5, 4, 0.2), (2, 3, 0.3)]
+        members = [self._member(np.arange(a, a - n, -1), t, -1.0) for a, n, t in spans]
+        return dc.spool(members[::-1] if request.param else members)
+
+    def test_overlaps_keep_each_label_once(self, overlapping):
+        """The member reached first owns a shared sample, as when ascending."""
+        patch = overlapping.chunk(time=None)[0]
+        labels = patch.get_coord("time").values
+        np.testing.assert_array_equal(labels, np.arange(8.0, -1, -1))
+        tags = [0.1] * 4 + [0.2] * 3 + [0.3] * 2
+        np.testing.assert_allclose(patch.data[0], labels + tags)
+
+    def test_overlaps_fill_length_windows(self, overlapping):
+        """A length window over the overlaps holds each of its samples once."""
+        patch = overlapping.chunk(time=5)[0]
+        labels = patch.get_coord("time").values
+        np.testing.assert_array_equal(labels, np.arange(4.0, -1, -1))
+        np.testing.assert_allclose(patch.data[0], labels + ([0.2] * 3 + [0.3] * 2))
+
+    def test_stepless_members_keep_data_with_labels(self):
+        """Descending members with no step merge with data following labels."""
+        first = self._member([6.0, 5.5, 4.0, 3.0], 0.1)
+        second = self._member([2.5, 1.0, 0.0], 0.2)
+        patch = dc.spool([second, first]).chunk(time=None)[0]
+        labels = patch.get_coord("time").values
+        np.testing.assert_array_equal(labels, [6.0, 5.5, 4.0, 3.0, 2.5, 1.0, 0.0])
+        np.testing.assert_allclose(patch.data[0], labels + ([0.1] * 4 + [0.2] * 3))
+
 
 class TestMixedUnitChunk:
     """Chunk partitioning and merging across unit differences."""
