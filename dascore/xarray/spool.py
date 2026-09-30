@@ -478,9 +478,10 @@ def spool_to_xarray(
     as `Patch.sel` does, and reading ``.values`` or asking for the
     pandas index materializes labels on demand. Other dimensions keep
     materialized labels, which per-channel arrays (gains, offsets) align
-    with. xarray aligns a lazy index only with lazy ones: to combine a
-    segment with arrays indexed along the merged dimension, or reindex
-    it, give it an ordinary index first, which reads all its labels into
+    with. Before xarray 2026.9 a lazy index aligned only with lazy ones,
+    and labels that differ still do not align: to combine a segment with
+    arrays indexed along the merged dimension, or reindex it, give it an
+    ordinary index first, which reads all its labels into
     memory (so select first where possible), e.g.
     ``data.drop_indexes("time").set_xindex("time")``, or give the other
     array this index type, ``other.drop_indexes("time").set_xindex("time",
