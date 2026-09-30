@@ -616,12 +616,6 @@ class TestAlignment:
             lambda: eager.reindex_like(eager_to, method=method),
         )
 
-    def test_materialized_index_refuses_to_align(self):
-        """Xarray matches indexes by type; lazy_coords=False is the way out."""
-        lazy, eager = _pair(MS)
-        with pytest.raises(xr.AlignmentError):
-            lazy + eager
-
 
 class TestFromVariables:
     """An ordinary array takes this index type through set_xindex."""

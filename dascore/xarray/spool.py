@@ -478,13 +478,15 @@ def spool_to_xarray(
     as `Patch.sel` does, and reading ``.values`` or asking for the
     pandas index materializes labels on demand. Other dimensions keep
     materialized labels, which per-channel arrays (gains, offsets) align
-    with. xarray aligns a lazy index only with lazy ones: to combine a
-    segment with arrays indexed along the merged dimension, or reindex
-    it, give it an ordinary index first, which reads all its labels into
-    memory (so select first where possible), e.g.
+    with. Before xarray 2026.9 a lazy index aligned only with lazy ones,
+    and a lazy and a materialized index whose labels differ still do not:
+    to combine a segment with arrays indexed along the merged dimension,
+    or reindex it, give it an ordinary index first, which reads all its
+    labels into memory (so select first where possible), e.g.
     ``data.drop_indexes("time").set_xindex("time")``, or give the other
     array this index type, ``other.drop_indexes("time").set_xindex("time",
-    CoordIndex)``, which reads no lazy labels where the two agree.
+    CoordIndex)``, which reads no lazy labels where the two are the same
+    coordinate.
 
     A spool with pending value-range selections cannot be converted: the
     catalog states such bounds as candidacy rather than sample positions,
