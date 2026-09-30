@@ -3525,7 +3525,6 @@ def _runs_step(runs, declared, dtype, sources):
     strict = not _is_null(declared)
     if strict:
         step = _declared_step(declared, dtype)
-        _check_grid_spacings(runs, step, dtype)
     else:
         steps = [x.step(dtype) for x in runs if isinstance(x, Grid)]
         if len(steps) != len(runs) or len({_maybe_unpack(x) for x in steps}) != 1:
@@ -3548,14 +3547,13 @@ def _runs_step(runs, declared, dtype, sources):
     )
     step = magnitude if ascending else -magnitude
     try:
+        # a shared step is kept only where it could also be declared
+        _check_grid_spacings(runs, step, dtype)
         for run, values in stored:
             if len(run) > 1 and not is_strictly_monotonic(values):
                 msg = "A declared step needs one-dimensional, monotonic values."
                 raise CoordError(msg)
         list(_skips(runs, step, dtype, sources))
-        # a shared step is kept only where it could also be declared
-        if not strict:
-            _check_grid_spacings(runs, step, dtype)
     except CoordError:
         if strict:
             raise
