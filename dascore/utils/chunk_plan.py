@@ -1045,6 +1045,13 @@ def _partition_frames(df: pd.DataFrame, labels: pd.Series, name: str):
     )
 
 
+def _negated(values: np.ndarray) -> np.ndarray:
+    """Values negated exactly, datetimes by their integer ticks."""
+    if values.dtype.kind == "M":
+        return (-values.view(np.int64)).view(values.dtype)
+    return -values
+
+
 def _owned_starts(start, stop, step, codes):
     """Each source's start moved past the furthest stop before it in its partition."""
     is_first = np.r_[True, codes[1:] != codes[:-1]]
@@ -1088,15 +1095,15 @@ def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str
     lo, hi = _owned_starts(start, stop, step, codes), stop.copy()
     descending = pd.Series(to_float(step) < 0).groupby(codes).transform("any")
     if (desc := descending.to_numpy()).any():
-        # Descending data run from their max: mirrored (pivot minus
-        # value) they are trimmed exactly as ascending ones are.
-        rows, pivot = np.flatnonzero(desc), stop[desc].max()
+        # Descending data run from their max: negated they are trimmed
+        # exactly as ascending ones are.
+        rows = np.flatnonzero(desc)
         tie = sorted_df.get("_patch_row", pd.Series(np.arange(len(start))))
-        key = (tie.to_numpy()[rows], pivot - stop[rows], codes[rows])
+        key = (tie.to_numpy()[rows], _negated(stop[rows]), codes[rows])
         rows = rows[np.lexsort(key)]
-        mirrored = (pivot - stop[rows], pivot - start[rows], step[rows], codes[rows])
-        lo[desc], hi[rows] = start[desc], pivot - _owned_starts(*mirrored)
-    modified = (lo != start) | (hi != stop)
+        negated = (_negated(stop[rows]), _negated(start[rows]), step[rows], codes[rows])
+        lo[desc], hi[rows] = start[desc], _negated(_owned_starts(*negated))
+    modified = lo != start
     if "_modified" in sorted_df.columns:
         modified = sorted_df["_modified"].to_numpy() | modified
     keep = lo <= hi
@@ -1777,6 +1784,7 @@ def build_chunk_plan(
             touched.append((ids_p[rel_out], kpids[rel_src + lo_k]))
             steps = ksteps[rel_src + lo_k]
             clipped = {min_name: lo, max_name: hi, f"{name}_step": steps}
+            clipped["_patch_row"] = kpids[rel_src + lo_k]  # ties as chunk(None)
             firsts = np.flatnonzero(np.r_[True, rel_out[1:] != rel_out[:-1]])
             lo, hi, _, own = _member_envelopes(pd.DataFrame(clipped), firsts, name)
             rel_src, rel_out, lo, hi = rel_src[own], rel_out[own], lo[own], hi[own]

@@ -933,13 +933,14 @@ class TestDescendingChunk:
         assert time.min() == t.min()
 
     @staticmethod
-    def _member(values, tag, step=None):
+    def _member(values, tag, step=None, **attrs):
         """A patch whose data are its time labels plus a member tag."""
         labels = np.asarray(values, dtype=float)
         time = labels if step is None else get_coord(data=labels, step=step)
         data = (labels + tag)[None]
         coords = {"distance": [0], "time": time}
-        return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+        dims = ("distance", "time")
+        return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
 
     @pytest.fixture(params=[False, True], ids=["plan_order", "reversed"])
     def overlapping(self, request):
@@ -956,12 +957,32 @@ class TestDescendingChunk:
         tags = [0.1] * 4 + [0.2] * 3 + [0.3] * 2
         np.testing.assert_allclose(patch.data[0], labels + tags)
 
-    def test_overlaps_fill_length_windows(self, overlapping):
+    def test_length_windows_hold_each_sample_once(self, overlapping):
         """A length window over the overlaps holds each of its samples once."""
         patch = overlapping.chunk(time=5)[0]
         labels = patch.get_coord("time").values
         np.testing.assert_array_equal(labels, np.arange(4.0, -1, -1))
         np.testing.assert_allclose(patch.data[0], labels + ([0.2] * 3 + [0.3] * 2))
+
+    def test_overlaps_and_holes_fill(self):
+        """A fill value bridges a hole beside trimmed descending overlaps."""
+        spans = [([8, 7, 6, 5], 0.1), ([5, 4, 3], 0.2), ([1, 0], 0.3)]
+        spool = dc.spool([self._member(v, t, -1.0) for v, t in spans])
+        patch = spool.chunk(time=None, tolerance=10, fill_value=-9.0)[0]
+        labels = patch.get_coord("time").values
+        np.testing.assert_array_equal(labels, np.arange(8.0, -1, -1))
+        expected = [8.1, 7.1, 6.1, 5.1, 4.2, 3.2, -9.0, 1.3, 0.3]
+        np.testing.assert_allclose(patch.data[0], expected)
+
+    def test_shared_max_owner_same_in_explicit_windows(self):
+        """Members sharing their max give it to the first, windowed or not."""
+        short = self._member([8, 7, 6], 0.1, -1.0)
+        long = self._member([8, 7, 6, 5, 4], 0.2, -1.0)
+        spool = dc.spool([short, long])
+        for patch in (spool.chunk(time=None)[0], spool.chunk(time=[[4, 8]])[0]):
+            labels = patch.get_coord("time").values
+            np.testing.assert_array_equal(labels, np.arange(8.0, 3, -1))
+            np.testing.assert_allclose(patch.data[0], labels + ([0.1] * 3 + [0.2] * 2))
 
     def test_stepless_members_keep_data_with_labels(self):
         """Descending members with no step merge with data following labels."""
@@ -971,6 +992,29 @@ class TestDescendingChunk:
         labels = patch.get_coord("time").values
         np.testing.assert_array_equal(labels, [6.0, 5.5, 4.0, 3.0, 2.5, 1.0, 0.0])
         np.testing.assert_allclose(patch.data[0], labels + ([0.1] * 4 + [0.2] * 3))
+
+    def test_stepless_single_sample_member_follows_labels(self):
+        """A one-sample member states no direction; the others' order holds."""
+        members = [
+            self._member(v, t) for v, t in (([6.0, 5.5, 4.0, 3.0], 0.1), ([2.5], 0.2))
+        ]
+        # an associated coordinate must follow the labels too
+        members = [x.update_coords(aux=("time", x.data[0])) for x in members]
+        patch = dc.spool(members).chunk(time=None, conflict="drop")[0]
+        labels = patch.get_coord("time").values
+        np.testing.assert_array_equal(labels, [6.0, 5.5, 4.0, 3.0, 2.5])
+        expected = labels + ([0.1] * 4 + [0.2])
+        np.testing.assert_allclose(patch.data[0], expected)
+        np.testing.assert_allclose(patch.get_coord("aux").values, expected)
+
+    def test_stepless_keep_first_attrs_match_plan(self):
+        """Ordering the data leaves keep_first with the plan's first member."""
+        high = self._member([8.0, 7.0, 5.0], 0.1, description="high")
+        low = self._member([5.0, 3.0, 2.0, 0.0], 0.2, description="low")
+        spool = dc.spool([high, low])
+        plan = spool.chunk_plan(time=None, conflict="keep_first")
+        patch = spool.chunk(time=None, conflict="keep_first")[0]
+        assert patch.attrs.description == plan.outputs["description"].iloc[0]
 
 
 class TestMixedUnitChunk:
