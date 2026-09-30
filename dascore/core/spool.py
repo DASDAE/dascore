@@ -1768,9 +1768,6 @@ class Spool(NodeRepr, NamespaceOwner):
         base = collapse_working_df(self._catalog) if same_dim else None
         if base is None:
             base = self._catalog.to_df().reset_index(drop=True)
-            if "_patch_row" in base.columns:
-                # the index's own ids, which only rows read from it carry
-                base = base.assign(_index_row=base["_patch_row"])
         base = _ensure_patch_row(base)
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
         working = _drop_patch_local_empty(working)
@@ -1778,7 +1775,7 @@ class Spool(NodeRepr, NamespaceOwner):
         return base.reset_index(drop=True), working.reset_index(drop=True)
 
     def _build_chunk_plan(self, dim_kwargs, **params):
-        """Build and coalesce one plan from this spool's current source rows."""
+        """Build one plan from this spool's current source rows."""
         name = next(iter(dim_kwargs), None)
         source_rows, working = self._plan_frames(name)
         windows = explicit_windows(dim_kwargs)

@@ -491,7 +491,7 @@ def _add_exists_clause(
     where.add(
         "p.patch_row IN (SELECT pc.patch_row FROM patch_coords pc "
         "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
-        "WHERE pc.run_index = 0 AND " + " AND ".join(conditions) + ")",
+        "WHERE " + " AND ".join(conditions) + ")",
         *params,
     )
 
@@ -598,7 +598,7 @@ def build_coord_clause(
     where.add(
         "p.patch_row IN (SELECT pc.patch_row FROM patch_coords pc "
         "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
-        "WHERE pc.run_index = 0 AND " + " AND ".join(conditions) + ")",
+        "WHERE " + " AND ".join(conditions) + ")",
         *params,
     )
 
@@ -657,8 +657,7 @@ def _order_clause(
                 "COALESCE(cd.min_int, cd.min_float, cd.min_str) "
                 "FROM patch_coords pc JOIN coord_defs cd "
                 "ON cd.coord_row = pc.coord_row "
-                "WHERE pc.patch_row = p.patch_row AND pc.coord_name = ? "
-                "AND pc.run_index = 0))"
+                "WHERE pc.patch_row = p.patch_row AND pc.coord_name = ?))"
             )
             params.append(name)
             missing_time = "p.time_min IS NULL, "
@@ -671,8 +670,7 @@ def _order_clause(
             (
                 f"(SELECT cd.{_COORD_MIN_COLUMNS[value_kind]} FROM patch_coords pc "
                 "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
-                "WHERE pc.patch_row = p.patch_row AND pc.coord_name = ? "
-                "AND pc.run_index = 0)",
+                "WHERE pc.patch_row = p.patch_row AND pc.coord_name = ?)",
                 [name],
             )
             for value_kind in dict.fromkeys(rows["value_kind"])

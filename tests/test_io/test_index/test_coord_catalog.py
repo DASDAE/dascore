@@ -21,17 +21,16 @@ from dascore.io.index.query import Query
 from dascore.io.index.schema import INDEX_VERSION
 from tests.test_io.test_index.test_heterogeneity_stress import make_random_summaries
 
-# The coordinate discovery this replaces: a scan of every whole-coordinate link.
+# The coordinate discovery this replaces: a scan of every link.
 _LINK_VARIANTS = (
     "SELECT json_array(pc.coord_name, pc.dtype, cd.value_kind, cd.units, "
     "cd.is_relative) AS variant_key, count(*) AS patch_count "
     "FROM patch_coords pc JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
-    "WHERE pc.run_index = 0 GROUP BY 1"
+    "GROUP BY 1"
 )
 _LINK_COORD_META = (
     "SELECT DISTINCT pc.coord_name, cd.value_kind, cd.units, cd.is_relative "
-    "FROM patch_coords pc JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
-    "WHERE pc.run_index = 0"
+    "FROM patch_coords pc JOIN coord_defs cd ON cd.coord_row = pc.coord_row"
 )
 
 
@@ -169,7 +168,7 @@ class TestMaintainedCounts:
         """Selectable names are the linked names whose dtype states an envelope."""
         rows = _rows(
             backend,
-            "SELECT DISTINCT coord_name, dtype FROM patch_coords WHERE run_index = 0",
+            "SELECT DISTINCT coord_name, dtype FROM patch_coords",
         )
         expected = {name for name, dtype in rows if coord_dtype_is_stateable(dtype)}
         assert backend.coord_names() == expected
@@ -197,7 +196,7 @@ class TestMaintainedCounts:
             (last + 1, last),
         )
         con.execute(
-            "INSERT INTO patch_coords SELECT ?, coord_name, run_index, "
+            "INSERT INTO patch_coords SELECT ?, coord_name, "
             "coord_dims, coord_row, dtype FROM patch_coords WHERE patch_row = ?",
             (last + 1, last),
         )

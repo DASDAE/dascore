@@ -33,7 +33,8 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 26 scans labels flooring a
+# changes, not only when a column does. Version 27 drops the per-run
+# coordinate links (`run_index`). Version 26 scans labels flooring a
 # fractional-step grid as that grid, not a rounded step. Version 25 includes the step
 # runs on one fractional grid now state in their ids. Version 24 identifies a
 # coordinate by its runs, so a dev-era index states other ids for the
@@ -50,7 +51,7 @@ from typing import NamedTuple, get_args, get_type_hints
 # version 15 stored source coordinate and numeric attribute dtypes.
 # Earlier indexes lack the metadata required for reconstruction and are
 # rebuilt when opened.
-INDEX_VERSION = 26
+INDEX_VERSION = 27
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -215,14 +216,10 @@ class PatchCoordRow(NamedTuple):
 
     Links a patch to its coord defs; the name and dims are patch-level
     semantics (two patches can share values under different names).
-    `run_index` is always 0, the coordinate as a whole, which every query
-    reads; version 17 through 26 indexes may also hold links numbered from
-    1 to a coordinate's runs, which dascore no longer writes or reads.
     """
 
     patch_row: int
     coord_name: str
-    run_index: int
     coord_dims: str
     coord_row: int
     dtype: str  # source representation; shared definitions identify values
@@ -232,7 +229,7 @@ class CoordVariantRow(NamedTuple):
     """
     A row of the coord_variants table: one per distinct stated coordinate.
 
-    Counts the whole-coordinate links (`run_index` 0) sharing a name,
+    Counts the links sharing a name,
     dtype, kind, units and relativity, so coordinate discovery reads these
     few rows rather than every link. Kept by the counting triggers;
     `variant_key` is the other five as a JSON array, giving a tuple with
@@ -319,7 +316,7 @@ TABLE_CONSTRAINTS = MappingProxyType(
             "CHECK (is_relative IS NULL OR is_relative IN (0, 1))",
         ),
         "patch_coords": (
-            "PRIMARY KEY (patch_row, coord_name, run_index)",
+            "PRIMARY KEY (patch_row, coord_name)",
             "FOREIGN KEY (patch_row) REFERENCES patches(patch_row) ON DELETE CASCADE",
             "FOREIGN KEY (coord_row) REFERENCES coord_defs(coord_row)",
         ),
@@ -417,7 +414,7 @@ SPOOL_LATE_RENAMES = MappingProxyType(
 
 # Explicit secondary indexes, as (name, table, columns, WHERE clause or
 # None). Every other access path is covered by a PRIMARY KEY or UNIQUE
-# autoindex above — patch_coords(patch_row, coord_name, run_index),
+# autoindex above — patch_coords(patch_row, coord_name),
 # sources(base_uri, source_path), patches(source_row, source_patch_key),
 # coord_defs(def_key)
 # — and duplicating them measured ~25% extra file size and slower writes
@@ -448,14 +445,14 @@ TRIGGERS = MappingProxyType(
             "UPDATE meta_data SET patch_count = patch_count - 1; END"
         ),
         "count_variant_added": (
-            "AFTER INSERT ON patch_coords WHEN NEW.run_index = 0 BEGIN "
+            "AFTER INSERT ON patch_coords BEGIN "
             f"INSERT INTO coord_variants SELECT json_array({_NEW}), {_NEW}, 1 "
             "FROM coord_defs cd WHERE cd.coord_row = NEW.coord_row "
             "ON CONFLICT (variant_key) "
             "DO UPDATE SET patch_count = patch_count + 1; END"
         ),
         "count_variant_removed": (
-            "AFTER DELETE ON patch_coords WHEN OLD.run_index = 0 BEGIN "
+            "AFTER DELETE ON patch_coords BEGIN "
             "UPDATE coord_variants SET patch_count = patch_count - 1 "
             f"WHERE variant_key = {_OLD_KEY}; "
             "DELETE FROM coord_variants "
@@ -464,12 +461,8 @@ TRIGGERS = MappingProxyType(
     }
 )
 INDEXES = (
-    # whole coordinates only, so run links never lengthen a coordinate scan
-    ("idx_pcoords_name", "patch_coords", "coord_name", "run_index = 0"),
+    ("idx_pcoords_name", "patch_coords", "coord_name", None),
     ("idx_cdefs_grid", "coord_defs", "def_key", GRID_NEEDED),
-    # run links, which dascore no longer writes; kept so the version 26
-    # schema stays as it was
-    ("idx_pcoords_runs", "patch_coords", "coord_name", "run_index > 0"),
 )
 
 

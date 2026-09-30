@@ -671,7 +671,7 @@ class SQLiteIndexBackend:
                 "patch_coords",
                 PatchCoordRow._fields,
                 [
-                    (pid, name, 0, dims, def_ids[key], dtype)
+                    (pid, name, dims, def_ids[key], dtype)
                     for pid, name, dims, key, dtype in link_rows
                 ],
             )
@@ -1019,8 +1019,6 @@ class SQLiteIndexBackend:
                 [int(x) for x in links["coord_row"].unique()] if not links.empty else []
             )
             defs = self._fetch_in("SELECT * FROM coord_defs", "coord_row", def_ids)
-        # skip the per-run links an earlier dascore wrote
-        links = links[links["run_index"] == 0]
         return assemble_source_records(
             sources, patches, attrs, links, defs, self._attr_meta()
         )
@@ -1247,9 +1245,7 @@ class SQLiteIndexBackend:
             "cd.min_float, cd.max_float, cd.step_float, "
             "cd.min_int, cd.max_int, cd.step_int, cd.min_str, cd.max_str "
             "FROM patch_coords pc "
-            # the whole coordinate only: one envelope per patch and name
-            "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
-            "AND pc.run_index = 0"
+            "JOIN coord_defs cd ON cd.coord_row = pc.coord_row"
         )
         most = len(ids) * 4 >= self._patch_count()
         if most:
@@ -1390,22 +1386,13 @@ class SQLiteIndexBackend:
         """
         sql = (
             "SELECT DISTINCT coord_name FROM patch_coords "
-            "WHERE run_index = 0 AND coord_dims != coord_name"
+            "WHERE coord_dims != coord_name"
         )
         return set(self._fetch_df(sql)["coord_name"].astype(str))
 
-    def patch_ids_by_key(self) -> dict[str, int]:
-        """Each patch's id, by its source patch key (a plan's output id)."""
-        df = self._fetch_df("SELECT patch_row, source_patch_key FROM patches")
-        keys = df["source_patch_key"].astype(str)
-        return dict(zip(keys, df["patch_row"].astype(int), strict=True))
-
     def coord_dims_map(self) -> dict[str, str]:
         """Return each coord name's dims string (first observed wins)."""
-        df = self._fetch_df(
-            "SELECT DISTINCT coord_name, coord_dims FROM patch_coords "
-            "WHERE run_index = 0"
-        )
+        df = self._fetch_df("SELECT DISTINCT coord_name, coord_dims FROM patch_coords")
         out: dict[str, str] = {}
         for name, dims in zip(df["coord_name"], df["coord_dims"]):
             out.setdefault(str(name), str(dims))
