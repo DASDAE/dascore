@@ -15,6 +15,7 @@ import warnings
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 from datetime import timedelta
+from fractions import Fraction
 from itertools import accumulate, pairwise
 from unittest import mock
 
@@ -26,7 +27,7 @@ import dascore as dc
 import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
 from dascore.config import config_context
-from dascore.core.coords import NumericCoord
+from dascore.core.coords import Grid, NumericCoord, get_coord
 from dascore.core.lazy_array import LazyArray
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
@@ -188,6 +189,22 @@ class TestChunk:
         with pytest.raises(ChunkError, match=msg):
             diverse_spool.chunk(time=10000)
 
+    @pytest.mark.parametrize("fill_value", (None, np.nan))
+    @pytest.mark.parametrize("keep_partial", (False, True))
+    @pytest.mark.parametrize(
+        "kwargs",
+        ({"time": 0.0012}, {"distance": 0.3}, {"distance": 0.3 * get_quantity("mm")}),
+    )
+    def test_chunk_shorter_than_sample(self, kwargs, fill_value, keep_partial):
+        """Sub-sample chunks name the request as too short (#1251)."""
+        patch = dc.get_example_patch().set_units(distance="mm")
+        with pytest.raises(ChunkError, match="shorter than the sample step") as exc:
+            dc.spool([patch]).chunk(
+                **kwargs, fill_value=fill_value, keep_partial=keep_partial
+            )
+        assert repr(next(iter(kwargs))) in str(exc.value)
+        assert "smaller chunk" not in str(exc.value)
+
     def test_increment_too_big_names_knobs(self, diverse_spool):
         """The error should point at tolerance and keep_partial (#1046)."""
         with pytest.raises(ChunkError) as info:
@@ -202,6 +219,17 @@ class TestChunk:
         p2 = dc.get_example_patch(time_min=gap).set_units(distance="mm")
         with pytest.raises(ChunkError, match=r"is 300\.0 mm,"):
             dc.spool([p1, p2]).chunk(distance=2 * get_quantity("m"))
+
+    def test_below_one_coarse_sample(self):
+        """A chunk below only the coarser rate skips those patches."""
+        coarse = dc.get_example_patch()
+        fine = dc.get_example_patch(
+            time_step=to_timedelta64(0.001),
+            time_min=to_timedelta64(1000) + coarse.get_coord("time").min(),
+        )
+        out = dc.spool([coarse, fine]).chunk(time=0.002)
+        assert len(out)
+        assert {x.get_coord("time").step for x in out} == {fine.get_coord("time").step}
 
     def test_too_big_partial(self, diverse_spool):
         """When chunk is too large, all contiguous blocks should merge."""
@@ -836,7 +864,9 @@ class TestStreamingMerge:
         p2 = p2.transpose(*reversed(p2.dims))
         patches = iter([p1, p2])
         monkeypatch.setattr(
-            assembler, "_load_trimmed_patch", lambda patch_kwargs, joined: next(patches)
+            assembler,
+            "_load_trimmed_patch",
+            lambda patch_kwargs, joined, units=None: next(patches),
         )
         time_axis = p1.get_axis("time")
         samples = p1.data.shape[time_axis] * 2
@@ -854,7 +884,9 @@ class TestStreamingMerge:
         p2 = p2.select(distance=(None, distance.max() - distance.step))
         patches = iter([p1, p2])
         monkeypatch.setattr(
-            assembler, "_load_trimmed_patch", lambda patch_kwargs, joined: next(patches)
+            assembler,
+            "_load_trimmed_patch",
+            lambda patch_kwargs, joined, units=None: next(patches),
         )
         msg = "their shapes are incompatible"
         with pytest.raises(CoordMergeError, match=msg):
@@ -871,7 +903,9 @@ class TestStreamingMerge:
         )
         patches = iter([p1, p2])
         monkeypatch.setattr(
-            assembler, "_load_trimmed_patch", lambda patch_kwargs, joined: next(patches)
+            assembler,
+            "_load_trimmed_patch",
+            lambda patch_kwargs, joined, units=None: next(patches),
         )
         msg = "expected them to vary along time"
         with pytest.raises(CoordMergeError, match=msg):
@@ -3076,6 +3110,48 @@ class TestChunkFillValue:
             x.get_coord("time").step for x in spool
         ]
 
+    @staticmethod
+    def _two_members(step, second_offset_ns, count=3):
+        """Two members of one step, the second starting second_offset_ns on."""
+        t0 = np.datetime64("2020-01-01T00:00:00")
+        starts = (t0, t0 + np.timedelta64(second_offset_ns, "ns"))
+        patches = [
+            dc.Patch(
+                data=np.arange(float(count))[None],
+                coords={
+                    "distance": [0],
+                    "time": get_coord(start=x, step=step, shape=(count,)),
+                },
+                dims=("distance", "time"),
+            )
+            for x in starts
+        ]
+        spool = dc.spool(patches)
+        return spool.chunk(time=None, tolerance=10, fill_value=np.nan)[0], t0
+
+    def test_hole_between_offset_lattices_keeps_the_step(self):
+        """Members sharing a step on offset lattices fill at that step."""
+        ms = np.timedelta64(1, "ms")
+        # the second member sits 6.37 steps on: a 3-sample hole plus jitter
+        merged, t0 = self._two_members(ms, 6_370_000)
+        coord = merged.get_coord("time")
+        assert coord.evenly_sampled and coord.step == ms
+        # laid on the first member's lattice; the second snaps onto it
+        assert np.array_equal(coord.values, t0 + np.arange(9) * ms)
+        assert np.array_equal(self._fill_positions(merged), [3, 4, 5])
+        assert np.array_equal(merged.data[0, [0, 1, 2, 6, 7, 8]], [0, 1, 2] * 2)
+
+    def test_fractional_rate_hole_keeps_the_step(self):
+        """A one-sample hole at 6 kHz fills, though ns rounding shortens the seam."""
+        step = Fraction(1, 6000)
+        # one missing sample, the second start rounded to whole nanoseconds
+        merged, t0 = self._two_members(step, round(step * 1001 * 10**9), count=1000)
+        coord = merged.get_coord("time")
+        assert coord.evenly_sampled
+        assert coord.step == get_coord(start=t0, step=step, shape=(2,)).step
+        assert len(coord) == 2001
+        assert np.array_equal(self._fill_positions(merged), [1000])
+
     def test_infinite_tolerance_fills_every_hole(self, gapped_spool):
         """No boundary is a gap, so no hole is too wide to fill."""
         merged = gapped_spool.chunk(time=None, tolerance=np.inf, fill_value=np.nan)[0]
@@ -3252,6 +3328,15 @@ class TestChunkFillWindows:
         """A window holding no sample position is no output at all."""
         with pytest.raises(ChunkError, match="chunk"):
             dc.spool([random_patch]).chunk(time=0.001, fill_value=np.nan)
+
+    def test_window_holding_no_position_is_skipped(self):
+        """A selection between two samples leaves no position to fill."""
+        time = dc.get_coord(start=2.0, step=1.0, shape=(2,))
+        coords = {"distance": [0], "time": time}
+        patch = dc.Patch(data=np.ones((1, 2)), coords=coords, dims=tuple(coords))
+        view = dc.spool([patch]).select(time=(0.8, -0.1), relative=True)
+        with pytest.raises(ChunkError, match="chunk"):
+            view.chunk(time=2.0, keep_partial=True, fill_value=np.nan)
 
     def test_one_sample_output_is_not_padded(self):
         """An output of one descending sample states no step to pad by."""
@@ -4567,3 +4652,116 @@ class TestSelectedRecipeMerge:
                     assert_same_patch(one, other, kwargs, per_coord=True)
         assert compared > 30
         assert recipes, "no selected spool merged from the index"
+
+
+class TestChunkMergeRegressions:
+    """Chunk assembly preserves sample order, scale, and declared sampling."""
+
+    @pytest.fixture(params=["memory", "index", "stream", "materialized"])
+    def merge_spool(self, request, tmp_path, monkeypatch):
+        """Build a spool through each assembly route."""
+        if request.param == "stream":
+            monkeypatch.setattr(
+                PatchAssembler, "_member_meta_from_index", lambda *a: None
+            )
+        elif request.param == "materialized":
+            monkeypatch.setattr(
+                assembly_module, "_estimate_merge_samples", lambda *a: None
+            )
+
+        def build(patches):
+            if request.param == "memory":
+                return dc.spool(patches)
+            return _write_spool(tmp_path, patches)
+
+        return build
+
+    @pytest.mark.parametrize("length", [None, 4])
+    @pytest.mark.parametrize("reverse", [False, True])
+    def test_descending_sample_order(self, merge_spool, length, reverse):
+        """Descending samples match their labels, including across a seam (#1248)."""
+        patches = []
+        for start in (9, 4):
+            values = np.arange(start, start - 5, -1.0)
+            patches.append(
+                dc.Patch(
+                    data=values,
+                    coords={"time": values, "sample": ("time", values * 10)},
+                    dims=("time",),
+                )
+            )
+        spool = merge_spool(patches[::-1] if reverse else patches)
+        chunks = spool.chunk(time=length, conflict="keep_first")
+        assert len(chunks) == (1 if length is None else 2)
+        for patch in chunks:
+            np.testing.assert_array_equal(patch.data, patch.get_array("time"))
+            np.testing.assert_array_equal(patch.data * 10, patch.get_array("sample"))
+
+    @pytest.mark.parametrize("conflict", ["keep_first", "drop"])
+    def test_data_units_convert(self, merge_spool, conflict):
+        """Kilometre members convert to metres as concatenate does (#1247)."""
+        patches = [
+            dc.Patch(
+                data=np.arange(1, 6, dtype=np.int16),
+                coords={"time": np.arange(start, start + 5.0)},
+                dims=("time",),
+                attrs={"data_units": units},
+            )
+            for start, units in [(0, "m"), (5, "km")]
+        ]
+        actual = merge_spool(patches).chunk(time=None, conflict=conflict)[0]
+        expected = [1, 2, 3, 4, 5, 1000, 2000, 3000, 4000, 5000]
+        np.testing.assert_array_equal(actual.data, expected)
+        assert actual.attrs.data_units == get_quantity("m")
+
+    def test_descending_units_follow_the_plan(self, merge_spool):
+        """keep_first keeps the units the chunked spool advertises."""
+        patches = [
+            dc.Patch(
+                data=np.arange(5.0),
+                coords={"time": np.arange(start, start - 5.0, -1)},
+                dims=("time",),
+                attrs={"data_units": units},
+            )
+            for start, units in [(4, "m"), (9, "km")]
+        ]
+        chunked = merge_spool(patches).chunk(time=None, conflict="keep_first")
+        stated = chunked.get_contents()["data_units"].iloc[0]
+        assert chunked[0].attrs.data_units == get_quantity(stated)
+
+    def test_zero_shared_step_is_not_kept(self):
+        """One-sample grids declaring no spacing fuse on their span."""
+        runs = (Grid(0.0, 0.0, 0, 1), Grid(1.0, 0.0, 0, 1))
+        coord = NumericCoord(runs=runs, dtype="float64")
+        with np.errstate(all="ignore"):
+            out = coord.fuse(1.0, keep_step=True)
+        np.testing.assert_array_equal(out.values, [0.0, 1.0])
+
+    def test_ulp_different_float_steps(self):
+        """Float steps one ulp apart still merge on the shared step."""
+        steps = (0.004, np.nextafter(0.004, 1))
+        starts = (0.0, 0.004 * 1500 + 3e-6)
+        patches = [
+            dc.Patch(
+                data=np.ones(1500),
+                coords={"time": dc.core.get_coord(start=a, step=b, shape=(1500,))},
+                dims=("time",),
+            )
+            for a, b in zip(starts, steps, strict=True)
+        ]
+        out = dc.spool(patches).chunk(time=None)[0]
+        assert out.get_coord("time").step == pytest.approx(0.004, rel=1e-12)
+
+    def test_jitter_keeps_declared_step(self, merge_spool):
+        """A three-microsecond seam offset does not change a four-ms step."""
+        step = np.timedelta64(4_000_000, "ns")
+        patches = []
+        for num in range(2):
+            start = ORIGIN + num * (1500 * step + np.timedelta64(3000, "ns"))
+            coord = dc.core.get_coord(start=start, step=step, shape=(1500,))
+            patches.append(
+                dc.Patch(data=np.arange(1500), coords={"time": coord}, dims=("time",))
+            )
+        merged = merge_spool(patches).chunk(time=None)[0]
+        assert merged.get_coord("time").step == step
+        np.testing.assert_array_equal(merged.data, np.tile(np.arange(1500), 2))

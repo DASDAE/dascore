@@ -53,6 +53,7 @@ from dascore.core.summary import (
     normalize_source_patch_keys,
 )
 from dascore.exceptions import (
+    DASDAEUnpickleError,
     DependencyError,
     InvalidFiberFileError,
     InvalidFiberIOError,
@@ -1089,15 +1090,21 @@ def _paired_hook(fiber_io: FiberIO, hook: str) -> Callable:
 
 class H5ArrayMixin:
     """
-    Slice a single-patch HDF5 format's array straight out of its dataset.
+    Describe and slice a single-patch HDF5 format's array from its dataset.
 
-    Mix into a reader whose `get_metadata` names its data with
-    `ArraySource(key=<dataset>.name)`, listing this class before `FiberIO`
-    in the bases.
+    List this class before `FiberIO` in the bases. `get_metadata` must name
+    its data with `ArraySource(key=<dataset>.name)`, as `_dataset_meta` does.
     """
 
     # Supplied by the FiberIO this is mixed into.
     get_metadata: Callable[..., list[dc.PatchMeta]]
+
+    @staticmethod
+    def _dataset_meta(attrs, coords, dataset: H5pyDataset) -> list[dc.PatchMeta]:
+        """Return a one-item PatchMeta list whose array is `dataset`."""
+        source = ArraySource(key=dataset.name)
+        dtype = str(dataset.dtype)
+        return [dc.PatchMeta(attrs=attrs, coords=coords, dtype=dtype, source=source)]
 
     def read_array(
         self, resource: H5Reader, windows: windows_type = (), key: str = ""
@@ -1889,7 +1896,7 @@ def _iter_scan_results(
                     except DependencyError as exc:
                         warnings.warn(str(exc), UserWarning, stacklevel=2)
                         continue
-                    except RemoteCacheError:
+                    except (RemoteCacheError, DASDAEUnpickleError):
                         raise
                     except PermissionError:
                         _warn_permission_denied(patch_source)
@@ -2006,6 +2013,8 @@ def scan(
 
     Inaccessible files and subdirectories are skipped with a warning.
     An inaccessible root directory raises PermissionError.
+    Legacy DASDAE pickled coordinates raise DASDAEUnpickleError unless
+    ``allow_dasdae_format_unpickle=True`` is enabled for trusted files.
 
     Parameters
     ----------

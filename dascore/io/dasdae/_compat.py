@@ -21,7 +21,7 @@ import pickle
 from collections.abc import Iterable
 
 from dascore.config import get_config
-from dascore.exceptions import InvalidFiberFileError, UnitError
+from dascore.exceptions import DASDAEUnpickleError, UnitError
 from dascore.io.utils import convert_attr_units
 from dascore.units import convert_units, get_quantity_str
 from dascore.utils.misc import unbyte
@@ -116,7 +116,7 @@ def translate_legacy_attrs(attrs, coord_names: Iterable[str] = ()):
                 "block, or enable it permanently with "
                 "dc.set_config(allow_dasdae_format_unpickle=True)."
             )
-            raise InvalidFiberFileError(msg)
+            raise DASDAEUnpickleError(msg)
         with contextlib.suppress(
             AttributeError,
             EOFError,

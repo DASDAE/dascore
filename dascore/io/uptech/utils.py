@@ -65,11 +65,7 @@ def _get_coords(resource, snap=True):
     """Build time and distance coordinates."""
     data = resource[_DATASET]
     values = _get_time(resource)
-    time = (
-        get_coord(data=values)
-        if should_snap(snap, "time")
-        else get_coord(data=values, snap=False)
-    )
+    time = get_coord(data=values, snap=should_snap(snap, "time"))
     # Uptech's sampling interval is the spatial channel pitch. The
     # spatial resolution is the sensing resolution and may be different.
     distance = get_coord(

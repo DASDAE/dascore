@@ -1694,23 +1694,6 @@ def merge_compatible_coords_attrs(
     return coord_out, attrs
 
 
-def _spool_up(func):
-    """
-    Spool the output of a function.
-
-    This is primarily to turn methods that return a list of patches
-    into something that can be used as a spool method.
-    """
-
-    @functools.wraps(func)
-    def _wrapper(self, *args, **kwargs):
-        """Wrapper for function."""
-        out = func(self, *args, **kwargs)
-        return dc.spool(out)
-
-    return _wrapper
-
-
 @compose_docstring(check_bev=check_behavior_description)
 def concatenate_patches(
     patches: Sequence[dc.Patch] | dc.Spool,
@@ -2020,12 +2003,7 @@ def concatenate_planned(
     stated = [x for x in units if not _is_missing(x)]
     if stated:
         kept = stated[0]
-        patches = [
-            x
-            if _is_missing(x.attrs.data_units) or x.attrs.data_units == kept
-            else x.convert_units(kept)
-            for x in patches
-        ]
+        patches = [x.convert_units(kept) for x in patches]
         attrs = attrs.update(data_units=kept)
     operation = operation_id(
         "Concatenate", {"arguments": ((dim, count),), "conflict": conflict}

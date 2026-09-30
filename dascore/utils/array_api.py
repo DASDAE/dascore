@@ -27,7 +27,6 @@ __all__ = [
     "array_namespace",
     "asarray_like",
     "backend_name",
-    "can_nan_reduce",
     "device",
     "is_foreign",
     "is_numpy",
@@ -320,32 +319,6 @@ NAN_REDUCE_DTYPES = {
     "std": ("integral", "real floating", "complex floating"),
     "sum": ("integral", "real floating", "complex floating"),
 }
-
-
-def can_nan_reduce(name: str, array: Any) -> bool:
-    """
-    Return True if a nan-skipping reduction can be done in the array's own
-    namespace, rather than by numpy.
-
-    Parameters
-    ----------
-    name
-        The name of the reduction; see
-        [nan_reduce](`dascore.utils.array_api.nan_reduce`).
-    array
-        The array to reduce.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> from dascore.utils.array_api import can_nan_reduce
-    >>>
-    >>> assert can_nan_reduce("mean", np.array([1.0, 2.0]))
-    """
-    xp = array_namespace(array)
-    if getattr(xp, f"nan{name}", None) is not None:
-        return True
-    return xp.isdtype(array.dtype, NAN_REDUCE_DTYPES[name])
 
 
 def nan_reduce(name: str, array: Any, axis=None, keepdims: bool = False) -> Any:

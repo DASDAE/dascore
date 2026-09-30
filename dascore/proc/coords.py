@@ -13,7 +13,7 @@ from scipy.interpolate import interp1d
 
 import dascore as dc
 from dascore.constants import PatchType, select_values_description
-from dascore.core.coords import BaseCoord, _fill_layout
+from dascore.core.coords import BaseCoord, _fill_layout, concat_coords
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import (
     CoordError,
@@ -901,8 +901,8 @@ class Unselect(_Query):
     Notes
     -----
     - Removing a range from the middle of a coordinate leaves a hole in
-      it, so the result is no longer evenly sampled and the coordinate
-      becomes a monotonic array. That is exactly what
+      it, so the coordinate becomes segmented: it keeps its step and
+      reports the removed samples as missing. That is exactly what
       [`Spool.unselect`](`dascore.core.spool.Spool.unselect`) refuses the
       patches' *own* coordinates for: at spool level the complement of a
       range is a hole in every patch rather than a choice between
@@ -952,7 +952,18 @@ class Unselect(_Query):
         trims: dict[str, Any] = {
             dim: np.flatnonzero(mask) for dim, mask in keep.items()
         }
-        return Select(**trims, samples=True).get_metadata(meta)
+        out, kwargs = Select(**trims, samples=True).get_metadata(meta)
+        coords = out.coords
+        for dim, kept in trims.items():
+            coord = meta.coords.coord_map[dim]
+            # nothing removed, nothing kept, or no grid to keep
+            if len(kept) in (0, len(coord)) or not coord.evenly_sampled:
+                continue
+            # Rebuilt from the contiguous slices kept, so a hole keeps the step.
+            runs = np.split(kept, np.flatnonzero(np.diff(kept) != 1) + 1)
+            joined = concat_coords(*(coord[run[0] : run[-1] + 1] for run in runs))
+            coords = coords.update(**{dim: joined})
+        return (out if coords is out.coords else out.new(coords=coords)), kwargs
 
 
 class Order(_Query):

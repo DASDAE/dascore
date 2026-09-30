@@ -306,7 +306,9 @@ The supported subset covers dimension names and scalar, slice, and unlabelled 1D
 
 ```{python}
 outside = patch.unselect(distance=(50, 200))
-assert outside.get_coord("distance").step is None
+distance = outside.get_coord("distance")
+assert distance.step == patch.get_coord("distance").step
+assert distance.missing().count > 0
 ```
 
 Each named coordinate is complemented independently. At spool level, patch coordinates cannot be unselected because removing an interior interval could turn one patch into two; use `Patch.unselect` when subdivision is intended.

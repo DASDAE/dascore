@@ -27,6 +27,7 @@ from dascore.core.coords import (
     CoordSummary,
     NumericCoord,
     _blank_coord,
+    concat_coords,
     get_coord,
 )
 from dascore.exceptions import CoordError, ParameterError
@@ -930,7 +931,7 @@ class TestSelect:
     @pytest.mark.parametrize("reverse", [False, True])
     def test_crossed_segmented_relative_bounds(self, reverse):
         """A segment must not reorder relative bounds resolved by its parent."""
-        coord = get_coord(data=np.array([0, 1, 2, 3, 4, 8, 9]), snap=False)
+        coord = concat_coords(get_coord(data=np.arange(5)), get_coord(data=[8, 9]))
         assert isinstance(coord, NumericCoord) and coord.runs_count > 1
         if reverse:
             coord = coord.sort(reverse=True)[0]
@@ -3164,7 +3165,10 @@ class TestIndexCoordinate:
             ]
         )
         values = values.astype("datetime64[ns]") if temporal else values / 1e9
-        coord = get_coord(data=values, snap=False)
+        coord = concat_coords(
+            get_coord(data=values[:4], snap=False),
+            get_coord(data=values[4:], snap=False),
+        )
         assert isinstance(coord, NumericCoord) and coord.runs_count > 1
         indices = np.array([0, 2, 4, 6])
         if operation == "stride":
@@ -3179,6 +3183,15 @@ class TestIndexCoordinate:
             np.testing.assert_array_equal(selected.data, [0, 2, 4, 6])
             out = selected.get_coord("x")
         np.testing.assert_array_equal(out.values, values[indices])
+
+    def test_stride_skips_middle_run(self):
+        """Striding across a join can skip an entire intervening run."""
+        coord = concat_coords(
+            get_coord(data=[0, 1]), get_coord(data=[3]), get_coord(data=[5, 6])
+        )
+        out = coord[::3]
+        np.testing.assert_array_equal(out.values, [0, 5])
+        assert out.runs_count == 2
 
     @pytest.mark.parametrize("indexer", [slice(1, 4), np.array([3, 2, 1])])
     def test_partial_index_avoids_full_allocation(self, monkeypatch, indexer):

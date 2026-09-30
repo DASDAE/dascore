@@ -302,20 +302,6 @@ def step_from_rate(rate) -> Fraction | np.timedelta64:
     return dc.to_timedelta64(1 / float(rate))
 
 
-def step_from_interval(seconds) -> Fraction | np.timedelta64:
-    """
-    The time step a file states as a sample interval in seconds.
-
-    The exact `Fraction` when the interval is a simple fraction (``1 /
-    3000``, ``0.004``), otherwise the nearest nanosecond timedelta, as
-    before.
-    """
-    frac = to_exact_fraction(seconds)
-    if frac is not None and frac > 0:
-        return frac
-    return dc.to_timedelta64(float(seconds))
-
-
 def selection_windows(
     coords: CoordManager, indexers: Mapping[str, int | slice | np.ndarray]
 ) -> tuple[tuple[tuple[int, int], ...], tuple[slice | np.ndarray, ...]]:

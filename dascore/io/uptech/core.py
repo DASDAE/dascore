@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import ArraySource, FiberIO, H5ArrayMixin
+from dascore.io import FiberIO, H5ArrayMixin
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
 
@@ -35,11 +35,5 @@ class UptechH5V1(H5ArrayMixin, FiberIO):
     ) -> list[dc.PatchMeta]:
         """Extract metadata without reading the signal array."""
         attrs = UptechPatchAttrs.model_validate(_get_attrs_dict(resource))
-        return [
-            dc.PatchMeta(
-                attrs=attrs,
-                coords=_get_coords(resource, snap=snap),
-                dtype=str(resource[_DATASET].dtype),
-                source=ArraySource(key=resource[_DATASET].name),
-            )
-        ]
+        coords = _get_coords(resource, snap=snap)
+        return self._dataset_meta(attrs, coords, resource[_DATASET])

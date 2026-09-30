@@ -153,12 +153,11 @@ OBJECT_SUFFIXES = (".json", ".yaml", ".yml")
 
 # Where a parquet annotations table names its dimensions.
 DIMS_KEY = "dascore:dims"
+# Where a bare parquet table keeps what attrs.json holds in a directory.
+ATTRS_KEY = "dascore:attrs"
 
 # Range suffixes, as everywhere else in DASCore.
 _MIN, _MAX = "_min", "_max"
-
-# The former range spelling, refused with a pointer to the new one.
-_RETIRED_RANGE = ("_start", "_end")
 
 # The resolution DASCore holds a time and a duration at.
 _NS_TIME = np.dtype("datetime64[ns]")
@@ -2762,16 +2761,6 @@ def _check_columns(frame: pd.DataFrame, attrs: AnnotationSetAttrs, table: str):
         )
         raise ParameterError(msg)
     extras = [str(x) for x in frame.columns if x not in set(RESERVED_COLUMNS) | spelled]
-    low, high = _RETIRED_RANGE
-    retired = {x[: -len(low)] for x in extras if x.endswith(low)}
-    retired &= {x[: -len(high)] for x in extras if x.endswith(high)}
-    if named := ", ".join(sorted(retired & set(attrs.dims))):
-        msg = (
-            f"The column(s) {named} state a range as {low}/{high}, which this "
-            f"format now spells {_MIN}/{_MAX}, as every other range in DASCore "
-            "is spelled. Rename the columns."
-        )
-        raise ParameterError(msg)
     stems = {x[: -len(_MIN)] for x in extras if x.endswith(_MIN)}
     stems &= {x[: -len(_MAX)] for x in extras if x.endswith(_MAX)}
     if stems:
@@ -3463,9 +3452,10 @@ def annotation_set_to_csv(
     duration dimension is refused: CSV has no spelling for one which reads
     back, where parquet has a type for it.
 
-    The dimensions are not written. Reading the table back states them
-    again, in the call or in a ``# dims: distance, time`` line written above
-    the header by hand.
+    Neither the dimensions nor the attributes are written; parquet keeps
+    both. Reading the table back states them again in the call, or the
+    dimensions in a ``# dims: distance, time`` line written above the header
+    by hand.
 
     Parameters
     ----------
@@ -3500,7 +3490,8 @@ def annotation_set_to_parquet(
 
     The parquet spelling of
     [to_csv](`dascore.core.annotations.annotation_set_to_csv`): columns keep
-    their types, and the dimensions travel in the file's metadata. A column
+    their types, and the dimensions and attributes travel in the file's
+    metadata, so the file reads back as the set it was. A column
     with no one type is written as JSON, which keeps each cell's value but
     not every python type -- a tuple comes back as a list. Needs pyarrow.
 
@@ -3528,8 +3519,12 @@ def annotation_set_to_parquet(
     True
     """
     _refuse_bare(annotations)
-    dims = json.dumps(list(annotations.dims))
-    write_parquet(annotations._df, path, {DIMS_KEY: dims})
+    # The dimensions travel under their own key only.
+    attrs = annotations._attrs.model_dump(
+        mode="json", exclude_defaults=True, exclude={"dims"}
+    )
+    metadata = {DIMS_KEY: json.dumps(list(annotations.dims))}
+    write_parquet(annotations._df, path, {**metadata, ATTRS_KEY: json.dumps(attrs)})
     return pathlib.Path(path)
 
 
@@ -3626,13 +3621,11 @@ def save_annotation_set(
         *(directory / f"{x}{json_suffix}" for x in documents),
         *(directory / f"{x}{suffix}" for x in tables),
     }
-    # The retired vertices table is claimed so saving over an old set clears it.
     claimed = {
         ATTRS_STEM: OBJECT_SUFFIXES,
         BASES_STEM: OBJECT_SUFFIXES,
         ANNOTATION_STEM: TABLE_SUFFIXES,
         FEATURE_STEM: TABLE_SUFFIXES,
-        "vertices": TABLE_SUFFIXES,
     }
     superseded = [
         x

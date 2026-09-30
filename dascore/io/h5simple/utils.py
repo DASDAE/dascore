@@ -2,11 +2,16 @@
 
 from __future__ import annotations
 
+import re
+from typing import Any, cast
+
 import numpy as np
+import pandas as pd
 
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.core import get_coord
+from dascore.exceptions import InvalidFiberFileError
 from dascore.io.utils import should_snap
 from dascore.utils.misc import _maybe_unpack, unbyte
 
@@ -18,6 +23,7 @@ OTHER_COORD_ARRAY_NAMES = frozenset(("channels", "distance"))
 
 FILE_FORMAT_ATTR_NAMES = frozenset(("__format__", "file_format", "format"))
 DEFAULT_ATTRS = frozenset(("CLASS", "PYTABLES_FORMAT_VERSION", "TITLE", "VERSION"))
+_CF_CALENDARS = frozenset(("standard", "gregorian", "proleptic_gregorian"))
 
 
 def _get_attrs_coords_and_data(h5, snap):
@@ -36,18 +42,42 @@ def _get_attrs_coords_and_data(h5, snap):
     return attr_dict, cm, data
 
 
+def _time_values(node, index=slice(None)):
+    """Time labels, decoding CF units such as 'milliseconds since 2017-09-18'."""
+    units = str(unbyte(_maybe_unpack(node.attrs.get("units", ""))))
+    unit, *rest = re.split(r" since ", units, maxsplit=1, flags=re.IGNORECASE)
+    origin = rest[0] if rest else ""
+    if not origin:
+        return dc.to_datetime64(node[index])
+    calendar = str(unbyte(_maybe_unpack(node.attrs.get("calendar", "standard"))))
+    if calendar.lower() not in _CF_CALENDARS:
+        msg = f"Time uses the unsupported CF calendar {calendar!r}."
+        raise InvalidFiberFileError(msg)
+    try:
+        name = cast("Any", unit.strip())  # CF names a unit pandas also knows
+        offsets = pd.to_timedelta(np.atleast_1d(node[index]), unit=name)
+        # pandas raises where numpy would wrap past the nanosecond range
+        out = (pd.Timestamp(origin.strip()) + offsets).as_unit("ns")
+    except (ValueError, OverflowError) as exc:
+        msg = f"Cannot decode the time units {units!r}."
+        raise InvalidFiberFileError(msg) from exc
+    out = out.tz_localize(None) if out.tz is not None else out
+    values = out.to_numpy()
+    return values if isinstance(index, slice) else values[0]
+
+
 def _get_coord(v, snap, name):
     """Get the coord values from a node."""
     length = len(v)
     if should_snap(snap, name) and length > 1:
-        start = v[0] if name != "time" else dc.to_datetime64(v[0])
-        stop = v[-1] if name != "time" else dc.to_datetime64(v[-1])
+        start = v[0] if name != "time" else _time_values(v, 0)
+        stop = v[-1] if name != "time" else _time_values(v, -1)
         duration = stop - start
         step = duration / (length - 1)
         coord = get_coord(min=start, max=stop + step, step=step)
         assert len(coord) == length
     else:
-        values = v[:] if name != "time" else dc.to_datetime64(v[:])
+        values = v[:] if name != "time" else _time_values(v)
         coord = get_coord(data=values, snap=False)
     return coord
 

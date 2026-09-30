@@ -272,8 +272,6 @@ def gap_boundaries(start, stop, step, tolerance: GapTolerance):
     ``reach`` is a reported value, not just a comparand.
     """
     start, stop, step = (np.asarray(x) for x in (start, stop, step))
-    if step.dtype == object:  # numeric rows without a step state None
-        step = pd.to_numeric(pd.Series(step), errors="coerce").to_numpy()
     order = np.argsort(start)
     starts, stops = start[order], stop[order]
     # runs are value-ordered regardless of coordinate orientation, so

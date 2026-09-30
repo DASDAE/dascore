@@ -89,13 +89,13 @@ segmented = concat_coords(first, second)
 print(segmented.get_discontinuities("gaps"))
 ```
 
-Pass `snap=False` to preserve an exact monotonic array. It returns the simplest truthful coordinate, so uniform input becomes one evenly sampled run. A coordinate of several runs reports a `step` only when every run sits on the same one, and `None` otherwise. `fuse(tolerance=...)` may reduce the number of runs within an error bound, while `snap()` replaces values with one evenly sampled run. A spool holds a patch with holes as its contiguous pieces, which `patch.split_gaps()` returns, and `dc.write` writes those pieces; irregular labels with no shared step are not gapped and stay whole.
+Pass `snap=False` to preserve an exact monotonic array. Labels one grid reproduces exactly become that grid; anything else stays one run of stored labels with no step, so holes in it are not reported unless a step is declared (below). Several runs come from joining coordinates, as above. A coordinate of several runs reports a `step` only when every run sits on the same one, and `None` otherwise. `fuse(tolerance=...)` may reduce the number of runs within an error bound, while `snap()` replaces values with one evenly sampled run. A spool holds a patch with holes as its contiguous pieces, which `patch.split_gaps()` returns, and `dc.write` writes those pieces; irregular labels with no shared step are not gapped and stay whole.
 
 ```{python}
 values = np.array([0.0, 1.0, 2.0, 7.0, 8.0, 9.0])
 exact = get_coord(data=values, units="m", snap=False)
 assert np.array_equal(exact.values, values)
-assert exact.runs_count == 2
+assert exact.runs_count == 1 and exact.step is None
 ```
 
 ### Declaring a grid and finding missing samples

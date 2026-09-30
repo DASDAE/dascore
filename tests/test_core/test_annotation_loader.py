@@ -21,7 +21,7 @@ except ImportError:
 
 import dascore as dc
 from dascore.core.annotation_loader import _holds_blank, find_annotations
-from dascore.core.annotations import DIMS_KEY, Line, Moveout, _one_file
+from dascore.core.annotations import ATTRS_KEY, DIMS_KEY, Line, Moveout, _one_file
 from dascore.exceptions import InvalidAnnotationError, ParameterError
 from dascore.utils.tables import DOCUMENT_KEY, write_parquet
 
@@ -618,14 +618,6 @@ class TestSavingOverASet:
         assert not (directory / "bases.json").exists()
         assert dc.annotations(directory) == regions
 
-    def test_a_retired_vertices_table_is_superseded(self, regions, tmp_path):
-        """Saving over an old set clears its vertices table, so it reads back."""
-        directory = regions.io.save(tmp_path / "picks")
-        (directory / "vertices.csv").write_text("id,seq,distance\na,0,1.0\n")
-        regions.io.save(directory)
-        assert not (directory / "vertices.csv").exists()
-        assert dc.annotations(directory) == regions
-
     def test_a_hand_authored_yaml_is_superseded(self, tmp_path):
         """Saving a set read from YAML does not leave two attrs files."""
         directory = tmp_path / "picks"
@@ -693,13 +685,25 @@ class TestTheDoor:
 
     @pytest.mark.parametrize(
         "given",
-        [{"attrs": {"dims": DIMS}}, {"features": pd.DataFrame()}, {"bases": {}}],
+        [
+            {"attrs": {"data_id": "other"}},
+            {"acquisition_key": "N.A.00.other"},
+            {"features": pd.DataFrame()},
+            {"bases": {}},
+        ],
     )
     def test_a_directory_refuses_what_it_states(self, regions, tmp_path, given):
         """A directory holds its own attributes, features and bases."""
         directory = regions.io.save(tmp_path / "picks")
-        with pytest.raises(InvalidAnnotationError, match="which states them"):
+        with pytest.raises(InvalidAnnotationError, match="which states it"):
             dc.annotations(directory, **given)
+
+    def test_a_directory_takes_what_agrees(self, regions, tmp_path):
+        """Restating what a directory states is allowed where the two agree."""
+        directory = regions.io.save(tmp_path / "picks")
+        key = regions.attrs.acquisition_key
+        assert dc.annotations(directory, acquisition_key=key, dims=DIMS) == regions
+        assert dc.annotations(directory, attrs={"data_id": "decimated"}) == regions
 
     def test_a_dataframe(self):
         """A frame becomes a set, as the constructor makes one."""
@@ -792,25 +796,12 @@ class TestDeclaringDimensions:
         with pytest.raises(InvalidAnnotationError, match="Extra inputs"):
             dc.annotations(directory)
 
-    @pytest.mark.parametrize(
-        "field, value, now",
-        [("history", ["decimate"], "data_id"), ("columns", {}, "annotation_columns")],
-    )
-    def test_a_retired_attrs_field(self, regions, tmp_path, field, value, now):
-        """A set written with a retired field names what replaced it."""
-        directory = regions.io.save(tmp_path / "picks")
-        document = json.loads((directory / "attrs.json").read_text())
-        document[field] = value
-        (directory / "attrs.json").write_text(json.dumps(document))
-        with pytest.raises(InvalidAnnotationError, match=f"{field}.*{now}"):
-            dc.annotations(directory)
-
     def test_a_directory_which_states_them_refuses_others(self, regions, tmp_path):
         """Reading the cells against other dimensions would type them
         differently and build a set which is not the one stored.
         """
         directory = regions.io.save(tmp_path / "picks")
-        with pytest.raises(InvalidAnnotationError, match="its own dimensions"):
+        with pytest.raises(InvalidAnnotationError, match="dims was given"):
             dc.annotations(directory, dims=("time", "distance"))
 
     def test_a_directory_which_states_none_takes_them(self, regions, tmp_path):
@@ -916,12 +907,11 @@ class TestTheTables:
         with pytest.raises(InvalidAnnotationError, match="states features more than"):
             dc.annotations(directory)
 
-    @pytest.mark.parametrize("name", ["feature.csv", "vertices.csv"])
-    def test_a_stray_table(self, regions, tmp_path, name):
-        """A near-miss, or the retired vertices table, raises rather than hides."""
+    def test_a_stray_table(self, regions, tmp_path):
+        """A near-miss table raises rather than hides."""
         directory = regions.io.save(tmp_path / "picks")
-        (directory / name).write_text("id,seq\n")
-        with pytest.raises(InvalidAnnotationError, match=name.replace(".", r"\.")):
+        (directory / "feature.csv").write_text("id,seq\n")
+        with pytest.raises(InvalidAnnotationError, match=r"feature\.csv"):
             dc.annotations(directory)
 
     def test_bases_which_are_not_json(self, with_features, tmp_path):
@@ -1446,17 +1436,16 @@ class TestCollections:
             dc.annotations(root)
 
     def test_dimensions_stated_beside_the_sets(self, tmp_path):
-        """A collection may declare them, and then refuses a caller restating them."""
+        """A collection may declare them, and then refuses others."""
         root = tmp_path / "sets"
         directory = root / "hand"
         directory.mkdir(parents=True)
         (directory / "annotations.csv").write_text("note,time_min,time_max\nq,1,2\n")
         (root / "attrs.json").write_text('{"dims": ["time"]}')
         assert dc.annotations(root).dims == ("time",)
-        with pytest.raises(
-            InvalidAnnotationError, match="a directory of sets stating its own"
-        ):
-            dc.annotations(root, dims=("time",))
+        assert dc.annotations(root, dims=("time",)) == dc.annotations(root)
+        with pytest.raises(InvalidAnnotationError, match="dims was given"):
+            dc.annotations(root, dims=("distance",))
 
     def test_a_dimension_spelled_two_ways(self, tmp_path):
         """A set of values beside a set of ranges merges; rows keep their own."""
@@ -1930,8 +1919,8 @@ class TestCarriedAnnotations:
     def test_a_carried_set_directory_states_its_own(self, data, regions):
         """A carried directory holds its attributes, as any set directory does."""
         regions.io.save(data / ".annotations")
-        with pytest.raises(InvalidAnnotationError, match="which states them"):
-            dc.annotations(data, attrs={"dims": DIMS})
+        with pytest.raises(InvalidAnnotationError, match="which states it"):
+            dc.annotations(data, attrs={"dims": ("time",)})
 
     def test_carried_twice(self, data, regions):
         """A directory states what it carries once."""
@@ -2080,7 +2069,7 @@ class TestParquet:
     def test_a_bare_table(self, mixed, tmp_path):
         """A set of regions is one file, and reads back as the set it was."""
         loaded = dc.annotations(mixed.io.to_parquet(tmp_path / "picks.parquet"))
-        assert loaded.annotations.equals(mixed.annotations)
+        assert loaded == mixed
 
     def test_the_dimensions_travel_with_the_file(self, mixed, tmp_path):
         """A parquet file states its dimensions where it can: its footer."""
@@ -2093,6 +2082,93 @@ class TestParquet:
         assert dc.annotations(path, dims=DIMS).dims == DIMS
         with pytest.raises(InvalidAnnotationError, match="where the two agree"):
             dc.annotations(path, dims=("depth",))
+
+    def test_the_attributes_travel_with_the_file(self, tmp_path):
+        """A set made on a patch reads back whole, column docs included."""
+        patch = dc.get_example_patch()
+        frame = pd.DataFrame({"code": ["001"], "time": [patch.get_coord("time").min()]})
+        columns = {"code": {"dtype": "str", "description": "a code"}}
+        made = dc.AnnotationSet.from_patch(
+            patch, frame, acquisition_key="N.A.00.das", annotation_columns=columns
+        )
+        loaded = dc.annotations(made.io.to_parquet(tmp_path / "picks.parquet"))
+        assert loaded == made and loaded.attrs.data_id == patch.attrs.data_id
+        assert loaded.annotations["code"][0] == "001"
+
+    def test_a_collection_saved_bare(self, regions, picks, tmp_path):
+        """Sets loaded together keep what each states for itself."""
+        regions.io.save(tmp_path / "sets" / "hand")
+        picks.io.save(tmp_path / "sets" / "phasenet")
+        loaded = dc.annotations(tmp_path / "sets")
+        back = dc.annotations(loaded.io.to_parquet(tmp_path / "flat.parquet"))
+        assert back == loaded and set(back.attrs.sets) == {"hand", "phasenet"}
+
+    def test_restating_the_attributes(self, regions, tmp_path):
+        """What the file states may be given again only where the two agree."""
+        path = regions.io.to_parquet(tmp_path / "picks.parquet")
+        assert dc.annotations(path, dims=DIMS, attrs=regions.attrs) == regions
+        assert (
+            dc.annotations(path, dims=DIMS, attrs={"data_id": "decimated"}) == regions
+        )
+        assert dc.annotations(path, acquisition_key="NET.ARR.00.das") == regions
+        with pytest.raises(InvalidAnnotationError, match="acquisition_key was given"):
+            dc.annotations(path, acquisition_key="NET.ARR.00.other")
+        with pytest.raises(InvalidAnnotationError, match=r"^data_id was given"):
+            dc.annotations(path, attrs={"data_id": "other"})
+        with pytest.raises(InvalidAnnotationError, match="dims was given"):
+            dc.annotations(path, attrs=dc.AnnotationSet(None, dims=("time",)).attrs)
+
+    def test_what_a_source_leaves_unstated(self, picks, tmp_path):
+        """A field the stored set never stated is the caller's to give."""
+        bare = picks.io.to_parquet(tmp_path / "picks.parquet")
+        for path in (bare, picks.io.save(tmp_path / "picks", format="parquet")):
+            assert dc.annotations(path, data_id="x").attrs.data_id == "x"
+
+    def test_columns_a_footer_leaves_unstated(self, tmp_path):
+        """Column docs given for a file which states none type its cells."""
+        frame = pd.DataFrame({"code": ["001"], "time": [1.0]})
+        path = tmp_path / "picks.parquet"
+        dc.AnnotationSet(frame, dims=("time",)).io.to_parquet(path)
+        columns = {"code": {"dtype": "category"}}
+        loaded = dc.annotations(path, annotation_columns=columns)
+        assert loaded.annotations["code"].dtype.name == "category"
+
+    def test_a_directory_of_only_a_table(self, regions, tmp_path):
+        """A footer is the only statement a directory without attrs makes."""
+        (tmp_path / "picks").mkdir()
+        regions.io.to_parquet(tmp_path / "picks" / "annotations.parquet")
+        assert dc.annotations(tmp_path / "picks") == regions
+
+    def test_a_directory_checks_its_table(self, regions, tmp_path):
+        """A table's own attributes must agree with its directory's."""
+        directory = regions.io.save(tmp_path / "picks", format="parquet")
+        (directory / "annotations.parquet").unlink()
+        other = dc.AnnotationSet(regions.annotations, dims=DIMS, data_id="other")
+        other.io.to_parquet(directory / "annotations.parquet")
+        with pytest.raises(InvalidAnnotationError, match="data_id was given"):
+            dc.annotations(directory)
+
+    def test_a_file_stating_only_dimensions(self, regions, tmp_path):
+        """A file written before the attributes travelled still reads."""
+        path = tmp_path / "picks.parquet"
+        write_parquet(regions.annotations, path, {DIMS_KEY: json.dumps(DIMS)})
+        assert dc.annotations(path).attrs == dc.AnnotationSet(None, dims=DIMS).attrs
+
+    @pytest.mark.parametrize(
+        ("stated", "message"),
+        [
+            ('{"object_type": "Other"}', "declares 'Other'"),
+            ("{oops", ATTRS_KEY),
+            ("[1]", "not a mapping"),
+        ],
+    )
+    def test_attributes_this_cannot_read(self, regions, stated, message, tmp_path):
+        """Attributes this cannot read are refused."""
+        path = tmp_path / "picks.parquet"
+        meta = {DIMS_KEY: json.dumps(DIMS), ATTRS_KEY: stated}
+        write_parquet(regions.annotations, path, meta)
+        with pytest.raises(InvalidAnnotationError, match=message):
+            dc.annotations(path)
 
     def test_kinds_a_csv_would_lose(self, mixed, tmp_path):
         """A column with no one type is written as documents, not as text."""

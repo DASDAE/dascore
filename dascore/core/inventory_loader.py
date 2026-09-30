@@ -443,43 +443,11 @@ _TABLES: Mapping[str, _Table] = {
 _CSV_SUFFIX = ".csv"
 _TABLES_BY_FOLD = {x.casefold(): x for x in _TABLES}
 
-# Names this format used to read, and what reads them now. A directory
-# written before a rename is not a crew's own file which owes this format
-# nothing -- it is this format's own former spelling, and a reader which
-# shrugged at it would drop data the author believes is in the inventory.
-# The document doors already refuse the same fact, so this is what keeps
-# one stored inventory from breaking two different ways.
-_RETIRED_TABLES = {"annotations": "labels"}
-
 # The columns of geometry.csv which are not columns of the segment: the one
 # naming it and the one placing each row along it. Read off the registry so
 # the headers and the fields they fill cannot drift apart.
 _GEOMETRY_STRUCTURAL = frozenset({"name", "distance"})
 assert _GEOMETRY_STRUCTURAL == {_TABLES["geometry"].group, _TABLES["geometry"].order}
-
-# Columns this format used to read, by the table which read them. A file
-# written before a rename is this format's own former spelling, so it is
-# told what to write instead rather than having the column reported as a
-# field the model has never heard of.
-_RETIRED_COLUMNS = {
-    "optical_components": {
-        "sequence": (
-            "components state distance_min and distance_max, which say "
-            "where each one is without being counted through. Drop the "
-            "column."
-        ),
-        "optical_length": (
-            "a component's length is the span between its distance_min "
-            "and distance_max, which place it as well. State those."
-        ),
-    },
-    "geometry": {
-        "segment": (
-            "the column naming a segment is now name, which is the field "
-            "it fills. Rename the column."
-        )
-    },
-}
 
 
 def _object_rows(frame: pd.DataFrame, table: _Table, path: Path) -> list[dict]:
@@ -720,17 +688,11 @@ def _refuse_near_miss(stem: str, child: Path, model) -> None:
     """
     Refuse a table stem that resembles a misplaced or misspelled track table.
 
-    Reject retired table names, valid table names unsupported by this model, and
-    close matches to this model's actual table attributes. Matching is case-folded
-    and deliberately strict to avoid treating unrelated field files as format errors.
+    Reject valid table names unsupported by this model, and close matches to this
+    model's actual table attributes. Matching is case-folded and deliberately strict
+    to avoid treating unrelated field files as format errors.
     """
     folded = stem.casefold()
-    if (now := _RETIRED_TABLES.get(folded)) is not None:
-        msg = (
-            f"{_quote(child)} names {stem}, which this format now reads as "
-            f"{now}{_CSV_SUFFIX}. Rename it: what it holds are {now}."
-        )
-        raise InvalidInventoryError(msg)
     tables = {x.casefold(): x for x in set(model.model_fields) & set(_TABLES)}
     if (elsewhere := _TABLES_BY_FOLD.get(folded)) and folded not in tables:
         msg = (
@@ -807,26 +769,6 @@ def _load_table(path: Path, table: _Table, stem: str, crs):
         raise InvalidInventoryError(str(error)) from error
 
 
-def _refuse_retired_columns(frame: pd.DataFrame, stem: str, path: Path) -> None:
-    """
-    Explain a column this format used to read, rather than shrugging.
-
-    A file written before a rename is this format's own former spelling,
-    not a crew's own file which owes it nothing, so it is told what to
-    write instead. Without this a dropped column reports as a field the
-    model has never heard of, and a renamed one as the column now missing.
-    """
-    retired = _RETIRED_COLUMNS.get(stem, {})
-    for column in frame.columns:
-        if (advice := retired.get(str(column))) is None:
-            continue
-        msg = (
-            f"{_quote(path)} states {column}, which this format no longer "
-            f"reads: {advice}"
-        )
-        raise InvalidInventoryError(msg)
-
-
 def _read_track_table(path: Path, table: _Table, stem: str, crs):
     """Read one track table, in the table utilities' own error vocabulary."""
     frame = read_table(path, what="no track")
@@ -841,7 +783,6 @@ def _read_track_table(path: Path, table: _Table, stem: str, crs):
     # are both none of its business. A table of nothing else keeps its
     # rows, and is refused by the columns it then fails to state.
     frame = drop_private_columns(frame)
-    _refuse_retired_columns(frame, stem, path)
     units: Mapping[str, str] = {}
     if stem == "geometry":
         frame, units = _geometry_columns(frame, crs, path)
