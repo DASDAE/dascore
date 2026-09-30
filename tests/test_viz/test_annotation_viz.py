@@ -140,6 +140,8 @@ class TestStyle:
         assert line.get_path_effects()[0]._gc["linewidth"] == 5
         assert polygon.get_alpha() == 0.9
         assert shapes.viz.plot(linewidth=None).lines
+        (line, *_) = shapes.viz.plot(linewidth=0).lines
+        assert line.get_path_effects()[0]._gc["linewidth"] == 0
 
     def test_kind_legend(self, shapes):
         """Without a color column, two kinds or more are named in a legend."""

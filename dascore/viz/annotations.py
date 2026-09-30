@@ -199,8 +199,9 @@ def plot(
         """The style of an artist for a row index or a feature id."""
         ink = _INK if color is None or by_color else color
         out: dict[str, Any] = {"color": ink, **style}
-        width = float(out.get("linewidth") or plt.rcParams["lines.linewidth"])
-        halo = pe.withStroke(linewidth=width + 2, foreground="white")
+        width = out.get("linewidth")
+        width = float(plt.rcParams["lines.linewidth"] if width is None else width)
+        halo = pe.withStroke(linewidth=width + 2 if width else 0, foreground="white")
         out.setdefault("path_effects", [halo])
         if color_of is not None and (value := color_of(where)) is not None:
             out["color"] = colors[value]
