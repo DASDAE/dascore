@@ -62,10 +62,11 @@ def patch_to_xarray(patch: PatchType, lazy_coords: bool | Collection[str] = Fals
     -----
     A lazy coordinate is the patch's own coordinate, so it converts back exactly,
     exact sampling grid included; a one-sample materialized coordinate cannot
-    retain its step. xarray aligns a lazy index only with lazy indexes: combining
-    a lazy result with an array whose index is materialized, or reindexing it to
-    new labels, raises an AlignmentError. Materialized labels, the default, cost
-    8 bytes a sample along each dimension, which beside a patch's data is little.
+    retain its step. Combining a lazy result with an array whose index is
+    materialized raises an AlignmentError when the labels differ, and before
+    xarray 2026.9 even when they agree; so does reindexing it to new labels.
+    Materialized labels, the default, cost 8 bytes a sample along each
+    dimension, which beside a patch's data is little.
 
     Examples
     --------
