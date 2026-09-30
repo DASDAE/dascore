@@ -3152,6 +3152,15 @@ class TestChunkFillValue:
         assert len(coord) == 2001
         assert np.array_equal(self._fill_positions(merged), [1000])
 
+    def test_offlattice_fractional_hole_fills(self):
+        """A 3 kHz member resuming a ns off the lattice past a hole still fills."""
+        step = Fraction(1, 3000)
+        # one missing sample; the second start is a ns short of the lattice
+        merged, _ = self._two_members(step, round(step * 4 * 10**9) - 1, count=3)
+        coord = merged.get_coord("time")
+        assert coord.evenly_sampled and coord.step_exact == step
+        assert np.array_equal(self._fill_positions(merged), [3])
+
     def test_infinite_tolerance_fills_every_hole(self, gapped_spool):
         """No boundary is a gap, so no hole is too wide to fill."""
         merged = gapped_spool.chunk(time=None, tolerance=np.inf, fill_value=np.nan)[0]

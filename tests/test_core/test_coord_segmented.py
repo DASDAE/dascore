@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pickle
 import warnings
+from fractions import Fraction
 
 import numpy as np
 import pandas as pd
@@ -584,6 +585,23 @@ class TestSimplifyAndSnap:
             get_coord(start=10.0, stop=20.2, step=1.02),
         )
         assert coord.fuse(0.5, keep_step=True).evenly_sampled
+
+    @pytest.mark.parametrize(
+        ("rate", "seam_ns"), [(3000, 666_666), (1024, 1_953_124), (6000, 333_334)]
+    )
+    def test_keep_step_leaves_offlattice_fractional_hole(self, rate, seam_ns):
+        """A fractional grid resuming a ns off its lattice past a hole stays as is."""
+        step = Fraction(1, rate)
+        t0 = np.datetime64("2020-01-01T00:00:00")
+        first = get_coord(start=t0, step=step, shape=(4,))
+        # about two steps on from the (floored) last label, off the lattice
+        seam = np.timedelta64(seam_ns, "ns")
+        coord = concat_coords(
+            first, get_coord(start=first.values[-1] + seam, step=step, shape=(4,))
+        )
+        out = coord.fuse(None, keep_step=True)
+        assert out.runs_count == 2
+        assert np.array_equal(out.values, coord.values)
 
     def test_simplify_base_coord_noop(self):
         """Other coords return themselves from fuse."""

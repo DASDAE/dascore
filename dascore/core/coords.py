@@ -3553,6 +3553,9 @@ def _runs_step(runs, declared, dtype, sources):
                 msg = "A declared step needs one-dimensional, monotonic values."
                 raise CoordError(msg)
         list(_skips(runs, step, dtype, sources))
+        # a shared step is kept only where it could also be declared
+        if not strict:
+            _check_grid_spacings(runs, step, dtype)
     except CoordError:
         if strict:
             raise
