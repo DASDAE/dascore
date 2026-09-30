@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import ArraySource, FiberIO, H5ArrayMixin
+from dascore.io import FiberIO, H5ArrayMixin
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import (
@@ -23,22 +23,12 @@ class DASHDF5(H5ArrayMixin, FiberIO):
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
-        version_str = _get_cf_version_str(resource)
-        if version_str:
-            return version_str
-        return None
+        return _get_cf_version_str(resource) or None
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
     ) -> list[dc.PatchMeta]:
         """Get metadata from file."""
         coords = _get_cf_coords(resource, snap=snap)
-        attrs = _get_cf_attrs(resource, coords)
-        return [
-            dc.PatchMeta(
-                attrs=attrs,
-                coords=coords,
-                dtype=str(resource["das"].dtype),
-                source=ArraySource(key=resource["das"].name),
-            )
-        ]
+        attrs = _get_cf_attrs(resource)
+        return self._dataset_meta(attrs, coords, resource["das"])

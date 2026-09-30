@@ -618,14 +618,6 @@ class TestSavingOverASet:
         assert not (directory / "bases.json").exists()
         assert dc.annotations(directory) == regions
 
-    def test_a_retired_vertices_table_is_superseded(self, regions, tmp_path):
-        """Saving over an old set clears its vertices table, so it reads back."""
-        directory = regions.io.save(tmp_path / "picks")
-        (directory / "vertices.csv").write_text("id,seq,distance\na,0,1.0\n")
-        regions.io.save(directory)
-        assert not (directory / "vertices.csv").exists()
-        assert dc.annotations(directory) == regions
-
     def test_a_hand_authored_yaml_is_superseded(self, tmp_path):
         """Saving a set read from YAML does not leave two attrs files."""
         directory = tmp_path / "picks"
@@ -804,19 +796,6 @@ class TestDeclaringDimensions:
         with pytest.raises(InvalidAnnotationError, match="Extra inputs"):
             dc.annotations(directory)
 
-    @pytest.mark.parametrize(
-        "field, value, now",
-        [("history", ["decimate"], "data_id"), ("columns", {}, "annotation_columns")],
-    )
-    def test_a_retired_attrs_field(self, regions, tmp_path, field, value, now):
-        """A set written with a retired field names what replaced it."""
-        directory = regions.io.save(tmp_path / "picks")
-        document = json.loads((directory / "attrs.json").read_text())
-        document[field] = value
-        (directory / "attrs.json").write_text(json.dumps(document))
-        with pytest.raises(InvalidAnnotationError, match=f"{field}.*{now}"):
-            dc.annotations(directory)
-
     def test_a_directory_which_states_them_refuses_others(self, regions, tmp_path):
         """Reading the cells against other dimensions would type them
         differently and build a set which is not the one stored.
@@ -928,12 +907,11 @@ class TestTheTables:
         with pytest.raises(InvalidAnnotationError, match="states features more than"):
             dc.annotations(directory)
 
-    @pytest.mark.parametrize("name", ["feature.csv", "vertices.csv"])
-    def test_a_stray_table(self, regions, tmp_path, name):
-        """A near-miss, or the retired vertices table, raises rather than hides."""
+    def test_a_stray_table(self, regions, tmp_path):
+        """A near-miss table raises rather than hides."""
         directory = regions.io.save(tmp_path / "picks")
-        (directory / name).write_text("id,seq\n")
-        with pytest.raises(InvalidAnnotationError, match=name.replace(".", r"\.")):
+        (directory / "feature.csv").write_text("id,seq\n")
+        with pytest.raises(InvalidAnnotationError, match=r"feature\.csv"):
             dc.annotations(directory)
 
     def test_bases_which_are_not_json(self, with_features, tmp_path):
@@ -2180,13 +2158,12 @@ class TestParquet:
         ("stated", "message"),
         [
             ('{"object_type": "Other"}', "declares 'Other'"),
-            ('{"history": []}', "to_parquet"),
             ("{oops", ATTRS_KEY),
             ("[1]", "not a mapping"),
         ],
     )
     def test_attributes_this_cannot_read(self, regions, stated, message, tmp_path):
-        """Attributes this cannot read, or an earlier layout wrote, are refused."""
+        """Attributes this cannot read are refused."""
         path = tmp_path / "picks.parquet"
         meta = {DIMS_KEY: json.dumps(DIMS), ATTRS_KEY: stated}
         write_parquet(regions.annotations, path, meta)

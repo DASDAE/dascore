@@ -1081,15 +1081,21 @@ def _paired_hook(fiber_io: FiberIO, hook: str) -> Callable:
 
 class H5ArrayMixin:
     """
-    Slice a single-patch HDF5 format's array straight out of its dataset.
+    Describe and slice a single-patch HDF5 format's array from its dataset.
 
-    Mix into a reader whose `get_metadata` names its data with
-    `ArraySource(key=<dataset>.name)`, listing this class before `FiberIO`
-    in the bases.
+    List this class before `FiberIO` in the bases. `get_metadata` must name
+    its data with `ArraySource(key=<dataset>.name)`, as `_dataset_meta` does.
     """
 
     # Supplied by the FiberIO this is mixed into.
     get_metadata: Callable[..., list[dc.PatchMeta]]
+
+    @staticmethod
+    def _dataset_meta(attrs, coords, dataset: H5pyDataset) -> list[dc.PatchMeta]:
+        """Return a one-item PatchMeta list whose array is `dataset`."""
+        source = ArraySource(key=dataset.name)
+        dtype = str(dataset.dtype)
+        return [dc.PatchMeta(attrs=attrs, coords=coords, dtype=dtype, source=source)]
 
     def read_array(
         self, resource: H5Reader, windows: windows_type = (), key: str = ""

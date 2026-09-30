@@ -174,9 +174,7 @@ def _get_g1_h5_base_coords(resource, dims, extra_coords=None, snap=True):
 
     def _coord(values, name, units=None):
         """Return a tolerant or exact coordinate from stored values."""
-        if should_snap(snap, name):
-            return dc.get_coord(data=values, units=units)
-        return get_coord(data=values, units=units, snap=False)
+        return get_coord(data=values, units=units, snap=should_snap(snap, name))
 
     extra_coords = {} if extra_coords is None else extra_coords
     starts = resource["start_times"][...]

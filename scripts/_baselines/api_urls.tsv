@@ -4769,7 +4769,6 @@ dascore.utils.array_api.NumpyFallbackWarning	/api/dascore/warnings/NumpyFallback
 dascore.utils.array_api.array_namespace	/api/dascore/utils/array_api/array_namespace.qmd
 dascore.utils.array_api.asarray_like	/api/dascore/utils/array_api/asarray_like.qmd
 dascore.utils.array_api.backend_name	/api/dascore/utils/array_api/backend_name.qmd
-dascore.utils.array_api.can_nan_reduce	/api/dascore/utils/array_api/can_nan_reduce.qmd
 dascore.utils.array_api.is_array	/api/dascore/compat/is_array.qmd
 dascore.utils.array_api.is_foreign	/api/dascore/utils/array_api/is_foreign.qmd
 dascore.utils.array_api.is_numpy	/api/dascore/utils/array_api/is_numpy.qmd
@@ -5170,7 +5169,7 @@ dascore.utils.pd.PatchAttrs.new	/api/dascore/models/base/DascoreBaseModel/new.qm
 dascore.utils.pd.PatchAttrs.update	/api/dascore/core/attrs/PatchAttrs/update.qmd
 dascore.utils.pd.adjust_segments	/api/dascore/utils/pd/adjust_segments.qmd
 dascore.utils.pd.dataframe_to_patch	/api/dascore/utils/pd/dataframe_to_patch.qmd
-dascore.utils.pd.drop_private_columns	/api/dascore/utils/pd/drop_private_columns.qmd
+dascore.utils.pd.drop_private_columns	/api/dascore/utils/tables/drop_private_columns.qmd
 dascore.utils.pd.drop_selector_names	/api/dascore/utils/pd/drop_selector_names.qmd
 dascore.utils.pd.fill_defaults_from_pydantic	/api/dascore/utils/pd/fill_defaults_from_pydantic.qmd
 dascore.utils.pd.filter_df	/api/dascore/utils/pd/filter_df.qmd
@@ -7389,8 +7388,6 @@ docs/api/dascore/utils/array_api/asarray_like	/api/dascore/utils/array_api/asarr
 docs/api/dascore/utils/array_api/asarray_like.qmd	/api/dascore/utils/array_api/asarray_like.qmd
 docs/api/dascore/utils/array_api/backend_name	/api/dascore/utils/array_api/backend_name.qmd
 docs/api/dascore/utils/array_api/backend_name.qmd	/api/dascore/utils/array_api/backend_name.qmd
-docs/api/dascore/utils/array_api/can_nan_reduce	/api/dascore/utils/array_api/can_nan_reduce.qmd
-docs/api/dascore/utils/array_api/can_nan_reduce.qmd	/api/dascore/utils/array_api/can_nan_reduce.qmd
 docs/api/dascore/utils/array_api/is_foreign	/api/dascore/utils/array_api/is_foreign.qmd
 docs/api/dascore/utils/array_api/is_foreign.qmd	/api/dascore/utils/array_api/is_foreign.qmd
 docs/api/dascore/utils/array_api/is_numpy	/api/dascore/utils/array_api/is_numpy.qmd
@@ -7851,8 +7848,6 @@ docs/api/dascore/utils/pd/adjust_segments	/api/dascore/utils/pd/adjust_segments.
 docs/api/dascore/utils/pd/adjust_segments.qmd	/api/dascore/utils/pd/adjust_segments.qmd
 docs/api/dascore/utils/pd/dataframe_to_patch	/api/dascore/utils/pd/dataframe_to_patch.qmd
 docs/api/dascore/utils/pd/dataframe_to_patch.qmd	/api/dascore/utils/pd/dataframe_to_patch.qmd
-docs/api/dascore/utils/pd/drop_private_columns	/api/dascore/utils/pd/drop_private_columns.qmd
-docs/api/dascore/utils/pd/drop_private_columns.qmd	/api/dascore/utils/pd/drop_private_columns.qmd
 docs/api/dascore/utils/pd/drop_selector_names	/api/dascore/utils/pd/drop_selector_names.qmd
 docs/api/dascore/utils/pd/drop_selector_names.qmd	/api/dascore/utils/pd/drop_selector_names.qmd
 docs/api/dascore/utils/pd/fill_defaults_from_pydantic	/api/dascore/utils/pd/fill_defaults_from_pydantic.qmd

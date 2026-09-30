@@ -228,7 +228,7 @@ class TestChunkPlanDF:
         df.loc[3, "time_min"] = dc.to_datetime64("NaT")
         expected_start = df.loc[4, "time_min"]
         plan = build_chunk_plan(
-            df, keep_partial=True, missing_dim="drop", time=dc.to_timedelta64(15)
+            df, keep_partial=True, on_missing_dim="drop", time=dc.to_timedelta64(15)
         )
         assert expected_start in set(plan.outputs["time_min"])
 

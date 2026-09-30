@@ -174,7 +174,7 @@ def _get_dist_coord(header):
     return coord
 
 
-def _get_attr_dict(header, extras=None):
+def _get_attr_dict(header):
     """
     Extract info from sintela headers which will be used to create patch Attrs.
     """
@@ -185,7 +185,6 @@ def _get_attr_dict(header, extras=None):
         gauge_length=header["gauge_length"],
         gps_status=header["gps_status"],
     )
-    out.update(extras if extras is not None else {})
     return out
 
 
@@ -226,10 +225,10 @@ def _read_sample_range(fid, header, start=0, stop=None):
     return data[offset : offset + (stop - start)]
 
 
-def _get_attrs_coords_header(rid, attr_class=PatchAttrs, extras=None):
+def _get_attrs_coords_header(rid, attr_class=PatchAttrs):
     """Get Patch attributes and coordinates."""
     header = _get_complete_header(rid)
     coords = {"time": _get_time_coord(header), "distance": _get_dist_coord(header)}
     cm = get_coord_manager(coords=coords, dims=DIMS)
-    attrs = _get_attr_dict(header, extras)
+    attrs = _get_attr_dict(header)
     return attr_class(**attrs), cm, header

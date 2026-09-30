@@ -658,8 +658,8 @@ def spool_to_xarray(
                     # The same construction chunk merges by: concatenate
                     # the member coordinates truth-preservingly, then
                     # absorb the seams which are sub-sample jitter. A
-                    # seam past tolerance, or a hole of whole missing
-                    # samples, stays segmented here exactly as there.
+                    # seam past tolerance, or one two steps wide or
+                    # more, stays segmented here exactly as there.
                     coord = concat_coords(*member_coords).fuse(
                         GapTolerance.from_user(tolerance, dim), keep_step=True
                     )

@@ -624,11 +624,6 @@ class TestComponentPlacement:
         assert [x.name for x in path.optical_components] == ["a", "s", "b"]
         assert path.check() is path
 
-    def test_the_removed_origin_explains_itself(self):
-        """A path written against the old layout says what to write now."""
-        with pytest.raises(ValidationError, match="no longer takes start_distance"):
-            inv.OpticalPath(start_distance=100.0)
-
     def test_extent_survives_a_copy_which_skips_validation(self):
         """`model_copy` skips the ordering validator; the span must hold.
 
@@ -2531,16 +2526,6 @@ class TestPrReviewFindings:
         """A nan interval would silently poison every resolved distance."""
         with pytest.raises(ValidationError):
             inv.Acquisition(code="RAW", spatial_interval=np.nan)
-
-    @pytest.mark.parametrize("name", ["distance_min", "start_distance"])
-    def test_removed_origin_explains_itself(self, name):
-        """An inventory written against the affine form says what to do.
-
-        Both spellings are refused: the field's old name, and the name it
-        would carry now.
-        """
-        with pytest.raises(ValidationError, match=f"no longer takes {name}"):
-            inv.Acquisition(code="RAW", **{name: 100.0})
 
     def test_duplicate_channel_identity_raises(self):
         """Channel (location_code, code) names a stream; it must be unique."""

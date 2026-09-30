@@ -28,20 +28,16 @@ class ProdMLV2_0(FiberIO):  # noqa
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
-        version_str = _get_prodml_version_str(resource)
-        if version_str:
-            return version_str
-        return None
+        return _get_prodml_version_str(resource) or None
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
     ) -> list[dc.PatchMeta]:
         """Scan a prodml file, return summary information about the file's contents."""
         out: list[dc.PatchMeta] = []
-        for attr, coords, source_patch_key in _yield_prodml_attrs_coords(
+        for attrs, coords, source_patch_key in _yield_prodml_attrs_coords(
             resource, snap=snap
         ):
-            attrs = attr
             out.append(
                 dc.PatchMeta(
                     attrs=attrs,

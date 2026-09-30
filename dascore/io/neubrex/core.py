@@ -10,7 +10,7 @@ import dascore as dc
 import dascore.io.neubrex.utils_das as das_utils
 import dascore.io.neubrex.utils_rfs as rfs_utils
 from dascore.constants import snap_type
-from dascore.io import ArraySource, FiberIO, H5ArrayMixin
+from dascore.io import FiberIO, H5ArrayMixin
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
 
@@ -50,9 +50,7 @@ class NeubrexRFSV1(H5ArrayMixin, FiberIO):
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
-        if rfs_utils._is_neubrex(resource):
-            return self.version
-        return None
+        return self.version if rfs_utils._is_neubrex(resource) else None
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
@@ -60,14 +58,7 @@ class NeubrexRFSV1(H5ArrayMixin, FiberIO):
         """Get the attributes of a resource belong to this type."""
         cm = rfs_utils._get_coord_manager(resource, snap)
         attrs = NeubrexRFSPatchAttrs.from_dict(rfs_utils._get_attr_dict(resource))
-        return [
-            dc.PatchMeta(
-                attrs=attrs,
-                coords=cm,
-                dtype=str(resource["data"].dtype),
-                source=ArraySource(key=resource["data"].name),
-            )
-        ]
+        return self._dataset_meta(attrs, cm, resource["data"])
 
 
 class NeubrexDASV1(H5ArrayMixin, FiberIO):
@@ -81,9 +72,7 @@ class NeubrexDASV1(H5ArrayMixin, FiberIO):
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
-        if das_utils._is_neubrex(resource):
-            return self.version
-        return None
+        return self.version if das_utils._is_neubrex(resource) else None
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
@@ -92,11 +81,4 @@ class NeubrexDASV1(H5ArrayMixin, FiberIO):
         acoustic = resource["Acoustic"]
         cm = das_utils._get_coord_manager(acoustic)
         attrs = NeubrexDASPatchAttrs.from_dict(das_utils._get_attr_dict(acoustic))
-        return [
-            dc.PatchMeta(
-                attrs=attrs,
-                coords=cm,
-                dtype=str(acoustic.dtype),
-                source=ArraySource(key=acoustic.name),
-            )
-        ]
+        return self._dataset_meta(attrs, cm, acoustic)

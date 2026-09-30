@@ -82,7 +82,7 @@ def _read_coord(fid, offset, count, snap, start_time=None):
     return get_coord(data=values, snap=False)
 
 
-def _get_patch_attrs(fid, extras=None, *, snap=True):
+def _get_patch_attrs(fid, *, snap=True):
     """Extract metadata from the header followed by distance and time arrays.
 
     The six float32 header fields are the channel count, sample count,
@@ -108,5 +108,5 @@ def _get_patch_attrs(fid, extras=None, *, snap=True):
     coord_manager = get_coord_manager(
         {"time": time, "distance": dist}, dims=("distance", "time")
     )
-    attrs = dc.PatchAttrs(data_type=data_type, **({} if extras is None else extras))
+    attrs = dc.PatchAttrs(data_type=data_type)
     return attrs, coord_manager, (data_offset, measurement_count, sensor_num)

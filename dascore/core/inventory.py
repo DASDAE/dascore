@@ -1072,28 +1072,6 @@ class Acquisition(TimeRangedModel):
         description="True when the interrogator is attached to both path ends.",
     )
 
-    @model_validator(mode="before")
-    @classmethod
-    def _reject_start_distance(cls, data):
-        """Explain the removed affine form rather than 'extra inputs'.
-
-        Both spellings are refused: `start_distance` is what the field was
-        called when it existed, and `distance_min` is what it would be
-        called now, so neither reads as an origin the acquisition honors.
-        """
-        for name in ("distance_min", "start_distance"):
-            if not isinstance(data, Mapping) or name not in data:
-                continue
-            msg = (
-                f"Acquisition no longer takes {name}; the distance_map "
-                "is the one channel-resolution mechanism. Write "
-                f"{name}: {data[name]} as distance_map: "
-                f"{{channel: [0], distance: [{data[name]}]}}, which "
-                "states the same origin and takes spatial_interval as its slope."
-            )
-            raise InvalidInventoryError(msg)
-        return data
-
     def channel_to_distance(self, values, axis: str | None = None) -> np.ndarray:
         """
         Map channel-like patch coordinates onto optical path distance.
@@ -1279,20 +1257,6 @@ class OpticalPath(TimeRangedModel):
     """
 
     name: str = Field(default="", description="Human-readable optical path name.")
-
-    @model_validator(mode="before")
-    @classmethod
-    def _reject_start_distance(cls, data):
-        """Explain the removed origin rather than 'extra inputs'."""
-        if isinstance(data, Mapping) and "start_distance" in data:
-            msg = (
-                "OpticalPath no longer takes start_distance; its components "
-                "carry absolute distances, so the path spans whatever they "
-                "do. Give the first component a distance_min of "
-                f"{data['start_distance']} instead."
-            )
-            raise InvalidInventoryError(msg)
-        return data
 
     location_code: LocationCodeStr = Field(
         default="",

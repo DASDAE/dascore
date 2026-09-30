@@ -56,7 +56,6 @@ from dascore.io.utils import (
     convert_attr_units,
     resolve_keyed_source,
     slice_dataset,
-    step_from_interval,
     step_from_rate,
     windows_to_slices,
 )
@@ -2397,12 +2396,6 @@ class TestStepFromRate:
         # A float32 999.9 is 999.9000244; nothing is claimed for it.
         assert isinstance(step_from_rate(np.float32(999.9)), np.timedelta64)
         assert step_from_rate(999.9) == Fraction(10, 9999)
-
-    def test_interval(self):
-        """Simple intervals give exact steps."""
-        assert step_from_interval(0.004) == Fraction(1, 250)
-        assert step_from_interval(1 / 3000) == Fraction(1, 3000)
-        assert isinstance(step_from_interval(0.0012345678912345), np.timedelta64)
 
     def test_nonpositive_falls_back(self):
         """A non-positive rate is not a grid."""

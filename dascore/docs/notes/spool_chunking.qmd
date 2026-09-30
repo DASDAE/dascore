@@ -73,16 +73,16 @@ assert merged.get_contents()["data_type"].iloc[0] == "velocity"
 assert merged[0].attrs.data_type == "velocity"
 ```
 
-Chunking is defined on dimensions: a patch that lacks the chunked dimension — including one that carries the name only as a *non-dimensional coordinate*, which cannot be trimmed or merged along it — raises by default, and `missing_dim="drop"` excludes it instead. Losing patches silently would be data loss, so it requires the explicit opt-in.
+Chunking is defined on dimensions: a patch that lacks the chunked dimension — including one that carries the name only as a *non-dimensional coordinate*, which cannot be trimmed or merged along it — raises by default, and `on_missing_dim="drop"` excludes it instead. Losing patches silently would be data loss, so it requires the explicit opt-in.
 
 ```{python}
 import pytest
 from dascore.exceptions import ChunkError
 
 no_time = [dc.get_example_patch().mean("time") for _ in range(2)]
-with pytest.raises(ChunkError, match="missing_dim"):
+with pytest.raises(ChunkError, match="on_missing_dim"):
     dc.spool(no_time).chunk(time=None)
-assert len(dc.spool(no_time).chunk(time=None, missing_dim="drop")) == 0
+assert len(dc.spool(no_time).chunk(time=None, on_missing_dim="drop")) == 0
 
 # A name carried only as a non-dimensional coordinate counts as missing.
 base = dc.get_example_patch()
