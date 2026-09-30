@@ -1811,7 +1811,7 @@ class Spool(NodeRepr, NamespaceOwner):
         tolerance: float | Quantity | np.timedelta64 = 1.5,
         conflict: CONFLICT = "raise",
         group: str | Sequence[str] | None = None,
-        missing_dim: Literal["raise", "drop"] = "raise",
+        on_missing_dim: Literal["raise", "drop"] = "raise",
         fill_value=None,
         on_incomplete: WARN_LEVELS = "raise",
         **kwargs,
@@ -1850,7 +1850,7 @@ class Spool(NodeRepr, NamespaceOwner):
             tolerance=tolerance,
             conflict=conflict,
             group=group,
-            missing_dim=missing_dim,
+            on_missing_dim=on_missing_dim,
             fill_value=fill_value,
             on_incomplete=on_incomplete,
         )
@@ -1949,7 +1949,7 @@ class Spool(NodeRepr, NamespaceOwner):
         *,
         tolerance: float | Quantity | np.timedelta64 = 1.5,
         group: str | Sequence[str] | None = None,
-        missing_dim: Literal["raise", "drop"] = "drop",
+        on_missing_dim: Literal["raise", "drop"] = "drop",
     ) -> pd.DataFrame:
         """
         Return a dataframe with one row per gap along a dimension.
@@ -1977,7 +1977,7 @@ class Spool(NodeRepr, NamespaceOwner):
             so one attribute value can span several groups. A value
             nobody recorded is a value of its own, so a patch which never
             stated the attribute is not grouped with one which did.
-        missing_dim
+        on_missing_dim
             What to do with patches lacking `dim`: "drop" (the default)
             excludes them, "raise" refuses. Chunk defaults to "raise"
             because it must produce those patches; a report need not.
@@ -2027,7 +2027,7 @@ class Spool(NodeRepr, NamespaceOwner):
             dim,
             tolerance=tolerance,
             group=group,
-            missing_dim=missing_dim,
+            on_missing_dim=on_missing_dim,
         )
         return present_columns(out)
 
@@ -2037,7 +2037,7 @@ class Spool(NodeRepr, NamespaceOwner):
         *,
         tolerance: float | Quantity | np.timedelta64 = 1.5,
         group: str | Sequence[str] | None = None,
-        missing_dim: Literal["raise", "drop"] = "drop",
+        on_missing_dim: Literal["raise", "drop"] = "drop",
     ) -> pd.DataFrame:
         """
         Return a dataframe summarizing how complete the spool is.
@@ -2061,7 +2061,7 @@ class Spool(NodeRepr, NamespaceOwner):
             attribute value can span several rows. A value nobody
             recorded is a value of its own, so a patch which never
             stated the attribute is not grouped with one which did.
-        missing_dim
+        on_missing_dim
             What to do with patches lacking `dim`: "drop" (the default)
             excludes them, "raise" refuses.
 
@@ -2105,7 +2105,7 @@ class Spool(NodeRepr, NamespaceOwner):
             dim,
             tolerance=tolerance,
             group=group,
-            missing_dim=missing_dim,
+            on_missing_dim=on_missing_dim,
         )
         return present_columns(out)
 
@@ -2118,7 +2118,7 @@ class Spool(NodeRepr, NamespaceOwner):
         tolerance: float | Quantity | np.timedelta64 = 1.5,
         conflict: CONFLICT = "raise",
         group: str | Sequence[str] | None = None,
-        missing_dim: Literal["raise", "drop"] = "raise",
+        on_missing_dim: Literal["raise", "drop"] = "raise",
         fill_value=None,
         on_incomplete: WARN_LEVELS = "raise",
         **kwargs,
@@ -2161,7 +2161,7 @@ class Spool(NodeRepr, NamespaceOwner):
             `patch_kind_attrs`; unlike the default, explicitly passed names
             must exist on at least one patch. Dimensions and coordinate
             identities always partition implicitly.
-        missing_dim
+        on_missing_dim
             What to do when patches lack the chunked dimension: "raise"
             (default) or "drop" (exclude them from the output).
         on_incomplete
@@ -2252,7 +2252,7 @@ class Spool(NodeRepr, NamespaceOwner):
             tolerance=tolerance,
             conflict=conflict,
             group=group,
-            missing_dim=missing_dim,
+            on_missing_dim=on_missing_dim,
             fill_value=fill_value,
             on_incomplete=on_incomplete,
         )

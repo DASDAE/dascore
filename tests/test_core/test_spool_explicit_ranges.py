@@ -459,7 +459,9 @@ class TestExplicitChunk:
             dims=("time",),
         )
         with pytest.raises(ChunkError, match="source is empty"):
-            dc.spool(patch).chunk_plan(distance=np.array([[1, 3]]), missing_dim="drop")
+            dc.spool(patch).chunk_plan(
+                distance=np.array([[1, 3]]), on_missing_dim="drop"
+            )
         spool = dc.spool(_patch(np.arange(10)))
         with pytest.raises(ChunkError, match="no sampled position"):
             spool.chunk_plan(distance=np.array([[1.1, 1.9]]))

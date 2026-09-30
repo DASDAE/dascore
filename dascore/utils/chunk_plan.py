@@ -119,7 +119,7 @@ class ChunkPlan:
         The requested chunk length (None for merge mode).
     params
         Resolved parameters (group attrs, tolerances, overlap,
-        keep_partial, conflict, snap_coords, missing_dim) — recorded, not
+        keep_partial, conflict, snap_coords, on_missing_dim) — recorded, not
         referencing config.
     trim_dims
         Dimensions besides `dim` explicit windows trim (in `{dim}_min/max`).
@@ -652,17 +652,17 @@ def _partition_unit(df: pd.DataFrame, name: str, row: int) -> str:
     return "" if pd.isnull(unit) else str(unit)
 
 
-def _validate_missing_dim(missing_dim) -> None:
-    """Reject a missing_dim value that is neither policy."""
-    if missing_dim not in ("raise", "drop"):
-        msg = f"missing_dim must be 'raise' or 'drop', got {missing_dim!r}"
+def _validate_on_missing_dim(on_missing_dim) -> None:
+    """Reject an on_missing_dim value that is neither policy."""
+    if on_missing_dim not in ("raise", "drop"):
+        msg = f"on_missing_dim must be 'raise' or 'drop', got {on_missing_dim!r}"
         raise ParameterError(msg)
 
 
 def _prepare_relation(
     df: pd.DataFrame,
     name: str,
-    missing_dim: str,
+    on_missing_dim: str,
     dim_label: str = "chunk dimension",
     operation: str = "chunking",
 ) -> pd.DataFrame:
@@ -670,17 +670,17 @@ def _prepare_relation(
     Ready a flat relation for planning or reporting along ``name``.
 
     Attaches patch rows, re-spells compatible units, then applies the
-    `missing_dim` policy. Missing envelopes, and patches carrying the
+    `on_missing_dim` policy. Missing envelopes, and patches carrying the
     name only as a non-dimensional coordinate (spec 7 / D2), both count
     as missing: envelope presence is not enough, because auxiliary
     coordinates index their envelopes too but their patches cannot be
     trimmed or merged *along* the name.
 
     `dim_label` and `operation` word the error for the caller; a typo in
-    `missing_dim` raises here rather than silently taking the drop
+    `on_missing_dim` raises here rather than silently taking the drop
     branch, which would truncate exactly the report the user asked for.
     """
-    _validate_missing_dim(missing_dim)
+    _validate_on_missing_dim(on_missing_dim)
     min_name, max_name = f"{name}_min", f"{name}_max"
     df = _ensure_patch_row(df)
     df = _normalize_chunk_units(df, name)
@@ -693,7 +693,7 @@ def _prepare_relation(
     unusable = null_rows | not_a_dim
     if not unusable.any():
         return df
-    if missing_dim == "raise":
+    if on_missing_dim == "raise":
         bad = df.loc[unusable, "_patch_row"].tolist()
         rides = int((not_a_dim & ~null_rows).sum())
         detail = (
@@ -705,7 +705,7 @@ def _prepare_relation(
         msg = (
             f"{int(unusable.sum())} patch(es) lack the {dim_label} "
             f"{name!r}{detail} (patch rows {bad[:5]}...). Pass "
-            "missing_dim='drop' to exclude them."
+            "on_missing_dim='drop' to exclude them."
         )
         raise ChunkError(msg)
     return df[~unusable]
@@ -1288,7 +1288,7 @@ def _report_dim_columns(df: pd.DataFrame, name: str, carried) -> tuple[str, str,
     return columns
 
 
-def _report_preamble(df, name, group, missing_dim):
+def _report_preamble(df, name, group, on_missing_dim):
     """
     Resolve what both reports need before they can differ.
 
@@ -1298,7 +1298,7 @@ def _report_preamble(df, name, group, missing_dim):
     """
     group_attrs = _resolve_group_attrs(group, set(df.columns))
     names = _report_dim_columns(df, name, group_attrs)
-    df = _prepare_relation(df, name, missing_dim, "dimension", "gap reporting")
+    df = _prepare_relation(df, name, on_missing_dim, "dimension", "gap reporting")
     return df, group_attrs, _gap_carried_columns(df, name, group_attrs), names
 
 
@@ -1386,7 +1386,7 @@ def build_gap_frame(
     *,
     tolerance: float | Quantity | np.timedelta64 | GapTolerance = DEFAULT_TOLERANCE,
     group: str | Sequence[str] | None = None,
-    missing_dim: Literal["raise", "drop"] = "drop",
+    on_missing_dim: Literal["raise", "drop"] = "drop",
 ) -> pd.DataFrame:
     """
     Report every discontinuity along ``name`` in a flat patch relation.
@@ -1397,7 +1397,7 @@ def build_gap_frame(
     `{name}_min` is the last sample before the gap and `{name}_max` the
     first sample after it, so `gap_size` is their difference.
     """
-    df, group_attrs, carried, names = _report_preamble(df, name, group, missing_dim)
+    df, group_attrs, carried, names = _report_preamble(df, name, group, on_missing_dim)
     min_name, max_name, step_name = names
     tolerance = GapTolerance.from_user(tolerance, name)
     columns = [min_name, max_name, step_name, "gap_size", "group_id", *carried]
@@ -1426,7 +1426,7 @@ def build_coverage_frame(
     *,
     tolerance: float | Quantity | np.timedelta64 | GapTolerance = DEFAULT_TOLERANCE,
     group: str | Sequence[str] | None = None,
-    missing_dim: Literal["raise", "drop"] = "drop",
+    on_missing_dim: Literal["raise", "drop"] = "drop",
 ) -> pd.DataFrame:
     """
     Summarize how much of each cell's span along ``name`` holds data.
@@ -1437,7 +1437,7 @@ def build_coverage_frame(
     extent, `gap_total` the sum of its gaps, `covered` the rest, and
     `coverage` their ratio.
     """
-    df, group_attrs, carried, names = _report_preamble(df, name, group, missing_dim)
+    df, group_attrs, carried, names = _report_preamble(df, name, group, on_missing_dim)
     min_name, max_name, step_name = names
     tolerance = GapTolerance.from_user(tolerance, name)
     columns = [
@@ -1506,7 +1506,7 @@ def build_chunk_plan(
     tolerance: float | Quantity | np.timedelta64 | GapTolerance = 1.5,
     conflict: CONFLICT = "raise",
     group=None,
-    missing_dim: Literal["raise", "drop"] = "raise",
+    on_missing_dim: Literal["raise", "drop"] = "raise",
     fill_value=None,
     on_incomplete: WARN_LEVELS = "raise",
     _exact_coords=None,
@@ -1562,7 +1562,7 @@ def build_chunk_plan(
         if value <= zero:
             msg = "Chunk value must be greater than 0."
             raise ParameterError(msg)
-    _validate_missing_dim(missing_dim)
+    _validate_on_missing_dim(on_missing_dim)
     min_name, max_name = f"{name}_min", f"{name}_max"
     for dim in kwargs:
         if f"{dim}_min" not in df.columns and not df.empty:
@@ -1578,13 +1578,13 @@ def build_chunk_plan(
         tolerance=tolerance,
         fill_value=fill_value,
         conflict=conflict,
-        missing_dim=missing_dim,
+        on_missing_dim=on_missing_dim,
         group=_resolve_group_attrs(group, set(df.columns)),
         sampling_group_tolerance=dc.get_config().sampling_group_tolerance,
         on_incomplete=on_incomplete,
     )
     if not df.empty:
-        df = _prepare_relation(df, name, missing_dim)
+        df = _prepare_relation(df, name, on_missing_dim)
     if df.empty:
         if explicit is not None:
             _report_incomplete(
