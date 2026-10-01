@@ -513,6 +513,7 @@ class TestNanosecondRange:
             "1000 years",
             pd.Timedelta(np.timedelta64(200_000, "D")),
             np.array([300], dtype="timedelta64[Y]"),
+            np.array([2**62], dtype="timedelta64[2ns]"),
             np.array([530], dtype="datetime64[Y]"),
         ],
     )

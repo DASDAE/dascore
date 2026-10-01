@@ -39,6 +39,7 @@ _NS_PER_UNIT = {
     "s": 10**9,
     "ms": 10**6,
     "us": 10**3,
+    "ns": 1,  # only bounded with a multiplier, e.g. datetime64[2ns]
 }
 
 
@@ -62,8 +63,9 @@ def _as_ns(value, kind: str):
         value = value.astype("datetime64[D]")
     unit, count = np.datetime_data(value.dtype)
     # Numpy may wrap rather than raise when widening, so bound the count.
-    if unit in _NS_PER_UNIT:
-        limit = _MAX_NS // (_NS_PER_UNIT[unit] * count)
+    size = _NS_PER_UNIT.get(unit, 0) * count
+    if size > 1:
+        limit = _MAX_NS // size
         if np.ndim(value) == 0:  # python ints, much faster for one value
             ticks = int(value.view(np.int64))
             bad = ticks != -(2**63) and abs(ticks) > limit  # -2**63 is NaT
