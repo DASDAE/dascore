@@ -41,7 +41,10 @@ import inspect
 import numbers
 import sys
 import textwrap
+import warnings
 from contextvars import ContextVar
+from importlib.metadata import entry_points
+from pathlib import Path
 from types import FunctionType
 from typing import TYPE_CHECKING, Any, ClassVar, Self, overload
 
@@ -88,7 +91,9 @@ from dascore.utils.patch_registry import (
     is_default,
     patch_function_tag,
     register_patch_function,
+    resolve_patch_function,
 )
+from dascore.utils.plugins import KERNEL_GROUP
 
 if TYPE_CHECKING:
     from dascore.core.attrs import PatchAttrs
@@ -305,8 +310,11 @@ class PatchProcessor(DascoreBaseModel):
         backend, then `numpy_kernel` for NumPy or `kernel` for other arrays,
         with a NumPy fallback if needed, before moving up: a subclass
         which wrote its own kernel means it, and a backend kernel
-        registered against its parent must not answer for it.
+        registered against its parent must not answer for it. A backend
+        other than NumPy first loads its `dascore.kernels` entry points, once.
         """
+        if backend != "numpy":
+            _load_kernel_plugin(backend)
         for klass in cls.__mro__:
             contents = klass.__dict__
             if (found := contents.get("_kernels", {}).get(backend)) is not None:
@@ -396,8 +404,11 @@ class PatchProcessor(DascoreBaseModel):
 
     def _run(self, patch: dc.PatchMeta, record: bool) -> dc.PatchMeta:
         """Run the operation; `record=False` writes no history or ids."""
-        self.check(patch)
         meta = patch.drop_data() if isinstance(patch, dc.Patch) else patch
+        # Before the check, which asks whether the class has any kernel.
+        if meta.backend != "numpy":
+            _load_kernel_plugin(meta.backend)
+        self.check(patch)
         out, plan = self.get_metadata(meta)
         plan = _checked_plan(self, plan)
         # Resolved from the metadata, so an operation with no kernel is
@@ -659,9 +670,9 @@ def check_patch_listings(patch_class, meta_class) -> None:
         _check_patch_listing(cls)
 
 
-def register_kernel(cls: type[PatchProcessor], backend: str):
+def register_kernel(cls: type[PatchProcessor] | str, backend: str | tuple[str, ...]):
     """
-    Say that a function is how an operation runs on one array backend.
+    Say that a function is how an operation runs on given array backends.
 
     Used as a decorator. The kernel has the class's own `kernel` signature,
     `(processor, data, **plan)`, and returns an array.
@@ -669,33 +680,51 @@ def register_kernel(cls: type[PatchProcessor], backend: str):
     Parameters
     ----------
     cls
-        The processor the kernel belongs to.
+        The processor the kernel belongs to, or its registry tag.
     backend
         The backend it is for, as
         [`backend_name`](`dascore.utils.array_api.backend_name`) spells
-        it -- "numpy", "cupy", "dask".
+        it -- "numpy", "cupy", "dask" -- or a tuple of them.
     """
+    owner = _processor_named(cls) if isinstance(cls, str) else cls
+    backends = (backend,) if isinstance(backend, str) else tuple(backend)
 
     def decorate(func):
         """Record the kernel against the class and hand it back."""
-        previous = cls.__dict__.get("_kernels")
-        cls._kernels = {**cls.__dict__.get("_kernels", {}), backend: func}
-        try:
-            # A class body which wrote no kernel looked metadata-only
-            # when its method was checked; this kernel says otherwise, for
-            # the class and for everything which inherits it.
-            _recheck_for_kernel(cls)
-        except Exception:
-            # Refused, so the class is left as it was rather than
-            # holding a kernel whose method is on the wrong class.
-            if previous is None:
-                del cls._kernels
-            else:
-                cls._kernels = previous
-            raise
+        # A class body which wrote no kernel looked metadata-only when its
+        # method was checked; this kernel says otherwise, for the class and
+        # for everything which inherits it. Refused before anything changes.
+        _recheck_for_kernel(owner)
+        kernels = owner.__dict__.get("_kernels", {})
+        owner._kernels = {**kernels, **dict.fromkeys(backends, func)}
         return func
 
     return decorate
+
+
+def _processor_named(name: str) -> type[PatchProcessor]:
+    """Return the processor a registry tag names."""
+    owner = getattr(resolve_patch_function(name), "__processor__", None)
+    if owner is None:
+        msg = f"{name!r} is a patch function, not a PatchProcessor, so takes no kernel."
+        raise ParameterError(msg)
+    return owner
+
+
+@functools.cache
+def _load_kernel_plugin(backend: str) -> None:
+    """Load every `dascore.kernels` entry point named for a backend, once."""
+    for entry_point in entry_points(group=KERNEL_GROUP, name=backend):
+        # The error is caught inside the cache, so a broken plugin warns once.
+        try:
+            entry_point.load()
+        except Exception as error:
+            msg = (
+                f"Kernel plugin {entry_point.value!r} for backend {backend!r} "
+                f"failed to load, so its kernels are not used: {error!r}"
+            )
+            prefix = str(Path(__file__).parent.parent)
+            warnings.warn(msg, UserWarning, skip_file_prefixes=(prefix,))
 
 
 def _method_for(cls: type[PatchProcessor], host: type):

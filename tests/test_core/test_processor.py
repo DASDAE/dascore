@@ -9,7 +9,7 @@ import pickle
 import subprocess
 import sys
 import warnings
-from types import FunctionType
+from types import FunctionType, SimpleNamespace
 from typing import Any, ClassVar, Self
 
 import numpy as np
@@ -118,6 +118,19 @@ class SeamNeedsVelocity(PatchProcessor):
     def kernel(self, data):
         """Return a copy."""
         return data + 0
+
+
+class SeamKernelNamed(PatchProcessor):
+    """Reached by its tag; only `register_kernel` tests touch it."""
+
+    @staticmethod
+    def seam_kernel_named(patch: PatchType, /) -> PatchType:
+        """Hand the data back."""
+        return SeamKernelNamed().run(patch)
+
+    def kernel(self, data):
+        """Hand the data back."""
+        return data
 
 
 def _host_method(host, name, monkeypatch, run=None):
@@ -1091,6 +1104,142 @@ class TestKernelFor:
     def test_no_kernel_at_all_is_metadata_only(self):
         """A processor which touches no data says so by defining none."""
         assert SeamHidden.kernel_for("numpy") is None
+
+
+class TestRegisterKernelForms:
+    """What `register_kernel` accepts besides a class and one backend."""
+
+    def test_a_tuple_registers_every_backend(self):
+        """Each backend named gets the one kernel."""
+
+        class Local(SeamScale):
+            """A class to register against, so nothing leaks."""
+
+            name = None
+
+        @register_kernel(Local, ("tuple_one", "tuple_two"))
+        def _both(processor, data):
+            """Registered for two made-up backends."""
+            return data
+
+        assert Local.kernel_for("tuple_one") is _both
+        assert Local.kernel_for("tuple_two") is _both
+
+    def test_a_tag_names_the_class(self):
+        """The registry tag resolves to the processor it belongs to."""
+        tag = patch_function_tag(SeamKernelNamed.patch_function)
+
+        @register_kernel(tag, "named_backend")
+        def _named(processor, data):
+            """Registered by tag."""
+            return data
+
+        assert SeamKernelNamed.kernel_for("named_backend") is _named
+
+    @pytest.mark.parametrize("name", ["no_such_operation_here", "aggregate"])
+    def test_a_name_with_no_processor_is_refused(self, name):
+        """An unknown tag, or a patch function with no class, has no kernels."""
+        with pytest.raises(ParameterError, match=name):
+            register_kernel(name, "numpy")
+
+
+@pytest.fixture()
+def kernel_plugins(monkeypatch):
+    """Serve the kernel entry points from a dict of loaders per backend."""
+    loaders: dict[str, list] = {}
+
+    def _entry_points(group, name):
+        assert group == "dascore.kernels"
+        found = loaders.get(name, [])
+        return [SimpleNamespace(value="fake.module", load=x) for x in found]
+
+    processor_module._load_kernel_plugin.cache_clear()
+    monkeypatch.setattr(processor_module, "entry_points", _entry_points)
+    yield loaders
+    processor_module._load_kernel_plugin.cache_clear()
+
+
+class TestKernelPlugins:
+    """A backend package's kernels load the first time its data appear."""
+
+    @pytest.fixture()
+    def local(self):
+        """Return a class to register against, so nothing leaks."""
+
+        class Local(SeamScale):
+            """A class to register against."""
+
+            name = None
+
+        return Local
+
+    def test_a_plugin_supplies_the_kernel(self, kernel_plugins, local):
+        """Loading the entry point is what registers the kernel."""
+
+        def _kernel(processor, data):
+            """The plugin's kernel."""
+            return data
+
+        kernel_plugins["plug_backend"] = [
+            lambda: register_kernel(local, "plug_backend")(_kernel)
+        ]
+        assert local.kernel_for("plug_backend") is _kernel
+
+    def test_plugins_load_once(self, kernel_plugins, local):
+        """Every plugin for a backend loads, and repeated lookups reload none."""
+        calls = []
+        kernel_plugins["once_backend"] = [
+            lambda: calls.append("first"),
+            lambda: calls.append("second"),
+        ]
+        for _ in range(3):
+            local.kernel_for("once_backend")
+            SeamSum.kernel_for("once_backend")
+        assert calls == ["first", "second"]
+
+    def test_a_broken_plugin_warns_once(self, kernel_plugins, local):
+        """The error is reported, the generic kernel runs, nothing retries."""
+        calls = []
+
+        def _broken():
+            calls.append(1)
+            raise RuntimeError("plugin exploded")
+
+        kernel_plugins["broken_backend"] = [_broken, lambda: calls.append(2)]
+        generic = SeamScale.__dict__["kernel"]
+        with pytest.warns(UserWarning, match="broken_backend.*plugin exploded") as w:
+            assert local.kernel_for("broken_backend") is generic
+        # Pointed at the caller, not at DASCore's own frames.
+        assert w[0].filename == __file__
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert local.kernel_for("broken_backend") is generic
+        # The plugin after the broken one still loaded.
+        assert calls == [1, 2]
+
+    def test_numpy_never_consults_entry_points(self, kernel_plugins, local):
+        """The hot path asks nothing of the install."""
+        kernel_plugins["numpy"] = [lambda: pytest.fail("numpy loaded a plugin")]
+        local.kernel_for("numpy")
+        local()(dc.get_example_patch())
+
+    def test_a_plugin_kernel_still_refuses_metadata(self, kernel_plugins):
+        """A class whose only kernel is a plugin's needs data from the first call."""
+
+        class Local(PatchProcessor):
+            """Metadata-only until a plugin gives it a kernel."""
+
+            name = None
+
+        kernel_plugins["meta_backend"] = [
+            lambda: register_kernel(Local, "meta_backend")(lambda processor, data: data)
+        ]
+        patch = dc.get_example_patch()
+        meta = dc.PatchMeta(
+            patch.coords, attrs=patch.attrs, dtype=patch.dtype, backend="meta_backend"
+        )
+        with pytest.raises(PatchDataError):
+            Local().run(meta)
 
 
 class TestWhereOperationsAreListed:
