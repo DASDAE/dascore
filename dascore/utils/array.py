@@ -1199,7 +1199,8 @@ def apply_ufunc(ufunc, *args, **kwargs):
     *args
         Additional positional arguments, can contain patches.
     **kwargs
-        Keyword arguments, can contain patches.
+        Keyword arguments, can contain patches. ``out`` is refused, as is
+        a ``where`` mask on element-wise ufuncs; use ``patch.data`` for those.
 
     Examples
     --------
