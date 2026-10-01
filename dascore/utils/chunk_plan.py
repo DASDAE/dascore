@@ -1045,26 +1045,21 @@ def _partition_frames(df: pd.DataFrame, labels: pd.Series, name: str):
     )
 
 
-def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str):
-    """
-    Overlap-corrected source envelopes over the whole sorted relation.
+def _negated(values: np.ndarray) -> np.ndarray:
+    """Values negated exactly, datetimes by their integer ticks."""
+    if values.dtype.kind == "M":
+        return (-values.view(np.int64)).view(values.dtype)
+    return -values
 
-    Within each partition (rows ordered by start, patch row) an
-    overlapping source's start moves to just past the furthest stop of
-    the sources before it, so the earliest source owns the overlap (D3:
-    complete overlaps keep the first member, deterministically). Returns
-    the corrected starts, the row modification flags, and the kept-row
-    mask (sources left degenerate by the correction contribute nothing).
-    """
-    start, stop, step = (x.to_numpy() for x in get_interval_columns(sorted_df, name))
-    is_first = np.zeros(len(sorted_df), dtype=bool)
-    is_first[seg_starts] = True
+
+def _owned_starts(start, stop, step, codes):
+    """Each source's start moved past the furthest stop before it in its partition."""
+    is_first = np.r_[True, codes[1:] != codes[:-1]]
     # The owner of the furthest stop so far in the partition: the last
     # row whose stop set the running maximum. Comparing with the
     # previous row alone would let a source nested in an earlier one
     # re-emerge after a shorter neighbor and hand out samples the
     # earlier source already owns.
-    codes = np.cumsum(is_first) - 1
     running_max = pd.Series(stop).groupby(codes).cummax().to_numpy()
     rows = np.arange(len(stop))
     owner = np.maximum.accumulate(np.where(stop == running_max, rows, 0))
@@ -1072,17 +1067,49 @@ def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str
     prev_stop = stop[prev_owner]
     owner_step = step[prev_owner]
     isna = pd.isnull(owner_step)
-    prev_step = np.where(~isna, owner_step, np.zeros_like(owner_step))
+    prev_step = np.abs(np.where(~isna, owner_step, np.zeros_like(owner_step)))
     # Add the step so consecutive sources do not share one sample; the
     # roll artifact at each partition's first row is masked out.
     overlaps = (start <= prev_stop) & ~is_first
     # an object step (a run row's) must not turn the starts into objects
-    corrected = np.where(overlaps, prev_stop + prev_step, start).astype(start.dtype)
-    modified = corrected != start
+    return np.where(overlaps, prev_stop + prev_step, start).astype(start.dtype)
+
+
+def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str):
+    """
+    Overlap-corrected source envelopes over the whole sorted relation.
+
+    Within each partition an overlapping source is trimmed to just past
+    the sources the data reach before it, so the earliest source owns
+    the overlap (D3: complete overlaps keep the first member,
+    deterministically): ascending sources (rows ordered by start, patch
+    row) lose their start, descending ones their stop. Returns the
+    corrected starts and stops, the row modification flags, and the
+    kept-row mask (sources left degenerate by the correction contribute
+    nothing).
+    """
+    start, stop, step = (x.to_numpy() for x in get_interval_columns(sorted_df, name))
+    is_first = np.zeros(len(sorted_df), dtype=bool)
+    is_first[seg_starts] = True
+    codes = np.cumsum(is_first) - 1
+    lo, hi = _owned_starts(start, stop, step, codes), stop.copy()
+    descending = pd.Series(to_float(step) < 0).groupby(codes).transform("any")
+    if (desc := descending.to_numpy()).any():
+        # Descending data run from their max: negated they are trimmed
+        # exactly as ascending ones are.
+        rows = np.flatnonzero(desc)
+        tie = sorted_df.get("_patch_row", pd.Series(np.arange(len(start))))
+        # a window's clip leaves sources their original max to order by
+        peak = sorted_df.get("_source_max", pd.Series(stop)).to_numpy()
+        key = (tie.to_numpy()[rows], _negated(peak[rows]), codes[rows])
+        rows = rows[np.lexsort(key)]
+        negated = (_negated(stop[rows]), _negated(start[rows]), step[rows], codes[rows])
+        lo[desc], hi[rows] = start[desc], _negated(_owned_starts(*negated))
+    modified = lo != start
     if "_modified" in sorted_df.columns:
         modified = sorted_df["_modified"].to_numpy() | modified
-    keep = corrected <= stop
-    return corrected, modified, keep
+    keep = lo <= hi
+    return lo, hi, modified, keep
 
 
 def _carried_columns(
@@ -1600,13 +1627,14 @@ def build_chunk_plan(
         [get_middle_value(step_all[a:b]) for a, b in zip(seg_starts, seg_ends)]
     )
     start_all = sorted_df[min_name].to_numpy()
-    corrected, mod_after, keep_row = _member_envelopes(sorted_df, seg_starts, name)
+    stop_all = sorted_df[max_name].to_numpy()
+    lo_all, hi_all, mod_after, keep_row = _member_envelopes(sorted_df, seg_starts, name)
     if explicit is not None:  # windows resolve their own overlaps
-        corrected, keep_row = start_all, np.ones(len(start_all), dtype=bool)
+        lo_all, hi_all = start_all, stop_all
+        keep_row = np.ones(len(start_all), dtype=bool)
     # kept-row (member candidate) arrays; partitions stay contiguous, so
     # partition p's kept rows sit in [koffsets[p], koffsets[p + 1])
-    stop_all = sorted_df[max_name].to_numpy()
-    src1, src2 = corrected[keep_row], stop_all[keep_row]
+    src1, src2 = lo_all[keep_row], hi_all[keep_row]
     korig_min, korig_max = start_all[keep_row], stop_all[keep_row]
     kpids = sorted_df["_patch_row"].to_numpy()[keep_row]
     ksteps, kmod = step_all[keep_row], mod_after[keep_row]
@@ -1758,8 +1786,11 @@ def build_chunk_plan(
             touched.append((ids_p[rel_out], kpids[rel_src + lo_k]))
             steps = ksteps[rel_src + lo_k]
             clipped = {min_name: lo, max_name: hi, f"{name}_step": steps}
+            # ordered and tied as chunk(time=None) orders the sources
+            clipped["_patch_row"] = kpids[rel_src + lo_k]
+            clipped["_source_max"] = korig_max[rel_src + lo_k]
             firsts = np.flatnonzero(np.r_[True, rel_out[1:] != rel_out[:-1]])
-            lo, _, own = _member_envelopes(pd.DataFrame(clipped), firsts, name)
+            lo, hi, _, own = _member_envelopes(pd.DataFrame(clipped), firsts, name)
             rel_src, rel_out, lo, hi = rel_src[own], rel_out[own], lo[own], hi[own]
             m_counts = np.bincount(rel_out, minlength=n_out)
             total = int(m_counts.sum())

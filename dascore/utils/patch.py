@@ -743,8 +743,13 @@ def _force_patch_merge(patch_dict_list, merge_kwargs, **kwargs):
     dims_tuple = tuple(dims)
     patches = [x if x.dims == dims_tuple else x.transpose(*dims) for x in df["patch"]]
     axis = patches[0].get_axis(merge_dim)
+    # data follow the merged coordinate's order; attrs keep plan order
+    reverse = any(x.get_coord(merge_dim).reverse_sorted for x in patches)
+    ordered = sorted(
+        patches, key=lambda x: x.get_coord(merge_dim).min(), reverse=reverse
+    )
     # get data, coords, attrs for merging patch together.
-    data = [x.data for x in patches]
+    data = [x.data for x in ordered]
     coords = [x.coords for x in patches]
     attrs = [x.attrs for x in patches]
     new_data = np.concatenate(data, axis=axis)
