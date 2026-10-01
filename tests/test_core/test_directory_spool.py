@@ -445,9 +445,9 @@ class TestBasicChunk:
         durations = contents["time_max"] - contents["time_min"]
         new_t_delta = (durations / 4).max()
         new_spool = spool.chunk(time=new_t_delta, keep_partial=True)
-        # Ensure there are exactly 4x as many patches in spool after chunk
+        # Four quarters of each span, then each last sample on its own
         new_contents = new_spool.get_contents()
-        assert len(new_contents) == 4 * len(spool)
+        assert len(new_contents) == 5 * len(spool)
         # Ensure each spool can be iterated
         patch_list = list(new_spool)
         for patch in patch_list:

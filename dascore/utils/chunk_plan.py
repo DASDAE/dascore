@@ -73,6 +73,7 @@ from dascore.utils.time import (
     is_timedelta64,
     to_datetime64,
     to_float,
+    to_int,
     to_timedelta64,
 )
 
@@ -1639,6 +1640,11 @@ def build_chunk_plan(
     kpids = sorted_df["_patch_row"].to_numpy()[keep_row]
     ksteps, kmod = step_all[keep_row], mod_after[keep_row]
     koffsets = np.r_[0, np.cumsum(np.bincount(codes[keep_row], minlength=n_parts))]
+    regular = explicit is None and not merge_mode
+    if regular:
+        lattice, assumed = _sample_lattices(sorted_df[keep_row], name)
+        # the kept source holding each partition's last sample
+        end_rows = pd.Series(src2).groupby(codes[keep_row]).idxmax().to_numpy()
     has_dtype = "_dtype" in sorted_df.columns
     if has_dtype:
         # The element dtype resolves per *output*, not per partition: a
@@ -1720,6 +1726,13 @@ def build_chunk_plan(
             stops_p = g_stops[part : part + 1]
         else:
             sub_sample[part] = not pd.isnull(part_step) and value_c < abs(part_step)
+            cell, end_row = abs(part_step), end_rows[part]
+            if lattice[2][end_row] > 1:  # a fractional grid's next label ends it
+                tail = tuple(x[end_row : end_row + 1] for x in lattice)
+                stop = to_int(np.asarray([g_stops[part]]))
+                cell = (_lattice_label(stop + 1, tail) - stop)[0]
+                if np.asarray(g_stops[part]).dtype.kind in "Mm":
+                    cell = np.timedelta64(int(cell), "ns")
             try:
                 start_stop = get_intervals(
                     g_starts[part],
@@ -1729,7 +1742,7 @@ def build_chunk_plan(
                     # interval arithmetic is over (direction-free) envelope
                     # values; a descending coordinate's negative step would
                     # invert the final partial interval
-                    step=abs(part_step),
+                    step=cell,
                     keep_partials=keep_partial,
                 )
             except ChunkError:  # partition too short; skip (D8)
@@ -1737,18 +1750,31 @@ def build_chunk_plan(
             except Exception as exc:
                 deferred = exc
                 break
-            starts_p, stops_p = start_stop[:, 0], start_stop[:, 1]
+            starts_p, ends_p = start_stop[:, 0], start_stop[:, 1]
+            if assumed[end_row] and not pd.isnull(cell):
+                # no known last sample: as before, a window must fit one
+                fits = starts_p + cell <= g_stops[part]
+                starts_p, ends_p = starts_p[fits], ends_p[fits]
+            stops_p = ends_p
             if fill_value is not None:
+                # the grid runs from the partition's first sample to its last
+                one = tuple(x[koffsets[part] : koffsets[part] + 1] for x in lattice)
+                first, stop = np.asarray([g_starts[part]]), np.asarray([g_stops[part]])
+                origin = _member_samples(first, first, first, first, one)[0][0]
+                last = _grid_snapped(stop, stop, origin, abs(part_step))[1]
                 starts_p, stops_p, on_grid = _grid_snapped(
-                    starts_p, stops_p, g_starts[part], abs(part_step)
+                    starts_p, ends_p, origin, abs(part_step), open_end=True
                 )
+                stops_p = np.minimum(stops_p, last)
+                on_grid &= stops_p >= starts_p
                 starts_p, stops_p = starts_p[on_grid], stops_p[on_grid]
-                # A window can hold no position at all once snapped -- a
-                # partition whose envelope a pending selection resolved
-                # against the patch need not start on the grid -- and a
-                # partition of nothing but those produces no output.
-                if not len(starts_p):
-                    continue
+                ends_p = ends_p[on_grid]
+            # A window can hold no position at all once snapped -- a
+            # partition whose envelope a pending selection resolved
+            # against the patch need not start on the grid -- and a
+            # partition of nothing but those produces no output.
+            if not len(starts_p):
+                continue
         active[part] = True
         n_out = len(starts_p)
         ids_p = np.arange(next_id, next_id + n_out)
@@ -1770,15 +1796,19 @@ def build_chunk_plan(
         rel_src = np.arange(total) - offsets + np.repeat(first_src, m_counts)
         lo = np.maximum(s1[rel_src], starts_p[rel_out])
         hi = np.minimum(s2[rel_src], stops_p[rel_out])
-        # No sample lies between one source's stop and the next source's
-        # start, but an output edge can (any length that is not a whole
-        # number of samples). That edge selects an end source whose
-        # samples all fall outside the output, so its trim inverts;
-        # dropping it loses nothing (#1008).
+        read = lo, hi  # the bounds each member is loaded with
+        if regular:
+            windows = (starts_p[rel_out], ends_p[rel_out])
+            member_lattice = [x[rel_src + lo_k] for x in lattice]
+            lo, hi, *read = _member_samples(
+                s1[rel_src], s2[rel_src], *windows, member_lattice
+            )
+        # A member whose window holds none of its samples drops (#1008).
         overlap_ok = lo <= hi
         if not overlap_ok.all():
             rel_src, rel_out = rel_src[overlap_ok], rel_out[overlap_ok]
             lo, hi = lo[overlap_ok], hi[overlap_ok]
+            read = [x[overlap_ok] for x in read]
             m_counts = np.bincount(rel_out, minlength=n_out)
             total = int(m_counts.sum())
         if explicit is not None and total:
@@ -1802,6 +1832,12 @@ def build_chunk_plan(
         # cover the partition evenly instead of skipping the hole.
         fed = np.ones(n_out, dtype=bool) if fill_value is not None else m_counts > 0
         fed_counts[part] = int(fed.sum())
+        if regular and fill_value is None and total:
+            # an output's envelope is its members' first and last samples
+            firsts = np.flatnonzero(np.r_[True, rel_out[1:] != rel_out[:-1]])
+            starts_p, stops_p = np.array(starts_p), np.array(stops_p)
+            starts_p[rel_out[firsts]] = np.minimum.reduceat(lo, firsts)
+            stops_p[rel_out[firsts]] = np.maximum.reduceat(hi, firsts)
         out_starts.append(starts_p[fed])
         out_stops.append(stops_p[fed])
         out_ids.append(ids_p[fed])
@@ -1809,8 +1845,8 @@ def build_chunk_plan(
             out_requests.append(np.asarray(requests_p)[fed])
         m_out_ids.append(ids_p[rel_out])
         m_src.append(rel_src + lo_k)
-        m_lo.append(lo)
-        m_hi.append(hi)
+        m_lo.append(read[0] if regular else lo)
+        m_hi.append(read[1] if regular else hi)
         m_parts.append(np.full(total, part, dtype=np.intp))
         if has_dtype:
             part_dtypes = dtype_all[seg_starts[part] : seg_ends[part]]
@@ -2471,7 +2507,7 @@ def _concatenated_steps(sorted_df: pd.DataFrame, codes: np.ndarray, name: str):
     return first.where(one_step & contiguous).to_numpy()
 
 
-def _grid_snapped(starts, stops, origin, step):
+def _grid_snapped(starts, stops, origin, step, open_end=False):
     """
     Window edges moved onto the grid the partition's samples sit on.
 
@@ -2484,13 +2520,99 @@ def _grid_snapped(starts, stops, origin, step):
     holds no position at all.
     """
     lo = np.ceil((starts - origin) / step - _GRID_SNAP_RTOL)
-    hi = np.floor((stops - origin) / step + _GRID_SNAP_RTOL)
+    if open_end:  # the last position strictly before each stop
+        hi = np.ceil((stops - origin) / step - _GRID_SNAP_RTOL) - 1
+    else:
+        hi = np.floor((stops - origin) / step + _GRID_SNAP_RTOL)
     # An edge a pending selection left unstated has no position, which
     # the comparison already answers False; the cast still has to see a
     # number, so it is given one which the mask then drops.
     keep = hi >= lo
     lo, hi = (np.where(keep, x, 0).astype(np.int64) for x in (lo, hi))
     return origin + lo * step, origin + hi * step, keep
+
+
+def _sample_lattices(rows: pd.DataFrame, name: str):
+    """
+    Each row's source lattice (base, stride, den, phase, margin, min, max).
+
+    Labels are ``base + (phase + k * stride) // den`` in integer ticks, or
+    ``base + k * stride`` for floats, which a read takes within ``margin``.
+    ``base`` is the source's first label; a zero stride places nothing;
+    min/max are an untrimmed row's own labels. Also returns the rows whose
+    base is only assumed: trimmed rows whose source is unknown.
+    """
+    from dascore.utils.patch_assembly import _units_converted  # noqa: PLC0415
+
+    low, high = rows[f"{name}_min"], rows[f"{name}_max"]
+    whole = ~rows.get("_modified", pd.Series(False, index=rows.index)).fillna(False)
+    first, known = low, whole
+    # a plan member keeps its source's range, a selected view its envelope
+    sources = [rows.get(f"_{name}_src_low")]
+    if (envelope := rows.get(f"_{name}_source_envelope")) is not None:
+        pick = lambda x: x.get(f"{name}_min") if isinstance(x, dict) else None  # noqa
+        sources.append(envelope.map(pick).astype(low.dtype))
+    for source in (x for x in sources if x is not None):
+        first = first.where(known | source.isna(), source)
+        known = known | source.notna()
+    base, steps = first.to_numpy(), rows[f"{name}_step"].fillna(0)
+    if base.dtype.kind in "Mm":  # nanosecond ticks, whatever the frame's unit
+        base, steps = to_int(base), to_int(pd.to_timedelta(steps).to_numpy())
+    stride = np.abs(np.asarray(steps))
+    den, phase = np.ones(len(rows), np.int64), np.zeros(len(rows), np.int64)
+    grids = rows.get(f"_{name}_grid", pd.Series(None, index=rows.index))
+    for pos in np.flatnonzero([isinstance(x, tuple) and x[1] > 1 for x in grids]):
+        if base.dtype.kind in "iuMm" and not _units_converted(rows.iloc[pos], name):
+            num, den[pos], offset, count = grids.iloc[pos]
+            # a descending grid's first label is its last position's
+            stride[pos], phase[pos] = abs(num), (min(num, 0) * (count - 1) + offset)
+            phase[pos] %= den[pos]
+    dtypes = rows.get(f"_{name}_coord_dtype", pd.Series("", index=rows.index))
+    rounded = dtypes.isin([x for x in dtypes.unique() if str(x).startswith("float")])
+    margin = np.where(rounded.to_numpy(), stride / 10, 0 * stride)  # clear of neighbors
+    own = (x.where(whole).to_numpy() for x in (low, high))
+    return (base, stride, den, phase, margin, *own), ~known.to_numpy()
+
+
+def _lattice_label(values, lattice, before=False):
+    """The first label at or after each value (ticks), or the last one before."""
+    base, stride, den, phase, *_ = lattice
+    if values.dtype.kind == "f":
+        k = np.ceil((values - base) / stride - _GRID_SNAP_RTOL) - before
+        return base + k * stride
+    k = -((phase - (values - base) * den) // stride) - before
+    return base + (phase + k * stride) // den
+
+
+def _member_samples(firsts, lasts, starts, ends, lattice):
+    """
+    Each member's first and last label in its window ``[start, end)``.
+
+    Edges which are not already the row's own labels move onto its lattice;
+    without one they stay at the window, a tick short of its end. Returns
+    the labels and the bounds to read them with; high < low holds nothing.
+    """
+    base, stride, den, phase, margin, own_min, own_max = lattice
+    kind, placed, unit = firsts.dtype.kind, stride > 0, f"{firsts.dtype.kind}8[ns]"
+    ticks = (lambda x: x.astype(unit).view(np.int64)) if kind in "Mm" else np.asarray
+    inside = np.maximum(firsts, starts)
+    low, end, last = ticks(inside), ticks(ends), ticks(lasts)
+    safe = (base, np.where(placed, stride, 1), den, phase)
+    snap_lo = placed & (inside != own_min)
+    lo = np.where(snap_lo, _lattice_label(low, safe), low)
+    # a member's last label is the last one before just past it
+    bump = 2 * _GRID_SNAP_RTOL * stride if kind == "f" else 1
+    at_last, at_end = (_lattice_label(x, safe, True) for x in (last + bump, end))
+    kept = np.where(placed, at_last < at_end, lasts < ends)
+    snap_hi = placed & ~(kept & (lasts == own_max))
+    short = np.nextafter(end, -np.inf) if kind == "f" else end - 1
+    hi = np.where(snap_hi, np.minimum(at_last, at_end), np.where(kept, last, short))
+    if kind in "Mm":
+        lo, hi = (x.astype(np.int64).view(unit).astype(firsts.dtype) for x in (lo, hi))
+    if kind != "f":
+        return lo, hi, lo, hi
+    pad = np.where(snap_lo, margin, 0), np.where(snap_hi, margin, 0)
+    return lo, hi, lo - pad[0], hi + pad[1]
 
 
 def _snapped_cuts(cuts, start, step) -> list:

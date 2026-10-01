@@ -4,6 +4,7 @@ import pickle
 import re
 import threading
 from dataclasses import replace
+from itertools import pairwise
 from unittest.mock import Mock
 
 import numpy as np
@@ -1613,3 +1614,82 @@ class TestExplicitBoxes:
         np.testing.assert_array_equal(chunked[0].data, expected.data)
         pieces = [((1, 2), (0, 3), (1, 5)), ((1, 2), (0, 3), (6, 7))]
         assert _boxes(spool.select(**windows), dims) == pieces
+
+
+def _chain_sources(path, values, sizes):
+    """A memory and a DASDAE directory spool of one patch cut into pieces."""
+    data = np.random.default_rng(len(values)).random((2, len(values)))
+    whole = dc.Patch(data=data, coords={"x": values, "y": [0, 1]}, dims=("y", "x"))
+    edges = np.r_[0, np.cumsum(sizes)]
+    for num, (a, b) in enumerate(pairwise(edges)):
+        whole.select(x=(a, b), samples=True).io.write(path / f"{num}.h5", "dasdae")
+    disk = dc.spool(path).update(progress=None)
+    return whole, dc.spool([dc.read(x)[0] for x in sorted(path.glob("*.h5"))]), disk
+
+
+def _assert_selects(spool, whole, window):
+    """One output: the merged patch selected to the window, labels and data."""
+    expected = whole.select(x=tuple(window))
+    assert len(spool) == 1
+    assert np.array_equal(
+        spool[0].get_coord("x").values, expected.get_coord("x").values
+    )
+    assert np.array_equal(spool[0].data, expected.data)
+
+
+_T0 = np.datetime64("2020-01-01", "ns")
+# name: (labels, piece sizes); index steps truncate 1/1024 and 1/3000 s
+_CHAINS = {
+    "1024": (_T0 + np.arange(768) * dc.to_timedelta64(1 / 1024), [256] * 3),
+    "3000": (_T0 + np.arange(2250) * dc.to_timedelta64(1 / 3000), [750] * 3),
+    "exact": (get_coord(start=_T0, step=(1, 1024), shape=(768,)), [250, 270, 248]),
+    "float_desc": (10 - np.arange(70) / 3, [20, 27, 23]),
+    "int_desc": (10 - 3 * np.arange(70), [23, 20, 27]),
+}
+
+
+class TestChainedExplicitChunk:
+    """A regular chunk then explicit windows keeps every sample it held."""
+
+    @pytest.fixture(scope="class")
+    def sources(self, tmp_path_factory):
+        """Each chain's merged patch, memory spool and directory spool."""
+        return {
+            name: _chain_sources(tmp_path_factory.mktemp(name), *args)
+            for name, args in _CHAINS.items()
+        }
+
+    @pytest.mark.parametrize("rate", ["1024", "3000"])
+    def test_fractional_rate(self, sources, rate):
+        """Disk and memory both equal the merged patch selected to the window."""
+        whole, mem, disk = sources[rate]
+        ms = np.timedelta64(1, "ms")
+        window = np.array([_T0 + 30 * ms, _T0 + 690 * ms])
+        for spool in (mem, disk):
+            _assert_selects(spool.chunk(x=0.1).chunk(x=window[None]), whole, window)
+
+    def test_trimmed_rows_keep_file_samples(self, sources):
+        """A collapsed member's coordinate is its file's samples in its trim."""
+        whole, _, disk = sources["exact"]
+        chunked = disk.chunk(x=0.1)
+        rows, _ = chunked._plan_frames("x")
+        assert rows["_modified"].all()
+        coords = known_coordinates(chunked._catalog, rows, "x")
+        x = whole.get_coord("x").values
+        for row in rows.to_dict("records"):
+            wanted = x[(x >= row["x_min"]) & (x <= row["x_max"])]
+            assert np.array_equal(coords[row["_patch_row"]].values, wanted)
+
+    @pytest.mark.parametrize("seed", range(len(_CHAINS)))
+    def test_random_plans(self, sources, seed):
+        """Random lengths and windows: disk equals memory equals truth."""
+        rng = np.random.default_rng(seed)
+        whole, mem, disk = sources[list(_CHAINS)[seed]]
+        values = whole.get_coord("x").values
+        length = abs(values[-1] - values[0]) * float(rng.uniform(0.07, 0.31))
+        length = int(np.ceil(length)) if values.dtype.kind == "i" else length
+        half = len(values) // 2
+        window = np.sort([rng.choice(values[:half]), rng.choice(values[half:])])
+        for spool in (mem, disk):
+            first = spool.chunk(x=length, keep_partial=True)
+            _assert_selects(first.chunk(x=window[None]), whole, window)

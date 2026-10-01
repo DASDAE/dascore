@@ -93,6 +93,10 @@ with pytest.raises(ChunkError, match="non-dimensional coordinate"):
     dc.spool([aux]).chunk(sensor=100)
 ```
 
+## Regular windows
+
+A chunk length cuts each partition into half-open windows `[start, start + length)`, each starting `length - overlap` after the one before, and a window holds exactly the samples whose labels fall inside it, judged on each source's own sample grid. Without overlap the windows partition the samples, so none is dropped or repeated; a length that is not a whole number of samples gives windows whose counts differ by one. Each output's envelope names its first and last samples. A window is complete when it ends no later than one sample past the partition's last; `keep_partial=True` keeps the rest too.
+
 ## Chunking by size
 
 A chunk length may be a quantity instead of a bare number: either a compatible unit (`time=10 * s`, `distance=100 * m`, converted to the partition's stated coordinate units — a spool recording no units for the coordinate raises, since there is nothing to convert to) or a quantity of information (`time=25 * megabytes`), which sizes each output by its data array. A bare length means the coordinate's own units, like every other bare number. `overlap` accepts the same forms.

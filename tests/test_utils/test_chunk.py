@@ -217,10 +217,12 @@ class TestChunkPlanDF:
         seg_len = dur / 3
         dt = df["time_step"].iloc[0]
         chunk_df = build_chunk_plan(df, keep_partial=True, time=seg_len).outputs
+        # three thirds of the span, then the last sample on its own
+        assert len(chunk_df) == 4
+        assert chunk_df["time_min"].iloc[-1] == df["time_max"].iloc[0]
         duration = chunk_df["time_max"] - chunk_df["time_min"]
-        assert duration.sum() == ((seg_len - dt) * 3)
-        assert len(duration) == 3
-        assert (duration > np.timedelta64(0, "s")).all()
+        samples = (duration / dt).round() + 1
+        assert samples.sum() == round(dur / dt) + 1
 
     def test_nan_in_df(self, contiguous_df):
         """A null envelope row breaks continuity when dropped."""
@@ -288,7 +290,7 @@ class TestEdgeInWindow:
 
     def test_stop_in_window_drops_trailing_source(self, contiguous_three):
         """A stop at 4.5 must not pull in the source starting at 5."""
-        plan = build_chunk_plan(contiguous_three, time=5.5)
+        plan = build_chunk_plan(contiguous_three, time=4.5)
         self._check_members(plan)
         first = plan.members[plan.members["output_id"] == 0]
         assert first["_patch_row"].tolist() == [0]
@@ -301,7 +303,7 @@ class TestEdgeInWindow:
         assert third["_patch_row"].tolist() == [1, 2]
         assert third[["time_min", "time_max"]].to_numpy().tolist() == [
             [9.0, 9.0],
-            [10.0, 12.5],
+            [10.0, 13.0],
         ]
 
     def test_sub_tolerance_gap(self, sub_tolerance_gap):

@@ -168,7 +168,9 @@ class TestChunk:
         contents = spool.get_contents()
         duration = contents["time_max"] - contents["time_min"]
         dt = contents["time_step"]
-        assert (((duration + dt) / dc.to_timedelta64(1)) >= 10).all()
+        # envelopes name samples, and overlapping sources off each other's
+        # grid leave a window a sample short of its length
+        assert (((duration + 2 * dt) / dc.to_timedelta64(1)) >= 10).all()
 
     def test_small_segments_with_partial(self, diverse_spool):
         """Test issue #262 with partials."""
@@ -2046,8 +2048,143 @@ class TestChunkEdgeBetweenPatches:
         out = dc.spool([p1, p2]).chunk(time=length)
         assert len(out) == 4
         coords = [patch.get_coord("time") for patch in out]
-        assert all(len(coord) == len(coords[0]) for coord in coords)
+        # windows of a fractional number of samples hold whole ones
+        assert np.ptp([len(coord) for coord in coords]) <= 1
         assert all(a.max() < b.min() for a, b in pairwise(coords))
+
+
+_T0 = np.datetime64("2020-01-01", "ns")
+
+
+def _time_values(rate, count=600):
+    """Times at a rate whose step the index truncates to whole nanoseconds."""
+    return _T0 + np.arange(count) * to_timedelta64(1 / rate)
+
+
+def _exact_values(count=600, offset=0):
+    """An exact 1/1024 s grid, ``offset`` samples past its origin."""
+    return get_coord(start=_T0, step=(1, 1024), shape=(offset + count,))[offset:]
+
+
+# name: (labels, piece sizes, chunk length, overlap)
+_PARTITION_CASES = {
+    "1024": (_time_values(1024), [200, 200, 200], 0.1, None),
+    "3000": (_time_values(3000), [200, 200, 200], 0.0301, None),
+    "exact": (_exact_values(), [201, 199, 200], 0.1, None),
+    "exact_far": (_exact_values(offset=3_686_401), [301, 299], 0.1, None),
+    "whole_ns": (_time_values(1000), [250, 350], 0.1005, None),
+    "float": (10 + np.arange(60) * 0.25, [25, 35], 1.13, None),
+    "float_desc": (10 - np.arange(60) / 3, [25, 35], 1.13, None),
+    "int": (10 + np.arange(60) * 3, [25, 35], 7, None),
+    "int_desc": (10 - np.arange(60) * 3, [25, 35], 7, None),
+    "overlap": (_time_values(1024), [200, 200, 200], 0.1, 0.03),
+    "int_overlap": (10 + np.arange(60) * 3, [25, 35], 7, 2),
+}
+
+
+def _cut_spools(path, values, sizes):
+    """One patch along x, its memory spool cut into pieces and their files."""
+    data = np.random.default_rng(len(sizes)).random((2, len(values)))
+    whole = dc.Patch(data=data, coords={"x": values, "y": [0, 1]}, dims=("y", "x"))
+    edges = np.r_[0, np.cumsum(sizes)]
+    pieces = [whole.select(x=(a, b), samples=True) for a, b in pairwise(edges)]
+    for num, piece in enumerate(pieces):
+        piece.io.write(path / f"{num}.h5", "dasdae")
+    return whole, dc.spool(pieces), dc.spool(path).update(progress=None)
+
+
+def _half_open_windows(whole, length, overlap):
+    """The labels and data of ``whole`` inside each window [ref, ref + length)."""
+    x = whole.get_coord("x").values
+    as_time = x.dtype.kind == "M"
+    length = to_timedelta64(length) if as_time else length
+    stride = length - (to_timedelta64(overlap or 0) if as_time else overlap or 0)
+    out, ref = [], x.min()
+    while ref <= x.max():
+        mask = (x >= ref) & (x < ref + length)
+        out.append((x[mask], whole.data[:, mask]))
+        ref = ref + stride
+    return out
+
+
+class TestRegularChunkPartition:
+    """
+    A regular window is the half-open interval [ref, ref + length).
+
+    Without overlap the windows partition the samples whatever the length,
+    on disk and in memory, and every envelope names real sample labels.
+    """
+
+    @pytest.fixture(params=["memory", "disk"])
+    def route(self, request):
+        """Which spool of a case to chunk."""
+        return request.param
+
+    @pytest.mark.parametrize("case", list(_PARTITION_CASES))
+    def test_windows_hold_their_samples(self, tmp_path, case, route):
+        """Each output is the merged patch inside its half-open window."""
+        values, sizes, length, overlap = _PARTITION_CASES[case]
+        whole, *spools = _cut_spools(tmp_path, values, sizes)
+        spool = spools[route == "disk"]
+        out = spool.chunk(x=length, overlap=overlap, keep_partial=True)
+        expected = _half_open_windows(whole, length, overlap)
+        assert len(out) == len(expected)
+        contents = out.get_contents()
+        for patch, (labels, data), row in zip(out, expected, contents.iloc):
+            coord = patch.get_coord("x")
+            assert np.array_equal(patch.data, data)
+            if labels.dtype.kind == "f":  # float labels are known to rounding
+                np.testing.assert_allclose(coord.values, labels, rtol=1e-12)
+                bounds = [row["x_min"], row["x_max"]]
+                np.testing.assert_allclose(bounds, [coord.min(), coord.max()], 0, 1e-8)
+                continue
+            assert np.array_equal(coord.values, labels)
+            assert (row["x_min"], row["x_max"]) == (coord.min(), coord.max())
+
+    @pytest.mark.parametrize("case", ["1024", "exact", "float_desc", "int"])
+    def test_outputs_join_to_the_whole(self, tmp_path, case, route):
+        """No sample is dropped or repeated by non-overlapping windows."""
+        values, sizes, length, _ = _PARTITION_CASES[case]
+        whole, *spools = _cut_spools(tmp_path, values, sizes)
+        out = spools[route == "disk"].chunk(x=length, keep_partial=True)
+        descending = whole.get_coord("x").reverse_sorted
+        out = sorted(out, key=lambda x: x.get_coord("x").min(), reverse=descending)
+        joined = np.concatenate([patch.data for patch in out], axis=1)
+        assert np.array_equal(joined, whole.data)
+
+    @pytest.mark.parametrize(
+        "values, length, count",
+        [
+            (_time_values(1000), 0.1, 100),
+            (_exact_values(), 0.125, 128),
+            (10 - np.arange(60) * 3, 9, 3),
+        ],
+    )
+    def test_whole_sample_lengths_are_equal(self, tmp_path, values, length, count):
+        """A length of whole samples gives every full window as many."""
+        _, mem, disk = _cut_spools(tmp_path, values, [len(values) // 2] * 2)
+        for spool in (mem, disk):
+            shapes = {patch.shape[1] for patch in spool.chunk(x=length)}
+            assert shapes == {count}
+
+    def test_full_exact_windows_are_kept(self, tmp_path):
+        """A window holding all its samples on an exact grid is not partial."""
+        _, mem, disk = _cut_spools(tmp_path, _exact_values(1024), [512, 512])
+        for spool in (mem, disk):
+            assert [patch.shape[1] for patch in spool.chunk(x=0.25)] == [256] * 4
+
+    def test_long_exact_source(self):
+        """Labels an hour from an exact grid's origin still land exactly."""
+        values = _exact_values(1024 * 3600)
+        data = np.zeros((1, len(values)), dtype=np.int8)
+        patch = dc.Patch(data=data, coords={"x": values, "y": [0]}, dims=("y", "x"))
+        length = to_timedelta64(2.5005)
+        out = dc.spool([patch]).chunk(x=length, keep_partial=True)
+        x = values.values
+        for index in (-2, -1):
+            ref = x[0] + length * (len(out) + index)
+            wanted = x[(x >= ref) & (x < ref + length)]
+            assert np.array_equal(out[index].get_coord("x").values, wanted)
 
 
 class TestChunkWithAssociatedCoords:
@@ -4260,7 +4397,9 @@ class TestTrimmedRecipeMerge:
         memory = list(dc.spool(patches).chunk(**kwargs))[1]
         assert np.array_equal(out.data, memory.data)
         assert out.coords == memory.coords
-        assert out.data.tolist() == list(range(12, 22))
+        # the second window is [1.1, 2.2); in float32 the sample at 1.1 ties
+        # its start and falls to the first window
+        assert out.data.tolist() == list(range(12, 23))
 
     def test_an_integer_coordinate_trims_on_its_own_grid(self, tmp_path, route):
         """A chunk edge between integer samples keeps only what it names."""
@@ -4280,9 +4419,9 @@ class TestTrimmedRecipeMerge:
         merged = route.merges()
         fast = list(spool.chunk(distance=7.8))
         assert merged and all(merged)
-        # the second window is [7.8, 14.6], which starts at channel 8
+        # the second window is [7.8, 15.6), channels 8 through 15
         second = fast[1].get_coord("distance")
-        assert np.array_equal(second.values, np.arange(8, 15))
+        assert np.array_equal(second.values, np.arange(8, 16))
         route.force_patches()
         slow = list(spool.chunk(distance=7.8))
         for one, other in zip(fast, slow, strict=True):
@@ -4612,7 +4751,7 @@ class TestSelectedRecipeMerge:
         opens; a member wrongly read as a window only shows in an output
         assembled from more than one.
         """
-        kwargs = {"distance": 9.0, "keep_partial": True}
+        kwargs = {"distance": 7.0, "keep_partial": True}
         return {**kwargs, "tolerance": np.inf} if bridged else kwargs
 
     @pytest.mark.parametrize(

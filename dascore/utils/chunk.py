@@ -41,14 +41,15 @@ def get_intervals(
         The overlap of the start of each interval with the end
         of the previous interval.
     step
-        If not None, subtract step (the sampling interval) from the end
-        values so that the intervals do not overlap by one sample.
+        The sampling interval; a window is full when it ends no later than
+        one step past ``stop``.
     keep_partials
         If True, keep the segments which are smaller than chunksize.
 
     Returns
     -------
-    A 2D array where first column is start and second column is end.
+    A 2D array of half-open ``[start, end)`` windows: the first column is
+    the start, the second the exclusive end.
     """
     if is_datetime64(start):
         # need to ensure we have numpy datetimes, not pandas
@@ -81,20 +82,11 @@ def get_intervals(
     # reference with no overlap
     new_step = length - overlap
     reference = np.arange(start, stop + new_step, step=new_step)
-    # Since we just add to get stop values we need to remove anything
-    # that is within a sample of stopping value (otherwise that segment
-    # will have no data).
-    reference = reference[(reference + step) <= stop]
-    # we subtract step to avoid overlaps in segments. This can mean segments
-    # are ~ one sample shorter than those requested.
-    ends = reference + length - step
-    starts = reference
-    # trim end to not surpass stop
-    bad_ends = ends > stop
-    if bad_ends.any():
-        if not keep_partials:
-            ends_filt = ends <= stop
-            ends, starts = ends[ends_filt], starts[ends_filt]
-        else:
-            ends[bad_ends] = stop
+    # every window holding a sample starts at or before the last one
+    starts = reference[reference <= stop]
+    # each window is half-open: [start, start + length)
+    ends = starts + length
+    if not keep_partials:
+        full = ends <= stop + step
+        starts, ends = starts[full], ends[full]
     return np.stack([starts, ends]).T
