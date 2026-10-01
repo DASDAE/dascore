@@ -119,7 +119,7 @@ class ChunkPlan:
         The requested chunk length (None for merge mode).
     params
         Resolved parameters (group attrs, tolerances, overlap,
-        keep_partial, conflict, snap_coords, missing_dim) — recorded, not
+        keep_partial, conflict, snap_coords, on_missing_dim) — recorded, not
         referencing config.
     trim_dims
         Dimensions besides `dim` explicit windows trim (in `{dim}_min/max`).
@@ -136,32 +136,6 @@ class ChunkPlan:
     def merge_mode(self) -> bool:
         """Return True when this plan merges (no segmenting length)."""
         return self.value is None
-
-
-def coalesce_runs(plan: ChunkPlan, working: pd.DataFrame) -> ChunkPlan:
-    """
-    Merge each output's consecutive members cut from one patch's runs.
-
-    A patch split into runs plans run by run (its rows share one
-    `_patch_row`), so a hole can end an output; the runs which land in
-    one output are read from their patch once, as one member spanning
-    them.
-    """
-    members = plan.members
-    ids = working["_patch_row"]
-    split = set(ids[ids.duplicated(keep=False)])
-    if not split or members.empty:
-        return plan
-    lo, hi = f"{plan.dim}_min", f"{plan.dim}_max"
-    out, pid = members["output_id"], members["_patch_row"]
-    same = (out == out.shift()) & (pid == pid.shift()) & pid.isin(split)
-    if not same.any():
-        return plan
-    piece = (~same).cumsum()
-    merged = members[~same].copy()
-    merged[lo] = members.groupby(piece, sort=False)[lo].min().to_numpy()
-    merged[hi] = members.groupby(piece, sort=False)[hi].max().to_numpy()
-    return replace(plan, members=merged.reset_index(drop=True))
 
 
 def _kind_codes(df: pd.DataFrame, names: Sequence[str]) -> pd.Series:
@@ -652,17 +626,17 @@ def _partition_unit(df: pd.DataFrame, name: str, row: int) -> str:
     return "" if pd.isnull(unit) else str(unit)
 
 
-def _validate_missing_dim(missing_dim) -> None:
-    """Reject a missing_dim value that is neither policy."""
-    if missing_dim not in ("raise", "drop"):
-        msg = f"missing_dim must be 'raise' or 'drop', got {missing_dim!r}"
+def _validate_on_missing_dim(on_missing_dim) -> None:
+    """Reject an on_missing_dim value that is neither policy."""
+    if on_missing_dim not in ("raise", "drop"):
+        msg = f"on_missing_dim must be 'raise' or 'drop', got {on_missing_dim!r}"
         raise ParameterError(msg)
 
 
 def _prepare_relation(
     df: pd.DataFrame,
     name: str,
-    missing_dim: str,
+    on_missing_dim: str,
     dim_label: str = "chunk dimension",
     operation: str = "chunking",
 ) -> pd.DataFrame:
@@ -670,17 +644,17 @@ def _prepare_relation(
     Ready a flat relation for planning or reporting along ``name``.
 
     Attaches patch rows, re-spells compatible units, then applies the
-    `missing_dim` policy. Missing envelopes, and patches carrying the
+    `on_missing_dim` policy. Missing envelopes, and patches carrying the
     name only as a non-dimensional coordinate (spec 7 / D2), both count
     as missing: envelope presence is not enough, because auxiliary
     coordinates index their envelopes too but their patches cannot be
     trimmed or merged *along* the name.
 
     `dim_label` and `operation` word the error for the caller; a typo in
-    `missing_dim` raises here rather than silently taking the drop
+    `on_missing_dim` raises here rather than silently taking the drop
     branch, which would truncate exactly the report the user asked for.
     """
-    _validate_missing_dim(missing_dim)
+    _validate_on_missing_dim(on_missing_dim)
     min_name, max_name = f"{name}_min", f"{name}_max"
     df = _ensure_patch_row(df)
     df = _normalize_chunk_units(df, name)
@@ -693,7 +667,7 @@ def _prepare_relation(
     unusable = null_rows | not_a_dim
     if not unusable.any():
         return df
-    if missing_dim == "raise":
+    if on_missing_dim == "raise":
         bad = df.loc[unusable, "_patch_row"].tolist()
         rides = int((not_a_dim & ~null_rows).sum())
         detail = (
@@ -705,7 +679,7 @@ def _prepare_relation(
         msg = (
             f"{int(unusable.sum())} patch(es) lack the {dim_label} "
             f"{name!r}{detail} (patch rows {bad[:5]}...). Pass "
-            "missing_dim='drop' to exclude them."
+            "on_missing_dim='drop' to exclude them."
         )
         raise ChunkError(msg)
     return df[~unusable]
@@ -1071,26 +1045,21 @@ def _partition_frames(df: pd.DataFrame, labels: pd.Series, name: str):
     )
 
 
-def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str):
-    """
-    Overlap-corrected source envelopes over the whole sorted relation.
+def _negated(values: np.ndarray) -> np.ndarray:
+    """Values negated exactly, datetimes by their integer ticks."""
+    if values.dtype.kind == "M":
+        return (-values.view(np.int64)).view(values.dtype)
+    return -values
 
-    Within each partition (rows ordered by start, patch row) an
-    overlapping source's start moves to just past the furthest stop of
-    the sources before it, so the earliest source owns the overlap (D3:
-    complete overlaps keep the first member, deterministically). Returns
-    the corrected starts, the row modification flags, and the kept-row
-    mask (sources left degenerate by the correction contribute nothing).
-    """
-    start, stop, step = (x.to_numpy() for x in get_interval_columns(sorted_df, name))
-    is_first = np.zeros(len(sorted_df), dtype=bool)
-    is_first[seg_starts] = True
+
+def _owned_starts(start, stop, step, codes):
+    """Each source's start moved past the furthest stop before it in its partition."""
+    is_first = np.r_[True, codes[1:] != codes[:-1]]
     # The owner of the furthest stop so far in the partition: the last
     # row whose stop set the running maximum. Comparing with the
     # previous row alone would let a source nested in an earlier one
     # re-emerge after a shorter neighbor and hand out samples the
     # earlier source already owns.
-    codes = np.cumsum(is_first) - 1
     running_max = pd.Series(stop).groupby(codes).cummax().to_numpy()
     rows = np.arange(len(stop))
     owner = np.maximum.accumulate(np.where(stop == running_max, rows, 0))
@@ -1098,17 +1067,49 @@ def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str
     prev_stop = stop[prev_owner]
     owner_step = step[prev_owner]
     isna = pd.isnull(owner_step)
-    prev_step = np.where(~isna, owner_step, np.zeros_like(owner_step))
+    prev_step = np.abs(np.where(~isna, owner_step, np.zeros_like(owner_step)))
     # Add the step so consecutive sources do not share one sample; the
     # roll artifact at each partition's first row is masked out.
     overlaps = (start <= prev_stop) & ~is_first
     # an object step (a run row's) must not turn the starts into objects
-    corrected = np.where(overlaps, prev_stop + prev_step, start).astype(start.dtype)
-    modified = corrected != start
+    return np.where(overlaps, prev_stop + prev_step, start).astype(start.dtype)
+
+
+def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str):
+    """
+    Overlap-corrected source envelopes over the whole sorted relation.
+
+    Within each partition an overlapping source is trimmed to just past
+    the sources the data reach before it, so the earliest source owns
+    the overlap (D3: complete overlaps keep the first member,
+    deterministically): ascending sources (rows ordered by start, patch
+    row) lose their start, descending ones their stop. Returns the
+    corrected starts and stops, the row modification flags, and the
+    kept-row mask (sources left degenerate by the correction contribute
+    nothing).
+    """
+    start, stop, step = (x.to_numpy() for x in get_interval_columns(sorted_df, name))
+    is_first = np.zeros(len(sorted_df), dtype=bool)
+    is_first[seg_starts] = True
+    codes = np.cumsum(is_first) - 1
+    lo, hi = _owned_starts(start, stop, step, codes), stop.copy()
+    descending = pd.Series(to_float(step) < 0).groupby(codes).transform("any")
+    if (desc := descending.to_numpy()).any():
+        # Descending data run from their max: negated they are trimmed
+        # exactly as ascending ones are.
+        rows = np.flatnonzero(desc)
+        tie = sorted_df.get("_patch_row", pd.Series(np.arange(len(start))))
+        # a window's clip leaves sources their original max to order by
+        peak = sorted_df.get("_source_max", pd.Series(stop)).to_numpy()
+        key = (tie.to_numpy()[rows], _negated(peak[rows]), codes[rows])
+        rows = rows[np.lexsort(key)]
+        negated = (_negated(stop[rows]), _negated(start[rows]), step[rows], codes[rows])
+        lo[desc], hi[rows] = start[desc], _negated(_owned_starts(*negated))
+    modified = lo != start
     if "_modified" in sorted_df.columns:
         modified = sorted_df["_modified"].to_numpy() | modified
-    keep = corrected <= stop
-    return corrected, modified, keep
+    keep = lo <= hi
+    return lo, hi, modified, keep
 
 
 def _carried_columns(
@@ -1288,7 +1289,7 @@ def _report_dim_columns(df: pd.DataFrame, name: str, carried) -> tuple[str, str,
     return columns
 
 
-def _report_preamble(df, name, group, missing_dim):
+def _report_preamble(df, name, group, on_missing_dim):
     """
     Resolve what both reports need before they can differ.
 
@@ -1298,7 +1299,7 @@ def _report_preamble(df, name, group, missing_dim):
     """
     group_attrs = _resolve_group_attrs(group, set(df.columns))
     names = _report_dim_columns(df, name, group_attrs)
-    df = _prepare_relation(df, name, missing_dim, "dimension", "gap reporting")
+    df = _prepare_relation(df, name, on_missing_dim, "dimension", "gap reporting")
     return df, group_attrs, _gap_carried_columns(df, name, group_attrs), names
 
 
@@ -1386,7 +1387,7 @@ def build_gap_frame(
     *,
     tolerance: float | Quantity | np.timedelta64 | GapTolerance = DEFAULT_TOLERANCE,
     group: str | Sequence[str] | None = None,
-    missing_dim: Literal["raise", "drop"] = "drop",
+    on_missing_dim: Literal["raise", "drop"] = "drop",
 ) -> pd.DataFrame:
     """
     Report every discontinuity along ``name`` in a flat patch relation.
@@ -1397,7 +1398,7 @@ def build_gap_frame(
     `{name}_min` is the last sample before the gap and `{name}_max` the
     first sample after it, so `gap_size` is their difference.
     """
-    df, group_attrs, carried, names = _report_preamble(df, name, group, missing_dim)
+    df, group_attrs, carried, names = _report_preamble(df, name, group, on_missing_dim)
     min_name, max_name, step_name = names
     tolerance = GapTolerance.from_user(tolerance, name)
     columns = [min_name, max_name, step_name, "gap_size", "group_id", *carried]
@@ -1426,7 +1427,7 @@ def build_coverage_frame(
     *,
     tolerance: float | Quantity | np.timedelta64 | GapTolerance = DEFAULT_TOLERANCE,
     group: str | Sequence[str] | None = None,
-    missing_dim: Literal["raise", "drop"] = "drop",
+    on_missing_dim: Literal["raise", "drop"] = "drop",
 ) -> pd.DataFrame:
     """
     Summarize how much of each cell's span along ``name`` holds data.
@@ -1437,7 +1438,7 @@ def build_coverage_frame(
     extent, `gap_total` the sum of its gaps, `covered` the rest, and
     `coverage` their ratio.
     """
-    df, group_attrs, carried, names = _report_preamble(df, name, group, missing_dim)
+    df, group_attrs, carried, names = _report_preamble(df, name, group, on_missing_dim)
     min_name, max_name, step_name = names
     tolerance = GapTolerance.from_user(tolerance, name)
     columns = [
@@ -1506,7 +1507,7 @@ def build_chunk_plan(
     tolerance: float | Quantity | np.timedelta64 | GapTolerance = 1.5,
     conflict: CONFLICT = "raise",
     group=None,
-    missing_dim: Literal["raise", "drop"] = "raise",
+    on_missing_dim: Literal["raise", "drop"] = "raise",
     fill_value=None,
     on_incomplete: WARN_LEVELS = "raise",
     _exact_coords=None,
@@ -1562,7 +1563,7 @@ def build_chunk_plan(
         if value <= zero:
             msg = "Chunk value must be greater than 0."
             raise ParameterError(msg)
-    _validate_missing_dim(missing_dim)
+    _validate_on_missing_dim(on_missing_dim)
     min_name, max_name = f"{name}_min", f"{name}_max"
     for dim in kwargs:
         if f"{dim}_min" not in df.columns and not df.empty:
@@ -1578,13 +1579,13 @@ def build_chunk_plan(
         tolerance=tolerance,
         fill_value=fill_value,
         conflict=conflict,
-        missing_dim=missing_dim,
+        on_missing_dim=on_missing_dim,
         group=_resolve_group_attrs(group, set(df.columns)),
         sampling_group_tolerance=dc.get_config().sampling_group_tolerance,
         on_incomplete=on_incomplete,
     )
     if not df.empty:
-        df = _prepare_relation(df, name, missing_dim)
+        df = _prepare_relation(df, name, on_missing_dim)
     if df.empty:
         if explicit is not None:
             _report_incomplete(
@@ -1626,13 +1627,14 @@ def build_chunk_plan(
         [get_middle_value(step_all[a:b]) for a, b in zip(seg_starts, seg_ends)]
     )
     start_all = sorted_df[min_name].to_numpy()
-    corrected, mod_after, keep_row = _member_envelopes(sorted_df, seg_starts, name)
+    stop_all = sorted_df[max_name].to_numpy()
+    lo_all, hi_all, mod_after, keep_row = _member_envelopes(sorted_df, seg_starts, name)
     if explicit is not None:  # windows resolve their own overlaps
-        corrected, keep_row = start_all, np.ones(len(start_all), dtype=bool)
+        lo_all, hi_all = start_all, stop_all
+        keep_row = np.ones(len(start_all), dtype=bool)
     # kept-row (member candidate) arrays; partitions stay contiguous, so
     # partition p's kept rows sit in [koffsets[p], koffsets[p + 1])
-    stop_all = sorted_df[max_name].to_numpy()
-    src1, src2 = corrected[keep_row], stop_all[keep_row]
+    src1, src2 = lo_all[keep_row], hi_all[keep_row]
     korig_min, korig_max = start_all[keep_row], stop_all[keep_row]
     kpids = sorted_df["_patch_row"].to_numpy()[keep_row]
     ksteps, kmod = step_all[keep_row], mod_after[keep_row]
@@ -1784,8 +1786,11 @@ def build_chunk_plan(
             touched.append((ids_p[rel_out], kpids[rel_src + lo_k]))
             steps = ksteps[rel_src + lo_k]
             clipped = {min_name: lo, max_name: hi, f"{name}_step": steps}
+            # ordered and tied as chunk(time=None) orders the sources
+            clipped["_patch_row"] = kpids[rel_src + lo_k]
+            clipped["_source_max"] = korig_max[rel_src + lo_k]
             firsts = np.flatnonzero(np.r_[True, rel_out[1:] != rel_out[:-1]])
-            lo, _, own = _member_envelopes(pd.DataFrame(clipped), firsts, name)
+            lo, hi, _, own = _member_envelopes(pd.DataFrame(clipped), firsts, name)
             rel_src, rel_out, lo, hi = rel_src[own], rel_out[own], lo[own], hi[own]
             m_counts = np.bincount(rel_out, minlength=n_out)
             total = int(m_counts.sum())

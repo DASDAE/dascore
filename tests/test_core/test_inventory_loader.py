@@ -1411,23 +1411,6 @@ class TestTrackTables:
         with pytest.raises(InvalidInventoryError, match="Did you mean geometry"):
             make_inventory(files)
 
-    def test_the_retired_annotations_table_says_what_to_rename(self, make_inventory):
-        """A name this format used to read is told what reads it now.
-
-        The document doors already refuse the same fact, so shrugging at it
-        here would break one stored inventory two different ways -- loudly
-        as YAML, silently as a directory, and the silent one loses the
-        labels the author believes are in it.
-        """
-        files = {
-            **PATH_DIRECTORY,
-            "fiber_arrays/DAS.L001/path/annotations.csv": (
-                "distance_min,distance_max,group,value\n0,10,zone,north\n"
-            ),
-        }
-        with pytest.raises(InvalidInventoryError, match="now reads as labels"):
-            make_inventory(files)
-
     def test_a_stem_naming_a_field_which_is_not_row_shaped(self, make_inventory):
         """Only an attribute rows can build may be stated as a table."""
         files = {
@@ -1851,19 +1834,6 @@ class TestUnreadableTables:
         with pytest.raises(InvalidInventoryError, match="its header names 3 columns"):
             make_inventory(files)
 
-    def test_a_retired_sequence_column_says_what_to_write(self, make_inventory):
-        """A table written when order decided placement is told what changed."""
-        files = {
-            **MINIMAL,
-            **TRACKS,
-            "fiber_arrays/DAS.L001/path/optical_components.csv": (
-                "sequence,object_type,distance_min,distance_max,name\n"
-                "1,FiberSegment,0,100,a\n"
-            ),
-        }
-        with pytest.raises(InvalidInventoryError, match="Drop the column"):
-            make_inventory(files)
-
     def test_a_components_table_which_does_not_tile_is_refused(self, make_inventory):
         """The loader checks what it builds, or a bad table loads fine.
 
@@ -1880,32 +1850,6 @@ class TestUnreadableTables:
             ),
         }
         with pytest.raises(InvalidInventoryError, match="leaves a gap of 20"):
-            make_inventory(files)
-
-    def test_a_retired_length_column_says_what_to_write(self, make_inventory):
-        """The other column the components table lost is explained too."""
-        files = {
-            **MINIMAL,
-            **TRACKS,
-            "fiber_arrays/DAS.L001/path/optical_components.csv": (
-                "object_type,optical_length,name\nFiberSegment,100,a\n"
-            ),
-        }
-        with pytest.raises(InvalidInventoryError, match="State those"):
-            make_inventory(files)
-
-    def test_a_retired_segment_column_says_what_to_write(self, make_inventory):
-        """A renamed column is told its new name, not that one is missing."""
-        files = {
-            **MINIMAL,
-            **TRACKS,
-            "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "segment,distance,longitude,latitude,elevation\n"
-                "S100,100.0,-117.0,40.0,687.0\n"
-                "S100,102.0,-117.1,40.1,685.0\n"
-            ),
-        }
-        with pytest.raises(InvalidInventoryError, match="now name"):
             make_inventory(files)
 
     def test_a_cell_which_does_not_pertain_to_its_row(self, make_inventory):
@@ -1949,20 +1893,6 @@ class TestTableRegistry:
             for column in (table.group, table.order):
                 assert column is None or column not in loader._TABLES
             assert stem  # every key names something
-
-    def test_a_retired_column_names_no_field_of_the_model(self):
-        """A column explained as retired must not still be readable.
-
-        A name which is still a field would be refused by the explanation
-        rather than read, which is a worse failure than the bare unknown
-        field the explanation exists to replace.
-        """
-        for stem, retired in loader._RETIRED_COLUMNS.items():
-            track = inv.OpticalPath.model_fields[stem].annotation
-            members = inv._annotation_members(inv.get_args(track)[0])
-            assert members  # a track holds models, or this checks nothing
-            for model in members:
-                assert not (set(retired) & set(model.model_fields))
 
 
 class TestSilentlyLostRows:

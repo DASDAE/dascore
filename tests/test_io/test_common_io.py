@@ -10,6 +10,7 @@ test_io_core.py
 
 from __future__ import annotations
 
+import importlib.util
 import inspect
 from contextlib import suppress
 from functools import cache
@@ -54,6 +55,7 @@ from dascore.io.terra15 import (
     Terra15FormatterV6,
 )
 from dascore.io.uptech import UptechH5V1
+from dascore.io.zarr import ZarrV2, ZarrV3
 from dascore.utils.downloader import fetch, get_registry_df
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.misc import all_close, iterate, order_range_tuple
@@ -67,12 +69,19 @@ from tests.test_io._common_io_test_utils import (
 # (see `_write_dasdae_v2`) so the format sits in the same matrix as the
 # version it succeeds.
 _DASDAE_V2_PATH = Path(mkdtemp("dasdae_v2")) / "example_dasdae_v2.h5"
+# Nor is any zarr store; one is written for each zarr format when the
+# optional dependencies are installed.
+_HAS_ZARR = all(importlib.util.find_spec(x) for x in ("zarr", "xarray"))
+_ZARR_IOS = (ZarrV3(), ZarrV2()) if _HAS_ZARR else ()
+_ZARR_PATHS = {io: Path(mkdtemp("zarr")) / "example.zarr" for io in _ZARR_IOS}
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _write_dasdae_v2():
     """Write the version 2 example before any fixture fetches it."""
     dc.write(dc.get_example_patch("random_das"), _DASDAE_V2_PATH, "dasdae")
+    for io, path in _ZARR_PATHS.items():
+        io.write(dc.get_example_patch("random_das"), path)
 
 
 # --- Fixtures
@@ -125,6 +134,7 @@ COMMON_IO_READ_TESTS = {
     NetCDFCFV18(): ("xdas_netcdf.nc",),
     MSeedV2(): ("etna_9n_3chan_10s.mseed",),
     UptechH5V1(): ("uptech_as1000_1.hdf5",),
+    **{io: (str(path),) for io, path in _ZARR_PATHS.items()},
 }
 
 # This tuple is for fiber io which support a write method and can write
@@ -134,6 +144,7 @@ COMMON_IO_WRITE_TESTS = (
     PickleIO(),
     DASDAEV1(),
     DASDAEV2(),
+    *_ZARR_IOS,
 )
 
 # Specifies data registry entries which should not be tested.
@@ -152,7 +163,7 @@ SKIP_DATA_FILES = {
 # have converted away at the parse boundary.
 # Formats which hand back the attrs stored in the file rather than building
 # them from a header, so the file, not the reader, chooses the names.
-_PASS_THROUGH_FORMATS = frozenset({"DASDAE", "NETCDF_CF"})
+_PASS_THROUGH_FORMATS = frozenset({"DASDAE", "NETCDF_CF", "ZARR"})
 
 VENDOR_ATTRS = frozenset(
     {

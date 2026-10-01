@@ -87,10 +87,10 @@ class TestValidation:
         with pytest.raises(ChunkError, match="quelle"):
             build_chunk_plan(random_flat, quelle=10)
 
-    def test_bad_missing_dim_raises(self, random_flat):
-        """missing_dim accepts only raise/drop."""
-        with pytest.raises(ParameterError, match="missing_dim"):
-            build_chunk_plan(random_flat, time=None, missing_dim="bob")
+    def test_bad_on_missing_dim_raises(self, random_flat):
+        """on_missing_dim accepts only raise/drop."""
+        with pytest.raises(ParameterError, match="on_missing_dim"):
+            build_chunk_plan(random_flat, time=None, on_missing_dim="bob")
 
 
 class TestMergePlan:
@@ -705,9 +705,9 @@ class TestChunkOnlyOnDims:
             sp.chunk(time=None)
 
     def test_drop_excludes_aux_patches(self, aux_time_patch):
-        """missing_dim='drop' keeps only patches with the real dimension."""
+        """on_missing_dim='drop' keeps only patches with the real dimension."""
         sp = dc.spool([dc.get_example_patch(), aux_time_patch])
-        out = sp.chunk(time=None, missing_dim="drop", conflict="drop")
+        out = sp.chunk(time=None, on_missing_dim="drop", conflict="drop")
         assert len(out) == 1
         assert out[0].dims == ("distance", "time")
 

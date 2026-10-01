@@ -167,10 +167,12 @@ class CoordIndex(CoordinateTransformIndex):
     labels differ materializes both, costing what aligning materialized
     indexes costs.
 
-    xarray matches an index only with indexes of its own type: combining
-    a lazy array with one whose index is materialized, or reindexing it
-    to new labels, raises xarray's AlignmentError even where the labels
-    agree. Convert with ``lazy_coords=False`` for those.
+    From xarray 2026.9 a lazy array combines with one whose index is
+    materialized when the labels are equal; arithmetic keeps the left
+    operand's index, and the comparison reads every lazy label. Labels that
+    differ, or reindexing to new labels, raise xarray's AlignmentError, as
+    every such mix did on earlier versions. Convert with
+    ``lazy_coords=False`` to avoid the error.
     """
 
     transform: CoordTransform

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import ArraySource, FiberIO, H5ArrayMixin
+from dascore.io import FiberIO, H5ArrayMixin
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
 
@@ -29,10 +29,7 @@ class APSensingV10(H5ArrayMixin, FiberIO):
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
-        version_str = _get_version_string(resource)
-        if version_str:
-            return version_str
-        return None
+        return _get_version_string(resource) or None
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
@@ -40,11 +37,4 @@ class APSensingV10(H5ArrayMixin, FiberIO):
         """Scan an AP sensing file, return summary info about the contents."""
         coords = _get_coords(resource)
         attrs = APSensingPatchAttrs.model_validate(_get_attrs_dict(resource))
-        return [
-            dc.PatchMeta(
-                attrs=attrs,
-                coords=coords,
-                dtype=str(resource["DAS"].dtype),
-                source=ArraySource(key=resource["DAS"].name),
-            )
-        ]
+        return self._dataset_meta(attrs, coords, resource["DAS"])

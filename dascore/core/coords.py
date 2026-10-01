@@ -30,7 +30,6 @@ from uuid import uuid4
 import numpy as np
 import pandas as pd
 from pydantic import (
-    Field,
     ValidationError,
     field_validator,
     model_validator,
@@ -252,15 +251,6 @@ class CoordSummary(DascoreBaseModel):
     step_numerator: int | None = None
     step_denominator: int | None = None
     origin_offset: int | None = None
-    # Each run's summary, in order, for a segmented coordinate, so an index
-    # can see holes inside a patch; None otherwise, including past
-    # _MAX_SUMMARY_RUNS runs. Left out of the repr, which it would swamp.
-    runs: tuple[CoordSummary, ...] | None = Field(default=None, repr=False)
-
-    @property
-    def is_exact_grid(self) -> bool:
-        """Return True when the summary states an exact integer grid."""
-        return self.step_numerator is not None
 
     @property
     def is_range_like(self) -> bool:
@@ -1550,9 +1540,6 @@ _NS_PER_S = 10**9
 # A float spacing this close to a whole number of steps is on the grid;
 # a float grid such as 0.1 cannot be held exactly, an off-grid label can.
 _GRID_RTOL = 1e-6
-# A coordinate's summary carries its runs only up to this many, since each
-# becomes an index row; past it the summary is an envelope.
-_MAX_SUMMARY_RUNS = 256
 _BLANK_QUERY_MSG = "A coordinate without labels selects only by samples."
 
 
@@ -3177,20 +3164,19 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """
         Whether any seam between these runs skips a position of their grid.
 
-        A seam a whole number of steps wider than one is a hole, which
-        re-fitting would spread over the run; any other seam is
+        A seam two steps wide or more skips a position, whether or not the
+        later run sits on the earlier one's lattice, so it is a hole which
+        re-fitting would spread over the run. The slack absorbs nanosecond
+        rounding of fractional-rate steps and starts. A narrower seam is
         misalignment, and stays the tolerance's business.
         """
         steps = [x.step(self.dtype) if isinstance(x, Grid) else self.step for x in runs]
         for num in range(1, len(runs)):
-            if (_lattice_gap(runs[num - 1], runs[num]) or 0) > 0:
-                return False
             step = steps[num - 1] if not _is_null(steps[num - 1]) else steps[num]
-            if _is_null(step):
+            if _is_null(step) or not step:
                 continue  # no grid stated, so no position to have skipped
             span = abs(labels[num][0] - labels[num - 1][-1]) / abs(step)
-            whole = np.round(span)
-            if whole > 1 and abs(span - whole) <= _GRID_RTOL * whole:
+            if span >= 2 - 1e-3:
                 return False
         return True
 
@@ -3482,7 +3468,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         return components
 
     def to_summary(self, dims=()) -> CoordSummary:
-        """Get the summary info about the coord, exact grid and runs included."""
+        """Get the summary info about the coord, exact grid included."""
         summary = super().to_summary(dims=dims)
         if (grid := self._grid) is not None:
             if not grid.exact:
@@ -3493,14 +3479,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             )
         if self.runs_count == 1 and not _is_null(self.step):
             # labels on a declared grid state its step when none is missing
-            complete = self.missing().complete
-            return (
-                summary.model_copy(update={"step": self.step}) if complete else summary
-            )
-        if self.runs_count < 2 or self.runs_count > _MAX_SUMMARY_RUNS:
-            return summary
-        runs = tuple(x.to_summary(dims=dims) for x in self.segments)
-        return summary.model_copy(update={"runs": runs})
+            if self.missing().complete:
+                return summary.model_copy(update={"step": self.step})
+        return summary
 
     def _repr_fields(self) -> tuple[tuple[str, Text, bool], ...]:
         fields = super()._repr_fields()
@@ -3544,7 +3525,6 @@ def _runs_step(runs, declared, dtype, sources):
     strict = not _is_null(declared)
     if strict:
         step = _declared_step(declared, dtype)
-        _check_grid_spacings(runs, step, dtype)
     else:
         steps = [x.step(dtype) for x in runs if isinstance(x, Grid)]
         if len(steps) != len(runs) or len({_maybe_unpack(x) for x in steps}) != 1:
@@ -3567,6 +3547,8 @@ def _runs_step(runs, declared, dtype, sources):
     )
     step = magnitude if ascending else -magnitude
     try:
+        # a shared step is kept only where it could also be declared
+        _check_grid_spacings(runs, step, dtype)
         for run, values in stored:
             if len(run) > 1 and not is_strictly_monotonic(values):
                 msg = "A declared step needs one-dimensional, monotonic values."

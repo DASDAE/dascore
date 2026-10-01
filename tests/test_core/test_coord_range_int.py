@@ -621,7 +621,6 @@ class TestNewAndRoundTrips:
     def test_summary(self, hz_1024):
         """The summary carries the grid and rebuilds the coordinate."""
         summary = hz_1024[1:].to_summary(dims=("time",))
-        assert summary.is_exact_grid
         assert summary.step_numerator == 1953125
         assert summary.step_denominator == 2
         assert summary.origin_offset == 1

@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import dascore as dc
 from dascore.constants import snap_type
-from dascore.io import ArraySource, FiberIO, H5ArrayMixin
+from dascore.io import FiberIO, H5ArrayMixin
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.hdf5 import H5Reader
 
@@ -38,24 +38,14 @@ class SilixaH5V1(H5ArrayMixin, FiberIO):
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
-        version_str = self._version_check(resource, self.version)
-        if version_str:
-            return version_str
-        return None
+        return self._version_check(resource, self.version) or None
 
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
     ) -> list[dc.PatchMeta]:
         """Scan a Silixa HDF5 file, return summary information on the contents."""
         attrs, coords = self._attr_getter(resource, SilixaPatchAttrs)
-        return [
-            dc.PatchMeta(
-                attrs=attrs,
-                coords=coords,
-                dtype=str(resource[self._data_name].dtype),
-                source=ArraySource(key=resource[self._data_name].name),
-            )
-        ]
+        return self._dataset_meta(attrs, coords, resource[self._data_name])
 
 
 class SilixaH5V2(SilixaH5V1):

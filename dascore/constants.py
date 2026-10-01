@@ -34,6 +34,9 @@ class ExecutorType(Protocol):
 # Bump this to force re-downloading of all data file
 DATA_VERSION = "0.0.0"
 
+# The file a directory spool keeps its index in, inside the directory.
+INDEX_NAME = ".dascore_index.sqlite3"
+
 # Types dascore can convert into time representations
 timeable_types = int | float | str | np.datetime64 | pd.Timestamp
 opt_timeable_types = None | timeable_types

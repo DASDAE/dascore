@@ -135,11 +135,11 @@ def _read_attrs(directory: Path) -> dict[str, Any]:
     path = _one_spelling(directory, ATTRS_STEM, OBJECT_SUFFIXES)
     if path is None:
         return {}
-    return _checked_attrs(_read_object(path), quote_path(path), "io.save")
+    return _checked_attrs(_read_object(path), quote_path(path))
 
 
-def _checked_attrs(data: dict[str, Any], where: str, rewrite: str) -> dict[str, Any]:
-    """Refuse attributes another object, or an earlier layout, wrote."""
+def _checked_attrs(data: dict[str, Any], where: str) -> dict[str, Any]:
+    """Refuse attributes another object wrote."""
     declared = data.pop(TAG_FIELD, None)
     if declared is not None and declared != _SET_TAG:
         msg = (
@@ -147,13 +147,6 @@ def _checked_attrs(data: dict[str, Any], where: str, rewrite: str) -> dict[str, 
             f"an annotation set declare {_SET_TAG!r}."
         )
         raise ParameterError(msg)
-    if retired := sorted(set(_RETIRED_ATTRS) & set(data)):
-        replaced = ", ".join(f"{x} (now {_RETIRED_ATTRS[x]})" for x in retired)
-        msg = (
-            f"{where} states {replaced}, which an earlier layout "
-            f"wrote; rewrite the set with {rewrite}."
-        )
-        raise InvalidAnnotationError(msg)
     return data
 
 
@@ -166,7 +159,7 @@ def _table_attrs(metadata: Mapping, path: Path) -> dict[str, Any] | None:
     if not isinstance(data, Mapping):
         msg = f"{where} holds {type(data).__name__}, not a mapping of attributes."
         raise ParameterError(msg)
-    return _checked_attrs(dict(data), where, "io.to_parquet")
+    return _checked_attrs(dict(data), where)
 
 
 def _refuse_restated(where: str, stored: Mapping, dims, kwargs: dict) -> None:
@@ -187,13 +180,6 @@ def _refuse_restated(where: str, stored: Mapping, dims, kwargs: dict) -> None:
     differ = {k: v for k, v in stated.items() if _build_attrs(held, **{k: v}) != held}
     _refuse_overrides(where, **differ)
     kwargs["attrs"] = _build_attrs(held, **given)
-
-
-# Attributes an earlier layout wrote, and what states them now.
-_RETIRED_ATTRS = {
-    "history": "data_id",
-    "columns": "annotation_columns and feature_columns",
-}
 
 
 def _read_dimension(series: pd.Series, path: Path) -> pd.Series:

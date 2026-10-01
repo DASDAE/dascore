@@ -15,6 +15,7 @@ import warnings
 from concurrent.futures import ProcessPoolExecutor
 from contextlib import contextmanager
 from datetime import timedelta
+from fractions import Fraction
 from itertools import accumulate, pairwise
 from unittest import mock
 
@@ -26,7 +27,7 @@ import dascore as dc
 import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
 from dascore.config import config_context
-from dascore.core.coords import Grid, NumericCoord
+from dascore.core.coords import Grid, NumericCoord, get_coord
 from dascore.core.lazy_array import LazyArray
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
@@ -710,10 +711,10 @@ class TestChunkMerge:
         patches = [random_patch.mean("time") for _ in range(3)]
         spool = dc.spool(patches)
         # Losing patches silently would be data loss; this raises by default
-        # (0.2 change) with missing_dim="drop" restoring the old behavior.
-        with pytest.raises(ChunkError, match="missing_dim"):
+        # (0.2 change) with on_missing_dim="drop" restoring the old behavior.
+        with pytest.raises(ChunkError, match="on_missing_dim"):
             spool.chunk(time=None)
-        chunked = spool.chunk(time=None, missing_dim="drop")
+        chunked = spool.chunk(time=None, on_missing_dim="drop")
         assert not len(chunked)
 
     def test_merge_with_conflicting_private_coords(
@@ -930,6 +931,99 @@ class TestDescendingChunk:
         n_time = p.shape[p.get_axis("time")]
         assert patch.shape[patch.get_axis("time")] == 2 * n_time
         assert time.min() == t.min()
+
+    @staticmethod
+    def _member(values, tag, step=None, **attrs):
+        """A patch whose data are its time labels plus a member tag."""
+        labels = np.asarray(values, dtype=float)
+        time = labels if step is None else get_coord(data=labels, step=step)
+        data = (labels + tag)[None]
+        coords = {"distance": [0], "time": time}
+        dims = ("distance", "time")
+        return dc.Patch(data=data, coords=coords, dims=dims, attrs=attrs)
+
+    @pytest.fixture(params=[False, True], ids=["plan_order", "reversed"])
+    def overlapping(self, request):
+        """Descending members 8..5, 5..2, 2..0 sharing samples 5 and 2."""
+        spans = [(8, 4, 0.1), (5, 4, 0.2), (2, 3, 0.3)]
+        members = [self._member(np.arange(a, a - n, -1), t, -1.0) for a, n, t in spans]
+        return dc.spool(members[::-1] if request.param else members)
+
+    def test_overlaps_keep_each_label_once(self, overlapping):
+        """The member reached first owns a shared sample, as when ascending."""
+        patch = overlapping.chunk(time=None)[0]
+        labels = patch.get_coord("time").values
+        np.testing.assert_array_equal(labels, np.arange(8.0, -1, -1))
+        tags = [0.1] * 4 + [0.2] * 3 + [0.3] * 2
+        np.testing.assert_allclose(patch.data[0], labels + tags)
+
+    def test_length_windows_hold_each_sample_once(self, overlapping):
+        """A length window over the overlaps holds each of its samples once."""
+        patch = overlapping.chunk(time=5)[0]
+        labels = patch.get_coord("time").values
+        np.testing.assert_array_equal(labels, np.arange(4.0, -1, -1))
+        np.testing.assert_allclose(patch.data[0], labels + ([0.2] * 3 + [0.3] * 2))
+
+    def test_overlaps_and_holes_fill(self):
+        """A fill value bridges a hole beside trimmed descending overlaps."""
+        spans = [([8, 7, 6, 5], 0.1), ([5, 4, 3], 0.2), ([1, 0], 0.3)]
+        spool = dc.spool([self._member(v, t, -1.0) for v, t in spans])
+        patch = spool.chunk(time=None, tolerance=10, fill_value=-9.0)[0]
+        labels = patch.get_coord("time").values
+        np.testing.assert_array_equal(labels, np.arange(8.0, -1, -1))
+        expected = [8.1, 7.1, 6.1, 5.1, 4.2, 3.2, -9.0, 1.3, 0.3]
+        np.testing.assert_allclose(patch.data[0], expected)
+
+    def test_shared_max_owner_same_in_explicit_windows(self):
+        """Members sharing their max give it to the first, windowed or not."""
+        short = self._member([8, 7, 6], 0.1, -1.0)
+        long = self._member([8, 7, 6, 5, 4], 0.2, -1.0)
+        spool = dc.spool([short, long])
+        for patch in (spool.chunk(time=None)[0], spool.chunk(time=[[4, 8]])[0]):
+            labels = patch.get_coord("time").values
+            np.testing.assert_array_equal(labels, np.arange(8.0, 3, -1))
+            np.testing.assert_allclose(patch.data[0], labels + ([0.1] * 3 + [0.2] * 2))
+
+    def test_explicit_window_inside_overlap_keeps_owner(self):
+        """A window inside an overlap takes it from the higher source."""
+        high = self._member([8, 7, 6, 5, 4], 0.1, -1.0)
+        low = self._member([7, 6, 5, 4, 3], 0.2, -1.0)
+        patch = dc.spool([low, high]).chunk(time=[[4, 6]])[0]
+        labels = patch.get_coord("time").values
+        np.testing.assert_array_equal(labels, [6.0, 5.0, 4.0])
+        np.testing.assert_allclose(patch.data[0], labels + 0.1)
+
+    def test_stepless_members_keep_data_with_labels(self):
+        """Descending members with no step merge with data following labels."""
+        first = self._member([6.0, 5.5, 4.0, 3.0], 0.1)
+        second = self._member([2.5, 1.0, 0.0], 0.2)
+        patch = dc.spool([second, first]).chunk(time=None)[0]
+        labels = patch.get_coord("time").values
+        np.testing.assert_array_equal(labels, [6.0, 5.5, 4.0, 3.0, 2.5, 1.0, 0.0])
+        np.testing.assert_allclose(patch.data[0], labels + ([0.1] * 4 + [0.2] * 3))
+
+    def test_stepless_single_sample_member_follows_labels(self):
+        """A one-sample member states no direction; the others' order holds."""
+        members = [
+            self._member(v, t) for v, t in (([6.0, 5.5, 4.0, 3.0], 0.1), ([2.5], 0.2))
+        ]
+        # an associated coordinate must follow the labels too
+        members = [x.update_coords(aux=("time", x.data[0])) for x in members]
+        patch = dc.spool(members).chunk(time=None, conflict="drop")[0]
+        labels = patch.get_coord("time").values
+        np.testing.assert_array_equal(labels, [6.0, 5.5, 4.0, 3.0, 2.5])
+        expected = labels + ([0.1] * 4 + [0.2])
+        np.testing.assert_allclose(patch.data[0], expected)
+        np.testing.assert_allclose(patch.get_coord("aux").values, expected)
+
+    def test_stepless_keep_first_attrs_match_plan(self):
+        """Ordering the data leaves keep_first with the plan's first member."""
+        high = self._member([8.0, 7.0, 5.0], 0.1, description="high")
+        low = self._member([5.0, 3.0, 2.0, 0.0], 0.2, description="low")
+        spool = dc.spool([high, low])
+        plan = spool.chunk_plan(time=None, conflict="keep_first")
+        patch = spool.chunk(time=None, conflict="keep_first")[0]
+        assert patch.attrs.description == plan.outputs["description"].iloc[0]
 
 
 class TestMixedUnitChunk:
@@ -3109,6 +3203,57 @@ class TestChunkFillValue:
             x.get_coord("time").step for x in spool
         ]
 
+    @staticmethod
+    def _two_members(step, second_offset_ns, count=3):
+        """Two members of one step, the second starting second_offset_ns on."""
+        t0 = np.datetime64("2020-01-01T00:00:00")
+        starts = (t0, t0 + np.timedelta64(second_offset_ns, "ns"))
+        patches = [
+            dc.Patch(
+                data=np.arange(float(count))[None],
+                coords={
+                    "distance": [0],
+                    "time": get_coord(start=x, step=step, shape=(count,)),
+                },
+                dims=("distance", "time"),
+            )
+            for x in starts
+        ]
+        spool = dc.spool(patches)
+        return spool.chunk(time=None, tolerance=10, fill_value=np.nan)[0], t0
+
+    def test_hole_between_offset_lattices_keeps_the_step(self):
+        """Members sharing a step on offset lattices fill at that step."""
+        ms = np.timedelta64(1, "ms")
+        # the second member sits 6.37 steps on: a 3-sample hole plus jitter
+        merged, t0 = self._two_members(ms, 6_370_000)
+        coord = merged.get_coord("time")
+        assert coord.evenly_sampled and coord.step == ms
+        # laid on the first member's lattice; the second snaps onto it
+        assert np.array_equal(coord.values, t0 + np.arange(9) * ms)
+        assert np.array_equal(self._fill_positions(merged), [3, 4, 5])
+        assert np.array_equal(merged.data[0, [0, 1, 2, 6, 7, 8]], [0, 1, 2] * 2)
+
+    def test_fractional_rate_hole_keeps_the_step(self):
+        """A one-sample hole at 6 kHz fills, though ns rounding shortens the seam."""
+        step = Fraction(1, 6000)
+        # one missing sample, the second start rounded to whole nanoseconds
+        merged, t0 = self._two_members(step, round(step * 1001 * 10**9), count=1000)
+        coord = merged.get_coord("time")
+        assert coord.evenly_sampled
+        assert coord.step == get_coord(start=t0, step=step, shape=(2,)).step
+        assert len(coord) == 2001
+        assert np.array_equal(self._fill_positions(merged), [1000])
+
+    def test_offlattice_fractional_hole_fills(self):
+        """A 3 kHz member resuming a ns off the lattice past a hole still fills."""
+        step = Fraction(1, 3000)
+        # one missing sample; the second start is a ns short of the lattice
+        merged, _ = self._two_members(step, round(step * 4 * 10**9) - 1, count=3)
+        coord = merged.get_coord("time")
+        assert coord.evenly_sampled and coord.step_exact == step
+        assert np.array_equal(self._fill_positions(merged), [3])
+
     def test_infinite_tolerance_fills_every_hole(self, gapped_spool):
         """No boundary is a gap, so no hole is too wide to fill."""
         merged = gapped_spool.chunk(time=None, tolerance=np.inf, fill_value=np.nan)[0]
@@ -3296,18 +3441,13 @@ class TestChunkFillWindows:
             view.chunk(time=2.0, keep_partial=True, fill_value=np.nan)
 
     def test_one_sample_output_is_not_padded(self):
-        """An output of one descending sample states no step to pad by."""
-        time = dc.get_coord(start=39.0, step=-1.0, shape=(40,))
-        coords = {"distance": np.arange(2.0), "time": time}
-        patch = dc.Patch(data=np.ones((2, 40)), coords=coords, dims=tuple(coords))
-        overlapping = patch.update_coords(time_min=time.max() - 7)
-        with suppress_warnings(UserWarning):
-            merged = dc.spool([patch, overlapping]).chunk(time=None, tolerance=50)
-            # the relative selection leaves the plan's windows off the grid
-            view = merged.select(time=(0.1, -0.1), relative=True)
-            first = view.chunk(time=2.5, tolerance=20, fill_value=np.nan)[0]
-        assert first.shape == (2, 1)
-        assert not np.isnan(first.data).any()
+        """An output of one sample states no step to pad by."""
+        coords = {"distance": np.arange(2.0), "time": np.array([5.0])}
+        patch = dc.Patch(data=np.ones((2, 1)), coords=coords, dims=tuple(coords))
+        out = dc.spool([patch]).chunk(time=None, tolerance=20, fill_value=np.nan)
+        assert len(out) == 1
+        assert out[0].shape == (2, 1)
+        assert not np.isnan(out[0].data).any()
 
     def test_fill_window_needs_a_span_and_a_step(self, random_patch):
         """Neither the row's span nor the sibling's step can be missing."""
