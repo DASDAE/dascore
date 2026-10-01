@@ -59,7 +59,11 @@ def _patch_datasets(path: UPath):
     with suppress_warnings(UserWarning, message="Consolidated metadata"):
         names = sorted(zarr.open_group(path, mode="r").group_keys())
     for name in names:
-        with _open_zarr(path, name) as dataset:
+        try:
+            dataset = _open_zarr(path, name)
+        except KeyError:  # raw zarr arrays with no dimension names
+            continue
+        with dataset:
             if _has_payload(dataset):
                 yield name, dataset
 
@@ -156,6 +160,7 @@ class ZarrV3(FiberIO):
         zarr = optional_import("zarr")  # xarray is required by the conversion
         spool = dc.spool([spool]) if isinstance(spool, dc.Patch) else spool
         names = get_patch_names(spool).str.replace("/", "_", regex=False)
+        names = names.mask(names == "", "patch")  # "" would name the root
         if resource.exists() and not _marked_zarr_format(resource):
             if resource.is_file() or any(resource.iterdir()):
                 msg = f"{resource} exists and is not a zarr store; not replacing it."

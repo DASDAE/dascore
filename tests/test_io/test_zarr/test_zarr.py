@@ -9,6 +9,7 @@ from unittest import mock
 
 import fsspec
 import numpy as np
+import pandas as pd
 import pytest
 import upath
 from fsspec.implementations.local import LocalFileSystem
@@ -500,6 +501,23 @@ class TestMultiPatch:
         dc.write(spool, path, "zarr")
         assert all("/" not in x.source_patch_key for x in dc.scan(path))
         assert len(dc.read(path)) == len(spool)
+
+    def test_empty_names(self, zarr_spool, tmp_path, monkeypatch):
+        """Empty names (e.g. from a source named ".h5") do not name the root."""
+        blank = pd.Series([""] * len(zarr_spool))
+        monkeypatch.setattr(zarr_core, "get_patch_names", lambda _: blank)
+        path = tmp_path / "blank.zarr"
+        dc.write(zarr_spool, path, "zarr")
+        assert len(dc.read(path)) == len(zarr_spool)
+
+    def test_raw_zarr_group_skipped(self, zarr_spool, tmp_path):
+        """A child group of plain zarr arrays is not a patch and is skipped."""
+        path = tmp_path / "raw.zarr"
+        dc.write(zarr_spool, path, "zarr")
+        group = zarr.open_group(path, mode="a")
+        group.create_group("raw").create_array("values", data=np.arange(3))
+        zarr.consolidate_metadata(path)
+        assert len(dc.read(path)) == len(zarr_spool)
 
     def test_streams(self, zarr_spool, tmp_path, monkeypatch):
         """Each patch is converted and written before the next is converted."""
