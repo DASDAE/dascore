@@ -43,6 +43,8 @@ import sys
 import textwrap
 import warnings
 from contextvars import ContextVar
+from importlib.metadata import entry_points
+from pathlib import Path
 from types import FunctionType
 from typing import TYPE_CHECKING, Any, ClassVar, Self, overload
 
@@ -91,7 +93,7 @@ from dascore.utils.patch_registry import (
     register_patch_function,
     resolve_patch_function,
 )
-from dascore.utils.plugins import KERNEL_GROUP, maybe_load_entry_point
+from dascore.utils.plugins import KERNEL_GROUP
 
 if TYPE_CHECKING:
     from dascore.core.attrs import PatchAttrs
@@ -309,7 +311,7 @@ class PatchProcessor(DascoreBaseModel):
         with a NumPy fallback if needed, before moving up: a subclass
         which wrote its own kernel means it, and a backend kernel
         registered against its parent must not answer for it. A backend
-        other than NumPy first loads its `dascore.kernels` entry point, once.
+        other than NumPy first loads its `dascore.kernels` entry points, once.
         """
         if backend != "numpy":
             _load_kernel_plugin(backend)
@@ -402,8 +404,11 @@ class PatchProcessor(DascoreBaseModel):
 
     def _run(self, patch: dc.PatchMeta, record: bool) -> dc.PatchMeta:
         """Run the operation; `record=False` writes no history or ids."""
-        self.check(patch)
         meta = patch.drop_data() if isinstance(patch, dc.Patch) else patch
+        # Before the check, which asks whether the class has any kernel.
+        if meta.backend != "numpy":
+            _load_kernel_plugin(meta.backend)
+        self.check(patch)
         out, plan = self.get_metadata(meta)
         plan = _checked_plan(self, plan)
         # Resolved from the metadata, so an operation with no kernel is
@@ -667,7 +672,7 @@ def check_patch_listings(patch_class, meta_class) -> None:
 
 def register_kernel(cls: type[PatchProcessor] | str, backend: str | tuple[str, ...]):
     """
-    Say that a function is how an operation runs on one array backend.
+    Say that a function is how an operation runs on given array backends.
 
     Used as a decorator. The kernel has the class's own `kernel` signature,
     `(processor, data, **plan)`, and returns an array.
@@ -708,13 +713,18 @@ def _processor_named(name: str) -> type[PatchProcessor]:
 
 @functools.cache
 def _load_kernel_plugin(backend: str) -> None:
-    """Load the `dascore.kernels` entry point for a backend, if any, once."""
-    # The error is caught inside the cache, so a broken plugin warns once.
-    try:
-        maybe_load_entry_point(KERNEL_GROUP, backend)
-    except Exception as error:
-        msg = f"Kernel plugin for backend {backend!r} failed to load: {error!r}"
-        warnings.warn(msg, UserWarning, stacklevel=3)
+    """Load every `dascore.kernels` entry point named for a backend, once."""
+    for entry_point in entry_points(group=KERNEL_GROUP, name=backend):
+        # The error is caught inside the cache, so a broken plugin warns once.
+        try:
+            entry_point.load()
+        except Exception as error:
+            msg = (
+                f"Kernel plugin {entry_point.value!r} for backend {backend!r} "
+                f"failed to load, so its kernels are not used: {error!r}"
+            )
+            prefix = str(Path(__file__).parent.parent)
+            warnings.warn(msg, UserWarning, skip_file_prefixes=(prefix,))
 
 
 def _method_for(cls: type[PatchProcessor], host: type):

@@ -9,7 +9,7 @@ import pickle
 import subprocess
 import sys
 import warnings
-from types import FunctionType
+from types import FunctionType, SimpleNamespace
 from typing import Any, ClassVar, Self
 
 import numpy as np
@@ -28,7 +28,6 @@ from dascore.exceptions import (
     PatchDataError,
 )
 from dascore.proc.basic import Abs, Normalize, _known_real
-from dascore.utils import plugins
 from dascore.utils.array_api import backend_name
 from dascore.utils.docs import compose_docstring
 from dascore.utils.identity import encode
@@ -1146,22 +1145,18 @@ class TestRegisterKernelForms:
 
 @pytest.fixture()
 def kernel_plugins(monkeypatch):
-    """Serve the kernel entry points from a dict, and log what is asked."""
-    loaders: dict[str, Any] = {}
-    asked: list[str] = []
+    """Serve the kernel entry points from a dict of loaders per backend."""
+    loaders: dict[str, list] = {}
 
-    def _loaders(group):
-        asked.append(group)
-        return loaders if group == "dascore.kernels" else {}
+    def _entry_points(group, name):
+        assert group == "dascore.kernels"
+        found = loaders.get(name, [])
+        return [SimpleNamespace(value="fake.module", load=x) for x in found]
 
-    def _clear():
-        plugins.maybe_load_entry_point.cache_clear()
-        processor_module._load_kernel_plugin.cache_clear()
-
-    _clear()
-    monkeypatch.setattr(plugins, "get_entry_point_loaders", _loaders)
-    yield loaders, asked
-    _clear()
+    processor_module._load_kernel_plugin.cache_clear()
+    monkeypatch.setattr(processor_module, "entry_points", _entry_points)
+    yield loaders
+    processor_module._load_kernel_plugin.cache_clear()
 
 
 class TestKernelPlugins:
@@ -1180,51 +1175,71 @@ class TestKernelPlugins:
 
     def test_a_plugin_supplies_the_kernel(self, kernel_plugins, local):
         """Loading the entry point is what registers the kernel."""
-        loaders, _ = kernel_plugins
 
         def _kernel(processor, data):
             """The plugin's kernel."""
             return data
 
-        loaders["plug_backend"] = lambda: register_kernel(local, "plug_backend")(
-            _kernel
-        )
+        kernel_plugins["plug_backend"] = [
+            lambda: register_kernel(local, "plug_backend")(_kernel)
+        ]
         assert local.kernel_for("plug_backend") is _kernel
 
-    def test_a_plugin_loads_once(self, kernel_plugins, local):
-        """Repeated lookups, from any class, do not load it again."""
-        loaders, _ = kernel_plugins
+    def test_plugins_load_once(self, kernel_plugins, local):
+        """Every plugin for a backend loads, and repeated lookups reload none."""
         calls = []
-        loaders["once_backend"] = lambda: calls.append(1)
+        kernel_plugins["once_backend"] = [
+            lambda: calls.append("first"),
+            lambda: calls.append("second"),
+        ]
         for _ in range(3):
             local.kernel_for("once_backend")
             SeamSum.kernel_for("once_backend")
-        assert len(calls) == 1
+        assert calls == ["first", "second"]
 
     def test_a_broken_plugin_warns_once(self, kernel_plugins, local):
         """The error is reported, the generic kernel runs, nothing retries."""
-        loaders, _ = kernel_plugins
         calls = []
 
         def _broken():
             calls.append(1)
             raise RuntimeError("plugin exploded")
 
-        loaders["broken_backend"] = _broken
+        kernel_plugins["broken_backend"] = [_broken, lambda: calls.append(2)]
         generic = SeamScale.__dict__["kernel"]
-        with pytest.warns(UserWarning, match="broken_backend.*plugin exploded"):
+        with pytest.warns(UserWarning, match="broken_backend.*plugin exploded") as w:
             assert local.kernel_for("broken_backend") is generic
+        # Pointed at the caller, not at DASCore's own frames.
+        assert w[0].filename == __file__
         with warnings.catch_warnings():
             warnings.simplefilter("error")
             assert local.kernel_for("broken_backend") is generic
-        assert len(calls) == 1
+        # The plugin after the broken one still loaded.
+        assert calls == [1, 2]
 
     def test_numpy_never_consults_entry_points(self, kernel_plugins, local):
         """The hot path asks nothing of the install."""
-        loaders, asked = kernel_plugins
-        loaders["numpy"] = lambda: pytest.fail("numpy loaded a plugin")
+        kernel_plugins["numpy"] = [lambda: pytest.fail("numpy loaded a plugin")]
         local.kernel_for("numpy")
-        assert asked == []
+        local()(dc.get_example_patch())
+
+    def test_a_plugin_kernel_still_refuses_metadata(self, kernel_plugins):
+        """A class whose only kernel is a plugin's needs data from the first call."""
+
+        class Local(PatchProcessor):
+            """Metadata-only until a plugin gives it a kernel."""
+
+            name = None
+
+        kernel_plugins["meta_backend"] = [
+            lambda: register_kernel(Local, "meta_backend")(lambda processor, data: data)
+        ]
+        patch = dc.get_example_patch()
+        meta = dc.PatchMeta(
+            patch.coords, attrs=patch.attrs, dtype=patch.dtype, backend="meta_backend"
+        )
+        with pytest.raises(PatchDataError):
+            Local().run(meta)
 
 
 class TestWhereOperationsAreListed:
