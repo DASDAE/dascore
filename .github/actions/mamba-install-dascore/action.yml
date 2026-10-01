@@ -76,11 +76,6 @@ runs:
       run: |
         python --version
 
-    - name: get tags for correct versioning
-      shell: bash -el {0}
-      run: |
-        git fetch --tags --force
-
     - name: install dascore
       if: "${{ inputs.install-package == 'true' }}"
       shell: bash -l {0}

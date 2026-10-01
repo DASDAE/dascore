@@ -39,10 +39,6 @@ runs:
         # turning it on.
         enable-cache: false
 
-    - name: get tags for correct versioning
-      shell: bash
-      run: git fetch --tags --force
-
     - name: install dascore
       if: "${{ inputs.install-package == 'true' }}"
       shell: bash
