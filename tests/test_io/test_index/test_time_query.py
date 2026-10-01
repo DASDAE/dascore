@@ -10,6 +10,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore.exceptions import TimeOverflowError
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import PatchCatalog
 from dascore.io.index.query import Query, build_sql
@@ -155,6 +156,12 @@ class TestTimeQuery:
         assert len(selected) == 1
         assert np.array_equal(selected[0].data, [1, 2])
         spool._catalog.close()
+
+    def test_unrepresentable_date_string_raises(self):
+        """A bound no nanosecond time can hold raises rather than matching nothing."""
+        spool = dc.get_example_spool("random_das")
+        with pytest.raises(TimeOverflowError):
+            len(spool.select(time=(None, "3000-01-01")))
 
 
 class TestPlannedTimeQueries:

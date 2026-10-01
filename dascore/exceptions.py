@@ -114,6 +114,10 @@ class TimeError(ValueError, DASCoreError):
     """Raised when something is wrong with a time value."""
 
 
+class TimeOverflowError(OverflowError, TimeError):
+    """Raised when a time cannot be represented in nanoseconds."""
+
+
 class InvalidTimeRangeError(TimeError):
     """Raised when an invalid time range is encountered."""
 

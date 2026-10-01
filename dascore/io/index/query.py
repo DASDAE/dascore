@@ -21,7 +21,12 @@ from typing import NamedTuple
 import numpy as np
 import pandas as pd
 
-from dascore.exceptions import InvalidSpoolQueryError, ParameterError, UnitError
+from dascore.exceptions import (
+    InvalidSpoolQueryError,
+    ParameterError,
+    TimeOverflowError,
+    UnitError,
+)
 from dascore.io.index.ingest import TypedValue, typed_value
 from dascore.io.index.schema import glob_expr, quote
 from dascore.units import convert_units, get_quantity
@@ -118,6 +123,8 @@ def _coerce_scalar(value, target_kinds: set[str]):
         try:
             retyped = typed_value(pd.Timestamp(value).to_datetime64())
             return retyped
+        except TimeOverflowError:
+            raise
         except (ValueError, TypeError):
             pass
     return typed
