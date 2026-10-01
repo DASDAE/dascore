@@ -264,6 +264,9 @@ def get_gridded_coord(values, units=None) -> BaseCoord:
     Such an array can jitter past the tolerance `get_coord` uses to recognize
     an even coordinate and leave a monotonic coord with no step.
 
+    The grid depends only on the first and last stored values and the sample
+    count, so files stating the same span agree on every sample and merge.
+
     Parameters
     ----------
     values
@@ -281,7 +284,8 @@ def get_gridded_coord(values, units=None) -> BaseCoord:
     >>> float(round(coord.step, 4))
     0.1
     """
-    coord = get_coord(data=np.atleast_1d(np.asarray(values)), units=units)
+    # Keep the stored labels so snap anchors on them, not a median-step grid.
+    coord = get_coord(data=np.atleast_1d(np.asarray(values)), units=units, snap=False)
     # A lone sample states no spacing, and snap would invent a step of 1.
     return coord.snap() if len(coord) > 1 else coord
 

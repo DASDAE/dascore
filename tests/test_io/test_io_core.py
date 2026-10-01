@@ -54,6 +54,7 @@ from dascore.io.core import (
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.utils import (
     convert_attr_units,
+    get_gridded_coord,
     resolve_keyed_source,
     slice_dataset,
     step_from_rate,
@@ -396,6 +397,43 @@ class TestExactCoord:
         assert coord.runs_count == 1
         np.testing.assert_array_equal(coord.values, values)
         assert len(coord.get_discontinuities("gaps")) == 1
+
+
+class TestGetGriddedCoord:
+    """Tests for forcing a stored array onto the grid it restates."""
+
+    @pytest.fixture(scope="class")
+    def same_span(self):
+        """An even array and a jittered one stating the same span."""
+        n = 2_000
+        even = np.linspace(850.0, 1049.9, n)
+        jittered = even.copy()
+        jittered[1:-1] += np.random.default_rng(1).normal(0, 5e-4, n - 2)
+        return even, jittered
+
+    def test_grid_depends_only_on_span_and_count(self, same_span):
+        """Arrays stating the same span agree on every sample."""
+        first, second = (get_gridded_coord(x, units="m") for x in same_span)
+
+        np.testing.assert_array_equal(first.values, second.values)
+        assert first.max() == same_span[0][-1]
+
+    def test_same_span_patches_merge(self, same_span):
+        """Adjacent patches gridded from the same span merge into one."""
+        time = dc.to_datetime64(0) + np.arange(10) * dc.to_timedelta64(1)
+        patches = [
+            dc.Patch(
+                data=np.zeros((len(x), 10)),
+                coords={
+                    "distance": get_gridded_coord(x, units="m"),
+                    "time": time + i * dc.to_timedelta64(10),
+                },
+                dims=("distance", "time"),
+            )
+            for i, x in enumerate(same_span)
+        ]
+
+        assert len(dc.spool(patches).chunk(time=None)) == 1
 
 
 class TestFormatManager:
