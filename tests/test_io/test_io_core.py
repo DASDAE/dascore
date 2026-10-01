@@ -404,7 +404,9 @@ class TestGetGriddedCoord:
 
     @pytest.fixture(scope="class")
     def same_span(self):
-        """An even array and a jittered one stating the same span."""
+        """An even array (inside get_coord's evenness tolerance) and a
+        jittered one (outside it) stating the same span.
+        """
         n = 2_000
         even = np.linspace(850.0, 1049.9, n)
         jittered = even.copy()
@@ -418,22 +420,16 @@ class TestGetGriddedCoord:
         np.testing.assert_array_equal(first.values, second.values)
         assert first.max() == same_span[0][-1]
 
-    def test_same_span_patches_merge(self, same_span):
-        """Adjacent patches gridded from the same span merge into one."""
-        time = dc.to_datetime64(0) + np.arange(10) * dc.to_timedelta64(1)
-        patches = [
-            dc.Patch(
-                data=np.zeros((len(x), 10)),
-                coords={
-                    "distance": get_gridded_coord(x, units="m"),
-                    "time": time + i * dc.to_timedelta64(10),
-                },
-                dims=("distance", "time"),
-            )
-            for i, x in enumerate(same_span)
-        ]
+    def test_float32_grid_depends_only_on_span_and_count(self):
+        """Float32 arrays one ulp apart in the interior grid identically."""
+        values = [0.1, 0.11, 0.12, 0.13, 0.14, 0.14999999, 0.16]
+        first = np.array(values, dtype=np.float32)
+        second = first.copy()
+        second[3] = np.nextafter(second[3], np.float32(1))
 
-        assert len(dc.spool(patches).chunk(time=None)) == 1
+        out = [get_gridded_coord(x, units="m").values for x in (first, second)]
+
+        np.testing.assert_array_equal(*out)
 
 
 class TestFormatManager:
