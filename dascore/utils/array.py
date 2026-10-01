@@ -1223,6 +1223,13 @@ def apply_ufunc(ufunc, *args, **kwargs):
     """
     _raise_on_out(kwargs)
     is_ufunc = isinstance(ufunc, np.ufunc)
+    # Without out, NumPy leaves the cells outside the mask unset.
+    if is_ufunc and kwargs.get("where", True) is not True:
+        msg = (
+            "The 'where' parameter cannot be used in element-wise patch "
+            "functions. Use the patch.data array directly."
+        )
+        raise ParameterError(msg)
     if is_ufunc:
         key = (ufunc.nin, ufunc.nout)
     else:
