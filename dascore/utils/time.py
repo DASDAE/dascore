@@ -23,13 +23,28 @@ from dascore.exceptions import TimeError, TimeOverflowError, UnitError
 _NAT_DATETIME64 = np.datetime64("NaT", "ns")
 _NAT_TIMEDELTA64 = np.timedelta64("NaT", "ns")
 _EPOCH_DATETIME64 = np.datetime64(0, "ns")
-# Whole seconds a nanosecond count can hold; -2**63 itself is NaT.
-_MAX_SECONDS = (2**63 - 1) // 1_000_000_000
+# The largest nanosecond count; -2**63 is NaT, so the range is symmetric.
+_MAX_NS = 2**63 - 1
+_MAX_SECONDS = _MAX_NS // 1_000_000_000
+_NS_DTYPES = {"M": np.dtype("datetime64[ns]"), "m": np.dtype("timedelta64[ns]")}
+# Nanoseconds per unit numpy can widen to ns; timedelta years and months
+# are numpy's average lengths.
+_NS_PER_UNIT = {
+    "Y": 31_556_952 * 10**9,
+    "M": 2_629_746 * 10**9,
+    "W": 7 * 86_400 * 10**9,
+    "D": 86_400 * 10**9,
+    "h": 3_600 * 10**9,
+    "m": 60 * 10**9,
+    "s": 10**9,
+    "ms": 10**6,
+    "us": 10**3,
+}
 
 
 def _raise_out_of_range(value):
     """Raise for a time the nanosecond representation cannot hold."""
-    shown = value if np.ndim(value) == 0 else "A value"
+    shown = value if np.ndim(value) == 0 else "An array element"
     msg = (
         f"{shown} is outside the range a nanosecond time can represent "
         "(about 1677-09-21 to 2262-04-11, or 292 years as a duration)."
@@ -39,31 +54,51 @@ def _raise_out_of_range(value):
 
 def _as_ns(value, kind: str):
     """Cast a datetime64 ("M") or timedelta64 ("m") to ns, raising on overflow."""
-    dtype = np.dtype(f"{kind}8[ns]")
-    if value.dtype == dtype:
+    dtype = _NS_DTYPES[kind]
+    if value.dtype == dtype and np.ndim(value) == 0:
         return value
-    # Numpy converts years and months to ns through the calendar, which
-    # wraps; through days, the cast raises like every other unit.
+    # Datetime years and months go through days, which have a fixed length.
     if np.datetime_data(value.dtype)[0] in ("Y", "M") and kind == "M":
         value = value.astype("datetime64[D]")
-    try:
-        return value.astype(dtype)
-    except OverflowError:
-        _raise_out_of_range(value)
+    unit, count = np.datetime_data(value.dtype)
+    # Numpy may wrap rather than raise when widening, so bound the count.
+    if unit in _NS_PER_UNIT:
+        limit = _MAX_NS // (_NS_PER_UNIT[unit] * count)
+        if np.ndim(value) == 0:  # python ints, much faster for one value
+            ticks = int(value.view(np.int64))
+            bad = ticks != -(2**63) and abs(ticks) > limit  # -2**63 is NaT
+        else:
+            ticks = value.astype(np.int64)
+            bad = np.any(((ticks > limit) | (ticks < -limit)) & ~np.isnat(value))
+        if bad:
+            _raise_out_of_range(value)
+    return value.astype(dtype)
 
 
 def _parse_iso(text):
     """Parse ISO text (a str or str array) to datetime64[ns], raising on overflow."""
     is_str = isinstance(text, str)
     value = np.datetime64(text) if is_str else text.astype("datetime64")
-    if np.datetime_data(value.dtype)[0] == "ns":
-        # Numpy builds text with nanosecond digits directly in ns, where a
-        # time out of range wraps; whole seconds cannot, so compare them.
-        seconds = np.datetime64(text, "s") if is_str else text.astype("datetime64[s]")
-        shifted = value.astype(np.int64) // 1_000_000_000 != seconds.astype(np.int64)
-        if np.any((shifted | np.isnat(value)) & ~np.isnat(seconds)):
-            _raise_out_of_range(text)
-    return _as_ns(value, "M")
+    if np.datetime_data(value.dtype)[0] not in ("ns", "ps", "fs", "as"):
+        return _as_ns(value, "M")
+    # Numpy builds text with sub-microsecond digits directly in that unit,
+    # where a time out of range wraps; truncate to ns as dascore always has,
+    # and compare whole seconds, which cannot wrap. A wrap can land on NaT.
+    if is_str:
+        value = np.datetime64(text, "ns")
+        seconds = np.datetime64(text, "s")
+        ok = np.isnat(seconds) or (
+            not np.isnat(value)
+            and int(value.astype(np.int64)) // 10**9 == int(seconds.astype(np.int64))
+        )
+    else:
+        value = text.astype("datetime64[ns]")
+        seconds = text.astype("datetime64[s]")
+        shifted = value.astype(np.int64) // 10**9 != seconds.astype(np.int64)
+        ok = not np.any((shifted | np.isnat(value)) & ~np.isnat(seconds))
+    if not ok:
+        _raise_out_of_range(text)
+    return value
 
 
 def _float_array_to_ns(array):
@@ -84,7 +119,7 @@ def _seconds_to_ns(num: float) -> int:
     """Convert finite seconds to an integer nanosecond count, raising on overflow."""
     out = round(num * 1_000_000_000)
     if not -(2**63) < out < 2**63:
-        _raise_out_of_range(num)
+        _raise_out_of_range(f"{num} seconds")
     return out
 
 
@@ -103,6 +138,8 @@ def to_datetime64(obj: timeable_types | np.ndarray):
         should conform to [ISO 8601](https://en.wikipedia.org/wiki/ISO_8601).
         Floats and integers are interpreted as seconds from Jan 1st, 1970.
         Arrays and Series of floats or strings are also supported.
+        A time outside about 1677-09-21 to 2262-04-11 raises a
+        `TimeOverflowError`.
 
     Examples
     --------
@@ -201,6 +238,8 @@ def _string_array_to_datetime64(arr: pd.arrays.StringArray):
     not dispatch the other.
     """
     out = pd.to_datetime(arr, errors="coerce", format="mixed")
+    if getattr(out, "tz", None) is not None:  # offsets parse to UTC
+        out = out.tz_convert(None)
     return _as_ns(out.to_numpy(), "M")
 
 
@@ -217,7 +256,7 @@ def _datetime_to_datetime64(dt: datetime):
     # if this is nullish and return NaT if so.
     if pd.isnull(dt):
         return _NAT_DATETIME64
-    # Built in its own microseconds; building it in ns wraps out of range.
+    # A datetime holds microseconds; building it in ns would wrap.
     return _as_ns(np.datetime64(dt), "M")
 
 
@@ -253,7 +292,8 @@ def to_timedelta64(obj: float | np.ndarray | str | timedelta):
     obj
         An object to convert to timedelta64. Can be a float, str or array of
         such. Floats are interpreted as seconds and strings must conform to
-        the output style of timedeltas (e.g. str(time_delta)).
+        the output style of timedeltas (e.g. str(time_delta)). A duration
+        past about 292 years raises a `TimeOverflowError`.
 
     Examples
     --------
@@ -349,7 +389,7 @@ def _string_array_to_timedelta64(arr: pd.arrays.StringArray):
 @to_timedelta64.register(pd.Timedelta)
 def _unpack_pandas_time_delta(time_delta: pd.Timedelta):
     """Convert a pandas Timedelta to numpy timedelta64."""
-    return time_delta.to_numpy()
+    return _as_ns(time_delta.to_numpy(), "m")
 
 
 @to_timedelta64.register(timedelta)
@@ -367,7 +407,7 @@ def _time_delta_from_str(time_delta_str: str):
             if units[-1] == "s":
                 units = units[:-1]
             new_unit = NUMPY_TIME_UNIT_MAPPING[units]
-            return np.timedelta64(int(val), new_unit)
+            return _as_ns(np.timedelta64(int(val), new_unit), "m")
         case [val] if val.lower() == "nat" or val.lower() == "":
             return _NAT_TIMEDELTA64
         case _:

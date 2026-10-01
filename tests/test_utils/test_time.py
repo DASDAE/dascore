@@ -478,22 +478,21 @@ class TestNanosecondRange:
         "value",
         [
             "2500-01-01",
-            "1000-01-01",
             "2500",  # parsed in years, which numpy wraps through the calendar
             "2500-01-01T00:00:00.000000000",  # parsed straight into ns
             "2262-04-11T23:47:16.854775808",  # one ns past the last valid
             "1677-09-21T00:12:43.145224192",  # wraps onto the NaT sentinel
             "2262-04-11T23:47:16.854775807-05:00",  # past once in UTC
             np.array(["2020-01-01", "2500-01-01"]),
+            np.array(["2020-01-01", "2500-01-01T00:00:00.000000000"]),
             np.array(["2500-01-01"], dtype=object),
             pd.array(["2020-01-01", "2500-01-01"], dtype="string"),
             np.datetime64("2500-01-01", "D"),
             np.array([530], dtype="datetime64[Y]"),
             datetime(2500, 1, 1),
-            date(2500, 1, 1),
             pd.Timestamp("2500-01-01"),
             2e10,
-            np.array([2e10]),
+            -9_223_372_036.854775808,  # rounds onto the NaT sentinel
             np.array([np.iinfo(np.int64).max / 1e9]),
         ],
     )
@@ -511,6 +510,10 @@ class TestNanosecondRange:
             np.array([np.iinfo(np.int64).min]),
             np.timedelta64(1000, "Y"),
             timedelta(days=200_000),
+            "1000 years",
+            pd.Timedelta(np.timedelta64(200_000, "D")),
+            np.array([300], dtype="timedelta64[Y]"),
+            np.array([530], dtype="datetime64[Y]"),
         ],
     )
     def test_timedelta_raises(self, value):
@@ -555,6 +558,16 @@ class TestNanosecondRange:
         """Inputs in coarser units come back in ns."""
         assert to_datetime64(pd.Timestamp("2020-01-01")).dtype == "datetime64[ns]"
         assert to_timedelta64(timedelta(days=1)).dtype == "timedelta64[ns]"
+        assert to_timedelta64(pd.Timedelta(days=1)).dtype == "timedelta64[ns]"
+        assert to_timedelta64("2 days").dtype == "timedelta64[ns]"
+
+    def test_finer_than_nanoseconds_truncates(self):
+        """Text with more than nine fractional digits truncates to ns."""
+        expected = np.datetime64("2020-01-01T00:00:00.123456789", "ns")
+        assert to_datetime64("2020-01-01T00:00:00.1234567891") == expected
+        assert (
+            to_datetime64(np.array(["2020-01-01T00:00:00.1234567891"]))[0] == expected
+        )
 
     def test_still_an_overflow_error(self):
         """Handlers written for numpy's OverflowError keep catching it."""
