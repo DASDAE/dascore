@@ -206,6 +206,20 @@ class TestBasicAggregations:
         assert len(new_time) == 1
         assert new_time[0] == out.get_array("time")[0]
 
+    @pytest.mark.parametrize("name", sorted(_AGG_FUNCS))
+    def test_dim_reduce_integer_coord(self, name):
+        """Every named dim_reduce keeps an integer coord's reduced value."""
+        values = np.arange(10, 15)
+        patch = dc.Patch(
+            data=np.ones((5, 4)),
+            coords={"distance": values, "time": np.arange(4)},
+            dims=("distance", "time"),
+        )
+        out = patch.max("distance", dim_reduce=name)
+        coord = out.get_coord("distance")
+        assert len(coord) == 1
+        assert coord.values[0] == _AGG_FUNCS[name](values)
+
     def test_dim_reduce_distance(self, random_patch):
         """Ensure non-time dims also work."""
         out = random_patch.aggregate(dim="distance", method="mean", dim_reduce=np.var)
