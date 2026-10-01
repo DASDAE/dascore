@@ -168,6 +168,9 @@ def _str_to_datetime64(obj: str) -> np.datetime64:
     # strip off timezone info so numpy doesn't complain.
     if obj.endswith("Z"):
         obj = obj[:-1]
+    # Numpy parses these with no unit, which it deprecates.
+    if obj.lower() in ("", "nat"):
+        return _NAT_DATETIME64
     return _parse_iso(obj)
 
 

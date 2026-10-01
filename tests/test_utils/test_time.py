@@ -569,6 +569,23 @@ class TestNanosecondRange:
             to_datetime64(np.array(["2020-01-01T00:00:00.1234567891"]))[0] == expected
         )
 
+    @pytest.mark.parametrize("text", ["NaT", "nat", ""])
+    def test_nat_strings(self, text):
+        """Text naming no time is NaT, without numpy's unitless warning."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert np.isnat(to_datetime64(text))
+
+    def test_empty_arrays(self):
+        """Empty arrays have nothing to bound and still convert."""
+        assert to_datetime64(np.array([])).dtype == "datetime64[ns]"
+        assert to_timedelta64(np.array([])).dtype == "timedelta64[ns]"
+
+    def test_pandas_strings_with_offset(self):
+        """Pandas parses an offset to an aware time; it comes back as UTC."""
+        text = pd.array(["2020-01-01T01:00:00+01:00"], dtype="string")
+        assert to_datetime64(text)[0] == np.datetime64("2020-01-01T00:00", "ns")
+
     def test_still_an_overflow_error(self):
         """Handlers written for numpy's OverflowError keep catching it."""
         with pytest.raises(OverflowError):
