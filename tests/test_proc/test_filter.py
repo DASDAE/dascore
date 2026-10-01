@@ -202,6 +202,7 @@ class TestSobelFilter:
         [
             {"dim": "time", "mode": "not_a_mode"},
             {"dim": "time", "mode": 0.0},
+            {"dim": "time", "mode": ["reflect"]},
             {"dim": -1},
             {"dim": None, "mode": "constant"},
             {"dim": "distance", "mode": "constant", "cval": None},

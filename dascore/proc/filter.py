@@ -184,7 +184,7 @@ class SobelFilter(PatchProcessor):
         """Return the axis to filter along, once the arguments are checked."""
         problems = {
             "dim": not isinstance(self.dim, str),
-            "mode": self.mode not in _NDIMAGE_MODES,
+            "mode": not isinstance(self.mode, str) or self.mode not in _NDIMAGE_MODES,
             "cval": not isinstance(self.cval, float | int),
         }
         if bad := [name for name, is_bad in problems.items() if is_bad]:
