@@ -446,9 +446,9 @@ class Abs(PatchProcessor):
 
     Examples
     --------
-    >>> import dascore # import dascore library
-    >>> pa = dascore.get_example_patch() # generate example patch
-    >>> out = pa.abs() # take absolute value of generated example patch data
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> out = patch.abs()
     """
 
     def kernel(self, data):

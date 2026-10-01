@@ -13,9 +13,9 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from scipy import ndimage
 from scipy.ndimage import gaussian_filter as np_gauss
 from scipy.ndimage import median_filter as nd_median_filter
+from scipy.ndimage import sobel as nd_sobel
 
 import dascore as dc
 from dascore.constants import PatchType, samples_arg_description
@@ -53,32 +53,10 @@ zpk2sos = lazy_import("scipy.signal", "zpk2sos")
 np_savgol_filter = lazy_import("scipy.signal", "savgol_filter")
 
 
-def _check_sobel_args(dim, mode, cval):
-    """Check Sobel filter kwargs and return."""
-    mode_options = {
-        "reflect",
-        "constant",
-        "nearest",
-        "mirror",
-        "wrap",
-        "grid-constant",
-        "grid-mirror",
-        "grid-wrap",
-    }
-    if not isinstance(dim, str):
-        msg = "dim parameter should be a string."
-        raise FilterValueError(msg)
-    if not isinstance(mode, str):
-        msg = "mode parameter should be a string."
-        raise FilterValueError(msg)
-    if not isinstance(cval, float | int):
-        msg = "cval parameter should be a float or an int."
-        raise FilterValueError(msg)
-    if mode not in mode_options:
-        msg = f"The valid values for modes are {mode_options}."
-        raise FilterValueError(msg)
-
-    return dim, mode, cval
+# The boundary modes scipy.ndimage filters accept.
+_NDIMAGE_MODES = frozenset(
+    "constant grid-constant grid-mirror grid-wrap mirror nearest reflect wrap".split()
+)
 
 
 def _get_sos(sr, filt_min, filt_max, corners):
@@ -158,16 +136,13 @@ def pass_filter(
     sos = _get_sos(sr, filt_min, filt_max, corners)
     if patch.data.dtype == np.float32:
         sos = sos.astype(np.float32, copy=False)
-    if zerophase:
-        out = sosfiltfilt(sos, patch.data, axis=axis)
-    else:
-        out = sosfilt(sos, patch.data, axis=axis)
-    return patch.new(data=out)
+    apply_sos = sosfiltfilt if zerophase else sosfilt
+    return patch.new(data=apply_sos(sos, patch.data, axis=axis))
 
 
 class SobelFilter(PatchProcessor):
     """
-    Apply a Sobel filter.
+    Estimate the gradient along one dimension with a Sobel operator.
 
     Parameters
     ----------
@@ -192,32 +167,40 @@ class SobelFilter(PatchProcessor):
     --------
     >>> import dascore
     >>> pa = dascore.get_example_patch()
-
-    >>>  # 1. Apply Sobel filter using the default parameter values.
-    >>> sobel_default = pa.sobel_filter(dim='time', mode='reflect', cval=0.0)
-
-    >>>  # 2. Apply Sobel filter with arbitrary parameter values.
-    >>> sobel_arbitrary = pa.sobel_filter(dim='time', mode='constant', cval=1)
-
-    >>> # 3. Apply Sobel filter along both axes
+    >>> # Differentiate along time, mirroring the data at the edges.
+    >>> time_edges = pa.sobel_filter("time")
+    >>> # Pad the edges with a fixed value instead.
+    >>> padded = pa.sobel_filter("time", mode="constant", cval=1)
+    >>> # Chain calls to take the gradient along several dimensions.
     >>> sobel_time_space = pa.sobel_filter('time').sobel_filter('distance')
     """
 
-    # Loose, so `_check_sobel_args` refuses a bad value as a ParameterError.
+    # Loose, so `get_metadata` refuses a bad value as a FilterValueError.
     dim: Any
     mode: Any = "reflect"
     cval: Any = 0.0
 
     def get_metadata(self, meta):
         """Return the axis to filter along, once the arguments are checked."""
-        dim, _, _ = _check_sobel_args(self.dim, self.mode, self.cval)
+        problems = {
+            "dim": not isinstance(self.dim, str),
+            "mode": self.mode not in _NDIMAGE_MODES,
+            "cval": not isinstance(self.cval, float | int),
+        }
+        if bad := [name for name, is_bad in problems.items() if is_bad]:
+            msg = (
+                f"Invalid sobel_filter argument(s): {', '.join(bad)}. dim must "
+                f"name a dimension, cval must be a number, and mode must be "
+                f"one of {sorted(_NDIMAGE_MODES)}."
+            )
+            raise FilterValueError(msg)
         # the kernel smooths along every other axis too
         require_no_holes(meta, meta.dims, "sobel_filter")
-        return meta, {"axis": meta.get_axis(dim)}
+        return meta, {"axis": meta.get_axis(self.dim)}
 
     def numpy_kernel(self, data, *, axis):
         """Return the Sobel gradient along the axis."""
-        return ndimage.sobel(data, axis=axis, mode=self.mode, cval=self.cval)
+        return nd_sobel(data, axis=axis, mode=self.mode, cval=self.cval)
 
 
 @patch_function()
