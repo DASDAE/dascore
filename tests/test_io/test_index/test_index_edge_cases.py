@@ -1155,7 +1155,7 @@ class TestIndexerEdges:
         sub = tmp_path / "unit"
         sub.mkdir()
         (sub / "metadata.xml").write_text(metadata)
-        # hidden files and subdirectories inside a unit are ignored
+        # hidden files inside a unit are members, so write this one first
         (sub / ".hidden_state").write_text("x")
         (sub / "logs").mkdir()
         rand = np.random.default_rng(0).random((5000, 10)).astype("float32")

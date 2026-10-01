@@ -85,6 +85,8 @@ extras = [
     "pyarrow",
     "netCDF4",
     "h5netcdf",
+    # The ZARR format; zarr 3 reads and writes both zarr formats 2 and 3.
+    "zarr>=3",
     "findiff",
     "obspy",
     "numba",
@@ -209,6 +211,8 @@ WAV = "dascore.io.wav.core:WavIO"
 XMLBINARY__V1 = "dascore.io.xml_binary.core:XMLBinaryV1"
 GDR_DAS__V1 = "dascore.io.gdr.core:GDR_V1"
 NETCDF_CF__V1_8 = "dascore.io.netcdf.core:NetCDFCFV18"
+ZARR__V2 = "dascore.io.zarr.core:ZarrV2"
+ZARR__V3 = "dascore.io.zarr.core:ZarrV3"
 MSEED__V2 = "dascore.io.mseed.core:MSeedV2"
 MSEED__V3 = "dascore.io.mseed.core:MSeedV3"
 

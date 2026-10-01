@@ -26,9 +26,9 @@ import pandas as pd
 import dascore as dc
 from dascore.compat import UPath
 from dascore.config import config_attr, config_context, get_config
-from dascore.constants import PROGRESS_LEVELS, ExecutorType
+from dascore.constants import INDEX_NAME, PROGRESS_LEVELS, ExecutorType
 from dascore.exceptions import InvalidIndexVersionError
-from dascore.io.core import is_directory_format
+from dascore.io.core import _directory_members, is_directory_format
 from dascore.io.index.backend import get_backend
 from dascore.io.index.ingest import (
     SourceRecord,
@@ -46,16 +46,8 @@ from dascore.utils.progress import track, validate_progress_level
 
 def _directory_signature(path: Path) -> tuple[int, int]:
     """Return a stable 128-bit manifest signature as two SQLite ints."""
-    members = sorted(
-        (
-            sub
-            for sub in path.rglob("*")
-            if sub.is_file() and not sub.name.startswith(".")
-        ),
-        key=lambda sub: sub.relative_to(path).as_posix(),
-    )
     digest = hashlib.sha256()
-    for member in members:
+    for member in _directory_members(path):
         status = member.stat()
         relative = member.relative_to(path).as_posix().encode()
         digest.update(len(relative).to_bytes(8, "big"))
@@ -227,7 +219,7 @@ class DBDirectoryIndexer:
 
     @property
     def _index_name(self) -> str:
-        return ".dascore_index.sqlite3"
+        return INDEX_NAME
 
     @staticmethod
     def _is_legacy_or_foreign_index(path: Path) -> bool:
@@ -318,8 +310,9 @@ class DBDirectoryIndexer:
         unit. A directory-format unit (e.g. XMLBinary) appears as one
         entry keyed by the directory, with a 128-bit manifest fingerprint
         split across the two integer stat fields. The fingerprint covers
-        every member's relative path, mtime, and size, so member changes
-        cannot cancel each other out. Mirrors the skip protocol dc.scan
+        the relative path, mtime, and size of each member
+        `_directory_members` names, so member changes cannot cancel each
+        other out. Mirrors the skip protocol dc.scan
         uses so members are not offered individually.
         """
         files: dict[str, tuple[int, int, Path]] = {}

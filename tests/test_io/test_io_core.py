@@ -991,6 +991,30 @@ class TestScan:
         assert len(caught) == 1
         assert str(denied) in str(caught[0].message)
 
+    def test_directory_probe_denied(self, tmp_path, random_patch, monkeypatch):
+        """A directory whose format probe is denied warns; the scan goes on."""
+        fiber_io = FiberIO.manager.get_fiberio(
+            format=_FiberDirectory.name, version=_FiberDirectory.version
+        )
+        denied = tmp_path / fiber_io.name
+        denied.mkdir()
+        readable = tmp_path / "readable.h5"
+        random_patch.io.write(readable, "dasdae")
+
+        def raise_permission_error(*args, **kwargs):
+            raise PermissionError(f"Permission denied: {denied}")
+
+        monkeypatch.setattr(fiber_io, "get_format", raise_permission_error)
+        with pytest.warns(UserWarning, match="Permission denied; skipping"):
+            out = dc.scan([denied, readable], progress=None)
+        assert [Path(summary.source_path) for summary in out] == [readable]
+
+    def test_path_filtered_out(self, tmp_path, random_patch):
+        """A file its extension filter rejects scans as nothing."""
+        path = tmp_path / "patch.h5"
+        random_patch.io.write(path, "dasdae")
+        assert dc.scan(path, ext="xyz") == []
+
     @pytest.fixture(scope="class")
     def nested_directory_with_patches(self, tmpdir_factory, random_patch):
         """Return a nested directory with patch files interlaced."""
@@ -1899,13 +1923,14 @@ class TestSourceIds:
         spelled = dc.read(terra15_path, name.lower(), version)[0]
         assert spelled.attrs.origin_id == dc.read(terra15_path)[0].attrs.origin_id
 
-    def test_a_hidden_member_is_not_part_of_a_directory(self, tmp_path):
-        """Including one under a hidden directory, which is hidden too."""
+    def test_the_index_is_not_part_of_a_directory(self, tmp_path):
+        """A hidden member is part of a directory; its DASCore index is not."""
         (tmp_path / "member.h5").write_bytes(b"data")
         before = _source_stats(tmp_path)
-        (tmp_path / ".cache").mkdir()
-        (tmp_path / ".cache" / "member.h5").write_bytes(b"much more data")
+        (tmp_path / ".dascore_index.sqlite3-journal").write_bytes(b"index")
         assert _source_stats(tmp_path) == before
+        (tmp_path / ".zattrs").write_bytes(b"{}")
+        assert _source_stats(tmp_path) != before
 
     def test_one_file_spelled_two_ways(self, terra15_path, monkeypatch):
         """
