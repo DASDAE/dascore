@@ -286,7 +286,7 @@ def get_gridded_coord(values, units=None) -> BaseCoord:
     0.1
     """
     values = np.atleast_1d(np.asarray(values))
-    # Grid floats in float64 so float32 rounding cannot move an endpoint.
+    # Grid floats in float64; float32 step arithmetic split equal spans.
     if values.dtype.kind == "f":
         values = values.astype(np.float64)
     # snap=True would fit a jitter-dependent median step.
