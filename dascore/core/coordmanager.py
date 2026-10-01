@@ -1380,7 +1380,8 @@ class CoordManager(RichRepr, DascoreBaseModel):
         dim_to_coord_map = self.dim_to_coord_map
 
         # Iterate each of the coords to flip.
-        for name in dims:
+        # Repeating a dim would flip its associated coords twice but not it.
+        for name in dict.fromkeys(dims):
             coord = self.get_coord(name)
             if coord.ndim != 1:
                 msg = (
@@ -1396,7 +1397,12 @@ class CoordManager(RichRepr, DascoreBaseModel):
                 # Don't flip dimensional coords twice!
                 if associated == name:
                     continue
-                associated_coord = self.get_coord(associated)
+                # Build on earlier flips when it depends on several flipped dims.
+                associated_coord = (
+                    out[associated][1]
+                    if associated in out
+                    else self.get_coord(associated)
+                )
                 dims = dim_map[associated]
                 axis = dims.index(name)
                 out[associated] = (dims, _flip_coord(associated_coord, axis))
