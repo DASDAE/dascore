@@ -54,6 +54,7 @@ from dascore.io.core import (
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.utils import (
     convert_attr_units,
+    get_gridded_coord,
     resolve_keyed_source,
     slice_dataset,
     step_from_rate,
@@ -396,6 +397,39 @@ class TestExactCoord:
         assert coord.runs_count == 1
         np.testing.assert_array_equal(coord.values, values)
         assert len(coord.get_discontinuities("gaps")) == 1
+
+
+class TestGetGriddedCoord:
+    """Tests for forcing a stored array onto the grid it restates."""
+
+    @pytest.fixture(scope="class")
+    def same_span(self):
+        """An even array (inside get_coord's evenness tolerance) and a
+        jittered one (outside it) stating the same span.
+        """
+        n = 2_000
+        even = np.linspace(850.0, 1049.9, n)
+        jittered = even.copy()
+        jittered[1:-1] += np.random.default_rng(1).normal(0, 5e-4, n - 2)
+        return even, jittered
+
+    def test_grid_depends_only_on_span_and_count(self, same_span):
+        """Arrays stating the same span agree on every sample."""
+        first, second = (get_gridded_coord(x, units="m") for x in same_span)
+
+        np.testing.assert_array_equal(first.values, second.values)
+        assert first.max() == same_span[0][-1]
+
+    def test_float32_grid_depends_only_on_span_and_count(self):
+        """Float32 arrays one ulp apart in the interior grid identically."""
+        values = [0.1, 0.11, 0.12, 0.13, 0.14, 0.14999999, 0.16]
+        first = np.array(values, dtype=np.float32)
+        second = first.copy()
+        second[3] = np.nextafter(second[3], np.float32(1))
+
+        out = [get_gridded_coord(x, units="m").values for x in (first, second)]
+
+        np.testing.assert_array_equal(*out)
 
 
 class TestFormatManager:

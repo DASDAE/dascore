@@ -33,7 +33,8 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 27 drops the per-run
+# changes, not only when a column does. Version 28 grids a stored distance
+# array in float64 from its end values, not a median step. Version 27 drops the per-run
 # coordinate links (`run_index`). Version 26 scans labels flooring a
 # fractional-step grid as that grid, not a rounded step. Version 25 includes the step
 # runs on one fractional grid now state in their ids. Version 24 identifies a
@@ -51,7 +52,7 @@ from typing import NamedTuple, get_args, get_type_hints
 # version 15 stored source coordinate and numeric attribute dtypes.
 # Earlier indexes lack the metadata required for reconstruction and are
 # rebuilt when opened.
-INDEX_VERSION = 27
+INDEX_VERSION = 28
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
