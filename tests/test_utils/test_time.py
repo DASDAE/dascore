@@ -13,7 +13,7 @@ import pytest
 
 import dascore as dc
 from dascore.compat import random_state
-from dascore.exceptions import TimeError, UnitError
+from dascore.exceptions import TimeError, TimeOverflowError, UnitError
 
 try:
     import pyarrow
@@ -468,6 +468,98 @@ class TestToTimeDelta64:
         expected = np.timedelta64(1577836800, "s")
         assert to_timedelta64(np.array([value])) == expected
         assert to_timedelta64(np.array(value)) == expected
+
+
+@pytest.mark.filterwarnings("ignore:no explicit representation of timezones")
+class TestNanosecondRange:
+    """Times a nanosecond count cannot hold raise rather than wrap (#890)."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "2500-01-01",
+            "1000-01-01",
+            "2500",  # parsed in years, which numpy wraps through the calendar
+            "2500-01-01T00:00:00.000000000",  # parsed straight into ns
+            "2262-04-11T23:47:16.854775808",  # one ns past the last valid
+            "1677-09-21T00:12:43.145224192",  # wraps onto the NaT sentinel
+            "2262-04-11T23:47:16.854775807-05:00",  # past once in UTC
+            np.array(["2020-01-01", "2500-01-01"]),
+            np.array(["2500-01-01"], dtype=object),
+            pd.array(["2020-01-01", "2500-01-01"], dtype="string"),
+            np.datetime64("2500-01-01", "D"),
+            np.array([530], dtype="datetime64[Y]"),
+            datetime(2500, 1, 1),
+            date(2500, 1, 1),
+            pd.Timestamp("2500-01-01"),
+            2e10,
+            np.array([2e10]),
+            np.array([np.iinfo(np.int64).max / 1e9]),
+        ],
+    )
+    def test_datetime_raises(self, value):
+        """Every spelling of an out of range time raises."""
+        with pytest.raises(TimeOverflowError, match="outside the range"):
+            to_datetime64(value)
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            1e12,
+            np.array([1e12]),
+            np.array([9_223_372_037]),
+            np.array([np.iinfo(np.int64).min]),
+            np.timedelta64(1000, "Y"),
+            timedelta(days=200_000),
+        ],
+    )
+    def test_timedelta_raises(self, value):
+        """Durations past about 292 years raise."""
+        with pytest.raises(TimeOverflowError, match="outside the range"):
+            to_timedelta64(value)
+
+    @pytest.mark.parametrize(
+        "iso",
+        [
+            "2262-04-11T23:47:16.854775807",
+            "1677-09-21T00:12:43.145224193",
+            "2262-04-11",
+            "1677-09-22",
+        ],
+    )
+    def test_outermost_values_convert(self, iso):
+        """The edges of the range are still representable."""
+        expected = np.datetime64(iso, "ns")
+        assert to_datetime64(iso) == expected
+        assert to_datetime64(np.array([iso]))[0] == expected
+
+    def test_offset_into_range_converts(self):
+        """An offset moving a written time into the range is not an overflow."""
+        out = to_datetime64("2262-04-12T04:47:16.854775807+05:00")
+        assert out == np.datetime64("2262-04-11T23:47:16.854775807", "ns")
+
+    def test_nat_and_nanoseconds_together(self):
+        """A NaT string next to nanosecond text stays NaT."""
+        out = to_datetime64(np.array(["NaT", "2020-01-01T00:00:00.123456789"]))
+        assert np.isnat(out[0])
+        assert out[1] == np.datetime64("2020-01-01T00:00:00.123456789", "ns")
+
+    def test_whole_seconds_at_the_edge(self):
+        """The last whole second each way fits."""
+        out = to_timedelta64(np.array([9_223_372_036, -9_223_372_036]))
+        assert np.array_equal(
+            out.astype(np.int64) // 10**9, [9_223_372_036, -9_223_372_036]
+        )
+
+    def test_results_are_nanoseconds(self):
+        """Inputs in coarser units come back in ns."""
+        assert to_datetime64(pd.Timestamp("2020-01-01")).dtype == "datetime64[ns]"
+        assert to_timedelta64(timedelta(days=1)).dtype == "timedelta64[ns]"
+
+    def test_still_an_overflow_error(self):
+        """Handlers written for numpy's OverflowError keep catching it."""
+        with pytest.raises(OverflowError):
+            to_timedelta64(1e12)
 
 
 class TestDegenerateArrays:
