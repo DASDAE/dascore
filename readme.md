@@ -6,12 +6,14 @@ A python library for distributed fiber optic sensing.
 [![CodSpeed Badge](https://img.shields.io/endpoint?url=https://codspeed.io/badge.json)](https://codspeed.io/DASDAE/dascore)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 [![Checked with ty](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ty/main/assets/badge/v0.json)](https://github.com/astral-sh/ty)
+
 [![PyPI Version](https://img.shields.io/pypi/v/dascore.svg)](https://pypi.python.org/pypi/dascore)
 [![supported versions](https://img.shields.io/pypi/pyversions/dascore.svg?label=python_versions)](https://pypi.python.org/pypi/dascore)
+[![Licence](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/DASDAE/dascore/blob/dev/dascore/docs/LICENSE)
+[![DOI](https://zenodo.org/badge/422627477.svg)](https://zenodo.org/badge/latestdoi/422627477)
+
 [![PyPI Downloads](https://img.shields.io/pypi/dm/dascore.svg?label=pypi)](https://pypi.org/project/dascore/)
 [![Conda Downloads](https://img.shields.io/conda/dn/conda-forge/dascore.svg?label=conda)](https://github.com/conda-forge/dascore-feedstock)
-[![DOI](https://zenodo.org/badge/422627477.svg)](https://zenodo.org/badge/latestdoi/422627477)
-[![Licence](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/DASDAE/dascore/blob/dev/dascore/docs/LICENSE)
 
 [Code](https://github.com/DASDAE/dascore)
 
