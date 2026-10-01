@@ -927,6 +927,27 @@ def get_patch_names(
     return out
 
 
+def _unique_patch_names(names) -> list[str]:
+    """
+    Return ``names`` with repeats suffixed ``__1``, ``__2``, ...
+
+    A suffix already taken, by a given name or an earlier suffix, is
+    skipped. Patches can share a name (e.g. gap-split siblings differing
+    only along a dimension the name omits); a writer keying groups by name
+    needs them apart.
+    """
+    names = list(names)
+    reserved, used, out = set(names), set(), []
+    for name in names:
+        new, num = name, 0
+        while new in used or (num and new in reserved):
+            num += 1
+            new = f"{name}__{num}"
+        used.add(new)
+        out.append(new)
+    return out
+
+
 def get_dim_axis_value(
     patch: _HasDims,
     *,

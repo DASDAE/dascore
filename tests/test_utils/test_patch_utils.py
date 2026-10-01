@@ -24,6 +24,7 @@ from dascore.models import ArrayLike
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import (
     _force_patch_merge,
+    _unique_patch_names,
     align_patch_coords,
     check_data_units,
     check_dims,
@@ -1318,6 +1319,18 @@ class TestGetPatchName:
         names = get_patch_names(df, coords=("time", "distance"))
         assert len(names) == len(df)
         assert names.str.len().gt(0).all()
+
+
+class TestUniquePatchNames:
+    """Repeated patch names are suffixed so no two are equal."""
+
+    def test_repeats(self):
+        """Each repeat takes the next suffix; unique names are unchanged."""
+        assert _unique_patch_names(["a", "a", "b", "a"]) == ["a", "a__1", "b", "a__2"]
+
+    def test_suffix_taken(self):
+        """A suffix another patch is already named is skipped."""
+        assert _unique_patch_names(["a", "a", "a__1"]) == ["a", "a__2", "a__1"]
 
 
 class TestSwapKwargsDimToAxis:
