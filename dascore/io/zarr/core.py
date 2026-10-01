@@ -7,7 +7,7 @@ import numpy as np
 import dascore as dc
 from dascore.compat import UPath
 from dascore.constants import snap_type, windows_type
-from dascore.exceptions import MissingOptionalDependencyError
+from dascore.exceptions import MissingOptionalDependencyError, PatchAttributeError
 from dascore.io import FiberIO
 from dascore.io.netcdf.utils import (
     dataset_to_patch_meta,
@@ -18,7 +18,7 @@ from dascore.io.netcdf.utils import (
 from dascore.io.utils import resolve_keyed_source
 from dascore.utils.io import staged_path
 from dascore.utils.misc import optional_import, suppress_warnings
-from dascore.utils.patch import _unique_patch_names
+from dascore.utils.patch import _unique_patch_names, get_patch_names
 
 # The file which marks a directory as a zarr group, by zarr format.
 _MARKERS = {"3": "zarr.json", "2": ".zgroup"}
@@ -35,11 +35,33 @@ def _open_zarr(path: UPath, group: str | None = None):
         )
 
 
-def _patch_groups(path: UPath) -> list[str]:
-    """Return a store's child groups, one per patch; empty for a root payload."""
+def _has_payload(dataset) -> bool:
+    """Return True if an open dataset holds a dimensioned payload."""
+    try:
+        name = get_xarray_data_var_name(dataset)
+    except ValueError:
+        return False
+    return bool(dataset[name].dims)
+
+
+def _patch_datasets(path: UPath):
+    """
+    Yield ``(group, open dataset)`` for each patch of a store.
+
+    A root payload is the one patch (group None) and child groups are then
+    ignored; otherwise each child group holding a payload is a patch.
+    """
+    with _open_zarr(path) as root:
+        if _has_payload(root):
+            yield None, root
+            return
     zarr = optional_import("zarr")
     with suppress_warnings(UserWarning, message="Consolidated metadata"):
-        return sorted(zarr.open_group(str(path), mode="r").group_keys())
+        names = sorted(zarr.open_group(path, mode="r").group_keys())
+    for name in names:
+        with _open_zarr(path, name) as dataset:
+            if _has_payload(dataset):
+                yield name, dataset
 
 
 def _marked_zarr_format(path: UPath) -> str | None:
@@ -48,12 +70,7 @@ def _marked_zarr_format(path: UPath) -> str | None:
 
 
 class ZarrV3(FiberIO):
-    """
-    Zarr IO (zarr format 3); the payload is ``data``, else the only variable.
-
-    A single patch is stored at the store root, several as one group each,
-    named as DASDAE names its patch groups.
-    """
+    """Zarr IO (zarr format 3); the payload is ``data``, else the only variable."""
 
     name = "ZARR"
     version = "3"
@@ -80,44 +97,51 @@ class ZarrV3(FiberIO):
         if version is None:
             return None
         try:
-            groups = _patch_groups(resource)
-            dataset = _open_zarr(resource, groups[0] if groups else None)
+            for _ in _patch_datasets(resource):
+                return version
         except MissingOptionalDependencyError:
             # Claimed, so reading names the missing package and a scan
             # does not walk into the store's chunks.
             return version
-        with dataset:
-            name = get_xarray_data_var_name(dataset)
-            return version if dataset[name].dims else None
+        return None
 
     def get_metadata(
         self, resource: UPath, *, snap: snap_type = True
     ) -> list[dc.PatchMeta]:
         """Describe each patch from its metadata and coordinates."""
-        out = []
-        for group in _patch_groups(resource) or [None]:
-            with _open_zarr(resource, group) as dataset:
-                out.extend(dataset_to_patch_meta(dataset, snap, key=group))
-        return out
+        return [
+            meta
+            for group, dataset in _patch_datasets(resource)
+            for meta in dataset_to_patch_meta(dataset, snap, key=group)
+        ]
 
     def read_array(
         self, resource: UPath, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """Read a window of one patch; only the chunks it touches are read."""
         where = str(resource)
-        group = None
-        if groups := _patch_groups(resource):
-            group = resolve_keyed_source({x: x for x in groups}, key, where)
-            key = ""  # the group holds one payload
-        with _open_zarr(resource, group) as dataset:
-            return read_dataset_array(dataset, windows, key, where)
+        with _open_zarr(resource) as root:
+            if _has_payload(root):
+                return read_dataset_array(root, windows, key, where)
+        if not key:  # groups are listed only when no key names one
+            groups = [x for x, _ in _patch_datasets(resource)]
+            key = resolve_keyed_source(dict(zip(groups, groups)), key, where)
+        try:
+            dataset = _open_zarr(resource, key)
+        except (KeyError, FileNotFoundError) as exc:
+            msg = f"No patch named '{key}' in {where}."
+            raise PatchAttributeError(msg) from exc
+        with dataset:
+            return read_dataset_array(dataset, windows, "", where)
 
     def write(self, spool, resource: UPath, encoding: dict | None = None, **kwargs):
         """
         Write a spool to a zarr store, replacing any store there.
 
-        One patch is written at the store root; several are written one
-        group each, named by `get_patch_names` with repeats suffixed.
+        One patch is written at the store root. Several are written one
+        group each, named by `get_patch_names` with "/" replaced by "_" and
+        repeats suffixed ``__1``, ``__2``, ... as DASDAE does; one patch is
+        held in memory at a time.
 
         The store is built beside ``resource`` and moved into place once
         complete, so a failed write leaves the previous store intact.
@@ -127,36 +151,35 @@ class ZarrV3(FiberIO):
         encoding
             Passed to xarray's ``Dataset.to_zarr``, e.g.
             ``{"data": {"chunks": (100, 1000), "shards": (100, 10000)}}``;
-            ``shards`` needs zarr format 3. Applied to every patch's group.
+            ``shards`` needs zarr format 3.
         """
-        xr = optional_import("xarray")
-        optional_import("zarr")
-        patches = [spool] if isinstance(spool, dc.Patch) else list(spool)
-        if len(patches) > 1:
-            names = _unique_patch_names(patches)
-            datasets = (spool_to_cf_dataset(x) for x in patches)
-            data = xr.DataTree.from_dict(dict(zip(names, datasets, strict=True)))
-            if encoding:
-                encoding = {f"/{x}": encoding for x in names}
-        else:
-            data = spool_to_cf_dataset(patches)
+        zarr = optional_import("zarr")  # xarray is required by the conversion
+        spool = dc.spool([spool]) if isinstance(spool, dc.Patch) else spool
+        names = get_patch_names(spool).str.replace("/", "_", regex=False)
         if resource.exists() and not _marked_zarr_format(resource):
             if resource.is_file() or any(resource.iterdir()):
                 msg = f"{resource} exists and is not a zarr store; not replacing it."
                 raise FileExistsError(msg)
+        zarr_format = int(self.version)
+        options = dict(zarr_format=zarr_format, encoding=encoding)
         # zarr warns that consolidated metadata is outside the format 3
         # spec; it saves a reader one metadata request per array.
         with (
             staged_path(resource) as staging,
             suppress_warnings(UserWarning, message="Consolidated metadata"),
         ):
-            data.to_zarr(
-                staging,
-                mode="w",
-                zarr_format=int(self.version),
-                consolidated=True,
-                encoding=encoding,
-            )
+            if len(names) <= 1:
+                dataset = spool_to_cf_dataset(spool)
+                dataset.to_zarr(staging, mode="w", consolidated=True, **options)
+            else:
+                zarr.open_group(staging, mode="w", zarr_format=zarr_format)
+                names = _unique_patch_names(names)
+                for name, patch in zip(names, spool, strict=True):
+                    dataset = spool_to_cf_dataset(patch)
+                    dataset.to_zarr(
+                        staging, group=name, mode="w", consolidated=False, **options
+                    )
+                zarr.consolidate_metadata(staging, zarr_format=zarr_format)
 
 
 class ZarrV2(ZarrV3):

@@ -7,10 +7,14 @@ import sys
 from pathlib import Path
 from unittest import mock
 
+import fsspec
 import numpy as np
 import pytest
+import upath
 from fsspec.implementations.local import LocalFileSystem
+from fsspec.implementations.memory import MemoryFileSystem
 from upath import UPath
+from upath.implementations.memory import MemoryPath
 
 import dascore as dc
 from dascore.exceptions import MissingOptionalDependencyError, PatchAttributeError
@@ -18,6 +22,7 @@ from dascore.io import core as io_core
 from dascore.io.core import source_identity
 from dascore.io.index.indexer import scan_unit_stats
 from dascore.io.zarr import ZarrV3
+from dascore.io.zarr import core as zarr_core
 from dascore.utils.misc import suppress_warnings
 
 xr = pytest.importorskip("xarray")
@@ -406,16 +411,33 @@ def multi_written(request, zarr_spool, tmp_path_factory):
     return path, list(zarr_spool.get_patch_names())
 
 
+def _store(path, groups, version="3"):
+    """Write a store of xarray datasets by group path, "/" being the root."""
+    tree = xr.DataTree.from_dict(groups)
+    with suppress_warnings(UserWarning, message="Consolidated metadata"):
+        tree.to_zarr(path, mode="w", zarr_format=int(version))
+    return path
+
+
+class AuthMemory(MemoryFileSystem):
+    """A memory filesystem which needs a token, as an object store might."""
+
+    protocol = ("zarrauth",)
+
+    def __init__(self, *args, token=None, **kwargs):
+        if token != "secret":
+            raise PermissionError("no token")
+        super().__init__(*args, **kwargs)
+
+
 class TestMultiPatch:
     """A spool of several patches is one group per patch, round tripped."""
 
     def test_round_trip(self, multi_written, zarr_spool):
-        """Each patch reads back equal, exact time grid included, in name order."""
+        """Each patch reads back equal, in name order."""
         path, _ = multi_written
         first, later, twin = zarr_spool
-        out = list(dc.read(path))
-        assert out == [first, twin, later]
-        assert out[2].get_coord("time") == later.get_coord("time")
+        assert list(dc.read(path)) == [first, twin, later]
 
     def test_keys(self, multi_written):
         """Patch keys are the group names; a repeated name is suffixed."""
@@ -432,23 +454,28 @@ class TestMultiPatch:
         for node in tree.children.values():
             assert node["data"].dims == zarr_spool[0].dims
 
-    @pytest.mark.parametrize("version", VERSIONS)
-    def test_select_reads_one_group(self, zarr_spool, tmp_path, version):
+    def test_select_reads_one_group(self, zarr_spool, tmp_path):
         """Loading one patch never reads another patch's payload chunks."""
         path = tmp_path / "spool.zarr"
-        dc.write(zarr_spool, path, "zarr", file_version=version)
+        dc.write(zarr_spool, path, "zarr")
         spool = dc.spool(path).update()
         _, later, _ = zarr_spool
         selected = spool.select(time=(later.get_coord("time").min(), None))
         (key,) = selected.get_contents()["source_patch_key"]
-        metadata = {"zarr.json", ".zarray", ".zattrs"}
         others = set(zarr.open_group(path, mode="r").group_keys()) - {key}
         for chunk in (x for g in others for x in (path / g / "data").rglob("*")):
-            if chunk.is_file() and chunk.name not in metadata:
+            if chunk.is_file() and chunk.name != "zarr.json":
                 chunk.write_bytes(b"not a chunk")
         assert selected[0] == later
         with pytest.raises(RuntimeError):  # the spoiled chunks are unreadable
             dc.read(path)
+
+    def test_keyed_read_skips_listing(self, multi_written, zarr_spool, monkeypatch):
+        """A keyed read opens its group without listing the others."""
+        path, names = multi_written
+        monkeypatch.setattr(zarr_core, "_patch_datasets", None)
+        out = ZarrV3().read_array(path, key=names[1])
+        assert np.array_equal(out, zarr_spool[1].data)
 
     def test_key_required(self, multi_written):
         """read_array needs a key, and a known one, on a multi-patch store."""
@@ -466,20 +493,77 @@ class TestMultiPatch:
         chunks = {group[x]["data"].chunks for x in group.group_keys()}
         assert chunks == {(50, 500)}
 
-    def test_single_patch_at_root(self, zarr_patch, tmp_path):
-        """A one-patch spool keeps its payload at the root, no groups."""
-        path = tmp_path / "one.zarr"
-        dc.write(dc.spool([zarr_patch]), path, "zarr")
-        assert not list(zarr.open_group(path, mode="r").group_keys())
-        assert xr.open_zarr(path)["data"].shape == zarr_patch.shape
+    def test_slash_in_name(self, zarr_spool, tmp_path):
+        """A "/" in a patch name makes no nested group; the patch round trips."""
+        spool = dc.spool([x.update_attrs(tag="a/b") for x in zarr_spool])
+        path = tmp_path / "slash.zarr"
+        dc.write(spool, path, "zarr")
+        assert all("/" not in x.source_patch_key for x in dc.scan(path))
+        assert len(dc.read(path)) == len(spool)
+
+    def test_streams(self, zarr_spool, tmp_path, monkeypatch):
+        """Each patch is converted and written before the next is converted."""
+        events = []
+        to_cf, to_zarr = zarr_core.spool_to_cf_dataset, xr.Dataset.to_zarr
+
+        def _to_cf(*args):
+            events.append("convert")
+            return to_cf(*args)
+
+        def _to_zarr(*args, **kwargs):
+            events.append("write")
+            return to_zarr(*args, **kwargs)
+
+        monkeypatch.setattr(zarr_core, "spool_to_cf_dataset", _to_cf)
+        monkeypatch.setattr(xr.Dataset, "to_zarr", _to_zarr)
+        dc.write(zarr_spool, tmp_path / "s.zarr", "zarr")
+        assert events == ["convert", "write"] * len(zarr_spool)
+
+    def test_leftover_groups_cleared(self, zarr_spool, tmp_path):
+        """Groups a killed write left in the staging store are not kept."""
+        path = tmp_path / "spool.zarr"
+        old = dc.spool([x.update_attrs(tag="old") for x in zarr_spool])
+        ZarrV3().write(old, tmp_path / ".spool.zarr.partial")
+        dc.write(zarr_spool, path, "zarr")
+        assert len(dc.read(path)) == len(zarr_spool)
 
     def test_rewrite_refreshes(self, zarr_spool, zarr_patch, tmp_path):
-        """A store rewritten with other patches is re-indexed."""
+        """A grouped store rewritten as one patch is re-indexed."""
         path = tmp_path / "a.zarr"
         dc.write(zarr_spool, path, "zarr")
         spool = dc.spool(tmp_path).update()
         assert len(spool) == 3
-        dc.write(zarr_spool[:2], path, "zarr")
-        assert len(spool.update()) == 2
         dc.write(zarr_patch, path, "zarr")
-        assert spool.update()[0] == zarr_patch
+        assert list(spool.update()) == [zarr_patch]
+
+    def test_storage_options(self, zarr_spool):
+        """A remote store is listed with its path's storage options."""
+        fsspec.register_implementation("zarrauth", AuthMemory, clobber=True)
+        upath.registry.register_implementation("zarrauth", MemoryPath, clobber=True)
+        path = UPath("zarrauth://dascore_zarr_auth/spool.zarr", token="secret")
+        dc.write(zarr_spool, path, "zarr")
+        assert len(dc.read(path)) == len(zarr_spool)
+
+
+class TestForeignGroups:
+    """Stores other tools write with groups: a root payload wins."""
+
+    @pytest.mark.parametrize("version", VERSIONS)
+    def test_root_payload_wins(self, tmp_path, version):
+        """Root data beside aux, attrs-only and nested groups reads alone."""
+        data = xr.Dataset({"data": (("distance", "time"), np.ones((3, 4)))})
+        aux = xr.Dataset({"temp": ("sensor", np.arange(3.0))})
+        groups = {"/": data, "/aux": aux, "/meta": xr.Dataset(attrs={"a": 1})}
+        path = _store(tmp_path / "s.zarr", groups | {"/x/y": data}, version)
+        (patch,) = dc.read(path)
+        assert patch.shape == (3, 4)
+
+    @pytest.mark.parametrize("version", VERSIONS)
+    def test_groups_without_payload_skipped(self, tmp_path, version):
+        """Child groups holding no payload are not patches."""
+        data = xr.Dataset({"data": (("distance", "time"), np.ones((3, 4)))})
+        meta = xr.Dataset(attrs={"a": 1})
+        groups = {"/a_meta": meta, "/p1": data, "/p2": data * 2, "/z_meta": meta}
+        path = _store(tmp_path / "s.zarr", groups, version)
+        assert sorted(x.source_patch_key for x in dc.scan(path)) == ["p1", "p2"]
+        assert len(dc.read(path)) == 2

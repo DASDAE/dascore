@@ -927,19 +927,24 @@ def get_patch_names(
     return out
 
 
-def _unique_patch_names(patches) -> list[str]:
+def _unique_patch_names(names) -> list[str]:
     """
-    Return `get_patch_names` with repeats suffixed ``__1``, ``__2``, ...
+    Return ``names`` with repeats suffixed ``__1``, ``__2``, ...
 
-    Patches can share a name (e.g. gap-split siblings differing only along
-    an unnamed dimension); a writer keying groups by name needs them apart.
+    A suffix already taken, by a given name or an earlier suffix, is
+    skipped. Patches can share a name (e.g. gap-split siblings differing
+    only along a dimension the name omits); a writer keying groups by name
+    needs them apart.
     """
-    counts: dict[str, int] = {}
-    out = []
-    for name in get_patch_names(patches).values:
-        num = counts.get(name, 0)
-        counts[name] = num + 1
-        out.append(name if num == 0 else f"{name}__{num}")
+    names = list(names)
+    reserved, used, out = set(names), set(), []
+    for name in names:
+        new, num = name, 0
+        while new in used or (num and new in reserved):
+            num += 1
+            new = f"{name}__{num}"
+        used.add(new)
+        out.append(new)
     return out
 
 

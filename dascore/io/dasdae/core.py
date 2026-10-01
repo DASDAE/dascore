@@ -13,7 +13,7 @@ from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.utils.hdf5 import H5Reader, H5Writer, h5_encoding
 from dascore.utils.misc import unbyte
-from dascore.utils.patch import _unique_patch_names
+from dascore.utils.patch import _unique_patch_names, get_patch_names
 
 from .utils import (
     _get_contents_from_patch_groups_generic,
@@ -78,9 +78,9 @@ class DASDAEV1(FiberIO):
         with contextlib.suppress(ValueError):
             resource.create_group("waveforms")
         waveforms = resource["waveforms"]
-        # Names are unique within this batch; strict zip fails loudly if the
-        # name pass and patch pass ever disagree in length.
-        names = _unique_patch_names(patches)
+        # Strict zip keeps streaming (no spool materialization) yet fails
+        # loudly if the name and patch passes ever disagree in length.
+        names = _unique_patch_names(get_patch_names(patches))
         variables = {"data"}  # a variable need only belong to one patch
         for patch, name in zip(patches, names, strict=True):
             variables.update(patch.coords.coord_map)

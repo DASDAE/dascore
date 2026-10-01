@@ -123,7 +123,7 @@ def _get_patch_key(data_var_name):
 def dataset_to_patch_meta(
     dataset, snap: snap_type = True, key: str | None = None
 ) -> list[dc.PatchMeta]:
-    """Describe the payload of an open xarray dataset; ``key`` overrides its key."""
+    """Describe an open dataset's payload without reading it; ``key`` sets its key."""
     data_var_name = get_xarray_data_var_name(dataset)
     data_array = dataset[data_var_name]
     dims, shape = data_array.dims, data_array.shape
