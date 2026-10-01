@@ -5,6 +5,7 @@ from __future__ import annotations
 import os
 import sys
 from pathlib import Path
+from typing import ClassVar
 from unittest import mock
 
 import fsspec
@@ -71,6 +72,12 @@ def foreign_store(request, tmp_path_factory):
         path, zarr_format=zarr_format, consolidated=False, encoding=encoding
     )
     return path, data, time
+
+
+def _reader(path):
+    """Return the FiberIO for a store's zarr format."""
+    file_format, version = dc.get_format(path)
+    return dc.io.FiberIO.manager.get_fiberio(format=file_format, version=version)
 
 
 def _edit_attrs(path, **attrs):
@@ -173,7 +180,7 @@ class TestForeignStore:
     def test_read_array_decodes(self, foreign_store):
         """read_array applies the scale factor as read does."""
         path, data, _ = foreign_store
-        out = ZarrV3().read_array(path, ((1, 3), None))
+        out = _reader(path).read_array(path, ((1, 3), None))
         assert np.allclose(out, data[1:3])
 
 
@@ -431,6 +438,18 @@ class AuthMemory(MemoryFileSystem):
         super().__init__(*args, **kwargs)
 
 
+class CountMemory(MemoryFileSystem):
+    """A memory filesystem which records the objects read from it."""
+
+    protocol = ("zarrcount",)
+    read: ClassVar[list[str]] = []
+
+    def cat_file(self, path, start=None, end=None, **kwargs):
+        """Record the path, then read it."""
+        self.read.append(path)
+        return super().cat_file(path, start, end, **kwargs)
+
+
 class TestMultiPatch:
     """A spool of several patches is one group per patch, round tripped."""
 
@@ -474,17 +493,18 @@ class TestMultiPatch:
     def test_keyed_read_skips_listing(self, multi_written, zarr_spool, monkeypatch):
         """A keyed read opens its group without listing the others."""
         path, names = multi_written
+        reader = _reader(path)
         monkeypatch.setattr(zarr_core, "_patch_datasets", None)
-        out = ZarrV3().read_array(path, key=names[1])
+        out = reader.read_array(path, key=names[1])
         assert np.array_equal(out, zarr_spool[1].data)
 
     def test_key_required(self, multi_written):
         """read_array needs a key, and a known one, on a multi-patch store."""
         path, _ = multi_written
         with pytest.raises(PatchAttributeError, match="several patches"):
-            ZarrV3().read_array(path)
+            _reader(path).read_array(path)
         with pytest.raises(PatchAttributeError, match="No patch named"):
-            ZarrV3().read_array(path, key="bob")
+            _reader(path).read_array(path, key="bob")
 
     def test_encoding_each_group(self, zarr_spool, tmp_path):
         """One per-variable encoding lands on every patch's payload."""
@@ -561,6 +581,28 @@ class TestMultiPatch:
         path = UPath("zarrauth://dascore_zarr_auth/spool.zarr", token="secret")
         dc.write(zarr_spool, path, "zarr")
         assert len(dc.read(path)) == len(zarr_spool)
+        assert len(dc.spool(path)) == len(zarr_spool)
+
+    def test_remote_spool_reads_one_group(self, zarr_spool):
+        """
+        A remote store is a spool; scanning reads no payload chunk, and
+        loading one patch reads only that patch's.
+        """
+        fsspec.register_implementation("zarrcount", CountMemory, clobber=True)
+        upath.registry.register_implementation("zarrcount", MemoryPath, clobber=True)
+        path = UPath("zarrcount://dascore_zarr_count/spool.zarr")
+        dc.write(zarr_spool, path, "zarr", encoding={"data": {"chunks": (10, 100)}})
+        CountMemory.read.clear()
+        spool = dc.spool(path)
+        assert not [x for x in CountMemory.read if "/data/" in x]
+        # A format 3 store is not probed for format 2 metadata files.
+        assert not [x for x in CountMemory.read if "/.z" in x]
+        _, later, _ = zarr_spool
+        selected = spool.select(time=(later.get_coord("time").min(), None))
+        (key,) = selected.get_contents()["source_patch_key"]
+        assert selected[0] == later
+        groups = {x.split("/")[-5] for x in CountMemory.read if "/data/c/" in x}
+        assert groups == {key}
 
 
 class TestForeignGroups:

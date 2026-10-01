@@ -48,6 +48,11 @@ class TestBasic:
         with pytest.raises(FileNotFoundError, match="does not exist"):
             Spool._from_file("/not/a/directory")
 
+    def test_raises_directory(self, tmp_path):
+        """A directory is refused unless its format reads directories."""
+        with pytest.raises(FileNotFoundError, match="is a directory"):
+            Spool._from_file(tmp_path, "DASDAE", "1")
+
     def test_local_upath_file(self, terra15_v5_path):
         """Ensure _from_file accepts local UPath inputs."""
         spool = Spool._from_file(UPath(terra15_v5_path))

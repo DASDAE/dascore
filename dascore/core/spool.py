@@ -76,6 +76,7 @@ from dascore.exceptions import (
     InvalidSpoolQueryError,
     MissingPatchError,
     ParameterError,
+    UnknownFiberFormatError,
     UnresolvedPatchError,
 )
 from dascore.units import Quantity
@@ -127,7 +128,11 @@ from dascore.utils.patch import (
     get_patch_names,
     stack_patches,
 )
-from dascore.utils.paths import coerce_to_upath, requires_local_directory
+from dascore.utils.paths import (
+    coerce_to_upath,
+    is_local_path,
+    requires_local_directory,
+)
 from dascore.utils.pd import (
     drop_selector_names,
     get_dim_names_from_columns,
@@ -2468,22 +2473,23 @@ class Spool(NodeRepr, NamespaceOwner):
         makes of the file, which is usually an empty spool.
         """
         path = path if isinstance(path, UPath) else Path(path)
-        if not path.exists() or path.is_dir():
-            msg = f"{path} does not exist or is a directory"
-            raise FileNotFoundError(msg)
+        if not path.exists():
+            raise FileNotFoundError(f"{path} does not exist")
         from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
-        if file_format and file_version:
+        if not (file_format and file_version):
             # Both internal callers already know the format, and sniffing
             # it again opens the file a second time; for a remote source
-            # that is a round trip. Resolving the reader canonicalizes the
-            # names and still rejects a pair no reader claims.
-            fiber_io = dc.io.FiberIO.manager.get_fiberio(
-                format=file_format, version=file_version
-            )
-            _format, _version = fiber_io.name, fiber_io.version
-        else:
-            _format, _version = dc.get_format(path, file_format, file_version)
+            # that is a round trip.
+            file_format, file_version = dc.get_format(path, file_format, file_version)
+        # Resolving the reader canonicalizes the names and still rejects a
+        # pair no reader claims.
+        fiber_io = dc.io.FiberIO.manager.get_fiberio(
+            format=file_format, version=file_version
+        )
+        _format, _version = fiber_io.name, fiber_io.version
+        if fiber_io.input_type != "directory" and path.is_dir():
+            raise FileNotFoundError(f"{path} is a directory")
         out = cls()
         out._catalog = PatchCatalog.from_file(
             path, file_format=_format, file_version=_version
@@ -2996,14 +3002,19 @@ def spool(obj: path_types | Spool | Sequence[PatchType], **kwargs) -> Spool:
 def _spool_from_str(path, **kwargs):
     """Get a spool from a path."""
     path = coerce_to_upath(resolve_example_uri(path))
-    # A directory was passed; index it.
-    if path.is_dir():
-        requires_local_directory(path, label="Directory spool")
+    # A local directory was passed; index it.
+    if is_local_path(path) and path.is_dir():
         return Spool._from_directory(path, **kwargs)
-    # A single file was passed. If the file format supports quick
-    # scanning build a lazy file-backed spool, else read it into memory.
-    elif path.exists():  # a single file path was passed.
-        _format, _version = dc.get_format(path, **kwargs)
+    # A single file, or a remote directory one reader reads whole (e.g. a
+    # zarr store); its patches load lazily. Remote directories of files
+    # cannot be indexed.
+    elif path.exists():
+        try:
+            _format, _version = dc.get_format(path, **kwargs)
+        except UnknownFiberFormatError:
+            if path.is_dir():
+                requires_local_directory(path, label="Directory spool")
+            raise
         return Spool._from_file(path, _format, _version)
     else:
         msg = (

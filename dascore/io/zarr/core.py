@@ -24,14 +24,24 @@ from dascore.utils.patch import _unique_patch_names, get_patch_names
 _MARKERS = {"3": "zarr.json", "2": ".zgroup"}
 
 
-def _open_zarr(path: UPath, group: str | None = None):
-    """Open a store (or one group) as a lazy dataset; only coordinates are read."""
+def _open_zarr(path: UPath, zarr_format: int, group: str | None = None):
+    """
+    Open a store (or one group) as a lazy dataset; only coordinates are read.
+
+    Naming the format saves probing for the other format's metadata files,
+    each a request on a remote store.
+    """
     xr = optional_import("xarray")
     optional_import("zarr")
     # A store without consolidated metadata still opens, only slower.
     with suppress_warnings(RuntimeWarning, message="Failed to open Zarr store"):
         return xr.open_dataset(
-            path, engine="zarr", group=group, chunks=None, cache=False
+            path,
+            engine="zarr",
+            group=group,
+            chunks=None,
+            cache=False,
+            zarr_format=zarr_format,
         )
 
 
@@ -44,23 +54,24 @@ def _has_payload(dataset) -> bool:
     return bool(dataset[name].dims)
 
 
-def _patch_datasets(path: UPath):
+def _patch_datasets(path: UPath, zarr_format: int):
     """
     Yield ``(group, open dataset)`` for each patch of a store.
 
     A root payload is the one patch (group None) and child groups are then
     ignored; otherwise each child group holding a payload is a patch.
     """
-    with _open_zarr(path) as root:
+    with _open_zarr(path, zarr_format) as root:
         if _has_payload(root):
             yield None, root
             return
     zarr = optional_import("zarr")
     with suppress_warnings(UserWarning, message="Consolidated metadata"):
-        names = sorted(zarr.open_group(path, mode="r").group_keys())
+        group = zarr.open_group(path, mode="r", zarr_format=zarr_format)
+        names = sorted(group.group_keys())
     for name in names:
         try:
-            dataset = _open_zarr(path, name)
+            dataset = _open_zarr(path, zarr_format, name)
         except KeyError:  # raw zarr arrays with no dimension names
             continue
         with dataset:
@@ -101,7 +112,7 @@ class ZarrV3(FiberIO):
         if version is None:
             return None
         try:
-            for _ in _patch_datasets(resource):
+            for _ in _patch_datasets(resource, int(version)):
                 return version
         except MissingOptionalDependencyError:
             # Claimed, so reading names the missing package and a scan
@@ -115,7 +126,7 @@ class ZarrV3(FiberIO):
         """Describe each patch from its metadata and coordinates."""
         return [
             meta
-            for group, dataset in _patch_datasets(resource)
+            for group, dataset in _patch_datasets(resource, int(self.version))
             for meta in dataset_to_patch_meta(dataset, snap, key=group)
         ]
 
@@ -123,15 +134,15 @@ class ZarrV3(FiberIO):
         self, resource: UPath, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """Read a window of one patch; only the chunks it touches are read."""
-        where = str(resource)
-        with _open_zarr(resource) as root:
+        where, zarr_format = str(resource), int(self.version)
+        with _open_zarr(resource, zarr_format) as root:
             if _has_payload(root):
                 return read_dataset_array(root, windows, key, where)
         if not key:  # groups are listed only when no key names one
-            groups = [x for x, _ in _patch_datasets(resource)]
+            groups = [x for x, _ in _patch_datasets(resource, zarr_format)]
             key = resolve_keyed_source(dict(zip(groups, groups)), key, where)
         try:
-            dataset = _open_zarr(resource, key)
+            dataset = _open_zarr(resource, zarr_format, key)
         except (KeyError, FileNotFoundError) as exc:
             msg = f"No patch named '{key}' in {where}."
             raise PatchAttributeError(msg) from exc
@@ -148,7 +159,8 @@ class ZarrV3(FiberIO):
         held in memory at a time.
 
         The store is built beside ``resource`` and moved into place once
-        complete, so a failed write leaves the previous store intact.
+        complete, so a failed write leaves the previous store intact. On
+        object storage the move is a copy, so it is not atomic.
 
         Parameters
         ----------

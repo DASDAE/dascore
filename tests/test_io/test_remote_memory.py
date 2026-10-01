@@ -9,7 +9,7 @@ from upath import UPath
 
 import dascore as dc
 from dascore.config import config_context
-from dascore.exceptions import InvalidSpoolError
+from dascore.exceptions import InvalidSpoolError, UnknownFiberFormatError
 from dascore.utils.downloader import fetch
 from dascore.utils.remote_io import clear_remote_file_cache, get_remote_cache_path
 
@@ -184,6 +184,16 @@ class TestMemoryRemoteSpool:
         (root / "file.txt").write_text("x")
         with pytest.raises(InvalidSpoolError, match="local filesystem"):
             dc.spool(root)
+
+    def test_spool_unknown_file(self):
+        """A remote file no reader claims is refused as a local one is."""
+        path = UPath("memory://dascore/remote_unknown/file.txt")
+        path.write_text("x")
+        with (
+            config_context(allow_remote_cache_for_metadata=True),
+            pytest.raises(UnknownFiberFormatError),
+        ):
+            dc.spool(path)
 
 
 class TestMemoryRemoteMetadataAccess:
