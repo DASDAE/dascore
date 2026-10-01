@@ -13,27 +13,26 @@ scipy_detrend = lazy_import("scipy.signal", "detrend")
 
 class Detrend(PatchProcessor):
     """
-    Perform detrending along a given dimension (distance or time) of a patch.
+    Remove a constant or linear trend from the data along one dimension.
 
     Parameters
     ----------
     patch
         The patch to detrend.
     dim
-        The dimension ("distance" or "time") along where detrending is applied.
+        Name of the dimension to detrend along.
     type
-        Specifies least-squares fit type for detrend,
-        with "linear" (default) or "constant" as options.
-
-    Returns
-    -------
-    The Patch instance after applying the detrend function.
+        The trend to subtract: "linear" (the default) removes a least-squares
+        line, "constant" removes the mean.
 
     Examples
     --------
-    >>> import dascore # import dascore library
-    >>> pa = dascore.get_example_patch() # generate example patch
-    >>> out = pa.detrend("time") # detrend along the time dimension
+    >>> import dascore
+    >>> pa = dascore.get_example_patch()
+    >>> # Subtract the best-fitting line from each channel.
+    >>> out = pa.detrend("time")
+    >>> # Or only the mean.
+    >>> demeaned = pa.detrend("time", type="constant")
     """
 
     dim: str

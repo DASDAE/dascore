@@ -29,7 +29,7 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Environment :: WebAssembly",
     "Environment :: WebAssembly :: Emscripten",
-    "License :: OSI Approved :: GNU Lesser General Public License v3 or later (LGPLv3+)",
+    "License :: OSI Approved :: MIT License",
     "Topic :: Scientific/Engineering",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
