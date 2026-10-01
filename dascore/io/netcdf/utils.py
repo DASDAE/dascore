@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, Protocol
 
+import h5py
 import numpy as np
 
 import dascore as dc
@@ -15,16 +16,14 @@ from dascore.units import get_quantity_str
 from dascore.xarray import patch_to_xarray
 
 XDAS_PAYLOAD_VARIABLE = "__values__"
+XDAS_MAPPINGS = ("coordinate_interpolation", "coordinate_sampling")
+XDAS_TILING = "__tiling__"
 
 
-def get_xarray_data_var_name(dataset) -> str | None:
+def get_xarray_data_var_name(dataset) -> str:
     """Return the main xarray data variable name."""
     if "data" in dataset.data_vars:
         return "data"
-    # XDAS-style files can surface the primary payload under a None key while
-    # exposing coordinate helper arrays as additional data variables.
-    if None in dataset.data_vars:
-        return None
     if len(dataset.data_vars) == 1:
         return next(iter(dataset.data_vars))
     msg = "No suitable data variable found in the dataset"
@@ -75,32 +74,23 @@ def get_cf_version(h5file: _HasAttrs) -> str | None:
     return None
 
 
-def _get_tie_point_coord(h5file, coord_name: str, coord_len: int) -> np.ndarray | None:
-    """Decode one XDAS-style tie-point coordinate array."""
-    values_name = f"{coord_name}_values"
-    indices_name = f"{coord_name}_indices"
-    if values_name not in h5file:
-        return None
-    values_var = h5file[values_name]
-    values = values_var[:]
-    if indices_name in h5file:
-        indices = h5file[indices_name][:]
-        if len(values) >= 2 and len(indices) >= 2:
-            sample_index = np.arange(coord_len, dtype=np.float64)
-            if np.issubdtype(np.asarray(values).dtype, np.datetime64):
-                value_ns = values.astype("datetime64[ns]").astype(np.int64)
-                values = np.interp(sample_index, indices, value_ns).astype(np.int64)
-                values = values.astype("datetime64[ns]")
-            else:
-                values = np.interp(sample_index, indices, values)
-    return values
+def _is_xdas_marked(name, node):
+    """Return True for a dataset only this layout writes, else None."""
+    if isinstance(node, h5py.Dataset) and (
+        name.rsplit("/", 1)[-1] == XDAS_PAYLOAD_VARIABLE
+        or any(x in node.attrs for x in (*XDAS_MAPPINGS, XDAS_TILING))
+    ):
+        return True
+    return None  # visititems stops at the first value which is not None
+
+
+def is_xdas_file(h5) -> bool:
+    """Return True if a NetCDF-4 file holds an XDAS tie-point or unnamed signal."""
+    return is_netcdf4_file(h5) and bool(h5.visititems(_is_xdas_marked))
 
 
 def _get_dim_coord(h5file, coord_name: str, coord_len: int) -> np.ndarray:
     """Return one dimension coordinate for a coord-less payload variable."""
-    tied_values = _get_tie_point_coord(h5file, coord_name, coord_len)
-    if tied_values is not None:
-        return tied_values
     if coord_name in h5file:
         return h5file[coord_name][:]
     return np.arange(coord_len)
@@ -113,11 +103,6 @@ def get_scan_coord(coord, snap=True):
         return values
     units = coord.attrs.get("units")
     return dc.core.get_coord(data=values, units=units, snap=snap)
-
-
-def _get_patch_key(data_var_name):
-    """Normalize the selected xarray payload name to a patch id."""
-    return XDAS_PAYLOAD_VARIABLE if data_var_name is None else data_var_name
 
 
 def dataset_to_patch_meta(
@@ -139,7 +124,7 @@ def dataset_to_patch_meta(
         coords=dc.get_coord_manager(coords=coords, dims=dims),
         dims=dims,
         dtype=str(data_array.dtype),
-        source=ArraySource(key=key or _get_patch_key(data_var_name)),
+        source=ArraySource(key=key or data_var_name),
     )
     return [meta]
 
@@ -152,8 +137,7 @@ def read_dataset_array(dataset, windows: windows_type, key: str, where: str):
     decoding (scaling, offsets, fill values) applies exactly as in `read`.
     """
     data_var_name = get_xarray_data_var_name(dataset)
-    patch_key = _get_patch_key(data_var_name)
-    resolve_keyed_source({patch_key: data_var_name}, key, where=where)
+    resolve_keyed_source({data_var_name: data_var_name}, key, where=where)
     data_array = dataset[data_var_name]
     return data_array[windows_to_slices(windows, data_array.shape)].to_numpy()
 

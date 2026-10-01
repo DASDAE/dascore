@@ -60,6 +60,10 @@ patch.io.write(zarr_path, "ZARR", encoding=encoding)
 zarr_patch = dc.read(zarr_path)[0]
 ```
 
+## XDAS
+
+The XDAS format reads NetCDF files in XDAS's layout; it does not write them. Each signal, including signals in nested groups, is a patch whose `source_patch_key` is its path in the file (for example `"network/fiber_a/signal"`). Coordinates stored as tie points (both spellings), as sampled segments (including rates stated as a ratio) or as stored labels are decoded exactly, without reading any samples. Signals compressed with a filter h5py can read and local HDF5 virtual datasets are read; a missing virtual source raises rather than reading fill values, and tile manifests raise `NotImplementedError`. A signal whose tie points leave a hole or change the step is one patch per evenly sampled stretch, keyed `"<path>#0"`, `"<path>#1"`, and so on, as `dc.spool` holds a patch with holes.
+
 # Scanning metadata
 
 [`dc.scan`](`dascore.scan`) returns [`PatchSummary`](`dascore.PatchSummary`) objects without loading patch arrays.

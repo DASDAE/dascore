@@ -248,12 +248,7 @@ class TestNetCDFCoreHelpers:
         ds_with_data = xr.Dataset({"data": (("x",), [1, 2])})
         ds_single = xr.Dataset({"signal": (("x",), [1, 2])})
         ds_multi = xr.Dataset({"signal": (("x",), [1, 2]), "other": (("x",), [3, 4])})
-
-        class _DatasetWithNone:
-            data_vars: ClassVar = {None: object(), "distance_indices": object()}
-
         assert netcdf_utils.get_xarray_data_var_name(ds_with_data) == "data"
-        assert netcdf_utils.get_xarray_data_var_name(_DatasetWithNone()) is None
         assert netcdf_utils.get_xarray_data_var_name(ds_single) == "signal"
         with pytest.raises(ValueError, match="No suitable data variable found"):
             netcdf_utils.get_xarray_data_var_name(ds_multi)

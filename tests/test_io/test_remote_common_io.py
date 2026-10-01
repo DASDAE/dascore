@@ -37,8 +37,8 @@ pytestmark = [
 # reader is already read, scanned and format-detected against the same files
 # by tests/test_io/test_common_io.py. These nine cover the ways a reader can
 # reach the bytes -- whole-file HDF5, ranged HDF5, a plain binary walk, a
-# SEG-Y trace scan, an obspy handoff -- plus NETCDF_CF, the only one which
-# unwraps the handle through get_h5py_file into h5netcdf.
+# SEG-Y trace scan, an obspy handoff -- plus XDAS, which walks the groups
+# of a NetCDF file.
 #
 # Sintela_Protobuf is deliberately not among them: it walks its MTLV envelope
 # with three small sequential reads per record, so a modest file becomes
@@ -53,7 +53,7 @@ REMOTE_FORMATS = {
     ("SR4731", "200"),
     ("segy", "1.0"),
     ("MSEED", "2"),
-    ("NETCDF_CF", "1.8"),
+    ("XDAS", "1"),
 }
 # One file each: what is under test is the streaming path, and a second file
 # of the same format goes down the same one.

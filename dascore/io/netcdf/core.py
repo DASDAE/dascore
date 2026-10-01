@@ -18,6 +18,7 @@ from .utils import (
     dataset_to_patch_meta,
     get_cf_version,
     is_netcdf4_file,
+    is_xdas_file,
     parse_cf_version,
     read_dataset_array,
     spool_to_cf_dataset,
@@ -100,7 +101,7 @@ class NetCDFCFV18(FiberIO):
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
-        if not is_netcdf4_file(resource):
+        if not is_netcdf4_file(resource) or is_xdas_file(resource):
             return None
         cf_version = get_cf_version(resource)
         if not cf_version:

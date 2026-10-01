@@ -2,12 +2,14 @@
 
 from __future__ import annotations
 
+import re
 import warnings
 from collections.abc import Iterable, Mapping, Sequence
 from fractions import Fraction
 from typing import Any, cast
 
 import numpy as np
+import pandas as pd
 
 import dascore as dc
 from dascore.constants import INVENTORY_ATTRS, snap_type
@@ -15,6 +17,7 @@ from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import BaseCoord, get_coord
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import (
+    InvalidFiberFileError,
     MissingPatchError,
     ParameterError,
     PatchAttributeError,
@@ -22,8 +25,34 @@ from dascore.exceptions import (
 )
 from dascore.models import ArrayLike
 from dascore.units import convert_units, get_quantity_str
-from dascore.utils.misc import _to_slice, iterate, unbyte
+from dascore.utils.misc import _maybe_unpack, _to_slice, iterate, unbyte
 from dascore.utils.time import to_exact_fraction
+
+_CF_CALENDARS = frozenset(("standard", "gregorian", "proleptic_gregorian"))
+
+
+def cf_time_values(node, index=slice(None)):
+    """Time labels, decoding CF units such as 'milliseconds since 2017-09-18'."""
+    units = str(unbyte(_maybe_unpack(node.attrs.get("units", ""))))
+    unit, *rest = re.split(r" since ", units, maxsplit=1, flags=re.IGNORECASE)
+    origin = rest[0] if rest else ""
+    if not origin:
+        return dc.to_datetime64(node[index])
+    calendar = str(unbyte(_maybe_unpack(node.attrs.get("calendar", "standard"))))
+    if calendar.lower() not in _CF_CALENDARS:
+        msg = f"Time uses the unsupported CF calendar {calendar!r}."
+        raise InvalidFiberFileError(msg)
+    try:
+        name = cast("Any", unit.strip())  # CF names a unit pandas also knows
+        offsets = pd.to_timedelta(np.atleast_1d(node[index]), unit=name)
+        # pandas raises where numpy would wrap past the nanosecond range
+        out = (pd.Timestamp(origin.strip()) + offsets).as_unit("ns")
+    except (ValueError, OverflowError) as exc:
+        msg = f"Cannot decode the time units {units!r}."
+        raise InvalidFiberFileError(msg) from exc
+    out = out.tz_localize(None) if out.tz is not None else out
+    values = out.to_numpy()
+    return values if isinstance(index, slice) else values[0]
 
 
 def should_snap(snap: snap_type, name: str) -> bool:
