@@ -120,8 +120,10 @@ def _get_patch_key(data_var_name):
     return XDAS_PAYLOAD_VARIABLE if data_var_name is None else data_var_name
 
 
-def dataset_to_patch_meta(dataset, snap: snap_type = True) -> list[dc.PatchMeta]:
-    """Describe the payload of an open xarray dataset without reading it."""
+def dataset_to_patch_meta(
+    dataset, snap: snap_type = True, key: str | None = None
+) -> list[dc.PatchMeta]:
+    """Describe the payload of an open xarray dataset; ``key`` overrides its key."""
     data_var_name = get_xarray_data_var_name(dataset)
     data_array = dataset[data_var_name]
     dims, shape = data_array.dims, data_array.shape
@@ -137,7 +139,7 @@ def dataset_to_patch_meta(dataset, snap: snap_type = True) -> list[dc.PatchMeta]
         coords=dc.get_coord_manager(coords=coords, dims=dims),
         dims=dims,
         dtype=str(data_array.dtype),
-        source=ArraySource(key=_get_patch_key(data_var_name)),
+        source=ArraySource(key=key or _get_patch_key(data_var_name)),
     )
     return [meta]
 

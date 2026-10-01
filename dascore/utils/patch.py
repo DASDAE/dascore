@@ -927,6 +927,22 @@ def get_patch_names(
     return out
 
 
+def _unique_patch_names(patches) -> list[str]:
+    """
+    Return `get_patch_names` with repeats suffixed ``__1``, ``__2``, ...
+
+    Patches can share a name (e.g. gap-split siblings differing only along
+    an unnamed dimension); a writer keying groups by name needs them apart.
+    """
+    counts: dict[str, int] = {}
+    out = []
+    for name in get_patch_names(patches).values:
+        num = counts.get(name, 0)
+        counts[name] = num + 1
+        out.append(name if num == 0 else f"{name}__{num}")
+    return out
+
+
 def get_dim_axis_value(
     patch: _HasDims,
     *,

@@ -13,7 +13,7 @@ from fsspec.implementations.local import LocalFileSystem
 from upath import UPath
 
 import dascore as dc
-from dascore.exceptions import MissingOptionalDependencyError
+from dascore.exceptions import MissingOptionalDependencyError, PatchAttributeError
 from dascore.io import core as io_core
 from dascore.io.core import source_identity
 from dascore.io.index.indexer import scan_unit_stats
@@ -384,3 +384,102 @@ class TestReplace:
         assert len(dc.scan(tmp_path)) == 1
         dc.write(zarr_patch, path, "zarr")
         assert [x.name for x in tmp_path.iterdir()] == ["patch.zarr"]
+
+
+@pytest.fixture(scope="module")
+def zarr_spool(zarr_patch):
+    """Two patches apart in time, and a third named as the first; data differ."""
+    time = zarr_patch.get_coord("time")
+    later = zarr_patch.update_coords(time_min=time.max() + np.timedelta64(1, "s"))
+    later = later.update(data=later.data * 2)
+    distance = zarr_patch.get_array("distance") + 1e4
+    twin = zarr_patch.update_coords(distance=distance).update_attrs(station="SUE")
+    twin = twin.update(data=twin.data + 1)
+    return dc.spool([zarr_patch, later, twin])
+
+
+@pytest.fixture(scope="module", params=VERSIONS)
+def multi_written(request, zarr_spool, tmp_path_factory):
+    """Return (path, names) of the spool written as each zarr format."""
+    path = tmp_path_factory.mktemp("zarr") / "spool.zarr"
+    dc.write(zarr_spool, path, "zarr", file_version=request.param)
+    return path, list(zarr_spool.get_patch_names())
+
+
+class TestMultiPatch:
+    """A spool of several patches is one group per patch, round tripped."""
+
+    def test_round_trip(self, multi_written, zarr_spool):
+        """Each patch reads back equal, exact time grid included, in name order."""
+        path, _ = multi_written
+        first, later, twin = zarr_spool
+        out = list(dc.read(path))
+        assert out == [first, twin, later]
+        assert out[2].get_coord("time") == later.get_coord("time")
+
+    def test_keys(self, multi_written):
+        """Patch keys are the group names; a repeated name is suffixed."""
+        path, names = multi_written
+        keys = sorted(x.source_patch_key for x in dc.scan(path))
+        assert names[0] == names[2]
+        assert keys == sorted([names[0], names[1], f"{names[0]}__1"])
+
+    def test_datatree(self, multi_written, zarr_spool):
+        """Xarray opens the store as a tree with one node per patch."""
+        path, _ = multi_written
+        tree = xr.open_datatree(path, engine="zarr")
+        assert len(tree.children) == len(zarr_spool)
+        for node in tree.children.values():
+            assert node["data"].dims == zarr_spool[0].dims
+
+    @pytest.mark.parametrize("version", VERSIONS)
+    def test_select_reads_one_group(self, zarr_spool, tmp_path, version):
+        """Loading one patch never reads another patch's payload chunks."""
+        path = tmp_path / "spool.zarr"
+        dc.write(zarr_spool, path, "zarr", file_version=version)
+        spool = dc.spool(path).update()
+        _, later, _ = zarr_spool
+        selected = spool.select(time=(later.get_coord("time").min(), None))
+        (key,) = selected.get_contents()["source_patch_key"]
+        metadata = {"zarr.json", ".zarray", ".zattrs"}
+        others = set(zarr.open_group(path, mode="r").group_keys()) - {key}
+        for chunk in (x for g in others for x in (path / g / "data").rglob("*")):
+            if chunk.is_file() and chunk.name not in metadata:
+                chunk.write_bytes(b"not a chunk")
+        assert selected[0] == later
+        with pytest.raises(RuntimeError):  # the spoiled chunks are unreadable
+            dc.read(path)
+
+    def test_key_required(self, multi_written):
+        """read_array needs a key, and a known one, on a multi-patch store."""
+        path, _ = multi_written
+        with pytest.raises(PatchAttributeError, match="several patches"):
+            ZarrV3().read_array(path)
+        with pytest.raises(PatchAttributeError, match="No patch named"):
+            ZarrV3().read_array(path, key="bob")
+
+    def test_encoding_each_group(self, zarr_spool, tmp_path):
+        """One per-variable encoding lands on every patch's payload."""
+        path = tmp_path / "enc.zarr"
+        dc.write(zarr_spool, path, "zarr", encoding={"data": {"chunks": (50, 500)}})
+        group = zarr.open_group(path, mode="r")
+        chunks = {group[x]["data"].chunks for x in group.group_keys()}
+        assert chunks == {(50, 500)}
+
+    def test_single_patch_at_root(self, zarr_patch, tmp_path):
+        """A one-patch spool keeps its payload at the root, no groups."""
+        path = tmp_path / "one.zarr"
+        dc.write(dc.spool([zarr_patch]), path, "zarr")
+        assert not list(zarr.open_group(path, mode="r").group_keys())
+        assert xr.open_zarr(path)["data"].shape == zarr_patch.shape
+
+    def test_rewrite_refreshes(self, zarr_spool, zarr_patch, tmp_path):
+        """A store rewritten with other patches is re-indexed."""
+        path = tmp_path / "a.zarr"
+        dc.write(zarr_spool, path, "zarr")
+        spool = dc.spool(tmp_path).update()
+        assert len(spool) == 3
+        dc.write(zarr_spool[:2], path, "zarr")
+        assert len(spool.update()) == 2
+        dc.write(zarr_patch, path, "zarr")
+        assert spool.update()[0] == zarr_patch
