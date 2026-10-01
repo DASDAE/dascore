@@ -9,6 +9,8 @@ from typing import Any
 
 # The entry-point group every FiberIO plugin registers under.
 FIBER_IO_GROUP = "dascore.fiber_io"
+# The entry-point group a backend package's kernels load from, keyed by backend.
+KERNEL_GROUP = "dascore.kernels"
 
 
 @functools.cache

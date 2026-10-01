@@ -28,6 +28,7 @@ from dascore.exceptions import (
     PatchDataError,
 )
 from dascore.proc.basic import Abs, Normalize, _known_real
+from dascore.utils import plugins
 from dascore.utils.array_api import backend_name
 from dascore.utils.docs import compose_docstring
 from dascore.utils.identity import encode
@@ -118,6 +119,19 @@ class SeamNeedsVelocity(PatchProcessor):
     def kernel(self, data):
         """Return a copy."""
         return data + 0
+
+
+class SeamKernelNamed(PatchProcessor):
+    """Reached by its tag; only `register_kernel` tests touch it."""
+
+    @staticmethod
+    def seam_kernel_named(patch: PatchType, /) -> PatchType:
+        """Hand the data back."""
+        return SeamKernelNamed().run(patch)
+
+    def kernel(self, data):
+        """Hand the data back."""
+        return data
 
 
 def _host_method(host, name, monkeypatch, run=None):
@@ -1091,6 +1105,126 @@ class TestKernelFor:
     def test_no_kernel_at_all_is_metadata_only(self):
         """A processor which touches no data says so by defining none."""
         assert SeamHidden.kernel_for("numpy") is None
+
+
+class TestRegisterKernelForms:
+    """What `register_kernel` accepts besides a class and one backend."""
+
+    def test_a_tuple_registers_every_backend(self):
+        """Each backend named gets the one kernel."""
+
+        class Local(SeamScale):
+            """A class to register against, so nothing leaks."""
+
+            name = None
+
+        @register_kernel(Local, ("tuple_one", "tuple_two"))
+        def _both(processor, data):
+            """Registered for two made-up backends."""
+            return data
+
+        assert Local.kernel_for("tuple_one") is _both
+        assert Local.kernel_for("tuple_two") is _both
+
+    def test_a_tag_names_the_class(self):
+        """The registry tag resolves to the processor it belongs to."""
+        tag = patch_function_tag(SeamKernelNamed.patch_function)
+
+        @register_kernel(tag, "named_backend")
+        def _named(processor, data):
+            """Registered by tag."""
+            return data
+
+        assert SeamKernelNamed.kernel_for("named_backend") is _named
+
+    @pytest.mark.parametrize("name", ["no_such_operation_here", "aggregate"])
+    def test_a_name_with_no_processor_is_refused(self, name):
+        """An unknown tag, or a patch function with no class, has no kernels."""
+        with pytest.raises(ParameterError, match=name):
+            register_kernel(name, "numpy")
+
+
+@pytest.fixture()
+def kernel_plugins(monkeypatch):
+    """Serve the kernel entry points from a dict, and log what is asked."""
+    loaders: dict[str, Any] = {}
+    asked: list[str] = []
+
+    def _loaders(group):
+        asked.append(group)
+        return loaders if group == "dascore.kernels" else {}
+
+    def _clear():
+        plugins.maybe_load_entry_point.cache_clear()
+        processor_module._load_kernel_plugin.cache_clear()
+
+    _clear()
+    monkeypatch.setattr(plugins, "get_entry_point_loaders", _loaders)
+    yield loaders, asked
+    _clear()
+
+
+class TestKernelPlugins:
+    """A backend package's kernels load the first time its data appear."""
+
+    @pytest.fixture()
+    def local(self):
+        """Return a class to register against, so nothing leaks."""
+
+        class Local(SeamScale):
+            """A class to register against."""
+
+            name = None
+
+        return Local
+
+    def test_a_plugin_supplies_the_kernel(self, kernel_plugins, local):
+        """Loading the entry point is what registers the kernel."""
+        loaders, _ = kernel_plugins
+
+        def _kernel(processor, data):
+            """The plugin's kernel."""
+            return data
+
+        loaders["plug_backend"] = lambda: register_kernel(local, "plug_backend")(
+            _kernel
+        )
+        assert local.kernel_for("plug_backend") is _kernel
+
+    def test_a_plugin_loads_once(self, kernel_plugins, local):
+        """Repeated lookups, from any class, do not load it again."""
+        loaders, _ = kernel_plugins
+        calls = []
+        loaders["once_backend"] = lambda: calls.append(1)
+        for _ in range(3):
+            local.kernel_for("once_backend")
+            SeamSum.kernel_for("once_backend")
+        assert len(calls) == 1
+
+    def test_a_broken_plugin_warns_once(self, kernel_plugins, local):
+        """The error is reported, the generic kernel runs, nothing retries."""
+        loaders, _ = kernel_plugins
+        calls = []
+
+        def _broken():
+            calls.append(1)
+            raise RuntimeError("plugin exploded")
+
+        loaders["broken_backend"] = _broken
+        generic = SeamScale.__dict__["kernel"]
+        with pytest.warns(UserWarning, match="broken_backend.*plugin exploded"):
+            assert local.kernel_for("broken_backend") is generic
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert local.kernel_for("broken_backend") is generic
+        assert len(calls) == 1
+
+    def test_numpy_never_consults_entry_points(self, kernel_plugins, local):
+        """The hot path asks nothing of the install."""
+        loaders, asked = kernel_plugins
+        loaders["numpy"] = lambda: pytest.fail("numpy loaded a plugin")
+        local.kernel_for("numpy")
+        assert asked == []
 
 
 class TestWhereOperationsAreListed:

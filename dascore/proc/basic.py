@@ -1541,5 +1541,4 @@ class Demean(PatchProcessor):
 
 
 # Dask and cupy implement nanmedian without copying to numpy.
-for _backend in ("dask", "cupy"):
-    register_kernel(Demedian, _backend)(Demedian.numpy_kernel)
+register_kernel(Demedian, ("dask", "cupy"))(Demedian.numpy_kernel)

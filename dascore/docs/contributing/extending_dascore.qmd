@@ -165,4 +165,19 @@ def _abs_mybackend(processor, data):
 
 The data backend selects the kernel. A registered kernel takes precedence over the same class's `numpy_kernel` and `kernel`; a subclass's own implementation takes precedence over its parent's registrations.
 
+The operation may also be named by its registry tag, and one kernel may serve several backends:
+
+```python
+@register_kernel("abs", ("mybackend", "otherbackend"))
+def _abs_mybackend(processor, data):
+    return np.abs(data)
+```
+
+So the kernels exist without users importing the backend package, declare the module which registers them as a `dascore.kernels` entry point named for the backend. DASCore imports it the first time data of that backend meet a processor:
+
+```toml
+[project.entry-points."dascore.kernels"]
+mybackend = "mypackage.kernels"
+```
+
 See [Contributing](contributing.qmd), [Testing](testing.qmd), and [Documentation](documentation.qmd) for package conventions.

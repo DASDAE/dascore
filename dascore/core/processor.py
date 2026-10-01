@@ -41,6 +41,7 @@ import inspect
 import numbers
 import sys
 import textwrap
+import warnings
 from contextvars import ContextVar
 from types import FunctionType
 from typing import TYPE_CHECKING, Any, ClassVar, Self, overload
@@ -88,7 +89,9 @@ from dascore.utils.patch_registry import (
     is_default,
     patch_function_tag,
     register_patch_function,
+    resolve_patch_function,
 )
+from dascore.utils.plugins import KERNEL_GROUP, maybe_load_entry_point
 
 if TYPE_CHECKING:
     from dascore.core.attrs import PatchAttrs
@@ -305,8 +308,11 @@ class PatchProcessor(DascoreBaseModel):
         backend, then `numpy_kernel` for NumPy or `kernel` for other arrays,
         with a NumPy fallback if needed, before moving up: a subclass
         which wrote its own kernel means it, and a backend kernel
-        registered against its parent must not answer for it.
+        registered against its parent must not answer for it. A backend
+        other than NumPy first loads its `dascore.kernels` entry point, once.
         """
+        if backend != "numpy":
+            _load_kernel_plugin(backend)
         for klass in cls.__mro__:
             contents = klass.__dict__
             if (found := contents.get("_kernels", {}).get(backend)) is not None:
@@ -659,7 +665,7 @@ def check_patch_listings(patch_class, meta_class) -> None:
         _check_patch_listing(cls)
 
 
-def register_kernel(cls: type[PatchProcessor], backend: str):
+def register_kernel(cls: type[PatchProcessor] | str, backend: str | tuple[str, ...]):
     """
     Say that a function is how an operation runs on one array backend.
 
@@ -669,33 +675,46 @@ def register_kernel(cls: type[PatchProcessor], backend: str):
     Parameters
     ----------
     cls
-        The processor the kernel belongs to.
+        The processor the kernel belongs to, or its registry tag.
     backend
         The backend it is for, as
         [`backend_name`](`dascore.utils.array_api.backend_name`) spells
-        it -- "numpy", "cupy", "dask".
+        it -- "numpy", "cupy", "dask" -- or a tuple of them.
     """
+    owner = _processor_named(cls) if isinstance(cls, str) else cls
+    backends = (backend,) if isinstance(backend, str) else tuple(backend)
 
     def decorate(func):
         """Record the kernel against the class and hand it back."""
-        previous = cls.__dict__.get("_kernels")
-        cls._kernels = {**cls.__dict__.get("_kernels", {}), backend: func}
-        try:
-            # A class body which wrote no kernel looked metadata-only
-            # when its method was checked; this kernel says otherwise, for
-            # the class and for everything which inherits it.
-            _recheck_for_kernel(cls)
-        except Exception:
-            # Refused, so the class is left as it was rather than
-            # holding a kernel whose method is on the wrong class.
-            if previous is None:
-                del cls._kernels
-            else:
-                cls._kernels = previous
-            raise
+        # A class body which wrote no kernel looked metadata-only when its
+        # method was checked; this kernel says otherwise, for the class and
+        # for everything which inherits it. Refused before anything changes.
+        _recheck_for_kernel(owner)
+        kernels = owner.__dict__.get("_kernels", {})
+        owner._kernels = {**kernels, **dict.fromkeys(backends, func)}
         return func
 
     return decorate
+
+
+def _processor_named(name: str) -> type[PatchProcessor]:
+    """Return the processor a registry tag names."""
+    owner = getattr(resolve_patch_function(name), "__processor__", None)
+    if owner is None:
+        msg = f"{name!r} is a patch function, not a PatchProcessor, so takes no kernel."
+        raise ParameterError(msg)
+    return owner
+
+
+@functools.cache
+def _load_kernel_plugin(backend: str) -> None:
+    """Load the `dascore.kernels` entry point for a backend, if any, once."""
+    # The error is caught inside the cache, so a broken plugin warns once.
+    try:
+        maybe_load_entry_point(KERNEL_GROUP, backend)
+    except Exception as error:
+        msg = f"Kernel plugin for backend {backend!r} failed to load: {error!r}"
+        warnings.warn(msg, UserWarning, stacklevel=3)
 
 
 def _method_for(cls: type[PatchProcessor], host: type):
