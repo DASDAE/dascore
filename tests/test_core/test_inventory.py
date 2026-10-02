@@ -1521,6 +1521,10 @@ class TestResourcePool:
         assert acq.interrogator == "int-01"
         assert inventory.get_resource("int-01") == unit
 
+    def test_interrogator_has_no_default_instrument_type(self):
+        """An unstated instrument type stays blank rather than guessed."""
+        assert inv.Interrogator(resource_id="int-01").instrument_type == ""
+
     def test_resource_correction_is_single_site(self):
         """Replacing a pooled resource touches only the pool."""
         cable = inv.Cable(resource_id="cable-01", fiber_count=1)
@@ -2446,10 +2450,34 @@ class TestOpticalLoss:
         )
         assert seg.attenuation_db_per_km == (0.3, 0.35)
 
-    def test_tuple_loss_requires_tuple_measurements(self):
-        """Tuple loss requires tuple measurements."""
+    @pytest.mark.parametrize("quantity", ["loss", "reflectance"])
+    def test_tuple_values_without_measurements(self, quantity):
+        """Tuple values need no measurement records and round trip."""
+        seg = inv.FiberSegment(
+            distance_min=0.0, distance_max=10.0, **{f"{quantity}_db": (0.1, 0.2)}
+        )
+        assert getattr(seg, f"{quantity}_measurement") is None
+        path = inv.OpticalPath(optical_components=(seg,))
+        array = inv.FiberArray(code="L001", optical_paths=(path,))
+        inventory = inv.Inventory(
+            networks=(inv.Network(code="DAS", fiber_arrays=(array,)),)
+        )
+        loaded = dc.inventory(inventory.io.to_yaml())
+        got = loaded.networks[0].fiber_arrays[0].optical_paths[0]
+        assert getattr(got.optical_components[0], f"{quantity}_db") == (0.1, 0.2)
+
+    @pytest.mark.parametrize("quantity", ["loss", "reflectance"])
+    @pytest.mark.parametrize(
+        ("value", "records"), [(0.1, ("m1", "m2")), ((0.1, 0.2), "m1")]
+    )
+    def test_tuple_and_scalar_do_not_pair(self, quantity, value, records):
+        """Records given for a value must match it: tuple to tuple."""
         with pytest.raises(ValidationError, match="equal-length"):
-            inv.FiberSegment(distance_min=0.0, distance_max=10.0, loss_db=(0.1, 0.2))
+            inv.FiberSegment(
+                distance_min=0.0,
+                distance_max=10.0,
+                **{f"{quantity}_db": value, f"{quantity}_measurement": records},
+            )
 
     def test_length_mismatch_raises(self):
         """Length mismatch raises."""
@@ -2787,12 +2815,6 @@ def _sample_inventories() -> dict[str, inv.Inventory]:
     return {
         "defaults": inv.Inventory(),
         "blank_crs": inv.Inventory(coordinate_reference_system=blank_crs),
-        "blank_resources": inv.Inventory(
-            resources=(
-                inv.Interrogator(resource_id="int-1", instrument_type=""),
-                inv.Cable(resource_id="cable-2", name=""),
-            )
-        ),
         "explicit_empties": inv.Inventory(
             networks=(
                 inv.Network(
@@ -2968,12 +2990,6 @@ class TestSerializationIsLossless:
         crs = dc.inventory(inventory.io.to_yaml()).coordinate_reference_system
         assert (crs.authority, crs.code, crs.name) == ("", "", "")
 
-    def test_blank_instrument_type_survives(self):
-        """A blanked field with a non-empty default is not a missing one."""
-        inventory = SAMPLE_INVENTORIES["blank_resources"]
-        loaded = dc.inventory(inventory.io.to_yaml())
-        assert loaded.resources["int-1"].instrument_type == ""
-
     def test_every_blankable_field_survives(self):
         """Emptying any field of any model must survive a round trip.
 
@@ -3000,7 +3016,6 @@ class TestSerializationIsLossless:
         # The fields the reported bug was found in must be among those swept.
         crs = "CoordinateReferenceSystem"
         assert {(crs, "authority"), (crs, "code"), (crs, "name")} <= checked
-        assert ("Interrogator", "instrument_type") in checked
 
     def test_defaulted_fields_are_dropped(self):
         """A field still holding its default is left out of the document."""
@@ -3265,12 +3280,7 @@ class TestGetNamesRoundTrip:
         base = build_inventory()
         path = base.networks[0].fiber_arrays[0].optical_paths[0]
         component = path.optical_components[0]
-        measured = base.new(
-            resources={"m1": inv.OpticalMeasurement(resource_id="m1")}
-        ).replace(
-            component,
-            component.new(loss_db=(0.2, 0.25), loss_measurement=("m1", "m1")),
-        )
+        measured = base.replace(component, component.new(loss_db=(0.2, 0.25)))
         coords = set(measured.get_names().coords)
         assert "optical_components.loss_db" not in coords
         assert "optical_components.name" in coords

@@ -334,9 +334,7 @@ class Interrogator(InventoryModel):
     manufacturer: str = Field(default="", description="Manufacturer name.")
     model: str = Field(default="", description="Model number.")
     serial_number: str = Field(default="", description="Serial number.")
-    instrument_type: str = Field(
-        default="interrogator", description="General instrument category."
-    )
+    instrument_type: str = Field(default="", description="General instrument category.")
 
 
 class Enclosure(InventoryModel):
@@ -464,9 +462,9 @@ class _OpticalComponentBase(_IntervalModel):
 
     Every component carries a unified one-way transmission ``loss_db`` and
     return ``reflectance_db`` (the two quantities an OTDR trace shows per
-    event), each paired with the measurement record that produced it.
-    Multi-wavelength values are equal-length tuples paired elementwise
-    with their measurements, which carry the wavelengths.
+    event), each optionally paired with the measurement record that
+    produced it. Multi-wavelength values are tuples; records given for
+    them pair elementwise and carry the wavelengths.
     """
 
     _identity_field: ClassVar[str] = "name"
@@ -498,17 +496,19 @@ class _OpticalComponentBase(_IntervalModel):
 
     @model_validator(mode="after")
     def _check_measurement_pairing(self) -> Self:
-        """Tuple values pair elementwise with tuple measurement records."""
+        """Measurement records, when given, pair elementwise with values."""
         for quantity in ("loss", "reflectance"):
             value = getattr(self, f"{quantity}_db")
             meas = getattr(self, f"{quantity}_measurement")
+            if meas is None:
+                continue
             value_seq = isinstance(value, tuple)
             meas_seq = isinstance(meas, tuple)
             if value_seq != meas_seq:
                 msg = (
-                    f"Multi-valued {quantity}_db requires an equal-length "
-                    f"{quantity}_measurement tuple (each value needs the "
-                    "record carrying its wavelength), and vice versa."
+                    f"{quantity}_measurement must be an equal-length tuple "
+                    f"when {quantity}_db is a tuple, and a single record "
+                    "otherwise."
                 )
                 raise InvalidInventoryError(msg)
             if value_seq and len(value) != len(meas):
