@@ -27,6 +27,12 @@ from numpy.lib.stride_tricks import as_strided
 from dascore.exceptions import ParameterError
 
 
+def _taper_like(taper: np.ndarray, array: np.ndarray) -> np.ndarray:
+    """Return the taper in float64 for double data, else float32."""
+    double = np.finfo(np.result_type(array.dtype, np.float16)).bits >= 64
+    return taper.astype(np.float64 if double else np.float32, copy=False)
+
+
 @dataclass(frozen=True)
 class TilePlan:
     """
@@ -163,6 +169,7 @@ class TilePlan:
             The weights each tile is multiplied by, of the tile's shape; see
             `dascore.utils.signal.get_taper`.
         """
+        taper = _taper_like(taper, tiles)
         dtype = np.result_type(tiles, taper)
         buffer = np.zeros(self.extended, dtype=dtype)
         grid = tiles.reshape((*self.grid, *self.size))

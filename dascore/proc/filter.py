@@ -7,6 +7,7 @@ Tobias Megies, Moritz Beyreuther, Yannik Behr
 
 from __future__ import annotations
 
+import datetime
 import sys
 from collections.abc import Sequence
 from typing import Any, ClassVar
@@ -27,6 +28,7 @@ from dascore.units import (
     get_filter_units,
     get_inverted_quant,
     invert_quantity,
+    percent,
     quant_sequence_to_quant_array,
 )
 from dascore.utils.docs import compose_docstring
@@ -445,7 +447,10 @@ class SavgolFilter(_WindowFilter):
         return data
 
 
-@compose_docstring(sample_explanation=samples_arg_description)
+# Durations carry their units, so they are never sample counts.
+_DURATIONS = (np.timedelta64, datetime.timedelta)
+
+
 class GaussianFilter(_WindowFilter):
     """
     Applies a Gaussian filter along specified dimensions.
@@ -455,7 +460,8 @@ class GaussianFilter(_WindowFilter):
     patch
         The patch to filter
     samples
-        {sample_explanation}
+        If True, plain numbers are sigma in samples, and may be fractional.
+        Otherwise, values are in the units of the dimension, or carry units.
     mode
         The mode for handling edges.
     cval
@@ -464,7 +470,7 @@ class GaussianFilter(_WindowFilter):
         Truncate the filter kernel length to this many standard deviations.
     **kwargs
         Used to specify the sigma value (standard deviation) for desired
-        dimensions.
+        dimensions. Sigma is not rounded to whole samples.
 
     Examples
     --------
@@ -488,10 +494,36 @@ class GaussianFilter(_WindowFilter):
     and arguments.
     """
 
+    __version__ = "1.1"
     samples: Any = False
     mode: Any = "reflect"
     cval: Any = 0.0
     truncate: Any = 4.0
+
+    def get_metadata(self, meta):
+        """Return each sigma in samples, unrounded: it is no window length."""
+        size, axes = [0.0] * len(meta.dims), []
+        kwargs = self.model_extra or {}
+        for dim, axis, value in get_dim_axis_value(
+            meta, kwargs=kwargs, allow_multiple=True
+        ):
+            coord = meta.get_coord(dim, require_evenly_sampled=True)
+            step = abs(to_float(coord.step))
+            if isinstance(value, dc.units.Quantity) and value.units == percent:
+                value = value.magnitude / 100 * coord.coord_range(extend=False)
+            elif isinstance(value, dc.units.Quantity):
+                value = convert_units(value.magnitude, coord.units, value.units)
+            elif self.kwargs["samples"] and not isinstance(value, _DURATIONS):
+                value = to_float(value) * step  # a plain number is samples
+            count = to_float(value) / step
+            if not (np.isfinite(count) and count >= 0):
+                msg = (
+                    f"gaussian_filter needs a finite, non-negative sigma, got {value}."
+                )
+                raise ParameterError(msg)
+            axes.append(axis)
+            size[axis] = count
+        return meta, {"size": tuple(size), "axes": tuple(axes)}
 
     def numpy_kernel(self, data, *, size, axes):
         """Return the data smoothed along the axes."""

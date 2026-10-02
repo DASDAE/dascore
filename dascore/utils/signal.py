@@ -134,19 +134,17 @@ def _build_taper(
         raise ParameterError(msg)
     edges = []
     for length, over in zip(size, overlap):
-        # float32 throughout, edges and product alike, so the taper is the
-        # one the filter has always used to the last bit.
-        edge = np.ones(length, dtype=np.float32)
+        edge = np.ones(length)
         # Built even when the overlap is zero, so a window nothing knows is
         # refused rather than never asked for.
-        ramp = get_ramp(window, over, complementary=True).astype(np.float32)
+        ramp = get_ramp(window, over, complementary=True)
         if over:
             edge[:over] = ramp
             edge[length - over :] = ramp[::-1]
         edges.append(edge)
     # Separable: the taper is the outer product of its edges.
     taper = math.prod(np.ix_(*edges)) if len(edges) > 1 else edges[0]
-    return np.asarray(taper, dtype=np.float32)
+    return np.asarray(taper, dtype=np.float64)
 
 
 @lru_cache(maxsize=64)
@@ -187,7 +185,7 @@ def get_taper(
     Returns
     -------
     numpy.ndarray
-        A ``float32`` array of shape `size`; a copy, so it may be written to.
+        A ``float64`` array of shape `size`; a copy, so it may be written to.
 
     Examples
     --------
@@ -226,7 +224,7 @@ def get_dual_taper(
 
     Returns
     -------
-    A pair of ``float32`` arrays of shape `size`: the analysis window and
+    A pair of ``float64`` arrays of shape `size`: the analysis window and
     its dual.
 
     Examples
@@ -312,6 +310,6 @@ def get_window_edges(window: Any, size: tuple[int, ...]) -> list[np.ndarray]:
 
 
 def _outer(edges: list[np.ndarray]) -> np.ndarray:
-    """Return the outer product of the edges, in float32."""
+    """Return the outer product of the edges."""
     out = math.prod(np.ix_(*edges)) if len(edges) > 1 else edges[0]
-    return np.asarray(out, np.float32)
+    return np.asarray(out, np.float64)

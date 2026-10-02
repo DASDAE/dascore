@@ -14,6 +14,7 @@ from dascore.core.coords import get_coord
 from dascore.io.core import read
 from dascore.io.prodml.utils import _get_prodml_version_str, _get_root_attrs
 from dascore.utils.downloader import fetch
+from dascore.utils.misc import suppress_warnings
 
 
 @pytest.fixture(scope="session")
@@ -41,6 +42,14 @@ class TestProdMLFile:
     We do this since the other tests read the prodML files, even though
     the Silixa file is technical just ProdML v2.1.
     """
+
+    @pytest.mark.parametrize("name", ["prodml_2.0.h5", "prodml_fbe_1.h5"])
+    def test_dtype_is_not_an_attr(self, name):
+        """The data type is the patch's, not an attr, so a spool does not warn."""
+        with suppress_warnings(UserWarning, action="error"):
+            spool = dc.spool(fetch(name))
+        patch = spool[0]
+        assert patch.dtype == patch.data.dtype
 
     @pytest.fixture(scope="class")
     def issue_221_patch_path(self, tmp_path_factory):

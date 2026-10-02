@@ -31,7 +31,7 @@ def agc(tiles):
     return tiles / np.where(rms > 0, rms, 1)
 
 
-def _jitted():
+def _jitted(identity=False):
     """Return a numba-compiled per-tile function, or skip."""
     numba = pytest.importorskip("numba")
     from dascore.utils._tiles_numba import _JIT_AVAILABLE  # noqa: PLC0415
@@ -43,7 +43,11 @@ def _jitted():
     def half_tile(tile):
         return tile * 0.5
 
-    return half_tile
+    @numba.njit
+    def same_tile(tile):
+        return tile.copy()
+
+    return same_tile if identity else half_tile
 
 
 @pytest.fixture(scope="module")
@@ -65,8 +69,31 @@ def cube():
     return dc.Patch(data=data, coords=coords, dims=("shot", "distance", "time"))
 
 
+def _identity(data):
+    """Return the stack untouched."""
+    return data
+
+
 class TestOverlapAdd:
     """Tiles blended back under the taper."""
+
+    @pytest.mark.parametrize("engine", ["numpy", "numba"])
+    @pytest.mark.parametrize("dtype", [np.float16, np.float32, np.complex64])
+    def test_single_precision_stays_single(self, random_patch, engine, dtype):
+        """A taper never widens single precision data, on either engine."""
+        patch = random_patch.new(data=random_patch.data.astype(dtype))
+        func = _jitted(identity=True) if engine == "numba" else _identity
+        out = patch.tile_apply(func, time=0.5, distance=50)
+        assert out.data.dtype == np.result_type(dtype, np.float32)
+
+    @pytest.mark.parametrize("analysis", [None, "hann"])
+    def test_identity_round_trip_keeps_precision(self, random_patch, analysis):
+        """An untouched stack comes back exactly, in the data's own dtype."""
+        kwargs = dict(time=0.5, distance=50, analysis=analysis)
+        out = random_patch.tile_apply(_identity, **kwargs)
+        np.testing.assert_allclose(out.data, random_patch.data, rtol=1e-12, atol=0)
+        single = random_patch.new(data=random_patch.data.astype(np.float32))
+        assert single.tile_apply(_identity, **kwargs).data.dtype == np.float32
 
     def test_identity(self, patch):
         """An unchanged stack blends back to the input."""
@@ -462,6 +489,14 @@ class TestReassemble:
         n = stacked.shape[stacked.get_axis("time")]
         reversed_stack = stacked.order(time=np.arange(n)[::-1], samples=True)
         assert reversed_stack.reassemble().equals(patch, close=True)
+
+    def test_reordered_single_precision_stays_single(self, patch):
+        """A reordered float32 stack reassembles as float32."""
+        single = patch.new(data=patch.data.astype(np.float32))
+        stacked = single.tile_apply(identity, mode="stack", time=64, samples=True)
+        n = stacked.shape[stacked.get_axis("time")]
+        reversed_stack = stacked.order(time=np.arange(n)[::-1], samples=True)
+        assert reversed_stack.reassemble().data.dtype == np.float32
 
     def test_dropped_tiles_leave_their_region_quiet(self, patch):
         """A stack with tiles removed blends what is left; the gap stays silent."""

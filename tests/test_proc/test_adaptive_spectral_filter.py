@@ -19,6 +19,7 @@ from dascore.proc.adaptive_spectral_filter import (
     AdaptiveSpectralFilter,
     _adaptive_spectral_filter_scipy,
     _get_engine,
+    _plan_and_taper,
     _validate_window_and_overlap,
 )
 from dascore.utils.signal import get_taper
@@ -583,6 +584,11 @@ class TestAdaptiveSpectralFilter:
 
 class TestAdaptiveSpectralCore:
     """Tests for plain array adaptive spectral helpers."""
+
+    def test_taper_is_float32_for_both_engines(self):
+        """The shared taper is float32, the precision both engines work in."""
+        _, taper = _plan_and_taper(np.zeros((64, 64)), (16, 16), (4, 4))
+        assert taper.dtype == np.float32
 
     @pytest.mark.parametrize(
         "window_size,overlap,match",
