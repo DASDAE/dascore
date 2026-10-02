@@ -209,6 +209,39 @@ class TestCorrelateInternal:
             corr_patch.correlate(time=1, lag=10, samples=True)
 
 
+class TestCorrelatePaddedTransform:
+    """Correlating a padded transform keeps every lag."""
+
+    @pytest.fixture()
+    def patch(self):
+        """Two traces, the first leading by 3 samples, of a non-fast length."""
+        # 230 is not a fast FFT length, so dft pads it to 231.
+        trace = np.zeros(230)
+        trace[100] = 1
+        coords = {"distance": [0.0, 1.0], "time": np.arange(230) * 0.01}
+        data = np.vstack([np.roll(trace, -3), trace])
+        return dc.Patch(data=data, dims=("distance", "time"), coords=coords)
+
+    def test_negative_lag_after_padding(self, patch):
+        """A 3-sample lead reads as -3 samples when dft pads the record."""
+        out = (
+            patch.dft("time", real=True)
+            .correlate(distance=1, samples=True)
+            .idft()
+            .correlate_shift("time")
+            .squeeze()
+        )
+        lags = out.get_array("lag_time")
+        assert np.isclose(lags[np.argmax(out.data[0])], -0.03)
+
+    def test_only_the_lag_dim_keeps_its_padding(self, random_patch):
+        """A dim transformed alongside the correlated one is still trimmed."""
+        patch = random_patch.select(distance=(0, 17), time=(0, 230), samples=True)
+        spectra = patch.dft(("distance", "time"), real="time")
+        out = spectra.correlate(ft_distance=1, samples=True).idft()
+        assert out.shape[out.get_axis("distance")] == 17
+
+
 class TestCorrelateErrors:
     """Tests for correlate input validation."""
 

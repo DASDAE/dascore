@@ -54,6 +54,13 @@ def correlate_shift(
         weighting. This is done by simply dividing by the coordinate step.
         See [dft note](`dascore/docs/notes/dft_notes.qmd`) for more details.
 
+    Notes
+    -----
+    A product of transforms is a correlation circular over the transformed
+    length, but `idft` trims a padded transform back to the original length,
+    which drops the most negative lags. Transform with `pad=False`, or pad
+    first with `patch.pad(time="correlate")`, as below.
+
     Examples
     --------
     >>> import dascore as dc
@@ -61,7 +68,7 @@ def correlate_shift(
     >>>
     >>> # Example 1
     >>> # An auto-correlation of the example patch
-    >>> dft = patch.dft("time", real=True)
+    >>> dft = patch.dft("time", real=True, pad=False)
     >>> dft_sq = dft * dft.conj()
     >>> idft = dft_sq.idft()
     >>> auto_patch = idft.correlate_shift(dim="time")
@@ -87,7 +94,7 @@ def correlate_shift(
     return out
 
 
-@patch_function(data_type="correlation")
+@patch_function(data_type="correlation", version="1.1")
 def correlate(
     patch: PatchType,
     samples: bool = False,
@@ -183,6 +190,12 @@ def correlate(
     dim_name = f"source_{dim}"
     cm = patch.coords.update(**{dim_name: (dim_name, new_coord)})
     out = patch.update(data=fft_prod, coords=cm)
+    lag_dim = fft_dim.removeprefix("ft_")
+    if (unpadded := f"_{lag_dim}_unpadded") in out.coords.coord_map:
+        # The product is a correlation circular over the padded length, so
+        # idft must keep all of it; trimming would drop the negative lags.
+        coords = out.coords.update(**{unpadded: (None, out.get_coord(lag_dim))})
+        out = out.update(coords=coords)
     # Undo fft if this function did one, shift, and update coord.
     if not input_dft:
         idft = out.idft.func(out)
