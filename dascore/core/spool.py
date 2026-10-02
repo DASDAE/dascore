@@ -2663,36 +2663,23 @@ class Spool(NodeRepr, NamespaceOwner):
             # residual-trimmed
             # view cannot know its trimmed `data_id` without loading,
             # and data values are never compared here anyway.
+            # Generated per-coordinate columns which describe representation:
+            # def keys, grids and coord dtypes (a plan's outputs state none),
+            # and what a coordinate spanned before this view trimmed it.
+            suffixes = ("_def_key", "_grid", "_coord_dtype", _SOURCE_SUFFIX)
             drop = [
-                "source_path",
+                *_SOURCE_COLUMNS,
                 "_patch_row",
-                "origin_id",
-                "data_id",
-                "source_patch_key",
-                "source_format",
-                "source_version",
                 "_modified",
                 "_patch_local_empty",
-                # A plan states no size until its outputs are assembled,
-                # and equality holds between a view and its
-                # materialization: the envelopes already say what the
-                # rows describe, so the sample count adds nothing here.
+                # A plan states no size until its outputs are assembled, and
+                # the envelopes already say what the rows describe.
                 "_data_size",
-                *[c for c in df.columns if _private(c, "_def_key")],
-                *[c for c in df.columns if _private(c, "_grid")],
-                # a plan's outputs state a placeholder coordinate dtype
-                # for the same reason they state no def key
-                *[c for c in df.columns if _private(c, "_coord_dtype")],
-                # what a coordinate spanned before this view trimmed it
-                # says how the view reached its envelopes, not what the
-                # row describes; the trimmed envelopes are compared
-                *[c for c in df.columns if _private(c, _SOURCE_SUFFIX)],
-                # whether the index holds every attr a patch defines says
+                *[c for c in df.columns if _private(c, suffixes)],
                 # what the index can state, not what the patch is
                 "_attrs_complete",
                 "_attr_dtypes",
-                # when a source was last written and how big it is says
-                # what backs the row, not what the row describes
+                # when a source was last written and how big it is
                 *SOURCE_STAT_COLUMNS,
             ]
             out = df.drop(columns=drop, errors="ignore")
