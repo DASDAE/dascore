@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from typing import Any, Literal
@@ -59,6 +60,7 @@ from dascore.utils.patch import (
 )
 from dascore.utils.time import dtype_time_like
 from dascore.utils.window import resolve_window
+from dascore.warnings import DASCoreWarning
 
 # An attr a patch does not state at all, which no value can equal.
 _MISSING = object()
@@ -253,6 +255,12 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
         Attrs to add/update. Nested `coords` payloads are not accepted here;
         use `patch.update_coords(...)` for coordinate changes.
 
+    Notes
+    -----
+    Keys such as `time_min`, `time_max`, `time_step` or `d_time`, which name
+    one of the patch's dimensions, are stored as attributes and do not move
+    the coordinate; a DASCoreWarning points to `Patch.update_coords`.
+
     Examples
     --------
     >>> import dascore as dc
@@ -266,6 +274,21 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     """
     stated = self.attrs.model_dump(exclude_unset=True)
     out_attrs = self.attrs.from_dict({**stated, **attrs})
+    # Before attrs and coords were separated these keys moved coordinates.
+    names = {
+        "{}_min": "{}_min",
+        "{}_max": "{}_max",
+        "{}_step": "{}_step",
+        "d_{}": "{}_step",
+    }
+    keys = {n.format(d): c.format(d) for d in self.dims for n, c in names.items()}
+    if coord_keys := [k for k in keys if k in attrs]:
+        use = ", ".join(f"{keys[k]}=..." for k in coord_keys)
+        msg = (
+            f"update_attrs stores {coord_keys} as attributes and leaves the "
+            f"coordinates unchanged; use Patch.update_coords({use}) to change them."
+        )
+        warnings.warn(msg, DASCoreWarning, stacklevel=2)
     if not inside_operation():
         # Only the keys the caller wrote, each against what the patch says
         # now: restating a value is not a change, and comparing whole
