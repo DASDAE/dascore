@@ -399,7 +399,7 @@ def _read_coord(node, name, attrs2, snap):
             runs = np.split(array, np.cumsum(lengths)[:-1])
             return NumericCoord(runs=tuple(runs), units=units, step=node_step)
         if node_step is not None:
-            return get_coord(data=array, units=units, step=node_step)
+            return get_coord(data=array, units=units, step=node_step, snap=False)
         if snap or np.ndim(array) != 1:
             return get_coord(data=array, units=units)
         return get_coord(data=array, units=units, snap=False)

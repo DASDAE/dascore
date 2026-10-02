@@ -1259,3 +1259,19 @@ class TestExactLabels:
         assert coord.runs_count == 1
         assert isinstance(coord.runs[0], Labels)
         np.testing.assert_array_equal(coord.values, values)
+
+    @pytest.mark.parametrize("snap", [True, False])
+    def test_declared_step_labels_roundtrip(self, tmp_path, snap):
+        """Labels stored with a declared step read back exactly in both modes."""
+        values = np.arange(300) * 0.1
+        values[1::2] += 0.1 * 5e-7
+        coord = dc.get_coord(data=values, step=0.1, snap=False)
+        patch = dc.Patch(
+            data=np.zeros((300, 2)),
+            dims=("time", "distance"),
+            coords={"time": coord, "distance": [0.0, 1.0]},
+        )
+        path = tmp_path / "declared.h5"
+        dc.write(patch, path, "DASDAE")
+        out = dc.read(path, snap=snap)[0].get_coord("time")
+        np.testing.assert_array_equal(out.values, values)

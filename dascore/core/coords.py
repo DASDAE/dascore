@@ -4360,8 +4360,15 @@ def get_coord(
             return _range_coord(dict(start=data[0], step=step, shape=(1,)), units)
         return NumericCoord.from_labels(data, units=units)
     if not _is_null(step):
-        # a declared step is a claim about the grid, so the labels are read
-        # against it exactly rather than fitted
+        # a declared step is a claim about the grid; snapping forgives the
+        # rounding by which float labels such as arange(n) * step miss it
+        real_step = isinstance(step, float | int | np.floating | np.integer)
+        if snap and real_step and step and data.dtype.kind == "f" and data.ndim == 1:
+            spec = dict(start=data[0], step=step, shape=data.shape)
+            out = _range_coord(spec, units)
+            tol = abs(step) * _GRID_RTOL
+            if len(out) == len(data) and np.allclose(out.values, data, 0, tol):
+                return out
         return _exact_coord(data, step=step, units=units)
     if snap:
         start, stop, step, monotonic = _maybe_get_start_stop_step(data)
