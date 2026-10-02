@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
+from upath import UPath
 
 import dascore as dc
 import dascore.examples as dc_examples
@@ -56,6 +57,22 @@ class TestGetExampleSpool:
         """Ensure get_example_spool works on a datafile."""
         spool = dc.get_example_spool("dispersion_event.h5")
         assert isinstance(spool, dc.BaseSpool)
+
+
+class TestSpoolToDirectory:
+    """Tests for writing a spool's patches to a directory."""
+
+    def test_str_path(self, tmp_path):
+        """A directory given as a string works like a Path."""
+        spool = dc.get_example_spool("random_das")
+        dc.examples.spool_to_directory(spool, str(tmp_path))
+        assert len(list(tmp_path.iterdir())) == len(spool)
+
+    def test_upath_is_kept(self):
+        """A remote directory stays on its own filesystem."""
+        path = UPath("memory://spool_to_directory_test")
+        out = dc.examples.spool_to_directory(dc.get_example_spool(), path)
+        assert out.protocol == "memory" and len(list(out.iterdir()))
 
 
 class TestRandomSpool:
