@@ -7,6 +7,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
+from dascore.units import get_quantity
 from dascore.utils.patch import (
     get_dim_axis_value,
     patch_function,
@@ -33,7 +34,7 @@ def _get_source_fft(patch, dim, source, source_axis, samples):
     return out
 
 
-@patch_function(data_type="correlation")
+@patch_function(data_type="correlation", version="1.1")
 def correlate_shift(
     patch: PatchType, dim: str, undo_weighting: bool = True
 ) -> PatchType:
@@ -91,10 +92,14 @@ def correlate_shift(
         **{dim: f"lag_{dim}"}
     )
     out = patch.update(data=data, coords=new_cm)
+    units, coord_units = get_quantity(patch.attrs.data_units), coord.units
+    if undo_weighting and units is not None and coord_units is not None:
+        # dividing by the step divides the units by the coordinate's too
+        out = out.update_attrs(data_units=units / get_quantity(coord_units))
     return out
 
 
-@patch_function(data_type="correlation", version="1.1")
+@patch_function(data_type="correlation", version="1.2")
 def correlate(
     patch: PatchType,
     samples: bool = False,
@@ -196,6 +201,9 @@ def correlate(
         # idft must keep all of it; trimming would drop the negative lags.
         coords = out.coords.update(**{unpadded: (None, out.get_coord(lag_dim))})
         out = out.update(coords=coords)
+    if (units := get_quantity(patch.attrs.data_units)) is not None:
+        # a product of two spectra carries their units twice
+        out = out.update_attrs(data_units=units**2)
     # Undo fft if this function did one, shift, and update coord.
     if not input_dft:
         idft = out.idft.func(out)

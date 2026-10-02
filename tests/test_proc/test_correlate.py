@@ -5,7 +5,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import ParameterError, UnitError
-from dascore.units import m
+from dascore.units import get_quantity, m
 from dascore.utils.time import to_float
 
 
@@ -240,6 +240,20 @@ class TestCorrelatePaddedTransform:
         spectra = patch.dft(("distance", "time"), real="time")
         out = spectra.correlate(ft_distance=1, samples=True).idft()
         assert out.shape[out.get_axis("distance")] == 17
+
+
+class TestCorrelationUnits:
+    """Correlations carry the square of the data units."""
+
+    def test_both_routes_give_squared_units(self, random_patch):
+        """Correlate and the dft pipeline both give (m/s)**2 for m/s data."""
+        patch = random_patch.update_attrs(data_units="m/s")
+        direct = patch.correlate(distance=0, samples=True)
+        spectra = patch.dft("time", real=True)
+        piped = (spectra * spectra.conj()).idft().correlate_shift("time")
+        expected = get_quantity("m/s") ** 2
+        for out in (direct, piped):
+            assert get_quantity(out.attrs.data_units) == expected
 
 
 class TestCorrelateErrors:
