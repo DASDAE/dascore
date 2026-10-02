@@ -6,10 +6,12 @@ import contextlib
 from functools import partial
 
 import numpy as np
+import pandas as pd
 
 import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
+from dascore.io.index.catalog import LiveResolver
 from dascore.io.utils import slice_dataset
 from dascore.utils.hdf5 import H5Reader, H5Writer, h5_encoding
 from dascore.utils.misc import unbyte
@@ -78,10 +80,21 @@ class DASDAEV1(FiberIO):
         with contextlib.suppress(ValueError):
             resource.create_group("waveforms")
         waveforms = resource["waveforms"]
+        # A lone patch held in memory is named from its summary, as the spool
+        # names it; asking the spool costs a catalog query, most of the write.
+        resolver = getattr(getattr(patches, "_catalog", None), "resolver", None)
+        if isinstance(resolver, LiveResolver) and len(patches) == 1:
+            # A live spool's path names nothing, and an unset value is no column.
+            summary = patches[0].summary.flat_dump()
+            summary = {
+                k: v for k, v in summary.items() if v is not None and k != "source_path"
+            }
+            names = get_patch_names(pd.DataFrame([summary]))
+        else:
+            names = _unique_patch_names(get_patch_names(patches))
+        variables = {"data"}  # a variable need only belong to one patch
         # Strict zip keeps streaming (no spool materialization) yet fails
         # loudly if the name and patch passes ever disagree in length.
-        names = _unique_patch_names(get_patch_names(patches))
-        variables = {"data"}  # a variable need only belong to one patch
         for patch, name in zip(patches, names, strict=True):
             variables.update(patch.coords.coord_map)
             _save_patch(patch, waveforms, name, self._compact_coords, options)

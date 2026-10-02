@@ -82,6 +82,33 @@ def written_dascore_correlate(tmp_path_factory, random_patch):
 class TestWriteDASDAE:
     """Ensure the format can be written."""
 
+    def test_write_does_not_query_the_spool(self, random_patch, tmp_path, monkeypatch):
+        """Patches are named from their summaries, without a catalog query."""
+
+        def _refuse(self, *args, **kwargs):
+            raise AssertionError("get_contents was called")
+
+        monkeypatch.setattr(dc.Spool, "get_contents", _refuse)
+        random_patch.io.write(tmp_path / "out.h5", "DASDAE")
+        monkeypatch.undo()
+        assert dc.spool(tmp_path / "out.h5")[0] == random_patch
+
+    def test_patches_read_from_one_file_keep_apart(self, tmp_path):
+        """Patches from one source file appended to a target do not collide."""
+        source = dc.get_example_spool("random_das")
+        dc.write(source, tmp_path / "source.h5", "DASDAE")
+        for patch in dc.spool(tmp_path / "source.h5"):
+            patch.io.write(tmp_path / "target.h5", "DASDAE")
+        assert len(dc.spool(tmp_path / "target.h5")) == len(source)
+
+    def test_unnamed_patches_keep_apart(self, random_patch, tmp_path):
+        """Patches with no name attr are named by their contents, not "nan"."""
+        first = random_patch.update_attrs(name=None)
+        second = first.update_coords(time_min="2001-01-01")
+        for patch in (first, second):
+            patch.io.write(tmp_path / "target.h5", "DASDAE")
+        assert len(dc.spool(tmp_path / "target.h5")) == 2
+
     def test_append(self, written_dascore_v1_random, tmp_path_factory, random_patch):
         """Ensure files can be appended to unindexed dasdae file."""
         # make a copy of the dasdae file.
