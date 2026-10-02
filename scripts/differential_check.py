@@ -20,6 +20,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import hashlib
+import importlib.util
 import json
 import os
 import subprocess
@@ -34,6 +35,9 @@ import numpy as np
 
 import dascore as dc
 from dascore.utils.signal import WINDOW_NAMES
+
+# Derivatives above second order need findiff, which the minimal install lacks.
+HAS_FINDIFF = importlib.util.find_spec("findiff") is not None
 
 # Repeat fast calls for _TIMING_BUDGET; stop slow calls at _TIMING_MIN_ROUNDS.
 _TIMING_MIN_ROUNDS = 3
@@ -221,7 +225,6 @@ MATRIX_CALLS = {
     # calculus
     "differentiate": lambda patch: patch.differentiate("time"),
     "differentiate_step": lambda patch: patch.differentiate("distance", step=2),
-    "differentiate_findiff": lambda patch: patch.differentiate("time", order=4),
     "integrate": lambda patch: patch.integrate("time"),
     "integrate_definite": lambda patch: patch.integrate("distance", definite=True),
     "strain_rate": lambda patch: patch.update_attrs(
@@ -232,6 +235,10 @@ MATRIX_CALLS = {
     ).velocity_to_strain_rate_edgeless(step_multiple=2),
     "phase_weighted_stack": lambda patch: patch.phase_weighted_stack("distance"),
 }
+if HAS_FINDIFF:
+    MATRIX_CALLS["differentiate_findiff"] = lambda patch: patch.differentiate(
+        "time", order=4
+    )
 
 
 def _pinned(patch, label: str):
@@ -519,7 +526,7 @@ def _calculus_calls(patch, int_patch, f32, dft_patch, wacky, typed) -> dict:
         "velocity",
     )
     three_d = _pinned(dc.get_example_patch("nd_patch", dim_count=3), "3d")
-    return {
+    calls = {
         "diff_time": lambda: patch.differentiate("time"),
         "diff_distance": lambda: patch.differentiate(dim="distance", order=2),
         "diff_all": lambda: patch.differentiate(None),
@@ -596,6 +603,12 @@ def _calculus_calls(patch, int_patch, f32, dft_patch, wacky, typed) -> dict:
         ),
         "pws_bad_complex": lambda: dft_patch.phase_weighted_stack("distance"),
     }
+    if not HAS_FINDIFF:
+        findiff_only = {
+            x for x in calls if "order4" in x or "order6" in x or "findiff" in x
+        }
+        calls = {k: v for k, v in calls.items() if k not in findiff_only}
+    return calls
 
 
 def get_calls() -> dict:
