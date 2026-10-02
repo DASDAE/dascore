@@ -93,6 +93,19 @@ class TestSegyWrite:
         patch2 = dc.spool(path)[0]
         assert set(random_patch.shape) == set(patch2.shape)
 
+    def test_fractional_start_second_warns(self, channel_patch, tmp_path_factory):
+        """A start time between whole seconds warns that it is floored."""
+        pytest.importorskip("segyio")
+        path = tmp_path_factory.mktemp("test_fractional_start") / "temppath.segy"
+        start = np.datetime64("2020-01-01T00:00:00.846")
+        patch = channel_patch.update_coords(time_min=start)
+        with pytest.warns(UserWarning, match="written as 2020-01-01 00:00:00"):
+            patch.io.write(path, "segy")
+        # A start on a whole second is written as it is, without a warning.
+        whole = channel_patch.update_coords(time_min=start.astype("datetime64[s]"))
+        with suppress_warnings(UserWarning, message=".*whole seconds", action="error"):
+            whole.io.write(path.with_name("whole.segy"), "segy")
+
     def test_loss_of_precision_raises(self, random_patch, tmp_path_factory):
         """Raise PatchError when writing would lose precision."""
         pytest.importorskip("segyio")

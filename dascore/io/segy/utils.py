@@ -171,6 +171,12 @@ def _get_segy_compatible_patch(spool, round_error_max=3e-9):
             "patch.update_coords or resample the time axis with patch.resample"
         )
         raise PatchError(msg)
+    if (start := pd.Timestamp(dc.to_datetime64(time.min()))) != start.floor("s"):
+        msg = (
+            "The SEGY writer stores the start time in whole seconds, so "
+            f"{start} will be written as {start.floor('s')}."
+        )
+        warnings.warn(msg)
     return patch.transpose("channel", "time")
 
 

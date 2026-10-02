@@ -79,6 +79,9 @@ class SegyV1_0(FiberIO):  # noqa
 
         Notes
         -----
+        Trace headers store the start time in whole seconds, so a fractional
+        start second is dropped, with a warning.
+
         Based on the example from segyio:
         https://github.com/equinor/segyio/blob/master/python/examples/make-file.py
         """
