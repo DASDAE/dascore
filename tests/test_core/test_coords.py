@@ -3416,3 +3416,50 @@ class TestFractionalSnap:
         """
         out = get_coord(data=np.array([0, 1, 3]))
         assert not out.evenly_sampled
+
+
+class TestDeclaredStepSnap:
+    """Float labels with a declared step snap to it within rounding."""
+
+    @pytest.mark.parametrize("step", [0.1, 0.2, 1 / 3])
+    def test_rounded_labels_keep_the_step(self, step):
+        """Labels within rounding of the declared grid are evenly sampled."""
+        values = np.arange(300) * step
+        values[1::2] += step * 5e-7
+        out = get_coord(data=values, step=step)
+        assert out.evenly_sampled and out.step == step
+        assert np.allclose(out.values, values)
+
+    @pytest.mark.parametrize("step", [-0.1, 0.1, np.array(0.1)])
+    def test_descending_and_array_steps_snap(self, step):
+        """Descending labels snap whatever the declared step's sign or type."""
+        values = (np.arange(300) * 0.1)[::-1]
+        out = get_coord(data=values, step=step)
+        assert out.evenly_sampled and np.allclose(out.values, values)
+
+    def test_non_finite_step_is_refused(self):
+        """An infinite declared step raises the step error, not a count error."""
+        with pytest.raises(CoordError, match="finite non-zero"):
+            get_coord(data=np.array([0.0, 1.0, 2.0]), step=np.inf)
+
+    @pytest.mark.parametrize(("start", "step"), [(1e12, 1e-3), (1e6, 1.4e-10)])
+    def test_unrepresentable_grid_is_not_snapped(self, start, step):
+        """A grid floats cannot hold at these labels is not claimed for them."""
+        values = start + np.arange(300) * step
+        with pytest.raises(CoordError):
+            get_coord(data=values, step=step)
+
+    @pytest.mark.parametrize("offset", [2e-6, 0.5])
+    def test_labels_off_the_grid_are_refused(self, offset):
+        """Labels further off the declared grid than rounding raise."""
+        values = np.arange(300) * 0.1
+        values[1::2] += 0.1 * offset
+        with pytest.raises(CoordError):
+            get_coord(data=values, step=0.1)
+
+    def test_exact_read_does_not_snap(self):
+        """Without snapping, rounded labels are kept exactly."""
+        values = np.arange(300) * 0.1
+        values[1::2] += 0.1 * 5e-7
+        out = get_coord(data=values, step=0.1, snap=False)
+        assert np.array_equal(out.values, values)
