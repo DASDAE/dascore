@@ -1357,6 +1357,7 @@ class TestKnownDivergences:
 
     @pytest.mark.xfail(
         strict=True,
+        raises=AssertionError,
         reason="scalar and strided isel build np.arange over the whole axis",
     )
     @pytest.mark.parametrize("index", [5, slice(10, 20, 2)], ids=["point", "stride"])
@@ -1389,7 +1390,9 @@ class TestKnownDivergences:
         )
 
     @pytest.mark.xfail(
-        strict=True, reason="later members' data units not converted to the first's"
+        strict=True,
+        raises=AssertionError,
+        reason="later members' data units not converted to the first's",
     )
     def test_keep_first_data_units(self, random_patch):
         """
@@ -1410,7 +1413,9 @@ class TestKnownDivergences:
         np.testing.assert_array_equal(data.values, merged.data)
 
     @pytest.mark.xfail(
-        strict=True, reason="units on dims other than the merged one dropped"
+        strict=True,
+        raises=AssertionError,
+        reason="units on dims other than the merged one dropped",
     )
     def test_non_merged_dim_units(self, random_spool):
         """The distance coordinate keeps its units through a round trip."""
@@ -1421,7 +1426,9 @@ class TestKnownDivergences:
         assert data.dc.to_patch().get_coord("distance").units == expected
 
     @pytest.mark.xfail(
-        strict=True, reason="associated coord's latitude_* summary values land in attrs"
+        strict=True,
+        raises=AssertionError,
+        reason="associated coord's latitude_* summary values land in attrs",
     )
     def test_associated_coord_attrs(self, random_patch):
         """An associated coordinate's summary (latitude_min etc.) stays out of attrs."""
