@@ -10,6 +10,7 @@ import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
 from dascore.io.utils import slice_dataset
+from dascore.io.xdas.utils import is_xdas_file
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import (
@@ -28,7 +29,9 @@ class H5Simple(FiberIO):
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
-        return self.version if _is_h5simple(resource) else None
+        if _is_h5simple(resource) and not is_xdas_file(resource):
+            return self.version
+        return None
 
     def read_array(
         self, resource: H5Reader, windows: windows_type = (), key: str = ""

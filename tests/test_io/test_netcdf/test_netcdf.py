@@ -960,6 +960,35 @@ class TestPlainNetCDF4:
         np.testing.assert_array_equal(coord.values, time)
         assert len(dc.read(path)[0].get_coord("time")) == 4
 
+    @pytest.mark.parametrize("start", [0.0, np.datetime64("2020-01-01", "ns")])
+    def test_tie_points_without_mapping(self, tmp_path, start):
+        """Tie-point arrays named for a dimension still give its labels."""
+        xr = pytest.importorskip("xarray")
+        pytest.importorskip("h5netcdf")
+        step = np.timedelta64(2, "s") if isinstance(start, np.datetime64) else 2.0
+        dataset = xr.Dataset(
+            {
+                "data": (("time",), np.arange(5.0)),
+                "time_values": (("time_points",), [start, start + 4 * step]),
+                "time_indices": (("time_points",), [0, 4]),
+            },
+            attrs={"Conventions": "CF-1.8"},
+        )
+        path = tmp_path / "ties.nc"
+        dataset.to_netcdf(path, engine="h5netcdf")
+        time = dc.read(path, file_format="NETCDF_CF")[0].get_array("time")
+        np.testing.assert_array_equal(time, start + np.arange(5) * step)
+
+    def test_utc_offset(self, tmp_path):
+        """A reference time with a UTC offset is converted to UTC."""
+        path = tmp_path / "offset.h5"
+        with h5py.File(path, "w") as handle:
+            handle.create_dataset("data", data=np.ones((3, 2)))
+            time = handle.create_dataset("time", data=[0, 1, 2])
+            time.attrs["units"] = "seconds since 2020-01-01T00:00:00+02:00"
+        time = dc.read(path)[0].get_coord("time")
+        assert time.min() == np.datetime64("2019-12-31T22:00:00")
+
     def test_other_calendar_refused(self, tmp_path):
         """A calendar other than the standard one is refused, not misread."""
         path = tmp_path / "noleap.h5"

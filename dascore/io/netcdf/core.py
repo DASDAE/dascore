@@ -11,6 +11,7 @@ import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
+from dascore.io.xdas.utils import is_xdas_file
 from dascore.utils.hdf5 import H5Reader, get_h5py_file
 from dascore.utils.misc import optional_import
 
@@ -100,7 +101,7 @@ class NetCDFCFV18(FiberIO):
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
-        if not is_netcdf4_file(resource):
+        if not is_netcdf4_file(resource) or is_xdas_file(resource):
             return None
         cf_version = get_cf_version(resource)
         if not cf_version:

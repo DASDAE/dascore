@@ -71,6 +71,10 @@ first_second = spool.select(time=(start, start + dc.to_timedelta64(1)))[0]
 
 Writing builds the new store beside the path and then moves it into place. On object storage that move is a copy, so a reader can see a partly replaced store while it runs.
 
+## XDAS
+
+DASCore reads, but does not write, NetCDF files in the XDAS layout. Each signal, including those in nested groups, becomes a patch whose `source_patch_key` is its path in the file (for example `"network/fiber_a/signal"`). Tie-point and sampled coordinates are decoded exactly without reading samples, and CF scale, offset and fill values are applied. A signal whose tie points leave a gap, overlap or change the step becomes one patch per evenly sampled stretch, keyed `"<path>#0"`, `"<path>#1"`, and so on. A virtual dataset whose source is missing raises; tile manifests are not supported.
+
 # Scanning metadata
 
 [`dc.scan`](`dascore.scan`) returns [`PatchSummary`](`dascore.PatchSummary`) objects without loading patch arrays.

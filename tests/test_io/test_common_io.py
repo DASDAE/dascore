@@ -55,6 +55,7 @@ from dascore.io.terra15 import (
     Terra15FormatterV6,
 )
 from dascore.io.uptech import UptechH5V1
+from dascore.io.xdas import XdasV1
 from dascore.io.zarr import ZarrV2, ZarrV3
 from dascore.utils.downloader import fetch, get_registry_df
 from dascore.utils.hdf5 import H5Reader
@@ -74,14 +75,22 @@ _DASDAE_V2_PATH = Path(mkdtemp("dasdae_v2")) / "example_dasdae_v2.h5"
 _HAS_ZARR = all(importlib.util.find_spec(x) for x in ("zarr", "xarray"))
 _ZARR_IOS = (ZarrV3(), ZarrV2()) if _HAS_ZARR else ()
 _ZARR_PATHS = {io: Path(mkdtemp("zarr")) / "example.zarr" for io in _ZARR_IOS}
+# The shipped NetCDF file is XDAS's layout, so generic NetCDF gets its own.
+_HAS_NETCDF = all(importlib.util.find_spec(x) for x in ("h5netcdf", "xarray"))
+_NETCDF_IOS = (NetCDFCFV18(),) if _HAS_NETCDF else ()
+_NETCDF_PATHS = {io: Path(mkdtemp("netcdf")) / "example.nc" for io in _NETCDF_IOS}
 
 
 @pytest.fixture(scope="session", autouse=True)
 def _write_dasdae_v2():
     """Write the version 2 example before any fixture fetches it."""
     dc.write(dc.get_example_patch("random_das"), _DASDAE_V2_PATH, "dasdae")
-    for io, path in _ZARR_PATHS.items():
+    for io, path in (_ZARR_PATHS | _NETCDF_PATHS).items():
         io.write(dc.get_example_patch("random_das"), path)
+    for path in _NETCDF_PATHS.values():
+        # H5Simple also claims a root "data" beside "time"; not under test here.
+        with h5py.File(path, "r+") as handle:
+            handle.move("data", "strain")
 
 
 # --- Fixtures
@@ -131,10 +140,10 @@ COMMON_IO_READ_TESTS = {
     ),
     Terra15FormatterV5(): ("terra15_v5_test_file.hdf5",),
     Terra15FormatterV6(): ("terra15_v6_test_file.hdf5",),
-    NetCDFCFV18(): ("xdas_netcdf.nc",),
+    XdasV1(): ("xdas_netcdf.nc",),
     MSeedV2(): ("etna_9n_3chan_10s.mseed",),
     UptechH5V1(): ("uptech_as1000_1.hdf5",),
-    **{io: (str(path),) for io, path in _ZARR_PATHS.items()},
+    **{io: (str(path),) for io, path in (_ZARR_PATHS | _NETCDF_PATHS).items()},
 }
 
 # This tuple is for fiber io which support a write method and can write
