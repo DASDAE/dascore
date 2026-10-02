@@ -799,12 +799,14 @@ class FiberIO:
 
         return read
 
-    def _prepare_read(self, manager, snap):
+    def _prepare_read(self, manager, snap, keys=frozenset()):
         """Return metadata and a loader for ordered ``(windows, key)`` requests.
 
         Built-in readers can retain parsed headers in the loader's closure.
         This hook is never used by scans; it must preserve the public metadata
         and array contracts and retain nothing after the read completes.
+        Non-empty `keys` are the only native keys the read wants; a reader
+        may then omit the metadata of other keyed patches.
         """
         resource = manager.get_resource(_required_resource_type(self.get_metadata))
         metadata_func = cast(_TypeCasterMethod, self.get_metadata)
@@ -852,7 +854,9 @@ class FiberIO:
         relative = select.pop("relative", False)
         out = []
         with IOResourceManager(resource) as manager:
-            patches, load = _paired_hook(self, "_prepare_read")(manager, snap)
+            patches, load = _paired_hook(self, "_prepare_read")(
+                manager, snap, keys=wanted
+            )
             patches = [_validate_metadata(patch) for patch in patches]
             origins = [patch._source or ArraySource() for patch in patches]
             if provenance_source is not None:

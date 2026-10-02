@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import gc
+import weakref
+
 import numpy as np
 import pytest
 from scipy.fft import next_fast_len
@@ -391,6 +394,19 @@ class TestDiscreteFourierTransform:
         assert get_quantity(out.attrs.data_units) == get_quantity("dB")
         assert out.attrs.data_type == linear.attrs.data_type
         assert np.allclose(out.data, expected)
+
+    def test_distance_dft_frees_its_output(self, random_patch):
+        """A dft over distance leaves nothing pinned for the cycle collector."""
+        enabled = gc.isenabled()
+        gc.disable()
+        try:
+            out = random_patch.dft("distance")
+            ref = weakref.ref(out.data)
+            del out
+            assert ref() is None
+        finally:
+            if enabled:
+                gc.enable()
 
 
 class TestInverseDiscreteFourierTransform:

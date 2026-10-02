@@ -324,7 +324,8 @@ def _unit_to_str(unit: Unit) -> str:
     Unit is safe to use as a cache key.
     """
     with _UNIT_LOCK:
-        return str(unit)
+        # A dimensionless unit prints as "", which reads back as no units.
+        return str(unit) or "dimensionless"
 
 
 # The subset of quantity_like which names a unit; a numpy time value
@@ -361,10 +362,9 @@ def get_quantity_str(quant_value: unit_like) -> str | None:
         if quant_value.magnitude == 1.0:
             return _unit_to_str(quant_value.units)
         return str(quant_value)
-    # Any other type (eg a pint Unit): validate by conversion, then use
-    # the string of the original input.
+    # What remains is a pint Unit: validate it by conversion.
     get_quantity(quant_value)
-    return str(quant_value)
+    return _unit_to_str(quant_value)
 
 
 @cache
@@ -376,6 +376,19 @@ def _validate_quantity_str(quant_str: str) -> None:
     except UndefinedUnitError as e:
         msg = f"DASCore failed to parse the following unit/quantity: {quant_str}"
         raise UnitError(msg) from e
+
+
+def _quantities_equal(quant1: Quantity | None, quant2: Quantity | None) -> bool:
+    """
+    Return True if two quantities (or None) are equal.
+
+    Unlike `==`, quantities of different dimensions are not compared: pint
+    raises and catches an error for them, and the traceback it keeps pins
+    the caller's arrays until a garbage-collection pass.
+    """
+    if quant1 is None or quant2 is None:
+        return quant1 is quant2
+    return quant1.dimensionality == quant2.dimensionality and quant1 == quant2
 
 
 def get_inverted_quant(quant: Quantity | None, data_units):

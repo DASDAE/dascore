@@ -606,17 +606,19 @@ def _get_file_version(h5):
     return unbyte(h5.attrs.get("__DASDAE_version__", ""))
 
 
-def _get_contents_from_patch_groups_generic(h5, snap=True):
-    """Get DASDAE scan summaries from a generic HDF5 handle."""
+def _get_contents_from_patch_groups_generic(h5, snap=True, keys=frozenset()):
+    """Get DASDAE scan summaries from a generic HDF5 handle, of `keys` if given."""
     waveforms = h5.get("waveforms")
     if waveforms is None:
         return []
     file_legacy = _is_legacy_file(h5)
+    # Listing names opens no group, so only the wanted ones are decoded.
+    groups = (waveforms[name] for name in waveforms if not keys or name in keys)
     return [
         _get_metadata_from_group(
             group,
             legacy=_is_legacy_group(group, file_legacy),
             snap=snap,
         )
-        for group in waveforms.values()
+        for group in groups
     ]

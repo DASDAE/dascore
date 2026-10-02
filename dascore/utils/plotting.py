@@ -9,7 +9,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from dascore.exceptions import ParameterError
-from dascore.units import Hz, get_quantity_str, maybe_convert_percent_to_fraction
+from dascore.units import (
+    Hz,
+    _quantities_equal,
+    get_quantity_str,
+    maybe_convert_percent_to_fraction,
+)
 from dascore.units import s as seconds
 from dascore.utils.misc import suppress_warnings, tukey_fence
 from dascore.utils.time import dtype_time_like
@@ -18,7 +23,7 @@ from dascore.utils.time import dtype_time_like
 def _get_dim_label(patch, dim):
     """Create a label for the given dimension, including units if defined."""
     maybe_units = patch.get_coord(dim).units if dim in patch.coords else None
-    if maybe_units == 1 / seconds:
+    if _quantities_equal(maybe_units, 1 / seconds):
         maybe_units = Hz
     return _get_label(string.capwords(str(dim)), maybe_units)
 

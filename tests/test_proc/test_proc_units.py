@@ -118,6 +118,15 @@ class TestConvertUnits:
         with pytest.raises(UnitError):
             unit_patch.convert_units("s")
 
+    def test_dimensionless_units_scale(self, random_patch):
+        """Dimensionless data (eg integrated 1/s) keep units which convert."""
+        strain = random_patch.set_units("1/s").integrate("time")
+        simplified = random_patch.set_units("nm/m").simplify_units()
+        for patch in (strain, strain * 2, simplified):
+            assert get_quantity(patch.attrs.data_units) == get_quantity("m/m")
+            out = patch.convert_units("nm/m")
+            assert np.allclose(out.data, patch.data * 1e9)
+
     def test_update_data_and_coord_units(self, random_patch):
         """Ensure we can update data and coordinate units in 1 go."""
         patch = random_patch.set_units("m/s", distance="ft")

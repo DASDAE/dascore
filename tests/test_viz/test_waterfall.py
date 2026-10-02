@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import gc
+import weakref
 from fractions import Fraction
 
 import matplotlib.dates as mdates
@@ -20,7 +22,7 @@ from dascore.exceptions import ParameterError
 from dascore.units import get_quantity_str, percent
 from dascore.utils.gaps import GapTolerance, get_gap_edges
 from dascore.utils.misc import suppress_warnings
-from dascore.utils.plotting import _get_extents
+from dascore.utils.plotting import _get_dim_label, _get_extents
 from dascore.utils.time import is_datetime64, to_timedelta64
 from dascore.viz._labels import BAR_GID, MAX_LABELS, MAX_RUNS, SEAM_GID
 from dascore.viz._lanes import string_colors
@@ -1512,3 +1514,21 @@ class TestReviewedCellRendering:
         ax = patch.viz.waterfall(cbar=False, label_coord="zone")
         bars = [line for line in ax.lines if str(line.get_gid()).startswith(BAR_GID)]
         assert bars[0].get_ydata().tolist() == [2.0 + width, 1.0]
+
+
+class TestDimLabel:
+    """Tests for the axis label helper."""
+
+    def test_distance_label_frees_the_patch(self, random_patch):
+        """Labelling a distance axis leaves nothing pinned for the collector."""
+        patch = random_patch.new(data=random_patch.data.copy())
+        enabled = gc.isenabled()
+        gc.disable()
+        try:
+            ref = weakref.ref(patch.data)
+            assert _get_dim_label(patch, "distance") == "Distance [m]"
+            del patch
+            assert ref() is None
+        finally:
+            if enabled:
+                gc.enable()
