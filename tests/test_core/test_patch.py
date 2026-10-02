@@ -6,6 +6,7 @@ import gc
 import operator
 import pickle
 import re
+import warnings
 import weakref
 from typing import Any, cast
 
@@ -35,6 +36,7 @@ from dascore.io.core import (
 from dascore.proc.basic import apply_operator
 from dascore.utils.array import apply_ufunc
 from dascore.utils.misc import suppress_warnings
+from dascore.warnings import DASCoreWarning
 
 
 class ArrayProtocolWrapper:
@@ -1160,10 +1162,25 @@ class TestUpdateAttrs:
 
     def test_update_attrs_accepts_coordinate_shaped_names(self, random_patch):
         """Coord-shaped names are ordinary attrs; coords are never affected."""
-        out = random_patch.update_attrs(time_step=10, channel_step=3)
-        assert out.attrs["time_step"] == 10
-        assert out.attrs["channel_step"] == 3
-        assert out.coords == random_patch.coords
+        # Names of the patch's own dims once moved coords, so they warn.
+        for key in ("time_min", "time_step", "d_time"):
+            with pytest.warns(DASCoreWarning, match="update_coords"):
+                out = random_patch.update_attrs(**{key: 10})
+            assert out.attrs[key] == 10
+            assert out.coords == random_patch.coords
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DASCoreWarning)
+            assert random_patch.update_attrs(channel_step=3).attrs["channel_step"] == 3
+
+    def test_coordinate_shaped_names_warn_in_patch_functions(self, random_patch):
+        """The warning also reaches code inside a user's patch function."""
+
+        @dc.patch_function()
+        def restamp(patch):
+            return patch.update_attrs(time_min=10)
+
+        with pytest.warns(DASCoreWarning, match="update_coords"):
+            restamp(random_patch)
 
     def test_update_non_sorted_coord(self, wacky_dim_patch):
         """Ensure update_coords updates non-sorted coordinates."""

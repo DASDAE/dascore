@@ -22,6 +22,10 @@ import dascore as dc
 from dascore.core.coordmanager import get_coord_manager
 from dascore.utils.downloader import fetch
 
+# These tests shadow coordinates with attrs on purpose, which update_attrs
+# warns about.
+pytestmark = pytest.mark.filterwarnings("ignore:update_attrs stores")
+
 # The suffix-capture family from the original bug report: each of these was
 # previously reinterpreted as coordinate metadata for a phantom coordinate.
 COORD_SHAPED_NAMES = (

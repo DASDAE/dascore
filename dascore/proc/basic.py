@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
 from typing import Any, Literal
@@ -59,6 +60,7 @@ from dascore.utils.patch import (
 )
 from dascore.utils.time import dtype_time_like
 from dascore.utils.window import resolve_window
+from dascore.warnings import DASCoreWarning
 
 # An attr a patch does not state at all, which no value can equal.
 _MISSING = object()
@@ -266,6 +268,15 @@ def update_attrs(self: PatchType, **attrs) -> PatchType:
     """
     stated = self.attrs.model_dump(exclude_unset=True)
     out_attrs = self.attrs.from_dict({**stated, **attrs})
+    # Before attrs and coords were separated these keys moved coordinates.
+    names = ("{}_min", "{}_max", "{}_step", "d_{}")
+    keys = [n.format(d) for d in self.dims for n in names]
+    if coord_keys := [k for k in keys if k in attrs]:
+        msg = (
+            f"update_attrs stores {coord_keys} as attributes and leaves the "
+            "coordinates unchanged; use Patch.update_coords to change them."
+        )
+        warnings.warn(msg, DASCoreWarning, stacklevel=2)
     if not inside_operation():
         # Only the keys the caller wrote, each against what the patch says
         # now: restating a value is not a change, and comparing whole

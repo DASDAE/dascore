@@ -42,6 +42,7 @@ from dascore.io.odh4.core import ODH4PatchAttrs
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
 from dascore.utils.time import to_datetime64
+from dascore.warnings import DASCoreWarning
 
 # a list of fixture names for written DASDAE files
 WRITTEN_FILES = []
@@ -156,7 +157,8 @@ class TestReadDASDAE:
                 del group.attrs[_SEPARATE_ATTRS_KEY]
         # append a new patch carrying an attr shadowing its own coord envelope
         dim = random_patch.dims[0]
-        new_patch = random_patch.update_attrs(tag="new", **{f"{dim}_step": 999})
+        with pytest.warns(DASCoreWarning, match="update_coords"):
+            new_patch = random_patch.update_attrs(tag="new", **{f"{dim}_step": 999})
         new_patch.io.write(path, "dasdae")
         with h5py.File(path, "r") as h5:
             assert not h5.attrs.get(_SEPARATE_ATTRS_KEY, False)  # file stays legacy
