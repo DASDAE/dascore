@@ -518,12 +518,12 @@ def _get_raw_node_attr_coords(node_info, d_coord, base_info, snap=True):
     info = dict(base_info)
     t_coord = _get_time_coord(node_info.node, snap=snap)
     info.update(_get_data_unit_and_type(node_info.node))
-    info["dtype"] = str(node_info.node["RawData"].dtype)
+    dtype = str(node_info.node["RawData"].dtype)
     coords = dc.get_coord_manager(
         coords={"time": t_coord, "distance": d_coord},
         dims=_get_node_dims(node_info),
     )
-    return ProdMLRawPatchAttrs(**info), coords
+    return ProdMLRawPatchAttrs(**info), coords, dtype
 
 
 @register_func(_NODE_ATTRS_PROCESSORS, key="fbe")
@@ -532,7 +532,7 @@ def _get_processed_node_attr_coords(node_info, d_coord, base_info, snap=True):
     out = dict(base_info)
     t_coord = _get_time_coord(node_info.parent_node, snap=snap)
     out.update(_get_data_unit_and_type(node_info.node))
-    out["dtype"] = str(node_info.node.dtype)
+    dtype = str(node_info.node.dtype)
     out.update(maybe_get_items(node_info.node.attrs, _FBE_NODE_ATTRS))
     out.update(maybe_get_items(node_info.parent_node.attrs, _FBE_PARENT_ATTRS))
     # For some reason, the distance coords in raw and fbe data are not the
@@ -549,7 +549,7 @@ def _get_processed_node_attr_coords(node_info, d_coord, base_info, snap=True):
         coords={"time": t_coord, "distance": distance},
         dims=_get_node_dims(node_info),
     )
-    return ProdMLFbePatchAttrs.from_dict(out), coords
+    return ProdMLFbePatchAttrs.from_dict(out), coords, dtype
 
 
 @register_func(_NODE_DATA_PROCESSORS, key="raw")
@@ -570,7 +570,7 @@ def _get_fbe_data(node_info):
 
 def _yield_prodml_attrs_coords(
     fi, *, snap=True
-) -> Iterator[tuple[dc.PatchAttrs, dc.CoordManager, str]]:
+) -> Iterator[tuple[dc.PatchAttrs, dc.CoordManager, str, str]]:
     """Scan a prodML file, return metadata."""
     acq = fi["Acquisition"]
     # Get the information common to all from root attributes.
@@ -579,8 +579,8 @@ def _yield_prodml_attrs_coords(
     # Iterate the raw and processed data and return results in a list.
     for node_info in _yield_data_nodes(fi):
         func = _NODE_ATTRS_PROCESSORS[node_info.patch_type]
-        attr, coords = func(node_info, d_coord, base_info, snap=snap)
-        yield attr, coords, node_info.name
+        attr, coords, dtype = func(node_info, d_coord, base_info, snap=snap)
+        yield attr, coords, node_info.name, dtype
 
 
 def _get_dims_from_attrs(attrs):
