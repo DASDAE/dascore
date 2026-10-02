@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import tracemalloc
+
 import numpy as np
 import pytest
 
@@ -1154,3 +1156,263 @@ class TestToXarrayExactGrid:
         for leaf in leaves:
             array = leaf.dataset["data"]
             assert np.asarray(array.values).shape == array.shape
+
+
+def _segments(tree):
+    """The data variables of a tree, in node order."""
+    return [node.dataset["data"] for node in tree.subtree if "data" in node.dataset]
+
+
+def _write_spool(patches, path):
+    """Write each patch to its own DASDAE file and index the directory."""
+    path.mkdir(exist_ok=True)
+    for num, patch in enumerate(patches):
+        patch.io.write(path / f"p{num}.h5", "dasdae")
+    return dc.spool(path).update()
+
+
+@pytest.fixture(scope="module")
+def patches():
+    """Three abutting patches, then a fourth past a gap; distinct data."""
+    spool = dc.get_example_spool("random_das", length=4, shape=(20, 500))
+    out = [
+        patch.new(data=patch.data + num).set_units("m/s")
+        for num, patch in enumerate(spool)
+    ]
+    gap = np.timedelta64(60, "s")
+    out[3] = out[3].update_coords(time_min=out[3].get_coord("time").min() + gap)
+    return out
+
+
+class TestTreeMatchesChunk:
+    """
+    Every segment equals the patch `chunk(time=None)` merges, in order.
+
+    These pin the tree's user-visible output against the eager reference
+    for the spool shapes a rewrite of the read path must keep: in-memory
+    and file-backed members, multi-member segments, mixed dtypes,
+    transposed members, sample selections, and split blocks.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _require_libs(self):
+        """These tests need both optional libraries."""
+        pytest.importorskip("xarray")
+        pytest.importorskip("dask")
+
+    @pytest.fixture(params=["memory", "dasdae"])
+    def to_spool(self, request, tmp_path):
+        """Build a spool from patches, held in memory or in DASDAE files."""
+        if request.param == "memory":
+            return dc.spool
+        return lambda patches: _write_spool(patches, tmp_path / "files")
+
+    @staticmethod
+    def _assert_matches(tree, expected):
+        """Each segment's data, dims, dtype, coords and units equal the patch's."""
+        segments = _segments(tree)
+        assert len(segments) == len(expected)
+        for data, patch in zip(segments, expected, strict=True):
+            assert data.dims == patch.dims
+            assert data.dtype == patch.data.dtype
+            out = data.dc.to_patch()
+            np.testing.assert_array_equal(out.data, patch.data)
+            for dim in patch.dims:
+                np.testing.assert_array_equal(
+                    out.get_coord(dim).values, patch.get_coord(dim).values
+                )
+            # Only the merged dimension's units survive today; the others
+            # are pinned by TestKnownDivergences.test_non_merged_dim_units.
+            assert out.get_coord("time").units == patch.get_coord("time").units
+            assert out.attrs.data_units == patch.attrs.data_units
+
+    def test_segments(self, patches, to_spool):
+        """A gap splits two segments; the first merges three members."""
+        spool = to_spool(patches)
+        tree = spool.io.to_xarray()
+        assert [x.data.npartitions for x in _segments(tree)] == [3, 1]
+        self._assert_matches(tree, spool.chunk(time=None))
+
+    def test_mixed_dtypes(self, patches, to_spool):
+        """int16 and float32 members merge to float32 as chunk merges them."""
+        mixed = [
+            patches[0].new(data=(patches[0].data * 100).astype(np.int16)),
+            patches[1].new(data=patches[1].data.astype(np.float32)),
+            patches[2].new(data=(patches[2].data * 100).astype(np.int16)),
+        ]
+        spool = to_spool(mixed)
+        tree = spool.io.to_xarray()
+        assert _segments(tree)[0].dtype == np.float32
+        self._assert_matches(tree, spool.chunk(time=None))
+
+    def test_transposed_member(self, patches, to_spool):
+        """A member stored (time, distance) is its own segment, as in chunk."""
+        spool = to_spool([patches[0], patches[1].transpose(), patches[2]])
+        tree = spool.io.to_xarray()
+        native, flipped = ("distance", "time"), ("time", "distance")
+        assert [x.dims for x in _segments(tree)] == [native, flipped, native]
+        self._assert_matches(tree, spool.chunk(time=None))
+
+    def test_samples_select(self, patches, to_spool):
+        """Trimming each member by samples opens gaps, so every one splits."""
+        spool = to_spool(patches).select(time=(10, -10), samples=True)
+        tree = spool.io.to_xarray()
+        assert len(_segments(tree)) == 4
+        self._assert_matches(tree, spool.chunk(time=None))
+
+    def test_split_blocks(self, patches, tmp_path):
+        """A block size of a few KB cuts each file member into many blocks."""
+        spool = _write_spool(patches, tmp_path)
+        tree = spool.io.to_xarray(block_size=4_000)
+        assert _segments(tree)[0].data.npartitions > 3
+        self._assert_matches(tree, spool.chunk(time=None))
+
+    def test_selection_across_seam(self, patches, to_spool):
+        """Isel and sel windows straddling a member seam equal Patch.select."""
+        spool = to_spool(patches[:3])
+        (data,) = _segments(spool.io.to_xarray())
+        (merged,) = spool.chunk(time=None)
+        seam = len(patches[0].get_coord("time"))
+        sub = data.isel(time=slice(seam - 5, seam + 5), distance=slice(2, 9))
+        expected = merged.select(
+            time=(seam - 5, seam + 5), distance=(2, 9), samples=True
+        )
+        self._assert_matches_patch(sub, expected)
+        times = merged.get_coord("time").values
+        sub = data.sel(time=slice(times[seam - 3], times[seam + 3]))
+        expected = merged.select(time=(times[seam - 3], times[seam + 3]))
+        assert sub.sizes["time"] == 7
+        self._assert_matches_patch(sub, expected)
+
+    @staticmethod
+    def _assert_matches_patch(data, patch):
+        """One selected array's dims, values and coordinates equal the patch's."""
+        assert data.dims == patch.dims
+        np.testing.assert_array_equal(data.compute().values, patch.data)
+        for dim in patch.dims:
+            np.testing.assert_array_equal(data[dim].values, patch.get_coord(dim).values)
+
+
+@pytest.fixture(scope="module")
+def long_segment():
+    """One channel of 2e6 int8 samples: tiny data, a long time axis."""
+    pytest.importorskip("xarray")
+    pytest.importorskip("dask")
+    samples = 2_000_000
+    time = dc.core.get_coord(
+        start=np.datetime64("2020-01-01"),
+        step=np.timedelta64(1, "ms"),
+        shape=(samples,),
+    )
+    distance = dc.core.get_coord(start=0.0, step=1.0, shape=(1,))
+    patch = dc.Patch(
+        data=np.zeros((1, samples), dtype=np.int8),
+        coords={"distance": distance, "time": time},
+        dims=("distance", "time"),
+    )
+    (data,) = _segments(dc.spool([patch]).io.to_xarray())
+    return data
+
+
+class TestKnownDivergences:
+    """
+    Where the tree disagrees with chunk or wastes memory today.
+
+    Each test asserts the correct behaviour and is a strict xfail, so the
+    read-path rewrite flips it to a pass and must then drop the mark.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _require_libs(self):
+        """These tests need both optional libraries."""
+        pytest.importorskip("xarray")
+        pytest.importorskip("dask")
+
+    @staticmethod
+    def _peak_bytes(func):
+        """Peak bytes traced while ``func`` runs, after one warm-up call."""
+        func()
+        tracemalloc.start()
+        try:
+            func()
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        return peak
+
+    def test_contiguous_window_memory(self, long_segment):
+        """
+        Control for the memory xfails: a step-one window stays small.
+
+        If this fails the measurement, not the indexing, is at fault.
+        """
+        samples = long_segment.sizes["time"]
+        peak = self._peak_bytes(lambda: long_segment.isel(time=slice(5, 6)).compute())
+        assert peak < samples * 8 // 4
+
+    @pytest.mark.xfail(
+        strict=True, reason="scalar/strided isel allocate np.arange(n) (bug 5)"
+    )
+    @pytest.mark.parametrize("index", [5, slice(10, 20, 2)], ids=["point", "stride"])
+    def test_point_and_stride_memory(self, long_segment, index):
+        """
+        A scalar or short strided isel allocates nothing the length of time.
+
+        Peak traced memory must stay far below the 8 bytes per sample a
+        positional array over the whole axis costs.
+        """
+        samples = long_segment.sizes["time"]
+        peak = self._peak_bytes(lambda: long_segment.isel(time=index).compute())
+        assert peak < samples * 8 // 4
+
+    @pytest.mark.xfail(
+        strict=True, raises=IndexError, reason="strides on two dims (bug 6)"
+    )
+    def test_stride_on_two_dims(self, random_spool):
+        """Striding both dimensions at once equals the same isel of chunk."""
+        (data,) = _segments(random_spool.io.to_xarray())
+        (merged,) = random_spool.chunk(time=None)
+        index = dict(distance=slice(None, None, 2), time=slice(None, None, 2))
+        expected = merged.isel(**index)
+        np.testing.assert_array_equal(
+            data.isel(**index).compute().values, expected.data
+        )
+
+    @pytest.mark.xfail(strict=True, reason="members' data units ignored (bug 7)")
+    def test_keep_first_data_units(self, random_patch):
+        """
+        A member in other data units is converted to the merged units.
+
+        chunk keeps the first member's m/s and converts the second's
+        100 cm/s to 1 m/s, so every sample is one; the tree must agree
+        rather than splice in the raw hundreds.
+        """
+        coord = random_patch.get_coord("time")
+        first = random_patch.new(data=np.ones_like(random_patch.data))
+        second = random_patch.new(data=np.full_like(random_patch.data, 100.0))
+        second = second.update_coords(time_min=coord.max() + coord.step)
+        spool = dc.spool([first.set_units("m/s"), second.set_units("cm/s")])
+        kwargs = dict(group=[], conflict="keep_first")
+        (merged,) = spool.chunk(time=None, **kwargs)
+        (data,) = _segments(spool.io.to_xarray(**kwargs))
+        np.testing.assert_array_equal(data.values, merged.data)
+
+    @pytest.mark.xfail(strict=True, reason="non-merged dim units dropped (bug 11a)")
+    def test_non_merged_dim_units(self, random_spool):
+        """The distance coordinate keeps its units through a round trip."""
+        (data,) = _segments(random_spool.io.to_xarray())
+        (merged,) = random_spool.chunk(time=None)
+        expected = merged.get_coord("distance").units
+        assert expected is not None
+        assert data.dc.to_patch().get_coord("distance").units == expected
+
+    @pytest.mark.xfail(strict=True, reason="associated coord leaks attrs (bug 11b)")
+    def test_associated_coord_attrs(self, random_patch):
+        """An associated coordinate's envelope never lands in the attrs."""
+        n = len(random_patch.get_coord("distance"))
+        patch = random_patch.update_coords(
+            latitude=("distance", np.linspace(10, 11, n))
+        )
+        (data,) = _segments(dc.spool([patch]).io.to_xarray())
+        leaked = {x for x in data.attrs if x.startswith("latitude")}
+        assert not leaked
