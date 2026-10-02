@@ -44,10 +44,12 @@ def _groups(text) -> list[tuple[str, list[str]]]:
     return out
 
 
-def _delta(attrs, key):
-    """Return a spacing stated as ``key`` (and ``key_units``), in ns if timed."""
-    value, units = _attr(attrs, key), _attr(attrs, f"{key}_units")
-    return pd.to_timedelta(value, unit=units).value if units else value
+def _delta(attrs, key, value=None, suffix="_"):
+    """Return a spacing stated as ``key``, in ns if its dtype is a timedelta."""
+    value = _attr(attrs, key) if value is None else value
+    if str(_attr(attrs, f"{key}{suffix}dtype")).startswith("timedelta"):
+        return pd.to_timedelta(value, unit=_attr(attrs, f"{key}{suffix}units")).value
+    return value
 
 
 def _specs(group, node):
@@ -60,7 +62,7 @@ def _specs(group, node):
     is refused.
     """
     for label, refs in _groups(_attr(node.attrs, "coordinate_interpolation")):
-        if len(refs) == 2:
+        if len(refs) == 2 and all(x in group for x in refs):
             yield label, label, refs[1], refs[0], False, None, 0
             continue
         name = refs[0].removesuffix("_interpolation") if len(refs) == 1 else ""
@@ -85,9 +87,7 @@ def _specs(group, node):
         attrs = descriptor.attrs
         dim, refs = _groups(_attr(attrs, "tie_point_mapping"))[0]
         if "sampling_interval" not in attrs:  # the interval was its own value
-            interval = descriptor[()]
-            if units := _attr(attrs, "units"):
-                interval = pd.to_timedelta(interval, unit=units).value
+            interval = _delta(attrs, "", descriptor[()], suffix="")
             yield label, dim, *refs, True, Fraction(interval), 0
             continue
         key = "sampling_interval"
@@ -196,9 +196,10 @@ def _tie_point_runs(group, spec, length):
             (v0, i1 - i0, div(v1 - v0, i1 - i0)) for (v0, v1), (i0, i1) in pairs
         ]
         segments.append((ticks[-1], 1, None))
-    # stored labels are within a tick (half of one for rounded integers)
+    # stored labels are within a tick (half of one for rounded integers),
+    # or for floats a few units of their own precision
     tick = 1 if dtype.kind == "M" else 0.5 if exact_kind else 0
-    tolerance += tick or 1e-9 * max(abs(x) for x in ticks)
+    tolerance += tick or 4 * np.finfo(dtype).eps * max(abs(x) for x in ticks)
     out, first = [], 0
     for start, count, step in _runs(segments, tolerance):
         if exact is not None and step is not None:
@@ -282,7 +283,7 @@ def unpack(node, data: np.ndarray) -> np.ndarray:
     out = data.astype(dtype)
     for name in _FILLS:
         if name in node.attrs:
-            out[data == _attr(node.attrs, name)] = np.nan
+            out[np.isin(data, np.atleast_1d(node.attrs[name]))] = np.nan
     scale = dtype.type(_attr(node.attrs, "scale_factor", 1))
     return out * scale + dtype.type(_attr(node.attrs, "add_offset", 0))
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import sys
+
 import h5py
 import numpy as np
 import pytest
@@ -45,6 +47,7 @@ def xdas_dataset(legacy=False, name="strain rate", times=TIMES, indices=None):
             attrs = {"interpolation_name": "linear", "tie_point_mapping": tie_mapping}
             if dim == "time":  # XDAS states the step of a regular time axis
                 attrs |= {"sampling_interval": 4, "sampling_interval_units": "ms"}
+                attrs["sampling_interval_dtype"] = "timedelta64[ns]"
             ds[f"{dim}_interpolation"] = xr.DataArray(np.nan, attrs=attrs)
     ds[name].attrs = {"coordinate_interpolation": " ".join(mapping), "tag": "a"}
     ds["distance_values"].attrs["units"] = "m"
@@ -57,12 +60,14 @@ def sampled_dataset(legacy=False, rate=(3, 1)):
     if legacy:
         mapping = "time: time_values time_lengths"
         attrs = {"tie_point_mapping": mapping, "units": "milliseconds"}
+        attrs["dtype"] = "timedelta64[ns]"
         descriptor, label = numerator, "time"
     else:
         mapping = "time: time_lengths time_points"
         key = "sampling_numerator" if denominator > 1 else "sampling_interval"
         attrs = {"tie_point_mapping": mapping, key: numerator}
         attrs[f"{key}_units"] = "milliseconds"
+        attrs[f"{key}_dtype"] = "timedelta64[ns]"
         if denominator > 1:
             attrs |= {"sampling_interval": 0, "sampling_denominator": denominator}
         descriptor, label = np.nan, "time_values"
@@ -146,7 +151,11 @@ class TestDetection:
         )
         broken = xdas_dataset()
         broken["strain rate"].attrs["coordinate_interpolation"] = "time_values"
-        for number, ds in enumerate([quadratic, shared, broken]):
+        dangling = xdas_dataset(legacy=True)
+        dangling["strain rate"].attrs["coordinate_interpolation"] = (
+            "time: time_a time_b"
+        )
+        for number, ds in enumerate([quadratic, shared, broken, dangling]):
             path = write(ds, tmp_path / f"{number}.nc")
             assert XdasV1().get_format(path) is False
             assert dc.get_format(path)[0] == "NETCDF_CF"
@@ -189,6 +198,14 @@ class TestRead:
         np.testing.assert_array_equal(patch.data, expected)
         assert np.isnan(patch.data[0, 0])
         assert not set(packing) & set(patch.attrs.model_dump())
+
+    def test_several_missing_values(self, tmp_path):
+        """Every value a missing_value list names becomes NaN."""
+        path = write(xdas_dataset(), tmp_path / "missing.nc")
+        with h5py.File(path, "r+") as handle:
+            handle["strain rate"].attrs["missing_value"] = np.array([0.0, 1.0], "f4")
+        data = dc.read(path)[0].data
+        assert np.isnan(data.flat[:2]).all() and not np.isnan(data.flat[2:]).any()
 
     def test_spool_and_selection(self, xdas_path):
         """Selecting while reading, or lazily, matches selecting afterwards."""
@@ -287,6 +304,7 @@ class TestGaps:
         ds["time_interpolation"].attrs |= {
             "sampling_numerator": 1_000_000_000,
             "sampling_numerator_units": "nanoseconds",
+            "sampling_numerator_dtype": "timedelta64[ns]",
             "sampling_denominator": 1024,
         }
         ds = ds.drop_vars(["distance_indices", "distance_values"])
@@ -322,6 +340,35 @@ class TestCoordinates:
         ds["distance_values"] = ("distance_points", np.array([18, 2], "uint16"))
         coord = dc.read(write(ds, tmp_path / "uint.nc"))[0].get_coord("distance")
         np.testing.assert_array_equal(coord.values, np.arange(18, 1, -2))
+
+    def test_float_gap_far_from_zero(self, tmp_path):
+        """A small gap in floats far from zero is still a gap."""
+        ds = xdas_dataset().drop_vars(["distance_indices", "distance_values"])
+        values = 1e9 + np.arange(9.0)
+        values[4:] += 0.5
+        ds["distance_indices"] = ("distance_points", [0, 3, 4, 8])
+        ds["distance_values"] = ("distance_points", values[[0, 3, 4, 8]])
+        assert len(dc.read(write(ds, tmp_path / "far.nc"))) == 2
+
+    def test_sampled_distance(self, tmp_path):
+        """A sampled interval in metres stays in metres."""
+        mapping = "distance: distance_lengths distance_points"
+        attrs = {"tie_point_mapping": mapping, "sampling_interval": 2.0}
+        attrs["sampling_interval_units"] = "m"
+        ds = xr.Dataset(
+            {
+                "signal": (("distance",), np.arange(7)),
+                "distance_values": ("distance_points", [0.0, 100.0]),
+                "distance_lengths": ("distance_points", [3, 4]),
+                "distance_sampling": ((), np.nan, attrs),
+            },
+            attrs={"Conventions": "CF-1.13"},
+        )
+        ds["signal"].attrs["coordinate_sampling"] = "distance_values: distance_sampling"
+        _, second = dc.read(write(ds, tmp_path / "metres.nc"))
+        np.testing.assert_array_equal(
+            second.get_array("distance"), [100, 102, 104, 106]
+        )
 
     def test_time_zone_offset(self, tmp_path):
         """A reference time with a UTC offset is converted to UTC."""
@@ -437,6 +484,10 @@ class TestVirtual:
         with pytest.raises(FileNotFoundError, match="values"):
             dc.read(virtual_path)
 
+    @pytest.mark.skipif(
+        sys.platform == "win32",
+        reason="HDF5's C runtime does not see os.environ changes on Windows.",
+    )
     def test_prefix_source(self, virtual_path, tmp_path_factory, monkeypatch):
         """A source HDF5 finds through HDF5_VDS_PREFIX is read."""
         elsewhere = tmp_path_factory.mktemp("sources")

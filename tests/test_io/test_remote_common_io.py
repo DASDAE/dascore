@@ -17,7 +17,7 @@ from tests.test_io._common_io_test_utils import (
     skip_on_timeout,
     skip_timeout,
 )
-from tests.test_io.test_common_io import COMMON_IO_READ_TESTS
+from tests.test_io.test_common_io import _HAS_NETCDF, COMMON_IO_READ_TESTS
 from tests.test_io.test_common_io import _write_dasdae_v2 as _write_dasdae_v2
 
 # The localhost HTTP + fsspec/aiohttp streaming path can intermittently deadlock
@@ -58,6 +58,8 @@ REMOTE_FORMATS = {
     ("NETCDF_CF", "1.8"),
     ("XDAS", "1"),
 }
+if not _HAS_NETCDF:  # its matrix file is written with xarray
+    REMOTE_FORMATS.discard(("NETCDF_CF", "1.8"))
 # One file each: what is under test is the streaming path, and a second file
 # of the same format goes down the same one.
 REMOTE_COMMON_IO_READ_TESTS = {
