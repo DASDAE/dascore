@@ -12,6 +12,7 @@ import pytest
 from scipy.signal import hilbert as sp_hilbert
 
 import dascore as dc
+from dascore.core.coords import concat_coords
 from dascore.utils.array_api import (
     array_namespace,
     asarray_like,
@@ -426,6 +427,23 @@ def _velocity(patch):
     return patch.update_attrs(data_type="velocity")
 
 
+def _shifted(patch):
+    """Return the patch with a shift in samples for each distance."""
+    return patch.update_coords(shift=("distance", np.arange(patch.shape[0]) % 5))
+
+
+def _tiled(patch):
+    """Return the patch cut into a stack of tiles along time."""
+    return patch.tile_apply(np.positive, mode="stack", time=64, samples=True)
+
+
+def _holed(patch):
+    """Return the first 190 times of the patch with ten samples missing."""
+    coord = patch.get_coord("time")
+    holed = concat_coords(coord[:100], coord[110:200])
+    return patch.isel(time=slice(0, 190)).update_coords(time=holed)
+
+
 # One call per operation converted to a processor, and the numpy patch it is
 # given (on each backend too); the results must match numpy's.
 _CONVERTED = {
@@ -487,6 +505,17 @@ _CONVERTED = {
         _velocity,
     ),
     "phase_weighted_stack": (lambda p: p.phase_weighted_stack("distance"), None),
+    "pad": (lambda p: p.pad(time=(2, 3), samples=True), None),
+    "decimate": (lambda p: p.decimate(time=4), None),
+    "interpolate": (lambda p: p.interpolate(time=p.get_array("time")[1::3]), None),
+    "resample": (lambda p: p.resample(time=0.005), None),
+    "align_to_coord": (
+        lambda p: p.align_to_coord(time="shift", samples=True),
+        _shifted,
+    ),
+    "correlate_shift": (lambda p: p.correlate_shift("time"), None),
+    "reassemble": (lambda p: p.reassemble(), _tiled),
+    "fill_gaps": (lambda p: p.fill_gaps("time"), _holed),
 }
 
 
@@ -506,6 +535,12 @@ _NUMPY_ONLY = {
     "differentiate",
     "integrate",
     "velocity_to_strain_rate",
+    "decimate",
+    "interpolate",
+    "resample",
+    "align_to_coord",
+    "reassemble",
+    "fill_gaps",
 }
 
 
@@ -600,6 +635,23 @@ class TestArrayApiKernelBranches:
         out = backend_patch.new(data=data).angle()
         positive = np.asarray(backend_patch.data) > 0
         assert np.allclose(np.asarray(out.data)[positive], np.arctan2(2, 1))
+
+    def test_pad_writes_the_constant(self, backend_patch):
+        """The padded samples hold the constant, both ends of both axes."""
+        out = backend_patch.pad(
+            time=(1, 2), distance=(0, 1), samples=True, constant_values=7
+        )
+        values = np.asarray(out.data)
+        assert values.shape == (301, 2003)
+        assert (values[:, :1] == 7).all() and (values[:, -2:] == 7).all()
+        assert (values[-1] == 7).all()
+        assert np.array_equal(values[:-1, 1:-2], np.asarray(backend_patch.data))
+
+    def test_pad_other_modes_are_numpys(self, backend_patch):
+        """A mode other than constant goes through numpy, which decides it."""
+        with pytest.warns(NumpyFallbackWarning, match="pad"):
+            with pytest.raises(ValueError, match="reflect"):
+                backend_patch.pad(time=1, samples=True, mode="reflect")
 
     def test_fillna_fills(self, backend_patch):
         """Non-finite values are replaced by the value."""

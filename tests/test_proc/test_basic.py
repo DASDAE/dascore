@@ -19,6 +19,7 @@ from dascore.exceptions import (
     ParameterError,
     PatchBroadcastError,
 )
+from dascore.proc.basic import Pad
 from dascore.utils.misc import _merge_tuples
 from dascore.warnings import NumpyFallbackWarning
 
@@ -1191,6 +1192,34 @@ class TestPad:
         """Test that providing a sequence for constant_values raises a TypeError."""
         with pytest.raises(ParameterError):
             random_patch.pad(time=(0, 5), constant_values=(0, 0))
+
+
+class TestPadProcessor:
+    """What the Pad class guarantees beyond what the framework checks."""
+
+    def test_metadata_without_data(self, random_patch):
+        """The padded shape and widths come from metadata alone."""
+        pad = Pad(time=(0.008, 0.012), distance="fft")
+        out, plan = pad.get_metadata(random_patch.drop_data())
+        assert out.shape == (300, 2005)
+        assert plan == {"pad_width": ((0, 0), (2, 3))}
+
+    def test_widths_in_coordinate_units(self, random_patch):
+        """Without samples, a width is a span of the coordinate."""
+        out = random_patch.pad(time=(0.008, 0.012))
+        assert out.shape == (300, 2005)
+
+    def test_mode_reaches_numpy(self, random_patch):
+        """Another mode is numpy's, which refuses a constant with it."""
+        with pytest.raises(ValueError, match="reflect"):
+            random_patch.pad(time=1, samples=True, mode="reflect")
+
+    def test_integer_data_stay_integer(self, random_patch):
+        """Padding int data with an int keeps the dtype."""
+        ints = random_patch.new(data=np.ones(random_patch.shape, dtype=np.int32))
+        out = ints.pad(time=1, samples=True, constant_values=7)
+        assert out.dtype == np.int32
+        assert (np.asarray(out.data)[:, 0] == 7).all()
 
 
 class TestConj:

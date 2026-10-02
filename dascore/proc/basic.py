@@ -22,7 +22,7 @@ from dascore.core.coordmanager import (
     get_coord_manager,
 )
 from dascore.core.coords import get_coord
-from dascore.core.processor import PatchProcessor, register_kernel
+from dascore.core.processor import PatchProcessor, _via_numpy, register_kernel
 from dascore.core.source import ArraySource
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
@@ -1089,15 +1089,106 @@ class Fillna(PatchProcessor):
         return xp.where(to_replace, value, data)
 
 
-@patch_function()
-def pad(
-    patch: PatchType,
-    mode: Literal["constant"] = "constant",
-    constant_values: Any = 0,
-    expand_coords=True,
-    samples=False,
-    **kwargs,
-) -> PatchType:
+def _pad_tuple(value, samples, coord):
+    """
+    Get a tuple, in samples, of (pad_to_start, pad_to_end).
+    """
+    if value in {"fft", "correlate"}:
+        target_length = len(coord) if value == "fft" else 2 * len(coord) - 1
+        # Determine value so that the output dim will be a fast length.
+        value = (0, next_fast_len(target_length) - len(coord))
+        samples = True  # ensure padding isn't interpreted as coord units.
+    elif not isinstance(value, Sequence):
+        value = (value, value)
+    if not samples:  # Ensure values are in samples.
+        value = tuple(coord.get_sample_count(x) for x in value)
+    return value
+
+
+def _padded_coord(coord, pad_tuple, expand_coords):
+    """Get the new coordinate along the expanded axis."""
+    # A pad of no samples leaves the coordinate exactly as it was,
+    # rather than rebuilding it from its values -- which would widen
+    # an integer coordinate to hold a NaN nothing is going to write.
+    if not any(pad_tuple):
+        return coord
+    if expand_coords and coord.evenly_sampled:
+        # Extend the grid itself: rebuilding from the rounded step would
+        # move every label of a fractional grid.
+        total = len(coord) + pad_tuple[0] + pad_tuple[1]
+        return coord._with_runs((coord.runs[0].sliced(-pad_tuple[0], 1, total),))
+    old_values = coord.values
+    # Need to convert ints to float so NaN can be used.
+    if np.issubdtype(old_values.dtype, np.integer):
+        old_values = old_values.astype(np.float64)
+    null_value = _get_nullish(old_values.dtype)
+    added_nan_values = np.pad(
+        old_values, pad_width=pad_tuple, constant_values=null_value
+    )
+    # Units passed rather than updated onto the coordinate: a
+    # coordinate built from new data starts with none, so the
+    # meters a distance was measured in would come off here.
+    return get_coord(data=added_nan_values, units=coord.units)
+
+
+def _pad_fill(dtype):
+    """What a padded coordinate holds where nothing was measured."""
+    # The spellings a projection onto uncovered channels already
+    # uses: blank text, an unset number, and not a member.
+    if dtype.kind in "US":
+        return ""
+    if dtype.kind == "b":
+        return False
+    return _get_nullish(dtype)
+
+
+def _padded_associated_coords(coords, pad_tuples):
+    """Grow the coordinates measured on a padded dimension with it."""
+    out = {}
+    for name, coord_dims in coords.dim_map.items():
+        if name in pad_tuples or pad_tuples.keys().isdisjoint(coord_dims):
+            continue
+        widths = [pad_tuples.get(x, (0, 0)) for x in coord_dims]
+        # A pad of no samples is not a pad: `pad(time="fft")` on a
+        # patch already of a fast length asks for one, and widening
+        # an integer coordinate there would change it for nothing.
+        if not any(any(x) for x in widths):
+            continue
+        coord = coords.coord_map[name]
+        values = coord.values
+        # An integer coordinate has to widen to hold the NaN which
+        # says nothing is known there, as the padded dimension's own
+        # does above.
+        if np.issubdtype(values.dtype, np.integer):
+            values = values.astype(np.float64)
+        padded = np.pad(
+            values, pad_width=widths, constant_values=_pad_fill(values.dtype)
+        )
+        grown = get_coord(data=padded, units=coord.units)
+        out[name] = (coord_dims, grown)
+    return out
+
+
+def _pad_array(data, pad_width, constant_values=0):
+    """Return data with `constant_values` added along each axis, as np.pad does."""
+    xp = array_namespace(data)
+    for axis, widths in enumerate(pad_width):
+        if not any(widths):
+            continue
+        fills = [
+            xp.full(
+                (*data.shape[:axis], width, *data.shape[axis + 1 :]),
+                constant_values,
+                dtype=data.dtype,
+                device=device(data),
+            )
+            for width in widths
+        ]
+        data = xp.concat([fills[0], data, fills[1]], axis=axis)
+    return data
+
+
+class Pad(PatchProcessor):
     """
     Pad the patch data along specified dimensions.
 
@@ -1156,108 +1247,46 @@ def pad(
     >>> padded_fft = patch.pad(time="fft")
     """
 
-    def _get_pad_tuple(value, samples, coord):
-        """
-        Get a tuple, in samples, of (pad_to_start, pad_to_end).
-        """
-        if value in {"fft", "correlate"}:
-            target_length = len(coord) if value == "fft" else 2 * len(coord) - 1
-            # Determine value so that the output dim will be a fast length.
-            value = (0, next_fast_len(target_length) - len(coord))
-            samples = True  # ensure padding isn't interpreted as coord units.
-        elif not isinstance(value, Sequence):
-            value = (value, value)
-        if not samples:  # Ensure values are in samples.
-            value = tuple(coord.get_sample_count(x) for x in value)
-        return value
+    mode: Any = "constant"
+    constant_values: Any = 0
+    expand_coords: Any = True
+    samples: Any = False
 
-    def _get_new_coord(coord, pad_tuple, expand_coords):
-        """Get the new coordinate along the expanded axis."""
-        # A pad of no samples leaves the coordinate exactly as it was,
-        # rather than rebuilding it from its values -- which would widen
-        # an integer coordinate to hold a NaN nothing is going to write.
-        if not any(pad_tuple):
-            return coord
-        if expand_coords and coord.evenly_sampled:
-            # Extend the grid itself: rebuilding from the rounded step would
-            # move every label of a fractional grid.
-            total = len(coord) + pad_tuple[0] + pad_tuple[1]
-            new_coord = coord._with_runs(
-                (coord.runs[0].sliced(-pad_tuple[0], 1, total),)
-            )
-        else:
-            old_values = coord.values
-            # Need to convert ints to float so NaN can be used.
-            if np.issubdtype(old_values.dtype, np.integer):
-                old_values = old_values.astype(np.float64)
-            null_value = _get_nullish(old_values.dtype)
-            added_nan_values = np.pad(
-                old_values, pad_width=pad_tuple, constant_values=null_value
-            )
-            # Units passed rather than updated onto the coordinate: a
-            # coordinate built from new data starts with none, so the
-            # meters a distance was measured in would come off here.
-            new_coord = get_coord(data=added_nan_values, units=coord.units)
-        return new_coord
+    model_config = ConfigDict(extra="allow")
 
-    if isinstance(constant_values, Sequence):
-        raise ParameterError("constant_values must be a scalar, not a sequence.")
+    def get_metadata(self, meta):
+        """Return the padded coordinates, and each axis's (before, after) widths."""
+        if isinstance(self.constant_values, Sequence):
+            raise ParameterError("constant_values must be a scalar, not a sequence.")
+        pad_width = [(0, 0)] * len(meta.shape)
+        extras = self.model_extra or {}
+        dimfo = get_dim_axis_value(meta, kwargs=extras, allow_multiple=True)
+        new_coords = {}
+        pad_tuples = {}
+        for dim, axis, value in dimfo:
+            coord = meta.get_coord(dim, require_evenly_sampled=not self.samples)
+            pad_tuple = _pad_tuple(value, self.samples, coord)
+            pad_width[axis] = pad_tuple
+            pad_tuples[dim] = pad_tuple
+            new_coords[dim] = _padded_coord(coord, pad_tuple, self.expand_coords)
+        new_coords |= _padded_associated_coords(meta.coords, pad_tuples)
+        coords = meta.coords._update_grid(
+            *(dim for dim, widths in pad_tuples.items() if any(widths)), **new_coords
+        )
+        return meta.new(coords=coords), {"pad_width": tuple(pad_width)}
 
-    def _pad_fill(dtype):
-        """What a padded coordinate holds where nothing was measured."""
-        # The spellings a projection onto uncovered channels already
-        # uses: blank text, an unset number, and not a member.
-        if dtype.kind in "US":
-            return ""
-        if dtype.kind == "b":
-            return False
-        return _get_nullish(dtype)
+    def numpy_kernel(self, data, *, pad_width):
+        """Return the data padded by numpy, in any of its modes."""
+        return np.pad(
+            data, pad_width, mode=self.mode, constant_values=self.constant_values
+        )
 
-    def _get_associated_coords(pad_tuples):
-        """Grow the coordinates measured on a padded dimension with it."""
-        out = {}
-        for name, coord_dims in patch.coords.dim_map.items():
-            if name in pad_tuples or pad_tuples.keys().isdisjoint(coord_dims):
-                continue
-            widths = [pad_tuples.get(x, (0, 0)) for x in coord_dims]
-            # A pad of no samples is not a pad: `pad(time="fft")` on a
-            # patch already of a fast length asks for one, and widening
-            # an integer coordinate there would change it for nothing.
-            if not any(any(x) for x in widths):
-                continue
-            coord = patch.coords.coord_map[name]
-            values = coord.values
-            # An integer coordinate has to widen to hold the NaN which
-            # says nothing is known there, as the padded dimension's own
-            # does above.
-            if np.issubdtype(values.dtype, np.integer):
-                values = values.astype(np.float64)
-            padded = np.pad(
-                values, pad_width=widths, constant_values=_pad_fill(values.dtype)
-            )
-            grown = get_coord(data=padded, units=coord.units)
-            out[name] = (coord_dims, grown)
-        return out
-
-    pad_width = [(0, 0)] * len(patch.shape)
-    dimfo = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
-    new_coords = {}
-    pad_tuples = {}
-
-    for dim, axis, value in dimfo:
-        coord = patch.get_coord(dim, require_evenly_sampled=not samples)
-        pad_tuple = _get_pad_tuple(value, samples, coord)
-        pad_width[axis] = pad_tuple
-        pad_tuples[dim] = pad_tuple
-        new_coords[dim] = _get_new_coord(coord, pad_tuple, expand_coords)
-    new_coords |= _get_associated_coords(pad_tuples)
-
-    # Pad data, update coord manager, and return.
-    new_data = np.pad(patch.data, pad_width, mode=mode, constant_values=constant_values)
-    new_coords = patch.coords._update_grid(
-        *(dim for dim, widths in pad_tuples.items() if any(widths)), **new_coords
-    )
-    return patch.new(data=new_data, coords=new_coords)
+    def kernel(self, data, *, pad_width):
+        """Return the data padded with a constant; numpy pads in other modes."""
+        if self.mode != "constant":
+            numpy_pad = _via_numpy(type(self).numpy_kernel, "pad")
+            return numpy_pad(self, data, pad_width=pad_width)
+        return _pad_array(data, pad_width, self.constant_values)
 
 
 class Roll(PatchProcessor):

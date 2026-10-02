@@ -316,7 +316,7 @@ def dft(
     original_cm = patch.coords if pad else None
     if pad:  # apply padding to avoid slow dft lengths.
         pad_kwargs = {x: "fft" for x in dims}
-        patch = patch.pad.func(patch, **pad_kwargs)
+        patch = patch.pad.func(patch, **pad_kwargs)  # ty: ignore[unresolved-attribute]
     # get axes and spacing along desired dimensions.
     dxs, axes = _get_dx_or_spacing_and_axes(patch, dims, require_evenly_spaced=True)
     # get new coordinates (need before pad)
@@ -767,8 +767,6 @@ def istft(patch) -> dc.Patch:
     --------
     [Patch.stft](`dascore.Patch.stft`), [Patch.idft](`dascore.Patch.idft`)
     """
-    from dascore.proc.tile_apply import reassemble  # noqa: PLC0415
-
     coord_map = patch.coords.get_coord_tuple_map()
     dims = [d for d in patch.dims if f"_tile_source_{d}" in coord_map]
     if not dims or "_stft_real" not in dict(patch.attrs):
@@ -828,7 +826,7 @@ def istft(patch) -> dc.Patch:
         coords=get_coord_manager(coords=coord_map, dims=stack_dims),
         attrs=dc.PatchAttrs(**attrs),
     )
-    out = reassemble.func(stack)
+    out = dc.Patch.reassemble.func(stack)  # ty: ignore[unresolved-attribute]
     return out.update_attrs(
         data_type=data_type or "",
         data_units=_get_data_units_from_dims(patch, dims, truediv),

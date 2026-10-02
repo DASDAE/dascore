@@ -793,7 +793,9 @@ def _check_signature(cls: type[PatchProcessor], func) -> None:
             if field.is_required()
             else field.get_default(call_default_factory=True)
         )
-        if not _values_equal(parameter.default, default):
+        # Identity first: a NaN default is itself, and equal to nothing.
+        same = parameter.default is default
+        if not (same or _values_equal(parameter.default, default)):
             msg = (
                 f"{cls.name} defaults {name} to {parameter.default!r} where "
                 f"{cls.__name__} defaults it to {default!r}; the two must "

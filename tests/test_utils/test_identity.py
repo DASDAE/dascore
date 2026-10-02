@@ -854,6 +854,8 @@ class TestPatchRules:
             assert (patch + 1).attrs.data_id == ""
             assert patch.pass_filter(time=(1, 10)).attrs.data_id == ""
             assert patch.decimate(time=2).attrs.data_id == ""
+            # A decorated patch function, now decimate is a processor.
+            assert patch.where(np.asarray(patch.data) > 0).attrs.data_id == ""
             assert np.abs(patch).attrs.data_id == ""
 
     def test_two_patches(self, patch):
