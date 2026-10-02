@@ -35,6 +35,32 @@ plt.show()
 
 Pass an existing Matplotlib axis to compose the plot with other panels. The returned axis can be customized with the normal Matplotlib API.
 
+### Large images
+
+Most DAS patches have more samples than the figure has pixels, so Matplotlib has to downsample them, and `interpolation_stage` decides how. `"data"` averages the data first and then colors the result; `"rgba"` colors every sample first and then averages the colors. The default, `"auto"`, uses `"rgba"` whenever it downsamples. This applies to evenly sampled patches, which are drawn with `imshow`; irregular coordinates use `pcolormesh`, which ignores `interpolation_stage`.
+
+Neither is right for every patch. In the top row below, `"data"` keeps the strong contrast of the arrivals, while `"rgba"` blends neighbouring reds and blues into paler colors. In the bottom row, the same patch carries an oscillation far faster than one pixel: `"data"` averages it away, hiding that it exists, while `"rgba"` shows it as a grey wash.
+
+```{python}
+import numpy as np
+
+base = dc.get_example_patch("example_event_2")
+big = base.resample(time=base.get_coord("time").step / 10)
+time = big.get_array("time")
+carrier = 40 * np.sin(2 * np.pi * 20_000 * (time - time[0]))
+noisy = big.new(data=big.data + carrier[None, :])
+
+fig, axes = plt.subplots(2, 2, figsize=(12, 8))
+for row, plot_patch in zip(axes, [big, noisy]):
+    for ax, stage in zip(row, ["data", "rgba"]):
+        plot_patch.viz.waterfall(ax=ax, interpolation_stage=stage)
+        ax.set_title(f'interpolation_stage="{stage}"')
+plt.tight_layout()
+plt.show()
+```
+
+Try `"data"` when coherent arrivals look washed out, and `"rgba"` when the image looks suspiciously clean. Low-pass filtering and then decimating the patch to about the figure's pixel count avoids the question, since nothing is left to downsample.
+
 ### Inventory labels
 
 After [`Patch.enrich`](`dascore.proc.inventory.enrich`) adds inventory labels as coordinates, `label_coord` marks their ranges along the plot edges. Boolean coordinates mark membership under their coordinate name.
