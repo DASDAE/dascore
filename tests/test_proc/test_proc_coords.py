@@ -292,6 +292,23 @@ class TestCoordsFromDf:
         out = random_patch.coords_from_df(end_df.iloc[[3, 1, 0, 2]])
         assert np.array_equal(out.coords.get_array("x"), expected, equal_nan=True)
 
+    def test_numeric_string_anchors(self, random_patch, end_df):
+        """Anchors given as strings order by value, not lexically."""
+        expected = random_patch.coords_from_df(end_df, max_gap=50)
+        df = end_df.astype({"distance": str})
+        out = random_patch.coords_from_df(df, max_gap=50)
+        assert np.array_equal(
+            out.coords.get_array("x"), expected.coords.get_array("x"), equal_nan=True
+        )
+
+    def test_narrow_int_anchors_gap(self, random_patch):
+        """Gaps between narrow integer anchors are measured without wrapping."""
+        patch = random_patch.update_coords(distance=np.arange(-100, 200))
+        df = pd.DataFrame({"distance": np.array([-100, 100], dtype=np.int8)})
+        df["x"] = [0.0, 1.0]
+        x = patch.coords_from_df(df, max_gap=50).coords.get_array("x")
+        assert np.isnan(x[1])
+
     def test_duplicate_anchor_raises(self, random_patch, end_df):
         """Two rows for one anchor value are ambiguous."""
         df = pd.concat([end_df, end_df.iloc[[0]]])

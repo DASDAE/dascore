@@ -527,8 +527,11 @@ class CoordsFromDf(PatchProcessor):
         # Get coordinates of axis being updated
         anchor_dim = next(iter(anchor_dim))
         axis_coords = meta.coords.get_array(anchor_dim)
-        dataframe = dataframe.sort_values(anchor_dim)
-        anchors = pd.to_numeric(dataframe[anchor_dim]).to_numpy()
+        # Float before sorting, so numeric strings order by value and narrow
+        # integers cannot wrap when gaps are measured.
+        anchors = pd.to_numeric(dataframe[anchor_dim]).to_numpy(dtype=np.float64)
+        order = np.argsort(anchors, kind="stable")
+        dataframe, anchors = dataframe.iloc[order], anchors[order]
         if np.any(np.diff(anchors) == 0):
             msg = f"coords_from_df table has duplicate {anchor_dim} values."
             raise ParameterError(msg)
