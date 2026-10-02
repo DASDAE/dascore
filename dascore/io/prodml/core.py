@@ -35,14 +35,14 @@ class ProdMLV2_0(FiberIO):  # noqa
     ) -> list[dc.PatchMeta]:
         """Scan a prodml file, return summary information about the file's contents."""
         out: list[dc.PatchMeta] = []
-        for attrs, coords, source_patch_key in _yield_prodml_attrs_coords(
+        for attrs, coords, source_patch_key, dtype in _yield_prodml_attrs_coords(
             resource, snap=snap
         ):
             out.append(
                 dc.PatchMeta(
                     attrs=attrs,
                     coords=coords,
-                    dtype=attrs.get("dtype", ""),
+                    dtype=dtype,
                     source=ArraySource(key=source_patch_key),
                 )
             )
