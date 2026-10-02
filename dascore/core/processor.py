@@ -496,6 +496,10 @@ _RESERVED = frozenset(x for x in vars(PatchProcessor) if not x.startswith("_")) 
 }
 
 
+# Spellings which have always been a module rather than an operation's
+# function: `dascore.proc.aggregate` holds the aggregations.
+_MODULE_SPELLINGS = frozenset({"dascore.proc.aggregate"})
+
 # Classes created before `dascore.core.patch` has finished importing, which
 # is every one of DASCore's own; they are checked once both classes exist to
 # be checked against.
@@ -560,7 +564,8 @@ def _check_patch_listing(cls) -> None:
     # patch reaches it. Set here because the method is written in a class
     # which cannot exist when either module is read.
     for module in (cls.__module__, cls.__module__.rsplit(".", 1)[0]):
-        setattr(sys.modules[module], cls.name, cls.patch_function)
+        if f"{module}.{cls.name}" not in _MODULE_SPELLINGS:
+            setattr(sys.modules[module], cls.name, cls.patch_function)
 
 
 def _hosted_method(cls: type[PatchProcessor]):

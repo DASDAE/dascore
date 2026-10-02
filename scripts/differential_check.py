@@ -18,6 +18,7 @@ unlisted calls are not checked.
 from __future__ import annotations
 
 import argparse
+import fnmatch
 import hashlib
 import json
 import os
@@ -48,6 +49,40 @@ _TIMING_PASSES = 3
 
 # Keys a dump carries which are not calls.
 _BOOKKEEPING = {"_timing", "_dascore_path"}
+
+# Calls which raise on purpose, so that a rewrite keeps the message; and
+# matrix inputs an operation cannot take. `--strict` still fails if one
+# raises on one side only, since `compare` sees the two errors differ.
+EXPECTED_ERRORS = (
+    "norm_bad",
+    "rename_missing",
+    "transpose_bad_dim",
+    "*_bad",
+    "*_bad_*",
+    "agg_no_dims*",
+    "agg_squeeze_all",
+    "agg_last_all",
+    "hampel_even",
+    "idxmax_none",
+    "idxmax_tuple",
+    "idxmax_partial",
+    "idxmax_squeeze_only_dim",
+    "pass_two_dims",
+    "*_no_window",
+    # A max or callable dim_reduce of a coordinate starting at 0 makes
+    # the wrong length on dev already.
+    "agg_reduce_callable",
+    "idxmax_positional",
+    # One sample per dimension has no step to window or filter by.
+    "matrix/tiny/*",
+    "matrix/single_row/hampel_exact",
+    # scipy refuses these dtypes and values.
+    "matrix/complex*/median_filter",
+    "matrix/complex*/hampel_exact",
+    "matrix/bool/hampel_*",
+    "matrix/*nan*/savgol_filter",
+    "matrix/*inf*/savgol_filter",
+)
 
 
 # The fingerprint fields which say what a call answered, as opposed to what
@@ -142,6 +177,27 @@ MATRIX_CALLS = {
     ),
     "where_arr": lambda patch: patch.where(np.asarray(patch.data) > 0),
     "where_other": lambda patch: patch.where(np.asarray(patch.data) > 0, other=0),
+    # window filters and pass filters
+    "median_filter": lambda patch: patch.median_filter(time=3, samples=True),
+    "gaussian_filter": lambda patch: patch.gaussian_filter(time=1, samples=True),
+    "savgol_filter": lambda patch: patch.savgol_filter(1, time=3, samples=True),
+    "wiener_filter": lambda patch: patch.wiener_filter(time=3, samples=True),
+    "hampel_filter": lambda patch: patch.hampel_filter(time=3, samples=True),
+    "hampel_exact": lambda patch: patch.hampel_filter(
+        time=3, distance=3, samples=True, approximate=False
+    ),
+    "pass_filter": lambda patch: patch.pass_filter(time=(None, 0.5), zerophase=False),
+    # aggregations along several dims and with each kind of dim_reduce
+    "first": lambda patch: patch.first("time"),
+    "last": lambda patch: patch.last("distance"),
+    "mean_both": lambda patch: patch.mean(("time", "distance")),
+    "median_all": lambda patch: patch.median(),
+    "sum_squeeze": lambda patch: patch.sum("time", dim_reduce="squeeze"),
+    "max_reduce_mean": lambda patch: patch.max("distance", dim_reduce="mean"),
+    "agg_median": lambda patch: patch.aggregate("distance", method="median"),
+    "agg_callable": lambda patch: patch.aggregate("time", method=np.nanmax),
+    "idxmax_distance": lambda patch: patch.idxmax("distance", dim_reduce="squeeze"),
+    "idxmin_min": lambda patch: patch.idxmin("distance", dim_reduce="min"),
 }
 
 
@@ -179,6 +235,135 @@ def get_matrix_calls() -> dict:
     return out
 
 
+def _filter_calls(small, small_int, small_f32, spiky, hz, m, s) -> dict:
+    """Return calls to the pass, notch and window filters."""
+    return {
+        "pass_band": lambda: small.pass_filter(time=(10, 100)),
+        "pass_low_causal": lambda: small.pass_filter(time=(None, 50), zerophase=False),
+        "pass_high_corners": lambda: small.pass_filter(time=(20, ...), corners=2),
+        "pass_hz": lambda: small.pass_filter(time=(1 * hz, 10 * hz)),
+        "pass_distance": lambda: small.pass_filter(distance=(None, 0.1)),
+        "pass_wavelength": lambda: small.pass_filter(distance=(5 * m, 10 * m)),
+        "pass_f32": lambda: small_f32.pass_filter(time=(None, 50)),
+        "pass_int": lambda: small_int.pass_filter(time=(None, 50)),
+        "pass_bad_range": lambda: small.pass_filter(time=(None, 1000)),
+        "pass_two_dims": lambda: small.pass_filter(time=(1, 10), distance=(0.1, 0.2)),
+        "notch_time": lambda: small.notch_filter(time=60, q=30),
+        "notch_positional": lambda: small.notch_filter(10, time=60),
+        "notch_both": lambda: small.notch_filter(time=60, distance=0.2, q=30),
+        "notch_units": lambda: small.notch_filter(time=60 * hz, distance=5 * m, q=3),
+        "notch_f32": lambda: small_f32.notch_filter(time=60, q=30),
+        "notch_bad": lambda: small.notch_filter(time=500, q=30),
+        "median_time": lambda: small.median_filter(time=0.012),
+        "median_units": lambda: small.median_filter(time=0.012 * s, distance=2 * m),
+        "median_samples": lambda: small.median_filter(time=3, distance=4, samples=True),
+        "median_constant": lambda: small.median_filter(
+            time=3, samples=True, mode="constant", cval=1.0
+        ),
+        "median_int": lambda: small_int.median_filter(time=3, samples=True),
+        "median_positional": lambda: small.median_filter(True, "nearest", time=3),
+        "savgol_time": lambda: small.savgol_filter(polyorder=2, time=0.04),
+        "savgol_distance": lambda: small.savgol_filter(2, distance=5, samples=True),
+        "savgol_both": lambda: small.savgol_filter(distance=10, time=0.04, polyorder=4),
+        "savgol_constant": lambda: small.savgol_filter(
+            1, True, "constant", 2.0, time=5
+        ),
+        "savgol_f32": lambda: small_f32.savgol_filter(2, time=7, samples=True),
+        "savgol_bad": lambda: small.savgol_filter(polyorder=9, time=5, samples=True),
+        "gauss_time": lambda: small.gaussian_filter(time=0.02),
+        "gauss_samples": lambda: small.gaussian_filter(samples=True, distance=3),
+        "gauss_both": lambda: small.gaussian_filter(time=0.02, distance=3 * m),
+        "gauss_options": lambda: small.gaussian_filter(
+            True, "constant", 1.0, 2.0, time=4
+        ),
+        "gauss_int": lambda: small_int.gaussian_filter(time=2, samples=True),
+        "wiener_time": lambda: spiky.wiener_filter(time=5, samples=True),
+        "wiener_noise": lambda: spiky.wiener_filter(time=5, samples=True, noise=0.01),
+        "wiener_both": lambda: spiky.wiener_filter(time=5, distance=3, samples=True),
+        "wiener_units": lambda: spiky.wiener_filter(time=0.02 * s),
+        "wiener_int": lambda: small_int.wiener_filter(time=3, samples=True),
+        "wiener_no_window": lambda: spiky.wiener_filter(),
+        "median_no_window": lambda: small.median_filter(),
+        "pass_no_window": lambda: small.pass_filter(),
+        "notch_no_window": lambda: small.notch_filter(3),
+        "hampel_time": lambda: spiky.hampel_filter(time=0.02, threshold=3.5),
+        "hampel_both": lambda: spiky.hampel_filter(time=5, distance=5, samples=True),
+        "hampel_exact": lambda: spiky.hampel_filter(
+            time=5, distance=5, samples=True, approximate=False
+        ),
+        "hampel_large": lambda: spiky.hampel_filter(
+            time=11, distance=11, samples=True, approximate=False
+        ),
+        "hampel_int": lambda: small_int.hampel_filter(time=5, samples=True),
+        "hampel_f32": lambda: small_f32.hampel_filter(time=5, samples=True),
+        "hampel_bad_threshold": lambda: spiky.hampel_filter(time=5, threshold=-1),
+        "hampel_even": lambda: spiky.hampel_filter(time=4, samples=True),
+    }
+
+
+def _aggregate_calls(patch, null_patch, int_patch, bool_patch, typed) -> dict:
+    """Return aggregations with every kind of dim and dim_reduce."""
+    collapsed = patch.mean("time")
+    return {
+        **{
+            f"agg_{name}_reduce_{how}": (
+                lambda name=name, how=how: getattr(patch, name)("time", dim_reduce=how)
+            )
+            for name in ("mean", "max", "first", "any")
+            for how in ("squeeze", "mean", "min", "first", "last", "median", "sum")
+        },
+        "agg_reduce_callable": lambda: patch.mean("distance", dim_reduce=np.max),
+        "agg_both_dims": lambda: patch.mean(("time", "distance")),
+        "agg_both_dims_squeeze": lambda: patch.sum(["distance"], dim_reduce="squeeze"),
+        "agg_reversed_dims": lambda: patch.std(("distance", "time"), dim_reduce="mean"),
+        "agg_squeeze_all": lambda: patch.mean(dim_reduce="squeeze"),
+        "agg_no_dims": lambda: patch.mean(()),
+        "agg_no_dims_typed": lambda: typed.any(()),
+        "agg_typed_any": lambda: typed.any("distance"),
+        "agg_typed_mean": lambda: typed.mean("distance"),
+        "agg_bad_dim": lambda: patch.mean("nope"),
+        "agg_bad_reduce": lambda: patch.mean("time", dim_reduce="nope"),
+        "agg_positional": lambda: patch.aggregate("time", "max", "squeeze"),
+        "agg_positional_short": lambda: patch.min("distance", "mean"),
+        **{
+            f"agg_method_{method}": (
+                lambda method=method: patch.aggregate("distance", method=method)
+            )
+            for method in ("median", "min", "max", "sum", "std", "first", "last")
+        },
+        "agg_method_callable": lambda: patch.aggregate("time", method=np.nanmax),
+        "agg_method_all": lambda: patch.aggregate(method="mean"),
+        "agg_median_all": lambda: patch.median(),
+        "agg_median_distance": lambda: patch.median("distance"),
+        "agg_first_all": lambda: patch.first(),
+        "agg_last_all": lambda: patch.last(dim_reduce="squeeze"),
+        "agg_any_all": lambda: bool_patch.any(),
+        "agg_all_distance": lambda: bool_patch.all("distance"),
+        "agg_null_median": lambda: null_patch.median("time"),
+        "agg_null_first": lambda: null_patch.first("distance"),
+        "agg_int_median": lambda: int_patch.median("distance"),
+        "agg_int_std_all": lambda: int_patch.std(),
+        "agg_collapsed_again": lambda: collapsed.mean("time"),
+        "agg_collapsed_distance": lambda: collapsed.max("distance"),
+        "idxmax_time": lambda: patch.idxmax("time"),
+        "idxmin_time": lambda: patch.idxmin("time"),
+        "idxmax_distance": lambda: patch.idxmax("distance"),
+        "idxmax_squeeze": lambda: patch.idxmax("time", dim_reduce="squeeze"),
+        "idxmin_reduce_mean": lambda: patch.idxmin("distance", dim_reduce="mean"),
+        "idxmax_positional": lambda: patch.idxmax("distance", "max"),
+        "idxmax_null": lambda: null_patch.idxmax("time"),
+        "idxmin_null_distance": lambda: null_patch.idxmin("distance"),
+        "idxmax_int": lambda: int_patch.idxmax("distance"),
+        "idxmax_typed": lambda: typed.idxmax("time"),
+        "idxmax_none": lambda: patch.idxmax(None),
+        "idxmax_tuple": lambda: patch.idxmax(("time",)),
+        "idxmax_partial": lambda: collapsed.idxmax("time"),
+        "idxmax_squeeze_only_dim": lambda: collapsed.squeeze().idxmax(
+            "distance", dim_reduce="squeeze"
+        ),
+    }
+
+
 def get_calls() -> dict:
     """Return the calls to compare, keyed by a name for the report."""
     patch = _pinned(dc.get_example_patch(), "example")
@@ -196,7 +381,19 @@ def get_calls() -> dict:
     with_nondim = patch.update_coords(
         quality=("distance", np.arange(patch.shape[0], dtype="float64"))
     )
+    # Small enough for the slow window filters to be timed in a few rounds.
+    small = _pinned(patch.isel(distance=slice(0, 40), time=slice(0, 400)), "small")
+    small_int = _pinned(
+        small.new(data=(np.asarray(small.data) * 100).astype("int32")), "small_int"
+    )
+    small_f32 = _pinned(small.new(data=np.asarray(small.data, "float32")), "f32")
+    spiky = np.asarray(small.data).copy()
+    spiky[10, 5], spiky[20, 50] = 10.0, -8.0
+    spiky = _pinned(small.new(data=spiky), "spiky")
+    hz, m, s = dc.get_unit("Hz"), dc.get_unit("m"), dc.get_unit("s")
     return {
+        **_filter_calls(small, small_int, small_f32, spiky, hz, m, s),
+        **_aggregate_calls(patch, null_patch, int_patch, bool_patch, typed),
         # The inputs themselves, so a difference in the examples cannot
         # masquerade as a difference in the functions.
         "input_patch": lambda: patch,
@@ -612,7 +809,7 @@ def _merge_timing(kept: dict, other: dict) -> dict:
 
 def _raised(dumped: dict) -> set[str]:
     """
-    Return names of calls that recorded errors.
+    Return names of calls that recorded errors, other than the expected ones.
 
     Matching errors otherwise compare equal; `--strict` detects these failed
     comparisons.
@@ -620,7 +817,10 @@ def _raised(dumped: dict) -> set[str]:
     return {
         i
         for i, v in dumped.items()
-        if i not in _BOOKKEEPING and isinstance(v, dict) and "error" in v
+        if i not in _BOOKKEEPING
+        and isinstance(v, dict)
+        and "error" in v
+        and not any(fnmatch.fnmatchcase(i, x) for x in EXPECTED_ERRORS)
     }
 
 

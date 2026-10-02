@@ -6,15 +6,14 @@ from __future__ import annotations
 
 import math
 import warnings
+from typing import Any, ClassVar
 
 import numpy as np
 from scipy.ndimage import median_filter
 
-from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
+from dascore.proc.filter import _WindowFilter
 from dascore.utils.moving import has_engine, move_median
-from dascore.utils.patch import patch_function
-from dascore.utils.window import resolve_window
 
 
 def _separable_median(data, size, mode, out):
@@ -97,15 +96,7 @@ def _hampel_non_separable(dataf, size, mode, threshold):
     return dataf
 
 
-@patch_function()
-def hampel_filter(
-    patch: PatchType,
-    *,
-    threshold: float = 10.0,
-    samples: bool = False,
-    approximate: bool = True,
-    **kwargs,
-) -> PatchType:
+class HampelFilter(_WindowFilter):
     """
     A Hampel filter implementation useful for removing spikes in data.
 
@@ -185,40 +176,52 @@ def hampel_filter(
     ...     time=5, distance=5, samples=True, approximate=False
     ... )
     """
-    if threshold <= 0 or not np.isfinite(threshold):
-        msg = "hampel_filter threshold must be finite and greater than zero"
-        raise ParameterError(msg)
-    # First build axis windows
-    data = patch.data
-    # For now we just hardcode mode as it is probably the only one that
-    # makes sense in a DAS data context.
-    mode = "reflect"
-    # Only bottleneck's moving median is flat in window size; the exact
-    # filter and scipy's median_filter both grow with the window.
-    fast = approximate and has_engine("bottleneck")
-    size = resolve_window(
-        patch, kwargs, samples=samples, require_odd=True, min_samples=3
-    ).full_size()
-    # The cost tracks the window's area, so a 2D window is as expensive as
-    # its samples multiplied.
-    if not fast and math.prod(size) > 100:
-        msg = (
-            f"Large window size ({math.prod(size)} samples) may result in slow "
-            "performance. Consider reducing the window size."
-        )
-        warnings.warn(msg, UserWarning, stacklevel=2)
-    # Need to convert ints to float for calculations to avoid roundoff error.
-    # There were issues using np.issubdtype not working so this uses kind.
-    is_int = data.dtype.kind in {"i", "u"}
-    dataf = data.copy() if not is_int else data.astype(np.float32)
-    # Apply hampel filtering using appropriate method
-    if approximate:
-        dataf = _hampel_separable(dataf, size, mode, threshold)
-    else:
-        # Use standard 2D median filter (more accurate but slower)
-        dataf = _hampel_non_separable(dataf, size, mode, threshold)
-    # Cast back to original dtype (round if original was integer)
-    if np.issubdtype(data.dtype, np.integer):
-        dataf = np.rint(dataf)
-    out = dataf.astype(data.dtype, copy=False)
-    return patch.update(data=out)
+
+    threshold: Any = 10.0
+    samples: Any = False
+    approximate: Any = True
+
+    _positional_fields = ()
+    _window_rules: ClassVar[dict[str, Any]] = {"require_odd": True, "min_samples": 3}
+
+    def get_metadata(self, meta):
+        """Return the window, warning when it will be slow to filter with."""
+        threshold = self.threshold
+        if threshold <= 0 or not np.isfinite(threshold):
+            msg = "hampel_filter threshold must be finite and greater than zero"
+            raise ParameterError(msg)
+        out, plan = super().get_metadata(meta)
+        size = plan["size"]
+        # Only bottleneck's moving median is flat in window size; the exact
+        # filter and scipy's median_filter both grow with the window.
+        fast = self.approximate and has_engine("bottleneck")
+        # The cost tracks the window's area, so a 2D window is as expensive as
+        # its samples multiplied.
+        if not fast and math.prod(size) > 100:
+            msg = (
+                f"Large window size ({math.prod(size)} samples) may result in slow "
+                "performance. Consider reducing the window size."
+            )
+            warnings.warn(msg, UserWarning, stacklevel=2)
+        return out, plan
+
+    def numpy_kernel(self, data, *, size, axes):
+        """Return the data with outliers replaced by the local median."""
+        # For now we just hardcode mode as it is probably the only one that
+        # makes sense in a DAS data context.
+        mode = "reflect"
+        threshold = self.threshold
+        # Need to convert ints to float for calculations to avoid roundoff error.
+        # There were issues using np.issubdtype not working so this uses kind.
+        is_int = data.dtype.kind in {"i", "u"}
+        dataf = data.copy() if not is_int else data.astype(np.float32)
+        # Apply hampel filtering using appropriate method
+        if self.approximate:
+            dataf = _hampel_separable(dataf, size, mode, threshold)
+        else:
+            # Use standard 2D median filter (more accurate but slower)
+            dataf = _hampel_non_separable(dataf, size, mode, threshold)
+        # Cast back to original dtype (round if original was integer)
+        if np.issubdtype(data.dtype, np.integer):
+            dataf = np.rint(dataf)
+        return dataf.astype(data.dtype, copy=False)

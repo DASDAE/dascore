@@ -5,7 +5,6 @@ from __future__ import annotations
 import functools
 import inspect
 import math
-import sys
 import warnings
 from collections import namedtuple
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -70,6 +69,7 @@ from dascore.utils.misc import (
     _apply_union_indexers,
     _get_nullish,
     _merge_tuples,
+    get_parent_code_name,
     iterate,
     to_object_array,
     validate_warn_level,
@@ -1056,8 +1056,7 @@ def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
     if isinstance(d_dim, np.timedelta64):
         d_dim = d_dim / np.timedelta64(1, "s")
     if pd.isnull(d_dim) or not coord.evenly_sampled:
-        # get the name of the calling function
-        calling_function = inspect.getframeinfo(sys._getframe(1))[2]
+        calling_function = get_parent_code_name()
         msg = (
             f"Patch coordinate {dim} is not evenly sampled as required by "
             f"{calling_function}. This can be fixed with Patch.snap or "

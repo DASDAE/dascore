@@ -36,12 +36,10 @@ from dascore.utils.identity import (
     stamp,
     try_operation_id,
 )
-from dascore.utils.misc import iterate
 from dascore.utils.patch import (
     _merge_aligned_coords,
     _merge_models,
     align_patch_coords,
-    get_dim_axis_value,
     numpy_fallback,
     swap_kwargs_dim_to_axis,
 )
@@ -884,30 +882,6 @@ def _apply_reduction(func, data, axis):
     # before dascore knew about other backends, and decides the output's
     # backend.
     return func(data, axis=axis)
-
-
-def _apply_aggregator(patch, dim, func, dim_reduce="empty"):
-    """Apply an aggregation operator to patch."""
-    data = patch.data
-    dims = tuple(iterate(patch.dims if dim is None else dim))
-    dfo = get_dim_axis_value(patch, args=dims, allow_multiple=True)
-    if dim_reduce == "squeeze" and {dim for dim, _, _ in dfo} == set(patch.dims):
-        msg = "Cannot squeeze all dimensions; at least one dimension must remain."
-        raise ParameterError(msg)
-    # Iter all specified dimensions.
-    for dim, _, _ in dfo:
-        axis = patch.get_axis(dim)
-        new_coord = patch.get_coord(dim).reduce_coord(dim_reduce=dim_reduce)
-        if new_coord is None:
-            coords = patch.coords.drop_coords(dim)[0]
-            data = _apply_reduction(func, data, axis)
-        else:
-            coords = patch.coords.update(**{dim: new_coord})
-            reduced = _apply_reduction(func, data, axis)
-            data = array_namespace(reduced).expand_dims(reduced, axis=axis)
-        attrs = patch.attrs.model_dump(exclude={"coords", "dims"}, exclude_unset=True)
-        patch = patch.new(data=data, coords=coords, attrs=attrs)
-    return patch
 
 
 def _find_patches(args, kwargs):

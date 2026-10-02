@@ -540,19 +540,81 @@ class Patch(NamespaceOwner, PatchMeta):
         """Replace nullish data with a value."""
         return dascore.proc.basic.Fillna(value=value, include_inf=include_inf).run(self)
 
-    pass_filter = dascore.proc.pass_filter
-    hampel_filter = dascore.proc.hampel_filter
+    def pass_filter(self, corners: int = 4, zerophase: bool = True, **kwargs) -> Self:
+        """Apply a Butterworth pass filter along a dimension."""
+        return dascore.proc.PassFilter(
+            corners=corners, zerophase=zerophase, **kwargs
+        ).run(self)
+
+    def hampel_filter(
+        self,
+        *,
+        threshold: float = 10.0,
+        samples: bool = False,
+        approximate: bool = True,
+        **kwargs,
+    ) -> Self:
+        """Replace outliers with the local median."""
+        return dascore.proc.HampelFilter(
+            threshold=threshold, samples=samples, approximate=approximate, **kwargs
+        ).run(self)
 
     def sobel_filter(self, dim: Any, mode: Any = "reflect", cval: Any = 0.0) -> Self:
         """Apply a Sobel filter along a dimension."""
         return dascore.proc.SobelFilter(dim=dim, mode=mode, cval=cval).run(self)
 
-    median_filter = dascore.proc.median_filter
-    notch_filter = dascore.proc.notch_filter
-    savgol_filter = dascore.proc.savgol_filter
-    gaussian_filter = dascore.proc.gaussian_filter
+    def median_filter(
+        self,
+        samples: bool = False,
+        mode: str = "reflect",
+        cval: float = 0.0,
+        **kwargs,
+    ) -> Self:
+        """Apply a median filter over a window."""
+        return dascore.proc.MedianFilter(
+            samples=samples, mode=mode, cval=cval, **kwargs
+        ).run(self)
+
+    def notch_filter(self, q: float, **kwargs) -> Self:
+        """Apply a notch filter along one or more dimensions."""
+        return dascore.proc.NotchFilter(q=q, **kwargs).run(self)
+
+    def savgol_filter(
+        self,
+        polyorder: int,
+        samples: bool = False,
+        mode: str = "interp",
+        cval: float = 0.0,
+        **kwargs,
+    ) -> Self:
+        """Apply a Savitzky-Golay filter along one or more dimensions."""
+        return dascore.proc.SavgolFilter(
+            polyorder=polyorder, samples=samples, mode=mode, cval=cval, **kwargs
+        ).run(self)
+
+    def gaussian_filter(
+        self,
+        samples: bool = False,
+        mode: str = "reflect",
+        cval: float = 0.0,
+        truncate: float = 4.0,
+        **kwargs,
+    ) -> Self:
+        """Apply a Gaussian filter along one or more dimensions."""
+        return dascore.proc.GaussianFilter(
+            samples=samples, mode=mode, cval=cval, truncate=truncate, **kwargs
+        ).run(self)
+
     slope_filter = dascore.proc.slope_filter
-    wiener_filter = dascore.proc.wiener_filter
+
+    def wiener_filter(
+        self, *, noise: float | None = None, samples: bool = False, **kwargs
+    ) -> Self:
+        """Apply a Wiener filter to reduce noise."""
+        return dascore.proc.WienerFilter(noise=noise, samples=samples, **kwargs).run(
+            self
+        )
+
     reassemble = dascore.proc.reassemble
 
     def angle(self) -> Self:
@@ -669,19 +731,104 @@ class Patch(NamespaceOwner, PatchMeta):
     whiten = dascore.proc.whiten
 
     # --- Patch aggregations shortcuts.
-    aggregate = dascore.proc.agg.aggregate
-    min = dascore.proc.agg.min
-    max = dascore.proc.agg.max
-    mean = dascore.proc.agg.mean
-    median = dascore.proc.agg.median
-    std = dascore.proc.agg.std
-    sum = dascore.proc.agg.sum
-    any = dascore.proc.agg.any
-    all = dascore.proc.agg.all
-    first = dascore.proc.agg.first
-    last = dascore.proc.agg.last
-    idxmax = dascore.proc.agg.idxmax
-    idxmin = dascore.proc.agg.idxmin
+    def aggregate(
+        self,
+        dim: str | Sequence[str] | None = None,
+        method: str | Callable = "mean",
+        dim_reduce: str | Callable = "empty",
+    ) -> Self:
+        """Aggregate values along one or more dimensions."""
+        return dascore.proc.agg.Aggregate(
+            dim=dim, method=method, dim_reduce=dim_reduce
+        ).run(self)
+
+    def min(
+        self,
+        dim: str | Sequence[str] | None = None,
+        dim_reduce: str | Callable = "empty",
+    ) -> Self:
+        """Calculate the minimum along one or more dimensions."""
+        return dascore.proc.agg.Min(dim=dim, dim_reduce=dim_reduce).run(self)
+
+    def max(
+        self,
+        dim: str | Sequence[str] | None = None,
+        dim_reduce: str | Callable = "empty",
+    ) -> Self:
+        """Calculate the maximum along one or more dimensions."""
+        return dascore.proc.agg.Max(dim=dim, dim_reduce=dim_reduce).run(self)
+
+    def mean(
+        self,
+        dim: str | Sequence[str] | None = None,
+        dim_reduce: str | Callable = "empty",
+    ) -> Self:
+        """Calculate the mean along one or more dimensions."""
+        return dascore.proc.agg.Mean(dim=dim, dim_reduce=dim_reduce).run(self)
+
+    def median(
+        self,
+        dim: str | Sequence[str] | None = None,
+        dim_reduce: str | Callable = "empty",
+    ) -> Self:
+        """Calculate the median along one or more dimensions."""
+        return dascore.proc.agg.Median(dim=dim, dim_reduce=dim_reduce).run(self)
+
+    def std(
+        self,
+        dim: str | Sequence[str] | None = None,
+        dim_reduce: str | Callable = "empty",
+    ) -> Self:
+        """Calculate the standard deviation along one or more dimensions."""
+        return dascore.proc.agg.Std(dim=dim, dim_reduce=dim_reduce).run(self)
+
+    def sum(
+        self,
+        dim: str | Sequence[str] | None = None,
+        dim_reduce: str | Callable = "empty",
+    ) -> Self:
+        """Sum the values along one or more dimensions."""
+        return dascore.proc.agg.Sum(dim=dim, dim_reduce=dim_reduce).run(self)
+
+    def any(
+        self,
+        dim: str | Sequence[str] | None = None,
+        dim_reduce: str | Callable = "empty",
+    ) -> Self:
+        """Perform boolean any along one or more dimensions."""
+        return dascore.proc.agg.AnyTrue(dim=dim, dim_reduce=dim_reduce).run(self)
+
+    def all(
+        self,
+        dim: str | Sequence[str] | None = None,
+        dim_reduce: str | Callable = "empty",
+    ) -> Self:
+        """Perform boolean all along one or more dimensions."""
+        return dascore.proc.agg.AllTrue(dim=dim, dim_reduce=dim_reduce).run(self)
+
+    def first(
+        self,
+        dim: str | Sequence[str] | None = None,
+        dim_reduce: str | Callable = "empty",
+    ) -> Self:
+        """Get the first value along one or more dimensions."""
+        return dascore.proc.agg.First(dim=dim, dim_reduce=dim_reduce).run(self)
+
+    def last(
+        self,
+        dim: str | Sequence[str] | None = None,
+        dim_reduce: str | Callable = "empty",
+    ) -> Self:
+        """Get the last value along one or more dimensions."""
+        return dascore.proc.agg.Last(dim=dim, dim_reduce=dim_reduce).run(self)
+
+    def idxmax(self, dim: str, dim_reduce: str | Callable = "empty") -> Self:
+        """Return the coordinate value where the data are largest."""
+        return dascore.proc.agg.Idxmax(dim=dim, dim_reduce=dim_reduce).run(self)
+
+    def idxmin(self, dim: str, dim_reduce: str | Callable = "empty") -> Self:
+        """Return the coordinate value where the data are smallest."""
+        return dascore.proc.agg.Idxmin(dim=dim, dim_reduce=dim_reduce).run(self)
 
     # --- Universal functions
     add = PatchUFunc(np.add)

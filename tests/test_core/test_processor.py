@@ -9,7 +9,7 @@ import pickle
 import subprocess
 import sys
 import warnings
-from types import FunctionType, SimpleNamespace
+from types import FunctionType, ModuleType, SimpleNamespace
 from typing import Any, ClassVar, Self
 
 import numpy as np
@@ -1136,7 +1136,7 @@ class TestRegisterKernelForms:
 
         assert SeamKernelNamed.kernel_for("named_backend") is _named
 
-    @pytest.mark.parametrize("name", ["no_such_operation_here", "aggregate"])
+    @pytest.mark.parametrize("name", ["no_such_operation_here", "pad"])
     def test_a_name_with_no_processor_is_refused(self, name):
         """An unknown tag, or a patch function with no class, has no kernels."""
         with pytest.raises(ParameterError, match=name):
@@ -1723,3 +1723,82 @@ class TestReconcileWithData:
         assert out.shape == (len(kept), patch.shape[1])
         assert np.array_equal(out.get_array("distance"), kept)
         assert out.attrs.data_id != source.attrs.data_id
+
+
+class TestWindowAndPassFilters:
+    """The pass, notch and window filters run as processors."""
+
+    calls: ClassVar[dict[str, dict]] = {
+        "pass_filter": {"time": (None, 100)},
+        "notch_filter": {"time": 60, "q": 30},
+        "median_filter": {"time": 3, "samples": True},
+        "savgol_filter": {"polyorder": 2, "time": 5, "samples": True},
+        "gaussian_filter": {"time": 2, "samples": True},
+        "wiener_filter": {"time": 5, "samples": True},
+        "hampel_filter": {"time": 5, "samples": True},
+    }
+
+    @pytest.mark.parametrize("name", sorted(calls))
+    def test_class_matches_method(self, random_patch, name):
+        """The class run directly gives the method's result."""
+        kwargs = self.calls[name]
+        cls = getattr(dc.Patch, name).__processor__
+        assert cls(**kwargs)(random_patch) == getattr(random_patch, name)(**kwargs)
+
+    def test_positional_spelling_is_one_operation(self):
+        """Positional and keyword spellings share an operation id."""
+        positional = dc.proc.MedianFilter(True, "nearest", time=3)
+        keyword = dc.proc.MedianFilter(samples=True, mode="nearest", time=3)
+        assert positional.operation_id == keyword.operation_id
+
+    @pytest.mark.parametrize("cls", ["WienerFilter", "HampelFilter"])
+    def test_keyword_only(self, cls):
+        """The options of these two are refused positionally."""
+        with pytest.raises(TypeError):
+            getattr(dc.proc, cls)(True, time=3)
+
+
+class TestAggregations:
+    """The aggregations run as processors."""
+
+    names = (
+        "min",
+        "max",
+        "mean",
+        "median",
+        "std",
+        "sum",
+        "first",
+        "last",
+        "any",
+        "all",
+    )
+
+    @pytest.mark.parametrize("name", names)
+    def test_class_matches_method(self, random_patch, name):
+        """The class run directly gives the method's result."""
+        cls = getattr(dc.Patch, name).__processor__
+        expected = getattr(random_patch, name)("time", dim_reduce="squeeze")
+        assert cls(dim="time", dim_reduce="squeeze")(random_patch) == expected
+
+    def test_aggregate_spellings_are_one_operation(self):
+        """Positional and keyword spellings share an operation id."""
+        positional = dc.proc.agg.Aggregate("time", "max")
+        keyword = dc.proc.agg.Aggregate(dim="time", method="max")
+        assert positional.operation_id == keyword.operation_id
+
+    def test_metadata_is_reduced_without_data(self, random_patch):
+        """The reduced shape is known before the data are read."""
+        meta, _ = dc.proc.agg.Mean(dim="time").get_metadata(random_patch.drop_data())
+        assert meta.shape == random_patch.mean("time").shape
+
+    @pytest.mark.parametrize("name", ["idxmax", "idxmin"])
+    def test_idx_class_matches_method(self, random_patch, name):
+        """The value-dependent result is built in reconcile."""
+        cls = getattr(dc.Patch, name).__processor__
+        assert cls(dim="time")(random_patch) == getattr(random_patch, name)("time")
+
+    def test_aggregate_submodule_survives(self):
+        """`dascore.proc.aggregate` stays the module, not the function."""
+        assert isinstance(dc.proc.aggregate, ModuleType)
+        assert dc.proc.agg.aggregate is dc.Patch.aggregate
