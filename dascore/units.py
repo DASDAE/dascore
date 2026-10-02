@@ -324,7 +324,8 @@ def _unit_to_str(unit: Unit) -> str:
     Unit is safe to use as a cache key.
     """
     with _UNIT_LOCK:
-        return str(unit)
+        # A dimensionless unit prints as "", which reads back as no units.
+        return str(unit) or "dimensionless"
 
 
 # The subset of quantity_like which names a unit; a numpy time value
@@ -364,6 +365,8 @@ def get_quantity_str(quant_value: unit_like) -> str | None:
     # Any other type (eg a pint Unit): validate by conversion, then use
     # the string of the original input.
     get_quantity(quant_value)
+    if isinstance(quant_value, PlainUnit):
+        return _unit_to_str(quant_value)
     return str(quant_value)
 
 
