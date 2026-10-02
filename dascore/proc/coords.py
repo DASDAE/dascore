@@ -473,6 +473,10 @@ class CoordsFromDf(PatchProcessor):
         Dictionary mapping column name in dataframe to its units.
     extrapolate
         If True, extrapolate outside provided range in dataframe.
+    max_gap
+        If given, positions between two neighbouring rows further apart than
+        this (in the dimension's units) are NaN rather than interpolated,
+        for tables that leave stretches unsurveyed.
 
     Examples
     --------
@@ -487,6 +491,8 @@ class CoordsFromDf(PatchProcessor):
     >>> # attach dataframe to patch, interpolating when needed. This
     >>> # adds coordinates x and y which are associated with dimension distance.
     >>> patch_with_coords = pa.coords_from_df(df)
+    >>> # Leave channels NaN where neighbouring rows are over 50 m apart.
+    >>> patch_with_gaps = pa.coords_from_df(df.iloc[[0, 1, -2, -1]], max_gap=50)
 
     Notes
     -----
@@ -494,8 +500,10 @@ class CoordsFromDf(PatchProcessor):
       the patch.dims. This will either add new coordinates, or update existing
       ones if they already exist.
 
-    * This function uses linear extrapolation between the nearest two points
-      to get values in patch coords that aren't in the dataframe.
+    * This function uses linear interpolation between the nearest two points
+      to get values in patch coords that aren't in the dataframe. Row order
+      does not matter, but each value of the dimension column may appear
+      only once.
 
     """
 
@@ -503,6 +511,7 @@ class CoordsFromDf(PatchProcessor):
     # Typed loosely because a unit is written as a string or as a unit object.
     units: dict[str, Any] | None = None
     extrapolate: bool = False
+    max_gap: float | None = None
 
     history = "method_name"
 
@@ -518,6 +527,19 @@ class CoordsFromDf(PatchProcessor):
         # Get coordinates of axis being updated
         anchor_dim = next(iter(anchor_dim))
         axis_coords = meta.coords.get_array(anchor_dim)
+        dataframe = dataframe.sort_values(anchor_dim)
+        anchors = pd.to_numeric(dataframe[anchor_dim]).to_numpy()
+        if np.any(np.diff(anchors) == 0):
+            msg = f"coords_from_df table has duplicate {anchor_dim} values."
+            raise ParameterError(msg)
+        unsurveyed = np.zeros(len(axis_coords), dtype=bool)
+        if self.max_gap is not None:
+            # Strictly inside an interval wider than max_gap.
+            right = np.searchsorted(anchors, axis_coords, side="right")
+            inner = (right > 0) & (right < len(anchors))
+            wide = np.diff(anchors) > self.max_gap
+            unsurveyed[inner] = wide[right[inner] - 1]
+            unsurveyed &= ~np.isin(axis_coords, anchors)
 
         # make a dictionary from coordinates("(axis, coordinate array)") as input to
         # update_coords
@@ -527,22 +549,21 @@ class CoordsFromDf(PatchProcessor):
         for coord in set(dataframe.columns) - {anchor_dim}:
             if self.extrapolate:
                 f = interp1d(
-                    pd.to_numeric(dataframe[anchor_dim]),
+                    anchors,
                     pd.to_numeric(dataframe[coord]),
                     fill_value="extrapolate",
                 )
-                new_coords[coord] = (anchor_dim, f(axis_coords))
+                values = f(axis_coords)
             else:
-                new_coords[coord] = (
-                    anchor_dim,
-                    np.interp(
-                        axis_coords,
-                        pd.to_numeric(dataframe[anchor_dim]),
-                        pd.to_numeric(dataframe[coord]),
-                        left=float("nan"),
-                        right=float("nan"),
-                    ),
+                values = np.interp(
+                    axis_coords,
+                    anchors,
+                    pd.to_numeric(dataframe[coord]),
+                    left=float("nan"),
+                    right=float("nan"),
                 )
+            values[unsurveyed] = np.nan
+            new_coords[coord] = (anchor_dim, values)
 
         coords = meta.coords.update(**new_coords)
         # Only coordinates are named, so the conversion never scales data.

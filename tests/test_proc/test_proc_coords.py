@@ -278,6 +278,49 @@ class TestCoordsFromDf:
             coord = out.get_coord(char)
             assert coord.units == get_quantity("m")
 
+    @pytest.fixture()
+    def end_df(self, random_patch):
+        """Anchors at the two ends of distance and nothing between."""
+        dist = random_patch.coords.get_array("distance")
+        df = pd.DataFrame({"distance": dist[[0, 1, -2, -1]]})
+        df["x"] = [0.0, 1.0, 100.0, 101.0]
+        return df
+
+    def test_unsorted_table_matches_sorted(self, random_patch, end_df):
+        """Row order of the table does not change the result."""
+        expected = random_patch.coords_from_df(end_df).coords.get_array("x")
+        out = random_patch.coords_from_df(end_df.iloc[[3, 1, 0, 2]])
+        assert np.array_equal(out.coords.get_array("x"), expected, equal_nan=True)
+
+    def test_duplicate_anchor_raises(self, random_patch, end_df):
+        """Two rows for one anchor value are ambiguous."""
+        df = pd.concat([end_df, end_df.iloc[[0]]])
+        with pytest.raises(ParameterError, match="duplicate"):
+            random_patch.coords_from_df(df)
+
+    @pytest.mark.parametrize("extrapolate", [False, True])
+    def test_max_gap(self, random_patch, end_df, extrapolate):
+        """Channels between anchors further apart than max_gap are NaN."""
+        dist = random_patch.coords.get_array("distance")
+        step = dist[1] - dist[0]
+        out = random_patch.coords_from_df(
+            end_df, max_gap=2 * step, extrapolate=extrapolate
+        )
+        x = out.coords.get_array("x")
+        assert np.array_equal(x[[0, 1, -2, -1]], end_df["x"].values)
+        assert np.all(np.isnan(x[2:-2]))
+
+    def test_max_gap_keeps_close_anchors(self, random_patch, coord_df):
+        """A max_gap wider than every spacing changes nothing."""
+        expected = random_patch.coords_from_df(coord_df)
+        out = random_patch.coords_from_df(coord_df, max_gap=np.inf)
+        for name in set(coord_df.columns) - set(random_patch.dims):
+            assert np.array_equal(
+                out.coords.get_array(name),
+                expected.coords.get_array(name),
+                equal_nan=True,
+            )
+
     def test_no_dim_column_raises(self, random_patch, coord_df):
         """Ensure when no columns overlap with coords an error is raised."""
         bad_df = coord_df.drop(columns="distance")
