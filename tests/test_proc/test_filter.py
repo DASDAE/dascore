@@ -195,35 +195,26 @@ class TestPassFilter:
 
 
 class TestSobelFilter:
-    """Simple tests to make sure Sobel filter runs."""
+    """Tests for the Sobel filter."""
 
-    def test_invalid_mode(self, random_patch):
-        """Ensure ValueError is raised with an invalid mode."""
-        with pytest.raises(FilterValueError):
-            _ = random_patch.sobel_filter(dim="time", mode="test", cval=0.0)
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            {"dim": "time", "mode": "not_a_mode"},
+            {"dim": "time", "mode": 0.0},
+            {"dim": "time", "mode": ["reflect"]},
+            {"dim": -1},
+            {"dim": None, "mode": "constant"},
+            {"dim": "distance", "mode": "constant", "cval": None},
+        ],
+    )
+    def test_bad_arguments_raise(self, random_patch, kwargs):
+        """A dim, mode, or cval of the wrong kind or value is refused."""
+        with pytest.raises(FilterValueError, match="sobel_filter"):
+            random_patch.sobel_filter(**kwargs)
 
-    def test_invalid_mode_type(self, random_patch):
-        """Ensure ValueError is raised with an invalid mode type."""
-        with pytest.raises(FilterValueError):
-            _ = random_patch.sobel_filter(dim="time", mode=0.0)
-
-    def test_invalid_dim(self, random_patch):
-        """Ensure ValueError is raised with an invalid dim type."""
-        with pytest.raises(FilterValueError):
-            _ = random_patch.sobel_filter(dim=-1)
-
-    def test_invalid_axis(self, random_patch):
-        """Ensure ValueError is raised with an invalid axis value."""
-        with pytest.raises(FilterValueError):
-            _ = random_patch.sobel_filter(dim=None, mode="constant", cval=0.0)
-
-    def test_invalid_cval(self, random_patch):
-        """Ensure ValueError is raised with an invalid cval value."""
-        with pytest.raises(FilterValueError):
-            _ = random_patch.sobel_filter(dim="distance", mode="constant", cval=None)
-
-    def test_sobel_runs(self, random_patch):
-        """Ensure Sobel filter works with default params."""
+    def test_default_output(self, random_patch):
+        """The defaults return a patch of finite values."""
         out = random_patch.sobel_filter(dim="time")
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))

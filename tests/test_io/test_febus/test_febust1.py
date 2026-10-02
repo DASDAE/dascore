@@ -69,6 +69,13 @@ class TestFebusT1:
         assert_allclose(dist.max(), 89.9, rtol=1e-3)
         assert_allclose(dist.step, 0.0816, rtol=1e-3)
 
+    def test_distance_ends_on_stored_values(self, t1_path, t1_patch):
+        """The distance grid starts and ends on the file's stored values."""
+        with h5py.File(t1_path) as fi:
+            stored = fi["Data/Distance"][()]
+        dist = t1_patch.get_coord("distance")
+        assert (dist.min(), dist.max()) == (stored[0], stored[-1])
+
     def test_temperature_reasonable(self, t1_patch):
         """Temperature values should be plausible (5 to 50 °C)."""
         assert t1_patch.data.min() > 5

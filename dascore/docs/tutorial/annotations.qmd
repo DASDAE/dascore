@@ -147,7 +147,7 @@ len(cut), cut.get_contents()[["feature_id", "time_min", "time_max"]]
 
 # Plotting
 
-[`ann.viz.plot`](`dascore.viz.annotations.plot`) draws every feature on an axis, putting dimensions where [`waterfall`](`dascore.viz.waterfall.waterfall`) puts them. Draw the patch first and the annotations over it. `color` may name a column, giving one color per value and a legend; features with no value, here the paths, the polygon and a trigger time added across the fiber, are grey:
+[`ann.viz.plot`](`dascore.viz.annotations.plot`) draws every feature on an axis, putting dimensions where [`waterfall`](`dascore.viz.waterfall.waterfall`) puts them. Draw the patch first and the annotations over it. `color` may name a column, giving one color per value and a legend; features with no value, here the paths, the polygon and a trigger time added across the fiber, are black, so they read over the waterfall: lines and markers with a white halo, filled shapes with a solid edge. `palette` fixes the colors of chosen values, e.g. `palette={"P": "tab:red", "S": "tab:cyan"}`, and when no color column is given and two or more kinds are drawn, a legend names the kinds:
 
 ```{python}
 ann = ann.add(pd.DataFrame({"time": [0.08], "note": ["trigger"]}))
