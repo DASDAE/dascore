@@ -14,7 +14,7 @@ import pandas as pd
 import dascore as dc
 import dascore.core
 from dascore.compat import random_state
-from dascore.config import config_context
+from dascore.config import config_context, get_config
 from dascore.core.inventory import (
     Acquisition,
     CouplingCondition,
@@ -29,7 +29,12 @@ from dascore.core.inventory import (
     OpticalPathLabel,
 )
 from dascore.exceptions import UnknownExampleError
-from dascore.utils.downloader import fetch
+from dascore.utils.downloader import (
+    _fetch_cached,
+    fetch,
+    get_fetcher,
+    get_registry_df,
+)
 from dascore.utils.imports import lazy_import
 from dascore.utils.misc import iterate, register_func
 from dascore.utils.patch import get_patch_names
@@ -859,10 +864,20 @@ def get_example_spool(example_name="random_das", **kwargs) -> dc.Spool:
     (`UnknownExampleError`)['dascore.examples.UnknownExampleError`] if
         unregistered patch is requested.
     """
+    if example_name in get_registry_df()["name"].values:
+        path = _fetch_cached(example_name, str(get_config().downloader_cache_dir))
+        if dc.get_format(path)[0] != "DASDAE":
+            return dc.spool(path)
+        # Registry files are hash checked, so their legacy pickles are trusted:
+        # fetch again, which re-checks the hash just before the read, and read
+        # now, since the setting ends with the block.
+        path = Path(get_fetcher().fetch(example_name))
+        with config_context(allow_dasdae_format_unpickle=True):
+            return dc.spool(dc.read(path))
     if example_name not in EXAMPLE_SPOOLS:
-        # Allow the example spool to be a data registry file.
-        with suppress(ValueError):
-            return dc.spool(fetch(example_name))
+        # Any other existing file is the caller's own, read under their config.
+        if Path(example_name).exists():
+            return dc.spool(example_name)
         msg = (
             f"No example spool registered with name {example_name} "
             f"Registered example spools are {list(EXAMPLE_SPOOLS)}"

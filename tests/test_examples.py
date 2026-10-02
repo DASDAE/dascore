@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -9,7 +11,8 @@ import pytest
 import dascore as dc
 import dascore.examples as dc_examples
 from dascore.examples import EXAMPLE_INVENTORIES, EXAMPLE_PATCHES
-from dascore.exceptions import UnknownExampleError
+from dascore.exceptions import DASDAEUnpickleError, UnknownExampleError
+from dascore.utils.downloader import fetch, get_fetcher
 from dascore.utils.intervals import normalize_value, value_kind
 from dascore.utils.time import to_float
 
@@ -56,6 +59,41 @@ class TestGetExampleSpool:
         """Ensure get_example_spool works on a datafile."""
         spool = dc.get_example_spool("dispersion_event.h5")
         assert isinstance(spool, dc.BaseSpool)
+
+    def test_legacy_registry_file_needs_no_opt_in(self):
+        """A legacy DASDAE registry file loads under the default config."""
+        with dc.config_context(allow_dasdae_format_unpickle=False):
+            spool = dc.get_example_spool("UoU_lf_urban.hdf5")
+            assert len(spool[0].data)
+
+    def test_other_registry_formats_stay_lazy(self):
+        """A registry file of another format is a file-backed spool."""
+        spool = dc.get_example_spool("sample_tdms_file_v4713.tdms")
+        assert spool.spool_path is not None
+        assert len(spool[0].data)
+
+    @pytest.mark.network
+    def test_tampered_cache_file_is_replaced(self, tmp_path, monkeypatch):
+        """A cached registry file changed after its first fetch is re-fetched."""
+        # Keep the shared data cache, which other tests read, out of it.
+        monkeypatch.delenv("DFS_DATA_DIR", raising=False)
+        name = "UoU_lf_urban.hdf5"
+        with dc.config_context(downloader_cache_dir=tmp_path):
+            dc.get_example_spool(name)
+            cached = Path(get_fetcher().abspath) / name
+            assert cached.is_relative_to(tmp_path)
+            original = cached.read_bytes()
+            cached.write_bytes(original + b"tampered")
+            dc.get_example_spool(name)
+        assert cached.read_bytes() == original
+
+    def test_local_copy_keeps_the_opt_in(self, tmp_path):
+        """A file outside the registry is read under the caller's config."""
+        path = tmp_path / "copy.hdf5"
+        path.write_bytes(fetch("UoU_lf_urban.hdf5").read_bytes())
+        with dc.config_context(allow_dasdae_format_unpickle=False):
+            with pytest.raises(DASDAEUnpickleError):
+                dc.get_example_spool(str(path))[0]
 
 
 class TestRandomSpool:
