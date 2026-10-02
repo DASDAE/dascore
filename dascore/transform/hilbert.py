@@ -11,6 +11,7 @@ import numpy as np
 from dascore.constants import DIM_REDUCE_DOCS
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
+from dascore.proc.basic import _as_float
 from dascore.utils.array_api import array_namespace, asarray_like
 from dascore.utils.docs import compose_docstring
 from dascore.utils.imports import lazy_import
@@ -155,7 +156,7 @@ def _infer_transform_dim(patch, stack_dim):
     return next(iter(dims))
 
 
-def _phase_weighted_stack(data, analytic, axis: int, power):
+def _phase_weighted_stack(data, analytic, axis: int, power, squeeze: bool):
     """Return the mean along an axis weighted by the coherence of its phases."""
     xp = array_namespace(data)
     # Get unit phasors. Use eps here to avoid unstable division by 0.
@@ -168,7 +169,8 @@ def _phase_weighted_stack(data, analytic, axis: int, power):
     weights = xp.abs(mean_phasor) ** power
     # Stack original data and apply weights (we can do this since weights
     # are common across all samples)
-    return xp.mean(data, axis=axis, keepdims=True) * weights
+    out = xp.mean(_as_float(data), axis=axis, keepdims=True) * weights
+    return xp.squeeze(out, axis=axis) if squeeze else out
 
 
 @compose_docstring(dim_reduce=DIM_REDUCE_DOCS)
@@ -252,13 +254,11 @@ class PhaseWeightedStack(PatchProcessor):
         # Ensure evenly sampled transform dimension and get needed coords.
         meta.get_coord(transform_dim, require_evenly_sampled=True)
         stack_coord = meta.get_coord(stack_dim)
-        # Get corresponding axes.
         plan = {
             "transform_axis": meta.get_axis(transform_dim),
             "stack_axis": meta.get_axis(stack_dim),
             "squeeze": self.dim_reduce == "squeeze",
         }
-        # Create new coord and coord manager.
         new_coord = stack_coord.reduce_coord(dim_reduce=self.dim_reduce)
         cm = meta.coords.update(**{stack_dim: new_coord})
         return meta.new(coords=cm), plan
@@ -266,12 +266,9 @@ class PhaseWeightedStack(PatchProcessor):
     def numpy_kernel(self, data, *, transform_axis, stack_axis, squeeze):
         """Return the phase weighted stack, through scipy's Hilbert transform."""
         analytic = scipy_hilbert(data, axis=transform_axis)
-        stacked = _phase_weighted_stack(data, analytic, stack_axis, self.power)
-        return np.squeeze(stacked, axis=stack_axis) if squeeze else stacked
+        return _phase_weighted_stack(data, analytic, stack_axis, self.power, squeeze)
 
     def kernel(self, data, *, transform_axis, stack_axis, squeeze):
         """Return the phase weighted stack, through the FFT."""
         analytic = analytic_signal(data, transform_axis)
-        stacked = _phase_weighted_stack(data, analytic, stack_axis, self.power)
-        xp = array_namespace(data)
-        return xp.squeeze(stacked, axis=stack_axis) if squeeze else stacked
+        return _phase_weighted_stack(data, analytic, stack_axis, self.power, squeeze)

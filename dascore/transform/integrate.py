@@ -31,9 +31,8 @@ def _quasi_mean(array):
 
 
 def _get_definite_coords(meta, dims):
-    """Get new coordinates with smashed (or not) coordinates."""
+    """Return coords with each dim collapsed to one sample, keeping its min and max."""
     new_coords = {x: _quasi_mean(meta.get_coord(x).values) for x in dims}
-    # also add related coords indicating start/stop
     for name in dims:
         coord = meta.get_coord(name).values
         new_coords[f"pre_integrate_{name}_min"] = (name, np.asarray([coord.min()]))

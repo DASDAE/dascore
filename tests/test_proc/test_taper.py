@@ -362,11 +362,11 @@ class TestTaperHoles:
 
 
 class TestTaperDtype:
-    """A taper scales the data in place of the old values, keeping the dtype."""
+    """A taper keeps the data's dtype."""
 
     @pytest.mark.parametrize("dtype", ["int32", "bool", "float32", "complex64"])
     def test_keeps_dtype(self, random_patch, dtype):
-        """Integer data stay integer, truncated as an in-place multiply was."""
+        """Each dtype is kept, and the ramps change some samples but not all."""
         patch = random_patch.new(data=(random_patch.data * 100).astype(dtype))
         out = patch.taper(time=0.2)
         assert out.dtype == patch.dtype

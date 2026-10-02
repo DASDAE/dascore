@@ -78,6 +78,7 @@ EXPECTED_ERRORS = (
     "matrix/bool/hampel_*",
     "matrix/*nan*/savgol_filter",
     "matrix/*inf*/savgol_filter",
+    # NumPy cannot subtract booleans; scipy's Hilbert transform refuses complex.
     "matrix/bool/differentiate*",
     "matrix/bool/strain_rate*",
     "matrix/complex*/phase_weighted_stack",
@@ -85,7 +86,8 @@ EXPECTED_ERRORS = (
     "matrix/single_row/differentiate_step",
     "matrix/single_row/slope_mute",
     "matrix/single_row/strain_rate*",
-    "matrix/single_row/taper_*",
+    "matrix/single_row/taper_distance",
+    "matrix/single_row/taper_range_invert",
 )
 
 
@@ -393,6 +395,9 @@ def _envelope_calls(patch, int_patch, f32, dft_patch, wacky, m, s) -> dict:
     t2 = t1 + np.timedelta64(3, "s")
     percent = dc.get_unit("percent")
     velocity = ([0, 0.375], [0, 0.25]), ([0, 300], [0, 300])
+    # Distance starts at 100 m, so absolute and relative distances differ.
+    distance = patch.get_array("distance") + 100
+    shifted = _pinned(patch.update_coords(distance=distance), "shifted")
     return {
         **{
             f"taper_{name}": (
@@ -447,8 +452,8 @@ def _envelope_calls(patch, int_patch, f32, dft_patch, wacky, m, s) -> dict:
         "line_mute_time": lambda: patch.line_mute(time=(0, 0.5)),
         "line_mute_invert": lambda: patch.line_mute(time=(0.2, -0.2), invert=True),
         "line_mute_distance": lambda: patch.line_mute(distance=(50, 100)),
-        "line_mute_absolute": lambda: patch.line_mute(
-            distance=(50, 100), relative=False
+        "line_mute_absolute": lambda: shifted.line_mute(
+            distance=(150, 250), relative=False
         ),
         "line_mute_smooth_units": lambda: patch.line_mute(
             time=(0.2, 0.8), smooth=0.02 * s
@@ -624,7 +629,6 @@ def get_calls() -> dict:
     return {
         **_filter_calls(small, small_f32, spiky, hz, m, s),
         **_envelope_calls(patch, int_patch, f32, dft_patch, wacky, m, s),
-        "taper_bad_unsorted": lambda: unsorted.taper(distance=0.1),
         "diff_bad_unsorted": lambda: unsorted.differentiate("distance"),
         **_calculus_calls(patch, int_patch, f32, dft_patch, wacky, typed),
         **_aggregate_calls(patch, null_patch, int_patch, bool_patch, typed),

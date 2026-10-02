@@ -135,7 +135,7 @@ class Taper(PatchProcessor):
     model_config = ConfigDict(extra="allow")
 
     def get_metadata(self, meta):
-        """Return the axis, where each ramp ends, and the ramps themselves."""
+        """Return the axis, the ramps, and where each meets the untouched middle."""
         shape = meta.shape
         axis, samps, start_slice, end_slice = _get_taper_slices(
             meta, self.model_extra or {}
@@ -169,6 +169,15 @@ class Taper(PatchProcessor):
                 piece = xp.astype(_scale_by(piece, ramp), data.dtype)
             pieces.append(piece)
         return xp.concat(pieces, axis=axis)
+
+    def numpy_kernel(self, data, *, axis, start, stop, head, tail):
+        """Return a copy of the data with its ends scaled in place."""
+        out = np.array(data)
+        for span, ramp in ((slice(None, start), head), (slice(stop, None), tail)):
+            if ramp is not None:
+                inds = broadcast_for_index(out.ndim, axis, span)
+                out[inds] = out[inds] * ramp
+        return out
 
 
 def _get_taper_coord_inds(coord, values, relative, samples):

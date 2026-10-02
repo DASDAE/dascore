@@ -288,6 +288,11 @@ class TestIntegrateMetadata:
         out, _ = Integrate(dim="time", definite=True).get_metadata(
             random_patch.drop_data()
         )
-        expected = random_patch.integrate("time", definite=True)
-        assert out.shape == expected.shape
-        assert out.coords == expected.coords
+        time = random_patch.get_array("time")
+        assert out.shape[out.get_axis("time")] == 1
+        # Evenly sampled, so the mean time is the midpoint, to float rounding.
+        midpoint = time[0] + (time[-1] - time[0]) / 2
+        gap = out.get_coord("time").values[0] - midpoint
+        assert abs(gap) < np.timedelta64(1, "us")
+        assert out.coords.get_array("pre_integrate_time_min")[0] == time[0]
+        assert out.coords.get_array("pre_integrate_time_max")[0] == time[-1]

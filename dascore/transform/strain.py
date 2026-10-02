@@ -181,7 +181,7 @@ class VelocityToStrainRateEdgeless(PatchProcessor):
         coord = meta.get_coord("distance", require_evenly_sampled=True)
         distance_step = coord.step
         gauge_length = step_multiple * distance_step
-        # The samples step_multiple ahead of, and behind, each new one.
+        # The two samples, step_multiple apart, which straddle each new one.
         keys = [
             meta.coords.select_indexers(distance=x, samples=True)[1]
             for x in ((step_multiple, None), (None, -step_multiple))
@@ -207,8 +207,7 @@ class VelocityToStrainRateEdgeless(PatchProcessor):
         out = meta.new(coords=new_coords, attrs=new_attrs)
         axis = meta.get_axis("distance")
         ahead, behind = (
-            broadcast_for_index(meta.ndim, axis, x.get("distance", slice(None)))
-            for x in keys
+            broadcast_for_index(meta.ndim, axis, x["distance"]) for x in keys
         )
         return out, {"ahead": ahead, "behind": behind, "gauge_length": gauge_length}
 

@@ -818,7 +818,6 @@ class PowCoord(PatchProcessor):
 
     def kernel(self, data, *, curves):
         """Return the data times each gain curve in turn."""
-        data = _as_float(data)
         for curve in curves:
             data = _scale_by(data, curve)
         return data

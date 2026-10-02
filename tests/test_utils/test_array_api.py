@@ -636,6 +636,16 @@ class TestArrayApiKernelBranches:
         with pytest.raises(ValueError, match="must be real"):
             backend_patch.new(data=data).hilbert("time")
 
+    def test_phase_weighted_stack_of_integers(self, backend_patch):
+        """Integer data are stacked in float, as numpy does."""
+        xp = array_namespace(backend_patch.data)
+        ints = backend_patch.new(data=xp.astype(backend_patch.data * 100, xp.int32))
+        out = ints.phase_weighted_stack("distance")
+        expected = dc.Patch(
+            data=np.asarray(ints.data), coords=ints.coords, dims=ints.dims
+        ).phase_weighted_stack("distance")
+        assert np.allclose(np.asarray(out.data), expected.data)
+
     def test_full_with_a_numpy_scalar(self, backend_patch):
         """A numpy scalar fill keeps its dtype, on the patch's backend."""
         out = backend_patch.full(np.float32(2))

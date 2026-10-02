@@ -420,7 +420,7 @@ def _mute_envelope(meta, kwargs, smooth, invert, relative):
     out_shape = [meta.shape[ax] if ax in geo.axes else 1 for ax in range(meta.ndim)]
     out = np.zeros(out_shape) if invert else np.ones(out_shape)
     fill_val = 1 if invert else 0
-    # Easy path for 1D mute.
+    # Fill the muted region (or, inverted, the kept one).
     out = geo._apply_mask(out, meta, fill_val)
     # Apply smoothing if requested.
     if smooth is not None:

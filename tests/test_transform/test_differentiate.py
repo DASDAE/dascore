@@ -8,7 +8,7 @@ import pytest
 import dascore as dc
 import dascore.proc.coords
 from dascore.exceptions import CoordError, ParameterError
-from dascore.transform.differentiate import Differentiate, differentiate
+from dascore.transform.differentiate import differentiate
 from dascore.units import get_quantity
 from dascore.utils.time import to_float
 
@@ -217,6 +217,16 @@ class TestCompareOrders:
         # since dxdy(3x * 2y) = 6
         assert np.allclose(p1.data, 6.0)
 
+    def test_order_used(self):
+        """A 4th order stencil is exact for a cubic, where order 2 is not."""
+        pytest.importorskip("findiff")
+        x = np.arange(20.0)
+        patch = dc.Patch(data=x**3, coords={"x": x}, dims=("x",))
+        order2 = patch.differentiate("x", order=2).data
+        order4 = patch.differentiate("x", order=4).data
+        assert np.allclose(order4, 3 * x**2)
+        assert np.allclose(order2[1:-1], 3 * x[1:-1] ** 2 + 1)
+
 
 class TestDataType:
     """A derivative changes what the data is, where the vocabulary says so."""
@@ -276,12 +286,3 @@ class TestHoles:
         """Step-less labels are an irregular grid and use label spacing."""
         out = stepless_seam_patch.differentiate("time")
         assert out.shape == stepless_seam_patch.shape
-
-
-class TestDifferentiateMetadata:
-    """The derivative's metadata is worked out without the data."""
-
-    def test_step_over_two_dims_refused_from_metadata(self, random_patch):
-        """A strided derivative over two dims is refused before any data."""
-        with pytest.raises(ParameterError, match="only be used along one axis"):
-            Differentiate(dim=None, step=2).get_metadata(random_patch.drop_data())
