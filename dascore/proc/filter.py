@@ -7,6 +7,7 @@ Tobias Megies, Moritz Beyreuther, Yannik Behr
 
 from __future__ import annotations
 
+import datetime
 import sys
 from collections.abc import Sequence
 from typing import Any, ClassVar
@@ -27,6 +28,7 @@ from dascore.units import (
     get_filter_units,
     get_inverted_quant,
     invert_quantity,
+    percent,
     quant_sequence_to_quant_array,
 )
 from dascore.utils.docs import compose_docstring
@@ -445,7 +447,10 @@ class SavgolFilter(_WindowFilter):
         return data
 
 
-@compose_docstring(sample_explanation=samples_arg_description)
+# Durations carry their units, so they are never sample counts.
+_DURATIONS = (np.timedelta64, datetime.timedelta)
+
+
 class GaussianFilter(_WindowFilter):
     """
     Applies a Gaussian filter along specified dimensions.
@@ -455,7 +460,8 @@ class GaussianFilter(_WindowFilter):
     patch
         The patch to filter
     samples
-        {sample_explanation}
+        If True, plain numbers are sigma in samples, and may be fractional.
+        Otherwise, values are in the units of the dimension, or carry units.
     mode
         The mode for handling edges.
     cval
@@ -464,8 +470,7 @@ class GaussianFilter(_WindowFilter):
         Truncate the filter kernel length to this many standard deviations.
     **kwargs
         Used to specify the sigma value (standard deviation) for desired
-        dimensions. Sigma is not rounded, so it may be a fraction of a
-        sample, even with `samples=True`.
+        dimensions. Sigma is not rounded to whole samples.
 
     Examples
     --------
@@ -503,11 +508,14 @@ class GaussianFilter(_WindowFilter):
             meta, kwargs=kwargs, allow_multiple=True
         ):
             coord = meta.get_coord(dim, require_evenly_sampled=True)
-            if isinstance(value, dc.units.Quantity):
+            step = abs(to_float(coord.step))
+            if isinstance(value, dc.units.Quantity) and value.units == percent:
+                value = value.magnitude / 100 * coord.coord_range(extend=False)
+            elif isinstance(value, dc.units.Quantity):
                 value = convert_units(value.magnitude, coord.units, value.units)
-            elif self.kwargs["samples"]:
-                value = to_float(value) * to_float(coord.step)
-            count = to_float(value) / abs(to_float(coord.step))
+            elif self.kwargs["samples"] and not isinstance(value, _DURATIONS):
+                value = to_float(value) * step  # a plain number is samples
+            count = to_float(value) / step
             if not (np.isfinite(count) and count >= 0):
                 msg = (
                     f"gaussian_filter needs a finite, non-negative sigma, got {value}."

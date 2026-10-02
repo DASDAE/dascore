@@ -18,7 +18,7 @@ from dascore.exceptions import (
     ParameterError,
     UnitError,
 )
-from dascore.units import Hz, convert_units, get_unit, m, s
+from dascore.units import Hz, convert_units, get_unit, m, percent, s
 from dascore.utils.misc import broadcast_for_index
 from dascore.utils.patch import get_dim_sampling_rate
 
@@ -423,6 +423,30 @@ class TestGaussianFilter:
         sigma = [0.0] * random_patch.ndim
         sigma[random_patch.get_axis("time")] = 1.5
         assert np.allclose(out.data, ndimage.gaussian_filter(random_patch.data, sigma))
+
+    def test_descending_coord_in_samples(self, random_patch):
+        """A sample sigma on a reversed coordinate is applied as given."""
+        patch = random_patch.flip("time")
+        sigma = [0.0] * patch.ndim
+        sigma[patch.get_axis("time")] = 1.5
+        out = patch.gaussian_filter(time=1.5, samples=True)
+        assert np.allclose(out.data, ndimage.gaussian_filter(patch.data, sigma))
+
+    def test_duration_sigma_keeps_its_units(self, random_patch):
+        """A timedelta is a duration even with samples=True."""
+        step = random_patch.get_coord("time").step
+        expected = random_patch.gaussian_filter(time=1.5, samples=True)
+        out = random_patch.gaussian_filter(time=step * 3 / 2, samples=True)
+        assert np.allclose(out.data, expected.data)
+
+    def test_percent_sigma(self, random_patch):
+        """A percent sigma is a fraction of the coordinate's range."""
+        coord = random_patch.get_coord("time")
+        samples = 0.01 * dc.to_float(coord.coord_range(extend=False))
+        samples /= dc.to_float(coord.step)
+        expected = random_patch.gaussian_filter(time=samples, samples=True)
+        out = random_patch.gaussian_filter(time=1 * percent)
+        assert np.allclose(out.data, expected.data)
 
     def test_quantity_sigma_keeps_its_units(self, random_patch):
         """A sigma with units is converted even when samples=True."""
