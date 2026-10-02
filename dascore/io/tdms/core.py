@@ -44,7 +44,7 @@ class TDMSFormatterV4713(FiberIO):
         )
         return [dc.PatchMeta(attrs=attrs, coords=coords, dtype=fileinfo["data_type"])]
 
-    def _prepare_read(self, manager, snap):
+    def _prepare_read(self, manager, snap, keys=frozenset()):
         """Reuse the header parsed for metadata when loading samples."""
         resource = manager.get_resource(BinaryReader)
         fileinfo, attrs = _get_fileinfo(resource)

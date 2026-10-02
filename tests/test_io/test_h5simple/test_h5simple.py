@@ -208,8 +208,8 @@ class TestH5Simple:
         class Doubled(FiberIO):
             name = f"_test_h5simple_doubled_{doubled_first}"
 
-            def _prepare_read(self, manager, snap):
-                return FiberIO._prepare_read(self, manager, snap)
+            def _prepare_read(self, manager, snap, keys=frozenset()):
+                return FiberIO._prepare_read(self, manager, snap, keys)
 
             def get_metadata(self, resource: H5Reader, *, snap=True):
                 return H5Simple().get_metadata(resource, snap=snap)

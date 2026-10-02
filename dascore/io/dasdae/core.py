@@ -114,6 +114,17 @@ class DASDAEV1(FiberIO):
         """Find the patch's data dataset once, for any number of windows."""
         return partial(slice_dataset, _get_patch_group(resource, key)["data"])
 
+    def _prepare_read(self, manager, snap, keys=frozenset()):
+        """Decode only the waveform groups a keyed read wants."""
+        resource = manager.get_resource(H5Reader)
+        patches = _get_contents_from_patch_groups_generic(resource, snap, keys)
+
+        def load(requests):
+            for windows, key in requests:
+                yield self._prepare_array_reader(resource, key=key)(windows)
+
+        return patches, load
+
     def get_metadata(
         self, resource: H5Reader, *, snap: snap_type = True
     ) -> list[dc.PatchMeta]:
