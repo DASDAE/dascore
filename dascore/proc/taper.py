@@ -5,15 +5,19 @@ from __future__ import annotations
 from collections.abc import Sequence
 from functools import reduce
 from operator import add
+from typing import Any
 
 import numpy as np
+from pydantic import ConfigDict
 
-from dascore.constants import PatchType
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
+from dascore.proc.basic import _scale_by
 from dascore.units import Quantity
+from dascore.utils.array_api import array_namespace
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import broadcast_for_index
-from dascore.utils.patch import get_dim_axis_value, patch_function, require_no_holes
+from dascore.utils.patch import get_dim_axis_value, require_no_holes
 from dascore.utils.signal import WINDOW_NAMES, get_ramp
 from dascore.utils.time import to_float
 
@@ -61,13 +65,18 @@ def _validate_windows(samps, start_slice, end_slice, shape, axis):
         raise ParameterError(msg)
 
 
-@patch_function()
+class _Envelope(PatchProcessor):
+    """An operation which multiplies the data by an envelope it plans."""
+
+    name = None
+
+    def kernel(self, data, *, env):
+        """Return the data times the envelope."""
+        return _scale_by(data, env)
+
+
 @compose_docstring(taper_type=sorted(WINDOW_NAMES))
-def taper(
-    patch: PatchType,
-    window_type: str | tuple = "hann",
-    **kwargs,
-) -> PatchType:
+class Taper(PatchProcessor):
     """
     Taper the ends of the signal.
 
@@ -120,26 +129,46 @@ def taper(
     >>> from dascore.units import m
     >>> patch_taper4 = patch.taper(distance=15 * m)
     """
-    # get taper values in samples.
-    out = np.array(patch.data)  # Need to make a copy here.
-    shape = out.shape
-    n_dims = len(out.shape)
-    axis, samps, start_slice, end_slice = _get_taper_slices(patch, kwargs)
-    _validate_windows(samps, start_slice, end_slice, shape, axis)
-    if samps[0] is not None:
-        val = start_slice.stop
-        window = get_ramp(window_type, val)
-        # get indices window (which will broadcast) and data
-        data_inds = broadcast_for_index(n_dims, axis, start_slice)
-        window_inds = broadcast_for_index(n_dims, axis, slice(None), fill=None)
-        out[data_inds] = out[data_inds] * window[window_inds]
-    if samps[1] is not None:
-        val = shape[axis] - end_slice.start
-        window = get_ramp(window_type, val)[::-1]
-        data_inds = broadcast_for_index(n_dims, axis, end_slice)
-        window_inds = broadcast_for_index(n_dims, axis, slice(None), fill=None)
-        out[data_inds] = out[data_inds] * window[window_inds]
-    return patch.new(data=out)
+
+    window_type: Any = "hann"
+
+    model_config = ConfigDict(extra="allow")
+
+    def get_metadata(self, meta):
+        """Return the axis, where each ramp ends, and the ramps themselves."""
+        shape = meta.shape
+        axis, samps, start_slice, end_slice = _get_taper_slices(
+            meta, self.model_extra or {}
+        )
+        _validate_windows(samps, start_slice, end_slice, shape, axis)
+        # Shaped to broadcast against the data along the axis.
+        indexer = broadcast_for_index(len(shape), axis, slice(None), fill=None)
+        plan = {"axis": axis, "start": None, "stop": None, "head": None, "tail": None}
+        if samps[0] is not None:
+            plan["start"] = start_slice.stop
+            plan["head"] = get_ramp(self.window_type, plan["start"])[indexer]
+        if samps[1] is not None:
+            plan["stop"] = end_slice.start
+            ramp = get_ramp(self.window_type, shape[axis] - plan["stop"])[::-1]
+            plan["tail"] = ramp[indexer]
+        return meta, plan
+
+    def kernel(self, data, *, axis, start, stop, head, tail):
+        """Return the data with its ends scaled by the ramps, in its own dtype."""
+        xp = array_namespace(data)
+        spans = [(start, stop, None)]
+        if head is not None:
+            spans.insert(0, (None, start, head))
+        if tail is not None:
+            spans.append((stop, None, tail))
+        pieces = []
+        for first, last, ramp in spans:
+            piece = data[broadcast_for_index(data.ndim, axis, slice(first, last))]
+            if ramp is not None:
+                # Scaled in float and cast back, as an in-place multiply was.
+                piece = xp.astype(_scale_by(piece, ramp), data.dtype)
+            pieces.append(piece)
+        return xp.concat(pieces, axis=axis)
 
 
 def _get_taper_coord_inds(coord, values, relative, samples):
@@ -203,16 +232,8 @@ def _get_range_envelope(coord, inds, window_type, invert):
     return out
 
 
-@patch_function()
 @compose_docstring(taper_type=sorted(WINDOW_NAMES))
-def taper_range(
-    patch: PatchType,
-    window_type: str | tuple = "hann",
-    invert=False,
-    relative=False,
-    samples=False,
-    **kwargs,
-) -> PatchType:
+class TaperRange(_Envelope):
     """
     Taper a range inside the patch.
 
@@ -288,11 +309,20 @@ def taper_range(
     >>> taper_range = ((25,50,100,125), (150,175,200,225))
     >>> patch_tapered_5 = patch.taper_range(distance=taper_range)
     """
-    dim, ax, values = get_dim_axis_value(patch, kwargs=kwargs)[0]
-    coord = patch.get_coord(dim, require_sorted=True)
-    inds = _get_taper_coord_inds(coord, values, relative, samples)
-    env = _get_range_envelope(coord, inds, window_type, invert)
-    # Ensure envelope broadcasts to index
-    indexer = broadcast_for_index(patch.ndim, ax, value=slice(None), fill=None)
-    env_broadcastable = env[indexer]
-    return patch.new(data=patch.data * env_broadcastable)
+
+    window_type: Any = "hann"
+    invert: Any = False
+    relative: Any = False
+    samples: Any = False
+
+    model_config = ConfigDict(extra="allow")
+
+    def get_metadata(self, meta):
+        """Return the envelope, shaped to broadcast along its axis."""
+        dim, ax, values = get_dim_axis_value(meta, kwargs=self.model_extra or {})[0]
+        coord = meta.get_coord(dim, require_sorted=True)
+        inds = _get_taper_coord_inds(coord, values, self.relative, self.samples)
+        env = _get_range_envelope(coord, inds, self.window_type, self.invert)
+        # Ensure envelope broadcasts to index
+        indexer = broadcast_for_index(meta.ndim, ax, value=slice(None), fill=None)
+        return meta, {"env": env[indexer]}

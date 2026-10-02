@@ -7,6 +7,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import ParameterError
+from dascore.proc.mute import LineMute, SlopeMute
 
 
 def _get_testable_coord_values(coord, relative=False):
@@ -831,3 +832,24 @@ class TestSlopeMute:
         ]
         expected = [0, 0, 1, 1]
         _assert_point_values(muted, self._dims, points=points, expected_values=expected)
+
+
+class TestMuteProcessors:
+    """The mute classes keep the old functions' keyword-only options."""
+
+    def test_line_mute_refuses_positional(self):
+        """Every option of line_mute is keyword-only."""
+        with pytest.raises(TypeError, match="0 positional"):
+            LineMute(0.1)
+
+    def test_slope_mute_takes_only_slopes_positionally(self):
+        """Only the slopes come by position."""
+        with pytest.raises(TypeError, match="1 positional"):
+            SlopeMute((1, 3), ("time", "distance"))
+
+    def test_envelope_from_metadata(self, patch_ones):
+        """The envelope is worked out from the metadata alone."""
+        meta = patch_ones.drop_data()
+        _, plan = SlopeMute(slopes=(20.0, 30.0)).get_metadata(meta)
+        muted = patch_ones.slope_mute(slopes=(20.0, 30.0))
+        assert np.array_equal(np.broadcast_to(plan["env"], meta.shape), muted.data)

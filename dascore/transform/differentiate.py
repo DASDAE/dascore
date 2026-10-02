@@ -2,20 +2,19 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from operator import truediv
+from typing import Any
 
 import numpy as np
 
 from dascore.compat import is_array
-from dascore.constants import PatchType
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
 from dascore.utils.misc import broadcast_for_index, iterate, optional_import
 from dascore.utils.patch import (
     _get_data_type_from_dims,
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
-    patch_function,
     require_no_holes,
 )
 
@@ -49,37 +48,55 @@ def _get_diff(order, data, axes, dx_or_spacing):
     return new_data
 
 
-def _strided_diff(order, patch, axes, dx_or_spacing, step):
+def _strided_diff(order, data, axes, dx_or_spacing, step):
     """Calculate a strided differentiation along specified axes."""
-    if len(axes) > 1:
-        msg = "Step in patch.differentiate can only be used along one axis."
-        raise ParameterError(msg)
     new_data = None
     dx_or_space = dx_or_spacing[0]
     for step_ in range(step):
         current_slice = slice(step_, None, step)
-        slicer = broadcast_for_index(patch.ndim, axes[0], current_slice)
+        slicer = broadcast_for_index(data.ndim, axes[0], current_slice)
         # Need to either double DX or slice the coordinate spacing to
         # account for the fact we are skipping some columns/rows.
         if is_array(dx_or_space):
             _dx_or_space = dx_or_space[current_slice]
         else:
             _dx_or_space = dx_or_space * step
-        sub = _get_diff(order, patch.data[slicer], axes, [_dx_or_space])
+        sub = _get_diff(order, data[slicer], axes, [_dx_or_space])
         if new_data is None:
-            new_data = np.empty_like(patch.data, dtype=sub.dtype)
+            new_data = np.empty_like(data, dtype=sub.dtype)
         new_data[slicer] = sub
     assert new_data is not None
     return new_data
 
 
-@patch_function(version="1.2")
-def differentiate(
-    patch: PatchType,
-    dim: str | Sequence[str] | None,
-    order: int = 2,
-    step: int = 1,
-) -> PatchType:
+def _derivative_metadata(meta, dims, step):
+    """Return the attrs of a derivative over dims, and the kernel's plan."""
+    require_no_holes(meta, dims, "differentiate")
+    dx_or_spacing, axes = _get_dx_or_spacing_and_axes(meta, dims)
+    if step > 1 and len(axes) > 1:
+        msg = "Step in patch.differentiate can only be used along one axis."
+        raise ParameterError(msg)
+    data_units = _get_data_units_from_dims(meta, dims, truediv)
+    data_type = _get_data_type_from_dims(meta, dims, differentiate=True)
+    attrs = meta.attrs.update(data_units=data_units, data_type=data_type)
+    return attrs, {"axes": axes, "spacing": dx_or_spacing, "step": step}
+
+
+class _Derivative(PatchProcessor):
+    """A first derivative by finite differences, of accuracy `order`."""
+
+    name = None
+
+    def numpy_kernel(self, data, *, axes, spacing, step):
+        """Return the derivative of the data along the axes."""
+        order = self.kwargs["order"]
+        if step > 1:
+            return _strided_diff(order, data, axes, spacing, step)
+        # This avoids an extra copy of the array so probably merits its own case.
+        return _get_diff(order, data, axes, spacing)
+
+
+class Differentiate(_Derivative):
     r"""
     Calculate first derivative along dimension(s) using central differences.
 
@@ -155,15 +172,14 @@ def differentiate(
     >>> # or rows used for estimating the derivative.
     >>> patch_diff_3 = patch.differentiate(dim="distance", step=3, order=2)
     """
-    dims = iterate(dim if dim is not None else patch.dims)
-    require_no_holes(patch, dims, "differentiate")
-    dx_or_spacing, axes = _get_dx_or_spacing_and_axes(patch, dims)
-    if step > 1:
-        new_data = _strided_diff(order, patch, axes, dx_or_spacing, step)
-    # This avoids an extra copy of the array so probably merits its own case.
-    else:
-        new_data = _get_diff(order, patch.data, axes, dx_or_spacing)
-    data_units = _get_data_units_from_dims(patch, dims, truediv)
-    data_type = _get_data_type_from_dims(patch, dims, differentiate=True)
-    attrs = patch.attrs.update(data_units=data_units, data_type=data_type)
-    return patch.new(data=new_data, attrs=attrs)
+
+    __version__ = "1.2"
+    dim: Any
+    order: Any = 2
+    step: Any = 1
+
+    def get_metadata(self, meta):
+        """Return the derivative's units and data_type, and the spacing."""
+        dims = iterate(self.dim if self.dim is not None else meta.dims)
+        attrs, plan = _derivative_metadata(meta, dims, self.step)
+        return meta.new(attrs=attrs), plan

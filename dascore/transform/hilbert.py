@@ -4,17 +4,16 @@ Patch functions based on the Hilbert transform.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from typing import Any
 
 import numpy as np
 
-from dascore.constants import DIM_REDUCE_DOCS, PatchType
+from dascore.constants import DIM_REDUCE_DOCS
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
 from dascore.utils.array_api import array_namespace, asarray_like
 from dascore.utils.docs import compose_docstring
 from dascore.utils.imports import lazy_import
-from dascore.utils.patch import patch_function
 
 scipy_hilbert = lazy_import("scipy.signal", "hilbert")
 
@@ -141,7 +140,7 @@ class Envelope(Hilbert):
         return array_namespace(data).abs(analytic_signal(data, axis))
 
 
-def __infer_transform_dim(patch, stack_dim):
+def _infer_transform_dim(patch, stack_dim):
     """Try to infer transform dimension."""
     dims = set(patch.dims) - {stack_dim}
     if len(dims) > 1:
@@ -156,15 +155,24 @@ def __infer_transform_dim(patch, stack_dim):
     return next(iter(dims))
 
 
-@patch_function(data_type="phase_weighted_stack")
+def _phase_weighted_stack(data, analytic, axis: int, power):
+    """Return the mean along an axis weighted by the coherence of its phases."""
+    xp = array_namespace(data)
+    # Get unit phasors. Use eps here to avoid unstable division by 0.
+    eps = xp.finfo(xp.real(analytic).dtype).eps
+    amp = xp.maximum(xp.abs(analytic), eps)
+    unit_phasors = analytic / amp
+    mean_phasor = xp.mean(unit_phasors, axis=axis, keepdims=True)
+    # Weight by coherence: |mean_phasor| runs from 0 (random phases) to 1
+    # (all phases aligned).
+    weights = xp.abs(mean_phasor) ** power
+    # Stack original data and apply weights (we can do this since weights
+    # are common across all samples)
+    return xp.mean(data, axis=axis, keepdims=True) * weights
+
+
 @compose_docstring(dim_reduce=DIM_REDUCE_DOCS)
-def phase_weighted_stack(
-    patch: PatchType,
-    stack_dim: str,
-    transform_dim: str | None = None,
-    power: float = 2.0,
-    dim_reduce: str | Callable = "empty",
-) -> PatchType:
+class PhaseWeightedStack(PatchProcessor):
     """
     Apply phase weighted stacking to enhance coherent signals.
 
@@ -227,32 +235,43 @@ def phase_weighted_stack(
     >>> _ = ax.set_ylabel("amplitude")
     >>> _ = ax.legend()
     """
-    # Ensure patch has both stack and transform dim. Raises nice Error if not.
-    if transform_dim is None:
-        transform_dim = __infer_transform_dim(patch, stack_dim)
-    # Ensure evenly sampled transform dimension and get needed coords.
-    patch.get_coord(transform_dim, require_evenly_sampled=True)
-    stack_coord = patch.get_coord(stack_dim)
-    # Get corresponding axes.
-    transform_axis = patch.get_axis(transform_dim)
-    stack_axis = patch.get_axis(stack_dim)
-    data = patch.data
-    # Get unit phasors. Use eps here to avoid unstable division by 0.
-    analytic_data = scipy_hilbert(data, axis=transform_axis)
-    eps = np.finfo(analytic_data.real.dtype).eps
-    amp = np.maximum(np.abs(analytic_data), eps)
-    unit_phasors = analytic_data / amp
-    mean_phasor = np.mean(unit_phasors, axis=stack_axis, keepdims=True)
-    # Weight by coherence: |mean_phasor| runs from 0 (random phases) to 1
-    # (all phases aligned).
-    weights = np.abs(mean_phasor) ** power
-    # Stack original data and apply weights (we can do this since weights
-    # are common across all samples)
-    stacked_data = (
-        np.mean(data, axis=stack_axis, keepdims=True) * weights
-    )  # Create new coord and coord manager, put patch back and return.
-    new_coord = stack_coord.reduce_coord(dim_reduce=dim_reduce)
-    cm = patch.coords.update(**{stack_dim: new_coord})
-    if dim_reduce == "squeeze":
-        stacked_data = np.squeeze(stacked_data, axis=stack_axis)
-    return patch.new(data=stacked_data, coords=cm)
+
+    stack_dim: Any
+    transform_dim: Any = None
+    power: Any = 2.0
+    dim_reduce: Any = "empty"
+
+    data_type = "phase_weighted_stack"
+
+    def get_metadata(self, meta):
+        """Return metadata with the stack dimension reduced, and the axes."""
+        stack_dim, transform_dim = self.stack_dim, self.transform_dim
+        # Ensure patch has both stack and transform dim. Raises nice Error if not.
+        if transform_dim is None:
+            transform_dim = _infer_transform_dim(meta, stack_dim)
+        # Ensure evenly sampled transform dimension and get needed coords.
+        meta.get_coord(transform_dim, require_evenly_sampled=True)
+        stack_coord = meta.get_coord(stack_dim)
+        # Get corresponding axes.
+        plan = {
+            "transform_axis": meta.get_axis(transform_dim),
+            "stack_axis": meta.get_axis(stack_dim),
+            "squeeze": self.dim_reduce == "squeeze",
+        }
+        # Create new coord and coord manager.
+        new_coord = stack_coord.reduce_coord(dim_reduce=self.dim_reduce)
+        cm = meta.coords.update(**{stack_dim: new_coord})
+        return meta.new(coords=cm), plan
+
+    def numpy_kernel(self, data, *, transform_axis, stack_axis, squeeze):
+        """Return the phase weighted stack, through scipy's Hilbert transform."""
+        analytic = scipy_hilbert(data, axis=transform_axis)
+        stacked = _phase_weighted_stack(data, analytic, stack_axis, self.power)
+        return np.squeeze(stacked, axis=stack_axis) if squeeze else stacked
+
+    def kernel(self, data, *, transform_axis, stack_axis, squeeze):
+        """Return the phase weighted stack, through the FFT."""
+        analytic = analytic_signal(data, transform_axis)
+        stacked = _phase_weighted_stack(data, analytic, stack_axis, self.power)
+        xp = array_namespace(data)
+        return xp.squeeze(stacked, axis=stack_axis) if squeeze else stacked

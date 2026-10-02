@@ -723,11 +723,52 @@ class Patch(NamespaceOwner, PatchMeta):
             **kwargs,
         ).run(self)
 
-    pow_coord = dascore.proc.pow_coord
-    taper = dascore.proc.taper
-    taper_range = dascore.proc.taper_range
-    line_mute = dascore.proc.line_mute
-    slope_mute = dascore.proc.slope_mute
+    def pow_coord(self, relative: bool = True, **kwargs) -> Self:
+        """Scale the data by coordinate values raised to a power."""
+        return dascore.proc.PowCoord(relative=relative, **kwargs).run(self)
+
+    def taper(self, window_type: str | tuple = "hann", **kwargs) -> Self:
+        """Taper the ends of the signal."""
+        return dascore.proc.Taper(window_type=window_type, **kwargs).run(self)
+
+    def taper_range(
+        self,
+        window_type: str | tuple = "hann",
+        invert=False,
+        relative=False,
+        samples=False,
+        **kwargs,
+    ) -> Self:
+        """Taper a range inside the patch."""
+        return dascore.proc.TaperRange(
+            window_type=window_type,
+            invert=invert,
+            relative=relative,
+            samples=samples,
+            **kwargs,
+        ).run(self)
+
+    def line_mute(
+        self, *, smooth=None, invert: bool = False, relative: bool = True, **kwargs
+    ) -> Self:
+        """Mute (zero out) data in a region specified by one or more lines."""
+        return dascore.proc.LineMute(
+            smooth=smooth, invert=invert, relative=relative, **kwargs
+        ).run(self)
+
+    def slope_mute(
+        self,
+        slopes: tuple[float, float] | np.ndarray,
+        *,
+        dims: tuple[str, str] = ("distance", "time"),
+        smooth: float | None = None,
+        invert: bool = False,
+    ) -> Self:
+        """Apply a mute between specified slopes (eg velocities)."""
+        return dascore.proc.SlopeMute(
+            slopes=slopes, dims=dims, smooth=smooth, invert=invert
+        ).run(self)
+
     rolling = dascore.proc.rolling
     whiten = dascore.proc.whiten
 
@@ -847,13 +888,24 @@ class Patch(NamespaceOwner, PatchMeta):
     minimum = PatchUFunc(np.minimum)
 
     # --- transformation functions
-    differentiate = transform.differentiate
+    def differentiate(
+        self, dim: str | Sequence[str] | None, order: int = 2, step: int = 1
+    ) -> Self:
+        """Calculate the first derivative along dimension(s)."""
+        return transform.Differentiate(dim=dim, order=order, step=step).run(self)
+
     dft = transform.dft
     fbe = transform.fbe
     idft = transform.idft
     stft = transform.stft
     istft = transform.istft
-    integrate = transform.integrate
+
+    def integrate(
+        self, dim: Sequence[str] | str | None, definite: bool = False
+    ) -> Self:
+        """Integrate along dimension(s) using the trapezoidal rule."""
+        return transform.Integrate(dim=dim, definite=definite).run(self)
+
     stalta = transform.stalta
 
     def kurtosis(self, samples: bool = False, recursive: bool = True, **kwargs) -> Self:
@@ -862,8 +914,18 @@ class Patch(NamespaceOwner, PatchMeta):
             self
         )
 
-    velocity_to_strain_rate = transform.velocity_to_strain_rate
-    velocity_to_strain_rate_edgeless = transform.velocity_to_strain_rate_edgeless
+    def velocity_to_strain_rate(self, step_multiple: int = 2, order: int = 2) -> Self:
+        """Convert velocity DAS data to strain rate using central differences."""
+        return transform.VelocityToStrainRate(
+            step_multiple=step_multiple, order=order
+        ).run(self)
+
+    def velocity_to_strain_rate_edgeless(self, step_multiple: int = 1) -> Self:
+        """Estimate strain rate using staggered central differences."""
+        return transform.VelocityToStrainRateEdgeless(step_multiple=step_multiple).run(
+            self
+        )
+
     dispersion_phase_shift = transform.dispersion_phase_shift
     tau_p = transform.tau_p
 
@@ -875,7 +937,21 @@ class Patch(NamespaceOwner, PatchMeta):
         """Return the magnitude of the analytic signal."""
         return transform.Envelope(dim=dim).run(self)
 
-    phase_weighted_stack = transform.phase_weighted_stack
+    def phase_weighted_stack(
+        self,
+        stack_dim: str,
+        transform_dim: str | None = None,
+        power: float = 2.0,
+        dim_reduce: str | Callable = "empty",
+    ) -> Self:
+        """Stack weighted by phase coherence to enhance coherent signals."""
+        return transform.PhaseWeightedStack(
+            stack_dim=stack_dim,
+            transform_dim=transform_dim,
+            power=power,
+            dim_reduce=dim_reduce,
+        ).run(self)
+
     median_frequency = transform.median_frequency
     spectral_centroid = transform.spectral_centroid
     spectral_peak_frequency = transform.spectral_peak_frequency

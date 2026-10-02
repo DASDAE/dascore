@@ -33,6 +33,7 @@ from typing import Any
 import numpy as np
 
 import dascore as dc
+from dascore.utils.signal import WINDOW_NAMES
 
 # Repeat fast calls for _TIMING_BUDGET; stop slow calls at _TIMING_MIN_ROUNDS.
 _TIMING_MIN_ROUNDS = 3
@@ -77,6 +78,14 @@ EXPECTED_ERRORS = (
     "matrix/bool/hampel_*",
     "matrix/*nan*/savgol_filter",
     "matrix/*inf*/savgol_filter",
+    "matrix/bool/differentiate*",
+    "matrix/bool/strain_rate*",
+    "matrix/complex*/phase_weighted_stack",
+    # One distance sample has no step, and too few for these windows.
+    "matrix/single_row/differentiate_step",
+    "matrix/single_row/slope_mute",
+    "matrix/single_row/strain_rate*",
+    "matrix/single_row/taper_*",
 )
 
 
@@ -193,6 +202,33 @@ MATRIX_CALLS = {
     "agg_callable": lambda patch: patch.aggregate("time", method=np.nanmax),
     "idxmax_distance": lambda patch: patch.idxmax("distance", dim_reduce="squeeze"),
     "idxmin_min": lambda patch: patch.idxmin("distance", dim_reduce="min"),
+    # envelope multipliers
+    "taper": lambda patch: patch.taper(time=0.25),
+    "taper_distance": lambda patch: patch.taper(
+        distance=(0.3, None), window_type="ramp"
+    ),
+    "taper_range": lambda patch: patch.taper_range(time=(1, 2, 4, 6), samples=True),
+    "taper_range_invert": lambda patch: patch.taper_range(
+        distance=(1, 4), samples=True, invert=True
+    ),
+    "line_mute": lambda patch: patch.line_mute(time=(0, 1.0)),
+    "line_mute_smooth": lambda patch: patch.line_mute(time=(0.5, 2.0), smooth=0.2),
+    "slope_mute": lambda patch: patch.slope_mute((0.5, 4)),
+    "pow_coord": lambda patch: patch.pow_coord(time=2),
+    "pow_coord_abs": lambda patch: patch.pow_coord(distance=1, relative=False),
+    # calculus
+    "differentiate": lambda patch: patch.differentiate("time"),
+    "differentiate_step": lambda patch: patch.differentiate("distance", step=2),
+    "differentiate_findiff": lambda patch: patch.differentiate("time", order=4),
+    "integrate": lambda patch: patch.integrate("time"),
+    "integrate_definite": lambda patch: patch.integrate("distance", definite=True),
+    "strain_rate": lambda patch: patch.update_attrs(
+        data_type="velocity"
+    ).velocity_to_strain_rate(),
+    "strain_rate_edgeless": lambda patch: patch.update_attrs(
+        data_type="velocity"
+    ).velocity_to_strain_rate_edgeless(step_multiple=2),
+    "phase_weighted_stack": lambda patch: patch.phase_weighted_stack("distance"),
 }
 
 
@@ -351,6 +387,212 @@ def _aggregate_calls(patch, null_patch, int_patch, bool_patch, typed) -> dict:
     }
 
 
+def _envelope_calls(patch, int_patch, f32, dft_patch, wacky, m, s) -> dict:
+    """Return tapers, mutes and coordinate gains, with every spelling."""
+    t1 = patch.get_coord("time").min() + np.timedelta64(1, "s")
+    t2 = t1 + np.timedelta64(3, "s")
+    percent = dc.get_unit("percent")
+    velocity = ([0, 0.375], [0, 0.25]), ([0, 300], [0, 300])
+    return {
+        **{
+            f"taper_{name}": (
+                lambda name=name: patch.taper(time=0.05, window_type=name)
+            )
+            for name in sorted(WINDOW_NAMES)
+        },
+        "taper_tukey": lambda: patch.taper(time=0.1, window_type=("tukey", 0.5)),
+        "taper_distance": lambda: patch.taper(
+            distance=(0.10, None), window_type="triang"
+        ),
+        "taper_end_only": lambda: patch.taper(time=(None, 0.2)),
+        "taper_percent": lambda: patch.taper(time=(20 * percent, 12 * percent)),
+        "taper_meters": lambda: patch.taper(distance=15 * m),
+        "taper_seconds": lambda: patch.taper(time=(1 * s, 2 * s)),
+        "taper_timedelta": lambda: patch.taper(time=np.timedelta64(500, "ms")),
+        "taper_positional": lambda: patch.taper("blackman", time=0.1),
+        "taper_none": lambda: patch.taper(time=(None, None)),
+        "taper_bad_zero": lambda: patch.taper(time=0),
+        "taper_int": lambda: int_patch.taper(time=0.1),
+        "taper_f32": lambda: f32.taper(time=0.1),
+        "taper_complex": lambda: dft_patch.taper(ft_time=0.1),
+        "taper_wacky": lambda: wacky.taper(distance=0.1),
+        "taper_bad_overlap": lambda: patch.taper(time=0.6),
+        "taper_bad_length": lambda: patch.taper(time=(0.1, 0.2, 0.3)),
+        "taper_bad_dims": lambda: patch.taper(time=0.1, distance=0.1),
+        "taper_range_abs": lambda: patch.taper_range(time=(t1, t2)),
+        "taper_range_invert": lambda: patch.taper_range(time=(t1, t2), invert=True),
+        "taper_range_relative": lambda: patch.taper_range(
+            time=(1, 2, 5, 5), relative=True
+        ),
+        "taper_range_samples": lambda: patch.taper_range(
+            distance=(10, 80), samples=True
+        ),
+        "taper_range_two": lambda: patch.taper_range(
+            distance=((25, 50, 100, 125), (150, 175, 200, 225))
+        ),
+        "taper_range_ellipsis": lambda: patch.taper_range(
+            distance=(..., 50, 100, None), window_type="ramp"
+        ),
+        "taper_range_positional": lambda: patch.taper_range(
+            "hamming", True, False, True, distance=(10, 20, 30, 40)
+        ),
+        "taper_range_int": lambda: int_patch.taper_range(
+            distance=(10, 80), samples=True
+        ),
+        "taper_range_f32": lambda: f32.taper_range(distance=(10, 80), samples=True),
+        "taper_range_wacky": lambda: wacky.taper_range(distance=(5, 10, 20, 25)),
+        "taper_range_bad_len": lambda: patch.taper_range(time=(1, 2, 3), samples=True),
+        "taper_range_bad_none": lambda: patch.taper_range(time=(None, 2), samples=True),
+        "taper_range_bad_scalar": lambda: patch.taper_range(time=2),
+        "line_mute_time": lambda: patch.line_mute(time=(0, 0.5)),
+        "line_mute_invert": lambda: patch.line_mute(time=(0.2, -0.2), invert=True),
+        "line_mute_distance": lambda: patch.line_mute(distance=(50, 100)),
+        "line_mute_absolute": lambda: patch.line_mute(
+            distance=(50, 100), relative=False
+        ),
+        "line_mute_smooth_units": lambda: patch.line_mute(
+            time=(0.2, 0.8), smooth=0.02 * s
+        ),
+        "line_mute_smooth_int": lambda: patch.line_mute(time=(0.2, 0.8), smooth=5),
+        "line_mute_line": lambda: patch.line_mute(
+            time=(0, [0, 0.3]), distance=(None, [0, 300]), smooth=0.02
+        ),
+        "line_mute_wedge": lambda: patch.line_mute(
+            time=velocity[0], distance=velocity[1]
+        ),
+        "line_mute_wedge_invert": lambda: patch.line_mute(
+            time=velocity[0], distance=velocity[1], invert=True
+        ),
+        "line_mute_parallel": lambda: patch.line_mute(
+            time=([0, 0.2], [0.1, 0.3]), distance=([0, 100], [0, 100])
+        ),
+        "line_mute_smooth_dict": lambda: patch.line_mute(
+            time=velocity[0], distance=velocity[1], smooth={"time": 0.01, "distance": 3}
+        ),
+        "line_mute_int": lambda: int_patch.line_mute(time=(0, 0.5)),
+        "line_mute_f32": lambda: f32.line_mute(time=(0, 0.5), smooth=0.05),
+        "line_mute_bad_none": lambda: patch.line_mute(),
+        "line_mute_bad_three": lambda: patch.line_mute(time=(0, 1, 2)),
+        "line_mute_bad_smooth": lambda: patch.line_mute(time=(0, 1), smooth=1.5),
+        "line_mute_bad_dict": lambda: patch.line_mute(time=(0, 1), smooth={"x": 1}),
+        "line_mute_bad_degenerate": lambda: patch.line_mute(
+            time=([0, 0], [0, 0.3]), distance=([0, 0], [0, 300])
+        ),
+        "slope_mute": lambda: patch.slope_mute(slopes=(1000, 3000)),
+        "slope_mute_invert": lambda: patch.slope_mute(slopes=(1500, 2500), invert=True),
+        "slope_mute_smooth": lambda: patch.slope_mute(slopes=(1000, 3000), smooth=0.05),
+        "slope_mute_slowness": lambda: patch.slope_mute(
+            slopes=(0.0003, 0.001), dims=("time", "distance")
+        ),
+        "slope_mute_edges": lambda: patch.slope_mute(slopes=np.array([0, np.inf])),
+        "slope_mute_flipped": lambda: patch.flip("distance").slope_mute((1000, 3000)),
+        "slope_mute_int": lambda: int_patch.slope_mute((1000, 3000)),
+        "slope_mute_bad_shape": lambda: patch.slope_mute(slopes=(1, 2, 3)),
+        "slope_mute_bad_sign": lambda: patch.slope_mute(slopes=(-1, 2)),
+        "pow_coord_time": lambda: patch.pow_coord(time=2),
+        "pow_coord_distance": lambda: patch.pow_coord(distance=1),
+        "pow_coord_both": lambda: patch.pow_coord(time=2, distance=1),
+        "pow_coord_float": lambda: patch.pow_coord(time=0.5),
+        "pow_coord_absolute": lambda: patch.pow_coord(distance=2, relative=False),
+        "pow_coord_positional": lambda: patch.pow_coord(False, distance=1),
+        "pow_coord_units": lambda: patch.update_attrs(data_units="m/s").pow_coord(
+            distance=1, relative=False
+        ),
+        "pow_coord_int": lambda: int_patch.pow_coord(time=1),
+        "pow_coord_f32": lambda: f32.pow_coord(time=2),
+        "pow_coord_complex": lambda: dft_patch.pow_coord(ft_time=1, relative=False),
+        "pow_coord_wacky": lambda: wacky.pow_coord(distance=1),
+        "pow_coord_bad_time": lambda: patch.pow_coord(time=1, relative=False),
+        "pow_coord_bad_negative": lambda: patch.pow_coord(distance=-1, relative=False),
+    }
+
+
+def _calculus_calls(patch, int_patch, f32, dft_patch, wacky, typed) -> dict:
+    """Return derivatives, integrals, strain rates and phase weighted stacks."""
+    velocity = _pinned(
+        dc.get_example_patch("deformation_rate_event_1").isel(time=slice(0, 300)),
+        "velocity",
+    )
+    three_d = _pinned(dc.get_example_patch("nd_patch", dim_count=3), "3d")
+    return {
+        "diff_time": lambda: patch.differentiate("time"),
+        "diff_distance": lambda: patch.differentiate(dim="distance", order=2),
+        "diff_all": lambda: patch.differentiate(None),
+        "diff_tuple": lambda: patch.differentiate(("distance", "time")),
+        "diff_order4": lambda: patch.differentiate("time", order=4),
+        "diff_order6_all": lambda: patch.differentiate(None, order=6),
+        "diff_step": lambda: patch.differentiate("distance", step=3),
+        "diff_step_order4": lambda: patch.differentiate("time", order=4, step=2),
+        "diff_positional": lambda: patch.differentiate("time", 2, 2),
+        "diff_int": lambda: int_patch.differentiate("time"),
+        "diff_int_step": lambda: int_patch.differentiate("time", step=2),
+        "diff_f32": lambda: f32.differentiate("time"),
+        "diff_complex": lambda: dft_patch.differentiate("ft_time"),
+        "diff_typed": lambda: typed.differentiate("time"),
+        "diff_units": lambda: patch.update_attrs(data_units="m").differentiate("time"),
+        "diff_wacky": lambda: wacky.differentiate("distance"),
+        "diff_wacky_step": lambda: wacky.differentiate("distance", step=2),
+        "diff_wacky_findiff": lambda: wacky.differentiate("distance", order=4),
+        "diff_bad_step_dims": lambda: patch.differentiate(None, step=2),
+        "int_time": lambda: patch.integrate("time"),
+        "int_distance": lambda: patch.integrate(dim="distance"),
+        "int_all": lambda: patch.integrate(None),
+        "int_definite": lambda: patch.integrate("time", definite=True),
+        "int_definite_all": lambda: patch.integrate(None, True),
+        "int_int": lambda: int_patch.integrate("time"),
+        "int_f32": lambda: f32.integrate("distance", definite=True),
+        "int_complex": lambda: dft_patch.integrate("ft_time"),
+        "int_typed": lambda: typed.integrate("time"),
+        "int_units": lambda: patch.update_attrs(data_units="m/s").integrate("time"),
+        "int_wacky": lambda: wacky.integrate("distance"),
+        "int_wacky_definite": lambda: wacky.integrate("distance", definite=True),
+        "int_no_dims": lambda: patch.integrate(()),
+        "strain_rate": lambda: velocity.velocity_to_strain_rate(),
+        "strain_rate_4": lambda: velocity.velocity_to_strain_rate(step_multiple=4),
+        "strain_rate_order4": lambda: velocity.velocity_to_strain_rate(4, 4),
+        "strain_rate_f32": lambda: _pinned(
+            velocity.new(data=np.asarray(velocity.data, "float32")), "vf32"
+        ).velocity_to_strain_rate(),
+        "strain_rate_bad_odd": lambda: velocity.velocity_to_strain_rate(
+            step_multiple=3
+        ),
+        "strain_rate_bad_zero": lambda: velocity.velocity_to_strain_rate(
+            step_multiple=0
+        ),
+        "strain_rate_bad_type": lambda: patch.velocity_to_strain_rate(),
+        "edgeless_1": lambda: velocity.velocity_to_strain_rate_edgeless(),
+        "edgeless_3": lambda: velocity.velocity_to_strain_rate_edgeless(
+            step_multiple=3
+        ),
+        "edgeless_positional": lambda: velocity.velocity_to_strain_rate_edgeless(5),
+        "edgeless_bad_zero": lambda: velocity.velocity_to_strain_rate_edgeless(0),
+        "edgeless_bad_float": lambda: velocity.velocity_to_strain_rate_edgeless(1.0),
+        "edgeless_long": lambda: velocity.velocity_to_strain_rate_edgeless(10_000),
+        "edgeless_bad_type": lambda: patch.velocity_to_strain_rate_edgeless(),
+        "pws_distance": lambda: patch.phase_weighted_stack("distance"),
+        "pws_time": lambda: patch.phase_weighted_stack("time", "distance"),
+        "pws_power": lambda: patch.phase_weighted_stack("distance", power=1),
+        "pws_squeeze": lambda: patch.phase_weighted_stack(
+            "distance", dim_reduce="squeeze"
+        ),
+        "pws_reduce_mean": lambda: patch.phase_weighted_stack(
+            "distance", "time", 3, "mean"
+        ),
+        "pws_reduce_callable": lambda: patch.phase_weighted_stack(
+            "distance", dim_reduce=np.max
+        ),
+        "pws_bad_reduce": lambda: patch.phase_weighted_stack("time", dim_reduce="x"),
+        "pws_f32": lambda: f32.phase_weighted_stack("distance"),
+        "pws_int": lambda: int_patch.phase_weighted_stack("distance"),
+        "pws_3d": lambda: three_d.phase_weighted_stack("dim_1", transform_dim="dim_2"),
+        "pws_bad_3d": lambda: three_d.phase_weighted_stack("dim_1"),
+        "pws_bad_1d": lambda: (
+            patch.mean("time").squeeze().phase_weighted_stack("distance")
+        ),
+        "pws_bad_complex": lambda: dft_patch.phase_weighted_stack("distance"),
+    }
+
+
 def get_calls() -> dict:
     """Return the calls to compare, keyed by a name for the report."""
     patch = _pinned(dc.get_example_patch(), "example")
@@ -375,8 +617,16 @@ def get_calls() -> dict:
     spiky[10, 5], spiky[20, 50] = 10.0, -8.0
     spiky = _pinned(small.new(data=spiky), "spiky")
     hz, m, s = dc.get_unit("Hz"), dc.get_unit("m"), dc.get_unit("s")
+    f32 = _pinned(patch.new(data=np.asarray(patch.data, "float32")), "f32_full")
+    # Unevenly sampled, so the derivatives and tapers take coordinate values.
+    unsorted = dc.get_example_patch("wacky_dim_coords_patch").isel(time=slice(0, 200))
+    wacky = _pinned(unsorted.sort_coords("distance"), "wacky")
     return {
         **_filter_calls(small, small_f32, spiky, hz, m, s),
+        **_envelope_calls(patch, int_patch, f32, dft_patch, wacky, m, s),
+        "taper_bad_unsorted": lambda: unsorted.taper(distance=0.1),
+        "diff_bad_unsorted": lambda: unsorted.differentiate("distance"),
+        **_calculus_calls(patch, int_patch, f32, dft_patch, wacky, typed),
         **_aggregate_calls(patch, null_patch, int_patch, bool_patch, typed),
         # The inputs themselves, so a difference in the examples cannot
         # masquerade as a difference in the functions.

@@ -13,14 +13,14 @@ from pydantic import BaseModel, ConfigDict
 from scipy.ndimage import gaussian_filter
 
 import dascore as dc
-from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.models import sensible_model_equals, sensible_model_hash
+from dascore.proc.taper import _Envelope
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import (
     get_2d_line_intersection,
 )
-from dascore.utils.patch import get_dim_axis_value, patch_function
+from dascore.utils.patch import get_dim_axis_value
 
 _smooth_param = """
 smooth
@@ -412,16 +412,24 @@ def _get_mute_geometry(patch, kwargs, relative=True):
     return geometry
 
 
-@patch_function()
+def _mute_envelope(meta, kwargs, smooth, invert, relative):
+    """Return the envelope which mutes a region, shaped to broadcast."""
+    geo = _get_mute_geometry(meta, kwargs, relative)
+    # Initialize the output array which shares the dimensionality of the
+    # patch (so it will broadcast) but is as flat as possible.
+    out_shape = [meta.shape[ax] if ax in geo.axes else 1 for ax in range(meta.ndim)]
+    out = np.zeros(out_shape) if invert else np.ones(out_shape)
+    fill_val = 1 if invert else 0
+    # Easy path for 1D mute.
+    out = geo._apply_mask(out, meta, fill_val)
+    # Apply smoothing if requested.
+    if smooth is not None:
+        out = geo._apply_smoothing(out, smooth, meta)
+    return out
+
+
 @compose_docstring(smooth_param=_smooth_param)
-def line_mute(
-    patch: PatchType,
-    *,
-    smooth=None,
-    invert: bool = False,
-    relative: bool = True,
-    **kwargs,
-) -> PatchType:
+class LineMute(_Envelope):
     """
     Mute (zero out) data in a region specified by one or more lines.
 
@@ -485,30 +493,23 @@ def line_mute(
     - [`Patch.gaussian_filter`](`dascore.proc.filter.gaussian_filter`)
     - [`Patch.slope_mute`](`dascore.Patch.slope_mute`)
     """
-    geo = _get_mute_geometry(patch, kwargs, relative)
-    # Initialize the output array which shares the dimensionality of the
-    # patch (so it will broadcast) but is as flat as possible.
-    out_shape = [patch.shape[ax] if ax in geo.axes else 1 for ax in range(patch.ndim)]
-    out = np.zeros(out_shape) if invert else np.ones(out_shape)
-    fill_val = 1 if invert else 0
-    # Easy path for 1D mute.
-    out = geo._apply_mask(out, patch, fill_val)
-    # Apply smoothing if requested.
-    if smooth is not None:
-        out = geo._apply_smoothing(out, smooth, patch)
-    return patch.update(data=patch.data * out)
+
+    smooth: Any = None
+    invert: Any = False
+    relative: Any = True
+
+    model_config = ConfigDict(extra="allow")
+    _positional_fields = ()
+
+    def get_metadata(self, meta):
+        """Return the envelope of the region the lines bound."""
+        extras = self.model_extra or {}
+        env = _mute_envelope(meta, extras, self.smooth, self.invert, self.relative)
+        return meta, {"env": env}
 
 
-@patch_function()
 @compose_docstring(_smooth_param=_smooth_param)
-def slope_mute(
-    patch: PatchType,
-    slopes: tuple[float, float] | NDArray,
-    *,
-    dims: tuple[str, str] = ("distance", "time"),
-    smooth: float | None = None,
-    invert: bool = False,
-) -> PatchType:
+class SlopeMute(_Envelope):
     """
     Apply a mute between specified slopes (eg velocities).
 
@@ -567,6 +568,23 @@ def slope_mute(
     - [`Patch.slope_filter`](`dascore.proc.filter.slope_filter`)
     - [`Patch.line_mute`](`dascore.proc.mute.line_mute`)
     """
+
+    slopes: Any
+    dims: Any = ("distance", "time")
+    smooth: Any = None
+    invert: Any = False
+
+    _positional_fields = ("slopes",)
+
+    def get_metadata(self, meta):
+        """Return the envelope of the region between the two slopes."""
+        mute_kwargs = _slope_lines(meta, self.slopes, self.dims)
+        env = _mute_envelope(meta, mute_kwargs, self.smooth, self.invert, False)
+        return meta, {"env": env}
+
+
+def _slope_lines(meta, slopes, dims) -> dict:
+    """Return the two lines, as `line_mute` takes them, which slopes describe."""
     # Convert slopes to array and validate
     slopes_array = np.asarray(slopes)
     if slopes_array.shape != (2,):
@@ -577,7 +595,7 @@ def slope_mute(
         msg = "slopes must be positive."
         raise ParameterError(msg)
     # Get the coordinate information
-    coord_x, coord_y = (patch.get_coord(x, require_sorted=True) for x in dims)
+    coord_x, coord_y = (meta.get_coord(x, require_sorted=True) for x in dims)
     origin = (dc.to_float(coord_x[0]), dc.to_float(coord_y[0]))
     # Here we take the full range as to allow it to be negative if the
     # coord is reversed sorted.
@@ -596,11 +614,4 @@ def slope_mute(
         else:
             # Slope is rise over run (e.g., distance/time for velocity)
             dim1_vals[num][1] = origin[1] + range_x / slope
-    mute_kwargs = {
-        dims[0]: dim0_vals,
-        dims[1]: dim1_vals,
-        "smooth": smooth,
-        "invert": invert,
-        "relative": False,
-    }
-    return line_mute.func(patch, **mute_kwargs)
+    return {dims[0]: dim0_vals, dims[1]: dim1_vals}

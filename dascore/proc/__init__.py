@@ -11,8 +11,8 @@ from .detrend import Detrend
 from .filter import MedianFilter, PassFilter, SobelFilter, SavgolFilter, GaussianFilter, slope_filter, NotchFilter
 from .resample import decimate, interpolate, resample
 from .rolling import rolling
-from .taper import taper, taper_range
-from .mute import line_mute, slope_mute
+from .taper import Taper, TaperRange
+from .mute import LineMute, SlopeMute
 from .units import ConvertUnits, SetUnits, SimplifyUnits
 from .whiten import whiten
 from .hampel import HampelFilter

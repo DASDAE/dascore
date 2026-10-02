@@ -5,7 +5,7 @@ from __future__ import annotations
 import math
 import warnings
 from numbers import Real
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 
@@ -13,21 +13,19 @@ import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError, UnitError
-from dascore.transform.differentiate import differentiate
+from dascore.transform.differentiate import _Derivative, _derivative_metadata
 from dascore.units import convert_units, get_factor_and_unit, get_unit
-from dascore.utils.patch import patch_function
+from dascore.utils.misc import broadcast_for_index
 
 
-@patch_function(
-    version="1.1",
-    required_dims=("distance",),
-    required_attrs={"data_type": "velocity"},
-)
-def velocity_to_strain_rate(
-    patch: PatchType,
-    step_multiple: int = 2,
-    order: int = 2,
-) -> PatchType:
+def _check_step_multiple(step_multiple) -> None:
+    """Refuse a step multiple which is not positive."""
+    if step_multiple <= 0:
+        msg = "step_multiple must be positive."
+        raise ParameterError(msg)
+
+
+class VelocityToStrainRate(_Derivative):
     r"""
     Convert velocity DAS data to strain rate using central differences.
 
@@ -96,36 +94,32 @@ def velocity_to_strain_rate(
     of this function removes potential edge effects and supports even and odd
     `step_multiple` values.
     """
-    if step_multiple <= 0:
-        msg = "step_multiple must be positive."
-        raise ParameterError(msg)
 
-    if step_multiple % 2 != 0:
-        msg = (
-            "Step_multiple must be even. Use velocity_to_strain_rate_edgeless "
-            "if odd step multiples are required."
+    __version__ = "1.1"
+    step_multiple: Any = 2
+    order: Any = 2
+
+    required_dims = ("distance",)
+    required_attrs: ClassVar[dict[str, str]] = {"data_type": "velocity"}
+
+    def get_metadata(self, meta):
+        """Return strain rate metadata, and the spacing to differentiate by."""
+        _check_step_multiple(self.step_multiple)
+        if self.step_multiple % 2 != 0:
+            msg = (
+                "Step_multiple must be even. Use velocity_to_strain_rate_edgeless "
+                "if odd step multiples are required."
+            )
+            raise ParameterError(msg)
+        step = meta.get_coord("distance", require_evenly_sampled=True).step
+        attrs, plan = _derivative_metadata(meta, ("distance",), self.step_multiple // 2)
+        new_attrs = attrs.update(
+            data_type="strain_rate", gauge_length=step * self.step_multiple
         )
-        raise ParameterError(msg)
-
-    coord = patch.get_coord("distance", require_evenly_sampled=True)
-    step = coord.step
-    patch = differentiate.func(
-        patch, dim="distance", order=order, step=step_multiple // 2
-    )
-    new_attrs = patch.attrs.update(
-        data_type="strain_rate", gauge_length=step * step_multiple
-    )
-    return patch.update(attrs=new_attrs)
+        return meta.new(attrs=new_attrs), plan
 
 
-@patch_function(
-    required_dims=("distance",),
-    required_attrs={"data_type": "velocity"},
-)
-def velocity_to_strain_rate_edgeless(
-    patch: PatchType,
-    step_multiple: int = 1,
-) -> PatchType:
+class VelocityToStrainRateEdgeless(PatchProcessor):
     r"""
     Estimate strain-rate using central differences.
 
@@ -174,37 +168,53 @@ def velocity_to_strain_rate_edgeless(
     [strain-rate note](`dascore/docs/notes/velocity_to_strain_rate.qmd`)
     for more details on step_multiple and order effects.
     """
-    if step_multiple <= 0:
-        msg = "step_multiple must be positive."
-        raise ParameterError(msg)
 
-    coord = patch.get_coord("distance", require_evenly_sampled=True)
-    distance_step = coord.step
-    gauge_length = step_multiple * distance_step
+    step_multiple: Any = 1
 
-    data_1 = patch.select(distance=(step_multiple, None), samples=True).data
-    data_2 = patch.select(distance=(None, -step_multiple), samples=True).data
-    strain_rate = (data_1 - data_2) / gauge_length
+    required_dims = ("distance",)
+    required_attrs: ClassVar[dict[str, str]] = {"data_type": "velocity"}
 
-    # Need to get distance values between current ones.
-    dists = patch.get_array("distance")
-    new_dist = (dists[step_multiple:] + dists[:-step_multiple]) / 2
-    new_coords = patch.coords.update(distance=new_dist)
+    def get_metadata(self, meta):
+        """Return the metadata between samples, and the differencing plan."""
+        step_multiple = self.step_multiple
+        _check_step_multiple(step_multiple)
+        coord = meta.get_coord("distance", require_evenly_sampled=True)
+        distance_step = coord.step
+        gauge_length = step_multiple * distance_step
+        # The samples step_multiple ahead of, and behind, each new one.
+        keys = [
+            meta.coords.select_indexers(distance=x, samples=True)[1]
+            for x in ((step_multiple, None), (None, -step_multiple))
+        ]
 
-    # Handle unit conversions.
-    new_data_units = None
-    data_units = dc.get_quantity(patch.attrs.data_units)
-    dist_units = dc.get_quantity(patch.get_coord("distance").units)
-    if data_units and dist_units:
-        new_data_units = data_units / dist_units
+        # Need to get distance values between current ones.
+        dists = coord.values
+        new_dist = (dists[step_multiple:] + dists[:-step_multiple]) / 2
+        new_coords = meta.coords.update(distance=new_dist)
 
-    new_attrs = patch.attrs.update(
-        data_type="strain_rate",
-        gauge_length=distance_step * step_multiple,
-        data_units=new_data_units,
-    )
+        # Handle unit conversions.
+        new_data_units = None
+        data_units = dc.get_quantity(meta.attrs.data_units)
+        dist_units = dc.get_quantity(coord.units)
+        if data_units and dist_units:
+            new_data_units = data_units / dist_units
 
-    return patch.new(data=strain_rate, coords=new_coords, attrs=new_attrs)
+        new_attrs = meta.attrs.update(
+            data_type="strain_rate",
+            gauge_length=distance_step * step_multiple,
+            data_units=new_data_units,
+        )
+        out = meta.new(coords=new_coords, attrs=new_attrs)
+        axis = meta.get_axis("distance")
+        ahead, behind = (
+            broadcast_for_index(meta.ndim, axis, x.get("distance", slice(None)))
+            for x in keys
+        )
+        return out, {"ahead": ahead, "behind": behind, "gauge_length": gauge_length}
+
+    def kernel(self, data, *, ahead, behind, gauge_length):
+        """Return the difference of samples step_multiple apart, per gauge."""
+        return (data[ahead] - data[behind]) / gauge_length
 
 
 def _get_strain_data_type(units) -> str:

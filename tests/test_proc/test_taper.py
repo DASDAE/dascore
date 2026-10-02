@@ -359,3 +359,17 @@ class TestTaperHoles:
         """Step-less labels are an irregular grid and still taper."""
         out = stepless_seam_patch.taper(time=0.1)
         assert out.shape == stepless_seam_patch.shape
+
+
+class TestTaperDtype:
+    """A taper scales the data in place of the old values, keeping the dtype."""
+
+    @pytest.mark.parametrize("dtype", ["int32", "bool", "float32", "complex64"])
+    def test_keeps_dtype(self, random_patch, dtype):
+        """Integer data stay integer, truncated as an in-place multiply was."""
+        patch = random_patch.new(data=(random_patch.data * 100).astype(dtype))
+        out = patch.taper(time=0.2)
+        assert out.dtype == patch.dtype
+        axis = patch.get_axis("time")
+        ramp = (out.data != patch.data).any(axis=1 - axis)
+        assert ramp.any() and not ramp.all()

@@ -5,11 +5,11 @@ Transforms are defined as
 """
 from __future__ import annotations
 
-from .differentiate import differentiate
+from .differentiate import Differentiate
 from .fourier import dft, idft, stft, istft
-from .integrate import integrate
-from .hilbert import Hilbert, Envelope, phase_weighted_stack
-from .strain import velocity_to_strain_rate, velocity_to_strain_rate_edgeless, RadiansToStrain
+from .integrate import Integrate
+from .hilbert import Hilbert, Envelope, PhaseWeightedStack
+from .strain import VelocityToStrainRate, VelocityToStrainRateEdgeless, RadiansToStrain
 from .dispersion import dispersion_phase_shift
 from .taup import tau_p
 from .stalta import stalta

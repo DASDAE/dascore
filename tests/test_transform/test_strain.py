@@ -9,6 +9,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import ParameterError, PatchAttributeError, UnitError
+from dascore.transform.strain import VelocityToStrainRateEdgeless
 from dascore.units import get_quantity
 
 
@@ -153,6 +154,14 @@ class TestStaggeredStrainRateConversion:
         """Ensure the attributes were updated with strain_rate."""
         attrs = patch_strain_rate_default.attrs
         assert attrs["data_type"] == "strain_rate"
+
+    def test_metadata_without_data(self, terra15_das_patch):
+        """The staggered coordinates are worked out from the metadata alone."""
+        meta = terra15_das_patch.drop_data()
+        out, _ = VelocityToStrainRateEdgeless(step_multiple=3).get_metadata(meta)
+        expected = terra15_das_patch.velocity_to_strain_rate_edgeless(step_multiple=3)
+        assert out.shape == expected.shape
+        assert out.coords == expected.coords
 
     def test_coords_odd_step(self, terra15_das_patch):
         """Ensure coords are staggered when step multiple is odd."""

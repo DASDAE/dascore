@@ -8,7 +8,7 @@ import pytest
 import dascore as dc
 import dascore.proc.coords
 from dascore.exceptions import CoordError, ParameterError
-from dascore.transform.differentiate import differentiate
+from dascore.transform.differentiate import Differentiate, differentiate
 from dascore.units import get_quantity
 from dascore.utils.time import to_float
 
@@ -276,3 +276,12 @@ class TestHoles:
         """Step-less labels are an irregular grid and use label spacing."""
         out = stepless_seam_patch.differentiate("time")
         assert out.shape == stepless_seam_patch.shape
+
+
+class TestDifferentiateMetadata:
+    """The derivative's metadata is worked out without the data."""
+
+    def test_step_over_two_dims_refused_from_metadata(self, random_patch):
+        """A strided derivative over two dims is refused before any data."""
+        with pytest.raises(ParameterError, match="only be used along one axis"):
+            Differentiate(dim=None, step=2).get_metadata(random_patch.drop_data())
