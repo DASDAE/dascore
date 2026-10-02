@@ -392,6 +392,7 @@ def _squeeze_value(meta, name: str):
     # private coord belongs to the operation which made it (eg stft).
     attrs = type(meta.attrs)  # a reader's attrs may declare more fields
     reserved = {"coords", "dims", "patch_id", "processing_id"}
+    reserved |= set(meta.attrs.model_extra or {})  # never overwrite an attr
     if name in attrs.model_fields or hasattr(attrs, name) or name in reserved:
         raise CoordError(f"Cannot squeeze {name!r}: the attrs reserve that name.")
     if name.startswith("_"):

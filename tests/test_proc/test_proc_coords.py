@@ -246,6 +246,13 @@ class TestSqueezeCoords:
         assert out.attrs["held"] == 2
         assert "gappy" in out.coords.coord_map
 
+    def test_existing_attr_kept(self, patch):
+        """A coordinate sharing an existing attr's name is not squeezed."""
+        patch = patch.update_attrs(quality=3)
+        assert patch.squeeze_coords().attrs["quality"] == 3
+        with pytest.raises(CoordError, match="reserve"):
+            patch.squeeze_coords("quality")
+
     def test_reader_attrs_reserved(self, random_patch):
         """A field a reader's attrs declare is not overwritten."""
 
