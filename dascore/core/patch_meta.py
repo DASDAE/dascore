@@ -408,10 +408,14 @@ class PatchMeta(NodeRepr):
         dataframe: pd.DataFrame,
         units: dict[str, Any] | None = None,
         extrapolate: bool = False,
+        max_gap: float | None = None,
     ) -> Self:
         """Update non-dimensional coordinates from a dataframe."""
         return dascore.proc.coords.CoordsFromDf(
-            dataframe=dataframe, units=units, extrapolate=extrapolate
+            dataframe=dataframe,
+            units=units,
+            extrapolate=extrapolate,
+            max_gap=max_gap,
         ).run(self)
 
     update = dascore.proc.update
