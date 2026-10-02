@@ -362,12 +362,9 @@ def get_quantity_str(quant_value: unit_like) -> str | None:
         if quant_value.magnitude == 1.0:
             return _unit_to_str(quant_value.units)
         return str(quant_value)
-    # Any other type (eg a pint Unit): validate by conversion, then use
-    # the string of the original input.
+    # What remains is a pint Unit: validate it by conversion.
     get_quantity(quant_value)
-    if isinstance(quant_value, PlainUnit):
-        return _unit_to_str(quant_value)
-    return str(quant_value)
+    return _unit_to_str(quant_value)
 
 
 @cache
