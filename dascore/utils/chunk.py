@@ -17,6 +17,11 @@ from dascore.utils.time import (
     to_timedelta64,
 )
 
+# Slack (in steps) so an edge a float rounding short of a label still holds it.
+_GRID_SNAP_RTOL = 1e-9
+# Steps a read widens a float bound by, as a label is known only to rounding.
+_READ_PAD = 0.1
+
 
 def get_intervals(
     start,
@@ -25,6 +30,7 @@ def get_intervals(
     overlap=None,
     step=None,
     keep_partials=False,
+    tail=None,
 ):
     """
     Create a range of values with optional overlaps.
@@ -41,14 +47,17 @@ def get_intervals(
         The overlap of the start of each interval with the end
         of the previous interval.
     step
-        If not None, subtract step (the sampling interval) from the end
-        values so that the intervals do not overlap by one sample.
+        The sampling interval; a window is full when it ends no later than
+        one step past ``stop``.
     keep_partials
         If True, keep the segments which are smaller than chunksize.
+    tail
+        The gap past ``stop`` to the next sample if not ``step`` (an exact
+        fractional grid); it only decides which windows are full.
 
     Returns
     -------
-    A 2D array where first column is start and second column is end.
+    A 2D array of half-open ``[start, end)`` windows, start then end.
     """
     if is_datetime64(start):
         # need to ensure we have numpy datetimes, not pandas
@@ -63,6 +72,7 @@ def get_intervals(
     # get variable and perform checks
     overlap = length * 0 if not overlap else overlap
     step = length * 0 if pd.isnull(step) else step
+    tail = step if pd.isnull(tail) else tail
     # Check for errors. Overlap equal to length would produce zero-stride
     # segments, so it is also rejected.
     if overlap >= length:
@@ -71,30 +81,18 @@ def get_intervals(
     if length < step:
         msg = "Cant chunk when chunk length is shorter than one sample step."
         raise ChunkError(msg)
-    # If the step is known, we need to account for it in the total duration
-    # See 474.
-    _raw_duration = stop - start
-    duration = _raw_duration + step if step is not None else _raw_duration
-    if duration < length and not keep_partials:
+    # A window is full when it ends no later than one step past the last
+    # sample, to within the step's float rounding (see #474).
+    top = stop + step * _GRID_SNAP_RTOL if isinstance(step, float) else stop
+    if top - start + tail < length and not keep_partials:
         msg = "Cant chunk when data interval is less than chunk size. "
         raise ChunkError(msg)
-    # reference with no overlap
-    new_step = length - overlap
-    reference = np.arange(start, stop + new_step, step=new_step)
-    # Since we just add to get stop values we need to remove anything
-    # that is within a sample of stopping value (otherwise that segment
-    # will have no data).
-    reference = reference[(reference + step) <= stop]
-    # we subtract step to avoid overlaps in segments. This can mean segments
-    # are ~ one sample shorter than those requested.
-    ends = reference + length - step
-    starts = reference
-    # trim end to not surpass stop
-    bad_ends = ends > stop
-    if bad_ends.any():
-        if not keep_partials:
-            ends_filt = ends <= stop
-            ends, starts = ends[ends_filt], starts[ends_filt]
-        else:
-            ends[bad_ends] = stop
+    reference = np.arange(start, stop + length - overlap, step=length - overlap)
+    # windows stop at the first to hold the last sample
+    reach = top - overlap if overlap > 0 * overlap else top
+    starts = reference[: max(np.searchsorted(reference, reach, "right"), 1)]
+    ends = starts + length
+    if not keep_partials:
+        full = np.searchsorted(ends, top + tail, "right")
+        starts, ends = starts[:full], ends[:full]
     return np.stack([starts, ends]).T

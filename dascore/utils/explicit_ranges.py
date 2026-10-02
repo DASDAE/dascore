@@ -186,11 +186,14 @@ def _project_manager(coords, name):
 
 def _row_coordinate(row, name):
     """Rebuild an indexed regular grid before scanning a file payload."""
-    from dascore.utils.patch_assembly import coord_from_row  # noqa: PLC0415
+    from dascore.utils import patch_assembly as pa  # noqa: PLC0415
 
     unit = row.get(f"_{name}_units")
     unit = None if unit is None or pd.isnull(unit) else str(unit)
-    return coord_from_row(row, name, unit)
+    if (source := pa.source_coord_from_row(row, name, unit)) is None:
+        return pa.coord_from_row(row, name, unit)
+    # A trimmed member's bounds need not sit on its file's samples.
+    return source.select(pa._row_bounds(row, name))[0]
 
 
 def _source_manager(resolver, row, files=None, projection=None):

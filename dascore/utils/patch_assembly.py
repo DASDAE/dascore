@@ -45,6 +45,7 @@ from dascore.utils.attrs import (
     combine_patch_attrs,
     warn_if_histories_differ,
 )
+from dascore.utils.chunk import _READ_PAD
 from dascore.utils.chunk_plan import _SOURCE_COLUMNS
 from dascore.utils.identity import (
     ids_enabled,
@@ -332,12 +333,13 @@ def _row_values(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
 
 def _row_bounds(row: Mapping, dim: str) -> tuple[Any, Any] | None:
     """
-    A dimension's (min, max) bounds exactly as the row states them, or None.
+    A dimension's (min, max) bounds as a read takes them, or None.
 
     Never cast to the coordinate's dtype: these are the window the plan
     drew, which falls where it likes between samples, and rounding one
     onto the stored grid would take in a sample the plan left out. What
-    the bounds mean is decided by the coordinate they select.
+    the bounds mean is decided by the coordinate they select. A float
+    bound is known only to rounding, so it is widened by a tenth of a step.
     """
     values = []
     for name in ("min", "max"):
@@ -349,6 +351,10 @@ def _row_bounds(row: Mapping, dim: str) -> tuple[Any, Any] | None:
         elif isinstance(value, pd.Timedelta):
             value = value.to_timedelta64()
         values.append(value)
+    step = row.get(f"{dim}_step", np.nan)
+    if np.asarray(values[0]).dtype.kind == "f" and not _is_null(step):
+        pad = abs(step) * _READ_PAD
+        return values[0] - pad, values[1] + pad
     return values[0], values[1]
 
 
@@ -676,6 +682,9 @@ class PatchAssembler:
         # convert kwargs to format understood by parser/patch.select
         kwargs = _convert_min_max_in_kwargs(patch_kwargs, joined)
         kwargs = _drop_associated_ranges(patch_kwargs, kwargs, self.plan_dim)
+        if kwargs.get("_modified"):  # read hints and trims take the same bounds
+            for dim in {self.plan_dim, *self.trim_dims} & set(kwargs):
+                kwargs[dim] = _row_bounds(patch_kwargs, dim) or kwargs[dim]
         patch = self.load_patch(kwargs)
         # If the limits of the source patch were not modified, we can just
         # skip selection. This is important for missing coordinates

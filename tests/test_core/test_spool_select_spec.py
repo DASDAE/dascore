@@ -363,8 +363,10 @@ class TestRelative:
         rows = chunked.get_contents().itertuples()
         for row, patch in zip(rows, chunked, strict=True):
             coord = patch.get_coord("time")
-            assert coord.min() == row.time_min
-            assert coord.max() == row.time_max
+            # a relative trim's labels are not known, so the rows state the
+            # window's values, within a sample of them
+            assert np.timedelta64(0) <= coord.min() - row.time_min < coord.step
+            assert np.timedelta64(0) <= row.time_max - coord.max() < coord.step
 
     def test_absolute_after_relative_keeps_both_windows(self, spool):
         """A later absolute window narrows the relative one, not the source."""

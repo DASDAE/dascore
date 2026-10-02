@@ -111,6 +111,24 @@ class TestGetIntervals:
         assert out[-1, 1] == stop
         assert out[0, 0] == start
 
+    def test_full_float_window_within_rounding(self):
+        """A window ending one step past the last sample is full despite rounding."""
+        out = get_intervals(0.0, 0.8999999999999998, 0.2, step=0.09999999999999998)
+        assert len(out) == 5
+
+    def test_window_a_sample_short_is_partial(self):
+        """A window missing one sample is dropped unless partials are kept."""
+        assert get_intervals(0, 8, 5, step=1).tolist() == [[0, 5]]
+        assert len(get_intervals(0, 8, 5, step=1, keep_partials=True)) == 2
+
+    def test_overlap_window_must_hold_a_new_sample(self):
+        """A window holding only samples of the one before is not emitted."""
+        out = get_intervals(0, 12, 4, overlap=2, step=1, keep_partials=True)
+        assert out[:, 0].tolist() == [0, 2, 4, 6, 8, 10]
+        # without overlap the last sample is its own window
+        out = get_intervals(0, 12, 4, step=1, keep_partials=True)
+        assert out[:, 0].tolist() == [0, 4, 8, 12]
+
     def test_timedelta_start_numeric_length(self):
         """
         A numeric length for a timedelta64 start should be coerced to a
@@ -217,10 +235,12 @@ class TestChunkPlanDF:
         seg_len = dur / 3
         dt = df["time_step"].iloc[0]
         chunk_df = build_chunk_plan(df, keep_partial=True, time=seg_len).outputs
+        # three thirds of the span, then the last sample on its own
+        assert len(chunk_df) == 4
+        assert chunk_df["time_min"].iloc[-1] == df["time_max"].iloc[0]
         duration = chunk_df["time_max"] - chunk_df["time_min"]
-        assert duration.sum() == ((seg_len - dt) * 3)
-        assert len(duration) == 3
-        assert (duration > np.timedelta64(0, "s")).all()
+        samples = (duration / dt).round() + 1
+        assert samples.sum() == round(dur / dt) + 1
 
     def test_nan_in_df(self, contiguous_df):
         """A null envelope row breaks continuity when dropped."""
@@ -288,7 +308,7 @@ class TestEdgeInWindow:
 
     def test_stop_in_window_drops_trailing_source(self, contiguous_three):
         """A stop at 4.5 must not pull in the source starting at 5."""
-        plan = build_chunk_plan(contiguous_three, time=5.5)
+        plan = build_chunk_plan(contiguous_three, time=4.5)
         self._check_members(plan)
         first = plan.members[plan.members["output_id"] == 0]
         assert first["_patch_row"].tolist() == [0]
@@ -301,7 +321,7 @@ class TestEdgeInWindow:
         assert third["_patch_row"].tolist() == [1, 2]
         assert third[["time_min", "time_max"]].to_numpy().tolist() == [
             [9.0, 9.0],
-            [10.0, 12.5],
+            [10.0, 13.0],
         ]
 
     def test_sub_tolerance_gap(self, sub_tolerance_gap):

@@ -61,7 +61,8 @@ class TestBasic:
         duration = time_coord.max() - time_coord.min()
         dt = duration / 3
         spool = terra15_file_spool.chunk(time=dt, keep_partial=True)
-        assert len(spool) == 3
+        # three thirds of the span, then the last sample on its own
+        assert len(spool) == 4
         for loaded_patch in spool:
             assert isinstance(loaded_patch, dc.Patch)
 

@@ -18,6 +18,13 @@ from dascore.io.index.catalog import PatchCatalog
 from dascore.units import get_quantity, m, s
 from dascore.utils.chunk_plan import _ensure_patch_row
 from dascore.utils.explicit_ranges import known_coordinates
+from tests.test_core.test_patch_chunk import (
+    _T0,
+    _assert_labels,
+    _cut_spools,
+    _exact_values,
+    _time_values,
+)
 
 
 def _ends(patch, dim="distance"):
@@ -1613,3 +1620,65 @@ class TestExplicitBoxes:
         np.testing.assert_array_equal(chunked[0].data, expected.data)
         pieces = [((1, 2), (0, 3), (1, 5)), ((1, 2), (0, 3), (6, 7))]
         assert _boxes(spool.select(**windows), dims) == pieces
+
+
+def _assert_selects(spool, whole, window):
+    """One output: the merged patch selected to the window, labels and data."""
+    expected = whole.select(x=tuple(window))
+    assert len(spool) == 1
+    _assert_labels(spool[0].get_coord("x").values, expected.get_coord("x").values)
+    assert np.array_equal(spool[0].data, expected.data)
+
+
+# name: (labels, piece sizes); index steps truncate 1/1024 and 1/3000 s
+_CHAINS = {
+    "1024": (_time_values(1024, 768), [256] * 3),
+    "3000": (_time_values(3000, 2250), [750] * 3),
+    "exact": (_exact_values(768), [250, 270, 248]),
+    "exact_far": (_exact_values(768, offset=3_686_401), [251, 269, 248]),
+    "float_desc": (10 - np.arange(70) / 3, [20, 27, 23]),
+    "float_tenth": (5 + np.arange(120) * 0.1, [60, 60]),
+    "int_desc": (10 - 3 * np.arange(70), [23, 20, 27]),
+}
+
+
+class TestChainedExplicitChunk:
+    """A regular chunk then explicit windows keeps every sample it held."""
+
+    @pytest.fixture(scope="class")
+    def sources(self, tmp_path_factory):
+        """Each chain's merged patch, memory spool and directory spool."""
+        return {
+            name: _cut_spools(tmp_path_factory.mktemp(name), *args)
+            for name, args in _CHAINS.items()
+        }
+
+    @pytest.mark.parametrize(
+        "case, length, window",
+        [
+            ("1024", 0.1, _T0 + np.array([30, 690], dtype="m8[ms]")),
+            ("3000", 0.1, _T0 + np.array([30, 690], dtype="m8[ms]")),
+            # float labels a regular chunk computes meet the file's own labels
+            ("float_tenth", 0.73, np.array([7.23, 15.33])),
+        ],
+    )
+    def test_window(self, sources, case, length, window):
+        """Disk and memory both equal the merged patch selected to the window."""
+        whole, mem, disk = sources[case]
+        for spool in (mem, disk):
+            first = spool.chunk(x=length, keep_partial=True)
+            _assert_selects(first.chunk(x=window[None]), whole, window)
+
+    @pytest.mark.parametrize("seed", range(len(_CHAINS)))
+    def test_random_plans(self, sources, seed):
+        """Random lengths and windows: disk equals memory equals truth."""
+        rng = np.random.default_rng(seed)
+        whole, mem, disk = sources[list(_CHAINS)[seed]]
+        values = whole.get_coord("x").values
+        length = abs(values[-1] - values[0]) * float(rng.uniform(0.07, 0.31))
+        length = int(np.ceil(length)) if values.dtype.kind == "i" else length
+        half = len(values) // 2
+        window = np.sort([rng.choice(values[:half]), rng.choice(values[half:])])
+        for spool in (mem, disk):
+            first = spool.chunk(x=length, keep_partial=True)
+            _assert_selects(first.chunk(x=window[None]), whole, window)
