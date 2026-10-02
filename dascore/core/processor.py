@@ -36,6 +36,7 @@ Examples
 from __future__ import annotations
 
 import ast
+import builtins
 import functools
 import inspect
 import numbers
@@ -118,7 +119,8 @@ class PatchProcessor(DascoreBaseModel):
     - `numpy_kernel(data, **plan)`: a numpy, scipy or numba computation.
       NumPy data prefer it; other backends use `kernel` if available,
       otherwise convert through NumPy with a `NumpyFallbackWarning`.
-    - `reconcile(result, out)`: the one hook which sees both halves. Return
+    - `reconcile(result, out, meta)`: the one hook which sees both halves,
+      given the input metadata as well. Return
       metadata to attach the result, or a patch holding the final data.
 
     Each subclass is registered under `name` (snake case of the class name
@@ -362,7 +364,7 @@ class PatchProcessor(DascoreBaseModel):
         """
         return meta, {}
 
-    def reconcile(self, data, out: dc.PatchMeta) -> dc.PatchMeta:
+    def reconcile(self, data, out: dc.PatchMeta, meta: dc.PatchMeta) -> dc.PatchMeta:
         """Return metadata or a patch holding the final data; default as is."""
         return out
 
@@ -421,7 +423,7 @@ class PatchProcessor(DascoreBaseModel):
             # computed anything: the data are the ones which came in, and
             # metadata has none to show.
             unchanged = patch._data if isinstance(patch, dc.Patch) else None
-            out = self.reconcile(unchanged, out)
+            out = self.reconcile(unchanged, out, meta)
             attrs = self._result_attrs(out) if not record else self._record(patch, out)
             # The data are whatever they were: a patch puts its own back,
             # and metadata has none to put.
@@ -435,7 +437,7 @@ class PatchProcessor(DascoreBaseModel):
         result = kernel(self, data, **plan)
         if out is meta and result is data:
             return self._unchanged(patch, record)
-        out = self.reconcile(result, out)
+        out = self.reconcile(result, out, meta)
         attrs = self._record(patch, out) if record else self._result_attrs(out)
         out = out.update(attrs=attrs)
         new = out if isinstance(out, dc.Patch) else out.to_patch(result)
@@ -496,8 +498,8 @@ _RESERVED = frozenset(x for x in vars(PatchProcessor) if not x.startswith("_")) 
 }
 
 
-# Spellings which have always been a module rather than an operation's
-# function: `dascore.proc.aggregate` holds the aggregations.
+# Dotted names which are modules, so no operation's function is bound over
+# them: `dascore.proc.aggregate` stays the aggregations' module.
 _MODULE_SPELLINGS = frozenset({"dascore.proc.aggregate"})
 
 # Classes created before `dascore.core.patch` has finished importing, which
@@ -563,9 +565,13 @@ def _check_patch_listing(cls) -> None:
     # documented URL, and `dascore.proc.select` is how a body holding no
     # patch reaches it. Set here because the method is written in a class
     # which cannot exist when either module is read.
-    for module in (cls.__module__, cls.__module__.rsplit(".", 1)[0]):
-        if f"{module}.{cls.name}" not in _MODULE_SPELLINGS:
-            setattr(sys.modules[module], cls.name, cls.patch_function)
+    module, package = cls.__module__, cls.__module__.rsplit(".", 1)[0]
+    # A star import of the package must not shadow a builtin, other than
+    # the long-public `dascore.proc.abs`.
+    shadows = hasattr(builtins, cls.name) and cls.name != "abs"
+    for target in (module,) if shadows else (module, package):
+        if f"{target}.{cls.name}" not in _MODULE_SPELLINGS:
+            setattr(sys.modules[target], cls.name, cls.patch_function)
 
 
 def _hosted_method(cls: type[PatchProcessor]):

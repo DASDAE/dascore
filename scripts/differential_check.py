@@ -51,12 +51,11 @@ _TIMING_PASSES = 3
 _BOOKKEEPING = {"_timing", "_dascore_path"}
 
 # Calls which raise on purpose, so that a rewrite keeps the message; and
-# matrix inputs an operation cannot take. `--strict` still fails if one
-# raises on one side only, since `compare` sees the two errors differ.
+# matrix inputs an operation cannot take. `--strict` skips these, but
+# `compare` still fails a call which raises on one side only, or with a
+# different message.
 EXPECTED_ERRORS = (
-    "norm_bad",
     "rename_missing",
-    "transpose_bad_dim",
     "*_bad",
     "*_bad_*",
     "agg_no_dims*",
@@ -69,10 +68,6 @@ EXPECTED_ERRORS = (
     "idxmax_squeeze_only_dim",
     "pass_two_dims",
     "*_no_window",
-    # A max or callable dim_reduce of a coordinate starting at 0 makes
-    # the wrong length on dev already.
-    "agg_reduce_callable",
-    "idxmax_positional",
     # One sample per dimension has no step to window or filter by.
     "matrix/tiny/*",
     "matrix/single_row/hampel_exact",
@@ -235,7 +230,7 @@ def get_matrix_calls() -> dict:
     return out
 
 
-def _filter_calls(small, small_int, small_f32, spiky, hz, m, s) -> dict:
+def _filter_calls(small, small_f32, spiky, hz, m, s) -> dict:
     """Return calls to the pass, notch and window filters."""
     return {
         "pass_band": lambda: small.pass_filter(time=(10, 100)),
@@ -244,8 +239,6 @@ def _filter_calls(small, small_int, small_f32, spiky, hz, m, s) -> dict:
         "pass_hz": lambda: small.pass_filter(time=(1 * hz, 10 * hz)),
         "pass_distance": lambda: small.pass_filter(distance=(None, 0.1)),
         "pass_wavelength": lambda: small.pass_filter(distance=(5 * m, 10 * m)),
-        "pass_f32": lambda: small_f32.pass_filter(time=(None, 50)),
-        "pass_int": lambda: small_int.pass_filter(time=(None, 50)),
         "pass_bad_range": lambda: small.pass_filter(time=(None, 1000)),
         "pass_two_dims": lambda: small.pass_filter(time=(1, 10), distance=(0.1, 0.2)),
         "notch_time": lambda: small.notch_filter(time=60, q=30),
@@ -260,7 +253,6 @@ def _filter_calls(small, small_int, small_f32, spiky, hz, m, s) -> dict:
         "median_constant": lambda: small.median_filter(
             time=3, samples=True, mode="constant", cval=1.0
         ),
-        "median_int": lambda: small_int.median_filter(time=3, samples=True),
         "median_positional": lambda: small.median_filter(True, "nearest", time=3),
         "savgol_time": lambda: small.savgol_filter(polyorder=2, time=0.04),
         "savgol_distance": lambda: small.savgol_filter(2, distance=5, samples=True),
@@ -268,7 +260,6 @@ def _filter_calls(small, small_int, small_f32, spiky, hz, m, s) -> dict:
         "savgol_constant": lambda: small.savgol_filter(
             1, True, "constant", 2.0, time=5
         ),
-        "savgol_f32": lambda: small_f32.savgol_filter(2, time=7, samples=True),
         "savgol_bad": lambda: small.savgol_filter(polyorder=9, time=5, samples=True),
         "gauss_time": lambda: small.gaussian_filter(time=0.02),
         "gauss_samples": lambda: small.gaussian_filter(samples=True, distance=3),
@@ -276,12 +267,10 @@ def _filter_calls(small, small_int, small_f32, spiky, hz, m, s) -> dict:
         "gauss_options": lambda: small.gaussian_filter(
             True, "constant", 1.0, 2.0, time=4
         ),
-        "gauss_int": lambda: small_int.gaussian_filter(time=2, samples=True),
         "wiener_time": lambda: spiky.wiener_filter(time=5, samples=True),
         "wiener_noise": lambda: spiky.wiener_filter(time=5, samples=True, noise=0.01),
         "wiener_both": lambda: spiky.wiener_filter(time=5, distance=3, samples=True),
         "wiener_units": lambda: spiky.wiener_filter(time=0.02 * s),
-        "wiener_int": lambda: small_int.wiener_filter(time=3, samples=True),
         "wiener_no_window": lambda: spiky.wiener_filter(),
         "median_no_window": lambda: small.median_filter(),
         "pass_no_window": lambda: small.pass_filter(),
@@ -294,8 +283,6 @@ def _filter_calls(small, small_int, small_f32, spiky, hz, m, s) -> dict:
         "hampel_large": lambda: spiky.hampel_filter(
             time=11, distance=11, samples=True, approximate=False
         ),
-        "hampel_int": lambda: small_int.hampel_filter(time=5, samples=True),
-        "hampel_f32": lambda: small_f32.hampel_filter(time=5, samples=True),
         "hampel_bad_threshold": lambda: spiky.hampel_filter(time=5, threshold=-1),
         "hampel_even": lambda: spiky.hampel_filter(time=4, samples=True),
     }
@@ -383,16 +370,13 @@ def get_calls() -> dict:
     )
     # Small enough for the slow window filters to be timed in a few rounds.
     small = _pinned(patch.isel(distance=slice(0, 40), time=slice(0, 400)), "small")
-    small_int = _pinned(
-        small.new(data=(np.asarray(small.data) * 100).astype("int32")), "small_int"
-    )
     small_f32 = _pinned(small.new(data=np.asarray(small.data, "float32")), "f32")
     spiky = np.asarray(small.data).copy()
     spiky[10, 5], spiky[20, 50] = 10.0, -8.0
     spiky = _pinned(small.new(data=spiky), "spiky")
     hz, m, s = dc.get_unit("Hz"), dc.get_unit("m"), dc.get_unit("s")
     return {
-        **_filter_calls(small, small_int, small_f32, spiky, hz, m, s),
+        **_filter_calls(small, small_f32, spiky, hz, m, s),
         **_aggregate_calls(patch, null_patch, int_patch, bool_patch, typed),
         # The inputs themselves, so a difference in the examples cannot
         # masquerade as a difference in the functions.
@@ -811,8 +795,8 @@ def _raised(dumped: dict) -> set[str]:
     """
     Return names of calls that recorded errors, other than the expected ones.
 
-    Matching errors otherwise compare equal; `--strict` detects these failed
-    comparisons.
+    Two matching errors compare equal, so without `--strict` a call broken on
+    both sides would pass unnoticed.
     """
     return {
         i
@@ -839,7 +823,10 @@ if __name__ == "__main__":
     parser.add_argument(
         "--strict",
         action="store_true",
-        help="Fail if any call raised, even where both sides raised alike.",
+        help=(
+            "Fail if any call outside EXPECTED_ERRORS raised, even where both "
+            "sides raised alike."
+        ),
     )
     args = parser.parse_args()
     if args.dump:

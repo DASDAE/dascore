@@ -92,7 +92,9 @@ class _Reduction(PatchProcessor):
         if is_numpy(original) or backend_name(data) == backend_name(original):
             return data
         # An aggregator the standard has no name for went through numpy.
-        warn_numpy_fallback(self.name or type(self).__name__, backend_name(original))
+        # Only a named subclass runs, so the name is set.
+        assert self.name is not None
+        warn_numpy_fallback(self.name, backend_name(original), skip_dascore=True)
         return asarray_like(data, original)
 
 
@@ -103,11 +105,11 @@ class Aggregate(_Reduction):
 
     Notes
     -----
-    Whether an aggregation can be applied by the patch's own array backend
-    depends on the method, so this function makes no promise about the
-    backend of its output. Most shortcuts, such as
-    [`Patch.mean`](`dascore.proc.aggregate.mean`), do keep the data on their
-    backend; use those where one fits.
+    The output stays on the patch's array backend. A method the array API
+    standard has no name for, such as a median or a callable, runs through
+    NumPy and warns before the result is converted back; most shortcuts,
+    such as [`Patch.mean`](`dascore.proc.aggregate.mean`), avoid that round
+    trip, so prefer one where it fits.
 
     Parameters
     ----------
@@ -447,16 +449,17 @@ class Idxmax(PatchProcessor):
     dim_reduce: Any = "empty"
 
     data_type = ""
-    # Whether the extreme is the largest; the data are built in `reconcile`.
+    # Whether the extreme is the largest.
     _want_max: ClassVar[bool] = True
 
     def get_metadata(self, meta):
-        """Return the axis, once the dimension is known to have values."""
+        """Return the reduced metadata, and the axis and whether it stays."""
         name, dim = self.name, self.dim
         if not isinstance(dim, str):
             msg = f"{name} reduces a single dimension; dim must be its name."
             raise ParameterError(msg)
-        if meta.get_coord(dim)._partial:
+        coord = meta.get_coord(dim)
+        if coord._partial:
             # The coord the default dim_reduce leaves behind holds no values,
             # so indexing it would quietly null the whole result.
             msg = (
@@ -464,33 +467,29 @@ class Idxmax(PatchProcessor):
                 "the dimension has already been reduced."
             )
             raise ParameterError(msg)
-        return meta, {"axis": meta.get_axis(dim)}
-
-    def kernel(self, data, *, axis):
-        """Return the index of each extreme, the empty slices, and the input."""
-        original = data
-        if not is_numpy(data):
-            # The indexing is numpy only, so say so rather than quietly
-            # pulling a lazy or device array into memory.
-            warn_numpy_fallback(self.name or type(self).__name__, backend_name(data))
-            data = to_numpy(data)
-        return (*_extreme_index(data, axis, self._want_max), original)
-
-    def reconcile(self, data, out):
-        """Return the coordinate values at the extremes, the dimension reduced."""
-        index, empty, original = data
-        coord = out.get_coord(self.dim)
-        values = coord.values[index]
-        values = values if empty is None else _fill_empty(values, empty)
-        if not is_numpy(original):
-            values = asarray_like(values, original)
-        reduced, ((axis, keep),) = _reduce_meta(out, self.dim, self.dim_reduce)
-        if keep:
-            values = array_namespace(values).expand_dims(values, axis=axis)
+        out, ((axis, keep),) = _reduce_meta(meta, dim, self.dim_reduce)
         # A time coord's units describe its step, not its magnitude, so
         # labelling nanoseconds "s" would scale any unit maths by a billion.
         units = None if dtype_time_like(coord.dtype) else coord.units
-        return reduced.update_attrs(data_units=units).to_patch(values)
+        return out.update_attrs(data_units=units), {"axis": axis, "keep": keep}
+
+    # The kernel finds indices; `reconcile` swaps in the coordinate values.
+    def numpy_kernel(self, data, *, axis, keep):
+        """Return the index of each extreme, and the empty slices or None."""
+        out = _extreme_index(data, axis, self._want_max)
+        if keep:
+            out = tuple(x if x is None else np.expand_dims(x, axis) for x in out)
+        return out
+
+    def reconcile(self, data, out, meta):
+        """Return the coordinate values at the extremes."""
+        index, empty = data
+        values = meta.get_coord(self.dim).values[to_numpy(index)]
+        if empty is not None:
+            values = _fill_empty(values, to_numpy(empty))
+        if not is_numpy(index):
+            values = asarray_like(values, index)
+        return out.to_patch(values)
 
 
 @compose_docstring(params=IDX_DOC_STR, notes=IDX_NOTES)

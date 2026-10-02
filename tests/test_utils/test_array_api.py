@@ -149,7 +149,8 @@ class TestPatchBackends:
 
     def test_numpy_only_function_does_not_warn(self, backend_patch):
         """Nothing converts or warns for a plain numpy-only function."""
-        # stalta hands the array to numpy, which gives numpy data back.
+        # stalta is not a processor; its rolling means go through numpy or
+        # pandas, which give numpy back.
         with warnings_as_errors():
             out = backend_patch.stalta(time=(0.01, 0.1))
         assert out.shape == backend_patch.shape
@@ -522,8 +523,9 @@ class TestConvertedProcessorsOnBackends:
         assert np.allclose(values, expected.data, atol=atol, equal_nan=True)
 
 
-# Aggregations whose aggregator may go through numpy: the standard has no
-# median or take, and idxmax indexes coordinate values with numpy.
+# Aggregations whose aggregator may go through numpy (the standard has no
+# median or take, and idxmax indexes coordinate values with numpy), plus a
+# native mean as control.
 _AGGREGATIONS = {
     "aggregate": lambda p: p.aggregate("time", method="median"),
     "aggregate_mean": lambda p: p.aggregate("time", method="mean"),
@@ -539,14 +541,22 @@ class TestAggregationsOnBackends:
     """Aggregations run natively, or warn they fall back, on every backend."""
 
     @pytest.mark.parametrize("name", sorted(_AGGREGATIONS))
-    def test_runs_or_falls_back(self, random_patch, to_backend, name):
+    def test_runs_or_falls_back(self, random_patch, to_backend, backend, name):
         """The backend comes back, and the values are numpy's."""
         call = _AGGREGATIONS[name]
         patch = to_backend(random_patch)
         with warnings.catch_warnings(record=True) as record:
             warnings.simplefilter("always")
             out = call(patch)
-        assert all(x.category is NumpyFallbackWarning for x in record)
+        # Dask runs numpy's median and take itself; the indexing never does.
+        native = name == "aggregate_mean" or (
+            backend == "dask" and not name.startswith("idx")
+        )
+        assert [x.category for x in record] == (
+            [] if native else [NumpyFallbackWarning]
+        )
+        # The warning points at the caller, not into dascore.
+        assert all(x.filename == __file__ for x in record)
         assert backend_name(out.data) == backend_name(patch.data)
         expected = call(random_patch)
         assert out.dims == expected.dims

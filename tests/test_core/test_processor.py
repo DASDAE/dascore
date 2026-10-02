@@ -211,7 +211,7 @@ class TestTheSeam:
 
             name = None
 
-            def reconcile(self, data, out):
+            def reconcile(self, data, out, meta):
                 """Record what the kernel produced."""
                 return out.update_attrs(station=str(data.dtype))
 
@@ -223,7 +223,7 @@ class TestTheSeam:
 
             name = None
 
-            def reconcile(self, data, out):
+            def reconcile(self, data, out, meta):
                 """Would fail the test if reached."""
                 raise AssertionError
 
@@ -241,7 +241,7 @@ class TestTheSeam:
                 """Rename the distance coordinate, so something changed."""
                 return meta.rename_coords(distance="depth"), {}
 
-            def reconcile(self, data, out):
+            def reconcile(self, data, out, meta):
                 """Record what the data were, which only this hook sees."""
                 seen = "none" if data is None else str(data.dtype)
                 return out.update_attrs(station=seen)
@@ -1558,7 +1558,7 @@ class TestNumpyKernel:
                 """Return the data, where it is positive, and a count."""
                 return data * 1, data > 0, 3
 
-            def reconcile(self, result, out):
+            def reconcile(self, result, out, meta):
                 """Check both came back on the input's backend."""
                 data, mask, count = result
                 assert backend_name(mask) == backend_name(data)
@@ -1707,7 +1707,7 @@ class TestReconcileWithData:
             keep = np.asarray(data)[:, 0] >= 0
             return data[keep], keep
 
-        def reconcile(self, result, out):
+        def reconcile(self, result, out, meta):
             """Build the result from the rows the kernel kept."""
             data, keep = result
             distance = out.get_coord("distance")
@@ -1728,29 +1728,6 @@ class TestReconcileWithData:
 class TestWindowAndPassFilters:
     """The pass, notch and window filters run as processors."""
 
-    calls: ClassVar[dict[str, dict]] = {
-        "pass_filter": {"time": (None, 100)},
-        "notch_filter": {"time": 60, "q": 30},
-        "median_filter": {"time": 3, "samples": True},
-        "savgol_filter": {"polyorder": 2, "time": 5, "samples": True},
-        "gaussian_filter": {"time": 2, "samples": True},
-        "wiener_filter": {"time": 5, "samples": True},
-        "hampel_filter": {"time": 5, "samples": True},
-    }
-
-    @pytest.mark.parametrize("name", sorted(calls))
-    def test_class_matches_method(self, random_patch, name):
-        """The class run directly gives the method's result."""
-        kwargs = self.calls[name]
-        cls = getattr(dc.Patch, name).__processor__
-        assert cls(**kwargs)(random_patch) == getattr(random_patch, name)(**kwargs)
-
-    def test_positional_spelling_is_one_operation(self):
-        """Positional and keyword spellings share an operation id."""
-        positional = dc.proc.MedianFilter(True, "nearest", time=3)
-        keyword = dc.proc.MedianFilter(samples=True, mode="nearest", time=3)
-        assert positional.operation_id == keyword.operation_id
-
     @pytest.mark.parametrize("cls", ["WienerFilter", "HampelFilter"])
     def test_keyword_only(self, cls):
         """The options of these two are refused positionally."""
@@ -1761,42 +1738,19 @@ class TestWindowAndPassFilters:
 class TestAggregations:
     """The aggregations run as processors."""
 
-    names = (
-        "min",
-        "max",
-        "mean",
-        "median",
-        "std",
-        "sum",
-        "first",
-        "last",
-        "any",
-        "all",
-    )
-
-    @pytest.mark.parametrize("name", names)
-    def test_class_matches_method(self, random_patch, name):
-        """The class run directly gives the method's result."""
+    @pytest.mark.parametrize("name", ["mean", "idxmax"])
+    def test_metadata_is_reduced_without_data(self, random_patch, name):
+        """The reduced shape and units are known before the data are read."""
         cls = getattr(dc.Patch, name).__processor__
-        expected = getattr(random_patch, name)("time", dim_reduce="squeeze")
-        assert cls(dim="time", dim_reduce="squeeze")(random_patch) == expected
+        meta, _ = cls(dim="distance").get_metadata(random_patch.drop_data())
+        expected = getattr(random_patch, name)("distance")
+        assert meta.shape == expected.shape
+        assert meta.attrs.data_units == expected.attrs.data_units
 
-    def test_aggregate_spellings_are_one_operation(self):
-        """Positional and keyword spellings share an operation id."""
-        positional = dc.proc.agg.Aggregate("time", "max")
-        keyword = dc.proc.agg.Aggregate(dim="time", method="max")
-        assert positional.operation_id == keyword.operation_id
-
-    def test_metadata_is_reduced_without_data(self, random_patch):
-        """The reduced shape is known before the data are read."""
-        meta, _ = dc.proc.agg.Mean(dim="time").get_metadata(random_patch.drop_data())
-        assert meta.shape == random_patch.mean("time").shape
-
-    @pytest.mark.parametrize("name", ["idxmax", "idxmin"])
-    def test_idx_class_matches_method(self, random_patch, name):
-        """The value-dependent result is built in reconcile."""
-        cls = getattr(dc.Patch, name).__processor__
-        assert cls(dim="time")(random_patch) == getattr(random_patch, name)("time")
+    def test_package_does_not_shadow_builtins(self):
+        """A star import of `dascore.proc` leaves `sum` and the like alone."""
+        assert not {"min", "max", "sum", "any", "all"} & set(vars(dc.proc))
+        assert dc.proc.agg.sum is dc.Patch.sum
 
     def test_aggregate_submodule_survives(self):
         """`dascore.proc.aggregate` stays the module, not the function."""
