@@ -29,6 +29,7 @@ from dascore.exceptions import (
     UnresolvedPatchError,
 )
 from dascore.models import ArrayLike
+from dascore.utils.misc import suppress_warnings
 
 
 @pytest.fixture(scope="module")
@@ -630,6 +631,17 @@ class TestCoords:
         """A group the path does not define is an error by default."""
         with pytest.raises(PatchError, match="defines no 'nope'"):
             patch.enrich(inventory, attrs=False, coords=("nope",))
+
+    @pytest.mark.parametrize("on_missing", ["warn", "ignore", "null"])
+    def test_missing_coord_keeps_the_patch_coord(self, patch, inventory, on_missing):
+        """A name the path does not define leaves the patch's coordinate alone."""
+        own = np.arange(len(patch.get_coord("distance")), dtype=float)
+        held = patch.update_coords(nope=("distance", own))
+        with suppress_warnings(UserWarning, message="The inventory defines no 'nope'"):
+            out = held.enrich(
+                inventory, attrs=False, coords=("nope",), on_missing=on_missing
+            )
+        assert np.array_equal(out.get_coord("nope").values, own)
 
     def test_missing_coord_null(self, patch, inventory):
         """It can instead be filled with the missing marker."""
