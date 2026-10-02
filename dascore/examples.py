@@ -29,7 +29,12 @@ from dascore.core.inventory import (
     OpticalPathLabel,
 )
 from dascore.exceptions import UnknownExampleError
-from dascore.utils.downloader import _fetch_cached, fetch, get_registry_df
+from dascore.utils.downloader import (
+    _fetch_cached,
+    fetch,
+    get_fetcher,
+    get_registry_df,
+)
 from dascore.utils.imports import lazy_import
 from dascore.utils.misc import iterate, register_func
 from dascore.utils.patch import get_patch_names
@@ -863,8 +868,10 @@ def get_example_spool(example_name="random_das", **kwargs) -> dc.Spool:
         path = _fetch_cached(example_name, str(get_config().downloader_cache_dir))
         if dc.get_format(path)[0] != "DASDAE":
             return dc.spool(path)
-        # Registry files are fetched by name and hash checked, so their legacy
-        # pickles are trusted; read now, since the setting ends with the block.
+        # Registry files are hash checked, so their legacy pickles are trusted:
+        # fetch again, which re-checks the hash just before the read, and read
+        # now, since the setting ends with the block.
+        path = Path(get_fetcher().fetch(example_name))
         with config_context(allow_dasdae_format_unpickle=True):
             return dc.spool(dc.read(path))
     if example_name not in EXAMPLE_SPOOLS:

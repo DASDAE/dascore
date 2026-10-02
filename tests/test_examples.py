@@ -70,6 +70,18 @@ class TestGetExampleSpool:
         assert spool.spool_path is not None
         assert len(spool[0].data)
 
+    @pytest.mark.network
+    def test_tampered_cache_file_is_replaced(self, tmp_path):
+        """A cached registry file changed after its first fetch is re-fetched."""
+        name = "UoU_lf_urban.hdf5"
+        with dc.config_context(downloader_cache_dir=tmp_path):
+            dc.get_example_spool(name)
+            cached = next(tmp_path.rglob(name))
+            original = cached.read_bytes()
+            cached.write_bytes(original + b"tampered")
+            dc.get_example_spool(name)
+        assert cached.read_bytes() == original
+
     def test_local_copy_keeps_the_opt_in(self, tmp_path):
         """A file outside the registry is read under the caller's config."""
         path = tmp_path / "copy.hdf5"
