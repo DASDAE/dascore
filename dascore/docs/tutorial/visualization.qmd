@@ -37,7 +37,7 @@ Pass an existing Matplotlib axis to compose the plot with other panels. The retu
 
 ### Large images
 
-Most DAS patches have more samples than the figure has pixels, so Matplotlib has to downsample them, and `interpolation_stage` decides how. `"data"` averages the data first and then colors the result; `"rgba"` colors every sample first and then averages the colors. The default, `"auto"`, uses `"rgba"` whenever it downsamples.
+Most DAS patches have more samples than the figure has pixels, so Matplotlib has to downsample them, and `interpolation_stage` decides how. `"data"` averages the data first and then colors the result; `"rgba"` colors every sample first and then averages the colors. The default, `"auto"`, uses `"rgba"` whenever it downsamples. This applies to evenly sampled patches, which are drawn with `imshow`; irregular coordinates use `pcolormesh`, which ignores `interpolation_stage`.
 
 Neither is right for every patch. In the top row below, `"data"` keeps the strong contrast of the arrivals, while `"rgba"` blends neighbouring reds and blues into paler colors. In the bottom row, the same patch carries an oscillation far faster than one pixel: `"data"` averages it away, hiding that it exists, while `"rgba"` shows it as a grey wash.
 
@@ -59,7 +59,7 @@ plt.tight_layout()
 plt.show()
 ```
 
-Try `"data"` when coherent arrivals look washed out, and `"rgba"` when the image looks suspiciously clean. Decimating or filtering the patch first avoids the question, since the plot then has fewer samples than pixels.
+Try `"data"` when coherent arrivals look washed out, and `"rgba"` when the image looks suspiciously clean. Low-pass filtering and then decimating the patch to about the figure's pixel count avoids the question, since nothing is left to downsample.
 
 ### Inventory labels
 
