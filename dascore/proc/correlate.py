@@ -52,7 +52,8 @@ def correlate_shift(
         The dimension name that was correlated in the freq. domain.
     undo_weighting
         If True, also undo the weighting artifact caused by DASCore's dft
-        weighting. This is done by simply dividing by the coordinate step.
+        weighting. This is done by simply dividing by the coordinate step,
+        and the data units by the coordinate's units.
         See [dft note](`dascore/docs/notes/dft_notes.qmd`) for more details.
 
     Notes
@@ -162,6 +163,9 @@ def correlate(
 
     Notes
     -----
+    The result's data units are the square of the patch's (for example
+    (m/s)**2 for velocity), as each value is a sum of products of the data.
+
     Correlation runs along the dimension not named in ``kwargs``. That dimension
     becomes a lag dimension prefixed with ``lag_``; for example, selecting a
     ``distance`` source transforms ``time`` into ``lag_time``.

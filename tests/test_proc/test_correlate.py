@@ -255,6 +255,16 @@ class TestCorrelationUnits:
         for out in (direct, piped):
             assert get_quantity(out.attrs.data_units) == expected
 
+    def test_shift_leaves_units_it_does_not_rescale(self, random_patch):
+        """Without weighting undone, or without data units, units are kept."""
+        spectra = random_patch.update_attrs(data_units="m/s").dft("time", real=True)
+        product = (spectra * spectra.conj()).idft()
+        kept = product.correlate_shift("time", undo_weighting=False)
+        assert kept.attrs.data_units == product.attrs.data_units
+        unitless = random_patch.dft("time", real=True)
+        shifted = (unitless * unitless.conj()).idft().correlate_shift("time")
+        assert shifted.attrs.data_units is None
+
 
 class TestCorrelateErrors:
     """Tests for correlate input validation."""
