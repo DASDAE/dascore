@@ -46,9 +46,11 @@ class SegyV1_0(FiberIO):  # noqa
             shape = (len(stream.samples), len(stream.header))
             time, channel = windows_to_slices(windows, shape)
             channels = range(shape[1])[channel]
-            if not channels:
-                return np.empty((len(range(shape[0])[time]), 0), dtype=stream.dtype)
-            return np.stack([stream.trace[index][time] for index in channels], axis=-1)
+            out = np.empty((len(range(shape[0])[time]), len(channels)), stream.dtype)
+            # Filled in place, so the data are held once and in C order.
+            for index, trace in enumerate(stream.trace[channel]):
+                out[:, index] = trace[time]
+            return out
 
     def get_metadata(
         self, resource: LocalPath, *, snap: snap_type = True
