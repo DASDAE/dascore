@@ -14,6 +14,7 @@ from typing import Any, Literal
 
 import numpy as np
 import numpy.fft as nft
+import scipy.fft as sft
 
 import dascore as dc
 from dascore import units
@@ -550,7 +551,7 @@ def _swap_window_axes(data: np.ndarray, axes: tuple[int, ...]) -> np.ndarray:
     return np.moveaxis(data, (*axes, *tail), (*tail, *axes))
 
 
-@patch_function(data_type="fourier_transform", version="2.1")
+@patch_function(data_type="fourier_transform", version="2.2")
 def stft(
     patch: PatchType,
     taper_window: str | ndarray | tuple[str | Any, ...] = "hann",
@@ -696,7 +697,8 @@ def stft(
     # Real data is transformed one-sided along the last windowed dimension
     # and centred along the others, as dft does; complex data centred along
     # every one.
-    fft = nft.rfftn if real else nft.fftn
+    # scipy's transforms keep single precision; numpy's work in double.
+    fft = sft.rfftn if real else sft.fftn
     spectra = fft(tiles, s=nffts, axes=tail)
     centred = tail[:-1] if real else tail
     if centred:

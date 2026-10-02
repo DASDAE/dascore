@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import gc
+import tracemalloc
 import weakref
 
 import numpy as np
@@ -554,6 +555,20 @@ class TestInverseDiscreteFourierTransform:
 
 class TestSTFT:
     """Tests for the short-time Fourier transform."""
+
+    def test_single_precision_peak_memory(self):
+        """float32 data are transformed in single precision, without a double copy."""
+        data = np.zeros((100, 50_000), dtype=np.float32)
+        time = dc.to_datetime64(0) + np.arange(50_000) * np.timedelta64(1, "ms")
+        coords = {"distance": np.arange(100.0), "time": time}
+        patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+        tracemalloc.start()
+        try:
+            out = patch.stft(time=256, samples=True)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        assert peak < 3 * out.data.nbytes
 
     @pytest.mark.parametrize("detrend", [False, True])
     def test_single_precision_stays_single(self, random_patch, detrend):
