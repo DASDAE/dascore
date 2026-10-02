@@ -421,6 +421,11 @@ def _single(patch):
     return patch.new(data=np.asarray(patch.data, dtype=np.float32))
 
 
+def _velocity(patch):
+    """Return the patch labelled as velocity, which strain rate needs."""
+    return patch.update_attrs(data_type="velocity")
+
+
 # One call per operation converted to a processor, and the numpy patch it is
 # given (on each backend too); the results must match numpy's.
 _CONVERTED = {
@@ -467,6 +472,21 @@ _CONVERTED = {
     "gaussian_filter": (lambda p: p.gaussian_filter(time=2, samples=True), None),
     "wiener_filter": (lambda p: p.wiener_filter(time=5, samples=True), None),
     "hampel_filter": (lambda p: p.hampel_filter(time=5, samples=True), None),
+    "taper": (lambda p: p.taper(time=0.1), None),
+    "taper_single": (lambda p: p.taper(time=(None, 0.2), window_type="ramp"), _single),
+    "taper_range": (lambda p: p.taper_range(time=(5, 10, 20, 30), samples=True), None),
+    "line_mute": (lambda p: p.line_mute(time=(0, 0.01), smooth=0.1), None),
+    "slope_mute": (lambda p: p.slope_mute((1, 3)), None),
+    "pow_coord": (lambda p: p.pow_coord(time=2, distance=1), None),
+    "pow_coord_single": (lambda p: p.pow_coord(time=2), _single),
+    "differentiate": (lambda p: p.differentiate("time"), None),
+    "integrate": (lambda p: p.integrate("distance", definite=True), None),
+    "velocity_to_strain_rate": (lambda p: p.velocity_to_strain_rate(), _velocity),
+    "velocity_to_strain_rate_edgeless": (
+        lambda p: p.velocity_to_strain_rate_edgeless(step_multiple=3),
+        _velocity,
+    ),
+    "phase_weighted_stack": (lambda p: p.phase_weighted_stack("distance"), None),
 }
 
 
@@ -483,6 +503,9 @@ _NUMPY_ONLY = {
     "gaussian_filter",
     "wiener_filter",
     "hampel_filter",
+    "differentiate",
+    "integrate",
+    "velocity_to_strain_rate",
 }
 
 
@@ -510,8 +533,12 @@ class TestConvertedProcessorsOnBackends:
             with warnings_as_errors():
                 out = call(patch)
         else:
-            with pytest.warns(NumpyFallbackWarning, match=cls.name):
+            with pytest.warns(NumpyFallbackWarning, match=cls.name) as record:
                 out = call(patch)
+            # One fallback, pointing at the caller rather than into dascore.
+            fallbacks = [x for x in record if x.category is NumpyFallbackWarning]
+            assert len(fallbacks) == 1
+            assert fallbacks[0].filename == __file__
         assert backend_name(out.data) == backend
         expected = call(numpy_patch)
         values = np.asarray(out.data)
@@ -608,6 +635,16 @@ class TestArrayApiKernelBranches:
         data = xp.astype(backend_patch.data, xp.complex128)
         with pytest.raises(ValueError, match="must be real"):
             backend_patch.new(data=data).hilbert("time")
+
+    def test_phase_weighted_stack_of_integers(self, backend_patch):
+        """Integer data are stacked in float, as numpy does."""
+        xp = array_namespace(backend_patch.data)
+        ints = backend_patch.new(data=xp.astype(backend_patch.data * 100, xp.int32))
+        out = ints.phase_weighted_stack("distance")
+        expected = dc.Patch(
+            data=np.asarray(ints.data), coords=ints.coords, dims=ints.dims
+        ).phase_weighted_stack("distance")
+        assert np.allclose(np.asarray(out.data), expected.data)
 
     def test_full_with_a_numpy_scalar(self, backend_patch):
         """A numpy scalar fill keeps its dtype, on the patch's backend."""

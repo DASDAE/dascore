@@ -30,7 +30,6 @@ from dascore.models.base import values_equal
 from dascore.units import _quantities_equal, get_quantity
 from dascore.utils.array import _apply_binary_ufunc
 from dascore.utils.array_api import (
-    _real_dtype,
     array_namespace,
     asarray_like,
     backend_name,
@@ -728,8 +727,13 @@ def _windowed_normalize_kernel(data, axis: int, norm: str, window: int):
     return out if numpy_input else asarray_like(out, original)
 
 
-@patch_function()
-def pow_coord(patch: PatchType, relative: bool = True, **kwargs) -> PatchType:
+def _scale_by(data, envelope):
+    """Return data, made float if it cannot hold a fraction, times an envelope."""
+    data = _as_float(data)
+    return data * asarray_like(envelope, data)
+
+
+class PowCoord(PatchProcessor):
     """
     Scale the data by coordinate values raised to a power.
 
@@ -793,33 +797,53 @@ def pow_coord(patch: PatchType, relative: bool = True, **kwargs) -> PatchType:
     >>> # Both at once.
     >>> gained = patch.pow_coord(time=2, distance=1)
     """
-    dim_axis_values = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
-    data = _as_float(patch.data)
-    # The curve is built in the data's own precision, so a float32 patch is
-    # not doubled in size by being gained.
-    gain_dtype = np.float32 if _real_dtype(data) == np.float32 else np.float64
-    data_units = get_quantity(patch.attrs.data_units)
-    for dim, axis, power in dim_axis_values:
-        # Sorted, because a gain curve says "further along the coordinate
-        # means more gain", which an unsorted coordinate cannot mean.
-        coord = patch.get_coord(dim, require_sorted=True)
-        curve = _coord_gain_curve(coord, float(power), relative, dim, gain_dtype)
-        shape = [1] * len(patch.dims)
-        shape[axis] = curve.size
-        data = data * asarray_like(curve.reshape(shape), data)
-        coord_units = get_quantity(coord.units)
-        if not relative and coord_units is not None:
-            # Data carrying no units is dimensionless, as it is everywhere
-            # else units are combined, rather than a reason to drop the
-            # coordinate's.
-            gain_units = coord_units ** float(power)
-            data_units = gain_units if data_units is None else data_units * gain_units
-    out = patch.new(data=data)
-    if not _quantities_equal(data_units, get_quantity(patch.attrs.data_units)):
-        # The units moved, so whatever the data was called -- velocity,
-        # strain rate -- it is not that any more.
-        out = out.update_attrs(data_units=data_units, data_type="")
-    return out
+
+    relative: Any = True
+
+    model_config = ConfigDict(extra="allow")
+
+    def get_metadata(self, meta):
+        """Return metadata with the gained units, and each dimension's curve."""
+        extras = self.model_extra or {}
+        dim_axis_values = get_dim_axis_value(meta, kwargs=extras, allow_multiple=True)
+        # The curve is built in the data's own precision, so a float32 patch is
+        # not doubled in size by being gained.
+        # Read by name: a backend's own dtype does not compare with numpy's.
+        single = str(meta.dtype).rsplit(".", 1)[-1] in ("float32", "complex64")
+        gain_dtype = np.float32 if single else np.float64
+        data_units = get_quantity(meta.attrs.data_units)
+        curves = []
+        for dim, axis, power in dim_axis_values:
+            # Sorted, because a gain curve says "further along the coordinate
+            # means more gain", which an unsorted coordinate cannot mean.
+            coord = meta.get_coord(dim, require_sorted=True)
+            curve = _coord_gain_curve(
+                coord, float(power), self.relative, dim, gain_dtype
+            )
+            shape = [1] * len(meta.dims)
+            shape[axis] = curve.size
+            curves.append(curve.reshape(shape))
+            coord_units = get_quantity(coord.units)
+            if not self.relative and coord_units is not None:
+                # Data carrying no units is dimensionless, as it is everywhere
+                # else units are combined, rather than a reason to drop the
+                # coordinate's.
+                gain_units = coord_units ** float(power)
+                data_units = (
+                    gain_units if data_units is None else data_units * gain_units
+                )
+        out = meta
+        if not _quantities_equal(data_units, get_quantity(meta.attrs.data_units)):
+            # The units moved, so whatever the data was called -- velocity,
+            # strain rate -- it is not that any more.
+            out = meta.update_attrs(data_units=data_units, data_type="")
+        return out, {"curves": curves}
+
+    def kernel(self, data, *, curves):
+        """Return the data times each gain curve in turn."""
+        for curve in curves:
+            data = _scale_by(data, curve)
+        return data
 
 
 def _coord_gain_curve(

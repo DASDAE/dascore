@@ -217,6 +217,17 @@ class TestPhaseWeightedStack:
         with pytest.raises(ParameterError, match=msg):
             patch.phase_weighted_stack("time")
 
+    def test_power(self, random_patch):
+        """Power zero gives the plain mean; other powers weight it differently."""
+        axis = random_patch.get_axis("distance")
+        mean = np.mean(random_patch.data, axis=axis, keepdims=True)
+        stacks = {
+            x: random_patch.phase_weighted_stack("distance", power=x).data
+            for x in (0, 1, 2)
+        }
+        assert np.allclose(stacks[0], mean)
+        assert not np.allclose(stacks[1], stacks[2])
+
 
 class TestHilbertIntegration:
     """Integration tests for Hilbert functions."""

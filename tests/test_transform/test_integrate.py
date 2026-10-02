@@ -8,7 +8,7 @@ import pytest
 import dascore as dc
 import dascore.proc.coords
 from dascore.exceptions import CoordError
-from dascore.transform.integrate import integrate
+from dascore.transform.integrate import Integrate, integrate
 from dascore.units import get_quantity
 from dascore.utils.misc import broadcast_for_index
 from dascore.utils.time import to_float
@@ -278,3 +278,21 @@ class TestHoles:
         """Step-less labels are an irregular grid and use label spacing."""
         out = stepless_seam_patch.integrate("time", definite=True)
         assert np.allclose(out.data, 79.5)
+
+
+class TestIntegrateMetadata:
+    """The integral's metadata is worked out without the data."""
+
+    def test_definite_coords_from_metadata(self, random_patch):
+        """A definite integral collapses its dimension in the metadata alone."""
+        out, _ = Integrate(dim="time", definite=True).get_metadata(
+            random_patch.drop_data()
+        )
+        time = random_patch.get_array("time")
+        assert out.shape[out.get_axis("time")] == 1
+        # Evenly sampled, so the mean time is the midpoint, to float rounding.
+        midpoint = time[0] + (time[-1] - time[0]) / 2
+        gap = out.get_coord("time").values[0] - midpoint
+        assert abs(gap) < np.timedelta64(1, "us")
+        assert out.coords.get_array("pre_integrate_time_min")[0] == time[0]
+        assert out.coords.get_array("pre_integrate_time_max")[0] == time[-1]

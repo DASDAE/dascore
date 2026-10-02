@@ -2,19 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
 from operator import mul
+from typing import Any
 
 import numpy as np
 
 from dascore.compat import is_array
-from dascore.constants import PatchType
+from dascore.core.processor import PatchProcessor
 from dascore.utils.misc import broadcast_for_index, iterate
 from dascore.utils.patch import (
     _get_data_type_from_dims,
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
-    patch_function,
     require_no_holes,
 )
 
@@ -31,21 +30,19 @@ def _quasi_mean(array):
     return np.asarray([out], dtype=array.dtype)
 
 
-def _get_definite_integral(patch, array, dxs_or_vals, dims, axes):
+def _get_definite_coords(meta, dims):
+    """Return coords with each dim collapsed to one sample, keeping its min and max."""
+    new_coords = {x: _quasi_mean(meta.get_coord(x).values) for x in dims}
+    for name in dims:
+        coord = meta.get_coord(name).values
+        new_coords[f"pre_integrate_{name}_min"] = (name, np.asarray([coord.min()]))
+        new_coords[f"pre_integrate_{name}_max"] = (name, np.asarray([coord.max()]))
+    return meta.coords.update(**new_coords)
+
+
+def _get_definite_integral(array, dxs_or_vals, axes):
     """Get a definite integral along axes."""
-
-    def _get_new_coords_and_array(patch, array, dims):
-        """Get new coordinates with smashed (or not) coordinates."""
-        new_coords = {x: _quasi_mean(patch.get_coord(x).values) for x in dims}
-        # also add related coords indicating start/stop
-        for name in dims:
-            coord = patch.get_coord(name).values
-            new_coords[f"pre_integrate_{name}_min"] = (name, np.asarray([coord.min()]))
-            new_coords[f"pre_integrate_{name}_max"] = (name, np.asarray([coord.max()]))
-        cm = patch.coords.update(**new_coords)
-        return array, cm
-
-    ndims = len(patch.shape)
+    ndims = len(array.shape)
     for dxs_or_val, ax in zip(dxs_or_vals, axes):
         # Numpy 2/3 compat code
         indexer = broadcast_for_index(ndims, ax, None, fill=slice(None))
@@ -53,11 +50,10 @@ def _get_definite_integral(patch, array, dxs_or_vals, dims, axes):
             array = _TRAP_FUNC(array, x=dxs_or_val, axis=ax)[indexer]
         else:
             array = _TRAP_FUNC(array, dx=dxs_or_val, axis=ax)[indexer]
-    array, coords = _get_new_coords_and_array(patch, array, dims)
-    return array, coords
+    return array
 
 
-def _get_indefinite_integral(patch, array, dxs_or_vals, axes):
+def _get_indefinite_integral(array, dxs_or_vals, axes):
     """
     Get indefinite integral along dimensions.
 
@@ -77,15 +73,10 @@ def _get_indefinite_integral(patch, array, dxs_or_vals, axes):
         avs = (array[stop_indexer] + array[start_indexer]) * (dx_or_val / 2)
         out[stop_indexer] = np.cumsum(avs, axis=ax)
         array = out
-    return array, patch.coords  # coords shouldn't change
+    return array
 
 
-@patch_function(version="1.2")
-def integrate(
-    patch: PatchType,
-    dim: Sequence[str] | str | None,
-    definite: bool = False,
-) -> PatchType:
+class Integrate(PatchProcessor):
     """
     Integrate along a specified dimension using composite trapezoidal rule.
 
@@ -135,17 +126,27 @@ def integrate(
     >>> # integrate along all dimensions.
     >>> all_integrated = patch.integrate(dim=None, definite=False)
     """
-    dims = iterate(dim if dim is not None else patch.dims)
-    require_no_holes(patch, dims, "integrate")
-    dxs_or_vals, axes = _get_dx_or_spacing_and_axes(patch, dims)
-    array = patch.data
-    if axes and array.dtype.kind in "biu":
-        array = array.astype(np.float64)
-    if definite:
-        array, coords = _get_definite_integral(patch, array, dxs_or_vals, dims, axes)
-    else:
-        array, coords = _get_indefinite_integral(patch, array, dxs_or_vals, axes)
-    new_units = _get_data_units_from_dims(patch, dims, mul)
-    data_type = _get_data_type_from_dims(patch, dims, differentiate=False)
-    attrs = patch.attrs.update(data_units=new_units, data_type=data_type)
-    return patch.new(data=array, attrs=attrs, coords=coords)
+
+    __version__ = "1.2"
+    dim: Any
+    definite: Any = False
+
+    def get_metadata(self, meta):
+        """Return the integral's coords, units and data_type, and the spacing."""
+        dims = iterate(self.dim if self.dim is not None else meta.dims)
+        require_no_holes(meta, dims, "integrate")
+        dxs_or_vals, axes = _get_dx_or_spacing_and_axes(meta, dims)
+        coords = _get_definite_coords(meta, dims) if self.definite else meta.coords
+        new_units = _get_data_units_from_dims(meta, dims, mul)
+        data_type = _get_data_type_from_dims(meta, dims, differentiate=False)
+        attrs = meta.attrs.update(data_units=new_units, data_type=data_type)
+        out = meta.new(attrs=attrs, coords=coords)
+        return out, {"axes": axes, "spacing": dxs_or_vals}
+
+    def numpy_kernel(self, data, *, axes, spacing):
+        """Return the integral of the data along the axes."""
+        if axes and data.dtype.kind in "biu":
+            data = data.astype(np.float64)
+        if self.definite:
+            return _get_definite_integral(data, spacing, axes)
+        return _get_indefinite_integral(data, spacing, axes)

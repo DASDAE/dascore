@@ -217,6 +217,16 @@ class TestCompareOrders:
         # since dxdy(3x * 2y) = 6
         assert np.allclose(p1.data, 6.0)
 
+    def test_order_used(self):
+        """A 4th order stencil is exact for a cubic, where order 2 is not."""
+        pytest.importorskip("findiff")
+        x = np.arange(20.0)
+        patch = dc.Patch(data=x**3, coords={"x": x}, dims=("x",))
+        order2 = patch.differentiate("x", order=2).data
+        order4 = patch.differentiate("x", order=4).data
+        assert np.allclose(order4, 3 * x**2)
+        assert np.allclose(order2[1:-1], 3 * x[1:-1] ** 2 + 1)
+
 
 class TestDataType:
     """A derivative changes what the data is, where the vocabulary says so."""

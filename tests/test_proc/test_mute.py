@@ -7,6 +7,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import ParameterError
+from dascore.proc.mute import LineMute, SlopeMute
 
 
 def _get_testable_coord_values(coord, relative=False):
@@ -142,6 +143,17 @@ class Test1DLineMute:
             one_ranges=[(..., v1 - step), (v2 + step, ...)],
             relative=True,
         )
+
+    def test_absolute(self, patch_ones):
+        """Absolute values are coordinate values, not offsets from the start."""
+        dist = patch_ones.get_array("distance") + 100
+        patch = patch_ones.update_coords(distance=dist)
+        absolute = patch.line_mute(distance=(150, 200), relative=False)
+        relative = patch.line_mute(distance=(150, 200), relative=True)
+        assert not np.array_equal(absolute.data, relative.data)
+        axis = patch.get_axis("distance")
+        muted = (absolute.data == 0).all(axis=1 - axis)
+        assert np.array_equal(muted, (dist >= 150) & (dist <= 200))
 
     def test_mute_open_interval(self, patch_ones):
         """Mute using None for interval ends."""
@@ -831,3 +843,30 @@ class TestSlopeMute:
         ]
         expected = [0, 0, 1, 1]
         _assert_point_values(muted, self._dims, points=points, expected_values=expected)
+
+
+class TestMuteProcessors:
+    """The mute classes keep the old functions' keyword-only options."""
+
+    def test_line_mute_refuses_positional(self):
+        """Every option of line_mute is keyword-only."""
+        with pytest.raises(TypeError, match="0 positional"):
+            LineMute(0.1)
+
+    def test_slope_mute_takes_only_slopes_positionally(self):
+        """Only the slopes come by position."""
+        with pytest.raises(TypeError, match="1 positional"):
+            SlopeMute((1, 3), ("time", "distance"))
+
+    def test_envelope_from_metadata(self, patch_ones):
+        """The envelope is worked out from the metadata alone."""
+        meta = patch_ones.drop_data()
+        _, plan = SlopeMute(slopes=(20.0, 30.0)).get_metadata(meta)
+        env = np.broadcast_to(plan["env"], meta.shape)
+        # (distance, time) indices of 2 m and 8 ms samples; muted between
+        # 20 and 30 m/s, as in test_slope_mute_basic.
+        assert env[50, 500] == 0  # 100 m at 4 s
+        assert env[25, 250] == 0  # 50 m at 2 s
+        assert env[25, 500] == 1  # 50 m at 4 s
+        assert env[75, 500] == 1  # 150 m at 4 s
+        assert env[40, 250] == 1  # 80 m at 2 s
