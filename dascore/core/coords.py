@@ -321,7 +321,7 @@ class CoordSummary(DascoreBaseModel):
                 np.asarray(start).astype(dtype)[()],
                 np.asarray(stop).astype(dtype)[()],
             )
-            unit, count = np.datetime_data(dtype)
+            unit, count = np.datetime_data(dtype.str)
             step = np.asarray(step).astype(f"m8[{count}{unit}]")[()]
         return get_coord(start=start, stop=stop, step=step, units=self.units)
 
