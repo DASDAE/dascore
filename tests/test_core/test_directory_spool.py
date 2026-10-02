@@ -491,6 +491,18 @@ class TestSampleSelectPushdown:
         expected = spool[0].select(distance=(1, 3), samples=True)
         assert spool.select(distance=(1, 3), samples=True)[0] == expected
 
+    def test_uneven_coordinate_reads_whole(self, tmp_path, trims):
+        """A coordinate without a step cannot be restated, so it is not hinted."""
+        patch = dc.get_example_patch().select(distance=(0, 20), samples=True)
+        values = np.cumsum(np.arange(1, 21, dtype=float))
+        patch = patch.update_coords(distance=values)
+        patch.io.write(tmp_path / "uneven.h5", "DASDAE")
+        spool = dc.spool(tmp_path / "uneven.h5")
+        expected = spool[0].select(distance=(2, 5), samples=True)
+        trims.clear()
+        assert spool.select(distance=(2, 5), samples=True)[0] == expected
+        assert all("distance" not in trim for trim in trims)
+
     def test_in_memory_spool_keeps_its_ids(self):
         """A spool of patches in memory selects exactly as each patch does."""
         spool = dc.get_example_spool("random_das")
