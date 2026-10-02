@@ -76,6 +76,7 @@ from dascore.exceptions import (
     InvalidSpoolQueryError,
     MissingPatchError,
     ParameterError,
+    RemoteCacheError,
     UnknownFiberFormatError,
     UnresolvedPatchError,
 )
@@ -128,11 +129,7 @@ from dascore.utils.patch import (
     get_patch_names,
     stack_patches,
 )
-from dascore.utils.paths import (
-    coerce_to_upath,
-    is_local_path,
-    requires_local_directory,
-)
+from dascore.utils.paths import coerce_to_upath, is_local_path
 from dascore.utils.pd import (
     drop_selector_names,
     get_dim_names_from_columns,
@@ -2477,19 +2474,17 @@ class Spool(NodeRepr, NamespaceOwner):
             raise FileNotFoundError(f"{path} does not exist")
         from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
-        if not (file_format and file_version):
-            # Both internal callers already know the format, and sniffing
-            # it again opens the file a second time; for a remote source
-            # that is a round trip.
-            file_format, file_version = dc.get_format(path, file_format, file_version)
-        # Resolving the reader canonicalizes the names and still rejects a
-        # pair no reader claims.
-        fiber_io = dc.io.FiberIO.manager.get_fiberio(
-            format=file_format, version=file_version
-        )
-        _format, _version = fiber_io.name, fiber_io.version
-        if fiber_io.input_type != "directory" and path.is_dir():
-            raise FileNotFoundError(f"{path} is a directory")
+        if file_format and file_version:
+            # A caller which already knows the format saves opening the
+            # file a second time; for a remote source that is a round trip.
+            # Resolving the reader canonicalizes the names and still
+            # rejects a pair no reader claims.
+            fiber_io = dc.io.FiberIO.manager.get_fiberio(
+                format=file_format, version=file_version
+            )
+            _format, _version = fiber_io.name, fiber_io.version
+        else:
+            _format, _version = dc.get_format(path, file_format, file_version)
         out = cls()
         out._catalog = PatchCatalog.from_file(
             path, file_format=_format, file_version=_version
@@ -2656,7 +2651,7 @@ class Spool(NodeRepr, NamespaceOwner):
             return name.startswith("_") and name.endswith(suffix)
 
         def _strip_identity(df):
-            # synthetic per-catalog identities (memory:// paths, ids) and
+            # synthetic per-catalog identities (memorypatch:// paths, ids) and
             # backend provenance (format/version) are not content; equal
             # spools must compare equal without them, and column order
             # (a construction artifact) must not matter. A patch's own
@@ -3011,9 +3006,13 @@ def _spool_from_str(path, **kwargs):
     elif path.exists():
         try:
             _format, _version = dc.get_format(path, **kwargs)
-        except UnknownFiberFormatError:
+        except (UnknownFiberFormatError, RemoteCacheError) as exc:
             if path.is_dir():
-                requires_local_directory(path, label="Directory spool")
+                msg = (
+                    f"{path} is not a single store DASCore reads (e.g. zarr); "
+                    "spools of a directory of files need local filesystem paths."
+                )
+                raise InvalidSpoolError(msg) from exc
             raise
         return Spool._from_file(path, _format, _version)
     else:

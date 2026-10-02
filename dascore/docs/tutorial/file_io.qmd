@@ -60,14 +60,16 @@ patch.io.write(zarr_path, "ZARR", encoding=encoding)
 zarr_patch = dc.read(zarr_path)[0]
 ```
 
-A store on object storage is a `UPath` carrying its storage options, e.g. `UPath("s3://bucket/das.zarr", anon=True)`, and `dc.read`, `dc.scan`, and `dc.spool` take it as they take a local store. A scan reads only metadata and coordinates, and loading a patch reads only the chunks its selection touches. A remote store is a spool by itself, but a remote directory of stores cannot be indexed.
-
-Writing builds the new store beside the path and then moves it into place. On object storage that move is a copy, so a reader can see a partly replaced store while it runs.
+A store on object storage is a `UPath` carrying its storage options, and `dc.read`, `dc.scan`, and `dc.spool` take it as they take a local store. A scan reads only metadata and coordinates, and loading a patch reads only the chunks its selection touches. A remote directory of stores cannot be indexed.
 
 ```python
-spool = dc.spool(zarr_path)
-first = spool.select(time=(None, patch.get_coord("time").min()))[0]
+store = UPath("s3://bucket/das.zarr", anon=True)
+spool = dc.spool(store)
+start = spool.get_contents()["time_min"].min()
+first_second = spool.select(time=(start, start + dc.to_timedelta64(1)))[0]
 ```
+
+Writing builds the new store beside the path and then moves it into place. On object storage that move is a copy, so a reader can see a partly replaced store while it runs.
 
 # Scanning metadata
 

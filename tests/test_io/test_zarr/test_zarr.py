@@ -74,12 +74,6 @@ def foreign_store(request, tmp_path_factory):
     return path, data, time
 
 
-def _reader(path):
-    """Return the FiberIO for a store's zarr format."""
-    file_format, version = dc.get_format(path)
-    return dc.io.FiberIO.manager.get_fiberio(format=file_format, version=version)
-
-
 def _edit_attrs(path, **attrs):
     """Set payload attrs in place and consolidate, as another zarr tool would."""
     zarr.open_group(path, mode="r+")["data"].attrs.update(attrs)
@@ -177,10 +171,17 @@ class TestForeignStore:
         assert np.allclose(patch.data, data)
         assert np.array_equal(patch.get_array("time"), time)
 
+    def test_named_version_believed(self, foreign_store):
+        """A store opens under either zarr version named, as its marker says."""
+        path, data, _ = foreign_store
+        for version in VERSIONS:
+            patch = dc.read(path, file_format="ZARR", file_version=version)[0]
+            assert np.allclose(patch.data, data)
+
     def test_read_array_decodes(self, foreign_store):
         """read_array applies the scale factor as read does."""
         path, data, _ = foreign_store
-        out = _reader(path).read_array(path, ((1, 3), None))
+        out = ZarrV3().read_array(path, ((1, 3), None))
         assert np.allclose(out, data[1:3])
 
 
@@ -307,6 +308,14 @@ class TestRemote:
         assert dc.read(path)[0] == zarr_patch
         (summary,) = dc.scan(path.parent)
         assert summary.source_format == "ZARR"
+
+    def test_memory_spool_derived(self, zarr_patch):
+        """A memory:// store is a file path, not a live patch, when derived."""
+        path = UPath("memory://dascore_zarr_test/derived.zarr")
+        dc.write(zarr_patch, path, "zarr")
+        spool = dc.spool(path)
+        assert spool.chunk(time=None)[0] == zarr_patch
+        assert all(x == zarr_patch for x in spool + dc.spool([zarr_patch]))
 
 
 class TestReplace:
@@ -493,18 +502,17 @@ class TestMultiPatch:
     def test_keyed_read_skips_listing(self, multi_written, zarr_spool, monkeypatch):
         """A keyed read opens its group without listing the others."""
         path, names = multi_written
-        reader = _reader(path)
         monkeypatch.setattr(zarr_core, "_patch_datasets", None)
-        out = reader.read_array(path, key=names[1])
+        out = ZarrV3().read_array(path, key=names[1])
         assert np.array_equal(out, zarr_spool[1].data)
 
     def test_key_required(self, multi_written):
         """read_array needs a key, and a known one, on a multi-patch store."""
         path, _ = multi_written
         with pytest.raises(PatchAttributeError, match="several patches"):
-            _reader(path).read_array(path)
+            ZarrV3().read_array(path)
         with pytest.raises(PatchAttributeError, match="No patch named"):
-            _reader(path).read_array(path, key="bob")
+            ZarrV3().read_array(path, key="bob")
 
     def test_encoding_each_group(self, zarr_spool, tmp_path):
         """One per-variable encoding lands on every patch's payload."""
@@ -581,7 +589,24 @@ class TestMultiPatch:
         path = UPath("zarrauth://dascore_zarr_auth/spool.zarr", token="secret")
         dc.write(zarr_spool, path, "zarr")
         assert len(dc.read(path)) == len(zarr_spool)
-        assert len(dc.spool(path)) == len(zarr_spool)
+
+    @pytest.mark.parametrize(
+        ("name", "file_format"),
+        [("auth_spool.zarr", "zarr"), ("auth_spool.h5", "dasdae")],
+    )
+    def test_spool_loads_with_storage_options(self, zarr_spool, name, file_format):
+        """A remote spool's patches load with the path's options, also derived."""
+        fsspec.register_implementation("zarrauth", AuthMemory, clobber=True)
+        upath.registry.register_implementation("zarrauth", MemoryPath, clobber=True)
+        path = UPath(f"zarrauth://dascore_zarr_auth/{name}", token="secret")
+        dc.write(zarr_spool, path, file_format)
+        spool = dc.spool(path)
+        _, later, twin = zarr_spool
+        assert spool.select(station="SUE")[0] == twin
+        start = later.get_coord("time").min()
+        assert spool.select(time=(start, None), station="BOB")[0] == later
+        assert all(x.data.size for x in spool.chunk(time=1))
+        assert all(x.data.size for x in spool + dc.spool([twin]))
 
     def test_remote_spool_reads_one_group(self, zarr_spool):
         """
@@ -594,7 +619,7 @@ class TestMultiPatch:
         dc.write(zarr_spool, path, "zarr", encoding={"data": {"chunks": (10, 100)}})
         CountMemory.read.clear()
         spool = dc.spool(path)
-        assert not [x for x in CountMemory.read if "/data/" in x]
+        assert not [x for x in CountMemory.read if "/data/c/" in x]
         # A format 3 store is not probed for format 2 metadata files.
         assert not [x for x in CountMemory.read if "/.z" in x]
         _, later, _ = zarr_spool

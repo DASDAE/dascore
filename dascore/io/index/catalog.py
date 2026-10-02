@@ -35,6 +35,7 @@ import numpy as np
 import pandas as pd
 
 import dascore as dc
+from dascore.compat import UPath
 from dascore.constants import PROGRESS_LEVELS, ExecutorType, namespace_select_type
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import MissingPatchError
@@ -55,7 +56,7 @@ from dascore.utils.misc import (
     express_range_for_coord,
     is_range,
 )
-from dascore.utils.paths import coerce_to_local_path, is_memory_uri
+from dascore.utils.paths import coerce_to_local_path, is_local_path, is_memory_uri
 
 # Directory archives present in per-patch time order (source ordinals
 # alone cannot interleave multi-patch files); ordinal and patch row stay
@@ -241,8 +242,11 @@ def _live_entries(patches: Sequence[dc.Patch]) -> dict[str, dc.Patch]:
 class FileResolver(PatchResolver):
     """Load patches through dc.read; remoteness is the path layer's job."""
 
-    def __init__(self, root: Path | str | None = None):
+    def __init__(self, root: Path | str | None = None, upaths: Mapping | None = None):
         self._root = Path(root) if root is not None else None
+        # Rows hold path strings; a remote path's storage options live only
+        # on the UPath it was given as, so that is kept to reopen it.
+        self._upaths = dict(upaths or {})
 
     def _read(self, path, row: Mapping, trim: dict, source_patch_key: str):
         """
@@ -263,6 +267,8 @@ class FileResolver(PatchResolver):
 
     def resolve_path(self, path: str | Path) -> str | Path:
         """Resolve a row's source path against the catalog root."""
+        if upath := self._upaths.get(str(path)):
+            return upath
         return resolve_against_root(path, self._root)
 
     def resolve(self, row: Mapping, **trim) -> dc.Patch:
@@ -290,7 +296,7 @@ class CompositeResolver(PatchResolver):
     Route rows to a live registry, a plan, or the filesystem by scheme.
 
     Union catalogs mix file-backed rows (absolute paths), in-memory rows
-    (memory:// paths), and plan-output rows (plan://token/... paths);
+    (memorypatch:// paths), and plan-output rows (plan://token/... paths);
     this resolver dispatches accordingly.
     """
 
@@ -319,6 +325,8 @@ class CompositeResolver(PatchResolver):
         if paths is not None:
             entries = {k: v for k, v in entries.items() if k in paths}
         self.live._registry.update(entries)
+        file = getattr(resolver, "file", resolver)
+        self.file._upaths.update(getattr(file, "_upaths", {}))
         plans = getattr(resolver, "plan_entries", dict)()
         if paths is not None:
             plans = {
@@ -806,7 +814,9 @@ class PatchCatalog:
         if mtime is not None and scan_unit_stats(source) == (mtime, size):
             mtimes[str(source)], sizes[str(source)] = mtime, size
         records = summaries_to_records(summaries, mtimes_ns=mtimes, sizes_bytes=sizes)
-        out = cls(resolver=FileResolver())
+        remote = isinstance(path, UPath) and not is_local_path(path)
+        upaths = {str(path): path} if remote else {}
+        out = cls(resolver=FileResolver(upaths=upaths))
         out.backend.write_sources(records)
         out._invalidate()
         return out

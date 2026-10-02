@@ -185,6 +185,13 @@ class TestMemoryRemoteSpool:
         with pytest.raises(InvalidSpoolError, match="local filesystem"):
             dc.spool(root)
 
+    def test_spool_directory_with_metadata_xml_rejected(self):
+        """A remote folder a directory reader cannot probe gives the same error."""
+        root = UPath("memory://dascore/remote_xml_dir")
+        (root / "metadata.xml").write_text("<a/>")
+        with pytest.raises(InvalidSpoolError, match="local filesystem"):
+            dc.spool(root)
+
     def test_spool_unknown_file(self):
         """A remote file no reader claims is refused as a local one is."""
         path = UPath("memory://dascore/remote_unknown/file.txt")
