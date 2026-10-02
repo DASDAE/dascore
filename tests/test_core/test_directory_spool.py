@@ -16,6 +16,7 @@ from dascore.constants import ONE_SECOND
 from dascore.core.source import ArraySource
 from dascore.core.spool import Spool
 from dascore.exceptions import InvalidSpoolError, MissingPatchError, ParameterError
+from dascore.io.index.catalog import FileResolver
 from dascore.utils.misc import suppress_warnings
 
 
@@ -428,6 +429,88 @@ class TestSelect:
         patch = selected_spool[0]
         history = patch.attrs.history
         assert len(history) <= 1
+
+
+class TestSampleSelectPushdown:
+    """A samples=True select reads only the selected samples (#1318)."""
+
+    @pytest.fixture()
+    def trims(self, monkeypatch):
+        """Record the read hints each file-backed row is resolved with."""
+        out = []
+        resolve = FileResolver.resolve
+
+        def _spy(self, row, **trim):
+            out.append(trim)
+            return resolve(self, row, **trim)
+
+        monkeypatch.setattr(FileResolver, "resolve", _spy)
+        return out
+
+    @pytest.mark.parametrize(
+        "select",
+        [
+            {"distance": (10, 20)},
+            {"distance": (None, 30), "time": (5, -5)},
+            {"distance": (-40, None)},
+            {"time": (0, 1)},
+        ],
+    )
+    @pytest.mark.parametrize("relative", [False, True])
+    def test_reads_only_selected_samples(
+        self, multi_patch_file_spool, trims, select, relative
+    ):
+        """Each patch reads the window and equals the eager selection."""
+        spool = multi_patch_file_spool
+        expected = [x.select(samples=True, relative=relative, **select) for x in spool]
+        trims.clear()
+        out = list(spool.select(samples=True, relative=relative, **select))
+        assert out == expected
+        assert len(trims) == len(expected)
+        for trim, patch in zip(trims, out):
+            assert set(trim) == set(select)
+            for name, (low, high) in trim.items():
+                coord = patch.get_coord(name)
+                step = coord.step
+                assert coord.min() - step < low <= coord.min()
+                assert coord.max() <= high < coord.max() + step
+
+    def test_empty_range(self, multi_patch_file_spool):
+        """A sample range holding nothing gives what the eager select does."""
+        spool = multi_patch_file_spool
+        expected = [x.select(distance=(5, 5), samples=True) for x in spool]
+        assert list(spool.select(distance=(5, 5), samples=True)) == expected
+
+    def test_float32_far_from_zero(self, tmp_path):
+        """Half-step bounds that round onto neighbours still pick exactly."""
+        patch = dc.get_example_patch().select(distance=(0, 20), samples=True)
+        coord = dc.get_coord(start=np.float32(1e5), step=np.float32(0.01), shape=(20,))
+        patch = patch.update_coords(distance=coord.change_length(20))
+        patch.io.write(tmp_path / "far.h5", "DASDAE")
+        spool = dc.spool(tmp_path / "far.h5")
+        expected = spool[0].select(distance=(1, 3), samples=True)
+        assert spool.select(distance=(1, 3), samples=True)[0] == expected
+
+    def test_in_memory_spool_keeps_its_ids(self):
+        """A spool of patches in memory selects exactly as each patch does."""
+        spool = dc.get_example_spool("random_das")
+        expected = [x.select(time=(10, 20), samples=True) for x in spool]
+        out = list(spool.select(time=(10, 20), samples=True))
+        assert [x.attrs.data_id for x in out] == [x.attrs.data_id for x in expected]
+
+    def test_after_a_value_select_stays_on_the_patch(
+        self, multi_patch_file_spool, trims
+    ):
+        """Samples counted from an already trimmed patch are not pushed."""
+        spool = multi_patch_file_spool
+        dist = spool[0].get_coord("distance")
+        value = (dist.min() + 5 * dist.step, None)
+        expected = [
+            x.select(distance=value).select(distance=(0, 3), samples=True)
+            for x in spool
+        ]
+        sub = spool.select(distance=value).select(distance=(0, 3), samples=True)
+        assert list(sub) == expected
 
 
 class TestBasicChunk:
