@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -10,7 +12,7 @@ import dascore as dc
 import dascore.examples as dc_examples
 from dascore.examples import EXAMPLE_INVENTORIES, EXAMPLE_PATCHES
 from dascore.exceptions import DASDAEUnpickleError, UnknownExampleError
-from dascore.utils.downloader import fetch
+from dascore.utils.downloader import fetch, get_fetcher
 from dascore.utils.intervals import normalize_value, value_kind
 from dascore.utils.time import to_float
 
@@ -71,12 +73,15 @@ class TestGetExampleSpool:
         assert len(spool[0].data)
 
     @pytest.mark.network
-    def test_tampered_cache_file_is_replaced(self, tmp_path):
+    def test_tampered_cache_file_is_replaced(self, tmp_path, monkeypatch):
         """A cached registry file changed after its first fetch is re-fetched."""
+        # Keep the shared data cache, which other tests read, out of it.
+        monkeypatch.delenv("DFS_DATA_DIR", raising=False)
         name = "UoU_lf_urban.hdf5"
         with dc.config_context(downloader_cache_dir=tmp_path):
             dc.get_example_spool(name)
-            cached = next(tmp_path.rglob(name))
+            cached = Path(get_fetcher().abspath) / name
+            assert cached.is_relative_to(tmp_path)
             original = cached.read_bytes()
             cached.write_bytes(original + b"tampered")
             dc.get_example_spool(name)
