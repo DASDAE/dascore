@@ -2098,7 +2098,8 @@ class Spool(NodeRepr, NamespaceOwner):
             kwargs are used to specify the dimension along which to chunk, eg:
             `time=10` chunks along the time axis in 10 second increments.
             Each window is half-open, ``[start, start + length)``, so
-            windows without overlap share no sample and drop none.
+            windows without overlap share no sample; only a final partial
+            window is dropped, unless ``keep_partial=True``.
             The value may also be a quantity: one of the coordinate's own
             units (`time=10 * s`) or a data size (`time=25 * megabytes`),
             which chunks so each patch's data array is about that large.

@@ -95,7 +95,7 @@ with pytest.raises(ChunkError, match="non-dimensional coordinate"):
 
 ## Regular windows
 
-A chunk length cuts each partition into half-open windows `[start, start + length)`, each starting `length - overlap` after the one before, and a window holds exactly the samples whose labels fall inside it, judged on each source's own sample grid. Without overlap the windows partition the samples, so none is dropped or repeated; a length that is not a whole number of samples gives windows whose counts differ by one. Each output's envelope names its first and last samples. A window is complete when it ends no later than one sample past the partition's last; `keep_partial=True` keeps the rest too.
+A chunk length cuts each partition into half-open windows `[start, start + length)`, each starting `length - overlap` after the one before, and a window holds exactly the samples whose labels fall inside it, judged on each source's own sample grid. Without overlap the windows partition the samples, so none is repeated; a length that is not a whole number of samples gives windows whose counts differ by one. With overlap, a window is only made when it holds a sample past the end of the one before. A window is complete when it ends no later than one sample past the partition's last sample; only complete windows are kept unless `keep_partial=True`. An output's coordinate range runs from its first sample to its last when its sources are evenly sampled and their sample positions are known; otherwise (an uneven coordinate, or a view a relative selection trimmed) it states the window's own bounds.
 
 ## Chunking by size
 

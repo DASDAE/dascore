@@ -111,6 +111,24 @@ class TestGetIntervals:
         assert out[-1, 1] == stop
         assert out[0, 0] == start
 
+    def test_full_float_window_within_rounding(self):
+        """A window ending one step past the last sample is full despite rounding."""
+        out = get_intervals(0.0, 0.8999999999999998, 0.2, step=0.09999999999999998)
+        assert len(out) == 5
+
+    def test_window_a_sample_short_is_partial(self):
+        """A window missing one sample is dropped unless partials are kept."""
+        assert get_intervals(0, 8, 5, step=1).tolist() == [[0, 5]]
+        assert len(get_intervals(0, 8, 5, step=1, keep_partials=True)) == 2
+
+    def test_overlap_window_must_hold_a_new_sample(self):
+        """A window holding only samples of the one before is not emitted."""
+        out = get_intervals(0, 12, 4, overlap=2, step=1, keep_partials=True)
+        assert out[:, 0].tolist() == [0, 2, 4, 6, 8, 10]
+        # without overlap the last sample is its own window
+        out = get_intervals(0, 12, 4, step=1, keep_partials=True)
+        assert out[:, 0].tolist() == [0, 4, 8, 12]
+
     def test_timedelta_start_numeric_length(self):
         """
         A numeric length for a timedelta64 start should be coerced to a

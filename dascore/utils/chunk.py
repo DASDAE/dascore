@@ -17,6 +17,13 @@ from dascore.utils.time import (
     to_timedelta64,
 )
 
+# Slack when deciding which side of a grid position a window edge falls on,
+# so an edge a float rounding error short of a position still holds it.
+_GRID_SNAP_RTOL = 1e-9
+# The fraction of a step a float member bound is widened by when read, so a
+# label known to rounding (float32 most of all) is not lost.
+_READ_PAD = 0.1
+
 
 def get_intervals(
     start,
@@ -63,7 +70,7 @@ def get_intervals(
         length = to_timedelta64(length)
     # get variable and perform checks
     overlap = length * 0 if not overlap else overlap
-    step = length * 0 if pd.isnull(step) else step
+    step = length * 0 if step is None or pd.isnull(step) else step
     # Check for errors. Overlap equal to length would produce zero-stride
     # segments, so it is also rejected.
     if overlap >= length:
@@ -72,21 +79,19 @@ def get_intervals(
     if length < step:
         msg = "Cant chunk when chunk length is shorter than one sample step."
         raise ChunkError(msg)
-    # If the step is known, we need to account for it in the total duration
-    # See 474.
-    _raw_duration = stop - start
-    duration = _raw_duration + step if step is not None else _raw_duration
-    if duration < length and not keep_partials:
+    # A window is full when it ends no later than one step past the last
+    # sample, to within the step's float rounding (see #474).
+    top = stop + step * _GRID_SNAP_RTOL if isinstance(step, float) else stop
+    if top - start + step < length and not keep_partials:
         msg = "Cant chunk when data interval is less than chunk size. "
         raise ChunkError(msg)
-    # reference with no overlap
-    new_step = length - overlap
-    reference = np.arange(start, stop + new_step, step=new_step)
-    # every window holding a sample starts at or before the last one
-    starts = reference[reference <= stop]
+    reference = np.arange(start, stop + length - overlap, step=length - overlap)
+    # after the first, a window must hold a sample past the previous one's end
+    reach = top - overlap if overlap > 0 * overlap else top
+    starts = reference[: max(np.searchsorted(reference, reach, "right"), 1)]
     # each window is half-open: [start, start + length)
     ends = starts + length
     if not keep_partials:
-        full = ends <= stop + step
-        starts, ends = starts[full], ends[full]
+        full = np.searchsorted(ends, top + step, "right")
+        starts, ends = starts[:full], ends[:full]
     return np.stack([starts, ends]).T
