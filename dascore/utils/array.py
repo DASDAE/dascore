@@ -19,7 +19,13 @@ from dascore.compat import array, is_array
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError, PatchBroadcastError, UnitError
 from dascore.models import ArrayLike
-from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
+from dascore.units import (
+    DimensionalityError,
+    Quantity,
+    Unit,
+    get_quantity,
+    get_quantity_str,
+)
 from dascore.utils.array_api import (
     array_namespace,
     asarray_like,
@@ -471,7 +477,7 @@ def _apply_binary_ufunc(
         # the scale comes out of a division, so shed its float noise
         magnitude = float(f"{quantity.magnitude:.12g}")
         if magnitude == 1:
-            return str(quantity.units)
+            return get_quantity_str(quantity.units)
         return str(magnitude * quantity.units)
 
     def _apply_op_one_unitful(
@@ -588,7 +594,7 @@ def _apply_binary_ufunc(
         except TypeError:
             # a logarithmic level cannot be divided by a number, but it has
             # kept its unit through the operation
-            return new_data, attrs.update(data_units=str(probe.units))
+            return new_data, attrs.update(data_units=get_quantity_str(probe.units))
 
     def _apply_op_both_unitful(
         patch, other, operator, attrs, data_units, other_units, reversed=False
@@ -636,7 +642,9 @@ def _apply_binary_ufunc(
                 data_units=_fallback_label(new_data, data_units)
             )
         if hasattr(result, "units"):
-            return result.magnitude, attrs.update(data_units=str(result.units))
+            return result.magnitude, attrs.update(
+                data_units=get_quantity_str(result.units)
+            )
         # Result is unitless (e.g., from boolean comparison)
         return result, attrs.update(data_units=None)
 
