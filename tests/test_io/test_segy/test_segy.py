@@ -1,7 +1,5 @@
 """Tests for SEGY format."""
 
-import warnings
-
 import numpy as np
 import pytest
 
@@ -105,8 +103,7 @@ class TestSegyWrite:
             patch.io.write(path, "segy")
         # A start on a whole second is written as it is, without a warning.
         whole = channel_patch.update_coords(time_min=start.astype("datetime64[s]"))
-        with warnings.catch_warnings():
-            warnings.filterwarnings("error", message=".*whole seconds")
+        with suppress_warnings(UserWarning, message=".*whole seconds", action="error"):
             whole.io.write(path.with_name("whole.segy"), "segy")
 
     def test_loss_of_precision_raises(self, random_patch, tmp_path_factory):
