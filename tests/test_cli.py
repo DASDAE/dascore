@@ -85,7 +85,7 @@ class TestDocuments:
         record = next(
             x
             for x in manifest["documents"]
-            if x["id"] == "dascore.proc.filter.pass_filter"
+            if x["id"] == "dascore.proc.filter.PassFilter"
         )
         assert "low pass" in record["keywords"]
         text = doc_cache.read_document(root, manifest, "Patch.pass_filter")

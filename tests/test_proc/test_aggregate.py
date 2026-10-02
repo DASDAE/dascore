@@ -426,6 +426,19 @@ class TestIdxMaxMin:
         with pytest.raises(CoordError, match="not found"):
             random_patch.idxmax("not_a_dim")
 
+    def test_non_dimensional_coord_raises(self, random_patch):
+        """A coordinate which is not a dimension cannot be reduced."""
+        dist = random_patch.get_array("distance")
+        patch = random_patch.update_coords(dist2=("distance", dist * 2))
+        with pytest.raises(ParameterError, match="at least one dimension"):
+            patch.idxmax("dist2")
+
+    def test_squeeze_all_refused_from_metadata(self, random_patch):
+        """Squeezing the only dimension is refused before any data are read."""
+        meta = random_patch.select(distance=0, samples=True).squeeze().drop_data()
+        with pytest.raises(ParameterError, match="Cannot squeeze all"):
+            dc.proc.agg.Idxmax(dim="time", dim_reduce="squeeze").get_metadata(meta)
+
     def test_reduced_dimension_raises(self, random_patch):
         """The partial coord left behind has no values to point at."""
         with pytest.raises(ParameterError, match="holds no values"):

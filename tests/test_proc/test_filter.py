@@ -8,6 +8,7 @@ import sys
 import numpy as np
 import pandas as pd
 import pytest
+from scipy import ndimage, signal
 
 import dascore as dc
 from dascore.exceptions import (
@@ -269,6 +270,14 @@ class TestMedianFilter:
         out = random_patch.median_filter(time=1, distance=1, samples=True)
         assert out == random_patch
 
+    def test_mode_matches_scipy(self, random_patch):
+        """The edge mode is scipy's."""
+        out = random_patch.median_filter(time=3, samples=True, mode="wrap")
+        size = [1, 1]
+        size[random_patch.get_axis("time")] = 3
+        expected = ndimage.median_filter(random_patch.data, size=size, mode="wrap")
+        assert np.allclose(out.data, expected)
+
 
 class TestNotchFilter:
     """Tests for the notch filter."""
@@ -328,6 +337,15 @@ class TestNotchFilter:
         with pytest.raises(UnitError, match="has no units"):
             patch.notch_filter(distance=value, q=30)
 
+    def test_q_matches_scipy(self, random_patch):
+        """The quality factor is scipy's."""
+        sr = get_dim_sampling_rate(random_patch, "time")
+        b, a = signal.iirnotch(60, Q=5, fs=sr)
+        axis = random_patch.get_axis("time")
+        expected = signal.filtfilt(b, a, random_patch.data, axis=axis)
+        out = random_patch.notch_filter(time=60, q=5)
+        assert np.allclose(out.data, expected)
+
 
 class TestSavgolFilter:
     """Simple tests on Savgol filter."""
@@ -385,6 +403,13 @@ class TestSavgolFilter:
         assert np.allclose(out.data, swapped.data)
         assert not np.allclose(out.data, last_keyword.data)
 
+    def test_window_matches_scipy(self, random_patch):
+        """The window length in samples is scipy's."""
+        out = random_patch.savgol_filter(polyorder=2, time=7, samples=True)
+        axis = random_patch.get_axis("time")
+        expected = signal.savgol_filter(random_patch.data, 7, 2, axis=axis)
+        assert np.allclose(out.data, expected)
+
 
 class TestGaussianFilter:
     """Test the Gaussian Filter."""
@@ -406,6 +431,14 @@ class TestGaussianFilter:
         out = event_patch_2.gaussian_filter(time=5, distance=5, samples=True)
         assert isinstance(out, dc.Patch)
         assert out.shape == event_patch_2.shape
+
+    def test_truncate_matches_scipy(self, random_patch):
+        """The kernel is truncated where scipy truncates it."""
+        out = random_patch.gaussian_filter(time=2, samples=True, truncate=1.0)
+        axis = random_patch.get_axis("time")
+        data = random_patch.data
+        expected = ndimage.gaussian_filter1d(data, 2, axis=axis, truncate=1.0)
+        assert np.allclose(out.data, expected)
 
 
 class TestSlopeFilter:

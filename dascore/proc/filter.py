@@ -9,10 +9,11 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, ClassVar
 
 import numpy as np
 import pandas as pd
+from pydantic import ConfigDict
 from scipy.ndimage import gaussian_filter as np_gauss
 from scipy.ndimage import median_filter as nd_median_filter
 from scipy.ndimage import sobel as nd_sobel
@@ -82,10 +83,7 @@ def _get_sos(sr, filt_min, filt_max, corners):
     return zpk2sos(z, p, k)
 
 
-@patch_function()
-def pass_filter(
-    patch: PatchType, corners: int = 4, zerophase: bool = True, **kwargs
-) -> PatchType:
+class PassFilter(PatchProcessor):
     """
     Apply a Butterworth pass filter (bandpass, highpass, or lowpass).
 
@@ -127,17 +125,30 @@ def pass_filter(
     --------
     filtering, bandpass, low pass, high pass, frequency
     """
-    dim, (arg1, arg2) = check_filter_kwargs(kwargs)
-    axis = patch.get_axis(dim)
-    coord_units = patch.coords.coord_map[dim].units
-    filt_min, filt_max = get_filter_units(arg1, arg2, to_unit=coord_units, dim=dim)
-    sr = get_dim_sampling_rate(patch, dim)
-    # get nyquist and low/high in terms of nyquist
-    sos = _get_sos(sr, filt_min, filt_max, corners)
-    if patch.data.dtype == np.float32:
-        sos = sos.astype(np.float32, copy=False)
-    apply_sos = sosfiltfilt if zerophase else sosfilt
-    return patch.new(data=apply_sos(sos, patch.data, axis=axis))
+
+    # Loose here and below, so values reach scipy, history and ids as given.
+    corners: Any = 4
+    zerophase: Any = True
+
+    model_config = ConfigDict(extra="allow")
+
+    def get_metadata(self, meta):
+        """Return the axis and the filter's second-order sections."""
+        dim, (arg1, arg2) = check_filter_kwargs(self.model_extra or {})
+        axis = meta.get_axis(dim)
+        coord_units = meta.coords.coord_map[dim].units
+        filt_min, filt_max = get_filter_units(arg1, arg2, to_unit=coord_units, dim=dim)
+        sr = get_dim_sampling_rate(meta, dim)
+        # get nyquist and low/high in terms of nyquist
+        sos = _get_sos(sr, filt_min, filt_max, self.corners)
+        if meta.dtype == np.float32:
+            sos = sos.astype(np.float32, copy=False)
+        return meta, {"axis": axis, "sos": sos}
+
+    def numpy_kernel(self, data, *, axis, sos):
+        """Return the data filtered along the axis."""
+        apply_sos = sosfiltfilt if self.zerophase else sosfilt
+        return apply_sos(sos, data, axis=axis)
 
 
 class SobelFilter(PatchProcessor):
@@ -203,15 +214,27 @@ class SobelFilter(PatchProcessor):
         return nd_sobel(data, axis=axis, mode=self.mode, cval=self.cval)
 
 
-@patch_function()
+class _WindowFilter(PatchProcessor):
+    """A filter whose window along each dimension is given as a keyword."""
+
+    name = None
+    model_config = ConfigDict(extra="allow")
+    # How `resolve_window` reads the window.
+    _window_rules: ClassVar[dict[str, Any]] = {"min_samples": 0}
+
+    def get_metadata(self, meta):
+        """Return the window along every axis, and the axes it spans."""
+        window = resolve_window(
+            meta,
+            self.model_extra or {},
+            samples=self.kwargs["samples"],
+            **self._window_rules,
+        )
+        return meta, {"size": window.full_size(), "axes": window.axes}
+
+
 @compose_docstring(sample_explanation=samples_arg_description)
-def median_filter(
-    patch: PatchType,
-    samples: bool = False,
-    mode: str = "reflect",
-    cval: float = 0.0,
-    **kwargs,
-) -> PatchType:
+class MedianFilter(_WindowFilter):
     """
     Apply 2-D median filter.
 
@@ -259,13 +282,17 @@ def median_filter(
     --------
     filtering, median, smoothing, denoising
     """
-    size = resolve_window(patch, kwargs, samples=samples, min_samples=0).full_size()
-    new_data = nd_median_filter(patch.data, size=size, mode=mode, cval=cval)
-    return patch.update(data=new_data)
+
+    samples: Any = False
+    mode: Any = "reflect"
+    cval: Any = 0.0
+
+    def numpy_kernel(self, data, *, size, axes):
+        """Return the median of the window around each sample."""
+        return nd_median_filter(data, size=size, mode=self.mode, cval=self.cval)
 
 
-@patch_function()
-def notch_filter(patch: PatchType, q: float, **kwargs) -> PatchType:
+class NotchFilter(PatchProcessor):
     """
     Apply a second-order IIR notch digital filter on patch's data.
 
@@ -312,45 +339,50 @@ def notch_filter(patch: PatchType, q: float, **kwargs) -> PatchType:
     >>> # Apply a notch filter along distance axis to remove 5 m wavelength
     >>> filtered = pa.notch_filter(distance=5 * m, q=30)
     """
-    data = patch.data
-    dinfo = get_dim_axis_value(patch, kwargs=kwargs, allow_multiple=True)
-    for dim, axis, value in dinfo:
-        coord = patch.get_coord(dim)
-        # Invert units if needed
-        if isinstance(value, dc.units.Quantity):
-            if coord.units is None:
-                # every quantity is rejected, dimensionless ones included:
-                # there is nothing to convert against, and reading `20 %`
-                # as 0.2 Hz (which is what used to happen) is a trap.
-                msg = (
-                    f"Cannot filter {dim!r} with {value}: the coordinate "
-                    "has no units, so a quantity cannot be interpreted "
-                    "against it. Pass a plain number instead."
-                )
-                raise UnitError(msg)
-            value, _ = get_inverted_quant(value, coord.units)
-        # Check valid parameters
-        w0 = to_float(value)
-        sr = get_dim_sampling_rate(patch, dim)
-        nyquist = 0.5 * sr
-        if w0 > nyquist:
-            msg = f"possible filter values are in [0, {nyquist}] you passed {w0}"
-            raise FilterValueError(msg)
-        b, a = iirnotch(w0, Q=q, fs=sr)
-        data = filtfilt(b, a, data, axis=axis)
-    return patch.new(data=data)
+
+    q: Any
+
+    model_config = ConfigDict(extra="allow")
+
+    def get_metadata(self, meta):
+        """Return the axis and filter coefficients of each dimension."""
+        filters = []
+        extras = self.model_extra or {}
+        dinfo = get_dim_axis_value(meta, kwargs=extras, allow_multiple=True)
+        for dim, axis, value in dinfo:
+            coord = meta.get_coord(dim)
+            # Invert units if needed
+            if isinstance(value, dc.units.Quantity):
+                if coord.units is None:
+                    # every quantity is rejected, dimensionless ones included:
+                    # there is nothing to convert against, and reading `20 %`
+                    # as 0.2 Hz (which is what used to happen) is a trap.
+                    msg = (
+                        f"Cannot filter {dim!r} with {value}: the coordinate "
+                        "has no units, so a quantity cannot be interpreted "
+                        "against it. Pass a plain number instead."
+                    )
+                    raise UnitError(msg)
+                value, _ = get_inverted_quant(value, coord.units)
+            # Check valid parameters
+            w0 = to_float(value)
+            sr = get_dim_sampling_rate(meta, dim)
+            nyquist = 0.5 * sr
+            if w0 > nyquist:
+                msg = f"possible filter values are in [0, {nyquist}] you passed {w0}"
+                raise FilterValueError(msg)
+            filters.append((axis, *iirnotch(w0, Q=self.q, fs=sr)))
+        return meta, {"filters": filters}
+
+    def numpy_kernel(self, data, *, filters):
+        """Return the data with each notch applied in turn."""
+        for axis, b, a in filters:
+            data = filtfilt(b, a, data, axis=axis)
+        return data
 
 
-@patch_function()
 @compose_docstring(sample_explanation=samples_arg_description)
-def savgol_filter(
-    patch: PatchType,
-    polyorder: int,
-    samples: bool = False,
-    mode: str = "interp",
-    cval: float = 0.0,
-    **kwargs,
-) -> PatchType:
+class SavgolFilter(_WindowFilter):
     """
     Applies Savgol filter along specified dimensions.
 
@@ -393,31 +425,28 @@ def savgol_filter(
     >>> # Combine distance and time filter
     >>> filtered_pa_3 = pa.savgol_filter(distance=10, time=0.1, polyorder=4)
     """
-    data = patch.data
-    window = resolve_window(patch, kwargs, samples=samples, min_samples=0)
-    size, axes = window.full_size(), window.axes
-    for ax in axes:
-        data = np_savgol_filter(
-            x=data,
-            window_length=size[ax],
-            polyorder=polyorder,
-            mode=mode,
-            cval=cval,
-            axis=ax,
-        )
-    return patch.update(data=data)
+
+    polyorder: Any
+    samples: Any = False
+    mode: Any = "interp"
+    cval: Any = 0.0
+
+    def numpy_kernel(self, data, *, size, axes):
+        """Return the data filtered along each axis in turn."""
+        for ax in axes:
+            data = np_savgol_filter(
+                x=data,
+                window_length=size[ax],
+                polyorder=self.polyorder,
+                mode=self.mode,
+                cval=self.cval,
+                axis=ax,
+            )
+        return data
 
 
-@patch_function()
 @compose_docstring(sample_explanation=samples_arg_description)
-def gaussian_filter(
-    patch: PatchType,
-    samples: bool = False,
-    mode: str = "reflect",
-    cval: float = 0.0,
-    truncate: float = 4.0,
-    **kwargs,
-) -> PatchType:
+class GaussianFilter(_WindowFilter):
     """
     Applies a Gaussian filter along specified dimensions.
 
@@ -458,18 +487,22 @@ def gaussian_filter(
     See scipy.ndimage.gaussian_filter for more info on implementation
     and arguments.
     """
-    window = resolve_window(patch, kwargs, samples=samples, min_samples=0)
-    size, axes = window.full_size(), window.axes
-    used_size = tuple(size[x] for x in axes)
-    data = np_gauss(
-        input=patch.data,
-        sigma=used_size,
-        axes=axes,
-        mode=mode,
-        cval=cval,
-        truncate=truncate,
-    )
-    return patch.update(data=data)
+
+    samples: Any = False
+    mode: Any = "reflect"
+    cval: Any = 0.0
+    truncate: Any = 4.0
+
+    def numpy_kernel(self, data, *, size, axes):
+        """Return the data smoothed along the axes."""
+        return np_gauss(
+            input=data,
+            sigma=tuple(size[x] for x in axes),
+            axes=axes,
+            mode=self.mode,
+            cval=self.cval,
+            truncate=self.truncate,
+        )
 
 
 @patch_function()

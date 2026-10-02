@@ -682,7 +682,11 @@ def get_parent_code_name(levels: int = 2) -> str:
         frame = frame.f_back if frame is not None else None
     if frame is None:  # asked for a frame above the top of the stack
         return "<unknown>"
-    return frame.f_code.co_name
+    name = frame.f_code.co_name
+    # A processor works its metadata out in `get_metadata`; name the operation.
+    if name == "get_metadata":
+        name = getattr(frame.f_locals.get("self"), "name", None) or name
+    return name
 
 
 def to_str(val):

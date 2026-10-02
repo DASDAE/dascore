@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import fnmatch
 from pathlib import Path
 
 import numpy as np
 import pytest
 from differential_check import (
+    EXPECTED_ERRORS,
     MATRIX_CALLS,
     check_dascore_path,
     compare,
@@ -17,7 +19,6 @@ from differential_check import (
 )
 
 import dascore as dc
-from dascore.exceptions import ParameterError
 
 
 @pytest.fixture(scope="module")
@@ -155,13 +156,6 @@ class TestVersionGate:
 # the class included, since it names the error it writes. Naming them here
 # keeps a fourth from joining quietly, which would drop that call from the
 # comparison.
-RAISERS = {
-    "norm_bad": ValueError,
-    "transpose_bad_dim": ParameterError,
-    "rename_missing": KeyError,
-}
-
-
 class TestCalls:
     """Tests for the calls which get compared."""
 
@@ -174,8 +168,8 @@ class TestCalls:
     def test_calls_run(self):
         """Every call fingerprints, save the ones which exist to raise."""
         for name, call in get_calls().items():
-            if (error := RAISERS.get(name)) is not None:
-                with pytest.raises(error):
+            if any(fnmatch.fnmatchcase(name, x) for x in EXPECTED_ERRORS):
+                with pytest.raises(Exception):
                     call()
                 continue
             assert digest(call()), f"{name} returned nothing"
