@@ -390,19 +390,21 @@ def _squeeze_value(meta, name: str):
         raise CoordError(msg)
     # Fields, methods, and names the attrs rewrite are the attrs' own; a
     # private coord belongs to the operation which made it (eg stft).
-    attrs = dc.PatchAttrs
+    attrs = type(meta.attrs)  # a reader's attrs may declare more fields
     reserved = {"coords", "dims", "patch_id", "processing_id"}
     if name in attrs.model_fields or hasattr(attrs, name) or name in reserved:
         raise CoordError(f"Cannot squeeze {name!r}: the attrs reserve that name.")
     if name.startswith("_"):
         raise CoordError(f"Cannot squeeze {name!r}: it is private.")
     values = np.asarray(meta.coords.coord_map[name].values).reshape(-1)
-    # NaN and NaT never equal themselves, so a null-only coord stays.
-    if not values.size or not np.all(values == values[0]):
+    if not values.size or pd.isnull(values).any() or not np.all(values == values[0]):
         msg = f"Cannot squeeze {name!r}: its values are not one non-null value."
         raise CoordError(msg)
     # Times stay numpy scalars, as the other attrs hold them.
-    return values[0] if values.dtype.kind in "mM" else values[0].item()
+    value = values[0]
+    return (
+        value if values.dtype.kind in "mM" else getattr(value, "item", lambda: value)()
+    )
 
 
 class SqueezeCoords(PatchProcessor):

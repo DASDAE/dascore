@@ -233,6 +233,31 @@ class TestSqueezeCoords:
         assert isinstance(out.attrs["when"], np.datetime64)
         assert out.attrs.tag == patch.attrs.tag
 
+    def test_object_values(self, random_patch):
+        """Object coords squeeze; one holding a missing value is left alone."""
+        (size,) = random_patch.coord_shapes["distance"]
+        held = np.full(size, 2, dtype=object)
+        gappy = held.copy()
+        gappy[1] = pd.NA
+        patch = random_patch.update_coords(
+            held=("distance", held), gappy=("distance", gappy)
+        )
+        out = patch.squeeze_coords()
+        assert out.attrs["held"] == 2
+        assert "gappy" in out.coords.coord_map
+
+    def test_reader_attrs_reserved(self, random_patch):
+        """A field a reader's attrs declare is not overwritten."""
+
+        class _Attrs(dc.PatchAttrs):
+            gauge_length: float = 1.0
+
+        (size,) = random_patch.coord_shapes["distance"]
+        patch = random_patch.update(attrs=_Attrs(**random_patch.attrs.model_dump()))
+        patch = patch.update_coords(gauge_length=("distance", np.full(size, "x")))
+        out = patch.squeeze_coords()
+        assert "gauge_length" in out.coords.coord_map
+
     def test_named(self, patch):
         """Named coordinates, bare or in sequences, are the only ones moved."""
         out = patch.squeeze_coords("quality", ["station"])
