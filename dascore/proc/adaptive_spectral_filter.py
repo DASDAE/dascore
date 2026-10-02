@@ -116,7 +116,8 @@ def _plan_and_taper(
     """Validate the filter's inputs and return where its tiles sit and their taper."""
     stride = tuple(win - over for win, over in zip(window_size, overlap))
     plan = get_tile_plan(data.shape, window_size, stride)
-    return plan, get_taper("triang", window_size, overlap)
+    # The filter works in float32 on both engines, so its taper does too.
+    return plan, get_taper("triang", window_size, overlap).astype(np.float32)
 
 
 def _weight_spectra(
