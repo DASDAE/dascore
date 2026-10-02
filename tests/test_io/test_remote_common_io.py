@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -17,6 +18,7 @@ from tests.test_io._common_io_test_utils import (
     skip_timeout,
 )
 from tests.test_io.test_common_io import COMMON_IO_READ_TESTS
+from tests.test_io.test_common_io import _write_dasdae_v2 as _write_dasdae_v2
 
 # The localhost HTTP + fsspec/aiohttp streaming path can intermittently deadlock
 # on Windows (the async read stalls while h5py probes remote HDF5 metadata),
@@ -37,8 +39,8 @@ pytestmark = [
 # reader is already read, scanned and format-detected against the same files
 # by tests/test_io/test_common_io.py. These nine cover the ways a reader can
 # reach the bytes -- whole-file HDF5, ranged HDF5, a plain binary walk, a
-# SEG-Y trace scan, an obspy handoff -- plus XDAS, which walks the groups
-# of a NetCDF file.
+# SEG-Y trace scan, an obspy handoff -- plus NETCDF_CF, which unwraps the
+# handle through get_h5py_file into h5netcdf, and XDAS, which walks groups.
 #
 # Sintela_Protobuf is deliberately not among them: it walks its MTLV envelope
 # with three small sequential reads per record, so a modest file becomes
@@ -53,6 +55,7 @@ REMOTE_FORMATS = {
     ("SR4731", "200"),
     ("segy", "1.0"),
     ("MSEED", "2"),
+    ("NETCDF_CF", "1.8"),
     ("XDAS", "1"),
 }
 # One file each: what is under test is the streaming path, and a second file
@@ -103,7 +106,7 @@ def _get_remote_case(fetch_name: str, to_http_range_path):
 @pytest.fixture(
     scope="session",
     params=REMOTE_GET_FORMAT_CASES,
-    ids=lambda case: f"{case[0].name}-{case[0].version}-{case[1]}",
+    ids=lambda case: f"{case[0].name}-{case[0].version}-{Path(case[1]).name}",
 )
 def remote_get_format_case(request, to_http_range_path):
     """Return one remote get-format case per IO/file pairing."""

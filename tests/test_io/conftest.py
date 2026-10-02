@@ -349,7 +349,8 @@ def to_http_range_path(
 
     def _convert(path_or_name: str | Path) -> UPath:
         relative_path = _coerce_http_relative_path(path_or_name)
-        ensure_http_fetch_file(Path(path_or_name).name, relative_path)
+        path = Path(path_or_name)
+        ensure_http_fetch_file(path if path.is_absolute() else path.name, relative_path)
         out = http_range_das_path / relative_path
         with skip_on_timeout(5, f"HTTP fixture path readiness probe: {out}"):
             _wait_for_http_path(out)

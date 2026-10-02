@@ -11,6 +11,7 @@ import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
+from dascore.io.xdas.utils import is_xdas_file
 from dascore.utils.hdf5 import H5Reader, get_h5py_file
 from dascore.utils.misc import optional_import
 
@@ -18,7 +19,6 @@ from .utils import (
     dataset_to_patch_meta,
     get_cf_version,
     is_netcdf4_file,
-    is_xdas_file,
     parse_cf_version,
     read_dataset_array,
     spool_to_cf_dataset,

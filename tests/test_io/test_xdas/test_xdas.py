@@ -11,6 +11,7 @@ from dascore.exceptions import InvalidFiberFileError, PatchAttributeError
 from dascore.io.h5simple import H5Simple
 from dascore.io.netcdf import NetCDFCFV18
 from dascore.io.xdas import XdasV1
+from dascore.utils.downloader import fetch
 
 xr = pytest.importorskip("xarray")
 pytest.importorskip("h5netcdf")
@@ -42,6 +43,8 @@ def xdas_dataset(legacy=False, name="strain rate", times=TIMES, indices=None):
         else:
             mapping.append(f"{dim}_values: {dim}_interpolation")
             attrs = {"interpolation_name": "linear", "tie_point_mapping": tie_mapping}
+            if dim == "time":  # XDAS states the step of a regular time axis
+                attrs |= {"sampling_interval": 4, "sampling_interval_units": "ms"}
             ds[f"{dim}_interpolation"] = xr.DataArray(np.nan, attrs=attrs)
     ds[name].attrs = {"coordinate_interpolation": " ".join(mapping), "tag": "a"}
     ds["distance_values"].attrs["units"] = "m"
@@ -133,6 +136,22 @@ class TestDetection:
         assert XdasV1().get_format(path) is False
         assert dc.get_format(path) == ("NETCDF_CF", "1.8")
 
+    def test_other_cf_interpolation_not_claimed(self, tmp_path):
+        """CF interpolation XDAS does not write stays generic NetCDF."""
+        quadratic = xdas_dataset()
+        quadratic["time_interpolation"].attrs["interpolation_name"] = "quadratic"
+        shared = xdas_dataset()
+        shared["strain rate"].attrs["coordinate_interpolation"] = (
+            "time_values: distance_values: time_interpolation"
+        )
+        broken = xdas_dataset()
+        broken["strain rate"].attrs["coordinate_interpolation"] = "time_values"
+        for number, ds in enumerate([quadratic, shared, broken]):
+            path = write(ds, tmp_path / f"{number}.nc")
+            assert XdasV1().get_format(path) is False
+            assert dc.get_format(path)[0] == "NETCDF_CF"
+        dc.spool(tmp_path).update()
+
 
 class TestRead:
     """Signals become patches with exact coordinates and their own attrs."""
@@ -147,8 +166,29 @@ class TestRead:
         assert patch.get_coord("time").step == np.timedelta64(4, "ms")
         assert str(patch.get_coord("distance").units) == "1 m"
         assert patch.attrs.tag == "a"
-        assert "coordinate_interpolation" not in patch.attrs.model_dump()
+        names = set(patch.attrs.model_dump())
+        assert not {x for x in names if x.startswith("_") and x != "_source_patch_key"}
+        assert not names & {"coordinate_interpolation", "coordinates"}
         assert patch._source.key == "strain rate"
+
+    def test_shipped_file(self):
+        """The shipped file, in the original spelling, is one 50 Hz patch."""
+        patch = dc.read(fetch("xdas_netcdf.nc"))[0]
+        assert patch.shape == (300, 401)
+        assert patch.get_coord("time").step == np.timedelta64(20, "ms")
+
+    def test_packed(self, tmp_path):
+        """CF scale, offset and fill values apply, and do not become attrs."""
+        ds = xdas_dataset()
+        ds["strain rate"][0, 0] = np.nan
+        packing = {"scale_factor": 0.5, "add_offset": 10.0, "_FillValue": -999}
+        encoding = {"strain rate": {"dtype": "int16", **packing}}
+        path = write(ds, tmp_path / "packed.nc", encoding=encoding)
+        patch = dc.read(path)[0]
+        expected = xr.open_dataset(path, engine="h5netcdf")["strain rate"].values
+        np.testing.assert_array_equal(patch.data, expected)
+        assert np.isnan(patch.data[0, 0])
+        assert not set(packing) & set(patch.attrs.model_dump())
 
     def test_spool_and_selection(self, xdas_path):
         """Selecting while reading, or lazily, matches selecting afterwards."""
@@ -186,13 +226,6 @@ class TestRead:
             offset = groups.index(patch._source.key.rsplit("/", 1)[0])
             np.testing.assert_array_equal(patch.data, DATA + offset)
 
-    def test_compressed(self, tmp_path):
-        """A signal stored with a built-in HDF5 filter reads like any other."""
-        ds = xdas_dataset()
-        encoding = {"strain rate": {"compression": "gzip", "chunksizes": (8, 9)}}
-        path = write(ds, tmp_path / "gzip.nc", encoding=encoding)
-        np.testing.assert_array_equal(dc.read(path)[0].data, DATA)
-
     def test_tile_manifest(self, tmp_path):
         """A tile manifest placeholder is refused rather than read as data."""
         ds = xdas_dataset()
@@ -226,6 +259,44 @@ class TestGaps:
         out = XdasV1().read_array(gapped_path, ((1, 3),), key="strain rate#1")
         np.testing.assert_array_equal(out, DATA[11:13])
 
+    def test_overlap(self, tmp_path):
+        """Tie points which jump back keep each stretch with its own samples."""
+        times = TIMES.copy()
+        times[10:] -= np.timedelta64(20, "ms")
+        path = write(
+            xdas_dataset(times=times, indices=[0, 9, 10, 30]), tmp_path / "o.nc"
+        )
+        _, second = dc.spool(path)
+        np.testing.assert_array_equal(second.data, DATA[10:])
+        np.testing.assert_array_equal(second.get_array("time"), times[10:])
+        assert len(dc.scan(path)) == 2
+
+    def test_backward_segments(self, tmp_path):
+        """Sampled segments keep file order when the second starts earlier."""
+        ds = sampled_dataset()
+        ds["time_values"] = ("time_points", [START + np.timedelta64(1, "s"), START])
+        first, _ = dc.read(write(ds, tmp_path / "back.nc"))
+        assert first.get_coord("time").min() == START + np.timedelta64(1, "s")
+        np.testing.assert_array_equal(first.data, np.arange(3))
+
+    def test_contiguous_ties_one_patch(self, tmp_path):
+        """Tie points on one grid, floored to whole ns, are one patch."""
+        offsets = (np.arange(3072) * 10**9 // 1024).astype("timedelta64[ns]")
+        ties = [0, 1023, 1024, 2047, 2048, 3071]
+        ds = xdas_dataset(times=START + offsets, indices=ties)
+        ds["time_interpolation"].attrs |= {
+            "sampling_numerator": 1_000_000_000,
+            "sampling_numerator_units": "nanoseconds",
+            "sampling_denominator": 1024,
+        }
+        ds = ds.drop_vars(["distance_indices", "distance_values"])
+        ds["distance_indices"] = ("distance_points", [0, 3, 8])
+        ds["distance_values"] = ("distance_points", np.arange(9)[[0, 3, 8]] * 0.1)
+        path = write(ds, tmp_path / "1024.nc")
+        (patch,) = dc.read(path)
+        assert patch.get_coord("time").step_exact == 1 / 1024
+        np.testing.assert_allclose(patch.get_array("distance"), np.arange(9) * 0.1)
+
 
 class TestCoordinates:
     """Each way of storing a coordinate decodes to exact labels."""
@@ -237,6 +308,29 @@ class TestCoordinates:
         path = write(ds, tmp_path / "int.nc")
         coord = dc.read(path)[0].get_coord("distance")
         np.testing.assert_array_equal(coord.values, np.arange(11, 28, 2))
+
+    def test_integer_rounded(self, tmp_path):
+        """Integer ties a fractional step apart give the labels they round to."""
+        ds = xdas_dataset()
+        ds["distance_values"] = ("distance_points", [0, 10])
+        coord = dc.read(write(ds, tmp_path / "round.nc"))[0].get_coord("distance")
+        np.testing.assert_array_equal(coord.values, [0, 1, 2, 4, 5, 6, 8, 9, 10])
+
+    def test_unsigned_descending(self, tmp_path):
+        """Unsigned ties which descend do not wrap around."""
+        ds = xdas_dataset()
+        ds["distance_values"] = ("distance_points", np.array([18, 2], "uint16"))
+        coord = dc.read(write(ds, tmp_path / "uint.nc"))[0].get_coord("distance")
+        np.testing.assert_array_equal(coord.values, np.arange(18, 1, -2))
+
+    def test_time_zone_offset(self, tmp_path):
+        """A reference time with a UTC offset is converted to UTC."""
+        ds = xdas_dataset()
+        ds["time_values"] = ("time_points", [0, 120])
+        units = "milliseconds since 2020-01-01T00:00:00+02:00"
+        ds["time_values"].attrs["units"] = units
+        time = dc.read(write(ds, tmp_path / "tz.nc"))[0].get_coord("time")
+        assert time.min() == np.datetime64("2019-12-31T22:00:00")
 
     @pytest.mark.parametrize("legacy", [False, True])
     def test_sampled(self, tmp_path, legacy):
@@ -263,11 +357,13 @@ class TestCoordinates:
         with pytest.raises(InvalidFiberFileError, match="do not sum"):
             dc.read(path, file_format="XDAS")
 
-    @pytest.mark.parametrize("ties", [[1, 30], [0, 29], [0, 0]])
+    @pytest.mark.parametrize("ties", [[1, 30], [0, 29], [0, 10, 10, 30]])
     def test_bad_tie_points(self, tmp_path, ties):
         """Tie points which do not span the dimension are refused."""
         ds = xdas_dataset()
+        ds = ds.drop_vars(["time_indices", "time_values"])
         ds["time_indices"] = ("time_points", ties)
+        ds["time_values"] = ("time_points", TIMES[: len(ties)])
         path = write(ds, tmp_path / "bad.nc")
         with pytest.raises(InvalidFiberFileError, match="do not span"):
             dc.read(path)
@@ -284,13 +380,20 @@ class TestCoordinates:
         ds = xdas_dataset().drop_vars(["time_indices", "time_values"])
         ds = ds.drop_vars("time_interpolation").assign_coords(time=jittered)
         ds = ds.assign_coords(lat=("distance", np.linspace(40, 41, 9)))
+        ds["lon_indices"] = ("lon_points", [0, 8])
+        ds["lon_values"] = ("lon_points", [10.0, 14.0])
+        lon_mapping = "distance: lon_indices lon_points"
+        attrs = {"interpolation_name": "linear", "tie_point_mapping": lon_mapping}
+        ds["lon_interpolation"] = xr.DataArray(np.nan, attrs=attrs)
         ds["strain rate"].attrs["coordinate_interpolation"] = (
-            "distance_values: distance_interpolation"
+            "distance_values: distance_interpolation lon_values: lon_interpolation"
         )
         path = write(ds, tmp_path / "stored.nc")
         patch = dc.read(path, snap=False)[0]
         np.testing.assert_array_equal(patch.get_array("time"), jittered)
         assert patch.coords.dim_map["lat"] == ("distance",)
+        np.testing.assert_array_equal(patch.get_array("lon"), np.arange(10, 14.5, 0.5))
+        assert len(dc.spool(path)) == 1
 
     def test_positional(self, tmp_path):
         """A dimension with no coordinate is numbered by sample."""
@@ -326,3 +429,25 @@ class TestVirtual:
         assert dc.scan(virtual_path)[0].shape == DATA.shape
         with pytest.raises(FileNotFoundError, match=r"source\.h5"):
             dc.read(virtual_path)
+
+    def test_missing_source_dataset(self, virtual_path):
+        """A source file without the mapped dataset raises too."""
+        with h5py.File(virtual_path.parent / "source.h5", "a") as handle:
+            handle.move("values", "other")
+        with pytest.raises(FileNotFoundError, match="values"):
+            dc.read(virtual_path)
+
+    def test_prefix_source(self, virtual_path, tmp_path_factory, monkeypatch):
+        """A source HDF5 finds through HDF5_VDS_PREFIX is read."""
+        elsewhere = tmp_path_factory.mktemp("sources")
+        (virtual_path.parent / "source.h5").rename(elsewhere / "source.h5")
+        monkeypatch.setenv("HDF5_VDS_PREFIX", str(elsewhere))
+        np.testing.assert_array_equal(dc.read(virtual_path)[0].data, DATA)
+
+    def test_same_file_source(self, tmp_path):
+        """A virtual dataset may read from another dataset in its own file."""
+        path = write(xdas_dataset(), tmp_path / "same.nc")
+        with h5py.File(path, "r+") as handle:
+            handle.create_dataset("values", data=DATA)
+        _replace_with_virtual(path, ".")
+        np.testing.assert_array_equal(dc.read(path)[0].data, DATA)

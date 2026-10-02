@@ -248,7 +248,12 @@ class TestNetCDFCoreHelpers:
         ds_with_data = xr.Dataset({"data": (("x",), [1, 2])})
         ds_single = xr.Dataset({"signal": (("x",), [1, 2])})
         ds_multi = xr.Dataset({"signal": (("x",), [1, 2]), "other": (("x",), [3, 4])})
+
+        class _DatasetWithNone:
+            data_vars: ClassVar = {None: object(), "distance_indices": object()}
+
         assert netcdf_utils.get_xarray_data_var_name(ds_with_data) == "data"
+        assert netcdf_utils.get_xarray_data_var_name(_DatasetWithNone()) is None
         assert netcdf_utils.get_xarray_data_var_name(ds_single) == "signal"
         with pytest.raises(ValueError, match="No suitable data variable found"):
             netcdf_utils.get_xarray_data_var_name(ds_multi)
@@ -954,6 +959,34 @@ class TestPlainNetCDF4:
         coord = dc.read(path, snap=False)[0].get_coord("time")
         np.testing.assert_array_equal(coord.values, time)
         assert len(dc.read(path)[0].get_coord("time")) == 4
+
+    @pytest.mark.parametrize("start", [0.0, np.datetime64("2020-01-01", "ns")])
+    def test_tie_points_without_mapping(self, tmp_path, start):
+        """Tie-point arrays named for a dimension still give its labels."""
+        xr = pytest.importorskip("xarray")
+        step = np.timedelta64(2, "s") if isinstance(start, np.datetime64) else 2.0
+        dataset = xr.Dataset(
+            {
+                "data": (("time",), np.arange(5.0)),
+                "time_values": (("time_points",), [start, start + 4 * step]),
+                "time_indices": (("time_points",), [0, 4]),
+            },
+            attrs={"Conventions": "CF-1.8"},
+        )
+        path = tmp_path / "ties.nc"
+        dataset.to_netcdf(path, engine="h5netcdf")
+        time = dc.read(path, file_format="NETCDF_CF")[0].get_array("time")
+        np.testing.assert_array_equal(time, start + np.arange(5) * step)
+
+    def test_utc_offset(self, tmp_path):
+        """A reference time with a UTC offset is converted to UTC."""
+        path = tmp_path / "offset.h5"
+        with h5py.File(path, "w") as handle:
+            handle.create_dataset("data", data=np.ones((3, 2)))
+            time = handle.create_dataset("time", data=[0, 1, 2])
+            time.attrs["units"] = "seconds since 2020-01-01T00:00:00+02:00"
+        time = dc.read(path)[0].get_coord("time")
+        assert time.min() == np.datetime64("2019-12-31T22:00:00")
 
     def test_other_calendar_refused(self, tmp_path):
         """A calendar other than the standard one is refused, not misread."""

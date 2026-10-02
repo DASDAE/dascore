@@ -7,11 +7,10 @@ import numpy as np
 import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
-from dascore.io.netcdf.utils import is_xdas_file
 from dascore.io.utils import resolve_keyed_source, windows_to_slices
 from dascore.utils.hdf5 import H5Reader
 
-from .utils import check_virtual_sources, get_pieces
+from .utils import check_virtual_sources, get_pieces, is_xdas_file, unpack
 
 
 class XdasV1(FiberIO):
@@ -29,7 +28,7 @@ class XdasV1(FiberIO):
     preferred_extensions = ("nc", "nc4", "netcdf")
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
-        """Return the version of a file with tie-point or unnamed signals."""
+        """Return the version if a dataset carries an XDAS coordinate mapping."""
         return self.version if is_xdas_file(resource) else None
 
     def get_metadata(
@@ -50,4 +49,4 @@ class XdasV1(FiberIO):
             slice(x.start + off, x.stop + off)
             for x, off in zip(slices, offsets, strict=True)
         )
-        return node[shifted]
+        return unpack(node, node[shifted])

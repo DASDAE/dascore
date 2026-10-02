@@ -9,8 +9,8 @@ import numpy as np
 import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
-from dascore.io.netcdf.utils import is_xdas_file
 from dascore.io.utils import slice_dataset
+from dascore.io.xdas.utils import is_xdas_file
 from dascore.utils.hdf5 import H5Reader
 
 from .utils import (

@@ -50,7 +50,7 @@ def cf_time_values(node, index=slice(None)):
     except (ValueError, OverflowError) as exc:
         msg = f"Cannot decode the time units {units!r}."
         raise InvalidFiberFileError(msg) from exc
-    out = out.tz_localize(None) if out.tz is not None else out
+    out = out.tz_convert(None) if out.tz is not None else out
     values = out.to_numpy()
     return values if isinstance(index, slice) else values[0]
 
