@@ -48,8 +48,8 @@ class SegyV1_0(FiberIO):  # noqa
             channels = range(shape[1])[channel]
             out = np.empty((len(range(shape[0])[time]), len(channels)), stream.dtype)
             # Filled in place, so the data are held once and in C order.
-            for index, trace in enumerate(stream.trace[channel]):
-                out[:, index] = trace[time]
+            for index, trace_index in enumerate(channels):
+                out[:, index] = stream.trace[trace_index][time]
             return out
 
     def get_metadata(
