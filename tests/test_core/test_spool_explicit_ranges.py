@@ -1653,21 +1653,20 @@ class TestChainedExplicitChunk:
             for name, args in _CHAINS.items()
         }
 
-    @pytest.mark.parametrize("rate", ["1024", "3000"])
-    def test_fractional_rate(self, sources, rate):
+    @pytest.mark.parametrize(
+        "case, length, window",
+        [
+            ("1024", 0.1, _T0 + np.array([30, 690], dtype="m8[ms]")),
+            ("3000", 0.1, _T0 + np.array([30, 690], dtype="m8[ms]")),
+            # float labels a regular chunk computes meet the file's own labels
+            ("float_tenth", 0.73, np.array([7.23, 15.33])),
+        ],
+    )
+    def test_window(self, sources, case, length, window):
         """Disk and memory both equal the merged patch selected to the window."""
-        whole, mem, disk = sources[rate]
-        ms = np.timedelta64(1, "ms")
-        window = np.array([_T0 + 30 * ms, _T0 + 690 * ms])
+        whole, mem, disk = sources[case]
         for spool in (mem, disk):
-            _assert_selects(spool.chunk(x=0.1).chunk(x=window[None]), whole, window)
-
-    def test_float_window(self, sources):
-        """Float labels a regular chunk computes meet the file's own labels."""
-        whole, mem, disk = sources["float_tenth"]
-        window = np.array([7.23, 15.33])
-        for spool in (mem, disk):
-            first = spool.chunk(x=0.73, keep_partial=True)
+            first = spool.chunk(x=length, keep_partial=True)
             _assert_selects(first.chunk(x=window[None]), whole, window)
 
     @pytest.mark.parametrize("seed", range(len(_CHAINS)))

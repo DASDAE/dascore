@@ -17,11 +17,9 @@ from dascore.utils.time import (
     to_timedelta64,
 )
 
-# Slack when deciding which side of a grid position a window edge falls on,
-# so an edge a float rounding error short of a position still holds it.
+# Slack (in steps) so an edge a float rounding short of a label still holds it.
 _GRID_SNAP_RTOL = 1e-9
-# The fraction of a step a float member bound is widened by when read, so a
-# label known to rounding (float32 most of all) is not lost.
+# Steps a read widens a float bound by, as a label is known only to rounding.
 _READ_PAD = 0.1
 
 
@@ -54,13 +52,12 @@ def get_intervals(
     keep_partials
         If True, keep the segments which are smaller than chunksize.
     tail
-        The gap past ``stop`` to the next sample, where it is not ``step``
-        (an exact fractional grid); used only to say which windows are full.
+        The gap past ``stop`` to the next sample if not ``step`` (an exact
+        fractional grid); it only decides which windows are full.
 
     Returns
     -------
-    A 2D array of half-open ``[start, end)`` windows: the first column is
-    the start, the second the exclusive end.
+    A 2D array of half-open ``[start, end)`` windows, start then end.
     """
     if is_datetime64(start):
         # need to ensure we have numpy datetimes, not pandas
@@ -74,8 +71,8 @@ def get_intervals(
         length = to_timedelta64(length)
     # get variable and perform checks
     overlap = length * 0 if not overlap else overlap
-    step = length * 0 if step is None or pd.isnull(step) else step
-    tail = step if tail is None or pd.isnull(tail) else tail
+    step = length * 0 if pd.isnull(step) else step
+    tail = step if pd.isnull(tail) else tail
     # Check for errors. Overlap equal to length would produce zero-stride
     # segments, so it is also rejected.
     if overlap >= length:
@@ -94,7 +91,6 @@ def get_intervals(
     # windows stop at the first to hold the last sample
     reach = top - overlap if overlap > 0 * overlap else top
     starts = reference[: max(np.searchsorted(reference, reach, "right"), 1)]
-    # each window is half-open: [start, start + length)
     ends = starts + length
     if not keep_partials:
         full = np.searchsorted(ends, top + tail, "right")

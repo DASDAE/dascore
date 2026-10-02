@@ -339,8 +339,7 @@ def _row_bounds(row: Mapping, dim: str) -> tuple[Any, Any] | None:
     drew, which falls where it likes between samples, and rounding one
     onto the stored grid would take in a sample the plan left out. What
     the bounds mean is decided by the coordinate they select. A float
-    bound names its sample only to rounding, so it is widened by a
-    fraction of the step.
+    bound is known only to rounding, so it is widened by a tenth of a step.
     """
     values = []
     for name in ("min", "max"):
@@ -352,12 +351,11 @@ def _row_bounds(row: Mapping, dim: str) -> tuple[Any, Any] | None:
         elif isinstance(value, pd.Timedelta):
             value = value.to_timedelta64()
         values.append(value)
-    low, high = values
-    step = row.get(f"{dim}_step")
-    if step is not None and not _is_null(step) and np.asarray(low).dtype.kind == "f":
+    step = row.get(f"{dim}_step", np.nan)
+    if np.asarray(values[0]).dtype.kind == "f" and not _is_null(step):
         pad = abs(step) * _READ_PAD
-        low, high = low - pad, high + pad
-    return low, high
+        return values[0] - pad, values[1] + pad
+    return values[0], values[1]
 
 
 def _units_converted(row: Mapping, dim: str) -> bool:

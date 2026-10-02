@@ -2072,6 +2072,9 @@ def _exact_values(count=600, offset=0, sign=1):
     return coord[offset:]
 
 
+# 600k samples at 3000 Hz, past where 333333 ns steps count the span exactly
+_LONG_GRID = get_coord(start=_T0, step=(1, 3000), shape=(600_000,))
+
 # name: (labels, piece sizes, chunk length, overlap)
 _PARTITION_CASES = {
     "1024": (_time_values(1024, 300), [100, 100, 100], 0.1, None),
@@ -2223,11 +2226,9 @@ class TestRegularChunkPartition:
 
     def test_long_exact_source(self):
         """Labels minutes from an exact grid's origin still land exactly."""
-        values = _exact_values(1024 * 600)
-        data = np.zeros((1, len(values)), dtype=np.int8)
-        patch = dc.Patch(data=data, coords={"x": values, "y": [0]}, dims=("y", "x"))
-        length = to_timedelta64(2.5005)
-        out = dc.spool([patch]).chunk(x=length, keep_partial=True)
+        values, length = _exact_values(1024 * 600), to_timedelta64(2.5005)
+        _, spool, _ = _cut_spools(None, values, [len(values)])
+        out = spool.chunk(x=length, keep_partial=True)
         x = values.values
         for index in (-2, -1):
             ref = x[0] + length * (len(out) + index)
@@ -2243,41 +2244,31 @@ class TestRegularChunkPartition:
         assert [x.data.tolist() for x in out] == [x[1].tolist() for x in expected]
 
     @pytest.mark.parametrize(
-        "values, sizes, bounds, kind, route",
+        "values, sizes, bounds, kind, length, route",
         [
-            (_exact_values(30), [30], (3, 30), "samples", "memory"),
-            (_exact_values(30), [15, 15], (3, 30), "samples", "memory"),
-            (_exact_values(30), [15, 15], (3, 30), "samples", "disk"),
-            (_exact_values(30), [30], (0.009765625, None), "relative", "memory"),
-            (np.arange(40.0), [20, 20], (1, 36.5), "relative", "memory"),
-            (np.arange(40.0), [20, 20], (1, 36.5), "relative", "disk"),
-            (np.arange(40) * 0.3, [20, 20], (0.1, -0.4), "relative", "memory"),
+            (_exact_values(30), [30], (3, 30), "samples", 0.0098, "memory"),
+            (_exact_values(30), [15, 15], (3, 30), "samples", 0.0098, "memory"),
+            (_exact_values(30), [15, 15], (3, 30), "samples", 0.0098, "disk"),
+            (_exact_values(30), [30], (10 / 1024, None), "relative", 0.0098, "memory"),
+            (np.arange(40.0), [20, 20], (1, 36.5), "relative", 6, "memory"),
+            (np.arange(40.0), [20, 20], (1, 36.5), "relative", 6, "disk"),
+            (np.arange(40) * 0.3, [20, 20], (0.1, -0.4), "relative", 6, "memory"),
+            # a relative view has no grid, yet [1, 4.05) holds 4 and the next not
+            (np.arange(40.0), [40], (1, 30), "relative", 3.05, "memory"),
+            (np.arange(40.0), [40], (1, 30), "relative", 3.05, "disk"),
+            (_LONG_GRID, [600_000], (500_000, None), "samples", 1.001, "memory"),
         ],
     )
     def test_selected_view_matches_its_patches(
-        self, tmp_path, values, sizes, bounds, kind, route
+        self, tmp_path, values, sizes, bounds, kind, length, route
     ):
         """A lazily selected view chunks as its loaded patches do."""
         path = tmp_path if route == "disk" else None
         _, *spools = _cut_spools(path, values, sizes)
         view = spools[route == "disk"].select(x=bounds, **{kind: True})
         loaded = dc.spool([patch.new() for patch in view])
-        length = to_timedelta64(0.0098) if values.dtype.kind == "M" else 6
+        length = to_timedelta64(length) if values.dtype.kind == "M" else length
         kwargs = dict(x=length, keep_partial=True)
-        assert _labels(view.chunk(**kwargs)) == _labels(loaded.chunk(**kwargs))
-
-    def test_view_without_grid_keeps_window_ends(self, tmp_path, route):
-        """
-        A view whose grid is unknown keeps a label in a window's last tenth step.
-
-        A relative selection leaves no source origin to snap members onto, so
-        the window [1, 4.05) must still hold 4 and the next must not.
-        """
-        path = tmp_path if route == "disk" else None
-        _, *spools = _cut_spools(path, np.arange(40.0), [40])
-        view = spools[route == "disk"].select(x=(1, 30), relative=True)
-        loaded = dc.spool([patch.new() for patch in view])
-        kwargs = dict(x=3.05, keep_partial=True)
         assert _labels(view.chunk(**kwargs)) == _labels(loaded.chunk(**kwargs))
 
     def test_view_without_grid_keeps_a_late_first_label(self):
@@ -2320,30 +2311,20 @@ class TestLongFractionalGrid:
     """An exact 3000 Hz grid long enough that whole-ns steps miscount it."""
 
     @pytest.fixture(scope="class")
-    def coord(self):
-        """600k samples, past where 333333 ns steps count the span exactly."""
-        return get_coord(start=_T0, step=(1, 3000), shape=(600_000,))
-
-    @pytest.fixture(scope="class")
-    def patch(self, coord):
-        """A one-channel patch on the long grid."""
-        data = np.zeros((1, len(coord)), dtype=np.int8)
-        return dc.Patch(data=data, coords={"x": coord, "y": [0]}, dims=("y", "x"))
-
-    @pytest.fixture(scope="class")
-    def row(self, coord):
+    def row(self):
         """The one-row frame an index states for the long grid."""
+        coord = _LONG_GRID
         grid = (*coord.runs[0].canonical()[1:], len(coord))
         step = pd.Timedelta(coord.step)
         return pd.DataFrame(
             {"x_min": [coord.min()], "x_max": [coord.max()], "x_step": [step]}
         ).assign(_x_grid=[grid])
 
-    def test_sample_selection_uses_the_grid(self, coord, row):
+    def test_sample_selection_uses_the_grid(self, row):
         """A whole row's sample selection lands on the grid's own labels."""
         residuals = (({"x": (500_000, None)}, True, False),)
         out = patch_local_adjusted_envelopes(row, residuals)
-        picked = coord[500_000:]
+        picked = _LONG_GRID[500_000:]
         assert out["x_min"].iloc[0] == picked.min()
         assert out["_x_grid"].iloc[0][-1] == len(picked)
 
@@ -2361,21 +2342,12 @@ class TestLongFractionalGrid:
         assert out.loc[0, ["x_min", "x_max"]].isna().all()
         assert out.loc[1, "x_min"] == longer[700_001:].min()
 
-    def test_selected_view_chunks_as_loaded(self, patch):
-        """A sample-selected view chunks as its loaded patch does."""
-        view = dc.spool([patch]).select(x=(500_000, None), samples=True)
-        loaded = dc.spool([x.new() for x in view])
-        kwargs = dict(x=to_timedelta64(1.001), keep_partial=True)
-        assert _labels(view.chunk(**kwargs)) == _labels(loaded.chunk(**kwargs))
-
     def test_one_sample_windows(self):
         """Windows one fractional step long hold one sample each."""
-        coord = get_coord(start=_T0, step=(1, 3000), shape=(30,))
-        patch = dc.Patch(
-            data=np.arange(30)[None], coords={"x": coord, "y": [0]}, dims=("y", "x")
-        )
-        out = dc.spool([patch]).chunk(x=1 / 3000)
-        assert [x.data.tolist() for x in out] == [[[i]] for i in range(30)]
+        whole, spool, _ = _cut_spools(None, _LONG_GRID[:30], [30])
+        out = spool.chunk(x=1 / 3000)
+        assert [x.shape[1] for x in out] == [1] * 30
+        assert np.array_equal(np.hstack([x.data for x in out]), whole.data)
 
 
 class TestChunkWithAssociatedCoords:
