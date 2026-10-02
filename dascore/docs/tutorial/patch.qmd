@@ -402,7 +402,7 @@ rebuilt = dc.Patch(
 
 To change an association, pass the same values with a new dimension tuple. This changes coordinate metadata without reshaping the patch.
 
-Coordinates not associated with a dimension use `(None, values)`. [`Patch.drop_coords`](`dascore.Patch.drop_coords`) removes non-dimensional coordinates; dimension coordinates cannot be dropped.
+Coordinates not associated with a dimension use `(None, values)`. [`Patch.drop_coords`](`dascore.Patch.drop_coords`) removes non-dimensional coordinates; dimension coordinates cannot be dropped. [`Patch.squeeze_coords`](`dascore.Patch.squeeze_coords`) moves non-dimensional coordinates holding a single value into the attrs.
 
 ```{python}
 detached = located.update_coords(latitude=(None, latitude))

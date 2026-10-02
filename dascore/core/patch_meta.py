@@ -403,6 +403,10 @@ class PatchMeta(NodeRepr):
         # field and refuse the rest.
         return dascore.proc.coords.DropCoords(coords=coords).run(self)
 
+    def squeeze_coords(self, *coords: str | Iterable[str]) -> Self:
+        """Move single-valued non-dimensional coordinates into the attrs."""
+        return dascore.proc.coords.SqueezeCoords(coords=coords).run(self)
+
     def coords_from_df(
         self,
         dataframe: pd.DataFrame,
