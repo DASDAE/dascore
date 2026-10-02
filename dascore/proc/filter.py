@@ -464,7 +464,8 @@ class GaussianFilter(_WindowFilter):
         Truncate the filter kernel length to this many standard deviations.
     **kwargs
         Used to specify the sigma value (standard deviation) for desired
-        dimensions.
+        dimensions. Sigma is not rounded, so it may be a fraction of a
+        sample, even with `samples=True`.
 
     Examples
     --------
@@ -488,10 +489,33 @@ class GaussianFilter(_WindowFilter):
     and arguments.
     """
 
+    __version__ = "1.1"
     samples: Any = False
     mode: Any = "reflect"
     cval: Any = 0.0
     truncate: Any = 4.0
+
+    def get_metadata(self, meta):
+        """Return each sigma in samples, unrounded: it is no window length."""
+        size, axes = [0.0] * len(meta.dims), []
+        kwargs = self.model_extra or {}
+        for dim, axis, value in get_dim_axis_value(
+            meta, kwargs=kwargs, allow_multiple=True
+        ):
+            coord = meta.get_coord(dim, require_evenly_sampled=True)
+            if isinstance(value, dc.units.Quantity):
+                value = convert_units(value.magnitude, coord.units, value.units)
+            elif self.kwargs["samples"]:
+                value = to_float(value) * to_float(coord.step)
+            count = to_float(value) / abs(to_float(coord.step))
+            if not (np.isfinite(count) and count >= 0):
+                msg = (
+                    f"gaussian_filter needs a finite, non-negative sigma, got {value}."
+                )
+                raise ParameterError(msg)
+            axes.append(axis)
+            size[axis] = count
+        return meta, {"size": tuple(size), "axes": tuple(axes)}
 
     def numpy_kernel(self, data, *, size, axes):
         """Return the data smoothed along the axes."""

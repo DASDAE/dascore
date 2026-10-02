@@ -18,7 +18,7 @@ from dascore.exceptions import (
     ParameterError,
     UnitError,
 )
-from dascore.units import Hz, convert_units, get_unit, m
+from dascore.units import Hz, convert_units, get_unit, m, s
 from dascore.utils.misc import broadcast_for_index
 from dascore.utils.patch import get_dim_sampling_rate
 
@@ -413,6 +413,41 @@ class TestSavgolFilter:
 
 class TestGaussianFilter:
     """Test the Gaussian Filter."""
+
+    @pytest.mark.parametrize("samples", [True, False])
+    def test_fractional_sigma_is_not_rounded(self, random_patch, samples):
+        """A sigma between whole samples is applied as given."""
+        step = dc.to_float(random_patch.get_coord("time").step)
+        value = 1.5 if samples else 1.5 * step
+        out = random_patch.gaussian_filter(time=value, samples=samples)
+        sigma = [0.0] * random_patch.ndim
+        sigma[random_patch.get_axis("time")] = 1.5
+        assert np.allclose(out.data, ndimage.gaussian_filter(random_patch.data, sigma))
+
+    def test_quantity_sigma_keeps_its_units(self, random_patch):
+        """A sigma with units is converted even when samples=True."""
+        step = dc.to_float(random_patch.get_coord("time").step)
+        expected = random_patch.gaussian_filter(time=1.5, samples=True)
+        out = random_patch.gaussian_filter(time=1.5 * step * s, samples=True)
+        assert np.allclose(out.data, expected.data)
+
+    @pytest.mark.parametrize(
+        "kwargs",
+        [dict(time=-1, samples=True), dict(time=-0.5), dict(time=np.nan)],
+    )
+    def test_bad_sigma_raises(self, random_patch, kwargs):
+        """A negative or non-finite sigma is refused rather than misread."""
+        with pytest.raises(ParameterError, match="non-negative sigma"):
+            random_patch.gaussian_filter(**kwargs)
+
+    def test_sigma_far_from_the_origin(self):
+        """A fractional sigma survives a coordinate far from zero."""
+        coord = dc.get_coord(start=1e16, step=2.0, shape=(10,))
+        data = np.random.default_rng(0).random((10, 50))
+        coords = {"distance": coord, "time": np.arange(50) * 0.1}
+        patch = dc.Patch(data=data, dims=("distance", "time"), coords=coords)
+        out = patch.gaussian_filter(distance=3)
+        assert np.allclose(out.data, ndimage.gaussian_filter(data, (1.5, 0)))
 
     def test_filter_time(self, event_patch_2):
         """Test for simple filter along the time axis."""
