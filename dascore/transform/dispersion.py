@@ -12,7 +12,9 @@ from dascore.exceptions import ParameterError
 from dascore.utils.patch import patch_function
 
 
-@patch_function(required_dims=("time", "distance"), data_type="dispersion")
+@patch_function(
+    required_dims=("time", "distance"), data_type="dispersion", version="1.1"
+)
 def dispersion_phase_shift(
     patch: PatchType,
     phase_velocities: Sequence[float],
@@ -46,15 +48,18 @@ def dispersion_phase_shift(
     - Dims/Units of the output are forced to be 'frequency' ('Hz')
       and 'velocity' ('m/s').
 
-    - The patch's distance coordinates are assumed to be ordered by
-    distance from the source, and not "fiber distance". In other
-    words, data are effectively mapped along a 2-D line.
+    - Each channel's distance is read as its position along the wave's
+    path, so data are effectively mapped along a 2-D line; the coordinate
+    need not be sorted.
 
-    - The input shot gather must be right-sided meaning the
-    wavefield propagates from lower to higher channel numbers.
-    Always plot the patch first to verify its orientation.
-    If the gather is left-sided, simply mirror the patch along
-    the distance axis (see Example 2 below).
+    - The image depends only on distances relative to each other, so any
+    origin works for a one-sided gather, but the wave must travel toward
+    increasing distance. For a gather whose wave travels toward lower
+    distance, negate the coordinate
+    (`patch.update_coords(distance=-patch.get_array("distance"))`); for a
+    two-sided gather, use the offset from the source
+    (`abs(distance - source_distance)`). Reversing the patch with `flip`
+    changes nothing, since it reverses the data and the coordinate together.
 
     Examples
     --------
@@ -74,14 +79,6 @@ def dispersion_phase_shift(
     ax.set_ylim(1500, 100)
     disp_patch.viz.waterfall(show=True, ax=ax)
 
-    # Example 2 - Left-sided wavefield
-    patch = (
-        dc.get_example_patch('dispersion_event')
-    )
-    mirrored_patch = patch.flip("distance")
-
-    disp_patch = mirrored_patch.dispersion_phase_shift(np.arange(100,1500,1),
-            approx_resolution=0.1,approx_freq=[5,70])
     ```
     """
     patch_cop = patch.convert_units(distance="m").transpose("distance", "time")
