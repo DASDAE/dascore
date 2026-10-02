@@ -41,6 +41,7 @@ from dascore.io.febus.core import FebusPatchAttrs
 from dascore.io.index import catalog, planned
 from dascore.io.index.schema import SOURCE_STAT_COLUMNS
 from dascore.units import get_quantity
+from dascore.utils.chunk_plan import patch_local_adjusted_envelopes
 from dascore.utils.gaps import GapTolerance
 from dascore.utils.misc import get_middle_value, suppress_warnings
 from dascore.utils.patch import _get_merged_coord
@@ -2265,6 +2266,28 @@ class TestRegularChunkPartition:
         kwargs = dict(x=length, keep_partial=True)
         assert _labels(view.chunk(**kwargs)) == _labels(loaded.chunk(**kwargs))
 
+    def test_view_without_grid_keeps_window_ends(self, tmp_path, route):
+        """
+        A view whose grid is unknown keeps a label in a window's last tenth step.
+
+        A relative selection leaves no source origin to snap members onto, so
+        the window [1, 4.05) must still hold 4 and the next must not.
+        """
+        path = tmp_path if route == "disk" else None
+        _, *spools = _cut_spools(path, np.arange(40.0), [40])
+        view = spools[route == "disk"].select(x=(1, 30), relative=True)
+        loaded = dc.spool([patch.new() for patch in view])
+        kwargs = dict(x=3.05, keep_partial=True)
+        assert _labels(view.chunk(**kwargs)) == _labels(loaded.chunk(**kwargs))
+
+    def test_view_without_grid_keeps_a_late_first_label(self):
+        """A source starting in a window's last tenth step keeps its first label."""
+        _, spool, _ = _cut_spools(None, np.arange(40.0), [20, 20])
+        view = spool.select(x=(0, 18.99), relative=True)
+        out = view.chunk(x=4.01, keep_partial=True)
+        labels = np.concatenate([x.get_coord("x").values for x in out])
+        assert labels.tolist() == [*range(19), *range(20, 39)]
+
     def test_units_differing_by_source(self):
         """Sources spelling the unit differently keep every sample when re-chunked."""
         patch = dc.get_example_patch()
@@ -2291,6 +2314,68 @@ class TestRegularChunkPartition:
         assert bounds == [[x, x + 9.0] for x in range(11, 90, 10)]
         joined = np.concatenate([x.data for x in out], axis=1)
         assert np.array_equal(joined, whole.select(x=(11, 90)).data)
+
+
+class TestLongFractionalGrid:
+    """An exact 3000 Hz grid long enough that whole-ns steps miscount it."""
+
+    @pytest.fixture(scope="class")
+    def coord(self):
+        """600k samples, past where 333333 ns steps count the span exactly."""
+        return get_coord(start=_T0, step=(1, 3000), shape=(600_000,))
+
+    @pytest.fixture(scope="class")
+    def patch(self, coord):
+        """A one-channel patch on the long grid."""
+        data = np.zeros((1, len(coord)), dtype=np.int8)
+        return dc.Patch(data=data, coords={"x": coord, "y": [0]}, dims=("y", "x"))
+
+    @pytest.fixture(scope="class")
+    def row(self, coord):
+        """The one-row frame an index states for the long grid."""
+        grid = (*coord.runs[0].canonical()[1:], len(coord))
+        step = pd.Timedelta(coord.step)
+        return pd.DataFrame(
+            {"x_min": [coord.min()], "x_max": [coord.max()], "x_step": [step]}
+        ).assign(_x_grid=[grid])
+
+    def test_sample_selection_uses_the_grid(self, coord, row):
+        """A whole row's sample selection lands on the grid's own labels."""
+        residuals = (({"x": (500_000, None)}, True, False),)
+        out = patch_local_adjusted_envelopes(row, residuals)
+        picked = coord[500_000:]
+        assert out["x_min"].iloc[0] == picked.min()
+        assert out["_x_grid"].iloc[0][-1] == len(picked)
+
+    def test_emptied_row_is_passed_over(self, row):
+        """A row an earlier sample selection emptied stays empty."""
+        longer = get_coord(start=_T0, step=(1, 3000), shape=(800_000,))
+        grid = (*longer.runs[0].canonical()[1:], len(longer))
+        other = row.assign(x_max=longer.max(), _x_grid=[grid])
+        df = pd.concat([row, other], ignore_index=True)
+        residuals = (
+            ({"x": (700_000, None)}, True, False),
+            ({"x": (1, None)}, True, False),
+        )
+        out = patch_local_adjusted_envelopes(df, residuals, drop_empty=False)
+        assert out.loc[0, ["x_min", "x_max"]].isna().all()
+        assert out.loc[1, "x_min"] == longer[700_001:].min()
+
+    def test_selected_view_chunks_as_loaded(self, patch):
+        """A sample-selected view chunks as its loaded patch does."""
+        view = dc.spool([patch]).select(x=(500_000, None), samples=True)
+        loaded = dc.spool([x.new() for x in view])
+        kwargs = dict(x=to_timedelta64(1.001), keep_partial=True)
+        assert _labels(view.chunk(**kwargs)) == _labels(loaded.chunk(**kwargs))
+
+    def test_one_sample_windows(self):
+        """Windows one fractional step long hold one sample each."""
+        coord = get_coord(start=_T0, step=(1, 3000), shape=(30,))
+        patch = dc.Patch(
+            data=np.arange(30)[None], coords={"x": coord, "y": [0]}, dims=("y", "x")
+        )
+        out = dc.spool([patch]).chunk(x=1 / 3000)
+        assert [x.data.tolist() for x in out] == [[[i]] for i in range(30)]
 
 
 class TestChunkWithAssociatedCoords:

@@ -460,15 +460,18 @@ def patch_local_adjusted_envelopes(
             new_min = new_min.mask(unresolved, mins)
             new_max = new_max.mask(unresolved, maxs)
             # An exact fractional grid's samples are not whole steps apart,
-            # so a whole row on one takes the labels and grid it picks.
+            # so a whole row on one (its envelope spans the grid's labels)
+            # takes the labels and grid it picks.
             grid_col = f"_{name}_grid"
             codes, grids = pd.factorize(df.get(grid_col, pd.Series(dtype=object)))
-            for code, grid in enumerate(grids):
-                same = (codes == code) & (counts == grid[-1]).to_numpy()
-                coord = coord_from_row(df[same].iloc[0], name) if same.any() else None
-                if coord is not None and len(
-                    picked := coord.select(value, samples=True)[0]
-                ):
+            for code in range(len(grids)):
+                rows = (codes == code) & mins.notna().to_numpy()
+                coord = coord_from_row(df[rows].iloc[0], name) if rows.any() else None
+                if coord is None:  # emptied by an earlier selection
+                    continue
+                span = coord.max() - coord.min()
+                same = rows & ((maxs - mins) == span).to_numpy()
+                if same.any() and len(picked := coord.select(value, samples=True)[0]):
                     new_min[same] = mins[same] + (picked.min() - coord.min())
                     new_max[same] = maxs[same] - (coord.max() - picked.max())
                     terms = (*picked.runs[0].canonical()[1:], len(picked))
@@ -1762,8 +1765,9 @@ def build_chunk_plan(
                     # interval arithmetic is over (direction-free) envelope
                     # values; a descending coordinate's negative step would
                     # invert the final partial interval
-                    step=cell,
+                    step=abs(part_step),
                     keep_partials=keep_partial,
+                    tail=cell,
                 )
             except ChunkError:  # partition too short; skip (D8)
                 continue
@@ -2608,9 +2612,9 @@ def _member_samples(firsts, lasts, starts, ends, lattice):
     Each member's first and last label in its window ``[start, end)``.
 
     Edges which are not already the row's own labels move onto its lattice.
-    Without one they stay at the window's values, its open end moved below
-    what a read widens a float bound by (see `_row_bounds`). A high below
-    its low holds nothing.
+    Without one they stay at the window's values, moved in by what a read
+    widens a float bound by (see `_row_bounds`). A high below its low holds
+    nothing.
     """
     base, stride, den, phase, width, own_min, own_max = lattice
     kind, placed, unit = firsts.dtype.kind, stride > 0, f"{firsts.dtype.kind}8[ns]"
@@ -2626,10 +2630,13 @@ def _member_samples(firsts, lasts, starts, ends, lattice):
     at_last, at_end = (_lattice_label(x, safe, True) for x in (last + bump, end))
     kept = np.where(placed, at_last < at_end, lasts < ends)
     snap_hi = placed & ~(kept & (lasts == own_max))
-    if kind == "f":
-        short = np.nextafter(end - 2 * _READ_PAD * width - bump, -np.inf)
-    else:
-        short = end - 1
+    short = end - 1
+    if kind == "f":  # move window edges in by a read's pad, not past own labels
+        pad = _READ_PAD * width
+        inner = np.minimum(low + pad - bump, np.maximum(last, low - bump))
+        lo = np.where(placed | (firsts >= starts), lo, inner)
+        short = np.nextafter(end - pad - bump, -np.inf)
+        short = np.where(low < end - bump, np.maximum(short, low), short)
     hi = np.where(snap_hi, np.minimum(at_last, at_end), np.where(kept, last, short))
     # a row's own label and a lattice label naming one sample differ by rounding
     holds = placed & (on_grid <= np.minimum(at_last, at_end))

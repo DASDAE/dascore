@@ -32,6 +32,7 @@ def get_intervals(
     overlap=None,
     step=None,
     keep_partials=False,
+    tail=None,
 ):
     """
     Create a range of values with optional overlaps.
@@ -52,6 +53,9 @@ def get_intervals(
         one step past ``stop``.
     keep_partials
         If True, keep the segments which are smaller than chunksize.
+    tail
+        The gap past ``stop`` to the next sample, where it is not ``step``
+        (an exact fractional grid); used only to say which windows are full.
 
     Returns
     -------
@@ -71,6 +75,7 @@ def get_intervals(
     # get variable and perform checks
     overlap = length * 0 if not overlap else overlap
     step = length * 0 if step is None or pd.isnull(step) else step
+    tail = step if tail is None or pd.isnull(tail) else tail
     # Check for errors. Overlap equal to length would produce zero-stride
     # segments, so it is also rejected.
     if overlap >= length:
@@ -82,16 +87,16 @@ def get_intervals(
     # A window is full when it ends no later than one step past the last
     # sample, to within the step's float rounding (see #474).
     top = stop + step * _GRID_SNAP_RTOL if isinstance(step, float) else stop
-    if top - start + step < length and not keep_partials:
+    if top - start + tail < length and not keep_partials:
         msg = "Cant chunk when data interval is less than chunk size. "
         raise ChunkError(msg)
     reference = np.arange(start, stop + length - overlap, step=length - overlap)
-    # after the first, a window must hold a sample past the previous one's end
+    # windows stop at the first to hold the last sample
     reach = top - overlap if overlap > 0 * overlap else top
     starts = reference[: max(np.searchsorted(reference, reach, "right"), 1)]
     # each window is half-open: [start, start + length)
     ends = starts + length
     if not keep_partials:
-        full = np.searchsorted(ends, top + step, "right")
+        full = np.searchsorted(ends, top + tail, "right")
         starts, ends = starts[:full], ends[:full]
     return np.stack([starts, ends]).T
