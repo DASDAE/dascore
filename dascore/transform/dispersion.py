@@ -124,19 +124,16 @@ def dispersion_phase_shift(
     assert (nchan, nt) == patch_cop.data.shape
 
     fs = 1 / dt
-    if approx_resolution is not None:
-        approxnf = int(nt * (fs / (nt)) / approx_resolution)
-        f = np.arange(approxnf) * fs / (approxnf - 1)
-    else:
-        f = np.arange(nt) * fs / (nt - 1)
-
-    nf = np.size(f)
+    nf = int(fs / approx_resolution) if approx_resolution else nt
+    f = np.arange(nf) * fs / nf
 
     nv = np.size(phase_velocities)
     w = 2 * np.pi * f
+    # Pad to a multiple of nf and decimate the bins so no sample is dropped.
+    step = -(-nt // nf)
     fft_d = np.zeros((nchan, nf), dtype=complex)
     for i in range(nchan):
-        fft_d[i] = nft.fft(patch_cop.data[i, :], n=nf)
+        fft_d[i] = nft.fft(patch_cop.data[i, :], n=nf * step)[::step]
 
     fft_d = np.divide(
         fft_d, abs(fft_d), out=np.zeros_like(fft_d), where=abs(fft_d) != 0
