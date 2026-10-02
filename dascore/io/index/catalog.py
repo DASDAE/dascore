@@ -314,6 +314,11 @@ class CompositeResolver(PatchResolver):
         """Return the plan-prefix routing table."""
         return self.plans
 
+    def absorb_upaths(self, resolver: PatchResolver):
+        """Keep the storage-aware paths another resolver reopens sources by."""
+        file = getattr(resolver, "file", resolver)
+        self.file._upaths.update(getattr(file, "_upaths", {}))
+
     def absorb(self, resolver: PatchResolver, paths=None) -> None:
         """
         Take over another resolver's live and plan entries.
@@ -325,8 +330,7 @@ class CompositeResolver(PatchResolver):
         if paths is not None:
             entries = {k: v for k, v in entries.items() if k in paths}
         self.live._registry.update(entries)
-        file = getattr(resolver, "file", resolver)
-        self.file._upaths.update(getattr(file, "_upaths", {}))
+        self.absorb_upaths(resolver)
         plans = getattr(resolver, "plan_entries", dict)()
         if paths is not None:
             plans = {
@@ -390,6 +394,7 @@ def _membership_resolver(
         return out
     out = CompositeResolver()
     out.live._registry = dict(keep)
+    out.absorb_upaths(resolver)
     plans = getattr(resolver, "plan_entries", dict)()
     out.plans = {
         prefix: plan

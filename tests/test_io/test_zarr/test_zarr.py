@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import pickle
 import sys
 from pathlib import Path
 from typing import ClassVar
@@ -607,6 +608,9 @@ class TestMultiPatch:
         assert spool.select(time=(start, None), station="BOB")[0] == later
         assert all(x.data.size for x in spool.chunk(time=1))
         assert all(x.data.size for x in spool + dc.spool([twin]))
+        # A mixed view sent to another process keeps the options too.
+        view = pickle.loads(pickle.dumps((spool + dc.spool([twin])).select()))
+        assert all(x.data.size for x in view)
 
     def test_remote_spool_reads_one_group(self, zarr_spool):
         """
