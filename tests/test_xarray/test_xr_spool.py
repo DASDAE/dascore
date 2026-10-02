@@ -2,17 +2,35 @@
 
 from __future__ import annotations
 
+import os
 import tracemalloc
+from contextlib import contextmanager
 
 import numpy as np
 import pytest
 
 import dascore as dc
+import dascore.io.core as io_core
 from dascore.config import config_context
 from dascore.examples import spool_to_directory
 from dascore.exceptions import PatchConversionError
 from dascore.io.index.planned import PlanResolver
 from tests.conftest import join_patches
+
+
+@pytest.fixture
+def array_reads(monkeypatch):
+    """Record every stored window a read loads, as (path, windows)."""
+    reads = []
+    original = io_core._open_array_reader
+
+    @contextmanager
+    def _recording(source):
+        with original(source) as load:
+            yield lambda src: reads.append((src.path, src.windows)) or load(src)
+
+    monkeypatch.setattr(io_core, "_open_array_reader", _recording)
+    return reads
 
 
 class TestSpoolToXarray:
@@ -89,7 +107,6 @@ class TestSpoolToXarray:
     def test_builds_without_reading(self, diverse_spool_directory, monkeypatch):
         """Constructing the tree must not read any patch data."""
         from dascore.io.index.catalog import FileResolver, PatchCatalog  # noqa: PLC0415
-        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
 
         spool = dc.spool(diverse_spool_directory).update()
 
@@ -99,34 +116,26 @@ class TestSpoolToXarray:
         monkeypatch.setattr(PatchCatalog, "resolve_row", _fail)
         monkeypatch.setattr(FileResolver, "resolve", _fail)
         monkeypatch.setattr(PlanResolver, "_load_member", _fail)
-        monkeypatch.setattr(PlanResolver, "_load_member_array", _fail)
+        monkeypatch.setattr(io_core, "_open_array_reader", _fail)
         tree = spool.io.to_xarray()
         assert len(self._leaves(tree))
 
     def test_compute_reads_only_needed_blocks(
-        self, diverse_spool_directory, monkeypatch
+        self, diverse_spool_directory, monkeypatch, array_reads
     ):
         """A small selection loads only the member blocks it touches."""
-        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
-
         spool = dc.spool(diverse_spool_directory).update()
         tree = spool.io.to_xarray()
         calls = []
         # A block reads through whichever path its format offers, so both
         # are counted: what the test pins is how many members are read.
         original = PlanResolver._load_member
-        original_array = PlanResolver._load_member_array
 
         def _counting(self, kwargs):
             calls.append("patch")
             return original(self, kwargs)
 
-        def _counting_array(self, row, windows):
-            calls.append("array")
-            return original_array(self, row, windows)
-
         monkeypatch.setattr(PlanResolver, "_load_member", _counting)
-        monkeypatch.setattr(PlanResolver, "_load_member_array", _counting_array)
         # The DAS2.R2D1..RAW random segment merges three source patches;
         # slicing inside the first must load exactly one of the three,
         # and the loaded values must match the eagerly chunked patch.
@@ -138,7 +147,7 @@ class TestSpoolToXarray:
         data = leaf.dataset["data"]
         assert data.data.npartitions == 3
         small = data.isel(time=slice(0, 5)).compute()
-        assert len(calls) == 1
+        assert len(calls) + len(array_reads) == 1
         merged = spool.select(acquisition_key="DAS2.R2D1..RAW").chunk(time=None)[0]
         expected = merged.data[:, :5] if merged.dims[0] != "time" else merged.data[:5]
         np.testing.assert_array_equal(small.values, expected)
@@ -176,8 +185,6 @@ class TestSpoolToXarray:
 
     def test_stale_index_shape_raises(self, random_spool, monkeypatch):
         """A block whose loaded shape breaks its promise raises clearly."""
-        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
-
         tree = random_spool.io.to_xarray()
         original = PlanResolver._load_member
 
@@ -230,6 +237,39 @@ class TestSpoolToXarray:
             data["time"].values, merged.get_coord("time").values
         )
 
+    def test_trim_of_a_sample_selection_keeps_its_grid(self, random_patch):
+        """A member cut from a sample-selected patch stays on that patch's grid.
+
+        The selection withholds the source's own range, so the cut is
+        sized from its row alone; an off-grid overlap would show a cut
+        off its grid as labels a fraction of a step off.
+        """
+        coord = random_patch.get_coord("time")
+        shifted = random_patch.update_coords(time_min=coord.max() - 9.3 * coord.step)
+        spool = dc.spool([random_patch, shifted]).select(time=(1, -1), samples=True)
+        merged = spool.chunk(time=None)[0]
+        data = self._leaves(spool.io.to_xarray())[0].dataset["data"]
+        np.testing.assert_array_equal(data.values, merged.data)
+        np.testing.assert_array_equal(
+            data["time"].values, merged.get_coord("time").values
+        )
+
+    def test_mixed_dtypes_round_as_chunk_does(self, random_patch):
+        """Members loading as patches pass through the merge's promotion chain."""
+        coord = random_patch.get_coord("time")
+        dtypes = (np.int16, np.float32, np.float64)
+        patches = [
+            random_patch.new(
+                data=(random_patch.data * 1000).astype(dtype)
+            ).update_coords(time_min=coord.min() + num * len(coord) * coord.step)
+            for num, dtype in enumerate(dtypes)
+        ]
+        spool = dc.spool(patches)
+        merged = spool.chunk(time=None)[0]
+        data = self._leaves(spool.io.to_xarray())[0].dataset["data"]
+        assert data.dtype == merged.data.dtype == np.float64
+        np.testing.assert_array_equal(data.values, merged.data)
+
     def test_single_sample_non_dim(self, random_patch):
         """A one-sample non-merge dimension has no step yet converts."""
         thin = random_patch.select(distance=(0, 1), samples=True)
@@ -254,21 +294,6 @@ class TestSpoolToXarray:
         wobbly = random_patch.update_coords(distance=dist)
         with pytest.raises(PatchConversionError, match="no sampling step"):
             dc.spool([wobbly]).io.to_xarray()
-
-    def test_transposed_member_load(self, random_spool, monkeypatch):
-        """A member loading in another dim order is transposed to match."""
-        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
-
-        tree = random_spool.io.to_xarray()
-        merged = random_spool.chunk(time=None)[0]
-        original = PlanResolver._load_member
-
-        def _transposed(self, kwargs):
-            return original(self, kwargs).transpose()
-
-        monkeypatch.setattr(PlanResolver, "_load_member", _transposed)
-        leaf = self._leaves(tree)[0]
-        np.testing.assert_array_equal(leaf.dataset["data"].values, merged.data)
 
     def test_no_group_attrs(self, random_spool):
         """With no grouping attributes the whole spool is one group."""
@@ -470,19 +495,9 @@ class TestToXarrayReadArray:
         return path
 
     @pytest.fixture
-    def override_calls(self, monkeypatch):
-        """Record successful array-only loads, excluding normal derived reads."""
-        calls = []
-        original = PlanResolver._load_member_array
-
-        def load(resolver, row, windows):
-            out = original(resolver, row, windows)
-            if out is not None:
-                calls.append(windows)
-            return out
-
-        monkeypatch.setattr(PlanResolver, "_load_member_array", load)
-        return calls
+    def override_calls(self, array_reads):
+        """The windows of stored arrays reads load, in each source's order."""
+        return array_reads
 
     def _leaf(self, tree):
         """The first dataset holding a data variable."""
@@ -509,8 +524,6 @@ class TestToXarrayReadArray:
         self, dasdae_directory, override_calls, monkeypatch
     ):
         """With an override, computing never builds a member Patch."""
-        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
-
         spool = dc.spool(dasdae_directory).update()
         eager = spool.chunk(time=None)[0].data
         # The eager reference can use dev's array fast path too; count
@@ -535,19 +548,19 @@ class TestToXarrayReadArray:
         assert np.array_equal(out, sub.chunk(time=None)[0].data)
         assert override_calls == []
 
-    def test_chunked_spool_falls_back(self, dasdae_directory, override_calls):
-        """A plan-backed spool's trimmed rows never take the fast path.
+    def test_chunked_spool_reads_file_windows(self, dasdae_directory, override_calls):
+        """A plan-backed spool's trimmed rows read windows of their files.
 
-        Its collapsed member rows state trimmed envelopes, so a sample
-        window computed against them is not a window on the file grid;
-        the fast path must refuse or it reads the wrong samples.
+        Its collapsed member rows state trimmed envelopes beside each
+        file's own range, so each window is placed on the file's grid;
+        one placed on the trimmed envelope would read the wrong samples.
         """
         spool = dc.spool(dasdae_directory).update().chunk(time=3)
         eager = spool.chunk(time=None)[0].data
         override_calls.clear()
         out = self._leaf(spool.io.to_xarray())["data"].data.compute()
         assert np.array_equal(out, eager)
-        assert override_calls == []
+        assert len(override_calls) > len(dc.spool(dasdae_directory))
 
     def test_interior_window_fast_path(self, tmp_path, override_calls):
         """An overlap-trimmed member reads an interior file window.
@@ -569,103 +582,50 @@ class TestToXarrayReadArray:
         out = self._leaf(spool.io.to_xarray())["data"].data.compute()
         assert np.array_equal(out, eager)
         # the trimmed member's window must not be anchored at the start
-        starts = sorted(window["time"][0] for window in override_calls)
+        axis = first.dims.index("time")
+        starts = sorted(windows[axis][0] for _, windows in override_calls)
         assert len(override_calls) == 2
         assert starts[0] == 0 and starts[1] > 0
 
-    def test_transposes_source_order(self):
-        """A native-order array is transposed to the tree's dims.
-
-        Three dimensions with a cyclic permutation, so the permutation
-        differs from its inverse and a reversed mapping cannot pass.
-        """
-        from dascore.xarray.spool import _load_xarray_block  # noqa: PLC0415
-
-        native = np.arange(24).reshape(2, 3, 4)
-
-        class _Fake:
-            def _load_member_array(self, row, windows):
-                return native
-
-        row = {"dims": "time,distance,depth", "source_path": "x"}
-        out = _load_xarray_block(
-            _Fake(),
-            row,
-            "time",
-            (0, 1),
-            ("distance", "depth", "time"),
-            (3, 4, 2),
-            native.dtype,
-            (0, 2),
+    def test_mixed_data_units_convert_as_chunk(self, tmp_path, override_calls):
+        """Files in other data units load as patches, converted to the first's."""
+        first = dc.get_example_patch()
+        time = first.get_coord("time")
+        second = first.update_coords(time_min=time.max() + time.step)
+        first.set_units("m/s").io.write(tmp_path / "a.h5", "dasdae")
+        second.new(data=first.data * 100).set_units("cm/s").io.write(
+            tmp_path / "b.h5", "dasdae"
         )
-        assert np.array_equal(out, native.transpose(1, 2, 0))
+        spool = dc.spool(tmp_path).update()
+        kwargs = dict(group=[], conflict="keep_first")
+        (merged,) = spool.chunk(time=None, **kwargs)
+        override_calls.clear()
+        out = self._leaf(spool.io.to_xarray(**kwargs))["data"].values
+        np.testing.assert_allclose(out, merged.data)
+        assert override_calls == []
 
-    def test_mismatched_dims_fall_back(self, random_patch):
-        """A row stating different dims than the tree takes the patch path."""
-        from dascore.xarray.spool import _load_xarray_block  # noqa: PLC0415
-
-        patch = random_patch
-
-        class _Fake:
-            def _load_member_array(self, row, windows):
-                raise AssertionError("fast path consulted with foreign dims")
-
-            def _load_member(self, row):
-                return patch
-
-        coord = patch.get_coord("time")
-        out = _load_xarray_block(
-            _Fake(),
-            {"dims": "depth,time", "source_path": "x"},
-            "time",
-            (coord.min(), coord.max()),
-            patch.dims,
-            patch.shape,
-            patch.data.dtype,
-            (0, len(coord)),
-        )
-        assert np.array_equal(out, patch.data)
-
-    def test_stale_shape_raises(self):
-        """An array which breaks the index's promise raises."""
-        from dascore.xarray.spool import _load_xarray_block  # noqa: PLC0415
-
-        class _Fake:
-            def _load_member_array(self, row, windows):
-                return np.zeros((2, 2))
-
-        row = {"dims": "time,distance", "source_path": "x"}
+    def test_a_file_rewritten_after_building_raises(self, tmp_path):
+        """A window read which is not the shape indexed says to update."""
+        patch = dc.get_example_patch()
+        path = tmp_path / "p.h5"
+        patch.io.write(path, "dasdae")
+        tree = dc.spool(tmp_path).update().io.to_xarray()
+        path.unlink()
+        patch.select(distance=(0, 10), samples=True).io.write(path, "dasdae")
         with pytest.raises(PatchConversionError, match="promised"):
-            _load_xarray_block(
-                _Fake(), row, "time", (0, 2), ("time", "distance"), (3, 4), "f8", (0, 3)
-            )
+            self._leaf(tree)["data"].compute()
 
-    def test_row_without_dims_falls_back(self, random_patch):
-        """A row which cannot state its dimension order takes the patch path."""
-        from dascore.xarray.spool import _load_xarray_block  # noqa: PLC0415
-
-        patch = random_patch
-
-        class _Fake:
-            def _load_member_array(self, row, windows):
-                raise AssertionError("fast path consulted without dims")
-
-            def _load_member(self, row):
-                return patch
-
-        coord = patch.get_coord("time")
-        lims = (coord.min(), coord.max())
-        out = _load_xarray_block(
-            _Fake(),
-            {"source_path": "x"},
-            "time",
-            lims,
-            patch.dims,
-            patch.shape,
-            patch.data.dtype,
-            (0, len(coord)),
-        )
-        assert np.array_equal(out, patch.data)
+    def test_a_changed_local_file_is_refused(self, tmp_path):
+        """A file changed since indexing is refused when the tree is built."""
+        for num, patch in enumerate(dc.get_example_spool()):
+            patch.io.write(tmp_path / f"p{num}.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        assert self._leaf(spool.io.to_xarray())  # untouched files convert
+        path = tmp_path / "p1.h5"
+        stat = path.stat()
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
+        with pytest.raises(PatchConversionError, match=r"spool.update\(\)"):
+            spool.io.to_xarray()
 
 
 class TestToXarrayLazyCoords:
@@ -809,68 +769,45 @@ class TestToXarrayBlockSize:
         assert np.array_equal(data.compute().values, expected)
         assert np.array_equal(np.asarray(data["time"].values), merged.get_array("time"))
 
-    def test_a_selection_reads_only_its_samples(self, file_spool, monkeypatch):
+    @staticmethod
+    def _time_windows(spool, reads):
+        """The time window of each recorded read."""
+        axis = spool[0].dims.index("time")
+        return [windows[axis] for _, windows in reads]
+
+    @pytest.mark.parametrize("quarters", [0, 1])
+    def test_a_selection_reads_only_its_samples(
+        self, file_spool, array_reads, quarters
+    ):
         """A window reaches the reader as itself, whatever the blocks are.
 
         The selection fuses into the segment source's own read, so the
         blocks bound a bulk read and say nothing about this one.
         """
-        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
+        block_size = quarters * file_spool[0].data.nbytes // 4
+        data = self._leaf(file_spool.io.to_xarray(block_size=block_size))
+        piece = data.isel(time=slice(3, 11)).compute()
+        assert self._time_windows(file_spool, array_reads) == [(3, 11)]
+        assert piece.sizes["time"] == 8
 
-        for block_size in (0, file_spool[0].data.nbytes // 4):
-            windows = []
-            original = PlanResolver._load_member_array
-
-            def _counting(self, row, member_windows, _original=original, **kwargs):
-                windows.append(dict(member_windows))
-                return _original(self, row, member_windows, **kwargs)
-
-            monkeypatch.setattr(PlanResolver, "_load_member_array", _counting)
-            data = self._leaf(file_spool.io.to_xarray(block_size=block_size))
-            piece = data.isel(time=slice(3, 11)).compute()
-            monkeypatch.undo()
-            assert windows == [{"time": (3, 11)}], block_size
-            assert piece.sizes["time"] == 8
-
-    def test_a_selection_reads_only_the_members_it_covers(self, file_spool):
+    def test_a_selection_reads_only_the_members_it_covers(
+        self, file_spool, array_reads
+    ):
         """A window inside one member never opens the others."""
-        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
-
         samples = len(file_spool[0].get_coord("time"))
-        paths = []
-        original = PlanResolver._load_member_array
-
-        def _counting(self, row, member_windows, **kwargs):
-            paths.append(row.get("source_path"))
-            return original(self, row, member_windows, **kwargs)
-
         data = self._leaf(file_spool.io.to_xarray())
-        with pytest.MonkeyPatch.context() as patcher:
-            patcher.setattr(PlanResolver, "_load_member_array", _counting)
-            # a window straddling the first seam covers two of three members
-            straddle = data.isel(time=slice(samples - 2, samples + 2)).compute()
+        # a window straddling the first seam covers two of three members
+        straddle = data.isel(time=slice(samples - 2, samples + 2)).compute()
         assert straddle.sizes["time"] == 4
-        assert len(set(paths)) == 2
+        assert len({path for path, _ in array_reads}) == 2
 
-    def test_a_selection_on_another_dimension_reads_less(self, file_spool):
+    def test_a_selection_on_another_dimension_reads_less(self, file_spool, array_reads):
         """A distance window is pushed into the read, not applied after."""
-        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
-
-        sizes = []
-        original = PlanResolver._load_member_array
-
-        def _counting(self, row, member_windows, **kwargs):
-            out = original(self, row, member_windows, **kwargs)
-            sizes.append(0 if out is None else out.size)
-            return out
-
         data = self._leaf(file_spool.io.to_xarray())
-        whole = file_spool[0].data.size
-        with pytest.MonkeyPatch.context() as patcher:
-            patcher.setattr(PlanResolver, "_load_member_array", _counting)
-            narrow = data.isel(distance=slice(0, 3)).compute()
+        axis = file_spool[0].dims.index("distance")
+        narrow = data.isel(distance=slice(0, 3)).compute()
         assert narrow.sizes["distance"] == 3
-        assert max(sizes) < whole
+        assert {windows[axis] for _, windows in array_reads} == {(0, 3)}
 
     @pytest.mark.parametrize("block_size", [0, 1_000_000])
     def test_every_index_form_matches_the_merged_patch(self, file_spool, block_size):
@@ -903,55 +840,31 @@ class TestToXarrayBlockSize:
         pair = data.isel(distance=[0, 3], time=slice(0, 7)).compute().values
         assert np.array_equal(pair, whole[[0, 3]][:, :7])
 
-    def test_a_selection_missing_every_member_reads_nothing(self, file_spool):
-        """An empty window has no member to ask, and is empty rather than absent."""
-        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
-
-        reads = []
-        original = PlanResolver._load_member_array
-        data = self._leaf(file_spool.io.to_xarray())
-        with pytest.MonkeyPatch.context() as patcher:
-            patcher.setattr(
-                PlanResolver,
-                "_load_member_array",
-                lambda self, row, w: reads.append(w) or original(self, row, w),
-            )
-            out = data.isel(time=slice(0, 0)).compute()
-        assert out.sizes["time"] == 0
-        assert reads == []
-
-    def test_a_fallback_read_still_narrows_other_dimensions(
-        self, file_spool, monkeypatch
+    def test_a_selection_missing_every_member_reads_nothing(
+        self, file_spool, array_reads
     ):
-        """A patch-path read applies the other dimensions' windows itself."""
-        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
+        """An empty window has no member to ask, and is empty rather than absent."""
+        data = self._leaf(file_spool.io.to_xarray())
+        out = data.isel(time=slice(0, 0)).compute()
+        assert out.sizes["time"] == 0
+        assert array_reads == []
 
+    def test_a_patch_read_still_narrows_other_dimensions(self, file_spool, monkeypatch):
+        """A member loading as a patch applies the other dimensions' windows itself."""
+        monkeypatch.setattr(PlanResolver, "_member_array_source", lambda *args: None)
         data = self._leaf(file_spool.io.to_xarray())
         merged = file_spool.chunk(time=None)[0]
         whole = merged.transpose(*data.dims).data
-        monkeypatch.setattr(
-            PlanResolver, "_load_member_array", lambda self, row, w: None
-        )
         got = data.isel(distance=slice(0, 4), time=slice(0, 6)).compute().values
         assert np.array_equal(got, whole[:4, :6])
 
-    def test_a_block_reads_only_its_own_window(self, file_spool, monkeypatch):
+    def test_a_block_reads_only_its_own_window(self, file_spool, array_reads):
         """Computing one piece reads that piece's samples, not the file."""
-        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
-
-        windows = []
-        original = PlanResolver._load_member_array
-
-        def _counting(self, row, member_windows, **kwargs):
-            windows.append(dict(member_windows))
-            return original(self, row, member_windows, **kwargs)
-
-        monkeypatch.setattr(PlanResolver, "_load_member_array", _counting)
         quarter = file_spool[0].data.nbytes // 4
         data = self._leaf(file_spool.io.to_xarray(block_size=quarter))
         samples = len(file_spool[0].get_coord("time"))
         piece = data.isel(time=slice(0, samples // 4)).compute()
-        assert windows == [{"time": (0, samples // 4)}]
+        assert self._time_windows(file_spool, array_reads) == [(0, samples // 4)]
         assert piece.sizes["time"] == samples // 4
 
     def test_a_member_the_index_cannot_window_stays_whole(self, random_spool):
@@ -989,22 +902,18 @@ class TestToXarrayBlockSize:
             override = self._leaf(file_spool.io.to_xarray(block_size=0))
         assert override.data.npartitions == len(file_spool)
 
-    def test_a_piece_falling_back_reads_its_own_bounds(self, file_spool, monkeypatch):
-        """A piece whose window read fails still loads its own samples.
+    def test_a_file_member_loading_as_a_patch_stays_whole(
+        self, file_spool, monkeypatch
+    ):
+        """A file member which cannot be windowed is one block, read once.
 
-        The array path can decline at load (a file which changed since
-        indexing), and the piece then loads as a patch trimmed by value.
-        Those bounds are the piece's own, not its member's, or the block
-        would come back the size of the whole member.
+        Splitting it would load the whole file once per piece.
         """
-        from dascore.io.index.planned import PlanResolver  # noqa: PLC0415
-
+        monkeypatch.setattr(PlanResolver, "_member_array_source", lambda *args: None)
         quarter = file_spool[0].data.nbytes // 4
         data = self._leaf(file_spool.io.to_xarray(block_size=quarter))
+        assert data.data.npartitions == len(file_spool)
         merged = file_spool.chunk(time=None)[0]
-        monkeypatch.setattr(
-            PlanResolver, "_load_member_array", lambda self, row, w: None
-        )
         assert np.array_equal(data.compute().values, merged.transpose(*data.dims).data)
 
     def test_pieces_of_an_interior_window_stay_anchored(self, tmp_path):
@@ -1027,50 +936,6 @@ class TestToXarrayBlockSize:
         data = self._leaf(spool.io.to_xarray(block_size=merged.data.nbytes // 8))
         assert data.data.npartitions > 2
         assert np.array_equal(data.compute().values, merged.transpose(*data.dims).data)
-
-
-class TestWindowAndKey:
-    """The split of one index into a window to read and what to take."""
-
-    @staticmethod
-    def _split(key, size=10):
-        from dascore.xarray.spool import _window_and_key  # noqa: PLC0415
-
-        return _window_and_key(key, size)
-
-    def test_a_plain_slice_is_the_window(self):
-        """A step-one slice needs nothing taken out of what it reads."""
-        assert self._split(slice(2, 6)) == ((2, 6), slice(None))
-        assert self._split(slice(None)) == ((0, 10), slice(None))
-
-    def test_a_backwards_slice_reads_nothing(self):
-        """A stop before its start selects nothing, and reads nothing."""
-        assert self._split(slice(6, 2)) == ((6, 6), slice(None))
-
-    def test_an_integer_drops_its_dimension(self):
-        """The window holds one sample and the take is an integer, not a slice."""
-        assert self._split(3) == ((3, 4), 0)
-        assert self._split(-2) == ((8, 9), 0)
-
-    def test_a_stride_reads_the_span_it_covers(self):
-        """Reading is contiguous, so a stride is taken from its span."""
-        window, take = self._split(slice(1, 8, 3))
-        assert window == (1, 8)
-        assert np.array_equal(take, [0, 3, 6])
-
-    def test_positions_are_read_as_the_span_enclosing_them(self):
-        """Scattered positions still name one window, and their offsets in it."""
-        window, take = self._split([7, 2, 4])
-        assert window == (2, 8)
-        assert np.array_equal(take, [5, 0, 2])
-
-    def test_no_positions_read_nothing(self):
-        """An empty index has no span, so it names an empty window.
-
-        Dask spells this as an empty slice before it reaches the source,
-        so only a direct caller sees this branch.
-        """
-        assert self._split([]) == ((0, 0), slice(None))
 
 
 class TestBlockPieces:
@@ -1319,12 +1184,7 @@ def long_segment(requires_xarray_dask):
 
 @pytest.mark.usefixtures("requires_xarray_dask")
 class TestKnownDivergences:
-    """
-    Where the tree disagrees with chunk or wastes memory today.
-
-    Each test asserts the correct behaviour and is a strict xfail, so the
-    read-path rewrite flips it to a pass and must then drop the mark.
-    """
+    """Where the tree once disagreed with chunk or wasted memory."""
 
     @staticmethod
     def _peak_bytes(func):
@@ -1346,7 +1206,7 @@ class TestKnownDivergences:
 
     def test_contiguous_window_memory(self, long_segment):
         """
-        Control for the memory xfails: a step-one window stays small.
+        Control for the memory tests: a step-one window stays small.
 
         If this fails the measurement, not the indexing, is at fault.
         """
@@ -1355,11 +1215,6 @@ class TestKnownDivergences:
         peak = self._peak_bytes(lambda: window.compute(scheduler="synchronous"))
         assert peak < samples * 8 // 4
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="scalar and strided isel build np.arange over the whole axis",
-    )
     @pytest.mark.parametrize("index", [5, slice(10, 20, 2)], ids=["point", "stride"])
     def test_point_and_stride_memory(self, long_segment, index):
         """
@@ -1374,11 +1229,6 @@ class TestKnownDivergences:
         )
         assert peak < samples * 8 // 4
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=IndexError,
-        reason="striding two dims at once raises IndexError",
-    )
     def test_stride_on_two_dims(self, random_spool):
         """Striding both dimensions at once equals the same isel of chunk."""
         (data,) = _segments(random_spool.io.to_xarray())
@@ -1389,11 +1239,6 @@ class TestKnownDivergences:
             data.isel(**index).compute().values, expected.data
         )
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="later members' data units not converted to the first's",
-    )
     def test_keep_first_data_units(self, random_patch):
         """
         A member in other data units is converted to the merged units.
@@ -1412,11 +1257,6 @@ class TestKnownDivergences:
         (data,) = _segments(spool.io.to_xarray(**kwargs))
         np.testing.assert_array_equal(data.values, merged.data)
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="units on dims other than the merged one dropped",
-    )
     def test_non_merged_dim_units(self, random_spool):
         """The distance coordinate keeps its units through a round trip."""
         (data,) = _segments(random_spool.io.to_xarray())
@@ -1425,11 +1265,6 @@ class TestKnownDivergences:
         assert expected is not None
         assert data.dc.to_patch().get_coord("distance").units == expected
 
-    @pytest.mark.xfail(
-        strict=True,
-        raises=AssertionError,
-        reason="associated coord's latitude_* summary values land in attrs",
-    )
     def test_associated_coord_attrs(self, random_patch):
         """An associated coordinate's summary (latitude_min etc.) stays out of attrs."""
         n = len(random_patch.get_coord("distance"))
