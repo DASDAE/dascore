@@ -1163,8 +1163,13 @@ class TestUpdateAttrs:
     def test_update_attrs_accepts_coordinate_shaped_names(self, random_patch):
         """Coord-shaped names are ordinary attrs; coords are never affected."""
         # Names of the patch's own dims once moved coords, so they warn.
-        for key in ("time_min", "time_step", "d_time"):
-            with pytest.warns(DASCoreWarning, match="update_coords"):
+        pairs = {
+            "time_min": "time_min",
+            "time_step": "time_step",
+            "d_time": "time_step",
+        }
+        for key, coord_key in pairs.items():
+            with pytest.warns(DASCoreWarning, match=rf"update_coords\({coord_key}="):
                 out = random_patch.update_attrs(**{key: 10})
             assert out.attrs[key] == 10
             assert out.coords == random_patch.coords

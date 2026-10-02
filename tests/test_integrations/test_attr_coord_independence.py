@@ -21,10 +21,7 @@ import pytest
 import dascore as dc
 from dascore.core.coordmanager import get_coord_manager
 from dascore.utils.downloader import fetch
-
-# These tests shadow coordinates with attrs on purpose, which update_attrs
-# warns about.
-pytestmark = pytest.mark.filterwarnings("ignore:update_attrs stores")
+from dascore.warnings import DASCoreWarning
 
 # The suffix-capture family from the original bug report: each of these was
 # previously reinterpreted as coordinate metadata for a phantom coordinate.
@@ -126,7 +123,8 @@ class TestDasdaeRoundTrip:
     def test_shadowing_attr_round_trips(self, random_patch, tmp_path_factory):
         """An attr shadowing the patch's own coord envelope still survives."""
         patch = random_patch.rename_coords(distance="channel")
-        patch = patch.update_attrs(channel_step=999)
+        with pytest.warns(DASCoreWarning, match="update_coords"):
+            patch = patch.update_attrs(channel_step=999)
         path = tmp_path_factory.mktemp("dasdae_shadow") / "patch.h5"
         patch.io.write(path, "dasdae")
         read_back = dc.spool(path)[0]
@@ -163,7 +161,8 @@ class TestGetContentsClobberWarning:
     def shadowing_patch(self, random_patch):
         """A patch with an attr equal to one of its own envelope columns."""
         patch = random_patch.rename_coords(distance="channel")
-        return patch.update_attrs(channel_step=999)
+        with pytest.warns(DASCoreWarning, match="update_coords"):
+            return patch.update_attrs(channel_step=999)
 
     def test_warns_and_coord_wins(self, shadowing_patch):
         """Genuine collision warns; the coord envelope owns the column."""
@@ -202,7 +201,8 @@ class TestGetContentsClobberWarning:
         # the flat column is the (numeric) envelope even in the filtered
         # frame, so the residual must fall back to the real attr values
         patch = random_patch.rename_coords(distance="channel")
-        patch = patch.update_attrs(channel_min="vendor-a7")
+        with pytest.warns(DASCoreWarning, match="update_coords"):
+            patch = patch.update_attrs(channel_min="vendor-a7")
         spool = dc.spool([patch])
         with pytest.warns(UserWarning, match="collide with coordinate envelope"):
             df = spool.get_contents()
@@ -218,7 +218,8 @@ class TestFixedEnvelopeColumnsReserved:
 
     def test_fixed_envelope_attr_warns_and_skips(self, random_patch):
         """An attr named like a fixed envelope column warns and is skipped."""
-        patch = random_patch.update_attrs(time_step=123.0)
+        with pytest.warns(DASCoreWarning, match="update_coords"):
+            patch = random_patch.update_attrs(time_step=123.0)
         with pytest.warns(UserWarning, match="reserved attr name"):
             spool = dc.spool([patch])
             df = spool.get_contents()
