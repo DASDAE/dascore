@@ -854,7 +854,8 @@ class TestPatchRules:
             assert (patch + 1).attrs.data_id == ""
             assert patch.pass_filter(time=(1, 10)).attrs.data_id == ""
             assert patch.decimate(time=2).attrs.data_id == ""
-            # A decorated patch function, now decimate is a processor.
+            # decimate is a processor now, so where keeps the ids-disabled
+            # path of a decorated patch function covered.
             assert patch.where(np.asarray(patch.data) > 0).attrs.data_id == ""
             assert np.abs(patch).attrs.data_id == ""
 

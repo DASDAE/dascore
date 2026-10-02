@@ -11,7 +11,8 @@ import dascore as dc
 from dascore.exceptions import ParameterError, PatchError
 from dascore.proc.tile_apply import Reassemble, TileApply
 from dascore.units import percent
-from dascore.utils.signal import get_window
+from dascore.utils.signal import get_taper, get_window
+from dascore.utils.tiles import get_tile_plan
 
 
 def identity(tiles):
@@ -770,6 +771,11 @@ class TestReassembleProcessor:
             Reassemble("hann")
 
     def test_taper(self, tiles):
-        """Changed tiles blend differently under another taper."""
+        """Changed tiles blend under the taper given."""
         out = tiles.reassemble(taper="triang")
+        plan = get_tile_plan((2000,), (16,), (8,))
+        taper = get_taper("triang", (16,), (8,))
+        rows = tiles.transpose("distance", "time", "time_offset").data
+        expected = np.stack([plan.overlap_add(row, taper) for row in rows])
+        assert np.allclose(out.transpose("distance", "time").data, expected)
         assert not np.allclose(out.data, tiles.reassemble().data)

@@ -273,3 +273,9 @@ class TestCorrelateShiftProcessor:
         expected = shifted / 0.004 if undo_weighting else shifted
         assert out.dtype == expected.dtype
         assert np.array_equal(out.data, expected)
+
+    def test_single_precision_promotes(self, random_patch):
+        """float32 data divided by the float64 step become float64, as in numpy."""
+        single = random_patch.new(data=random_patch.data.astype(np.float32))
+        assert single.correlate_shift("time").dtype == np.float64
+        assert single.correlate_shift("time", undo_weighting=False).dtype == np.float32

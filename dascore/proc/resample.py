@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import operator
 from typing import Any
 
 import numpy as np
@@ -9,9 +10,10 @@ from pydantic import ConfigDict
 
 import dascore as dc
 import dascore.compat as compat
-from dascore.core.processor import PatchProcessor
+from dascore.core.processor import PatchProcessor, _via_numpy
 from dascore.exceptions import FilterValueError, ParameterError
 from dascore.units import get_filter_units
+from dascore.utils.array_api import array_namespace
 from dascore.utils.imports import lazy_import
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import (
@@ -85,7 +87,7 @@ class Decimate(_DecimateFields):
 
     See Also
     --------
-    [resample](`dascore.proc.resample.resample`)
+    [resample](`dascore.Patch.resample`)
         Change sampling to a specified interval or number of samples, rather
         than by an integer decimation factor.
 
@@ -109,7 +111,9 @@ class Decimate(_DecimateFields):
         if self.filter_type:
             require_no_holes(meta, dim, "filtered decimate")
             coords = coords._update_grid(dim)
-        plan = {"axis": axis, "factor": factor, "slices": slices}
+            # scipy's own refusal of a factor which is not an integer.
+            operator.index(factor)
+        plan = {"axis": axis, "factor": int(factor), "slices": slices}
         return meta.new(coords=coords), plan
 
     def numpy_kernel(self, data, *, axis, factor, slices):
@@ -119,6 +123,14 @@ class Decimate(_DecimateFields):
             return _apply_scipy_decimation(data, factor, ftype=ftype, axis=axis)
         # Copying releases the reference to the parent array.
         return np.array(data[slices]) if self.copy else data[slices]
+
+    def kernel(self, data, *, axis, factor, slices):
+        """Return the data sliced on its own backend; filtered by numpy."""
+        if self.filter_type:
+            numpy_decimate = _via_numpy(type(self).numpy_kernel, "decimate")
+            return numpy_decimate(self, data, axis=axis, factor=factor, slices=slices)
+        xp = array_namespace(data)
+        return xp.asarray(data[slices], copy=True) if self.copy else data[slices]
 
 
 def _interpolate_associated(cm, dim, coord_num, samples_num, kind) -> dict:
@@ -194,7 +206,7 @@ class Interpolate(PatchProcessor):
     --------
     [Patch.snap_coords](`dascore.Patch.snap_coords`)
         Snap coordinates to evenly sampled values without interpolating data.
-    [resample](`dascore.proc.resample.resample`)
+    [resample](`dascore.Patch.resample`)
         Resample data to a target sampling interval or number of samples.
 
     Examples
@@ -226,6 +238,9 @@ class Interpolate(PatchProcessor):
         # interp1d does not support datetime64.
         coord_num = to_int(cm.get_array(dim))
         samples_num = to_int(samples)
+        if np.asarray(samples_num).dtype.kind not in "biufc":
+            # Text or objects: let scipy refuse them, as it did unplanned.
+            _interp(coord_num, coord_num, samples_num, 0, self.kind)
         coord_new = dc.core.get_coord(data=samples)
         updates = {dim: (cm.dim_map[dim], coord_new)}
         updates |= _interpolate_associated(cm, dim, coord_num, samples_num, self.kind)
@@ -253,7 +268,7 @@ class Resample(PatchProcessor):
     Since Fourier methods only support adding or removing an integer number
     of frequency bins, the exact desired sampling rate is often not achievable
     with resampling alone. If the fourier resampling doesn't produce the exact
-    result, an interpolation (see [interpolate](`dascore.proc.interpolate`))
+    result, an interpolation (see [interpolate](`dascore.Patch.interpolate`))
     is used to achieve the desired sampling rate.
 
     Parameters
@@ -299,8 +314,8 @@ class Resample(PatchProcessor):
 
     See Also
     --------
-    [decimate](`dascore.proc.resample.decimate`)
-    [interpolate](`dascore.proc.resample.interpolate`)
+    [decimate](`dascore.Patch.decimate`)
+    [interpolate](`dascore.Patch.interpolate`)
     """
 
     window: Any = None

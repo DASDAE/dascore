@@ -22,7 +22,7 @@ from dascore.core.coordmanager import (
     get_coord_manager,
 )
 from dascore.core.coords import get_coord
-from dascore.core.processor import PatchProcessor, _via_numpy, register_kernel
+from dascore.core.processor import PatchProcessor, register_kernel
 from dascore.core.source import ArraySource
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
@@ -1117,18 +1117,21 @@ def _padded_coord(coord, pad_tuple, expand_coords):
         # move every label of a fractional grid.
         total = len(coord) + pad_tuple[0] + pad_tuple[1]
         return coord._with_runs((coord.runs[0].sliced(-pad_tuple[0], 1, total),))
-    old_values = coord.values
-    # Need to convert ints to float so NaN can be used.
-    if np.issubdtype(old_values.dtype, np.integer):
-        old_values = old_values.astype(np.float64)
-    null_value = _get_nullish(old_values.dtype)
-    added_nan_values = np.pad(
-        old_values, pad_width=pad_tuple, constant_values=null_value
-    )
+    return _grown_coord(coord, pad_tuple, _get_nullish)
+
+
+def _grown_coord(coord, widths, fill_for):
+    """Return `coord` padded by `widths` with `fill_for(dtype)`, from its values."""
+    values = coord.values
+    # An integer coordinate has to widen to hold the NaN which says
+    # nothing is known where samples were added.
+    if np.issubdtype(values.dtype, np.integer):
+        values = values.astype(np.float64)
+    padded = np.pad(values, pad_width=widths, constant_values=fill_for(values.dtype))
     # Units passed rather than updated onto the coordinate: a
     # coordinate built from new data starts with none, so the
     # meters a distance was measured in would come off here.
-    return get_coord(data=added_nan_values, units=coord.units)
+    return get_coord(data=padded, units=coord.units)
 
 
 def _pad_fill(dtype):
@@ -1154,17 +1157,7 @@ def _padded_associated_coords(coords, pad_tuples):
         # an integer coordinate there would change it for nothing.
         if not any(any(x) for x in widths):
             continue
-        coord = coords.coord_map[name]
-        values = coord.values
-        # An integer coordinate has to widen to hold the NaN which
-        # says nothing is known there, as the padded dimension's own
-        # does above.
-        if np.issubdtype(values.dtype, np.integer):
-            values = values.astype(np.float64)
-        padded = np.pad(
-            values, pad_width=widths, constant_values=_pad_fill(values.dtype)
-        )
-        grown = get_coord(data=padded, units=coord.units)
+        grown = _grown_coord(coords.coord_map[name], widths, _pad_fill)
         out[name] = (coord_dims, grown)
     return out
 
@@ -1172,6 +1165,9 @@ def _padded_associated_coords(coords, pad_tuples):
 def _pad_array(data, pad_width, constant_values=0):
     """Return data with `constant_values` added along each axis, as np.pad does."""
     xp = array_namespace(data)
+    # Some backends refuse a numpy scalar as a fill value.
+    if isinstance(constant_values, np.generic):
+        constant_values = constant_values.item()
     for axis, widths in enumerate(pad_width):
         if not any(widths):
             continue
@@ -1197,7 +1193,7 @@ class Pad(PatchProcessor):
     patch
         The patch to pad.
     mode : str, optional
-        The mode of padding, by default 'constant'.
+        The mode of padding; only 'constant' is supported.
     constant_values : scalar , optional
         A single scalar value used as the padding value across all dimensions.
         Defaults to 0.
@@ -1258,6 +1254,9 @@ class Pad(PatchProcessor):
         """Return the padded coordinates, and each axis's (before, after) widths."""
         if isinstance(self.constant_values, Sequence):
             raise ParameterError("constant_values must be a scalar, not a sequence.")
+        if self.mode != "constant":
+            msg = f"pad supports only mode='constant', not mode={self.mode!r}."
+            raise ParameterError(msg)
         pad_width = [(0, 0)] * len(meta.shape)
         extras = self.model_extra or {}
         dimfo = get_dim_axis_value(meta, kwargs=extras, allow_multiple=True)
@@ -1276,16 +1275,11 @@ class Pad(PatchProcessor):
         return meta.new(coords=coords), {"pad_width": tuple(pad_width)}
 
     def numpy_kernel(self, data, *, pad_width):
-        """Return the data padded by numpy, in any of its modes."""
-        return np.pad(
-            data, pad_width, mode=self.mode, constant_values=self.constant_values
-        )
+        """Return the data padded with a constant by numpy."""
+        return np.pad(data, pad_width, constant_values=self.constant_values)
 
     def kernel(self, data, *, pad_width):
-        """Return the data padded with a constant; numpy pads in other modes."""
-        if self.mode != "constant":
-            numpy_pad = _via_numpy(type(self).numpy_kernel, "pad")
-            return numpy_pad(self, data, pad_width=pad_width)
+        """Return the data padded with a constant."""
         return _pad_array(data, pad_width, self.constant_values)
 
 

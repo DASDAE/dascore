@@ -647,11 +647,34 @@ class TestArrayApiKernelBranches:
         assert (values[-1] == 7).all()
         assert np.array_equal(values[:-1, 1:-2], np.asarray(backend_patch.data))
 
-    def test_pad_other_modes_are_numpys(self, backend_patch):
-        """A mode other than constant goes through numpy, which decides it."""
-        with pytest.warns(NumpyFallbackWarning, match="pad"):
-            with pytest.raises(ValueError, match="reflect"):
-                backend_patch.pad(time=1, samples=True, mode="reflect")
+    def test_pad_with_a_numpy_scalar(self, backend_patch):
+        """A numpy scalar fill is written, on the patch's backend."""
+        out = backend_patch.pad(time=1, samples=True, constant_values=np.int64(7))
+        assert backend_name(out.data) == backend_name(backend_patch.data)
+        assert (np.asarray(out.data)[:, 0] == 7).all()
+
+    def test_decimate_unfiltered_is_native(self, random_patch, backend_patch):
+        """Striding needs no numpy: no warning, and the backend kept."""
+        expected = random_patch.decimate(time=4, filter_type=None)
+        with warnings_as_errors():
+            for copy in (True, False):
+                out = backend_patch.decimate(time=4, filter_type=None, copy=copy)
+                assert backend_name(out.data) == backend_name(backend_patch.data)
+                assert np.array_equal(np.asarray(out.data), expected.data)
+
+    @pytest.mark.parametrize("undo_weighting", (True, False))
+    def test_correlate_shift_of_integers(
+        self, random_patch, to_backend, undo_weighting
+    ):
+        """Integers shift as numpy shifts them, dtype and promotion included."""
+        ints = np.arange(random_patch.size).reshape(random_patch.shape)
+        numpy_patch = random_patch.new(data=ints)
+        patch = to_backend(numpy_patch)
+        out = patch.correlate_shift("time", undo_weighting=undo_weighting)
+        expected = numpy_patch.correlate_shift("time", undo_weighting=undo_weighting)
+        assert backend_name(out.data) == backend_name(patch.data)
+        assert np.asarray(out.data).dtype == expected.dtype
+        assert np.array_equal(np.asarray(out.data), expected.data)
 
     def test_fillna_fills(self, backend_patch):
         """Non-finite values are replaced by the value."""

@@ -788,7 +788,8 @@ def drop_associated_coords(coords, dim: str, action: str):
         return coords
     names = ", ".join(associated)
     msg = f"{action} dimension {dim!r} dropped associated coordinates: {names}."
-    # At the caller's code, however deep inside dascore the operation runs.
+    # Point the warning at the first frame outside dascore; a fixed
+    # stacklevel breaks as the processor call depth varies.
     prefix = str(Path(__file__).parent.parent)
     warnings.warn(msg, DASCoreWarning, skip_file_prefixes=(prefix,))
     return coords.drop_coords(*associated)[0]

@@ -451,6 +451,20 @@ class TestShapeProcessors:
         copied = random_patch.decimate(time=4, filter_type=None)
         assert not np.shares_memory(copied.data, random_patch.data)
 
+    def test_decimate_factor_as_text(self, random_patch):
+        """Unfiltered, the factor is anything int takes; filtered, scipy's."""
+        out = random_patch.decimate(time="3", filter_type=None)
+        assert out.equals(random_patch.decimate(time=3, filter_type=None))
+        with pytest.raises(TypeError, match="cannot be interpreted as an integer"):
+            random_patch.decimate(time="3")
+
+    def test_interpolate_onto_text(self, random_patch):
+        """Positions which are not numbers are scipy's to refuse."""
+        with pytest.raises(ValueError, match="could not convert string"):
+            random_patch.interpolate(time=["2017-09-18T00:00:01"])
+        with pytest.raises(ValueError, match="object arrays"):
+            random_patch.interpolate(time=np.array([None, 1], dtype=object))
+
     def test_decimate_keeps_int_dtype(self, random_patch):
         """Striding int data leaves them int."""
         ints = random_patch.new(data=np.ones(random_patch.shape, dtype=np.int16))

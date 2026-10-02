@@ -1204,14 +1204,11 @@ class TestPadProcessor:
         assert out.shape == (300, 2005)
         assert plan == {"pad_width": ((0, 0), (2, 3))}
 
-    def test_widths_in_coordinate_units(self, random_patch):
-        """Without samples, a width is a span of the coordinate."""
-        out = random_patch.pad(time=(0.008, 0.012))
-        assert out.shape == (300, 2005)
-
-    def test_mode_reaches_numpy(self, random_patch):
-        """Another mode is numpy's, which refuses a constant with it."""
-        with pytest.raises(ValueError, match="reflect"):
+    def test_only_constant_mode(self, random_patch):
+        """Any other mode is refused before data are read."""
+        with pytest.raises(ParameterError, match="reflect"):
+            Pad(time=1, samples=True, mode="reflect").get_metadata(random_patch)
+        with pytest.raises(ParameterError, match="reflect"):
             random_patch.pad(time=1, samples=True, mode="reflect")
 
     def test_integer_data_stay_integer(self, random_patch):

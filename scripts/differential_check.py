@@ -678,7 +678,8 @@ def _shape_calls(patch, int_patch, f32, dft_patch, wacky, with_nondim, m, s) -> 
     step = patch.get_coord("time").step
     dist = patch.get_array("distance")
     up_time = np.arange(time.min(), time.max(), step / 2)
-    # Unsorted, repeated, negative and out-of-order shifts, in samples and time.
+    # Unsorted, repeated and negative shifts, in samples and time, and a
+    # shuffled distance order.
     rng = np.random.default_rng(0)
     shifts = rng.integers(-20, 20, size=len(dist))
     order = rng.permutation(len(dist))
@@ -724,7 +725,6 @@ def _shape_calls(patch, int_patch, f32, dft_patch, wacky, with_nondim, m, s) -> 
         "pad_wacky": lambda: wacky.pad(distance=2, time=1, samples=True),
         "pad_bad_wacky_units": lambda: wacky.pad(distance=2.0),
         "pad_bad_sequence": lambda: patch.pad(time=1, constant_values=(1, 2)),
-        "pad_bad_mode": lambda: patch.pad(time=1, samples=True, mode="reflect"),
         "pad_bad_dim": lambda: patch.pad(nope=1),
         # decimate
         "decimate_iir": lambda: patch.decimate(time=10),
@@ -752,6 +752,8 @@ def _shape_calls(patch, int_patch, f32, dft_patch, wacky, with_nondim, m, s) -> 
             distance=2
         ),
         "decimate_bad_dim": lambda: patch.decimate(nope=2),
+        "decimate_text": lambda: patch.decimate(time="3", filter_type=None),
+        "decimate_bad_text": lambda: patch.decimate(time="3"),
         # interpolate
         "interp_up": lambda: patch.interpolate(time=up_time),
         "interp_down": lambda: patch.interpolate(time=time[::3]),
@@ -768,6 +770,7 @@ def _shape_calls(patch, int_patch, f32, dft_patch, wacky, with_nondim, m, s) -> 
         "interp_rider_time": lambda: aligned.interpolate(distance=dist[:30] + 0.5),
         "interp_bad_kind": lambda: patch.interpolate(time=time[::2], kind="nope"),
         "interp_bad_dim": lambda: patch.interpolate(nope=time),
+        "interp_bad_text": lambda: patch.interpolate(time=["2017-09-18T00:00:01"]),
         # resample
         "resample_timedelta": lambda: patch.resample(time=np.timedelta64(10, "ms")),
         "resample_hz": lambda: patch.resample(time=50 * hz),

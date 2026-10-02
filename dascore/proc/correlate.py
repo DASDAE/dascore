@@ -103,11 +103,16 @@ class CorrelateShift(PatchProcessor):
     def kernel(self, data, *, axis, step):
         """Return the data shifted so zero lag is central, divided by the step."""
         xp = array_namespace(data)
-        data = xp.fft.fftshift(data, axes=axis)
+        # fftshift is this roll, but some backends shift only floats.
+        data = xp.roll(data, data.shape[axis] // 2, axis=axis)
         if step is None:
             return data
-        # A numpy scalar sets the result's dtype where a python float does
-        # not; a 0-d array does the same on backends refusing numpy scalars.
+        if not xp.isdtype(data.dtype, ("real floating", "complex floating")):
+            # numpy promotes integers to float64 here; some backends refuse to.
+            data = xp.astype(data, xp.float64)
+        # Divide by the step as a 0-d array: like a numpy scalar, and unlike
+        # a python float, it sets the result's dtype, and every backend
+        # accepts it.
         return data / (xp.asarray(step) if isinstance(step, np.generic) else step)
 
 
@@ -122,7 +127,7 @@ def correlate(
 
     The correlation runs in the frequency domain, transforming the target
     dimension when needed. For an already transformed patch, apply
-    [`Patch.correlate_shift`](`dascore.proc.correlate.correlate_shift`) after
+    [`Patch.correlate_shift`](`dascore.Patch.correlate_shift`) after
     the inverse transform. The 2D input becomes 3D, with one new source
     dimension; [`Patch.squeeze`](`dascore.Patch.squeeze`) removes it for a
     single source.

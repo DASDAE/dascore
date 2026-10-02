@@ -488,11 +488,6 @@ class Reassemble(PatchProcessor):
             weights = get_taper(
                 "hann" if self.taper is None else self.taper, size, overlap
             )
-        plan = get_tile_plan(shape, size, strides)
-        as_cut = all(
-            len(s) == count and np.array_equal(s, np.arange(count) * st - m)
-            for s, count, st, m in zip(starts, plan.grid, strides, plan.margin)
-        )
         # Put the source coordinates back, and drop everything the stack added,
         # along with any coordinate on a tile or offset axis, which has no
         # sample to go back to.
@@ -531,7 +526,6 @@ class Reassemble(PatchProcessor):
             "strides": strides,
             "starts": starts,
             "weights": weights,
-            "as_cut": as_cut,
         }
 
     def numpy_kernel(
@@ -545,7 +539,6 @@ class Reassemble(PatchProcessor):
         strides,
         starts,
         weights,
-        as_cut,
     ):
         """Return the tiles blended back under their weights."""
         ndim = len(tile_axes)
@@ -556,10 +549,14 @@ class Reassemble(PatchProcessor):
         batch_shape = moved.shape[: -2 * ndim]
         grid = moved.shape[-2 * ndim : -ndim]
         stacks = moved.reshape((-1, int(np.prod(grid)), *size))
+        plan = get_tile_plan(shape, size, strides)
+        as_cut = all(
+            len(s) == count and np.array_equal(s, np.arange(count) * st - m)
+            for s, count, st, m in zip(starts, plan.grid, strides, plan.margin)
+        )
         if as_cut:
             # Every tile, in the order it was cut: the plan blends the stack a
             # colour class at a time rather than a tile at a time.
-            plan = get_tile_plan(shape, size, strides)
             blended = np.stack([plan.overlap_add(stack, weights) for stack in stacks])
         else:
             blended = _place_each(stacks, starts, shape, size, weights)
