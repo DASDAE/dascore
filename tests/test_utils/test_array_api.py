@@ -149,9 +149,10 @@ class TestPatchBackends:
 
     def test_numpy_only_function_does_not_warn(self, backend_patch):
         """Nothing converts or warns for a plain numpy-only function."""
-        # median_filter hands the array to scipy, which gives numpy data back.
+        # stalta is not a processor; its rolling means go through numpy or
+        # pandas, which give numpy back.
         with warnings_as_errors():
-            out = backend_patch.median_filter(time=3, samples=True)
+            out = backend_patch.stalta(time=(0.01, 0.1))
         assert out.shape == backend_patch.shape
 
     def test_numpy_kernel_falls_back_with_a_warning(self, backend_patch):
@@ -459,11 +460,30 @@ _CONVERTED = {
     "envelope": (lambda p: p.envelope("time"), None),
     "kurtosis": (lambda p: p.kurtosis(time=8, samples=True), None),
     "radians_to_strain": (lambda p: _units(p, "mrad").radians_to_strain(), None),
+    "pass_filter": (lambda p: p.pass_filter(time=(None, 100)), None),
+    "notch_filter": (lambda p: p.notch_filter(time=60, q=30), None),
+    "median_filter": (lambda p: p.median_filter(time=3, samples=True), None),
+    "savgol_filter": (lambda p: p.savgol_filter(2, time=5, samples=True), None),
+    "gaussian_filter": (lambda p: p.gaussian_filter(time=2, samples=True), None),
+    "wiener_filter": (lambda p: p.wiener_filter(time=5, samples=True), None),
+    "hampel_filter": (lambda p: p.hampel_filter(time=5, samples=True), None),
 }
 
 
 # The converted operations which have only a numpy kernel, so fall back.
-_NUMPY_ONLY = {"demedian", "detrend", "sobel_filter", "kurtosis"}
+_NUMPY_ONLY = {
+    "demedian",
+    "detrend",
+    "sobel_filter",
+    "kurtosis",
+    "pass_filter",
+    "notch_filter",
+    "median_filter",
+    "savgol_filter",
+    "gaussian_filter",
+    "wiener_filter",
+    "hampel_filter",
+}
 
 
 class TestConvertedProcessorsOnBackends:
@@ -501,6 +521,46 @@ class TestConvertedProcessorsOnBackends:
         single = values.dtype in (np.float32, np.complex64)
         atol = 1e-5 if single else 1e-8
         assert np.allclose(values, expected.data, atol=atol, equal_nan=True)
+
+
+# Aggregations whose aggregator may go through numpy (the standard has no
+# median or take, and idxmax indexes coordinate values with numpy), plus a
+# native mean as control.
+_AGGREGATIONS = {
+    "aggregate": lambda p: p.aggregate("time", method="median"),
+    "aggregate_mean": lambda p: p.aggregate("time", method="mean"),
+    "median": lambda p: p.median("time"),
+    "first": lambda p: p.first("time"),
+    "last": lambda p: p.last("distance", dim_reduce="squeeze"),
+    "idxmax": lambda p: p.idxmax("distance"),
+    "idxmin": lambda p: p.idxmin("distance", dim_reduce="squeeze"),
+}
+
+
+class TestAggregationsOnBackends:
+    """Aggregations run natively, or warn they fall back, on every backend."""
+
+    @pytest.mark.parametrize("name", sorted(_AGGREGATIONS))
+    def test_runs_or_falls_back(self, random_patch, to_backend, backend, name):
+        """The backend comes back, and the values are numpy's."""
+        call = _AGGREGATIONS[name]
+        patch = to_backend(random_patch)
+        with warnings.catch_warnings(record=True) as record:
+            warnings.simplefilter("always")
+            out = call(patch)
+        # Dask runs numpy's median and take itself; the indexing never does.
+        native = name == "aggregate_mean" or (
+            backend == "dask" and not name.startswith("idx")
+        )
+        assert [x.category for x in record] == (
+            [] if native else [NumpyFallbackWarning]
+        )
+        # The warning points at the caller, not into dascore.
+        assert all(x.filename == __file__ for x in record)
+        assert backend_name(out.data) == backend_name(patch.data)
+        expected = call(random_patch)
+        assert out.dims == expected.dims
+        assert np.allclose(np.asarray(out.data), expected.data, equal_nan=True)
 
 
 class TestArrayApiKernelBranches:

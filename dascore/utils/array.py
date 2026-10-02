@@ -19,7 +19,13 @@ from dascore.compat import array, is_array
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError, PatchBroadcastError, UnitError
 from dascore.models import ArrayLike
-from dascore.units import DimensionalityError, Quantity, Unit, get_quantity
+from dascore.units import (
+    DimensionalityError,
+    Quantity,
+    Unit,
+    get_quantity,
+    get_quantity_str,
+)
 from dascore.utils.array_api import (
     array_namespace,
     asarray_like,
@@ -36,12 +42,10 @@ from dascore.utils.identity import (
     stamp,
     try_operation_id,
 )
-from dascore.utils.misc import iterate
 from dascore.utils.patch import (
     _merge_aligned_coords,
     _merge_models,
     align_patch_coords,
-    get_dim_axis_value,
     numpy_fallback,
     swap_kwargs_dim_to_axis,
 )
@@ -473,7 +477,7 @@ def _apply_binary_ufunc(
         # the scale comes out of a division, so shed its float noise
         magnitude = float(f"{quantity.magnitude:.12g}")
         if magnitude == 1:
-            return str(quantity.units)
+            return get_quantity_str(quantity.units)
         return str(magnitude * quantity.units)
 
     def _apply_op_one_unitful(
@@ -590,7 +594,7 @@ def _apply_binary_ufunc(
         except TypeError:
             # a logarithmic level cannot be divided by a number, but it has
             # kept its unit through the operation
-            return new_data, attrs.update(data_units=str(probe.units))
+            return new_data, attrs.update(data_units=get_quantity_str(probe.units))
 
     def _apply_op_both_unitful(
         patch, other, operator, attrs, data_units, other_units, reversed=False
@@ -638,7 +642,9 @@ def _apply_binary_ufunc(
                 data_units=_fallback_label(new_data, data_units)
             )
         if hasattr(result, "units"):
-            return result.magnitude, attrs.update(data_units=str(result.units))
+            return result.magnitude, attrs.update(
+                data_units=get_quantity_str(result.units)
+            )
         # Result is unitless (e.g., from boolean comparison)
         return result, attrs.update(data_units=None)
 
@@ -884,30 +890,6 @@ def _apply_reduction(func, data, axis):
     # before dascore knew about other backends, and decides the output's
     # backend.
     return func(data, axis=axis)
-
-
-def _apply_aggregator(patch, dim, func, dim_reduce="empty"):
-    """Apply an aggregation operator to patch."""
-    data = patch.data
-    dims = tuple(iterate(patch.dims if dim is None else dim))
-    dfo = get_dim_axis_value(patch, args=dims, allow_multiple=True)
-    if dim_reduce == "squeeze" and {dim for dim, _, _ in dfo} == set(patch.dims):
-        msg = "Cannot squeeze all dimensions; at least one dimension must remain."
-        raise ParameterError(msg)
-    # Iter all specified dimensions.
-    for dim, _, _ in dfo:
-        axis = patch.get_axis(dim)
-        new_coord = patch.get_coord(dim).reduce_coord(dim_reduce=dim_reduce)
-        if new_coord is None:
-            coords = patch.coords.drop_coords(dim)[0]
-            data = _apply_reduction(func, data, axis)
-        else:
-            coords = patch.coords.update(**{dim: new_coord})
-            reduced = _apply_reduction(func, data, axis)
-            data = array_namespace(reduced).expand_dims(reduced, axis=axis)
-        attrs = patch.attrs.model_dump(exclude={"coords", "dims"}, exclude_unset=True)
-        patch = patch.new(data=data, coords=coords, attrs=attrs)
-    return patch
 
 
 def _find_patches(args, kwargs):
@@ -1199,7 +1181,8 @@ def apply_ufunc(ufunc, *args, **kwargs):
     *args
         Additional positional arguments, can contain patches.
     **kwargs
-        Keyword arguments, can contain patches.
+        Keyword arguments, can contain patches. ``out`` is refused, as is
+        a ``where`` mask on element-wise ufuncs; use ``patch.data`` for those.
 
     Examples
     --------
@@ -1223,6 +1206,13 @@ def apply_ufunc(ufunc, *args, **kwargs):
     """
     _raise_on_out(kwargs)
     is_ufunc = isinstance(ufunc, np.ufunc)
+    # Without out, NumPy leaves the cells outside the mask unset.
+    if is_ufunc and kwargs.get("where", True) is not True:
+        msg = (
+            "The 'where' parameter cannot be used in element-wise patch "
+            "functions. Use the patch.data array directly."
+        )
+        raise ParameterError(msg)
     if is_ufunc:
         key = (ufunc.nin, ufunc.nout)
     else:

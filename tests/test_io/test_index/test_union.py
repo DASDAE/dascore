@@ -157,7 +157,7 @@ class TestCompositeResolver:
     """Resolver dispatch for union catalogs."""
 
     def test_routes_memory_rows(self, contiguous_patches):
-        """memory:// rows go to the live registry."""
+        """memorypatch:// rows go to the live registry."""
         p1, _ = contiguous_patches
         cat = PatchCatalog.union([PatchCatalog.from_patches([p1])])
         assert isinstance(cat.resolver, CompositeResolver)

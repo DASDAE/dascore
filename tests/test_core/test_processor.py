@@ -9,7 +9,7 @@ import pickle
 import subprocess
 import sys
 import warnings
-from types import FunctionType, SimpleNamespace
+from types import FunctionType, ModuleType, SimpleNamespace
 from typing import Any, ClassVar, Self
 
 import numpy as np
@@ -211,7 +211,7 @@ class TestTheSeam:
 
             name = None
 
-            def reconcile(self, data, out):
+            def reconcile(self, data, out, meta):
                 """Record what the kernel produced."""
                 return out.update_attrs(station=str(data.dtype))
 
@@ -223,7 +223,7 @@ class TestTheSeam:
 
             name = None
 
-            def reconcile(self, data, out):
+            def reconcile(self, data, out, meta):
                 """Would fail the test if reached."""
                 raise AssertionError
 
@@ -241,7 +241,7 @@ class TestTheSeam:
                 """Rename the distance coordinate, so something changed."""
                 return meta.rename_coords(distance="depth"), {}
 
-            def reconcile(self, data, out):
+            def reconcile(self, data, out, meta):
                 """Record what the data were, which only this hook sees."""
                 seen = "none" if data is None else str(data.dtype)
                 return out.update_attrs(station=seen)
@@ -1136,7 +1136,7 @@ class TestRegisterKernelForms:
 
         assert SeamKernelNamed.kernel_for("named_backend") is _named
 
-    @pytest.mark.parametrize("name", ["no_such_operation_here", "aggregate"])
+    @pytest.mark.parametrize("name", ["no_such_operation_here", "pad"])
     def test_a_name_with_no_processor_is_refused(self, name):
         """An unknown tag, or a patch function with no class, has no kernels."""
         with pytest.raises(ParameterError, match=name):
@@ -1558,7 +1558,7 @@ class TestNumpyKernel:
                 """Return the data, where it is positive, and a count."""
                 return data * 1, data > 0, 3
 
-            def reconcile(self, result, out):
+            def reconcile(self, result, out, meta):
                 """Check both came back on the input's backend."""
                 data, mask, count = result
                 assert backend_name(mask) == backend_name(data)
@@ -1707,7 +1707,7 @@ class TestReconcileWithData:
             keep = np.asarray(data)[:, 0] >= 0
             return data[keep], keep
 
-        def reconcile(self, result, out):
+        def reconcile(self, result, out, meta):
             """Build the result from the rows the kernel kept."""
             data, keep = result
             distance = out.get_coord("distance")
@@ -1723,3 +1723,36 @@ class TestReconcileWithData:
         assert out.shape == (len(kept), patch.shape[1])
         assert np.array_equal(out.get_array("distance"), kept)
         assert out.attrs.data_id != source.attrs.data_id
+
+
+class TestWindowAndPassFilters:
+    """The pass, notch and window filters run as processors."""
+
+    @pytest.mark.parametrize("cls", ["WienerFilter", "HampelFilter"])
+    def test_keyword_only(self, cls):
+        """The options of these two are refused positionally."""
+        with pytest.raises(TypeError):
+            getattr(dc.proc, cls)(True, time=3)
+
+
+class TestAggregations:
+    """The aggregations run as processors."""
+
+    @pytest.mark.parametrize("name", ["mean", "idxmax"])
+    def test_metadata_is_reduced_without_data(self, random_patch, name):
+        """The reduced shape and units are known before the data are read."""
+        cls = getattr(dc.Patch, name).__processor__
+        meta, _ = cls(dim="distance").get_metadata(random_patch.drop_data())
+        expected = getattr(random_patch, name)("distance")
+        assert meta.shape == expected.shape
+        assert meta.attrs.data_units == expected.attrs.data_units
+
+    def test_package_does_not_shadow_builtins(self):
+        """A star import of `dascore.proc` leaves `sum` and the like alone."""
+        assert not {"min", "max", "sum", "any", "all"} & set(vars(dc.proc))
+        assert dc.proc.agg.sum is dc.Patch.sum
+
+    def test_aggregate_submodule_survives(self):
+        """`dascore.proc.aggregate` stays the module, not the function."""
+        assert isinstance(dc.proc.aggregate, ModuleType)
+        assert dc.proc.agg.aggregate is dc.Patch.aggregate

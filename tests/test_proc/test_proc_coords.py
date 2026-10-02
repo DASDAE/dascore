@@ -195,6 +195,124 @@ class TestDropCoords:
             random_patch.drop_coords(["time"])
 
 
+class TestSqueezeCoords:
+    """Tests for moving single-valued coordinates into the attrs."""
+
+    @pytest.fixture()
+    def patch(self, random_patch):
+        """A patch with constant, varying, null and private coordinates."""
+        (size,) = random_patch.coord_shapes["distance"]
+        varied = np.arange(size, dtype=np.float64)
+        return random_patch.update_coords(
+            quality=("distance", np.full(size, 2.0)),
+            station=("distance", np.full(size, "A")),
+            when=("distance", np.full(size, np.datetime64("2020-01-01"))),
+            varied=("distance", varied),
+            nothing=("distance", np.full(size, np.nan)),
+            tag=("distance", np.full(size, "B")),
+            update=("distance", np.full(size, 1)),
+            patch_id=("distance", np.full(size, "C")),
+            _window=("distance", np.ones(size)),
+        )
+
+    def test_sweep(self, patch):
+        """Every qualifying coordinate, and only those, becomes an attr."""
+        out = patch.squeeze_coords()
+        moved = {"quality", "station", "when"}
+        assert set(out.coords.coord_map) == set(patch.coords.coord_map) - moved
+        assert out.dims == patch.dims
+        assert np.shares_memory(out.data, patch.data)
+
+    def test_values(self, patch):
+        """Times stay numpy datetimes, other values become python scalars."""
+        out = patch.squeeze_coords()
+        assert type(out.attrs["quality"]) is float
+        assert out.attrs["quality"] == 2.0
+        assert out.attrs["station"] == "A"
+        assert out.attrs["when"] == np.datetime64("2020-01-01")
+        assert isinstance(out.attrs["when"], np.datetime64)
+        assert out.attrs.tag == patch.attrs.tag
+
+    def test_object_values(self, random_patch):
+        """Object coords squeeze; one holding a missing value is left alone."""
+        (size,) = random_patch.coord_shapes["distance"]
+        held = np.full(size, 2, dtype=object)
+        gappy = held.copy()
+        gappy[1] = pd.NA
+        patch = random_patch.update_coords(
+            held=("distance", held), gappy=("distance", gappy)
+        )
+        out = patch.squeeze_coords()
+        assert out.attrs["held"] == 2
+        assert "gappy" in out.coords.coord_map
+
+    def test_existing_attr_kept(self, patch):
+        """A coordinate sharing an existing attr's name is not squeezed."""
+        patch = patch.update_attrs(quality=3)
+        assert patch.squeeze_coords().attrs["quality"] == 3
+        with pytest.raises(CoordError, match="reserve"):
+            patch.squeeze_coords("quality")
+
+    def test_reader_attrs_reserved(self, random_patch):
+        """A field a reader's attrs declare is not overwritten."""
+
+        class _Attrs(dc.PatchAttrs):
+            gauge_length: float = 1.0
+
+        (size,) = random_patch.coord_shapes["distance"]
+        patch = random_patch.update(attrs=_Attrs(**random_patch.attrs.model_dump()))
+        patch = patch.update_coords(gauge_length=("distance", np.full(size, "x")))
+        out = patch.squeeze_coords()
+        assert "gauge_length" in out.coords.coord_map
+
+    def test_named(self, patch):
+        """Named coordinates, bare or in sequences, are the only ones moved."""
+        out = patch.squeeze_coords("quality", ["station"])
+        assert {"quality", "station"}.isdisjoint(out.coords.coord_map)
+        assert "when" in out.coords.coord_map
+        assert out.attrs["station"] == "A"
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "time",
+            "bob",
+            "varied",
+            "nothing",
+            "tag",
+            "update",
+            "patch_id",
+            "_window",
+        ],
+    )
+    def test_named_refused(self, patch, name):
+        """Named coordinates which cannot be squeezed raise."""
+        with pytest.raises(CoordError, match="Cannot squeeze"):
+            patch.squeeze_coords("quality", name)
+
+    def test_noop(self, patch, random_patch):
+        """Nothing to squeeze, or an empty selection, returns the patch."""
+        assert random_patch.squeeze_coords() is random_patch
+        assert patch.squeeze_coords([]) is patch
+
+    def test_length_one_dim(self, patch):
+        """A length-one dimension is never squeezed."""
+        flat = patch.select(time=0, samples=True)
+        assert flat.squeeze_coords().dims == patch.dims
+        with pytest.raises(CoordError, match="Cannot squeeze"):
+            flat.squeeze_coords("time")
+
+    def test_empty_coord(self, patch):
+        """An empty coordinate holds no value to squeeze."""
+        empty = patch.select(distance=(None, -1))
+        assert "quality" in empty.squeeze_coords().coords.coord_map
+
+    def test_metadata(self, patch):
+        """The operation runs on metadata alone."""
+        out = patch.drop_data().squeeze_coords("quality")
+        assert out.attrs["quality"] == 2.0
+
+
 class TestCoordsFromDf:
     """Tests for attaching coordinate(s) to a patch."""
 
@@ -277,6 +395,66 @@ class TestCoordsFromDf:
         for char in "XYZ":
             coord = out.get_coord(char)
             assert coord.units == get_quantity("m")
+
+    @pytest.fixture()
+    def end_df(self, random_patch):
+        """Anchors at the two ends of distance and nothing between."""
+        dist = random_patch.coords.get_array("distance")
+        df = pd.DataFrame({"distance": dist[[0, 1, -2, -1]]})
+        df["x"] = [0.0, 1.0, 100.0, 101.0]
+        return df
+
+    def test_unsorted_table_matches_sorted(self, random_patch, end_df):
+        """Row order of the table does not change the result."""
+        expected = random_patch.coords_from_df(end_df).coords.get_array("x")
+        out = random_patch.coords_from_df(end_df.iloc[[3, 1, 0, 2]])
+        assert np.array_equal(out.coords.get_array("x"), expected, equal_nan=True)
+
+    def test_numeric_string_anchors(self, random_patch):
+        """Anchors given as strings order by value, not lexically."""
+        df = pd.DataFrame({"distance": [2, 10, 100], "x": [0.0, 1.0, 2.0]})
+        expected = random_patch.coords_from_df(df, max_gap=50)
+        out = random_patch.coords_from_df(df.astype({"distance": str}), max_gap=50)
+        assert np.array_equal(
+            out.coords.get_array("x"), expected.coords.get_array("x"), equal_nan=True
+        )
+
+    def test_narrow_int_anchors_gap(self, random_patch):
+        """Gaps between narrow integer anchors are measured without wrapping."""
+        patch = random_patch.update_coords(distance=np.arange(-100, 200))
+        df = pd.DataFrame({"distance": np.array([-100, 100], dtype=np.int8)})
+        df["x"] = [0.0, 1.0]
+        x = patch.coords_from_df(df, max_gap=50).coords.get_array("x")
+        assert np.isnan(x[1])
+
+    def test_duplicate_anchor_raises(self, random_patch, end_df):
+        """Two rows for one anchor value are ambiguous."""
+        df = pd.concat([end_df, end_df.iloc[[0]]])
+        with pytest.raises(ParameterError, match="duplicate"):
+            random_patch.coords_from_df(df)
+
+    @pytest.mark.parametrize("extrapolate", [False, True])
+    def test_max_gap(self, random_patch, end_df, extrapolate):
+        """Channels between anchors further apart than max_gap are NaN."""
+        dist = random_patch.coords.get_array("distance")
+        step = dist[1] - dist[0]
+        out = random_patch.coords_from_df(
+            end_df, max_gap=2 * step, extrapolate=extrapolate
+        )
+        x = out.coords.get_array("x")
+        assert np.array_equal(x[[0, 1, -2, -1]], end_df["x"].values)
+        assert np.all(np.isnan(x[2:-2]))
+
+    def test_max_gap_keeps_close_anchors(self, random_patch, coord_df):
+        """A max_gap wider than every spacing changes nothing."""
+        expected = random_patch.coords_from_df(coord_df)
+        out = random_patch.coords_from_df(coord_df, max_gap=np.inf)
+        for name in set(coord_df.columns) - set(random_patch.dims):
+            assert np.array_equal(
+                out.coords.get_array(name),
+                expected.coords.get_array(name),
+                equal_nan=True,
+            )
 
     def test_no_dim_column_raises(self, random_patch, coord_df):
         """Ensure when no columns overlap with coords an error is raised."""

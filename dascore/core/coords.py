@@ -1530,7 +1530,8 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
                 result = _reduce_time_like(func, coord_data)
             else:
                 result = func(coord_data)
-            new_coord = self.update(values=result)
+            # An integer scalar would be read as a length, not a value.
+            new_coord = self.update(values=np.atleast_1d(result))
         return new_coord
 
 

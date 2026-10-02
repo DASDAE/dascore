@@ -206,6 +206,20 @@ class TestBasicAggregations:
         assert len(new_time) == 1
         assert new_time[0] == out.get_array("time")[0]
 
+    @pytest.mark.parametrize("name", sorted(_AGG_FUNCS))
+    def test_dim_reduce_integer_coord(self, name):
+        """Every named dim_reduce keeps an integer coord's reduced value."""
+        values = np.arange(10, 15)
+        patch = dc.Patch(
+            data=np.ones((5, 4)),
+            coords={"distance": values, "time": np.arange(4)},
+            dims=("distance", "time"),
+        )
+        out = patch.max("distance", dim_reduce=name)
+        coord = out.get_coord("distance")
+        assert len(coord) == 1
+        assert coord.values[0] == _AGG_FUNCS[name](values)
+
     def test_dim_reduce_distance(self, random_patch):
         """Ensure non-time dims also work."""
         out = random_patch.aggregate(dim="distance", method="mean", dim_reduce=np.var)
@@ -411,6 +425,19 @@ class TestIdxMaxMin:
         """A dimension the patch does not have is an error."""
         with pytest.raises(CoordError, match="not found"):
             random_patch.idxmax("not_a_dim")
+
+    def test_non_dimensional_coord_raises(self, random_patch):
+        """A coordinate which is not a dimension cannot be reduced."""
+        dist = random_patch.get_array("distance")
+        patch = random_patch.update_coords(dist2=("distance", dist * 2))
+        with pytest.raises(ParameterError, match="at least one dimension"):
+            patch.idxmax("dist2")
+
+    def test_squeeze_all_refused_from_metadata(self, random_patch):
+        """Squeezing the only dimension is refused before any data are read."""
+        meta = random_patch.select(distance=0, samples=True).squeeze().drop_data()
+        with pytest.raises(ParameterError, match="Cannot squeeze all"):
+            dc.proc.agg.Idxmax(dim="time", dim_reduce="squeeze").get_metadata(meta)
 
     def test_reduced_dimension_raises(self, random_patch):
         """The partial coord left behind has no values to point at."""

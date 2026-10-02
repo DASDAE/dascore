@@ -56,7 +56,7 @@ class H5Simple(FiberIO):
         data_node = nodes[0]
         return partial(slice_dataset, data_node)
 
-    def _prepare_read(self, manager, snap):
+    def _prepare_read(self, manager, snap, keys=frozenset()):
         """Reuse the data node found while reading metadata."""
         patches, data = self._metadata_and_data(manager.get_resource(H5Reader), snap)
 

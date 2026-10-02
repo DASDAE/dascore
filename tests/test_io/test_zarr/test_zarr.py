@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import pickle
 import sys
 from pathlib import Path
+from typing import ClassVar
 from unittest import mock
 
 import fsspec
@@ -170,6 +172,13 @@ class TestForeignStore:
         assert np.allclose(patch.data, data)
         assert np.array_equal(patch.get_array("time"), time)
 
+    def test_named_version_believed(self, foreign_store):
+        """A store opens under either zarr version named, as its marker says."""
+        path, data, _ = foreign_store
+        for version in VERSIONS:
+            patch = dc.read(path, file_format="ZARR", file_version=version)[0]
+            assert np.allclose(patch.data, data)
+
     def test_read_array_decodes(self, foreign_store):
         """read_array applies the scale factor as read does."""
         path, data, _ = foreign_store
@@ -301,6 +310,14 @@ class TestRemote:
         (summary,) = dc.scan(path.parent)
         assert summary.source_format == "ZARR"
 
+    def test_memory_spool_derived(self, zarr_patch):
+        """A memory:// store is a file path, not a live patch, when derived."""
+        path = UPath("memory://dascore_zarr_test/derived.zarr")
+        dc.write(zarr_patch, path, "zarr")
+        spool = dc.spool(path)
+        assert spool.chunk(time=None)[0] == zarr_patch
+        assert all(x == zarr_patch for x in spool + dc.spool([zarr_patch]))
+
 
 class TestReplace:
     """A write replaces a store, or nothing, and never half of one."""
@@ -429,6 +446,18 @@ class AuthMemory(MemoryFileSystem):
         if token != "secret":
             raise PermissionError("no token")
         super().__init__(*args, **kwargs)
+
+
+class CountMemory(MemoryFileSystem):
+    """A memory filesystem which records the objects read from it."""
+
+    protocol = ("zarrcount",)
+    read: ClassVar[list[str]] = []
+
+    def cat_file(self, path, start=None, end=None, **kwargs):
+        """Record the path, then read it."""
+        self.read.append(path)
+        return super().cat_file(path, start, end, **kwargs)
 
 
 class TestMultiPatch:
@@ -561,6 +590,48 @@ class TestMultiPatch:
         path = UPath("zarrauth://dascore_zarr_auth/spool.zarr", token="secret")
         dc.write(zarr_spool, path, "zarr")
         assert len(dc.read(path)) == len(zarr_spool)
+
+    @pytest.mark.parametrize(
+        ("name", "file_format"),
+        [("auth_spool.zarr", "zarr"), ("auth_spool.h5", "dasdae")],
+    )
+    def test_spool_loads_with_storage_options(self, zarr_spool, name, file_format):
+        """A remote spool's patches load with the path's options, also derived."""
+        fsspec.register_implementation("zarrauth", AuthMemory, clobber=True)
+        upath.registry.register_implementation("zarrauth", MemoryPath, clobber=True)
+        path = UPath(f"zarrauth://dascore_zarr_auth/{name}", token="secret")
+        dc.write(zarr_spool, path, file_format)
+        spool = dc.spool(path)
+        _, later, twin = zarr_spool
+        assert spool.select(station="SUE")[0] == twin
+        start = later.get_coord("time").min()
+        assert spool.select(time=(start, None), station="BOB")[0] == later
+        assert all(x.data.size for x in spool.chunk(time=1))
+        assert all(x.data.size for x in spool + dc.spool([twin]))
+        # A mixed view sent to another process keeps the options too.
+        view = pickle.loads(pickle.dumps((spool + dc.spool([twin])).select()))
+        assert all(x.data.size for x in view)
+
+    def test_remote_spool_reads_one_group(self, zarr_spool):
+        """
+        A remote store is a spool; scanning reads no payload chunk, and
+        loading one patch reads only that patch's.
+        """
+        fsspec.register_implementation("zarrcount", CountMemory, clobber=True)
+        upath.registry.register_implementation("zarrcount", MemoryPath, clobber=True)
+        path = UPath("zarrcount://dascore_zarr_count/spool.zarr")
+        dc.write(zarr_spool, path, "zarr", encoding={"data": {"chunks": (10, 100)}})
+        CountMemory.read.clear()
+        spool = dc.spool(path)
+        assert not [x for x in CountMemory.read if "/data/c/" in x]
+        # A format 3 store is not probed for format 2 metadata files.
+        assert not [x for x in CountMemory.read if "/.z" in x]
+        _, later, _ = zarr_spool
+        selected = spool.select(time=(later.get_coord("time").min(), None))
+        (key,) = selected.get_contents()["source_patch_key"]
+        assert selected[0] == later
+        groups = {x.split("/")[-5] for x in CountMemory.read if "/data/c/" in x}
+        assert groups == {key}
 
 
 class TestForeignGroups:

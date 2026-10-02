@@ -42,6 +42,7 @@ from dascore.io.odh4.core import ODH4PatchAttrs
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import register_func
 from dascore.utils.time import to_datetime64
+from dascore.warnings import DASCoreWarning
 
 # a list of fixture names for written DASDAE files
 WRITTEN_FILES = []
@@ -156,7 +157,8 @@ class TestReadDASDAE:
                 del group.attrs[_SEPARATE_ATTRS_KEY]
         # append a new patch carrying an attr shadowing its own coord envelope
         dim = random_patch.dims[0]
-        new_patch = random_patch.update_attrs(tag="new", **{f"{dim}_step": 999})
+        with pytest.warns(DASCoreWarning, match="update_coords"):
+            new_patch = random_patch.update_attrs(tag="new", **{f"{dim}_step": 999})
         new_patch.io.write(path, "dasdae")
         with h5py.File(path, "r") as h5:
             assert not h5.attrs.get(_SEPARATE_ATTRS_KEY, False)  # file stays legacy
@@ -260,6 +262,49 @@ class TestReadDASDAE:
 
         assert len(out) == 1
         assert out[0].attrs.tag == "S120"
+
+
+@pytest.fixture(scope="class", params=["1", "2"])
+def keyed_path(tmp_path_factory, request):
+    """A three-patch DASDAE file of each version."""
+    path = tmp_path_factory.mktemp("keyed") / "multi.h5"
+    spool = dc.examples.get_example_spool("random_das", length=3)
+    dc.write(spool, path, "DASDAE", file_version=request.param)
+    return path
+
+
+class TestKeyedRead:
+    """A keyed read decodes only the groups it names."""
+
+    @pytest.fixture
+    def decoded(self, monkeypatch):
+        """Record the name of each group whose metadata is decoded."""
+        names = []
+        original = dasdae_utils._get_metadata_from_group
+
+        def counted(group, *args, **kwargs):
+            names.append(group.name.rsplit("/", 1)[-1])
+            return original(group, *args, **kwargs)
+
+        monkeypatch.setattr(dasdae_utils, "_get_metadata_from_group", counted)
+        return names
+
+    @pytest.mark.parametrize("index", [0, 1, 2])
+    def test_matches_whole_read(self, keyed_path, index):
+        """The keyed patch equals its counterpart in a whole-file read."""
+        expected = dc.read(keyed_path)[index]
+        out = dc.read(keyed_path, source_patch_key=expected._source.key)
+        assert len(out) == 1
+        assert out[0] == expected
+        assert out[0]._source == expected._source
+
+    def test_spool_decodes_one_group(self, keyed_path, decoded):
+        """Loading one patch from an indexed spool decodes only its group."""
+        spool = dc.spool(keyed_path).update()
+        key = spool.get_contents()["source_patch_key"].iloc[1]
+        decoded.clear()
+        assert spool[1]._source.key == key
+        assert decoded == [key]
 
 
 @pytest.fixture(scope="class")

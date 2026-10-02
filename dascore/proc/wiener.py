@@ -4,23 +4,16 @@ Wiener filtering functionality for noise reduction.
 
 from __future__ import annotations
 
-from dascore.constants import PatchType
+from typing import Any, ClassVar
+
 from dascore.exceptions import ParameterError
+from dascore.proc.filter import _WindowFilter
 from dascore.utils.imports import lazy_import
-from dascore.utils.patch import patch_function
-from dascore.utils.window import resolve_window
 
 wiener = lazy_import("scipy.signal", "wiener")
 
 
-@patch_function()
-def wiener_filter(
-    patch: PatchType,
-    *,
-    noise: float | None = None,
-    samples: bool = False,
-    **kwargs,
-) -> PatchType:
+class WienerFilter(_WindowFilter):
     """
     Apply a Wiener filter to reduce noise in the patch data.
 
@@ -72,13 +65,23 @@ def wiener_filter(
     This implementation uses scipy.signal.wiener which performs adaptive
     noise reduction based on local statistics within the specified window.
     """
-    if not kwargs:
-        msg = (
-            "To use wiener_filter you must specify dimension-specific window "
-            "sizes via kwargs (e.g., time=5, distance=3)"
-        )
-        raise ParameterError(msg)
 
-    size = resolve_window(patch, kwargs, samples=samples).full_size()
-    filtered_data = wiener(patch.data, mysize=size, noise=noise)
-    return patch.update(data=filtered_data)
+    noise: Any = None
+    samples: Any = False
+
+    _positional_fields = ()
+    _window_rules: ClassVar[dict[str, Any]] = {}
+
+    def get_metadata(self, meta):
+        """Return the window, once one is known to be given."""
+        if not self.model_extra:
+            msg = (
+                "To use wiener_filter you must specify dimension-specific window "
+                "sizes via kwargs (e.g., time=5, distance=3)"
+            )
+            raise ParameterError(msg)
+        return super().get_metadata(meta)
+
+    def numpy_kernel(self, data, *, size, axes):
+        """Return the Wiener-filtered data."""
+        return wiener(data, mysize=size, noise=self.noise)

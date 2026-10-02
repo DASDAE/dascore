@@ -402,7 +402,7 @@ rebuilt = dc.Patch(
 
 To change an association, pass the same values with a new dimension tuple. This changes coordinate metadata without reshaping the patch.
 
-Coordinates not associated with a dimension use `(None, values)`. [`Patch.drop_coords`](`dascore.Patch.drop_coords`) removes non-dimensional coordinates; dimension coordinates cannot be dropped.
+Coordinates not associated with a dimension use `(None, values)`. [`Patch.drop_coords`](`dascore.Patch.drop_coords`) removes non-dimensional coordinates; dimension coordinates cannot be dropped. [`Patch.squeeze_coords`](`dascore.Patch.squeeze_coords`) moves non-dimensional coordinates holding a single value into the attrs.
 
 ```{python}
 detached = located.update_coords(latitude=(None, latitude))
@@ -418,7 +418,7 @@ with_units = patch.set_units("m/s", distance="ft")
 converted = with_units.convert_units("ft/s", distance="m")
 ```
 
-Use `set_units` only when values are already expressed in the new unit or when correcting a missing label. Use `convert_units` when numeric values must preserve the same physical quantity. Data units are stored as Pint quantities and can be formatted with [`get_quantity_str`](`dascore.units.get_quantity_str`).
+Use `set_units` only when values are already expressed in the new unit or when correcting a missing label. Use `convert_units` when numeric values must preserve the same physical quantity. Data units are stored as Pint quantities and can be formatted with [`get_quantity_str`](`dascore.units.get_quantity_str`). Dimensionless data, such as strain in `m/m` or a ratio of two patches with the same units, keeps `dimensionless` as its units, which differs from `None` (units unknown): `convert_units("nm/m")` scales dimensionless data by 1e9, but only labels data with unknown units.
 
 Quantities may be passed directly to selection and processing functions:
 

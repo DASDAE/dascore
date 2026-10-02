@@ -2,22 +2,25 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable
+from typing import Any, ClassVar
 
 import numpy as np
 
-from dascore.constants import _AGG_FUNCS, DIM_REDUCE_DOCS, PatchType
+from dascore.constants import _AGG_FUNCS, DIM_REDUCE_DOCS
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
-from dascore.utils.array import _apply_aggregator, is_numpy
+from dascore.utils.array import _apply_reduction, is_numpy
 from dascore.utils.array_api import (
+    array_namespace,
     asarray_like,
     backend_name,
     to_numpy,
     warn_numpy_fallback,
 )
 from dascore.utils.docs import compose_docstring
-from dascore.utils.misc import _get_nullish
-from dascore.utils.patch import patch_function
+from dascore.utils.misc import _get_nullish, iterate
+from dascore.utils.patch import get_dim_axis_value
 from dascore.utils.time import dtype_time_like
 
 AGG_DOC_STR = f"""
@@ -37,25 +40,76 @@ See [`Patch.aggregate`](`dascore.Patch.aggregate`) for examples
 and more details.
 """
 
+# The module's own `min`, `max`, `sum`, `any` and `all` are patch functions,
+# so nothing below may use those builtins.
 
-@patch_function()
+
+def _reduce_meta(meta, dim, dim_reduce):
+    """Return metadata with dims reduced, and each one's axis and whether it stays."""
+    dims = tuple(iterate(meta.dims if dim is None else dim))
+    dfo = get_dim_axis_value(meta, args=dims, allow_multiple=True)
+    if dim_reduce == "squeeze" and {x for x, _, _ in dfo} == set(meta.dims):
+        msg = "Cannot squeeze all dimensions; at least one dimension must remain."
+        raise ParameterError(msg)
+    steps = []
+    for name, _, _ in dfo:
+        axis = meta.get_axis(name)
+        new_coord = meta.get_coord(name).reduce_coord(dim_reduce=dim_reduce)
+        if new_coord is None:
+            coords = meta.coords.drop_coords(name)[0]
+        else:
+            coords = meta.coords.update(**{name: new_coord})
+        attrs = meta.attrs.model_dump(exclude={"coords", "dims"}, exclude_unset=True)
+        meta = meta.new(coords=coords, attrs=attrs)
+        steps.append((axis, new_coord is not None))
+    return meta, tuple(steps)
+
+
+class _Reduction(PatchProcessor):
+    """Reduce the data along dimensions with one aggregator."""
+
+    name = None
+    # The aggregator, for the shortcuts which fix one.
+    reducer: ClassVar[Callable]
+
+    def _reducer(self) -> Callable:
+        """Return the aggregator to apply."""
+        return self.reducer
+
+    def get_metadata(self, meta):
+        """Return the reduced metadata, and each reduced axis in turn."""
+        values = self.kwargs
+        out, steps = _reduce_meta(meta, values["dim"], values["dim_reduce"])
+        return out, {"steps": steps}
+
+    def kernel(self, data, *, steps):
+        """Return the data reduced along each axis in turn."""
+        func, original = self._reducer(), data
+        for axis, keep in steps:
+            data = _apply_reduction(func, data, axis)
+            if keep:
+                data = array_namespace(data).expand_dims(data, axis=axis)
+        if is_numpy(original) or backend_name(data) == backend_name(original):
+            return data
+        # An aggregator the standard has no name for went through numpy.
+        # Only a named subclass runs, so the name is set.
+        assert self.name is not None
+        warn_numpy_fallback(self.name, backend_name(original), skip_dascore=True)
+        return asarray_like(data, original)
+
+
 @compose_docstring(params=AGG_DOC_STR, options=sorted(_AGG_FUNCS))
-def aggregate(
-    patch: PatchType,
-    dim: str | Sequence[str] | None = None,
-    method: str | Callable = "mean",
-    dim_reduce: str | Callable = "empty",
-) -> PatchType:
+class Aggregate(_Reduction):
     """
     Aggregate values along a specified dimension.
 
     Notes
     -----
-    Whether an aggregation can be applied by the patch's own array backend
-    depends on the method, so this function makes no promise about the
-    backend of its output. Most shortcuts, such as
-    [`Patch.mean`](`dascore.proc.aggregate.mean`), do keep the data on their
-    backend; use those where one fits.
+    The output stays on the patch's array backend. A method the array API
+    standard has no name for, such as a median or a callable, runs through
+    NumPy and warns before the result is converted back; most shortcuts,
+    such as [`Patch.mean`](`dascore.proc.aggregate.mean`), avoid that round
+    trip, so prefer one where it fits.
 
     Parameters
     ----------
@@ -92,17 +146,27 @@ def aggregate(
     ...     "distance", method="min", dim_reduce="mean",
     ... )
     """
-    func = _AGG_FUNCS.get(method, method)
-    return _apply_aggregator(patch, dim, func, dim_reduce)
+
+    # Loose here and below, so values are recorded as given.
+    dim: Any = None
+    method: Any = "mean"
+    dim_reduce: Any = "empty"
+
+    def _reducer(self) -> Callable:
+        """Return the aggregator a method names, or the method itself."""
+        return _AGG_FUNCS.get(self.method, self.method)
 
 
-@patch_function()
+class _Shortcut(_Reduction):
+    """An aggregation whose aggregator is fixed."""
+
+    name = None
+    dim: Any = None
+    dim_reduce: Any = "empty"
+
+
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
-def min(
-    patch: PatchType,
-    dim: str | Sequence[str] | None = None,
-    dim_reduce: str | Callable = "empty",
-) -> PatchType:
+class Min(_Shortcut):
     """
     Calculate the minimum along one or more dimensions.
 
@@ -121,16 +185,12 @@ def min(
 
     {notes}
     """
-    return aggregate.func(patch, dim=dim, method=np.nanmin, dim_reduce=dim_reduce)
+
+    reducer = staticmethod(np.nanmin)
 
 
-@patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
-def max(
-    patch: PatchType,
-    dim: str | Sequence[str] | None = None,
-    dim_reduce: str | Callable = "empty",
-) -> PatchType:
+class Max(_Shortcut):
     """
     Calculate the maximum along one or more dimensions.
 
@@ -149,16 +209,12 @@ def max(
 
     {notes}
     """
-    return aggregate.func(patch, dim=dim, method=np.nanmax, dim_reduce=dim_reduce)
+
+    reducer = staticmethod(np.nanmax)
 
 
-@patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
-def mean(
-    patch: PatchType,
-    dim: str | Sequence[str] | None = None,
-    dim_reduce: str | Callable = "empty",
-) -> PatchType:
+class Mean(_Shortcut):
     """
     Calculate the mean along one or more dimensions.
 
@@ -177,16 +233,12 @@ def mean(
 
     {notes}
     """
-    return aggregate.func(patch, dim=dim, method=np.nanmean, dim_reduce=dim_reduce)
+
+    reducer = staticmethod(np.nanmean)
 
 
-@patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
-def median(
-    patch: PatchType,
-    dim: str | Sequence[str] | None = None,
-    dim_reduce: str | Callable = "empty",
-) -> PatchType:
+class Median(_Shortcut):
     """
     Calculate the median along one or more dimensions.
 
@@ -196,16 +248,12 @@ def median(
 
     {notes}
     """
-    return aggregate.func(patch, dim=dim, method=np.nanmedian, dim_reduce=dim_reduce)
+
+    reducer = staticmethod(np.nanmedian)
 
 
-@patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
-def std(
-    patch: PatchType,
-    dim: str | Sequence[str] | None = None,
-    dim_reduce: str | Callable = "empty",
-) -> PatchType:
+class Std(_Shortcut):
     """
     Calculate the standard deviation along one or more dimensions.
 
@@ -215,16 +263,12 @@ def std(
 
     {notes}
     """
-    return aggregate.func(patch, dim=dim, method=np.nanstd, dim_reduce=dim_reduce)
+
+    reducer = staticmethod(np.nanstd)
 
 
-@patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
-def first(
-    patch: PatchType,
-    dim: str | Sequence[str] | None = None,
-    dim_reduce: str | Callable = "empty",
-) -> PatchType:
+class First(_Shortcut):
     """
     Get the first value along one or more dimensions.
 
@@ -234,17 +278,12 @@ def first(
 
     {notes}
     """
-    func = _AGG_FUNCS["first"]
-    return aggregate.func(patch, dim=dim, method=func, dim_reduce=dim_reduce)
+
+    reducer = staticmethod(_AGG_FUNCS["first"])
 
 
-@patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
-def last(
-    patch: PatchType,
-    dim: str | Sequence[str] | None = None,
-    dim_reduce: str | Callable = "empty",
-) -> PatchType:
+class Last(_Shortcut):
     """
     Get the last value along one or more dimensions.
 
@@ -254,17 +293,12 @@ def last(
 
     {notes}
     """
-    func = _AGG_FUNCS["last"]
-    return aggregate.func(patch, dim=dim, method=func, dim_reduce=dim_reduce)
+
+    reducer = staticmethod(_AGG_FUNCS["last"])
 
 
-@patch_function()
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
-def sum(
-    patch: PatchType,
-    dim: str | Sequence[str] | None = None,
-    dim_reduce: str | Callable = "empty",
-) -> PatchType:
+class Sum(_Shortcut):
     """
     Sum the values along one or more dimensions.
 
@@ -274,16 +308,12 @@ def sum(
 
     {notes}
     """
-    return aggregate.func(patch, dim=dim, method=np.nansum, dim_reduce=dim_reduce)
+
+    reducer = staticmethod(np.nansum)
 
 
-@patch_function(data_type="")
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
-def any(
-    patch: PatchType,
-    dim: str | Sequence[str] | None = None,
-    dim_reduce: str | Callable = "empty",
-) -> PatchType:
+class AnyTrue(_Shortcut):
     """
     Perform boolean any operation along one or more dimensions.
 
@@ -293,16 +323,14 @@ def any(
 
     {notes}
     """
-    return aggregate.func(patch, dim=dim, method=np.any, dim_reduce=dim_reduce)
+
+    name = "any"
+    data_type = ""
+    reducer = staticmethod(np.any)
 
 
-@patch_function(data_type="")
 @compose_docstring(params=AGG_DOC_STR, notes=AGG_NOTES)
-def all(
-    patch: PatchType,
-    dim: str | Sequence[str] | None = None,
-    dim_reduce: str | Callable = "empty",
-) -> PatchType:
+class AllTrue(_Shortcut):
     """
     Perform boolean all operation along one or more dimensions.
 
@@ -312,7 +340,10 @@ def all(
 
     {notes}
     """
-    return aggregate.func(patch, dim=dim, method=np.all, dim_reduce=dim_reduce)
+
+    name = "all"
+    data_type = ""
+    reducer = staticmethod(np.all)
 
 
 IDX_DOC_STR = f"""
@@ -385,49 +416,8 @@ def _fill_empty(values, empty):
     return np.where(empty, _get_nullish(dtype), values)
 
 
-def _idx_aggregate(patch, dim, want_max, dim_reduce):
-    """Shared implementation of idxmax and idxmin."""
-    name = "idxmax" if want_max else "idxmin"
-    if not isinstance(dim, str):
-        msg = f"{name} reduces a single dimension; dim must be its name."
-        raise ParameterError(msg)
-    coord = patch.get_coord(dim)
-    if coord._partial:
-        # The coord the default dim_reduce leaves behind holds no values,
-        # so indexing it would quietly null the whole result.
-        msg = (
-            f"The '{dim}' coordinate holds no values for {name} to return; "
-            "the dimension has already been reduced."
-        )
-        raise ParameterError(msg)
-    coord_values = coord.values
-
-    def _func(data, axis):
-        original = data
-        if not is_numpy(data):
-            # The indexing below is numpy only, so say so rather than
-            # quietly pulling a lazy or device array into memory.
-            warn_numpy_fallback(name, backend_name(data))
-            data = to_numpy(data)
-        index, empty = _extreme_index(data, axis, want_max)
-        out = coord_values[index]
-        out = out if empty is None else _fill_empty(out, empty)
-        return out if data is original else asarray_like(out, original)
-
-    out = _apply_aggregator(patch, dim, _func, dim_reduce)
-    # A time coord's units describe its step, not its magnitude, so
-    # labelling nanoseconds "s" would scale any unit maths by a billion.
-    units = None if dtype_time_like(coord.dtype) else coord.units
-    return out.update_attrs(data_units=units)
-
-
-@patch_function(data_type="")
 @compose_docstring(params=IDX_DOC_STR, notes=IDX_NOTES)
-def idxmax(
-    patch: PatchType,
-    dim: str,
-    dim_reduce: str | Callable = "empty",
-) -> PatchType:
+class Idxmax(PatchProcessor):
     """
     Return the coordinate value where the data are largest along a dimension.
 
@@ -454,16 +444,56 @@ def idxmax(
     - [`Patch.idxmin`](`dascore.proc.aggregate.idxmin`)
     - [`Patch.max`](`dascore.proc.aggregate.max`)
     """
-    return _idx_aggregate(patch, dim, True, dim_reduce)
+
+    dim: Any
+    dim_reduce: Any = "empty"
+
+    data_type = ""
+    # Whether the extreme is the largest.
+    _want_max: ClassVar[bool] = True
+
+    def get_metadata(self, meta):
+        """Return the reduced metadata, and the axis and whether it stays."""
+        name, dim = self.name, self.dim
+        if not isinstance(dim, str):
+            msg = f"{name} reduces a single dimension; dim must be its name."
+            raise ParameterError(msg)
+        coord = meta.get_coord(dim)
+        if coord._partial:
+            # The coord the default dim_reduce leaves behind holds no values,
+            # so indexing it would quietly null the whole result.
+            msg = (
+                f"The '{dim}' coordinate holds no values for {name} to return; "
+                "the dimension has already been reduced."
+            )
+            raise ParameterError(msg)
+        out, ((axis, keep),) = _reduce_meta(meta, dim, self.dim_reduce)
+        # A time coord's units describe its step, not its magnitude, so
+        # labelling nanoseconds "s" would scale any unit maths by a billion.
+        units = None if dtype_time_like(coord.dtype) else coord.units
+        return out.update_attrs(data_units=units), {"axis": axis, "keep": keep}
+
+    # The kernel finds indices; `reconcile` swaps in the coordinate values.
+    def numpy_kernel(self, data, *, axis, keep):
+        """Return the index of each extreme, and the empty slices or None."""
+        out = _extreme_index(data, axis, self._want_max)
+        if keep:
+            out = tuple(x if x is None else np.expand_dims(x, axis) for x in out)
+        return out
+
+    def reconcile(self, data, out, meta):
+        """Return the coordinate values at the extremes."""
+        index, empty = data
+        values = meta.get_coord(self.dim).values[to_numpy(index)]
+        if empty is not None:
+            values = _fill_empty(values, to_numpy(empty))
+        if not is_numpy(index):
+            values = asarray_like(values, index)
+        return out.to_patch(values)
 
 
-@patch_function(data_type="")
 @compose_docstring(params=IDX_DOC_STR, notes=IDX_NOTES)
-def idxmin(
-    patch: PatchType,
-    dim: str,
-    dim_reduce: str | Callable = "empty",
-) -> PatchType:
+class Idxmin(Idxmax):
     """
     Return the coordinate value where the data are smallest along a dimension.
 
@@ -484,4 +514,5 @@ def idxmin(
     - [`Patch.idxmax`](`dascore.proc.aggregate.idxmax`)
     - [`Patch.min`](`dascore.proc.aggregate.min`)
     """
-    return _idx_aggregate(patch, dim, False, dim_reduce)
+
+    _want_max = False

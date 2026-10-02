@@ -383,6 +383,90 @@ class DropCoords(PatchProcessor):
         return meta.new(coords=coords), {}
 
 
+def _squeeze_value(meta, name: str):
+    """Return the lone value of a coord, or raise CoordError if it has none."""
+    if name not in meta.coords.coord_map or name in meta.dims:
+        msg = f"Cannot squeeze {name!r}: it is not a non-dimensional coordinate."
+        raise CoordError(msg)
+    # Fields, methods, and names the attrs rewrite are the attrs' own; a
+    # private coord belongs to the operation which made it (eg stft).
+    attrs = type(meta.attrs)  # a reader's attrs may declare more fields
+    reserved = {"coords", "dims", "patch_id", "processing_id"}
+    reserved |= set(meta.attrs.model_extra or {})  # never overwrite an attr
+    if name in attrs.model_fields or hasattr(attrs, name) or name in reserved:
+        raise CoordError(f"Cannot squeeze {name!r}: the attrs reserve that name.")
+    if name.startswith("_"):
+        raise CoordError(f"Cannot squeeze {name!r}: it is private.")
+    values = np.asarray(meta.coords.coord_map[name].values).reshape(-1)
+    if not values.size or pd.isnull(values).any() or not np.all(values == values[0]):
+        msg = f"Cannot squeeze {name!r}: its values are not one non-null value."
+        raise CoordError(msg)
+    # Times stay numpy scalars, as the other attrs hold them.
+    value = values[0]
+    return (
+        value if values.dtype.kind in "mM" else getattr(value, "item", lambda: value)()
+    )
+
+
+class SqueezeCoords(PatchProcessor):
+    """
+    Move non-dimensional coordinates holding one value into the attrs.
+
+    Each coordinate is dropped and its value stored as an attribute of the
+    same name; units are not kept and dimensions are never touched.
+
+    Parameters
+    ----------
+    *coords
+        The coordinates to squeeze, as names or sequences of them. If none
+        are given, every non-dimensional coordinate whose values are all one
+        non-null value is squeezed, skipping private coordinates and names
+        the attrs reserve.
+
+    Raises
+    ------
+    CoordError
+        If a named coordinate is absent, a dimension, private, reserved by
+        the attrs, or not one non-null value throughout.
+
+    Examples
+    --------
+    >>> import numpy as np
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> ones = np.ones(patch.coord_shapes["distance"])
+    >>> patch = patch.update_coords(quality=("distance", ones))
+    >>> out = patch.squeeze_coords()
+    >>> assert "quality" not in out.coords.coord_map
+    >>> assert out.attrs["quality"] == 1
+    """
+
+    coords: tuple[Any, ...] = ()
+
+    @field_validator("coords", mode="before")
+    @classmethod
+    def _one_name(cls, value):
+        """Say how a single coordinate name is spelled here."""
+        return _refuse_one_name(cls, "coords", value)
+
+    def get_metadata(self, meta):
+        """Return the coordinates without the squeezed ones, and the new attrs."""
+        values = {}
+        if self.coords:  # named: each must qualify
+            for name in [x for coord in self.coords for x in iterate(coord)]:
+                values[name] = _squeeze_value(meta, name)
+        else:  # sweep: take whatever qualifies
+            for name in meta.coords.coord_map:
+                try:
+                    values[name] = _squeeze_value(meta, name)
+                except CoordError:
+                    continue
+        if not values:
+            return meta, {}
+        coords, _ = meta.coords.drop_coords(*values)
+        return meta.new(coords=coords, attrs=meta.attrs.update(**values)), {}
+
+
 class DropPrivateCoords(PatchProcessor):
     """
     Drop all private coords in the patch.
@@ -473,6 +557,10 @@ class CoordsFromDf(PatchProcessor):
         Dictionary mapping column name in dataframe to its units.
     extrapolate
         If True, extrapolate outside provided range in dataframe.
+    max_gap
+        If given, positions between two neighbouring rows further apart than
+        this (in the dimension's units) are NaN rather than interpolated,
+        for tables that leave stretches unsurveyed.
 
     Examples
     --------
@@ -487,6 +575,8 @@ class CoordsFromDf(PatchProcessor):
     >>> # attach dataframe to patch, interpolating when needed. This
     >>> # adds coordinates x and y which are associated with dimension distance.
     >>> patch_with_coords = pa.coords_from_df(df)
+    >>> # Leave channels NaN where neighbouring rows are over 50 m apart.
+    >>> patch_with_gaps = pa.coords_from_df(df.iloc[[0, 1, -2, -1]], max_gap=50)
 
     Notes
     -----
@@ -494,8 +584,10 @@ class CoordsFromDf(PatchProcessor):
       the patch.dims. This will either add new coordinates, or update existing
       ones if they already exist.
 
-    * This function uses linear extrapolation between the nearest two points
-      to get values in patch coords that aren't in the dataframe.
+    * This function uses linear interpolation between the nearest two points
+      to get values in patch coords that aren't in the dataframe. Row order
+      does not matter, but each value of the dimension column may appear
+      only once.
 
     """
 
@@ -503,6 +595,7 @@ class CoordsFromDf(PatchProcessor):
     # Typed loosely because a unit is written as a string or as a unit object.
     units: dict[str, Any] | None = None
     extrapolate: bool = False
+    max_gap: float | None = None
 
     history = "method_name"
 
@@ -518,6 +611,22 @@ class CoordsFromDf(PatchProcessor):
         # Get coordinates of axis being updated
         anchor_dim = next(iter(anchor_dim))
         axis_coords = meta.coords.get_array(anchor_dim)
+        # Float before sorting, so numeric strings order by value and narrow
+        # integers cannot wrap when gaps are measured.
+        anchors = pd.to_numeric(dataframe[anchor_dim]).to_numpy(dtype=np.float64)
+        order = np.argsort(anchors, kind="stable")
+        dataframe, anchors = dataframe.iloc[order], anchors[order]
+        if np.any(np.diff(anchors) == 0):
+            msg = f"coords_from_df table has duplicate {anchor_dim} values."
+            raise ParameterError(msg)
+        unsurveyed = np.zeros(len(axis_coords), dtype=bool)
+        if self.max_gap is not None:
+            # Strictly inside an interval wider than max_gap.
+            right = np.searchsorted(anchors, axis_coords, side="right")
+            inner = (right > 0) & (right < len(anchors))
+            wide = np.diff(anchors) > self.max_gap
+            unsurveyed[inner] = wide[right[inner] - 1]
+            unsurveyed &= ~np.isin(axis_coords, anchors)
 
         # make a dictionary from coordinates("(axis, coordinate array)") as input to
         # update_coords
@@ -527,22 +636,21 @@ class CoordsFromDf(PatchProcessor):
         for coord in set(dataframe.columns) - {anchor_dim}:
             if self.extrapolate:
                 f = interp1d(
-                    pd.to_numeric(dataframe[anchor_dim]),
+                    anchors,
                     pd.to_numeric(dataframe[coord]),
                     fill_value="extrapolate",
                 )
-                new_coords[coord] = (anchor_dim, f(axis_coords))
+                values = f(axis_coords)
             else:
-                new_coords[coord] = (
-                    anchor_dim,
-                    np.interp(
-                        axis_coords,
-                        pd.to_numeric(dataframe[anchor_dim]),
-                        pd.to_numeric(dataframe[coord]),
-                        left=float("nan"),
-                        right=float("nan"),
-                    ),
+                values = np.interp(
+                    axis_coords,
+                    anchors,
+                    pd.to_numeric(dataframe[coord]),
+                    left=float("nan"),
+                    right=float("nan"),
                 )
+            values[unsurveyed] = np.nan
+            new_coords[coord] = (anchor_dim, values)
 
         coords = meta.coords.update(**new_coords)
         # Only coordinates are named, so the conversion never scales data.
