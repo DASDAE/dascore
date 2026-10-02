@@ -292,11 +292,11 @@ class TestCoordsFromDf:
         out = random_patch.coords_from_df(end_df.iloc[[3, 1, 0, 2]])
         assert np.array_equal(out.coords.get_array("x"), expected, equal_nan=True)
 
-    def test_numeric_string_anchors(self, random_patch, end_df):
+    def test_numeric_string_anchors(self, random_patch):
         """Anchors given as strings order by value, not lexically."""
-        expected = random_patch.coords_from_df(end_df, max_gap=50)
-        df = end_df.astype({"distance": str})
-        out = random_patch.coords_from_df(df, max_gap=50)
+        df = pd.DataFrame({"distance": [2, 10, 100], "x": [0.0, 1.0, 2.0]})
+        expected = random_patch.coords_from_df(df, max_gap=50)
+        out = random_patch.coords_from_df(df.astype({"distance": str}), max_gap=50)
         assert np.array_equal(
             out.coords.get_array("x"), expected.coords.get_array("x"), equal_nan=True
         )
