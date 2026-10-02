@@ -9,6 +9,7 @@ import hashlib
 import inspect
 import json
 from collections.abc import Iterable, Mapping
+from contextlib import suppress
 from typing import Any
 
 import numpy as np
@@ -454,8 +455,11 @@ def _apply_binary_ufunc(
         # already have one; that would materialize non-numpy data.
         if (shape := getattr(other, "shape", None)) is None:
             shape = np.asanyarray(other).shape
-        if patch.shape == shape:
-            return patch
+        # Numpy already broadcasts an operand which leaves the patch's shape
+        # alone, a scalar say, so the patch needs no reshaping step.
+        with suppress(ValueError):
+            if np.broadcast_shapes(patch.shape, shape) == patch.shape:
+                return patch
         if (patch_ndims := patch.ndim) < (array_ndims := len(shape)):
             msg = f"Cannot broadcast patch/array {patch_ndims=} {array_ndims=}"
             raise PatchBroadcastError(msg)
