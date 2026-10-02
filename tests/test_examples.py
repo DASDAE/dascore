@@ -64,6 +64,12 @@ class TestGetExampleSpool:
             spool = dc.get_example_spool("UoU_lf_urban.hdf5")
             assert len(spool[0].data)
 
+    def test_other_registry_formats_stay_lazy(self):
+        """A registry file of another format is a file-backed spool."""
+        spool = dc.get_example_spool("sample_tdms_file_v4713.tdms")
+        assert spool.spool_path is not None
+        assert len(spool[0].data)
+
     def test_local_copy_keeps_the_opt_in(self, tmp_path):
         """A file outside the registry is read under the caller's config."""
         path = tmp_path / "copy.hdf5"
