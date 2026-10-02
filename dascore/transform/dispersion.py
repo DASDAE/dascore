@@ -55,11 +55,13 @@ def dispersion_phase_shift(
     - The image depends only on distances relative to each other, so any
     origin works for a one-sided gather, but the wave must travel toward
     increasing distance. For a gather whose wave travels toward lower
-    distance, negate the coordinate
-    (`patch.update_coords(distance=-patch.get_array("distance"))`); for a
-    two-sided gather, use the offset from the source
-    (`abs(distance - source_distance)`). Reversing the patch with `flip`
-    changes nothing, since it reverses the data and the coordinate together.
+    distance, negate the coordinate; for a two-sided gather, use the offset
+    from the source (`abs(distance - source_distance)`). The new values carry
+    no units, so convert to metres first:
+    `p = patch.convert_units(distance="m")` then
+    `p.update_coords(distance=-p.get_array("distance"))`. Reversing the
+    patch with `flip` changes nothing, since it reverses the data and the
+    coordinate together.
 
     Examples
     --------
