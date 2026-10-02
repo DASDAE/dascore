@@ -378,6 +378,19 @@ def _validate_quantity_str(quant_str: str) -> None:
         raise UnitError(msg) from e
 
 
+def _quantities_equal(quant1: Quantity | None, quant2: Quantity | None) -> bool:
+    """
+    Return True if two quantities (or None) are equal.
+
+    Unlike `==`, quantities of different dimensions are not compared: pint
+    raises and catches an error for them, and the traceback it keeps pins
+    the caller's arrays until a garbage-collection pass.
+    """
+    if quant1 is None or quant2 is None:
+        return quant1 is quant2
+    return quant1.dimensionality == quant2.dimensionality and quant1 == quant2
+
+
 def get_inverted_quant(quant: Quantity | None, data_units):
     """Convert to inverted units."""
     if quant is None:
