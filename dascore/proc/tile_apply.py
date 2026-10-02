@@ -41,7 +41,7 @@ from dascore.utils.signal import (
     get_window_edges,
     get_window_nd,
 )
-from dascore.utils.tiles import get_tile_plan
+from dascore.utils.tiles import _taper_like, get_tile_plan
 from dascore.utils.time import dtype_time_like
 from dascore.utils.window import Window, resolve_window
 
@@ -193,6 +193,8 @@ class TileApply(PatchProcessor):
       [`Patch.adaptive_spectral_filter`](`dascore.Patch.adaptive_spectral_filter`).
     """
 
+    __version__ = "1.1"
+
     model_config = ConfigDict(extra="allow", frozen=True, arbitrary_types_allowed=True)
 
     function: Callable
@@ -324,7 +326,7 @@ def _windows(
 
 def _windowed(tiles: np.ndarray, analysis: np.ndarray | None) -> np.ndarray:
     """Return the tiles under the analysis window, or as they are without one."""
-    return tiles if analysis is None else tiles * analysis
+    return tiles if analysis is None else tiles * _taper_like(analysis, tiles)
 
 
 def _stack_coords(patch: PatchType, window: Window, analysis: Any):
@@ -373,7 +375,7 @@ def _stack_coords(patch: PatchType, window: Window, analysis: Any):
         # window the tiles were cut under, whose dual blends them back.
         new_coords[f"_tile_source_{dim}"] = (None, coord)
         if edges is not None:
-            edge = edges[window.dims.index(dim)].astype(np.float32)
+            edge = edges[window.dims.index(dim)]
             new_coords[f"_tile_analysis_{dim}"] = (None, edge)
         # And every coordinate which rode along it, a quality flag say.
         for name, aux_dims in coords.dim_map.items():
@@ -398,6 +400,7 @@ def _place_each(stacks, starts, shape, size, weights):
     or reordered -- where the plan's colour classes no longer apply.
     """
     ndim = len(shape)
+    weights = _taper_like(weights, stacks)
     origins = np.stack(np.meshgrid(*starts, indexing="ij"), axis=-1).reshape(-1, ndim)
     low = tuple(int(min(0, s.min())) for s in starts)
     high = tuple(int(max(n, s.max() + z)) for n, s, z in zip(shape, starts, size))
@@ -414,7 +417,7 @@ def _place_each(stacks, starts, shape, size, weights):
     return out[(slice(None), *inner)]
 
 
-@patch_function()
+@patch_function(version="1.1")
 def reassemble(patch: PatchType, *, taper: Any = None) -> PatchType:
     """
     Blend a stack of tiles back into the patch they were cut from.

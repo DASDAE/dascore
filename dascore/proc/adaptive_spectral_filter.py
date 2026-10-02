@@ -276,6 +276,8 @@ class AdaptiveSpectralFilter(PatchProcessor):
       transforms fastest.
     """
 
+    __version__ = "1.1"
+
     model_config = ConfigDict(extra="allow", frozen=True)
     # Every option by name, as before.
     _positional_fields = ()
