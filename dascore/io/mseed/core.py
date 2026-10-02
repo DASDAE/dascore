@@ -107,7 +107,7 @@ class MSeedV2(FiberIO):
         pymseed = optional_import("pymseed")
         return _scan_patches(resource, pymseed)
 
-    def _prepare_read(self, manager, snap):
+    def _prepare_read(self, manager, snap, keys=frozenset()):
         """Share one header scan across every logical patch in this read."""
         resource = manager.get_resource(LocalPath)
         pymseed = optional_import("pymseed")
