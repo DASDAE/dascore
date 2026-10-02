@@ -3430,6 +3430,18 @@ class TestDeclaredStepSnap:
         assert out.evenly_sampled and out.step == step
         assert np.allclose(out.values, values)
 
+    @pytest.mark.parametrize("step", [-0.1, 0.1, np.array(0.1)])
+    def test_descending_and_array_steps_snap(self, step):
+        """Descending labels snap whatever the declared step's sign or type."""
+        values = (np.arange(300) * 0.1)[::-1]
+        out = get_coord(data=values, step=step)
+        assert out.evenly_sampled and np.allclose(out.values, values)
+
+    def test_non_finite_step_is_refused(self):
+        """An infinite declared step raises the step error, not a count error."""
+        with pytest.raises(CoordError, match="finite non-zero"):
+            get_coord(data=np.array([0.0, 1.0, 2.0]), step=np.inf)
+
     @pytest.mark.parametrize(("start", "step"), [(1e12, 1e-3), (1e6, 1.4e-10)])
     def test_unrepresentable_grid_is_not_snapped(self, start, step):
         """A grid floats cannot hold at these labels is not claimed for them."""
