@@ -27,7 +27,7 @@ from dascore.core.source import ArraySource
 from dascore.exceptions import ParameterError
 from dascore.models import ArrayLike
 from dascore.models.base import values_equal
-from dascore.units import get_quantity
+from dascore.units import _quantities_equal, get_quantity
 from dascore.utils.array import _apply_binary_ufunc
 from dascore.utils.array_api import (
     _real_dtype,
@@ -815,7 +815,7 @@ def pow_coord(patch: PatchType, relative: bool = True, **kwargs) -> PatchType:
             gain_units = coord_units ** float(power)
             data_units = gain_units if data_units is None else data_units * gain_units
     out = patch.new(data=data)
-    if data_units != get_quantity(patch.attrs.data_units):
+    if not _quantities_equal(data_units, get_quantity(patch.attrs.data_units)):
         # The units moved, so whatever the data was called -- velocity,
         # strain rate -- it is not that any more.
         out = out.update_attrs(data_units=data_units, data_type="")

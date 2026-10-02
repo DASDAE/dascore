@@ -23,7 +23,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import ParameterError, PatchError
-from dascore.units import Quantity, invert_quantity, percent
+from dascore.units import Quantity, _quantities_equal, invert_quantity, percent
 from dascore.utils.imports import lazy_import
 from dascore.utils.misc import iterate
 from dascore.utils.patch import (
@@ -57,7 +57,7 @@ def _get_dft_coord_units(units):
     """Get units for DFT coordinates."""
     new_units = invert_quantity(units)
     # This purposefully converts 1/s to Hz to be more conventional. See #693.
-    if new_units == dc.get_quantity("1/s"):
+    if _quantities_equal(new_units, dc.get_quantity("1/s")):
         new_units = dc.get_quantity("Hz")
     return new_units
 

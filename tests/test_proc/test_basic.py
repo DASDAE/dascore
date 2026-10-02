@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import gc
 import operator
+import weakref
 
 import numpy as np
 import pandas as pd
@@ -545,6 +547,20 @@ class TestWindowedNormalize:
 
 class TestPowCoord:
     """Tests for scaling data by a coordinate raised to a power."""
+
+    def test_unit_change_frees_its_output(self, random_patch):
+        """Changing data units leaves nothing pinned for the cycle collector."""
+        patch = random_patch.update_attrs(data_units="m/s")
+        enabled = gc.isenabled()
+        gc.disable()
+        try:
+            out = patch.pow_coord(distance=1, relative=False)
+            ref = weakref.ref(out.data)
+            del out
+            assert ref() is None
+        finally:
+            if enabled:
+                gc.enable()
 
     def test_curve_counts_from_one(self, random_patch):
         """The gain should be one, two, three ... raised to the power."""
