@@ -964,6 +964,7 @@ class TestPlainNetCDF4:
     def test_tie_points_without_mapping(self, tmp_path, start):
         """Tie-point arrays named for a dimension still give its labels."""
         xr = pytest.importorskip("xarray")
+        pytest.importorskip("h5netcdf")
         step = np.timedelta64(2, "s") if isinstance(start, np.datetime64) else 2.0
         dataset = xr.Dataset(
             {
