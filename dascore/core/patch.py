@@ -437,7 +437,8 @@ class Patch(NamespaceOwner, PatchMeta):
             The remaining operands, which can contain patches.
         **kwargs
             Keyword arguments which configure the operation, such as `dim`
-            for a reduction or accumulation.
+            for a reduction or accumulation. A `where` mask is refused on
+            element-wise ufuncs; use `patch.data` for masked operations.
 
         Examples
         --------
