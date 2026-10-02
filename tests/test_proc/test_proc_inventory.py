@@ -949,6 +949,25 @@ class TestEnrichContracts:
         )
         assert np.isnan(twice.attrs.pulse_rate)
 
+    @pytest.mark.parametrize("conflict", ["raise", "keep_last", "drop", "keep_first"])
+    def test_null_marker_never_conflicts(self, patch, inventory, conflict):
+        """The inventory having no answer leaves a stated attr standing."""
+        stated = patch.update_attrs(pulse_rate=1.25)
+        out = stated.enrich(
+            inventory,
+            attrs=("pulse_rate",),
+            coords=False,
+            on_missing="null",
+            conflict=conflict,
+        )
+        assert out.attrs.pulse_rate == 1.25
+
+    def test_unstated_closed_fiber_loop_does_not_conflict(self, patch, inventory):
+        """An acquisition silent on the loop leaves the file's flag alone."""
+        looped = patch.update_attrs(closed_fiber_loop=True)
+        out = looped.enrich(inventory, coords=False, conflict="raise")
+        assert out.attrs.closed_fiber_loop is True
+
     def test_missing_marker_matches_the_field(self, patch, inventory):
         """A string field's missing marker is not a float."""
         out = patch.enrich(

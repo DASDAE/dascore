@@ -1067,8 +1067,8 @@ class Acquisition(TimeRangedModel):
             "optical path distance."
         ),
     )
-    closed_fiber_loop: bool = Field(
-        default=False,
+    closed_fiber_loop: bool | None = Field(
+        default=None,
         description="True when the interrogator is attached to both path ends.",
     )
 

@@ -204,15 +204,21 @@ def _apply_conflict(patch, new_attrs, conflict) -> tuple[dict, list]:
     """
     Return the attrs to set and to drop, given the conflict policy.
 
-    Filling an empty attr is never a conflict, and an agreeing header is
-    kept unless `keep_last` asks the inventory to correct it; a conflict
-    is both sides holding different information.
+    Filling an empty attr is never a conflict, nor is an inventory with no
+    answer (the `on_missing="null"` marker), which leaves a stated attr
+    standing. An agreeing header is kept unless `keep_last` asks the
+    inventory to correct it; a conflict is both sides holding different
+    information.
     """
     current = dict(patch.attrs)
     updates, drops = {}, []
     for name, value in new_attrs.items():
         old = current.get(name, None)
-        if _is_missing(old) or conflict == "keep_last":
+        if _is_missing(old):
+            updates[name] = value
+        elif _is_missing(value):
+            continue
+        elif conflict == "keep_last":
             updates[name] = value
         elif header_agrees(old, value):
             # The header stands, so selection on it sees what comes out.
