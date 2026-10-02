@@ -10,6 +10,19 @@ from dascore.transform import dispersion_phase_shift
 from dascore.utils.misc import suppress_warnings
 
 
+def _plane_wave_patch(freq=50.0, velocity=500.0, fs=500.0, nt=200, nchan=40):
+    """Return a right-going monochromatic plane wave on a 2 m spaced line."""
+    time = np.arange(nt) / fs
+    dist = np.arange(nchan) * 2.0
+    data = np.cos(2 * np.pi * freq * (time[None, :] - dist[:, None] / velocity))
+    coords = {
+        "distance": dist,
+        "time": dc.to_datetime64("2020-01-01") + dc.to_timedelta64(time),
+    }
+    patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+    return patch.set_units(distance="m")
+
+
 class TestDispersion:
     """Tests for the dispersion module."""
 
@@ -116,5 +129,24 @@ class TestDispersion:
             random_patch.dispersion_phase_shift(
                 phase_velocities=velocities,
                 approx_resolution=2.0,
-                approx_freq=[22.0, 22.1],
+                approx_freq=[22.5, 23.5],
             )
+
+    def test_plane_wave_peak(self):
+        """A plane wave's image peaks at its own frequency and velocity."""
+        patch = _plane_wave_patch(freq=50.0, velocity=500.0)
+        out = patch.dispersion_phase_shift(np.arange(400.0, 600.0, 1.0))
+        freqs = out.get_array("frequency")
+        np.testing.assert_allclose(np.diff(freqs), 500.0 / 200)
+        column = out.select(frequency=(49.9, 50.1)).squeeze()
+        assert column.get_array("velocity")[np.argmax(column.data)] == 500.0
+
+    def test_coarse_resolution_uses_whole_record(self):
+        """A resolution coarser than 1/duration still reads every sample."""
+        patch = _plane_wave_patch(nt=2050)
+        data = patch.data.copy()
+        data[:, 2000:] = 0
+        vels = np.arange(400.0, 600.0, 5.0)
+        full = patch.dispersion_phase_shift(vels, approx_resolution=2.5)
+        cut = patch.new(data=data).dispersion_phase_shift(vels, approx_resolution=2.5)
+        assert not np.allclose(full.data, cut.data)
