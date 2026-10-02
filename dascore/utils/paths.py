@@ -17,7 +17,7 @@ _HIVE_NULL = "__HIVE_DEFAULT_PARTITION__"
 # Synthetic URI schemes for in-memory patch identities (see
 # dascore.io.index.catalog); such paths dispatch to in-memory registries
 # and are never treated as file names.
-_MEMORY_SCHEMES = ("memorypatch://", "memory://")
+_MEMORY_SCHEME = "memorypatch://"
 # Synthetic URI scheme naming a file in the example data registry
 # (dascore/data_registry.txt); resolved to a local path by
 # dascore.utils.downloader.resolve_example_uri.
@@ -50,11 +50,11 @@ def is_memory_uri(path) -> bool:
     """
     Return True if a path is a synthetic in-memory patch identity.
 
-    Matches the exact ``memorypatch://`` / ``memory://`` schemes rather
-    than any string beginning with "memory", so a real file or directory
-    named e.g. ``memory_notes.h5`` is not misclassified.
+    Matches the exact ``memorypatch://`` scheme, so neither a real file
+    named e.g. ``memory_notes.h5`` nor a ``memory://`` filesystem path is
+    misclassified.
     """
-    return str(path).startswith(_MEMORY_SCHEMES)
+    return str(path).startswith(_MEMORY_SCHEME)
 
 
 def is_example_uri(path: object) -> bool:
