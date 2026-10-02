@@ -961,6 +961,24 @@ class TestStringArrayHelpers:
         with pytest.raises(ParameterError, match=match):
             apply_ufunc(np.add, random_patch, random_patch, out=random_patch)
 
+    def test_where_parameter_raises(self, random_patch):
+        """A mask would leave the unselected cells unset, so where is refused."""
+        mask = np.zeros(random_patch.shape, dtype=bool)
+        calls = (
+            lambda: apply_ufunc(np.multiply, random_patch, 2, where=mask),
+            lambda: random_patch.apply_ufunc(np.multiply, 2, where=mask),
+            lambda: np.multiply(random_patch, 2, where=mask),
+            lambda: np.abs(random_patch, where=mask),
+        )
+        for call in calls:
+            with pytest.raises(ParameterError, match="where"):
+                call()
+
+    def test_where_true_allowed(self, random_patch):
+        """The default where=True selects everything, so it is accepted."""
+        out = apply_ufunc(np.multiply, random_patch, 2, where=True)
+        assert np.array_equal(out.data, random_patch.data * 2)
+
 
 class TestApplyArrayFunc:
     """Tests for apply array func."""
@@ -1540,10 +1558,10 @@ class TestArrayBackends:
 
     def test_ufunc_keyword_falls_back(self, backend_patch, random_patch, backend):
         """Numpy-only ufunc keywords have no array API equivalent."""
-        where = np.ones(backend_patch.shape, dtype=bool)
         with pytest.warns(NumpyFallbackWarning):
-            out = np.add(backend_patch, 1, where=where)
-        self._assert_matches_numpy(out, np.add(random_patch, 1, where=where), backend)
+            out = np.add(backend_patch, 1, casting="same_kind")
+        expected = np.add(random_patch, 1, casting="same_kind")
+        self._assert_matches_numpy(out, expected, backend)
 
     def test_stored_units_fall_back(self, backend_patch, random_patch, backend):
         """Units stored on a patch become quantities when patches align."""
