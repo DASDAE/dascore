@@ -141,6 +141,18 @@ class TestDispersion:
         column = out.select(frequency=(49.9, 50.1)).squeeze()
         assert column.get_array("velocity")[np.argmax(column.data)] == 500.0
 
+    def test_negated_distance_images_left_going_wave(self):
+        """Negating distance images a wave travelling toward lower distance."""
+        patch = _plane_wave_patch(freq=50.0, velocity=500.0)
+        # The documented recipe, from a gather recorded in feet.
+        left = patch.update(data=patch.data[::-1]).convert_units(distance="ft")
+        left = left.convert_units(distance="m")
+        dist = left.get_array("distance")
+        vels = np.arange(400.0, 600.0, 1.0)
+        out = left.update_coords(distance=-dist).dispersion_phase_shift(vels)
+        column = out.select(frequency=(49.9, 50.1)).squeeze()
+        assert column.get_array("velocity")[np.argmax(column.data)] == 500.0
+
     def test_coarse_resolution_uses_whole_record(self):
         """A resolution coarser than 1/duration still reads every sample."""
         patch = _plane_wave_patch(nt=2050)
