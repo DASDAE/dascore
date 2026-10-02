@@ -1293,7 +1293,7 @@ def _array_reader(
 
 @contextmanager
 def _open_array_reader(
-    source: ArraySource,
+    source: ArraySource, path=None
 ) -> Iterator[Callable[[ArraySource], np.ndarray]]:
     """
     Open the resource a source names, and yield a loader of sources in it.
@@ -1302,6 +1302,8 @@ def _open_array_reader(
     checks what it reads against the source's description. The resource is
     opened once, a reader is prepared once per key, and all are released
     when the context exits, however it exits; the arrays stay valid.
+    ``path`` opens the resource in place of the source's string, for a
+    path which carries more (a remote store's options).
     """
     fiberio = FiberIO.manager.get_fiberio(format=source.format, version=source.version)
     readers = {}
@@ -1318,7 +1320,7 @@ def _open_array_reader(
             raise InvalidFiberIOError(msg)
         return out
 
-    with IOResourceManager(source.path) as manager:
+    with IOResourceManager(source.path if path is None else path) as manager:
         resource = manager.get_resource(_required_resource_type(fiberio.read_array))
         try:
             yield load

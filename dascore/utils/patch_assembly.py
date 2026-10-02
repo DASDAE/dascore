@@ -38,7 +38,7 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
-from dascore.units import get_quantity
+from dascore.units import conversion_factors, get_quantity, units_match
 from dascore.utils.array_api import to_numpy
 from dascore.utils.attrs import (
     _is_missing,
@@ -141,10 +141,19 @@ def _match_merge_units(patch, merge_dim, target_units):
     return patch, target_units
 
 
-def plan_data_units(joined: pd.DataFrame):
+def plan_data_units(units: Iterable):
     """The data units members merge into: the first stated, in plan order."""
-    stated = [x for x in joined.get("data_units", []) if not _is_missing(x)]
+    stated = [x for x in units if not _is_missing(x)]
     return get_quantity(stated[0]) if stated else None
+
+
+def _converted_dtype(dtype, units, target) -> np.dtype:
+    """The dtype `convert_units` gives ``dtype`` data going ``units`` to ``target``."""
+    factors = conversion_factors(units, target)
+    if factors is None:
+        return np.dtype(dtype)
+    plan = dict(zip(("mult1", "add", "mult2"), factors, strict=True))
+    return dc.proc.units.ConvertUnits().kernel(np.empty(0, dtype), **plan).dtype
 
 
 def _drop_associated_ranges(row, kwargs, plan_dim) -> dict:
@@ -682,7 +691,7 @@ class PatchAssembler:
         expected_len = len(joined["current_index"].unique())
         merging = len(joined) > expected_len
         merge_dim = _get_varying_dim(joined) if merging else None
-        units = plan_data_units(joined)
+        units = plan_data_units(joined.get("data_units", []))
         if merge_dim is not None:
             # members go in the output coordinate's order
             descending = bool((to_float(joined[f"{merge_dim}_step"].values) < 0).all())
@@ -838,31 +847,45 @@ class PatchAssembler:
             meta.attrs = meta.attrs.update(data_id=source.data_id)
         return source
 
-    def describe_output(self, rows) -> OutputMeta | None:
+    def describe_output(self, rows, units=None) -> OutputMeta | None:
         """
         What one output is, from its member rows in order; nothing is read.
 
         Members are sized as `_meta_from_index` sizes them, without its
         identity checks, or else from their envelopes (see `_sized_meta`).
         Only a member read as a window of its stored array has a source;
-        the rest load as patches. None when a row states no evenly sampled
-        range or no dtype.
+        the rest load as patches, as does one stating other data units
+        than ``units``, which loading converts (its dtype and attrs are
+        the converted ones). The data id is empty unless every member's is
+        known without loading it. None when a row states no evenly sampled range
+        or no dtype.
         """
         metas = [self._sized_meta(row, loose=True) for row in rows]
         dtypes = [x.get("_dtype") for x in rows]
         if None in metas or not all(isinstance(x, str) and x for x in dtypes):
             return None
-        dims = metas[0].dims
-        chain, casts = _cast_chain(dtypes)
-        for row, meta, cast in zip(rows, metas, casts, strict=True):
-            meta.cast_via = cast
-            if self.can_use_index is None or self.can_use_index(row):
+        dims, known = metas[0].dims, []
+        for num, (row, meta) in enumerate(zip(rows, metas, strict=True)):
+            stated = meta.attrs.data_units
+            converted = units is not None and not units_match(stated, units)
+            if converted:
+                dtypes[num] = _converted_dtype(dtypes[num], stated, units)
+                meta.attrs = meta.attrs.update(data_units=units)
+            elif self.can_use_index is None or self.can_use_index(row):
                 meta.source = self._member_source(row, meta, dims)
+            # a loaded member keeps its row's id only if loading changes nothing
+            whole = meta.source is not None or not (converted or row.get("_modified"))
+            known.append(whole and not _is_missing(row.get("data_id")))
+        chain, casts = _cast_chain(dtypes)
+        for meta, cast in zip(metas, casts, strict=True):
+            meta.cast_via = cast
         coords, attrs = metas[0].coords, metas[0].attrs
         if len(metas) > 1:
             coords, attrs = self._merged_meta(
                 self.plan_dim, [x.coords for x in metas], [x.attrs for x in metas]
             )
+        if not all(known):
+            attrs = attrs.update(data_id="")
         return OutputMeta(dims, coords, attrs, chain[-1], metas)
 
     def _stream(self, joined, df_dict_list, merge_dim, samples, units=None):
@@ -1033,20 +1056,26 @@ class PatchAssembler:
                 coord = coord_at_stored_unit(
                     coord_from_row(row, dim, units=units), row, dim
                 )
-                placed = coord and (coord, slice(0, len(coord)), len(coord))
+                placed = (
+                    None if coord is None else (coord, slice(0, len(coord)), len(coord))
+                )
             if placed is None and loose:
                 coord = _sized_coord(row, dim, units)
                 if coord is not None and cut:  # a cut's end need not be a sample
                     coord = coord.select(_row_bounds(row, dim))[0]
-                placed = coord and (coord, None, None)
-            if not placed:
+                placed = None if coord is None else (coord, None, None)
+            if placed is None:
                 return None
             coord_map[dim], span, length = placed
             window.append(span)
             extent.append(length)
         coords = get_coord_manager(coord_map, dims=dims)
         # every coordinate's envelope is a coordinate's, not an attr
-        named = [x[1:-12] for x in map(str, row) if x.endswith("_coord_dtype")]
+        named = {
+            x.removeprefix("_").removesuffix("_coord_dtype")
+            for x in map(str, row)
+            if x.endswith("_coord_dtype")
+        }
         attrs = _attrs_from_row(row, dims, coord_names={*dims, *named})
         if None in window:  # sized, but not a window of its stored array
             return _MemberMeta(dims, coords, attrs, (), ())

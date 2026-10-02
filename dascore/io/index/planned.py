@@ -678,8 +678,8 @@ class PlanResolver(PatchResolver):
         array, so a file rewritten longer under the same key would come
         back the shape its row predicted and go unnoticed. Only a source
         measured now and found to be what was recorded keeps the recipe:
-        one `changed_sources` cannot measure refuses it too, and sends the
-        merge down the patch path.
+        a source `changed_sources` cannot measure refuses it too, and sends
+        the merge down the patch path.
         """
         return self.changed_sources(rows) == []
 
@@ -695,18 +695,21 @@ class PlanResolver(PatchResolver):
         by its own stat, a directory-format unit by its manifest.
 
         A remote store is never touched. A path this process cannot stat,
-        one the index recorded nothing for, and one which will not answer
-        make this None, or are left out with ``skip_unmeasured``.
+        or one the index recorded nothing for, makes this None, or is left
+        out with ``skip_unmeasured``, which also follows a member loading
+        another plan's output to that plan's members. A recorded file which
+        no longer answers (deleted, unreadable) is listed as changed.
         """
-        stats = self._source_stats
-        if len(stats) != len(SOURCE_STAT_COLUMNS) or "source_path" not in rows.columns:
-            return [] if skip_unmeasured else None
+        stats, named = self._source_stats, "source_path" in rows.columns
+        changed = self._nested_changes(rows) if skip_unmeasured and named else []
+        if len(stats) != len(SOURCE_STAT_COLUMNS) or not named:
+            return changed if skip_unmeasured else None
         # the row numbers this slice kept, which is what the stats are under
         taken = rows.index.to_numpy()
         paths = rows["source_path"].to_numpy()
         mtimes = stats[SOURCE_STAT_COLUMNS[0]][taken]
         sizes = stats[SOURCE_STAT_COLUMNS[1]][taken]
-        seen, changed = set(), []
+        seen = set()
         for path, mtime, size in zip(paths, mtimes, sizes, strict=True):
             path = _row_str(path)
             if path in seen:
@@ -718,6 +721,18 @@ class PlanResolver(PatchResolver):
                 return None
             if scan_unit_stats(path) != (int(mtime), int(size)):
                 changed.append(path)
+        return changed
+
+    def _nested_changes(self, rows: pd.DataFrame) -> list[str]:
+        """The changed sources of the plans whose outputs these rows load."""
+        paths = rows["source_path"].map(_row_str)
+        changed = []
+        for prefix, plan in getattr(self.loader, "plan_entries", dict)().items():
+            ids = paths[paths.str.startswith(prefix)].str.removeprefix(prefix)
+            if len(ids):
+                members = plan.member_rows
+                members = members[members["output_id"].isin(ids.astype(int))]
+                changed += plan.changed_sources(members, skip_unmeasured=True)
         return changed
 
     def source_stats_of(self, rows: pd.DataFrame) -> pd.DataFrame:

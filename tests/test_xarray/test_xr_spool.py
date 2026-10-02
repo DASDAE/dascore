@@ -4,10 +4,14 @@ from __future__ import annotations
 
 import os
 import tracemalloc
+import typing
 from contextlib import contextmanager
 
+import fsspec
 import numpy as np
 import pytest
+from fsspec.implementations.memory import MemoryFileSystem
+from upath import UPath
 
 import dascore as dc
 import dascore.io.core as io_core
@@ -15,6 +19,8 @@ from dascore.config import config_context
 from dascore.examples import spool_to_directory
 from dascore.exceptions import PatchConversionError
 from dascore.io.index.planned import PlanResolver
+from dascore.units import get_quantity_str
+from dascore.utils.patch_assembly import PatchAssembler
 from tests.conftest import join_patches
 
 
@@ -25,8 +31,8 @@ def array_reads(monkeypatch):
     original = io_core._open_array_reader
 
     @contextmanager
-    def _recording(source):
-        with original(source) as load:
+    def _recording(source, *path):
+        with original(source, *path) as load:
             yield lambda src: reads.append((src.path, src.windows)) or load(src)
 
     monkeypatch.setattr(io_core, "_open_array_reader", _recording)
@@ -163,17 +169,13 @@ class TestSpoolToXarray:
     @pytest.mark.parametrize("bad_dtype", [None, ""])
     def test_missing_dtype_raises(self, random_spool, monkeypatch, bad_dtype):
         """An index without a dtype cannot size the arrays; say so."""
-        import dascore.utils.chunk_plan as chunk_plan_module  # noqa: PLC0415
+        original = PatchAssembler._df_to_dict_list
 
-        original = chunk_plan_module.build_chunk_plan
+        def _null_dtype(self, df):
+            return [{**row, "_dtype": bad_dtype} for row in original(self, df)]
 
-        def _null_dtype(*args, **kwargs):
-            plan = original(*args, **kwargs)
-            plan.outputs["_dtype"] = bad_dtype
-            return plan
-
-        monkeypatch.setattr(chunk_plan_module, "build_chunk_plan", _null_dtype)
-        with pytest.raises(PatchConversionError, match="dtype"):
+        monkeypatch.setattr(PatchAssembler, "_df_to_dict_list", _null_dtype)
+        with pytest.raises(PatchConversionError, match=r"dtype.*spool.update\(\)"):
             random_spool.io.to_xarray()
 
     def test_tolerance_argument(self, diverse_spool):
@@ -185,7 +187,6 @@ class TestSpoolToXarray:
 
     def test_stale_index_shape_raises(self, random_spool, monkeypatch):
         """A block whose loaded shape breaks its promise raises clearly."""
-        tree = random_spool.io.to_xarray()
         original = PlanResolver._load_member
 
         def _truncated(self, kwargs):
@@ -193,6 +194,7 @@ class TestSpoolToXarray:
             return patch.select(time=(0, 5), samples=True)
 
         monkeypatch.setattr(PlanResolver, "_load_member", _truncated)
+        tree = random_spool.io.to_xarray()  # building reads nothing
         leaf = self._leaves(tree)[0]
         with pytest.raises(PatchConversionError, match="promised"):
             leaf.dataset["data"].compute()
@@ -588,7 +590,7 @@ class TestToXarrayReadArray:
         assert starts[0] == 0 and starts[1] > 0
 
     def test_mixed_data_units_convert_as_chunk(self, tmp_path, override_calls):
-        """Files in other data units load as patches, converted to the first's."""
+        """A file in other data units loads as a patch, converted to the first's."""
         first = dc.get_example_patch()
         time = first.get_coord("time")
         second = first.update_coords(time_min=time.max() + time.step)
@@ -602,7 +604,8 @@ class TestToXarrayReadArray:
         override_calls.clear()
         out = self._leaf(spool.io.to_xarray(**kwargs))["data"].values
         np.testing.assert_allclose(out, merged.data)
-        assert override_calls == []
+        # the first is in the merged units already, so reads as a window
+        assert [path for path, _ in override_calls] == [str(tmp_path / "a.h5")]
 
     def test_a_file_rewritten_after_building_raises(self, tmp_path):
         """A window read which is not the shape indexed says to update."""
@@ -627,6 +630,96 @@ class TestToXarrayReadArray:
         with pytest.raises(PatchConversionError, match=r"spool.update\(\)"):
             spool.io.to_xarray()
 
+    @staticmethod
+    def _touch(path):
+        """Move a file's mtime on a second, as a rewrite would."""
+        stat = path.stat()
+        os.utime(path, ns=(stat.st_atime_ns, stat.st_mtime_ns + 10**9))
+
+    @pytest.mark.parametrize(
+        "derive",
+        [
+            lambda x: x.chunk(distance=100),
+            lambda x: x.chunk(time=None).select(time=(0, 10), samples=True),
+        ],
+        ids=["other dim", "selected"],
+    )
+    def test_a_changed_file_under_a_nested_plan_is_refused(self, tmp_path, derive):
+        """A plan loading another plan's outputs is checked down to its files."""
+        for num, patch in enumerate(dc.get_example_spool()):
+            patch.io.write(tmp_path / f"p{num}.h5", "dasdae")
+        spool = derive(dc.spool(tmp_path).update())
+        assert self._leaf(spool.io.to_xarray())  # untouched files convert
+        self._touch(tmp_path / "p1.h5")
+        with pytest.raises(PatchConversionError, match=r"spool.update\(\)"):
+            spool.io.to_xarray()
+
+    def test_an_unmeasurable_member_checks_the_rest(self, tmp_path, random_patch):
+        """A patch held in memory beside the files does not excuse a changed one."""
+        for num, patch in enumerate(dc.get_example_spool()):
+            patch.io.write(tmp_path / f"p{num}.h5", "dasdae")
+        later = random_patch.update_coords(time_min=np.datetime64("2030-01-01"))
+        spool = dc.spool(tmp_path).update() + dc.spool([later])
+        assert len(_segments(spool.io.to_xarray())) == 2
+        self._touch(tmp_path / "p1.h5")
+        with pytest.raises(PatchConversionError, match=r"spool.update\(\)"):
+            spool.io.to_xarray()
+
+    def test_a_remote_file_keeps_its_storage_options(self, tmp_path, token_store):
+        """A window read opens a remote file with the options its path carries."""
+        dc.get_example_patch().io.write(tmp_path / "p.h5", "dasdae")
+        path = UPath("tokenmem://bucket/p.h5", token="secret")
+        path.write_bytes((tmp_path / "p.h5").read_bytes())
+        spool = dc.spool(path)
+        out = self._leaf(spool.io.to_xarray())["data"].values
+        assert np.array_equal(out, spool.chunk(time=None)[0].data)
+
+    @pytest.mark.parametrize("engine", ["h5netcdf", "zarr"])
+    def test_the_tree_writes_with_its_units(self, tmp_path, random_spool, engine):
+        """A store holds the segment's attrs, data units included."""
+        xr = pytest.importorskip("xarray")
+        pytest.importorskip(engine)
+        spool = dc.spool([x.update_attrs(data_units="m/s") for x in random_spool])
+        tree = spool.io.to_xarray()
+        path = tmp_path / "tree"
+        if engine == "zarr":
+            tree.to_zarr(path)
+        else:
+            tree.to_netcdf(path, engine=engine)
+        back = xr.open_datatree(path, engine=engine)
+        assert self._leaf(back)["data"].attrs["data_units"] == "m / s"
+
+
+class _TokenStore(MemoryFileSystem):
+    """An in-memory store which opens nothing without its token."""
+
+    protocol = "tokenmem"
+    store: typing.ClassVar[dict] = {}
+    pseudo_dirs: typing.ClassVar[list] = [""]
+
+    def __init__(self, token=None, **kwargs):
+        super().__init__(**kwargs)
+        self.token = token
+
+    @classmethod
+    def _strip_protocol(cls, path):
+        """Name paths as the memory store does."""
+        path = str(path).replace(f"{cls.protocol}://", "memory://")
+        return MemoryFileSystem._strip_protocol(path)
+
+    def _open(self, path, *args, **kwargs):
+        if self.token != "secret":
+            raise PermissionError("no token")
+        return super()._open(path, *args, **kwargs)
+
+
+@pytest.fixture
+def token_store():
+    """Register the token store for one test."""
+    fsspec.register_implementation(_TokenStore.protocol, _TokenStore, clobber=True)
+    yield
+    _TokenStore.store.clear()
+
 
 class TestToXarrayLazyCoords:
     """The tree's evenly sampled time coordinates are served lazily."""
@@ -640,23 +733,6 @@ class TestToXarrayLazyCoords:
     def _leaf(self, tree):
         """The first dataset holding a data variable."""
         return next(node for node in tree.subtree if "data" in node.dataset)
-
-    def test_mixed_unit_members_merge(self, tmp_path):
-        """Members spelling one distance in metres and feet join as chunk does.
-
-        Their rows state an integer and a float coordinate; the lazy tree
-        builds both in the plan's units so the segments share a dtype.
-        """
-        metres = dc.get_example_patch().set_units(distance="m")
-        dist = metres.get_coord("distance")
-        span = float(dist.max() - dist.min() + dist.step)
-        feet = metres.update_coords(distance=(dist.values + span) / 0.3048)
-        feet = feet.set_units(distance="ft")
-        dc.write(metres, tmp_path / "m.h5", "dasdae")
-        dc.write(feet, tmp_path / "ft.h5", "dasdae")
-        spool = dc.spool(tmp_path).update()
-        out = self._leaf(spool.io.to_xarray(dim="distance"))["data"].data.compute()
-        assert np.array_equal(out, spool.chunk(distance=None)[0].data)
 
     def test_time_coordinate_is_lazy(self, random_spool):
         """An evenly sampled merged time coordinate gets the lazy index."""
@@ -839,6 +915,36 @@ class TestToXarrayBlockSize:
         # and an index on both dimensions at once
         pair = data.isel(distance=[0, 3], time=slice(0, 7)).compute().values
         assert np.array_equal(pair, whole[[0, 3]][:, :7])
+
+    @pytest.mark.parametrize(
+        "index",
+        [
+            dict(distance=5, time=slice(0, 1500, 999)),
+            dict(distance=slice(0, 6, 2), time=slice(0, 1500, 999)),
+            dict(distance=0, time=slice(5, 5)),
+        ],
+    )
+    def test_a_block_the_selection_misses_keeps_its_shape(self, random_patch, index):
+        """A block holding none of a selection is empty in the selection's shape."""
+        halves = (
+            random_patch.select(time=(0, 1000), samples=True),
+            random_patch.select(time=(1000, None), samples=True),
+        )
+        data = self._leaf(dc.spool(halves).io.to_xarray())
+        expected = random_patch.transpose(*data.dims).isel(**index)
+        assert np.array_equal(data.isel(**index).compute().values, expected.data)
+
+    def test_a_window_ending_on_a_seam_reads_one_member(self, file_spool, array_reads):
+        """The member after a window's end is not opened for no samples."""
+        samples = len(file_spool[0].get_coord("time"))
+        data = self._leaf(file_spool.io.to_xarray())
+        data.isel(time=slice(0, samples)).compute()
+        assert self._time_windows(file_spool, array_reads) == [(0, samples)]
+        array_reads.clear()
+        self._leaf(file_spool.io.to_xarray(block_size=0)).compute()
+        windows = self._time_windows(file_spool, array_reads)
+        assert len(windows) == len(file_spool)
+        assert all(stop > start for start, stop in windows)
 
     def test_a_selection_missing_every_member_reads_nothing(
         self, file_spool, array_reads
@@ -1029,6 +1135,25 @@ def _segments(tree):
     return [node.dataset["data"] for node in tree.subtree if "data" in node.dataset]
 
 
+def _assert_attrs_match(data, patch):
+    """
+    A segment's attrs are the patch's, as a store can hold them.
+
+    Its data units are a string, and it states no history, which the
+    index never holds; an id is stated only where the rows know chunk's,
+    and is then chunk's.
+    """
+    expected = {k: v for k, v in dict(patch.attrs).items() if v is not None}
+    expected.pop("history", None)
+    if (units := expected.get("data_units")) is not None:
+        expected["data_units"] = get_quantity_str(units)
+    got = dict(data.attrs)
+    for name in ("data_id", "origin_id"):
+        if name not in got:
+            expected.pop(name, None)
+    assert got == expected
+
+
 @pytest.fixture(scope="module")
 def requires_xarray_dask():
     """Skip without both optional libraries."""
@@ -1087,6 +1212,7 @@ class TestTreeMatchesChunk:
             # are pinned by TestKnownDivergences.test_non_merged_dim_units.
             assert out.get_coord("time").units == patch.get_coord("time").units
             assert out.attrs.data_units == patch.attrs.data_units
+            _assert_attrs_match(data, patch)
 
     def test_segments(self, patches, to_spool):
         """A gap splits two segments; the first merges three members."""
@@ -1094,6 +1220,79 @@ class TestTreeMatchesChunk:
         tree = spool.io.to_xarray()
         assert len(_segments(tree)) == 2
         self._assert_matches(tree, spool.chunk(time=None))
+        # whole members state the ids chunk gives, merged or not
+        assert all("data_id" in x.attrs for x in _segments(tree))
+
+    @pytest.mark.parametrize("conflict", ["keep_first", "drop"])
+    @pytest.mark.parametrize("units, dtype", [("cm", np.float64), (None, np.int16)])
+    def test_members_in_other_data_units(
+        self, patches, to_spool, conflict, units, dtype
+    ):
+        """
+        int16 members in m and cm merge as chunk merges them.
+
+        chunk converts the second to the first's units, which makes it
+        float64, and promotes the merge to that; casting back to int16
+        would turn every 0.01 into 0. A member stating no units takes
+        the first's and keeps its values.
+        """
+        ones = np.ones(patches[0].shape, dtype=np.int16)
+        spool = to_spool(
+            [
+                patches[0].new(data=ones).set_units("m"),
+                patches[1].new(data=ones).set_units(units),
+            ]
+        )
+        kwargs = dict(conflict=conflict, group=[])
+        tree = spool.io.to_xarray(**kwargs)
+        assert _segments(tree)[0].dtype == dtype
+        assert _segments(tree)[0].attrs["data_units"] == "m"
+        self._assert_matches(tree, spool.chunk(time=None, **kwargs))
+
+    @pytest.mark.parametrize("read", ["window", "patch"])
+    def test_lossy_promotion_chain(self, patches, tmp_path, monkeypatch, read):
+        """
+        A member rounds where the merge's buffer rounded it, on either read.
+
+        int64 2**53 + 1 goes through float64 on its way to longdouble,
+        which keeps 2**53; a direct cast to longdouble would keep the 1.
+        """
+        specs = (("int64", 2**53 + 1), ("float64", 1), ("longdouble", 2))
+        members = [
+            patch.new(data=np.full(patch.shape, value, dtype=dtype))
+            for patch, (dtype, value) in zip(patches, specs)
+        ]
+        spool = dc.spool(spool_to_directory(members, tmp_path)).update()
+        expected = spool.chunk(time=None)
+        if read == "patch":
+            monkeypatch.setattr(
+                PlanResolver, "_member_array_source", lambda *args: None
+            )
+        tree = spool.io.to_xarray()
+        assert _segments(tree)[0].values[0, 0] == np.longdouble(2**53)
+        self._assert_matches(tree, expected)
+
+    def test_associated_coords(self, patches, to_spool):
+        """Associated coordinates leave the attrs as chunk's patch states them."""
+        size = len(patches[0].get_coord("distance"))
+        latitude = ("distance", np.linspace(10, 11, size))
+        spool = to_spool([x.update_coords(latitude=latitude) for x in patches[:2]])
+        self._assert_matches(spool.io.to_xarray(), spool.chunk(time=None))
+
+    @pytest.mark.parametrize(
+        "select", [dict(distance=(1, None)), dict(time=(1, -1))], ids=["off", "on"]
+    )
+    def test_rechunked_sample_selection_refused(self, patches, to_spool, select):
+        """
+        A same-dimension chunk of a sample selection is refused when built.
+
+        Re-planning it collapses onto the source rows and loses the
+        selection, so its members would load unselected: wrong samples
+        from files, a false "changed" from memory.
+        """
+        spool = to_spool(patches[:2]).select(samples=True, **select)
+        with pytest.raises(PatchConversionError, match="sample selection"):
+            spool.chunk(time=None).io.to_xarray()
 
     def test_mixed_dtypes(self, patches, to_spool):
         """int16 and float32 members merge to float32 as chunk merges them."""

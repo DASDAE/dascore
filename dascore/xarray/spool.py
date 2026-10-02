@@ -12,15 +12,18 @@ is served by the lazy index in `dascore.xarray.index`.
 from __future__ import annotations
 
 import typing
+from collections import defaultdict
+from dataclasses import replace
 from typing import Any
 
 import numpy as np
 import pandas as pd
 
+import dascore as dc
 from dascore.config import get_config
 from dascore.constants import CONFLICT, SpoolType
-from dascore.core.lazy_array import LazyArray
 from dascore.exceptions import InvalidFiberIOError, ParameterError, PatchConversionError
+from dascore.units import get_quantity_str
 from dascore.utils.misc import optional_import
 from dascore.utils.time import to_float
 from dascore.xarray.patch import _to_dataarray
@@ -93,11 +96,11 @@ def _window_and_pick(key, size: int):
     """
     Split one dimension's index into a window to read and what to pick.
 
-    Dask hands a source slices and integers, picking positions itself
-    from what they read. Reading is contiguous, so an integer, a stride
-    or a reversal is read as the window enclosing what it selects and
-    picked out of it; the bounds are arithmetic, so finding them builds
-    nothing as long as the axis.
+    Dask hands a source integers and forward slices, picking positions
+    and reversing itself from what they read. Reading is contiguous, so
+    an integer or a stride is read as the window enclosing what it
+    selects and picked out of it; the bounds are computed arithmetically,
+    never by building an array the length of the axis.
     """
     if not isinstance(key, slice):
         # an integer drops its dimension, and must still do so here
@@ -106,8 +109,8 @@ def _window_and_pick(key, size: int):
     span = range(*key.indices(size))
     if not span:
         return (0, 0), slice(None)
-    low, high = min(span[0], span[-1]), max(span[0], span[-1]) + 1
-    return (low, high), slice(span[0] - low, None, span.step)
+    assert span.step > 0, "dask reverses what it reads itself"
+    return (span[0], span[-1] + 1), slice(None, None, span.step)
 
 
 class _SegmentSource:
@@ -123,9 +126,10 @@ class _SegmentSource:
     part of it.
     """
 
-    def __init__(self, meta, rows, dim, resolver, joined, units):
-        self.members, self.rows = meta.members, rows
-        self.resolver, self.joined, self.units = resolver, joined, units
+    def __init__(self, meta, rows, dim, assembler, frame, units, locations):
+        self.members, self.rows, self.locations = meta.members, rows, locations
+        # `frame` has the member rows' columns, which is all a load asks of it
+        self.assembler, self.frame, self.units = assembler, frame, units
         self.dims, self.dtype = meta.dims, meta.dtype
         self.shape = meta.coords.shape
         self.ndim = len(self.shape)
@@ -148,29 +152,33 @@ class _SegmentSource:
                     max(low, start) - start, min(high, stop) - start
                 )
                 parts.append(self._read(num, member, tuple(window)))
-        if not parts:
-            shape = tuple(hi - lo for (lo, hi), _ in pairs)
-            return np.empty(shape, dtype=self.dtype)
-        out = parts[0] if len(parts) == 1 else np.concatenate(parts, axis=self.axis)
+        if parts:
+            out = parts[0] if len(parts) == 1 else np.concatenate(parts, self.axis)
+        else:
+            out = np.empty(tuple(hi - lo for (lo, hi), _ in pairs), dtype=self.dtype)
         # slices and integers pick orthogonally, as xarray means them
         return out[tuple(pick for _, pick in pairs)]
 
     def _read(self, num, member, window) -> np.ndarray:
         """Read one member's window, cast as the merge casts it."""
         if member.source is not None:
+            source, path = member.source[window], self.locations[num]
             try:
-                lazy = LazyArray.from_sources(
-                    [member.source], dtype=self.dtype, cast_via=[member.cast_via]
-                )
-                return lazy[window].load()
+                # the resolved path, which keeps a remote store's options
+                with dc.io.core._open_array_reader(source, path) as load:
+                    data = load(source)
             except (InvalidFiberIOError, ParameterError) as error:
-                raise PatchConversionError(self._stale(num, error)) from error
-        # chunk's own member load: residuals, trims and units, as it merges
-        assembler = self.resolver._assembler(fill=False)
-        patch = assembler._load_trimmed_patch(self.rows[num], self.joined, self.units)
-        if patch.dims != self.dims or patch.shape != member.coords.shape:
-            raise PatchConversionError(self._stale(num, f"shape {patch.shape}"))
-        data = np.asarray(patch.data)[window]
+                msg = self._stale(num, f"raised {error}")
+                raise PatchConversionError(msg) from error
+        else:
+            # chunk's own member load: residuals, trims and units, as it merges
+            patch = self.assembler._load_trimmed_patch(
+                self.rows[num], self.frame, self.units
+            )
+            if patch.dims != self.dims or patch.shape != member.coords.shape:
+                msg = self._stale(num, f"gave shape {patch.shape}")
+                raise PatchConversionError(msg)
+            data = np.asarray(patch.data)[window]
         if member.cast_via is not None:
             data = data.astype(member.cast_via)
         return data.astype(self.dtype, copy=False)
@@ -178,11 +186,30 @@ class _SegmentSource:
     def _stale(self, num, found) -> str:
         """Why a member which did not load as indexed is refused."""
         return (
-            f"Loaded block from '{self.rows[num].get('source_path', '<memory>')}' "
-            f"gave {found}, but the spool index promised "
+            f"Loading '{self.rows[num].get('source_path', '<memory>')}' {found}, "
+            "but the spool index promised shape "
             f"{self.members[num].coords.shape}. The source changed after "
             "indexing; run spool.update() and convert again."
         )
+
+
+def _location(resolver, row):
+    """Where a member's file opens, with any storage options its path carries."""
+    loader, path, _, _ = resolver._array_read_info(row)
+    return loader.resolve_path(path)
+
+
+def _store_attrs(attrs) -> dict:
+    """A segment's attrs as a store holds them: data units as a string."""
+    out = dict(attrs)
+    # the index holds no history, and an empty id is one the rows cannot know
+    out.pop("history", None)
+    for name in ("data_id", "origin_id"):
+        if not out.get(name):
+            out.pop(name, None)
+    if out.get("data_units") is not None:
+        out["data_units"] = get_quantity_str(out["data_units"])
+    return out
 
 
 def _xarray_group_nodes(outputs, group_attrs):
@@ -268,10 +295,11 @@ def spool_to_xarray(
         ``dim`` rather than whole. It does not affect a selection, which
         reads only what it asks for whatever the blocks are. None takes
         the configured ``xarray_block_size`` (256 MiB by default); zero
-        makes each source patch one block. A patch whose format cannot
-        hand back a window (see `FiberIO.read_array`) stays one block
-        whatever this says: splitting it would read the file once per
-        block instead of once.
+        makes each source patch one block. A patch which cannot be read
+        as a window of its stored array (a format without
+        `FiberIO.read_array`, or one whose data units or coordinates the
+        index cannot stand for) stays one block whatever this says:
+        splitting it would read the file once per block instead of once.
 
     Notes
     -----
@@ -282,9 +310,16 @@ def spool_to_xarray(
 
     Requires ``xarray`` and ``dask``. Coordinates associated with a
     dimension (rather than defining one) are not carried into the tree.
-    Building the tree checks that every local source file is still what
-    the spool indexed, and refuses one which changed; a remote one is not
-    checked until a read finds it is not the shape the index promised.
+    Building the tree checks every local source file the index recorded
+    a stat for, and refuses one which changed (or can no longer be
+    stat'ed). Any other source (a remote one, say), and any file changed
+    after the tree is built, is only caught when a read finds it is not
+    the shape the index promised.
+
+    Each segment's attrs are those of the patch `chunk` merges, with
+    data units as a string. They state no history, which the index does
+    not hold, and state ``data_id`` or ``origin_id`` only where the index
+    knows the merged patch's without loading it.
 
     The merged dimension's coordinate, when it is a range or segmented,
     is served lazily by `dascore.xarray.index.CoordIndex`: its labels are
@@ -311,7 +346,9 @@ def spool_to_xarray(
     select on the tree (e.g. ``sel(time=...)``), or select with
     ``samples=True`` on dimensions, which stays exact. Pending inventory
     enrichment is likewise refused, since the tree would omit the
-    enriched attributes.
+    enriched attributes, as is a spool chunked along ``dim`` after a
+    sample (or relative) selection: planning it again along ``dim``
+    would lose the selection. Convert the selected spool instead.
     """
     xr = optional_import("xarray")
     da = optional_import("dask.array")
@@ -332,7 +369,11 @@ def spool_to_xarray(
         )
         raise PatchConversionError(msg)
     # function-level to avoid circular imports through the package root
-    from dascore.io.index.planned import PlanResolver, derived_catalog  # noqa: PLC0415
+    from dascore.io.index.planned import (  # noqa: PLC0415
+        PlanResolver,
+        collapse_working_df,
+        derived_catalog,
+    )
     from dascore.utils.chunk_plan import build_chunk_plan  # noqa: PLC0415
     from dascore.utils.patch_assembly import plan_data_units  # noqa: PLC0415
 
@@ -369,6 +410,21 @@ def spool_to_xarray(
             "positions, so the lazy arrays cannot be sized. Convert "
             "first and select on the tree, or select dimensions with "
             "samples=True."
+        )
+        raise PatchConversionError(msg)
+    own = spool._catalog.resolver
+    if (
+        isinstance(own, PlanResolver)
+        and own.dim == dim
+        and any(s or r for _, s, r in own.parent_residuals)
+        and collapse_working_df(spool._catalog) is not None
+    ):
+        # Planning along the same dimension again starts from the source
+        # rows, which do not carry the selection the plan was made after.
+        msg = (
+            f"Cannot convert a spool chunked along '{dim}' after a sample "
+            f"selection or a relative one: planning it along '{dim}' again "
+            "would lose the selection. Convert the selected spool instead."
         )
         raise PatchConversionError(msg)
     steps = working.get(f"{dim}_step")
@@ -417,34 +473,33 @@ def spool_to_xarray(
         )
         raise PatchConversionError(msg)
     assembler = resolver._assembler(fill=False)
-    by_output = dict(tuple(member_rows.groupby("output_id", sort=False)))
+    if resolver.parent_residuals:
+        # a residual re-trims the loaded patch, which a window read skips
+        assembler = replace(assembler, array_source=None)
+    by_output = defaultdict(list)
+    for row in assembler._df_to_dict_list(member_rows):
+        by_output[row["output_id"]].append(row)
 
     def _segment(out):
         """One output's dask array and its coordinates and attrs."""
-        if (dtype_str := out["_dtype"]) is None or not str(dtype_str):
-            msg = (
-                "Cannot build a lazy array without a dtype in the spool "
-                "index; re-index the spool with spool.update()."
-            )
-            raise PatchConversionError(msg)
-        joined = by_output[out["output_id"]]
-        units = plan_data_units(joined)
-        joined = joined.sort_values(f"{dim}_min", kind="stable")
-        rows = assembler._df_to_dict_list(joined)
-        meta = assembler.describe_output(rows)
+        rows = by_output[out["output_id"]]
+        units = plan_data_units([x.get("data_units") for x in rows])
+        rows = sorted(rows, key=lambda x: x[f"{dim}_min"])
+        meta = assembler.describe_output(rows, units)
         if meta is None:
             msg = (
                 f"Cannot size a lazy array: a patch spanning {out[f'{dim}_min']} "
                 f"to {out[f'{dim}_max']} records no sampling step for one of "
-                "its dimensions (or no dtype) in the spool index."
+                "its dimensions, or no dtype, in the spool index; an index "
+                "made before dtypes were recorded needs spool.update()."
             )
             raise PatchConversionError(msg)
-        if len({x.attrs.data_units for x in meta.members}) > 1:
-            # only a loaded patch converts its data units, as chunk's does
-            for member in meta.members:
-                member.source = None
+        locations = [
+            None if x.source is None else _location(resolver, row)
+            for x, row in zip(meta.members, rows, strict=True)
+        ]
         array = da.from_array(
-            _SegmentSource(meta, rows, dim, resolver, joined, units),
+            _SegmentSource(meta, rows, dim, assembler, member_rows, units, locations),
             chunks=_segment_chunks(meta, block_size, dim),
             meta=np.empty((0,) * len(meta.dims), dtype=meta.dtype),
             # the source is the read; dask must not copy it into the
@@ -458,7 +513,8 @@ def spool_to_xarray(
         # sample materialized, which for a long merge dwarfs everything
         # else the tree holds. The others are short, and a materialized
         # index is what per-channel arrays align on.
-        return _to_dataarray(array, meta.coords, meta.attrs, (dim,), held=False)
+        attrs = _store_attrs(meta.attrs)
+        return _to_dataarray(array, meta.coords, attrs, (dim,), held=False)
 
     tree = {}
     for code, sub in outputs.groupby(codes.to_numpy(), sort=True):
