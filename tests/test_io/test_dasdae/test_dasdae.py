@@ -101,9 +101,10 @@ class TestWriteDASDAE:
             patch.io.write(tmp_path / "target.h5", "DASDAE")
         assert len(dc.spool(tmp_path / "target.h5")) == len(source)
 
-    def test_unnamed_patches_keep_apart(self, random_patch, tmp_path):
+    @pytest.mark.parametrize("unset", [None, np.nan, ""])
+    def test_unnamed_patches_keep_apart(self, random_patch, tmp_path, unset):
         """Patches with no name attr are named by their contents, not "nan"."""
-        first = random_patch.update_attrs(name=None)
+        first = random_patch.update_attrs(name=unset)
         second = first.update_coords(time_min="2001-01-01")
         for patch in (first, second):
             patch.io.write(tmp_path / "target.h5", "DASDAE")

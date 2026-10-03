@@ -13,6 +13,7 @@ from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
 from dascore.io.index.catalog import LiveResolver
 from dascore.io.utils import slice_dataset
+from dascore.utils.attrs import _is_missing
 from dascore.utils.hdf5 import H5Reader, H5Writer, h5_encoding
 from dascore.utils.misc import unbyte
 from dascore.utils.patch import _unique_patch_names, get_patch_names
@@ -84,10 +85,14 @@ class DASDAEV1(FiberIO):
         # names it; asking the spool costs a catalog query, most of the write.
         resolver = getattr(getattr(patches, "_catalog", None), "resolver", None)
         if isinstance(resolver, LiveResolver) and len(patches) == 1:
+            # Kept, so the patch is built (and enriched) only once.
+            patches = [patches[0]]
             # A live spool's path names nothing, and an unset value is no column.
             summary = patches[0].summary.flat_dump()
             summary = {
-                k: v for k, v in summary.items() if v is not None and k != "source_path"
+                k: v
+                for k, v in summary.items()
+                if not _is_missing(v) and k != "source_path"
             }
             names = get_patch_names(pd.DataFrame([summary]))
         else:
