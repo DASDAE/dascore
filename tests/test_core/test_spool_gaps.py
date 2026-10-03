@@ -431,7 +431,7 @@ class TestChunkKeepsHoles:
         later = patch.update_coords(time_min=float(starts[-1]) + 20 + shift)
         length = [None, 5.0, 13.0][int(rng.integers(3))]
         tolerance = float(rng.choice([1.5, 10.0, 100.0]))
-        with suppress_warnings(DASCoreWarning):  # wide tolerances span gaps
+        with suppress_warnings(DASCoreWarning, message="tolerance spans a gap"):
             chunked = dc.spool([patch, later]).chunk(
                 time=length, tolerance=tolerance, snap_coords=snap
             )

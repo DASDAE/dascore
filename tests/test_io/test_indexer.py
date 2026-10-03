@@ -379,7 +379,7 @@ class TestUpdate:
 
     def test_legacy_index_warns(self, empty_index):
         """A leftover .dascore_index.h5 warns once per update."""
-        (empty_index.path / ".dascore_index.h5").write_bytes(b"old")
+        (empty_index.path / ".dascore_index.h5").write_bytes(b"\x89HDF\r\n\x1a\n" * 2)
         with pytest.warns(DASCoreWarning, match=r"dascore_index\.sqlite3") as rec:
             empty_index.update(progress=None)
         assert len(rec) == 1
@@ -389,6 +389,14 @@ class TestUpdate:
         with warnings.catch_warnings():
             warnings.filterwarnings("error", category=DASCoreWarning)
             empty_index.update(progress=None)
+
+    def test_index_given_the_old_name_is_silent(self, empty_index):
+        """An index the user chose to call .dascore_index.h5 is not legacy."""
+        path = empty_index.path
+        indexer = DBDirectoryIndexer(path, index_path=path / ".dascore_index.h5")
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", category=DASCoreWarning)
+            indexer.update(progress=None)
 
     def test_index_with_bad_file(self, spool_directory_with_non_das_file):
         """Ensure if one file is not readable index continues."""

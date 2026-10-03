@@ -756,13 +756,27 @@ class TestFormatter:
 
     def test_old_interface_warns(self):
         """Overriding only the removed reader methods warns at definition."""
-        with pytest.warns(DASCoreWarning, match="get_version, get_metadata"):
+        with pytest.warns(DASCoreWarning, match="get_version, get_metadata") as rec:
 
             class OldStyle(FiberIO):
                 name = "_old_style_format"
 
                 def get_format(self, resource: H5Reader, **kwargs):
                     return False
+
+        assert rec[0].filename == __file__
+
+    def test_old_interface_from_a_mixin_warns(self):
+        """The removed methods warn when a mixin supplies them too."""
+
+        class OldMixin:
+            def get_format(self, resource: H5Reader, **kwargs):
+                return False
+
+        with pytest.warns(DASCoreWarning, match="overrides get_format"):
+
+            class OldStyle(OldMixin, FiberIO):
+                name = "_old_mixin_format"
 
     def test_new_interface_with_read_is_silent(self):
         """A reader which also overrides read, as Sintela does, is fine."""

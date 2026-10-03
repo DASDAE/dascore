@@ -409,11 +409,12 @@ class DBDirectoryIndexer:
         changes stay in the calling thread. The caller owns the client.
         """
         progress = validate_progress_level(progress)
-        if (self.path / ".dascore_index.h5").exists():
+        legacy = self.path / ".dascore_index.h5"
+        if legacy.exists() and self._is_legacy_or_foreign_index(legacy):
             msg = (
-                f"{self.path} holds a legacy .dascore_index.h5 which DASCore no "
-                f"longer uses; the index is now {INDEX_NAME}, so delete that "
-                "file to reset it."
+                f"{self.path} holds a legacy .dascore_index.h5, which DASCore "
+                f"no longer uses and can be deleted; the index is now "
+                f"{INDEX_NAME}, so delete that file to reset the index."
             )
             skip = (str(Path(dc.__file__).parent),)
             warnings.warn(msg, DASCoreWarning, skip_file_prefixes=skip)

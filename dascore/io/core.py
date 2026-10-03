@@ -1067,14 +1067,22 @@ class FiberIO:
 
 def _warn_old_interface(cls):
     """Warn when a subclass only overrides the removed reader methods."""
-    old = [x for x in ("get_format", "scan", "read") if x in vars(cls)]
-    new = ("get_version", "get_metadata", "read_array")
-    if old and all(_is_wrapped_func(getattr(cls, x), getattr(FiberIO, x)) for x in new):
+    old, new = (
+        ("get_format", "scan", "read"),
+        ("get_version", "get_metadata", "read_array"),
+    )
+    over = [
+        x for x in old if not _is_wrapped_func(getattr(cls, x), getattr(FiberIO, x))
+    ]
+    if over and all(
+        _is_wrapped_func(getattr(cls, x), getattr(FiberIO, x)) for x in new
+    ):
         msg = (
-            f"FiberIO {cls.__name__} overrides {', '.join(old)}, which DASCore "
+            f"FiberIO {cls.__name__} overrides {', '.join(over)}, which DASCore "
             f"no longer calls to read; implement {', '.join(new)} instead."
         )
-        warnings.warn(msg, DASCoreWarning, stacklevel=3)
+        skip = (str(Path(dc.__file__).parent),)
+        warnings.warn(msg, DASCoreWarning, skip_file_prefixes=skip)
 
 
 # The public methods each private FiberIO hook is paired with.
