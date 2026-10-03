@@ -767,9 +767,7 @@ def spool_to_directory(spool, path=None, file_format="DASDAE", extension="hdf5")
     extension
         The file extension given to each saved file.
     """
-    if path is None:
-        path = Path(tempfile.mkdtemp())
-        assert path.exists()
+    path = Path(tempfile.mkdtemp() if path is None else path)
     for patch in spool:
         name = get_patch_names(patch).iloc[0]
         out_path = path / (f"{name}.{extension}")
