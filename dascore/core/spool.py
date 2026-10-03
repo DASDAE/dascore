@@ -866,22 +866,25 @@ class Spool(NodeRepr, NamespaceOwner):
         backend = self._catalog.backend
         # Asked of the whole index first, so the usual coordinate every
         # patch holds neither realizes the view nor reads the inventory.
-        unstated = [
-            name
+        asked = {
+            name: value
             for name, value in coords.items()
             if value is not None
             and value is not Ellipsis
-            and backend.coord_unstated_ids(name)
-        ]
-        if not unstated:
+            and not backend.coord_held_everywhere(name)
+        }
+        if not asked:
             return {}
         ids = self._catalog.ordered_rows()
-        names = set(self._resolved_inventory().get_names().coords)
-        return {
-            name: coords[name]
-            for name in unstated
-            if name in names and backend.coord_unstated_ids(name, patch_rows=ids)
+        asked = {
+            name: value
+            for name, value in asked.items()
+            if backend.coord_unstated_ids(name, ids)
         }
+        if not asked:
+            return {}
+        names = set(self._resolved_inventory().get_names().coords)
+        return {name: value for name, value in asked.items() if name in names}
 
     def _select_partly_stated(self, name: str, value) -> Self:
         """
@@ -893,9 +896,11 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         catalog = self._catalog
         ids = np.asarray(catalog.ordered_rows(), dtype=np.int64)
-        lacking = np.isin(
-            ids, list(catalog.backend.coord_unstated_ids(name, patch_rows=ids))
-        )
+        lacking = np.isin(ids, list(catalog.backend.coord_unstated_ids(name, ids)))
+        if lacking.all():
+            # No row holds it -- a view can drop every row which did --
+            # so there is nothing for the index to judge.
+            return self._select_channels({name: value})
         matched = np.isin(ids, catalog.select(_coords={name: value}).ordered_rows())
         # The trim leaves the rows lacking the coordinate untouched on load.
         trimmed = catalog.trim({name: value}).restrict(matched | lacking, ids=ids)

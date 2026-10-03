@@ -1465,6 +1465,23 @@ class TestSelectPartlyHeldCoord:
         out = spool.select(y=(40.005, 40.02))
         assert self._extents(out) == [("bare", 16, 60), ("held", 16, 49)]
 
+    def test_window_without_holders(self, spool):
+        """A window dropping every holding row leaves the fiber to judge."""
+        windowed = spool.enrich(attrs=False, coords=("y",))
+        windowed = windowed.select(distance=[[60, 70]])
+        expected = dc.spool(list(windowed)).select(y=(40.02, 40.03))
+        out = windowed.select(y=(40.02, 40.03))
+        assert self._extents(out) == self._extents(expected) == [("bare", 60, 70)]
+
+    def test_view_of_holders_reads_no_inventory(self, spool, inventory, tmp_path):
+        """A view whose rows all hold the coordinate never reads the file."""
+        path = tmp_path / "inventory.yaml"
+        inventory.io.to_yaml(path)
+        lazy = spool.attach_inventory(path)
+        path.unlink()
+        out = lazy.select(tag="held").select(y=(40.005, 40.02))
+        assert self._extents(out) == [("held", 16, 49)]
+
 
 class TestInventoryUnselect:
     """Unselect reaches whatever select reaches."""
