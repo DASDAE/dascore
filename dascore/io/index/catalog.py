@@ -1205,6 +1205,17 @@ class PatchCatalog:
             residuals = (*residuals, (residual_coords, False, False))
         return self._view((*self._queries, query), residuals)
 
+    def trim(self, _coords: dict) -> PatchCatalog:
+        """
+        Return a view trimming patches on load without narrowing membership.
+
+        This is a coordinate selection's exact half alone: a patch lacking
+        one of the coordinates loads as it is, so a caller which chooses
+        the rows itself keeps the trim on the rows which hold them.
+        """
+        picked = self.select(_coords=_coords)
+        return self._view(self._queries, picked.residuals)
+
     # --- realization ------------------------------------------------------
 
     def to_df(self) -> pd.DataFrame:

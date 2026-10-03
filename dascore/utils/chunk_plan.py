@@ -192,10 +192,21 @@ def _adjust_unit_segments(df, name, canonical):
 def _adjust_absolute_envelopes(df, coords):
     """Project one absolute coordinate selection onto relation envelopes."""
     for name, value in coords.items():
+        # A row lacking the coordinate loads untrimmed (see
+        # `apply_exact_residuals`), so its envelopes stand as they are. The
+        # stored dtype marks a held coordinate; the identity key does not,
+        # being null for one with no data id.
+        column = df.get(f"_{name}_coord_dtype")
+        missing = np.zeros(len(df), bool) if column is None else column.isna().values
+        held, lacking = df[~missing], df[missing]
         if isinstance(value, _CanonicalRange):
-            df = _adjust_unit_segments(df, name, value)
+            held = _adjust_unit_segments(held, name, value)
         elif is_range(value):
-            df = adjust_segments(df, ignore_bad_kwargs=True, **{name: value})
+            held = adjust_segments(held, ignore_bad_kwargs=True, **{name: value})
+        df = held
+        if len(lacking):
+            lacking = lacking.assign(_modified=lacking.get("_modified", False))
+            df = pd.concat([held, lacking]).sort_index(kind="stable")
     return df
 
 

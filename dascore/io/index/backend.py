@@ -1376,6 +1376,27 @@ class SQLiteIndexBackend:
             params.append(json.dumps([int(x) for x in patch_rows]))
         return {int(x) for x in self._fetch_df(sql, params)["patch_row"]}
 
+    def coord_held_everywhere(self, name: str) -> bool:
+        """
+        Return True when every patch in the index holds one coordinate.
+
+        Read off the counts `coord_variants` keeps, so the usual answer,
+        for a coordinate every patch holds, costs nothing per patch.
+        """
+        sql = "SELECT SUM(patch_count) FROM coord_variants WHERE coord_name = ?"
+        with self._lock:
+            held = self._con.execute(sql, (name,)).fetchone()[0] or 0
+        return held >= self._patch_count()
+
+    def coord_unstated_ids(self, name: str, patch_rows) -> set[int]:
+        """Return the ids among some patches which do not hold one coordinate."""
+        sql = (
+            "SELECT value FROM json_each(?) AS j WHERE NOT EXISTS (SELECT 1 "
+            "FROM patch_coords WHERE patch_row = j.value AND coord_name = ?)"
+        )
+        params = [json.dumps([int(x) for x in patch_rows]), name]
+        return {int(x) for x in self._fetch_df(sql, params)["value"]}
+
     def associated_coord_names(self) -> set[str]:
         """Return every coord name some patch holds on a dimension not its own.
 

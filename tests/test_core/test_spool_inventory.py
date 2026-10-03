@@ -1422,6 +1422,73 @@ class TestSelectSeesPendingEnrichment:
             enriched.select(tag="random")[0]
 
 
+class TestSelectPartlyHeldCoord:
+    """
+    Selecting a coordinate some patches hold and the inventory defines.
+
+    A patch holding it is judged by its own values, which enrichment never
+    overwrites, and one without it by the inventory's projection, which
+    enrichment adds. The index knowing the name from some patches must not
+    drop the others, in memory or from a directory.
+    """
+
+    @pytest.fixture(scope="class", params=["memory", "directory"])
+    def spool(self, request, patch, inventory, tmp_path_factory):
+        """A patch holding `y` on its first 50 channels beside one without."""
+        held = patch.select(distance=(0, 49)).enrich(
+            inventory, attrs=False, coords=("y",)
+        )
+        parts = [held.update_attrs(tag="held"), patch.update_attrs(tag="bare")]
+        if request.param == "memory":
+            return dc.spool(parts).attach_inventory(inventory)
+        path = tmp_path_factory.mktemp("partly_held")
+        for num, part in enumerate(parts):
+            dc.write(part, path / f"{num}.h5", "dasdae")
+        return dc.spool(path).update().attach_inventory(inventory)
+
+    @staticmethod
+    def _extents(spool):
+        """Each patch's tag and distance range, in a fixed order."""
+        coords = [(x.attrs.tag, x.get_coord("distance")) for x in spool]
+        return sorted((tag, int(x.min()), int(x.max())) for tag, x in coords)
+
+    @pytest.mark.parametrize("y", [(39, 40.02), (40.05, 41), (41, 42)])
+    def test_matches_enriched(self, spool, y):
+        """Lazy selection yields what selecting the enriched patches does."""
+        enriched = spool.enrich(attrs=False, coords=("y",))
+        expected = dc.spool(list(enriched)).select(y=y)
+        out = enriched.select(_coords={"y": y})
+        assert self._extents(out) == self._extents(expected)
+
+    def test_held_rows_trim_by_their_own(self, spool):
+        """A holding patch is trimmed on its values, the other on the fiber's."""
+        out = spool.select(y=(40.005, 40.02))
+        assert self._extents(out) == [("bare", 16, 60), ("held", 16, 49)]
+
+    def test_window_without_holders(self, spool):
+        """A window dropping every holding row leaves the fiber to judge."""
+        windowed = spool.enrich(attrs=False, coords=("y",))
+        windowed = windowed.select(distance=[[60, 70]])
+        # Selected before iterating, which builds the window's pieces.
+        out = windowed.select(y=(40.02, 40.03))
+        expected = dc.spool(list(windowed)).select(y=(40.02, 40.03))
+        assert self._extents(out) == self._extents(expected) == [("bare", 60, 70)]
+
+    def test_view_of_holders_reads_no_inventory(self, spool, inventory, tmp_path):
+        """A view whose rows all hold the coordinate never reads the file."""
+        path = tmp_path / "inventory.yaml"
+        inventory.io.to_yaml(path)
+        lazy = spool.attach_inventory(path)
+        path.unlink()
+        out = lazy.select(tag="held").select(y=(40.005, 40.02))
+        assert self._extents(out) == [("held", 16, 49)]
+
+    def test_open_range_does_not_veto_a_flag(self, spool):
+        """A range open at both ends asks nothing, so `samples` still works."""
+        out = spool.select(distance=(0, 10), y=(None, None), samples=True)
+        assert self._extents(out) == [("bare", 0, 9), ("held", 0, 9)]
+
+
 class TestInventoryUnselect:
     """Unselect reaches whatever select reaches."""
 
