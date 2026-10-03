@@ -723,6 +723,8 @@ class Stft(PatchProcessor):
     - Real data is transformed one-sided along the last windowed dimension
       and centred along the others, as [Patch.dft](`dascore.Patch.dft`) with
       ``real=True`` is; complex data is centred along every one.
+    - Data that single precision holds (eg float32, complex64, int16) gives
+      a complex64 output; wider data gives complex128.
     - The output is a stack of windows as
       [Patch.tile_apply](`dascore.Patch.tile_apply`) makes one, transformed
       along the window: the transformed dimension becomes the window

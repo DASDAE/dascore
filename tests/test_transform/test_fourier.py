@@ -583,12 +583,17 @@ class TestSTFT:
         time = dc.to_datetime64(0) + np.arange(50_000) * np.timedelta64(1, "ms")
         coords = {"distance": np.arange(100.0), "time": time}
         patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+        # Measured from here, leaving any tracing already running as it was.
+        was_tracing = tracemalloc.is_tracing()
         tracemalloc.start()
+        tracemalloc.reset_peak()
+        before = tracemalloc.get_traced_memory()[0]
         try:
             out = patch.stft(time=256, samples=True)
-            peak = tracemalloc.get_traced_memory()[1]
+            peak = tracemalloc.get_traced_memory()[1] - before
         finally:
-            tracemalloc.stop()
+            if not was_tracing:
+                tracemalloc.stop()
         assert peak < 3 * out.data.nbytes
 
     @pytest.mark.parametrize("detrend", [False, True])
