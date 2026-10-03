@@ -240,7 +240,7 @@ class CoordinateReferenceSystem(InventoryModel):
             raise InvalidInventoryError(msg)
         return self
 
-    def _repr_line(self) -> Text:
+    def _repr_line(self, description: str | None = None) -> Text:
         """
         One line naming the frame and its axes.
 
@@ -392,13 +392,14 @@ _Resource: TypeAlias = Annotated[
 ]
 
 
-def _distance_line(model, skip=()) -> Text:
+def _distance_line(model, skip=(), description=None) -> Text:
     """One line for a model covering an interval of optical distance."""
     span = f"[{model.distance_min:g}, {model.distance_max:g}) m"
     return model_to_line(
         model,
         skip=(*skip, "distance_min", "distance_max"),
         extra={"distance": span},
+        description=description,
     )
 
 
@@ -439,9 +440,9 @@ class _IntervalModel(InventoryModel):
             raise InvalidInventoryError(msg)
         return self
 
-    def _repr_line(self) -> Text:
+    def _repr_line(self, description: str | None = None) -> Text:
         """One line stating the interval this item covers."""
-        return _distance_line(self)
+        return _distance_line(self, description=description)
 
     @property
     def optical_length(self) -> float:
@@ -919,7 +920,7 @@ class DistanceMap(InventoryModel):
             )
             raise InvalidInventoryError(msg)
 
-    def _repr_line(self) -> Text:
+    def _repr_line(self, description: str | None = None) -> Text:
         """
         One line naming the axes mapped and how many points do it.
 
@@ -1300,9 +1301,9 @@ class OpticalPath(TimeRangedModel):
         """
         return tuple(sorted(value, key=lambda x: x.interval))
 
-    def _repr_line(self) -> Text:
+    def _repr_line(self, description: str | None = None) -> Text:
         """One line naming the path, its extent, and its track sizes."""
-        return _distance_line(self)
+        return _distance_line(self, description=description)
 
     @property
     def optical_length(self) -> float:
@@ -1832,9 +1833,11 @@ class FiberArray(TimeRangedModel):
         default=(), description="Optical paths associated with this fiber array."
     )
 
-    def _repr_line(self) -> Text:
+    def _repr_line(self, description: str | None = None) -> Text:
         """One line naming the array, without the things it holds."""
-        return model_to_line(self, skip=("acquisitions", "optical_paths"))
+        return model_to_line(
+            self, skip=("acquisitions", "optical_paths"), description=description
+        )
 
     def _repr_children(self) -> tuple[InventoryModel, ...]:
         """What an array holds, each of which prints itself."""
@@ -1893,9 +1896,11 @@ class Network(TimeRangedModel):
         default=(), description="Stations in this network."
     )
 
-    def _repr_line(self) -> Text:
+    def _repr_line(self, description: str | None = None) -> Text:
         """One line naming the network, without the things it holds."""
-        return model_to_line(self, skip=("fiber_arrays", "stations"))
+        return model_to_line(
+            self, skip=("fiber_arrays", "stations"), description=description
+        )
 
     def _repr_children(self) -> tuple[InventoryModel, ...]:
         """What a network holds, each of which prints itself."""
