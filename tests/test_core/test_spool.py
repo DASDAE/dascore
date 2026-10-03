@@ -353,6 +353,19 @@ class TestGetLazyPatch:
         assert lazy.coords == spool[0].coords
         assert np.array_equal(np.asarray(lazy.data), spool[0].data)
 
+    def test_imprecise_float_grid_raises(self):
+        """Float grids too far from zero for their step raise when read."""
+
+        def make(start):
+            time = 1_000_000_000 + (start + np.arange(2001)) * 0.1
+            data = np.zeros((3, 2001))
+            coords = {"distance": np.arange(3), "time": time}
+            return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+        spool = dc.spool([make(0), make(2001)]).chunk(time=None)
+        with pytest.raises(CoordMergeError, match="Source 1"):
+            np.asarray(spool.get_lazy_patch().data)
+
     def test_stale_first_source_raises(self, patches, monkeypatch):
         """A first source shorter than its index entry raises."""
         spool = dc.spool(patches).chunk(time=None)

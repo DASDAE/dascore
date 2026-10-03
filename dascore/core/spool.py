@@ -25,6 +25,7 @@ from dascore.constants import (
     numeric_types,
     timeable_types,
 )
+from dascore.core.coords import get_coord
 from dascore.exceptions import (
     CoordMergeError,
     InvalidSpoolError,
@@ -715,7 +716,10 @@ class DataFrameSpool(BaseSpool):
         shape = list(first.shape)
         shape[axis] = int(offsets[-1])
         data = _LazySourceArray(load, offsets, axis, tuple(shape), first.data)
-        coord = first.get_coord(dim).change_length(shape[axis])
+        # Built from start and step; change_length can fail for large origins.
+        old = first.get_coord(dim)
+        stop = old.min() + shape[axis] * old.step
+        coord = get_coord(start=old.min(), stop=stop, step=old.step, units=old.units)
         return first.new(data=data, coords=first.coords.update(**{dim: coord}))
 
     def _get_lazy_source_samples(self, joined, dim, first):
