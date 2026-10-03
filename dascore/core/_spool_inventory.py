@@ -1059,7 +1059,10 @@ def _epoch_changes(resolved: list, boundaries) -> RowEpochs:
             return RowEpochs(tuple(cuts), boundary, resolved[0])
         if not _same(previous.optical_path, current.optical_path):
             cuts.append(boundary)
-    return RowEpochs(tuple(cuts), None, resolved[0])
+    # A row reaching outside its path's epochs is undescribed, as one reaching
+    # outside its acquisition's is; a pathless acquisition still describes it.
+    pathed = {x.optical_path is None for x in resolved}
+    return RowEpochs(tuple(cuts), None, None if len(pathed) > 1 else resolved[0])
 
 
 # A cache miss, told apart from a cached None (the inventory saying nothing).

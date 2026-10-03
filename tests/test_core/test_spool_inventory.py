@@ -2341,27 +2341,36 @@ class TestConformPartialCoverage:
         with pytest.raises(UnresolvedPatchError, match="does not describe"):
             spool.conform_to_inventory()
 
-    def test_a_path_which_lapses_divides_the_patch(
+    def test_a_row_reaching_past_its_path_is_undescribed(
         self, patch, inventory, off_grid_boundary
     ):
         """
-        A lapsed optical path splits a patch into two described pieces.
+        A path lapsing mid-patch leaves the row undescribed, as an acquisition does.
 
-        An acquisition remains described without a path; a lapsed acquisition instead
-        makes the row unresolved.
+        Cutting off the pathless tail would hand back a piece no path describes.
         """
+        lapsed = _replace_path(inventory, time_max=off_grid_boundary)
+        spool = dc.spool(patch).attach_inventory(lapsed)
+        assert len(spool.conform_to_inventory(on_unresolved="ignore")) == 0
+        with pytest.warns(UserWarning, match="does not describe"):
+            assert len(spool.conform_to_inventory(on_unresolved="warn")) == 0
+        with pytest.raises(UnresolvedPatchError, match="does not describe"):
+            spool.conform_to_inventory()
+
+    def test_a_path_ending_on_the_last_sample_misses_it(self, patch, inventory):
+        """Epochs are half-open, so a path ending at the last sample leaves it out."""
+        time = patch.get_coord("time")
+        lapsed = _replace_path(inventory, time_max=time.max())
+        spool = dc.spool(patch).attach_inventory(lapsed)
+        with pytest.raises(UnresolvedPatchError, match="does not describe"):
+            spool.conform_to_inventory()
+
+    def test_a_pathless_acquisition_still_conforms(self, patch, inventory):
+        """An acquisition with no path at all describes the patch by itself."""
         array = inventory.networks[0].fiber_arrays[0]
-        lapsed = inventory.replace(
-            array,
-            array.new(
-                optical_paths=(array.optical_paths[0].new(time_max=off_grid_boundary),)
-            ),
-        ).check()
-        out = dc.spool(patch).attach_inventory(lapsed).conform_to_inventory()
-        assert len(out) == 2
-        first, second = out.enrich(coords=True)
-        assert "zone" in first.coords.coord_map
-        assert "zone" not in second.coords.coord_map
+        pathless = inventory.replace(array, array.new(optical_paths=()))
+        out = dc.spool(patch).attach_inventory(pathless).conform_to_inventory()
+        assert len(out) == 1
 
     def test_many_undescribed_patches_are_summarized(self, patch, inventory):
         """Naming every file of a mismatched archive helps nobody."""

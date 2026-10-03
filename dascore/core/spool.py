@@ -1370,7 +1370,9 @@ class Spool(NodeRepr, NamespaceOwner):
             outside every matching epoch, or one with no instants to
             resolve at because its time axis is not physical. A patch is
             judged over its whole span, so one described at its start but
-            not at its end is undescribed. "raise" (the default)
+            not at its end is undescribed. That includes an optical path
+            lapsing partway, unless the acquisition has no path at all.
+            "raise" (the default)
             fails and names them, "warn" drops them and says so, and
             "ignore" discards them silently, which is what an inventory
             deliberately covering part of an archive wants.

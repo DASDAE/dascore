@@ -206,7 +206,7 @@ assert len(conformed) == 1
 assert conformed[0].attrs.acquisition_key == "DAS.R2D1..RAW"
 ```
 
-Subdivision preserves every sample exactly once. Use `on_unresolved="warn"` or `"ignore"` when an inventory intentionally covers only part of an archive.
+Subdivision preserves every sample exactly once. A patch reaching past every epoch of its acquisition, or past its optical path's epochs, is unresolved as a whole rather than cut. Use `on_unresolved="warn"` or `"ignore"` when an inventory intentionally covers only part of an archive.
 
 Conforming raises when one patch straddles an acquisition change, since a patch cannot carry two acquisition configurations. This is why attachment remains inert: conforming can remove, split, or reject data and must be requested explicitly.
 
