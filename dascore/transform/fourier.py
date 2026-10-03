@@ -8,6 +8,7 @@ implementation.
 from __future__ import annotations
 
 from collections.abc import Mapping
+from importlib import import_module
 from math import prod
 from operator import mul, truediv
 from typing import Any
@@ -381,11 +382,14 @@ class Dft(PatchProcessor):
         )
         out = padded.new(coords=new_coords, attrs=attrs)
         axes = tuple(int(x) for x in axes)
-        plan |= {"axes": axes, "real": real is not None, "step": np.prod(dxs)}
+        step = np.prod(dxs)
+        plan |= {"axes": axes, "real": real is not None, "step": step}
+        # Complex, then promoted by the step it is scaled by.
+        dtype = _result_dtype(meta.dtype, np.complex64, step)
         if output_type == "FFT":
-            return out, plan
+            return out.new(dtype=dtype), plan
         out, spectral = _spectral_amplitude_plan(out, output_type, dims, self.db)
-        return out, plan | spectral
+        return out.new(dtype=_result_dtype(dtype, real=True)), plan | spectral
 
     def kernel(self, data, **plan):
         """Return the transform on the data's backend, cast as numpy would cast it."""
@@ -569,6 +573,9 @@ class Idft(PatchProcessor):
         sizes = None if sizes is None else tuple(int(x) for x in sizes)
         axes = tuple(int(x) for x in axes)
         plan = {"axes": axes, "real": real, "step": step, "sizes": sizes}
+        # Divided by the step, then made complex unless there is nothing to invert.
+        dtype = _result_dtype(meta.dtype, step, *([np.complex64] if axes else []))
+        out = out.new(dtype=_result_dtype(dtype, real=real))
         return out, plan | {"indexer": indexer}
 
     def kernel(self, data, *, axes, real, step, sizes, indexer):
@@ -809,7 +816,12 @@ class Stft(PatchProcessor):
         )
         cycles = [values * step for values, step in zip(freqs, steps)]
         plan |= {"nffts": nffts, "steps": steps, "cycles": cycles, "real": real}
-        return meta.new(coords=cm, attrs=attrs), plan
+        # scipy's detrend computes in double unless the data are single or double.
+        tiles = meta.dtype
+        if self.detrend and _as_numpy_dtype(tiles).char not in "fdFD":
+            tiles = np.dtype(np.float64)
+        dtype = _result_dtype(tiles, np.complex64, like=meta.dtype)
+        return meta.new(coords=cm, attrs=attrs, dtype=dtype), plan
 
     def numpy_kernel(self, data, *, axes, size, stride, nffts, steps, cycles, real):
         """Return each window's spectrum, its phase referred to the centre."""
@@ -908,6 +920,8 @@ class Istft(PatchProcessor):
             data_type=data_type or "",
             data_units=_get_data_units_from_dims(meta, dims, truediv),
         )
+        dtype = _result_dtype(meta.dtype, np.complex64)
+        out = out.new(dtype=_result_dtype(dtype, real=bool(real)))
         return out, plan | {
             "centres": tuple(meta.get_axis(dim) for dim in dims),
             "swap": tuple(base_dims.index(ft_dim) for ft_dim in ft_dims),
@@ -956,3 +970,26 @@ def _stft_dims(patch) -> list[str]:
 def _is_complex(dtype) -> bool:
     """Whether a dtype, numpy's or another backend's, is complex."""
     return str(dtype).rsplit(".", 1)[-1].startswith("complex")
+
+
+def _as_numpy_dtype(dtype) -> np.dtype:
+    """Return numpy's dtype of the name a dtype, numpy's or another backend's, has."""
+    return np.dtype(str(dtype).rsplit(".", 1)[-1])
+
+
+def _result_dtype(dtype, *promote, real: bool = False, like=None):
+    """
+    Return the dtype a transform's kernel gives `dtype` data, in their backend.
+
+    `promote` is what numpy promotes the data with; `real` takes the real
+    counterpart, as an amplitude or an inverse real FFT does. `like` is a
+    dtype of the backend the result is spelt in, `dtype` by default.
+    """
+    like = dtype if like is None else like
+    out = np.result_type(_as_numpy_dtype(dtype), *promote)
+    if real and out.kind == "c":
+        out = np.finfo(out).dtype
+    if isinstance(like, np.dtype):
+        return out
+    # Another backend's dtypes are named as numpy's are, in its own package.
+    return getattr(import_module(type(like).__module__.split(".")[0]), out.name)

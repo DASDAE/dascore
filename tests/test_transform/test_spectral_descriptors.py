@@ -521,6 +521,32 @@ class TestSpectralProcessors:
         assert plan["axis"] == 1 and len(plan["keep"]) == 81
         assert plan["freqs"][0] == 0 and plan["freqs"][-1] == 10
 
+    @pytest.mark.parametrize("dtype", ["float32", "float64", "longdouble"])
+    @pytest.mark.parametrize("output", ["FFT", "AS"])
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "SpectralCentroid",
+            "MedianFrequency",
+            "SpectralPeakFrequency",
+            "SpectralPeakAmplitude",
+            "SpectralEntropy",
+            "SpectralKurtosis",
+            "SpectralFlatness",
+        ],
+    )
+    def test_metadata_dtype_is_the_kernels(self, dtype, output, name):
+        """Metadata states the dtype each descriptor's data come out in."""
+        patch = dc.get_example_patch("random_das", shape=(3, 128))
+        patch = patch.new(data=np.asarray(patch.data, dtype))
+        if output == "FFT":
+            spectra = patch.stft(time=64, samples=True)
+        else:
+            spectra = patch.dft("time", real=True, output=output)
+        processor = getattr(spectral_descriptors, name)("time")
+        meta = processor.get_metadata(spectra.drop_data())[0]
+        assert meta.dtype == processor.run(spectra).dtype
+
     def test_entropy_unnormalized(self, sine_dft):
         """Without normalizing, entropy is in bits, not a fraction of the most."""
         normalized = sine_dft.spectral_entropy(negative_frequencies="drop")

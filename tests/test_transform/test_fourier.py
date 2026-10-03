@@ -18,11 +18,28 @@ import dascore.proc.coords
 from dascore.compat import random_state
 from dascore.exceptions import ParameterError, PatchError
 from dascore.transform.fourier import Dft, Idft, Istft, Stft, dft, idft
+from dascore.transform.spectral_descriptors import SpectralCentroid
 from dascore.units import get_quantity, get_quantity_str, percent, second
 from dascore.utils.misc import iterate
+from dascore.warnings import NumpyFallbackWarning
 
 F_0 = 2
 seconds = get_quantity("seconds")
+# Every dtype a patch may hold numbers in, wider ones where the platform has them.
+DTYPES = (
+    "bool",
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "float16",
+    "float32",
+    "float64",
+    "complex64",
+    "complex128",
+    "longdouble",
+    "clongdouble",
+)
 
 
 @pytest.fixture(scope="session")
@@ -1031,6 +1048,55 @@ class TestFourierProcessors:
         expected = np.fft.fftshift(np.fft.fftn(patch.data, axes=(1,)) * step, axes=1)
         assert out.data.dtype == expected.dtype
         assert np.array_equal(out.data, expected)
+
+    @pytest.mark.parametrize("dtype", DTYPES)
+    @pytest.mark.parametrize(
+        "steps",
+        [
+            ((Dft, dict(dim="time")),),
+            ((Dft, dict(dim="time", real=True, pad=False)),),
+            ((Dft, dict(dim=None, output="AS")),),
+            ((Dft, dict(dim="time", real=True, output="PSD", db=True)),),
+            ((Dft, dict(dim="time")), (Idft, {})),
+            ((Dft, dict(dim="time", real=True)), (Idft, {})),
+            ((Idft, {}),),
+            ((Stft, dict(time=64, samples=True)),),
+            ((Stft, dict(time=64, distance=16, samples=True, detrend=True)),),
+            ((Stft, dict(time=64, samples=True)), (Istft, {})),
+        ],
+    )
+    def test_metadata_dtype_is_the_kernels(self, random_patch, dtype, steps):
+        """Metadata states the dtype the transform's data come out in."""
+        data = np.asarray(random_patch.data[:20, :256]).astype(dtype)
+        patch = random_patch.isel(distance=slice(0, 20), time=slice(0, 256))
+        patch = patch.new(data=data)
+        meta = patch.drop_data()
+        for cls, kwargs in steps:
+            if kwargs.get("real") and np.dtype(dtype).kind == "c":
+                pytest.skip("A real FFT refuses complex data.")
+            processor = cls(**kwargs)
+            patch, meta = processor.run(patch), processor.get_metadata(meta)[0]
+        assert meta.dtype == patch.dtype
+
+    def test_metadata_dtype_on_another_backend(self, random_patch):
+        """Another backend's metadata states its own dtype, as its data have it."""
+        xps = pytest.importorskip("array_api_strict")
+        data = xps.asarray(np.asarray(random_patch.data, np.float32))
+        patch = random_patch.new(data=data)
+        amplitude = Dft("time", output="AS")
+        meta = amplitude.get_metadata(patch.drop_data())[0]
+        assert meta.dtype == amplitude.run(patch).dtype
+        stft = Stft(time=64, samples=True)
+        with pytest.warns(NumpyFallbackWarning, match="stft"):
+            out = stft.run(patch)
+        assert stft.get_metadata(patch.drop_data())[0].dtype == out.dtype
+
+    def test_dft_metadata_composes(self, random_patch):
+        """A descriptor reads the spectrum dft would make from metadata alone."""
+        meta = Dft("time").get_metadata(random_patch.drop_data())[0]
+        out = SpectralCentroid("time").get_metadata(meta)[0]
+        expected = random_patch.dft("time").spectral_centroid("time").drop_data()
+        assert out.equals(expected)
 
     def test_amplitude_on_bare_coords(self):
         """Without coordinate units, AS does not fold in a data unit scale."""

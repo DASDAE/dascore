@@ -14,7 +14,12 @@ import numpy as np
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.processor import PatchProcessor
-from dascore.transform.fourier import DFT_OUTPUT_DATA_TYPE_MAP, _is_complex
+from dascore.transform.fourier import (
+    DFT_OUTPUT_DATA_TYPE_MAP,
+    _as_numpy_dtype,
+    _is_complex,
+    _result_dtype,
+)
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import broadcast_for_index
 
@@ -343,7 +348,10 @@ class _SpectralDescriptor(PatchProcessor):
         attrs = meta.attrs.drop(*obsolete).update(
             data_type=self.label, data_units=units
         )
-        out = meta.new(coords=coords, attrs=attrs)
+        # The power is the coefficients' squared magnitude, else the data as float.
+        power = _as_numpy_dtype(meta.dtype) if fmt == "fft" else np.dtype(np.float64)
+        dtype = _result_dtype(self.result_dtype(np.finfo(power).dtype), like=meta.dtype)
+        out = meta.new(coords=coords, attrs=attrs, dtype=dtype)
         axis = meta.dims.index(freq_dim)
         return out, plan | {"axis": axis, "fmt": _FORMATS.index(fmt)}
 
@@ -370,6 +378,10 @@ class _SpectralDescriptor(PatchProcessor):
 
     def describe(self, power: np.ndarray, freqs: np.ndarray, axis: int) -> Any:
         """Return the descriptor of linear power along an axis; each class's own."""
+
+    def result_dtype(self, power: np.dtype) -> np.dtype:
+        """Return the dtype `describe` returns for power of dtype `power`."""
+        return np.dtype(np.float64)
 
 
 class _SharedFields(_SpectralDescriptor):
@@ -577,6 +589,10 @@ class SpectralPeakAmplitude(_SharedFields):
 
     label = "Maximum Spectral Amplitude"
 
+    def result_dtype(self, power):
+        """Return the power's own dtype."""
+        return power
+
     def units(self, meta, freq_dim, fmt):
         """Return the amplitude's units: a power's square root."""
         data_units = meta.attrs.get("data_units")
@@ -623,6 +639,10 @@ class SpectralEntropy(_SpectralDescriptor):
     negative_frequencies: Any = "auto"
 
     label = "Spectral Entropy"
+
+    def result_dtype(self, power):
+        """Return the power's dtype, at least double."""
+        return np.result_type(power, np.float64)
 
     def units(self, meta, freq_dim, fmt):
         """Return no units: entropy, in bits or normalized to [0, 1], is unitless."""
@@ -674,6 +694,10 @@ class SpectralKurtosis(_SharedFields):
     """
 
     label = "Spectral Kurtosis"
+
+    def result_dtype(self, power):
+        """Return the power's dtype, at least double."""
+        return np.result_type(power, np.float64)
 
     def units(self, meta, freq_dim, fmt):
         """Return no units: kurtosis is a ratio."""
@@ -737,6 +761,10 @@ class SpectralFlatness(_SharedFields):
     """
 
     label = "Spectral Flatness"
+
+    def result_dtype(self, power):
+        """Return the power's own dtype."""
+        return power
 
     def units(self, meta, freq_dim, fmt):
         """Return no units: flatness is a ratio."""
