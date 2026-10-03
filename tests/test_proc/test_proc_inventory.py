@@ -656,6 +656,18 @@ class TestCoords:
         out = held.enrich(inventory, attrs=False, coords=("coupling.medium",))
         assert np.array_equal(out.get_coord("coupling.medium").values, own)
 
+    def test_wholly_uncovered_patch_keeps_its_coord(self, patch, inventory):
+        """An inventory stating nothing for any channel leaves the coord alone."""
+        name = "coupling.medium"
+        projected = patch.enrich(inventory, attrs=False, coords=(name,))
+        unset = projected.get_coord(name).values == ""
+        assert unset.any() and not unset.all()
+        outside = patch.select(distance=unset)
+        own = np.full(len(outside.get_coord("distance")), "soil")
+        held = outside.update_coords(**{name: ("distance", own)})
+        out = held.enrich(inventory, attrs=False, coords=(name,))
+        assert out.get_coord(name) == held.get_coord(name)
+
     def test_unset_patch_channels_are_filled(self, patch, inventory):
         """The inventory fills the channels the patch leaves unset."""
         full = patch.enrich(inventory, attrs=False, coords=("x",)).get_coord("x")
@@ -666,6 +678,14 @@ class TestCoords:
         )
         out = held.enrich(inventory, attrs=False, coords=("x",))
         assert np.array_equal(out.get_coord("x").values, full.values, equal_nan=True)
+
+    def test_unitless_unset_patch_coord_is_replaced(self, patch, inventory):
+        """A patch coordinate with every channel unset takes the inventory's."""
+        full = patch.enrich(inventory, attrs=False, coords=("x",)).get_coord("x")
+        assert full.units is not None
+        held = patch.update_coords(x=("distance", np.full(len(full), np.nan)))
+        out = held.enrich(inventory, attrs=False, coords=("x",))
+        assert out.get_coord("x") == full
 
     def test_object_strings_with_gaps_are_filled(self, patch, inventory):
         """A string coordinate held as objects with None gaps still merges."""

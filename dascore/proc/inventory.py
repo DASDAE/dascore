@@ -360,8 +360,9 @@ def _merge_coord(existing, values):
     re-enriching is a refresh rather than a collision.
     """
     other = values if isinstance(values, BaseCoord) else get_coord(data=values)
-    if existing.shape != other.shape:
-        return None
+    # The caller merges only a coordinate on the channel dimension, and the
+    # inventory projects one value per channel.
+    assert existing.shape == other.shape, "merged coordinates differ in shape"
     first, second = existing.values, other.values
     unset_first, unset_second = _unstated(first), _unstated(second)
     if unset_second.all():
@@ -422,7 +423,7 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
             raise PatchError(msg)
         existing = patch.coords.coord_map.get(name)
         values = None
-        if path is not None:
+        if channel is not None:
             values = get_coord_values(inventory, path, name, channel[2])
         if values is None:
             # A blanket request asks for the names the path itself lists,
@@ -434,7 +435,9 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
                 continue
             if existing is not None:
                 continue  # no answer leaves the patch's coordinate standing
-            channel = channel or _get_channel_distances(patch, context.acquisition)
+        # Only a null fill without a path gets here unmapped.
+        channel = channel or _get_channel_distances(patch, context.acquisition)
+        if values is None:
             values = np.full(len(channel[2]), np.nan)
         elif existing is not None:
             # A coordinate on another dimension describes other samples,
