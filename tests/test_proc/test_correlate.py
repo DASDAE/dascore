@@ -291,6 +291,20 @@ class TestCorrelateShiftProcessor:
         """float32 data stay float32 when divided by the step, or not."""
         single = random_patch.new(data=random_patch.data.astype(np.float32))
         out = single.correlate_shift("time", undo_weighting=undo_weighting)
-        meta = dc.proc.CorrelateShift("time", undo_weighting=undo_weighting)
         assert out.dtype == np.float32
-        assert meta.get_metadata(single.drop_data())[0].dtype == np.float32
+
+    @pytest.mark.parametrize("undo_weighting", (True, False))
+    @pytest.mark.parametrize(
+        "dtype", ("bool", "int16", "float16", "float32", "float64")
+    )
+    def test_metadata_dtype_is_the_kernels(self, random_patch, dtype, undo_weighting):
+        """Metadata states the dtype the shifted data come out in."""
+        patch = random_patch.new(data=random_patch.data.astype(dtype))
+        shift = dc.proc.CorrelateShift("time", undo_weighting=undo_weighting)
+        meta = shift.get_metadata(patch.drop_data())[0]
+        assert meta.dtype == shift.run(patch).dtype
+
+    def test_half_precision_does_not_overflow(self, random_patch):
+        """Half precision is divided by a fine step without overflowing."""
+        half = random_patch.new(data=np.full(random_patch.shape, 1000, np.float16))
+        assert np.all(np.isfinite(half.correlate_shift("time").data))

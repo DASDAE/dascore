@@ -10,6 +10,7 @@ import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
+from dascore.transform.fourier import _operand, _result_dtype
 from dascore.utils.array_api import array_namespace
 from dascore.utils.patch import (
     get_dim_axis_value,
@@ -98,9 +99,12 @@ class CorrelateShift(PatchProcessor):
         new_cm = cm._update_grid(dim, **{dim: new_coord}).rename_coord(
             **{dim: f"lag_{dim}"}
         )
-        # A python float divides single precision without widening it.
-        weight = float(to_float(step)) if self.undo_weighting else None
-        return meta.new(coords=new_cm), {"axis": axis, "step": weight}
+        out = meta.new(coords=new_cm)
+        if not self.undo_weighting:
+            return out, {"axis": axis, "step": None}
+        weight = _operand(to_float(step), meta.dtype)
+        dtype = _result_dtype(meta.dtype, weight)
+        return out.new(dtype=dtype), {"axis": axis, "step": weight}
 
     def kernel(self, data, *, axis, step):
         """Return the data shifted so zero lag is central, divided by the step."""
@@ -112,7 +116,10 @@ class CorrelateShift(PatchProcessor):
         if not xp.isdtype(data.dtype, ("real floating", "complex floating")):
             # numpy promotes integers to float64 here; some backends refuse to.
             data = xp.astype(data, xp.float64)
-        return data / step
+        # Divide by the step as a 0-d array: like a numpy scalar, and unlike
+        # a python float, it sets the result's dtype, and every backend
+        # accepts it.
+        return data / (xp.asarray(step) if isinstance(step, np.generic) else step)
 
 
 @patch_function(data_type="correlation", version="1.2")

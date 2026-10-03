@@ -29,7 +29,7 @@ from dascore.proc.basic import Pad, _pad_array
 from dascore.proc.tile_apply import Reassemble, TileApply
 from dascore.proc.units import _replace_data_units
 from dascore.units import Quantity, _quantities_equal, invert_quantity, percent
-from dascore.utils.array_api import array_namespace
+from dascore.utils.array_api import array_namespace, asarray_like
 from dascore.utils.imports import lazy_import
 from dascore.utils.misc import iterate
 from dascore.utils.patch import (
@@ -221,9 +221,8 @@ def _spectral_amplitude_plan(meta, output, dims, db):
     extent = extent.magnitude if has_quantity else extent
     if (output == "AS" and not has_quantity) or scale == 1:
         scale = None
-    # Python floats, which scale single precision without widening it.
-    scale = None if scale is None else float(scale)
-    divisor = float(extent * extent if output == "PS" else extent)
+    scale = None if scale is None else _operand(scale, meta.dtype)
+    divisor = _operand(extent * extent if output == "PS" else extent, meta.dtype)
     if db:
         data_units = _replace_data_units(meta.attrs, units.dB).data_units
     attrs = meta.attrs.update(
@@ -242,11 +241,12 @@ def _spectral_amplitude(data, xp, *, scale, square, divisor, db):
     """Return Fourier coefficients as amplitudes, powers or densities."""
     amp = xp.abs(data)
     if scale is not None:
-        amp = amp * scale
-    out = (amp * amp if square else amp) / divisor
+        amp = amp * _scalar(scale, amp)
+    out = (amp * amp if square else amp) / _scalar(divisor, amp)
     if db is None:
         return out
-    out = out + float(xp.finfo(out.dtype).eps)
+    # No higher a floor than double's, whatever the precision.
+    out = out + min(float(xp.finfo(out.dtype).eps), float(np.finfo(np.float64).eps))
     return db * xp.log10(out)
 
 
@@ -260,12 +260,36 @@ def _fft_input(data, xp, complex_input: bool):
     """
     if xp.isdtype(data.dtype, "complex floating"):
         return data
-    single = data.dtype == xp.float32
-    if complex_input:
-        return xp.astype(data, xp.complex64 if single else xp.complex128)
-    if xp.isdtype(data.dtype, "real floating"):
+    real = xp.isdtype(data.dtype, "real floating")
+    # Half precision is transformed in single, as numpy transforms it.
+    if real and xp.finfo(data.dtype).bits <= 32:
+        dtype = xp.complex64 if complex_input else xp.float32
+    elif complex_input:
+        dtype = xp.complex128
+    elif real:
         return data
-    return xp.astype(data, xp.float64)
+    else:
+        dtype = xp.float64
+    return data if data.dtype == dtype else xp.astype(data, dtype)
+
+
+def _scalar(value, like):
+    """Return a number as an operand `like` takes, with numpy's promotion."""
+    # A numpy scalar sets the result's dtype, as a 0-d array does, where a
+    # python number would not; some backends refuse numpy scalars outright.
+    return asarray_like(value, like) if isinstance(value, np.generic) else value
+
+
+def _operand(value, dtype) -> np.floating:
+    """
+    Return a number to scale data of `dtype` by, in the precision they keep.
+
+    Single, or narrower, data stay single; integers and wider data take
+    double, as they always have.
+    """
+    out = _as_numpy_dtype(dtype)
+    single = out.kind in "fc" and np.finfo(out).bits <= 32
+    return np.float32(value) if single else np.float64(value)
 
 
 class Dft(PatchProcessor):
@@ -380,11 +404,10 @@ class Dft(PatchProcessor):
         )
         out = padded.new(coords=new_coords, attrs=attrs)
         axes = tuple(int(x) for x in axes)
-        # A python float scales single precision without widening it.
-        step = float(np.prod(dxs))
+        step = _operand(np.prod(dxs), meta.dtype)
         plan |= {"axes": axes, "real": real is not None, "step": step}
-        # Integers are transformed as float64, then everything is complex.
-        dtype = _result_dtype(_result_dtype(meta.dtype, step), np.complex64)
+        # Complex, then promoted by the step it is scaled by.
+        dtype = _result_dtype(meta.dtype, np.complex64, step)
         if output_type == "FFT":
             return out.new(dtype=dtype), plan
         out, spectral = _spectral_amplitude_plan(out, output_type, dims, self.db)
@@ -411,7 +434,7 @@ def _dft_kernel(
     func = fft.rfftn if real else fft.fftn
     data = _fft_input(data, xp, not real) if cast else data
     # Scaled by the sample spacing (see the dft note), then centred.
-    data = func(data, axes=axes) * step
+    data = func(data, axes=axes) * _scalar(step, data)
     # The one-sided axis of a real transform is not centred.
     if shifted := (axes[:-1] if real else axes):
         data = fft.fftshift(data, axes=shifted)
@@ -564,7 +587,8 @@ class Idft(PatchProcessor):
         coords, sizes, padding = _get_idft_coords_and_sizes(
             meta, dims, new_dims, axes, real
         )
-        step = float(np.prod([to_float(coords.coord_map[x].step) for x in new_dims]))
+        step = np.prod([to_float(coords.coord_map[x].step) for x in new_dims])
+        step = _operand(step, meta.dtype)
         out = meta.new(attrs=_get_idft_attrs(meta, dims, coords), coords=coords)
         indexer = None
         if padding:
@@ -575,29 +599,29 @@ class Idft(PatchProcessor):
         axes = tuple(int(x) for x in axes)
         plan = {"axes": axes, "real": real, "step": step, "sizes": sizes}
         # Divided by the step, then made complex unless there is nothing to invert.
-        dtype = _result_dtype(meta.dtype, step)
-        dtype = _result_dtype(dtype, np.complex64) if axes else dtype
+        dtype = _result_dtype(meta.dtype, step, *([np.complex64] if axes else []))
         out = out.new(dtype=_result_dtype(dtype, real=real))
         return out, plan | {"indexer": indexer}
 
     def kernel(self, data, **plan):
         """Return the inverse transform, trimmed of the padding dft added."""
         xp = array_namespace(data)
-        return _idft_kernel(data, xp, xp.fft, **plan)
+        return _idft_kernel(data, xp, xp.fft, cast=True, **plan)
 
     def numpy_kernel(self, data, **plan):
-        """As `kernel`, with scipy's transforms, which keep single precision."""
-        return _idft_kernel(data, array_namespace(data), sft, **plan)
+        """As `kernel`, with scipy's transforms, which cast as numpy does."""
+        return _idft_kernel(data, array_namespace(data), sft, cast=False, **plan)
 
 
-def _idft_kernel(data, xp, fft, *, axes, real, step, sizes, indexer):
+def _idft_kernel(data, xp, fft, *, cast, axes, real, step, sizes, indexer):
     """Return the unscaled, uncentred inverse transform, trimmed of padding."""
-    data = data / step
+    data = data / _scalar(step, data)
     if shifted := (axes[:-1] if real else axes):
         data = fft.ifftshift(data, axes=shifted)
     func = fft.irfftn if real else fft.ifftn
     # Along no axes numpy hands the data back as they are.
-    data = func(_fft_input(data, xp, True) if axes else data, s=sizes, axes=axes)
+    data = _fft_input(data, xp, True) if cast and axes else data
+    data = func(data, s=sizes, axes=axes)
     return data if indexer is None else data[indexer]
 
 

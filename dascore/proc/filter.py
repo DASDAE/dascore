@@ -538,7 +538,7 @@ class GaussianFilter(_WindowFilter):
         )
 
 
-@patch_function()
+@patch_function(version="1.1")
 def slope_filter(
     patch: PatchType,
     filt: Sequence[float],
