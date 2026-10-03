@@ -32,7 +32,6 @@ from typing import (
     get_args,
     get_origin,
 )
-from uuid import uuid4
 
 import numpy as np
 from pydantic import (
@@ -69,6 +68,7 @@ from dascore.utils.documents import (
     parse_document,
     write_text_document,
 )
+from dascore.utils.identity import H, _encode_model
 from dascore.utils.intervals import (
     clip_intervals,
     interval_masks,
@@ -121,14 +121,6 @@ Azimuth = Annotated[float, Field(ge=0, lt=360, allow_inf_nan=False)]
 Dip = Annotated[float, Field(ge=-90, le=90, allow_inf_nan=False)]
 LocationCodeStr = Annotated[
     str, AfterValidator(lambda value: check_code(value, allow_blank=True))
-]
-# Stable identifier for a shareable inventory resource.
-ResourceIdStr = Annotated[
-    str,
-    Field(
-        default_factory=lambda: str(uuid4()),
-        description="Stable identifier for this shareable inventory resource.",
-    ),
 ]
 
 
@@ -278,16 +270,37 @@ class CoordinateReferenceSystem(InventoryModel):
         raise InvalidInventoryError(msg)
 
 
-class ExternalResource(InventoryModel):
+class _PooledResource(InventoryModel):
+    """Base of the shareable resources an inventory pools by resource_id."""
+
+    resource_id: str = Field(
+        default="",
+        description=(
+            "Stable identifier for this shareable inventory resource; "
+            "hashed from its content when unstated."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _name_by_content(self) -> Self:
+        """Name an unnamed resource by hashing its content, so every reload agrees."""
+        if not self.resource_id:
+            rid = H("inventory_resource", _encode_model(self), encoded=True)
+            # As in Inventory._normalize_resources: the model is frozen.
+            object.__setattr__(self, "resource_id", rid)
+            self.__pydantic_fields_set__.add("resource_id")
+        return self
+
+
+class ExternalResource(_PooledResource):
     """External resource identified but not otherwise modeled by DASCore."""
 
     object_type: Literal["ExternalResource"] = _object_type_tag("ExternalResource")
-    resource_id: ResourceIdStr
     uri: str = Field(default="", description="URI or identifier for the resource.")
     name: str = Field(default="", description="Human-readable resource name.")
 
 
-class OpticalMeasurement(InventoryModel):
+class OpticalMeasurement(_PooledResource):
     """
     A characterization of the optical path or its components.
 
@@ -298,7 +311,6 @@ class OpticalMeasurement(InventoryModel):
     """
 
     object_type: Literal["OpticalMeasurement"] = _object_type_tag("OpticalMeasurement")
-    resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable measurement name.")
     method: str = Field(
         default="",
@@ -325,11 +337,10 @@ class OpticalMeasurement(InventoryModel):
     )
 
 
-class Interrogator(InventoryModel):
+class Interrogator(_PooledResource):
     """DFOS interrogator unit used for data collection."""
 
     object_type: Literal["Interrogator"] = _object_type_tag("Interrogator")
-    resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable resource name.")
     manufacturer: str = Field(default="", description="Manufacturer name.")
     model: str = Field(default="", description="Model number.")
@@ -337,11 +348,10 @@ class Interrogator(InventoryModel):
     instrument_type: str = Field(default="", description="General instrument category.")
 
 
-class Enclosure(InventoryModel):
+class Enclosure(_PooledResource):
     """Physical housing, pipe, duct, conduit, or carrier resource."""
 
     object_type: Literal["Enclosure"] = _object_type_tag("Enclosure")
-    resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable resource name.")
     enclosure_type: str = Field(
         default="",
@@ -362,11 +372,10 @@ class Enclosure(InventoryModel):
     )
 
 
-class Cable(InventoryModel):
+class Cable(_PooledResource):
     """Physical cable containing one or more fiber segments."""
 
     object_type: Literal["Cable"] = _object_type_tag("Cable")
-    resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable resource name.")
     manufacturer: str = Field(default="", description="Manufacturer name.")
     model: str = Field(default="", description="Model name.")
@@ -2130,7 +2139,9 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
             return out
         out = {}
         for resource in value:
-            if resource.resource_id in out:
+            # Equal copies are one resource, as inline definitions are; two
+            # unnamed resources with equal content are named alike.
+            if out.get(resource.resource_id, resource) != resource:
                 msg = f"Duplicate resource_id {resource.resource_id!r}."
                 raise InvalidInventoryError(msg)
             out[resource.resource_id] = resource

@@ -12,7 +12,7 @@ DASCore names things three ways, and the suffix says which.
 
 Two indexes over the same files agree on every `_id` and `_key`, and on no `_row`. A key may be hashed into an ID; a row never is.
 
-Three names sit outside the table. Inventory `resource_id` values are UUID labels for shareable objects, and `acquisition_key` is the inventory identity which joins a patch to them. The frame columns `output_id` (chunk plans) and `group_id` (gap reports) predate the rule: they are ordinal numbers, not identities.
+Three names sit outside the table. Inventory `resource_id` values label shareable objects; the author states them, or DASCore hashes one from the object's content. `acquisition_key` is the inventory identity which joins a patch to those objects. The frame columns `output_id` (chunk plans) and `group_id` (gap reports) predate the rule: they are ordinal numbers, not identities.
 
 ## The three identities
 

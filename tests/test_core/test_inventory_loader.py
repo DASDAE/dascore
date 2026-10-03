@@ -211,7 +211,13 @@ class TestLoadDirectory:
 
     def test_reload_is_the_same_inventory(self, tmp_path):
         """Two loads of one directory are equal and serialize alike (#1375)."""
-        root = write_inventory(tmp_path / "inventory", PATH_DIRECTORY)
+        # An inline resource stating no resource_id is named by its content.
+        acquisition = (
+            "object_type: Acquisition\ndata_category: DAS\n"
+            "interrogator: {object_type: Interrogator, model: FI-1}\n"
+        )
+        files = {**PATH_DIRECTORY, "acquisitions/DAS.L001..RAW.yaml": acquisition}
+        root = write_inventory(tmp_path / "inventory", files)
         first, second = dc.inventory(root), dc.inventory(root)
         assert first == second
         assert hash(first) == hash(second)
