@@ -244,8 +244,8 @@ class TestRefusedBound:
         bound = self._refused_bound(terra15_patch)
         with pytest.warns(DASCoreWarning, match="No id could be derived"):
             first = dc.read(terra15_path, distance=bound)[0]
-        with pytest.warns(DASCoreWarning, match="No id could be derived"):
-            second = dc.read(terra15_path, distance=bound)[0]
+        # The same refusal again is not repeated.
+        second = dc.read(terra15_path, distance=bound)[0]
         assert first.shape != terra15_patch.shape
         # Nothing names the array, so the two reads are two arrays.
         assert first.attrs.data_id not in ("", terra15_patch.attrs.data_id)
