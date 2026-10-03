@@ -64,6 +64,9 @@ from dascore.exceptions import (
 )
 from dascore.units import cm, get_quantity, m
 
+# What the warning for a patch no single inventory context describes says.
+UNJUDGED_MATCH = "resolve to no single inventory context.*conform_to_inventory"
+
 
 @pytest.fixture(scope="module")
 def pair():
@@ -1078,7 +1081,7 @@ class TestInventorySelect:
         A patch described twice has no single answer, so it matches neither.
 
         Subdividing it is `conform_to_inventory`'s job; until it runs, a
-        straddling patch is one the selection cannot speak for.
+        straddling patch is one the selection cannot speak for, and says so.
         """
         old = inventory.networks[0].fiber_arrays[0]
         acq = old.acquisitions[0]
@@ -1094,8 +1097,9 @@ class TestInventorySelect:
             ),
         )
         spool = dc.spool([patch]).attach_inventory(split)
-        assert len(spool.select(gauge_length=10.0)) == 0
-        assert len(spool.select(gauge_length=20.0)) == 0
+        for value in (10.0, 20.0):
+            with pytest.warns(UserWarning, match=UNJUDGED_MATCH):
+                assert len(spool.select(gauge_length=value)) == 0
 
     def test_empty_spool(self, inventory):
         """Nothing to select from stays nothing."""
@@ -1433,14 +1437,15 @@ class TestInventoryUnselect:
 
     def test_undescribed_patch_is_kept(self, patch, inventory):
         """
-        Silently not matching means silently not being removed.
+        Not matching means not being removed.
 
         Unselect is the complement of a filter, so a patch the inventory
         cannot speak for stays for the same reason it is never selected.
         """
         other = patch.update_attrs(tag="other", acquisition_key="DAS.R2D1..OTHER")
         spool = dc.spool([patch, other]).attach_inventory(inventory)
-        out = spool.unselect(gauge_length=10.0)
+        with pytest.warns(UserWarning, match=UNJUDGED_MATCH):
+            out = spool.unselect(gauge_length=10.0)
         assert out.get_contents()["tag"].tolist() == ["other"]
 
     def test_stated_value_wins(self, patch, inventory):
@@ -2562,27 +2567,61 @@ class TestChannelSelect:
         spool = dc.spool(patch).attach_inventory(inventory)
         assert len(spool.select(coupling="cement")) == 0
 
-    def test_an_undescribed_patch_is_silently_not_selected(self, patch, inventory):
-        """The one agreed exception to loud-by-default."""
+    def test_an_undescribed_patch_is_not_selected(self, patch, inventory):
+        """A patch the inventory does not describe is dropped, and counted."""
         other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
         spool = dc.spool([patch, other]).attach_inventory(inventory)
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
+        with pytest.warns(UserWarning, match=r"^1 patch\(es\)") as record:
             assert len(spool.select(coupling="trench")) == 1
+        assert len(record) == 1
 
     def test_a_straddling_patch_is_not_selected(self, patch, inventory):
         """
         Described twice is not one answer, so it is not selected.
 
         `conform_to_inventory` is what turns such a row into rows which
-        each resolve; select is a filter and says nothing about it.
+        each resolve; the warning points there.
         """
         coord = patch.get_coord("time")
         middle = coord.min() + (coord.max() - coord.min()) / 2
         assert coord.min() < middle <= coord.max()
         split = _split_epochs(inventory, middle, second={"name": "moved"})
         spool = dc.spool(patch).attach_inventory(split)
-        assert len(spool.select(coupling="trench")) == 0
+        with pytest.warns(UserWarning, match=UNJUDGED_MATCH):
+            assert len(spool.select(coupling="trench")) == 0
+
+    def test_one_warning_counts_every_drop(self, patch, inventory):
+        """Two unresolved patches in one call give one warning naming both."""
+        coord = patch.get_coord("time")
+        middle = coord.min() + (coord.max() - coord.min()) / 2
+        split = _split_epochs(inventory, middle, second={"name": "moved"})
+        other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
+        spool = dc.spool([patch, other]).attach_inventory(split)
+        with pytest.warns(UserWarning, match=r"^2 patch\(es\)") as record:
+            assert len(spool.select(coupling="trench")) == 0
+        assert len(record) == 1
+
+    def test_a_patch_outside_every_path_epoch_warns(self, patch, inventory):
+        """Described by its acquisition but by no path, so nothing to judge."""
+        coord = patch.get_coord("time")
+        span = coord.max() - coord.min()
+        array = inventory.networks[0].fiber_arrays[0]
+        path = array.optical_paths[0]
+        earlier = path.new(time_min=coord.min() - 3 * span, time_max=coord.min() - span)
+        spool = dc.spool(patch).attach_inventory(
+            inventory.replace(array, array.new(optical_paths=(earlier,)))
+        )
+        with pytest.warns(UserWarning, match=UNJUDGED_MATCH):
+            assert len(spool.select(coupling="trench")) == 0
+
+    def test_a_resolved_non_match_is_silent(self, patch, inventory):
+        """Only unresolved patches warn; an ordinary miss says nothing."""
+        spool = dc.spool(patch).attach_inventory(inventory)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            assert len(spool.select(coupling="cement")) == 0
+            assert len(spool.select(gauge_length=99.0)) == 0
+            assert len(spool.expand_by("zone", include="nowhere")) == 0
 
     def test_conforming_first_makes_it_selectable(self, patch, inventory):
         """The pieces each resolve, so each is judged on its own."""
@@ -3015,10 +3054,21 @@ class TestChannelSelectEdges:
         ].tolist() == [100.0]
 
     def test_splitting_an_undescribed_spool_yields_nothing(self, patch, inventory):
-        """No fiber to split on means no output, not an error."""
+        """No fiber to split on means no output and a warning, not an error."""
         other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
         spool = dc.spool(other).attach_inventory(inventory)
-        assert len(spool.expand_by("zone")) == 0
+        with pytest.warns(UserWarning, match=UNJUDGED_MATCH):
+            assert len(spool.expand_by("zone")) == 0
+
+    def test_splitting_a_straddling_patch_warns(self, patch, inventory):
+        """A straddling patch is dropped from an expansion, and counted."""
+        coord = patch.get_coord("time")
+        middle = coord.min() + (coord.max() - coord.min()) / 2
+        split = _split_epochs(inventory, middle, second={"name": "moved"})
+        spool = dc.spool([patch, patch.update_attrs(tag="2")]).attach_inventory(split)
+        with pytest.warns(UserWarning, match=r"^2 patch\(es\)") as record:
+            assert len(spool.expand_by("zone")) == 0
+        assert len(record) == 1
 
     def test_splitting_skips_a_row_it_cannot_place(self, patch, inventory):
         """A described patch splits; one the inventory is silent about does not."""
