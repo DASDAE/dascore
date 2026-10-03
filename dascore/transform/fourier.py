@@ -318,7 +318,9 @@ class Dft(PatchProcessor):
 
     Notes
     -----
-    NumPy FFT output is scaled by each transformed dimension's sample spacing.
+    FFT output is scaled by each transformed dimension's sample spacing.
+    Single-precision data (float16, float32, complex64) are transformed in
+    single precision and give complex64; other data give complex128.
     Frequency coordinates remain ordered, use reciprocal units, and are named
     with an ``ft_`` prefix (for example, ``time`` becomes ``ft_time``).
 
@@ -549,6 +551,8 @@ class Idft(PatchProcessor):
     -----
     - Real transforms are determined by transformed coordinates which have
       no negative values.
+
+    - A complex64 spectrum inverts in single precision; others in double.
 
     - Non-dimensional coordinates measured on a transformed dimension are
       restored with it, provided the patch still carries what

@@ -1172,12 +1172,13 @@ class TestDftPrecision:
         assert np.allclose(out.data, single.data, atol=1e-4)
 
     def test_float64_real_transform_unchanged(self, random_patch):
-        """A float64 real transform is numpy's, scaled by the step, exactly."""
+        """A float64 real transform is numpy's, scaled by the step."""
         out = random_patch.dft("time", real=True, pad=False)
         step = dc.to_float(random_patch.get_coord("time").step)
         expected = np.fft.rfftn(random_patch.data, axes=(1,)) * step
         assert out.dtype == np.complex128
-        assert np.array_equal(out.data, expected)
+        # Bit-equal on some platforms; within round-off on all.
+        assert np.allclose(out.data, expected, rtol=1e-12, atol=1e-12 * step)
 
     def test_integer_spectrum_inverts_in_double(self, random_patch):
         """An integer spectrum is scaled and inverted in double precision."""

@@ -193,6 +193,7 @@ def correlate(
     -----
     The result's data units are the square of the patch's (for example
     (m/s)**2 for velocity), as each value is a sum of products of the data.
+    Single-precision data are correlated in single precision.
 
     Correlation runs along the dimension not named in ``kwargs``. That dimension
     becomes a lag dimension prefixed with ``lag_``; for example, selecting a
