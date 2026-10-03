@@ -941,9 +941,9 @@ def sanitize_range_param(select) -> tuple:
     # we allow a len(2) list here to not break old codes, but encourage a tuple.
     if not isinstance(select, (tuple | slice | list)) and select is not ...:
         msg = (
-            "Range values must be a (start, stop) tuple or slice. Use "
-            "Patch.sel for a single value; Patch.select also accepts an "
-            "array of values or a boolean mask."
+            "Range values must be a (start, stop) tuple or slice. For a "
+            "single value pass an array, e.g. np.array([value]), or use "
+            "Patch.sel on a dimension; a boolean mask also works."
         )
         raise ParameterError(msg)
     # handle slices, need to convert to tuple
