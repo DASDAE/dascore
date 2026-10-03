@@ -9,9 +9,10 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import ParameterError, PatchError
-from dascore.proc.tile_apply import TileApply
+from dascore.proc.tile_apply import Reassemble, TileApply
 from dascore.units import percent
-from dascore.utils.signal import get_window
+from dascore.utils.signal import get_taper, get_window
+from dascore.utils.tiles import get_tile_plan
 
 
 def identity(tiles):
@@ -743,3 +744,38 @@ class TestUnsignedTileBounds:
         assert tiles.get_array("x_stop")[0] == 1.5
         assert tiles.get_array("x")[0] == 0
         assert tiles.reassemble().equals(patch, close=True)
+
+
+class TestReassembleProcessor:
+    """What the Reassemble class guarantees beyond the framework."""
+
+    @pytest.fixture()
+    def tiles(self, patch):
+        """A stack whose tiles were each changed differently."""
+        stack = patch.tile_apply(np.positive, mode="stack", time=16, samples=True)
+        axis = stack.get_axis("time")
+        shape = [1] * stack.ndim
+        shape[axis] = stack.shape[axis]
+        scale = np.arange(1, stack.shape[axis] + 1).reshape(shape)
+        return stack.new(data=stack.data * scale)
+
+    def test_metadata_without_data(self, tiles, patch):
+        """The patch the tiles came from is known from metadata alone."""
+        out, plan = Reassemble().get_metadata(tiles.drop_data())
+        assert out.shape == patch.shape and out.dims == patch.dims
+        assert plan["size"] == (16,) and plan["strides"] == (8,)
+
+    def test_taper_is_keyword_only(self):
+        """The taper is given by name, as it always was."""
+        with pytest.raises(TypeError):
+            Reassemble("hann")
+
+    def test_taper(self, tiles):
+        """Changed tiles blend under the taper given."""
+        out = tiles.reassemble(taper="triang")
+        plan = get_tile_plan((2000,), (16,), (8,))
+        taper = get_taper("triang", (16,), (8,))
+        rows = tiles.transpose("distance", "time", "time_offset").data
+        expected = np.stack([plan.overlap_add(row, taper) for row in rows])
+        assert np.allclose(out.transpose("distance", "time").data, expected)
+        assert not np.allclose(out.data, tiles.reassemble().data)

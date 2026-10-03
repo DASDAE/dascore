@@ -22,7 +22,7 @@ from dascore.exceptions import (
     PatchError,
     UnknownCoordinateError,
 )
-from dascore.utils.array_api import array_namespace, to_numpy
+from dascore.utils.array_api import array_namespace
 from dascore.utils.docs import compose_docstring
 from dascore.utils.indexing import get_indexers, label_indexer
 from dascore.utils.misc import (
@@ -1512,14 +1512,7 @@ def _place_blocks(data, axis: int, length: int, blocks, fill) -> np.ndarray:
     return out
 
 
-@patch_function()
-def fill_gaps(
-    patch: PatchType,
-    *args,
-    fill_value: Any = np.nan,
-    samples: bool = False,
-    **kwargs,
-) -> PatchType:
+class FillGaps(PatchProcessor):
     """
     Fill the holes along a dimension with a constant value.
 
@@ -1584,13 +1577,29 @@ def fill_gaps(
     >>> # Fill with zeros instead of NaN.
     >>> assert (patch.fill_gaps("distance", fill_value=0).data[5:8] == 0).all()
     """
-    dim, axis, limit = get_dim_axis_value(patch, args=args, kwargs=kwargs)[0]
-    layout = _fill_layout(patch.get_coord(dim), limit, samples=samples)
-    if layout is None:
-        return patch
-    coord, blocks = layout
-    data = to_numpy(patch.data)
-    fill = _fill_scalar(fill_value, data.dtype)
-    data = _place_blocks(data, axis, len(coord), blocks, fill)
-    coords = drop_associated_coords(patch.coords, dim, "Filling gaps along")
-    return patch.new(data=data, coords=coords._update_grid(dim, **{dim: coord}))
+
+    args: Any = ()
+    fill_value: Any = np.nan
+    samples: Any = False
+
+    model_config = ConfigDict(extra="allow")
+    _positional_fields = ()
+
+    def get_metadata(self, meta):
+        """Return the filled grid, and where each run of samples lands on it."""
+        extras = self.model_extra or {}
+        dim, axis, limit = get_dim_axis_value(meta, args=self.args, kwargs=extras)[0]
+        layout = _fill_layout(meta.get_coord(dim), limit, samples=self.samples)
+        if layout is None:
+            return meta, {"axis": axis, "length": None, "blocks": None}
+        coord, blocks = layout
+        coords = drop_associated_coords(meta.coords, dim, "Filling gaps along")
+        out = meta.new(coords=coords._update_grid(dim, **{dim: coord}))
+        return out, {"axis": axis, "length": len(coord), "blocks": blocks}
+
+    def numpy_kernel(self, data, *, axis, length, blocks):
+        """Return the runs placed on the grid with the fill value between them."""
+        if blocks is None:
+            return data
+        fill = _fill_scalar(self.fill_value, data.dtype)
+        return _place_blocks(data, axis, length, blocks, fill)

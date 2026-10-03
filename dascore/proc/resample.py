@@ -2,21 +2,24 @@
 
 from __future__ import annotations
 
-from typing import Literal
+import operator
+from typing import Any
 
 import numpy as np
+from pydantic import ConfigDict
 
 import dascore as dc
 import dascore.compat as compat
-from dascore.constants import PatchType
+from dascore.core.processor import PatchProcessor, _via_numpy
 from dascore.exceptions import FilterValueError, ParameterError
 from dascore.units import get_filter_units
+from dascore.utils.array_api import array_namespace
 from dascore.utils.imports import lazy_import
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import (
     drop_associated_coords,
     get_dim_axis_value,
     get_start_stop_step,
-    patch_function,
     require_no_holes,
 )
 from dascore.utils.time import dtype_time_like, to_int, to_timedelta64
@@ -24,10 +27,10 @@ from dascore.utils.time import dtype_time_like, to_int, to_timedelta64
 scipy_decimate = lazy_import("scipy.signal", "decimate")
 
 
-def _apply_scipy_decimation(patch, factor, ftype, axis):
+def _apply_scipy_decimation(data, factor, ftype, axis):
     """Apply decimation along an axis."""
     try:
-        data = scipy_decimate(patch.data, factor, ftype=ftype, axis=axis)
+        data = scipy_decimate(data, factor, ftype=ftype, axis=axis)
     except ValueError as e:
         msg = (
             "Scipy decimation failed. This can happen for dimensions with "
@@ -38,13 +41,18 @@ def _apply_scipy_decimation(patch, factor, ftype, axis):
     return data
 
 
-@patch_function()
-def decimate(
-    patch: PatchType,
-    filter_type: Literal["iir", "fir", None] = "iir",
-    copy: bool = True,
-    **kwargs,
-) -> PatchType:
+# `copy` shadows pydantic's deprecated `BaseModel.copy`, which nothing calls.
+with suppress_warnings(UserWarning, message='Field name "copy"'):
+
+    class _DecimateFields(PatchProcessor):
+        """The parameters of `Decimate`, kept apart for the warning above."""
+
+        name = None
+        filter_type: Any = "iir"
+        copy: Any = True
+
+
+class Decimate(_DecimateFields):
     """
     Decimate a patch along a dimension.
 
@@ -79,7 +87,7 @@ def decimate(
 
     See Also
     --------
-    [resample](`dascore.proc.resample.resample`)
+    [resample](`dascore.Patch.resample`)
         Change sampling to a specified interval or number of samples, rather
         than by an integer decimation factor.
 
@@ -92,17 +100,37 @@ def decimate(
     >>> # Example using fir along distance dimension
     >>> decimated_fir = patch.decimate(distance=10, filter_type='fir')
     """
-    dim, axis, factor = get_dim_axis_value(patch, kwargs=kwargs)[0]
-    coords, slices = patch.coords.decimate(**{dim: int(factor)})
-    if filter_type:
-        require_no_holes(patch, dim, "filtered decimate")
-        coords = coords._update_grid(dim)
-        data = _apply_scipy_decimation(patch, factor, ftype=filter_type, axis=axis)
-    else:
-        data = patch.data[slices]
+
+    model_config = ConfigDict(extra="allow")
+
+    def get_metadata(self, meta):
+        """Return the decimated coordinates, the axis, factor and slices."""
+        extras = self.model_extra or {}
+        dim, axis, factor = get_dim_axis_value(meta, kwargs=extras)[0]
+        coords, slices = meta.coords.decimate(**{dim: int(factor)})
+        if self.filter_type:
+            require_no_holes(meta, dim, "filtered decimate")
+            coords = coords._update_grid(dim)
+            # scipy's own refusal of a factor which is not an integer.
+            operator.index(factor)
+        plan = {"axis": axis, "factor": int(factor), "slices": slices}
+        return meta.new(coords=coords), plan
+
+    def numpy_kernel(self, data, *, axis, factor, slices):
+        """Return the data filtered and decimated by scipy, or sliced."""
+        if self.filter_type:
+            ftype = self.filter_type
+            return _apply_scipy_decimation(data, factor, ftype=ftype, axis=axis)
         # Copying releases the reference to the parent array.
-        data = np.array(data) if copy else data
-    return patch.new(data=data, coords=coords)
+        return np.array(data[slices]) if self.copy else data[slices]
+
+    def kernel(self, data, *, axis, factor, slices):
+        """Return the data sliced on its own backend; filtered by numpy."""
+        if self.filter_type:
+            numpy_decimate = _via_numpy(type(self).numpy_kernel, "decimate")
+            return numpy_decimate(self, data, axis=axis, factor=factor, slices=slices)
+        xp = array_namespace(data)
+        return xp.asarray(data[slices], copy=True) if self.copy else data[slices]
 
 
 def _interpolate_associated(cm, dim, coord_num, samples_num, kind) -> dict:
@@ -141,8 +169,7 @@ def _interpolate_associated(cm, dim, coord_num, samples_num, kind) -> dict:
     return out
 
 
-@patch_function()
-def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> PatchType:
+class Interpolate(PatchProcessor):
     """
     Set coordinates of patch along a dimension using interpolation.
 
@@ -179,7 +206,7 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     --------
     [Patch.snap_coords](`dascore.Patch.snap_coords`)
         Snap coordinates to evenly sampled values without interpolating data.
-    [resample](`dascore.proc.resample.resample`)
+    [resample](`dascore.Patch.resample`)
         Resample data to a target sampling interval or number of samples.
 
     Examples
@@ -196,34 +223,42 @@ def interpolate(patch: PatchType, kind: str | int = "linear", **kwargs) -> Patch
     >>> patch = dc.get_example_patch("wacky_dim_coords_patch")
     >>> patch_time_even = patch.interpolate(time=None)
     """
-    dim, axis, samples = get_dim_axis_value(patch, kwargs=kwargs)[0]
-    if samples is None:
-        coord = patch.coords.coord_map[dim]
-        samples = coord.snap().values
-    # interp1d does not support datetime64.
-    coord_num = to_int(patch.coords.get_array(dim))
-    samples_num = to_int(samples)
-    func = compat.interp1d(
-        coord_num, patch.data, axis=axis, kind=kind, fill_value="extrapolate"
-    )
-    out = func(samples_num)
-    cm = patch.coords
-    associated_dims = cm.dim_map[dim]
-    coord_new = dc.core.get_coord(data=samples)
-    updates = {dim: (associated_dims, coord_new)}
-    updates |= _interpolate_associated(cm, dim, coord_num, samples_num, kind)
-    cm_new = cm._update_grid(dim, **updates)
-    return patch.new(data=out, coords=cm_new)
+
+    kind: Any = "linear"
+
+    model_config = ConfigDict(extra="allow")
+
+    def get_metadata(self, meta):
+        """Return the new coordinates, the axis, and both sets of positions."""
+        extras = self.model_extra or {}
+        dim, axis, samples = get_dim_axis_value(meta, kwargs=extras)[0]
+        cm = meta.coords
+        if samples is None:
+            samples = cm.coord_map[dim].snap().values
+        # interp1d does not support datetime64.
+        coord_num = to_int(cm.get_array(dim))
+        samples_num = to_int(samples)
+        if np.asarray(samples_num).dtype.kind not in "biufc":
+            # Text or objects: let scipy refuse them, as it did unplanned.
+            _interp(coord_num, coord_num, samples_num, 0, self.kind)
+        coord_new = dc.core.get_coord(data=samples)
+        updates = {dim: (cm.dim_map[dim], coord_new)}
+        updates |= _interpolate_associated(cm, dim, coord_num, samples_num, self.kind)
+        plan = {"axis": axis, "coord": coord_num, "samples": samples_num}
+        return meta.new(coords=cm._update_grid(dim, **updates)), plan
+
+    def numpy_kernel(self, data, *, axis, coord, samples):
+        """Return the data interpolated by scipy at the new positions."""
+        return _interp(data, coord, samples, axis, self.kind)
 
 
-@patch_function()
-def resample(
-    patch: PatchType,
-    window=None,
-    interp_kind: str = "linear",
-    samples: bool = False,
-    **kwargs,
-) -> PatchType:
+def _interp(data, coord, samples, axis, kind):
+    """Return data sampled at `coord` interpolated onto `samples` along an axis."""
+    func = compat.interp1d(coord, data, axis=axis, kind=kind, fill_value="extrapolate")
+    return func(samples)
+
+
+class Resample(PatchProcessor):
     """
     Resample along a single dimension using Fourier Method and interpolation.
 
@@ -233,7 +268,7 @@ def resample(
     Since Fourier methods only support adding or removing an integer number
     of frequency bins, the exact desired sampling rate is often not achievable
     with resampling alone. If the fourier resampling doesn't produce the exact
-    result, an interpolation (see [interpolate](`dascore.proc.interpolate`))
+    result, an interpolation (see [interpolate](`dascore.Patch.interpolate`))
     is used to achieve the desired sampling rate.
 
     Parameters
@@ -279,42 +314,59 @@ def resample(
 
     See Also
     --------
-    [decimate](`dascore.proc.resample.decimate`)
-    [interpolate](`dascore.proc.resample.interpolate`)
+    [decimate](`dascore.Patch.decimate`)
+    [interpolate](`dascore.Patch.interpolate`)
     """
-    dim, axis, value = get_dim_axis_value(patch, kwargs=kwargs)[0]
-    coord = patch.get_coord(dim, require_sorted=True, require_evenly_sampled=True)
-    new_step = None
-    if not samples:
-        step = coord.step
-        coord_units = dc.get_quantity(coord.units)
-        # inverse coord unit to trick filter units into giving correct units.
-        if coord_units is not None:
-            coord_units = 1 / coord_units
-        new_step, _ = get_filter_units(value, value, to_unit=coord_units)
-        if new_step is None:
-            msg = (
-                f"resample requires a sampling period for dimension {dim!r}; "
-                f"got {value!r}. Pass samples=True to resample by length."
-            )
-            raise ParameterError(msg)
-        # nasty hack so that ints/floats get converted to seconds.
-        if isinstance(step, np.timedelta64):
-            new_step = to_timedelta64(new_step)
-        current_sig_len = patch.data.shape[axis]
-        new_len = current_sig_len * (step / new_step)
-    else:
-        new_len = value
-    # do the resampling
-    data, new_coord = compat.resample(
-        patch.data, int(np.round(new_len)), t=coord, axis=axis, window=window
-    )
-    cm = drop_associated_coords(patch.coords, dim, "Resampling")
-    cm = cm._update_grid(dim, **{dim: new_coord})
-    out = patch.new(data=data, coords=cm)
-    # Interpolate if new sampling rate is not very close to desired sampling rate.
-    if not samples and not np.isclose(new_len, np.round(new_len)):
-        start, stop, step = get_start_stop_step(out, dim)
-        new_coord = np.arange(start, stop, new_step)
-        out = interpolate(out, kind=interp_kind, **{dim: new_coord})
-    return out
+
+    window: Any = None
+    interp_kind: Any = "linear"
+    samples: Any = False
+
+    model_config = ConfigDict(extra="allow")
+
+    def get_metadata(self, meta):
+        """Return the resampled coordinates, and the length and positions to hit."""
+        dim, axis, value = get_dim_axis_value(meta, kwargs=self.model_extra or {})[0]
+        coord = meta.get_coord(dim, require_sorted=True, require_evenly_sampled=True)
+        new_step = None
+        if not self.samples:
+            step = coord.step
+            coord_units = dc.get_quantity(coord.units)
+            # inverse coord unit to trick filter units into giving correct units.
+            if coord_units is not None:
+                coord_units = 1 / coord_units
+            new_step, _ = get_filter_units(value, value, to_unit=coord_units)
+            if new_step is None:
+                msg = (
+                    f"resample requires a sampling period for dimension {dim!r}; "
+                    f"got {value!r}. Pass samples=True to resample by length."
+                )
+                raise ParameterError(msg)
+            # nasty hack so that ints/floats get converted to seconds.
+            if isinstance(step, np.timedelta64):
+                new_step = to_timedelta64(new_step)
+            new_len = meta.shape[axis] * (step / new_step)
+        else:
+            new_len = value
+        num = int(np.round(new_len))
+        # The positions scipy's resample gives for its output.
+        start = coord[0]
+        new_coord = start + (coord[1] - start) * (len(coord) / num) * np.arange(num)
+        cm = drop_associated_coords(meta.coords, dim, "Resampling")
+        out = meta.new(coords=cm._update_grid(dim, **{dim: new_coord}))
+        plan = {"axis": axis, "num": num, "coord": None, "samples": None}
+        # Interpolate if new sampling rate is not very close to desired sampling rate.
+        if not self.samples and not np.isclose(new_len, num):
+            start, stop, _ = get_start_stop_step(out, dim)
+            new_coord = np.arange(start, stop, new_step)
+            interp = Interpolate(kind=self.interp_kind, **{dim: new_coord})
+            out, interp_plan = interp.get_metadata(out)
+            plan |= {"coord": interp_plan["coord"], "samples": interp_plan["samples"]}
+        return out, plan
+
+    def numpy_kernel(self, data, *, axis, num, coord, samples):
+        """Return the data resampled by scipy, then interpolated if needed."""
+        data = compat.resample(data, num, axis=axis, window=self.window)
+        if coord is not None:
+            data = _interp(data, coord, samples, axis, self.interp_kind)
+        return data

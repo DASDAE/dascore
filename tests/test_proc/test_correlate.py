@@ -251,3 +251,31 @@ class TestCorrelateErrors:
         patch_1d = dc.Patch(np.arange(10.0), coords={"time": coord}, dims=("time",))
         with pytest.raises(ParameterError, match="2D patch"):
             patch_1d.correlate(time=0, samples=True)
+
+
+class TestCorrelateShiftProcessor:
+    """What the CorrelateShift class guarantees beyond the framework."""
+
+    def test_metadata_without_data(self, random_patch):
+        """The lag coordinate and step come from metadata alone."""
+        shift = dc.proc.CorrelateShift(dim="distance")
+        out, plan = shift.get_metadata(random_patch.drop_data())
+        assert out.dims == ("lag_distance", "time")
+        assert out.get_coord("lag_distance").min() == -150
+        assert plan == {"axis": 0, "step": 1.0}
+
+    @pytest.mark.parametrize("undo_weighting", (True, False))
+    def test_undo_weighting(self, random_patch, undo_weighting):
+        """Only undoing the weighting divides the shifted data by the step."""
+        ints = random_patch.new(data=np.arange(random_patch.size).reshape(300, -1))
+        out = ints.correlate_shift("time", undo_weighting=undo_weighting)
+        shifted = np.fft.fftshift(ints.data, axes=1)
+        expected = shifted / 0.004 if undo_weighting else shifted
+        assert out.dtype == expected.dtype
+        assert np.array_equal(out.data, expected)
+
+    def test_single_precision_promotes(self, random_patch):
+        """float32 data divided by the float64 step become float64, as in numpy."""
+        single = random_patch.new(data=random_patch.data.astype(np.float32))
+        assert single.correlate_shift("time").dtype == np.float64
+        assert single.correlate_shift("time", undo_weighting=False).dtype == np.float32

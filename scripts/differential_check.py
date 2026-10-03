@@ -92,6 +92,7 @@ EXPECTED_ERRORS = (
     "matrix/single_row/strain_rate*",
     "matrix/single_row/taper_distance",
     "matrix/single_row/taper_range_invert",
+    "matrix/single_row/pad_fft",
 )
 
 
@@ -234,6 +235,22 @@ MATRIX_CALLS = {
         data_type="velocity"
     ).velocity_to_strain_rate_edgeless(step_multiple=2),
     "phase_weighted_stack": lambda patch: patch.phase_weighted_stack("distance"),
+    # shape changers
+    "pad_fft": lambda patch: patch.pad(time="fft", distance="correlate"),
+    "decimate_none": lambda patch: patch.decimate(time=3, filter_type=None),
+    "decimate_view": lambda patch: patch.decimate(
+        distance=2, filter_type=None, copy=False
+    ),
+    "interpolate": lambda patch: patch.interpolate(time=np.arange(0, 3.5, 0.3)),
+    "interpolate_nearest": lambda patch: patch.interpolate(
+        distance=[0.4, 1.6], kind="nearest"
+    ),
+    "resample_samples": lambda patch: patch.resample(time=5, samples=True),
+    "align_to_coord": lambda patch: patch.update_coords(
+        shift=("distance", np.arange(patch.shape[0]) % 3 - 1)
+    ).align_to_coord(time="shift", samples=True, mode="full"),
+    "correlate_shift": lambda patch: patch.correlate_shift("time"),
+    "fill_gaps_noop": lambda patch: patch.fill_gaps("time"),
 }
 if HAS_FINDIFF:
     MATRIX_CALLS["differentiate_findiff"] = lambda patch: patch.differentiate(
@@ -611,6 +628,243 @@ def _calculus_calls(patch, int_patch, f32, dft_patch, wacky, typed) -> dict:
     return calls
 
 
+def _gapped(coord, dim: str, label: str):
+    """Return a 3-row patch along a coordinate with holes, counting up."""
+    data = np.arange(3 * len(coord), dtype=np.float64).reshape(3, len(coord))
+    coords = {"distance": np.arange(3) * 1.0, dim: coord}
+    return _pinned(dc.Patch(data=data, coords=coords, dims=("distance", dim)), label)
+
+
+def _fill_gaps_calls(s) -> dict:
+    """Return fill_gaps on patches with real holes, with every spelling."""
+    t0, ms = np.datetime64("2020-01-01", "ns"), np.timedelta64(1_000_000, "ns")
+    get = dc.core.get_coord
+    concat = dc.core.coords.concat_coords
+    first = get(start=t0, step=ms, shape=(5,))
+    second = get(start=t0 + 8 * ms, step=ms, shape=(4,))
+    third = get(start=t0 + 30 * ms, step=ms, shape=(2,))
+    gapped = _gapped(concat(first, second), "time", "gapped")
+    three = _gapped(concat(first, second, third), "time", "three")
+    x = concat(get(start=0.0, stop=5.0, step=1.0), get(start=8.0, stop=10.0, step=1.0))
+    numeric = _gapped(x, "x", "numeric_gap")
+    int_gapped = _pinned(numeric.new(data=np.asarray(numeric.data, "int64")), "ig")
+    f32_gapped = _pinned(gapped.new(data=np.asarray(gapped.data, "float32")), "fg")
+    rider = numeric.update_coords(q=("x", np.arange(numeric.shape[1]) * 1.0))
+    return {
+        "fill_gaps_time": lambda: gapped.fill_gaps("time"),
+        "fill_gaps_kwarg": lambda: gapped.fill_gaps(time=None),
+        "fill_gaps_limit": lambda: three.fill_gaps(time=0.005),
+        "fill_gaps_limit_narrow": lambda: gapped.fill_gaps(time=0.0029),
+        "fill_gaps_limit_units": lambda: three.fill_gaps(time=5 * s / 1000),
+        "fill_gaps_limit_timedelta": lambda: gapped.fill_gaps(time=3 * ms),
+        "fill_gaps_samples": lambda: three.fill_gaps(time=3, samples=True),
+        "fill_gaps_samples_narrow": lambda: gapped.fill_gaps(time=2, samples=True),
+        "fill_gaps_value": lambda: gapped.fill_gaps("time", fill_value=0),
+        "fill_gaps_numeric": lambda: numeric.fill_gaps("x"),
+        "fill_gaps_int": lambda: int_gapped.fill_gaps("x", fill_value=-1),
+        "fill_gaps_f32": lambda: f32_gapped.fill_gaps("time", fill_value=0.1),
+        "fill_gaps_rider": lambda: rider.fill_gaps("x"),
+        "fill_gaps_noop": lambda: gapped.fill_gaps("distance"),
+        "fill_gaps_bad_int_nan": lambda: int_gapped.fill_gaps("x"),
+        "fill_gaps_bad_value": lambda: gapped.fill_gaps("time", fill_value="bob"),
+        "fill_gaps_bad_dim": lambda: gapped.fill_gaps("nope"),
+    }
+
+
+def _shape_calls(patch, int_patch, f32, dft_patch, wacky, with_nondim, m, s) -> dict:
+    """Return pads, decimations, interpolations, resamples, shifts and tiles."""
+    hz = dc.get_unit("Hz")
+    time = patch.get_array("time")
+    step = patch.get_coord("time").step
+    dist = patch.get_array("distance")
+    up_time = np.arange(time.min(), time.max(), step / 2)
+    # Unsorted, repeated and negative shifts, in samples and time, and a
+    # shuffled distance order.
+    rng = np.random.default_rng(0)
+    shifts = rng.integers(-20, 20, size=len(dist))
+    order = rng.permutation(len(dist))
+    aligned = _pinned(
+        patch.update_coords(
+            shift=("distance", shifts),
+            ramp=("distance", np.arange(len(dist))),
+            lag=("distance", np.abs(shifts) * step),
+            lag_float=("distance", np.abs(shifts) * 0.004),
+            when=("distance", time[: len(dist)]),
+        ),
+        "aligned",
+    )
+    descending = _pinned(patch.flip("time"), "descending")
+    corr = (patch.dft("time", real=True, pad=False) ** 2).idft()
+    odd = _pinned(patch.isel(time=slice(0, 1999)), "odd")
+    tiles = patch.tile_apply(np.positive, mode="stack", time=0.2)
+    tiles_2d = patch.tile_apply(
+        np.positive, mode="stack", time=64, distance=50, samples=True
+    )
+    analysed = patch.tile_apply(np.positive, mode="stack", time=0.2, analysis="hann")
+    return {
+        # pad
+        "pad_fft": lambda: patch.isel(time=slice(0, 1999)).pad(time="fft"),
+        "pad_fft_noop": lambda: patch.pad(time="fft"),
+        "pad_correlate": lambda: patch.pad(distance="correlate"),
+        "pad_seconds": lambda: patch.pad(time=0.02),
+        "pad_quantity": lambda: patch.pad(distance=(5 * m, 2 * m)),
+        "pad_timedelta": lambda: patch.pad(time=(step * 3, step)),
+        "pad_positional": lambda: patch.pad("constant", 2, False, True, time=3),
+        "pad_int": lambda: int_patch.pad(time=2, samples=True, constant_values=3),
+        "pad_int_float": lambda: int_patch.pad(
+            time=2, samples=True, constant_values=1.5
+        ),
+        "pad_f32": lambda: f32.pad(distance=(1, 0), samples=True),
+        "pad_complex": lambda: dft_patch.pad(ft_time=2, samples=True),
+        "pad_nan": lambda: patch.pad(time=1, samples=True, constant_values=np.nan),
+        "pad_zero": lambda: patch.pad(time=0, samples=True),
+        "pad_nondim": lambda: with_nondim.pad(distance=(1, 2), samples=True),
+        "pad_nondim_noexpand": lambda: with_nondim.pad(
+            distance=2, samples=True, expand_coords=False
+        ),
+        "pad_wacky": lambda: wacky.pad(distance=2, time=1, samples=True),
+        "pad_bad_wacky_units": lambda: wacky.pad(distance=2.0),
+        "pad_bad_sequence": lambda: patch.pad(time=1, constant_values=(1, 2)),
+        "pad_bad_dim": lambda: patch.pad(nope=1),
+        # decimate
+        "decimate_iir": lambda: patch.decimate(time=10),
+        "decimate_fir": lambda: patch.decimate(distance=10, filter_type="fir"),
+        "decimate_none": lambda: patch.decimate(time=7, filter_type=None),
+        "decimate_none_view": lambda: patch.decimate(
+            distance=3, filter_type=None, copy=False
+        ),
+        "decimate_positional": lambda: patch.decimate("fir", True, time=4),
+        "decimate_int": lambda: int_patch.decimate(time=5),
+        "decimate_int_none": lambda: int_patch.decimate(time=5, filter_type=None),
+        "decimate_f32": lambda: f32.decimate(time=2, filter_type="fir"),
+        "decimate_complex": lambda: dft_patch.decimate(distance=2),
+        "decimate_nondim": lambda: with_nondim.decimate(distance=3),
+        "decimate_nondim_none": lambda: with_nondim.decimate(
+            distance=3, filter_type=None
+        ),
+        "decimate_wacky": lambda: wacky.decimate(time=4, filter_type=None),
+        "decimate_wacky_iir": lambda: wacky.decimate(time=4),
+        "decimate_descending": lambda: descending.decimate(time=3),
+        "pad_descending": lambda: descending.pad(time=(0.01, 0.02)),
+        "interp_descending": lambda: descending.interpolate(time=time[::4]),
+        "corr_shift_descending": lambda: descending.correlate_shift("time"),
+        "decimate_bad_small": lambda: patch.isel(distance=slice(0, 10)).decimate(
+            distance=2
+        ),
+        "decimate_bad_dim": lambda: patch.decimate(nope=2),
+        "decimate_text": lambda: patch.decimate(time="3", filter_type=None),
+        "decimate_bad_text": lambda: patch.decimate(time="3"),
+        # interpolate
+        "interp_up": lambda: patch.interpolate(time=up_time),
+        "interp_down": lambda: patch.interpolate(time=time[::3]),
+        "interp_nearest": lambda: patch.interpolate(time=time[::2], kind="nearest"),
+        "interp_cubic": lambda: patch.interpolate(distance=dist[:50] + 0.5, kind=3),
+        "interp_positional": lambda: patch.interpolate("nearest", distance=dist[::2]),
+        "interp_extrapolate": lambda: patch.interpolate(distance=dist + 0.5),
+        "interp_snap": lambda: wacky.interpolate(time=None),
+        "interp_snap_distance": lambda: wacky.interpolate(distance=None),
+        "interp_int": lambda: int_patch.interpolate(distance=dist[::2] + 0.25),
+        "interp_f32": lambda: f32.interpolate(time=time[::2]),
+        "interp_complex": lambda: dft_patch.interpolate(distance=dist[:20] + 0.5),
+        "interp_nondim": lambda: with_nondim.interpolate(distance=dist[:30] + 0.5),
+        "interp_rider_time": lambda: aligned.interpolate(distance=dist[:30] + 0.5),
+        "interp_bad_kind": lambda: patch.interpolate(time=time[::2], kind="nope"),
+        "interp_bad_dim": lambda: patch.interpolate(nope=time),
+        "interp_bad_text": lambda: patch.interpolate(time=["2017-09-18T00:00:01"]),
+        # resample
+        "resample_timedelta": lambda: patch.resample(time=np.timedelta64(10, "ms")),
+        "resample_hz": lambda: patch.resample(time=50 * hz),
+        "resample_seconds": lambda: patch.resample(time=0.008),
+        "resample_distance": lambda: patch.resample(distance=3 * m),
+        "resample_samples": lambda: patch.resample(time=50, samples=True),
+        "resample_interp": lambda: patch.resample(time=np.timedelta64(7, "ms")),
+        "resample_interp_nearest": lambda: patch.resample(
+            time=np.timedelta64(7, "ms"), interp_kind="nearest"
+        ),
+        "resample_window": lambda: patch.resample(time=0.008, window="hann"),
+        "resample_positional": lambda: patch.resample(None, "nearest", True, time=333),
+        "resample_up": lambda: patch.resample(time=0.003),
+        "resample_int": lambda: int_patch.resample(time=0.008),
+        "resample_f32": lambda: f32.resample(time=0.008),
+        "resample_nondim": lambda: with_nondim.resample(distance=2),
+        "resample_bad_none": lambda: patch.resample(time=None),
+        "resample_bad_wacky": lambda: wacky.resample(time=0.01),
+        # align_to_coord
+        **{
+            f"align_{mode}_{name}": (
+                lambda mode=mode, name=name, extra=extra: aligned.align_to_coord(
+                    mode=mode, **extra
+                )
+            )
+            for mode in ("full", "same", "valid")
+            for name, extra in (
+                ("samples", {"time": "shift", "samples": True}),
+                ("lag", {"time": "lag"}),
+                ("float", {"time": "lag_float"}),
+                ("ramp", {"time": "ramp", "samples": True}),
+            )
+        },
+        "align_reverse": lambda: aligned.align_to_coord(
+            time="shift", samples=True, mode="full", reverse=True
+        ),
+        "align_fill": lambda: aligned.align_to_coord(
+            time="lag", mode="full", fill_value=0
+        ),
+        # Descending along the coordinate's own dimension; a descending
+        # aligned dimension raises on every mode, so it is not compared.
+        "align_descending_distance": lambda: aligned.flip("distance").align_to_coord(
+            time="shift", samples=True, mode="full"
+        ),
+        "align_unsorted_distance": lambda: aligned.isel(distance=order).align_to_coord(
+            time="lag", mode="valid"
+        ),
+        "align_int": lambda: _pinned(
+            aligned.new(data=np.asarray(aligned.data * 10, "int32")), "align_int"
+        ).align_to_coord(time="shift", samples=True, fill_value=-1),
+        "align_bad_mode": lambda: aligned.align_to_coord(
+            time="ramp", samples=True, mode="x"
+        ),
+        "align_bad_none": lambda: aligned.align_to_coord(),
+        "align_bad_two": lambda: aligned.align_to_coord(time="shift", distance="x"),
+        "align_bad_value": lambda: aligned.align_to_coord(time=1),
+        "align_bad_dim": lambda: aligned.align_to_coord(nope="shift"),
+        "align_bad_coord": lambda: aligned.align_to_coord(time="distance"),
+        "align_bad_samples": lambda: aligned.align_to_coord(time="lag", samples=True),
+        "align_bad_dtype": lambda: aligned.align_to_coord(time="when"),
+        "align_bad_overlap": lambda: (
+            aligned.align_to_coord(time="ramp", samples=True, mode="same")
+            .isel(time=slice(0, 3))
+            .align_to_coord(time="ramp", samples=True)
+        ),
+        # correlate_shift
+        "corr_shift": lambda: corr.correlate_shift("time"),
+        "corr_shift_unweighted": lambda: corr.correlate_shift(
+            "time", undo_weighting=False
+        ),
+        "corr_shift_positional": lambda: corr.correlate_shift("time", False),
+        "corr_shift_distance": lambda: patch.correlate_shift(dim="distance"),
+        "corr_shift_odd": lambda: odd.correlate_shift("time"),
+        "corr_shift_int": lambda: int_patch.correlate_shift("distance"),
+        "corr_shift_int_unweighted": lambda: int_patch.correlate_shift(
+            "distance", undo_weighting=False
+        ),
+        "corr_shift_f32": lambda: f32.correlate_shift("time"),
+        "corr_shift_complex": lambda: dft_patch.correlate_shift("distance"),
+        "corr_shift_bad_wacky": lambda: wacky.correlate_shift("distance"),
+        "corr_shift_bad_dim": lambda: patch.correlate_shift("nope"),
+        # reassemble
+        "reassemble": lambda: tiles.reassemble(),
+        "reassemble_taper": lambda: tiles.reassemble(taper="hamming"),
+        "reassemble_2d": lambda: tiles_2d.reassemble(),
+        "reassemble_thinned": lambda: tiles.isel(time=slice(0, None, 2)).reassemble(),
+        "reassemble_reordered": lambda: tiles.flip("time").reassemble(),
+        "reassemble_analysis": lambda: analysed.reassemble(),
+        "reassemble_scaled": lambda: (tiles * 2).reassemble(),
+        "reassemble_bad_analysis_taper": lambda: analysed.reassemble(taper="hann"),
+        "reassemble_bad_untiled": lambda: patch.reassemble(),
+    }
+
+
 def get_calls() -> dict:
     """Return the calls to compare, keyed by a name for the report."""
     patch = _pinned(dc.get_example_patch(), "example")
@@ -645,6 +899,8 @@ def get_calls() -> dict:
         "diff_bad_unsorted": lambda: unsorted.differentiate("distance"),
         **_calculus_calls(patch, int_patch, f32, dft_patch, wacky, typed),
         **_aggregate_calls(patch, null_patch, int_patch, bool_patch, typed),
+        **_shape_calls(patch, int_patch, f32, dft_patch, wacky, with_nondim, m, s),
+        **_fill_gaps_calls(s),
         # The inputs themselves, so a difference in the examples cannot
         # masquerade as a difference in the functions.
         "input_patch": lambda: patch,

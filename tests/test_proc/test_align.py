@@ -399,3 +399,22 @@ class TestAlignToCoord:
         # But full should work.
         new = patch.align_to_coord(time="shift", mode="full")
         assert new.dropna("time").data.size == 0
+
+
+class TestAlignToCoordProcessor:
+    """What the AlignToCoord class guarantees beyond the framework."""
+
+    def test_metadata_without_data(self, patch_with_known_shifts):
+        """The expanded shape and moves come from metadata alone."""
+        align = dc.proc.AlignToCoord(time="shift_time_known", samples=True, mode="full")
+        out, plan = align.get_metadata(patch_with_known_shifts.drop_data())
+        assert out.shape == (14, 5)
+        assert plan["shape"] == (14, 5)
+        assert np.array_equal(plan["dest"][0], [0, 1, 2, 3, 4])
+
+    def test_fill_value(self, patch_with_known_shifts):
+        """What fills the space the shifts open up is the fill value."""
+        out = patch_with_known_shifts.align_to_coord(
+            time="shift_time_known", samples=True, mode="full", fill_value=-1.5
+        )
+        assert (out.data == -1.5).sum() == 20
