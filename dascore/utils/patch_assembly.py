@@ -460,6 +460,27 @@ def _sized_coord(row: Mapping, dim: str, units=None):
     return get_coord(start=start, stop=stop, step=step, units=units)
 
 
+def _cut_coord(row: Mapping, dim: str, units=None):
+    """
+    The samples of a cut member's source inside the cut, or None.
+
+    As loading selects them: the source's own grid, in its own units,
+    selected to the cut and then converted to ``units``. A coordinate
+    counted from the cut's bound instead would put every label off the
+    grid by however far the bound fell between two samples.
+    """
+    stored = row.get(f"_{dim}_units_source")
+    stored = units if _is_null(stored) else stored
+    # the source's range is in its own units, as its row states them
+    source = source_coord_from_row({**row, f"_{dim}_units": stored}, dim, stored)
+    if source is None or (bounds := _row_bounds(row, dim)) is None:
+        return None
+    if units is not None and stored != units:
+        bounds = tuple(x * get_quantity(units) for x in bounds)
+    coord = source.select(bounds)[0]
+    return coord if units is None else coord.convert_units(units)
+
+
 def _at_unit(coord, unit: str):
     """The same evenly sampled coordinate counted in ``unit``, or None."""
     first = coord.max() if coord.reverse_sorted else coord.min()
@@ -873,8 +894,10 @@ class PatchAssembler:
                 meta.attrs = meta.attrs.update(data_units=units)
             elif self.can_use_index is None or self.can_use_index(row):
                 meta.source = self._member_source(row, meta, dims)
-            # a loaded member keeps its row's id only if loading changes nothing
+            # a loaded member keeps its row's id only if loading changes
+            # nothing, and a coordinate in other units changes it either way
             whole = meta.source is not None or not (converted or row.get("_modified"))
+            whole = whole and not _units_converted(row, self.plan_dim)
             known.append(whole and not _is_missing(row.get("data_id")))
         chain, casts = _cast_chain(dtypes)
         for meta, cast in zip(metas, casts, strict=True):
@@ -1060,9 +1083,11 @@ class PatchAssembler:
                     None if coord is None else (coord, slice(0, len(coord)), len(coord))
                 )
             if placed is None and loose:
-                coord = _sized_coord(row, dim, units)
-                if coord is not None and cut:  # a cut's end need not be a sample
-                    coord = coord.select(_row_bounds(row, dim))[0]
+                coord = _cut_coord(row, dim, units) if cut else None
+                if coord is None:
+                    coord = _sized_coord(row, dim, units)
+                    if coord is not None and cut:  # a cut's end need not be a sample
+                        coord = coord.select(_row_bounds(row, dim))[0]
                 placed = None if coord is None else (coord, None, None)
             if placed is None:
                 return None

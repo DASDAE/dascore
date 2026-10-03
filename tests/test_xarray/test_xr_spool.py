@@ -1280,19 +1280,89 @@ class TestTreeMatchesChunk:
         self._assert_matches(spool.io.to_xarray(), spool.chunk(time=None))
 
     @pytest.mark.parametrize(
-        "select", [dict(distance=(1, None)), dict(time=(1, -1))], ids=["off", "on"]
+        "select, window",
+        [
+            (dict(distance=(1, None)), None),
+            (dict(distance=(1, None)), 100),
+            (dict(time=(1, -1)), None),
+            (dict(time=(1, -1)), 600),
+        ],
+        ids=["off", "off-cut", "on", "on-wide"],
     )
-    def test_rechunked_sample_selection_refused(self, patches, to_spool, select):
+    def test_rechunked_sample_selection_refused(
+        self, patches, to_spool, select, window
+    ):
         """
         A same-dimension chunk of a sample selection is refused when built.
 
         Re-planning it collapses onto the source rows and loses the
-        selection, so its members would load unselected: wrong samples
-        from files, a false "changed" from memory.
+        selection wherever a member is a whole source or the selection
+        is on another dimension, so its members would load unselected:
+        wrong samples from files, a false "changed" from memory.
         """
         spool = to_spool(patches[:2]).select(samples=True, **select)
+        if window is None:
+            spool = spool.chunk(time=None)
+        else:
+            step = patches[0].get_coord("time").step
+            spool = spool.chunk(time=step * window, keep_partial=True)
         with pytest.raises(PatchConversionError, match="sample selection"):
-            spool.chunk(time=None).io.to_xarray()
+            spool.io.to_xarray()
+
+    @pytest.mark.parametrize("select", [dict(time=(1, -1)), dict(time=(5, None))])
+    def test_rechunked_sample_selection(self, patches, to_spool, select):
+        """
+        A sample selection chunked into windows of its members converts.
+
+        Every member is a window inside its selected source, which the
+        re-plan loads as chunk does.
+        """
+        spool = to_spool(patches[:2]).select(samples=True, **select)
+        step = patches[0].get_coord("time").step
+        spool = spool.chunk(time=step * 100, keep_partial=True)
+        self._assert_matches(spool.io.to_xarray(), spool.chunk(time=None))
+
+    @pytest.mark.parametrize("select", [None, dict(time=(1, None))])
+    @pytest.mark.parametrize("source", ["memory", "dasdae"])
+    @pytest.mark.parametrize(
+        "grid", [(550.0, 99.0, "cm"), (5.5, 0.99, "m"), (1000.0, 100.0, "cm")]
+    )
+    def test_trimmed_member_off_grid(self, tmp_path, source, select, grid):
+        """
+        A member trimmed between two of its samples keeps its own labels.
+
+        The second member overlaps the first and is trimmed at a bound
+        which is not one of its samples (counted in cm or in m); its
+        labels are its own samples past that bound, as chunk gives, not
+        ones counted from the bound. One which abuts it in cm is only
+        converted, which changes its id as chunk's load changes it.
+        """
+        time = dc.get_coord(
+            start=np.datetime64("2020-01-01"), step=np.timedelta64(1, "s"), shape=(4,)
+        )
+        members = [
+            dc.Patch(
+                data=np.arange(40.0).reshape(10, 4) + 100 * num,
+                coords={
+                    "distance": dc.get_coord(
+                        start=start, step=step, shape=(10,), units=units
+                    ),
+                    "time": time,
+                },
+                dims=("distance", "time"),
+            )
+            for num, (start, step, units) in enumerate([(0.0, 1.0, "m"), grid])
+        ]
+        spool = dc.spool(members)
+        if source == "dasdae":
+            # members sharing a time range need a directory each
+            for num, patch in enumerate(members):
+                spool_to_directory([patch], tmp_path / str(num))
+            spool = dc.spool(tmp_path).update()
+        if select is not None:
+            spool = spool.select(samples=True, **select)
+        tree = spool.io.to_xarray(dim="distance", group=[])
+        self._assert_matches(tree, spool.chunk(distance=None, group=[]))
 
     def test_mixed_dtypes(self, patches, to_spool):
         """int16 and float32 members merge to float32 as chunk merges them."""

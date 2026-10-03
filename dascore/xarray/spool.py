@@ -193,6 +193,31 @@ class _SegmentSource:
         )
 
 
+def _with_loaded_range(member_rows, members, source_rows, dim):
+    """
+    State each member's loaded range beside its cut, as a source range.
+
+    A residual withholds the range from the rows, since a window of the
+    stored array cannot stand for its selection; but a cut member's
+    labels are the samples its loaded patch has inside the cut, and the
+    rows planned over state that patch's range.
+    """
+    from dascore.utils.patch_assembly import (  # noqa: PLC0415
+        SOURCE_RANGE_ENDS,
+        source_range_column,
+    )
+
+    # the plan's members are the resolver's rows, in order
+    loaded = source_rows.set_index("_patch_row").loc[members["_patch_row"]]
+    ends = zip(SOURCE_RANGE_ENDS, ("min", "max", "step"), strict=True)
+    return member_rows.assign(
+        **{
+            source_range_column(dim, end): loaded[f"{dim}_{name}"].to_numpy()
+            for end, name in ends
+        }
+    )
+
+
 def _location(resolver, row):
     """Where a member's file opens, with any storage options its path carries."""
     loader, path, _, _ = resolver._array_read_info(row)
@@ -347,8 +372,10 @@ def spool_to_xarray(
     ``samples=True`` on dimensions, which stays exact. Pending inventory
     enrichment is likewise refused, since the tree would omit the
     enriched attributes, as is a spool chunked along ``dim`` after a
-    sample (or relative) selection: planning it again along ``dim``
-    would lose the selection. Convert the selected spool instead.
+    sample (or relative) selection, unless that selection was on ``dim``
+    alone and every chunk is a window inside a selected patch: planning
+    it again along ``dim`` would otherwise lose the selection. Convert
+    the selected spool instead.
     """
     xr = optional_import("xarray")
     da = optional_import("dask.array")
@@ -413,14 +440,17 @@ def spool_to_xarray(
         )
         raise PatchConversionError(msg)
     own = spool._catalog.resolver
-    if (
-        isinstance(own, PlanResolver)
-        and own.dim == dim
-        and any(s or r for _, s, r in own.parent_residuals)
-        and collapse_working_df(spool._catalog) is not None
+    selected = []
+    if isinstance(own, PlanResolver) and own.dim == dim:
+        selected = [set(c) for c, s, r in own.parent_residuals if s or r]
+    collapsed = collapse_working_df(spool._catalog) if selected else None
+    if collapsed is not None and (
+        any(x - {dim} for x in selected) or not collapsed["_modified"].all()
     ):
-        # Planning along the same dimension again starts from the source
-        # rows, which do not carry the selection the plan was made after.
+        # Re-planning along the same dimension loads the source rows
+        # without the selection the plan was made after (#1373): only a
+        # member trimmed inside its selected source, by a selection on
+        # this dimension alone, still loads the samples it stands for.
         msg = (
             f"Cannot convert a spool chunked along '{dim}' after a sample "
             f"selection or a relative one: planning it along '{dim}' again "
@@ -476,6 +506,7 @@ def spool_to_xarray(
     if resolver.parent_residuals:
         # a residual re-trims the loaded patch, which a window read skips
         assembler = replace(assembler, array_source=None)
+        member_rows = _with_loaded_range(member_rows, plan.members, source_rows, dim)
     by_output = defaultdict(list)
     for row in assembler._df_to_dict_list(member_rows):
         by_output[row["output_id"]].append(row)
