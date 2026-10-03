@@ -15,6 +15,7 @@ from typing import Any
 
 import numpy as np
 import numpy.fft as nft
+import scipy.fft as sft
 from pydantic import ConfigDict, Field
 
 import dascore as dc
@@ -722,6 +723,8 @@ class Stft(PatchProcessor):
     - Real data is transformed one-sided along the last windowed dimension
       and centred along the others, as [Patch.dft](`dascore.Patch.dft`) with
       ``real=True`` is; complex data is centred along every one.
+    - Data that single precision holds (eg float32, complex64, int16) gives
+      a complex64 output; wider data gives complex128.
     - The output is a stack of windows as
       [Patch.tile_apply](`dascore.Patch.tile_apply`) makes one, transformed
       along the window: the transformed dimension becomes the window
@@ -739,7 +742,7 @@ class Stft(PatchProcessor):
     [Patch.dft](`dascore.Patch.dft`), [Patch.istft](`dascore.Patch.istft`)
     """
 
-    __version__ = "2.1"
+    __version__ = "2.2"
 
     taper_window: Any = "hann"
     overlap: Any = Field(default_factory=lambda: _HALF_OVERLAP)
@@ -832,7 +835,9 @@ class Stft(PatchProcessor):
             for axis in tail:
                 tiles = sp_detrend(tiles, axis=axis, type="linear")
             tiles = tiles * _taper_like(get_window_nd(self.taper_window, size), tiles)
-        fft = nft.rfftn if real else nft.fftn
+        # scipy's transforms compute single precision data in single
+        # precision; numpy's use double internally, several times the memory.
+        fft = sft.rfftn if real else sft.fftn
         spectra = fft(tiles, s=nffts, axes=tail)
         centred = tail[:-1] if real else tail
         if centred:

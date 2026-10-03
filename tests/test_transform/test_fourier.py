@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import gc
 import pickle
+import tracemalloc
 import weakref
 from concurrent.futures import ProcessPoolExecutor
 
@@ -576,6 +577,25 @@ class TestInverseDiscreteFourierTransform:
 class TestSTFT:
     """Tests for the short-time Fourier transform."""
 
+    def test_single_precision_peak_memory(self):
+        """float32 data are transformed in single precision, without a double copy."""
+        data = np.zeros((100, 50_000), dtype=np.float32)
+        time = dc.to_datetime64(0) + np.arange(50_000) * np.timedelta64(1, "ms")
+        coords = {"distance": np.arange(100.0), "time": time}
+        patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+        # Measured from here, leaving any tracing already running as it was.
+        was_tracing = tracemalloc.is_tracing()
+        tracemalloc.start()
+        tracemalloc.reset_peak()
+        before = tracemalloc.get_traced_memory()[0]
+        try:
+            out = patch.stft(time=256, samples=True)
+            peak = tracemalloc.get_traced_memory()[1] - before
+        finally:
+            if not was_tracing:
+                tracemalloc.stop()
+        assert peak < 3 * out.data.nbytes
+
     @pytest.mark.parametrize("detrend", [False, True])
     def test_single_precision_stays_single(self, random_patch, detrend):
         """float32 data give complex64 spectra, detrended or not."""
@@ -1128,8 +1148,8 @@ class TestStftIdentity:
         """The default and an explicit half overlap keep their own ids."""
         default = chirp.stft(time=10 * second).attrs.data_id
         explicit = chirp.stft(time=10 * second, overlap=50 * percent).attrs.data_id
-        assert default == "b58639a01788bd9708b3bb7c94015993"
-        assert explicit == "348f576656aec44dd42c8450b4baafc9"
+        assert default == "f630eea773e7a629bb9b536291cfbf35"
+        assert explicit == "e54e55da12104a1f0e484fc9197ecd7c"
 
     @pytest.mark.concurrency
     def test_process_pool_stamps_the_serial_id(self, chirp):
