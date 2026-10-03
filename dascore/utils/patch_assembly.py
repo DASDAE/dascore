@@ -38,7 +38,7 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
-from dascore.units import get_quantity
+from dascore.units import conversion_factors, get_quantity, units_match
 from dascore.utils.array_api import to_numpy
 from dascore.utils.attrs import (
     _is_missing,
@@ -141,6 +141,21 @@ def _match_merge_units(patch, merge_dim, target_units):
     return patch, target_units
 
 
+def plan_data_units(units: Iterable):
+    """The data units members merge into: the first stated, in plan order."""
+    stated = [x for x in units if not _is_missing(x)]
+    return get_quantity(stated[0]) if stated else None
+
+
+def _converted_dtype(dtype, units, target) -> np.dtype:
+    """The dtype `convert_units` gives ``dtype`` data going ``units`` to ``target``."""
+    factors = conversion_factors(units, target)
+    if factors is None:
+        return np.dtype(dtype)
+    plan = dict(zip(("mult1", "add", "mult2"), factors, strict=True))
+    return dc.proc.units.ConvertUnits().kernel(np.empty(0, dtype), **plan).dtype
+
+
 def _drop_associated_ranges(row, kwargs, plan_dim) -> dict:
     """
     Drop the ranges of coordinates which merely ride a dimension.
@@ -232,8 +247,24 @@ class _MemberMeta:
     attrs: dc.PatchAttrs
     # The shape of the whole stored array and the part of it this member
     # is; the coords' shape and all of it when the plan trims nothing.
+    # Empty when the row only sizes the member, which then loads as a patch.
     extent: tuple[int, ...]
     window: tuple[slice, ...]
+    # The stored window this member reads as, if any (see `describe_output`).
+    source: ArraySource | None = None
+    # Where the merge's dtype promotion first rounds this member; `_cast_via`.
+    cast_via: np.dtype | None = None
+
+
+@dataclass
+class OutputMeta:
+    """What one plan output is, stated by its member rows alone."""
+
+    dims: tuple[str, ...]
+    coords: CoordManager
+    attrs: dc.PatchAttrs
+    dtype: np.dtype
+    members: list[_MemberMeta]
 
 
 def _attrs_from_row(
@@ -264,11 +295,7 @@ def _attrs_from_row(
         for k, v in row.items()
         if not str(k).startswith("_") and k not in skip and not _is_null(v)
     }
-    for name, value in out.items():
-        if isinstance(value, pd.Timestamp):
-            out[name] = value.to_datetime64()
-        elif isinstance(value, pd.Timedelta):
-            out[name] = value.to_timedelta64()
+    out = {name: _as_numpy(value) for name, value in out.items()}
     stored = row.get("_attr_dtypes")
     if isinstance(stored, str) and stored:
         for name, dtype in json.loads(stored).items():
@@ -291,6 +318,15 @@ def _is_null(value) -> bool:
     return np.ndim(value) == 0 and pd.isnull(value)
 
 
+def _as_numpy(value) -> Any:
+    """A frame's pandas time scalar as numpy's; anything else as it is."""
+    if isinstance(value, pd.Timestamp):
+        return value.to_datetime64()
+    if isinstance(value, pd.Timedelta):
+        return value.to_timedelta64()
+    return value
+
+
 def _row_values(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
     """
     A dimension's (min, max, step) envelope in the file's dtype, or None.
@@ -304,11 +340,7 @@ def _row_values(row: Mapping, dim: str) -> tuple[Any, Any, Any] | None:
         value = row.get(f"{dim}_{name}")
         if value is None or _is_null(value):
             return None
-        if isinstance(value, pd.Timestamp):
-            value = value.to_datetime64()
-        elif isinstance(value, pd.Timedelta):
-            value = value.to_timedelta64()
-        values.append(value)
+        values.append(_as_numpy(value))
     lo, hi, step = values
     if step == np.zeros((), dtype=np.asarray(step).dtype):
         return None  # a zero step is not a range
@@ -346,11 +378,7 @@ def _row_bounds(row: Mapping, dim: str) -> tuple[Any, Any] | None:
         value = row.get(f"{dim}_{name}")
         if value is None or _is_null(value):
             return None
-        if isinstance(value, pd.Timestamp):
-            value = value.to_datetime64()
-        elif isinstance(value, pd.Timedelta):
-            value = value.to_timedelta64()
-        values.append(value)
+        values.append(_as_numpy(value))
     step = row.get(f"{dim}_step", np.nan)
     if np.asarray(values[0]).dtype.kind == "f" and not _is_null(step):
         pad = abs(step) * _READ_PAD
@@ -419,6 +447,38 @@ def coord_from_row(row: Mapping, dim: str, units=None):
     if step < np.zeros((), dtype=np.asarray(step).dtype):
         return None
     return get_coord(start=lo, stop=hi + step, step=step, units=units)
+
+
+def _sized_coord(row: Mapping, dim: str, units=None):
+    """A coordinate sizing the row's envelope, even one `coord_from_row` refuses."""
+    if (coord := coord_from_row(row, dim, units=units)) is not None:
+        return coord
+    low, high, step = (_as_numpy(row.get(f"{dim}_{x}")) for x in ("min", "max", "step"))
+    if _is_null(step) or to_float(step) == 0:
+        return get_coord(data=[low], units=units) if low == high else None
+    start, stop = (high, low + step) if to_float(step) < 0 else (low, high + step)
+    return get_coord(start=start, stop=stop, step=step, units=units)
+
+
+def _cut_coord(row: Mapping, dim: str, units=None):
+    """
+    The samples of a cut member's source inside the cut, or None.
+
+    As loading selects them: the source's own grid, in its own units,
+    selected to the cut and then converted to ``units``. A coordinate
+    counted from the cut's bound instead would put every label off the
+    grid by however far the bound fell between two samples.
+    """
+    stored = row.get(f"_{dim}_units_source")
+    stored = units if _is_null(stored) else stored
+    # the source's range is in its own units, as its row states them
+    source = source_coord_from_row({**row, f"_{dim}_units": stored}, dim, stored)
+    if source is None or (bounds := _row_bounds(row, dim)) is None:
+        return None
+    if units is not None and stored != units:
+        bounds = tuple(x * get_quantity(units) for x in bounds)
+    coord = source.select(bounds)[0]
+    return coord if units is None else coord.convert_units(units)
 
 
 def _at_unit(coord, unit: str):
@@ -607,6 +667,13 @@ def _cast_via(dtype: np.dtype, chain: Sequence[np.dtype]) -> np.dtype | None:
     return None if via is None or via == chain[-1] else via
 
 
+def _cast_chain(dtypes) -> tuple[list[np.dtype], list[np.dtype | None]]:
+    """The promotion chain of members placed in order, and each one's cast."""
+    dtypes = [np.dtype(x) for x in dtypes]
+    chain = list(accumulate(dtypes, np.result_type))
+    return chain, [_cast_via(x, chain[num:]) for num, x in enumerate(dtypes)]
+
+
 @dataclass
 class PatchAssembler:
     """
@@ -636,15 +703,16 @@ class PatchAssembler:
     # Only a source measured now and found unchanged keeps the recipe.
     sources_unchanged: Callable[[pd.DataFrame], bool] | None = None
     trim_dims: tuple[str, ...] = ()
+    # Whether members carry coordinates the rows cannot rebuild, so the
+    # index cannot stand for their patches (it can still size them).
+    aux_coords: bool = False
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
         expected_len = len(joined["current_index"].unique())
         merging = len(joined) > expected_len
         merge_dim = _get_varying_dim(joined) if merging else None
-        # keep_first's units are the first member's in plan order
-        stated = [x for x in joined.get("data_units", []) if not _is_missing(x)]
-        units = get_quantity(stated[0]) if stated else None
+        units = plan_data_units(joined.get("data_units", []))
         if merge_dim is not None:
             # members go in the output coordinate's order
             descending = bool((to_float(joined[f"{merge_dim}_step"].values) < 0).all())
@@ -770,30 +838,78 @@ class PatchAssembler:
         assert self.array_source is not None, "the caller checks for a source"
         sources, rest = [], None
         for row, meta in zip(rows, metas, strict=True):
-            if meta.dims != dims:
-                return None
-            source = self.array_source(row, meta.extent)
+            source = self._member_source(row, meta, dims)
             if source is None:
                 return None
-            source = source[meta.window]
             placed = meta.coords.shape
-            assert source.shape == placed, "the window is the member's own samples"
-            if source.shape != source.extent:
-                # a trim is a window of the array its row names, and holds
-                # that window's id rather than the whole array's
-                meta.attrs = meta.attrs.update(data_id=source.data_id)
             others = placed[:axis] + placed[axis + 1 :]
             if rest is None:
                 rest = others
             elif others != rest:
                 return None
             sources.append(source)
-        dtypes = [np.dtype(x.dtype) for x in sources]
-        chain = list(accumulate(dtypes, np.result_type))
-        casts = [_cast_via(x, chain[num:]) for num, x in enumerate(dtypes)]
+        chain, casts = _cast_chain([x.dtype for x in sources])
         return LazyArray.from_sources(
             sources, axis=axis, dtype=chain[-1], cast_via=casts
         )
+
+    def _member_source(self, row, meta, dims) -> ArraySource | None:
+        """The stored window a member is, or None if it is not one."""
+        if meta.dims != dims or not meta.window or self.array_source is None:
+            return None
+        source = self.array_source(row, meta.extent)
+        if source is None:
+            return None
+        source = source[meta.window]
+        assert source.shape == meta.coords.shape, "the window is the member's samples"
+        if source.shape != source.extent:
+            # a trim is a window of the array its row names, and holds
+            # that window's id rather than the whole array's
+            meta.attrs = meta.attrs.update(data_id=source.data_id)
+        return source
+
+    def describe_output(self, rows, units=None) -> OutputMeta | None:
+        """
+        What one output is, from its member rows in order; nothing is read.
+
+        Members are sized as `_meta_from_index` sizes them, without its
+        identity checks, or else from their envelopes (see `_sized_meta`).
+        Only a member read as a window of its stored array has a source;
+        the rest load as patches, as does one stating other data units
+        than ``units``, which loading converts (its dtype and attrs are
+        the converted ones). The data id is empty unless every member's is
+        known without loading it. None when a row states no evenly sampled range
+        or no dtype.
+        """
+        metas = [self._sized_meta(row, loose=True) for row in rows]
+        dtypes = [x.get("_dtype") for x in rows]
+        if None in metas or not all(isinstance(x, str) and x for x in dtypes):
+            return None
+        dims, known = metas[0].dims, []
+        for num, (row, meta) in enumerate(zip(rows, metas, strict=True)):
+            stated = meta.attrs.data_units
+            converted = units is not None and not units_match(stated, units)
+            if converted:
+                dtypes[num] = _converted_dtype(dtypes[num], stated, units)
+                meta.attrs = meta.attrs.update(data_units=units)
+            elif self.can_use_index is None or self.can_use_index(row):
+                meta.source = self._member_source(row, meta, dims)
+            # a loaded member keeps its row's id only if loading changes
+            # nothing, and a coordinate in other units changes it either way
+            whole = meta.source is not None or not (converted or row.get("_modified"))
+            whole = whole and not _units_converted(row, self.plan_dim)
+            known.append(whole and not _is_missing(row.get("data_id")))
+        chain, casts = _cast_chain(dtypes)
+        for meta, cast in zip(metas, casts, strict=True):
+            meta.cast_via = cast
+        coords, attrs = metas[0].coords, metas[0].attrs
+        if len(metas) > 1:
+            coords, attrs = self._merged_meta(
+                self.plan_dim, [x.coords for x in metas], [x.attrs for x in metas]
+            )
+        if not all(known):
+            attrs = attrs.update(data_id="")
+        return OutputMeta(dims, coords, attrs, chain[-1], metas)
 
     def _stream(self, joined, df_dict_list, merge_dim, samples, units=None):
         """
@@ -858,6 +974,13 @@ class PatchAssembler:
 
     def _assemble(self, data, dims, merge_dim, coords, attrs):
         """Build the merged patch from the members' data, coords and attrs."""
+        coords, attrs = self._merged_meta(merge_dim, coords, attrs)
+        # The fold named the result; building it is not another array.
+        with operation_context():
+            return dc.Patch(data=data, coords=coords, attrs=attrs, dims=list(dims))
+
+    def _merged_meta(self, merge_dim, coords, attrs):
+        """The coordinates and attrs members merged along ``merge_dim`` have."""
         # Ensure the loaded patches only vary along the expected dimension,
         # the same requirement _force_patch_merge enforces.
         summary_df = pd.DataFrame([coord._get_dim_summary() for coord in coords])
@@ -878,11 +1001,7 @@ class PatchAssembler:
         new_attrs = combine_patch_attrs(
             attrs, **attr_kwargs, merge_params=self.merge_kwargs
         )
-        # The fold named the result; building it is not another array.
-        with operation_context():
-            return dc.Patch(
-                data=data, coords=new_coord, attrs=new_attrs, dims=list(dims)
-            )
+        return new_coord, new_attrs
 
     def _member_meta_from_index(self, rows) -> list[_MemberMeta] | None:
         """What the rows state about every member, or None if any is silent.
@@ -929,39 +1048,63 @@ class PatchAssembler:
             return None
         if not _is_null(complete := row.get("_attrs_complete")) and not complete:
             return None
+        # a window's id builds on the whole array's, so a row which does
+        # not name the array cannot name the window
+        cut = row.get("_modified") and self.plan_dim in str(row["dims"]).split(",")
+        if cut and ids_enabled() and _is_missing(row.get("data_id")):
+            return None
+        return None if self.aux_coords else self._sized_meta(row)
+
+    def _sized_meta(self, row: Mapping, loose: bool = False):
+        """
+        The coordinates an index row states for one member, or None.
+
+        Only a member which is a window of its stored array is sized,
+        unless ``loose``: then any other is sized from its envelope (a
+        plan cuts members on their own grids), and states no window.
+        """
         dims = tuple(str(row["dims"]).split(","))
-        trimmed = bool(row.get("_modified"))
         coord_map, extent, window = {}, [], []
         for dim in dims:
             # a coordinate with no units is NaN in a frame, not None,
             # and NaN would build a dimensionless quantity the patch
             # path does not have.
             units = None if _is_null(u := row.get(f"_{dim}_units")) else u
-            if trimmed and dim == self.plan_dim:
-                # a window's id builds on the whole array's, so a row
-                # which does not name the array cannot name the window
-                if ids_enabled() and _is_missing(row.get("data_id")):
-                    return None
+            cut = bool(row.get("_modified")) and dim == self.plan_dim
+            if cut:
                 placed = self._trim_window(row, dim, units)
-                if placed is None:
-                    return None
-                coord, span, length = placed
             else:
                 # Only the plan's dimension is trimmed here (a trim-dim plan
                 # withholds the source range, so never takes this path).
                 coord = coord_at_stored_unit(
                     coord_from_row(row, dim, units=units), row, dim
                 )
+                placed = (
+                    None if coord is None else (coord, slice(0, len(coord)), len(coord))
+                )
+            if placed is None and loose:
+                coord = _cut_coord(row, dim, units) if cut else None
                 if coord is None:
-                    return None
-                span, length = slice(0, len(coord)), len(coord)
-            coord_map[dim] = coord
-            extent.append(length)
+                    coord = _sized_coord(row, dim, units)
+                    if coord is not None and cut:  # a cut's end need not be a sample
+                        coord = coord.select(_row_bounds(row, dim))[0]
+                placed = None if coord is None else (coord, None, None)
+            if placed is None:
+                return None
+            coord_map[dim], span, length = placed
             window.append(span)
+            extent.append(length)
         coords = get_coord_manager(coord_map, dims=dims)
-        return _MemberMeta(
-            dims, coords, _attrs_from_row(row, dims), tuple(extent), tuple(window)
-        )
+        # every coordinate's envelope is a coordinate's, not an attr
+        named = {
+            x.removeprefix("_").removesuffix("_coord_dtype")
+            for x in map(str, row)
+            if x.endswith("_coord_dtype")
+        }
+        attrs = _attrs_from_row(row, dims, coord_names={*dims, *named})
+        if None in window:  # sized, but not a window of its stored array
+            return _MemberMeta(dims, coords, attrs, (), ())
+        return _MemberMeta(dims, coords, attrs, tuple(extent), tuple(window))
 
     def _trim_window(self, row: Mapping, dim: str, units):
         """
