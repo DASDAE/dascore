@@ -120,3 +120,12 @@ class TestMultiIndex:
         patch = xarray_to_patch(stacked.reset_index("z"))
         assert patch.dims == ("z",)
         assert patch.coords.dim_map["distance"] == ("z",)
+
+    def test_stacked_coord_on_another_dim_converts(self):
+        """A stacked coordinate riding an ordinary dimension still converts."""
+        xr = pytest.importorskip("xarray")
+        array = xr.DataArray(np.zeros((2, 2)), dims=("x", "y"))
+        array = array.assign_coords(x=[0, 1], y=[0, 1]).stack(z=("x", "y"))
+        array = array.to_dataset(name="v").rename_dims(z="row")["v"]
+        array = array.assign_coords(row=np.arange(4))
+        assert xarray_to_patch(array).dims == ("row",)

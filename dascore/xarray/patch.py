@@ -130,11 +130,12 @@ def xarray_to_patch(data_array) -> dc.Patch:
     """Convert an xarray dataarray to a patch."""
     # this cant work if xarray isn't installed. This ensures it is.
     xr = optional_import("xarray")
-    # a stacked dimension labels each sample with a tuple, which no patch
-    # coordinate holds
+    # a stacked dimension labels its samples with tuples; no patch dim can
     for index in data_array.xindexes.values():
-        if isinstance(index, xr.indexes.PandasMultiIndex):
-            dim = index.dim
+        dim = getattr(index, "dim", None)
+        if isinstance(index, xr.indexes.PandasMultiIndex) and (
+            data_array.xindexes.get(dim) is index
+        ):
             msg = (
                 f"Cannot convert the stacked dimension {dim!r} to a patch; "
                 f"call .unstack({dim!r}) first, or .reset_index({dim!r}) to "
