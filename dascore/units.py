@@ -7,6 +7,7 @@ import shutil
 import warnings
 from collections.abc import Sequence
 from functools import cache
+from pathlib import Path
 from threading import RLock
 from types import EllipsisType
 from typing import Any, cast
@@ -14,6 +15,7 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 import pint
+import pydantic
 from pint import DimensionalityError, Quantity, UndefinedUnitError, Unit
 from pint.facets.plain import PlainUnit
 from platformdirs import user_cache_path
@@ -121,7 +123,9 @@ def _str_to_quant(quant_str):
                 f"Unit string {quant_str!r} has a parenthesized number, which "
                 "is parsed as a scale factor, not a label."
             )
-            warnings.warn(msg, DASCoreWarning, stacklevel=2)
+            # Point at the caller, past dascore and the attrs validation.
+            skip = tuple(str(Path(x.__file__).parent) for x in (dc, pydantic))
+            warnings.warn(msg, DASCoreWarning, skip_file_prefixes=skip)
         ureg = get_registry()
         return ureg.Quantity(quant_str)
 

@@ -243,6 +243,12 @@ class TestParenthesizedFactor:
         with pytest.warns(DASCoreWarning, match="parenthesized number"):
             get_quantity(unit)
 
+    def test_patch_attrs_warn_at_the_caller(self, random_patch):
+        """Setting the label as data units warns at the line that set it."""
+        with pytest.warns(DASCoreWarning, match="parenthesized number") as rec:
+            random_patch.update_attrs(data_units="nanostrain (1e-9)")
+        assert rec[0].filename == __file__
+
     @pytest.mark.parametrize("unit", legit)
     def test_legit_silent(self, unit):
         """Ordinary unit strings, parentheses included, do not warn."""
