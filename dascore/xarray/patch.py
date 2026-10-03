@@ -157,7 +157,7 @@ def _coord_from(data_array, name, coord):
         if units is not None and not _is_temporal(served.dtype):
             served = served.set_units(units)
         return coord.dims, served
-    values = coord.values
-    if units is not None and not _is_temporal(values.dtype):
-        return coord.dims, get_coord(values=values, units=units)
-    return coord.dims, values
+    values = np.asarray(coord.values)
+    units = None if _is_temporal(values.dtype) else units
+    # exact labels, never snapped; only a snapping read keeps a 0-d scalar
+    return coord.dims, get_coord(data=values, units=units, snap=not values.ndim)

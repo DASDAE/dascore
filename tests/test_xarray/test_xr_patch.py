@@ -57,6 +57,50 @@ class TestXarray:
         assert isinstance(patch2, dc.Patch)
 
 
+class TestCoordinateConversion:
+    """xarray coordinates become patch coordinates holding the same labels."""
+
+    @pytest.fixture
+    def xr(self):
+        """The optional xarray module."""
+        return pytest.importorskip("xarray")
+
+    @pytest.mark.parametrize("lazy", [False, True])
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_scalar_coordinate(self, xr, lazy, dim):
+        """A coordinate left scalar by a selection stays one scalar."""
+        patch = dc.get_example_patch()
+        array = patch_to_xarray(patch, lazy_coords=lazy).isel({dim: 3})
+        out = xarray_to_patch(array)
+        coord = out.get_coord(dim)
+        assert coord.shape == ()
+        assert coord.values == patch.get_array(dim)[3]
+        assert xarray_to_patch(array.dc.abs()).get_coord(dim) == coord
+
+    def test_scalar_integer_without_units(self, xr):
+        """A scalar integer is one label, never the length of a partial coord."""
+        array = xr.DataArray(np.arange(3), dims="x", coords={"x": [5, 6, 7]})
+        coord = xarray_to_patch(array.isel(x=1)).get_coord("x")
+        assert coord.shape == () and coord.values == 6
+
+    def test_labels_are_not_moved(self, xr):
+        """Nearly even labels keep their exact values."""
+        labels = np.array([0.0, 1.0, 2.00000001, 3.0])
+        array = xr.DataArray(np.arange(4), dims="x", coords={"x": labels})
+        np.testing.assert_array_equal(xarray_to_patch(array).get_array("x"), labels)
+        array["x"].attrs["units"] = "m"
+        np.testing.assert_array_equal(xarray_to_patch(array).get_array("x"), labels)
+
+    @pytest.mark.parametrize("step", [0.1, 1.0209, 3])
+    def test_even_labels_stay_even(self, xr, step):
+        """Evenly sampled labels still come back as an evenly sampled coord."""
+        coord = dc.get_coord(start=0, step=step, shape=(50,))
+        patch = dc.Patch(data=np.arange(50), dims=("x",), coords={"x": coord})
+        out = xarray_to_patch(patch_to_xarray(patch)).get_coord("x")
+        assert out.evenly_sampled
+        np.testing.assert_array_equal(out.values, coord.values)
+
+
 class TestPublishedPaths:
     """The conversions stay importable from where the docs published them."""
 

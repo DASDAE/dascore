@@ -82,10 +82,7 @@ def _same_labels(first: BaseCoord, second: BaseCoord) -> bool:
         if first.data_id == second.data_id:
             return True
         if isinstance(first, NumericCoord) and isinstance(second, NumericCoord):
-            grids = (first._grid, second._grid)
-            if all(grid is not None and grid.exact for grid in grids):
-                return False  # exact grids have one canonical identity
-            # Float windows can spell identical labels with different parents.
+            # Grids with different steps or parents can spell the same labels.
             ends = [0, len(first) - 1]
             if not np.array_equal(
                 first._get_index_values(ends), second._get_index_values(ends)
@@ -104,9 +101,11 @@ def _chained(coords: list[BaseCoord]) -> BaseCoord | None:
         out = concat_coords(*coords)
     except CoordError:
         return None
-    # concat_coords orders its inputs; xarray's order is the data's
-    starts = [x.min() if out.sorted else x.max() for x in coords]
-    ordered = all((a < b) if out.sorted else (a > b) for a, b in pairwise(starts))
+    # concat_coords sorts segments; xarray's order is the data's, so each
+    # input must lie wholly beyond the one before it
+    spans = [(x.min(), x.max()) for x in coords]
+    spans = spans if out.sorted else spans[::-1]
+    ordered = all(a[1] < b[0] for a, b in pairwise(spans))
     return out if ordered and is_servable(out) and _relabels_exactly(out) else None
 
 
@@ -270,6 +269,11 @@ class CoordIndex(CoordinateTransformIndex):
         if np.ndim(raw) != 1:
             return None
         return self._picked(positional_indexer(raw, len(coord)))
+
+    def roll(self, shifts) -> CoordIndex:
+        """Roll the labels, as a materialized index rolls them."""
+        positions = np.arange(len(self.coordinate))
+        return self._picked(np.roll(positions, shifts[self.dim]))
 
     def sel(self, labels, method=None, tolerance=None) -> IndexSelResult:
         """Resolve label selection as `Patch.sel` does."""

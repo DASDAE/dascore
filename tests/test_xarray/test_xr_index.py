@@ -463,6 +463,17 @@ class TestConcat:
         expected = np.concatenate([x["x"].values for x in parts])
         np.testing.assert_array_equal(out["x"].values, expected)
 
+    def test_interleaved_segments_keep_their_order(self):
+        """Parts whose segments interleave keep the labels on their data."""
+        first, second = (
+            concat_coords(MS[a : a + 2], MS[a + 4 : a + 6]) for a in (0, 2)
+        )
+        lazy = [_pair(x, data=x.values)[0] for x in (first, second)]
+        out = xr.concat(lazy, dim="x")
+        expected = np.concatenate([first.values, second.values])
+        np.testing.assert_array_equal(out["x"].values, expected)
+        assert out.sel(x=MS.values[4]).values == MS.values[4]
+
     def test_concat_with_a_materialized_part(self):
         """A materialized part makes the result materialized."""
         lazy, _ = _pair(MS[:50])
@@ -547,15 +558,26 @@ class TestAlignment:
         out = xr.align(_pair(first)[0], _pair(second)[0], join="exact")
         np.testing.assert_array_equal(out[0]["x"].values, values)
 
-    def test_unequal_grids_need_no_labels(self, monkeypatch):
-        """Two grids differ by their ids alone, without reading a label."""
+    def test_unequal_grids_read_few_labels(self, monkeypatch):
+        """Two grids differ by their end labels, without reading the rest."""
         descending = COORDS["descending"]
-        monkeypatch.setattr(
-            NumericCoord,
-            "_get_index_values",
-            lambda *_: pytest.fail("the labels were read"),
-        )
+        original = NumericCoord._get_index_values
+
+        def _bounded(self, indices):
+            assert np.size(indices) <= 2, "the labels were read"
+            return original(self, indices)
+
+        monkeypatch.setattr(NumericCoord, "_get_index_values", _bounded)
         assert not _same_labels(MS, descending)
+
+    @pytest.mark.parametrize("shape,steps", [((1,), (1, 2)), ((2,), ((3, 2), 1))])
+    def test_grids_with_different_steps_but_same_labels(self, shape, steps):
+        """Exact grids spelling the same labels align, whatever their steps."""
+        first, second = (get_coord(start=0, step=x, shape=shape) for x in steps)
+        assert first.data_id != second.data_id
+        np.testing.assert_array_equal(first.values, second.values)
+        out = xr.align(_pair(first)[0], _pair(second)[0], join="exact")
+        np.testing.assert_array_equal(out[0]["x"].values, first.values)
 
     @pytest.mark.parametrize("start,step", [(0.2, 0.1), (0.1, 0.100001)])
     def test_unequal_float_alignment_reads_few_labels(self, monkeypatch, start, step):
@@ -615,6 +637,18 @@ class TestAlignment:
             lambda: lazy.reindex_like(lazy_to, method=method),
             lambda: eager.reindex_like(eager_to, method=method),
         )
+
+
+class TestRoll:
+    """Rolling the coordinates rolls the lazy labels, as eager xarray does."""
+
+    @pytest.mark.parametrize("shift", [0, 3, -7, 103])
+    def test_roll_coords(self, shift):
+        """The rolled array keeps a lazy index over the rolled labels."""
+        lazy, eager = _pair(MS)
+        out = lazy.roll(x=shift, roll_coords=True)
+        assert isinstance(out.xindexes["x"], CoordIndex)
+        _assert_same(lambda: out, lambda: eager.roll(x=shift, roll_coords=True))
 
 
 class TestFromVariables:
