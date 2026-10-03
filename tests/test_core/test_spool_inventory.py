@@ -63,6 +63,7 @@ from dascore.exceptions import (
     UnresolvedPatchError,
 )
 from dascore.units import cm, get_quantity, m
+from dascore.utils.misc import suppress_warnings
 
 # What the warning for a patch no single inventory context describes says.
 UNJUDGED_MATCH = "resolve to no single inventory context.*conform_to_inventory"
@@ -2640,16 +2641,14 @@ class TestChannelSelect:
         """
         other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER", gauge_length=99.0)
         spool = dc.spool([patch, other]).attach_inventory(inventory)
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
+        with suppress_warnings(action="error"):
             out = spool.select(gauge_length=10.0, **{"interrogator.model": "FI-*"})
         assert len(out) == 1
 
     def test_a_resolved_non_match_is_silent(self, patch, inventory):
         """Only unresolved patches warn; an ordinary miss says nothing."""
         spool = dc.spool(patch).attach_inventory(inventory)
-        with warnings.catch_warnings():
-            warnings.simplefilter("error")
+        with suppress_warnings(action="error"):
             assert len(spool.select(coupling="cement")) == 0
             assert len(spool.select(gauge_length=99.0)) == 0
             assert len(spool.expand_by("zone", include="nowhere")) == 0
