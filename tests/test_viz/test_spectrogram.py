@@ -6,9 +6,12 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pytest
 
+import dascore as dc
 from dascore.exceptions import ParameterError
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.plotting import _get_plot_values
 from dascore.viz.spectrogram import _get_other_dim, _spectrogram_patch
+from dascore.warnings import NumpyFallbackWarning
 
 
 def test_get_other_dim_valid():
@@ -45,6 +48,15 @@ class TestPlotSpectrogram:
         """Ensure a matplotlib axis is returned."""
         axis = random_patch.viz.spectrogram(dim="time")
         assert axis is not None
+        assert isinstance(axis, plt.Axes)
+
+    def test_dask_patch(self):
+        """A patch on another backend is drawn from numpy all the same."""
+        da = pytest.importorskip("dask.array")
+        chirp = dc.get_example_patch("chirp", channel_count=2)
+        patch = chirp.new(data=da.from_array(np.asarray(chirp.data)))
+        with suppress_warnings(NumpyFallbackWarning):
+            axis = patch.viz.spectrogram(dim="time")
         assert isinstance(axis, plt.Axes)
 
     def test_invalid_dim(self, random_patch):

@@ -8,7 +8,7 @@ Transforms change a patch's domain and usually its dimension names and units. Th
 
 # Fourier transform
 
-[`Patch.dft`](`dascore.transform.fourier.dft`) changes a dimension such as `time` to its Fourier-domain counterpart, `ft_time`. `real=True` keeps only the nonnegative frequencies of real input.
+[`Patch.dft`](`dascore.Patch.dft`) changes a dimension such as `time` to its Fourier-domain counterpart, `ft_time`. `real=True` keeps only the nonnegative frequencies of real input.
 
 ```{python}
 import numpy as np
@@ -29,7 +29,7 @@ spatial_spectrum = patch.dft(dim="distance", real=True)
 print(spatial_spectrum.get_coord("ft_distance"))
 ```
 
-[`Patch.idft`](`dascore.transform.fourier.idft`) performs the inverse transform:
+[`Patch.idft`](`dascore.Patch.idft`) performs the inverse transform:
 
 ```{python}
 round_trip = patch.dft(dim="time").idft()
@@ -42,7 +42,7 @@ See [Fourier transforms in DASCore](../notes/dft_notes.qmd) for naming, units, a
 
 # Short-time Fourier transform
 
-[`Patch.stft`](`dascore.transform.fourier.stft`) shows frequency content through time; [`Patch.istft`](`dascore.transform.fourier.istft`) inverts it.
+[`Patch.stft`](`dascore.Patch.stft`) shows frequency content through time; [`Patch.istft`](`dascore.Patch.istft`) inverts it.
 
 ```{python}
 from dascore.units import percent, second

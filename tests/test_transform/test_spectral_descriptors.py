@@ -7,6 +7,7 @@ import pytest
 
 import dascore as dc
 from dascore.transform import spectral_descriptors
+from dascore.transform.spectral_descriptors import SpectralCentroid
 
 
 @pytest.fixture(scope="class")
@@ -260,18 +261,6 @@ class TestSpectralValidation:
 class TestSpectralHelpers:
     """Tests for defensive paths in spectral helpers."""
 
-    def test_unhandled_format(self, sine_patch, monkeypatch):
-        """An unexpected normalized format triggers the internal assertion."""
-        monkeypatch.setattr(
-            spectral_descriptors,
-            "_normalize_spectral_format",
-            lambda patch, spectral_format: "unexpected",
-        )
-        with pytest.raises(
-            AssertionError, match="Unhandled spectral format 'unexpected'"
-        ):
-            spectral_descriptors._get_power(sine_patch, "auto")
-
     def test_nonnegative_frequencies(self):
         """Spectra without negative bins need no mirrored-power comparison."""
         freqs = np.array([0.0, 1.0, 2.0])
@@ -518,3 +507,59 @@ class TestOtherDescriptors:
             expected = input_units**0.5
 
         assert out.attrs.data_units == expected
+
+
+class TestSpectralProcessors:
+    """What the descriptor classes guarantee beyond what the framework checks."""
+
+    def test_metadata_without_data(self, random_patch):
+        """The reduced output and the bins read need no data."""
+        meta = random_patch.dft("time", real=True).drop_data()
+        out, plan = SpectralCentroid(fmax=10).get_metadata(meta)
+        assert out.dims == ("distance",) and out.shape == (300,)
+        assert out.attrs.data_type == "Spectral Centroid"
+        assert plan["axis"] == 1 and len(plan["keep"]) == 81
+        assert plan["freqs"][0] == 0 and plan["freqs"][-1] == 10
+
+    @pytest.mark.parametrize("dtype", ["float32", "float64", "longdouble"])
+    @pytest.mark.parametrize("output", ["FFT", "AS"])
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "SpectralCentroid",
+            "MedianFrequency",
+            "SpectralPeakFrequency",
+            "SpectralPeakAmplitude",
+            "SpectralEntropy",
+            "SpectralKurtosis",
+            "SpectralFlatness",
+        ],
+    )
+    def test_metadata_dtype_is_the_kernels(self, dtype, output, name):
+        """Metadata states the dtype each descriptor's data come out in."""
+        patch = dc.get_example_patch("random_das", shape=(3, 128))
+        patch = patch.new(data=np.asarray(patch.data, dtype))
+        if output == "FFT":
+            spectra = patch.stft(time=64, samples=True)
+        else:
+            spectra = patch.dft("time", real=True, output=output)
+        processor = getattr(spectral_descriptors, name)("time")
+        meta = processor.get_metadata(spectra.drop_data())[0]
+        assert meta.dtype == processor.run(spectra).dtype
+
+    def test_entropy_unnormalized(self, sine_dft):
+        """Without normalizing, entropy is in bits, not a fraction of the most."""
+        normalized = sine_dft.spectral_entropy(negative_frequencies="drop")
+        raw = sine_dft.spectral_entropy(normalize=False, negative_frequencies="drop")
+        bins = (sine_dft.get_array("ft_time") >= 0).sum()
+        assert np.allclose(raw.data, normalized.data * np.log2(bins))
+        assert not np.allclose(raw.data, normalized.data)
+
+    def test_complex_stft_folds_nyquist(self):
+        """A complex stft's -Nyquist bin counts once, as a real stft's does."""
+        patch = dc.get_example_patch("random_das", shape=(3, 500))
+        cplx = patch.new(data=np.asarray(patch.data) * (1 + 1j))
+        kwargs = dict(time=64, samples=True)  # even, so it has a Nyquist bin
+        out = cplx.stft(**kwargs).spectral_centroid()
+        expected = patch.stft(**kwargs).spectral_centroid()
+        assert np.allclose(out.data, expected.data)

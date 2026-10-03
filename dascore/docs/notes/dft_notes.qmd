@@ -279,7 +279,7 @@ Multiplying NumPy's FFT output by sample spacing gives DASCore coefficients with
 We also need to be careful to handle the frequency shifts if the frequency bins are to be sorted.
 :::
 
-Patch methods [dft](`dascore.transform.fourier.dft`) and [idft](`dascore.transform.fourier.idft`) handle this for you.
+Patch methods [dft](`dascore.Patch.dft`) and [idft](`dascore.Patch.idft`) handle this for you.
 
 ## Useful Resources
 

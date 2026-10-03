@@ -6,7 +6,7 @@ Transforms are defined as
 from __future__ import annotations
 
 from .differentiate import Differentiate
-from .fourier import dft, idft, stft, istft
+from .fourier import Dft, Idft, Stft, Istft
 from .integrate import Integrate
 from .hilbert import Hilbert, Envelope, PhaseWeightedStack
 from .strain import VelocityToStrainRate, VelocityToStrainRateEdgeless, RadiansToStrain
@@ -16,11 +16,11 @@ from .stalta import stalta
 from .fbe import fbe
 from .kurtosis import Kurtosis
 from .spectral_descriptors import (
-    median_frequency,
-    spectral_centroid,
-    spectral_entropy,
-    spectral_flatness,
-    spectral_kurtosis,
-    spectral_peak_frequency,
-    spectral_peak_amplitude,
+    MedianFrequency,
+    SpectralCentroid,
+    SpectralEntropy,
+    SpectralFlatness,
+    SpectralKurtosis,
+    SpectralPeakFrequency,
+    SpectralPeakAmplitude,
 )

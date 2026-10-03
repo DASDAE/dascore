@@ -2,23 +2,44 @@
 
 from __future__ import annotations
 
+import copy
 import gc
+import pickle
 import weakref
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 import pytest
 from scipy.fft import next_fast_len
+from scipy.signal import detrend, windows
 
 import dascore as dc
 import dascore.proc.coords
 from dascore.compat import random_state
 from dascore.exceptions import ParameterError, PatchError
-from dascore.transform.fourier import dft, idft
-from dascore.units import get_quantity, get_quantity_str, second
+from dascore.transform.fourier import Dft, Idft, Istft, Stft, dft, idft
+from dascore.transform.spectral_descriptors import SpectralCentroid
+from dascore.units import get_quantity, get_quantity_str, percent, second
 from dascore.utils.misc import iterate
+from dascore.warnings import NumpyFallbackWarning
 
 F_0 = 2
 seconds = get_quantity("seconds")
+# Every dtype a patch may hold numbers in, wider ones where the platform has them.
+DTYPES = (
+    "bool",
+    "int8",
+    "int16",
+    "int32",
+    "int64",
+    "float16",
+    "float32",
+    "float64",
+    "complex64",
+    "complex128",
+    "longdouble",
+    "clongdouble",
+)
 
 
 @pytest.fixture(scope="session")
@@ -946,3 +967,176 @@ class TestInverseSTFTAssociatedCoords:
         out = marked.istft()
         assert {"snr", "wlabel"}.isdisjoint(out.coords.coord_map)
         assert out.coords == stft_patch.istft().coords
+
+
+class TestFourierProcessors:
+    """What the Fourier classes guarantee beyond what the framework checks."""
+
+    def test_dft_options_are_keyword_only(self):
+        """Only the dimension is given by position, as it always was."""
+        with pytest.raises(TypeError):
+            Dft("time", True)
+
+    def test_dft_metadata_without_data(self, random_patch):
+        """The padded, transformed shape and the kernel's numbers need no data."""
+        meta = random_patch.isel(time=slice(0, 1999)).drop_data()
+        out, plan = Dft(dim="time", real=True).get_metadata(meta)
+        assert out.dims == ("distance", "ft_time")
+        assert out.shape == (300, 1001)
+        assert plan["pad_width"] == ((0, 0), (0, 1))
+        assert plan["axes"] == (1,) and plan["real"]
+        assert plan["step"] == 0.004
+
+    def test_idft_metadata_without_data(self, random_patch):
+        """The inverse trims the padding from metadata alone."""
+        meta = random_patch.isel(time=slice(0, 1999)).dft("time").drop_data()
+        out, plan = Idft().get_metadata(meta)
+        assert out.dims == ("distance", "time") and out.shape == (300, 1999)
+        assert plan["indexer"] == (slice(None), slice(0, 1999, 1))
+
+    def test_stft_metadata_without_data(self, random_patch):
+        """The windows and their spectra are known before any data are read."""
+        meta = random_patch.drop_data()
+        out, plan = Stft(time=64, samples=True, nfft=100).get_metadata(meta)
+        assert out.dims == ("distance", "ft_time", "time")
+        assert out.shape == (300, 51, 64)
+        assert plan["size"] == (64,) and plan["stride"] == (32,)
+        assert plan["nffts"] == (100,)
+
+    def test_istft_metadata_without_data(self, random_patch):
+        """The reassembled patch is known from the stack's metadata."""
+        meta = random_patch.stft(time=64, samples=True).drop_data()
+        out, plan = Istft().get_metadata(meta)
+        assert out.dims == ("distance", "time") and out.shape == (300, 2000)
+        assert plan["sizes"] == [64] and plan["nffts"] == [64]
+
+    def test_scaled_data_units(self, random_patch):
+        """A scale in the data units goes into the spectrum, as quantities do."""
+        plain = random_patch.set_units("m/s")
+        scaled = random_patch.set_units("10 m/s")
+        for output, factor in (("AS", 10), ("PS", 100), ("PSD", 100)):
+            expected = plain.dft("time", real=True, output=output).data * factor
+            out = scaled.dft("time", real=True, output=output).data
+            assert np.allclose(out, expected)
+
+    def test_stft_detrend(self, random_patch):
+        """A linear trend in each window is removed before the transform."""
+        ramp = np.broadcast_to(np.arange(2000.0), random_patch.shape)
+        patch = random_patch.new(data=ramp)
+        kwargs = dict(time=64, samples=True, taper_window="boxcar")
+        # The windows at the ends reach past the data, into zeros.
+        inner = (..., slice(1, -2))
+        out = patch.stft(detrend=True, **kwargs)
+        assert np.allclose(out.data[inner], 0, atol=1e-9)
+        assert not np.allclose(patch.stft(**kwargs).data[inner], 0, atol=1e-9)
+
+    def test_stft_detrend_then_taper(self):
+        """A detrended window is tapered after the trend is taken out."""
+        patch = dc.get_example_patch("random_das", shape=(3, 500))
+        out = patch.stft(time=64, samples=True, detrend=True)
+        # The fourth window, cut 32 samples before the data start, is 64:128.
+        bare = detrend(np.asarray(patch.data)[:, 64:128], axis=-1)
+        step = dc.to_float(patch.get_coord("time").step)
+        expected = np.abs(np.fft.rfft(windows.hann(64) * bare, axis=-1)) * step
+        assert np.allclose(np.abs(out.data[..., 3]), expected)
+
+    def test_dft_of_float16(self, random_patch):
+        """Half precision is transformed as numpy transforms it, in single."""
+        patch = random_patch.new(data=np.asarray(random_patch.data, np.float16))
+        out = patch.dft("time", pad=False)
+        step = dc.to_float(patch.get_coord("time").step)
+        expected = np.fft.fftshift(np.fft.fftn(patch.data, axes=(1,)) * step, axes=1)
+        assert out.data.dtype == expected.dtype
+        assert np.array_equal(out.data, expected)
+
+    @pytest.mark.parametrize("dtype", DTYPES)
+    @pytest.mark.parametrize(
+        "steps",
+        [
+            ((Dft, dict(dim="time")),),
+            ((Dft, dict(dim="time", real=True, pad=False)),),
+            ((Dft, dict(dim=None, output="AS")),),
+            ((Dft, dict(dim="time", real=True, output="PSD", db=True)),),
+            ((Dft, dict(dim="time")), (Idft, {})),
+            ((Dft, dict(dim="time", real=True)), (Idft, {})),
+            ((Idft, {}),),
+            ((Stft, dict(time=64, samples=True)),),
+            ((Stft, dict(time=64, distance=16, samples=True, detrend=True)),),
+            ((Stft, dict(time=64, samples=True)), (Istft, {})),
+        ],
+    )
+    def test_metadata_dtype_is_the_kernels(self, random_patch, dtype, steps):
+        """Metadata states the dtype the transform's data come out in."""
+        data = np.asarray(random_patch.data[:20, :256]).astype(dtype)
+        patch = random_patch.isel(distance=slice(0, 20), time=slice(0, 256))
+        patch = patch.new(data=data)
+        meta = patch.drop_data()
+        for cls, kwargs in steps:
+            if kwargs.get("real") and np.dtype(dtype).kind == "c":
+                pytest.skip("A real FFT refuses complex data.")
+            processor = cls(**kwargs)
+            patch, meta = processor.run(patch), processor.get_metadata(meta)[0]
+        assert meta.dtype == patch.dtype
+
+    def test_metadata_dtype_on_another_backend(self, random_patch):
+        """Another backend's metadata states its own dtype, as its data have it."""
+        xps = pytest.importorskip("array_api_strict")
+        data = xps.asarray(np.asarray(random_patch.data, np.float32))
+        patch = random_patch.new(data=data)
+        amplitude = Dft("time", output="AS")
+        meta = amplitude.get_metadata(patch.drop_data())[0]
+        assert meta.dtype == amplitude.run(patch).dtype
+        stft = Stft(time=64, samples=True)
+        with pytest.warns(NumpyFallbackWarning, match="stft"):
+            out = stft.run(patch)
+        assert stft.get_metadata(patch.drop_data())[0].dtype == out.dtype
+
+    def test_dft_metadata_composes(self, random_patch):
+        """A descriptor reads the spectrum dft would make from metadata alone."""
+        meta = Dft("time").get_metadata(random_patch.drop_data())[0]
+        out = SpectralCentroid("time").get_metadata(meta)[0]
+        expected = random_patch.dft("time").spectral_centroid("time").drop_data()
+        assert out.equals(expected)
+
+    def test_amplitude_on_bare_coords(self):
+        """Without coordinate units, AS does not fold in a data unit scale."""
+        coords = {"time": np.arange(4.0)}
+        patch = dc.Patch(
+            data=np.ones(4), coords=coords, dims=("time",), attrs={"data_units": "10 m"}
+        )
+        out = patch.dft("time", real=True, output="AS", pad=False)
+        assert np.allclose(out.data, [1.0, 0.0, 0.0])
+
+
+class TestStftIdentity:
+    """A default stft keeps the id it had as a patch function, however it travels."""
+
+    @pytest.fixture()
+    def chirp(self):
+        """A chirp patch with ids fixed, so the derived ids can be pinned."""
+        patch = dc.get_example_patch("chirp", channel_count=2)
+        return patch.update_attrs(data_id="cd" * 16, origin_id="cd" * 16)
+
+    def test_copies_keep_the_id(self):
+        """A pickled or copied processor names the same operation."""
+        processor = Stft(time=1 * second)
+        expected = processor.operation_id
+        assert pickle.loads(pickle.dumps(processor)).operation_id == expected
+        assert copy.deepcopy(processor).operation_id == expected
+
+    def test_ids_match_the_patch_function(self, chirp):
+        """The default and an explicit half overlap keep their own ids."""
+        default = chirp.stft(time=10 * second).attrs.data_id
+        explicit = chirp.stft(time=10 * second, overlap=50 * percent).attrs.data_id
+        assert default == "b58639a01788bd9708b3bb7c94015993"
+        assert explicit == "348f576656aec44dd42c8450b4baafc9"
+
+    @pytest.mark.concurrency
+    def test_process_pool_stamps_the_serial_id(self, chirp):
+        """A processor sent to a worker stamps the id a serial run does."""
+        processor = Stft(time=1 * second)
+        spool = dc.spool([chirp])
+        serial = spool.map(processor)[0].attrs.data_id
+        with ProcessPoolExecutor(1) as client:
+            pooled = spool.map(processor, client=client)[0].attrs.data_id
+        assert pooled == serial == chirp.stft(time=1 * second).attrs.data_id
