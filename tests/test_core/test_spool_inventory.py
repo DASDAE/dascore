@@ -63,7 +63,6 @@ from dascore.exceptions import (
     UnresolvedPatchError,
 )
 from dascore.units import cm, get_quantity, m
-from dascore.utils.attrs import _is_missing
 
 
 @pytest.fixture(scope="module")
@@ -1308,25 +1307,18 @@ class TestSelectSeesPendingEnrichment:
         assert selected.get_contents()["tag"].tolist() == ["wrong"]
 
     @pytest.mark.parametrize("conflict", ["keep_last", "drop"])
-    def test_null_on_missing_blanks_a_stated_header(self, patch, inventory, conflict):
+    def test_null_on_missing_keeps_a_stated_header(self, patch, inventory, conflict):
         """
-        `on_missing="null"` answers with a missing marker, which disagrees
-        with a stated header: `keep_last` writes the marker over it and
-        `drop` removes it, and either way the row is not selected by what
-        it stated.
+        `on_missing="null"` answers with a missing marker, which is no
+        answer: the stated header stands, and selection agrees.
         """
         stated = dc.spool(patch.update_attrs(pulse_rate=1.25))
         spool = stated.attach_inventory(inventory)
-        assert len(spool.select(pulse_rate=1.25)) == 1
         nulled = spool.enrich(
             attrs=("pulse_rate",), coords=False, on_missing="null", conflict=conflict
         )
-        assert len(nulled.select(pulse_rate=1.25)) == 0
-        assert len(nulled.unselect(pulse_rate=1.25)) == 1
-        assert _is_missing(dict(nulled[0].attrs).get("pulse_rate"))
-        # A blanket request never blanks anything.
-        blanket = spool.enrich(coords=False, on_missing="null", conflict=conflict)
-        assert len(blanket.select(pulse_rate=1.25)) == 1
+        assert len(nulled.select(pulse_rate=1.25)) == 1
+        assert nulled.select(pulse_rate=1.25)[0].attrs.pulse_rate == 1.25
 
     @pytest.mark.parametrize(
         "bad", [{"conflict": "keep_both"}, {"on_missing": "blank"}]

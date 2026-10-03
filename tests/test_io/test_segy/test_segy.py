@@ -1,5 +1,7 @@
 """Tests for SEGY format."""
 
+import tracemalloc
+
 import numpy as np
 import pytest
 
@@ -9,6 +11,7 @@ from dascore.exceptions import (
     PatchError,
 )
 from dascore.io.segy.core import SegyV1_0
+from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings
 
 
@@ -32,6 +35,29 @@ class TestSegyGetFormat:
         segy = SegyV1_0()
         out = segy.get_format(small_file)
         assert out is False  # we actually want to make sure its False.
+
+
+class TestSegyReadArray:
+    """Tests for reading SEGY trace data."""
+
+    def test_reads_without_a_second_copy(self):
+        """The traces are read in bulk, so the peak is about one array."""
+        pytest.importorskip("segyio")
+        path = fetch("conoco_segy_1.sgy")
+        tracemalloc.start()
+        try:
+            data = SegyV1_0().read_array(path)
+            peak = tracemalloc.get_traced_memory()[1]
+        finally:
+            tracemalloc.stop()
+        assert peak < 1.5 * data.nbytes
+        assert data.flags.c_contiguous
+
+    def test_narrow_window_holds_only_its_samples(self):
+        """A short time window does not keep the traces' full length."""
+        pytest.importorskip("segyio")
+        data = SegyV1_0().read_array(fetch("conoco_segy_1.sgy"), ((0, 1), None))
+        assert data.base is None and data.shape[0] == 1
 
 
 class TestSegyWrite:

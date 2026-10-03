@@ -204,15 +204,21 @@ def _apply_conflict(patch, new_attrs, conflict) -> tuple[dict, list]:
     """
     Return the attrs to set and to drop, given the conflict policy.
 
-    Filling an empty attr is never a conflict, and an agreeing header is
-    kept unless `keep_last` asks the inventory to correct it; a conflict
-    is both sides holding different information.
+    Filling an empty attr is never a conflict, nor is an inventory with no
+    answer (the `on_missing="null"` marker), which leaves a stated attr
+    standing. An agreeing header is kept unless `keep_last` asks the
+    inventory to correct it; a conflict is both sides holding different
+    information.
     """
     current = dict(patch.attrs)
     updates, drops = {}, []
     for name, value in new_attrs.items():
         old = current.get(name, None)
-        if _is_missing(old) or conflict == "keep_last":
+        if _is_missing(old):
+            updates[name] = value
+        elif _is_missing(value):
+            continue
+        elif conflict == "keep_last":
             updates[name] = value
         elif header_agrees(old, value):
             # The header stands, so selection on it sees what comes out.
@@ -389,15 +395,7 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
             )
             raise PatchError(msg)
         values = get_coord_values(inventory, path, name, distances)
-        if (existing := patch.coords.coord_map.get(name)) is not None:
-            if values is not None and _coords_equal(existing, values):
-                continue  # re-enriching is a refresh, not a collision
-            msg = (
-                f"The patch already has a {name!r} coordinate which the "
-                "inventory does not agree with; enrich will not overwrite "
-                "it. Rename or drop it first."
-            )
-            raise PatchError(msg)
+        existing = patch.coords.coord_map.get(name)
         if values is None:
             # A blanket request asks for the names the path itself lists,
             # so one of those without values would be the inventory
@@ -406,7 +404,18 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
             if on_missing != "null":
                 _report_missing(context, name, on_missing, "the optical path of ")
                 continue
+            if existing is not None:
+                continue  # no answer leaves the patch's coordinate standing
             values = np.full(len(distances), np.nan)
+        elif existing is not None:
+            if _coords_equal(existing, values):
+                continue  # re-enriching is a refresh, not a collision
+            msg = (
+                f"The patch already has a {name!r} coordinate which the "
+                "inventory does not agree with; enrich will not overwrite "
+                "it. Rename or drop it first."
+            )
+            raise PatchError(msg)
         out[name] = (dim, values)
     return out
 

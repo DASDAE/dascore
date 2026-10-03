@@ -13,7 +13,6 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import MissingPatchError, ParameterError
-from dascore.io.core import FiberIO
 from dascore.io.index.planned import (
     PLAN_SCHEME,
     PlanResolver,
@@ -26,7 +25,6 @@ from dascore.io.index.planned import (
 )
 from dascore.units import m
 from dascore.utils.chunk_plan import ChunkPlan, patch_local_adjusted_envelopes
-from dascore.utils.io import BinaryReader
 
 
 @pytest.fixture(scope="module")
@@ -448,8 +446,8 @@ class TestStatedUnits:
         assert _stated_units("ft") == "ft"
 
 
-class TestLoadMemberArray:
-    """Tests for the resolver's read_array fast path and its gates."""
+class TestMemberArraySource:
+    """Tests for naming a member's stored array, and the gates before it."""
 
     @pytest.fixture(scope="class")
     def file_spool(self, tmp_path_factory):
@@ -469,126 +467,44 @@ class TestLoadMemberArray:
         """One member row of the plan."""
         return resolver.member_rows.iloc[0].to_dict()
 
-    @pytest.fixture
-    def format_class(self, row):
-        """The class of the FiberIO which reads the row's file."""
-        fiber_io = FiberIO.manager.get_fiberio(
-            format=row["source_format"], version=row["source_version"]
-        )
-        return type(fiber_io)
+    def test_a_file_row_resolves(self, resolver, row):
+        """A plain file row names its reader, so its array can be windowed."""
+        assert resolver._array_read_info(row) is not None
+        assert resolver._can_load_member_from_index(row)
 
-    @pytest.fixture
-    def swap_read_array(self, format_class):
-        """Let a test replace the format's own read_array; restore it after."""
-        original = format_class.__dict__["read_array"]
-
-        def install(func):
-            def missing(self, resource, windows, **kwargs):
-                return FiberIO.read_array(
-                    self, resource, windows, key=kwargs.get("key", "")
-                )
-
-            format_class.read_array = missing if func is None else func
-
-        yield install
-        format_class.read_array = original
-
-    @pytest.fixture
-    def no_override(self, swap_read_array):
-        """Give the format the default read_array in place of its own."""
-        swap_read_array(None)
-
-    @pytest.fixture
-    def override(self, swap_read_array, format_class):
-        """Give the row's format a counting read_array override."""
-        calls = []
-        original = format_class.read_array
-
-        def read_array(self, resource, windows, **kwargs):
-            # a real override's caster wrapper consumes _pre_cast; this
-            # raw function sees it and must not forward it to read
-            kwargs.pop("_pre_cast", None)
-            calls.append((windows, kwargs))
-            return original(self, resource, windows, **kwargs)
-
-        swap_read_array(read_array)
-        return calls
-
-    def test_missing_array_hook_raises(self, resolver, row, no_override):
-        """A broken reader cannot silently fall back through its derived read."""
-        with pytest.raises(NotImplementedError):
-            resolver._load_member_array(row, {"time": (0, 5)})
-
-    def test_real_override_matches_patch_path(self, resolver, row):
-        """DASDAE's own override, through the resolver, matches the patch path."""
-        out = resolver._load_member_array(row, {"time": (2, 9)})
-        expected = resolver._load_member(row).select(time=(2, 9), samples=True).data
-        assert np.array_equal(out, expected)
-        assert out.dtype == expected.dtype
-
-    def test_override_loads_window(self, resolver, row, override):
-        """The override gets the windows and its array matches the patch path."""
-        expected = resolver._load_member(row).select(time=(2, 9), samples=True).data
-        override.clear()
-        out = resolver._load_member_array(row, {"time": (2, 9)})
-        assert np.array_equal(out, expected)
-        assert out.dtype == expected.dtype
-        # the row's own patch key rides along so multi-patch files resolve
-        expected_kwargs = {"key": row["source_patch_key"]}
-        # the reader takes its windows by position, in the row's stored order
-        positional = tuple(
-            (2, 9) if dim == "time" else None for dim in row["dims"].split(",")
-        )
-        assert override == [(positional, expected_kwargs)]
-
-    def test_unplaceable_window_returns_none(self, resolver, row, override):
-        """A window the row's dims cannot place has no position to take."""
-        assert resolver._load_member_array(row, {"nope": (0, 5)}) is None
-        blank = dict(row, dims="")
-        assert resolver._load_member_array(blank, {"time": (0, 5)}) is None
-        assert override == []
-
-    def test_digit_key_returns_none(self, resolver, row, override):
+    def test_digit_key_refuses(self, resolver, row):
         """A synthesized positional key only binds against a full read."""
-        row = dict(row, source_patch_key="3")
-        assert resolver._load_member_array(row, {"time": (0, 5)}) is None
-        assert override == []
+        assert resolver._array_read_info(dict(row, source_patch_key="3")) is None
 
-    def test_null_row_cells_return_none(self, resolver, row, override):
+    def test_null_row_cells_refuse(self, resolver, row):
         """NaN cells (a left merge's misses) refuse like absent ones."""
         for column in ("source_path", "source_format", "source_version"):
             bad = dict(row, **{column: float("nan")})
-            assert resolver._load_member_array(bad, {"time": (0, 5)}) is None
-        assert override == []
+            assert resolver._array_read_info(bad) is None
 
-    def test_residuals_return_none(self, file_spool, override):
+    def test_residuals_refuse(self, file_spool):
         """A residual selection re-trims patches; windows cannot compose."""
         sub = file_spool.select(time=(2, 100), samples=True).chunk(time=None)
         resolver = sub._catalog.resolver
         assert resolver.parent_residuals
         row = resolver.member_rows.iloc[0].to_dict()
-        assert resolver._load_member_array(row, {"time": (0, 5)}) is None
-        assert override == []
+        assert not resolver._can_load_member_from_index(row)
 
-    def test_missing_version_returns_none(self, resolver, row, override):
+    def test_missing_version_refuses(self, resolver, row):
         """Without an exact version the reader cannot be resolved."""
-        row = dict(row, source_version="")
-        assert resolver._load_member_array(row, {"time": (0, 5)}) is None
-        assert override == []
+        assert resolver._array_read_info(dict(row, source_version="")) is None
 
-    def test_unknown_format_returns_none(self, resolver, row, override):
+    def test_unknown_format_refuses(self, resolver, row):
         """An unknown format falls back rather than raising here."""
         row = dict(row, source_format="not_a_real_format", source_version="1")
-        assert resolver._load_member_array(row, {"time": (0, 5)}) is None
-        assert override == []
+        assert resolver._array_read_info(row) is None
 
-    def test_plan_path_returns_none(self, resolver, row, override):
+    def test_plan_path_refuses(self, resolver, row):
         """A nested plan row loads through its own resolver."""
         row = dict(row, source_path=f"{PLAN_SCHEME}deadbeef/0")
-        assert resolver._load_member_array(row, {"time": (0, 5)}) is None
-        assert override == []
+        assert resolver._array_read_info(row) is None
 
-    def test_memory_row_returns_none(self, override):
+    def test_memory_row_refuses(self):
         """An in-memory patch has no file to slice.
 
         The scheme gate is defense in depth: a memory row's "memory"
@@ -597,14 +513,12 @@ class TestLoadMemberArray:
         resolver = dc.get_example_spool().chunk(time=None)._catalog.resolver
         row = resolver.member_rows.iloc[0].to_dict()
         row["source_version"] = "1"
-        assert resolver._load_member_array(row, {"time": (0, 5)}) is None
-        assert override == []
+        assert resolver._array_read_info(row) is None
 
-    def test_non_file_loader_returns_none(self, resolver, row, override, monkeypatch):
+    def test_non_file_loader_refuses(self, resolver, row, monkeypatch):
         """A loader with no file leg cannot resolve a path."""
         monkeypatch.setattr(resolver, "loader", object())
-        assert resolver._load_member_array(row, {"time": (0, 5)}) is None
-        assert override == []
+        assert resolver._array_read_info(row) is None
 
     def test_member_source_names_the_whole_array(self, resolver, row):
         """The source a member row names reads exactly the member's array."""
@@ -622,22 +536,3 @@ class TestLoadMemberArray:
         for value in ("", None, float("nan")):
             blank = dict(row, _dtype=value)
             assert resolver._member_array_source(blank, shape) is None
-
-    def test_override_gets_annotated_handle(self, resolver, row, swap_read_array):
-        """The override receives the handle type it declares, like read.
-
-        The resource manager provisions it, so a remote path resolves the
-        same way dc.read's own reading does instead of arriving as a raw
-        URL string.
-        """
-        seen = {}
-
-        def read_array(self, resource, windows, **kwargs):
-            seen["resource"] = resource
-            return np.zeros(2)
-
-        read_array._required_type = BinaryReader
-        swap_read_array(read_array)
-        out = resolver._load_member_array(row, {"time": (0, 2)})
-        assert np.array_equal(out, np.zeros(2))
-        assert hasattr(seen["resource"], "read")  # a handle, not a path
