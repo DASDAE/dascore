@@ -209,6 +209,14 @@ class TestLoadDirectory:
         out = make_inventory(MINIMAL)
         assert out.schema_version == inv.Inventory().schema_version
 
+    def test_reload_is_the_same_inventory(self, tmp_path):
+        """Two loads of one directory are equal and serialize alike (#1375)."""
+        root = write_inventory(tmp_path / "inventory", PATH_DIRECTORY)
+        first, second = dc.inventory(root), dc.inventory(root)
+        assert first == second
+        assert hash(first) == hash(second)
+        assert first.io.to_yaml() == second.io.to_yaml()
+
     def test_envelope_states_the_singletons(self, make_inventory):
         """The envelope is where the document's own facts live."""
         out = make_inventory(

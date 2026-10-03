@@ -2085,9 +2085,10 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
     schema_version: int = Field(
         default=1, description="Version of the inventory manifest envelope."
     )
+    # Empty unless stated, as CreationInfo's strings are, so the same files
+    # load to the same inventory; nothing refers to the manifest by this id.
     resource_id: str = Field(
-        default_factory=lambda: str(uuid4()),
-        description="Identifier for the inventory manifest.",
+        default="", description="Identifier for the inventory manifest."
     )
     creation_info: CreationInfo = Field(
         default_factory=CreationInfo,
