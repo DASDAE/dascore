@@ -1376,6 +1376,24 @@ class SQLiteIndexBackend:
             params.append(json.dumps([int(x) for x in patch_rows]))
         return {int(x) for x in self._fetch_df(sql, params)["patch_row"]}
 
+    def coord_unstated_ids(self, name: str, patch_rows=None) -> set[int]:
+        """
+        Return the ids of the patches which do not hold one coordinate.
+
+        The counterpart of `attr_stated_ids` for coordinates, asked the
+        other way round: a coordinate is usually held by every patch, so
+        the answer is usually empty and cheap to give.
+        """
+        sql = (
+            "SELECT patch_row FROM patches WHERE patch_row NOT IN "
+            "(SELECT patch_row FROM patch_coords WHERE coord_name = ?)"
+        )
+        params: list = [name]
+        if patch_rows is not None:
+            sql += " AND patch_row IN (SELECT value FROM json_each(?))"
+            params.append(json.dumps([int(x) for x in patch_rows]))
+        return {int(x) for x in self._fetch_df(sql, params)["patch_row"]}
+
     def associated_coord_names(self) -> set[str]:
         """Return every coord name some patch holds on a dimension not its own.
 
