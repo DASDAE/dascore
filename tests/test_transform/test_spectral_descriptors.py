@@ -7,6 +7,7 @@ import pytest
 
 import dascore as dc
 from dascore.transform import spectral_descriptors
+from dascore.transform.spectral_descriptors import SpectralCentroid
 
 
 @pytest.fixture(scope="class")
@@ -260,17 +261,12 @@ class TestSpectralValidation:
 class TestSpectralHelpers:
     """Tests for defensive paths in spectral helpers."""
 
-    def test_unhandled_format(self, sine_patch, monkeypatch):
+    def test_unhandled_format(self, sine_patch):
         """An unexpected normalized format triggers the internal assertion."""
-        monkeypatch.setattr(
-            spectral_descriptors,
-            "_normalize_spectral_format",
-            lambda patch, spectral_format: "unexpected",
-        )
         with pytest.raises(
             AssertionError, match="Unhandled spectral format 'unexpected'"
         ):
-            spectral_descriptors._get_power(sine_patch, "auto")
+            spectral_descriptors._get_power(sine_patch.data, "unexpected")
 
     def test_nonnegative_frequencies(self):
         """Spectra without negative bins need no mirrored-power comparison."""
@@ -518,3 +514,24 @@ class TestOtherDescriptors:
             expected = input_units**0.5
 
         assert out.attrs.data_units == expected
+
+
+class TestSpectralProcessors:
+    """What the descriptor classes guarantee beyond what the framework checks."""
+
+    def test_metadata_without_data(self, random_patch):
+        """The reduced output and the bins read need no data."""
+        meta = random_patch.dft("time", real=True).drop_data()
+        out, plan = SpectralCentroid(fmax=10).get_metadata(meta)
+        assert out.dims == ("distance",) and out.shape == (300,)
+        assert out.attrs.data_type == "Spectral Centroid"
+        assert plan["axis"] == 1 and len(plan["keep"]) == 81
+        assert plan["freqs"][0] == 0 and plan["freqs"][-1] == 10
+
+    def test_entropy_unnormalized(self, sine_dft):
+        """Without normalizing, entropy is in bits, not a fraction of the most."""
+        normalized = sine_dft.spectral_entropy(negative_frequencies="drop")
+        raw = sine_dft.spectral_entropy(normalize=False, negative_frequencies="drop")
+        bins = (sine_dft.get_array("ft_time") >= 0).sum()
+        assert np.allclose(raw.data, normalized.data * np.log2(bins))
+        assert not np.allclose(raw.data, normalized.data)

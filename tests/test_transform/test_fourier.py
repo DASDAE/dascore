@@ -13,7 +13,7 @@ import dascore as dc
 import dascore.proc.coords
 from dascore.compat import random_state
 from dascore.exceptions import ParameterError, PatchError
-from dascore.transform.fourier import dft, idft
+from dascore.transform.fourier import Dft, Idft, Istft, Stft, dft, idft
 from dascore.units import get_quantity, get_quantity_str, second
 from dascore.utils.misc import iterate
 
@@ -946,3 +946,65 @@ class TestInverseSTFTAssociatedCoords:
         out = marked.istft()
         assert {"snr", "wlabel"}.isdisjoint(out.coords.coord_map)
         assert out.coords == stft_patch.istft().coords
+
+
+class TestFourierProcessors:
+    """What the Fourier classes guarantee beyond what the framework checks."""
+
+    def test_dft_options_are_keyword_only(self):
+        """Only the dimension is given by position, as it always was."""
+        with pytest.raises(TypeError):
+            Dft("time", True)
+
+    def test_dft_metadata_without_data(self, random_patch):
+        """The padded, transformed shape and the kernel's numbers need no data."""
+        meta = random_patch.isel(time=slice(0, 1999)).drop_data()
+        out, plan = Dft(dim="time", real=True).get_metadata(meta)
+        assert out.dims == ("distance", "ft_time")
+        assert out.shape == (300, 1001)
+        assert plan["pad_width"] == ((0, 0), (0, 1))
+        assert plan["axes"] == (1,) and plan["real"]
+        assert plan["step"] == 0.004
+
+    def test_idft_metadata_without_data(self, random_patch):
+        """The inverse trims the padding from metadata alone."""
+        meta = random_patch.isel(time=slice(0, 1999)).dft("time").drop_data()
+        out, plan = Idft().get_metadata(meta)
+        assert out.dims == ("distance", "time") and out.shape == (300, 1999)
+        assert plan["indexer"] == (slice(None), slice(0, 1999, 1))
+
+    def test_stft_metadata_without_data(self, random_patch):
+        """The windows and their spectra are known before any data are read."""
+        meta = random_patch.drop_data()
+        out, plan = Stft(time=64, samples=True, nfft=100).get_metadata(meta)
+        assert out.dims == ("distance", "ft_time", "time")
+        assert out.shape == (300, 51, 64)
+        assert plan["size"] == (64,) and plan["stride"] == (32,)
+        assert plan["nffts"] == (100,)
+
+    def test_istft_metadata_without_data(self, random_patch):
+        """The reassembled patch is known from the stack's metadata."""
+        meta = random_patch.stft(time=64, samples=True).drop_data()
+        out, plan = Istft().get_metadata(meta)
+        assert out.dims == ("distance", "time") and out.shape == (300, 2000)
+        assert plan["sizes"] == [64] and plan["nffts"] == [64]
+
+    def test_scaled_data_units(self, random_patch):
+        """A scale in the data units goes into the spectrum, as quantities do."""
+        plain = random_patch.set_units("m/s")
+        scaled = random_patch.set_units("10 m/s")
+        for output, factor in (("AS", 10), ("PS", 100), ("PSD", 100)):
+            expected = plain.dft("time", real=True, output=output).data * factor
+            out = scaled.dft("time", real=True, output=output).data
+            assert np.allclose(out, expected)
+
+    def test_stft_detrend(self, random_patch):
+        """A linear trend in each window is removed before the transform."""
+        ramp = np.broadcast_to(np.arange(2000.0), random_patch.shape)
+        patch = random_patch.new(data=ramp)
+        kwargs = dict(time=64, samples=True, taper_window="boxcar")
+        # The windows at the ends reach past the data, into zeros.
+        inner = (..., slice(1, -2))
+        out = patch.stft(detrend=True, **kwargs)
+        assert np.allclose(out.data[inner], 0, atol=1e-9)
+        assert not np.allclose(patch.stft(**kwargs).data[inner], 0, atol=1e-9)

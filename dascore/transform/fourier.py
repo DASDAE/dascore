@@ -7,29 +7,32 @@ implementation.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from math import prod
 from operator import mul, truediv
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 import numpy.fft as nft
+from pydantic import ConfigDict, Field
 
 import dascore as dc
 from dascore import units
-from dascore.compat import ndarray
-from dascore.constants import PatchType
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError, PatchError
+from dascore.proc.basic import Pad, _pad_array
+from dascore.proc.tile_apply import Reassemble, TileApply
+from dascore.proc.units import _replace_data_units
 from dascore.units import Quantity, _quantities_equal, invert_quantity, percent
+from dascore.utils.array_api import array_namespace
 from dascore.utils.imports import lazy_import
 from dascore.utils.misc import iterate
 from dascore.utils.patch import (
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
-    patch_function,
 )
 from dascore.utils.signal import get_window_nd
 from dascore.utils.tiles import _taper_like
@@ -45,6 +48,9 @@ DFT_OUTPUT_DATA_TYPE_MAP = {
     "PSD": "power_spectral_density",
 }
 DFT_OUTPUT_TYPES = ("FFT", *DFT_OUTPUT_DATA_TYPE_MAP)
+# stft's default overlap, one object shared by the method and the class so
+# that a call which leaves it unset has the id it had as a patch function.
+_HALF_OVERLAP = 50 * percent
 
 
 def _associated_prefix(dim: str) -> str:
@@ -196,52 +202,83 @@ def _get_transformed_domain_extent(patch, dims):
     return extent
 
 
-def _convert_dft_spectral_amplitudes(patch, output, dims, real, db):
-    """Convert the FFT output to spectral amplitude representations."""
-    amp = patch.abs()
-    extent = _get_transformed_domain_extent(amp, dims)
-    data_units = _get_dft_data_units(patch, dims, output)
-    if output == "AS":
-        # Convert DASCore's dx-scaled Fourier coefficients to harmonic
-        # amplitude.
-        out = amp / extent
-    elif output == "PS":
-        # PS bins sum to mean square.
-        out = amp * amp / (extent * extent)
-    elif output == "PSD":
-        # PSD bins integrate to mean square when multiplied by frequency-bin
-        # volume, which is the reciprocal of the transformed-domain extent.
-        out = amp * amp / extent
+def _spectral_amplitude_plan(meta, output, dims, db):
+    """
+    Return the metadata of a spectral output and how its kernel scales.
+
+    The amplitudes are divided by the transformed-domain extent as
+    quantities, so a scale in the data units ("10 m") is folded into the
+    data wherever both sides of an operation carry units.
+    """
+    extent = _get_transformed_domain_extent(meta, dims)
+    data_units = _get_dft_data_units(meta, dims, output)
+    fft_units = dc.get_quantity(meta.attrs.data_units)
+    scale = None if fft_units is None else fft_units.magnitude
+    has_quantity = isinstance(extent, Quantity)
+    extent = extent.magnitude if has_quantity else extent
+    # AS divides by the extent, which carries units only beside unitful
+    # data; PS and PSD square the amplitude first, a product of two patches
+    # with the same units, so the scale goes on whenever there are units.
+    if (output == "AS" and not has_quantity) or scale == 1:
+        scale = None
+    divisor = extent * extent if output == "PS" else extent
     if db:
-        out = out + np.finfo(out.data.dtype).eps
-        db_scale = 20 if output == "AS" else 10
-        out = db_scale * out.log10()
-        out = out.set_units(units.dB)
-        data_units = out.attrs.data_units
-
-    return out.update_attrs(
-        data_type=DFT_OUTPUT_DATA_TYPE_MAP[output],
-        data_units=data_units,
+        data_units = _replace_data_units(meta.attrs, units.dB).data_units
+    attrs = meta.attrs.update(
+        data_type=DFT_OUTPUT_DATA_TYPE_MAP[output], data_units=data_units
     )
+    plan = {
+        "scale": scale,
+        "square": output != "AS",
+        "divisor": divisor,
+        "db": (20 if output == "AS" else 10) if db else None,
+    }
+    return meta.new(attrs=attrs), plan
 
 
-@patch_function()
-def dft(
-    patch: PatchType,
-    dim: str | Sequence[str] | None,
-    *,
-    real: str | bool | None = None,
-    pad: bool = True,
-    output: Literal["FFT", "PSD", "PS", "AS"] = "FFT",
-    db: bool = False,
-) -> PatchType:
+def _spectral_amplitude(data, xp, *, scale, square, divisor, db):
+    """Return Fourier coefficients as amplitudes, powers or densities."""
+    amp = xp.abs(data)
+    if scale is not None:
+        amp = amp * _scalar(xp, scale)
+    out = (amp * amp if square else amp) / _scalar(xp, divisor)
+    if db is None:
+        return out
+    out = out + _scalar(xp, xp.finfo(out.dtype).eps)
+    return db * xp.log10(out)
+
+
+def _fft_input(data, xp, complex_input: bool):
+    """
+    Return data in the floating dtype an FFT takes, cast as numpy casts it.
+
+    NumPy converts integers, and real data for a complex transform, itself;
+    the standard refuses them. Complex data for a real transform are left
+    for the backend to refuse.
+    """
+    if xp.isdtype(data.dtype, "complex floating"):
+        return data
+    single = data.dtype == xp.float32
+    if complex_input:
+        return xp.astype(data, xp.complex64 if single else xp.complex128)
+    if xp.isdtype(data.dtype, "real floating"):
+        return data
+    return xp.astype(data, xp.float64)
+
+
+def _scalar(xp, value):
+    """Return a number as an operand every backend takes, with numpy's promotion."""
+    # A numpy scalar sets the result's dtype, as a 0-d array does, where a
+    # python number would not; some backends refuse numpy scalars outright.
+    return xp.asarray(value) if isinstance(value, np.generic) else value
+
+
+class Dft(PatchProcessor):
     """
     Perform the discrete Fourier transform (dft) on specified dimension(s).
 
     Parameters
     ----------
-    patch
-        Patch to transform.
     dim
         Dimension or dimensions to transform. None transforms all dimensions.
     real
@@ -268,7 +305,7 @@ def dft(
 
     A non-dimensional coordinate measured on one transformed dimension is
     removed from the output coordinates but retained for
-    [idft](`dascore.transform.fourier.idft`) to restore. One spanning multiple
+    [idft](`dascore.Patch.idft`) to restore. One spanning multiple
     dimensions is dropped.
 
     FFT data units combine the original data and transformed-dimension units;
@@ -283,8 +320,8 @@ def dft(
 
     See Also
     --------
-    - [idft](`dascore.transform.fourier.idft`)
-    - [stft](`dascore.transform.fourier.stft`)
+    - [idft](`dascore.Patch.idft`)
+    - [stft](`dascore.Patch.stft`)
 
     Examples
     --------
@@ -295,51 +332,80 @@ def dft(
     >>> dft_some_real = patch.dft(dim=("time", "distance"), real="time")
     >>> psd = patch.dft(dim="time", real=True, output="PSD")
     """
-    output_type = output.upper()
-    if output_type not in DFT_OUTPUT_TYPES:
-        msg = f"Unknown output={output!r}. Expected one of: {DFT_OUTPUT_TYPES}."
-        raise ValueError(msg)
-    if output_type == "FFT" and db:
-        msg = "db=True is only supported for output='AS', 'PS', or 'PSD'."
-        raise ParameterError(msg)
 
-    dims = list(iterate(dim if dim is not None else patch.dims))
-    patch.check_coords(coords=dims)
-    real = dims[-1] if real is True else real  # if true grab last dim
-    dims = _get_untransformed_dims(patch, dims)
-    real = real if real in dims else None  # may need to reset real
-    if not dims:  # no transformation needed.
-        return patch
-    # re-arrange list so real dim is last (if provided)
-    if isinstance(real, str):
-        assert real in dims, "real must be in provided dimensions."
-        dims.append(dims.pop(dims.index(real)))
-    original_cm = patch.coords if pad else None
-    if pad:  # apply padding to avoid slow dft lengths.
-        pad_kwargs = {x: "fft" for x in dims}
-        patch = patch.pad.func(patch, **pad_kwargs)  # ty: ignore[unresolved-attribute]
-    # get axes and spacing along desired dimensions.
-    dxs, axes = _get_dx_or_spacing_and_axes(patch, dims, require_evenly_spaced=True)
-    # get new coordinates (need before pad)
-    new_coords = _get_dft_new_coords(
-        patch, dxs, dims, axes, real, original_cm=original_cm
-    )
-    func = nft.rfftn if real is not None else nft.fftn
-    # scale as explained above and in notes, then shift
-    scale_factor = np.prod(dxs)
-    fft_data = func(patch.data, axes=axes) * scale_factor
-    shift_slice = slice(None) if real is None else slice(None, -1)
-    data = nft.fftshift(fft_data, axes=axes[shift_slice])
-    # get attributes
-    attrs = _get_dft_attrs(patch, dims, new_coords, pad=pad, output=output_type)
-    patch_out = patch.new(data=data, coords=new_coords, attrs=attrs)
+    dim: Any
+    real: Any = None
+    pad: Any = True
+    output: Any = "FFT"
+    db: Any = False
 
-    if output_type != "FFT":
-        patch_out = _convert_dft_spectral_amplitudes(
-            patch_out, output_type, dims, real, db
+    _positional_fields = ("dim",)
+
+    def get_metadata(self, meta):
+        """Return the transformed metadata, and the padding, axes and scales."""
+        output = self.output
+        output_type = output.upper()
+        if output_type not in DFT_OUTPUT_TYPES:
+            msg = f"Unknown output={output!r}. Expected one of: {DFT_OUTPUT_TYPES}."
+            raise ValueError(msg)
+        if output_type == "FFT" and self.db:
+            msg = "db=True is only supported for output='AS', 'PS', or 'PSD'."
+            raise ParameterError(msg)
+        dim, real = self.dim, self.real
+        dims = list(iterate(dim if dim is not None else meta.dims))
+        meta.check_coords(coords=dims)
+        real = dims[-1] if real is True else real  # if true grab last dim
+        dims = _get_untransformed_dims(meta, dims)
+        real = real if real in dims else None  # may need to reset real
+        # A divisor says the output is a spectrum made from the coefficients.
+        plan: dict[str, Any] = dict(pad_width=None, axes=(), real=False, step=1.0)
+        plan |= dict(scale=None, square=False, divisor=None, db=None)
+        if not dims:  # no transformation needed.
+            return meta, plan
+        # re-arrange list so real dim is last (if provided)
+        if isinstance(real, str):
+            assert real in dims, "real must be in provided dimensions."
+            dims.append(dims.pop(dims.index(real)))
+        padded = meta
+        if self.pad:  # apply padding to avoid slow dft lengths.
+            pad = Pad(**{x: "fft" for x in dims})
+            padded, pad_plan = pad.get_metadata(meta)
+            plan["pad_width"] = pad_plan["pad_width"]
+        # get axes and spacing along desired dimensions.
+        dxs, axes = _get_dx_or_spacing_and_axes(
+            padded, dims, require_evenly_spaced=True
         )
+        original_cm = meta.coords if self.pad else None
+        new_coords = _get_dft_new_coords(
+            padded, dxs, dims, axes, real, original_cm=original_cm
+        )
+        attrs = _get_dft_attrs(
+            padded, dims, new_coords, pad=self.pad, output=output_type
+        )
+        out = padded.new(coords=new_coords, attrs=attrs)
+        # scale as explained above and in notes, then shift
+        axes = tuple(int(x) for x in axes)
+        plan |= {"axes": axes, "real": real is not None, "step": np.prod(dxs)}
+        if output_type == "FFT":
+            return out, plan
+        out, spectral = _spectral_amplitude_plan(out, output_type, dims, self.db)
+        return out, plan | spectral
 
-    return patch_out
+    def kernel(self, data, *, pad_width, axes, real, step, divisor, **scaling):
+        """Return the scaled, centred transform, or a spectrum made from it."""
+        if not axes:
+            return data
+        xp = array_namespace(data)
+        if pad_width is not None:
+            data = _pad_array(data, pad_width)
+        func = xp.fft.rfftn if real else xp.fft.fftn
+        data = func(_fft_input(data, xp, not real), axes=axes) * _scalar(xp, step)
+        # The one-sided axis of a real transform is not centred.
+        if shifted := (axes[:-1] if real else axes):
+            data = xp.fft.fftshift(data, axes=shifted)
+        if divisor is None:
+            return data
+        return _spectral_amplitude(data, xp, divisor=divisor, **scaling)
 
 
 def _get_idft_dims_steps_axis(patch, dim):
@@ -427,21 +493,18 @@ def _check_dft_output_invertible(patch):
         raise ValueError(msg)
 
 
-@patch_function()
-def idft(patch: PatchType, dim: str | Sequence[str] | None = None) -> PatchType:
+class Idft(PatchProcessor):
     """
     Perform the inverse discrete Fourier transform (idft) on specified dimension(s).
 
     Currently, only patches that have been transformed with
-    [dft](`dascore.transform.fourier.dft`) can be used with this function.
+    [dft](`dascore.Patch.dft`) can be used with this function.
     After transformation with dft, the transformed coordinates cannot change
     (e.g., with [select](`dascore.Patch.select`) otherwise idft won't
     work.
 
     Parameters
     ----------
-    patch
-        Patch to transform.
     dim
         A single, or multiple dimensions over which to perform idft. If
         None, perform idft over all dimensions that have names starting
@@ -455,7 +518,7 @@ def idft(patch: PatchType, dim: str | Sequence[str] | None = None) -> PatchType:
 
     - Non-dimensional coordinates measured on a transformed dimension are
       restored with it, provided the patch still carries what
-      [dft](`dascore.transform.fourier.dft`) parked for them. One
+      [dft](`dascore.Patch.dft`) parked for them. One
       spanning more than one dimension is not parked, so it does not come
       back.
 
@@ -464,8 +527,8 @@ def idft(patch: PatchType, dim: str | Sequence[str] | None = None) -> PatchType:
 
     See Also
     --------
-    - [dft](`dascore.transform.fourier.dft`)
-    - [istft](`dascore.transform.fourier.istft`)
+    - [dft](`dascore.Patch.dft`)
+    - [istft](`dascore.Patch.istft`)
 
     Examples
     --------
@@ -476,24 +539,41 @@ def idft(patch: PatchType, dim: str | Sequence[str] | None = None) -> PatchType:
     >>> # get inverse dft, transformed axis are ascertained automatically
     >>> idft = dft_time.idft()
     """
-    _check_dft_output_invertible(patch)
-    dims, _steps, axes, real = _get_idft_dims_steps_axis(patch, dim)
-    new_dims = FourierTransformatter().rename_dims(dims, forward=False)
-    func = nft.irfftn if real else nft.ifftn
-    # Get new coords, fft sizes, and padding to remove.
-    coords, sizes, padding = _get_idft_coords_and_sizes(
-        patch, dims, new_dims, axes, real
-    )
-    # now unshift data and undo scaling
-    ax_slice = slice(None, -1) if real else slice(None)
-    scale_factor = np.prod([to_float(coords.coord_map[x].step) for x in new_dims])
-    _prepped = nft.ifftshift(patch.data / scale_factor, axes=axes[ax_slice])
-    data = func(_prepped, s=sizes, axes=axes)
-    attrs = _get_idft_attrs(patch, dims, coords)
-    out = patch.new(data=data, attrs=attrs, coords=coords)
-    if padding:
-        out = out.select(**padding, samples=True)
-    return out
+
+    dim: Any = None
+
+    def get_metadata(self, meta):
+        """Return the restored metadata, and the axes, sizes and trim."""
+        _check_dft_output_invertible(meta)
+        dims, _steps, axes, real = _get_idft_dims_steps_axis(meta, self.dim)
+        new_dims = FourierTransformatter().rename_dims(dims, forward=False)
+        # Get new coords, fft sizes, and padding to remove.
+        coords, sizes, padding = _get_idft_coords_and_sizes(
+            meta, dims, new_dims, axes, real
+        )
+        step = np.prod([to_float(coords.coord_map[x].step) for x in new_dims])
+        out = meta.new(attrs=_get_idft_attrs(meta, dims, coords), coords=coords)
+        indexer = None
+        if padding:
+            coords, found = out.coords.select_indexers(samples=True, **padding)
+            indexer = tuple(found.get(x, slice(None)) for x in out.dims)
+            out = out.new(coords=coords)
+        sizes = None if sizes is None else tuple(int(x) for x in sizes)
+        axes = tuple(int(x) for x in axes)
+        plan = {"axes": axes, "real": real, "step": step, "sizes": sizes}
+        return out, plan | {"indexer": indexer}
+
+    def kernel(self, data, *, axes, real, step, sizes, indexer):
+        """Return the inverse transform, trimmed of the padding dft added."""
+        xp = array_namespace(data)
+        # now unshift data and undo scaling
+        data = data / _scalar(xp, step)
+        if shifted := (axes[:-1] if real else axes):
+            data = xp.fft.ifftshift(data, axes=shifted)
+        func = xp.fft.irfftn if real else xp.fft.ifftn
+        # Along no axes numpy hands the data back as they are.
+        data = func(_fft_input(data, xp, True) if axes else data, s=sizes, axes=axes)
+        return data if indexer is None else data[indexer]
 
 
 def _resolve_nfft(nfft, coord, window_samples: int) -> int:
@@ -550,23 +630,12 @@ def _swap_window_axes(data: np.ndarray, axes: tuple[int, ...]) -> np.ndarray:
     return np.moveaxis(data, (*axes, *tail), (*tail, *axes))
 
 
-@patch_function(data_type="fourier_transform", version="2.1")
-def stft(
-    patch: PatchType,
-    taper_window: str | ndarray | tuple[str | Any, ...] = "hann",
-    overlap: Quantity | int | None = 50 * percent,
-    samples: bool = False,
-    detrend: bool = False,
-    nfft: int | Quantity | np.timedelta64 | Mapping[str, Any] | None = None,
-    **kwargs,
-):
+class Stft(PatchProcessor):
     """
     Perform a short-time fourier transform.
 
     Parameters
     ----------
-    patch
-        The patch to transform.
     taper_window
         The taper each window is multiplied by before its transform: a name,
         an array, or a ``(name, parameter)`` tuple `get_window` knows, for
@@ -646,103 +715,118 @@ def stft(
     --------
     [Patch.dft](`dascore.Patch.dft`), [Patch.istft](`dascore.Patch.istft`)
     """
-    resolved = resolve_window(
-        patch, kwargs, samples=samples, overlap=overlap, enforce_lt_coord=True
-    )
-    # In the patch's axis order, whatever order they were named in: the
-    # stack's window axes come out in that order.
-    order = np.argsort(resolved.axes)
-    dims = tuple(resolved.dims[i] for i in order)
-    axes = tuple(resolved.axes[i] for i in order)
-    sizes = tuple(resolved.size[i] for i in order)
-    ndim = len(dims)
-    coords = [patch.get_coord(dim) for dim in dims]
-    # No overlap given means none: the windows abut.
-    strides = resolved.stride
-    hops = sizes if strides is None else tuple(strides[i] for i in order)
-    if isinstance(nfft, Mapping) and (extra := set(nfft) - set(dims)):
-        msg = (
-            f"nfft names dimensions which are not windowed: {sorted(map(str, extra))}."
+
+    __version__ = "2.1"
+
+    taper_window: Any = "hann"
+    overlap: Any = Field(default_factory=lambda: _HALF_OVERLAP)
+    samples: Any = False
+    detrend: Any = False
+    nfft: Any = None
+
+    model_config = ConfigDict(extra="allow")
+    data_type = "fourier_transform"
+
+    def _tiler(self, **kwargs) -> TileApply:
+        """Return the tile_apply which cuts the windows, bare or under the taper."""
+        # A detrended window is tapered after the trend is removed, so the
+        # stack is cut bare and the taper goes on in the kernel; an invertible
+        # one is cut under the taper, which the stack then carries for istft.
+        analysis = None if self.detrend else self.taper_window
+        return TileApply(function=_as_is, mode="stack", analysis=analysis, **kwargs)
+
+    def get_metadata(self, meta):
+        """Return the stack's spectra metadata, and the windows and frequencies."""
+        nfft = self.nfft
+        resolved = resolve_window(
+            meta,
+            self.model_extra or {},
+            samples=self.samples,
+            overlap=self.overlap,
+            enforce_lt_coord=True,
         )
-        raise ParameterError(msg)
-    nffts = tuple(
-        _resolve_nfft(nfft.get(dim) if isinstance(nfft, Mapping) else nfft, coord, size)
-        for dim, coord, size in zip(dims, coords, sizes)
-    )
-    real = np.isrealobj(patch.data)
-    # A detrended window is tapered after the trend is removed, so the
-    # stack is cut bare and the taper goes on here; an invertible one is
-    # cut under the taper, which the stack then carries for istft.
-    settings: dict[str, Any] = {
-        "function": _as_is,
-        "mode": "stack",
-        "analysis": None if detrend else taper_window,
-        "overlap": {d: z - h for d, z, h in zip(dims, sizes, hops)},
-        "samples": True,
-        **dict(zip(dims, sizes)),
-    }
-    # `.func`: a step of stft, so it records no history or ids of its own.
-    # Through the class rather than the module: the method is written in
-    # `Patch`, and `.func` is the operation without this call's history.
-    # ty does not see attributes attached to a function at import.
-    stack = dc.Patch.tile_apply.func(patch, **settings)  # ty: ignore[unresolved-attribute]
-    tiles = stack.data
-    tail = tuple(range(-ndim, 0))
-    if detrend:
-        for axis in tail:
-            tiles = sp_detrend(tiles, axis=axis, type="linear")
-        tiles = tiles * _taper_like(get_window_nd(taper_window, sizes), tiles)
-    steps = [to_float(coord.step) for coord in coords]
-    # Real data is transformed one-sided along the last windowed dimension
-    # and centred along the others, as dft does; complex data centred along
-    # every one.
-    fft = nft.rfftn if real else nft.fftn
-    spectra = fft(tiles, s=nffts, axes=tail)
-    centred = tail[:-1] if real else tail
-    if centred:
-        spectra = nft.fftshift(spectra, axes=centred)
-    freqs = [nft.fftshift(nft.fftfreq(n, d=step)) for n, step in zip(nffts, steps)]
-    if real:
-        freqs[-1] = nft.rfftfreq(nffts[-1], d=steps[-1])
-    # One pass: the phase and, for compatibility with dft, the scale by step.
-    factor = np.prod(steps).astype(spectra.dtype)
-    for axis, cycles, size, step in zip(tail, freqs, sizes, steps):
-        shape = [1] * ndim
-        shape[axis] = -1
-        phase = _centre_phase(cycles * step, size, factor.dtype)
-        factor = factor * phase.reshape(shape)
-    spectra *= factor
-    ft_dims = FourierTransformatter().rename_dims(dims)
-    new_dims = (
-        *(ft_dims[dims.index(d)] if d in dims else d for d in patch.dims),
-        *dims,
-    )
-    coord_map = stack.coords.get_coord_tuple_map()
-    for dim, ft_dim, values, coord in zip(dims, ft_dims, freqs, coords):
-        coord_map.pop(f"{dim}_offset")
-        freq_coord = get_coord(data=values, units=invert_quantity(coord.units))
-        coord_map[ft_dim] = ((ft_dim,), freq_coord)
-    cm = get_coord_manager(coords=coord_map, dims=new_dims)
-    attrs = stack.attrs.update(
-        _stft_detrended=detrend,
-        _stft_real=dims[-1] if real else None,
-        _pre_stft_data_type=patch.attrs.get("data_type"),
-        data_units=_get_data_units_from_dims(patch, dims, mul),
-        **{f"_stft_mfft_{dim}": n for dim, n in zip(dims, nffts)},
-    )
-    data = _swap_window_axes(spectra, axes)
-    return patch.new(data=data, coords=cm, attrs=attrs)
+        # In the patch's axis order, whatever order they were named in: the
+        # stack's window axes come out in that order.
+        order = np.argsort(resolved.axes)
+        dims = tuple(resolved.dims[i] for i in order)
+        sizes = tuple(resolved.size[i] for i in order)
+        coords = [meta.get_coord(dim) for dim in dims]
+        # No overlap given means none: the windows abut.
+        strides = resolved.stride
+        hops = sizes if strides is None else tuple(strides[i] for i in order)
+        if isinstance(nfft, Mapping) and (extra := set(nfft) - set(dims)):
+            names = sorted(map(str, extra))
+            msg = f"nfft names dimensions which are not windowed: {names}."
+            raise ParameterError(msg)
+        nffts = tuple(
+            _resolve_nfft(nfft.get(d) if isinstance(nfft, Mapping) else nfft, c, z)
+            for d, c, z in zip(dims, coords, sizes)
+        )
+        real = not _is_complex(meta.dtype)
+        overlap = {d: z - h for d, z, h in zip(dims, sizes, hops)}
+        tiler = self._tiler(overlap=overlap, samples=True, **dict(zip(dims, sizes)))
+        stack, plan = tiler.get_metadata(meta)
+        steps = [to_float(coord.step) for coord in coords]
+        # Real data is transformed one-sided along the last windowed dimension
+        # and centred along the others, as dft does; complex data centred along
+        # every one.
+        freqs = [nft.fftshift(nft.fftfreq(n, d=step)) for n, step in zip(nffts, steps)]
+        if real:
+            freqs[-1] = nft.rfftfreq(nffts[-1], d=steps[-1])
+        ft_dims = FourierTransformatter().rename_dims(dims)
+        new_dims = (
+            *(ft_dims[dims.index(d)] if d in dims else d for d in meta.dims),
+            *dims,
+        )
+        coord_map = stack.coords.get_coord_tuple_map()
+        for dim, ft_dim, values, coord in zip(dims, ft_dims, freqs, coords):
+            coord_map.pop(f"{dim}_offset")
+            freq_coord = get_coord(data=values, units=invert_quantity(coord.units))
+            coord_map[ft_dim] = ((ft_dim,), freq_coord)
+        cm = get_coord_manager(coords=coord_map, dims=new_dims)
+        attrs = stack.attrs.update(
+            _stft_detrended=self.detrend,
+            _stft_real=dims[-1] if real else None,
+            _pre_stft_data_type=meta.attrs.get("data_type"),
+            data_units=_get_data_units_from_dims(meta, dims, mul),
+            **{f"_stft_mfft_{dim}": n for dim, n in zip(dims, nffts)},
+        )
+        cycles = [values * step for values, step in zip(freqs, steps)]
+        plan |= {"nffts": nffts, "steps": steps, "cycles": cycles, "real": real}
+        return meta.new(coords=cm, attrs=attrs), plan
+
+    def numpy_kernel(self, data, *, axes, size, stride, nffts, steps, cycles, real):
+        """Return each window's spectrum, its phase referred to the centre."""
+        tiles = TileApply.kernel(
+            self._tiler(), data, axes=axes, size=size, stride=stride
+        )
+        ndim = len(axes)
+        tail = tuple(range(-ndim, 0))
+        if self.detrend:
+            for axis in tail:
+                tiles = sp_detrend(tiles, axis=axis, type="linear")
+            tiles = tiles * _taper_like(get_window_nd(self.taper_window, size), tiles)
+        fft = nft.rfftn if real else nft.fftn
+        spectra = fft(tiles, s=nffts, axes=tail)
+        centred = tail[:-1] if real else tail
+        if centred:
+            spectra = nft.fftshift(spectra, axes=centred)
+        # One pass: the phase and, for compatibility with dft, the scale by step.
+        factor = np.prod(steps).astype(spectra.dtype)
+        for axis, per_sample, length in zip(tail, cycles, size):
+            shape = [1] * ndim
+            shape[axis] = -1
+            phase = _centre_phase(per_sample, length, factor.dtype)
+            factor = factor * phase.reshape(shape)
+        spectra *= factor
+        return _swap_window_axes(spectra, axes)
 
 
-@patch_function(version="2.1")
-def istft(patch) -> dc.Patch:
+class Istft(PatchProcessor):
     """
     Invert a short-time fourier transform.
 
-    Parameters
-    ----------
-    patch
-        A patch return from [stft](`dascore.transform.fourier.stft`).
+    The patch must be one returned by [stft](`dascore.Patch.stft`).
 
     Examples
     --------
@@ -769,7 +853,91 @@ def istft(patch) -> dc.Patch:
     --------
     [Patch.stft](`dascore.Patch.stft`), [Patch.idft](`dascore.Patch.idft`)
     """
-    coord_map = patch.coords.get_coord_tuple_map()
+
+    __version__ = "2.1"
+
+    def check(self, patch):
+        """Refuse a patch stft did not make, or made past inverting."""
+        out = super().check(patch)
+        _stft_dims(patch)
+        return out
+
+    def get_metadata(self, meta):
+        """Return the reassembled metadata, and how to invert each window."""
+        coord_map = meta.coords.get_coord_tuple_map()
+        dims = _stft_dims(meta)
+        # The dimension transformed one-sided, if any, is last, as it was cut.
+        real = meta.attrs["_stft_real"]
+        dims = [d for d in dims if d != real] + ([real] if real else [])
+        windows = [f"_tile_analysis_{dim}" for dim in dims]
+        ft_dims = FourierTransformatter().rename_dims(dims)
+        sizes = [len(coord_map[name][1]) for name in windows]
+        nffts = [int(meta.attrs[f"_stft_mfft_{dim}"]) for dim in dims]
+        steps = [to_float(coord_map[f"_tile_source_{dim}"][1].step) for dim in dims]
+        cycles = [
+            meta.get_coord(ft_dim).values * step for ft_dim, step in zip(ft_dims, steps)
+        ]
+        # The window centres go last, then the frequencies swap with them, so
+        # the windows' samples are the last axes whatever order the patch is in.
+        base_dims = [d for d in meta.dims if d not in dims]
+        offsets = [f"{dim}_offset" for dim in dims]
+        # The frequency axes do not survive, nor does anything riding on them.
+        for name, cdims in meta.coords.dim_map.items():
+            if set(cdims) & set(ft_dims):
+                coord_map.pop(name)
+        for offset, size in zip(offsets, sizes):
+            coord_map[offset] = ((offset,), get_coord(data=np.arange(size)))
+        renamed = (dims[ft_dims.index(d)] if d in ft_dims else d for d in base_dims)
+        stack_dims = (*renamed, *offsets)
+        data_type = meta.attrs.get("_pre_stft_data_type")
+        private = ("_stft", "_pre_stft")
+        attrs = {k: v for k, v in dict(meta.attrs).items() if not k.startswith(private)}
+        stack = meta.new(
+            coords=get_coord_manager(coords=coord_map, dims=stack_dims),
+            attrs=dc.PatchAttrs(**attrs),
+        )
+        out, plan = Reassemble().get_metadata(stack)
+        out = out.update_attrs(
+            data_type=data_type or "",
+            data_units=_get_data_units_from_dims(meta, dims, truediv),
+        )
+        return out, plan | {
+            "centres": tuple(meta.get_axis(dim) for dim in dims),
+            "swap": tuple(base_dims.index(ft_dim) for ft_dim in ft_dims),
+            "sizes": sizes,
+            "nffts": nffts,
+            "steps": steps,
+            "cycles": cycles,
+            "real": bool(real),
+        }
+
+    def numpy_kernel(
+        self, data, *, centres, swap, sizes, nffts, steps, cycles, real, **tiles
+    ):
+        """Return each window's inverse, blended back by reassemble."""
+        ndim = len(centres)
+        tail = tuple(range(-ndim, 0))
+        spectra = _swap_window_axes(np.moveaxis(data, centres, tail), swap)
+        factor = np.prod(steps).astype(spectra.dtype)
+        for axis, per_sample, size in zip(tail, cycles, sizes):
+            shape = [1] * ndim
+            shape[axis] = -1
+            phase = _centre_phase(per_sample, size, factor.dtype)
+            factor = factor * phase.reshape(shape)
+        spectra = spectra / factor
+        centred = tail[:-1] if real else tail
+        if centred:
+            spectra = nft.ifftshift(spectra, axes=centred)
+        ifft = nft.irfftn if real else nft.ifftn
+        stack = ifft(spectra, s=nffts, axes=tail)
+        # The FFT was zero padded past the window; the window is its first samples.
+        stack = stack[(..., *(slice(0, size) for size in sizes))]
+        return Reassemble.numpy_kernel(Reassemble(), stack, **tiles)
+
+
+def _stft_dims(patch) -> list[str]:
+    """Return the dimensions an invertible stft windowed, or say why there are none."""
+    coord_map = patch.coords.coord_map
     dims = [d for d in patch.dims if f"_tile_source_{d}" in coord_map]
     if not dims or "_stft_real" not in dict(patch.attrs):
         msg = (
@@ -779,57 +947,12 @@ def istft(patch) -> dc.Patch:
         raise PatchError(msg)
     windows = [f"_tile_analysis_{dim}" for dim in dims]
     if patch.attrs["_stft_detrended"] or any(w not in coord_map for w in windows):
+        # The patch itself, as the message has always shown it.
         msg = f"Inverse stft not possible for patch {patch}."
         raise PatchError(msg)
-    # The dimension transformed one-sided, if any, is last, as it was cut.
-    real = patch.attrs["_stft_real"]
-    dims = [d for d in dims if d != real] + ([real] if real else [])
-    windows = [f"_tile_analysis_{dim}" for dim in dims]
-    ndim = len(dims)
-    ft_dims = FourierTransformatter().rename_dims(dims)
-    sizes = [len(coord_map[name][1]) for name in windows]
-    nffts = [int(patch.attrs[f"_stft_mfft_{dim}"]) for dim in dims]
-    steps = [to_float(coord_map[f"_tile_source_{dim}"][1].step) for dim in dims]
-    # The window centres go last, then the frequencies swap with them, so
-    # the windows' samples are the last axes whatever order the patch is in.
-    tail = tuple(range(-ndim, 0))
-    centres = tuple(patch.get_axis(dim) for dim in dims)
-    base_dims = [d for d in patch.dims if d not in dims]
-    axes = tuple(base_dims.index(ft_dim) for ft_dim in ft_dims)
-    spectra = _swap_window_axes(np.moveaxis(patch.data, centres, tail), axes)
-    factor = np.prod(steps).astype(spectra.dtype)
-    for axis, ft_dim, size, step in zip(tail, ft_dims, sizes, steps):
-        shape = [1] * ndim
-        shape[axis] = -1
-        cycles = patch.get_coord(ft_dim).values * step
-        factor = factor * _centre_phase(cycles, size, factor.dtype).reshape(shape)
-    spectra = spectra / factor
-    centred = tail[:-1] if real else tail
-    if centred:
-        spectra = nft.ifftshift(spectra, axes=centred)
-    ifft = nft.irfftn if real else nft.ifftn
-    tiles = ifft(spectra, s=nffts, axes=tail)
-    # The FFT was zero padded past the window; the window is its first samples.
-    tiles = tiles[(..., *(slice(0, size) for size in sizes))]
-    offsets = [f"{dim}_offset" for dim in dims]
-    # The frequency axes do not survive, nor does anything riding on them.
-    for name, cdims in patch.coords.dim_map.items():
-        if set(cdims) & set(ft_dims):
-            coord_map.pop(name)
-    for offset, size in zip(offsets, sizes):
-        coord_map[offset] = ((offset,), get_coord(data=np.arange(size)))
-    renamed = (dims[ft_dims.index(d)] if d in ft_dims else d for d in base_dims)
-    stack_dims = (*renamed, *offsets)
-    data_type = patch.attrs.get("_pre_stft_data_type")
-    private = ("_stft", "_pre_stft")
-    attrs = {k: v for k, v in dict(patch.attrs).items() if not k.startswith(private)}
-    stack = patch.new(
-        data=tiles,
-        coords=get_coord_manager(coords=coord_map, dims=stack_dims),
-        attrs=dc.PatchAttrs(**attrs),
-    )
-    out = dc.Patch.reassemble.func(stack)  # ty: ignore[unresolved-attribute]
-    return out.update_attrs(
-        data_type=data_type or "",
-        data_units=_get_data_units_from_dims(patch, dims, truediv),
-    )
+    return dims
+
+
+def _is_complex(dtype) -> bool:
+    """Whether a dtype, numpy's or another backend's, is complex."""
+    return str(dtype).rsplit(".", 1)[-1].startswith("complex")

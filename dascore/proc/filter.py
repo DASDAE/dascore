@@ -692,7 +692,7 @@ def slope_filter(
 
     _check_inputs(patch, filt, dims)
     freq_dims = tuple(f"ft_{x}" for x in dims)
-    dft_patch = patch.dft.func(patch, dims)
+    dft_patch = patch.dft.func(patch, dims)  # ty: ignore[unresolved-attribute]
     transformed = patch is not dft_patch
 
     slope = _get_slope_array(dft_patch, directional, freq_dims)
