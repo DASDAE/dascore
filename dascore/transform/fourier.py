@@ -740,6 +740,41 @@ class Stft(PatchProcessor):
       [Patch.istft](`dascore.Patch.istft`) blends the windows back with.
       Non-dimensional coordinates along the transformed dimension travel with
       the stack and come back on the inverse.
+    - Named taper windows are symmetric: ``"hann"`` is
+      ``scipy.signal.get_window("hann", n, fftbins=False)``, whereas
+      `scipy.signal.stft` uses the periodic one.
+    - A window or overlap in coordinate units becomes a sample count rounded
+      up: ``time=2.0`` at 645.16 Hz is 1291 samples.
+    - Windows of ``n`` samples advance by ``hop = n - overlap`` from the
+      first sample, and every window reaching the data is kept, zero padded
+      at both ends. The first window starts ``(ceil(n / hop) - 1) * hop``
+      samples before the data: none when windows abut, ``overlap`` at 50%
+      overlap.
+    - The transformed coordinate is each window's centre, its sample
+      ``n // 2``, and each spectrum's phase is referred to that centre.
+      Centres fall on samples 0, hop, 2 * hop, ... only when ``n // 2`` is a
+      multiple of ``hop``, as at 50% overlap with an even ``n``.
+    - Spectra are scaled by the sample spacing ``dt``, as dft's are, rather
+      than by ``1 / sum(window)`` as `scipy.signal.stft` scales them.
+
+    Along time, one channel's stft equals this `scipy.signal.stft` call,
+    with ``x`` the channel's data and ``fs = 1 / dt``:
+
+    ```python
+    import numpy as np
+    from scipy.signal import get_window, stft
+
+    hop = n - overlap
+    margin = (-(-n // hop) - 1) * hop
+    w = get_window("hann", n, fftbins=False)
+    f, _, z = stft(
+        np.pad(x, (margin, n)), fs, window=w, nperseg=n,
+        noverlap=overlap, boundary=None, padded=False,
+    )
+    count = (margin + len(x) - 1) // hop + 1
+    phase = np.exp(2j * np.pi * f / fs * (n // 2))
+    out = z[:, :count] * w.sum() / fs * phase[:, None]
+    ```
 
     See Also
     --------

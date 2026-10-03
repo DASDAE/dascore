@@ -12,7 +12,8 @@ from concurrent.futures import ProcessPoolExecutor
 import numpy as np
 import pytest
 from scipy.fft import next_fast_len
-from scipy.signal import detrend, windows
+from scipy.signal import detrend, get_window, windows
+from scipy.signal import stft as scipy_stft
 
 import dascore as dc
 import dascore.proc.coords
@@ -615,6 +616,36 @@ class TestSTFT:
         trace = random_patch.data[0, :n]
         ref = np.fft.rfft(trace) * step * np.exp(2j * np.pi * k / n * (n // 2))
         assert np.abs(spectrum - ref).max() / np.abs(ref).max() < 1e-12
+
+    @pytest.mark.parametrize(
+        "n, overlap", [(256, 128), (256, 0), (256, 192), (255, 100)]
+    )
+    def test_scipy_equivalence(self, n, overlap):
+        """One channel matches the scipy.signal.stft call the Notes give."""
+        patch = dc.get_example_patch()
+        x = patch.data[0]
+        fs = 1 / dc.to_float(patch.get_coord("time").step)
+        out = patch.stft(time=n, overlap=overlap, samples=True)
+        # The recipe from the Stft docstring.
+        hop = n - overlap
+        margin = (-(-n // hop) - 1) * hop
+        w = get_window("hann", n, fftbins=False)
+        f, _, z = scipy_stft(
+            np.pad(x, (margin, n)),
+            fs,
+            window=w,
+            nperseg=n,
+            noverlap=overlap,
+            boundary=None,
+            padded=False,
+        )
+        count = (margin + len(x) - 1) // hop + 1
+        phase = np.exp(2j * np.pi * f / fs * (n // 2))
+        expected = z[:, :count] * w.sum() / fs * phase[:, None]
+        assert out.data[0].shape == expected.shape
+        assert np.allclose(out.get_array("ft_time"), f)
+        err = np.abs(out.data[0] - expected).max() / np.abs(expected).max()
+        assert err < 1e-8
 
     def test_numeric_window_with_timedelta_coord(self):
         """
