@@ -30,10 +30,14 @@ import time
 import warnings
 from pathlib import Path
 from typing import Any
+from unittest import mock
 
 import numpy as np
+import pandas as pd
 
 import dascore as dc
+import dascore.core.inventory as inventory_module
+from dascore.examples import inventory_patch_pair
 from dascore.utils.signal import WINDOW_NAMES
 
 # Derivatives above second order need findiff, which the minimal install lacks.
@@ -86,6 +90,7 @@ EXPECTED_ERRORS = (
     "matrix/longdouble/median_filter",
     "matrix/longdouble/gaussian_filter",
     "matrix/longdouble/hampel_exact",
+    "matrix/longdouble/whiten_smooth",
     "matrix/*nan*/savgol_filter",
     "matrix/*inf*/savgol_filter",
     # NumPy cannot subtract booleans; scipy's Hilbert transform refuses complex.
@@ -101,6 +106,7 @@ EXPECTED_ERRORS = (
     "matrix/single_row/pad_fft",
     "matrix/single_row/dft_real",
     "matrix/single_row/dft_nopad",
+    "matrix/single_row/slope_filter",
     "matrix/single_row/idft",
     # NumPy's real FFT refuses complex data; scipy's detrend refuses NaN and inf.
     "matrix/complex*/dft_real",
@@ -206,6 +212,14 @@ MATRIX_CALLS = {
     ),
     "where_arr": lambda patch: patch.where(np.asarray(patch.data) > 0),
     "where_other": lambda patch: patch.where(np.asarray(patch.data) > 0, other=0),
+    "where_patch": lambda patch: patch.where(patch.real() > 0, other=patch * 2),
+    "dropna_no_inf": lambda patch: patch.dropna("time", include_inf=False),
+    "dropna_all_time": lambda patch: patch.dropna("time", how="all"),
+    "stalta": lambda patch: patch.stalta(time=(2, 4), samples=True),
+    "correlate": lambda patch: patch.correlate(distance=0, samples=True),
+    "whiten": lambda patch: patch.whiten(time=None),
+    "whiten_smooth": lambda patch: patch.whiten(smooth_size=0.3),
+    "slope_filter": lambda patch: patch.slope_filter(filt=[0.5, 1, 2, 4]),
     # window filters and pass filters
     "median_filter": lambda patch: patch.median_filter(time=3, samples=True),
     "gaussian_filter": lambda patch: patch.gaussian_filter(time=1, samples=True),
@@ -1228,6 +1242,318 @@ def _spectral_calls(patch, with_nondim) -> dict:
     return calls
 
 
+def _fixed_inventory_pair():
+    """Return the example inventory pair with its random resource ids fixed."""
+    # The ids default to random uuids, which every enrich id would carry.
+    count = iter(range(1_000_000))
+    with mock.patch.object(inventory_module, "uuid4", lambda: f"id-{next(count)}"):
+        return inventory_patch_pair()
+
+
+def _data_dependent_calls(patch, null_patch, int_patch, f32, dft_patch, m) -> dict:
+    """Return where, dropna, add_distance_to and enrich with every option."""
+    cond = patch > 0.5
+    # Aligned on the overlap: a condition and a fill covering part of the patch.
+    part_cond = _pinned(cond.isel(distance=slice(10, 200)), "part_cond")
+    part_other = _pinned(patch.isel(time=slice(100, 1500)) * 0, "part_other")
+    row_cond = _pinned(patch.isel(time=0).squeeze() > 0.5, "row_cond")
+    lone_cond = _pinned(cond.mean("time").new(data=np.ones((300, 1), bool)), "lone")
+    inf = np.asarray(null_patch.data).copy()
+    inf[5, 5], inf[6, :] = np.inf, -np.inf
+    with_inf = _pinned(null_patch.new(data=inf), "with_inf")
+    xyz = _pinned(dc.get_example_patch("random_patch_with_xyz"), "xyz")
+    shot = pd.Series({"x": 10, "y": 10, "z": 0})
+    inv_patch, inventory = _fixed_inventory_pair()
+    inv_patch = _pinned(inv_patch, "inv_patch")
+    bare = _pinned(inv_patch.update_attrs(acquisition_key=""), "inv_bare")
+    stated = _pinned(inv_patch.update_attrs(gauge_length=3.0), "inv_stated")
+    enriched = inv_patch.enrich(inventory)
+    return {
+        "where_cond_patch_other_patch": lambda: patch.where(cond, other=patch * 2),
+        "where_other_patch": lambda: patch.where(patch.data > 0, other=patch * -1),
+        "where_other_array": lambda: patch.where(
+            patch.data > 0, other=np.zeros(patch.shape)
+        ),
+        "where_part_cond": lambda: patch.where(part_cond),
+        "where_part_both": lambda: patch.where(part_cond, other=part_other),
+        "where_broadcast_patch": lambda: patch.where(lone_cond, 1),
+        "where_broadcast_array": lambda: patch.where(np.ones((300, 1), bool), 1),
+        "where_int_nan": lambda: int_patch.where(int_patch.data > 0),
+        "where_int_int": lambda: int_patch.where(int_patch.data > 0, other=0),
+        "where_f32": lambda: f32.where(f32.data > 0, other=0),
+        "where_complex": lambda: dft_patch.where(dft_patch.real().data > 0),
+        "where_list": lambda: patch.isel(distance=slice(0, 2)).where(
+            [[True] * 2000, [False] * 2000]
+        ),
+        "where_positional": lambda: patch.where(cond, 3.0),
+        "where_transposed_cond": lambda: patch.where(
+            cond.transpose(), other=part_other
+        ),
+        "where_missing_dim": lambda: patch.where(row_cond, other=0.5),
+        "where_bad_float": lambda: patch.where(patch.data),
+        "where_bad_no_shared": lambda: patch.where(
+            cond.rename_coords(distance="x", time="y")
+        ),
+        # A pre-existing crash: the extra dimension's coord is sized as one.
+        "where_bad_extra_dim": lambda: patch.where(cond.rename_coords(distance="x")),
+        "where_bad_disjoint": lambda: patch.where(
+            cond.update_coords(time_min=np.datetime64("2030-01-01"))
+        ),
+        "where_bad_patch": lambda: patch.where(patch),
+        "dropna_no_inf": lambda: with_inf.dropna("time", include_inf=False),
+        "dropna_inf": lambda: with_inf.dropna("time"),
+        "dropna_all_time": lambda: with_inf.dropna("time", how="all"),
+        "dropna_any_distance": lambda: with_inf.dropna("distance"),
+        "dropna_positional": lambda: with_inf.dropna("distance", "all", False),
+        "dropna_noop": lambda: patch.dropna("time"),
+        "dropna_int_noop": lambda: int_patch.dropna("distance"),
+        "dropna_complex": lambda: dft_patch.dropna("distance"),
+        "dropna_bad_dim": lambda: null_patch.dropna("nope"),
+        "add_distance_to": lambda: xyz.add_distance_to(shot),
+        "add_distance_to_ord": lambda: xyz.add_distance_to(shot, ord=1),
+        "add_distance_to_prefix": lambda: xyz.add_distance_to(shot, prefix="shot"),
+        "add_distance_to_positional": lambda: xyz.add_distance_to(shot, 2, "src"),
+        "add_distance_to_two": lambda: xyz.add_distance_to(
+            pd.Series({"x": 1.5, "y": -2.0})
+        ),
+        "add_distance_to_bad_name": lambda: xyz.add_distance_to(
+            pd.Series({"x": 1, "q": 2})
+        ),
+        "add_distance_to_bad_dims": lambda: xyz.add_distance_to(
+            pd.Series({"x": 1, "time": 2})
+        ),
+        "enrich": lambda: inv_patch.enrich(inventory),
+        "enrich_no_coords": lambda: inv_patch.enrich(inventory, coords=False),
+        "enrich_no_attrs": lambda: inv_patch.enrich(inventory, attrs=False),
+        "enrich_named": lambda: inv_patch.enrich(
+            inventory, attrs=("gauge_length",), coords=("x", "y", "z")
+        ),
+        "enrich_noop": lambda: inv_patch.enrich(inventory, attrs=False, coords=False),
+        "enrich_refresh": lambda: enriched.enrich(inventory),
+        "enrich_key": lambda: bare.enrich(
+            inventory, acquisition_key="DAS.R2D1..RAW", coords=False
+        ),
+        "enrich_keep_first": lambda: stated.enrich(inventory, conflict="keep_first"),
+        "enrich_keep_last": lambda: stated.enrich(inventory, conflict="keep_last"),
+        "enrich_drop": lambda: stated.enrich(inventory, conflict="drop"),
+        "enrich_missing_null": lambda: inv_patch.enrich(
+            inventory, attrs=("pulse_rate",), coords=False, on_missing="null"
+        ),
+        "enrich_missing_ignore": lambda: inv_patch.enrich(
+            inventory, attrs=("pulse_rate",), coords=False, on_missing="ignore"
+        ),
+        "enrich_bad_conflict": lambda: stated.enrich(inventory),
+        "enrich_bad_missing": lambda: inv_patch.enrich(inventory, on_missing="x"),
+        "enrich_bad_key": lambda: bare.enrich(inventory),
+        "enrich_bad_time": lambda: inv_patch.enrich(inventory, time="2017-09-18"),
+    }
+
+
+def _composite_calls(patch, int_patch, f32, dft_patch, wacky, m, s) -> dict:
+    """Return the operations composed of others, with every option."""
+    hz = dc.get_unit("Hz")
+    small = _pinned(patch.isel(distance=slice(0, 30), time=slice(0, 500)), "comp")
+    units = _pinned(small.set_units("m/s"), "comp_units")
+    plain = _pinned(small.set_units(distance=None), "comp_plain")
+    env = _pinned(small.envelope("time"), "comp_env")
+    scaled = _pinned(env.set_units("10 m/s"), "comp_scaled")
+    cplx = _pinned(small.new(data=np.asarray(small.data) * (1 + 0.5j)), "comp_c")
+    f32_small = _pinned(f32.isel(distance=slice(0, 30), time=slice(0, 500)), "c32")
+    int_small = _pinned(int_patch.isel(distance=slice(0, 30), time=slice(0, 500)), "ci")
+    padded = small.pad(time="correlate")
+    real_ft = padded.dft("time", real=True)
+    full_ft = small.dft("time")
+    both_ft = small.dft(("distance", "time"))
+    event = _pinned(dc.get_example_patch("dispersion_event"), "dispersion")
+    event_small = _pinned(event.isel(distance=slice(0, 30), time=slice(0, 600)), "ev")
+    int_data = (np.asarray(event_small.data) * 1e3).astype("int64")
+    event_int = _pinned(event_small.new(data=int_data), "ev_int")
+    taup_in = _pinned(small.isel(distance=slice(0, 12), time=slice(0, 120)), "taup")
+    taup_wacky = _pinned(taup_in.update_coords(distance=np.arange(12) ** 1.5), "tw")
+    vels = np.arange(1000.0, 6000.0, 500.0)
+    filt = [2e3, 2.2e3, 8e3, 2e4]
+    return {
+        # stalta
+        "stalta": lambda: env.stalta(time=(0.02, 0.1)),
+        "stalta_samples": lambda: env.stalta(time=(5, 25), samples=True),
+        "stalta_distance": lambda: env.stalta(distance=(2, 6), samples=True),
+        "stalta_units": lambda: env.stalta(time=(0.02 * s, 0.1 * s)),
+        "stalta_int": lambda: int_small.stalta(time=(5, 25), samples=True),
+        "stalta_scaled": lambda: scaled.stalta(time=(5, 25), samples=True),
+        "stalta_row": lambda: env.isel(distance=slice(0, 1)).stalta(
+            time=(5, 25), samples=True
+        ),
+        "stalta_f32": lambda: f32_small.stalta(time=(5, 25), samples=True),
+        "stalta_long": lambda: patch.envelope("time").stalta(time=(0.1, 0.5)),
+        "stalta_bad_order": lambda: env.stalta(time=(0.1, 0.02)),
+        "stalta_bad_offset": lambda: env.set_units("degC").stalta(
+            time=(5, 25), samples=True
+        ),
+        "stalta_bad_two": lambda: env.stalta(time=(1, 2), distance=(1, 2)),
+        # fbe
+        "fbe": lambda: small.fbe(time=(10, 50), window=0.1),
+        "fbe_no_db": lambda: small.fbe(time=(10, 50), window=0.1, db=False),
+        "fbe_step": lambda: small.fbe(time=(10, 50), window=0.1, step=0.02),
+        "fbe_low": lambda: small.fbe(time=(None, 30), window=0.05),
+        "fbe_high": lambda: small.fbe(time=(20, ...), window=0.05),
+        "fbe_hz": lambda: small.fbe(time=(10 * hz, 50 * hz), window=0.1),
+        "fbe_distance": lambda: small.fbe(distance=(0.05, 0.2), window=5),
+        "fbe_positional": lambda: small.fbe(0.1, 0.04, False, time=(10, 50)),
+        "fbe_f32": lambda: f32_small.fbe(time=(10, 50), window=0.1),
+        "fbe_long": lambda: patch.fbe(time=(10, 50), window=0.5),
+        "fbe_bad_range": lambda: small.fbe(time=(10, 500), window=0.1),
+        "fbe_bad_two": lambda: small.fbe(time=(1, 2), distance=(1, 2), window=1),
+        "fbe_bad_offset": lambda: small.set_units("degC").fbe(
+            time=(10, 50), window=0.1
+        ),
+        # correlate
+        "correlate_one": lambda: small.correlate(distance=3, samples=True),
+        "correlate_value": lambda: small.correlate(distance=5),
+        "correlate_quantity": lambda: small.correlate(distance=5 * m),
+        "correlate_list": lambda: small.correlate(distance=[0, 4, 9], samples=True),
+        "correlate_time": lambda: small.correlate(time=[10, 20], samples=True),
+        "correlate_units": lambda: units.correlate(distance=2, samples=True),
+        "correlate_plain": lambda: plain.correlate(distance=2, samples=True),
+        "correlate_int": lambda: int_small.correlate(distance=1, samples=True),
+        "correlate_f32": lambda: f32_small.correlate(distance=1, samples=True),
+        "correlate_complex": lambda: cplx.correlate(distance=1, samples=True),
+        "correlate_dft_full": lambda: full_ft.correlate(distance=[1, 2], samples=True),
+        "correlate_dft_real": lambda: real_ft.correlate(distance=1, samples=True),
+        "correlate_positional": lambda: small.correlate(True, distance=2),
+        "correlate_transposed": lambda: small.transpose().correlate(
+            distance=2, samples=True
+        ),
+        "correlate_long": lambda: patch.correlate(distance=[1, 3], samples=True),
+        "correlate_bad_lag": lambda: small.correlate(distance=1, lag=2),
+        "correlate_bad_3d": lambda: small.stft(time=64, samples=True).correlate(
+            distance=1, samples=True
+        ),
+        # whiten
+        "whiten_default": lambda: small.whiten(),
+        "whiten_none": lambda: small.whiten(time=None),
+        "whiten_two": lambda: small.whiten(time=(10, 50)),
+        "whiten_four": lambda: small.whiten(time=(10, 20, 40, 60)),
+        "whiten_smooth": lambda: small.whiten(smooth_size=5, time=(10, 50)),
+        "whiten_water": lambda: small.whiten(smooth_size=5, water_level=0.05),
+        "whiten_water_only": lambda: small.whiten(water_level=0.05, time=None),
+        "whiten_distance": lambda: small.whiten(smooth_size=0.1, distance=None),
+        "whiten_positional": lambda: small.whiten(5, 0.01, time=None),
+        "whiten_int": lambda: int_small.whiten(smooth_size=5),
+        "whiten_f32": lambda: f32_small.whiten(smooth_size=5),
+        "whiten_complex": lambda: cplx.whiten(smooth_size=5),
+        "whiten_units": lambda: units.whiten(time=(10, 50)),
+        "whiten_dft": lambda: full_ft.whiten(smooth_size=5, time=(10, 50)),
+        "whiten_dft_real": lambda: small.dft("time", real=True).whiten(time=None),
+        "whiten_bad_wacky": lambda: wacky.whiten(time=None),
+        "whiten_long": lambda: patch.whiten(smooth_size=3, time=(5, 60)),
+        "whiten_bad_water": lambda: small.whiten(smooth_size=5, water_level=2.0),
+        "whiten_bad_water_int": lambda: small.whiten(smooth_size=5, water_level=1),
+        "whiten_bad_smooth": lambda: small.whiten(smooth_size=-1),
+        "whiten_bad_nyquist": lambda: small.whiten(smooth_size=500),
+        "whiten_bad_narrow": lambda: small.whiten(time=(10, 10.1)),
+        "whiten_bad_two_dims": lambda: small.whiten(time=None, distance=None),
+        "whiten_bad_dim": lambda: small.whiten(nope=None),
+        "whiten_bad_no_time": lambda: small.rename_coords(time="t").whiten(),
+        # slope_filter
+        "slope_filter": lambda: small.slope_filter(filt=filt),
+        "slope_filter_directional": lambda: small.slope_filter(
+            filt=[-2e4, -8e3, 2e3, 2e4], directional=True
+        ),
+        "slope_filter_invert": lambda: small.slope_filter(filt=filt, invert=True),
+        "slope_filter_array": lambda: small.slope_filter(filt=np.array(filt)),
+        "slope_filter_quantity": lambda: small.set_units(time="s").slope_filter(
+            filt=np.array(filt) * dc.get_unit("m/s")
+        ),
+        "slope_filter_slowness": lambda: small.set_units(time="s").slope_filter(
+            filt=np.array([1 / 2e4, 1 / 8e3, 1 / 2.2e3, 1 / 2e3]) * dc.get_unit("s/m")
+        ),
+        "slope_filter_dims": lambda: small.slope_filter(
+            filt=[1e-5, 1e-4, 1e-3, 1e-2], dims=("time", "distance")
+        ),
+        "slope_filter_positional": lambda: small.slope_filter(
+            filt, ("distance", "time"), True, True
+        ),
+        "slope_filter_dft": lambda: both_ft.slope_filter(filt=filt),
+        "slope_filter_int": lambda: int_small.slope_filter(filt=filt),
+        "slope_filter_f32": lambda: f32_small.slope_filter(filt=filt),
+        "slope_filter_complex": lambda: cplx.slope_filter(filt=filt),
+        "slope_filter_transposed": lambda: small.transpose().slope_filter(filt=filt),
+        "slope_filter_long": lambda: patch.slope_filter(filt=filt),
+        "slope_filter_bad_unsorted": lambda: small.slope_filter(filt=[3, 2, 1, 0]),
+        "slope_filter_bad_length": lambda: small.slope_filter(filt=[1, 2, 3]),
+        "slope_filter_bad_dims": lambda: small.slope_filter(
+            filt=filt, dims=("distance", "nope")
+        ),
+        "slope_filter_units": lambda: small.slope_filter(
+            filt=np.array(filt) * dc.get_unit("m/s")
+        ),
+        "slope_filter_bad_units": lambda: plain.slope_filter(
+            filt=np.array(filt) * dc.get_unit("m/s")
+        ),
+        # tau_p
+        "tau_p": lambda: taup_in.tau_p(vels),
+        "tau_p_uneven": lambda: taup_wacky.tau_p(vels),
+        "tau_p_transposed": lambda: taup_in.transpose().tau_p(vels),
+        "tau_p_quantity": lambda: taup_in.tau_p(vels * dc.get_unit("km/s") / 1000),
+        "tau_p_feet": lambda: taup_in.convert_units(distance="ft").tau_p(vels),
+        "tau_p_int": lambda: int_small.isel(
+            distance=slice(0, 12), time=slice(0, 120)
+        ).tau_p(vels),
+        "tau_p_bad_negative": lambda: taup_in.tau_p(-vels),
+        "tau_p_bad_order": lambda: taup_in.tau_p(vels[::-1]),
+        "tau_p_bad_dims": lambda: taup_in.rename_coords(time="t").tau_p(vels),
+        # dispersion_phase_shift
+        "dispersion": lambda: event_small.dispersion_phase_shift(
+            np.arange(100, 1500, 20)
+        ),
+        "dispersion_resolution": lambda: event_small.dispersion_phase_shift(
+            np.arange(100, 1500, 20), approx_resolution=0.5
+        ),
+        "dispersion_freq": lambda: event_small.dispersion_phase_shift(
+            np.arange(100, 1500, 20), approx_freq=[5, 70]
+        ),
+        "dispersion_both": lambda: event_small.dispersion_phase_shift(
+            np.arange(100, 1500, 20), 0.2, (5.0, 70.0)
+        ),
+        "dispersion_list": lambda: event_small.dispersion_phase_shift(
+            [100.0, 200.0, 400.0]
+        ),
+        "dispersion_transposed": lambda: event_small.transpose().dispersion_phase_shift(
+            np.arange(100, 1500, 20)
+        ),
+        "dispersion_int": lambda: event_int.dispersion_phase_shift(
+            np.arange(100, 1500, 20)
+        ),
+        "dispersion_full": lambda: event.dispersion_phase_shift(
+            np.arange(100, 1500, 5), approx_resolution=0.1, approx_freq=[5, 70]
+        ),
+        "dispersion_bad_order": lambda: event_small.dispersion_phase_shift(
+            np.arange(1500, 100, -20)
+        ),
+        "dispersion_bad_negative": lambda: event_small.dispersion_phase_shift(
+            np.arange(-100, 1500, 20)
+        ),
+        "dispersion_bad_resolution": lambda: event_small.dispersion_phase_shift(
+            np.arange(100, 1500, 20), approx_resolution=-1
+        ),
+        "dispersion_bad_freq_negative": lambda: event_small.dispersion_phase_shift(
+            np.arange(100, 1500, 20), approx_freq=[-5, 70]
+        ),
+        "dispersion_bad_freq_order": lambda: event_small.dispersion_phase_shift(
+            np.arange(100, 1500, 20), approx_freq=[70, 5]
+        ),
+        "dispersion_bad_freq_nyquist": lambda: event_small.dispersion_phase_shift(
+            np.arange(100, 1500, 20), approx_freq=[5, 5000]
+        ),
+        "dispersion_bad_empty": lambda: event_small.dispersion_phase_shift(
+            np.arange(100, 1500, 20), approx_resolution=400, approx_freq=[5, 7]
+        ),
+        "dispersion_bad_dims": lambda: event_small.rename_coords(
+            time="t"
+        ).dispersion_phase_shift(np.arange(100, 1500, 20)),
+    }
+
+
 def get_calls() -> dict:
     """Return the calls to compare, keyed by a name for the report."""
     patch = _pinned(dc.get_example_patch(), "example")
@@ -1266,6 +1592,8 @@ def get_calls() -> dict:
         **_fill_gaps_calls(s),
         **_fourier_calls(patch, int_patch, f32, wacky, with_nondim, m, s),
         **_spectral_calls(patch, with_nondim),
+        **_data_dependent_calls(patch, null_patch, int_patch, f32, dft_patch, m),
+        **_composite_calls(patch, int_patch, f32, dft_patch, wacky, m, s),
         # The inputs themselves, so a difference in the examples cannot
         # masquerade as a difference in the functions.
         "input_patch": lambda: patch,

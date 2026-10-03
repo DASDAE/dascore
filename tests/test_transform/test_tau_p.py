@@ -6,7 +6,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import ParameterError
 from dascore.transform._taup_kernels import _jit_taup_general, _jit_taup_uniform
-from dascore.transform.taup import tau_p
+from dascore.transform.taup import TauP, tau_p
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_timedelta64
 
@@ -208,3 +208,18 @@ class TestTauP:
 
         assert out.dims == expected.dims
         assert np.array_equal(out.data, expected.data)
+
+
+class TestTauPMetadata:
+    """tau_p works out its result from metadata alone."""
+
+    def test_two_sided_slownesses(self, random_patch):
+        """Each velocity gives a negative and a positive slowness."""
+        patch = random_patch.isel(time=slice(0, 50))
+        taup = TauP(velocities=np.arange(1e3, 3e3, 5e2))
+        out, _ = taup.get_metadata(patch.drop_data())
+        assert out.dims == ("slowness", "time")
+        assert out.shape == (8, 50)
+        slowness = out.coords.get_array("slowness")[[0, 3, 4, -1]]
+        assert np.allclose(slowness, [-4e-4, -1e-3, 1e-3, 4e-4])
+        assert out.dtype == taup(patch).dtype == np.float64

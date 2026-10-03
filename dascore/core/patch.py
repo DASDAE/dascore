@@ -6,6 +6,7 @@ from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final, Literal, Self
 
 import numpy as np
+from numpy.typing import NDArray
 
 import dascore as dc
 import dascore.proc.basic
@@ -376,9 +377,6 @@ class Patch(NamespaceOwner, PatchMeta):
             args=args, fill_value=fill_value, samples=samples, **kwargs
         ).run(self)
 
-    add_distance_to = dascore.proc.coords.add_distance_to
-    enrich = dascore.proc.enrich
-
     def radians_to_strain(
         self,
         gauge_length: Any = None,
@@ -536,7 +534,9 @@ class Patch(NamespaceOwner, PatchMeta):
             copy=copy, relative=relative, samples=samples, **kwargs
         ).run(self)
 
-    correlate = dascore.proc.correlate
+    def correlate(self, samples: bool = False, **kwargs) -> Self:
+        """Correlate source row/columns in a 2D patch with all other row/columns."""
+        return dascore.proc.Correlate(samples=samples, **kwargs).run(self)
 
     def correlate_shift(self, dim: str, undo_weighting: bool = True) -> Self:
         """Apply a shift to the patch data to undo correlation in frequency domain."""
@@ -563,7 +563,11 @@ class Patch(NamespaceOwner, PatchMeta):
         """Remove a linear or constant trend along a dimension."""
         return dascore.proc.Detrend(dim=dim, type=type).run(self)
 
-    dropna = dascore.proc.dropna
+    def dropna(self, dim, how: Literal["any", "all"] = "any", include_inf=True) -> Self:
+        """Return a patch with nullish values dropped along dimension."""
+        return dascore.proc.basic.Dropna(dim=dim, how=how, include_inf=include_inf).run(
+            self
+        )
 
     def fillna(self, value: Any, include_inf: bool = True) -> Self:
         """Replace nullish data with a value."""
@@ -634,7 +638,17 @@ class Patch(NamespaceOwner, PatchMeta):
             samples=samples, mode=mode, cval=cval, truncate=truncate, **kwargs
         ).run(self)
 
-    slope_filter = dascore.proc.slope_filter
+    def slope_filter(
+        self,
+        filt: Sequence[float],
+        dims: tuple[str, str] = ("distance", "time"),
+        directional: bool = False,
+        invert: bool = False,
+    ) -> Self:
+        """Filter the patch over certain slopes in the 2D Fourier domain."""
+        return dascore.proc.SlopeFilter(
+            filt=filt, dims=dims, directional=directional, invert=invert
+        ).run(self)
 
     def wiener_filter(
         self, *, noise: float | None = None, samples: bool = False, **kwargs
@@ -687,7 +701,9 @@ class Patch(NamespaceOwner, PatchMeta):
             samples=samples, update_coord=update_coord, **kwargs
         ).run(self)
 
-    where = dascore.proc.where
+    def where(self, cond: ArrayLike | Patch, other: Any | Patch = np.nan) -> Self:
+        """Return elements from patch where condition is True, else fill with other."""
+        return dascore.proc.basic.Where(cond=cond, other=other).run(self)
 
     def flip(self, *dims, flip_coords: bool = True) -> Self:
         """Flip data and optionally coordinates along dimensions."""
@@ -843,7 +859,17 @@ class Patch(NamespaceOwner, PatchMeta):
         ).run(self)
 
     rolling = dascore.proc.rolling
-    whiten = dascore.proc.whiten
+
+    def whiten(
+        self,
+        smooth_size: float | None = None,
+        water_level: float | None = None,
+        **kwargs,
+    ) -> Self:
+        """Spectral whitening of a signal."""
+        return dascore.proc.Whiten(
+            smooth_size=smooth_size, water_level=water_level, **kwargs
+        ).run(self)
 
     # --- Patch aggregations shortcuts.
     def aggregate(
@@ -981,7 +1007,11 @@ class Patch(NamespaceOwner, PatchMeta):
             self
         )
 
-    fbe = transform.fbe
+    def fbe(
+        self, window: float, step: float | None = None, db: bool = True, **kwargs
+    ) -> Self:
+        """Compute the rolling Frequency Band Energy in a window."""
+        return transform.Fbe(window=window, step=step, db=db, **kwargs).run(self)
 
     def idft(self, dim: str | Sequence[str] | None = None) -> Self:
         """Perform the inverse discrete Fourier transform on specified dimension(s)."""
@@ -1016,7 +1046,9 @@ class Patch(NamespaceOwner, PatchMeta):
         """Integrate along dimension(s) using the trapezoidal rule."""
         return transform.Integrate(dim=dim, definite=definite).run(self)
 
-    stalta = transform.stalta
+    def stalta(self, *, samples: bool = False, **kwargs) -> Self:
+        """Compute the STA/LTA ratio along a patch dimension."""
+        return transform.Stalta(samples=samples, **kwargs).run(self)
 
     def kurtosis(self, samples: bool = False, recursive: bool = True, **kwargs) -> Self:
         """Compute windowed or recursive kurtosis along a dimension."""
@@ -1036,8 +1068,22 @@ class Patch(NamespaceOwner, PatchMeta):
             self
         )
 
-    dispersion_phase_shift = transform.dispersion_phase_shift
-    tau_p = transform.tau_p
+    def dispersion_phase_shift(
+        self,
+        phase_velocities: Sequence[float],
+        approx_resolution: float | None = None,
+        approx_freq: tuple[float, float] | None = None,
+    ) -> Self:
+        """Compute dispersion images using the phase-shift method."""
+        return transform.DispersionPhaseShift(
+            phase_velocities=phase_velocities,
+            approx_resolution=approx_resolution,
+            approx_freq=approx_freq,
+        ).run(self)
+
+    def tau_p(self, velocities: NDArray[np.floating]) -> Self:
+        """Compute linear tau-p transform."""
+        return transform.TauP(velocities=velocities).run(self)
 
     def hilbert(self, dim: str) -> Self:
         """Return the analytic signal along a dimension."""
