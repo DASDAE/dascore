@@ -7,6 +7,7 @@ import json
 import os
 import platform
 import shutil
+import warnings
 from contextlib import suppress
 from pathlib import Path
 
@@ -27,6 +28,7 @@ from dascore.io.index.indexer import (
 )
 from dascore.io.index.query import InvalidSpoolQueryError
 from dascore.utils.patch import get_patch_names
+from dascore.warnings import DASCoreWarning
 
 
 @pytest.fixture(scope="class")
@@ -374,6 +376,19 @@ class TestUpdate:
         random_patch.io.write(path, file_format="dasdae")
         updated = empty_index.update(progress=None)
         assert len(updated._backend.query_rows()) == 1
+
+    def test_legacy_index_warns(self, empty_index):
+        """A leftover .dascore_index.h5 warns once per update."""
+        (empty_index.path / ".dascore_index.h5").write_bytes(b"old")
+        with pytest.warns(DASCoreWarning, match=r"dascore_index\.sqlite3") as rec:
+            empty_index.update(progress=None)
+        assert len(rec) == 1
+
+    def test_no_legacy_index_no_warning(self, empty_index):
+        """Without the old file an update stays silent."""
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", category=DASCoreWarning)
+            empty_index.update(progress=None)
 
     def test_index_with_bad_file(self, spool_directory_with_non_das_file):
         """Ensure if one file is not readable index continues."""
