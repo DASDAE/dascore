@@ -27,6 +27,7 @@ from dascore.core._spool_inventory import (
     get_interrogator,
     header_agrees,
     map_axis_coords,
+    numbers_close,
     readable_on,
     to_axis_units,
     validate_enrich_conflict,
@@ -360,7 +361,7 @@ def _stated_kind(values, unset) -> str:
     if stated.dtype == object:
         stated = np.asarray(stated.tolist())
     kind = stated.dtype.kind
-    return {"S": "U", "b": "f", "i": "f", "u": "f"}.get(kind, kind)
+    return {"S": "U", "i": "f", "u": "f"}.get(kind, kind)
 
 
 def _merge_coord(existing, values):
@@ -394,7 +395,12 @@ def _merge_coord(existing, values):
     # whether the stated channels agree.
     both = ~unset_first & ~unset_second
     stated = first[both].astype(object), second[both].astype(object)
-    if not np.all(stated[0] == stated[1]):
+    agree = stated[0] == stated[1]
+    if kinds[0] == "f":
+        # Numbers within rounding agree, as they do for attrs; the patch's
+        # values are kept, so a refresh still returns the coordinate as is.
+        agree |= numbers_close(stated[0].astype(float), stated[1].astype(float))
+    if not np.all(agree):
         return None
     fill = unset_first & ~unset_second
     if not fill.any():

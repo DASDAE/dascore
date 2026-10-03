@@ -687,6 +687,29 @@ class TestCoords:
         out = held.enrich(inventory, attrs=False, coords=("x",))
         assert out.get_coord("x") == full
 
+    def test_rounding_noise_is_a_refresh(self, patch, inventory):
+        """Float values within rounding of the inventory's keep the patch's."""
+        full = patch.enrich(inventory, attrs=False, coords=("x",)).get_coord("x")
+        noisy = full.values * (1 + 1e-12)
+        assert not np.array_equal(noisy, full.values)
+        held = patch.update_coords(
+            x=("distance", get_coord(data=noisy, units=full.units))
+        )
+        out = held.enrich(inventory, attrs=False, coords=("x",))
+        assert np.array_equal(out.get_coord("x").values, noisy)
+
+    def test_float_difference_beyond_rounding_disagrees(self, patch, inventory):
+        """A float value off by more than rounding is a real disagreement."""
+        full = patch.enrich(inventory, attrs=False, coords=("x",)).get_coord("x")
+        off = full.values.copy()
+        off[0] *= 1 + 1e-3
+        assert off[0] != full.values[0]
+        held = patch.update_coords(
+            x=("distance", get_coord(data=off, units=full.units))
+        )
+        with pytest.raises(PatchError, match="already has a 'x'"):
+            held.enrich(inventory, attrs=False, coords=("x",))
+
     def test_object_strings_with_gaps_are_filled(self, patch, inventory):
         """A string coordinate held as objects with None gaps still merges."""
         name = "coupling.medium"
