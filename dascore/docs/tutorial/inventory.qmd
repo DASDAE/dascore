@@ -21,6 +21,8 @@ An [`Inventory`](`dascore.core.inventory.Inventory`) contains [`Network`](`dasco
 
 Shared objects such as interrogators, cables, enclosures, and measurements live under `Inventory.resources`. Other objects refer to them by `resource_id`, avoiding duplicate metadata; model constructors also accept the object itself.
 
+In notebook displays, a long model description appears as `description: …`. Open a leaf model to read it, or open the description within a model that has children. Short descriptions remain in the summary line.
+
 ![Optical-path track concepts.](../_static/optical_path_concept.svg){width="100%" style="background-color: white" fig-alt="Four tracks share optical distance: contiguous optical components tile the complete fiber, geometry is a partially defined function, labels form independent interval groups, and coupling is stated only where known."}
 
 An optical path has four independent tracks along optical distance:

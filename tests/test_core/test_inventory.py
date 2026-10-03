@@ -2098,6 +2098,66 @@ class TestPanel:
             html = inventory._repr_html_()
         assert "... 3 more" in html
 
+    def test_long_description_opens_to_full_text(self):
+        """A long note stays out of the summary but is readable on click."""
+        description = "A long deployment note " * 10 + "<final detail>"
+        array = inv.FiberArray(
+            code="FA1", name="name description: stays", description=description
+        )
+        panel = inv.Inventory(
+            networks=(inv.Network(code="XT", fiber_arrays=(array,)),)
+        )._repr_html_()
+        summary = next(
+            x
+            for x in re.findall(r"<summary>(.*?)</summary>", panel)
+            if "FiberArray" in x
+        )
+        visible = re.sub(r"<[^>]+>", "", summary)
+        assert "description: …" in visible
+        assert description not in summary
+        assert "code: FA1" in visible
+        assert "name description: stays" in visible
+        assert "&lt;final detail&gt;" in panel
+        assert panel.count("&lt;final detail&gt;") == 1
+
+    def test_short_description_stays_in_summary(self):
+        """A short note needs no extra disclosure."""
+        array = inv.FiberArray(code="FA1", description="near portal")
+        panel = inv.Inventory(
+            networks=(inv.Network(code="XT", fiber_arrays=(array,)),)
+        )._repr_html_()
+        assert "description: near portal" in re.sub(r"<[^>]+>", "", panel)
+        assert 'class="dc-body dc-description"' not in panel
+
+    def test_multiline_description_starts_closed(self):
+        """A short note with a newline also stays out of the title."""
+        array = inv.FiberArray(code="FA1", description="first line\nsecond line")
+        panel = inv.Inventory(
+            networks=(inv.Network(code="XT", fiber_arrays=(array,)),)
+        )._repr_html_()
+        leaf = re.search(
+            r'<details class="dc-nest dc-d1"([^>]*)>'
+            r"<summary>(.*?)</summary>(.*?)</details>",
+            panel,
+            re.DOTALL,
+        )
+        assert leaf is not None
+        assert "open" not in leaf.group(1)
+        assert "description: …" in re.sub(r"<[^>]+>", "", leaf.group(2))
+        assert "first line\nsecond line" in leaf.group(3)
+
+    def test_long_parent_note_does_not_hide_children(self):
+        """A network's children remain visible while its note stays folded."""
+        network = inv.Network(
+            code="XT",
+            description="A network note " * 10,
+            fiber_arrays=(inv.FiberArray(code="FA1"),),
+        )
+        panel = inv.Inventory(networks=(network,))._repr_html_()
+        assert '<details class="dc-nest dc-d0" open>' in panel
+        assert '<details class="dc-note"><summary>description: …</summary>' in panel
+        assert "FiberArray" in panel
+
 
 class TestObjectTypeTag:
     """The union members' own tag field is invisible to users."""
