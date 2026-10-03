@@ -1322,6 +1322,46 @@ class TestTreeMatchesChunk:
         spool = spool.chunk(time=step * 100, keep_partial=True)
         self._assert_matches(spool.io.to_xarray(), spool.chunk(time=None))
 
+    @staticmethod
+    def _selected_chunk(starts):
+        """Chunk 20-second patches starting at ``starts``, then drop a channel."""
+        members = [
+            dc.Patch(
+                data=np.random.default_rng(num).random((3, 20)),
+                coords={
+                    "distance": np.arange(3),
+                    "time": dc.get_coord(
+                        start=dc.to_datetime64("2020-01-01") + dc.to_timedelta64(x),
+                        step=dc.to_timedelta64(1),
+                        shape=(20,),
+                    ),
+                },
+                dims=("distance", "time"),
+            )
+            for num, x in enumerate(starts)
+        ]
+        spool = dc.spool(members).chunk(time=None)
+        return spool.select(distance=(1, None), samples=True)
+
+    @pytest.mark.parametrize("starts", [(0, 20), (0, 10)])
+    def test_selection_of_an_exact_chunk(self, starts):
+        """A selected chunk whose envelope is its merged grid converts as chunk."""
+        spool = self._selected_chunk(starts)
+        self._assert_matches(spool.io.to_xarray(), spool.chunk(time=None))
+
+    @pytest.mark.parametrize("starts", [(0, 15.2), (0, 20.5, 41)])
+    def test_selection_of_a_snapped_chunk_refused(self, starts):
+        """
+        A selected chunk which snapped its members is refused when built.
+
+        Its envelope ends where its last member did, not where the merged
+        grid does (an off-grid end, or one drifted a whole sample), so it
+        cannot size the patch it loads.
+        """
+        spool = self._selected_chunk(starts)
+        with pytest.raises(PatchConversionError, match="snapped"):
+            spool.io.to_xarray()
+
     @pytest.mark.parametrize("select", [None, dict(time=(1, None))])
     @pytest.mark.parametrize("source", ["memory", "dasdae"])
     @pytest.mark.parametrize(

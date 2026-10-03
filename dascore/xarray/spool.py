@@ -218,6 +218,21 @@ def _with_loaded_range(member_rows, members, source_rows, dim):
     )
 
 
+def _misstated_merge(resolver, row, dim) -> bool:
+    """Whether a member loads a chunk's snapped merge its envelope misstates."""
+    path = str(row.get("source_path"))
+    for prefix, plan in getattr(resolver.loader, "plan_entries", dict)().items():
+        snaps = plan.mode == "chunk" and plan.merge_kwargs.get("fill_value") is None
+        if path.startswith(prefix) and plan.dim == dim and snaps:
+            rows = plan.member_rows.sort_values(f"{dim}_min")
+            rows = rows[rows["output_id"] == int(path.removeprefix(prefix))]
+            meta = plan._assembler().describe_output(rows.to_dict("records"))
+            assert meta is not None, "an output described its members can be"
+            coord = meta.coords.coord_map[dim]
+            return not coord.evenly_sampled or coord.max() != rows[f"{dim}_max"].max()
+    return False
+
+
 def _location(resolver, row):
     """Where a member's file opens, with any storage options its path carries."""
     loader, path, _, _ = resolver._array_read_info(row)
@@ -523,6 +538,13 @@ def spool_to_xarray(
                 f"to {out[f'{dim}_max']} records no sampling step for one of "
                 "its dimensions, or no dtype, in the spool index; an index "
                 "made before dtypes were recorded needs spool.update()."
+            )
+            raise PatchConversionError(msg)
+        if any(_misstated_merge(resolver, x, dim) for x in rows):
+            msg = (
+                f"Cannot size a lazy array: a patch spanning {out[f'{dim}_min']} to "
+                f"{out[f'{dim}_max']} loads a chunk which snapped its members "
+                "onto one grid; convert the spool before chunking it."
             )
             raise PatchConversionError(msg)
         locations = [
