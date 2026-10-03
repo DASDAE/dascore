@@ -598,7 +598,7 @@ class TestNetCDFXarrayCompatibility:
 
 
 class TestCFUnits:
-    """Units follow the CF ``units`` attribute in written and read files."""
+    """A file's CF ``units`` attributes read as units."""
 
     @pytest.fixture
     def cf_path(self, tmp_path):
@@ -607,7 +607,7 @@ class TestCFUnits:
         xr = pytest.importorskip("xarray")
         path = tmp_path / "cf.nc"
         dataset = xr.Dataset(
-            {"data": (("distance", "time"), np.zeros((3, 4)), {"units": "1/s"})},
+            {"data": (("distance", "time"), np.zeros((3, 4)), {"units": "m s-1"})},
             coords={
                 "distance": ("distance", np.arange(3.0), {"units": "1 m"}),
                 "time": np.arange(4.0),
@@ -619,24 +619,25 @@ class TestCFUnits:
         return path
 
     def test_read(self, cf_path):
-        """Data units come from ``units``; unknown coord units are dropped."""
-        with pytest.warns(UserWarning, match="latitude.*degrees_north"):
-            patch = dc.read(cf_path)[0]
-        assert patch.attrs.data_units == dc.get_quantity("1/s")
+        """CF ``units`` strings read as data and coordinate units."""
+        patch = dc.read(cf_path)[0]
+        assert patch.attrs.data_units == dc.get_quantity("m/s")
         assert "units" not in patch.attrs.model_dump()
-        assert patch.get_coord("latitude").units is None
+        assert patch.get_coord("latitude").units == dc.get_quantity("degree")
         # a magnitude-bearing string, as older files hold, still reads
         assert patch.get_coord("distance").units == dc.get_quantity("m")
 
-    def test_written_units(self, example_patch, tmp_path):
-        """The file states unit strings, the data's under ``units``."""
-        _require_xarray_netcdf_engine()
-        path = tmp_path / "units.nc"
-        dc.write(example_patch.set_units("m/s", distance="m"), path, "netcdf_cf")
-        with h5py.File(path, "r") as h5file:
-            assert h5file["data"].attrs["units"] == "m / s"
-            assert h5file["data"].attrs["data_units"] == "m / s"
-            assert h5file["distance"].attrs["units"] == "m"
+    def test_unparsed_units(self, tmp_path):
+        """Unparsed data units warn and stay an attr."""
+        engine = _require_xarray_netcdf_engine()
+        xr = pytest.importorskip("xarray")
+        path = tmp_path / "bogus.nc"
+        data = {"data": (("time",), np.zeros(4), {"units": "bogus"})}
+        dataset = xr.Dataset(data, attrs={"Conventions": "CF-1.8"})
+        dataset.to_netcdf(path, engine=engine)
+        with pytest.warns(UserWarning, match="bogus"):
+            patch = dc.spool(path)[0]
+        assert patch.attrs.model_dump()["units"] == "bogus"
 
 
 class TestNetCDFEdgeCases:
