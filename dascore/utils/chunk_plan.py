@@ -2841,8 +2841,7 @@ def _carry_grids(outputs, members, sources, name):
         grid = (num, den, (ideal + k0 * num) % den, k1 - k0 + 1)
         # a fill the members do not hold is padded on whole ticks, off the grid
         grids.append(grid if grid[-1] == held[out] else None)
-    outputs[col] = grids
-    return outputs
+    return outputs.assign(**{col: grids})
 
 
 def _report_incomplete(failures, behavior: WARN_LEVELS) -> None:
