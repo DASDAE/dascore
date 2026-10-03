@@ -90,12 +90,6 @@ def _estimate_merge_samples(df, dim) -> int | None:
     Returns None if the estimate cannot be made (eg unknown steps), in
     which case streaming the merge isn't possible.
     """
-    counts = _estimate_row_samples(df, dim)
-    return None if counts is None else int(counts.sum())
-
-
-def _estimate_row_samples(df, dim) -> np.ndarray | None:
-    """Estimate the number of samples along dim of each row, or None."""
     if dim is None:
         return None
     cols = [f"{dim}_min", f"{dim}_max", f"{dim}_step"]
@@ -111,7 +105,7 @@ def _estimate_row_samples(df, dim) -> np.ndarray | None:
     counts = np.round(ratios).astype(np.int64) + 1
     if (counts < 0).any():
         return None
-    return counts.to_numpy()
+    return int(counts.sum())
 
 
 class _LazySourceArray:
@@ -641,8 +635,9 @@ class DataFrameSpool(BaseSpool):
         The patch's data loads, one source patch at a time, only when it is
         sliced (e.g. by `Patch.select`). This lets a long patch, such as
         one made by `spool.chunk(time=None)`, be processed in pieces without
-        holding it all in memory. Unlike indexing the spool, attributes come
-        from the first source patch.
+        holding it all in memory. The sources must continue one evenly sampled
+        grid (to within 1% of a step), so the patch's coordinates match
+        `spool[index]`; attributes come from the first source patch.
 
         Parameters
         ----------
@@ -652,11 +647,12 @@ class DataFrameSpool(BaseSpool):
         Raises
         ------
         ParameterError
-            If the patch merges sources which don't follow each other along a
-            single evenly sampled dimension.
+            If the patch merges sources which don't continue one evenly
+            sampled grid, or which have coordinates along the merged
+            dimension.
         CoordMergeError
-            When a source is loaded whose other coordinates, dtype, or length
-            differ from the first source's.
+            When a source is loaded whose dtype, samples, or other
+            coordinates differ from what the first source implies.
 
         Examples
         --------
@@ -667,48 +663,87 @@ class DataFrameSpool(BaseSpool):
         >>> sub = patch.select(time=(0, 1), relative=True)
         """
         joined = self._get_joined_instructions(index)
-        dim = _get_varying_dim(joined)
-        counts = _estimate_row_samples(joined, dim)
-        if len(joined) > 1 and counts is None:
-            msg = (
-                "Cannot load this patch lazily; its sources don't follow each "
-                "other along one evenly sampled dimension."
-            )
-            raise ParameterError(msg)
-        if dim is not None:
-            joined = joined.sort_values(f"{dim}_min")
-            counts = _estimate_row_samples(joined, dim)
+        if len(joined) == 1:  # A single source is loaded as is.
+            return self._get_patches_from_index(index)[0]
+        # The merge dim is the only dimension whose range varies by source.
+        dims = joined["dims"].iloc[0].split(",")
+        varying = [
+            x
+            for x in dims
+            if f"{x}_min" in joined and joined[f"{x}_min"].nunique(dropna=False) > 1
+        ]
+        dim = varying[0] if len(varying) == 1 else None
+        joined = joined.sort_values(f"{dim}_min") if dim else joined
         rows = self._df_to_dict_list(joined)
         first = self._load_trimmed_patch(rows[0], joined)
-        dim = first.dims[0] if dim is None else dim
+        starts, counts = self._get_lazy_source_samples(joined, dim, first)
+        others = [
+            x for x in first.coords.coord_map if dim not in first.coords.dim_map[x]
+        ]
         axis = first.get_axis(dim)
-        counts = [first.shape[axis]] if len(rows) == 1 else counts
+        step = first.get_coord(dim).step
 
         def load(num):
             """Load a source, checking it fits the first one."""
-            patch = self._load_trimmed_patch(rows[num], joined)
-            patch = patch.transpose(*first.dims)
-            others = [x for x in first.dims if x != dim]
+            patch = self._load_trimmed_patch(rows[num], joined).transpose(*first.dims)
             fits = (
                 patch.data.dtype == first.data.dtype
                 and patch.shape[axis] == counts[num]
-                and all(patch.get_coord(x) == first.get_coord(x) for x in others)
+                and abs(patch.get_coord(dim).min() - starts[num]) <= step / 100
+                and set(patch.coords.coord_map) == set(first.coords.coord_map)
+                and all(
+                    patch.coords.coord_map[x] == first.coords.coord_map[x]
+                    for x in others
+                )
             )
             if not fits:
                 msg = (
                     f"Source {num} of the lazy patch has a different dtype, "
-                    f"length, or coordinates along {others} than the first."
+                    f"samples along {dim}, or other coordinates than the first."
                 )
                 raise CoordMergeError(msg)
             return patch.data
 
-        assert first.shape[axis] == counts[0], "source length differs from index"
-        starts = np.cumsum([0, *counts])
+        offsets = np.cumsum([0, *counts])
         shape = list(first.shape)
-        shape[axis] = int(starts[-1])
-        data = _LazySourceArray(load, starts, axis, tuple(shape), first.data)
+        shape[axis] = int(offsets[-1])
+        data = _LazySourceArray(load, offsets, axis, tuple(shape), first.data)
         coord = first.get_coord(dim).change_length(shape[axis])
         return first.new(data=data, coords=first.coords.update(**{dim: coord}))
+
+    def _get_lazy_source_samples(self, joined, dim, first):
+        """
+        Get the first sample and sample count of each source along dim.
+
+        These come from each source's own grid and its trimmed range. Raise
+        unless the sources continue the first one's evenly sampled grid.
+        """
+        bad_msg = (
+            "Cannot load this patch lazily; its sources don't continue one "
+            "evenly sampled grid{}. Use spool[index] instead."
+        )
+        coord = first.get_coord(dim) if dim else None
+        if coord is None or not coord.evenly_sampled:
+            raise ParameterError(bad_msg.format(""))
+        merge_coords = [
+            x
+            for x in first.coords.coord_map
+            if x != dim and dim in first.coords.dim_map[x]
+        ]
+        if merge_coords:
+            raise ParameterError(bad_msg.format(f" (or have coords {merge_coords})"))
+        source = self._source_df.loc[joined.index]
+        origin, step = source[f"{dim}_min"].to_numpy(), source[f"{dim}_step"].to_numpy()
+        low = joined[f"{dim}_min"].fillna(source[f"{dim}_min"]).to_numpy()
+        high = joined[f"{dim}_max"].fillna(source[f"{dim}_max"]).to_numpy()
+        first_num = np.ceil((low - origin) / step - 1e-9).astype(np.int64)
+        last_num = np.floor((high - origin) / step + 1e-9).astype(np.int64)
+        starts, counts = origin + first_num * step, last_num - first_num + 1
+        expected = starts[:-1] + counts[:-1] * coord.step
+        jumps = np.abs(starts[1:] - expected)
+        if np.any(step != coord.step) or np.any(jumps > coord.step / 100):
+            raise ParameterError(bad_msg.format(""))
+        return starts, counts
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
