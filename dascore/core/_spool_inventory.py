@@ -376,6 +376,44 @@ def report_unconformed(rows: pd.DataFrame, on_unresolved: str) -> None:
     warnings.warn(msg, UserWarning, stacklevel=3)
 
 
+def unjudged_rows(contexts, *, along_fiber: bool = False) -> np.ndarray:
+    """
+    Return which rows have no single inventory context to be judged by.
+
+    Along the fiber, a row whose context lies outside every epoch of its
+    optical paths has no channels to judge either.
+    """
+    return np.array(
+        [
+            context is None or (along_fiber and _outside_paths(context))
+            for context in contexts
+        ],
+        dtype=bool,
+    )
+
+
+def report_unjudged(count: int) -> None:
+    """
+    Warn once that a verb treated `count` unjudged patches as misses.
+
+    The warning points at the verb's caller, two frames above this one.
+    """
+    if not count:
+        return
+    msg = (
+        f"{count} patch(es) resolve to no single inventory context, so they "
+        "were treated as not matching: each straddles a change of "
+        "acquisition or optical path, reaches outside every optical-path "
+        "epoch, has no physical time to resolve at, or is not described by "
+        "the inventory. Spool.conform_to_inventory splits patches at "
+        "optical-path changes so the described parts can be used; pass it "
+        "on_unresolved='ignore' to drop the rest. It refuses a patch spanning "
+        "an acquisition change; select the time on each side of the change "
+        "instead."
+    )
+    warnings.warn(msg, UserWarning, stacklevel=3)
+
+
 def refuse_rows(source_rows: pd.DataFrame, reasons, summary: str) -> None:
     """
     Raise naming the patches an inventory verb cannot handle, and why.

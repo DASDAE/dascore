@@ -162,6 +162,8 @@ assert set(zones.get_contents()["zone"]) == {"north", "south"}
 
 Selection trims channels; a patch with no matching channels drops out.
 
+Selection and expansion also drop a patch that no single inventory context describes: one straddling an acquisition or optical-path change, reaching outside every optical-path epoch, or not described at all; `unselect` keeps it. A straddling patch's parts could answer differently, and selection judges whole patches rather than splitting them, so each call warns once with the number of such patches. Run `conform_to_inventory` first: it splits patches at optical-path changes so each described part can be selected, and by default raises on the rest; pass `on_unresolved="ignore"` to drop them. It refuses a patch spanning an acquisition change; select the time on each side of the change instead. A patch that resolves but does not match drops out silently. The same holds for an inventory-backed attribute such as `gauge_length`, unless the patch states it in its own header.
+
 Attaching a replacement inventory clears enrichment configured from the old one, preventing stale instructions from being applied to new metadata.
 
 ## Enriching patches
