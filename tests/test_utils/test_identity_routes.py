@@ -12,6 +12,7 @@ import dascore as dc
 from dascore.io.core import scan_payloads
 from dascore.utils.downloader import fetch
 from dascore.utils.identity import narrowed_data_id, read_operation_id
+from dascore.utils.misc import suppress_warnings
 from dascore.warnings import DASCoreWarning
 
 
@@ -244,8 +245,8 @@ class TestRefusedBound:
         bound = self._refused_bound(terra15_patch)
         with pytest.warns(DASCoreWarning, match="No id could be derived"):
             first = dc.read(terra15_path, distance=bound)[0]
-        # The same refusal again is not repeated.
-        second = dc.read(terra15_path, distance=bound)[0]
+        with suppress_warnings(DASCoreWarning, message="No id", action="error"):
+            second = dc.read(terra15_path, distance=bound)[0]
         assert first.shape != terra15_patch.shape
         # Nothing names the array, so the two reads are two arrays.
         assert first.attrs.data_id not in ("", terra15_patch.attrs.data_id)
