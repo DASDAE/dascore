@@ -414,7 +414,7 @@ class DBDirectoryIndexer:
             msg = (
                 f"{self.path} holds a legacy .dascore_index.h5, which DASCore "
                 f"no longer uses and can be deleted; the index is now "
-                f"{INDEX_NAME}, so delete that file to reset the index."
+                f"{self.index_path}, so delete that file to reset the index."
             )
             skip = (str(Path(dc.__file__).parent),)
             warnings.warn(msg, DASCoreWarning, skip_file_prefixes=skip)

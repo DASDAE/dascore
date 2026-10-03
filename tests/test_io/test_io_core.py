@@ -766,6 +766,23 @@ class TestFormatter:
 
         assert rec[0].filename == __file__
 
+    def test_old_interface_as_error_registers_nothing(self):
+        """A warning raised as an error leaves the name free for a fixed class."""
+        with suppress_warnings(DASCoreWarning, action="error"):
+            with pytest.raises(DASCoreWarning):
+
+                class Broken(FiberIO):
+                    name = "_old_then_fixed_format"
+
+                    def get_format(self, resource: H5Reader, **kwargs):
+                        return False
+
+            class Fixed(FiberIO):
+                name = "_old_then_fixed_format"
+
+                def get_version(self, resource: H5Reader):
+                    return None
+
     def test_old_interface_from_a_mixin_warns(self):
         """The removed methods warn when a mixin supplies them too."""
 

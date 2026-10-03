@@ -1044,8 +1044,8 @@ class FiberIO:
             raise InvalidFiberIOError(msg)
         # register fiber_io; a mixin may sit ahead of the FiberIO ancestor
         parent = next(x for x in cls.__mro__[1:] if issubclass(x, FiberIO))
+        _warn_old_interface(cls)  # first, so an error leaves nothing registered
         parent.manager.register_fiberio(cls())
-        _warn_old_interface(cls)
         # decorate methods for type-casting
         for name, param_ind in cls._automatic_type_casters.items():
             method = getattr(cls, name)
@@ -1075,8 +1075,9 @@ def _warn_old_interface(cls):
     over = [x for x in ("get_format", "scan", "read") if overridden(x)]
     if over and not any(overridden(x) for x in new):
         msg = (
-            f"FiberIO {cls.__name__} overrides {', '.join(over)}, which DASCore "
-            f"no longer calls to read; implement {', '.join(new)} instead."
+            f"FiberIO {cls.__name__} overrides {', '.join(over)} but none of "
+            f"{', '.join(new)}, through which DASCore now detects and reads "
+            "formats; without them its files may not be found or read."
         )
         skip = (str(Path(dc.__file__).parent),)
         warnings.warn(msg, DASCoreWarning, skip_file_prefixes=skip)
