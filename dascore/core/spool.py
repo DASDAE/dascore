@@ -131,8 +131,11 @@ class _LazySourceArray:
         return int(np.prod(self.shape))
 
     def __getitem__(self, key):
-        key = key if isinstance(key, tuple) else (key,)
-        key = list(key) + [slice(None)] * (self.ndim - len(key))
+        key = list(key) if isinstance(key, tuple) else [key]
+        if Ellipsis in key:
+            pos = key.index(Ellipsis)
+            key[pos : pos + 1] = [slice(None)] * (self.ndim - len(key) + 1)
+        key = key + [slice(None)] * (self.ndim - len(key))
         slices = all(isinstance(k, slice) for k in key)
         if not slices or (key[self._axis].step or 1) < 0:
             return np.asarray(self)[tuple(key)]  # Uncommon; loads everything.
@@ -636,7 +639,7 @@ class DataFrameSpool(BaseSpool):
         sliced (e.g. by `Patch.select`). This lets a long patch, such as
         one made by `spool.chunk(time=None)`, be processed in pieces without
         holding it all in memory. The sources must continue one evenly sampled
-        grid (to within 1% of a step), so the patch's coordinates match
+        grid, so the patch's coordinates match
         `spool[index]`; attributes come from the first source patch.
 
         Parameters
@@ -689,8 +692,8 @@ class DataFrameSpool(BaseSpool):
             fits = (
                 patch.data.dtype == first.data.dtype
                 and patch.shape[axis] == counts[num]
-                and abs(patch.get_coord(dim).min() - starts[num]) <= step / 100
-                and set(patch.coords.coord_map) == set(first.coords.coord_map)
+                and abs(patch.get_coord(dim).min() - starts[num]) <= step / 1000
+                and patch.coords.dim_map == first.coords.dim_map
                 and all(
                     patch.coords.coord_map[x] == first.coords.coord_map[x]
                     for x in others
@@ -715,8 +718,7 @@ class DataFrameSpool(BaseSpool):
         """
         Get the first sample and sample count of each source along dim.
 
-        These come from each source's own grid and its trimmed range. Raise
-        unless the sources continue the first one's evenly sampled grid.
+        Raise unless the sources continue the first one's evenly sampled grid.
         """
         bad_msg = (
             "Cannot load this patch lazily; its sources don't continue one "
@@ -732,17 +734,19 @@ class DataFrameSpool(BaseSpool):
         ]
         if merge_coords:
             raise ParameterError(bad_msg.format(f" (or have coords {merge_coords})"))
-        source = self._source_df.loc[joined.index]
-        origin, step = source[f"{dim}_min"].to_numpy(), source[f"{dim}_step"].to_numpy()
-        low = joined[f"{dim}_min"].fillna(source[f"{dim}_min"]).to_numpy()
-        high = joined[f"{dim}_max"].fillna(source[f"{dim}_max"]).to_numpy()
-        first_num = np.ceil((low - origin) / step - 1e-9).astype(np.int64)
-        last_num = np.floor((high - origin) / step + 1e-9).astype(np.int64)
-        starts, counts = origin + first_num * step, last_num - first_num + 1
-        expected = starts[:-1] + counts[:-1] * coord.step
-        jumps = np.abs(starts[1:] - expected)
-        if np.any(step != coord.step) or np.any(jumps > coord.step / 100):
+        # Place each source's range on the first source's grid; sources must
+        # follow each other without gaps on it. Sources whose own samples
+        # are off this grid raise when they load.
+        steps = self._source_df.loc[joined.index, f"{dim}_step"].to_numpy()
+        origin, step = coord.min(), coord.step
+        low = (joined[f"{dim}_min"].to_numpy() - origin) / step
+        high = (joined[f"{dim}_max"].to_numpy() - origin) / step
+        first_num = np.ceil(low - 1e-3).astype(np.int64)
+        last_num = np.floor(high + 1e-3).astype(np.int64)
+        contiguous = first_num[0] == 0 and np.all(first_num[1:] == last_num[:-1] + 1)
+        if np.any(steps != step) or not contiguous:
             raise ParameterError(bad_msg.format(""))
+        starts, counts = origin + first_num * step, last_num - first_num + 1
         return starts, counts
 
     def _patch_from_instruction_df(self, joined):

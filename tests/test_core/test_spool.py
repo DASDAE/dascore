@@ -324,6 +324,7 @@ class TestGetLazyPatch:
         for time_key in time_keys:
             key = (slice(2, 9), time_key)
             assert np.array_equal(lazy[key], data[key])
+        assert np.array_equal(lazy[..., 0:10], data[..., 0:10])
 
     def test_index(self, patches):
         """Each patch of a chunked or unchunked spool can be lazy."""
@@ -340,6 +341,14 @@ class TestGetLazyPatch:
             assert lazy.coords == patch.coords
             assert np.array_equal(np.asarray(lazy.data), patch.data)
 
+    def test_off_grid_select(self, patches):
+        """A selection starting between samples matches the spool."""
+        start = patches[0].get_coord("time").min() + np.timedelta64(1, "ms")
+        spool = dc.spool(patches).chunk(time=None).select(time=(start, None))
+        lazy = spool.get_lazy_patch()
+        assert lazy.coords == spool[0].coords
+        assert np.array_equal(np.asarray(lazy.data), spool[0].data)
+
     def test_single_source(self, patches):
         """A single source, even with irregular coordinates, is returned."""
         distance = patches[0].get_array("distance").astype(float)
@@ -347,7 +356,7 @@ class TestGetLazyPatch:
         patch = patches[0].update_coords(distance=distance)
         assert dc.spool([patch]).get_lazy_patch() == patch
 
-    @pytest.mark.parametrize("case", ["uneven", "offset", "time_coord"])
+    @pytest.mark.parametrize("case", ["uneven", "offset", "small_offset", "time_coord"])
     def test_not_lazy_raises(self, patches, case):
         """Sources off one evenly sampled grid, or with coords along it, raise."""
         if case == "uneven":
@@ -358,9 +367,10 @@ class TestGetLazyPatch:
                 x.update_coords(time=time - start + x.get_array("time")[0])
                 for x in patches
             ]
-        elif case == "offset":
-            shift = patches[1].get_coord("time").min() + np.timedelta64(800, "us")
-            new = [patches[0], patches[1].update_coords(time_min=shift), patches[2]]
+        elif case in {"offset", "small_offset"}:
+            offset = np.timedelta64(800 if case == "offset" else 20, "us")
+            shift = patches[2].get_coord("time").min() + offset
+            new = [patches[0], patches[1], patches[2].update_coords(time_min=shift)]
         else:
             new = [
                 x.update_coords(quality=("time", np.arange(x.shape[1])))
@@ -378,10 +388,12 @@ class TestGetLazyPatch:
 
         same = dc.spool([add_lat(x, 0) for x in patches]).chunk(time=None)
         assert same.get_lazy_patch().coords == same[0].coords
-        new = [add_lat(patches[0], 0), add_lat(patches[1], 0.5), patches[2]]
-        lazy = dc.spool(new).chunk(time=None, conflict="drop").get_lazy_patch()
-        with pytest.raises(CoordMergeError, match="other coordinates"):
-            np.asarray(lazy.data)
+        moved = patches[1].update_coords(lat=("time", np.arange(2000)))
+        for second in [add_lat(patches[1], 0.5), moved]:
+            new = [add_lat(patches[0], 0), second, add_lat(patches[2], 0)]
+            spool = dc.spool(new).chunk(time=None, conflict="keep_first")
+            with pytest.raises(CoordMergeError, match="other coordinates"):
+                np.asarray(spool.get_lazy_patch().data)
 
     def test_mismatched_source_raises(self, patches):
         """A source with a different dtype raises when it loads."""
