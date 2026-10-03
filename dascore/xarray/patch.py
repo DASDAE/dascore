@@ -145,7 +145,7 @@ def xarray_to_patch(data_array) -> dc.Patch:
 
 def _coord_from(data_array, name, coord):
     """
-    The dims and values a patch coordinate is built from.
+    The dims and coordinate a patch holds.
 
     A lazily indexed coordinate is served by the DASCore coordinate it
     was built from, which comes back as it is: reading its values would
@@ -157,7 +157,5 @@ def _coord_from(data_array, name, coord):
         if units is not None and not _is_temporal(served.dtype):
             served = served.set_units(units)
         return coord.dims, served
-    values = np.asarray(coord.values)
-    units = None if _is_temporal(values.dtype) else units
-    # exact labels, never snapped; only a snapping read keeps a 0-d scalar
-    return coord.dims, get_coord(data=values, units=units, snap=not values.ndim)
+    # a 0-d datetime reads as a numpy scalar, which get_coord takes as 1-d
+    return coord.dims, get_coord(data=np.asarray(coord.values), units=units)

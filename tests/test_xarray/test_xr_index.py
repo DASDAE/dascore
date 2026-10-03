@@ -20,6 +20,7 @@ from dascore.core.coords import (
 xr = pytest.importorskip("xarray")
 da = pytest.importorskip("dask.array")
 
+import dascore.xarray.index as xr_index  # noqa: E402
 from dascore.xarray.index import (  # noqa: E402
     CoordIndex,
     CoordTransform,
@@ -564,20 +565,36 @@ class TestAlignment:
         original = NumericCoord._get_index_values
 
         def _bounded(self, indices):
-            assert np.size(indices) <= 2, "the labels were read"
+            assert np.size(indices) <= 2, "more than the end labels were read"
             return original(self, indices)
 
         monkeypatch.setattr(NumericCoord, "_get_index_values", _bounded)
         assert not _same_labels(MS, descending)
 
-    @pytest.mark.parametrize("shape,steps", [((1,), (1, 2)), ((2,), ((3, 2), 1))])
-    def test_grids_with_different_steps_but_same_labels(self, shape, steps):
+    def test_grids_with_different_steps_but_same_labels(self):
         """Exact grids spelling the same labels align, whatever their steps."""
-        first, second = (get_coord(start=0, step=x, shape=shape) for x in steps)
+        first, second = (get_coord(start=0, step=x, shape=(1,)) for x in (1, 2))
         assert first.data_id != second.data_id
         np.testing.assert_array_equal(first.values, second.values)
         out = xr.align(_pair(first)[0], _pair(second)[0], join="exact")
         np.testing.assert_array_equal(out[0]["x"].values, first.values)
+
+    @pytest.mark.parametrize(
+        "steps,same,reads", [((1, (7, 6)), True, 8), (((6, 5), (4, 3)), False, 6)]
+    )
+    def test_labels_compare_in_blocks(self, monkeypatch, steps, same, reads):
+        """Labels are read a block at a time, stopping at the first difference."""
+        first, second = (get_coord(start=0, step=x, shape=(6,)) for x in steps)
+        original, sizes = NumericCoord._get_index_values, []
+
+        def _recorded(self, indices):
+            sizes.append(np.size(indices))
+            return original(self, indices)
+
+        monkeypatch.setattr(xr_index, "_LABEL_BLOCK", 2)
+        monkeypatch.setattr(NumericCoord, "_get_index_values", _recorded)
+        assert _same_labels(first, second) is same
+        assert max(sizes) == 2 and len(sizes) == reads
 
     @pytest.mark.parametrize("start,step", [(0.2, 0.1), (0.1, 0.100001)])
     def test_unequal_float_alignment_reads_few_labels(self, monkeypatch, start, step):

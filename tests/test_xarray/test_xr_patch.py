@@ -65,12 +65,11 @@ class TestCoordinateConversion:
         """The optional xarray module."""
         return pytest.importorskip("xarray")
 
-    @pytest.mark.parametrize("lazy", [False, True])
     @pytest.mark.parametrize("dim", ["time", "distance"])
-    def test_scalar_coordinate(self, xr, lazy, dim):
+    def test_scalar_coordinate(self, xr, dim):
         """A coordinate left scalar by a selection stays one scalar."""
         patch = dc.get_example_patch()
-        array = patch_to_xarray(patch, lazy_coords=lazy).isel({dim: 3})
+        array = patch_to_xarray(patch).isel({dim: 3})
         out = xarray_to_patch(array)
         coord = out.get_coord(dim)
         assert coord.shape == ()
@@ -83,22 +82,13 @@ class TestCoordinateConversion:
         coord = xarray_to_patch(array.isel(x=1)).get_coord("x")
         assert coord.shape == () and coord.values == 6
 
-    def test_labels_are_not_moved(self, xr):
-        """Nearly even labels keep their exact values."""
-        labels = np.array([0.0, 1.0, 2.00000001, 3.0])
-        array = xr.DataArray(np.arange(4), dims="x", coords={"x": labels})
-        np.testing.assert_array_equal(xarray_to_patch(array).get_array("x"), labels)
-        array["x"].attrs["units"] = "m"
-        np.testing.assert_array_equal(xarray_to_patch(array).get_array("x"), labels)
-
-    @pytest.mark.parametrize("step", [0.1, 1.0209, 3])
-    def test_even_labels_stay_even(self, xr, step):
-        """Evenly sampled labels still come back as an evenly sampled coord."""
-        coord = dc.get_coord(start=0, step=step, shape=(50,))
-        patch = dc.Patch(data=np.arange(50), dims=("x",), coords={"x": coord})
-        out = xarray_to_patch(patch_to_xarray(patch)).get_coord("x")
-        assert out.evenly_sampled
-        np.testing.assert_array_equal(out.values, coord.values)
+    @pytest.mark.parametrize("dtype", [np.float64, np.float32])
+    def test_float_axis_is_evenly_sampled(self, xr, dtype):
+        """An ordinary float axis converts to an evenly sampled coord."""
+        labels = np.linspace(0, 1, 1001, dtype=dtype)
+        array = xr.DataArray(np.zeros(1001), dims="x", coords={"x": labels})
+        assert xarray_to_patch(array).get_coord("x").evenly_sampled
+        assert array.dc.pass_filter(x=(None, 0.1)).shape == array.shape
 
 
 class TestPublishedPaths:

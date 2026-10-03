@@ -38,6 +38,8 @@ from dascore.exceptions import CoordError
 from dascore.utils.indexing import label_indexer, positional_indexer
 from dascore.utils.time import dtype_time_like
 
+_LABEL_BLOCK = 1_000_000  # labels compared at a time, bounding memory
+
 
 def is_servable(coord) -> bool:
     """Whether `CoordIndex` can serve a coordinate's labels."""
@@ -90,9 +92,13 @@ def _same_labels(first: BaseCoord, second: BaseCoord) -> bool:
                 return False
     # An id names the runs a coordinate holds as well as the labels they
     # spell, so two ways of partitioning one set of labels differ by it.
-    positions = np.arange(len(first))
-    labels = (x._get_index_values(positions) for x in (first, second))
-    return bool(np.array_equal(next(labels), next(labels)))
+    # Equal grids share an id; any others compare in bounded blocks.
+    for start in range(0, len(first), _LABEL_BLOCK):
+        positions = np.arange(start, min(start + _LABEL_BLOCK, len(first)))
+        labels = (x._get_index_values(positions) for x in (first, second))
+        if not np.array_equal(next(labels), next(labels)):
+            return False
+    return True
 
 
 def _chained(coords: list[BaseCoord]) -> BaseCoord | None:
