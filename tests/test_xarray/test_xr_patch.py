@@ -101,3 +101,22 @@ class TestPublishedPaths:
 
         assert utils_io.patch_to_xarray is patch_to_xarray
         assert utils_io.xarray_to_patch is xarray_to_patch
+
+
+class TestMultiIndex:
+    """A stacked dimension has no patch coordinate, so it is refused."""
+
+    def test_stacked_dimension_refused(self, random_patch):
+        """Converting a stacked array says how to make it convertible."""
+        pytest.importorskip("xarray")
+        stacked = patch_to_xarray(random_patch).stack(z=("distance", "time"))
+        with pytest.raises(dc.exceptions.PatchConversionError, match=r"unstack\('z'\)"):
+            xarray_to_patch(stacked)
+
+    def test_reset_index_converts(self, random_patch):
+        """With the index reset, the levels convert as coordinates along z."""
+        pytest.importorskip("xarray")
+        stacked = patch_to_xarray(random_patch).stack(z=("distance", "time"))
+        patch = xarray_to_patch(stacked.reset_index("z"))
+        assert patch.dims == ("z",)
+        assert patch.coords.dim_map["distance"] == ("z",)
