@@ -27,7 +27,7 @@ from dascore.proc.basic import Pad, _pad_array
 from dascore.proc.tile_apply import Reassemble, TileApply
 from dascore.proc.units import _replace_data_units
 from dascore.units import Quantity, _quantities_equal, invert_quantity, percent
-from dascore.utils.array_api import array_namespace
+from dascore.utils.array_api import array_namespace, asarray_like
 from dascore.utils.imports import lazy_import
 from dascore.utils.misc import iterate
 from dascore.utils.patch import (
@@ -206,9 +206,10 @@ def _spectral_amplitude_plan(meta, output, dims, db):
     """
     Return the metadata of a spectral output and how its kernel scales.
 
-    The amplitudes are divided by the transformed-domain extent as
-    quantities, so a scale in the data units ("10 m") is folded into the
-    data wherever both sides of an operation carry units.
+    A scale in the data units ("10 m") is folded into the data where
+    quantity arithmetic on patches folded it: always for PS and PSD, which
+    square the amplitude, but for AS only when the extent carries units,
+    which needs units on both the data and the transformed coordinates.
     """
     extent = _get_transformed_domain_extent(meta, dims)
     data_units = _get_dft_data_units(meta, dims, output)
@@ -216,9 +217,6 @@ def _spectral_amplitude_plan(meta, output, dims, db):
     scale = None if fft_units is None else fft_units.magnitude
     has_quantity = isinstance(extent, Quantity)
     extent = extent.magnitude if has_quantity else extent
-    # AS divides by the extent, which carries units only beside unitful
-    # data; PS and PSD square the amplitude first, a product of two patches
-    # with the same units, so the scale goes on whenever there are units.
     if (output == "AS" and not has_quantity) or scale == 1:
         scale = None
     divisor = extent * extent if output == "PS" else extent
@@ -240,11 +238,11 @@ def _spectral_amplitude(data, xp, *, scale, square, divisor, db):
     """Return Fourier coefficients as amplitudes, powers or densities."""
     amp = xp.abs(data)
     if scale is not None:
-        amp = amp * _scalar(xp, scale)
-    out = (amp * amp if square else amp) / _scalar(xp, divisor)
+        amp = amp * _scalar(scale, amp)
+    out = (amp * amp if square else amp) / _scalar(divisor, amp)
     if db is None:
         return out
-    out = out + _scalar(xp, xp.finfo(out.dtype).eps)
+    out = out + _scalar(xp.finfo(out.dtype).eps, out)
     return db * xp.log10(out)
 
 
@@ -266,11 +264,11 @@ def _fft_input(data, xp, complex_input: bool):
     return xp.astype(data, xp.float64)
 
 
-def _scalar(xp, value):
-    """Return a number as an operand every backend takes, with numpy's promotion."""
+def _scalar(value, like):
+    """Return a number as an operand `like` takes, with numpy's promotion."""
     # A numpy scalar sets the result's dtype, as a 0-d array does, where a
     # python number would not; some backends refuse numpy scalars outright.
-    return xp.asarray(value) if isinstance(value, np.generic) else value
+    return asarray_like(value, like) if isinstance(value, np.generic) else value
 
 
 class Dft(PatchProcessor):
@@ -357,7 +355,6 @@ class Dft(PatchProcessor):
         real = dims[-1] if real is True else real  # if true grab last dim
         dims = _get_untransformed_dims(meta, dims)
         real = real if real in dims else None  # may need to reset real
-        # A divisor says the output is a spectrum made from the coefficients.
         plan: dict[str, Any] = dict(pad_width=None, axes=(), real=False, step=1.0)
         plan |= dict(scale=None, square=False, divisor=None, db=None)
         if not dims:  # no transformation needed.
@@ -383,7 +380,6 @@ class Dft(PatchProcessor):
             padded, dims, new_coords, pad=self.pad, output=output_type
         )
         out = padded.new(coords=new_coords, attrs=attrs)
-        # scale as explained above and in notes, then shift
         axes = tuple(int(x) for x in axes)
         plan |= {"axes": axes, "real": real is not None, "step": np.prod(dxs)}
         if output_type == "FFT":
@@ -391,21 +387,35 @@ class Dft(PatchProcessor):
         out, spectral = _spectral_amplitude_plan(out, output_type, dims, self.db)
         return out, plan | spectral
 
-    def kernel(self, data, *, pad_width, axes, real, step, divisor, **scaling):
-        """Return the scaled, centred transform, or a spectrum made from it."""
-        if not axes:
-            return data
+    def kernel(self, data, **plan):
+        """Return the transform on the data's backend, cast as numpy would cast it."""
         xp = array_namespace(data)
-        if pad_width is not None:
-            data = _pad_array(data, pad_width)
-        func = xp.fft.rfftn if real else xp.fft.fftn
-        data = func(_fft_input(data, xp, not real), axes=axes) * _scalar(xp, step)
-        # The one-sided axis of a real transform is not centred.
-        if shifted := (axes[:-1] if real else axes):
-            data = xp.fft.fftshift(data, axes=shifted)
-        if divisor is None:
-            return data
-        return _spectral_amplitude(data, xp, divisor=divisor, **scaling)
+        return _dft_kernel(data, xp, xp.fft, cast=True, **plan)
+
+    def numpy_kernel(self, data, **plan):
+        """As `kernel`, but numpy casts the data, as it always has."""
+        return _dft_kernel(data, array_namespace(data), nft, cast=False, **plan)
+
+
+def _dft_kernel(
+    data, xp, fft, *, cast, pad_width, axes, real, step, divisor, **scaling
+):
+    """Return the scaled, centred transform, or a spectrum made from it."""
+    if not axes:
+        return data
+    if pad_width is not None:
+        data = _pad_array(data, pad_width)
+    func = fft.rfftn if real else fft.fftn
+    data = _fft_input(data, xp, not real) if cast else data
+    # Scaled by the sample spacing (see the dft note), then centred.
+    data = func(data, axes=axes) * _scalar(step, data)
+    # The one-sided axis of a real transform is not centred.
+    if shifted := (axes[:-1] if real else axes):
+        data = fft.fftshift(data, axes=shifted)
+    # No divisor: output="FFT", the coefficients as they are.
+    if divisor is None:
+        return data
+    return _spectral_amplitude(data, xp, divisor=divisor, **scaling)
 
 
 def _get_idft_dims_steps_axis(patch, dim):
@@ -497,11 +507,9 @@ class Idft(PatchProcessor):
     """
     Perform the inverse discrete Fourier transform (idft) on specified dimension(s).
 
-    Currently, only patches that have been transformed with
-    [dft](`dascore.Patch.dft`) can be used with this function.
-    After transformation with dft, the transformed coordinates cannot change
-    (e.g., with [select](`dascore.Patch.select`) otherwise idft won't
-    work.
+    Currently, only patches transformed with [dft](`dascore.Patch.dft`)
+    can be inverted. After dft, the transformed coordinates must not change
+    (e.g., with [select](`dascore.Patch.select`)), otherwise idft won't work.
 
     Parameters
     ----------
@@ -567,7 +575,7 @@ class Idft(PatchProcessor):
         """Return the inverse transform, trimmed of the padding dft added."""
         xp = array_namespace(data)
         # now unshift data and undo scaling
-        data = data / _scalar(xp, step)
+        data = data / _scalar(step, data)
         if shifted := (axes[:-1] if real else axes):
             data = xp.fft.ifftshift(data, axes=shifted)
         func = xp.fft.irfftn if real else xp.fft.ifftn
@@ -601,16 +609,24 @@ def _resolve_nfft(nfft, coord, window_samples: int) -> int:
     return count
 
 
-def _centre_phase(cycles: np.ndarray, size: int, dtype) -> np.ndarray:
+def _centre_phase(cycles, sizes, steps, dtype) -> np.ndarray:
     """
-    Return the phase which refers each window's spectrum to its centre sample.
+    Return the factor which scales the spectra and refers each to its centre.
 
     An FFT refers phase to the window's first sample; the window's time
     coordinate is its centre, so the spectrum is rotated to say the phase
-    there, as scipy's `ShortTimeFFT` does. `cycles` is each frequency in
-    cycles per sample.
+    there, as scipy's `ShortTimeFFT` does. `cycles` holds each windowed
+    dimension's frequencies in cycles per sample; the product of `steps` is
+    the scale, for compatibility with dft.
     """
-    return np.exp(2j * np.pi * cycles * (size // 2)).astype(dtype)
+    ndim = len(sizes)
+    factor = np.prod(steps).astype(dtype)
+    for axis, per_sample, size in zip(range(-ndim, 0), cycles, sizes):
+        shape = [1] * ndim
+        shape[axis] = -1
+        phase = np.exp(2j * np.pi * per_sample * (size // 2)).astype(dtype)
+        factor = factor * phase.reshape(shape)
+    return factor
 
 
 def _as_is(tiles: np.ndarray) -> np.ndarray:
@@ -797,11 +813,9 @@ class Stft(PatchProcessor):
 
     def numpy_kernel(self, data, *, axes, size, stride, nffts, steps, cycles, real):
         """Return each window's spectrum, its phase referred to the centre."""
-        tiles = TileApply.kernel(
-            self._tiler(), data, axes=axes, size=size, stride=stride
-        )
-        ndim = len(axes)
-        tail = tuple(range(-ndim, 0))
+        cut = TileApply.kernel_for("numpy")
+        tiles = cut(self._tiler(), data, axes=axes, size=size, stride=stride)
+        tail = tuple(range(-len(axes), 0))
         if self.detrend:
             for axis in tail:
                 tiles = sp_detrend(tiles, axis=axis, type="linear")
@@ -811,14 +825,7 @@ class Stft(PatchProcessor):
         centred = tail[:-1] if real else tail
         if centred:
             spectra = nft.fftshift(spectra, axes=centred)
-        # One pass: the phase and, for compatibility with dft, the scale by step.
-        factor = np.prod(steps).astype(spectra.dtype)
-        for axis, per_sample, length in zip(tail, cycles, size):
-            shape = [1] * ndim
-            shape[axis] = -1
-            phase = _centre_phase(per_sample, length, factor.dtype)
-            factor = factor * phase.reshape(shape)
-        spectra *= factor
+        spectra *= _centre_phase(cycles, size, steps, spectra.dtype)
         return _swap_window_axes(spectra, axes)
 
 
@@ -915,16 +922,9 @@ class Istft(PatchProcessor):
         self, data, *, centres, swap, sizes, nffts, steps, cycles, real, **tiles
     ):
         """Return each window's inverse, blended back by reassemble."""
-        ndim = len(centres)
-        tail = tuple(range(-ndim, 0))
+        tail = tuple(range(-len(centres), 0))
         spectra = _swap_window_axes(np.moveaxis(data, centres, tail), swap)
-        factor = np.prod(steps).astype(spectra.dtype)
-        for axis, per_sample, size in zip(tail, cycles, sizes):
-            shape = [1] * ndim
-            shape[axis] = -1
-            phase = _centre_phase(per_sample, size, factor.dtype)
-            factor = factor * phase.reshape(shape)
-        spectra = spectra / factor
+        spectra = spectra / _centre_phase(cycles, sizes, steps, spectra.dtype)
         centred = tail[:-1] if real else tail
         if centred:
             spectra = nft.ifftshift(spectra, axes=centred)
@@ -932,7 +932,7 @@ class Istft(PatchProcessor):
         stack = ifft(spectra, s=nffts, axes=tail)
         # The FFT was zero padded past the window; the window is its first samples.
         stack = stack[(..., *(slice(0, size) for size in sizes))]
-        return Reassemble.numpy_kernel(Reassemble(), stack, **tiles)
+        return Reassemble.kernel_for("numpy")(Reassemble(), stack, **tiles)
 
 
 def _stft_dims(patch) -> list[str]:

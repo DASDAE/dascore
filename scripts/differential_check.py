@@ -80,6 +80,12 @@ EXPECTED_ERRORS = (
     "matrix/complex*/median_filter",
     "matrix/complex*/hampel_exact",
     "matrix/bool/hampel_*",
+    "matrix/float16/median_filter",
+    "matrix/float16/gaussian_filter",
+    "matrix/float16/hampel_exact",
+    "matrix/longdouble/median_filter",
+    "matrix/longdouble/gaussian_filter",
+    "matrix/longdouble/hampel_exact",
     "matrix/*nan*/savgol_filter",
     "matrix/*inf*/savgol_filter",
     # NumPy cannot subtract booleans; scipy's Hilbert transform refuses complex.
@@ -116,6 +122,7 @@ def make_arrays() -> dict:
     arrays = {
         "float64": base,
         "float32": base.astype("float32"),
+        "float16": base.astype("float16"),
         "int32": (base * 100).astype("int32"),
         "int64": (base * 100).astype("int64"),
         "bool": base > 0,
@@ -136,6 +143,9 @@ def make_arrays() -> dict:
     both = nan.copy()
     both[2, 2], both[2, 3] = np.inf, -np.inf
     arrays["nan_and_inf"] = both
+    # Extended precision only where the platform has it, not as float64.
+    if np.finfo(np.longdouble).eps < np.finfo(np.float64).eps:
+        arrays["longdouble"] = base.astype(np.longdouble)
     return arrays
 
 
@@ -1093,7 +1103,7 @@ def _fourier_calls(patch, int_patch, f32, wacky, with_nondim, m, s) -> dict:
     }
 
 
-def _spectral_calls(patch, int_patch, f32, with_nondim) -> dict:
+def _spectral_calls(patch, with_nondim) -> dict:
     """Return the spectral descriptors with every option, on dft and stft input."""
     small = _pinned(patch.isel(distance=slice(0, 20)), "spec_small")
     real = small.dft("time", real=True)
@@ -1149,17 +1159,12 @@ def _spectral_calls(patch, int_patch, f32, with_nondim) -> dict:
         "fmin": (real, {"fmin": 10}),
         "fmax": (real, {"fmax": 40.5}),
         "band": (st, {"fmin": 5.0, "fmax": 60}),
-        "dim": (real, {"dim": "time"}),
-        "ft_dim": (real, {"dim": "ft_time"}),
         "both_dim": (both, {"dim": "time"}),
         "both_distance": (both, {"dim": "distance", "negative_frequencies": "keep"}),
         "fmt_fft": (real, {"spectral_format": "fft"}),
-        "fmt_fourier": (real, {"spectral_format": "Fourier Transform"}),
         "fmt_amplitude": (as_spec, {"spectral_format": "amplitude"}),
-        "fmt_as": (as_spec, {"spectral_format": "AS"}),
         "fmt_power": (ps_spec, {"spectral_format": "power"}),
         "fmt_density": (psd_spec, {"spectral_format": "density"}),
-        "fmt_psd_as_power": (psd_spec, {"spectral_format": "ps"}),
         "neg_drop": (full, {"negative_frequencies": "drop"}),
         "neg_keep": (full, {"negative_frequencies": "keep"}),
         "neg_raise_real": (real, {"negative_frequencies": "raise"}),
@@ -1171,6 +1176,15 @@ def _spectral_calls(patch, int_patch, f32, with_nondim) -> dict:
         "zeros": (zeros, {}),
         "single_bin": (single, {}),
         "nondim": (with_nondim.dft("time", real=True), {"fmax": 30}),
+    }
+    # Aliases and refusals are settled before any descriptor's own code
+    # runs, so one descriptor checks them for all.
+    shared = {
+        "dim": (real, {"dim": "time"}),
+        "ft_dim": (real, {"dim": "ft_time"}),
+        "fmt_fourier": (real, {"spectral_format": "Fourier Transform"}),
+        "fmt_as": (as_spec, {"spectral_format": "AS"}),
+        "fmt_psd_as_power": (psd_spec, {"spectral_format": "ps"}),
         "bad_format": (real, {"spectral_format": "nope"}),
         "bad_negative_option": (real, {"negative_frequencies": "nope"}),
         "bad_db": (db_spec, {}),
@@ -1193,6 +1207,12 @@ def _spectral_calls(patch, int_patch, f32, with_nondim) -> dict:
         f"{name}_{label}": (lambda name=name, src=src, kw=kw: getattr(src, name)(**kw))
         for name in names
         for label, (src, kw) in inputs.items()
+    }
+    calls |= {
+        f"spectral_centroid_{label}": (
+            lambda src=src, kw=kw: src.spectral_centroid(**kw)
+        )
+        for label, (src, kw) in shared.items()
     }
     calls |= {
         f"{name}_positional": (lambda name=name: getattr(real, name)("time", 1, 50.0))
@@ -1245,7 +1265,7 @@ def get_calls() -> dict:
         **_shape_calls(patch, int_patch, f32, dft_patch, wacky, with_nondim, m, s),
         **_fill_gaps_calls(s),
         **_fourier_calls(patch, int_patch, f32, wacky, with_nondim, m, s),
-        **_spectral_calls(patch, int_patch, f32, with_nondim),
+        **_spectral_calls(patch, with_nondim),
         # The inputs themselves, so a difference in the examples cannot
         # masquerade as a difference in the functions.
         "input_patch": lambda: patch,
@@ -1389,6 +1409,14 @@ def digest(patch) -> dict:
 
 def _hash(array) -> str:
     """Return a hash of an array's contents."""
+    array = np.asarray(array)
+    if array.dtype.type in (np.longdouble, np.clongdouble):
+        # Extended precision stores padding bytes nothing writes; hash each
+        # value exactly as two doubles instead.
+        parts = (array.real, array.imag) if array.dtype.kind == "c" else (array,)
+        high = [x.astype(np.float64) for x in parts]
+        low = [(x - h).astype(np.float64) for x, h in zip(parts, high)]
+        array = np.stack([*high, *low])
     return hashlib.md5(np.ascontiguousarray(array).tobytes()).hexdigest()
 
 

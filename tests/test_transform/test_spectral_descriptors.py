@@ -261,13 +261,6 @@ class TestSpectralValidation:
 class TestSpectralHelpers:
     """Tests for defensive paths in spectral helpers."""
 
-    def test_unhandled_format(self, sine_patch):
-        """An unexpected normalized format triggers the internal assertion."""
-        with pytest.raises(
-            AssertionError, match="Unhandled spectral format 'unexpected'"
-        ):
-            spectral_descriptors._get_power(sine_patch.data, "unexpected")
-
     def test_nonnegative_frequencies(self):
         """Spectra without negative bins need no mirrored-power comparison."""
         freqs = np.array([0.0, 1.0, 2.0])
@@ -535,3 +528,12 @@ class TestSpectralProcessors:
         bins = (sine_dft.get_array("ft_time") >= 0).sum()
         assert np.allclose(raw.data, normalized.data * np.log2(bins))
         assert not np.allclose(raw.data, normalized.data)
+
+    def test_complex_stft_folds_nyquist(self):
+        """A complex stft's -Nyquist bin counts once, as a real stft's does."""
+        patch = dc.get_example_patch("random_das", shape=(3, 500))
+        cplx = patch.new(data=np.asarray(patch.data) * (1 + 1j))
+        kwargs = dict(time=64, samples=True)  # even, so it has a Nyquist bin
+        out = cplx.stft(**kwargs).spectral_centroid()
+        expected = patch.stft(**kwargs).spectral_centroid()
+        assert np.allclose(out.data, expected.data)

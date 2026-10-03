@@ -188,13 +188,11 @@ def _get_power(data: np.ndarray, fmt: str) -> np.ndarray:
             msg = "Amplitude spectra must be non-negative."
             raise ValueError(msg)
         return data**2
-    if fmt in {"power", "density"}:
-        if np.any(data < 0):
-            msg = "Power spectra and spectral densities must be non-negative."
-            raise ValueError(msg)
-        return data
-
-    raise AssertionError(f"Unhandled spectral format {fmt!r}.")
+    assert fmt in {"power", "density"}, f"Unhandled spectral format {fmt!r}."
+    if np.any(data < 0):
+        msg = "Power spectra and spectral densities must be non-negative."
+        raise ValueError(msg)
+    return data
 
 
 def _power_has_symmetric_frequencies(
@@ -230,10 +228,11 @@ def _select_frequencies(
     """
     Return which frequency bins a descriptor reads, from metadata alone.
 
-    The bins kept according to ``negative_frequencies``, ``fmin``, and
-    ``fmax``: their frequencies, the order to read the bins in, which of
-    them to keep, and, where negative bins are dropped only if the power
-    mirrors, the frequencies to check that against.
+    The plan, from ``negative_frequencies``, ``fmin`` and ``fmax``: the kept
+    bins' frequencies (``freqs``) and indices (``keep``), any reordering
+    applied first (``order``), and, for ``negative_frequencies='auto'``, the
+    frequencies (``symmetric``) the kernel checks for mirrored power before
+    dropping negative bins, raising if it does not mirror.
     """
     freqs = np.asarray(patch.coords.get_array(freq_dim), dtype=float)
     plan: dict[str, Any] = {"symmetric": None, "order": None}
@@ -278,6 +277,12 @@ def _select_frequencies(
     return plan | {"keep": np.flatnonzero(mask), "freqs": freqs[mask]}
 
 
+def _power_fraction(power: np.ndarray, axis: int) -> np.ndarray:
+    """Return each bin's share of the total power along an axis, 0 if none."""
+    total = np.sum(power, axis=axis, keepdims=True)
+    return np.divide(power, total, out=np.zeros_like(power), where=total > 0)
+
+
 def _broadcast_freqs(
     freqs: np.ndarray,
     ndim: int,
@@ -307,7 +312,9 @@ class _SpectralDescriptor(PatchProcessor):
 
     def get_metadata(self, meta):
         """Return the reduced metadata, and the bins and format to read."""
-        # Declared by each subclass, after any option of its own.
+        # spectral_format and negative_frequencies are declared by each
+        # subclass, after its own options, so positional calls keep the
+        # method's order; the base reads them from kwargs.
         options = self.kwargs
         negative_frequencies = options["negative_frequencies"]
         if negative_frequencies not in {"auto", "drop", "raise", "keep"}:
@@ -366,7 +373,12 @@ class _SpectralDescriptor(PatchProcessor):
 
 
 class _SharedFields(_SpectralDescriptor):
-    """The descriptors whose options follow the frequency limits directly."""
+    """
+    The descriptors with no option of their own.
+
+    spectral_format and negative_frequencies follow fmax directly, in the
+    methods' positional order.
+    """
 
     name = None
 
@@ -613,19 +625,12 @@ class SpectralEntropy(_SpectralDescriptor):
     label = "Spectral Entropy"
 
     def units(self, meta, freq_dim, fmt):
-        """Return no units: entropy is a number of bits."""
+        """Return no units: entropy, in bits or normalized to [0, 1], is unitless."""
         return None
 
     def describe(self, power, freqs, axis):
         """Return the entropy of the power distribution."""
-        total_power = np.sum(power, axis=axis, keepdims=True)
-
-        p = np.divide(
-            power,
-            total_power,
-            out=np.zeros_like(power),
-            where=total_power > 0,
-        )
+        p = _power_fraction(power, axis)
 
         entropy = -np.sum(
             p * np.log2(p, out=np.zeros_like(p), where=p > 0),
@@ -676,14 +681,7 @@ class SpectralKurtosis(_SharedFields):
 
     def describe(self, power, freqs, axis):
         """Return the kurtosis of the power distribution over frequency."""
-        total_power = np.sum(power, axis=axis, keepdims=True)
-
-        p = np.divide(
-            power,
-            total_power,
-            out=np.zeros_like(power),
-            where=total_power > 0,
-        )
+        p = _power_fraction(power, axis)
 
         f = _broadcast_freqs(freqs, power.ndim, axis)
 

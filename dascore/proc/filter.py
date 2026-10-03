@@ -31,6 +31,7 @@ from dascore.units import (
     percent,
     quant_sequence_to_quant_array,
 )
+from dascore.utils.array_api import asarray_like
 from dascore.utils.docs import compose_docstring
 from dascore.utils.imports import lazy_import
 from dascore.utils.misc import (
@@ -699,7 +700,7 @@ def slope_filter(
     filt = _maybe_transform_units(filt, dft_patch, freq_dims)
 
     mask = _get_taper_mask(filt, slope, invert)
-    new_data = dft_patch.data * mask
+    new_data = dft_patch.data * asarray_like(mask, dft_patch.data)
     out = dft_patch.update(data=new_data)
     if transformed:
         out = out.idft().real()

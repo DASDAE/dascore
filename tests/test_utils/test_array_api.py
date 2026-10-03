@@ -723,6 +723,22 @@ class TestArrayApiKernelBranches:
         assert np.asarray(out.data).dtype == expected.dtype
         assert np.allclose(np.asarray(out.data), expected.data)
 
+    @pytest.mark.parametrize("output", ("AS", "PS", "PSD"))
+    def test_dft_spectra(self, random_patch, backend_patch, output):
+        """Amplitudes, powers and decibels are computed on the backend."""
+        kwargs = dict(real=True, output=output, db=output == "PS")
+        out = backend_patch.dft("time", **kwargs)
+        expected = random_patch.dft("time", **kwargs)
+        assert backend_name(out.data) == backend_name(backend_patch.data)
+        assert np.allclose(np.asarray(out.data), expected.data)
+
+    def test_slope_filter(self, random_patch, backend_patch):
+        """The numpy mask meets the transform on the transform's backend."""
+        filt = [2e3, 2.2e3, 8e3, 2e4]
+        out = backend_patch.slope_filter(filt=filt)
+        expected = random_patch.slope_filter(filt=filt)
+        assert np.allclose(np.asarray(out.data), expected.data)
+
     def test_fillna_fills(self, backend_patch):
         """Non-finite values are replaced by the value."""
         xp = array_namespace(backend_patch.data)
@@ -798,6 +814,15 @@ class TestDevices:
         patch = random_patch.new(data=xp.asarray(data, device=other))
         assert device(patch.fillna(2.0).data) == other
         assert device(patch.full(2.0).data) == other
+
+    def test_dft_keeps_the_device(self, random_patch):
+        """The scales dft and idft apply are built beside the data."""
+        xp = pytest.importorskip("array_api_strict")
+        other = xp.__array_namespace_info__().devices()[1]
+        patch = random_patch.new(data=xp.asarray(random_patch.data, device=other))
+        spectrum = patch.dft("time", real=True, output="PSD", db=True)
+        assert device(spectrum.data) == other
+        assert device(patch.dft("time").idft().data) == other
 
 
 class TestDaskLaziness:

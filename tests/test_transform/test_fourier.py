@@ -2,19 +2,23 @@
 
 from __future__ import annotations
 
+import copy
 import gc
+import pickle
 import weakref
+from concurrent.futures import ProcessPoolExecutor
 
 import numpy as np
 import pytest
 from scipy.fft import next_fast_len
+from scipy.signal import detrend, windows
 
 import dascore as dc
 import dascore.proc.coords
 from dascore.compat import random_state
 from dascore.exceptions import ParameterError, PatchError
 from dascore.transform.fourier import Dft, Idft, Istft, Stft, dft, idft
-from dascore.units import get_quantity, get_quantity_str, second
+from dascore.units import get_quantity, get_quantity_str, percent, second
 from dascore.utils.misc import iterate
 
 F_0 = 2
@@ -1008,3 +1012,65 @@ class TestFourierProcessors:
         out = patch.stft(detrend=True, **kwargs)
         assert np.allclose(out.data[inner], 0, atol=1e-9)
         assert not np.allclose(patch.stft(**kwargs).data[inner], 0, atol=1e-9)
+
+    def test_stft_detrend_then_taper(self):
+        """A detrended window is tapered after the trend is taken out."""
+        patch = dc.get_example_patch("random_das", shape=(3, 500))
+        out = patch.stft(time=64, samples=True, detrend=True)
+        # The fourth window, cut 32 samples before the data start, is 64:128.
+        bare = detrend(np.asarray(patch.data)[:, 64:128], axis=-1)
+        step = dc.to_float(patch.get_coord("time").step)
+        expected = np.abs(np.fft.rfft(windows.hann(64) * bare, axis=-1)) * step
+        assert np.allclose(np.abs(out.data[..., 3]), expected)
+
+    def test_dft_of_float16(self, random_patch):
+        """Half precision is transformed as numpy transforms it, in single."""
+        patch = random_patch.new(data=np.asarray(random_patch.data, np.float16))
+        out = patch.dft("time", pad=False)
+        step = dc.to_float(patch.get_coord("time").step)
+        expected = np.fft.fftshift(np.fft.fftn(patch.data, axes=(1,)) * step, axes=1)
+        assert out.data.dtype == expected.dtype
+        assert np.array_equal(out.data, expected)
+
+    def test_amplitude_on_bare_coords(self):
+        """Without coordinate units, AS does not fold in a data unit scale."""
+        coords = {"time": np.arange(4.0)}
+        patch = dc.Patch(
+            data=np.ones(4), coords=coords, dims=("time",), attrs={"data_units": "10 m"}
+        )
+        out = patch.dft("time", real=True, output="AS", pad=False)
+        assert np.allclose(out.data, [1.0, 0.0, 0.0])
+
+
+class TestStftIdentity:
+    """A default stft keeps the id it had as a patch function, however it travels."""
+
+    @pytest.fixture()
+    def chirp(self):
+        """A chirp patch with ids fixed, so the derived ids can be pinned."""
+        patch = dc.get_example_patch("chirp", channel_count=2)
+        return patch.update_attrs(data_id="cd" * 16, origin_id="cd" * 16)
+
+    def test_copies_keep_the_id(self):
+        """A pickled or copied processor names the same operation."""
+        processor = Stft(time=1 * second)
+        expected = processor.operation_id
+        assert pickle.loads(pickle.dumps(processor)).operation_id == expected
+        assert copy.deepcopy(processor).operation_id == expected
+
+    def test_ids_match_the_patch_function(self, chirp):
+        """The default and an explicit half overlap keep their own ids."""
+        default = chirp.stft(time=10 * second).attrs.data_id
+        explicit = chirp.stft(time=10 * second, overlap=50 * percent).attrs.data_id
+        assert default == "b58639a01788bd9708b3bb7c94015993"
+        assert explicit == "348f576656aec44dd42c8450b4baafc9"
+
+    @pytest.mark.concurrency
+    def test_process_pool_stamps_the_serial_id(self, chirp):
+        """A processor sent to a worker stamps the id a serial run does."""
+        processor = Stft(time=1 * second)
+        spool = dc.spool([chirp])
+        serial = spool.map(processor)[0].attrs.data_id
+        with ProcessPoolExecutor(1) as client:
+            pooled = spool.map(processor, client=client)[0].attrs.data_id
+        assert pooled == serial == chirp.stft(time=1 * second).attrs.data_id

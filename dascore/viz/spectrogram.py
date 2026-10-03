@@ -10,6 +10,7 @@ import matplotlib.pyplot as plt
 from dascore.constants import PatchType
 from dascore.exceptions import ParameterError
 from dascore.units import Quantity, percent
+from dascore.utils.array_api import to_numpy
 from dascore.utils.patch import patch_function
 
 
@@ -165,6 +166,8 @@ def spectrogram(
     # A spectrum occupies one hop in this view; its source window can
     # overlap neighbouring windows and is not a display pixel.
     spec = spec.drop_coords(f"{dim}_start", f"{dim}_stop")
+    # Drawn with numpy, whatever backend the transform kept.
+    spec = spec.update(data=to_numpy(spec.data))
     return spec.viz.waterfall(
         ax=ax, cmap=cmap, scale=scale, scale_type=scale_type, log=log, show=show
     )
