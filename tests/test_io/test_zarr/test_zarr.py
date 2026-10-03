@@ -139,6 +139,24 @@ class TestRoundTrip:
         assert np.array_equal(patch.get_array("distance"), np.arange(3))
         assert np.array_equal(patch.get_array("time"), np.arange(4.0) / 2)
 
+    @pytest.mark.parametrize("version", VERSIONS)
+    def test_cf_units(self, tmp_path, version):
+        """Data units come from ``units``; unknown coord units are dropped."""
+        path = tmp_path / "cf.zarr"
+        dataset = xr.Dataset(
+            {"data": (("distance", "time"), np.zeros((3, 4)), {"units": "1/s"})},
+            coords={
+                "time": np.arange(4.0),
+                "latitude": ("distance", np.arange(3.0), {"units": "degrees_east"}),
+            },
+        )
+        dataset.to_zarr(path, zarr_format=int(version), consolidated=False)
+        with pytest.warns(UserWarning, match="latitude.*degrees_east"):
+            patch = dc.read(path)[0]
+        assert patch.attrs.data_units == dc.get_quantity("1/s")
+        assert "units" not in patch.attrs.model_dump()
+        assert patch.get_coord("latitude").units is None
+
 
 class TestEncoding:
     """Storage options pass through to the store as xarray's encoding."""

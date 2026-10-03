@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import re
+
 import numpy as np
 import pytest
 
@@ -67,3 +69,66 @@ class TestPublishedPaths:
 
         assert utils_io.patch_to_xarray is patch_to_xarray
         assert utils_io.xarray_to_patch is xarray_to_patch
+
+
+class TestCFUnits:
+    """Units follow the CF ``units`` attribute both ways."""
+
+    @pytest.fixture
+    def xr(self):
+        """The xarray module, or skip."""
+        return pytest.importorskip("xarray")
+
+    @pytest.fixture
+    def units_patch(self, random_patch):
+        """A patch with data and distance units."""
+        return random_patch.set_units("m/s", distance="m")
+
+    def test_data_units_written_as_units(self, units_patch):
+        """Data units are written as strings, also under ``units``."""
+        array = patch_to_xarray(units_patch)
+        assert array.attrs["units"] == array.attrs["data_units"] == "m / s"
+
+    def test_units_read_as_data_units(self, xr, random_patch):
+        """A data variable's ``units`` become the patch's data units."""
+        array = patch_to_xarray(random_patch).assign_attrs(units="1/s")
+        patch = xarray_to_patch(array)
+        assert patch.attrs.data_units == dc.get_quantity("1/s")
+        assert "units" not in patch.attrs.model_dump()
+
+    def test_round_trip_no_stray_units(self, units_patch):
+        """A round trip gives the same patch, with no ``units`` attr."""
+        out = xarray_to_patch(patch_to_xarray(units_patch))
+        assert out == units_patch
+        assert "units" not in out.attrs.model_dump()
+
+    def test_coord_units_are_unit_strings(self, units_patch):
+        """A coordinate's units are written without a magnitude."""
+        array = patch_to_xarray(units_patch)
+        assert array.coords["distance"].attrs["units"] == "m"
+
+    @pytest.mark.parametrize("units", ["degrees_north", "m s-1", "("])
+    def test_unknown_coord_units_dropped(self, xr, random_patch, units):
+        """A coordinate unit string that cannot be parsed warns and is dropped."""
+        array = patch_to_xarray(random_patch)
+        array.coords["distance"].attrs["units"] = units
+        with pytest.warns(UserWarning, match=r"distance.*" + re.escape(units)):
+            patch = xarray_to_patch(array)
+        assert patch.get_coord("distance").units is None
+
+    def test_unknown_data_units_dropped(self, xr, random_patch):
+        """Data units that cannot be parsed warn and are dropped."""
+        array = patch_to_xarray(random_patch).assign_attrs(units="degrees_Celsius")
+        with pytest.warns(UserWarning, match="degrees_Celsius"):
+            patch = xarray_to_patch(array)
+        assert patch.attrs.data_units is None
+        assert "units" not in patch.attrs.model_dump()
+
+    @pytest.mark.parametrize("writer", ["to_netcdf", "to_zarr"])
+    def test_xarray_can_write(self, units_patch, tmp_path, writer):
+        """Xarray's own writers accept the converted array."""
+        pytest.importorskip("h5netcdf" if writer == "to_netcdf" else "zarr")
+        array = patch_to_xarray(units_patch).rename("data")
+        path = tmp_path / ("out.nc" if writer == "to_netcdf" else "out.zarr")
+        kwargs = {"engine": "h5netcdf"} if writer == "to_netcdf" else {}
+        getattr(array.to_dataset(), writer)(path, **kwargs)

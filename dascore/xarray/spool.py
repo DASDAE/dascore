@@ -23,7 +23,6 @@ import dascore as dc
 from dascore.config import get_config
 from dascore.constants import CONFLICT, SpoolType
 from dascore.exceptions import InvalidFiberIOError, ParameterError, PatchConversionError
-from dascore.units import get_quantity_str
 from dascore.utils.misc import optional_import
 from dascore.utils.time import to_float
 from dascore.xarray.patch import _to_dataarray
@@ -240,15 +239,13 @@ def _location(resolver, row):
 
 
 def _store_attrs(attrs) -> dict:
-    """A segment's attrs as a store holds them: data units as a string."""
+    """A segment's attrs as a store holds them."""
     out = dict(attrs)
     # the index holds no history, and an empty id is one the rows cannot know
     out.pop("history", None)
     for name in ("data_id", "origin_id"):
         if not out.get(name):
             out.pop(name, None)
-    if out.get("data_units") is not None:
-        out["data_units"] = get_quantity_str(out["data_units"])
     return out
 
 

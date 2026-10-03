@@ -1139,14 +1139,14 @@ def _assert_attrs_match(data, patch):
     """
     A segment's attrs are the patch's, as a store can hold them.
 
-    Its data units are a string, and it states no history, which the
-    index never holds; an id is stated only where the rows know chunk's,
-    and is then chunk's.
+    Its data units are a string, also stated as ``units``, and it states
+    no history, which the index never holds; an id is stated only where
+    the rows know chunk's, and is then chunk's.
     """
     expected = {k: v for k, v in dict(patch.attrs).items() if v is not None}
     expected.pop("history", None)
     if (units := expected.get("data_units")) is not None:
-        expected["data_units"] = get_quantity_str(units)
+        expected["data_units"] = expected["units"] = get_quantity_str(units)
     got = dict(data.attrs)
     for name in ("data_id", "origin_id"):
         if name not in got:

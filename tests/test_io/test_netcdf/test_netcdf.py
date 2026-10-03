@@ -597,6 +597,48 @@ class TestNetCDFXarrayCompatibility:
         _assert_patch_round_trip_equal(dascore_patch, xarray_patch)
 
 
+class TestCFUnits:
+    """Units follow the CF ``units`` attribute in written and read files."""
+
+    @pytest.fixture
+    def cf_path(self, tmp_path):
+        """A CF file with data units and a geolocated, degrees_north coord."""
+        engine = _require_xarray_netcdf_engine()
+        xr = pytest.importorskip("xarray")
+        path = tmp_path / "cf.nc"
+        dataset = xr.Dataset(
+            {"data": (("distance", "time"), np.zeros((3, 4)), {"units": "1/s"})},
+            coords={
+                "distance": ("distance", np.arange(3.0), {"units": "1 m"}),
+                "time": np.arange(4.0),
+                "latitude": ("distance", np.arange(3.0), {"units": "degrees_north"}),
+            },
+            attrs={"Conventions": "CF-1.8"},
+        )
+        dataset.to_netcdf(path, engine=engine)
+        return path
+
+    def test_read(self, cf_path):
+        """Data units come from ``units``; unknown coord units are dropped."""
+        with pytest.warns(UserWarning, match="latitude.*degrees_north"):
+            patch = dc.read(cf_path)[0]
+        assert patch.attrs.data_units == dc.get_quantity("1/s")
+        assert "units" not in patch.attrs.model_dump()
+        assert patch.get_coord("latitude").units is None
+        # a magnitude-bearing string, as older files hold, still reads
+        assert patch.get_coord("distance").units == dc.get_quantity("m")
+
+    def test_written_units(self, example_patch, tmp_path):
+        """The file states unit strings, the data's under ``units``."""
+        _require_xarray_netcdf_engine()
+        path = tmp_path / "units.nc"
+        dc.write(example_patch.set_units("m/s", distance="m"), path, "netcdf_cf")
+        with h5py.File(path, "r") as h5file:
+            assert h5file["data"].attrs["units"] == "m / s"
+            assert h5file["data"].attrs["data_units"] == "m / s"
+            assert h5file["distance"].attrs["units"] == "m"
+
+
 class TestNetCDFEdgeCases:
     """Test edge cases and error conditions."""
 
@@ -606,6 +648,7 @@ class TestNetCDFEdgeCases:
         class Coord:
             values: ClassVar = np.array([0.0, 1.0, 2.0, 5.0])
             attrs: ClassVar = {"units": "m"}
+            name = "distance"
 
         coord = netcdf_utils.get_scan_coord(Coord(), snap=False)
 
@@ -618,6 +661,7 @@ class TestNetCDFEdgeCases:
         class Coord:
             values: ClassVar = np.arange(4.0)
             attrs: ClassVar = {"units": "m"}
+            name = "distance"
 
         coord = netcdf_utils.get_scan_coord(Coord(), snap=True)
 

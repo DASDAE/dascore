@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Collection
+from tokenize import TokenError
 
 import numpy as np
+from pint.errors import PintError
 
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.coords import BaseCoord, get_coord
+from dascore.units import get_quantity, get_quantity_str
 from dascore.utils.identity import operation_context
 from dascore.utils.misc import optional_import
 
@@ -68,6 +72,9 @@ def patch_to_xarray(patch: PatchType, lazy_coords: bool | Collection[str] = Fals
     Materialized labels, the default, cost 8 bytes a sample along each
     dimension, which beside a patch's data is little.
 
+    Units are strings, as the CF conventions state them: a coordinate's
+    under ``units``, the data's under both ``data_units`` and ``units``.
+
     Examples
     --------
     >>> import dascore as dc
@@ -92,6 +99,8 @@ def _to_dataarray(data, coord_manager, attrs, lazy_coords, held: bool):
     # Omit None-valued attrs because xarray backends may reject them during
     # NetCDF serialization, while a missing attr round-trips cleanly.
     attrs = {key: value for key, value in dict(attrs).items() if value is not None}
+    if "data_units" in attrs:  # CF states a variable's units as ``units``
+        attrs["data_units"] = attrs["units"] = get_quantity_str(attrs["data_units"])
     coords, units, lazy = {}, {}, []
     for name, coord in coord_manager.coord_map.items():
         if coord._partial:
@@ -102,7 +111,7 @@ def _to_dataarray(data, coord_manager, attrs, lazy_coords, held: bool):
             # way the CF conventions do, as an attribute beside it.
             # A datetime says its units in its dtype, and xarray spends
             # that same attribute on saying how to serialize it.
-            units[name] = str(coord.units)
+            units[name] = coord.unit_str
         # An index labels a dimension, so only a coordinate which defines
         # one can be served by it; a coordinate merely riding a dimension
         # states its values as any other does.
@@ -126,7 +135,12 @@ def _is_temporal(dtype) -> bool:
 
 
 def xarray_to_patch(data_array) -> dc.Patch:
-    """Convert an xarray dataarray to a patch."""
+    """
+    Convert an xarray dataarray to a patch.
+
+    The array's ``units`` attribute gives the data units when ``data_units``
+    does not; a unit string that cannot be parsed is dropped with a warning.
+    """
     # this cant work if xarray isn't installed. This ensures it is.
     _ = optional_import("xarray")
 
@@ -137,7 +151,7 @@ def xarray_to_patch(data_array) -> dc.Patch:
             coords={
                 i: _coord_from(data_array, i, x) for i, x in data_array.coords.items()
             },
-            attrs=dict(data_array.attrs.items()),
+            attrs=_cf_attrs(data_array.attrs, data_array.name),
             dims=data_array.dims,
             data=data_array.data,
         )
@@ -152,7 +166,7 @@ def _coord_from(data_array, name, coord):
     spell out every sample, which is what the lazy index exists to avoid.
     """
     index = data_array.xindexes.get(name)
-    units = coord.attrs.get("units")
+    units = _cf_units(coord.attrs.get("units"), name)
     if isinstance(served := getattr(index, "coordinate", None), BaseCoord):
         if units is not None and not _is_temporal(served.dtype):
             served = served.set_units(units)
@@ -161,3 +175,25 @@ def _coord_from(data_array, name, coord):
     if units is not None and not _is_temporal(values.dtype):
         return coord.dims, get_coord(values=values, units=units)
     return coord.dims, values
+
+
+def _cf_units(units, name):
+    """The units if they parse, else None with a warning naming ``name``."""
+    if units is None:
+        return None
+    try:
+        get_quantity(units)
+    except (PintError, TokenError):
+        msg = f"Dropped the units of {name!r}: {units!r} could not be parsed."
+        warnings.warn(msg, UserWarning, stacklevel=2)
+        return None
+    return units
+
+
+def _cf_attrs(attrs, name) -> dict:
+    """A CF variable's attrs as patch attrs: its ``units`` are the data's."""
+    out = dict(attrs)
+    units = out.pop("units", None)
+    if units is not None and out.get("data_units") is None:
+        out["data_units"] = _cf_units(units, name or "data")
+    return out
