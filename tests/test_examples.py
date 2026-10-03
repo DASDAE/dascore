@@ -5,7 +5,6 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import pytest
-from upath import UPath
 
 import dascore as dc
 import dascore.examples as dc_examples
@@ -67,12 +66,6 @@ class TestSpoolToDirectory:
         spool = dc.get_example_spool("random_das")
         dc.examples.spool_to_directory(spool, str(tmp_path))
         assert len(list(tmp_path.iterdir())) == len(spool)
-
-    def test_upath_is_kept(self):
-        """A remote directory stays on its own filesystem."""
-        path = UPath("memory://spool_to_directory_test")
-        out = dc.examples.spool_to_directory(dc.get_example_spool(), path)
-        assert out.protocol == "memory" and len(list(out.iterdir()))
 
 
 class TestRandomSpool:

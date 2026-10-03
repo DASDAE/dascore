@@ -33,7 +33,6 @@ from dascore.utils.downloader import fetch
 from dascore.utils.imports import lazy_import
 from dascore.utils.misc import iterate, register_func
 from dascore.utils.patch import get_patch_names
-from dascore.utils.paths import coerce_to_upath
 from dascore.utils.time import to_timedelta64
 
 spy_chirp = lazy_import("scipy.signal", "chirp")
@@ -763,10 +762,7 @@ def spool_to_directory(spool, path=None, file_format="DASDAE", extension="hdf5")
     extension
         The file extension given to each saved file.
     """
-    if path is None:
-        path = Path(tempfile.mkdtemp())
-    elif isinstance(path, str):
-        path = coerce_to_upath(path)
+    path = Path(tempfile.mkdtemp() if path is None else path)
     for patch in spool:
         name = get_patch_names(patch).iloc[0]
         out_path = path / (f"{name}.{extension}")
