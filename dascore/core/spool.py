@@ -608,6 +608,23 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> # one box per row on two dimensions; row two's time end is open
         >>> boxes = spool.select(distance=ranges, time=[time, [time[0], None]])
         """
+        out, unjudged = self._select_counted(
+            _attrs=_attrs,
+            _coords=_coords,
+            samples=samples,
+            relative=relative,
+            **kwargs,
+        )
+        report_unjudged(unjudged)
+        return out
+
+    def _select_counted(
+        self, *, _attrs, _coords, samples, relative, **kwargs
+    ) -> tuple[Self, int]:
+        """
+        Select as `select` does, and count the patches dropped for having
+        no single inventory context, so a caller warns once for them all.
+        """
         # Explicit windows are independent requests, so they need separate
         # plan outputs even when they name the same source samples.
         raw = dict(kwargs)
@@ -642,16 +659,15 @@ class Spool(NodeRepr, NamespaceOwner):
 
             other_coords = drop_selector_names(_coords, set(explicit))
             other_kwargs = {k: v for k, v in kwargs.items() if k not in explicit}
-            base = self.select(
+            base, unjudged = self._select_counted(
                 _attrs=_attrs,
                 _coords=other_coords,
                 samples=False,
                 relative=False,
                 **other_kwargs,
             )
-            return base._new_from_catalog(
-                ExplicitSelectCatalog(base._catalog, explicit)
-            )
+            explicit_catalog = ExplicitSelectCatalog(base._catalog, explicit)
+            return base._new_from_catalog(explicit_catalog), unjudged
         if self._inventory is None:
             catalog = self._catalog.select(
                 _attrs=_attrs,
@@ -660,7 +676,7 @@ class Spool(NodeRepr, NamespaceOwner):
                 relative=relative,
                 **kwargs,
             )
-            return self._new_from_catalog(catalog)
+            return self._new_from_catalog(catalog), 0
         query = self._classify_query(_attrs, _coords, kwargs)
         channels = stated_channels(query.channels)
         # Neither keyword has anything to mean about a value the fiber
@@ -720,8 +736,7 @@ class Spool(NodeRepr, NamespaceOwner):
         if channels:
             out, more = out._select_channels(channels)
             unjudged += more
-        report_unjudged(unjudged)
-        return out
+        return out, unjudged
 
     def unselect(
         self,
@@ -799,19 +814,26 @@ class Spool(NodeRepr, NamespaceOwner):
         # The complement is taken against select itself rather than by
         # negating each predicate, so the two can never drift apart.
         if not query.channels:
-            removed = self.select(_attrs=stated)._catalog.ordered_rows()
-            return self._restrict_to_rows(removed, keep=False)
+            matched, unjudged = self._select_counted(
+                _attrs=stated, _coords=None, samples=False, relative=False
+            )
+            report_unjudged(unjudged)
+            return self._restrict_to_rows(matched._catalog.ordered_rows(), keep=False)
         # With both, the complement is still one set: a patch keeps every
         # channel unless the attrs matched it, and the channels the fiber
         # query did not match when they did. Complementing the two halves
         # apart would drop a patch the whole selection never held.
-        matched = self if not stated else self.select(_attrs=stated)
-        out, unjudged = self._select_channels(
+        matched, unjudged = self, 0
+        if stated:
+            matched, unjudged = self._select_counted(
+                _attrs=stated, _coords=None, samples=False, relative=False
+            )
+        out, more = self._select_channels(
             stated_channels(query.channels),
             complement=True,
             applies_to=matched._catalog.ordered_rows(),
         )
-        report_unjudged(unjudged)
+        report_unjudged(unjudged + more)
         return out
 
     def _classify_query(self, _attrs, _coords, kwargs) -> _InventoryQuery:
@@ -986,7 +1008,11 @@ class Spool(NodeRepr, NamespaceOwner):
         known = set(backend.attr_names())
         contexts = None
         mask = np.ones(len(ids), dtype=bool)
+        # Rows some name had to ask the inventory about and could not, and
+        # rows some name judged and missed; only the first kind, never
+        # missed, is dropped for having no context.
         unjudged = np.zeros(len(ids), dtype=bool)
+        missed = np.zeros(len(ids), dtype=bool)
         # How pending enrichment rewrites a stated header, if at all; the
         # `raise` policy refuses rather than rewrites, and `keep_first`
         # leaves the header standing.
@@ -1014,13 +1040,14 @@ class Spool(NodeRepr, NamespaceOwner):
                 else np.empty(0, dtype=np.int64)
             )
             matched = np.isin(ids, index_ids)
+            asked = np.zeros(len(ids), dtype=bool)
             # A stated row is resolved too when enrichment will rewrite it.
             rewriting = name in rewritten
             if not stated.all() or rewriting:
                 if contexts is None:
                     contexts = self._row_contexts(ids)
                 # A stated row keeps its header where the inventory is silent.
-                unjudged |= ~stated & unjudged_rows(contexts)
+                asked = ~stated & unjudged_rows(contexts)
                 answers = get_attr_values(self._resolved_inventory(), contexts, name)
                 matched = effective_matches(
                     stated,
@@ -1031,8 +1058,10 @@ class Spool(NodeRepr, NamespaceOwner):
                     conflict if rewriting else None,
                 )
             mask &= matched
+            unjudged |= asked
+            missed |= ~matched & ~asked
         out = self._new_from_catalog(self._catalog.restrict(mask, ids=ids))
-        return out, int(unjudged.sum())
+        return out, int((unjudged & ~missed).sum())
 
     def _row_contexts(self, ids) -> np.ndarray:
         """

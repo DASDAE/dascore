@@ -1448,6 +1448,15 @@ class TestInventoryUnselect:
             out = spool.unselect(gauge_length=10.0)
         assert out.get_contents()["tag"].tolist() == ["other"]
 
+    def test_one_warning_for_attrs_and_channels(self, patch, inventory):
+        """Both halves of a mixed query are counted in one warning."""
+        other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
+        stated = other.update_attrs(gauge_length=10.0)
+        spool = dc.spool([other, stated]).attach_inventory(inventory)
+        with pytest.warns(UserWarning, match=r"^2 patch\(es\)") as record:
+            assert len(spool.unselect(gauge_length=10.0, coupling="trench")) == 2
+        assert len(record) == 1
+
     def test_stated_value_wins(self, patch, inventory):
         """Per-row precedence is the same on the way out."""
         stated = patch.update_attrs(tag="stated", gauge_length=20.0)
@@ -2613,6 +2622,18 @@ class TestChannelSelect:
         )
         with pytest.warns(UserWarning, match=UNJUDGED_MATCH):
             assert len(spool.select(coupling="trench")) == 0
+
+    def test_an_ordinary_miss_is_not_counted(self, patch, inventory):
+        """
+        A patch a stated header already rules out is an ordinary miss,
+        even when another name would have needed the inventory.
+        """
+        other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER", gauge_length=99.0)
+        spool = dc.spool([patch, other]).attach_inventory(inventory)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = spool.select(gauge_length=10.0, **{"interrogator.model": "FI-*"})
+        assert len(out) == 1
 
     def test_a_resolved_non_match_is_silent(self, patch, inventory):
         """Only unresolved patches warn; an ordinary miss says nothing."""
