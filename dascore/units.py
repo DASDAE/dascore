@@ -29,11 +29,17 @@ from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, t
 from dascore.warnings import DASCoreWarning
 
 # A bracketed number with no unit in it, e.g. "(1e-9)", "[10^-9]": often an
-# annotation, which pint reads as a scale factor. One raised to, "m^(-1)", is
-# an exponent.
-_PAREN_NUMBER = re.compile(
-    r"(?<![\^*])(?<![\^*]\s)[(\[](?=[^)\]]*[\d⁰¹²³⁴⁵⁶⁷⁸⁹])[^a-df-zA-DF-Z()\[\]]*[)\]]"
-)
+# annotation, which pint reads as a scale factor.
+_PAREN_NUMBER = re.compile(r"[(\[](?=[^)\]]*[\d⁰¹²³⁴⁵⁶⁷⁸⁹])[^a-df-zA-DF-Z()\[\]]*[)\]]")
+_EXPONENT_END = re.compile(r"(\^|\*\*)\s*$")
+
+
+def _has_bracketed_factor(text: str) -> bool:
+    """True if a bracketed number scales the unit; "m^(-1)" is an exponent."""
+    return any(
+        not _EXPONENT_END.search(text, 0, x.start())
+        for x in _PAREN_NUMBER.finditer(text)
+    )
 
 
 def _get_unit_registry():
@@ -117,7 +123,7 @@ def get_unit(value) -> Unit:
 @cache
 def _str_to_quant(quant_str):
     """Get quantity from a string; cache output."""
-    if isinstance(quant_str, str) and _PAREN_NUMBER.search(quant_str):
+    if isinstance(quant_str, str) and _has_bracketed_factor(quant_str):
         # Cached, so this warns once per string per session.
         msg = (
             f"Unit string {quant_str!r} has a bracketed number, which is "
@@ -160,6 +166,10 @@ def get_quantity(
 
     Returns None for None, Ellipsis, or an empty string (no units). Handle this before
     using the result in arithmetic.
+
+    A number in brackets, as in a label such as "nanostrain (1e-9)", is a
+    scale factor to the unit, so it warns; drop it, or give the unit it
+    names (e.g. "strain"), unless the factor is meant.
 
     Parameters
     ----------

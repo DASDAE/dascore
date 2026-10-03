@@ -233,6 +233,8 @@ class TestParenthesizedFactor:
         "m^(-1)",
         "s**(-2)",
         "m ** (2)",
+        "m **  (2)",
+        "m ^  (-1)",
         "1/(10 m)",
     )
 
@@ -250,6 +252,8 @@ class TestParenthesizedFactor:
             "nanostrain (10**-9.0)",
             "nanostrain (10⁻⁹)",
             "nanostrain [1e-9]",
+            "nanostrain * (1e-9)",
+            "nanostrain*(1e-9)",
         ],
     )
     def test_warns(self, unit):
