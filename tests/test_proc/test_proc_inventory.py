@@ -29,6 +29,8 @@ from dascore.exceptions import (
     UnresolvedPatchError,
 )
 from dascore.models import ArrayLike
+from dascore.models.base import model_values
+from dascore.utils import identity
 from dascore.utils.misc import suppress_warnings
 
 
@@ -1134,6 +1136,21 @@ class TestEnrichContracts:
         history = patch.enrich(inventory).attrs.history
         assert len(history) == 1
         assert history[0].startswith("enrich(")
+
+    def test_enrich_encodes_the_inventory_once(self, patch, monkeypatch):
+        """Enriching many patches walks the immutable inventory once."""
+        inventory = inventory_patch_pair()[1]
+        walked = []
+
+        def spy(model):
+            if isinstance(model, Inventory):
+                walked.append(model)
+            return model_values(model)
+
+        monkeypatch.setattr(identity, "model_values", spy)
+        outs = [patch.enrich(inventory) for _ in range(4)]
+        assert len(walked) == 1
+        assert len({x.attrs.data_id for x in outs}) == 1
 
 
 class TestPartialStringCoverage:
