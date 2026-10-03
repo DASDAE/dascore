@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pint
 import pytest
@@ -33,6 +35,7 @@ from dascore.units import (
     units_match,
 )
 from dascore.utils.time import to_float
+from dascore.warnings import DASCoreWarning
 
 
 class TestUnitInit:
@@ -213,6 +216,39 @@ class TestGetQuantity:
         """Ensure time deltas can be converted to quantity"""
         quant = get_quantity(dc.to_datetime64(20))
         assert quant == (20 * dc.get_unit("s"))
+
+
+class TestParenthesizedFactor:
+    """Tests for warning on a parenthesized number in a unit string."""
+
+    legit = (
+        "100 cm",
+        "m/s",
+        "(m/s)**2",
+        "1/(m*s)",
+        "kg*m**2/(s**2)",
+        "nanostrain",
+        "(m/s)^2",
+        "10 * m",
+    )
+
+    @pytest.fixture(autouse=True)
+    def _clear_cache(self):
+        """Parsing is cached, so clear it to see the first-parse warning."""
+        units._str_to_quant.cache_clear()
+
+    @pytest.mark.parametrize("unit", ["nanostrain (1e-9)", "( 1E-9 ) m", "m (10^-9)"])
+    def test_warns(self, unit):
+        """A bare number in parentheses is likely a label; warn."""
+        with pytest.warns(DASCoreWarning, match="parenthesized number"):
+            get_quantity(unit)
+
+    @pytest.mark.parametrize("unit", legit)
+    def test_legit_silent(self, unit):
+        """Ordinary unit strings, parentheses included, do not warn."""
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", DASCoreWarning)
+            get_quantity(unit)
 
 
 class TestConvenientImport:

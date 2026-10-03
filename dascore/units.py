@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import re
 import shutil
+import warnings
 from collections.abc import Sequence
 from functools import cache
 from threading import RLock
@@ -21,6 +23,12 @@ from dascore.compat import is_array
 from dascore.exceptions import UnitError
 from dascore.utils.misc import _reinit_after_fork, iterate, unbyte
 from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
+from dascore.warnings import DASCoreWarning
+
+# A parenthesized bare number, e.g. "(1e-9)", "(10^-9)"; often an annotation.
+_PAREN_NUMBER = re.compile(
+    r"\(\s*[-+]?[\d.]+(?:[eE][-+]?\d+)?(?:\s*(?:\^|\*\*)\s*[-+]?\d+)?\s*\)"
+)
 
 
 def _get_unit_registry():
@@ -107,6 +115,13 @@ def _str_to_quant(quant_str):
     with _UNIT_LOCK:
         if isinstance(quant_str, Unit):
             quant_str = str(quant_str)  # ensure unit is converted to quantity
+        elif isinstance(quant_str, str) and _PAREN_NUMBER.search(quant_str):
+            # Cached, so this warns once per string per session.
+            msg = (
+                f"Unit string {quant_str!r} has a parenthesized number, which "
+                "is parsed as a scale factor, not a label."
+            )
+            warnings.warn(msg, DASCoreWarning, stacklevel=2)
         ureg = get_registry()
         return ureg.Quantity(quant_str)
 
