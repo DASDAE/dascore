@@ -226,14 +226,7 @@ class TestTunnelInventory:
         """Writing the files and reading them describes the same system."""
         path = dc_examples.write_tunnel_inventory(tmp_path / "tunnel")
         loaded = dc.inventory(path)
-        # Not == : an Inventory carries its own resource_id, which is a
-        # fresh uuid on each read, so two reads of one directory differ
-        # in their document identity and in nothing else.
-        assert loaded.networks == inventory.networks
-        assert loaded.resources == inventory.resources
-        assert (
-            loaded.coordinate_reference_system == inventory.coordinate_reference_system
-        )
+        assert loaded == inventory
 
     def test_unrepaired_directory_holds_one_epoch(self, tmp_path):
         """The deployment as installed is one path, not two."""
