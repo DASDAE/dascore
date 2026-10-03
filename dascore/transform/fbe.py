@@ -4,20 +4,25 @@ Patch function for 'Frequency-Band Energy' transform
 
 from __future__ import annotations
 
-from dascore.constants import PatchType
+from typing import Any
+
+import numpy as np
+from pydantic import ConfigDict
+
+from dascore.core.processor import PatchProcessor
+from dascore.proc.filter import PassFilter
+from dascore.proc.rolling import (
+    _PandasPatchRoller,
+    _rolling_numpy,
+    _rolling_pandas,
+    rolling,
+)
 from dascore.units import get_filter_units
 from dascore.utils.misc import check_filter_kwargs, check_filter_range
-from dascore.utils.patch import get_dim_sampling_rate, patch_function
+from dascore.utils.patch import get_dim_sampling_rate
 
 
-@patch_function()
-def fbe(
-    patch: PatchType,
-    window: float,
-    step: float | None = None,
-    db: bool = True,
-    **kwargs,
-) -> PatchType:
+class Fbe(PatchProcessor):
     """
     Compute the rolling Frequency Band Energy in a window.
     This is the Root-Mean-Squared (RMS) of the Energy in a Frequency Band (the FBE),
@@ -30,9 +35,6 @@ def fbe(
 
     Parameters
     ----------
-    patch
-        Input DASCore patch.
-
     window
         window length in which to calculate energy (in units of the sampling rate)
     step
@@ -72,28 +74,53 @@ def fbe(
     >>> ax = fbe_patch.viz.waterfall(cmap = 'Spectral_r')
     >>> _ = ax.set_title('FBE along distance-axis')
     """
-    dim, (arg1, arg2) = check_filter_kwargs(kwargs)
-    coord_units = patch.coords.coord_map[dim].units
-    filt_min, filt_max = get_filter_units(arg1, arg2, to_unit=coord_units, dim=dim)
-    sample_rate = get_dim_sampling_rate(patch, dim)
 
-    nyquist = 0.5 * sample_rate
-    low = None if filt_min is None else filt_min / nyquist
-    high = None if filt_max is None else filt_max / nyquist
-    check_filter_range(nyquist, low, high, filt_min, filt_max)
+    window: Any
+    step: Any = None
+    db: Any = True
 
-    if step is None:
-        step = 1 / sample_rate
+    model_config = ConfigDict(extra="allow")
 
-    patch = patch.pass_filter(**kwargs)
+    def get_metadata(self, meta):
+        """Return the energy's metadata, the filter and the rolling windows."""
+        extras = self.model_extra or {}
+        dim, (arg1, arg2) = check_filter_kwargs(extras)
+        coord_units = meta.coords.coord_map[dim].units
+        filt_min, filt_max = get_filter_units(arg1, arg2, to_unit=coord_units, dim=dim)
+        sample_rate = get_dim_sampling_rate(meta, dim)
+        nyquist = 0.5 * sample_rate
+        low = None if filt_min is None else filt_min / nyquist
+        high = None if filt_max is None else filt_max / nyquist
+        check_filter_range(nyquist, low, high, filt_min, filt_max)
+        step = 1 / sample_rate if self.step is None else self.step
+        plan = PassFilter(**extras).get_metadata(meta)[1]
+        # `rolling` reads only the metadata, and is how the windows were found.
+        roller = rolling(meta, **{dim: self.window, "step": step})
+        attrs = {"data_type": "frequency_band_energy"}
+        if self.db:
+            attrs["data_units"] = "dB"
+        out = meta.new(coords=roller.get_coords(), dtype=np.float64)
+        return out.new(attrs=attrs), plan | {
+            "window": roller.window,
+            "step": roller.step,
+            "pandas": isinstance(roller, _PandasPatchRoller),
+        }
 
-    fbe = ((patch**2).rolling(**{dim: window, "step": step}).mean() ** 0.5).update(
-        attrs={"data_type": "frequency_band_energy"}
-    )
-
-    if db:
-        fbe = (20 * fbe.log10()).update(
-            attrs={"data_type": "frequency_band_energy", "data_units": "dB"}
+    def numpy_kernel(self, data, *, axis, sos, window, step, pandas):
+        """Return the root-mean-square of the filtered data in each window."""
+        filtered = PassFilter.kernel_for("numpy")(
+            PassFilter(), data, axis=axis, sos=sos
         )
-
-    return fbe
+        roll = _rolling_pandas if pandas else _rolling_numpy
+        mean = roll(
+            filtered**2,
+            "mean" if pandas else np.mean,
+            window=window,
+            step=step,
+            axis=axis,
+            center=False,
+            args=(),
+            kwargs={},
+        )
+        energy = mean**0.5
+        return np.log10(energy) * 20 if self.db else energy

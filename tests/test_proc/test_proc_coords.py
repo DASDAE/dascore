@@ -2334,3 +2334,20 @@ class TestFillGaps:
         coord = NumericCoord.from_labels(values, step=1.0)
         with pytest.raises(CoordError, match="drift"):
             _fill_layout(coord)
+
+
+class TestAddDistanceToMetadata:
+    """add_distance_to needs no data, so metadata runs it too."""
+
+    def test_on_metadata(self, random_patch_with_xyz):
+        """The distances are worked out from the coordinates alone."""
+        meta = random_patch_with_xyz.drop_data()
+        out = meta.add_distance_to(pd.Series({"x": 10, "y": 10}))
+        assert isinstance(out, dc.PatchMeta)
+        assert out.get_coord("origin_distance").values[0] == pytest.approx(200**0.5)
+
+    def test_ord_picks_the_norm(self, random_patch_with_xyz):
+        """ord=1 sums the offsets rather than taking the Euclidean norm."""
+        shot = pd.Series({"x": 10, "y": 10})
+        out = random_patch_with_xyz.add_distance_to(shot, ord=1)
+        assert out.get_coord("origin_distance").values[0] == 20

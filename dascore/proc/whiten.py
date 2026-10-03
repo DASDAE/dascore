@@ -2,12 +2,25 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
+import numpy.fft as nft
+from pydantic import ConfigDict
 from scipy.ndimage import uniform_filter1d
 
-from dascore.constants import PatchType
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
-from dascore.utils.patch import patch_function
+from dascore.proc.taper import TaperRange, _scale_by
+from dascore.transform.fourier import (
+    Dft,
+    Idft,
+    _dft_kernel,
+    _idft_kernel,
+    _is_complex,
+    _prefixed,
+    _unprefixed,
+)
 from dascore.utils.transformatter import FourierTransformatter
 
 
@@ -40,9 +53,9 @@ def _get_dim_freq_range_from_kwargs(patch, kwargs):
     return dim, freq_range
 
 
-def _get_amp_envelope(fft_patch, axis, window_len, water_level):
+def _get_amp_envelope(data, axis, window_len, water_level):
     """Get a smoothed amplitude envelope."""
-    amp = np.abs(fft_patch.data)
+    amp = np.abs(data)
     # Uniform filter is *much* faster than convolve
     uni = uniform_filter1d(amp, window_len, axis=axis, mode="wrap")
     if water_level is not None:
@@ -78,13 +91,7 @@ def _check_freq_range(fft_coord, freq_range):
         raise ParameterError(msg)
 
 
-@patch_function()
-def whiten(
-    patch: PatchType,
-    smooth_size: float | None = None,
-    water_level: float | None = None,
-    **kwargs,
-) -> PatchType:
+class Whiten(PatchProcessor):
     """
     Spectral whitening of a signal.
 
@@ -94,8 +101,6 @@ def whiten(
 
     Parameters
     ----------
-    patch
-        The patch to transform.
     smooth_size
         Size in transformed domain units (eg Hz) or samples of moving average
         window, used to compute the spectrum before whitening.
@@ -137,27 +142,52 @@ def whiten(
     >>> # Whitening along distance with amplitude smoothing (0.1/m))
     >>> white_patch = patch.whiten(smooth_size=0.1, distance=None)
     """
-    dim, freq_range = _get_dim_freq_range_from_kwargs(patch, kwargs)
-    fft_dim = FourierTransformatter().rename_dims(dim)[0]
-    # Get frequency domain patch
-    fft_patch = patch.dft(dim, real=np.isrealobj(patch.data))
-    input_patch_fft = fft_patch is patch  # if input patch had fft
-    fft_coord = fft_patch.get_coord(fft_dim)
-    # Get amplitude spectra if smoothing, otherwise use ones.
-    if smooth_size is None:
-        amp = np.ones_like(fft_patch.data)
-    else:
-        _check_smooth(fft_coord, smooth_size, water_level)
-        axis = fft_patch.get_axis(fft_dim)
-        window_len = fft_coord.get_sample_count(smooth_size, enforce_lt_coord=True)
-        amp = _get_amp_envelope(fft_patch, axis, window_len, water_level)
-    # Init new output from new amplitudes and old phases.
-    out = fft_patch.new(data=amp * np.exp(1j * np.angle(fft_patch.data)))
-    # Apply band-limited taper to remove some frequencies.
-    if freq_range:
-        _check_freq_range(fft_coord, freq_range)
-        out = out.taper_range.func(out, **{fft_dim: freq_range})
-    # Convert back to time domain if input was in time-domain.
-    if not input_patch_fft:
-        out = out.idft()
-    return out
+
+    smooth_size: Any = None
+    water_level: Any = None
+
+    model_config = ConfigDict(extra="allow")
+
+    def get_metadata(self, meta):
+        """Return the whitened metadata, and the transforms, smoothing and taper."""
+        smooth_size, water_level = self.smooth_size, self.water_level
+        dim, freq_range = _get_dim_freq_range_from_kwargs(meta, self.model_extra or {})
+        fft_dim = FourierTransformatter().rename_dims(dim)[0]
+        # Get frequency domain metadata; none if the input is transformed.
+        dft = Dft(dim=dim, real=not _is_complex(meta.dtype))
+        out, dft_plan = dft.get_metadata(meta)
+        transform = out is not meta
+        fft_coord = out.get_coord(fft_dim)
+        plan = {"transform": transform, "axis": out.get_axis(fft_dim)}
+        plan |= {"window": None, "env": None, **_prefixed("dft_", dft_plan)}
+        # Smoothed amplitude spectra if smoothing, otherwise ones.
+        if smooth_size is not None:
+            _check_smooth(fft_coord, smooth_size, water_level)
+            count = fft_coord.get_sample_count(smooth_size, enforce_lt_coord=True)
+            plan["window"] = int(count)
+        # Apply band-limited taper to remove some frequencies.
+        if freq_range:
+            _check_freq_range(fft_coord, freq_range)
+            taper = TaperRange(**{fft_dim: freq_range})
+            plan["env"] = taper.get_metadata(out)[1]["env"]
+        # Convert back to time domain if input was in time-domain.
+        if transform:
+            out, idft_plan = Idft().get_metadata(out)
+            plan |= _prefixed("idft_", idft_plan)
+        return out, plan
+
+    def numpy_kernel(self, data, *, transform, axis, window, env, **plan):
+        """Return the data with flattened amplitudes and their phases kept."""
+        if transform:
+            data = _dft_kernel(data, np, nft, cast=False, **_unprefixed("dft_", plan))
+        if window is None:
+            amp = np.ones_like(data)
+        else:
+            amp = _get_amp_envelope(data, axis, window, self.water_level)
+        # New amplitudes, old phases.
+        data = amp * np.exp(1j * np.angle(data))
+        if env is not None:
+            data = _scale_by(data, env)
+        if transform:
+            data = _idft_kernel(data, **_unprefixed("idft_", plan))
+        return data

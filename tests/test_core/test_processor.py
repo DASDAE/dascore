@@ -1136,7 +1136,7 @@ class TestRegisterKernelForms:
 
         assert SeamKernelNamed.kernel_for("named_backend") is _named
 
-    @pytest.mark.parametrize("name", ["no_such_operation_here", "where"])
+    @pytest.mark.parametrize("name", ["no_such_operation_here", "waterfall"])
     def test_a_name_with_no_processor_is_refused(self, name):
         """An unknown tag, or a patch function with no class, has no kernels."""
         with pytest.raises(ParameterError, match=name):

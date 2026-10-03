@@ -6,6 +6,7 @@ import pytest
 import dascore as dc
 from dascore import get_example_patch
 from dascore.exceptions import ParameterError
+from dascore.proc.whiten import Whiten
 from dascore.units import Hz
 
 
@@ -233,3 +234,20 @@ class TestWhiten:
 
     def test_helpful_error_message(self, random_patch):
         """Ensure helpful error message is used when a bad kwarg is passed."""
+
+
+class TestWhitenMetadata:
+    """Whiten works out its result from metadata alone."""
+
+    def test_single_precision(self, random_patch):
+        """Single precision data come back double, as numpy's transform gives."""
+        patch = random_patch.new(data=np.asarray(random_patch.data, np.float32))
+        out, _ = Whiten(smooth_size=5).get_metadata(patch.drop_data())
+        assert out.shape == (300, 2000)
+        assert out.dtype == patch.whiten(smooth_size=5).dtype == np.float64
+
+    def test_water_level_raises_the_floor(self, random_patch):
+        """A water level changes the smoothed spectrum it divides by."""
+        plain = random_patch.whiten(smooth_size=5)
+        floored = random_patch.whiten(smooth_size=5, water_level=0.5)
+        assert not np.allclose(plain.data, floored.data)

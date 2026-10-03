@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-from typing import get_args
+from typing import Any, get_args
 
 import numpy as np
 
 import dascore as dc
 from dascore.constants import (
-    ENRICH_CONFLICT,
     INVENTORY_ATTRS,
-    ON_MISSING,
-    PatchType,
     enrich_attrs_description,
     enrich_conflict_description,
     enrich_coords_description,
@@ -34,10 +31,10 @@ from dascore.core._spool_inventory import (
 from dascore.core.coords import BaseCoord, get_coord
 from dascore.core.inventory import (
     Interrogator,
-    Inventory,
     ResolvedContext,
     axis_columns,
 )
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import (
     InvalidInventoryError,
     ParameterError,
@@ -47,7 +44,6 @@ from dascore.exceptions import (
 from dascore.utils.attrs import _is_missing
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate, validate_acquisition_key, warn_or_raise
-from dascore.utils.patch import patch_function
 from dascore.utils.time import to_datetime64
 
 
@@ -420,24 +416,13 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
     return out
 
 
-@patch_function()
 @compose_docstring(
     attrs_desc=enrich_attrs_description,
     coords_desc=enrich_coords_description,
     on_missing_desc=enrich_on_missing_description,
     conflict_desc=enrich_conflict_description,
 )
-def enrich(
-    patch: PatchType,
-    inventory: Inventory,
-    *,
-    attrs: bool | tuple[str, ...] = True,
-    coords: bool | tuple[str, ...] = True,
-    acquisition_key: str | None = None,
-    time=None,
-    on_missing: ON_MISSING = "raise",
-    conflict: ENRICH_CONFLICT = "raise",
-) -> PatchType:
+class Enrich(PatchProcessor):
     """
     Copy inventory metadata onto a patch.
 
@@ -448,8 +433,6 @@ def enrich(
 
     Parameters
     ----------
-    patch
-        The patch to enrich.
     inventory
         The inventory to resolve against.
     {attrs_desc}
@@ -477,32 +460,39 @@ def enrich(
     ...     inventory, attrs=("gauge_length",), coords=("x", "y", "z"),
     ... )
     """
-    validate_enrich_conflict(conflict)
-    if on_missing not in VALID_ON_MISSING:
-        msg = f"on_missing must be one of {VALID_ON_MISSING}, got {on_missing!r}."
-        raise ParameterError(msg)
-    validate_enrich_selection(attrs, coords)
-    source_id = _get_acquisition_key(patch, acquisition_key)
-    times = _get_resolution_times(patch, time)
-    context = _resolve_context(inventory, source_id, times)
-    new_attrs = _get_attr_values(inventory, context, attrs, on_missing)
-    updates, drops = _apply_conflict(patch, new_attrs, conflict)
-    new_coords = {}
-    if coords is not False:
-        new_coords = _get_coords(inventory, context, patch, coords, on_missing)
-    out = patch
-    if drops:
-        out = out.new(attrs=dc.PatchAttrs.from_dict(dict(out.attrs)).drop(*drops))
-    if updates:
-        out = out.update_attrs(**updates)
-    if new_coords:
-        # The raw function: enrich is the operation worth recording, and the
-        # nested entry would paste a rendered repr of every added coordinate
-        # into the history of every patch enriched.
-        # Through the class rather than the module: the method is written
-        # in `PatchMeta`, and `raw_function` is the operation without this
-        # call's history. ty does not see attributes attached at import.
-        out = dc.PatchMeta.update_coords.raw_function(  # ty: ignore[unresolved-attribute]
-            out, **new_coords
-        )
-    return out
+
+    inventory: Any
+    attrs: Any = True
+    coords: Any = True
+    acquisition_key: Any = None
+    time: Any = None
+    on_missing: Any = "raise"
+    conflict: Any = "raise"
+
+    _positional_fields = ("inventory",)
+
+    def get_metadata(self, meta):
+        """Return the metadata with the inventory's attrs and coordinates."""
+        inventory, attrs, coords = self.inventory, self.attrs, self.coords
+        on_missing = self.on_missing
+        validate_enrich_conflict(self.conflict)
+        if on_missing not in VALID_ON_MISSING:
+            msg = f"on_missing must be one of {VALID_ON_MISSING}, got {on_missing!r}."
+            raise ParameterError(msg)
+        validate_enrich_selection(attrs, coords)
+        source_id = _get_acquisition_key(meta, self.acquisition_key)
+        times = _get_resolution_times(meta, self.time)
+        context = _resolve_context(inventory, source_id, times)
+        new_attrs = _get_attr_values(inventory, context, attrs, on_missing)
+        updates, drops = _apply_conflict(meta, new_attrs, self.conflict)
+        new_coords = {}
+        if coords is not False:
+            new_coords = _get_coords(inventory, context, meta, coords, on_missing)
+        out = meta
+        if drops:
+            out = out.new(attrs=dc.PatchAttrs.from_dict(dict(out.attrs)).drop(*drops))
+        if updates:
+            out = out.update_attrs(**updates)
+        if new_coords:
+            out = out.new(coords=out.coords.update(**new_coords))
+        return out, {}

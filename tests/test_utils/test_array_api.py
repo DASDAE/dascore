@@ -8,11 +8,13 @@ from contextlib import contextmanager
 from typing import NamedTuple
 
 import numpy as np
+import pandas as pd
 import pytest
 from scipy.signal import hilbert as sp_hilbert
 
 import dascore as dc
 from dascore.core.coords import concat_coords
+from dascore.examples import inventory_patch_pair
 from dascore.utils.array_api import (
     array_namespace,
     asarray_like,
@@ -147,14 +149,6 @@ class TestPatchBackends:
             out = patch.squeeze()
         assert backend_name(out.data) == backend
         assert "distance" not in out.dims
-
-    def test_numpy_only_function_does_not_warn(self, backend_patch):
-        """Nothing converts or warns for a plain numpy-only function."""
-        # stalta is not a processor; its rolling means go through numpy or
-        # pandas, which give numpy back.
-        with warnings_as_errors():
-            out = backend_patch.stalta(time=(0.01, 0.1))
-        assert out.shape == backend_patch.shape
 
     def test_numpy_kernel_falls_back_with_a_warning(self, backend_patch):
         """A processor's numpy kernel runs on numpy copies, and says so."""
@@ -452,6 +446,16 @@ def _windowed(patch):
     return patch.stft(time=64, samples=True)
 
 
+def _with_xyz(patch):
+    """Return the patch with an x coordinate along distance."""
+    return patch.update_coords(x=("distance", np.arange(patch.shape[0]) * 2.0))
+
+
+def _acquired(patch):
+    """Return the patch named by the example inventory's acquisition."""
+    return patch.update_attrs(acquisition_key="DAS.R2D1..RAW")
+
+
 def _holed(patch):
     """Return the first 190 times of the patch with ten samples missing."""
     coord = patch.get_coord("time")
@@ -542,6 +546,23 @@ _CONVERTED = {
     "spectral_entropy": (lambda p: p.spectral_entropy(), _spectrum),
     "spectral_kurtosis": (lambda p: p.spectral_kurtosis(), _spectrum),
     "spectral_flatness": (lambda p: p.spectral_flatness(), _spectrum),
+    "where": (lambda p: p.where(np.asarray(p.data) > 0.5), None),
+    "dropna": (lambda p: p.dropna("time"), _signed),
+    "add_distance_to": (lambda p: p.add_distance_to(pd.Series({"x": 1.0})), _with_xyz),
+    "enrich": (lambda p: p.enrich(inventory_patch_pair()[1]), _acquired),
+    "stalta": (lambda p: p.stalta(time=(5, 20), samples=True), None),
+    "fbe": (lambda p: p.fbe(time=(10, 50), window=0.1), None),
+    "correlate": (lambda p: p.correlate(distance=2, samples=True), None),
+    "whiten": (lambda p: p.whiten(smooth_size=5), None),
+    "slope_filter": (lambda p: p.slope_filter(filt=[2e3, 2.2e3, 8e3, 2e4]), None),
+    "tau_p": (
+        lambda p: p.isel(time=slice(0, 50)).tau_p(np.arange(1e3, 3e3, 5e2)),
+        None,
+    ),
+    "dispersion_phase_shift": (
+        lambda p: p.dispersion_phase_shift(np.arange(100.0, 1500.0, 100.0)),
+        None,
+    ),
 }
 
 
@@ -576,6 +597,13 @@ _NUMPY_ONLY = {
     "spectral_entropy",
     "spectral_kurtosis",
     "spectral_flatness",
+    "dropna",
+    "stalta",
+    "fbe",
+    "correlate",
+    "whiten",
+    "tau_p",
+    "dispersion_phase_shift",
 }
 
 

@@ -39,6 +39,7 @@ from dascore.exceptions import (
 )
 from dascore.units import get_quantity
 from dascore.utils.array_api import (
+    array_namespace,
     asarray_like,
     backend_name,
     is_foreign,
@@ -1348,6 +1349,71 @@ def align_patch_coords(
     out1 = patch1.new(data=array1, coords=coord1)
     out2 = patch2.new(data=array2, coords=coord2)
     return out1, out2
+
+
+def _align_metadata(meta1: dc.PatchMeta, meta2: dc.PatchMeta):
+    """
+    Return two patches' metadata aligned as `align_patch_coords` aligns them.
+
+    Also return, for each, the step which aligns its array: the shape it is
+    reshaped to, the axes it is then permuted by, and the indexer applied
+    last (None for none); the step itself is None when nothing changes.
+    """
+    check_kind(meta1, meta2)
+    if meta1.coords == meta2.coords:
+        return meta1, meta2, None, None
+    shared_dims = set(meta1.dims) & set(meta2.dims)
+    if not shared_dims:
+        msg = (
+            "Cannot align patches with no shared dimensions. Dimensions are "
+            f"patch1: {meta1.dims}, patch2: {meta2.dims}"
+        )
+        raise PatchCoordinateError(msg)
+    dims = _merge_tuples(meta1.dims, meta2.dims)
+    managers, steps = [], []
+    for meta in (meta1, meta2):
+        added = {x: (x, 1) for x in dims if x not in meta.dims}
+        cm = meta.coords.update(**added) if added else meta.coords
+        steps.append((cm.shape, tuple(cm.dims.index(x) for x in dims)))
+        managers.append(cm.transpose(*dims))
+    indexers: list[list[Any]] = [[slice(None)] * len(dims) for _ in range(2)]
+    new_coords: list[dict] = [{}, {}]
+    for dim in shared_dims:
+        coord1, coord2 = (x.coord_map[dim] for x in managers)
+        if coord1 == coord2:
+            continue
+        ncoord1, ncoord2, sli1, sli2 = coord1.align_to(coord2)
+        if not len(ncoord1):
+            msg = (
+                f"Cannot align patches: they share no values along dimension "
+                f"{dim!r} ({coord1.min()} to {coord1.max()} and "
+                f"{coord2.min()} to {coord2.max()})."
+            )
+            raise PatchCoordinateError(msg)
+        axis = dims.index(dim)
+        new_coords[0][dim], new_coords[1][dim] = ncoord1, ncoord2
+        indexers[0][axis], indexers[1][axis] = sli1, sli2
+    out = []
+    for meta, cm, step, new, index in zip(
+        (meta1, meta2), managers, steps, new_coords, indexers
+    ):
+        indexer = tuple(index) if any(new_coords) else None
+        out.append((meta.new(coords=cm.update(**new)), (*step, indexer)))
+    (out1, step1), (out2, step2) = out
+    return out1, out2, step1, step2
+
+
+def _apply_alignment(data, steps):
+    """Return an array put through the steps `_align_metadata` gave for it."""
+    xp = array_namespace(data)
+    for step in steps:
+        if step is None:
+            continue
+        shape, axes, indexer = step
+        data = xp.permute_dims(xp.reshape(data, shape), axes)
+        if indexer is not None:
+            data = _apply_union_indexers(indexer, data)
+    return data
 
 
 def get_patch_kind(patch: dc.PatchMeta | dc.PatchAttrs) -> FrozenDict:

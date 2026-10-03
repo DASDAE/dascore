@@ -2,33 +2,23 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from typing import Any
 
 import numpy as np
 import numpy.fft as nft
 
-from dascore.constants import PatchType
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
-from dascore.utils.patch import patch_function
+from dascore.proc.coords import Transpose
+from dascore.proc.units import ConvertUnits, SetUnits
 
 
-@patch_function(
-    required_dims=("time", "distance"), data_type="dispersion", version="1.1"
-)
-def dispersion_phase_shift(
-    patch: PatchType,
-    phase_velocities: Sequence[float],
-    approx_resolution: float | None = None,
-    approx_freq: tuple[float, float] | None = None,
-) -> PatchType:
+class DispersionPhaseShift(PatchProcessor):
     """
     Compute dispersion images using the phase-shift method.
 
     Parameters
     ----------
-    patch
-        Patch to transform. Has to have dimensions of time and distance.
-        It also needs to be right-sided (see notes below).
     phase_velocities
         NumPy array of positive velocities, monotonically increasing, for
         which the dispersion will be computed.
@@ -83,12 +73,77 @@ def dispersion_phase_shift(
 
     ```
     """
-    patch_cop = patch.convert_units(distance="m").transpose("distance", "time")
-    dist = patch_cop.coords.get_array("distance")
-    time = patch_cop.coords.get_array("time")
 
-    dt = (time[1] - time[0]) / np.timedelta64(1, "s")
+    __version__ = "1.1"
+    phase_velocities: Any
+    approx_resolution: Any = None
+    approx_freq: Any = None
 
+    required_dims = ("time", "distance")
+    data_type = "dispersion"
+
+    def get_metadata(self, meta):
+        """Return the image's metadata, and the frequencies the kernel keeps."""
+        phase_velocities = self.phase_velocities
+        approx_resolution, approx_freq = self.approx_resolution, self.approx_freq
+        meta_cop, _ = ConvertUnits(distance="m").get_metadata(meta)
+        meta_cop, transpose = Transpose(dims=("distance", "time")).get_metadata(
+            meta_cop
+        )
+        dist = meta_cop.coords.get_array("distance")
+        time = meta_cop.coords.get_array("time")
+        dt = (time[1] - time[0]) / np.timedelta64(1, "s")
+        approx_min_freq, approx_max_freq = _frequency_range(
+            phase_velocities, approx_resolution, approx_freq, dt
+        )
+        nt = time.size
+        fs = 1 / dt
+        nf = int(fs / approx_resolution) if approx_resolution else nt
+        w = 2 * np.pi * (np.arange(nf) * fs / nf)
+        first_live_f = np.argmax(w >= 2 * np.pi * approx_min_freq)
+        last_live_f = np.argmax(w >= 2 * np.pi * approx_max_freq)
+        w = w[first_live_f:last_live_f]
+        nlivef = last_live_f - first_live_f
+        if nlivef < 1:
+            msg = "Combination of frequency resolution and range is not an array"
+            raise ParameterError(msg)
+        attrs = meta.attrs.update(category="dispersion")
+        coords = dict(velocity=phase_velocities, frequency=w / (2 * np.pi))
+        dims = ["velocity", "frequency"]
+        out = meta.new(coords=coords, attrs=attrs, dims=dims, dtype=np.float64)
+        out, _ = SetUnits(velocity="m/s", frequency="Hz").get_metadata(out)
+        return out, {
+            "axes": transpose.get("axes"),
+            "nf": nf,
+            # Pad to a multiple of nf and decimate the bins so no sample is dropped.
+            "step": -(-nt // nf),
+            "live": slice(int(first_live_f), int(last_live_f)),
+            "dist": dist,
+            "w": w,
+        }
+
+    def numpy_kernel(self, data, *, axes, nf, step, live, dist, w):
+        """Return the normalized phase-shift stack of each velocity and frequency."""
+        data = data if axes is None else np.permute_dims(data, axes)
+        nchan = dist.size
+        fft_d = np.zeros((nchan, nf), dtype=complex)
+        for i in range(nchan):
+            fft_d[i] = nft.fft(data[i, :], n=nf * step)[::step]
+        fft_d = np.divide(
+            fft_d, abs(fft_d), out=np.zeros_like(fft_d), where=abs(fft_d) != 0
+        )
+        fft_d[np.isnan(fft_d)] = 0
+        fft_d = fft_d[:, live]
+        phase_velocities = self.phase_velocities
+        fc = np.zeros(shape=(np.size(phase_velocities), w.size))
+        preamb = 1j * np.outer(dist, w)
+        for ci in range(np.size(phase_velocities)):
+            fc[ci, :] = abs(sum(np.exp(preamb / phase_velocities[ci]) * fft_d))
+        return fc / nchan
+
+
+def _frequency_range(phase_velocities, approx_resolution, approx_freq, dt):
+    """Check the arguments, and return the frequency range to image."""
     if not np.all(np.diff(phase_velocities) > 0):
         raise ParameterError(
             "Velocities for dispersion must be monotonically increasing"
@@ -117,48 +172,4 @@ def dispersion_phase_shift(
         if approx_min_freq >= 0.5 / dt or approx_max_freq >= 0.5 / dt:
             msg = "Frequency range cannot exceed Nyquist"
             raise ParameterError(msg)
-
-    nchan = dist.size
-    nt = time.size
-    assert (nchan, nt) == patch_cop.data.shape
-
-    fs = 1 / dt
-    nf = int(fs / approx_resolution) if approx_resolution else nt
-    f = np.arange(nf) * fs / nf
-
-    nv = np.size(phase_velocities)
-    w = 2 * np.pi * f
-    # Pad to a multiple of nf and decimate the bins so no sample is dropped.
-    step = -(-nt // nf)
-    fft_d = np.zeros((nchan, nf), dtype=complex)
-    for i in range(nchan):
-        fft_d[i] = nft.fft(patch_cop.data[i, :], n=nf * step)[::step]
-
-    fft_d = np.divide(
-        fft_d, abs(fft_d), out=np.zeros_like(fft_d), where=abs(fft_d) != 0
-    )
-
-    fft_d[np.isnan(fft_d)] = 0
-
-    first_live_f = np.argmax(w >= 2 * np.pi * approx_min_freq)
-    last_live_f = np.argmax(w >= 2 * np.pi * approx_max_freq)
-    w = w[first_live_f:last_live_f]
-    fft_d = fft_d[:, first_live_f:last_live_f]
-    nlivef = last_live_f - first_live_f
-
-    if nlivef < 1:
-        msg = "Combination of frequency resolution and range is not an array"
-        raise ParameterError(msg)
-
-    fc = np.zeros(shape=(nv, nlivef))
-    preamb = 1j * np.outer(dist, w)
-    for ci in range(nv):
-        fc[ci, :] = abs(sum(np.exp(preamb / phase_velocities[ci]) * fft_d))
-
-    attrs = patch.attrs.update(category="dispersion")
-    coords = dict(velocity=phase_velocities, frequency=w / (2 * np.pi))
-
-    disp_patch = patch.new(
-        data=fc / nchan, coords=coords, attrs=attrs, dims=["velocity", "frequency"]
-    )
-    return disp_patch.set_units(velocity="m/s", frequency="Hz")
+    return approx_min_freq, approx_max_freq

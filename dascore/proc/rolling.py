@@ -11,6 +11,7 @@ import pandas as pd
 import dascore as dc
 from dascore.constants import samples_arg_description
 from dascore.exceptions import ParameterError
+from dascore.proc.coords import Squeeze
 from dascore.utils.docs import compose_docstring
 from dascore.utils.identity import operation_context, stamp, try_operation_id
 from dascore.utils.patch import (
@@ -111,31 +112,7 @@ class _NumpyPatchRoller(_PatchRollerInfo):
 
         This only applies for numpy engine.
         """
-        wsize = self.window - 1
-        out = np.ceil(wsize / self.step) * self.step - wsize
-        return int(out)
-
-    def _pad_roll_array(self, data):
-        """
-        Pad the reduced array with NaNs and align it to the output coordinate.
-
-        The NaNs go at the start of the axis, except when centering, which
-        moves `num_nans // 2` of them to the end. This is done with a single
-        allocation rather than a pad followed by a roll.
-        """
-        num_nans = 1 + (self.window - 2) // self.step
-        if not num_nans:  # window of one sample; nothing to pad.
-            return data
-        shape = list(data.shape)
-        shape[self.axis] += num_nans
-        out = np.full(shape, np.nan, dtype=data.dtype)
-        start = num_nans - num_nans // 2 if self.center else num_nans
-        slicer = [slice(None, None)] * len(shape)
-        slicer[self.axis] = slice(start, start + data.shape[self.axis])
-        out[tuple(slicer)] = data
-        if self.step == 1:
-            assert out.shape == self.patch.data.shape
-        return out
+        return _start_index(self.window, self.step)
 
     @compose_docstring(apply_description=rolling_apply_description)
     def apply(self, function, *args, **kwargs):
@@ -146,23 +123,16 @@ class _NumpyPatchRoller(_PatchRollerInfo):
         -----
         The provided function must accept an ``axis`` argument.
         """
-        # TODO look at replacing this with a call to `as_strided` that
-        # accounts for strides.
-        slide_view = np.lib.stride_tricks.sliding_window_view(
+        out = _rolling_numpy(
             self.patch.data,
-            self.window,
-            self.axis,
+            function,
+            window=self.window,
+            step=self.step,
+            axis=self.axis,
+            center=self.center,
+            args=args,
+            kwargs=kwargs,
         )
-        # get slice to account for step (stride)
-        step_slice = [slice(None, None)] * len(self.patch.data.shape)
-        step_slice.append(slice(None, None))
-        # this accounts for NaNs that pad the start of the array.
-        start = self.get_start_index()
-        step_slice[self.axis] = slice(start, None, self.step)
-        # apply function, then pad with NaNs and roll
-        trimmed_slide_view = slide_view[tuple(step_slice)]
-        raw = function(trimmed_slide_view, *args, axis=-1, **kwargs)
-        out = self._pad_roll_array(np.asarray(raw, dtype=np.float64))
         return self._new_patch(out, function, args, kwargs)
 
     def mean(self):
@@ -193,47 +163,26 @@ class _NumpyPatchRoller(_PatchRollerInfo):
 class _PandasPatchRoller(_PatchRollerInfo):
     """A class to apply pandas rolling operations."""
 
-    def _get_df(self) -> pd.DataFrame:
-        """Get the dataframe from patch data."""
-        if len(self.patch.dims) > 2:
-            msg = "Cannot use Pandas engine on patches with more than 2 dims."
-            raise ParameterError(msg)
-        df = pd.DataFrame(self.patch.data)
-        return df
-
-    def _get_rolling(self):
-        """Get rolling."""
-        df = self._get_df()
-        roll = rolling_df(
-            df=df,
+    def _call_rolling_func(self, name, *args, **kwargs):
+        """Helper function for calling a rolling function."""
+        data = _rolling_pandas(
+            self.patch.data,
+            name,
             window=self.window,
             step=self.step,
             axis=self.axis,
             center=self.center,
+            args=args,
+            kwargs=kwargs,
         )
-        return roll
-
-    def _repack_patch(self, df, func_or_str, args=(), kwargs=None):
-        """Repack patch into dataframe."""
-        data = df.values if not self.axis else df.T.values
-        # get rid of extra dims if original data doesn't have them.
-        if len(data.shape) != len(self.patch.data.shape):
-            data = np.squeeze(data)
-        return self._new_patch(data, func_or_str, args, kwargs)
-
-    def _call_rolling_func(self, name, *args, **kwargs):
-        """Helper function for calling a rolling function."""
-        rolling = self._get_rolling()
-        df = getattr(rolling, name)(*args, **kwargs)
-        return self._repack_patch(df, name, args, kwargs)
+        return self._new_patch(data, name, args, kwargs)
 
     @compose_docstring(apply_description=rolling_apply_description)
     def apply(self, function, *args, **kwargs):
         """
         {apply_description}
         """
-        df = self._get_rolling().apply(function, args=args, kwargs=kwargs)
-        return self._repack_patch(df, function, args, kwargs)
+        return self._call_rolling_func(function, *args, **kwargs)
 
     def mean(self):
         """Apply mean."""
@@ -258,6 +207,57 @@ class _PandasPatchRoller(_PatchRollerInfo):
     def sum(self):
         """Apply sum to moving window."""
         return self._call_rolling_func(name="sum")
+
+
+def _start_index(window, step) -> int:
+    """Return where the numpy engine's first stepped window starts."""
+    wsize = window - 1
+    return int(np.ceil(wsize / step) * step - wsize)
+
+
+def _rolling_numpy(data, function, *, window, step, axis, center, args, kwargs):
+    """Return a function of each window, padded with NaN as `rolling` pads it."""
+    # TODO look at replacing this with a call to `as_strided` that
+    # accounts for strides.
+    slide_view = np.lib.stride_tricks.sliding_window_view(data, window, axis)
+    # get slice to account for step (stride); the start accounts for the
+    # NaNs which pad the start of the array.
+    step_slice = [slice(None, None)] * (data.ndim + 1)
+    step_slice[axis] = slice(_start_index(window, step), None, step)
+    raw = function(slide_view[tuple(step_slice)], *args, axis=-1, **kwargs)
+    reduced = np.asarray(raw, dtype=np.float64)
+    # Pad the reduced array with NaNs, aligned to the output coordinate.
+    # The NaNs go at the start of the axis, except when centering, which
+    # moves `num_nans // 2` of them to the end. This is done with a single
+    # allocation rather than a pad followed by a roll.
+    num_nans = 1 + (window - 2) // step
+    if not num_nans:  # window of one sample; nothing to pad.
+        return reduced
+    shape = list(reduced.shape)
+    shape[axis] += num_nans
+    out = np.full(shape, np.nan, dtype=reduced.dtype)
+    first = num_nans - num_nans // 2 if center else num_nans
+    slicer = [slice(None, None)] * len(shape)
+    slicer[axis] = slice(first, first + reduced.shape[axis])
+    out[tuple(slicer)] = reduced
+    return out
+
+
+def _rolling_pandas(data, function, *, window, step, axis, center, args, kwargs):
+    """Return pandas' rolling `function` (a name or a callable) of the data."""
+    if data.ndim > 2:
+        msg = "Cannot use Pandas engine on patches with more than 2 dims."
+        raise ParameterError(msg)
+    roll = rolling_df(
+        df=pd.DataFrame(data), window=window, step=step, axis=axis, center=center
+    )
+    if callable(function):
+        df = roll.apply(function, args=args, kwargs=kwargs)
+    else:
+        df = getattr(roll, function)(*args, **kwargs)
+    out = df.values if not axis else df.T.values
+    # get rid of extra dims if original data doesn't have them.
+    return np.squeeze(out) if out.ndim != data.ndim else out
 
 
 @compose_docstring(sample_explanation=samples_arg_description)
@@ -332,16 +332,6 @@ def rolling(
     >>> # drop nan at the start of the time axis.
     >>> out = mean_patch.dropna("time")
     """
-
-    def _get_engine(step, engine, patch):
-        """Get the engine."""
-        engines = {"numpy": _NumpyPatchRoller, "pandas": _PandasPatchRoller}
-        if cls := engines.get(engine):
-            return cls
-        if step < 10 and len(patch.squeeze().dims) < 2:
-            return _PandasPatchRoller
-        return _NumpyPatchRoller
-
     resolved = resolve_window(
         patch,
         kwargs,
@@ -356,7 +346,13 @@ def rolling(
     step = None if resolved.stride is None else resolved.stride[0]
     # No overlap or step given means every sample gets a window.
     step = 1 if step is None else step
-    cls = _get_engine(step, engine, patch)
+    engines = {"numpy": _NumpyPatchRoller, "pandas": _PandasPatchRoller}
+    # Read from the metadata alone, so an operation can roll metadata too.
+    if (cls := engines.get(engine)) is None:
+        meta = patch.drop_data() if isinstance(patch, dc.Patch) else patch
+        squeezed = Squeeze().get_metadata(meta)[0]
+        pandas = step < 10 and len(squeezed.dims) < 2
+        cls = _PandasPatchRoller if pandas else _NumpyPatchRoller
     roll_hist = (
         f"rolling({dim}={value}, step={step}, overlap={overlap}, "
         f"center={center}, engine={engine})"

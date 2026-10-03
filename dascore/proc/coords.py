@@ -34,7 +34,6 @@ from dascore.utils.misc import (
 from dascore.utils.patch import (
     drop_associated_coords,
     get_dim_axis_value,
-    patch_function,
 )
 
 
@@ -1343,10 +1342,7 @@ class Squeeze(PatchProcessor):
         return array_namespace(data).squeeze(data, axis=axes)
 
 
-@patch_function()
-def add_distance_to(
-    patch: PatchType, origin: pd.Series, ord=None, prefix: str = "origin"
-) -> PatchType:
+class AddDistanceTo(PatchProcessor):
     """
     Calculate the distance to "origin" and create new coordinate.
 
@@ -1358,9 +1354,6 @@ def add_distance_to(
 
     Parameters
     ----------
-    patch
-        The patch object which contains some overlap in coordinates as
-        index names in origin.
     origin
         A series which contains index names that overlap with patch coordinates.
         All the referenced coordinates must be associated with the same
@@ -1388,31 +1381,37 @@ def add_distance_to(
     >>> # Of course, the new coordinate can be used for sorting.
     >>> sorted_patch = patch_with_origin_dist.sort_coords("origin_distance")
     """
-    # Ensure all index values are represented in coord map.
-    if missing_coords := (set(origin.index) - set(patch.coords.coord_map)):
-        msg = f"Indices {missing_coords} are not patch coordinates."
-        raise PatchError(msg)
-    # Ensure all coordinates have the same associated dimension.
-    associated_dims = {patch.coords.dim_map[x] for x in origin.index}
-    if len(associated_dims) > 1:
-        dims = {i: v for i, v in patch.coords.dim_map.items() if i in origin.index}
-        msg = (
-            "All coordinate must be associated with the same dimension to "
-            f"calculate distance. Relevant dimension mappings are {dims}"
-        )
-        raise PatchError(msg)
-    # Create 2d arrays from coords and origin.
-    coord_array = np.stack([patch.get_array(x) for x in origin.index], axis=1)
-    origin_array = np.atleast_2d(origin.values)
-    # Translate coords to origin and take norm.
-    distance = np.linalg.norm(origin_array - coord_array, axis=1, ord=ord)
-    # Add attrs and coords to new patch
-    dims = next(iter(associated_dims))
-    new_coords = {f"{prefix}_{i}": (None, np.atleast_1d(v)) for i, v in origin.items()}
-    new_coords[f"{prefix}_distance"] = (dims, distance)
-    # The coordinates directly rather than `update_coords`: adding them is
-    # part of this operation, not a second one to record under its own name.
-    return patch.new(coords=patch.coords.update(**new_coords))
+
+    origin: Any
+    ord: Any = None
+    prefix: Any = "origin"
+
+    def get_metadata(self, meta):
+        """Return the metadata with the distance and origin coordinates added."""
+        origin, coords = self.origin, meta.coords
+        # Ensure all index values are represented in coord map.
+        if missing_coords := (set(origin.index) - set(coords.coord_map)):
+            msg = f"Indices {missing_coords} are not patch coordinates."
+            raise PatchError(msg)
+        # Ensure all coordinates have the same associated dimension.
+        associated_dims = {coords.dim_map[x] for x in origin.index}
+        if len(associated_dims) > 1:
+            dims = {i: v for i, v in coords.dim_map.items() if i in origin.index}
+            msg = (
+                "All coordinate must be associated with the same dimension to "
+                f"calculate distance. Relevant dimension mappings are {dims}"
+            )
+            raise PatchError(msg)
+        # Create 2d arrays from coords and origin.
+        coord_array = np.stack([coords.get_array(x) for x in origin.index], axis=1)
+        origin_array = np.atleast_2d(origin.values)
+        # Translate coords to origin and take norm.
+        distance = np.linalg.norm(origin_array - coord_array, axis=1, ord=self.ord)
+        dims = next(iter(associated_dims))
+        prefix = self.prefix
+        new = {f"{prefix}_{i}": (None, np.atleast_1d(v)) for i, v in origin.items()}
+        new[f"{prefix}_distance"] = (dims, distance)
+        return meta.new(coords=coords.update(**new)), {}
 
 
 def get_axis(self: PatchType, dim: str) -> int:

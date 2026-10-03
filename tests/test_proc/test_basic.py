@@ -18,8 +18,9 @@ from dascore.exceptions import (
     IncompatiblePatchError,
     ParameterError,
     PatchBroadcastError,
+    PatchCoordinateError,
 )
-from dascore.proc.basic import Pad
+from dascore.proc.basic import Pad, Where
 from dascore.utils.misc import _merge_tuples
 from dascore.warnings import NumpyFallbackWarning
 
@@ -1577,3 +1578,41 @@ class TestDemean:
         assert np.isnan(out.data).sum() == 1
         means = np.nanmean(out.data, axis=out.get_axis(dim))
         assert np.allclose(means, 0)
+
+
+class TestWhereMetadata:
+    """Where works out the aligned result from metadata alone."""
+
+    def test_partial_condition(self, random_patch):
+        """A condition covering part of the patch narrows the result to it."""
+        cond = random_patch.isel(distance=slice(10, 200)) > 0.5
+        out, _ = Where(cond=cond).get_metadata(random_patch.drop_data())
+        assert out.shape == (190, 2000)
+        assert out.dtype == random_patch.where(cond).dtype == np.float64
+
+    def test_integers_filled_with_nan(self, random_patch):
+        """The NaN fill promotes integer data, which the metadata says first."""
+        ints = random_patch.new(data=np.ones(random_patch.shape, dtype=np.int32))
+        out, _ = Where(cond=ints.data > 0).get_metadata(ints.drop_data())
+        assert out.dtype == ints.where(ints.data > 0).dtype == np.float64
+
+    def test_no_shared_dimension(self, random_patch):
+        """A condition sharing no dimension with the patch cannot align."""
+        cond = (random_patch > 0.5).rename_coords(distance="x", time="y")
+        with pytest.raises(PatchCoordinateError, match="no shared dimensions"):
+            random_patch.where(cond)
+
+    def test_no_shared_values(self, random_patch):
+        """Nor can one which shares a dimension but none of its values."""
+        later = np.datetime64("2030-01-01")
+        cond = (random_patch > 0.5).update_coords(time_min=later)
+        with pytest.raises(PatchCoordinateError, match="share no values"):
+            random_patch.where(cond)
+
+
+class TestDropnaNoop:
+    """Dropping nothing is no operation."""
+
+    def test_nothing_to_drop_is_the_patch(self, random_patch):
+        """The patch comes back itself, with nothing recorded."""
+        assert random_patch.dropna("time") is random_patch

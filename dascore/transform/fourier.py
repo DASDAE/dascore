@@ -8,7 +8,6 @@ implementation.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from importlib import import_module
 from math import prod
 from operator import mul, truediv
 from typing import Any
@@ -29,7 +28,12 @@ from dascore.proc.basic import Pad, _pad_array
 from dascore.proc.tile_apply import Reassemble, TileApply
 from dascore.proc.units import _replace_data_units
 from dascore.units import Quantity, _quantities_equal, invert_quantity, percent
-from dascore.utils.array_api import array_namespace, asarray_like
+from dascore.utils.array_api import (
+    _as_numpy_dtype,
+    _result_dtype,
+    array_namespace,
+    asarray_like,
+)
 from dascore.utils.imports import lazy_import
 from dascore.utils.misc import iterate
 from dascore.utils.patch import (
@@ -579,17 +583,32 @@ class Idft(PatchProcessor):
         out = out.new(dtype=_result_dtype(dtype, real=real))
         return out, plan | {"indexer": indexer}
 
-    def kernel(self, data, *, axes, real, step, sizes, indexer):
+    def kernel(self, data, **plan):
         """Return the inverse transform, trimmed of the padding dft added."""
-        xp = array_namespace(data)
-        # now unshift data and undo scaling
-        data = data / _scalar(step, data)
-        if shifted := (axes[:-1] if real else axes):
-            data = xp.fft.ifftshift(data, axes=shifted)
-        func = xp.fft.irfftn if real else xp.fft.ifftn
-        # Along no axes numpy hands the data back as they are.
-        data = func(_fft_input(data, xp, True) if axes else data, s=sizes, axes=axes)
-        return data if indexer is None else data[indexer]
+        return _idft_kernel(data, **plan)
+
+
+def _idft_kernel(data, *, axes, real, step, sizes, indexer):
+    """Return the inverse transform `Idft.get_metadata` planned."""
+    xp = array_namespace(data)
+    # now unshift data and undo scaling
+    data = data / _scalar(step, data)
+    if shifted := (axes[:-1] if real else axes):
+        data = xp.fft.ifftshift(data, axes=shifted)
+    func = xp.fft.irfftn if real else xp.fft.ifftn
+    # Along no axes numpy hands the data back as they are.
+    data = func(_fft_input(data, xp, True) if axes else data, s=sizes, axes=axes)
+    return data if indexer is None else data[indexer]
+
+
+def _prefixed(prefix: str, plan: dict) -> dict:
+    """Return a step's plan with its keys prefixed, to sit in a larger plan."""
+    return {f"{prefix}{key}": value for key, value in plan.items()}
+
+
+def _unprefixed(prefix: str, plan: dict) -> dict:
+    """Return the step's plan which `_prefixed` put in a larger plan."""
+    return {k.removeprefix(prefix): v for k, v in plan.items() if k.startswith(prefix)}
 
 
 def _resolve_nfft(nfft, coord, window_samples: int) -> int:
@@ -975,26 +994,3 @@ def _stft_dims(patch) -> list[str]:
 def _is_complex(dtype) -> bool:
     """Whether a dtype, numpy's or another backend's, is complex."""
     return str(dtype).rsplit(".", 1)[-1].startswith("complex")
-
-
-def _as_numpy_dtype(dtype) -> np.dtype:
-    """Return numpy's dtype of the name a dtype, numpy's or another backend's, has."""
-    return np.dtype(str(dtype).rsplit(".", 1)[-1])
-
-
-def _result_dtype(dtype, *promote, real: bool = False, like=None):
-    """
-    Return the dtype a transform's kernel gives `dtype` data, in their backend.
-
-    `promote` is what numpy promotes the data with; `real` takes the real
-    counterpart, as an amplitude or an inverse real FFT does. `like` is a
-    dtype of the backend the result is spelt in, `dtype` by default.
-    """
-    like = dtype if like is None else like
-    out = np.result_type(_as_numpy_dtype(dtype), *promote)
-    if real and out.kind == "c":
-        out = np.finfo(out).dtype
-    if isinstance(like, np.dtype):
-        return out
-    # Another backend's dtypes are named as numpy's are, in its own package.
-    return getattr(import_module(type(like).__module__.split(".")[0]), out.name)
