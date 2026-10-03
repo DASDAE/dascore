@@ -497,7 +497,7 @@ class TestMemoryLookAhead:
 
         import dascore.xarray.accessor as accessor  # noqa: PLC0415
 
-        monkeypatch.setattr(accessor, "_available_memory", lambda: 10**9)
+        monkeypatch.setattr(accessor, "available_memory", lambda: 10**9)
         assert self._sizer()(da.zeros((10, 10))) is None
 
     def test_a_lazy_array_which_does_not_fit_states_its_size(self, monkeypatch):
@@ -506,7 +506,7 @@ class TestMemoryLookAhead:
 
         import dascore.xarray.accessor as accessor  # noqa: PLC0415
 
-        monkeypatch.setattr(accessor, "_available_memory", lambda: 8)
+        monkeypatch.setattr(accessor, "available_memory", lambda: 8)
         array = da.zeros((10, 10))
         assert self._sizer()(array) == array.nbytes
 
@@ -516,30 +516,8 @@ class TestMemoryLookAhead:
 
         import dascore.xarray.accessor as accessor  # noqa: PLC0415
 
-        monkeypatch.setattr(accessor, "_available_memory", lambda: None)
+        monkeypatch.setattr(accessor, "available_memory", lambda: None)
         assert self._sizer()(da.zeros((10, 10))) is None
-
-    def test_the_budget_is_what_is_free_less_some_headroom(self, monkeypatch):
-        """An array is not the only thing memory has to hold."""
-        import dascore.xarray.accessor as accessor  # noqa: PLC0415
-
-        class _Stub:
-            @staticmethod
-            def virtual_memory():
-                return type("_M", (), {"available": 1000})
-
-        monkeypatch.setattr(accessor, "optional_import", lambda name: _Stub)
-        assert accessor._available_memory() == int(1000 * accessor._MEMORY_HEADROOM)
-
-    def test_no_way_to_ask_means_no_look_ahead(self, monkeypatch):
-        """Psutil is not a dependency, so its absence is ordinary."""
-        import dascore.xarray.accessor as accessor  # noqa: PLC0415
-
-        def _missing(name):
-            raise ImportError(name)
-
-        monkeypatch.setattr(accessor, "optional_import", _missing)
-        assert accessor._available_memory() is None
 
     @staticmethod
     def _announcing_method(monkeypatch):
@@ -558,7 +536,7 @@ class TestMemoryLookAhead:
         import dascore.xarray.accessor as accessor  # noqa: PLC0415
 
         self._announcing_method(monkeypatch)
-        monkeypatch.setattr(accessor, "_available_memory", lambda: 1)
+        monkeypatch.setattr(accessor, "available_memory", lambda: 1)
         with pytest.raises(PatchConversionError, match="exceed what memory"):
             lazy_data_array.dc.announce_fallback()
 
@@ -569,7 +547,7 @@ class TestMemoryLookAhead:
         import dascore.xarray.accessor as accessor  # noqa: PLC0415
 
         self._announcing_method(monkeypatch)
-        monkeypatch.setattr(accessor, "_available_memory", lambda: 10**12)
+        monkeypatch.setattr(accessor, "available_memory", lambda: 10**12)
         with suppress_warnings(NumpyFallbackWarning):
             out = lazy_data_array.dc.announce_fallback()
         assert isinstance(out.values, np.ndarray)
@@ -579,7 +557,7 @@ class TestMemoryLookAhead:
         import dascore.xarray.accessor as accessor  # noqa: PLC0415
 
         self._announcing_method(monkeypatch)
-        monkeypatch.setattr(accessor, "_available_memory", lambda: 1)
+        monkeypatch.setattr(accessor, "available_memory", lambda: 1)
         with suppress_warnings(NumpyFallbackWarning):
             assert data_array.dc.announce_fallback() is not None
 
@@ -588,7 +566,7 @@ class TestMemoryLookAhead:
         import dascore.xarray.accessor as accessor  # noqa: PLC0415
 
         da = pytest.importorskip("dask.array")
-        monkeypatch.setattr(accessor, "_available_memory", lambda: 8)
+        monkeypatch.setattr(accessor, "available_memory", lambda: 8)
         array = da.zeros((10, 10))
         assert accessor._largest_to_materialize([array]) == array.nbytes
 
@@ -605,7 +583,7 @@ class TestMemoryLookAhead:
             return self
 
         monkeypatch.setattr(dc.Patch, "announce_with_arg", method, raising=False)
-        monkeypatch.setattr(accessor, "_available_memory", lambda: 1)
+        monkeypatch.setattr(accessor, "available_memory", lambda: 1)
         # the receiver is in memory; the argument is the lazy one
         with pytest.raises(PatchConversionError, match="exceed what memory"):
             data_array.dc.announce_with_arg(lazy_data_array)
@@ -635,7 +613,7 @@ class TestMemoryLookAhead:
 
         import dascore.xarray.accessor as accessor  # noqa: PLC0415
 
-        monkeypatch.setattr(accessor, "_available_memory", lambda: 1)
+        monkeypatch.setattr(accessor, "available_memory", lambda: 1)
         assert isinstance(lazy_data_array.dc.abs().data, da.Array)
 
 

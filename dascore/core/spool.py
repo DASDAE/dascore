@@ -18,6 +18,7 @@ import pandas as pd
 from pandas.errors import (
     PerformanceWarning,
 )
+from rich.filesize import decimal as format_bytes
 from rich.text import Text
 
 import dascore as dc
@@ -70,7 +71,9 @@ from dascore.core._spool_inventory import (
 )
 from dascore.core.inventory import _SYSTEM_FACT_NAMES, Inventory
 from dascore.core.inventory_loader import BLESSED_NAME, carries_inventory
+from dascore.core.lazy_array import LazyArray
 from dascore.exceptions import (
+    InsufficientMemoryError,
     InvalidInventoryError,
     InvalidSpoolError,
     InvalidSpoolQueryError,
@@ -121,6 +124,7 @@ from dascore.utils.explicit_ranges import (
 )
 from dascore.utils.misc import (
     _spool_map,
+    available_memory,
     deep_equality_check,
     suppress_warnings,
 )
@@ -129,7 +133,7 @@ from dascore.utils.patch import (
     get_patch_names,
     stack_patches,
 )
-from dascore.utils.paths import coerce_to_upath, is_local_path
+from dascore.utils.paths import coerce_to_upath, is_local_path, is_memory_uri
 from dascore.utils.pd import (
     drop_selector_names,
     get_dim_names_from_columns,
@@ -203,6 +207,67 @@ def _cut_pad(dim: str, pad, known: bool, timed: bool) -> list:
     msg += "dimension of set and spool: numbers or, on a time dimension, "
     msg += "timedeltas or strings with units such as '-1s'."
     raise ParameterError(msg)
+
+
+def _itemsize(dtype) -> float:
+    """Bytes per sample of a stated dtype, or NaN when none is stated."""
+    try:
+        return float(np.dtype(dtype).itemsize)
+    except TypeError:
+        return np.nan
+
+
+def _estimated_samples(df: pd.DataFrame) -> pd.Series:
+    """
+    Each row's sample count from its coordinate envelopes; NaN where unknowable.
+
+    A dimension counts ``(max - min) / step + 1`` samples; a row missing
+    any of those for one of its dimensions has no count.
+    """
+    counts = pd.Series(1.0, index=df.index)
+    dims = df["dims"].fillna("").astype(str).str.split(",")
+    for dim in sorted({d for row in dims for d in row if d}):
+        has = dims.map(lambda row: dim in row).to_numpy()
+        cols = [f"{dim}_min", f"{dim}_max", f"{dim}_step"]
+        if not set(cols).issubset(df.columns):
+            counts[has] = np.nan
+            continue
+        low, high, step = (df[c][has] for c in cols)
+        with np.errstate(all="ignore"):
+            ratio = pd.to_numeric((high - low) / step, errors="coerce")
+            ratio = ratio.astype(np.float64)
+        rounded = np.round(ratio) + 1
+        counts[has] *= rounded.where(np.isfinite(ratio) & (rounded > 0))
+    return counts
+
+
+def _bytes_to_load(df: pd.DataFrame) -> int:
+    """
+    The bytes reading a relation's arrays takes.
+
+    A row stating its sample count is counted exactly; one trimmed by a
+    selection or assembled by a plan states none and is estimated from
+    its envelopes. A row whose size cannot be told (a dimension with no
+    step, or no dtype) counts nothing, as does a patch already in memory
+    presented as it is, so the figure is a floor.
+    """
+    if df.empty:
+        return 0
+    none = pd.Series(np.nan, index=df.index)
+    known = pd.to_numeric(df.get("_data_size", none), errors="coerce")
+    samples = known.astype(np.float64).where(known.notna(), _estimated_samples(df))
+    if "source_path" in df.columns:
+        # a live patch which still states its size is presented as it is
+        held = known.notna() & df["source_path"].map(is_memory_uri).to_numpy()
+        samples = samples.where(~held, 0.0)
+    itemsize = df.get("_dtype", none).map(_itemsize)
+    return int(np.nansum(samples.to_numpy() * itemsize.to_numpy(dtype=float)))
+
+
+def _loaded(patch: dc.Patch) -> dc.Patch:
+    """The patch with its data array in memory."""
+    data = patch.data
+    return patch.to_patch(data.load()) if isinstance(data, LazyArray) else patch
 
 
 def _spool_input_message(data) -> str:
@@ -447,6 +512,53 @@ class Spool(NodeRepr, NamespaceOwner):
         # cannot be resolved (see #583).
         for patch in self._catalog:
             yield self._maybe_enrich(patch)
+
+    def load(self) -> Self:
+        """
+        Read every patch into memory and return a spool holding them.
+
+        Before anything is read, the bytes the arrays take are added up
+        from the spool's contents and compared with the memory available,
+        so a spool which will not fit is refused rather than read part way.
+        The figure is a floor: a patch which states its sample count is
+        counted exactly, one a selection trimmed or a plan assembled is
+        estimated from its coordinate ranges, and one whose size cannot
+        be told counts nothing. Patches already in memory count nothing
+        either. Telling what is available needs ``psutil``, which is not a
+        dependency; without it the read goes ahead unchecked.
+
+        The loaded patches come back in a new spool, since a spool never
+        changes under its holder; the attached inventory comes along, with
+        any enrichment already applied to the patches.
+
+        Raises
+        ------
+        InsufficientMemoryError
+            When the arrays need more memory than is available.
+            [`select`](`dascore.core.spool.Spool.select`) a part of the
+            spool and load that, or iterate the spool and keep only what
+            each patch yields.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool("random_das")
+        >>> loaded = spool.load()
+        >>> assert len(loaded) == len(spool)
+        """
+        needed = _bytes_to_load(self._df)
+        available = available_memory()
+        if available is not None and needed > available:
+            msg = (
+                f"Loading this spool needs about {format_bytes(needed)} of memory "
+                f"but {format_bytes(available)} is available. Load a selection, "
+                "or iterate the spool and keep only what each patch yields."
+            )
+            raise InsufficientMemoryError(msg)
+        new = self.__class__([_loaded(patch) for patch in self])
+        new._inventory = self._inventory
+        new._on_unresolved = self._on_unresolved
+        return new
 
     def iterate(self, *, max_in_flight: int = 2) -> Generator[dc.Patch, None, None]:
         """

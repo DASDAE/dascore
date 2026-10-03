@@ -19,23 +19,9 @@ from typing import Any
 import dascore as dc
 from dascore.exceptions import PatchConversionError
 from dascore.utils.array_api import is_foreign
-from dascore.utils.misc import optional_import
+from dascore.utils.misc import available_memory, optional_import
 from dascore.warnings import NumpyFallbackWarning
 from dascore.xarray.patch import patch_to_xarray, xarray_to_patch
-
-# What is left of memory before an operation which cannot stay lazy is
-# refused rather than attempted. Materializing an array is not the only
-# thing holding memory, so the whole of what is free is not available.
-_MEMORY_HEADROOM = 0.8
-
-
-def _available_memory() -> int | None:
-    """Bytes a materialized array could use, or None if unknowable."""
-    try:  # psutil is not a dependency; the guard is skipped without it
-        psutil = optional_import("psutil")
-    except Exception:
-        return None
-    return int(psutil.virtual_memory().available * _MEMORY_HEADROOM)
 
 
 def _too_large_to_materialize(data) -> int | None:
@@ -43,7 +29,7 @@ def _too_large_to_materialize(data) -> int | None:
     if not is_foreign(data):
         return None  # already in memory, so materializing costs nothing
     size = getattr(data, "nbytes", None)
-    available = _available_memory()
+    available = available_memory()
     if size is None or available is None:
         return None
     return int(size) if int(size) > available else None

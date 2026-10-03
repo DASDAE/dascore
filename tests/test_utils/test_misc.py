@@ -18,6 +18,7 @@ import pytest
 from upath import UPath
 
 import dascore as dc
+import dascore.utils.misc as misc
 from dascore.exceptions import MissingOptionalDependencyError, ParameterError
 from dascore.utils.array_api import to_numpy
 from dascore.utils.misc import (
@@ -29,6 +30,7 @@ from dascore.utils.misc import (
     _maybe_unpack,
     _spool_map,
     all_diffs_close_enough,
+    available_memory,
     cached_method,
     deep_equality_check,
     get_2d_line_intersection,
@@ -456,6 +458,30 @@ def _raise_error(error):
         raise error
 
     return _func
+
+
+class TestAvailableMemory:
+    """Tests for the memory budget a read is checked against."""
+
+    def test_free_less_some_headroom(self, monkeypatch):
+        """An array is not the only thing memory has to hold."""
+
+        class _Stub:
+            @staticmethod
+            def virtual_memory():
+                return SimpleNamespace(available=1000)
+
+        monkeypatch.setattr(misc, "optional_import", lambda name: _Stub)
+        assert available_memory() == int(1000 * misc.MEMORY_HEADROOM)
+
+    def test_no_way_to_ask_means_no_figure(self, monkeypatch):
+        """Psutil is not a dependency, so its absence is ordinary."""
+
+        def _missing(name):
+            raise ImportError(name)
+
+        monkeypatch.setattr(misc, "optional_import", _missing)
+        assert available_memory() is None
 
 
 class TestOptionalImport:

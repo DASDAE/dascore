@@ -616,6 +616,34 @@ def all_diffs_close_enough(diffs):
     return np.allclose(diffs, med, rtol=0.001)
 
 
+# What is left of memory before an operation which must hold an array is
+# refused rather than attempted. The array is not the only thing holding
+# memory, so the whole of what is free is not available.
+MEMORY_HEADROOM = 0.8
+
+
+def available_memory() -> int | None:
+    """
+    Bytes an array read into memory could use, or None if unknowable.
+
+    What the system reports free, less some headroom, so that a read
+    which will not fit is refused before it starts rather than failing
+    part way. Asking needs ``psutil``, which is not a dependency; without
+    it there is no figure and nothing is refused.
+
+    Examples
+    --------
+    >>> from dascore.utils.misc import available_memory
+    >>> budget = available_memory()
+    >>> assert budget is None or budget > 0
+    """
+    try:  # psutil is not a dependency; the guard is skipped without it
+        psutil = optional_import("psutil")
+    except Exception:
+        return None
+    return int(psutil.virtual_memory().available * MEMORY_HEADROOM)
+
+
 @overload
 def unbyte(byte_or_str: bytes) -> str: ...
 

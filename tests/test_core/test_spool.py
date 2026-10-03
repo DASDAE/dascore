@@ -15,14 +15,17 @@ import pytest
 from pandas.errors import PerformanceWarning
 
 import dascore as dc
+import dascore.core.spool as spool_module
 import dascore.utils.patch_assembly as assembly_mod
 from dascore.config import config_context
 from dascore.core.coords import get_coord
-from dascore.core.spool import BaseSpool, Spool
+from dascore.core.lazy_array import LazyArray
+from dascore.core.spool import BaseSpool, Spool, _bytes_to_load
 from dascore.examples import ricker_moveout
 from dascore.exceptions import (
     CoordMergeError,
     IncompatiblePatchError,
+    InsufficientMemoryError,
     InvalidSpoolError,
     InvalidSpoolQueryError,
     MissingOptionalDependencyError,
@@ -255,6 +258,101 @@ class TestSpoolEquals:
         new2 = copy.deepcopy(random_spool)
         new2.__dict__["bad_attr"] = 2
         assert new1 == new2
+
+
+class TestLoad:
+    """Tests for reading a whole spool into memory."""
+
+    @pytest.fixture()
+    def budget(self, monkeypatch):
+        """Set what load believes is available, in bytes."""
+
+        def _set(value):
+            monkeypatch.setattr(spool_module, "available_memory", lambda: value)
+
+        return _set
+
+    def test_file_spool_loads(self, random_directory_spool, budget):
+        """Each patch comes back in memory, in order, holding the file's data."""
+        budget(10**12)
+        loaded = random_directory_spool.load()
+        assert isinstance(loaded, Spool)
+        assert len(loaded) == len(random_directory_spool)
+        for before, after in zip(random_directory_spool, loaded, strict=True):
+            assert isinstance(after.data, np.ndarray)
+            assert after == before
+
+    def test_too_large_refused(self, random_directory_spool, budget):
+        """A spool which will not fit is refused before any read."""
+        budget(8)
+        with pytest.raises(InsufficientMemoryError, match="is available"):
+            random_directory_spool.load()
+
+    def test_unknowable_budget_loads(self, random_directory_spool, budget):
+        """Without a figure for what is free there is nothing to refuse."""
+        budget(None)
+        assert len(random_directory_spool.load()) == len(random_directory_spool)
+
+    def test_in_memory_patches_cost_nothing(self, random_spool, budget):
+        """Patches already held are not counted against the budget."""
+        budget(1)
+        assert _bytes_to_load(random_spool._df) == 0
+        assert random_spool.load() == random_spool
+
+    def test_trimmed_rows_estimated(self, random_spool):
+        """A selection forgets a row's size; its ranges give the count."""
+        patch = random_spool[0]
+        start = patch.coords.min("time") + np.timedelta64(1, "s")
+        trimmed = random_spool.select(time=(start, None))
+        expected = patch.select(time=(start, None)).data.nbytes
+        assert _bytes_to_load(trimmed._df) == expected
+
+    def test_chunk_rows_estimated(self, random_spool):
+        """Plan outputs state no size; their ranges give the total."""
+        chunked = random_spool.chunk(time=3)
+        expected = sum(x.data.nbytes for x in random_spool)
+        assert _bytes_to_load(chunked._df) == expected
+
+    def test_unknown_step_or_dtype_counts_nothing(self):
+        """A row whose size cannot be told does not inflate the figure."""
+        df = pd.DataFrame(
+            {
+                "dims": ["time", "time", "time"],
+                "_dtype": ["float64", None, "float32"],
+                "_data_size": [None, 10, None],
+                "time_min": [0.0, 0.0, 0.0],
+                "time_max": [9.0, 9.0, 9.0],
+                "time_step": [np.nan, 1.0, 1.0],
+            }
+        )
+        assert _bytes_to_load(df) == 10 * 4
+        assert _bytes_to_load(df.iloc[:0]) == 0
+
+    def test_dim_without_ranges_counts_nothing(self):
+        """A dimension the frame has no ranges for leaves the row unknown."""
+        df = pd.DataFrame({"dims": ["time"], "_dtype": ["float64"]})
+        assert _bytes_to_load(df) == 0
+
+    def test_lazy_patch_is_read(self, random_patch, tmp_path, budget):
+        """A patch holding a lazy array comes back holding the array itself."""
+        budget(10**12)
+        path = tmp_path / "lazy.h5"
+        dc.write(random_patch, path, "dasdae")
+        stored = dc.read(path)[0]
+        lazy = stored.to_patch(LazyArray.from_sources([stored._source]))
+        loaded = dc.spool(lazy).load()[0]
+        assert isinstance(loaded.data, np.ndarray)
+        assert np.array_equal(loaded.data, stored.data)
+
+    def test_inventory_comes_along(self, budget):
+        """Enrichment is applied on the way in and the inventory stays attached."""
+        from dascore.examples import inventory_patch_pair  # noqa: PLC0415
+
+        budget(10**12)
+        patch, inventory = inventory_patch_pair()
+        loaded = dc.spool(patch).attach_inventory(inventory).enrich().load()
+        assert loaded[0].attrs.gauge_length == 10.0
+        assert loaded._inventory is inventory
 
 
 class TestIndexing:

@@ -259,6 +259,14 @@ joined = dc.spool([patch, later]).concatenate(time=None)
 
 Patches that cannot concatenate remain in separate output groups. Values are ordered along the concatenated dimension when it has a step; otherwise spool order is retained. Other coordinates must agree, while coordinates along the concatenated dimension are joined. For conflicting non-coordinate attributes, `conflict=` can raise (the default), drop them, or keep the first value.
 
+# Loading into memory
+
+[`Spool.load`](`dascore.core.spool.Spool.load`) reads every patch and returns a spool of in-memory patches, the way xarray's `load` does. The bytes the arrays take are added up from the spool contents first and compared with the memory available, so a spool which will not fit raises `InsufficientMemoryError` before anything is read rather than failing part way. The check needs `psutil`; without it the read goes ahead unchecked.
+
+```{python}
+loaded = spool.select(distance=(0, 100)).load()
+```
+
 # Loading ahead
 
 Use [`Spool.iterate`](`dascore.core.spool.Spool.iterate`) to load upcoming patches in a background thread while processing the current patch:
