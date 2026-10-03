@@ -57,7 +57,7 @@ def explicit_ranges(value) -> ExplicitRanges | None:
             if bound is None or bound is Ellipsis:
                 bounds.append(None)  # an open end
                 continue
-            magnitude = bound.magnitude if isinstance(bound, Quantity) else bound
+            magnitude: Any = bound.magnitude if isinstance(bound, Quantity) else bound
             if isinstance(magnitude, bool | np.bool_) or np.ndim(magnitude):
                 msg = f"Explicit range row {index} has a non-scalar bound."
                 raise ParameterError(msg)

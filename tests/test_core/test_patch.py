@@ -1318,6 +1318,12 @@ class TestCoords:
 class TestApplyOperator:
     """Tests for applying various ufunc-type operators."""
 
+    @pytest.mark.parametrize("other", [10, np.ones((300, 1))])
+    def test_broadcastable_operand_adds_no_history(self, random_patch, other):
+        """An operand numpy broadcasts leaves no internal step in the history."""
+        out = random_patch * other
+        assert out.attrs.history == random_patch.attrs.history
+
     ops = (
         operator.add,
         operator.sub,

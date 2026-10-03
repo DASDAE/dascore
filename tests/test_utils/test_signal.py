@@ -119,7 +119,7 @@ class TestGetTaper:
         taper = get_taper("triang", (8,), (3,))
         expected = [0.25, 0.5, 0.75, 1.0, 1.0, 0.75, 0.5, 0.25]
         np.testing.assert_allclose(taper, expected)
-        assert taper.dtype == np.float32
+        assert taper.dtype == np.float64
 
     def test_two_dimensional_is_separable(self):
         """The 2-D taper is the outer product of its edges."""
@@ -159,11 +159,10 @@ class TestGetTaper:
         with pytest.raises(ParameterError, match="not a known window"):
             get_taper("windowsXP", (8,), (0,))
 
-    def test_two_dimensional_is_float32_throughout(self):
-        """Edges multiply in float32, so the corner is the float32 product."""
+    def test_two_dimensional_is_float64_throughout(self):
+        """Edges multiply in float64, so the corner is the float64 product."""
         taper = get_taper("triang", (8, 8), (2, 2))
-        corner = np.float32(1 / 3) * np.float32(1 / 3)
-        assert taper[0, 0] == corner
+        assert taper[0, 0] == (1 / 3) * (1 / 3)
 
     def test_copies_are_handed_out(self):
         """Writing to one taper does not change the next."""
@@ -257,10 +256,10 @@ class TestGetDualTaper:
         np.testing.assert_allclose(out, array, atol=1e-5)
 
     def test_shapes_and_dtype(self):
-        """Both windows are float32 arrays of the tile's shape."""
+        """Both windows are float64 arrays of the tile's shape."""
         analysis, synthesis = get_dual_taper("hann", (8, 16), (4, 8))
         assert analysis.shape == synthesis.shape == (8, 16)
-        assert analysis.dtype == synthesis.dtype == np.float32
+        assert analysis.dtype == synthesis.dtype == np.float64
 
     def test_mismatched_lengths_refused(self):
         """A stride per axis."""

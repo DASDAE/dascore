@@ -555,6 +555,26 @@ class TestInverseDiscreteFourierTransform:
 class TestSTFT:
     """Tests for the short-time Fourier transform."""
 
+    @pytest.mark.parametrize("detrend", [False, True])
+    def test_single_precision_stays_single(self, random_patch, detrend):
+        """float32 data give complex64 spectra, detrended or not."""
+        patch = random_patch.new(data=random_patch.data.astype(np.float32))
+        out = patch.stft(time=0.5, detrend=detrend)
+        assert out.data.dtype == np.complex64
+
+    def test_odd_window_phase_is_exact(self, random_patch):
+        """An odd window's centre phase is computed at full precision."""
+        n = 255
+        step = dc.to_float(random_patch.get_coord("time").step)
+        out = random_patch.stft(
+            time=n, overlap=None, samples=True, taper_window="boxcar"
+        )
+        spectrum = out.data[0, :, 0]
+        k = np.arange(n // 2 + 1)
+        trace = random_patch.data[0, :n]
+        ref = np.fft.rfft(trace) * step * np.exp(2j * np.pi * k / n * (n // 2))
+        assert np.abs(spectrum - ref).max() / np.abs(ref).max() < 1e-12
+
     def test_numeric_window_with_timedelta_coord(self):
         """
         Stft with a numeric window length should work when the time

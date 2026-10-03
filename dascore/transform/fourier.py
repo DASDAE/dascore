@@ -32,6 +32,7 @@ from dascore.utils.patch import (
     patch_function,
 )
 from dascore.utils.signal import get_window_nd
+from dascore.utils.tiles import _taper_like
 from dascore.utils.time import to_float
 from dascore.utils.transformatter import FourierTransformatter
 from dascore.utils.window import resolve_window
@@ -316,7 +317,7 @@ def dft(
     original_cm = patch.coords if pad else None
     if pad:  # apply padding to avoid slow dft lengths.
         pad_kwargs = {x: "fft" for x in dims}
-        patch = patch.pad.func(patch, **pad_kwargs)
+        patch = patch.pad.func(patch, **pad_kwargs)  # ty: ignore[unresolved-attribute]
     # get axes and spacing along desired dimensions.
     dxs, axes = _get_dx_or_spacing_and_axes(patch, dims, require_evenly_spaced=True)
     # get new coordinates (need before pad)
@@ -520,7 +521,7 @@ def _resolve_nfft(nfft, coord, window_samples: int) -> int:
     return count
 
 
-def _centre_phase(cycles: np.ndarray, size: int) -> np.ndarray:
+def _centre_phase(cycles: np.ndarray, size: int, dtype) -> np.ndarray:
     """
     Return the phase which refers each window's spectrum to its centre sample.
 
@@ -529,7 +530,7 @@ def _centre_phase(cycles: np.ndarray, size: int) -> np.ndarray:
     there, as scipy's `ShortTimeFFT` does. `cycles` is each frequency in
     cycles per sample.
     """
-    return np.exp(2j * np.pi * cycles * (size // 2)).astype(np.complex64)
+    return np.exp(2j * np.pi * cycles * (size // 2)).astype(dtype)
 
 
 def _as_is(tiles: np.ndarray) -> np.ndarray:
@@ -549,7 +550,7 @@ def _swap_window_axes(data: np.ndarray, axes: tuple[int, ...]) -> np.ndarray:
     return np.moveaxis(data, (*axes, *tail), (*tail, *axes))
 
 
-@patch_function(data_type="fourier_transform", version="2.0")
+@patch_function(data_type="fourier_transform", version="2.1")
 def stft(
     patch: PatchType,
     taper_window: str | ndarray | tuple[str | Any, ...] = "hann",
@@ -690,7 +691,7 @@ def stft(
     if detrend:
         for axis in tail:
             tiles = sp_detrend(tiles, axis=axis, type="linear")
-        tiles = tiles * get_window_nd(taper_window, sizes)
+        tiles = tiles * _taper_like(get_window_nd(taper_window, sizes), tiles)
     steps = [to_float(coord.step) for coord in coords]
     # Real data is transformed one-sided along the last windowed dimension
     # and centred along the others, as dft does; complex data centred along
@@ -708,7 +709,8 @@ def stft(
     for axis, cycles, size, step in zip(tail, freqs, sizes, steps):
         shape = [1] * ndim
         shape[axis] = -1
-        factor = factor * _centre_phase(cycles * step, size).reshape(shape)
+        phase = _centre_phase(cycles * step, size, factor.dtype)
+        factor = factor * phase.reshape(shape)
     spectra *= factor
     ft_dims = FourierTransformatter().rename_dims(dims)
     new_dims = (
@@ -732,7 +734,7 @@ def stft(
     return patch.new(data=data, coords=cm, attrs=attrs)
 
 
-@patch_function(version="2.0")
+@patch_function(version="2.1")
 def istft(patch) -> dc.Patch:
     """
     Invert a short-time fourier transform.
@@ -767,8 +769,6 @@ def istft(patch) -> dc.Patch:
     --------
     [Patch.stft](`dascore.Patch.stft`), [Patch.idft](`dascore.Patch.idft`)
     """
-    from dascore.proc.tile_apply import reassemble  # noqa: PLC0415
-
     coord_map = patch.coords.get_coord_tuple_map()
     dims = [d for d in patch.dims if f"_tile_source_{d}" in coord_map]
     if not dims or "_stft_real" not in dict(patch.attrs):
@@ -802,7 +802,7 @@ def istft(patch) -> dc.Patch:
         shape = [1] * ndim
         shape[axis] = -1
         cycles = patch.get_coord(ft_dim).values * step
-        factor = factor * _centre_phase(cycles, size).reshape(shape)
+        factor = factor * _centre_phase(cycles, size, factor.dtype).reshape(shape)
     spectra = spectra / factor
     centred = tail[:-1] if real else tail
     if centred:
@@ -828,7 +828,7 @@ def istft(patch) -> dc.Patch:
         coords=get_coord_manager(coords=coord_map, dims=stack_dims),
         attrs=dc.PatchAttrs(**attrs),
     )
-    out = reassemble.func(stack)
+    out = dc.Patch.reassemble.func(stack)  # ty: ignore[unresolved-attribute]
     return out.update_attrs(
         data_type=data_type or "",
         data_units=_get_data_units_from_dims(patch, dims, truediv),

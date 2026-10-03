@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
+from typing import Any
+
 import numpy as np
 
 import dascore as dc
 from dascore.constants import PatchType
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
 from dascore.units import get_quantity
+from dascore.utils.array_api import array_namespace
 from dascore.utils.patch import (
     get_dim_axis_value,
     patch_function,
@@ -34,10 +38,7 @@ def _get_source_fft(patch, dim, source, source_axis, samples):
     return out
 
 
-@patch_function(data_type="correlation", version="1.1")
-def correlate_shift(
-    patch: PatchType, dim: str, undo_weighting: bool = True
-) -> PatchType:
+class CorrelateShift(PatchProcessor):
     """
     Apply a shift to the patch data to undo correlation in frequency domain.
 
@@ -75,29 +76,52 @@ def correlate_shift(
     >>> idft = dft_sq.idft()
     >>> auto_patch = idft.correlate_shift(dim="time")
     """
-    coord = patch.get_coord(dim, require_evenly_sampled=True)
-    axis = patch.get_axis(dim)
-    data = np.fft.fftshift(patch.data, axes=axis)
-    if undo_weighting:
-        data = data / to_float(coord.step)
-    step = coord.step
-    new_start = -np.ceil((len(coord) - 1) / 2) * step
-    new_end = np.ceil((len(coord) - 1) / 2) * step
-    _new_coord = dc.get_coord(
-        start=new_start, stop=new_end, step=step, units=coord.units
-    )
-    new_coord = _new_coord.change_length(len(coord))
-    assert len(new_coord) == len(coord)
-    cm = patch.coords
-    new_cm = cm._update_grid(dim, **{dim: new_coord}).rename_coord(
-        **{dim: f"lag_{dim}"}
-    )
-    out = patch.update(data=data, coords=new_cm)
-    units, coord_units = get_quantity(patch.attrs.data_units), coord.units
-    if undo_weighting and units is not None and coord_units is not None:
-        # dividing by the step divides the units by the coordinate's too
-        out = out.update_attrs(data_units=units / get_quantity(coord_units))
-    return out
+
+    __version__ = "1.1"
+    dim: Any
+    undo_weighting: Any = True
+
+    data_type = "correlation"
+
+    def get_metadata(self, meta):
+        """Return metadata with the lag coordinate, and the axis and step."""
+        dim = self.dim
+        coord = meta.get_coord(dim, require_evenly_sampled=True)
+        axis = meta.get_axis(dim)
+        step = coord.step
+        new_start = -np.ceil((len(coord) - 1) / 2) * step
+        new_end = np.ceil((len(coord) - 1) / 2) * step
+        _new_coord = dc.get_coord(
+            start=new_start, stop=new_end, step=step, units=coord.units
+        )
+        new_coord = _new_coord.change_length(len(coord))
+        assert len(new_coord) == len(coord)
+        cm = meta.coords
+        new_cm = cm._update_grid(dim, **{dim: new_coord}).rename_coord(
+            **{dim: f"lag_{dim}"}
+        )
+        weight = to_float(step) if self.undo_weighting else None
+        out = meta.new(coords=new_cm)
+        units = get_quantity(meta.attrs.data_units)
+        if self.undo_weighting and units is not None and coord.units is not None:
+            # dividing by the step divides the units by the coordinate's too
+            out = out.update_attrs(data_units=units / get_quantity(coord.units))
+        return out, {"axis": axis, "step": weight}
+
+    def kernel(self, data, *, axis, step):
+        """Return the data shifted so zero lag is central, divided by the step."""
+        xp = array_namespace(data)
+        # fftshift is this roll, but some backends shift only floats.
+        data = xp.roll(data, data.shape[axis] // 2, axis=axis)
+        if step is None:
+            return data
+        if not xp.isdtype(data.dtype, ("real floating", "complex floating")):
+            # numpy promotes integers to float64 here; some backends refuse to.
+            data = xp.astype(data, xp.float64)
+        # Divide by the step as a 0-d array: like a numpy scalar, and unlike
+        # a python float, it sets the result's dtype, and every backend
+        # accepts it.
+        return data / (xp.asarray(step) if isinstance(step, np.generic) else step)
 
 
 @patch_function(data_type="correlation", version="1.2")
@@ -111,7 +135,7 @@ def correlate(
 
     The correlation runs in the frequency domain, transforming the target
     dimension when needed. For an already transformed patch, apply
-    [`Patch.correlate_shift`](`dascore.proc.correlate.correlate_shift`) after
+    [`Patch.correlate_shift`](`dascore.Patch.correlate_shift`) after
     the inverse transform. The 2D input becomes 3D, with one new source
     dimension; [`Patch.squeeze`](`dascore.Patch.squeeze`) removes it for a
     single source.
@@ -185,7 +209,7 @@ def correlate(
     is_real = not np.issubdtype(patch.data.dtype, np.complexfloating)
     if not input_dft:  # Standard dft workflow for correlation
         # Note: we use .func here to avoid getting these added to the history.
-        padded = patch.pad.func(patch, **{fft_dim: "correlate"})
+        padded = patch.pad.func(patch, **{fft_dim: "correlate"})  # ty: ignore[unresolved-attribute]
         patch = padded.dft.func(padded, fft_dim, real=fft_dim if is_real else None)
     # Get the sources.
     source = patch.get_coord(dim).values if source is None else source

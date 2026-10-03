@@ -362,7 +362,15 @@ class Patch(NamespaceOwner, PatchMeta):
     get_array = dascore.proc.get_array
     pin_id = dascore.proc.pin_id
     split_gaps = dascore.proc.coords.split_gaps
-    fill_gaps = dascore.proc.coords.fill_gaps
+
+    def fill_gaps(
+        self, *args, fill_value: Any = np.nan, samples: bool = False, **kwargs
+    ) -> Self:
+        """Fill the holes along a dimension with a constant value."""
+        return dascore.proc.coords.FillGaps(
+            args=args, fill_value=fill_value, samples=samples, **kwargs
+        ).run(self)
+
     add_distance_to = dascore.proc.coords.add_distance_to
     enrich = dascore.proc.enrich
 
@@ -524,8 +532,23 @@ class Patch(NamespaceOwner, PatchMeta):
         ).run(self)
 
     correlate = dascore.proc.correlate
-    correlate_shift = dascore.proc.correlate_shift
-    decimate = dascore.proc.decimate
+
+    def correlate_shift(self, dim: str, undo_weighting: bool = True) -> Self:
+        """Apply a shift to the patch data to undo correlation in frequency domain."""
+        return dascore.proc.CorrelateShift(dim=dim, undo_weighting=undo_weighting).run(
+            self
+        )
+
+    def decimate(
+        self,
+        filter_type: Literal["iir", "fir", None] = "iir",
+        copy: bool = True,
+        **kwargs,
+    ) -> Self:
+        """Decimate a patch along a dimension."""
+        return dascore.proc.Decimate(filter_type=filter_type, copy=copy, **kwargs).run(
+            self
+        )
 
     def demedian(self, dim: str = "time") -> Self:
         """Remove the median along a dimension."""
@@ -616,14 +639,42 @@ class Patch(NamespaceOwner, PatchMeta):
             self
         )
 
-    reassemble = dascore.proc.reassemble
+    def reassemble(self, *, taper: Any = None) -> Self:
+        """Blend a stack of tiles back into the patch they were cut from."""
+        return dascore.proc.Reassemble(taper=taper).run(self)
 
     def angle(self) -> Self:
         """Return the phase angle of the data."""
         return dascore.proc.basic.Angle().run(self)
 
-    resample = dascore.proc.resample
-    pad = dascore.proc.pad
+    def resample(
+        self,
+        window=None,
+        interp_kind: str = "linear",
+        samples: bool = False,
+        **kwargs,
+    ) -> Self:
+        """Resample along a single dimension using Fourier Method and interpolation."""
+        return dascore.proc.Resample(
+            window=window, interp_kind=interp_kind, samples=samples, **kwargs
+        ).run(self)
+
+    def pad(
+        self,
+        mode: Literal["constant"] = "constant",
+        constant_values: Any = 0,
+        expand_coords=True,
+        samples=False,
+        **kwargs,
+    ) -> Self:
+        """Pad the patch data along specified dimensions."""
+        return dascore.proc.basic.Pad(
+            mode=mode,
+            constant_values=constant_values,
+            expand_coords=expand_coords,
+            samples=samples,
+            **kwargs,
+        ).run(self)
 
     def roll(self, samples: bool = False, update_coord: bool = False, **kwargs) -> Self:
         """Roll the data and optionally the coordinates along a dimension."""
@@ -637,9 +688,26 @@ class Patch(NamespaceOwner, PatchMeta):
         """Flip data and optionally coordinates along dimensions."""
         return dascore.proc.basic.Flip(dims=dims, flip_coords=flip_coords).run(self)
 
-    align_to_coord = dascore.proc.align_to_coord
+    def align_to_coord(
+        self,
+        mode: Literal["full", "valid", "same"] = "same",
+        samples: bool = False,
+        reverse: bool = False,
+        fill_value: float = np.nan,
+        **kwargs,
+    ) -> Self:
+        """Align (shift) patch dim(s) based on values in a non-dimension coordinate."""
+        return dascore.proc.AlignToCoord(
+            mode=mode,
+            samples=samples,
+            reverse=reverse,
+            fill_value=fill_value,
+            **kwargs,
+        ).run(self)
 
-    interpolate = dascore.proc.interpolate
+    def interpolate(self, kind: str | int = "linear", **kwargs) -> Self:
+        """Set coordinates of patch along a dimension using interpolation."""
+        return dascore.proc.Interpolate(kind=kind, **kwargs).run(self)
 
     def abs(self) -> Self:
         """Return a patch with the absolute value of its data."""

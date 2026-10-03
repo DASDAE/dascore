@@ -141,7 +141,7 @@ class _SeparatedBoxes(PatchCollection):
         # Read now rather than kept, so a box recolored after it was
         # built is edged in the color it states now. One color may stand
         # for every box, as matplotlib lets it, so the colors cycle.
-        faces = self.get_facecolor()
+        faces = np.asarray(self.get_facecolor())
         if len(faces):
             edges[cramped] = faces[np.nonzero(cramped)[0] % len(faces)]
         return edges

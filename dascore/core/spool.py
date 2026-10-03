@@ -957,16 +957,13 @@ class Spool(NodeRepr, NamespaceOwner):
         contexts = None
         mask = np.ones(len(ids), dtype=bool)
         # How pending enrichment rewrites a stated header, if at all; the
-        # `raise` policy refuses rather than rewrites, `keep_first` leaves
-        # the header standing, and `on_missing` applies to named attrs only.
+        # `raise` policy refuses rather than rewrites, and `keep_first`
+        # leaves the header standing.
         pending = self._enrich_kwargs or {}
         conflict = pending.get("conflict")
         rewritten = frozenset()
         if conflict is not None and conflict not in ("raise", "keep_first"):
             rewritten = enriched_attr_names(pending["attrs"])
-        nulls_missing = (
-            pending.get("on_missing") == "null" and pending.get("attrs") is not True
-        )
         for name, selector in query.items():
             # Which rows state the name is asked of the index rather than
             # read off the relation, so a spool whose headers state it
@@ -992,9 +989,6 @@ class Spool(NodeRepr, NamespaceOwner):
                 if contexts is None:
                     contexts = self._row_contexts(ids)
                 answers = get_attr_values(self._resolved_inventory(), contexts, name)
-                resolved = None
-                if rewriting and nulls_missing:
-                    resolved = np.array([x is not None for x in contexts], dtype=bool)
                 matched = effective_matches(
                     stated,
                     matched,
@@ -1002,7 +996,6 @@ class Spool(NodeRepr, NamespaceOwner):
                     match_resolved(answers, name, selector, backend.attr_units(name)),
                     self._row_headers(ids, name) if rewriting else None,
                     conflict if rewriting else None,
-                    resolved,
                 )
             mask &= matched
         return self._new_from_catalog(self._catalog.restrict(mask, ids=ids))

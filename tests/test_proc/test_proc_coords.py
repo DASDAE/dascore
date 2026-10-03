@@ -1920,6 +1920,26 @@ def _gapped_patch(coord, dim="time", dtype=np.float64):
     return dc.Patch(data=data, coords=coords, dims=("distance", dim))
 
 
+class TestFillGapsProcessor:
+    """What the FillGaps class guarantees beyond the framework."""
+
+    def test_metadata_without_data(self):
+        """The grid and where each run lands come from metadata alone."""
+        coord = concat_coords(
+            get_coord(start=0.0, stop=5.0, step=1.0),
+            get_coord(start=8.0, stop=10.0, step=1.0),
+        )
+        meta = _gapped_patch(coord, dim="x").drop_data()
+        out, plan = coords_module.FillGaps(args=("x",)).get_metadata(meta)
+        assert out.shape == (3, 10)
+        assert plan == {"axis": 1, "length": 10, "blocks": ((0, 5, 0), (5, 7, 8))}
+
+    def test_options_are_keyword_only(self):
+        """Only the dimension is positional, as it always was."""
+        with pytest.raises(TypeError):
+            coords_module.FillGaps(("x",), 0)
+
+
 class TestPartialDimension:
     """Gap operations on a dimension whose labels are unknown."""
 

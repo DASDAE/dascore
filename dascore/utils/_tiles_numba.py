@@ -14,7 +14,7 @@ import itertools
 import numpy as np
 
 from dascore.utils.jit import maybe_numba_jit
-from dascore.utils.tiles import TilePlan
+from dascore.utils.tiles import TilePlan, _taper_like
 
 
 @maybe_numba_jit(required=True, nopython=True, parallel=True)
@@ -64,6 +64,7 @@ def apply_jit(
     # One tile through the function first, to learn what it returns: the
     # output takes that dtype, so a real tile made complex is kept complex.
     probe = func(padded[tuple(slice(0, z) for z in plan.size)] * analysis)
+    taper = _taper_like(taper, padded)
     out = np.zeros(plan.extended, dtype=np.result_type(probe, padded, taper))
     tiles_in = plan._tile_view(padded)
     tiles_out = plan._tile_view(out, writeable=True)

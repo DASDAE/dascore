@@ -34,18 +34,17 @@ from dascore.exceptions import (
     PatchError,
 )
 from dascore.utils.misc import iterate
-from dascore.utils.patch import patch_function
 from dascore.utils.signal import (
     get_dual_taper,
     get_taper,
     get_window_edges,
     get_window_nd,
 )
-from dascore.utils.tiles import get_tile_plan
+from dascore.utils.tiles import _taper_like, get_tile_plan
 from dascore.utils.time import dtype_time_like
 from dascore.utils.window import Window, resolve_window
 
-__all__ = ("TileApply", "reassemble")
+__all__ = ("Reassemble", "TileApply")
 
 _MODES = ("overlap_add", "stack")
 _ENGINES = ("auto", "numpy", "numba")
@@ -193,6 +192,8 @@ class TileApply(PatchProcessor):
       [`Patch.adaptive_spectral_filter`](`dascore.Patch.adaptive_spectral_filter`).
     """
 
+    __version__ = "1.1"
+
     model_config = ConfigDict(extra="allow", frozen=True, arbitrary_types_allowed=True)
 
     function: Callable
@@ -324,7 +325,7 @@ def _windows(
 
 def _windowed(tiles: np.ndarray, analysis: np.ndarray | None) -> np.ndarray:
     """Return the tiles under the analysis window, or as they are without one."""
-    return tiles if analysis is None else tiles * analysis
+    return tiles if analysis is None else tiles * _taper_like(analysis, tiles)
 
 
 def _stack_coords(patch: PatchType, window: Window, analysis: Any):
@@ -373,7 +374,7 @@ def _stack_coords(patch: PatchType, window: Window, analysis: Any):
         # window the tiles were cut under, whose dual blends them back.
         new_coords[f"_tile_source_{dim}"] = (None, coord)
         if edges is not None:
-            edge = edges[window.dims.index(dim)].astype(np.float32)
+            edge = edges[window.dims.index(dim)]
             new_coords[f"_tile_analysis_{dim}"] = (None, edge)
         # And every coordinate which rode along it, a quality flag say.
         for name, aux_dims in coords.dim_map.items():
@@ -398,6 +399,7 @@ def _place_each(stacks, starts, shape, size, weights):
     or reordered -- where the plan's colour classes no longer apply.
     """
     ndim = len(shape)
+    weights = _taper_like(weights, stacks)
     origins = np.stack(np.meshgrid(*starts, indexing="ij"), axis=-1).reshape(-1, ndim)
     low = tuple(int(min(0, s.min())) for s in starts)
     high = tuple(int(max(n, s.max() + z)) for n, s, z in zip(shape, starts, size))
@@ -414,8 +416,7 @@ def _place_each(stacks, starts, shape, size, weights):
     return out[(slice(None), *inner)]
 
 
-@patch_function()
-def reassemble(patch: PatchType, *, taper: Any = None) -> PatchType:
+class Reassemble(PatchProcessor):
     """
     Blend a stack of tiles back into the patch they were cut from.
 
@@ -441,88 +442,123 @@ def reassemble(patch: PatchType, *, taper: Any = None) -> PatchType:
     >>> tiles = patch.tile_apply(lambda x: x, mode="stack", time=0.2, samples=False)
     >>> assert tiles.reassemble().equals(patch, close=True)
     """
-    stashed = {
-        name[len("_tile_source_") :]: coord
-        for name, coord in patch.coords.coord_map.items()
-        if name.startswith("_tile_source_")
-    }
-    # `dim` for the coordinate the tiles were cut from; `dim__name` for one
-    # which rode along it.
-    sources = {name: coord for name, coord in stashed.items() if "__" not in name}
-    riders = {name: coord for name, coord in stashed.items() if "__" in name}
-    if not sources:
-        msg = "reassemble takes a patch tile_apply stacked; this one has no tiles."
-        raise PatchError(msg)
-    dims = tuple(sources)
-    offset_dims = tuple(f"{dim}_offset" for dim in dims)
-    size = tuple(len(patch.get_coord(name)) for name in offset_dims)
-    shape = tuple(len(coord) for coord in sources.values())
-    tile_axes = tuple(patch.get_axis(dim) for dim in dims)
-    offset_axes = tuple(patch.get_axis(name) for name in offset_dims)
-    ndim = len(dims)
-    # Batches first, then the tile grid, then the samples within a tile.
-    moved = np.moveaxis(
-        patch.data, (*tile_axes, *offset_axes), tuple(range(-2 * ndim, 0))
-    )
-    batch_shape = moved.shape[: -2 * ndim]
-    grid = moved.shape[-2 * ndim : -ndim]
-    stacks = moved.reshape((-1, int(np.prod(grid)), *size))
-    # Where each tile goes is what its start says, whatever order the tiles
-    # are in and whichever of them are still here; the taper is the one the
-    # tiles were cut for, which the stride in attrs says.
-    starts = [patch.get_coord(f"_tile_index_{dim}").values for dim in dims]
-    strides = tuple(int(patch.attrs[f"_tile_stride_{dim}"]) for dim in dims)
-    windows = [f"_tile_analysis_{dim}" for dim in dims]
-    if all(name in patch.coords.coord_map for name in windows):
-        if taper is not None:
-            msg = (
-                "This stack was cut with an analysis window and is blended under "
-                "its dual; a taper cannot be given."
+
+    __version__ = "1.1"
+
+    taper: Any = None
+
+    _positional_fields = ()
+
+    def get_metadata(self, meta):
+        """Return the patch the tiles came from, and where each tile goes."""
+        coords = meta.coords
+        stashed = {
+            name[len("_tile_source_") :]: coord
+            for name, coord in coords.coord_map.items()
+            if name.startswith("_tile_source_")
+        }
+        # `dim` for the coordinate the tiles were cut from; `dim__name` for one
+        # which rode along it.
+        sources = {name: coord for name, coord in stashed.items() if "__" not in name}
+        riders = {name: coord for name, coord in stashed.items() if "__" in name}
+        if not sources:
+            msg = "reassemble takes a patch tile_apply stacked; this one has no tiles."
+            raise PatchError(msg)
+        dims = tuple(sources)
+        offset_dims = tuple(f"{dim}_offset" for dim in dims)
+        size = tuple(len(meta.get_coord(name)) for name in offset_dims)
+        shape = tuple(len(coord) for coord in sources.values())
+        # Where each tile goes is what its start says, whatever order the tiles
+        # are in and whichever of them are still here; the taper is the one the
+        # tiles were cut for, which the stride in attrs says.
+        starts = [meta.get_coord(f"_tile_index_{dim}").values for dim in dims]
+        strides = tuple(int(meta.attrs[f"_tile_stride_{dim}"]) for dim in dims)
+        windows = [f"_tile_analysis_{dim}" for dim in dims]
+        if all(name in coords.coord_map for name in windows):
+            if self.taper is not None:
+                msg = (
+                    "This stack was cut with an analysis window and is blended "
+                    "under its dual; a taper cannot be given."
+                )
+                raise ParameterError(msg)
+            edges = [meta.get_coord(name).values for name in windows]
+            weights = get_dual_taper(edges, size, strides)[1]
+        else:
+            overlap = tuple(z - st for z, st in zip(size, strides))
+            weights = get_taper(
+                "hann" if self.taper is None else self.taper, size, overlap
             )
-            raise ParameterError(msg)
-        edges = [patch.get_coord(name).values for name in windows]
-        weights = get_dual_taper(edges, size, strides)[1]
-    else:
-        overlap = tuple(z - st for z, st in zip(size, strides))
-        weights = get_taper("hann" if taper is None else taper, size, overlap)
-    plan = get_tile_plan(shape, size, strides)
-    as_cut = all(
-        len(s) == count and np.array_equal(s, np.arange(count) * st - m)
-        for s, count, st, m in zip(starts, plan.grid, strides, plan.margin)
-    )
-    if as_cut:
-        # Every tile, in the order it was cut: the plan blends the stack a
-        # colour class at a time rather than a tile at a time.
-        blended = np.stack([plan.overlap_add(stack, weights) for stack in stacks])
-    else:
-        blended = _place_each(stacks, starts, shape, size, weights)
-    out = blended.reshape((*batch_shape, *shape))
-    out = np.moveaxis(out, tuple(range(-ndim, 0)), tile_axes)
-    # Put the source coordinates back, and drop everything the stack added,
-    # along with any coordinate on a tile or offset axis, which has no
-    # sample to go back to.
-    consumed = set(dims) | set(offset_dims)
-    coord_map: dict[str, Any] = {
-        name: (cdims, values)
-        for name, (cdims, values) in patch.coords.get_coord_tuple_map().items()
-        if not consumed & set(iterate(cdims))
-    }
-    for dim, coord in sources.items():
-        coord_map[dim] = coord
-        for name in (
-            f"{dim}_start",
-            f"{dim}_stop",
-            f"_tile_index_{dim}",
-            f"{dim}_offset",
-            f"_tile_source_{dim}",
-            f"_tile_analysis_{dim}",
-        ):
-            coord_map.pop(name, None)
-    for key, coord in riders.items():
-        dim, name = key.split("__", 1)
-        coord_map[name] = (dim, coord)
-        coord_map.pop(f"_tile_source_{key}")
-    new_dims = tuple(d for d in patch.dims if d not in offset_dims)
-    coords = get_coord_manager(coords=coord_map, dims=new_dims)
-    attrs = {k: v for k, v in dict(patch.attrs).items() if not k.startswith("_tile_")}
-    return patch.new(data=out, coords=coords, attrs=dc.PatchAttrs(**attrs))
+        # Put the source coordinates back, and drop everything the stack added,
+        # along with any coordinate on a tile or offset axis, which has no
+        # sample to go back to.
+        consumed = set(dims) | set(offset_dims)
+        coord_map: dict[str, Any] = {
+            name: (cdims, values)
+            for name, (cdims, values) in coords.get_coord_tuple_map().items()
+            if not consumed & set(iterate(cdims))
+        }
+        for dim, coord in sources.items():
+            coord_map[dim] = coord
+            for name in (
+                f"{dim}_start",
+                f"{dim}_stop",
+                f"_tile_index_{dim}",
+                f"{dim}_offset",
+                f"_tile_source_{dim}",
+                f"_tile_analysis_{dim}",
+            ):
+                coord_map.pop(name, None)
+        for key, coord in riders.items():
+            dim, name = key.split("__", 1)
+            coord_map[name] = (dim, coord)
+            coord_map.pop(f"_tile_source_{key}")
+        new_dims = tuple(d for d in meta.dims if d not in offset_dims)
+        new_coords = get_coord_manager(coords=coord_map, dims=new_dims)
+        attrs = {
+            k: v for k, v in dict(meta.attrs).items() if not k.startswith("_tile_")
+        }
+        out = meta.new(coords=new_coords, attrs=dc.PatchAttrs(**attrs))
+        return out, {
+            "tile_axes": tuple(meta.get_axis(dim) for dim in dims),
+            "offset_axes": tuple(meta.get_axis(name) for name in offset_dims),
+            "shape": shape,
+            "size": size,
+            "strides": strides,
+            "starts": starts,
+            "weights": weights,
+        }
+
+    def numpy_kernel(
+        self,
+        data,
+        *,
+        tile_axes,
+        offset_axes,
+        shape,
+        size,
+        strides,
+        starts,
+        weights,
+    ):
+        """Return the tiles blended back under their weights."""
+        ndim = len(tile_axes)
+        # Batches first, then the tile grid, then the samples within a tile.
+        moved = np.moveaxis(
+            data, (*tile_axes, *offset_axes), tuple(range(-2 * ndim, 0))
+        )
+        batch_shape = moved.shape[: -2 * ndim]
+        grid = moved.shape[-2 * ndim : -ndim]
+        stacks = moved.reshape((-1, int(np.prod(grid)), *size))
+        plan = get_tile_plan(shape, size, strides)
+        as_cut = all(
+            len(s) == count and np.array_equal(s, np.arange(count) * st - m)
+            for s, count, st, m in zip(starts, plan.grid, strides, plan.margin)
+        )
+        if as_cut:
+            # Every tile, in the order it was cut: the plan blends the stack a
+            # colour class at a time rather than a tile at a time.
+            blended = np.stack([plan.overlap_add(stack, weights) for stack in stacks])
+        else:
+            blended = _place_each(stacks, starts, shape, size, weights)
+        out = blended.reshape((*batch_shape, *shape))
+        return np.moveaxis(out, tuple(range(-ndim, 0)), tile_axes)

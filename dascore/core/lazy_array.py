@@ -135,7 +135,7 @@ class _Column:
         self.codes = np.asarray(codes, dtype=np.int32)
 
     @classmethod
-    def of(cls, values: Sequence) -> _Column:
+    def of(cls, values: Sequence | np.ndarray) -> _Column:
         """Encode a sequence of values."""
         if not isinstance(values, list | tuple):
             # Positional, whatever the index, and python str for numpy text.
