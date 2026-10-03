@@ -2622,6 +2622,18 @@ class TestChannelSelect:
         )
         with pytest.warns(UserWarning, match=UNJUDGED_MATCH):
             assert len(spool.select(coupling="trench")) == 0
+        with pytest.warns(UserWarning, match=UNJUDGED_MATCH):
+            assert len(spool.expand_by("zone")) == 0
+
+    def test_explicit_ranges_count_too(self, patch, inventory):
+        """Array ranges select through the same count, pointing at the caller."""
+        other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
+        spool = dc.spool([patch, other]).attach_inventory(inventory)
+        ranges = np.array([[0, 50], [100, 150]])
+        with pytest.warns(UserWarning, match=r"^1 patch\(es\)") as record:
+            out = spool.select(distance=ranges, coupling="trench")
+        assert len(out) == 2
+        assert record[0].filename == __file__
 
     def test_an_ordinary_miss_is_not_counted(self, patch, inventory):
         """
@@ -2827,7 +2839,8 @@ class TestChannelUnselect:
         """The selection never held it, so its complement keeps all of it."""
         other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
         spool = dc.spool([patch, other]).attach_inventory(inventory)
-        out = spool.unselect(coupling="trench")
+        with pytest.warns(UserWarning, match=r"^1 patch\(es\)"):
+            out = spool.unselect(coupling="trench")
         assert len(out) == 2
         assert sorted(out.get_contents()["distance_min"]) == [0.0, 151.0]
 
@@ -3095,7 +3108,8 @@ class TestChannelSelectEdges:
         """A described patch splits; one the inventory is silent about does not."""
         other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER", tag="second")
         spool = dc.spool([patch, other]).attach_inventory(inventory)
-        out = spool.expand_by("zone")
+        with pytest.warns(UserWarning, match=r"^1 patch\(es\)"):
+            out = spool.expand_by("zone")
         assert out.get_contents()["zone"].tolist() == ["north", "south"]
 
     def test_splitting_an_unevenly_sampled_patch_refuses(self, patch, inventory):

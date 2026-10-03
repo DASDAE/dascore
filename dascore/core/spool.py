@@ -591,7 +591,8 @@ class Spool(NodeRepr, NamespaceOwner):
         patches are dropped with one warning per call counting them.
         [`conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`)
         splits patches at optical-path changes first, so the described parts
-        can be selected. Patches that resolve but do not match drop silently.
+        can be selected; a patch spanning an acquisition change must instead
+        be split by time. Patches that resolve but do not match drop silently.
 
         Examples
         --------

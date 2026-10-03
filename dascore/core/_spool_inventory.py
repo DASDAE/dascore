@@ -404,9 +404,11 @@ def report_unjudged(count: int) -> None:
         f"{count} patch(es) resolve to no single inventory context, so they "
         "were treated as not matching: each straddles a change of "
         "acquisition or optical path, reaches outside every optical-path "
-        "epoch, or is not described by the inventory. Use "
-        "Spool.conform_to_inventory first to split patches at optical-path "
-        "changes so the described parts can be selected."
+        "epoch, has no physical time to resolve at, or is not described by "
+        "the inventory. Spool.conform_to_inventory splits patches at "
+        "optical-path changes so the described parts can be selected; pass "
+        "it on_unresolved='ignore' to drop the rest. It refuses a patch "
+        "spanning an acquisition change, which must be split by time instead."
     )
     warnings.warn(msg, UserWarning, stacklevel=3)
 
