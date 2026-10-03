@@ -25,6 +25,7 @@ from dascore.constants import (
     numeric_types,
     timeable_types,
 )
+from dascore.core.coords import get_coord
 from dascore.exceptions import (
     CoordMergeError,
     InvalidSpoolError,
@@ -106,6 +107,66 @@ def _estimate_merge_samples(df, dim) -> int | None:
     if (counts < 0).any():
         return None
     return int(counts.sum())
+
+
+class _LazySourceArray:
+    """
+    An array whose data loads one source patch at a time when sliced.
+
+    Sources follow each other along one axis. Those used by the previous
+    read are kept, so reading forward along that axis loads each source
+    about once.
+
+    Note: on the dev branch this should use dascore.core.lazy_array.LazyArray.
+    """
+
+    def __init__(self, load, starts, axis, shape, first_data):
+        # starts holds each source's first index along axis, plus the total.
+        self._load, self._starts, self._axis = load, starts, axis
+        self._cache = {0: first_data}
+        self.shape, self.dtype, self.ndim = shape, first_data.dtype, len(shape)
+
+    @property
+    def size(self) -> int:
+        """The number of elements."""
+        return int(np.prod(self.shape))
+
+    def __getitem__(self, key):
+        key = list(key) if isinstance(key, tuple) else [key]
+        ellipses = [num for num, k in enumerate(key) if k is Ellipsis]
+        if ellipses:
+            pos = ellipses[0]
+            key[pos : pos + 1] = [slice(None)] * (self.ndim - len(key) + 1)
+        key = key + [slice(None)] * (self.ndim - len(key))
+        slices = all(isinstance(k, slice) for k in key)
+        if not slices or (key[self._axis].step or 1) < 0:
+            return np.asarray(self)[tuple(key)]  # Uncommon; loads everything.
+        # Find the sources overlapping the requested range along axis.
+        start, stop, step = key[self._axis].indices(self.shape[self._axis])
+        stop = max(start, stop)  # An empty (e.g. reversed) range selects nothing.
+        first = min(
+            np.searchsorted(self._starts, start, "right"), len(self._starts) - 1
+        )
+        first -= 1
+        last = max(np.searchsorted(self._starts, stop), first + 1)
+        # Reuse sources from the previous read; others are dropped below.
+        cache = {i: self._cache.get(i) for i in range(first, last)}
+        parts = []
+        for i, data in cache.items():
+            cache[i] = data if data is not None else self._load(i)
+            # Select the other axes per source so only requested data is copied.
+            local, offset = list(key), self._starts[i]
+            local[self._axis] = slice(max(start - offset, 0), stop - offset)
+            parts.append(cache[i][tuple(local)])
+        self._cache = cache
+        # A single source returns a view; spanning sources requires a copy.
+        out = parts[0] if len(parts) == 1 else np.concatenate(parts, self._axis)
+        # Apply the step last, after the contiguous range is assembled.
+        return out[broadcast_for_index(self.ndim, self._axis, slice(None, None, step))]
+
+    def __array__(self, dtype=None, copy=None):
+        out = np.asarray(self[()], dtype=dtype)
+        return out.copy() if copy else out
 
 
 class BaseSpool(NamespaceOwner, abc.ABC):
@@ -540,6 +601,10 @@ class DataFrameSpool(BaseSpool):
 
     def _get_patches_from_index(self, df_ind):
         """Given an index (from current df), return the corresponding patch."""
+        return self._patch_from_instruction_df(self._get_joined_instructions(df_ind))
+
+    def _get_joined_instructions(self, df_ind):
+        """Get the instructions, joined with sources, for an index."""
         source = self._source_df
         instruction = self._instruction_df
         # handle negative index.
@@ -566,7 +631,131 @@ class DataFrameSpool(BaseSpool):
         if len(joined) > 10:
             cols = set(joined.columns) - set(self._drop_columns)
             joined = joined.drop_duplicates(subset=list(cols), keep="first")
-        return self._patch_from_instruction_df(joined)
+        return joined
+
+    def get_lazy_patch(self, index: int = 0) -> PatchType:
+        """
+        Return the patch at index without loading its data.
+
+        The patch's data loads, one source patch at a time, only when it is
+        sliced (e.g. by `Patch.select`). This lets a long patch, such as
+        one made by `spool.chunk(time=None)`, be processed in pieces without
+        holding it all in memory. The sources must continue one evenly sampled
+        grid, so the patch's coordinates match
+        `spool[index]`; attributes come from the first source patch.
+
+        Parameters
+        ----------
+        index
+            The index of the patch in the spool.
+
+        Raises
+        ------
+        ParameterError
+            If the patch merges sources which don't continue one evenly
+            sampled grid, or which have coordinates along the merged
+            dimension.
+        CoordMergeError
+            When a source is loaded whose dtype, samples, or other
+            coordinates differ from what the first source implies.
+
+        Examples
+        --------
+        >>> import dascore as dc
+        >>> spool = dc.get_example_spool("random_das").chunk(time=None)
+        >>> patch = spool.get_lazy_patch()
+        >>> # Only the sources needed for this selection are loaded.
+        >>> sub = patch.select(time=(0, 1), relative=True)
+        """
+        joined = self._get_joined_instructions(index)
+        if len(joined) == 1:  # A single source is loaded as is.
+            return self._get_patches_from_index(index)[0]
+        # The merge dim is the only dimension whose range varies by source.
+        dims = joined["dims"].iloc[0].split(",")
+        varying = [
+            x
+            for x in dims
+            if f"{x}_min" in joined and joined[f"{x}_min"].nunique(dropna=False) > 1
+        ]
+        dim = varying[0] if len(varying) == 1 else None
+        joined = joined.sort_values(f"{dim}_min") if dim else joined
+        rows = self._df_to_dict_list(joined)
+        first = self._load_trimmed_patch(rows[0], joined)
+        starts, counts = self._get_lazy_source_samples(joined, dim, first)
+        others = [
+            x for x in first.coords.coord_map if dim not in first.coords.dim_map[x]
+        ]
+        axis = first.get_axis(dim)
+        step = first.get_coord(dim).step
+
+        def load(num, patch=None):
+            """Load a source, checking it fits the first one."""
+            if patch is None:
+                patch = self._load_trimmed_patch(rows[num], joined)
+            patch = patch.transpose(*first.dims)
+            fits = (
+                patch.data.dtype == first.data.dtype
+                and patch.shape[axis] == counts[num]
+                and abs(patch.get_coord(dim).min() - starts[num]) <= step / 1000
+                and patch.coords.dim_map == first.coords.dim_map
+                and all(
+                    patch.coords.coord_map[x] == first.coords.coord_map[x]
+                    for x in others
+                )
+            )
+            if not fits:
+                msg = (
+                    f"Source {num} of the lazy patch has a different dtype, "
+                    f"samples along {dim}, or other coordinates than the first."
+                )
+                raise CoordMergeError(msg)
+            return patch.data
+
+        load(0, first)  # The first source must match its indexed range too.
+        offsets = np.cumsum([0, *counts])
+        shape = list(first.shape)
+        shape[axis] = int(offsets[-1])
+        data = _LazySourceArray(load, offsets, axis, tuple(shape), first.data)
+        # Built from start and step; change_length can fail for large origins.
+        old = first.get_coord(dim)
+        stop = old.min() + shape[axis] * old.step
+        coord = get_coord(start=old.min(), stop=stop, step=old.step, units=old.units)
+        return first.new(data=data, coords=first.coords.update(**{dim: coord}))
+
+    def _get_lazy_source_samples(self, joined, dim, first):
+        """
+        Get the first sample and sample count of each source along dim.
+
+        Raise unless the sources continue the first one's evenly sampled grid.
+        """
+        bad_msg = (
+            "Cannot load this patch lazily; its sources don't continue one "
+            "evenly sampled grid{}. Use spool[index] instead."
+        )
+        coord = first.get_coord(dim) if dim else None
+        if coord is None or not coord.evenly_sampled:
+            raise ParameterError(bad_msg.format(""))
+        merge_coords = [
+            x
+            for x in first.coords.coord_map
+            if x != dim and dim in first.coords.dim_map[x]
+        ]
+        if merge_coords:
+            raise ParameterError(bad_msg.format(f" (or have coords {merge_coords})"))
+        # Place each source's range on the first source's grid; sources must
+        # follow each other without gaps on it. Sources whose own samples
+        # are off this grid raise when they load.
+        steps = self._source_df.loc[joined.index, f"{dim}_step"].to_numpy()
+        origin, step = coord.min(), coord.step
+        low = (joined[f"{dim}_min"].to_numpy() - origin) / step
+        high = (joined[f"{dim}_max"].to_numpy() - origin) / step
+        first_num = np.ceil(low - 1e-9).astype(np.int64)
+        last_num = np.floor(high + 1e-9).astype(np.int64)
+        contiguous = first_num[0] == 0 and np.all(first_num[1:] == last_num[:-1] + 1)
+        if np.any(steps != step) or not contiguous:
+            raise ParameterError(bad_msg.format(""))
+        starts, counts = origin + first_num * step, last_num - first_num + 1
+        return starts, counts
 
     def _patch_from_instruction_df(self, joined):
         """Get the patches joined columns of instruction df."""
