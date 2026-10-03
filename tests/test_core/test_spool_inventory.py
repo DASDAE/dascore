@@ -1469,8 +1469,9 @@ class TestSelectPartlyHeldCoord:
         """A window dropping every holding row leaves the fiber to judge."""
         windowed = spool.enrich(attrs=False, coords=("y",))
         windowed = windowed.select(distance=[[60, 70]])
-        expected = dc.spool(list(windowed)).select(y=(40.02, 40.03))
+        # Selected before iterating, which builds the window's pieces.
         out = windowed.select(y=(40.02, 40.03))
+        expected = dc.spool(list(windowed)).select(y=(40.02, 40.03))
         assert self._extents(out) == self._extents(expected) == [("bare", 60, 70)]
 
     def test_view_of_holders_reads_no_inventory(self, spool, inventory, tmp_path):
@@ -1481,6 +1482,11 @@ class TestSelectPartlyHeldCoord:
         path.unlink()
         out = lazy.select(tag="held").select(y=(40.005, 40.02))
         assert self._extents(out) == [("held", 16, 49)]
+
+    def test_open_range_does_not_veto_a_flag(self, spool):
+        """A range open at both ends asks nothing, so `samples` still works."""
+        out = spool.select(distance=(0, 10), y=(None, None), samples=True)
+        assert self._extents(out) == [("bare", 0, 9), ("held", 0, 9)]
 
 
 class TestInventoryUnselect:

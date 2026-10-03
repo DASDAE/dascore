@@ -193,8 +193,10 @@ def _adjust_absolute_envelopes(df, coords):
     """Project one absolute coordinate selection onto relation envelopes."""
     for name, value in coords.items():
         # A row lacking the coordinate loads untrimmed (see
-        # `apply_exact_residuals`), so its envelopes stand as they are.
-        column = df.get(f"_{name}_def_key")
+        # `apply_exact_residuals`), so its envelopes stand as they are. The
+        # stored dtype marks a held coordinate; the identity key does not,
+        # being null for one with no data id.
+        column = df.get(f"_{name}_coord_dtype")
         missing = np.zeros(len(df), bool) if column is None else column.isna().values
         held, lacking = df[~missing], df[missing]
         if isinstance(value, _CanonicalRange):

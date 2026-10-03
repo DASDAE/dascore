@@ -868,10 +868,8 @@ class Spool(NodeRepr, NamespaceOwner):
         # patch holds neither realizes the view nor reads the inventory.
         asked = {
             name: value
-            for name, value in coords.items()
-            if value is not None
-            and value is not Ellipsis
-            and not backend.coord_held_everywhere(name)
+            for name, value in stated_channels(coords).items()
+            if value is not None and not backend.coord_held_everywhere(name)
         }
         if not asked:
             return {}
