@@ -2172,6 +2172,25 @@ class TestConformSubdivision:
         assert _pieces(out)[1][0] == edges[1]
         assert out[0].shape[1] + out[1].shape[1] == patch.shape[1]
 
+    def test_a_path_gap_between_two_samples_drops_nothing(self, patch, inventory):
+        """
+        A gap between paths that holds no sample leaves every sample described.
+
+        Only samples outside every path epoch make a patch undescribed, so the
+        patch splits at the gap as it would at two abutting epochs.
+        """
+        coord = patch.get_coord("time")
+        array = inventory.networks[0].fiber_arrays[0]
+        old = array.optical_paths[0]
+        sample = coord.min() + coord.step * 500
+        gap = (sample - coord.step * 2 / 3, sample - coord.step / 3)
+        paths = (old.new(time_max=gap[0]), old.new(time_min=gap[1], name="after"))
+        split = inventory.replace(array, array.new(optical_paths=paths)).check()
+        out = dc.spool(patch).attach_inventory(split).conform_to_inventory()
+        assert len(out) == 2
+        assert _pieces(out)[1][0] == sample
+        assert out[0].shape[1] + out[1].shape[1] == patch.shape[1]
+
     def test_a_boundary_outside_the_patch_cuts_nothing(self, patch, inventory):
         """Only the epochs a patch actually reaches into can divide it."""
         coord = patch.get_coord("time")

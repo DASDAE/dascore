@@ -901,28 +901,41 @@ class RowEpochs(NamedTuple):
         What the row resolves to where it begins, or None where the
         inventory does not describe the row over its whole span. A row
         with no cuts and no conflict resolves to this throughout.
-    pathless
-        Whether the row reaches outside every epoch of its optical paths.
-        Conforming treats that as undescribed, as it does a row reaching
-        outside every acquisition epoch; selection still reads the
-        acquisition's own facts from `context`.
+    outside
+        For the span before the first cut and after each cut, whether it
+        falls outside every epoch of the row's optical paths.
     """
 
     cuts: tuple
     conflict: Any
     context: ResolvedContext | None
-    pathless: bool = False
+    outside: tuple = ()
 
     @property
     def described(self) -> bool:
         """Whether the inventory resolves this row, over its whole span."""
-        return self.context is not None and not self.pathless
+        return self.context is not None
 
     @property
     def settled(self) -> ResolvedContext | None:
         """The one context this row resolves to throughout, or None."""
-        whole = not self.cuts and self.conflict is None
+        whole = self.described and not self.cuts and self.conflict is None
         return self.context if whole else None
+
+    def pathless(self, starts) -> bool:
+        """
+        Return whether a piece starting at any of `starts` has no path.
+
+        A span between cuts that no piece starts in holds no sample, so a
+        gap between two paths narrower than a sample leaves nothing out.
+        """
+        if not self.cuts:
+            return self.outside[0]
+        cuts, starts = (
+            np.array(x, dtype="datetime64[ns]") for x in (self.cuts, starts)
+        )
+        spans = np.searchsorted(cuts, starts, "right")
+        return any(self.outside[x] for x in spans)
 
 
 # What a row whose key names no entry at all knows about its epochs.
@@ -1055,7 +1068,7 @@ def _epoch_changes(resolved: list, boundaries) -> RowEpochs:
     bound the answers do not change across is not a boundary this row
     crosses at all.
     """
-    cuts = []
+    cuts, outside = [], [_outside_paths(resolved[0])]
     # One boundary between each consecutive pair, so the three walk in
     # step -- `resolved[1:]` alone would leave the first sequence longer.
     for previous, current, boundary in zip(
@@ -1065,8 +1078,8 @@ def _epoch_changes(resolved: list, boundaries) -> RowEpochs:
             return RowEpochs(tuple(cuts), boundary, resolved[0])
         if not _same(previous.optical_path, current.optical_path):
             cuts.append(boundary)
-    pathless = any(_outside_paths(x) for x in resolved)
-    return RowEpochs(tuple(cuts), None, resolved[0], pathless)
+            outside.append(_outside_paths(current))
+    return RowEpochs(tuple(cuts), None, resolved[0], tuple(outside))
 
 
 def _outside_paths(context: ResolvedContext) -> bool:
