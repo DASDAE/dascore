@@ -79,6 +79,7 @@ class CorrelateShift(PatchProcessor):
     undo_weighting: Any = True
 
     data_type = "correlation"
+    __version__ = "1.1"
 
     def get_metadata(self, meta):
         """Return metadata with the lag coordinate, and the axis and step."""
@@ -97,7 +98,8 @@ class CorrelateShift(PatchProcessor):
         new_cm = cm._update_grid(dim, **{dim: new_coord}).rename_coord(
             **{dim: f"lag_{dim}"}
         )
-        weight = to_float(step) if self.undo_weighting else None
+        # A python float divides single precision without widening it.
+        weight = float(to_float(step)) if self.undo_weighting else None
         return meta.new(coords=new_cm), {"axis": axis, "step": weight}
 
     def kernel(self, data, *, axis, step):
@@ -110,13 +112,10 @@ class CorrelateShift(PatchProcessor):
         if not xp.isdtype(data.dtype, ("real floating", "complex floating")):
             # numpy promotes integers to float64 here; some backends refuse to.
             data = xp.astype(data, xp.float64)
-        # Divide by the step as a 0-d array: like a numpy scalar, and unlike
-        # a python float, it sets the result's dtype, and every backend
-        # accepts it.
-        return data / (xp.asarray(step) if isinstance(step, np.generic) else step)
+        return data / step
 
 
-@patch_function(data_type="correlation", version="1.1")
+@patch_function(data_type="correlation", version="1.2")
 def correlate(
     patch: PatchType,
     samples: bool = False,

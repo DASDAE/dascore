@@ -242,6 +242,18 @@ class TestCorrelatePaddedTransform:
         assert out.shape[out.get_axis("distance")] == 17
 
 
+class TestCorrelatePrecision:
+    """Single precision data are correlated in single precision."""
+
+    def test_float32_stays_float32(self, random_patch):
+        """A float32 patch correlates to float32, close to the float64 result."""
+        single = random_patch.new(data=random_patch.data.astype(np.float32))
+        out = single.correlate(distance=0, samples=True)
+        expected = random_patch.correlate(distance=0, samples=True)
+        assert out.dtype == np.float32
+        assert np.allclose(out.data, expected.data, rtol=1e-3, atol=1e-3)
+
+
 class TestCorrelateErrors:
     """Tests for correlate input validation."""
 
@@ -274,8 +286,11 @@ class TestCorrelateShiftProcessor:
         assert out.dtype == expected.dtype
         assert np.array_equal(out.data, expected)
 
-    def test_single_precision_promotes(self, random_patch):
-        """float32 data divided by the float64 step become float64, as in numpy."""
+    @pytest.mark.parametrize("undo_weighting", (True, False))
+    def test_single_precision_stays_single(self, random_patch, undo_weighting):
+        """float32 data stay float32 when divided by the step, or not."""
         single = random_patch.new(data=random_patch.data.astype(np.float32))
-        assert single.correlate_shift("time").dtype == np.float64
-        assert single.correlate_shift("time", undo_weighting=False).dtype == np.float32
+        out = single.correlate_shift("time", undo_weighting=undo_weighting)
+        meta = dc.proc.CorrelateShift("time", undo_weighting=undo_weighting)
+        assert out.dtype == np.float32
+        assert meta.get_metadata(single.drop_data())[0].dtype == np.float32
