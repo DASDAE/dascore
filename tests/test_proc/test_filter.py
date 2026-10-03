@@ -127,7 +127,7 @@ class TestPassFilter:
 
     def test_uneven_sampling_raises(self, wacky_dim_patch):
         """A nice error message should be raised if the samples aren't even."""
-        match = "is not evenly sampled"
+        match = r"is not evenly sampled.*Patch.snap_coords or Patch.interpolate"
         with pytest.raises(CoordDataError, match=match):
             wacky_dim_patch.pass_filter(time=(10, 100))
 

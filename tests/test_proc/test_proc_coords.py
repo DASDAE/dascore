@@ -471,6 +471,12 @@ class TestSelect:
         new_coords = patch.coords.update(**coord_dict)
         return patch.new(coords=new_coords)
 
+    def test_scalar_suggests_sel(self, random_patch):
+        """A single value points to sel and the other accepted forms."""
+        match = r"Patch.sel for a single value.*array of values or a boolean mask"
+        with pytest.raises(ParameterError, match=match):
+            random_patch.select(distance=10)
+
     def _assert_coord_unchanged(self, original_patch, selected_patch, coord_name):
         """Helper to assert a coordinate remains unchanged."""
         assert np.array_equal(

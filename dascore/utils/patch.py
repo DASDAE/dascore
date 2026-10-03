@@ -1063,8 +1063,8 @@ def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
         calling_function = get_parent_code_name()
         msg = (
             f"Patch coordinate {dim} is not evenly sampled as required by "
-            f"{calling_function}. This can be fixed with Patch.snap or "
-            f"Patch.extrapolate. "
+            f"{calling_function}. This can be fixed with Patch.snap_coords or "
+            f"Patch.interpolate."
         )
         raise CoordDataError(msg)
     return 1.0 / d_dim
