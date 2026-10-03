@@ -2043,6 +2043,7 @@ def build_chunk_plan(
             fill_value=fill_value,
             skip=skip,
         )
+    outputs = _carry_grids(outputs, members, sorted_df, name)
     return ChunkPlan(outputs, members, name, value, params)
 
 
@@ -2781,6 +2782,47 @@ def build_subdivision_plan(df: pd.DataFrame, pieces, name: str) -> ChunkPlan:
         }
     )
     return ChunkPlan(outputs.reset_index(drop=True), members, name, None, {})
+
+
+def _carry_grids(outputs, members, sources, name):
+    """
+    Give outputs on one exact grid the grid of their samples.
+
+    A whole-tick envelope cannot restate a fractional step, so a later plan
+    over the output would cut on a drifting lattice. A grid's labels are
+    ``(ideal + k * num) // den`` ticks; members on one lattice share num,
+    den and ideal origin modulo num, and a fill completes the lattice.
+    """
+    col, (low, high, _) = f"_{name}_grid", _dim_columns(outputs, name)
+    if col not in sources or sources[low].dtype.kind not in "Mm":
+        return outputs
+    lattice = {}  # source -> (num, den, ideal % |num|, ideal)
+    edges = to_int(sources[low]), to_int(sources[high])
+    for pid, grid, lo, hi in zip(sources["_patch_row"], sources[col], *edges):
+        if isinstance(grid, tuple):
+            num, den, phase, _ = grid  # a descending grid starts at its max
+            ideal = int(hi if num < 0 else lo) * den + phase
+            lattice[pid] = (num, den, ideal % abs(num), ideal)
+    first, kinds = {}, {}
+    for out, pid in zip(members["output_id"], members["_patch_row"]):
+        first.setdefault(out, pid)
+        kinds.setdefault(out, set()).add(lattice.get(pid, (None,))[:3])
+    grids = []
+    ends = to_int(outputs[low]), to_int(outputs[high])
+    for out, lo, hi in zip(outputs["output_id"], *ends):
+        if len(kinds.get(out, ())) != 1 or first[out] not in lattice:
+            grids.append(None)
+            continue
+        num, den, _, ideal = lattice[first[out]]
+        top, bottom = (int(hi) + 1) * den - ideal, int(lo) * den - ideal
+        if num > 0:  # first and last k labelling inside [lo, hi]
+            k0, k1 = -(-bottom // num), -(-top // num) - 1
+        else:
+            k0, k1 = top // num + 1, bottom // num
+        # slicing keeps a reduced grid reduced: num and den set what divides phase
+        grids.append((num, den, (ideal + k0 * num) % den, k1 - k0 + 1))
+    outputs[col] = grids
+    return outputs
 
 
 def _report_incomplete(failures, behavior: WARN_LEVELS) -> None:

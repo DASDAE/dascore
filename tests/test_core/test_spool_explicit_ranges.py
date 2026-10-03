@@ -1642,8 +1642,26 @@ _CHAINS = {
 }
 
 
+# the whole-tick step of an exact 1/1024 s grid
+_STEP = np.timedelta64(976562, "ns")
+
+
+def _assert_chain_loads(path, pieces, first, count=4):
+    """A chunk, then a regular one, equal the same on loaded patches."""
+    for num, piece in enumerate(pieces):
+        piece.io.write(path / f"{num}.h5", "dasdae")
+    second = dict(x=50 * _STEP + _STEP // 2, keep_partial=True)
+    eager = dc.spool(list(dc.spool(pieces).chunk(**first))).chunk(**second)
+    expected = [x.get_coord("x").values for x in eager]
+    for spool in (dc.spool(pieces), dc.spool(path).update(progress=None)):
+        got = spool.chunk(**first).chunk(**second)
+        assert len(got) == len(expected) == count
+        for patch, labels in zip(got, expected, strict=True):
+            assert np.array_equal(patch.get_coord("x").values, labels)
+
+
 class TestChainedExplicitChunk:
-    """A regular chunk then explicit windows keeps every sample it held."""
+    """Chunks chained with explicit windows keep every sample they held."""
 
     @pytest.fixture(scope="class")
     def sources(self, tmp_path_factory):
@@ -1668,6 +1686,29 @@ class TestChainedExplicitChunk:
         for spool in (mem, disk):
             first = spool.chunk(x=length, keep_partial=True)
             _assert_selects(first.chunk(x=window[None]), whole, window)
+
+    @pytest.mark.parametrize("sign, shift", [(1, 0), (-1, 0), (1, 300)])
+    def test_windows_then_regular_chunk(self, tmp_path, sign, shift):
+        """
+        Windows then a regular chunk on a 1/1024 s grid drop no sample.
+
+        A second piece shifted off the first's lattice (by ``shift`` ns)
+        joins no exact grid, and still matches the loaded patches.
+        """
+        values = _exact_values(300, sign=sign)
+        pieces = list(_cut_spools(None, values, [150, 150])[1])
+        coord = pieces[1].get_coord("x")
+        moved = coord.update(min=coord.min() + np.timedelta64(shift, "ns"))
+        pieces[1] = pieces[1].update_coords(x=moved)
+        window = values.min() + np.array([2 * _STEP + _STEP // 3, 200 * _STEP])
+        _assert_chain_loads(tmp_path, pieces, dict(x=window[None]))
+
+    def test_filled_chunk_then_regular_chunk(self, tmp_path):
+        """A filled chunk across a hole then a regular chunk drop no sample."""
+        whole = _cut_spools(None, _exact_values(300), [300])[0]
+        pieces = [whole.select(x=x, samples=True) for x in [(0, 140), (160, None)]]
+        first = dict(x=120 * _STEP + _STEP // 3, keep_partial=True, fill_value=0)
+        _assert_chain_loads(tmp_path, pieces, first, count=6)
 
     @pytest.mark.parametrize("seed", range(len(_CHAINS)))
     def test_random_plans(self, sources, seed):
