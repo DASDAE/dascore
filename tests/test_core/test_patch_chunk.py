@@ -2494,6 +2494,16 @@ class TestMergeDimCoords:
         with pytest.raises(CoordMergeError, match="power"):
             list(make_spool([power_halves[0], halves[1]]).chunk(time=None))
 
+    def test_rider_dims_differ(self, halves, power_halves, make_spool):
+        """Members holding the rider on different dims conflict."""
+        second = halves[1]
+        shape = (len(second.get_coord("distance")), len(second.get_coord("time")))
+        values = np.full(shape, 2.0)
+        second = second.update_coords(power=(("distance", "time"), values))
+        second = second.update_attrs(history=[])
+        with pytest.raises(CoordMergeError, match="power"):
+            list(make_spool([power_halves[0], second]).chunk(time=None))
+
     def test_same_name_on_other_dim(self, power_halves, make_spool):
         """
         Riding is decided per patch, not by the name across the spool.
