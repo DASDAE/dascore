@@ -349,6 +349,20 @@ def _get_blanket_coord_names(inventory, path) -> list[str]:
     return out + (["coupling"] if path.coupling else [])
 
 
+def _stated_kind(values, unset) -> str:
+    """
+    Return the kind of value an array states, ignoring width and precision.
+
+    An object array is judged by the values it holds, since a reader may
+    hand back strings with gaps that way.
+    """
+    stated = values[~unset]
+    if stated.dtype == object:
+        stated = np.asarray(stated.tolist())
+    kind = stated.dtype.kind
+    return {"S": "U", "b": "f", "i": "f", "u": "f"}.get(kind, kind)
+
+
 def _merge_coord(existing, values):
     """
     Merge a patch coordinate with the inventory's values for it.
@@ -369,7 +383,10 @@ def _merge_coord(existing, values):
         return existing
     if unset_first.all():
         return other
-    if existing.units != other.units:
+    # Values of another kind disagree even on channels only one side states;
+    # filling would coerce them (numbers into strings, say) to one array.
+    kinds = _stated_kind(first, unset_first), _stated_kind(second, unset_second)
+    if existing.units != other.units or kinds[0] != kinds[1]:
         return None
     # Compared as Python values rather than by dtype: a string array's width
     # is fixed by the longest value it happens to hold, and a reader may

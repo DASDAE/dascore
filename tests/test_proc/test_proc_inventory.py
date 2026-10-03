@@ -699,6 +699,16 @@ class TestCoords:
         merged = out.get_coord(name).values
         assert set(merged[full.values != ""]) == {"soil"}
 
+    def test_complementary_values_of_another_kind_disagree(self, patch, inventory):
+        """Numbers where the inventory states strings are not merged into them."""
+        name = "coupling.medium"
+        projected = patch.enrich(inventory, attrs=False, coords=(name,))
+        unset = projected.get_coord(name).values == ""
+        own = np.where(unset, 1.0, np.nan)
+        held = patch.update_coords(**{name: ("distance", own)})
+        with pytest.raises(PatchError, match=f"already has a '{name}'"):
+            held.enrich(inventory, attrs=False, coords=(name,))
+
     def test_coord_on_another_dim_is_not_merged(self, patch, inventory):
         """Matching length is not matching channels; another dim disagrees."""
         full = patch.enrich(inventory, attrs=False, coords=("x",)).get_coord("x")
