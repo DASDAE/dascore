@@ -21,6 +21,7 @@ from dascore.core._spool_inventory import (
     COORD_REDUNDANT_ATTRS,
     DATA_STATE_ATTRS,
     VALID_ON_MISSING,
+    _unstated,
     attr_owner,
     get_coord_values,
     get_interrogator,
@@ -348,45 +349,70 @@ def _get_blanket_coord_names(inventory, path) -> list[str]:
     return out + (["coupling"] if path.coupling else [])
 
 
-def _coords_equal(existing, values) -> bool:
-    """Return True when a patch coordinate already holds these values."""
+def _merge_coord(existing, values):
+    """
+    Merge a patch coordinate with the inventory's values for it.
+
+    A channel either side leaves unset (NaN, None, "") never disagrees:
+    the inventory fills the patch's gaps and the patch keeps what the
+    inventory does not cover. Returns None on a disagreement, and the
+    existing coordinate itself when the inventory adds nothing, so
+    re-enriching is a refresh rather than a collision.
+    """
     other = values if isinstance(values, BaseCoord) else get_coord(data=values)
-    if existing.units != other.units or existing.shape != other.shape:
-        return False
+    if existing.shape != other.shape:
+        return None
     first, second = existing.values, other.values
-    # Kind, not the exact dtype: a string array's width is fixed by the
-    # longest value it happens to hold, so a patch sliced down to the short
-    # values keeps the wider dtype and would otherwise never match a fresh
-    # projection of itself -- re-enriching a selection would stop being a
-    # refresh and start raising.
-    if first.dtype.kind != second.dtype.kind:
-        return False
-    equal = first == second
-    if np.issubdtype(first.dtype, np.floating):
-        equal |= np.isnan(first) & np.isnan(second)
-    return bool(np.all(equal))
+    unset_first, unset_second = _unstated(first), _unstated(second)
+    if unset_second.all():
+        return existing
+    if unset_first.all():
+        return other
+    if existing.units != other.units:
+        return None
+    # Compared as Python values rather than by dtype: a string array's width
+    # is fixed by the longest value it happens to hold, and a reader may
+    # hand back strings with gaps as an object array, so neither says
+    # whether the stated channels agree.
+    both = ~unset_first & ~unset_second
+    stated = first[both].astype(object), second[both].astype(object)
+    if not np.all(stated[0] == stated[1]):
+        return None
+    fill = unset_first & ~unset_second
+    if not fill.any():
+        return existing
+    return get_coord(data=np.where(fill, second, first), units=other.units)
 
 
 def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
     """Return the coordinates to add to the patch."""
     path = context.optical_path
-    if path is None:
-        if coords is True:
-            return {}
-        msg = (
-            f"No optical path is valid for {context.acquisition.code!r} at "
-            "the patch's time, so no per-channel coordinates can be resolved."
-        )
-        raise PatchError(msg)
     blanket = coords is True
-    names = _get_blanket_coord_names(inventory, path) if blanket else iterate(coords)
+    if path is None:
+        if blanket:
+            return {}
+        if on_missing == "raise":
+            msg = (
+                f"No optical path is valid for {context.acquisition.code!r} at "
+                "the patch's time, so no per-channel coordinates can be resolved."
+            )
+            raise PatchError(msg)
+        # With no path every named coordinate is missing, so on_missing
+        # decides each one as it would a name the path does not define.
+        names = iterate(coords)
+    else:
+        names = (
+            _get_blanket_coord_names(inventory, path) if blanket else iterate(coords)
+        )
     if not names:
         # Nothing to project, so the patch needs no channel mapping.
         return {}
-    channel_name, dim, distances = _get_channel_distances(patch, context.acquisition)
+    channel = (
+        None if path is None else _get_channel_distances(patch, context.acquisition)
+    )
     out = {}
     for name in names:
-        if name == channel_name:
+        if channel is not None and name == channel[0]:
             msg = (
                 f"The patch's {name!r} coordinate is the one this acquisition "
                 "maps onto the path, so enrich will not overwrite it with the "
@@ -394,8 +420,10 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
                 f"(patch.rename_coords({name}='instrument_distance'))."
             )
             raise PatchError(msg)
-        values = get_coord_values(inventory, path, name, distances)
         existing = patch.coords.coord_map.get(name)
+        values = None
+        if path is not None:
+            values = get_coord_values(inventory, path, name, channel[2])
         if values is None:
             # A blanket request asks for the names the path itself lists,
             # so one of those without values would be the inventory
@@ -406,17 +434,24 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
                 continue
             if existing is not None:
                 continue  # no answer leaves the patch's coordinate standing
-            values = np.full(len(distances), np.nan)
+            channel = channel or _get_channel_distances(patch, context.acquisition)
+            values = np.full(len(channel[2]), np.nan)
         elif existing is not None:
-            if _coords_equal(existing, values):
-                continue  # re-enriching is a refresh, not a collision
-            msg = (
-                f"The patch already has a {name!r} coordinate which the "
-                "inventory does not agree with; enrich will not overwrite "
-                "it. Rename or drop it first."
-            )
-            raise PatchError(msg)
-        out[name] = (dim, values)
+            # A coordinate on another dimension describes other samples,
+            # however its length happens to match the channels.
+            on_channels = patch.coords.dim_map[name] == (channel[1],)
+            merged = _merge_coord(existing, values) if on_channels else None
+            if merged is None:
+                msg = (
+                    f"The patch already has a {name!r} coordinate which the "
+                    "inventory does not agree with; enrich will not overwrite "
+                    "it. Rename or drop it first."
+                )
+                raise PatchError(msg)
+            if merged is existing:
+                continue
+            values = merged
+        out[name] = (channel[1], values)
     return out
 
 
