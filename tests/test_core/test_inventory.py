@@ -276,8 +276,21 @@ class TestGeometryColumns:
         """Two segments may overlap unless they state the same column."""
         first = inv.Geometry(distance=(0.0, 60.0), columns={"depth": (0.0, 6.0)})
         second = inv.Geometry(distance=(50.0, 80.0), columns={"depth": (5.0, 8.0)})
-        with pytest.raises(InvalidInventoryError, match="for column 'depth'"):
+        with pytest.raises(InvalidInventoryError, match="columns \\['depth'\\]"):
             self._inventory(first, second).check()
+
+    def test_column_overlap_reported_once_per_pair(self):
+        """Two shared columns are one fault, stated in optical distance."""
+        columns = {"chainage": (0.0, 1.0), "depth": (0.0, 1.0)}
+        first = inv.Geometry(name="a", distance=(0.0, 17.0), columns=columns)
+        second = inv.Geometry(name="b", distance=(1.0, 14.0), columns=columns)
+        path = self._inventory(first, second).networks[0].fiber_arrays[0]
+        with pytest.raises(InvalidInventoryError) as info:
+            path.optical_paths[0].check()
+        lines = str(info.value).splitlines()[1:]
+        assert len(lines) == 1
+        assert "optical distance from 1.0 to 14.0" in lines[0]
+        assert "['chainage', 'depth']" in lines[0]
 
     def test_different_columns_may_overlap(self):
         """Each column is its own function track, so they are independent."""
@@ -733,7 +746,7 @@ class TestPathTracks:
                 inv.Geometry(distance=(50.0, 80.0), **seg),
             ),
         )
-        with pytest.raises(InvalidInventoryError, match="Overlapping geometry"):
+        with pytest.raises(InvalidInventoryError, match="overlap in optical distance"):
             path.check()
 
     def test_boolean_labels_overlap_freely(self):

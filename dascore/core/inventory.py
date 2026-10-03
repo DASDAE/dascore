@@ -1497,20 +1497,26 @@ class OpticalPath(TimeRangedModel):
         for first, second in itertools.combinations(self.geometry, 2):
             lo = max(first.interval[0], second.interval[0])
             hi = min(first.interval[1], second.interval[1])
-            if first.name != second.name and lo < hi:
+            if lo >= hi:
+                continue
+            pair = (
+                f"Geometry segments {first.name!r} (distance {first.interval}) "
+                f"and {second.name!r} (distance {second.interval}) overlap in "
+                f"optical distance from {lo} to {hi}"
+            )
+            # One message per pair, not per column, as for the axes.
+            if shared := sorted(first.columns.keys() & second.columns.keys()):
                 errors.append(
-                    f"Geometry segments {first.name!r} and {second.name!r} "
-                    f"both cover ({lo}, {hi}); segments which overlap state "
-                    "different columns of one stretch of fiber, so they "
-                    "share its name."
+                    f"{pair}, and both state the columns {shared}. Each "
+                    "column is stated by at most one segment at any distance "
+                    "along the path."
+                )
+            elif first.name != second.name:
+                errors.append(
+                    f"{pair}; segments which overlap state different columns "
+                    "of one stretch of fiber, so they share its name."
                 )
         for name in sorted(spans):
-            if (overlap := intervals_overlap(spans[name])) is not None:
-                errors.append(
-                    f"Overlapping geometry intervals {overlap[0]} and "
-                    f"{overlap[1]} for column {name!r}; a column is a "
-                    "function track."
-                )
             if len(stated := units.get(name, set())) > 1:
                 errors.append(
                     f"Geometry column {name!r} is stated in {sorted(stated)}; "
