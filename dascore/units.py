@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 import shutil
 import warnings
@@ -27,9 +28,11 @@ from dascore.utils.misc import _reinit_after_fork, iterate, unbyte
 from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
 from dascore.warnings import DASCoreWarning
 
-# A parenthesized bare number, e.g. "(1e-9)", "(10^-9)"; often an annotation.
+# A bracketed number with no unit in it, e.g. "(1e-9)", "[10^-9]": often an
+# annotation, which pint reads as a scale factor. One raised to, "m^(-1)", is
+# an exponent.
 _PAREN_NUMBER = re.compile(
-    r"\(\s*[-+]?[\d.]+(?:[eE][-+]?\d+)?(?:\s*(?:\^|\*\*)\s*[-+]?\d+)?\s*\)"
+    r"(?<![\^*])(?<![\^*]\s)[(\[](?=[^)\]]*[\d⁰¹²³⁴⁵⁶⁷⁸⁹])[^a-df-zA-DF-Z()\[\]]*[)\]]"
 )
 
 
@@ -114,18 +117,18 @@ def get_unit(value) -> Unit:
 @cache
 def _str_to_quant(quant_str):
     """Get quantity from a string; cache output."""
+    if isinstance(quant_str, str) and _PAREN_NUMBER.search(quant_str):
+        # Cached, so this warns once per string per session.
+        msg = (
+            f"Unit string {quant_str!r} has a bracketed number, which is "
+            "parsed as a scale factor, not a label."
+        )
+        # Point at the caller, past dascore and the attrs validation.
+        skip = tuple(f"{Path(x.__file__).parent}{os.sep}" for x in (dc, pydantic))
+        warnings.warn(msg, DASCoreWarning, skip_file_prefixes=skip)
     with _UNIT_LOCK:
         if isinstance(quant_str, Unit):
             quant_str = str(quant_str)  # ensure unit is converted to quantity
-        elif isinstance(quant_str, str) and _PAREN_NUMBER.search(quant_str):
-            # Cached, so this warns once per string per session.
-            msg = (
-                f"Unit string {quant_str!r} has a parenthesized number, which "
-                "is parsed as a scale factor, not a label."
-            )
-            # Point at the caller, past dascore and the attrs validation.
-            skip = tuple(str(Path(x.__file__).parent) for x in (dc, pydantic))
-            warnings.warn(msg, DASCoreWarning, skip_file_prefixes=skip)
         ureg = get_registry()
         return ureg.Quantity(quant_str)
 

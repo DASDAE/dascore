@@ -230,6 +230,10 @@ class TestParenthesizedFactor:
         "nanostrain",
         "(m/s)^2",
         "10 * m",
+        "m^(-1)",
+        "s**(-2)",
+        "m ** (2)",
+        "1/(10 m)",
     )
 
     @pytest.fixture(autouse=True)
@@ -237,15 +241,25 @@ class TestParenthesizedFactor:
         """Parsing is cached, so clear it to see the first-parse warning."""
         units._str_to_quant.cache_clear()
 
-    @pytest.mark.parametrize("unit", ["nanostrain (1e-9)", "( 1E-9 ) m", "m (10^-9)"])
+    @pytest.mark.parametrize(
+        "unit",
+        [
+            "nanostrain (1e-9)",
+            "( 1E-9 ) m",
+            "m (10^-9)",
+            "nanostrain (10**-9.0)",
+            "nanostrain (10⁻⁹)",
+            "nanostrain [1e-9]",
+        ],
+    )
     def test_warns(self, unit):
         """A bare number in parentheses is likely a label; warn."""
-        with pytest.warns(DASCoreWarning, match="parenthesized number"):
+        with pytest.warns(DASCoreWarning, match="bracketed number"):
             get_quantity(unit)
 
     def test_patch_attrs_warn_at_the_caller(self, random_patch):
         """Setting the label as data units warns at the line that set it."""
-        with pytest.warns(DASCoreWarning, match="parenthesized number") as rec:
+        with pytest.warns(DASCoreWarning, match="bracketed number") as rec:
             random_patch.update_attrs(data_units="nanostrain (1e-9)")
         assert rec[0].filename == __file__
 
