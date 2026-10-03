@@ -96,6 +96,16 @@ class TestGetExampleSpool:
                 dc.get_example_spool(str(path))[0]
 
 
+class TestSpoolToDirectory:
+    """Tests for writing a spool's patches to a directory."""
+
+    def test_str_path(self, tmp_path):
+        """A directory given as a string works like a Path."""
+        spool = dc.get_example_spool("random_das")
+        dc.examples.spool_to_directory(spool, str(tmp_path))
+        assert len(list(tmp_path.iterdir())) == len(spool)
+
+
 class TestRandomSpool:
     """The knobs on the random spool example."""
 

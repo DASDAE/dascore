@@ -389,7 +389,6 @@ class TestSourceEnvelopes:
     @pytest.mark.parametrize(
         "residual",
         [
-            ({"time": (0, 5)}, True, False),  # sample indices
             ({"time": (1.0, None)}, False, True),  # relative bounds
             ({"time": _canonical_range((1 * m, 2 * m))}, False, False),  # units
         ],
@@ -397,6 +396,11 @@ class TestSourceEnvelopes:
     def test_a_selection_the_reader_cannot_take_keeps_nothing(self, rows, residual):
         """It cuts on the patch, which records it without any help."""
         assert _source_envelopes(rows, (residual,)) == {}
+
+    def test_a_lone_sample_range_keeps_its_envelope(self, rows):
+        """It counts from the source, which the envelope restates as values."""
+        out = _source_envelopes(rows, (({"time": (0, 5)}, True, False),))
+        assert set(out) == {"_time_source_envelope"}
 
     def test_one_such_selection_bars_the_whole_coordinate(self, rows):
         """What it left behind is not something the envelopes state."""

@@ -7,17 +7,21 @@ units, and remove obsolete DFT/STFT attributes and frequency-dependent coordinat
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, ClassVar, Literal
 
 import numpy as np
 
 import dascore as dc
 from dascore.constants import PatchType
-from dascore.transform.fourier import DFT_OUTPUT_DATA_TYPE_MAP
-from dascore.units import Quantity
+from dascore.core.processor import PatchProcessor
+from dascore.transform.fourier import (
+    DFT_OUTPUT_DATA_TYPE_MAP,
+    _as_numpy_dtype,
+    _is_complex,
+    _result_dtype,
+)
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import broadcast_for_index
-from dascore.utils.patch import patch_function
 
 SpectralFormat = Literal["auto", "fft", "amplitude", "power", "density"]
 NegativeFrequencies = Literal["auto", "drop", "raise", "keep"]
@@ -37,6 +41,8 @@ _SPECTRAL_FORMAT_ALIASES = {
     "density": "density",
     "spectral density": "density",
 }
+# What a plan says the data are, by position: a plan holds no strings.
+_FORMATS = ("fft", "amplitude", "power", "density")
 _DFT_OUTPUT_TO_FORMAT = {
     "FFT": "fft",
     "AS": "amplitude",
@@ -51,10 +57,6 @@ _DATA_TYPE_TO_FORMAT = {
 
 
 _SPECTRAL_PARAMETER_DOCS = {
-    "patch": """
-    patch
-        Fourier-domain DASCore patch from ``dft`` or ``stft``.
-    """,
     "dim": """
     dim
         Frequency dimension over which to compute the descriptor. This can be
@@ -143,7 +145,7 @@ def _normalize_spectral_format(
     type_key = "" if data_type is None else str(data_type).lower()
     if type_key in _SPECTRAL_FORMAT_ALIASES:
         return _SPECTRAL_FORMAT_ALIASES[type_key]
-    if np.iscomplexobj(patch.data):
+    if _is_complex(patch.dtype):
         return "fft"
 
     msg = (
@@ -164,25 +166,26 @@ def _ensure_not_db_scaled(patch: PatchType) -> None:
         raise ValueError(msg)
 
 
-def _get_power(patch: PatchType, spectral_format: SpectralFormat) -> np.ndarray:
-    """Convert known Fourier representations to spectral power."""
-    fmt = _normalize_spectral_format(patch, spectral_format)
-    data = np.asarray(patch.data)
-    _ensure_not_db_scaled(patch)
-
-    if fmt == "fft":
-        if not np.iscomplexobj(data):
-            msg = (
-                "spectral_format='fft' requires complex Fourier coefficients. "
-                "For real-valued spectra, pass spectral_format='amplitude', "
-                "'power', or 'density'."
-            )
-            raise ValueError(msg)
-        return np.abs(data) ** 2
-
-    if np.iscomplexobj(data):
+def _check_spectral_dtype(fmt: str, dtype) -> None:
+    """Raise if the data are not the kind of numbers a format holds."""
+    complex_data = _is_complex(dtype)
+    if fmt == "fft" and not complex_data:
+        msg = (
+            "spectral_format='fft' requires complex Fourier coefficients. "
+            "For real-valued spectra, pass spectral_format='amplitude', "
+            "'power', or 'density'."
+        )
+        raise ValueError(msg)
+    if fmt != "fft" and complex_data:
         msg = f"spectral_format={fmt!r} requires real-valued spectral data."
         raise ValueError(msg)
+
+
+def _get_power(data: np.ndarray, fmt: str) -> np.ndarray:
+    """Convert known Fourier representations to spectral power."""
+    data = np.asarray(data)
+    if fmt == "fft":
+        return np.abs(data) ** 2
 
     data = data.astype(float, copy=False)
     if fmt == "amplitude":
@@ -190,13 +193,11 @@ def _get_power(patch: PatchType, spectral_format: SpectralFormat) -> np.ndarray:
             msg = "Amplitude spectra must be non-negative."
             raise ValueError(msg)
         return data**2
-    if fmt in {"power", "density"}:
-        if np.any(data < 0):
-            msg = "Power spectra and spectral densities must be non-negative."
-            raise ValueError(msg)
-        return data
-
-    raise AssertionError(f"Unhandled spectral format {fmt!r}.")
+    assert fmt in {"power", "density"}, f"Unhandled spectral format {fmt!r}."
+    if np.any(data < 0):
+        msg = "Power spectra and spectral densities must be non-negative."
+        raise ValueError(msg)
+    return data
 
 
 def _power_has_symmetric_frequencies(
@@ -222,29 +223,24 @@ def _power_has_symmetric_frequencies(
     return True
 
 
-def _get_spectral_power(
+def _select_frequencies(
     patch: PatchType,
-    dim: str | None = None,
-    fmin: float | None = None,
-    fmax: float | None = None,
-    spectral_format: SpectralFormat = "auto",
-    negative_frequencies: NegativeFrequencies = "auto",
-) -> tuple[np.ndarray, np.ndarray, str]:
+    freq_dim: str,
+    fmin: float | None,
+    fmax: float | None,
+    negative_frequencies: NegativeFrequencies,
+) -> dict[str, Any]:
     """
-    Return frequency coordinates and spectral power from DFT or STFT input.
+    Return which frequency bins a descriptor reads, from metadata alone.
 
-    The returned power is always linear, non-negative, and trimmed according
-    to ``negative_frequencies``, ``fmin``, and ``fmax``.
+    The plan, from ``negative_frequencies``, ``fmin`` and ``fmax``: the kept
+    bins' frequencies (``freqs``) and indices (``keep``), any reordering
+    applied first (``order``), and, for ``negative_frequencies='auto'``, the
+    frequencies (``symmetric``) the kernel checks for mirrored power before
+    dropping negative bins, raising if it does not mirror.
     """
-    if negative_frequencies not in {"auto", "drop", "raise", "keep"}:
-        msg = "negative_frequencies must be one of 'auto', 'drop', 'raise', or 'keep'."
-        raise ValueError(msg)
-
-    freq_dim = _get_frequency_dim(patch, dim)
-    freq_axis = patch.dims.index(freq_dim)
-    freqs = np.asarray(patch.get_array(freq_dim), dtype=float)
-    power = _get_power(patch, spectral_format)
-
+    freqs = np.asarray(patch.coords.get_array(freq_dim), dtype=float)
+    plan: dict[str, Any] = {"symmetric": None, "order": None}
     mask = np.ones(freqs.shape, dtype=bool)
     has_negative = np.any(freqs < 0)
     if negative_frequencies == "raise" and has_negative:
@@ -255,13 +251,7 @@ def _get_spectral_power(
         )
         raise ValueError(msg)
     if negative_frequencies == "auto" and has_negative:
-        if not _power_has_symmetric_frequencies(freqs, power, freq_axis):
-            msg = (
-                "Fourier coordinate contains negative frequencies with "
-                "non-symmetric power. Pass negative_frequencies='drop' to use "
-                "only non-negative bins, or 'keep' to include all bins."
-            )
-            raise ValueError(msg)
+        plan["symmetric"] = freqs
         # A full even-length DFT stores its unpaired Nyquist bin at -Nyquist.
         # Retain its existing weight, matching DASCore's real DFT outputs.
         original_dim = freq_dim.removeprefix("ft_")
@@ -277,9 +267,8 @@ def _get_spectral_power(
             if np.allclose(freqs, expected, rtol=1e-7, atol=abs(spacing) * 1e-7):
                 freqs = freqs.copy()
                 freqs[0] = -freqs[0]
-                order = np.argsort(freqs)
-                freqs = freqs[order]
-                power = np.take(power, order, axis=freq_axis)
+                plan["order"] = np.argsort(freqs)
+                freqs = freqs[plan["order"]]
         mask &= freqs >= 0
     if negative_frequencies == "drop":
         mask &= freqs >= 0
@@ -290,34 +279,13 @@ def _get_spectral_power(
 
     if not np.any(mask):
         raise ValueError("Frequency limits exclude all Fourier frequency bins.")
-
-    freqs = freqs[mask]
-    power = np.take(power, np.flatnonzero(mask), axis=freq_axis)
-
-    return freqs, power, freq_dim
+    return plan | {"keep": np.flatnonzero(mask), "freqs": freqs[mask]}
 
 
-def _prepare_output(
-    patch: PatchType,
-    data: np.ndarray,
-    freq_dim: str,
-    data_type: str,
-    data_units: str | Quantity | None,
-) -> PatchType:
-    """Remove frequency-dependent coordinates and preserve remaining metadata."""
-    # Descriptor data is already reduced, so only drop coordinates here.
-    coords, _ = patch.coords.drop_coords(freq_dim)
-    # Reduction no longer represents Fourier coefficients, even when other
-    # Fourier dimensions remain. Preserve unrelated (including private) attrs.
-    obsolete = tuple(
-        key
-        for key in dict(patch.attrs)
-        if key.startswith(("_dft_", "_stft_", "_pre_dft_", "_pre_stft_"))
-    )
-    attrs = patch.attrs.drop(*obsolete).update(
-        data_type=data_type, data_units=data_units
-    )
-    return patch.update(data=data, coords=coords, attrs=attrs)
+def _power_fraction(power: np.ndarray, axis: int) -> np.ndarray:
+    """Return each bin's share of the total power along an axis, 0 if none."""
+    total = np.sum(power, axis=axis, keepdims=True)
+    return np.divide(power, total, out=np.zeros_like(power), where=total > 0)
 
 
 def _broadcast_freqs(
@@ -329,16 +297,109 @@ def _broadcast_freqs(
     return freqs[broadcast_for_index(ndim, freq_axis, slice(None), fill=None)]
 
 
-@patch_function()
+class _SpectralDescriptor(PatchProcessor):
+    """
+    What the spectral descriptors share: the power along a Fourier dimension.
+
+    `get_metadata` settles the frequency bins and the output's metadata;
+    the kernel turns the data into linear, non-negative power over those
+    bins, and `describe` reduces it along the frequency axis.
+    """
+
+    name = None
+
+    dim: Any = None
+    fmin: Any = None
+    fmax: Any = None
+
+    # The output's data_type.
+    label: ClassVar[str] = ""
+
+    def get_metadata(self, meta):
+        """Return the reduced metadata, and the bins and format to read."""
+        # spectral_format and negative_frequencies are declared by each
+        # subclass, after its own options, so positional calls keep the
+        # method's order; the base reads them from kwargs.
+        options = self.kwargs
+        negative_frequencies = options["negative_frequencies"]
+        if negative_frequencies not in {"auto", "drop", "raise", "keep"}:
+            msg = (
+                "negative_frequencies must be one of 'auto', 'drop', 'raise', "
+                "or 'keep'."
+            )
+            raise ValueError(msg)
+        freq_dim = _get_frequency_dim(meta, self.dim)
+        fmt = _normalize_spectral_format(meta, options["spectral_format"])
+        _ensure_not_db_scaled(meta)
+        _check_spectral_dtype(fmt, meta.dtype)
+        plan = _select_frequencies(
+            meta, freq_dim, self.fmin, self.fmax, negative_frequencies
+        )
+        # Descriptor data is already reduced, so only drop coordinates here.
+        coords, _ = meta.coords.drop_coords(freq_dim)
+        # Reduction no longer represents Fourier coefficients, even when other
+        # Fourier dimensions remain. Preserve unrelated (including private) attrs.
+        obsolete = tuple(
+            key
+            for key in dict(meta.attrs)
+            if key.startswith(("_dft_", "_stft_", "_pre_dft_", "_pre_stft_"))
+        )
+        units = self.units(meta, freq_dim, fmt)
+        attrs = meta.attrs.drop(*obsolete).update(
+            data_type=self.label, data_units=units
+        )
+        # The power is the coefficients' squared magnitude, else the data as float.
+        power = _as_numpy_dtype(meta.dtype) if fmt == "fft" else np.dtype(np.float64)
+        dtype = _result_dtype(self.result_dtype(np.finfo(power).dtype), like=meta.dtype)
+        out = meta.new(coords=coords, attrs=attrs, dtype=dtype)
+        axis = meta.dims.index(freq_dim)
+        return out, plan | {"axis": axis, "fmt": _FORMATS.index(fmt)}
+
+    def units(self, meta, freq_dim: str, fmt: str):
+        """Return the output's data units: the frequencies' by default."""
+        return meta.get_coord(freq_dim).units
+
+    def numpy_kernel(self, data, *, axis, fmt, symmetric, order, keep, freqs):
+        """Return the descriptor of the power in the bins kept."""
+        power = _get_power(data, _FORMATS[fmt])
+        if symmetric is not None and not _power_has_symmetric_frequencies(
+            symmetric, power, axis
+        ):
+            msg = (
+                "Fourier coordinate contains negative frequencies with "
+                "non-symmetric power. Pass negative_frequencies='drop' to use "
+                "only non-negative bins, or 'keep' to include all bins."
+            )
+            raise ValueError(msg)
+        if order is not None:
+            power = np.take(power, order, axis=axis)
+        power = np.take(power, keep, axis=axis)
+        return self.describe(power, freqs, axis)
+
+    def describe(self, power: np.ndarray, freqs: np.ndarray, axis: int) -> Any:
+        """Return the descriptor of linear power along an axis; each class's own."""
+
+    def result_dtype(self, power: np.dtype) -> np.dtype:
+        """Return the dtype `describe` returns for power of dtype `power`."""
+        return np.dtype(np.float64)
+
+
+class _SharedFields(_SpectralDescriptor):
+    """
+    The descriptors with no option of their own.
+
+    spectral_format and negative_frequencies follow fmax directly, in the
+    methods' positional order.
+    """
+
+    name = None
+
+    spectral_format: Any = "auto"
+    negative_frequencies: Any = "auto"
+
+
 @compose_docstring(**_SPECTRAL_PARAMETER_DOCS)
-def spectral_centroid(
-    patch: PatchType,
-    dim: str | None = None,
-    fmin: float | None = None,
-    fmax: float | None = None,
-    spectral_format: SpectralFormat = "auto",
-    negative_frequencies: NegativeFrequencies = "auto",
-) -> PatchType:
+class SpectralCentroid(_SharedFields):
     """
     Compute the spectral centroid of a Fourier-domain patch.
 
@@ -356,7 +417,6 @@ def spectral_centroid(
 
     Parameters
     ----------
-    {patch}
     {dim}
     {fmin}
     {fmax}
@@ -382,42 +442,26 @@ def spectral_centroid(
     >>> ax = centroid.viz.waterfall(cmap='turbo', ax=axs[1])
 
     """
-    freqs, power, freq_dim = _get_spectral_power(
-        patch,
-        dim=dim,
-        fmin=fmin,
-        fmax=fmax,
-        spectral_format=spectral_format,
-        negative_frequencies=negative_frequencies,
-    )
 
-    freq_axis = patch.dims.index(freq_dim)
-    freqs_b = _broadcast_freqs(freqs, power.ndim, freq_axis)
+    label = "Spectral Centroid"
 
-    numerator = np.sum(freqs_b * power, axis=freq_axis)
-    denominator = np.sum(power, axis=freq_axis)
+    def describe(self, power, freqs, axis):
+        """Return the power-weighted mean frequency."""
+        freqs_b = _broadcast_freqs(freqs, power.ndim, axis)
 
-    out = np.divide(
-        numerator,
-        denominator,
-        out=np.full_like(numerator, np.nan, dtype=float),
-        where=denominator > 0,
-    )
-    data_units = patch.get_coord(freq_dim).units
-    data_type = "Spectral Centroid"
-    return _prepare_output(patch, out, freq_dim, data_type, data_units)
+        numerator = np.sum(freqs_b * power, axis=axis)
+        denominator = np.sum(power, axis=axis)
+
+        return np.divide(
+            numerator,
+            denominator,
+            out=np.full_like(numerator, np.nan, dtype=float),
+            where=denominator > 0,
+        )
 
 
-@patch_function()
 @compose_docstring(**_SPECTRAL_PARAMETER_DOCS)
-def median_frequency(
-    patch: PatchType,
-    dim: str | None = None,
-    fmin: float | None = None,
-    fmax: float | None = None,
-    spectral_format: SpectralFormat = "auto",
-    negative_frequencies: NegativeFrequencies = "auto",
-) -> PatchType:
+class MedianFrequency(_SharedFields):
     """
     Compute the median frequency of a Fourier-domain patch.
 
@@ -433,7 +477,6 @@ def median_frequency(
 
     Parameters
     ----------
-    {patch}
     {dim}
     {fmin}
     {fmax}
@@ -459,47 +502,29 @@ def median_frequency(
     >>> med = spec.median_frequency(fmin=50, fmax=300)
     >>> ax = med.viz.waterfall(cmap='turbo', ax=axs[1], scale=[0,1])
     """
-    freqs, power, freq_dim = _get_spectral_power(
-        patch,
-        dim=dim,
-        fmin=fmin,
-        fmax=fmax,
-        spectral_format=spectral_format,
-        negative_frequencies=negative_frequencies,
-    )
 
-    freq_axis = patch.dims.index(freq_dim)
+    label = "Median Frequency"
 
-    # Move frequency axis to front for easier cumulative-power calculation.
-    power_f = np.moveaxis(power, freq_axis, 0)
+    def describe(self, power, freqs, axis):
+        """Return the frequency which halves the power."""
+        # Move frequency axis to front for easier cumulative-power calculation.
+        power_f = np.moveaxis(power, axis, 0)
 
-    cumulative_power = np.cumsum(power_f, axis=0)
-    total_power = cumulative_power[-1, ...]
-    half_power = 0.5 * total_power
+        cumulative_power = np.cumsum(power_f, axis=0)
+        total_power = cumulative_power[-1, ...]
+        half_power = 0.5 * total_power
 
-    # First frequency bin where cumulative power >= half total power.
-    idx = np.argmax(cumulative_power >= half_power[None, ...], axis=0)
+        # First frequency bin where cumulative power >= half total power.
+        idx = np.argmax(cumulative_power >= half_power[None, ...], axis=0)
 
-    out = freqs[idx]
+        out = freqs[idx]
 
-    # No valid power -> NaN
-    out = np.where(total_power > 0, out, np.nan)
-
-    data_units = patch.get_coord(freq_dim).units
-    data_type = "Median Frequency"
-    return _prepare_output(patch, out, freq_dim, data_type, data_units)
+        # No valid power -> NaN
+        return np.where(total_power > 0, out, np.nan)
 
 
-@patch_function()
 @compose_docstring(**_SPECTRAL_PARAMETER_DOCS)
-def spectral_peak_frequency(
-    patch: PatchType,
-    dim: str | None = None,
-    fmin: float | None = None,
-    fmax: float | None = None,
-    spectral_format: SpectralFormat = "auto",
-    negative_frequencies: NegativeFrequencies = "auto",
-) -> PatchType:
+class SpectralPeakFrequency(_SharedFields):
     """
     Compute the peak frequency of a Fourier-domain patch.
 
@@ -512,7 +537,6 @@ def spectral_peak_frequency(
 
     Parameters
     ----------
-    {patch}
     {dim}
     {fmin}
     {fmax}
@@ -525,34 +549,21 @@ def spectral_peak_frequency(
         Patch containing the frequency corresponding to the maximum
         spectral power.
     """
-    freqs, power, freq_dim = _get_spectral_power(
-        patch, dim, fmin, fmax, spectral_format, negative_frequencies
-    )
 
-    freq_axis = patch.dims.index(freq_dim)
+    label = "Frequency at Maximum"
 
-    power_f = np.moveaxis(power, freq_axis, 0)
+    def describe(self, power, freqs, axis):
+        """Return the frequency of the largest power."""
+        power_f = np.moveaxis(power, axis, 0)
 
-    idx = np.argmax(power_f, axis=0)
+        idx = np.argmax(power_f, axis=0)
 
-    out = freqs[idx]
-    out = np.where(np.sum(power_f, axis=0) > 0, out, np.nan)
-
-    data_units = patch.get_coord(freq_dim).units
-    data_type = "Frequency at Maximum"
-    return _prepare_output(patch, out, freq_dim, data_type, data_units)
+        out = freqs[idx]
+        return np.where(np.sum(power_f, axis=0) > 0, out, np.nan)
 
 
-@patch_function()
 @compose_docstring(**_SPECTRAL_PARAMETER_DOCS)
-def spectral_peak_amplitude(
-    patch: PatchType,
-    dim: str | None = None,
-    fmin: float | None = None,
-    fmax: float | None = None,
-    spectral_format: SpectralFormat = "auto",
-    negative_frequencies: NegativeFrequencies = "auto",
-) -> PatchType:
+class SpectralPeakAmplitude(_SharedFields):
     """
     Compute the peak spectral amplitude of a Fourier-domain patch.
 
@@ -564,7 +575,6 @@ def spectral_peak_amplitude(
 
     Parameters
     ----------
-    {patch}
     {dim}
     {fmin}
     {fmax}
@@ -576,34 +586,29 @@ def spectral_peak_amplitude(
     PatchType
         Patch containing the maximum spectral amplitude.
     """
-    _freqs, power, freq_dim = _get_spectral_power(
-        patch, dim, fmin, fmax, spectral_format, negative_frequencies
-    )
 
-    freq_axis = patch.dims.index(freq_dim)
-    amplitude = np.sqrt(power)
-    out = np.max(amplitude, axis=freq_axis)
+    label = "Maximum Spectral Amplitude"
 
-    data_units = patch.attrs.get("data_units")
-    resolved_format = _normalize_spectral_format(patch, spectral_format)
-    quantity = dc.get_quantity(data_units)
-    if resolved_format in {"power", "density"} and quantity is not None:
-        data_units = quantity**0.5
-    data_type = "Maximum Spectral Amplitude"
-    return _prepare_output(patch, out, freq_dim, data_type, data_units)
+    def result_dtype(self, power):
+        """Return the power's own dtype."""
+        return power
+
+    def units(self, meta, freq_dim, fmt):
+        """Return the amplitude's units: a power's square root."""
+        data_units = meta.attrs.get("data_units")
+        quantity = dc.get_quantity(data_units)
+        if fmt in {"power", "density"} and quantity is not None:
+            data_units = quantity**0.5
+        return data_units
+
+    def describe(self, power, freqs, axis):
+        """Return the largest amplitude."""
+        amplitude = np.sqrt(power)
+        return np.max(amplitude, axis=axis)
 
 
-@patch_function()
 @compose_docstring(**_SPECTRAL_PARAMETER_DOCS)
-def spectral_entropy(
-    patch: PatchType,
-    dim: str | None = None,
-    fmin: float | None = None,
-    fmax: float | None = None,
-    normalize: bool = True,
-    spectral_format: SpectralFormat = "auto",
-    negative_frequencies: NegativeFrequencies = "auto",
-) -> PatchType:
+class SpectralEntropy(_SpectralDescriptor):
     """
     Compute spectral entropy from a Fourier-domain patch.
 
@@ -615,7 +620,6 @@ def spectral_entropy(
 
     Parameters
     ----------
-    {patch}
     {dim}
     {fmin}
     {fmax}
@@ -629,46 +633,41 @@ def spectral_entropy(
     PatchType
         Patch containing spectral entropy.
     """
-    freqs, power, freq_dim = _get_spectral_power(
-        patch, dim, fmin, fmax, spectral_format, negative_frequencies
-    )
 
-    freq_axis = patch.dims.index(freq_dim)
+    normalize: Any = True
+    spectral_format: Any = "auto"
+    negative_frequencies: Any = "auto"
 
-    total_power = np.sum(power, axis=freq_axis, keepdims=True)
+    label = "Spectral Entropy"
 
-    p = np.divide(
-        power,
-        total_power,
-        out=np.zeros_like(power),
-        where=total_power > 0,
-    )
+    def result_dtype(self, power):
+        """Return the power's dtype, at least double."""
+        return np.result_type(power, np.float64)
 
-    entropy = -np.sum(
-        p * np.log2(p, out=np.zeros_like(p), where=p > 0),
-        axis=freq_axis,
-    )
+    def units(self, meta, freq_dim, fmt):
+        """Return no units: entropy, in bits or normalized to [0, 1], is unitless."""
+        return None
 
-    if normalize:
-        entropy = (
-            np.zeros_like(entropy) if freqs.size == 1 else entropy / np.log2(freqs.size)
+    def describe(self, power, freqs, axis):
+        """Return the entropy of the power distribution."""
+        p = _power_fraction(power, axis)
+
+        entropy = -np.sum(
+            p * np.log2(p, out=np.zeros_like(p), where=p > 0),
+            axis=axis,
         )
 
-    data_units = None
-    data_type = "Spectral Entropy"
-    return _prepare_output(patch, entropy, freq_dim, data_type, data_units)
+        if self.normalize:
+            entropy = (
+                np.zeros_like(entropy)
+                if freqs.size == 1
+                else entropy / np.log2(freqs.size)
+            )
+        return entropy
 
 
-@patch_function()
 @compose_docstring(**_SPECTRAL_PARAMETER_DOCS)
-def spectral_kurtosis(
-    patch: PatchType,
-    dim: str | None = None,
-    fmin: float | None = None,
-    fmax: float | None = None,
-    spectral_format: SpectralFormat = "auto",
-    negative_frequencies: NegativeFrequencies = "auto",
-) -> PatchType:
+class SpectralKurtosis(_SharedFields):
     """
     Compute spectral kurtosis from a Fourier-domain patch.
 
@@ -682,7 +681,6 @@ def spectral_kurtosis(
 
     Parameters
     ----------
-    {patch}
     {dim}
     {fmin}
     {fmax}
@@ -694,59 +692,47 @@ def spectral_kurtosis(
     PatchType
         Patch containing spectral kurtosis.
     """
-    freqs, power, freq_dim = _get_spectral_power(
-        patch, dim, fmin, fmax, spectral_format, negative_frequencies
-    )
 
-    freq_axis = patch.dims.index(freq_dim)
+    label = "Spectral Kurtosis"
 
-    total_power = np.sum(power, axis=freq_axis, keepdims=True)
+    def result_dtype(self, power):
+        """Return the power's dtype, at least double."""
+        return np.result_type(power, np.float64)
 
-    p = np.divide(
-        power,
-        total_power,
-        out=np.zeros_like(power),
-        where=total_power > 0,
-    )
+    def units(self, meta, freq_dim, fmt):
+        """Return no units: kurtosis is a ratio."""
+        return None
 
-    f = _broadcast_freqs(freqs, power.ndim, freq_axis)
+    def describe(self, power, freqs, axis):
+        """Return the kurtosis of the power distribution over frequency."""
+        p = _power_fraction(power, axis)
 
-    mean_f = np.sum(f * p, axis=freq_axis, keepdims=True)
+        f = _broadcast_freqs(freqs, power.ndim, axis)
 
-    var_f = np.sum(
-        ((f - mean_f) ** 2) * p,
-        axis=freq_axis,
-        keepdims=True,
-    )
+        mean_f = np.sum(f * p, axis=axis, keepdims=True)
 
-    kurt = np.divide(
-        np.sum(
-            ((f - mean_f) ** 4) * p,
-            axis=freq_axis,
-        ),
-        np.squeeze(var_f, axis=freq_axis) ** 2,
-        out=np.full_like(
-            np.squeeze(var_f, axis=freq_axis),
-            np.nan,
-        ),
-        where=np.squeeze(var_f, axis=freq_axis) > 0,
-    )
+        var_f = np.sum(
+            ((f - mean_f) ** 2) * p,
+            axis=axis,
+            keepdims=True,
+        )
 
-    data_units = None
-    data_type = "Spectral Kurtosis"
-    return _prepare_output(patch, kurt, freq_dim, data_type, data_units)
+        return np.divide(
+            np.sum(
+                ((f - mean_f) ** 4) * p,
+                axis=axis,
+            ),
+            np.squeeze(var_f, axis=axis) ** 2,
+            out=np.full_like(
+                np.squeeze(var_f, axis=axis),
+                np.nan,
+            ),
+            where=np.squeeze(var_f, axis=axis) > 0,
+        )
 
 
-@patch_function()
 @compose_docstring(**_SPECTRAL_PARAMETER_DOCS)
-def spectral_flatness(
-    patch: PatchType,
-    dim: str | None = None,
-    fmin: float | None = None,
-    fmax: float | None = None,
-    spectral_format: SpectralFormat = "auto",
-    negative_frequencies: NegativeFrequencies = "auto",
-) -> PatchType:
+class SpectralFlatness(_SharedFields):
     """
     Compute spectral flatness from a Fourier-domain patch.
 
@@ -762,7 +748,6 @@ def spectral_flatness(
 
     Parameters
     ----------
-    {patch}
     {dim}
     {fmin}
     {fmax}
@@ -774,28 +759,33 @@ def spectral_flatness(
     PatchType
         Patch containing spectral flatness.
     """
-    _freqs, power, freq_dim = _get_spectral_power(
-        patch, dim, fmin, fmax, spectral_format, negative_frequencies
-    )
 
-    freq_axis = patch.dims.index(freq_dim)
+    label = "Spectral Flatness"
 
-    # Normalize each slice to preserve spectral shape at any power scale.
-    peak_power = np.max(power, axis=freq_axis, keepdims=True)
-    power = np.divide(power, peak_power, out=np.zeros_like(power), where=peak_power > 0)
-    log_power = np.log(power, out=np.full_like(power, -np.inf), where=power > 0)
-    geo_mean = np.exp(np.mean(log_power, axis=freq_axis))
+    def result_dtype(self, power):
+        """Return the power's own dtype."""
+        return power
 
-    arith_mean = np.mean(power, axis=freq_axis)
+    def units(self, meta, freq_dim, fmt):
+        """Return no units: flatness is a ratio."""
+        return None
 
-    flatness = np.divide(
-        geo_mean,
-        arith_mean,
-        out=np.full_like(geo_mean, np.nan),
-        where=arith_mean > 0,
-    )
-    flatness = np.clip(flatness, 0, 1)
+    def describe(self, power, freqs, axis):
+        """Return the geometric over the arithmetic mean of the power."""
+        # Normalize each slice to preserve spectral shape at any power scale.
+        peak_power = np.max(power, axis=axis, keepdims=True)
+        power = np.divide(
+            power, peak_power, out=np.zeros_like(power), where=peak_power > 0
+        )
+        log_power = np.log(power, out=np.full_like(power, -np.inf), where=power > 0)
+        geo_mean = np.exp(np.mean(log_power, axis=axis))
 
-    data_units = None
-    data_type = "Spectral Flatness"
-    return _prepare_output(patch, flatness, freq_dim, data_type, data_units)
+        arith_mean = np.mean(power, axis=axis)
+
+        flatness = np.divide(
+            geo_mean,
+            arith_mean,
+            out=np.full_like(geo_mean, np.nan),
+            where=arith_mean > 0,
+        )
+        return np.clip(flatness, 0, 1)

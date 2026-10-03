@@ -12,6 +12,7 @@ import pytest
 from scipy.signal import hilbert as sp_hilbert
 
 import dascore as dc
+from dascore.core.coords import concat_coords
 from dascore.utils.array_api import (
     array_namespace,
     asarray_like,
@@ -426,6 +427,38 @@ def _velocity(patch):
     return patch.update_attrs(data_type="velocity")
 
 
+def _shifted(patch):
+    """Return the patch with a shift in samples for each distance."""
+    return patch.update_coords(shift=("distance", np.arange(patch.shape[0]) % 5))
+
+
+def _tiled(patch):
+    """Return the patch cut into a stack of tiles along time."""
+    return patch.tile_apply(np.positive, mode="stack", time=64, samples=True)
+
+
+def _transformed(patch):
+    """Return the patch transformed along time."""
+    return patch.dft("time")
+
+
+def _spectrum(patch):
+    """Return the one-sided spectrum of the patch along time."""
+    return patch.dft("time", real=True)
+
+
+def _windowed(patch):
+    """Return the short-time transform of the patch along time."""
+    return patch.stft(time=64, samples=True)
+
+
+def _holed(patch):
+    """Return the first 190 times of the patch with ten samples missing."""
+    coord = patch.get_coord("time")
+    holed = concat_coords(coord[:100], coord[110:200])
+    return patch.isel(time=slice(0, 190)).update_coords(time=holed)
+
+
 # One call per operation converted to a processor, and the numpy patch it is
 # given (on each backend too); the results must match numpy's.
 _CONVERTED = {
@@ -487,6 +520,28 @@ _CONVERTED = {
         _velocity,
     ),
     "phase_weighted_stack": (lambda p: p.phase_weighted_stack("distance"), None),
+    "pad": (lambda p: p.pad(time=(2, 3), samples=True), None),
+    "decimate": (lambda p: p.decimate(time=4), None),
+    "interpolate": (lambda p: p.interpolate(time=p.get_array("time")[1::3]), None),
+    "resample": (lambda p: p.resample(time=0.005), None),
+    "align_to_coord": (
+        lambda p: p.align_to_coord(time="shift", samples=True),
+        _shifted,
+    ),
+    "correlate_shift": (lambda p: p.correlate_shift("time"), None),
+    "reassemble": (lambda p: p.reassemble(), _tiled),
+    "fill_gaps": (lambda p: p.fill_gaps("time"), _holed),
+    "dft": (lambda p: p.dft("time"), None),
+    "idft": (lambda p: p.idft(), _transformed),
+    "stft": (lambda p: p.stft(time=64, samples=True), None),
+    "istft": (lambda p: p.istft(), _windowed),
+    "spectral_centroid": (lambda p: p.spectral_centroid(), _spectrum),
+    "median_frequency": (lambda p: p.median_frequency(), _spectrum),
+    "spectral_peak_frequency": (lambda p: p.spectral_peak_frequency(), _spectrum),
+    "spectral_peak_amplitude": (lambda p: p.spectral_peak_amplitude(), _spectrum),
+    "spectral_entropy": (lambda p: p.spectral_entropy(), _spectrum),
+    "spectral_kurtosis": (lambda p: p.spectral_kurtosis(), _spectrum),
+    "spectral_flatness": (lambda p: p.spectral_flatness(), _spectrum),
 }
 
 
@@ -506,6 +561,21 @@ _NUMPY_ONLY = {
     "differentiate",
     "integrate",
     "velocity_to_strain_rate",
+    "decimate",
+    "interpolate",
+    "resample",
+    "align_to_coord",
+    "reassemble",
+    "fill_gaps",
+    "stft",
+    "istft",
+    "spectral_centroid",
+    "median_frequency",
+    "spectral_peak_frequency",
+    "spectral_peak_amplitude",
+    "spectral_entropy",
+    "spectral_kurtosis",
+    "spectral_flatness",
 }
 
 
@@ -601,6 +671,74 @@ class TestArrayApiKernelBranches:
         positive = np.asarray(backend_patch.data) > 0
         assert np.allclose(np.asarray(out.data)[positive], np.arctan2(2, 1))
 
+    def test_pad_writes_the_constant(self, backend_patch):
+        """The padded samples hold the constant, both ends of both axes."""
+        out = backend_patch.pad(
+            time=(1, 2), distance=(0, 1), samples=True, constant_values=7
+        )
+        values = np.asarray(out.data)
+        assert values.shape == (301, 2003)
+        assert (values[:, :1] == 7).all() and (values[:, -2:] == 7).all()
+        assert (values[-1] == 7).all()
+        assert np.array_equal(values[:-1, 1:-2], np.asarray(backend_patch.data))
+
+    def test_pad_with_a_numpy_scalar(self, backend_patch):
+        """A numpy scalar fill is written, on the patch's backend."""
+        out = backend_patch.pad(time=1, samples=True, constant_values=np.int64(7))
+        assert backend_name(out.data) == backend_name(backend_patch.data)
+        assert (np.asarray(out.data)[:, 0] == 7).all()
+
+    def test_decimate_unfiltered_is_native(self, random_patch, backend_patch):
+        """Striding needs no numpy: no warning, and the backend kept."""
+        expected = random_patch.decimate(time=4, filter_type=None)
+        with warnings_as_errors():
+            for copy in (True, False):
+                out = backend_patch.decimate(time=4, filter_type=None, copy=copy)
+                assert backend_name(out.data) == backend_name(backend_patch.data)
+                assert np.array_equal(np.asarray(out.data), expected.data)
+
+    @pytest.mark.parametrize("undo_weighting", (True, False))
+    def test_correlate_shift_of_integers(
+        self, random_patch, to_backend, undo_weighting
+    ):
+        """Integers shift as numpy shifts them, dtype and promotion included."""
+        ints = np.arange(random_patch.size).reshape(random_patch.shape)
+        numpy_patch = random_patch.new(data=ints)
+        patch = to_backend(numpy_patch)
+        out = patch.correlate_shift("time", undo_weighting=undo_weighting)
+        expected = numpy_patch.correlate_shift("time", undo_weighting=undo_weighting)
+        assert backend_name(out.data) == backend_name(patch.data)
+        assert np.asarray(out.data).dtype == expected.dtype
+        assert np.array_equal(np.asarray(out.data), expected.data)
+
+    @pytest.mark.parametrize("real", (True, False))
+    def test_dft_of_integers(self, random_patch, to_backend, real):
+        """Integers transform as numpy transforms them, dtype included."""
+        ints = np.arange(random_patch.size).reshape(random_patch.shape) % 7
+        numpy_patch = random_patch.new(data=ints)
+        patch = to_backend(numpy_patch)
+        out = patch.dft("time", real=real)
+        expected = numpy_patch.dft("time", real=real)
+        assert backend_name(out.data) == backend_name(patch.data)
+        assert np.asarray(out.data).dtype == expected.dtype
+        assert np.allclose(np.asarray(out.data), expected.data)
+
+    @pytest.mark.parametrize("output", ("AS", "PS", "PSD"))
+    def test_dft_spectra(self, random_patch, backend_patch, output):
+        """Amplitudes, powers and decibels are computed on the backend."""
+        kwargs = dict(real=True, output=output, db=output == "PS")
+        out = backend_patch.dft("time", **kwargs)
+        expected = random_patch.dft("time", **kwargs)
+        assert backend_name(out.data) == backend_name(backend_patch.data)
+        assert np.allclose(np.asarray(out.data), expected.data)
+
+    def test_slope_filter(self, random_patch, backend_patch):
+        """The numpy mask meets the transform on the transform's backend."""
+        filt = [2e3, 2.2e3, 8e3, 2e4]
+        out = backend_patch.slope_filter(filt=filt)
+        expected = random_patch.slope_filter(filt=filt)
+        assert np.allclose(np.asarray(out.data), expected.data)
+
     def test_fillna_fills(self, backend_patch):
         """Non-finite values are replaced by the value."""
         xp = array_namespace(backend_patch.data)
@@ -676,6 +814,15 @@ class TestDevices:
         patch = random_patch.new(data=xp.asarray(data, device=other))
         assert device(patch.fillna(2.0).data) == other
         assert device(patch.full(2.0).data) == other
+
+    def test_dft_keeps_the_device(self, random_patch):
+        """The scales dft and idft apply are built beside the data."""
+        xp = pytest.importorskip("array_api_strict")
+        other = xp.__array_namespace_info__().devices()[1]
+        patch = random_patch.new(data=xp.asarray(random_patch.data, device=other))
+        spectrum = patch.dft("time", real=True, output="PSD", db=True)
+        assert device(spectrum.data) == other
+        assert device(patch.dft("time").idft().data) == other
 
 
 class TestDaskLaziness:

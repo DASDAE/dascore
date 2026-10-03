@@ -79,22 +79,24 @@ def patch_to_xarray(patch: PatchType, lazy_coords: bool | Collection[str] = Fals
     >>> lazy = patch_to_xarray(patch, lazy_coords=True)
     >>> assert lazy.xindexes["time"].coordinate == patch.get_coord("time")
     """
+    named = not isinstance(lazy_coords, bool)
+    if not named:
+        lazy_coords = patch.dims if lazy_coords else ()
+    return _to_dataarray(patch.data, patch.coords, patch.attrs, lazy_coords, named)
+
+
+def _to_dataarray(data, coord_manager, attrs, lazy_coords, held: bool):
+    """A DataArray of data, a coordinate manager and attrs; see patch_to_xarray."""
     xr = optional_import("xarray")
     _register_accessor()
     # Omit None-valued attrs because xarray backends may reject them during
     # NetCDF serialization, while a missing attr round-trips cleanly.
-    attrs = {
-        key: value for key, value in dict(patch.attrs).items() if value is not None
-    }
-    patch_dims = patch.dims
-    named = not isinstance(lazy_coords, bool)
-    if not named:
-        lazy_coords = patch_dims if lazy_coords else ()
+    attrs = {key: value for key, value in dict(attrs).items() if value is not None}
     coords, units, lazy = {}, {}, []
-    for name, coord in patch.coords.coord_map.items():
+    for name, coord in coord_manager.coord_map.items():
         if coord._partial:
             continue
-        dims = patch.coords.dim_map[name]
+        dims = coord_manager.dim_map[name]
         if coord.units is not None and not _is_temporal(coord.dtype):
             # a coordinate's units are its own; xarray states them the
             # way the CF conventions do, as an attribute beside it.
@@ -105,12 +107,12 @@ def patch_to_xarray(patch: PatchType, lazy_coords: bool | Collection[str] = Fals
         # one can be served by it; a coordinate merely riding a dimension
         # states its values as any other does.
         if name in lazy_coords and dims == (name,):
-            if (index := _lazy_index(name, coord, held=named)) is not None:
+            if (index := _lazy_index(name, coord, held=held)) is not None:
                 lazy.append(index)
                 continue
         coords[name] = (dims, coord.values)
     # Need to exclude non-coords
-    out = xr.DataArray(patch.data, attrs=attrs, dims=patch_dims, coords=coords)
+    out = xr.DataArray(data, attrs=attrs, dims=coord_manager.dims, coords=coords)
     for index in lazy:
         out = out.assign_coords(xr.Coordinates.from_xindex(index))
     for name, value in units.items():

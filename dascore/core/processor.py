@@ -244,12 +244,14 @@ class PatchProcessor(DascoreBaseModel):
         fields = type(self).model_fields
         # A field which only restates its default is left out, so a field
         # added later does not change the id of every operation before it.
+        # One never set holds its default, though a copy may not be the same
+        # object, which is all an unkeyable default can be matched by.
         given = {
             name: value
             for name, value in self.kwargs.items()
             if name not in fields
             or fields[name].is_required()
-            or not is_default(value, fields[name])
+            or (name in self.model_fields_set and not is_default(value, fields[name]))
         }
         return extract_patches(given)
 
@@ -793,7 +795,9 @@ def _check_signature(cls: type[PatchProcessor], func) -> None:
             if field.is_required()
             else field.get_default(call_default_factory=True)
         )
-        if not _values_equal(parameter.default, default):
+        # Identity first: a NaN default is itself, and equal to nothing.
+        same = parameter.default is default
+        if not (same or _values_equal(parameter.default, default)):
             msg = (
                 f"{cls.name} defaults {name} to {parameter.default!r} where "
                 f"{cls.__name__} defaults it to {default!r}; the two must "

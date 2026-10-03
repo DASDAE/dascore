@@ -21,6 +21,11 @@ from dascore.core.source import ArraySource
 from dascore.models import ArrayLike
 from dascore.proc.adaptive_spectral_filter import AdaptiveSpectralFilter
 from dascore.proc.tile_apply import TileApply
+from dascore.transform.spectral_descriptors import (
+    NegativeFrequencies,
+    SpectralFormat,
+)
+from dascore.units import Quantity
 from dascore.utils.array import (
     PatchUFunc,
     apply_ufunc,
@@ -362,7 +367,15 @@ class Patch(NamespaceOwner, PatchMeta):
     get_array = dascore.proc.get_array
     pin_id = dascore.proc.pin_id
     split_gaps = dascore.proc.coords.split_gaps
-    fill_gaps = dascore.proc.coords.fill_gaps
+
+    def fill_gaps(
+        self, *args, fill_value: Any = np.nan, samples: bool = False, **kwargs
+    ) -> Self:
+        """Fill the holes along a dimension with a constant value."""
+        return dascore.proc.coords.FillGaps(
+            args=args, fill_value=fill_value, samples=samples, **kwargs
+        ).run(self)
+
     add_distance_to = dascore.proc.coords.add_distance_to
     enrich = dascore.proc.enrich
 
@@ -524,8 +537,23 @@ class Patch(NamespaceOwner, PatchMeta):
         ).run(self)
 
     correlate = dascore.proc.correlate
-    correlate_shift = dascore.proc.correlate_shift
-    decimate = dascore.proc.decimate
+
+    def correlate_shift(self, dim: str, undo_weighting: bool = True) -> Self:
+        """Apply a shift to the patch data to undo correlation in frequency domain."""
+        return dascore.proc.CorrelateShift(dim=dim, undo_weighting=undo_weighting).run(
+            self
+        )
+
+    def decimate(
+        self,
+        filter_type: Literal["iir", "fir", None] = "iir",
+        copy: bool = True,
+        **kwargs,
+    ) -> Self:
+        """Decimate a patch along a dimension."""
+        return dascore.proc.Decimate(filter_type=filter_type, copy=copy, **kwargs).run(
+            self
+        )
 
     def demedian(self, dim: str = "time") -> Self:
         """Remove the median along a dimension."""
@@ -616,14 +644,42 @@ class Patch(NamespaceOwner, PatchMeta):
             self
         )
 
-    reassemble = dascore.proc.reassemble
+    def reassemble(self, *, taper: Any = None) -> Self:
+        """Blend a stack of tiles back into the patch they were cut from."""
+        return dascore.proc.Reassemble(taper=taper).run(self)
 
     def angle(self) -> Self:
         """Return the phase angle of the data."""
         return dascore.proc.basic.Angle().run(self)
 
-    resample = dascore.proc.resample
-    pad = dascore.proc.pad
+    def resample(
+        self,
+        window=None,
+        interp_kind: str = "linear",
+        samples: bool = False,
+        **kwargs,
+    ) -> Self:
+        """Resample along a single dimension using Fourier Method and interpolation."""
+        return dascore.proc.Resample(
+            window=window, interp_kind=interp_kind, samples=samples, **kwargs
+        ).run(self)
+
+    def pad(
+        self,
+        mode: Literal["constant"] = "constant",
+        constant_values: Any = 0,
+        expand_coords=True,
+        samples=False,
+        **kwargs,
+    ) -> Self:
+        """Pad the patch data along specified dimensions."""
+        return dascore.proc.basic.Pad(
+            mode=mode,
+            constant_values=constant_values,
+            expand_coords=expand_coords,
+            samples=samples,
+            **kwargs,
+        ).run(self)
 
     def roll(self, samples: bool = False, update_coord: bool = False, **kwargs) -> Self:
         """Roll the data and optionally the coordinates along a dimension."""
@@ -637,9 +693,26 @@ class Patch(NamespaceOwner, PatchMeta):
         """Flip data and optionally coordinates along dimensions."""
         return dascore.proc.basic.Flip(dims=dims, flip_coords=flip_coords).run(self)
 
-    align_to_coord = dascore.proc.align_to_coord
+    def align_to_coord(
+        self,
+        mode: Literal["full", "valid", "same"] = "same",
+        samples: bool = False,
+        reverse: bool = False,
+        fill_value: float = np.nan,
+        **kwargs,
+    ) -> Self:
+        """Align (shift) patch dim(s) based on values in a non-dimension coordinate."""
+        return dascore.proc.AlignToCoord(
+            mode=mode,
+            samples=samples,
+            reverse=reverse,
+            fill_value=fill_value,
+            **kwargs,
+        ).run(self)
 
-    interpolate = dascore.proc.interpolate
+    def interpolate(self, kind: str | int = "linear", **kwargs) -> Self:
+        """Set coordinates of patch along a dimension using interpolation."""
+        return dascore.proc.Interpolate(kind=kind, **kwargs).run(self)
 
     def abs(self) -> Self:
         """Return a patch with the absolute value of its data."""
@@ -894,11 +967,48 @@ class Patch(NamespaceOwner, PatchMeta):
         """Calculate the first derivative along dimension(s)."""
         return transform.Differentiate(dim=dim, order=order, step=step).run(self)
 
-    dft = transform.dft
+    def dft(
+        self,
+        dim: str | Sequence[str] | None,
+        *,
+        real: str | bool | None = None,
+        pad: bool = True,
+        output: Literal["FFT", "PSD", "PS", "AS"] = "FFT",
+        db: bool = False,
+    ) -> Self:
+        """Perform the discrete Fourier transform (dft) on specified dimension(s)."""
+        return transform.Dft(dim=dim, real=real, pad=pad, output=output, db=db).run(
+            self
+        )
+
     fbe = transform.fbe
-    idft = transform.idft
-    stft = transform.stft
-    istft = transform.istft
+
+    def idft(self, dim: str | Sequence[str] | None = None) -> Self:
+        """Perform the inverse discrete Fourier transform on specified dimension(s)."""
+        return transform.Idft(dim=dim).run(self)
+
+    def stft(
+        self,
+        taper_window: str | np.ndarray | tuple[str | Any, ...] = "hann",
+        overlap: Quantity | int | None = transform.fourier._HALF_OVERLAP,
+        samples: bool = False,
+        detrend: bool = False,
+        nfft: int | Quantity | np.timedelta64 | Mapping[str, Any] | None = None,
+        **kwargs,
+    ) -> Self:
+        """Perform a short-time fourier transform."""
+        return transform.Stft(
+            taper_window=taper_window,
+            overlap=overlap,
+            samples=samples,
+            detrend=detrend,
+            nfft=nfft,
+            **kwargs,
+        ).run(self)
+
+    def istft(self) -> Self:
+        """Invert a short-time fourier transform."""
+        return transform.Istft().run(self)
 
     def integrate(
         self, dim: Sequence[str] | str | None, definite: bool = False
@@ -952,13 +1062,126 @@ class Patch(NamespaceOwner, PatchMeta):
             dim_reduce=dim_reduce,
         ).run(self)
 
-    median_frequency = transform.median_frequency
-    spectral_centroid = transform.spectral_centroid
-    spectral_peak_frequency = transform.spectral_peak_frequency
-    spectral_peak_amplitude = transform.spectral_peak_amplitude
-    spectral_entropy = transform.spectral_entropy
-    spectral_kurtosis = transform.spectral_kurtosis
-    spectral_flatness = transform.spectral_flatness
+    def median_frequency(
+        self,
+        dim: str | None = None,
+        fmin: float | None = None,
+        fmax: float | None = None,
+        spectral_format: SpectralFormat = "auto",
+        negative_frequencies: NegativeFrequencies = "auto",
+    ) -> Self:
+        """Compute the median frequency of a Fourier-domain patch."""
+        return transform.MedianFrequency(
+            dim=dim,
+            fmin=fmin,
+            fmax=fmax,
+            spectral_format=spectral_format,
+            negative_frequencies=negative_frequencies,
+        ).run(self)
+
+    def spectral_centroid(
+        self,
+        dim: str | None = None,
+        fmin: float | None = None,
+        fmax: float | None = None,
+        spectral_format: SpectralFormat = "auto",
+        negative_frequencies: NegativeFrequencies = "auto",
+    ) -> Self:
+        """Compute the spectral centroid of a Fourier-domain patch."""
+        return transform.SpectralCentroid(
+            dim=dim,
+            fmin=fmin,
+            fmax=fmax,
+            spectral_format=spectral_format,
+            negative_frequencies=negative_frequencies,
+        ).run(self)
+
+    def spectral_peak_frequency(
+        self,
+        dim: str | None = None,
+        fmin: float | None = None,
+        fmax: float | None = None,
+        spectral_format: SpectralFormat = "auto",
+        negative_frequencies: NegativeFrequencies = "auto",
+    ) -> Self:
+        """Compute the peak frequency of a Fourier-domain patch."""
+        return transform.SpectralPeakFrequency(
+            dim=dim,
+            fmin=fmin,
+            fmax=fmax,
+            spectral_format=spectral_format,
+            negative_frequencies=negative_frequencies,
+        ).run(self)
+
+    def spectral_peak_amplitude(
+        self,
+        dim: str | None = None,
+        fmin: float | None = None,
+        fmax: float | None = None,
+        spectral_format: SpectralFormat = "auto",
+        negative_frequencies: NegativeFrequencies = "auto",
+    ) -> Self:
+        """Compute the peak spectral amplitude of a Fourier-domain patch."""
+        return transform.SpectralPeakAmplitude(
+            dim=dim,
+            fmin=fmin,
+            fmax=fmax,
+            spectral_format=spectral_format,
+            negative_frequencies=negative_frequencies,
+        ).run(self)
+
+    def spectral_entropy(
+        self,
+        dim: str | None = None,
+        fmin: float | None = None,
+        fmax: float | None = None,
+        normalize: bool = True,
+        spectral_format: SpectralFormat = "auto",
+        negative_frequencies: NegativeFrequencies = "auto",
+    ) -> Self:
+        """Compute spectral entropy from a Fourier-domain patch."""
+        return transform.SpectralEntropy(
+            dim=dim,
+            fmin=fmin,
+            fmax=fmax,
+            normalize=normalize,
+            spectral_format=spectral_format,
+            negative_frequencies=negative_frequencies,
+        ).run(self)
+
+    def spectral_kurtosis(
+        self,
+        dim: str | None = None,
+        fmin: float | None = None,
+        fmax: float | None = None,
+        spectral_format: SpectralFormat = "auto",
+        negative_frequencies: NegativeFrequencies = "auto",
+    ) -> Self:
+        """Compute spectral kurtosis from a Fourier-domain patch."""
+        return transform.SpectralKurtosis(
+            dim=dim,
+            fmin=fmin,
+            fmax=fmax,
+            spectral_format=spectral_format,
+            negative_frequencies=negative_frequencies,
+        ).run(self)
+
+    def spectral_flatness(
+        self,
+        dim: str | None = None,
+        fmin: float | None = None,
+        fmax: float | None = None,
+        spectral_format: SpectralFormat = "auto",
+        negative_frequencies: NegativeFrequencies = "auto",
+    ) -> Self:
+        """Compute spectral flatness from a Fourier-domain patch."""
+        return transform.SpectralFlatness(
+            dim=dim,
+            fmin=fmin,
+            fmax=fmax,
+            spectral_format=spectral_format,
+            negative_frequencies=negative_frequencies,
+        ).run(self)
 
 
 # Both classes list their operations by hand, and this is what refuses a

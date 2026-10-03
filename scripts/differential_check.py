@@ -80,6 +80,12 @@ EXPECTED_ERRORS = (
     "matrix/complex*/median_filter",
     "matrix/complex*/hampel_exact",
     "matrix/bool/hampel_*",
+    "matrix/float16/median_filter",
+    "matrix/float16/gaussian_filter",
+    "matrix/float16/hampel_exact",
+    "matrix/longdouble/median_filter",
+    "matrix/longdouble/gaussian_filter",
+    "matrix/longdouble/hampel_exact",
     "matrix/*nan*/savgol_filter",
     "matrix/*inf*/savgol_filter",
     # NumPy cannot subtract booleans; scipy's Hilbert transform refuses complex.
@@ -92,6 +98,15 @@ EXPECTED_ERRORS = (
     "matrix/single_row/strain_rate*",
     "matrix/single_row/taper_distance",
     "matrix/single_row/taper_range_invert",
+    "matrix/single_row/pad_fft",
+    "matrix/single_row/dft_real",
+    "matrix/single_row/dft_nopad",
+    "matrix/single_row/idft",
+    # NumPy's real FFT refuses complex data; scipy's detrend refuses NaN and inf.
+    "matrix/complex*/dft_real",
+    "matrix/complex*/idft_real",
+    "matrix/*nan*/stft_detrend",
+    "matrix/*inf*/stft_detrend",
 )
 
 
@@ -107,6 +122,7 @@ def make_arrays() -> dict:
     arrays = {
         "float64": base,
         "float32": base.astype("float32"),
+        "float16": base.astype("float16"),
         "int32": (base * 100).astype("int32"),
         "int64": (base * 100).astype("int64"),
         "bool": base > 0,
@@ -127,6 +143,9 @@ def make_arrays() -> dict:
     both = nan.copy()
     both[2, 2], both[2, 3] = np.inf, -np.inf
     arrays["nan_and_inf"] = both
+    # Extended precision only where the platform has it, not as float64.
+    if np.finfo(np.longdouble).eps < np.finfo(np.float64).eps:
+        arrays["longdouble"] = base.astype(np.longdouble)
     return arrays
 
 
@@ -234,6 +253,54 @@ MATRIX_CALLS = {
         data_type="velocity"
     ).velocity_to_strain_rate_edgeless(step_multiple=2),
     "phase_weighted_stack": lambda patch: patch.phase_weighted_stack("distance"),
+    # shape changers
+    "pad_fft": lambda patch: patch.pad(time="fft", distance="correlate"),
+    "decimate_none": lambda patch: patch.decimate(time=3, filter_type=None),
+    "decimate_view": lambda patch: patch.decimate(
+        distance=2, filter_type=None, copy=False
+    ),
+    "interpolate": lambda patch: patch.interpolate(time=np.arange(0, 3.5, 0.3)),
+    "interpolate_nearest": lambda patch: patch.interpolate(
+        distance=[0.4, 1.6], kind="nearest"
+    ),
+    "resample_samples": lambda patch: patch.resample(time=5, samples=True),
+    "align_to_coord": lambda patch: patch.update_coords(
+        shift=("distance", np.arange(patch.shape[0]) % 3 - 1)
+    ).align_to_coord(time="shift", samples=True, mode="full"),
+    "correlate_shift": lambda patch: patch.correlate_shift("time"),
+    "fill_gaps_noop": lambda patch: patch.fill_gaps("time"),
+    # Fourier transforms and spectral descriptors
+    "dft": lambda patch: patch.dft("time"),
+    "dft_real": lambda patch: patch.dft(("distance", "time"), real=True),
+    "dft_nopad": lambda patch: patch.dft("distance", pad=False),
+    "dft_psd_db": lambda patch: patch.dft("time", output="PSD", db=True),
+    "dft_as": lambda patch: patch.dft("time", output="AS"),
+    "idft": lambda patch: patch.dft(("distance", "time")).idft(),
+    "idft_real": lambda patch: patch.dft("time", real=True).idft(),
+    "stft": lambda patch: patch.stft(time=4, samples=True),
+    "stft_detrend": lambda patch: patch.stft(time=4, samples=True, detrend=True),
+    "istft": lambda patch: patch.stft(time=4, samples=True, overlap=2).istft(),
+    "spectral_centroid": lambda patch: patch.dft("time").spectral_centroid(
+        negative_frequencies="keep"
+    ),
+    "median_frequency": lambda patch: patch.dft("time").median_frequency(
+        negative_frequencies="drop"
+    ),
+    "spectral_peak_frequency": lambda patch: patch.dft(
+        "time", output="PS"
+    ).spectral_peak_frequency(negative_frequencies="keep"),
+    "spectral_peak_amplitude": lambda patch: patch.dft(
+        "time", output="AS"
+    ).spectral_peak_amplitude(negative_frequencies="keep"),
+    "spectral_entropy": lambda patch: patch.stft(time=4, samples=True).spectral_entropy(
+        negative_frequencies="keep"
+    ),
+    "spectral_kurtosis": lambda patch: patch.dft("time").spectral_kurtosis(
+        negative_frequencies="keep"
+    ),
+    "spectral_flatness": lambda patch: patch.dft("time").spectral_flatness(
+        negative_frequencies="keep"
+    ),
 }
 if HAS_FINDIFF:
     MATRIX_CALLS["differentiate_findiff"] = lambda patch: patch.differentiate(
@@ -611,6 +678,556 @@ def _calculus_calls(patch, int_patch, f32, dft_patch, wacky, typed) -> dict:
     return calls
 
 
+def _gapped(coord, dim: str, label: str):
+    """Return a 3-row patch along a coordinate with holes, counting up."""
+    data = np.arange(3 * len(coord), dtype=np.float64).reshape(3, len(coord))
+    coords = {"distance": np.arange(3) * 1.0, dim: coord}
+    return _pinned(dc.Patch(data=data, coords=coords, dims=("distance", dim)), label)
+
+
+def _fill_gaps_calls(s) -> dict:
+    """Return fill_gaps on patches with real holes, with every spelling."""
+    t0, ms = np.datetime64("2020-01-01", "ns"), np.timedelta64(1_000_000, "ns")
+    get = dc.core.get_coord
+    concat = dc.core.coords.concat_coords
+    first = get(start=t0, step=ms, shape=(5,))
+    second = get(start=t0 + 8 * ms, step=ms, shape=(4,))
+    third = get(start=t0 + 30 * ms, step=ms, shape=(2,))
+    gapped = _gapped(concat(first, second), "time", "gapped")
+    three = _gapped(concat(first, second, third), "time", "three")
+    x = concat(get(start=0.0, stop=5.0, step=1.0), get(start=8.0, stop=10.0, step=1.0))
+    numeric = _gapped(x, "x", "numeric_gap")
+    int_gapped = _pinned(numeric.new(data=np.asarray(numeric.data, "int64")), "ig")
+    f32_gapped = _pinned(gapped.new(data=np.asarray(gapped.data, "float32")), "fg")
+    rider = numeric.update_coords(q=("x", np.arange(numeric.shape[1]) * 1.0))
+    return {
+        "fill_gaps_time": lambda: gapped.fill_gaps("time"),
+        "fill_gaps_kwarg": lambda: gapped.fill_gaps(time=None),
+        "fill_gaps_limit": lambda: three.fill_gaps(time=0.005),
+        "fill_gaps_limit_narrow": lambda: gapped.fill_gaps(time=0.0029),
+        "fill_gaps_limit_units": lambda: three.fill_gaps(time=5 * s / 1000),
+        "fill_gaps_limit_timedelta": lambda: gapped.fill_gaps(time=3 * ms),
+        "fill_gaps_samples": lambda: three.fill_gaps(time=3, samples=True),
+        "fill_gaps_samples_narrow": lambda: gapped.fill_gaps(time=2, samples=True),
+        "fill_gaps_value": lambda: gapped.fill_gaps("time", fill_value=0),
+        "fill_gaps_numeric": lambda: numeric.fill_gaps("x"),
+        "fill_gaps_int": lambda: int_gapped.fill_gaps("x", fill_value=-1),
+        "fill_gaps_f32": lambda: f32_gapped.fill_gaps("time", fill_value=0.1),
+        "fill_gaps_rider": lambda: rider.fill_gaps("x"),
+        "fill_gaps_noop": lambda: gapped.fill_gaps("distance"),
+        "fill_gaps_bad_int_nan": lambda: int_gapped.fill_gaps("x"),
+        "fill_gaps_bad_value": lambda: gapped.fill_gaps("time", fill_value="bob"),
+        "fill_gaps_bad_dim": lambda: gapped.fill_gaps("nope"),
+    }
+
+
+def _shape_calls(patch, int_patch, f32, dft_patch, wacky, with_nondim, m, s) -> dict:
+    """Return pads, decimations, interpolations, resamples, shifts and tiles."""
+    hz = dc.get_unit("Hz")
+    time = patch.get_array("time")
+    step = patch.get_coord("time").step
+    dist = patch.get_array("distance")
+    up_time = np.arange(time.min(), time.max(), step / 2)
+    # Unsorted, repeated and negative shifts, in samples and time, and a
+    # shuffled distance order.
+    rng = np.random.default_rng(0)
+    shifts = rng.integers(-20, 20, size=len(dist))
+    order = rng.permutation(len(dist))
+    aligned = _pinned(
+        patch.update_coords(
+            shift=("distance", shifts),
+            ramp=("distance", np.arange(len(dist))),
+            lag=("distance", np.abs(shifts) * step),
+            lag_float=("distance", np.abs(shifts) * 0.004),
+            when=("distance", time[: len(dist)]),
+        ),
+        "aligned",
+    )
+    descending = _pinned(patch.flip("time"), "descending")
+    corr = (patch.dft("time", real=True, pad=False) ** 2).idft()
+    odd = _pinned(patch.isel(time=slice(0, 1999)), "odd")
+    tiles = patch.tile_apply(np.positive, mode="stack", time=0.2)
+    tiles_2d = patch.tile_apply(
+        np.positive, mode="stack", time=64, distance=50, samples=True
+    )
+    analysed = patch.tile_apply(np.positive, mode="stack", time=0.2, analysis="hann")
+    return {
+        # pad
+        "pad_fft": lambda: patch.isel(time=slice(0, 1999)).pad(time="fft"),
+        "pad_fft_noop": lambda: patch.pad(time="fft"),
+        "pad_correlate": lambda: patch.pad(distance="correlate"),
+        "pad_seconds": lambda: patch.pad(time=0.02),
+        "pad_quantity": lambda: patch.pad(distance=(5 * m, 2 * m)),
+        "pad_timedelta": lambda: patch.pad(time=(step * 3, step)),
+        "pad_positional": lambda: patch.pad("constant", 2, False, True, time=3),
+        "pad_int": lambda: int_patch.pad(time=2, samples=True, constant_values=3),
+        "pad_int_float": lambda: int_patch.pad(
+            time=2, samples=True, constant_values=1.5
+        ),
+        "pad_f32": lambda: f32.pad(distance=(1, 0), samples=True),
+        "pad_complex": lambda: dft_patch.pad(ft_time=2, samples=True),
+        "pad_nan": lambda: patch.pad(time=1, samples=True, constant_values=np.nan),
+        "pad_zero": lambda: patch.pad(time=0, samples=True),
+        "pad_nondim": lambda: with_nondim.pad(distance=(1, 2), samples=True),
+        "pad_nondim_noexpand": lambda: with_nondim.pad(
+            distance=2, samples=True, expand_coords=False
+        ),
+        "pad_wacky": lambda: wacky.pad(distance=2, time=1, samples=True),
+        "pad_bad_wacky_units": lambda: wacky.pad(distance=2.0),
+        "pad_bad_sequence": lambda: patch.pad(time=1, constant_values=(1, 2)),
+        "pad_bad_dim": lambda: patch.pad(nope=1),
+        # decimate
+        "decimate_iir": lambda: patch.decimate(time=10),
+        "decimate_fir": lambda: patch.decimate(distance=10, filter_type="fir"),
+        "decimate_none": lambda: patch.decimate(time=7, filter_type=None),
+        "decimate_none_view": lambda: patch.decimate(
+            distance=3, filter_type=None, copy=False
+        ),
+        "decimate_positional": lambda: patch.decimate("fir", True, time=4),
+        "decimate_int": lambda: int_patch.decimate(time=5),
+        "decimate_int_none": lambda: int_patch.decimate(time=5, filter_type=None),
+        "decimate_f32": lambda: f32.decimate(time=2, filter_type="fir"),
+        "decimate_complex": lambda: dft_patch.decimate(distance=2),
+        "decimate_nondim": lambda: with_nondim.decimate(distance=3),
+        "decimate_nondim_none": lambda: with_nondim.decimate(
+            distance=3, filter_type=None
+        ),
+        "decimate_wacky": lambda: wacky.decimate(time=4, filter_type=None),
+        "decimate_wacky_iir": lambda: wacky.decimate(time=4),
+        "decimate_descending": lambda: descending.decimate(time=3),
+        "pad_descending": lambda: descending.pad(time=(0.01, 0.02)),
+        "interp_descending": lambda: descending.interpolate(time=time[::4]),
+        "corr_shift_descending": lambda: descending.correlate_shift("time"),
+        "decimate_bad_small": lambda: patch.isel(distance=slice(0, 10)).decimate(
+            distance=2
+        ),
+        "decimate_bad_dim": lambda: patch.decimate(nope=2),
+        "decimate_text": lambda: patch.decimate(time="3", filter_type=None),
+        "decimate_bad_text": lambda: patch.decimate(time="3"),
+        # interpolate
+        "interp_up": lambda: patch.interpolate(time=up_time),
+        "interp_down": lambda: patch.interpolate(time=time[::3]),
+        "interp_nearest": lambda: patch.interpolate(time=time[::2], kind="nearest"),
+        "interp_cubic": lambda: patch.interpolate(distance=dist[:50] + 0.5, kind=3),
+        "interp_positional": lambda: patch.interpolate("nearest", distance=dist[::2]),
+        "interp_extrapolate": lambda: patch.interpolate(distance=dist + 0.5),
+        "interp_snap": lambda: wacky.interpolate(time=None),
+        "interp_snap_distance": lambda: wacky.interpolate(distance=None),
+        "interp_int": lambda: int_patch.interpolate(distance=dist[::2] + 0.25),
+        "interp_f32": lambda: f32.interpolate(time=time[::2]),
+        "interp_complex": lambda: dft_patch.interpolate(distance=dist[:20] + 0.5),
+        "interp_nondim": lambda: with_nondim.interpolate(distance=dist[:30] + 0.5),
+        "interp_rider_time": lambda: aligned.interpolate(distance=dist[:30] + 0.5),
+        "interp_bad_kind": lambda: patch.interpolate(time=time[::2], kind="nope"),
+        "interp_bad_dim": lambda: patch.interpolate(nope=time),
+        "interp_bad_text": lambda: patch.interpolate(time=["2017-09-18T00:00:01"]),
+        # resample
+        "resample_timedelta": lambda: patch.resample(time=np.timedelta64(10, "ms")),
+        "resample_hz": lambda: patch.resample(time=50 * hz),
+        "resample_seconds": lambda: patch.resample(time=0.008),
+        "resample_distance": lambda: patch.resample(distance=3 * m),
+        "resample_samples": lambda: patch.resample(time=50, samples=True),
+        "resample_interp": lambda: patch.resample(time=np.timedelta64(7, "ms")),
+        "resample_interp_nearest": lambda: patch.resample(
+            time=np.timedelta64(7, "ms"), interp_kind="nearest"
+        ),
+        "resample_window": lambda: patch.resample(time=0.008, window="hann"),
+        "resample_positional": lambda: patch.resample(None, "nearest", True, time=333),
+        "resample_up": lambda: patch.resample(time=0.003),
+        "resample_int": lambda: int_patch.resample(time=0.008),
+        "resample_f32": lambda: f32.resample(time=0.008),
+        "resample_nondim": lambda: with_nondim.resample(distance=2),
+        "resample_bad_none": lambda: patch.resample(time=None),
+        "resample_bad_wacky": lambda: wacky.resample(time=0.01),
+        # align_to_coord
+        **{
+            f"align_{mode}_{name}": (
+                lambda mode=mode, name=name, extra=extra: aligned.align_to_coord(
+                    mode=mode, **extra
+                )
+            )
+            for mode in ("full", "same", "valid")
+            for name, extra in (
+                ("samples", {"time": "shift", "samples": True}),
+                ("lag", {"time": "lag"}),
+                ("float", {"time": "lag_float"}),
+                ("ramp", {"time": "ramp", "samples": True}),
+            )
+        },
+        "align_reverse": lambda: aligned.align_to_coord(
+            time="shift", samples=True, mode="full", reverse=True
+        ),
+        "align_fill": lambda: aligned.align_to_coord(
+            time="lag", mode="full", fill_value=0
+        ),
+        # Descending along the coordinate's own dimension; a descending
+        # aligned dimension raises on every mode, so it is not compared.
+        "align_descending_distance": lambda: aligned.flip("distance").align_to_coord(
+            time="shift", samples=True, mode="full"
+        ),
+        "align_unsorted_distance": lambda: aligned.isel(distance=order).align_to_coord(
+            time="lag", mode="valid"
+        ),
+        "align_int": lambda: _pinned(
+            aligned.new(data=np.asarray(aligned.data * 10, "int32")), "align_int"
+        ).align_to_coord(time="shift", samples=True, fill_value=-1),
+        "align_bad_mode": lambda: aligned.align_to_coord(
+            time="ramp", samples=True, mode="x"
+        ),
+        "align_bad_none": lambda: aligned.align_to_coord(),
+        "align_bad_two": lambda: aligned.align_to_coord(time="shift", distance="x"),
+        "align_bad_value": lambda: aligned.align_to_coord(time=1),
+        "align_bad_dim": lambda: aligned.align_to_coord(nope="shift"),
+        "align_bad_coord": lambda: aligned.align_to_coord(time="distance"),
+        "align_bad_samples": lambda: aligned.align_to_coord(time="lag", samples=True),
+        "align_bad_dtype": lambda: aligned.align_to_coord(time="when"),
+        "align_bad_overlap": lambda: (
+            aligned.align_to_coord(time="ramp", samples=True, mode="same")
+            .isel(time=slice(0, 3))
+            .align_to_coord(time="ramp", samples=True)
+        ),
+        # correlate_shift
+        "corr_shift": lambda: corr.correlate_shift("time"),
+        "corr_shift_unweighted": lambda: corr.correlate_shift(
+            "time", undo_weighting=False
+        ),
+        "corr_shift_positional": lambda: corr.correlate_shift("time", False),
+        "corr_shift_distance": lambda: patch.correlate_shift(dim="distance"),
+        "corr_shift_odd": lambda: odd.correlate_shift("time"),
+        "corr_shift_int": lambda: int_patch.correlate_shift("distance"),
+        "corr_shift_int_unweighted": lambda: int_patch.correlate_shift(
+            "distance", undo_weighting=False
+        ),
+        "corr_shift_f32": lambda: f32.correlate_shift("time"),
+        "corr_shift_complex": lambda: dft_patch.correlate_shift("distance"),
+        "corr_shift_bad_wacky": lambda: wacky.correlate_shift("distance"),
+        "corr_shift_bad_dim": lambda: patch.correlate_shift("nope"),
+        # reassemble
+        "reassemble": lambda: tiles.reassemble(),
+        "reassemble_taper": lambda: tiles.reassemble(taper="hamming"),
+        "reassemble_2d": lambda: tiles_2d.reassemble(),
+        "reassemble_thinned": lambda: tiles.isel(time=slice(0, None, 2)).reassemble(),
+        "reassemble_reordered": lambda: tiles.flip("time").reassemble(),
+        "reassemble_analysis": lambda: analysed.reassemble(),
+        "reassemble_scaled": lambda: (tiles * 2).reassemble(),
+        "reassemble_bad_analysis_taper": lambda: analysed.reassemble(taper="hann"),
+        "reassemble_bad_untiled": lambda: patch.reassemble(),
+    }
+
+
+def _fourier_calls(patch, int_patch, f32, wacky, with_nondim, m, s) -> dict:
+    """Return dft, idft, stft and istft with every option, and round trips."""
+    units = _pinned(patch.set_units("m/s"), "units")
+    # A scale in the data units, with and without units on the coordinates.
+    scaled = _pinned(patch.set_units("10 m/s"), "scaled")
+    bare = _matrix_patch(np.asarray(patch.data)[:20, :256], "bare")
+    bare_scaled = _pinned(bare.update_attrs(data_units="10 m/s"), "bare_scaled")
+    odd = _pinned(patch.isel(time=slice(0, 1999), distance=slice(0, 299)), "odd8")
+    cplx = _pinned(patch.new(data=np.asarray(patch.data) * (1 + 0.5j)), "cplx")
+    c64 = _pinned(cplx.new(data=np.asarray(cplx.data, "complex64")), "c64")
+    full, real = patch.dft("time"), patch.dft("time", real=True)
+    both = patch.dft(("time", "distance"), real="time")
+    nopad = odd.dft("time", pad=False)
+    odd_real = odd.dft(("distance", "time"), real=True)
+    nondim = with_nondim.dft("distance")
+    tukey = ("tukey", 0.1)
+    window = np.hanning(64)
+    small = _pinned(patch.isel(distance=slice(0, 20)), "stft_small")
+    st = small.stft(time=0.1)
+    st_box = small.stft(time=64, samples=True, taper_window="boxcar", overlap=16)
+    st_2d = small.stft(distance=8, time=64, samples=True)
+    st_nfft = small.stft(time=64, samples=True, nfft=100)
+    st_odd = small.stft(time=33, samples=True, overlap=11)
+    st_cplx = _pinned(cplx.isel(distance=slice(0, 20)), "c20").stft(time=0.2)
+    st_nondim = with_nondim.isel(time=slice(0, 400)).stft(distance=16, samples=True)
+    st_f32 = _pinned(f32.isel(distance=slice(0, 20)), "f20").stft(time=0.1)
+    st_int = _pinned(int_patch.isel(distance=slice(0, 20)), "i20").stft(time=0.1)
+    pct = dc.get_unit("percent")
+    hz = dc.get_unit("Hz")
+    return {
+        # dft
+        "dft_time": lambda: patch.dft("time"),
+        "dft_distance": lambda: patch.dft("distance"),
+        "dft_both": lambda: patch.dft(("time", "distance")),
+        "dft_none": lambda: patch.dft(None),
+        "dft_real_true": lambda: patch.dft("time", real=True),
+        "dft_real_true_both": lambda: patch.dft(["distance", "time"], real=True),
+        "dft_real_named": lambda: patch.dft(("time", "distance"), real="time"),
+        "dft_real_other": lambda: patch.dft(("time", "distance"), real="distance"),
+        "dft_real_missing": lambda: patch.dft("time", real="distance"),
+        "dft_nopad": lambda: odd.dft("time", pad=False),
+        "dft_nopad_real": lambda: odd.dft("time", real=True, pad=False),
+        "dft_odd": lambda: odd.dft("time"),
+        "dft_odd_both": lambda: odd.dft(("distance", "time"), real=True),
+        "dft_complex": lambda: cplx.dft("time"),
+        "dft_complex64": lambda: c64.dft("distance"),
+        "dft_complex_twice": lambda: full.dft("distance"),
+        "dft_noop": lambda: full.dft("time"),
+        "dft_noop_output": lambda: full.dft("time", output="PSD"),
+        "dft_partial_noop": lambda: full.dft(("time", "distance")),
+        "dft_int": lambda: int_patch.dft("time", real=True),
+        "dft_f32": lambda: f32.dft("time"),
+        "dft_f32_real": lambda: f32.dft("distance", real=True),
+        "dft_units": lambda: units.dft("time", real=True),
+        "dft_nondim": lambda: with_nondim.dft("distance"),
+        "dft_nondim_nopad": lambda: with_nondim.dft("distance", pad=False),
+        **{
+            f"dft_{out}_{db}_{kind}": (
+                lambda out=out, db=db, src=src, kw=kw: src.dft(
+                    "time", output=out, db=db, **kw
+                )
+            )
+            for out in ("AS", "PS", "PSD")
+            for db in (False, True)
+            for kind, src, kw in (
+                ("real", patch, {"real": True}),
+                ("full", patch, {}),
+                ("units", units, {"real": True}),
+                ("scaled", scaled, {"real": True}),
+                ("bare_scaled", bare_scaled, {}),
+                ("f32", f32, {"pad": False}),
+            )
+        },
+        "dft_psd_lower": lambda: patch.dft("time", output="psd"),
+        "dft_as_both": lambda: units.dft(("time", "distance"), output="AS"),
+        "dft_ps_complex": lambda: cplx.dft("distance", output="PS", db=True),
+        "dft_bad_output": lambda: patch.dft("time", output="nope"),
+        "dft_bad_db": lambda: patch.dft("time", db=True),
+        "dft_bad_dim": lambda: patch.dft("nope"),
+        "dft_bad_wacky": lambda: wacky.dft("time"),
+        # idft
+        "idft_full": lambda: full.idft(),
+        "idft_real": lambda: real.idft(),
+        "idft_named": lambda: real.idft("time"),
+        "idft_ft_named": lambda: full.idft("ft_time"),
+        "idft_both": lambda: both.idft(),
+        "idft_partial": lambda: both.idft("distance"),
+        "idft_partial_real": lambda: both.idft("time"),
+        "idft_nopad": lambda: nopad.idft(),
+        "idft_odd_real": lambda: odd_real.idft(),
+        "idft_nondim": lambda: nondim.idft(),
+        "idft_complex": lambda: cplx.dft("time").idft(),
+        "idft_complex64": lambda: c64.dft("time", pad=False).idft(),
+        "idft_f32": lambda: f32.dft("time", real=True).idft(),
+        "idft_int": lambda: int_patch.dft("time", real=True).idft(),
+        "idft_units": lambda: units.dft(("time", "distance")).idft(),
+        "idft_scaled": lambda: (real * 2).idft(),
+        "idft_positional": lambda: both.idft(["time", "distance"]),
+        "idft_bad_psd": lambda: patch.dft("time", output="PSD").idft(),
+        "idft_bad_plain": lambda: patch.idft("time"),
+        "idft_none_plain": lambda: patch.idft(),
+        "idft_bad_two_real": lambda: (
+            patch.dft("time", real=True).dft("distance", real=True).idft()
+        ),
+        # stft
+        "stft_seconds": lambda: small.stft(time=0.1),
+        "stft_units": lambda: small.stft(time=0.2 * s, overlap=0.05 * s),
+        "stft_percent": lambda: small.stft(time=0.1, overlap=25 * pct),
+        "stft_overlap_none": lambda: small.stft(time=0.1, overlap=None),
+        "stft_samples": lambda: small.stft(time=64, samples=True, overlap=16),
+        "stft_boxcar": lambda: small.stft(time=64, samples=True, taper_window="boxcar"),
+        "stft_array": lambda: small.stft(time=64, samples=True, taper_window=window),
+        "stft_tuple": lambda: small.stft(time=64, samples=True, taper_window=tukey),
+        "stft_list": lambda: small.stft(
+            distance=8, time=64, samples=True, taper_window=["boxcar", "hann"]
+        ),
+        "stft_detrend": lambda: small.stft(time=0.1, detrend=True),
+        "stft_detrend_2d": lambda: small.stft(
+            distance=8, time=32, samples=True, detrend=True
+        ),
+        "stft_odd": lambda: small.stft(time=33, samples=True, overlap=11),
+        "stft_odd_input": lambda: odd.isel(distance=slice(0, 9)).stft(
+            time=31, samples=True
+        ),
+        "stft_nfft": lambda: small.stft(time=64, samples=True, nfft=100),
+        "stft_nfft_quantity": lambda: small.stft(time=0.1, nfft=0.2 * s),
+        "stft_nfft_timedelta": lambda: small.stft(
+            time=0.1, nfft=np.timedelta64(300, "ms")
+        ),
+        "stft_nfft_map": lambda: small.stft(
+            distance=8, time=32, samples=True, nfft={"time": 64}
+        ),
+        "stft_2d": lambda: small.stft(distance=8, time=64, samples=True),
+        "stft_2d_named_late": lambda: small.stft(time=64, distance=8, samples=True),
+        "stft_distance": lambda: small.stft(distance=5 * m),
+        "stft_complex": lambda: _pinned(cplx.isel(distance=slice(0, 20)), "c20").stft(
+            time=0.2
+        ),
+        "stft_complex_2d": lambda: _pinned(
+            cplx.isel(distance=slice(0, 20)), "c20"
+        ).stft(time=32, distance=4, samples=True),
+        "stft_f32": lambda: _pinned(f32.isel(distance=slice(0, 20)), "f20").stft(
+            time=0.1
+        ),
+        "stft_int": lambda: _pinned(int_patch.isel(distance=slice(0, 20)), "i20").stft(
+            time=0.1
+        ),
+        "stft_nondim": lambda: with_nondim.isel(time=slice(0, 400)).stft(
+            distance=16, samples=True
+        ),
+        "stft_hz_overlap": lambda: small.stft(time=0.1, overlap=0.02),
+        "stft_positional": lambda: small.stft("boxcar", 8, True, time=32),
+        "stft_bad_nfft_small": lambda: small.stft(time=64, samples=True, nfft=10),
+        "stft_bad_nfft_type": lambda: small.stft(time=64, samples=True, nfft=64.0),
+        "stft_bad_nfft_map": lambda: small.stft(
+            time=64, samples=True, nfft={"distance": 64}
+        ),
+        "stft_bad_array": lambda: small.stft(
+            time=64, samples=True, taper_window=np.ones(10)
+        ),
+        "stft_bad_no_window": lambda: small.stft(),
+        "stft_bad_dim": lambda: small.stft(nope=3),
+        "stft_bad_too_long": lambda: small.stft(time=100.0),
+        "stft_bad_hz": lambda: small.stft(time=10 * hz),
+        # istft
+        "istft": lambda: st.istft(),
+        "istft_boxcar": lambda: st_box.istft(),
+        "istft_2d": lambda: st_2d.istft(),
+        "istft_nfft": lambda: st_nfft.istft(),
+        "istft_odd": lambda: st_odd.istft(),
+        "istft_complex": lambda: st_cplx.istft(),
+        "istft_nondim": lambda: st_nondim.istft(),
+        "istft_f32": lambda: st_f32.istft(),
+        "istft_int": lambda: st_int.istft(),
+        "istft_transposed": lambda: st.transpose("time", "ft_time", "distance").istft(),
+        "istft_scaled": lambda: (st * 2).istft(),
+        "istft_bad_detrended": lambda: small.stft(time=0.1, detrend=True).istft(),
+        "istft_bad_plain": lambda: patch.istft(),
+        "istft_bad_dft": lambda: full.istft(),
+        # operations built on these, whose results must not move
+        "whiten_check": lambda: patch.whiten(time=(10, 50)),
+        "whiten_smooth_check": lambda: patch.whiten(smooth_size=5, time=None),
+        "slope_filter_check": lambda: patch.slope_filter(filt=[2e3, 2.2e3, 8e3, 2e4]),
+        "correlate_check": lambda: patch.correlate(distance=[1, 3], samples=True),
+        "correlate_dft_check": lambda: real.correlate(distance=[2], samples=True),
+    }
+
+
+def _spectral_calls(patch, with_nondim) -> dict:
+    """Return the spectral descriptors with every option, on dft and stft input."""
+    small = _pinned(patch.isel(distance=slice(0, 20)), "spec_small")
+    real = small.dft("time", real=True)
+    full = small.dft("time")
+    odd_full = small.isel(time=slice(0, 1999)).dft("time", pad=False)
+    st = small.stft(time=0.1)
+    st_full = _pinned(
+        small.new(data=np.asarray(small.data) * (1 + 1j)), "spec_cplx"
+    ).stft(time=0.1)
+    as_spec = small.dft("time", real=True, output="AS")
+    ps_spec = small.dft("time", real=True, output="PS")
+    psd_spec = small.dft("time", real=True, output="PSD")
+    db_spec = small.dft("time", real=True, output="PSD", db=True)
+    both = small.dft(("time", "distance"), real="time")
+    data = np.asarray(small.data)
+    asym = _pinned(
+        small.new(data=data + 1j * np.roll(data, 1, axis=1)), "spec_asym"
+    ).dft("time")
+    # Unmarked spectra: inferred from data_type, or from complex data.
+    unmarked = _pinned(
+        as_spec.update_attrs(_dft_output=None, data_type="amplitude"), "unmarked"
+    )
+    bare_complex = _pinned(
+        real.update_attrs(_dft_output=None, data_type=""), "bare_complex"
+    )
+    int_power = _pinned(
+        ps_spec.new(data=(np.asarray(ps_spec.data) * 1e6).astype("int64")), "ip"
+    )
+    f32_amp = _pinned(as_spec.new(data=np.asarray(as_spec.data, "float32")), "fa")
+    c64 = _pinned(real.new(data=np.asarray(real.data, "complex64")), "c64s")
+    negative = _pinned(as_spec.new(data=np.asarray(as_spec.data) - 1.0), "neg")
+    zeros = _pinned(as_spec.new(data=np.zeros(as_spec.shape)), "zero_spec")
+    single = real.select(ft_time=(10.0, 10.0))
+    names = (
+        "spectral_centroid",
+        "median_frequency",
+        "spectral_peak_frequency",
+        "spectral_peak_amplitude",
+        "spectral_entropy",
+        "spectral_kurtosis",
+        "spectral_flatness",
+    )
+    inputs = {
+        "real": (real, {}),
+        "full": (full, {}),
+        "odd_full": (odd_full, {}),
+        "stft": (st, {}),
+        "stft_full": (st_full, {"negative_frequencies": "keep"}),
+        "stft_drop": (st_full, {"negative_frequencies": "drop"}),
+        "as": (as_spec, {}),
+        "ps": (ps_spec, {}),
+        "psd": (psd_spec, {}),
+        "fmin": (real, {"fmin": 10}),
+        "fmax": (real, {"fmax": 40.5}),
+        "band": (st, {"fmin": 5.0, "fmax": 60}),
+        "both_dim": (both, {"dim": "time"}),
+        "both_distance": (both, {"dim": "distance", "negative_frequencies": "keep"}),
+        "fmt_fft": (real, {"spectral_format": "fft"}),
+        "fmt_amplitude": (as_spec, {"spectral_format": "amplitude"}),
+        "fmt_power": (ps_spec, {"spectral_format": "power"}),
+        "fmt_density": (psd_spec, {"spectral_format": "density"}),
+        "neg_drop": (full, {"negative_frequencies": "drop"}),
+        "neg_keep": (full, {"negative_frequencies": "keep"}),
+        "neg_raise_real": (real, {"negative_frequencies": "raise"}),
+        "unmarked": (unmarked, {}),
+        "bare_complex": (bare_complex, {}),
+        "int_power": (int_power, {"spectral_format": "power"}),
+        "f32_amplitude": (f32_amp, {}),
+        "complex64": (c64, {}),
+        "zeros": (zeros, {}),
+        "single_bin": (single, {}),
+        "nondim": (with_nondim.dft("time", real=True), {"fmax": 30}),
+    }
+    # Aliases and refusals are settled before any descriptor's own code
+    # runs, so one descriptor checks them for all.
+    shared = {
+        "dim": (real, {"dim": "time"}),
+        "ft_dim": (real, {"dim": "ft_time"}),
+        "fmt_fourier": (real, {"spectral_format": "Fourier Transform"}),
+        "fmt_as": (as_spec, {"spectral_format": "AS"}),
+        "fmt_psd_as_power": (psd_spec, {"spectral_format": "ps"}),
+        "bad_format": (real, {"spectral_format": "nope"}),
+        "bad_negative_option": (real, {"negative_frequencies": "nope"}),
+        "bad_db": (db_spec, {}),
+        "bad_fft_real": (as_spec, {"spectral_format": "fft"}),
+        "bad_amplitude_complex": (real, {"spectral_format": "amplitude"}),
+        "bad_negative_amplitude": (negative, {}),
+        "bad_negative_power": (negative, {"spectral_format": "power"}),
+        "bad_no_ft": (small, {}),
+        "bad_two_ft": (both, {}),
+        "bad_missing_dim": (real, {"dim": "distance"}),
+        "bad_empty": (real, {"fmin": 500}),
+        "bad_raise": (full, {"negative_frequencies": "raise"}),
+        "bad_asymmetric": (asym, {}),
+        "bad_unknown_type": (
+            _pinned(as_spec.update_attrs(_dft_output=None, data_type=""), "unk"),
+            {},
+        ),
+    }
+    calls = {
+        f"{name}_{label}": (lambda name=name, src=src, kw=kw: getattr(src, name)(**kw))
+        for name in names
+        for label, (src, kw) in inputs.items()
+    }
+    calls |= {
+        f"spectral_centroid_{label}": (
+            lambda src=src, kw=kw: src.spectral_centroid(**kw)
+        )
+        for label, (src, kw) in shared.items()
+    }
+    calls |= {
+        f"{name}_positional": (lambda name=name: getattr(real, name)("time", 1, 50.0))
+        for name in names
+    }
+    calls["spectral_entropy_raw"] = lambda: real.spectral_entropy(normalize=False)
+    calls["spectral_entropy_raw_stft"] = lambda: st.spectral_entropy(
+        "time", 5, 60, False
+    )
+    calls["spectral_entropy_single_raw"] = lambda: single.spectral_entropy(
+        normalize=False
+    )
+    return calls
+
+
 def get_calls() -> dict:
     """Return the calls to compare, keyed by a name for the report."""
     patch = _pinned(dc.get_example_patch(), "example")
@@ -645,6 +1262,10 @@ def get_calls() -> dict:
         "diff_bad_unsorted": lambda: unsorted.differentiate("distance"),
         **_calculus_calls(patch, int_patch, f32, dft_patch, wacky, typed),
         **_aggregate_calls(patch, null_patch, int_patch, bool_patch, typed),
+        **_shape_calls(patch, int_patch, f32, dft_patch, wacky, with_nondim, m, s),
+        **_fill_gaps_calls(s),
+        **_fourier_calls(patch, int_patch, f32, wacky, with_nondim, m, s),
+        **_spectral_calls(patch, with_nondim),
         # The inputs themselves, so a difference in the examples cannot
         # masquerade as a difference in the functions.
         "input_patch": lambda: patch,
@@ -788,6 +1409,14 @@ def digest(patch) -> dict:
 
 def _hash(array) -> str:
     """Return a hash of an array's contents."""
+    array = np.asarray(array)
+    if array.dtype.type in (np.longdouble, np.clongdouble):
+        # Extended precision stores padding bytes nothing writes; hash each
+        # value exactly as two doubles instead.
+        parts = (array.real, array.imag) if array.dtype.kind == "c" else (array,)
+        high = [x.astype(np.float64) for x in parts]
+        low = [(x - h).astype(np.float64) for x, h in zip(parts, high)]
+        array = np.stack([*high, *low])
     return hashlib.md5(np.ascontiguousarray(array).tobytes()).hexdigest()
 
 

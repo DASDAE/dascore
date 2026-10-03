@@ -29,7 +29,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from threading import RLock
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 import pandas as pd
@@ -57,6 +57,9 @@ from dascore.utils.misc import (
     is_range,
 )
 from dascore.utils.paths import coerce_to_local_path, is_local_path, is_memory_uri
+
+if TYPE_CHECKING:
+    from dascore.core.coords import BaseCoord
 
 # Directory archives present in per-patch time order (source ordinals
 # alone cannot interleave multi-patch files); ordinal and patch row stay
@@ -552,7 +555,7 @@ def _forget_what_a_trim_invalidates(df: pd.DataFrame, residuals=()) -> pd.DataFr
     return df.assign(**forgotten)
 
 
-def _coord_from_envelope(envelope, name: str, units=None) -> object | None:
+def _coord_from_envelope(envelope, name: str, units=None) -> BaseCoord | None:
     """
     The coordinate a stashed envelope describes, or None if it cannot.
 
@@ -633,12 +636,17 @@ def _hintable_names(residuals) -> set[str]:
     A sample-index, relative or unit-bearing selection anywhere in a
     chain takes its coordinate out: what it leaves behind is not
     something the envelopes state, so a later bound on the same
-    coordinate cannot be judged against them either.
+    coordinate cannot be judged against them either. The exception is
+    a coordinate's only selection being a sample range: it counts from
+    the source, so the source envelope restates it as values.
     """
+    once = Counter(name for coords, _, _ in residuals for name in coords)
     out, barred = set(), set()
     for coords, samples, relative in residuals:
         for name, value in coords.items():
-            if samples or relative or not _is_reader_hintable(value):
+            if samples and once[name] == 1:
+                out.add(name)
+            elif samples or relative or not _is_reader_hintable(value):
                 barred.add(name)
             elif name not in barred:
                 out.add(name)
@@ -1330,9 +1338,10 @@ class PatchCatalog:
         ranges) merged over the view's own residual ranges; like all trim
         hints they only reduce reading, exactness is re-applied above.
         """
+        hints, exact = self._samples_as_values(row)
         trim_hint = {}
         patch_local: set = set()
-        for coords, samples, relative in self._residuals:
+        for coords, samples, relative in hints:
             if samples or relative:
                 patch_local.update(coords)
                 continue
@@ -1358,7 +1367,46 @@ class PatchCatalog:
             # reader did to it; it replays on the loaded patch instead.
             trim_hint = {k: v for k, v in trim_hint.items() if k in coords}
         patch = self.resolver.resolve(row, **trim_hint)
-        return apply_exact_residuals(patch, self._residuals)
+        return apply_exact_residuals(patch, exact)
+
+    def _samples_as_values(self, row: Mapping) -> tuple[tuple, tuple]:
+        """
+        Restate the sample ranges the row's source envelope can count.
+
+        Returns the residuals to hint the reader with and those to apply
+        exactly. The hint takes the value range from half a step before the
+        first sample to half a step after the last; the exact select takes
+        the first and last sample's own values, which rounding cannot move.
+        """
+        path = str(row.get("source_path", ""))
+        plans = getattr(self.resolver, "plans", {})
+        # Only a file read gets narrower; data in memory or from a plan
+        # keeps the selection it was given.
+        if is_memory_uri(path) or any(path.startswith(p) for p in plans):
+            return self._residuals, self._residuals
+        names = _hintable_names(self._residuals)
+        hints, exact = [], []
+        for coords, samples, relative in self._residuals:
+            hint, values = {}, {}
+            for name in set(coords) & names if samples else ():
+                envelope = row.get(_source_column(name))
+                coord = _coord_from_envelope(envelope, name, row.get(f"_{name}_units"))
+                if coord is None:
+                    continue
+                picked = coord.select(coords[name], samples=True)[0]
+                if len(picked):
+                    half = abs(picked.step) / 2
+                    hint[name] = (picked.min() - half, picked.max() + half)
+                    values[name] = (picked.min(), picked.max())
+            if values:
+                hints.append((hint, False, False))
+                exact.append((values, False, False))
+                coords = {k: v for k, v in coords.items() if k not in values}
+                if not coords:
+                    continue
+            hints.append((coords, samples, relative))
+            exact.append((coords, samples, relative))
+        return tuple(hints), tuple(exact)
 
     def _source_coords(self, row: Mapping, names: set[str]) -> dict:
         """Rebuild each hintable coordinate as the row had it untrimmed."""

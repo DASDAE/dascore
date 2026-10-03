@@ -29,6 +29,7 @@ from dascore.exceptions import (
     UnresolvedPatchError,
 )
 from dascore.models import ArrayLike
+from dascore.utils.misc import suppress_warnings
 
 
 @pytest.fixture(scope="module")
@@ -631,6 +632,17 @@ class TestCoords:
         with pytest.raises(PatchError, match="defines no 'nope'"):
             patch.enrich(inventory, attrs=False, coords=("nope",))
 
+    @pytest.mark.parametrize("on_missing", ["warn", "ignore", "null"])
+    def test_missing_coord_keeps_the_patch_coord(self, patch, inventory, on_missing):
+        """A name the path does not define leaves the patch's coordinate alone."""
+        own = np.arange(len(patch.get_coord("distance")), dtype=float)
+        held = patch.update_coords(nope=("distance", own))
+        with suppress_warnings(UserWarning, message="The inventory defines no 'nope'"):
+            out = held.enrich(
+                inventory, attrs=False, coords=("nope",), on_missing=on_missing
+            )
+        assert np.array_equal(out.get_coord("nope").values, own)
+
     def test_missing_coord_null(self, patch, inventory):
         """It can instead be filled with the missing marker."""
         out = patch.enrich(inventory, attrs=False, coords=("nope",), on_missing="null")
@@ -948,6 +960,25 @@ class TestEnrichContracts:
             conflict="raise",
         )
         assert np.isnan(twice.attrs.pulse_rate)
+
+    @pytest.mark.parametrize("conflict", ["raise", "keep_last", "drop", "keep_first"])
+    def test_null_marker_never_conflicts(self, patch, inventory, conflict):
+        """The inventory having no answer leaves a stated attr standing."""
+        stated = patch.update_attrs(pulse_rate=1.25)
+        out = stated.enrich(
+            inventory,
+            attrs=("pulse_rate",),
+            coords=False,
+            on_missing="null",
+            conflict=conflict,
+        )
+        assert out.attrs.pulse_rate == 1.25
+
+    def test_unstated_closed_fiber_loop_does_not_conflict(self, patch, inventory):
+        """An acquisition silent on the loop leaves the file's flag alone."""
+        looped = patch.update_attrs(closed_fiber_loop=True)
+        out = looped.enrich(inventory, coords=False, conflict="raise")
+        assert out.attrs.closed_fiber_loop is True
 
     def test_missing_marker_matches_the_field(self, patch, inventory):
         """A string field's missing marker is not a float."""

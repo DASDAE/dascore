@@ -302,7 +302,8 @@ on_missing
     What to do when an explicitly requested name is one the inventory does
     not define: "raise" (the default), "warn" to say so and leave it off,
     "ignore" to leave it off silently, or "null" to fill the
-    dtype-appropriate missing marker so the name is present either way.
+    dtype-appropriate missing marker so the name is present either way;
+    the marker never replaces a value the patch already states.
     Blanket requests copy what is applicable and never trigger it, and
     per-channel coverage gaps are always missing values rather than errors.
 """.strip()
@@ -312,8 +313,9 @@ on_missing
 enrich_conflict_description = """
 conflict
     What to do when an attr the patch states disagrees with the
-    inventory. An attr the patch leaves unset (None, NaN, "") is filled
-    under every policy, and numbers equal up to float rounding agree.
+    inventory. An attr either side leaves unset (None, NaN, "") never
+    conflicts: the patch's is filled and the inventory's is ignored, under
+    every policy. Numbers equal up to float rounding agree.
     "raise" (default) raises a
     [PatchError](`dascore.exceptions.PatchError`), since a disagreement
     usually means the `acquisition_key` resolved to the wrong place.

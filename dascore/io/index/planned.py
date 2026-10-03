@@ -27,11 +27,7 @@ from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
 from dascore.core.source import ArraySource
 from dascore.exceptions import UnknownFiberFormatError
-from dascore.io.core import (
-    FiberIO,
-    _array_reader,
-    _required_resource_type,
-)
+from dascore.io.core import FiberIO
 from dascore.io.index.backend import get_backend
 from dascore.io.index.catalog import (
     CompositeResolver,
@@ -59,7 +55,6 @@ from dascore.utils.chunk_plan import (
     patch_local_adjusted_envelopes,
 )
 from dascore.utils.explicit_ranges import _select_manager, _source_manager
-from dascore.utils.io import IOResourceManager
 from dascore.utils.misc import is_range
 from dascore.utils.patch import concatenate_planned
 from dascore.utils.patch_assembly import (
@@ -655,12 +650,11 @@ class PlanResolver(PatchResolver):
             can_use_index=self._can_load_member_from_index,
             sources_unchanged=self._sources_unchanged,
             trim_dims=self.trim_dims,
+            aux_coords=bool(self.aux_coords),
         )
 
     def _can_load_member_from_index(self, row: Mapping) -> bool:
-        """Check every row-only fast-path condition before any array is read."""
-        if self.aux_coords:
-            return False
+        """Whether a member reads as a window of its stored array, reading nothing."""
         if row.get("_modified"):
             # A trim is a window of the source, which is only placeable
             # when the row keeps the source's own range beside it --
@@ -682,23 +676,34 @@ class PlanResolver(PatchResolver):
 
         A recipe reads the window the index promised rather than the whole
         array, so a file rewritten longer under the same key would come
-        back the shape its row predicted and go unnoticed. What the index
-        measured of each source came from the same join as the member
-        rows and is held under their row numbers, so the two describe
-        one revision of the index however long ago it was planned and
-        nothing is asked of the index here. Each distinct source is
+        back the shape its row predicted and go unnoticed. Only a source
+        measured now and found to be what was recorded keeps the recipe:
+        a source `changed_sources` cannot measure refuses it too, and sends
+        the merge down the patch path.
+        """
+        return self.changed_sources(rows) == []
+
+    def changed_sources(self, rows: pd.DataFrame, skip_unmeasured=False):
+        """
+        The member sources which are no longer what the index recorded.
+
+        What the index measured of each source came from the same join as
+        the member rows and is held under their row numbers, so the two
+        describe one revision of the index however long ago it was planned
+        and nothing is asked of the index here. Each distinct source is
         measured once, by the same function the indexer records -- a file
         by its own stat, a directory-format unit by its manifest.
 
-        Only a source measured now and found to be what was recorded
-        keeps the recipe. A remote store is never touched, and so is
-        never read blind: a path this process cannot stat, one the index
-        recorded nothing for, and one which will not answer all refuse
-        the recipe and send the merge down the patch path.
+        A remote store is never touched. A path this process cannot stat,
+        or one the index recorded nothing for, makes this None, or is left
+        out with ``skip_unmeasured``, which also follows a member loading
+        another plan's output to that plan's members. A recorded file which
+        no longer answers (deleted, unreadable) is listed as changed.
         """
-        stats = self._source_stats
-        if len(stats) != len(SOURCE_STAT_COLUMNS) or "source_path" not in rows.columns:
-            return False
+        stats, named = self._source_stats, "source_path" in rows.columns
+        changed = self._nested_changes(rows) if skip_unmeasured and named else []
+        if len(stats) != len(SOURCE_STAT_COLUMNS) or not named:
+            return changed if skip_unmeasured else None
         # the row numbers this slice kept, which is what the stats are under
         taken = rows.index.to_numpy()
         paths = rows["source_path"].to_numpy()
@@ -710,13 +715,25 @@ class PlanResolver(PatchResolver):
             if path in seen:
                 continue
             seen.add(path)
-            if not path or not _is_local(path):
-                return False
-            if mtime == NO_STAT or size == NO_STAT:
-                return False
+            if not path or not _is_local(path) or NO_STAT in (mtime, size):
+                if skip_unmeasured:
+                    continue
+                return None
             if scan_unit_stats(path) != (int(mtime), int(size)):
-                return False
-        return True
+                changed.append(path)
+        return changed
+
+    def _nested_changes(self, rows: pd.DataFrame) -> list[str]:
+        """The changed sources of the plans whose outputs these rows load."""
+        paths = rows["source_path"].map(_row_str)
+        changed = []
+        for prefix, plan in getattr(self.loader, "plan_entries", dict)().items():
+            ids = paths[paths.str.startswith(prefix)].str.removeprefix(prefix)
+            if len(ids):
+                members = plan.member_rows
+                members = members[members["output_id"].isin(ids.astype(int))]
+                changed += plan.changed_sources(members, skip_unmeasured=True)
+        return changed
 
     def source_stats_of(self, rows: pd.DataFrame) -> pd.DataFrame:
         """Put what the index measured back beside these member rows."""
@@ -792,62 +809,6 @@ class PlanResolver(PatchResolver):
             patch = self.loader.resolve(kwargs, **trim)
             patch = apply_exact_residuals(patch, self.parent_residuals)
         return self._in_plan_units(patch, kwargs)
-
-    def _load_member_array(self, row: Mapping, windows: Mapping) -> np.ndarray | None:
-        """
-        Load one member's raw array through the format's `read_array`.
-
-        ``windows`` maps dimension name to a half-open ``(start, stop)``
-        sample window on the member source's own grid; absent dimensions
-        load whole, and a window naming a dimension the row does not
-        state takes the fallback. The array comes back in the source's
-        stated dimension order, untransposed and uncast.
-
-        The caller must anchor the windows on the raw file grid — a
-        window computed against a trimmed or residual-adjusted envelope
-        is not a window on that grid. Returns None when the row cannot
-        take the data-only path, and the caller falls back to
-        `_load_member`, which is exact for every row. The fast path
-        requires a plain file-backed row with a concrete format and
-        version, a natively keyed patch (a synthesized digit key means
-        "the nth patch of the full read", which only the whole-read
-        default honors), a format which overrides ``read_array``, and no
-        parent residuals — a residual re-trims the loaded patch, and a
-        data-only read would skip that trim. The fast path trusts the
-        index about the grid itself: the caller's shape guard catches a
-        resized file, not a shifted one.
-        """
-        if self.parent_residuals:
-            return None
-        info = self._array_read_info(row)
-        if info is None:
-            return None
-        loader, path, fiber_io, key = info
-        # The reader takes its windows by position, in the source's order,
-        # so a window the row cannot place must take the exact fallback.
-        dims = [x for x in str(row.get("dims") or "").split(",") if x]
-        if set(windows) - set(dims):
-            return None
-        positional = tuple(windows.get(dim) for dim in dims)
-        # The resource manager resolves remote paths and opens the handle
-        # type the override's annotation asks for, exactly as dc.read
-        # provisions its reader; _pre_cast says the work is already done.
-        with IOResourceManager(loader.resolve_path(path)) as manager:
-            resource = manager.get_resource(
-                _required_resource_type(fiber_io.read_array)
-            )
-            return _array_reader(fiber_io, resource, key)(positional)
-
-    def can_read_array(self, row: Mapping) -> bool:
-        """
-        Whether a row can take the data-only path, reading nothing.
-
-        A caller which sizes its reads ahead of time -- splitting a
-        member into several windows, say -- must know this before it
-        builds them: splitting a row which loads as a patch would read
-        the whole source once per window instead of once.
-        """
-        return not self.parent_residuals and self._array_read_info(row) is not None
 
     def _array_read_info(self, row: Mapping):
         """Resolve array-reader metadata without opening the source file."""

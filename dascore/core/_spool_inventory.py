@@ -563,7 +563,7 @@ def match_resolved(values, name: str, selector, units=None) -> np.ndarray:
 
 
 def effective_matches(
-    stated, by_index, answers, by_inventory, headers=None, conflict=None, resolved=None
+    stated, by_index, answers, by_inventory, headers=None, conflict=None
 ) -> np.ndarray:
     """
     Combine the index's verdict with the inventory's the way extraction will.
@@ -574,10 +574,9 @@ def effective_matches(
     inventory's answer replaces the header where it has one, and under
     `drop` a header disagreeing with the answer comes out blank, which
     nothing selects. `keep_first` and `raise` never rewrite the header,
-    so they never reach here. `resolved` is given when
-    `on_missing="null"` is pending on a named attr: a resolved row the
-    inventory has no answer for then comes out blank too. `conflict` is
-    None when nothing rewrites.
+    so they never reach here. A row the inventory has no answer for keeps
+    its header under every policy. `conflict` is None when nothing
+    rewrites.
     """
     out = np.where(stated, by_index, by_inventory)
     if conflict is None:
@@ -590,8 +589,6 @@ def effective_matches(
         for row in np.flatnonzero(rewritten):
             if not header_agrees(headers[row], answers[row]):
                 out[row] = False
-    if resolved is not None:
-        out[stated & resolved & _unstated(answers)] = False
     return out
 
 

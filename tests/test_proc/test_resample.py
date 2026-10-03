@@ -7,6 +7,7 @@ import importlib
 import numpy as np
 import pandas as pd
 import pytest
+from scipy import signal as sp_signal
 
 import dascore as dc
 from dascore.compat import random_state
@@ -185,23 +186,23 @@ class TestDecimate:
         with pytest.raises(FilterValueError, match=match):
             small_patch.decimate(distance=2)
 
-    def test_scipy_decimation_gets_patch(self, random_patch, monkeypatch):
-        """The scipy decimation helper should receive the patch, not its data."""
+    def test_scipy_decimation_gets_data(self, random_patch, monkeypatch):
+        """The scipy decimation helper receives the data, never the patch."""
         calls = []
 
-        def decimate_spy(patch, factor, ftype, axis):
-            assert isinstance(patch, dc.Patch)
-            calls.append((patch, factor, ftype, axis))
-            slicer = [slice(None)] * patch.ndim
+        def decimate_spy(data, factor, ftype, axis):
+            assert not isinstance(data, dc.Patch)
+            calls.append((data, factor, ftype, axis))
+            slicer = [slice(None)] * data.ndim
             slicer[axis] = slice(None, None, int(factor))
-            return patch.data[tuple(slicer)]
+            return data[tuple(slicer)]
 
         monkeypatch.setattr(resample_mod, "_apply_scipy_decimation", decimate_spy)
 
         out = random_patch.decimate(time=2, filter_type="iir")
 
-        patch, factor, _, axis = calls[0]
-        assert patch is random_patch
+        data, factor, _, axis = calls[0]
+        assert data is random_patch.data
         assert out.shape[axis] == random_patch.shape[axis] // factor
 
     @pytest.mark.parametrize("filter_type", ("iir", None))
@@ -420,3 +421,72 @@ class TestDecimateHoles:
         """Striding without a filter still takes every nth sample."""
         out = holed_patch.decimate(time=2, filter_type=None)
         assert np.array_equal(out.data, holed_patch.data[:, ::2])
+
+
+class TestShapeProcessors:
+    """What Decimate, Interpolate and Resample guarantee beyond the framework."""
+
+    def test_metadata_without_data(self, random_patch):
+        """The new shapes and plans come from metadata alone."""
+        meta = random_patch.drop_data()
+        out, plan = dc.proc.Decimate(time=10).get_metadata(meta)
+        assert out.shape == (300, 200) and plan["factor"] == 10
+        out, plan = dc.proc.Resample(time=50, samples=True).get_metadata(meta)
+        assert out.shape == (300, 50) and plan["num"] == 50
+        assert plan["coord"] is None
+        new = random_patch.get_array("distance")[:7] + 0.5
+        out, plan = dc.proc.Interpolate(distance=new).get_metadata(meta)
+        assert out.shape == (7, 2000) and plan["axis"] == 0
+
+    def test_decimate_filter_type(self, random_patch):
+        """The filter is scipy's of the type asked for."""
+        out = random_patch.decimate(time=4, filter_type="fir")
+        expected = sp_signal.decimate(random_patch.data, 4, ftype="fir", axis=1)
+        assert np.array_equal(out.data, expected)
+
+    def test_decimate_copy(self, random_patch):
+        """Without copy, unfiltered decimation is a view of the data."""
+        view = random_patch.decimate(time=4, filter_type=None, copy=False)
+        assert np.shares_memory(view.data, random_patch.data)
+        copied = random_patch.decimate(time=4, filter_type=None)
+        assert not np.shares_memory(copied.data, random_patch.data)
+
+    def test_decimate_factor_as_text(self, random_patch):
+        """Unfiltered, the factor is anything int takes; filtered, scipy's."""
+        out = random_patch.decimate(time="3", filter_type=None)
+        assert out.equals(random_patch.decimate(time=3, filter_type=None))
+        with pytest.raises(TypeError, match="cannot be interpreted as an integer"):
+            random_patch.decimate(time="3")
+
+    def test_interpolate_onto_text(self, random_patch):
+        """Positions which are not numbers are scipy's to refuse."""
+        with pytest.raises(ValueError, match="could not convert string"):
+            random_patch.interpolate(time=["2017-09-18T00:00:01"])
+        with pytest.raises(ValueError, match="object arrays"):
+            random_patch.interpolate(time=np.array([None, 1], dtype=object))
+
+    def test_decimate_keeps_int_dtype(self, random_patch):
+        """Striding int data leaves them int."""
+        ints = random_patch.new(data=np.ones(random_patch.shape, dtype=np.int16))
+        assert ints.decimate(time=4, filter_type=None).dtype == np.int16
+
+    def test_interpolate_kind(self, random_patch):
+        """Nearest interpolation picks samples, coordinates riding along too."""
+        dist = random_patch.get_array("distance")
+        quality = (dist**2).astype(np.float64)
+        patch = random_patch.update_coords(quality=("distance", quality))
+        out = patch.interpolate(distance=dist[:-1] + 0.4, kind="nearest")
+        assert np.array_equal(out.data, patch.data[:-1])
+        assert np.array_equal(out.get_array("quality"), quality[:-1])
+
+    def test_resample_window(self, random_patch):
+        """The window is the one scipy applies to the spectrum."""
+        out = random_patch.resample(time=0.008, window="hann")
+        expected = sp_signal.resample(random_patch.data, 1000, axis=1, window="hann")
+        assert np.array_equal(out.data, expected)
+
+    def test_resample_interp_kind(self, random_patch):
+        """A nearest interpolation picks among the Fourier-resampled samples."""
+        out = random_patch.resample(time=np.timedelta64(7, "ms"), interp_kind="nearest")
+        fourier = sp_signal.resample(random_patch.data, 1143, axis=1)
+        assert np.isin(out.data[0], fourier[0]).all()

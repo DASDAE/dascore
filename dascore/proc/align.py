@@ -5,16 +5,16 @@ Functions to align patches based on some criterion.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal
+from typing import Any
 
 import numpy as np
+from pydantic import ConfigDict
 
 from dascore.compat import ndarray
-from dascore.constants import PatchType
 from dascore.core.coords import get_compatible_values
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
 from dascore.utils.misc import iterate
-from dascore.utils.patch import patch_function
 from dascore.utils.time import dtype_time_like
 
 
@@ -121,14 +121,14 @@ def _create_slice_indexer(start, stop, ndim, idx, coord_axes, dim_axis):
     return tuple(out)
 
 
-def _apply_shifts_to_data(data, meta, dim_axis, coord_axes, fill_value):
+def _apply_shifts_to_data(data, shape, source, dest, dim_axis, coord_axes, fill_value):
     """
     Apply different shifts to data along specified axis.
     """
-    out = np.full(meta.new_shape, fill_value)
+    out = np.full(shape, fill_value)
     coord_axes = tuple(iterate(coord_axes))
-    in_start, in_stop = meta.source_slice
-    out_start, out_stop = meta.dest_slice
+    in_start, in_stop = source
+    out_start, out_stop = dest
     for idx in np.ndindex(in_start.shape):
         source_ind = _create_slice_indexer(
             in_start[idx], in_stop[idx], out.ndim, idx, coord_axes, dim_axis
@@ -249,15 +249,7 @@ def _get_coord_values(dim, coord, dim_name, coord_name, samples):
     return coord_values
 
 
-@patch_function()
-def align_to_coord(
-    patch: PatchType,
-    mode: Literal["full", "valid", "same"] = "same",
-    samples: bool = False,
-    reverse: bool = False,
-    fill_value: float = np.nan,
-    **kwargs,
-) -> PatchType:
+class AlignToCoord(PatchProcessor):
     """
     Align (shift) patch dim(s) based on values in a non-dimension coordinate.
 
@@ -331,27 +323,44 @@ def align_to_coord(
 
     Letters represent data and dashes represent fill values.
     """
-    # Validate inputs and get coordinates.
-    dim_name, coord_name = _validate_alignment_inputs(patch, kwargs)
-    # We only require evenly sampled dim when we might need to expand it.
-    # Todo: this could technically be relaxed for modes other than "full" but
-    # would require re-working the implementation.
-    dim = patch.get_coord(dim_name, require_evenly_sampled=True)
-    coord = patch.get_coord(coord_name)
-    # Ensure valid dim and coordinate.
-    coord_vals = _get_coord_values(dim, coord, dim_name, coord_name, samples)
-    # Get axes of shift and other dims.
-    dim_axis = patch.dims.index(dim_name)
-    coord_dims = patch.coords.dim_map[coord_name]
-    coord_axes = tuple(patch.dims.index(x) for x in coord_dims)
-    # Get the metadata about shift and the indices for shifting.
-    inds = _get_shift_indices(coord_vals, dim, reverse, samples, mode)
-    meta = _calculate_shift_info(mode, inds, dim, dim_axis, patch.shape)
-    # Apply shifts to data
-    shifted_data = _apply_shifts_to_data(
-        patch.data, meta, dim_axis, coord_axes, fill_value
-    )
-    assert shifted_data.ndim == patch.data.ndim, "dimensionality changed"
-    # Get new coordinates.
-    new_coords = _get_aligned_coords(patch, dim_name, meta)
-    return patch.new(data=shifted_data, coords=new_coords)
+
+    mode: Any = "same"
+    samples: Any = False
+    reverse: Any = False
+    fill_value: Any = np.nan
+
+    model_config = ConfigDict(extra="allow")
+
+    def get_metadata(self, meta):
+        """Return the aligned coordinates, and where each trace moves from and to."""
+        # Validate inputs and get coordinates.
+        extras = self.model_extra or {}
+        dim_name, coord_name = _validate_alignment_inputs(meta, extras)
+        # We only require evenly sampled dim when we might need to expand it.
+        # Todo: this could technically be relaxed for modes other than "full" but
+        # would require re-working the implementation.
+        dim = meta.get_coord(dim_name, require_evenly_sampled=True)
+        coord = meta.get_coord(coord_name)
+        # Ensure valid dim and coordinate.
+        coord_vals = _get_coord_values(dim, coord, dim_name, coord_name, self.samples)
+        # Get axes of shift and other dims.
+        dim_axis = meta.dims.index(dim_name)
+        coord_dims = meta.coords.dim_map[coord_name]
+        coord_axes = tuple(meta.dims.index(x) for x in coord_dims)
+        # Get the metadata about shift and the indices for shifting.
+        mode = self.mode
+        inds = _get_shift_indices(coord_vals, dim, self.reverse, self.samples, mode)
+        info = _calculate_shift_info(mode, inds, dim, dim_axis, meta.shape)
+        plan = {
+            "shape": info.new_shape,
+            "source": info.source_slice,
+            "dest": info.dest_slice,
+            "dim_axis": dim_axis,
+            "coord_axes": coord_axes,
+        }
+        return meta.new(coords=_get_aligned_coords(meta, dim_name, info)), plan
+
+    def numpy_kernel(self, data, *, shape, source, dest, dim_axis, coord_axes):
+        """Return the traces shifted into a new array of the fill value."""
+        args = (shape, source, dest, dim_axis, coord_axes, self.fill_value)
+        return _apply_shifts_to_data(data, *args)
