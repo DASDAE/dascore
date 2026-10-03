@@ -7,6 +7,7 @@ import io
 import os
 import shutil
 import threading
+import warnings
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
@@ -71,6 +72,7 @@ from dascore.utils.io import (
 )
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_datetime64
+from dascore.warnings import DASCoreWarning
 
 tvar = TypeVar("tvar", int, float, str, Path)
 
@@ -751,6 +753,30 @@ class TestFormatter:
 
             class EmptyFormatter(FiberIO):
                 """formatter with no name."""
+
+    def test_old_interface_warns(self):
+        """Overriding only the removed reader methods warns at definition."""
+        with pytest.warns(DASCoreWarning, match="get_version, get_metadata"):
+
+            class OldStyle(FiberIO):
+                name = "_old_style_format"
+
+                def get_format(self, resource: H5Reader, **kwargs):
+                    return False
+
+    def test_new_interface_with_read_is_silent(self):
+        """A reader which also overrides read, as Sintela does, is fine."""
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", category=DASCoreWarning)
+
+            class NewStyle(FiberIO):
+                name = "_new_style_format"
+
+                def get_version(self, resource: H5Reader):
+                    return None
+
+                def read(self, resource, **kwargs):
+                    return dc.spool([])
 
     def test_empty_formatter_undefined_methods(self, random_patch):
         """
