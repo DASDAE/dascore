@@ -783,6 +783,9 @@ class TestFormatter:
                 def get_version(self, resource: H5Reader):
                     return None
 
+        found = FiberIO.manager.get_fiberio(format="_old_then_fixed_format")
+        assert isinstance(found, Fixed)
+
     def test_old_interface_from_a_mixin_warns(self):
         """The removed methods warn when a mixin supplies them too."""
 
