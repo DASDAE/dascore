@@ -10,10 +10,10 @@ from .fourier import Dft, Idft, Stft, Istft
 from .integrate import Integrate
 from .hilbert import Hilbert, Envelope, PhaseWeightedStack
 from .strain import VelocityToStrainRate, VelocityToStrainRateEdgeless, RadiansToStrain
-from .dispersion import dispersion_phase_shift
-from .taup import tau_p
-from .stalta import stalta
-from .fbe import fbe
+from .dispersion import DispersionPhaseShift
+from .taup import TauP
+from .stalta import Stalta
+from .fbe import Fbe
 from .kurtosis import Kurtosis
 from .spectral_descriptors import (
     MedianFrequency,

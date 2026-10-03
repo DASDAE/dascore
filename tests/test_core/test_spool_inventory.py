@@ -843,7 +843,7 @@ class TestSpoolEnrich:
         """Spool.enrich takes Patch.enrich's options, spelled the same."""
         patch_params = dict(inspect.signature(dc.Patch.enrich).parameters)
         spool_params = dict(inspect.signature(dc.Spool.enrich).parameters)
-        for name in ("patch", "inventory"):
+        for name in ("self", "inventory"):
             patch_params.pop(name)
         for name in ("self", "inventory", "on_unresolved"):
             spool_params.pop(name)
@@ -865,7 +865,7 @@ class TestSpoolEnrich:
         spool_doc = dc.core.spool.Spool.enrich.__doc__
         patch_doc = dc.Patch.enrich.__doc__
         forwarded = set(inspect.signature(dc.Patch.enrich).parameters) - {
-            "patch",
+            "self",
             "inventory",
         }
         for fragment in (

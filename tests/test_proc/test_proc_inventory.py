@@ -30,6 +30,7 @@ from dascore.exceptions import (
 )
 from dascore.models import ArrayLike
 from dascore.models.base import model_values
+from dascore.proc.inventory import Enrich
 from dascore.utils import identity
 from dascore.utils.misc import suppress_warnings
 
@@ -1191,3 +1192,18 @@ class TestEmptyIsUnambiguous:
         """The empty key is legal on a patch and names no entry."""
         with pytest.raises(InvalidInventoryError, match="empty acquisition_key"):
             inventory.resolve("")
+
+
+class TestEnrichProcessor:
+    """Enrich as a class: runs on metadata; only inventory is positional."""
+
+    def test_on_metadata(self, patch, inventory):
+        """Enrich needs no data, so metadata runs it too."""
+        out = patch.drop_data().enrich(inventory, coords=False)
+        assert isinstance(out, dc.PatchMeta)
+        assert out.attrs.gauge_length == 10.0
+
+    def test_options_are_keyword_only(self, inventory):
+        """Only the inventory may be given by position."""
+        with pytest.raises(TypeError, match="positional"):
+            Enrich(inventory, False)

@@ -502,6 +502,15 @@ class TestAlignPatches:
         assert out1.dims == out2.dims
         assert out1.ndim == out2.ndim
 
+    def test_transposed(self, random_patch):
+        """Equal coords in another dimension order are transposed to match."""
+        flipped = random_patch.transpose()
+        _, out2 = align_patch_coords(random_patch, flipped)
+        assert out2.dims == random_patch.dims
+        assert np.array_equal(out2.data, random_patch.data)
+        added = random_patch + flipped
+        assert np.array_equal(added.data, random_patch.data * 2)
+
     def test_len_1_non_coord_patch(self, random_patch):
         """Tests for when there are non-coordinate dimensions of len 1."""
         non_patch = random_patch.first("time")
