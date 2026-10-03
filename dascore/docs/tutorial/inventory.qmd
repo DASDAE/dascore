@@ -92,7 +92,7 @@ The main authoring rules are:
 
 A dated entity uses an `@time` suffix, such as `path@2025-01-01/`, to begin a new epoch. The directory loader validates identities, object types, references, track coverage, and epoch ranges when [`dc.inventory`](`dascore.core.inventory_loader.inventory`) reads it.
 
-Position is ordinary geometry whose column names match the coordinate reference system, or the canonical aliases `x`, `y`, and `z`. Positional axes must be stated together and use the CRS units; a geometry segment may omit all of them and record another quantity such as chainage instead.
+Position is ordinary geometry whose column names match the coordinate reference system, or the canonical aliases `x`, `y`, and `z`. Positional axes must be stated together and use the CRS units; a geometry segment may omit all of them and record another quantity such as chainage instead. Fiber gathered at one place, such as a spool, is a segment of two rows with the same position at the spool's start and end distances. Segments that place the axes may not overlap in optical distance.
 
 The [tunnel inventory recipe](../recipes/tunnel_inventory.qmd) builds a complete directory, including resources, geometry, repairs, and multiple optical paths.
 

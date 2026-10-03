@@ -421,8 +421,42 @@ class TestGeometryColumnReviewFindings:
                 "elevation": (100.0, 110.0),
             },
         )
-        with pytest.raises(InvalidInventoryError, match="for axis"):
+        with pytest.raises(InvalidInventoryError, match="overlap in optical"):
             self._inventory(canonical, labelled).check()
+
+    def test_overlap_reported_once_in_distance(self):
+        """One fault is one message, naming both segments and the distances."""
+        first = inv.Geometry(
+            name="a",
+            distance=(0.0, 17.0),
+            columns={"x": (0.0, 17.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
+        )
+        second = inv.Geometry(
+            name="b",
+            distance=(1.0, 14.0),
+            columns={"x": (5.0, 6.0), "y": (5.0, 6.0), "z": (5.0, 6.0)},
+        )
+        with pytest.raises(InvalidInventoryError) as info:
+            self._inventory(first, second).check()
+        lines = str(info.value).splitlines()[1:]
+        assert len(lines) == 1
+        assert "'a' (distance (0.0, 17.0))" in lines[0]
+        assert "'b' (distance (1.0, 14.0))" in lines[0]
+        assert "optical distance from 1.0 to 14.0" in lines[0]
+        assert "['x', 'y', 'z']" in lines[0]
+
+    def test_touching_segments_do_not_overlap(self):
+        """Coverage is half-open, so one may begin where the last ended."""
+        segments = [
+            inv.Geometry(
+                name=name,
+                distance=span,
+                columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
+            )
+            for name, span in (("a", (0.0, 10.0)), ("b", (10.0, 20.0)))
+        ]
+        inventory = self._inventory(*segments)
+        assert inventory.check() is inventory
 
     def test_an_axis_stated_twice_is_refused_when_placing(self):
         """Otherwise whichever spelling came last would win, silently."""
@@ -496,6 +530,11 @@ class TestGeometry:
     def test_requires_two_points(self):
         """Requires two points."""
         with pytest.raises(ValidationError, match="at least 2 control points"):
+            inv.Geometry(distance=(1.0,), columns={"x": (0.0,), "y": (0.0,)})
+
+    def test_one_point_suggests_a_repeated_position(self):
+        """A spool written as one row is told how to write it as two."""
+        with pytest.raises(ValidationError, match="same position"):
             inv.Geometry(distance=(1.0,), columns={"x": (0.0,), "y": (0.0,)})
 
     def test_strictly_increasing(self):
