@@ -183,8 +183,8 @@ def _coord_from(data_array, name, coord):
 
 
 # CF's unit grammar: ``m s-1`` is m*s**-1; latitude and longitude are degrees.
-_CF_POWER = re.compile(r"(?<![\w.])([^\W\d]+)(-?\d+)\b")
-_CF_DEGREES = re.compile(r"\bdegrees?_(north|east)\b")
+_CF_POWER = re.compile(r"((?<![\w.])[^\W\d]+|\))(-?\d+)\b")
+_CF_DEGREES = re.compile(r"\bdegrees?_?(north|east|N|E)\b")
 # what pint's parser raises for malformed strings such as "()" or "1/0"
 _PARSE_ERRORS = (
     PintError,
@@ -230,7 +230,9 @@ def _cf_attrs(attrs, name) -> dict:
     units, data_units = out.get("units"), out.get("data_units")
     if units is not None and data_units and units == _cf_unit_str(data_units):
         del out["units"]
-    elif (quant := _cf_units(units, name)) is not None:
-        del out["units"]
-        out["data_units"] = quant
+    elif units is not None:
+        # an edited units which cannot be read still says the old ones are wrong
+        out["data_units"] = _cf_units(units, name)
+        if out["data_units"] is not None:
+            del out["units"]
     return out

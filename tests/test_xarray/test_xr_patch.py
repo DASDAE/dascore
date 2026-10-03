@@ -76,7 +76,7 @@ class TestPublishedPaths:
 class TestCFUnits:
     """Units follow the CF ``units`` attribute both ways."""
 
-    @pytest.fixture
+    @pytest.fixture(autouse=True)
     def xr(self):
         """The xarray module, or skip."""
         return pytest.importorskip("xarray")
@@ -124,6 +124,9 @@ class TestCFUnits:
             ("1e-09", "1e-09"),
             ("degrees_north", "degree"),
             ("degrees_east", "degree"),
+            ("degree_N", "degree"),
+            ("degreesE", "degree"),
+            ("(m/s)2", "m**2/s**2"),
         ],
     )
     def test_cf_units_read(self, xr, random_patch, units, expected):
@@ -157,6 +160,14 @@ class TestCFUnits:
         """An edited ``units`` overrides the ``data_units`` it disagrees with."""
         array = patch_to_xarray(units_patch).assign_attrs(units="s-1")
         assert xarray_to_patch(array).attrs.data_units == dc.get_quantity("1/s")
+
+    def test_unreadable_edit_clears_data_units(self, xr, units_patch):
+        """An edited ``units`` which cannot be read leaves no stale data units."""
+        array = patch_to_xarray(units_patch).assign_attrs(units="bogus")
+        with pytest.warns(UserWarning, match="bogus"):
+            patch = xarray_to_patch(array)
+        assert patch.attrs.data_units is None
+        assert patch.attrs.model_dump()["units"] == "bogus"
 
     def test_empty_data_units(self, xr, random_patch):
         """An empty ``data_units`` lets ``units`` state the data units."""
