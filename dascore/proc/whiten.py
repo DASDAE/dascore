@@ -78,7 +78,7 @@ def _check_freq_range(fft_coord, freq_range):
         raise ParameterError(msg)
 
 
-@patch_function()
+@patch_function(version="1.1")
 def whiten(
     patch: PatchType,
     smooth_size: float | None = None,

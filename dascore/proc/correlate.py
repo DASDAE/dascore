@@ -10,6 +10,7 @@ import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
+from dascore.transform.fourier import _operand, _result_dtype
 from dascore.units import get_quantity
 from dascore.utils.array_api import array_namespace
 from dascore.utils.patch import (
@@ -77,7 +78,7 @@ class CorrelateShift(PatchProcessor):
     >>> auto_patch = idft.correlate_shift(dim="time")
     """
 
-    __version__ = "1.1"
+    __version__ = "1.2"
     dim: Any
     undo_weighting: Any = True
 
@@ -100,13 +101,16 @@ class CorrelateShift(PatchProcessor):
         new_cm = cm._update_grid(dim, **{dim: new_coord}).rename_coord(
             **{dim: f"lag_{dim}"}
         )
-        weight = to_float(step) if self.undo_weighting else None
         out = meta.new(coords=new_cm)
+        if not self.undo_weighting:
+            return out, {"axis": axis, "step": None}
         units = get_quantity(meta.attrs.data_units)
-        if self.undo_weighting and units is not None and coord.units is not None:
+        if units is not None and coord.units is not None:
             # dividing by the step divides the units by the coordinate's too
             out = out.update_attrs(data_units=units / get_quantity(coord.units))
-        return out, {"axis": axis, "step": weight}
+        weight = _operand(to_float(step), meta.dtype)
+        dtype = _result_dtype(meta.dtype, weight)
+        return out.new(dtype=dtype), {"axis": axis, "step": weight}
 
     def kernel(self, data, *, axis, step):
         """Return the data shifted so zero lag is central, divided by the step."""
@@ -124,7 +128,7 @@ class CorrelateShift(PatchProcessor):
         return data / (xp.asarray(step) if isinstance(step, np.generic) else step)
 
 
-@patch_function(data_type="correlation", version="1.2")
+@patch_function(data_type="correlation", version="1.3")
 def correlate(
     patch: PatchType,
     samples: bool = False,
@@ -189,6 +193,7 @@ def correlate(
     -----
     The result's data units are the square of the patch's (for example
     (m/s)**2 for velocity), as each value is a sum of products of the data.
+    Single-precision data are correlated in single precision.
 
     Correlation runs along the dimension not named in ``kwargs``. That dimension
     becomes a lag dimension prefixed with ``lag_``; for example, selecting a

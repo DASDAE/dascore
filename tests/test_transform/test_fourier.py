@@ -1064,10 +1064,10 @@ class TestFourierProcessors:
         """Half precision is transformed as numpy transforms it, in single."""
         patch = random_patch.new(data=np.asarray(random_patch.data, np.float16))
         out = patch.dft("time", pad=False)
-        step = dc.to_float(patch.get_coord("time").step)
+        step = float(dc.to_float(patch.get_coord("time").step))
         expected = np.fft.fftshift(np.fft.fftn(patch.data, axes=(1,)) * step, axes=1)
-        assert out.data.dtype == expected.dtype
-        assert np.array_equal(out.data, expected)
+        assert out.data.dtype == expected.dtype == np.complex64
+        assert np.allclose(out.data, expected, rtol=1e-5, atol=1e-6)
 
     @pytest.mark.parametrize("dtype", DTYPES)
     @pytest.mark.parametrize(
@@ -1080,6 +1080,7 @@ class TestFourierProcessors:
             ((Dft, dict(dim="time")), (Idft, {})),
             ((Dft, dict(dim="time", real=True)), (Idft, {})),
             ((Idft, {}),),
+            ("spectrum", (Idft, {})),
             ((Stft, dict(time=64, samples=True)),),
             ((Stft, dict(time=64, distance=16, samples=True, detrend=True)),),
             ((Stft, dict(time=64, samples=True)), (Istft, {})),
@@ -1087,9 +1088,12 @@ class TestFourierProcessors:
     )
     def test_metadata_dtype_is_the_kernels(self, random_patch, dtype, steps):
         """Metadata states the dtype the transform's data come out in."""
-        data = np.asarray(random_patch.data[:20, :256]).astype(dtype)
         patch = random_patch.isel(distance=slice(0, 20), time=slice(0, 256))
-        patch = patch.new(data=data)
+        if steps[0] == "spectrum":  # A spectrum held in dtype.
+            patch, steps = patch.dft("time"), steps[1:]
+        data = np.asarray(patch.data)
+        data = data if np.dtype(dtype).kind == "c" else data.real
+        patch = patch.new(data=data.astype(dtype))
         meta = patch.drop_data()
         for cls, kwargs in steps:
             if kwargs.get("real") and np.dtype(dtype).kind == "c":
@@ -1097,6 +1101,28 @@ class TestFourierProcessors:
             processor = cls(**kwargs)
             patch, meta = processor.run(patch), processor.get_metadata(meta)[0]
         assert meta.dtype == patch.dtype
+
+    @pytest.mark.parametrize("dtype", ("float16", "float32"))
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            dict(dim="time"),
+            dict(dim="time", real=True),
+            dict(dim=None, output="AS"),
+            dict(dim="time", real=True, output="PSD", db=True),
+        ],
+    )
+    def test_metadata_dtype_on_dask(self, random_patch, dtype, kwargs):
+        """Narrow floats on dask come out in the dtype their metadata state."""
+        da = pytest.importorskip("dask.array")
+        data = da.from_array(np.asarray(random_patch.data, dtype))
+        patch, meta = random_patch.new(data=data), random_patch.drop_data()
+        meta = meta.new(dtype=np.dtype(dtype))
+        # Spectra other than FFT do not invert.
+        steps = (Dft(**kwargs),) if "output" in kwargs else (Dft(**kwargs), Idft())
+        for processor in steps:
+            patch, meta = processor.run(patch), processor.get_metadata(meta)[0]
+            assert meta.dtype == patch.dtype
 
     def test_metadata_dtype_on_another_backend(self, random_patch):
         """Another backend's metadata states its own dtype, as its data have it."""
@@ -1126,6 +1152,67 @@ class TestFourierProcessors:
         )
         out = patch.dft("time", real=True, output="AS", pad=False)
         assert np.allclose(out.data, [1.0, 0.0, 0.0])
+
+
+class TestDftPrecision:
+    """Transforms keep single precision, and other dtypes as numpy gives them."""
+
+    @pytest.fixture()
+    def single(self, random_patch):
+        """The random patch in single precision."""
+        return random_patch.new(data=random_patch.data.astype(np.float32))
+
+    @pytest.mark.parametrize("real", (None, True))
+    def test_single_stays_single(self, single, real):
+        """float32 data give complex64 spectra which invert to float32."""
+        spectrum = single.dft("time", real=real)
+        assert spectrum.dtype == np.complex64
+        out = spectrum.idft()
+        assert out.dtype == (np.float32 if real else np.complex64)
+        assert np.allclose(out.data, single.data, atol=1e-4)
+
+    def test_float64_real_transform_unchanged(self, random_patch):
+        """A float64 real transform is numpy's, scaled by the step."""
+        out = random_patch.dft("time", real=True, pad=False)
+        step = dc.to_float(random_patch.get_coord("time").step)
+        expected = np.fft.rfftn(random_patch.data, axes=(1,)) * step
+        assert out.dtype == np.complex128
+        # Bit-equal on some platforms; within round-off on all.
+        assert np.allclose(out.data, expected, rtol=1e-12, atol=1e-12 * step)
+
+    def test_integer_spectrum_inverts_in_double(self, random_patch):
+        """An integer spectrum is scaled and inverted in double precision."""
+        spectrum = random_patch.dft("time")
+        ints = spectrum.new(data=np.ones(spectrum.shape, dtype=np.int16))
+        out = ints.idft()
+        assert out.dtype == np.complex128
+        expected = np.fft.ifftn(np.fft.ifftshift(ints.data / 0.004, axes=1), axes=(1,))
+        assert np.allclose(out.data, expected[:, : out.shape[1]])
+
+    def test_single_db_floor_is_doubles(self, random_patch):
+        """A faint single precision spectrum in dB reads as the double one does."""
+        faint = random_patch.new(data=random_patch.data * 1e-9)
+        single = faint.new(data=faint.data.astype(np.float32))
+        kwargs = dict(dim="time", output="PSD", db=True)
+        expected = np.median(faint.dft(**kwargs).data)
+        assert np.isclose(np.median(single.dft(**kwargs).data), expected, atol=0.1)
+
+    def test_half_precision_spectrum_inverts(self):
+        """A half precision spectrum of fine spacing inverts without overflow."""
+        coords = {"time": np.arange(8) * 1e-5}
+        patch = dc.Patch(data=np.ones(8), coords=coords, dims=("time",))
+        spectrum = patch.dft("time", pad=False)
+        out = spectrum.new(data=np.ones(8, np.float16)).idft()
+        assert out.dtype == np.complex64
+        assert np.all(np.isfinite(out.data))
+
+    def test_lazy_array_stays_lazy(self, single):
+        """A dask array is transformed on its own backend, so stays lazy."""
+        da = pytest.importorskip("dask.array")
+        lazy = single.new(data=da.from_array(single.data))
+        out = lazy.dft("time", pad=False)
+        assert isinstance(out.data, da.Array) and out.dtype == np.complex64
+        assert isinstance(out.idft().data, da.Array)
 
 
 class TestStftIdentity:
