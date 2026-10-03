@@ -33,6 +33,7 @@ from dascore.core._spool_inventory import (
 )
 from dascore.core.coords import BaseCoord, get_coord
 from dascore.core.inventory import (
+    CoordinateReferenceSystem,
     Interrogator,
     Inventory,
     ResolvedContext,
@@ -322,6 +323,30 @@ def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
 _DISTANCE_TOLERANCE = 1e-6
 
 
+# What an inventory which states no coordinate reference system has.
+_DEFAULT_CRS = CoordinateReferenceSystem()
+_CANONICAL_AXES = ("x", "y", "z")
+
+
+def _axis_name(crs, index: int) -> str:
+    """
+    Return the name a blanket request copies one canonical axis under.
+
+    The CRS's own label, unless the CRS is the default one or the label
+    would resolve to a different axis (a two-axis CRS labelled x and z).
+    An inventory which never states a CRS gets the default, and its
+    geometry is as often local x, y, z as the WGS 84 the default names, so
+    those keep their canonical names, as they always have.
+    """
+    label = crs.coordinate_labels[index]
+    if crs == _DEFAULT_CRS:
+        return _CANONICAL_AXES[index]
+    try:
+        return label if crs.axis_index(label) == index else _CANONICAL_AXES[index]
+    except InvalidInventoryError:
+        return _CANONICAL_AXES[index]
+
+
 def _get_blanket_coord_names(inventory, path) -> list[str]:
     """
     Return the coordinate names a blanket request copies.
@@ -335,11 +360,11 @@ def _get_blanket_coord_names(inventory, path) -> list[str]:
     grouted with hanging fiber has to select on.
     """
     crs = inventory.coordinate_reference_system
-    axis_names = crs.coordinate_labels
-    # The axes are copied under their canonical names, and only where some
-    # segment actually places the fiber; the rest come under their own.
+    # The axes are copied under the names the CRS gives them, and only where
+    # some segment actually places the fiber; the rest come under their own.
     axes = {x for segment in path.geometry for x in axis_columns(segment, crs)}
-    out = ["x", "y", "z"][: len(axis_names)] if axes else []
+    count = len(crs.coordinate_labels)
+    out = [_axis_name(crs, index) for index in range(count)] if axes else []
     out += [x for x in path.geometry_columns() if x not in axes]
     seen = dict.fromkeys(x.group for x in path.labels)
     out += [x for x in seen if x]

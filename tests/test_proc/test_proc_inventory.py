@@ -511,6 +511,55 @@ class TestCoords:
         names = set(out.coords.coord_map)
         assert {"x", "y", "z", "zone", "noisy"}.issubset(names)
 
+    def test_blanket_names_axes_after_the_crs(self, patch, inventory):
+        """A blanket request names positions as the CRS does. See #1381."""
+        crs = CoordinateReferenceSystem(
+            authority="EPSG",
+            code="2056",
+            coordinate_labels=("easting", "northing", "elevation"),
+            units=("m", "m", "m"),
+        )
+        inv = inventory.new(coordinate_reference_system=crs)
+        out = patch.enrich(inv, attrs=False)
+        names = set(out.coords.coord_map)
+        assert {"easting", "northing", "elevation"}.issubset(names)
+        assert not {"x", "y", "z"} & names
+        # The canonical spellings stay available by name, with the same values.
+        named = patch.enrich(inv, attrs=False, coords=("x",))
+        assert np.array_equal(
+            named.get_array("x"), out.get_array("easting"), equal_nan=True
+        )
+
+    def test_blanket_keeps_canonical_names_for_the_default_crs(self, patch, inventory):
+        """The default CRS keeps x, y, z, stated or not: equal inventories agree."""
+        stated = inventory.new(coordinate_reference_system=CoordinateReferenceSystem())
+        for inv in (inventory, stated):
+            names = set(patch.enrich(inv, attrs=False).coords.coord_map)
+            assert {"x", "y", "z"}.issubset(names)
+            assert not {"longitude", "latitude"} & names
+
+    def test_blanket_label_naming_another_axis(self, patch, inventory):
+        """A label naming another canonical axis falls back to its own name."""
+        crs = CoordinateReferenceSystem(
+            authority="local",
+            code="section",
+            coordinate_labels=("x", "z"),
+            units=("m", "m"),
+        )
+        old = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        geometry = tuple(
+            segment.new(
+                columns={k: v for k, v in segment.columns.items() if k in ("x", "y")}
+            )
+            for segment in old.geometry
+        )
+        inv = inventory.new(coordinate_reference_system=crs).replace(
+            old, old.new(geometry=geometry)
+        )
+        names = set(patch.enrich(inv, attrs=False).coords.coord_map)
+        assert {"x", "y"}.issubset(names)
+        assert "z" not in names
+
     def test_blanket_adds_coupling(self, patch, inventory):
         """How a channel is coupled is a per-channel fact. See #1043."""
         out = patch.enrich(inventory, attrs=False)
