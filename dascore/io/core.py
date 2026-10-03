@@ -1067,16 +1067,13 @@ class FiberIO:
 
 def _warn_old_interface(cls):
     """Warn when a subclass only overrides the removed reader methods."""
-    old, new = (
-        ("get_format", "scan", "read"),
-        ("get_version", "get_metadata", "read_array"),
-    )
-    over = [
-        x for x in old if not _is_wrapped_func(getattr(cls, x), getattr(FiberIO, x))
-    ]
-    if over and all(
-        _is_wrapped_func(getattr(cls, x), getattr(FiberIO, x)) for x in new
-    ):
+
+    def overridden(name):
+        return not _is_wrapped_func(getattr(cls, name), getattr(FiberIO, name))
+
+    new = ("get_version", "get_metadata", "read_array")
+    over = [x for x in ("get_format", "scan", "read") if overridden(x)]
+    if over and not any(overridden(x) for x in new):
         msg = (
             f"FiberIO {cls.__name__} overrides {', '.join(over)}, which DASCore "
             f"no longer calls to read; implement {', '.join(new)} instead."
