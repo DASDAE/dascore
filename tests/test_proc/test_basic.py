@@ -13,6 +13,7 @@ from scipy.fft import next_fast_len
 
 import dascore as dc
 from dascore import get_example_patch
+from dascore.core.processor import _is_plain
 from dascore.exceptions import (
     CoordError,
     IncompatiblePatchError,
@@ -1635,6 +1636,35 @@ class TestWhereMetadata:
         out = random_patch.where(random_patch.data > 0.5, other=other)
         expected = np.where(random_patch.data > 0.5, random_patch.data, 0)
         assert np.array_equal(out.data, expected)
+
+    def test_plan_holds_only_alignment(self, random_patch):
+        """The plan says how to align the operands, never carrying their data."""
+        cond = random_patch.transpose().isel(time=slice(10, 1500)) > 0.5
+        other = random_patch.isel(distance=slice(5, None))
+        _, plan = Where(cond=cond, other=other).get_metadata(random_patch.drop_data())
+        assert all(_is_plain(x) for x in plan.values())
+        flat = str(plan)
+        assert "array" not in flat and plan["cond_steps"] and plan["other_steps"]
+
+    def test_dask_condition_stays_lazy(self, random_patch):
+        """A lazy condition is read only when the lazy result is computed."""
+        dask_array = pytest.importorskip("dask.array")
+        reads = []
+
+        def count(block):
+            reads.append(block.shape)
+            return block
+
+        data = np.asarray(random_patch.data)
+        lazy = dask_array.from_array(data, chunks=(100, 500))
+        patch = random_patch.new(data=lazy)
+        cond_data = (lazy > 0.5).map_blocks(count, meta=np.empty((0, 0), bool))
+        cond = random_patch.new(data=cond_data).transpose()
+        out = patch.where(cond, other=0)
+        assert not reads
+        assert isinstance(out.data, dask_array.Array)
+        assert np.array_equal(np.asarray(out.data), np.where(data > 0.5, data, 0))
+        assert reads
 
 
 class TestDropnaNoop:

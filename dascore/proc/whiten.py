@@ -14,7 +14,7 @@ from dascore.exceptions import ParameterError
 from dascore.proc.basic import Angle
 from dascore.proc.taper import TaperRange, _scale_by
 from dascore.transform.fourier import Dft, Idft, _dft_kernel, _fft_input, _is_complex
-from dascore.utils.array_api import array_namespace, asarray_like
+from dascore.utils.array_api import _result_dtype, array_namespace, asarray_like
 from dascore.utils.transformatter import FourierTransformatter
 
 
@@ -167,6 +167,8 @@ class Whiten(PatchProcessor):
         # Convert back to time domain if input was in time-domain.
         if transform:
             out, plan["idft"] = Idft().get_metadata(out)
+        else:  # Unit phases of the data, at their precision.
+            out = out.new(dtype=_result_dtype(meta.dtype, np.complex64))
         return out, plan
 
     def numpy_kernel(self, data, *, transform, axis, window, env, dft, idft):
@@ -206,8 +208,11 @@ class Whiten(PatchProcessor):
 def _wrapped_mean(data, xp, window, axis):
     """
     Return `uniform_filter1d(mode="wrap")` of real data, as a circular
-    convolution, which leaves a backend's chunks along the axis alone.
+    convolution, which any backend runs natively.
     """
+    # A chunked (dask) array transforms along one chunk only.
+    if hasattr(data, "rechunk"):
+        data = data.rechunk({axis: -1})
     size = data.shape[axis]
     box = np.zeros(size)
     box[window // 2 - np.arange(window)] = 1 / window

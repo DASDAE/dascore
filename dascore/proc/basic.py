@@ -1400,22 +1400,18 @@ class Where(PatchProcessor):
         else:
             other_dtype = array(other)
         out = meta.new(dtype=_result_dtype(meta.dtype, other_dtype))
-        plan: dict[str, Any] = {f"{x}_steps": steps[x] for x in steps}
-        for name, value in (("cond", self.cond), ("other", self.other)):
-            # A patch's data go in as numpy, as the old `np.where` took them;
-            # `kernel` moves them to the data's backend.
-            patch = isinstance(value, dc.Patch)
-            plan[name] = to_numpy(value.data) if patch else None
-        return out, plan
+        # Only how to align: a patch operand's data stay where they are,
+        # lazy ones included, until the kernel reads them.
+        return out, {f"{x}_steps": steps[x] for x in steps}
 
     def numpy_kernel(self, data, **plan):
         """Return the data where the condition holds, else the other values."""
-        data, cond, other = self._aligned(data, **plan)
+        data, cond, other = self._aligned(data, to_numpy, **plan)
         return np.where(array(cond), data, array(other))
 
     def kernel(self, data, **plan):
         """As `numpy_kernel`, on the data's own backend."""
-        data, cond, other = self._aligned(data, **plan)
+        data, cond, other = self._aligned(data, lambda x: x, **plan)
         xp = array_namespace(data)
         other = asarray_like(other, data)
         # Promoted as numpy promotes, which some backends refuse to do.
@@ -1423,10 +1419,12 @@ class Where(PatchProcessor):
         cast = (xp.astype(x, dtype) for x in (data, other))
         return xp.where(asarray_like(cond, data), *cast)
 
-    def _aligned(self, data, *, data_steps, cond_steps, other_steps, cond, other):
+    def _aligned(self, data, convert, *, data_steps, cond_steps, other_steps):
         """Return the data, condition and other values, aligned to each other."""
-        cond = self.cond if cond is None else _apply_alignment(cond, cond_steps)
-        other = self.other if other is None else _apply_alignment(other, other_steps)
+        cond, other = (
+            _apply_alignment(convert(x.data), steps) if isinstance(x, dc.Patch) else x
+            for x, steps in ((self.cond, cond_steps), (self.other, other_steps))
+        )
         return _apply_alignment(data, data_steps), cond, other
 
 

@@ -960,7 +960,7 @@ def _is_plain(value) -> bool:
         return all(isinstance(x, str) and _is_plain(y) for x, y in value.items())
     # Data of any dtype but object, which could hold anything: `where`
     # fills with datetime and string data.
-    return isinstance(value, np.ndarray) and value.dtype.kind != "O"
+    return isinstance(value, np.ndarray) and not value.dtype.hasobject
 
 
 def _via_numpy(numpy_kernel, name: str):

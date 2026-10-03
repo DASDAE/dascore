@@ -250,6 +250,24 @@ class TestWhitenMetadata:
         assert out.shape == (300, 2000)
         assert out.dtype == patch.whiten(smooth_size=5).dtype == np.float64
 
+    @pytest.mark.parametrize("transformed", [False, True])
+    @pytest.mark.parametrize("smooth_size", [None, 5])
+    @pytest.mark.parametrize(
+        "dtype", [np.float32, np.float64, np.complex64, np.complex128]
+    )
+    def test_metadata_dtype_is_the_kernels(
+        self, random_patch, dtype, transformed, smooth_size
+    ):
+        """Metadata state the dtype whiten's data come out in."""
+        patch = random_patch.isel(distance=slice(0, 20), time=slice(0, 256))
+        patch = patch.dft("time") if transformed else patch
+        data = np.asarray(patch.data)
+        # A real spectrum, such as amplitudes, keeps only the real part.
+        data = data if np.dtype(dtype).kind == "c" else data.real
+        patch = patch.new(data=data.astype(dtype))
+        out, _ = Whiten(smooth_size=smooth_size).get_metadata(patch.drop_data())
+        assert out.dtype == patch.whiten(smooth_size=smooth_size).dtype
+
     def test_water_level_raises_the_floor(self, random_patch):
         """The smoothed spectrum is floored at the water level times its peak."""
         floored = random_patch.whiten(smooth_size=5, water_level=0.5)
@@ -281,3 +299,14 @@ class TestWhitenOnDask:
             out = lazy.whiten(**kwargs)
         assert isinstance(out.data, da.Array)
         assert np.allclose(out.data.compute(), patch.whiten(**kwargs).data)
+
+    def test_chunked_along_frequency(self, random_patch):
+        """Smoothing a spectrum chunked along frequency runs natively."""
+        da = pytest.importorskip("dask.array")
+        patch = random_patch.dft("time", real=True)
+        lazy = patch.new(data=da.from_array(patch.data, chunks=(-1, 500)))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            out = lazy.whiten(smooth_size=5)
+        assert isinstance(out.data, da.Array)
+        assert np.allclose(out.data.compute(), patch.whiten(smooth_size=5).data)

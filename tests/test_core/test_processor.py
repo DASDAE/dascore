@@ -777,8 +777,22 @@ class TestPlan:
 
     @pytest.mark.parametrize(
         "value",
-        ["time", {1: 2}, {"a": "time"}, np.array([None]), object()],
-        ids=["string", "int_keyed_dict", "dict_of_string", "object_array", "object"],
+        [
+            "time",
+            {1: 2},
+            {"a": "time"},
+            np.array([None]),
+            np.zeros(1, dtype=[("a", [("b", object)])]),
+            object(),
+        ],
+        ids=[
+            "string",
+            "int_keyed_dict",
+            "dict_of_string",
+            "object_array",
+            "nested_object_field",
+            "object",
+        ],
     )
     def test_refused(self, patch, value):
         """Anything else is refused before the kernel runs."""
