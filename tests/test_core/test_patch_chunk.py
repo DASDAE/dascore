@@ -51,6 +51,7 @@ from dascore.utils.patch_assembly import (
     _match_merge_units,
 )
 from dascore.utils.time import to_int, to_timedelta64
+from dascore.warnings import DASCoreWarning
 from tests.conftest import join_patches
 
 
@@ -807,7 +808,8 @@ class TestChunkMerge:
 
         # Case 3: A tolerance alone keeps the hole; with a fill value they merge.
         spool = dc.spool((base, patch_w_gap))
-        assert len(spool.chunk(time=None, tolerance=10)) == 2
+        with pytest.warns(DASCoreWarning, match="fill_value"):
+            assert len(spool.chunk(time=None, tolerance=10)) == 2
         assert len(spool.chunk(time=None, tolerance=10, fill_value=np.nan)) == 1
 
 
@@ -1656,7 +1658,8 @@ class TestQuantityTolerance:
         third = _patch(second.get_coord("time").max() + to_timedelta64(1.555), 1.04)
         spool = dc.spool([first, second, third])
         default = spool.chunk(time=None)
-        absolute = spool.chunk(time=None, tolerance=get_quantity("0.51 s"))
+        with pytest.warns(DASCoreWarning, match="fill_value"):
+            absolute = spool.chunk(time=None, tolerance=get_quantity("0.51 s"))
         assert len(default) == 2
         # each tolerance breaks at its own boundary, and both breaks stand
         assert len(absolute) == 3
@@ -1678,8 +1681,9 @@ class TestQuantityTolerance:
         """However wide the tolerance, a hole is missing data, not a slower rate."""
         step = random_patch.get_coord("time").step
         spool = self._gapped(random_patch, 40)
-        snapped = spool.chunk(time=None, tolerance=41 * step)
-        exact = spool.chunk(time=None, tolerance=41 * step, snap_coords=False)
+        with pytest.warns(DASCoreWarning, match="fill_value"):
+            snapped = spool.chunk(time=None, tolerance=41 * step)
+            exact = spool.chunk(time=None, tolerance=41 * step, snap_coords=False)
         # the hole stays a boundary, and every label keeps its source's value
         assert len(snapped) == len(exact) == 2
         for patches in zip(snapped, exact, spool, strict=True):
@@ -3374,7 +3378,8 @@ class TestRecipeMerge:
         start = np.datetime64("2020-01-01") + STEP * (8 + gap)
         second = self._patch(start, 8, seed=2)
         spool = self._write(tmp_path, [first, second])
-        assert len(spool.chunk(time=None, tolerance=10)) == 2
+        with pytest.warns(DASCoreWarning, match="fill_value"):
+            assert len(spool.chunk(time=None, tolerance=10)) == 2
         merged = spool.chunk(time=None, tolerance=10, fill_value=fill)
         assert len(merged) == 1
         out = merged[0]
@@ -3434,6 +3439,16 @@ class TestChunkFillValue:
         other = tuple(x for x in range(patch.ndim) if x != axis)
         return np.flatnonzero(np.isnan(patch.data).all(axis=other))
 
+    @pytest.mark.parametrize(
+        "kwargs",
+        [{}, {"tolerance": 5}, {"tolerance": 10, "fill_value": np.nan}],
+    )
+    def test_no_warning_unless_tolerance_spans_hole(self, gapped_spool, kwargs):
+        """The default, a narrower tolerance, or a fill value stay silent."""
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", "tolerance spans a gap")
+            gapped_spool.chunk(time=None, **kwargs)
+
     def test_merge_fills_the_hole(self, gapped_spool):
         """A merge over the hole comes back evenly sampled at the true step."""
         first, second = gapped_spool
@@ -3452,8 +3467,10 @@ class TestChunkFillValue:
         assert np.array_equal(merged.data[:, kept], source)
 
     def test_merge_without_fill_value_keeps_the_hole(self, gapped_spool):
-        """Without one the hole stays a boundary, however wide the tolerance."""
-        assert len(gapped_spool.chunk(time=None, tolerance=10)) == 2
+        """Without one the hole stays a boundary, with one warning saying so."""
+        with pytest.warns(DASCoreWarning, match="fill_value") as record:
+            assert len(gapped_spool.chunk(time=None, tolerance=10)) == 2
+        assert len(record) == 1
 
     def test_fill_value_does_not_widen_the_tolerance(self, gapped_spool):
         """A hole the tolerance does not span is still a boundary."""
@@ -3497,7 +3514,8 @@ class TestChunkFillValue:
             coords=second.coords.update(time_step=coord.step + to_timedelta64(1e-9))
         )
         spool = dc.spool([first, nudged])
-        pieces = spool.chunk(time=None, tolerance=20)
+        with pytest.warns(DASCoreWarning, match="fill_value"):
+            pieces = spool.chunk(time=None, tolerance=20)
         # the pathology was one range whose step was stretched over the hole
         assert [x.get_coord("time").step for x in pieces] == [
             x.get_coord("time").step for x in spool
