@@ -57,6 +57,40 @@ class TestXarray:
         assert isinstance(patch2, dc.Patch)
 
 
+class TestCoordinateConversion:
+    """xarray coordinates become patch coordinates holding the same labels."""
+
+    @pytest.fixture
+    def xr(self):
+        """The optional xarray module."""
+        return pytest.importorskip("xarray")
+
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_scalar_coordinate(self, xr, dim):
+        """A coordinate left scalar by a selection stays one scalar."""
+        patch = dc.get_example_patch()
+        array = patch_to_xarray(patch).isel({dim: 3})
+        out = xarray_to_patch(array)
+        coord = out.get_coord(dim)
+        assert coord.shape == ()
+        assert coord.values == patch.get_array(dim)[3]
+        assert xarray_to_patch(array.dc.abs()).get_coord(dim) == coord
+
+    def test_scalar_integer_without_units(self, xr):
+        """A scalar integer is one label, never the length of a partial coord."""
+        array = xr.DataArray(np.arange(3), dims="x", coords={"x": [5, 6, 7]})
+        coord = xarray_to_patch(array.isel(x=1)).get_coord("x")
+        assert coord.shape == () and coord.values == 6
+
+    @pytest.mark.parametrize("dtype", [np.float64, np.float32])
+    def test_float_axis_is_evenly_sampled(self, xr, dtype):
+        """An ordinary float axis converts to an evenly sampled coord."""
+        labels = np.linspace(0, 1, 1001, dtype=dtype)
+        array = xr.DataArray(np.zeros(1001), dims="x", coords={"x": labels})
+        assert xarray_to_patch(array).get_coord("x").evenly_sampled
+        assert array.dc.pass_filter(x=(None, 0.1)).shape == array.shape
+
+
 class TestPublishedPaths:
     """The conversions stay importable from where the docs published them."""
 
