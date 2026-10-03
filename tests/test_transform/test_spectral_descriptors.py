@@ -546,6 +546,12 @@ class TestSpectralProcessors:
         processor = getattr(spectral_descriptors, name)("time")
         meta = processor.get_metadata(spectra.drop_data())[0]
         assert meta.dtype == processor.run(spectra).dtype
+        if name == "SpectralEntropy":
+            # Unnormalized, the sum keeps the power's single precision.
+            raw = spectral_descriptors.SpectralEntropy("time", normalize=False)
+            assert (
+                raw.get_metadata(spectra.drop_data())[0].dtype == raw.run(spectra).dtype
+            )
 
     def test_entropy_unnormalized(self, sine_dft):
         """Without normalizing, entropy is in bits, not a fraction of the most."""

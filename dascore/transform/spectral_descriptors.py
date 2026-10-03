@@ -641,8 +641,8 @@ class SpectralEntropy(_SpectralDescriptor):
     label = "Spectral Entropy"
 
     def result_dtype(self, power):
-        """Return the power's dtype, at least double."""
-        return np.result_type(power, np.float64)
+        """Return the power's dtype; normalizing by a float divides it to double."""
+        return np.result_type(power, np.float64) if self.normalize else power
 
     def units(self, meta, freq_dim, fmt):
         """Return no units: entropy, in bits or normalized to [0, 1], is unitless."""
