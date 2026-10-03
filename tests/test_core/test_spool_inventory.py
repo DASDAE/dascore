@@ -2341,29 +2341,42 @@ class TestConformPartialCoverage:
         with pytest.raises(UnresolvedPatchError, match="does not describe"):
             spool.conform_to_inventory()
 
-    def test_a_row_reaching_past_its_path_is_undescribed(
-        self, patch, inventory, off_grid_boundary
+    @pytest.mark.parametrize(
+        "bound",
+        [
+            pytest.param({"time_max": 0.5}, id="path_lapses_midway"),
+            pytest.param({"time_min": 0.5}, id="path_starts_midway"),
+            pytest.param({"time_max": 1.0}, id="path_ends_on_last_sample"),
+            pytest.param({"time_max": -1.0}, id="path_ends_before_patch"),
+        ],
+    )
+    def test_samples_outside_every_path_epoch_are_undescribed(
+        self, patch, inventory, bound
     ):
         """
-        A path lapsing mid-patch leaves the row undescribed, as an acquisition does.
+        A patch reaching outside its path's epochs is unresolved as a whole.
 
-        Cutting off the pathless tail would hand back a piece no path describes.
+        As with a lapsing acquisition, the described part is not salvaged:
+        cutting it off would return a piece no path describes. Epochs are
+        half-open, so a path ending on the last sample misses that sample.
         """
-        lapsed = _replace_path(inventory, time_max=off_grid_boundary)
+        time = patch.get_coord("time")
+        ((field, fraction),) = bound.items()
+        when = time.min() + (time.max() - time.min()) * fraction
+        if fraction == 0.5:  # off the sample grid, as a real boundary is
+            when += time.step / 3
+        lapsed = _replace_path(inventory, **{field: when})
         spool = dc.spool(patch).attach_inventory(lapsed)
         assert len(spool.conform_to_inventory(on_unresolved="ignore")) == 0
-        with pytest.warns(UserWarning, match="does not describe"):
-            assert len(spool.conform_to_inventory(on_unresolved="warn")) == 0
         with pytest.raises(UnresolvedPatchError, match="does not describe"):
             spool.conform_to_inventory()
 
-    def test_a_path_ending_on_the_last_sample_misses_it(self, patch, inventory):
-        """Epochs are half-open, so a path ending at the last sample leaves it out."""
+    def test_selection_still_reads_the_acquisition(self, patch, inventory):
+        """Only conforming refuses a patch outside its path; attrs still select."""
         time = patch.get_coord("time")
-        lapsed = _replace_path(inventory, time_max=time.max())
+        lapsed = _replace_path(inventory, time_max=time.min() - time.step)
         spool = dc.spool(patch).attach_inventory(lapsed)
-        with pytest.raises(UnresolvedPatchError, match="does not describe"):
-            spool.conform_to_inventory()
+        assert len(spool.select(gauge_length=10.0)) == 1
 
     def test_a_pathless_acquisition_still_conforms(self, patch, inventory):
         """An acquisition with no path at all describes the patch by itself."""

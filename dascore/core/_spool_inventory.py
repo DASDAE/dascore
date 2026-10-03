@@ -901,21 +901,27 @@ class RowEpochs(NamedTuple):
         What the row resolves to where it begins, or None where the
         inventory does not describe the row over its whole span. A row
         with no cuts and no conflict resolves to this throughout.
+    pathless
+        Whether the row reaches outside every epoch of its optical paths.
+        Conforming treats that as undescribed, as it does a row reaching
+        outside every acquisition epoch; selection still reads the
+        acquisition's own facts from `context`.
     """
 
     cuts: tuple
     conflict: Any
     context: ResolvedContext | None
+    pathless: bool = False
 
     @property
     def described(self) -> bool:
         """Whether the inventory resolves this row, over its whole span."""
-        return self.context is not None
+        return self.context is not None and not self.pathless
 
     @property
     def settled(self) -> ResolvedContext | None:
         """The one context this row resolves to throughout, or None."""
-        whole = self.described and not self.cuts and self.conflict is None
+        whole = not self.cuts and self.conflict is None
         return self.context if whole else None
 
 
@@ -1059,10 +1065,22 @@ def _epoch_changes(resolved: list, boundaries) -> RowEpochs:
             return RowEpochs(tuple(cuts), boundary, resolved[0])
         if not _same(previous.optical_path, current.optical_path):
             cuts.append(boundary)
-    # A row reaching outside its path's epochs is undescribed, as one reaching
-    # outside its acquisition's is; a pathless acquisition still describes it.
-    pathed = {x.optical_path is None for x in resolved}
-    return RowEpochs(tuple(cuts), None, None if len(pathed) > 1 else resolved[0])
+    pathless = any(_outside_paths(x) for x in resolved)
+    return RowEpochs(tuple(cuts), None, resolved[0], pathless)
+
+
+def _outside_paths(context: ResolvedContext) -> bool:
+    """
+    Return whether a context falls outside every epoch of its paths.
+
+    An array placing no path at the acquisition's location at any time is
+    pathless by design, so its instants are never outside a path.
+    """
+    location = context.acquisition.location_code
+    paths = context.fiber_array.optical_paths
+    return context.optical_path is None and any(
+        x.location_code == location for x in paths
+    )
 
 
 # A cache miss, told apart from a cached None (the inventory saying nothing).
