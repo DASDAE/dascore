@@ -19,6 +19,7 @@ from dascore.core.spool import (
     _get_varying_dim,
 )
 from dascore.exceptions import (
+    CoordMergeError,
     InvalidSpoolError,
     MissingOptionalDependencyError,
     ParameterError,
@@ -263,6 +264,93 @@ class TestIndexing:
         match = "out of bounds for spool"
         with pytest.raises(IndexError, match=match):
             _ = random_spool[len(random_spool)]
+
+
+class TestGetLazyPatch:
+    """Tests for getting patches whose data loads when sliced."""
+
+    @pytest.fixture(scope="class")
+    def patches(self):
+        """Three contiguous patches."""
+        return list(dc.get_example_spool("random_das"))
+
+    @pytest.fixture(scope="class", params=["memory", "directory"])
+    def merged_spool(self, patches, request, tmp_path_factory):
+        """A spool of the patches, in memory or on disk, merged into one."""
+        if request.param == "memory":
+            return dc.spool(patches).chunk(time=None)
+        path = tmp_path_factory.mktemp("lazy_patch")
+        for num, patch in enumerate(patches):
+            patch.io.write(path / f"{num}.h5", "dasdae")
+        return dc.spool(path).update().chunk(time=None)
+
+    @pytest.fixture()
+    def load_counts(self, merged_spool, monkeypatch):
+        """Record how many source patches the merged spool loads."""
+        loads = []
+        load = merged_spool._load_trimmed_patch
+        monkeypatch.setattr(
+            merged_spool, "_load_trimmed_patch", lambda *a: loads.append(1) or load(*a)
+        )
+        return loads
+
+    def test_matches_patch(self, merged_spool):
+        """The lazy patch equals the merged patch."""
+        lazy, patch = merged_spool.get_lazy_patch(), merged_spool[0]
+        assert not isinstance(lazy.data, np.ndarray)
+        assert lazy.coords == patch.coords
+        assert np.array_equal(np.asarray(lazy.data), patch.data)
+        select = {"time": (7.5, 16.5), "relative": True}
+        assert lazy.select(**select) == patch.select(**select)
+        assert str(lazy)
+
+    def test_loads_lazily(self, merged_spool, load_counts):
+        """Creating loads one source; reading forward loads each once."""
+        patch = merged_spool.get_lazy_patch()
+        assert len(load_counts) == 1
+        axis = patch.get_axis("time")
+        for start in range(0, patch.shape[axis], 500):
+            key = [slice(None)] * 2
+            key[axis] = slice(max(start - 100, 0), start + 600)
+            patch.data[tuple(key)]
+        assert len(load_counts) == 3
+
+    def test_indexing(self, merged_spool):
+        """Empty, stepped, reversed and integer keys match numpy."""
+        lazy = merged_spool.get_lazy_patch().data
+        data = merged_spool[0].data
+        time_keys = [slice(1990, 2010), slice(6000, None), slice(2000, 2000)]
+        time_keys += [slice(3000, 1000), slice(10, None, 7), slice(None, None, -1), -1]
+        for time_key in time_keys:
+            key = (slice(2, 9), time_key)
+            assert np.array_equal(lazy[key], data[key])
+
+    def test_index(self, patches):
+        """Each patch of a chunked or unchunked spool can be lazy."""
+        for spool in [dc.spool(patches), dc.spool(patches).chunk(time=10)]:
+            for num, patch in enumerate(spool):
+                lazy = spool.get_lazy_patch(num)
+                assert np.array_equal(np.asarray(lazy.data), patch.data)
+
+    def test_uneven_raises(self, patches):
+        """Sources which aren't evenly sampled can't be lazy."""
+        time = patches[0].get_array("time").copy()
+        time[5] += np.timedelta64(1, "ms")
+        uneven = [
+            x.update_coords(time=time - time[0] + x.get_array("time")[0])
+            for x in patches
+        ]
+        spool = dc.spool(uneven).chunk(time=None, conflict="keep_first")
+        with pytest.raises(ParameterError, match="evenly sampled"):
+            spool.get_lazy_patch()
+
+    def test_mismatched_source_raises(self, patches):
+        """A source with a different dtype raises when it loads."""
+        second = patches[1].update(data=patches[1].data.astype(np.float32))
+        spool = dc.spool([patches[0], second, patches[2]]).chunk(time=None)
+        lazy = spool.get_lazy_patch()
+        with pytest.raises(CoordMergeError, match="different dtype"):
+            np.asarray(lazy.data)
 
 
 class TestSlicing:
