@@ -20,6 +20,7 @@ from dascore.utils.chunk_plan import (
     subdivision_pieces,
 )
 from dascore.utils.time import to_timedelta64
+from dascore.warnings import DASCoreWarning
 
 STARTTIME = np.datetime64("2020-01-03")
 ENDTIME = STARTTIME + np.timedelta64(60, "s")
@@ -407,7 +408,8 @@ class TestChunkPlanToMerge:
         df.loc[0, "time_max"] = df.loc[0, "time_min"] + 10 * step
         df.loc[1, "time_min"] = df.loc[0, "time_max"] + 5 * step
         df.loc[1, "time_max"] = df.loc[1, "time_min"] + 10 * step
-        assert len(build_chunk_plan(df, time=None, tolerance=10).outputs) == 2
+        with pytest.warns(DASCoreWarning, match="fill_value"):
+            assert len(build_chunk_plan(df, time=None, tolerance=10).outputs) == 2
         plan = build_chunk_plan(df, time=None, tolerance=10, fill_value=np.nan)
         assert len(plan.outputs) == 1
 

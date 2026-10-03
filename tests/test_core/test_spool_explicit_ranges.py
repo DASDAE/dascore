@@ -18,6 +18,7 @@ from dascore.io.index.catalog import PatchCatalog
 from dascore.units import get_quantity, m, s
 from dascore.utils.chunk_plan import _ensure_patch_row
 from dascore.utils.explicit_ranges import known_coordinates
+from dascore.warnings import DASCoreWarning
 from tests.test_core.test_patch_chunk import (
     _T0,
     _assert_labels,
@@ -392,10 +393,12 @@ class TestExplicitChunk:
         patch = _patch(np.arange(10))
         spool = dc.spool([patch.select(distance=(0, 4)), patch.select(distance=(7, 9))])
         with pytest.raises(ChunkError, match="sampled bounds"):
-            spool.chunk_plan(distance=np.array([[5, 9]]), tolerance=4)
-        partial = spool.chunk(
-            distance=np.array([[5, 9]]), tolerance=4, keep_partial=True
-        )
+            with pytest.warns(DASCoreWarning, match="fill_value"):
+                spool.chunk_plan(distance=np.array([[5, 9]]), tolerance=4)
+        with pytest.warns(DASCoreWarning, match="fill_value"):
+            partial = spool.chunk(
+                distance=np.array([[5, 9]]), tolerance=4, keep_partial=True
+            )
         assert _ends(partial[0]) == (7, 9)
         filled = spool.chunk(distance=np.array([[5, 9]]), tolerance=4, fill_value=0)
         assert _ends(filled[0]) == (5, 9)
