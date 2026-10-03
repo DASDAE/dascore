@@ -69,6 +69,7 @@ from dascore.utils.documents import (
     parse_document,
     write_text_document,
 )
+from dascore.utils.identity import H, _encode_model
 from dascore.utils.intervals import (
     clip_intervals,
     interval_masks,
@@ -78,6 +79,7 @@ from dascore.utils.intervals import (
 )
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
+    cached_method,
     check_code,
     is_strictly_monotonic,
     validate_acquisition_key,
@@ -2253,6 +2255,12 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
         object.__setattr__(self, "networks", networks)
         self.__pydantic_fields_set__.update({"resources", "networks"})
         return self
+
+    @cached_method
+    def _identity(self) -> tuple[str, str]:
+        """Return the id this inventory has wherever it is encoded, worked out once."""
+        # Not encode(self), which would come back here through this hook.
+        return "inventory", H("inventory", _encode_model(self), encoded=True)
 
     def _repr_children(self) -> tuple[Network, ...]:
         """The networks, which are what an inventory's tree is made of."""
