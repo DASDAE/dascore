@@ -666,6 +666,8 @@ def spool_to_directory(spool, path=None, file_format="DASDAE", extension="hdf5")
     if path is None:
         path = Path(tempfile.mkdtemp())
         assert path.exists()
+    elif isinstance(path, str):
+        path = Path(path)
     for patch in spool:
         name = get_patch_names(patch).iloc[0]
         out_path = path / (f"{name}.{extension}")
