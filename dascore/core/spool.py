@@ -1370,7 +1370,9 @@ class Spool(NodeRepr, NamespaceOwner):
             outside every matching epoch, or one with no instants to
             resolve at because its time axis is not physical. A patch is
             judged over its whole span, so one described at its start but
-            not at its end is undescribed. "raise" (the default)
+            not at its end is undescribed. So is one reaching outside
+            every epoch of its optical paths, unless its array places no
+            path at its location at any time. "raise" (the default)
             fails and names them, "warn" drops them and says so, and
             "ignore" discards them silently, which is what an inventory
             deliberately covering part of an archive wants.
@@ -1420,22 +1422,30 @@ class Spool(NodeRepr, NamespaceOwner):
             "reconcile; select the side you want, or correct the inventory",
         )
         described = np.array([x.described for x in epochs], dtype=bool)
-        if not described.all():
-            report_unconformed(source_rows[~described], on_unresolved)
-        kept = working[described].reset_index(drop=True)
-        cuts = [x.cuts for x, keep in zip(epochs, described, strict=True) if keep]
-        if not any(cuts):  # nothing to subdivide: a filter is the whole job
-            return new._restrict_to_rows(kept["_patch_row"].to_numpy())
-        sources = source_rows[described].reset_index(drop=True)
+        rows = np.flatnonzero(described)
+        candidates = working.iloc[rows].reset_index(drop=True)
+        cuts = [epochs[x].cuts for x in rows]
         refuse_rows(
-            sources,
-            unsubdividable(kept, cuts, "time"),
+            source_rows.iloc[rows].reset_index(drop=True),
+            unsubdividable(candidates, cuts, "time"),
             "must be subdivided at an epoch boundary but state no time step "
             "to find their samples with",
         )
-        return new._subdivided(
-            sources, kept, subdivision_pieces(kept, cuts, "time"), "time"
-        )
+        pieces = subdivision_pieces(candidates, cuts, "time") if any(cuts) else None
+        # A piece starting outside every path epoch holds samples no path
+        # describes, which leaves its row as undescribed as a lapsed
+        # acquisition would.
+        for index, row in enumerate(rows):
+            starts = [x for x, _ in pieces[index]] if pieces else []
+            described[row] = not epochs[row].pathless(starts)
+        if not described.all():
+            report_unconformed(source_rows[~described], on_unresolved)
+        kept = working[described].reset_index(drop=True)
+        if pieces is None:  # nothing to subdivide: a filter is the whole job
+            return new._restrict_to_rows(kept["_patch_row"].to_numpy())
+        sources = source_rows[described].reset_index(drop=True)
+        kept_pieces = [pieces[i] for i, row in enumerate(rows) if described[row]]
+        return new._subdivided(sources, kept, kept_pieces, "time")
 
     def _subdivided(self, sources, rows, pieces, name: str, stamp=None) -> Self:
         """

@@ -22,6 +22,7 @@ from dascore.core import Inventory
 from dascore.core import inventory as inv
 from dascore.exceptions import InvalidInventoryError
 from dascore.models import InventoryModel, values_equal
+from dascore.utils.identity import encode
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.namespace import InventoryNameSpace
 
@@ -1328,6 +1329,14 @@ class TestInventory:
         """Structural column names are outside the coordinate vocabulary."""
         with pytest.raises(ValidationError):
             inv.CoordinateReferenceSystem(coordinate_labels=("x", "distance"))
+
+    def test_encoding_follows_content(self):
+        """Equal inventories encode alike, and a changed one encodes apart."""
+        inventory = build_inventory()
+        first = encode(inventory)
+        assert first == encode(inventory.model_copy(deep=True))
+        old = inventory.networks[0].fiber_arrays[0].acquisitions[0]
+        assert first != encode(inventory.replace(old, old.new(gauge_length=12.0)))
 
 
 class TestReviewRegressions:

@@ -11,6 +11,7 @@ from dascore.constants import PatchType
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
 from dascore.transform.fourier import _operand, _result_dtype
+from dascore.units import get_quantity
 from dascore.utils.array_api import array_namespace
 from dascore.utils.patch import (
     get_dim_axis_value,
@@ -53,7 +54,8 @@ class CorrelateShift(PatchProcessor):
         The dimension name that was correlated in the freq. domain.
     undo_weighting
         If True, also undo the weighting artifact caused by DASCore's dft
-        weighting. This is done by simply dividing by the coordinate step.
+        weighting. This is done by simply dividing by the coordinate step,
+        and the data units by the coordinate's units.
         See [dft note](`dascore/docs/notes/dft_notes.qmd`) for more details.
 
     Notes
@@ -76,11 +78,11 @@ class CorrelateShift(PatchProcessor):
     >>> auto_patch = idft.correlate_shift(dim="time")
     """
 
+    __version__ = "1.2"
     dim: Any
     undo_weighting: Any = True
 
     data_type = "correlation"
-    __version__ = "1.1"
 
     def get_metadata(self, meta):
         """Return metadata with the lag coordinate, and the axis and step."""
@@ -102,6 +104,10 @@ class CorrelateShift(PatchProcessor):
         out = meta.new(coords=new_cm)
         if not self.undo_weighting:
             return out, {"axis": axis, "step": None}
+        units = get_quantity(meta.attrs.data_units)
+        if units is not None and coord.units is not None:
+            # dividing by the step divides the units by the coordinate's too
+            out = out.update_attrs(data_units=units / get_quantity(coord.units))
         weight = _operand(to_float(step), meta.dtype)
         dtype = _result_dtype(meta.dtype, weight)
         return out.new(dtype=dtype), {"axis": axis, "step": weight}
@@ -122,7 +128,7 @@ class CorrelateShift(PatchProcessor):
         return data / (xp.asarray(step) if isinstance(step, np.generic) else step)
 
 
-@patch_function(data_type="correlation", version="1.2")
+@patch_function(data_type="correlation", version="1.3")
 def correlate(
     patch: PatchType,
     samples: bool = False,
@@ -185,6 +191,9 @@ def correlate(
 
     Notes
     -----
+    The result's data units are the square of the patch's (for example
+    (m/s)**2 for velocity), as each value is a sum of products of the data.
+
     Correlation runs along the dimension not named in ``kwargs``. That dimension
     becomes a lag dimension prefixed with ``lag_``; for example, selecting a
     ``distance`` source transforms ``time`` into ``lag_time``.
@@ -224,6 +233,9 @@ def correlate(
         # idft must keep all of it; trimming would drop the negative lags.
         coords = out.coords.update(**{unpadded: (None, out.get_coord(lag_dim))})
         out = out.update(coords=coords)
+    if (units := get_quantity(patch.attrs.data_units)) is not None:
+        # a product of two spectra carries their units twice
+        out = out.update_attrs(data_units=units**2)
     # Undo fft if this function did one, shift, and update coord.
     if not input_dft:
         idft = out.idft.func(out)

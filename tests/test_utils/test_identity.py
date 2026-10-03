@@ -38,6 +38,7 @@ from dascore.utils.identity import (
     try_operation_id,
     with_ids,
 )
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch_registry import _as_key, _signature, call_operation_id
 from dascore.warnings import DASCoreWarning
 
@@ -1017,6 +1018,20 @@ class TestMutationBoundary:
         with pytest.warns(DASCoreWarning, match="No id could be derived"):
             out = patch.update_attrs(odd=object())
         assert out.attrs.data_id not in ("", patch.attrs.data_id)
+
+    def test_a_repeated_refusal_warns_once(self, patch):
+        """The same refusal warns on its first call, not on every call."""
+        with pytest.warns(DASCoreWarning, match="No id could be derived"):
+            patch.tile_apply(lambda x: x, time=0.5, distance=50)
+        with suppress_warnings(DASCoreWarning, message="No id could", action="error"):
+            patch.tile_apply(lambda x: x, time=0.5, distance=50)
+
+    def test_a_raised_refusal_raises_again(self, patch):
+        """A filter turning the warning into an error holds on every call."""
+        for _ in range(2):
+            with suppress_warnings(DASCoreWarning, action="error"):
+                with pytest.raises(DASCoreWarning, match="No id could be"):
+                    patch.tile_apply(lambda x: x, time=0.5, distance=50)
 
     def test_an_operation_stamps_its_own_result(self, patch):
         """The replacements a patch function makes do not name themselves."""

@@ -5,7 +5,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import ParameterError, UnitError
-from dascore.units import m
+from dascore.units import get_quantity, m
 from dascore.utils.time import to_float
 
 
@@ -252,6 +252,30 @@ class TestCorrelatePrecision:
         expected = random_patch.correlate(distance=0, samples=True)
         assert out.dtype == np.float32
         assert np.allclose(out.data, expected.data, rtol=1e-3, atol=1e-3)
+
+
+class TestCorrelationUnits:
+    """Correlations carry the square of the data units."""
+
+    def test_both_routes_give_squared_units(self, random_patch):
+        """Correlate and the dft pipeline both give (m/s)**2 for m/s data."""
+        patch = random_patch.update_attrs(data_units="m/s")
+        direct = patch.correlate(distance=0, samples=True)
+        spectra = patch.dft("time", real=True)
+        piped = (spectra * spectra.conj()).idft().correlate_shift("time")
+        expected = get_quantity("m/s") ** 2
+        for out in (direct, piped):
+            assert get_quantity(out.attrs.data_units) == expected
+
+    def test_shift_leaves_units_it_does_not_rescale(self, random_patch):
+        """Without weighting undone, or without data units, units are kept."""
+        spectra = random_patch.update_attrs(data_units="m/s").dft("time", real=True)
+        product = (spectra * spectra.conj()).idft()
+        kept = product.correlate_shift("time", undo_weighting=False)
+        assert kept.attrs.data_units == product.attrs.data_units
+        unitless = random_patch.dft("time", real=True)
+        shifted = (unitless * unitless.conj()).idft().correlate_shift("time")
+        assert shifted.attrs.data_units is None
 
 
 class TestCorrelateErrors:

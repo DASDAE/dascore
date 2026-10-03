@@ -2172,6 +2172,25 @@ class TestConformSubdivision:
         assert _pieces(out)[1][0] == edges[1]
         assert out[0].shape[1] + out[1].shape[1] == patch.shape[1]
 
+    def test_a_path_gap_between_two_samples_drops_nothing(self, patch, inventory):
+        """
+        A gap between paths that holds no sample leaves every sample described.
+
+        Only samples outside every path epoch make a patch undescribed, so the
+        patch splits at the gap as it would at two abutting epochs.
+        """
+        coord = patch.get_coord("time")
+        array = inventory.networks[0].fiber_arrays[0]
+        old = array.optical_paths[0]
+        sample = coord.min() + coord.step * 500
+        gap = (sample - coord.step * 2 / 3, sample - coord.step / 3)
+        paths = (old.new(time_max=gap[0]), old.new(time_min=gap[1], name="after"))
+        split = inventory.replace(array, array.new(optical_paths=paths)).check()
+        out = dc.spool(patch).attach_inventory(split).conform_to_inventory()
+        assert len(out) == 2
+        assert _pieces(out)[1][0] == sample
+        assert out[0].shape[1] + out[1].shape[1] == patch.shape[1]
+
     def test_a_boundary_outside_the_patch_cuts_nothing(self, patch, inventory):
         """Only the epochs a patch actually reaches into can divide it."""
         coord = patch.get_coord("time")
@@ -2341,27 +2360,49 @@ class TestConformPartialCoverage:
         with pytest.raises(UnresolvedPatchError, match="does not describe"):
             spool.conform_to_inventory()
 
-    def test_a_path_which_lapses_divides_the_patch(
-        self, patch, inventory, off_grid_boundary
+    @pytest.mark.parametrize(
+        "bound",
+        [
+            pytest.param({"time_max": 0.5}, id="path_lapses_midway"),
+            pytest.param({"time_min": 0.5}, id="path_starts_midway"),
+            pytest.param({"time_max": 1.0}, id="path_ends_on_last_sample"),
+            pytest.param({"time_max": -1.0}, id="path_ends_before_patch"),
+        ],
+    )
+    def test_samples_outside_every_path_epoch_are_undescribed(
+        self, patch, inventory, bound
     ):
         """
-        A lapsed optical path splits a patch into two described pieces.
+        A patch reaching outside its path's epochs is unresolved as a whole.
 
-        An acquisition remains described without a path; a lapsed acquisition instead
-        makes the row unresolved.
+        As with a lapsing acquisition, the described part is not salvaged:
+        cutting it off would return a piece no path describes. Epochs are
+        half-open, so a path ending on the last sample misses that sample.
         """
+        time = patch.get_coord("time")
+        ((field, fraction),) = bound.items()
+        when = time.min() + (time.max() - time.min()) * fraction
+        if fraction == 0.5:  # off the sample grid, as a real boundary is
+            when += time.step / 3
+        lapsed = _replace_path(inventory, **{field: when})
+        spool = dc.spool(patch).attach_inventory(lapsed)
+        assert len(spool.conform_to_inventory(on_unresolved="ignore")) == 0
+        with pytest.raises(UnresolvedPatchError, match="does not describe"):
+            spool.conform_to_inventory()
+
+    def test_selection_still_reads_the_acquisition(self, patch, inventory):
+        """Only conforming refuses a patch outside its path; attrs still select."""
+        time = patch.get_coord("time")
+        lapsed = _replace_path(inventory, time_max=time.min() - time.step)
+        spool = dc.spool(patch).attach_inventory(lapsed)
+        assert len(spool.select(gauge_length=10.0)) == 1
+
+    def test_a_pathless_acquisition_still_conforms(self, patch, inventory):
+        """An acquisition with no path at all describes the patch by itself."""
         array = inventory.networks[0].fiber_arrays[0]
-        lapsed = inventory.replace(
-            array,
-            array.new(
-                optical_paths=(array.optical_paths[0].new(time_max=off_grid_boundary),)
-            ),
-        ).check()
-        out = dc.spool(patch).attach_inventory(lapsed).conform_to_inventory()
-        assert len(out) == 2
-        first, second = out.enrich(coords=True)
-        assert "zone" in first.coords.coord_map
-        assert "zone" not in second.coords.coord_map
+        pathless = inventory.replace(array, array.new(optical_paths=()))
+        out = dc.spool(patch).attach_inventory(pathless).conform_to_inventory()
+        assert len(out) == 1
 
     def test_many_undescribed_patches_are_summarized(self, patch, inventory):
         """Naming every file of a mismatched archive helps nobody."""
