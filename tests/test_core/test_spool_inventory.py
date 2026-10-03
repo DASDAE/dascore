@@ -2600,14 +2600,12 @@ class TestChannelSelect:
             assert len(spool.select(coupling="trench")) == 0
 
     def test_one_warning_counts_every_drop(self, patch, inventory):
-        """Two unresolved patches in one call give one warning naming both."""
-        coord = patch.get_coord("time")
-        middle = coord.min() + (coord.max() - coord.min()) / 2
-        split = _split_epochs(inventory, middle, second={"name": "moved"})
+        """Drops by an attr and by a fiber coordinate share one warning."""
         other = patch.update_attrs(acquisition_key="DAS.R2D1..OTHER")
-        spool = dc.spool([patch, other]).attach_inventory(split)
+        stated = other.update_attrs(gauge_length=10.0)
+        spool = dc.spool([patch, other, stated]).attach_inventory(inventory)
         with pytest.warns(UserWarning, match=r"^2 patch\(es\)") as record:
-            assert len(spool.select(coupling="trench")) == 0
+            assert len(spool.select(gauge_length=10.0, coupling="trench")) == 1
         assert len(record) == 1
 
     def test_a_patch_outside_every_path_epoch_warns(self, patch, inventory):

@@ -586,9 +586,10 @@ class Spool(NodeRepr, NamespaceOwner):
         With an inventory attached, a patch that no single inventory context
         describes does not match a name the inventory answers for: one
         straddling an acquisition or optical-path change, reaching outside
-        every optical-path epoch, or not described at all. Its parts could
-        answer differently, and selection judges whole patches, so such
-        patches are dropped with one warning per call counting them.
+        every optical-path epoch, with no physical time to resolve at, or not
+        described at all. A straddler's parts could answer differently and
+        the others have no answer, and selection judges whole patches, so
+        such patches are dropped with one warning per call counting them.
         [`conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`)
         splits patches at optical-path changes first, so the described parts
         can be selected; a patch spanning an acquisition change must instead
@@ -620,7 +621,13 @@ class Spool(NodeRepr, NamespaceOwner):
         return out
 
     def _select_counted(
-        self, *, _attrs, _coords, samples, relative, **kwargs
+        self,
+        *,
+        _attrs: namespace_select_type = None,
+        _coords: namespace_select_type = None,
+        samples: bool = False,
+        relative: bool = False,
+        **kwargs,
     ) -> tuple[Self, int]:
         """
         Select as `select` does, and count the patches dropped for having
@@ -814,21 +821,16 @@ class Spool(NodeRepr, NamespaceOwner):
             raise ParameterError(msg)
         # The complement is taken against select itself rather than by
         # negating each predicate, so the two can never drift apart.
+        matched, unjudged = (
+            (self, 0) if not stated else self._select_counted(_attrs=stated)
+        )
         if not query.channels:
-            matched, unjudged = self._select_counted(
-                _attrs=stated, _coords=None, samples=False, relative=False
-            )
             report_unjudged(unjudged)
             return self._restrict_to_rows(matched._catalog.ordered_rows(), keep=False)
         # With both, the complement is still one set: a patch keeps every
         # channel unless the attrs matched it, and the channels the fiber
         # query did not match when they did. Complementing the two halves
         # apart would drop a patch the whole selection never held.
-        matched, unjudged = self, 0
-        if stated:
-            matched, unjudged = self._select_counted(
-                _attrs=stated, _coords=None, samples=False, relative=False
-            )
         out, more = self._select_channels(
             stated_channels(query.channels),
             complement=True,
@@ -1000,7 +1002,8 @@ class Spool(NodeRepr, NamespaceOwner):
         or clear them. Otherwise values are resolved once per inventory epoch. Rows
         unresolved by the inventory do not match. Selection uses the same projection
         and conflict rules as extraction. Also returns how many rows went
-        unmatched because the inventory had to answer for them and could not.
+        unmatched only because the inventory had to answer for them and could
+        not; a row another name already ruled out is not counted.
         """
         ids = np.asarray(self._catalog.ordered_rows(), dtype=np.int64)
         if not len(ids):
@@ -1009,9 +1012,9 @@ class Spool(NodeRepr, NamespaceOwner):
         known = set(backend.attr_names())
         contexts = None
         mask = np.ones(len(ids), dtype=bool)
-        # Rows some name had to ask the inventory about and could not, and
-        # rows some name judged and missed; only the first kind, never
-        # missed, is dropped for having no context.
+        # A row counts as unjudged when some name needed the inventory and
+        # found no context, unless another name already ruled it out; that
+        # is an ordinary miss.
         unjudged = np.zeros(len(ids), dtype=bool)
         missed = np.zeros(len(ids), dtype=bool)
         # How pending enrichment rewrites a stated header, if at all; the
@@ -1337,7 +1340,8 @@ class Spool(NodeRepr, NamespaceOwner):
         one warning per call counts such patches. Run
         [`conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`)
         first to split patches at optical-path changes so the described parts
-        can be expanded.
+        can be expanded; it refuses a patch spanning an acquisition change,
+        which must be split by time instead.
 
         Parameters
         ----------

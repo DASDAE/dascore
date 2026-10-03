@@ -394,7 +394,7 @@ def unjudged_rows(contexts, *, along_fiber: bool = False) -> np.ndarray:
 
 def report_unjudged(count: int) -> None:
     """
-    Warn, once per call, that a selection treated unjudged patches as misses.
+    Warn once that a verb treated `count` unjudged patches as misses.
 
     The warning points at the verb's caller, two frames above this one.
     """
@@ -406,9 +406,10 @@ def report_unjudged(count: int) -> None:
         "acquisition or optical path, reaches outside every optical-path "
         "epoch, has no physical time to resolve at, or is not described by "
         "the inventory. Spool.conform_to_inventory splits patches at "
-        "optical-path changes so the described parts can be selected; pass "
-        "it on_unresolved='ignore' to drop the rest. It refuses a patch "
-        "spanning an acquisition change, which must be split by time instead."
+        "optical-path changes so the described parts can be used; pass it "
+        "on_unresolved='ignore' to drop the rest. It refuses a patch spanning "
+        "an acquisition change; select the time on each side of the change "
+        "instead."
     )
     warnings.warn(msg, UserWarning, stacklevel=3)
 
