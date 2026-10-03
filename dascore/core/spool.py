@@ -132,8 +132,9 @@ class _LazySourceArray:
 
     def __getitem__(self, key):
         key = list(key) if isinstance(key, tuple) else [key]
-        if Ellipsis in key:
-            pos = key.index(Ellipsis)
+        ellipses = [num for num, k in enumerate(key) if k is Ellipsis]
+        if ellipses:
+            pos = ellipses[0]
             key[pos : pos + 1] = [slice(None)] * (self.ndim - len(key) + 1)
         key = key + [slice(None)] * (self.ndim - len(key))
         slices = all(isinstance(k, slice) for k in key)
@@ -686,9 +687,11 @@ class DataFrameSpool(BaseSpool):
         axis = first.get_axis(dim)
         step = first.get_coord(dim).step
 
-        def load(num):
+        def load(num, patch=None):
             """Load a source, checking it fits the first one."""
-            patch = self._load_trimmed_patch(rows[num], joined).transpose(*first.dims)
+            if patch is None:
+                patch = self._load_trimmed_patch(rows[num], joined)
+            patch = patch.transpose(*first.dims)
             fits = (
                 patch.data.dtype == first.data.dtype
                 and patch.shape[axis] == counts[num]
@@ -707,6 +710,7 @@ class DataFrameSpool(BaseSpool):
                 raise CoordMergeError(msg)
             return patch.data
 
+        load(0, first)  # The first source must match its indexed range too.
         offsets = np.cumsum([0, *counts])
         shape = list(first.shape)
         shape[axis] = int(offsets[-1])
@@ -741,8 +745,8 @@ class DataFrameSpool(BaseSpool):
         origin, step = coord.min(), coord.step
         low = (joined[f"{dim}_min"].to_numpy() - origin) / step
         high = (joined[f"{dim}_max"].to_numpy() - origin) / step
-        first_num = np.ceil(low - 1e-3).astype(np.int64)
-        last_num = np.floor(high + 1e-3).astype(np.int64)
+        first_num = np.ceil(low - 1e-9).astype(np.int64)
+        last_num = np.floor(high + 1e-9).astype(np.int64)
         contiguous = first_num[0] == 0 and np.all(first_num[1:] == last_num[:-1] + 1)
         if np.any(steps != step) or not contiguous:
             raise ParameterError(bad_msg.format(""))

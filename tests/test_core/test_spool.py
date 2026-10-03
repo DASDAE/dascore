@@ -325,6 +325,7 @@ class TestGetLazyPatch:
             key = (slice(2, 9), time_key)
             assert np.array_equal(lazy[key], data[key])
         assert np.array_equal(lazy[..., 0:10], data[..., 0:10])
+        assert np.array_equal(lazy[np.array([0, 2])], data[np.array([0, 2])])
 
     def test_index(self, patches):
         """Each patch of a chunked or unchunked spool can be lazy."""
@@ -341,13 +342,28 @@ class TestGetLazyPatch:
             assert lazy.coords == patch.coords
             assert np.array_equal(np.asarray(lazy.data), patch.data)
 
-    def test_off_grid_select(self, patches):
-        """A selection starting between samples matches the spool."""
-        start = patches[0].get_coord("time").min() + np.timedelta64(1, "ms")
-        spool = dc.spool(patches).chunk(time=None).select(time=(start, None))
+    @pytest.mark.parametrize("offset", [1_000, 1, 3_999])
+    def test_off_grid_select(self, patches, offset):
+        """Selections with bounds between (or near) samples match the spool."""
+        time = patches[0].get_coord("time")
+        start = time.min() + np.timedelta64(offset, "us")
+        stop = time.max() + 1000 * time.step - np.timedelta64(offset, "us")
+        spool = dc.spool(patches).chunk(time=None).select(time=(start, stop))
         lazy = spool.get_lazy_patch()
         assert lazy.coords == spool[0].coords
         assert np.array_equal(np.asarray(lazy.data), spool[0].data)
+
+    def test_stale_first_source_raises(self, patches, monkeypatch):
+        """A first source shorter than its index entry raises."""
+        spool = dc.spool(patches).chunk(time=None)
+        load = spool._load_trimmed_patch
+        monkeypatch.setattr(
+            spool,
+            "_load_trimmed_patch",
+            lambda *a: load(*a).select(time=(0, 10), samples=True),
+        )
+        with pytest.raises(CoordMergeError, match="Source 0"):
+            spool.get_lazy_patch()
 
     def test_single_source(self, patches):
         """A single source, even with irregular coordinates, is returned."""
