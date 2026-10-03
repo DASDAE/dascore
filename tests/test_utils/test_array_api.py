@@ -601,7 +601,6 @@ _NUMPY_ONLY = {
     "stalta",
     "fbe",
     "correlate",
-    "whiten",
     "tau_p",
     "dispersion_phase_shift",
 }

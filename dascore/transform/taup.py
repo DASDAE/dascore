@@ -18,6 +18,8 @@ class TauP(PatchProcessor):
     """
     Compute linear tau-p transform.
 
+    The patch must have time and distance dimensions.
+
     Parameters
     ----------
     velocities

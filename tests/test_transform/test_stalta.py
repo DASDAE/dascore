@@ -89,7 +89,7 @@ class TestStaLta:
 
 
 class TestStaltaProcessor:
-    """What the class says beyond the method."""
+    """Stalta as a class: keyword-only options and dtype from metadata."""
 
     def test_samples_is_keyword_only(self):
         """The windows are keywords, so samples cannot be given by position."""
@@ -97,7 +97,7 @@ class TestStaltaProcessor:
             Stalta(True, time=(5, 20))
 
     def test_single_precision(self, random_patch):
-        """The ratio of rolling means is double, as the metadata says first."""
+        """The ratio is double, and the metadata predicts it without data."""
         patch = random_patch.new(data=np.asarray(random_patch.data, np.float32))
         stalta = Stalta(time=(5, 20), samples=True)
         out, _ = stalta.get_metadata(patch.drop_data())

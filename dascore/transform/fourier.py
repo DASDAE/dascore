@@ -583,32 +583,17 @@ class Idft(PatchProcessor):
         out = out.new(dtype=_result_dtype(dtype, real=real))
         return out, plan | {"indexer": indexer}
 
-    def kernel(self, data, **plan):
+    def kernel(self, data, *, axes, real, step, sizes, indexer):
         """Return the inverse transform, trimmed of the padding dft added."""
-        return _idft_kernel(data, **plan)
-
-
-def _idft_kernel(data, *, axes, real, step, sizes, indexer):
-    """Return the inverse transform `Idft.get_metadata` planned."""
-    xp = array_namespace(data)
-    # now unshift data and undo scaling
-    data = data / _scalar(step, data)
-    if shifted := (axes[:-1] if real else axes):
-        data = xp.fft.ifftshift(data, axes=shifted)
-    func = xp.fft.irfftn if real else xp.fft.ifftn
-    # Along no axes numpy hands the data back as they are.
-    data = func(_fft_input(data, xp, True) if axes else data, s=sizes, axes=axes)
-    return data if indexer is None else data[indexer]
-
-
-def _prefixed(prefix: str, plan: dict) -> dict:
-    """Return a step's plan with its keys prefixed, to sit in a larger plan."""
-    return {f"{prefix}{key}": value for key, value in plan.items()}
-
-
-def _unprefixed(prefix: str, plan: dict) -> dict:
-    """Return the step's plan which `_prefixed` put in a larger plan."""
-    return {k.removeprefix(prefix): v for k, v in plan.items() if k.startswith(prefix)}
+        xp = array_namespace(data)
+        # now unshift data and undo scaling
+        data = data / _scalar(step, data)
+        if shifted := (axes[:-1] if real else axes):
+            data = xp.fft.ifftshift(data, axes=shifted)
+        func = xp.fft.irfftn if real else xp.fft.ifftn
+        # Along no axes numpy hands the data back as they are.
+        data = func(_fft_input(data, xp, True) if axes else data, s=sizes, axes=axes)
+        return data if indexer is None else data[indexer]
 
 
 def _resolve_nfft(nfft, coord, window_samples: int) -> int:

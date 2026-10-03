@@ -12,15 +12,7 @@ import dascore as dc
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
 from dascore.proc.basic import Pad
-from dascore.transform.fourier import (
-    Dft,
-    Idft,
-    _dft_kernel,
-    _idft_kernel,
-    _is_complex,
-    _prefixed,
-    _unprefixed,
-)
+from dascore.transform.fourier import Dft, Idft, _dft_kernel, _is_complex
 from dascore.units import get_quantity
 from dascore.utils.array_api import array_namespace
 from dascore.utils.patch import get_dim_axis_value
@@ -210,7 +202,7 @@ class Correlate(PatchProcessor):
             meta, pad = Pad(**{fft_dim: "correlate"}).get_metadata(meta)
             real = None if _is_complex(meta.dtype) else fft_dim
             meta, dft = Dft(dim=fft_dim, real=real).get_metadata(meta)
-            plan |= pad | _prefixed("dft_", dft)
+            plan |= pad | {"dft": dft}
         # Get the sources.
         coord = meta.get_coord(dim)
         source = coord.values if source is None else source
@@ -233,20 +225,20 @@ class Correlate(PatchProcessor):
         if transform:
             out, idft = Idft().get_metadata(out)
             out, shift = CorrelateShift(dim=fft_dim).get_metadata(out)
-            plan |= _prefixed("idft_", idft) | _prefixed("shift_", shift)
+            plan |= {"idft": idft, "shift": shift}
         return out, plan
 
     def numpy_kernel(self, data, *, transform, source_axis, index, **plan):
         """Return each row or column correlated with the sources."""
         if transform:
             data = np.pad(data, plan["pad_width"])
-            data = _dft_kernel(data, np, nft, cast=False, **_unprefixed("dft_", plan))
+            data = _dft_kernel(data, np, nft, cast=False, **plan["dft"])
         # The sources, along a third axis so they broadcast with the data.
         selector: list[Any] = [slice(None), slice(None), None]
         selector[source_axis] = index
         source = np.swapaxes(data[tuple(selector)], source_axis, -1)
         data = data[..., None] * np.conj(source)
         if transform:
-            data = _idft_kernel(data, **_unprefixed("idft_", plan))
-            data = _shift_lags(data, **_unprefixed("shift_", plan))
+            data = Idft().kernel(data, **plan["idft"])
+            data = _shift_lags(data, **plan["shift"])
         return data

@@ -1299,68 +1299,33 @@ def align_patch_coords(
     patch2
         The second patch.
     """
-    check_kind(patch1, patch2)
-    # Fast path for no alignment needed
-    if patch1.coords == patch2.coords:
+    meta1, meta2, step1, step2 = _align_metadata(patch1.drop_data(), patch2.drop_data())
+    if step1 is None:
         return patch1, patch2
-    shared_dims = set(patch1.dims) & set(patch2.dims)
-    if not shared_dims:
-        msg = (
-            "Cannot align patches with no shared dimensions. Dimensions are "
-            f"patch1: {patch1.dims}, patch2: {patch2.dims}"
-        )
-        raise PatchCoordinateError(msg)
-    # First ensure the patches have the same dims
+    # Appending and transposing as patches, not reshaping arrays, keeps the
+    # aligned patches' ids deterministic.
     dims = _merge_tuples(patch1.dims, patch2.dims)
-    dim_dict = {x: num for num, x in enumerate(dims)}
-    patch1 = patch1.append_dims(*dims).transpose(*dims)
-    patch2 = patch2.append_dims(*dims).transpose(*dims)
-    # Next, find the common coordinates and align.
-    # Annotated because `align_to` answers with a slice or an index
-    # array, and the whole-slice start below would otherwise fix the
-    # element type as the former.
-    align_1: list[slice | np.ndarray] = [slice(None)] * len(dims)
-    align_2: list[slice | np.ndarray] = [slice(None)] * len(dims)
-    new_coords_1, new_coords_2 = {}, {}
-    for dim in shared_dims:
-        coord1, coord2 = patch1.get_coord(dim), patch2.get_coord(dim)
-        if coord1 == coord2:
-            continue
-        dim_ind = dim_dict[dim]
-        # We actually need to do some alignment here.
-        ncoord1, ncoord2, sli1, sli2 = coord1.align_to(coord2)
-        if not len(ncoord1):
-            msg = (
-                f"Cannot align patches: they share no values along dimension "
-                f"{dim!r} ({coord1.min()} to {coord1.max()} and "
-                f"{coord2.min()} to {coord2.max()})."
-            )
-            raise PatchCoordinateError(msg)
-        new_coords_1[dim], new_coords_2[dim] = ncoord1, ncoord2
-        align_1[dim_ind], align_2[dim_ind] = sli1, sli2
-    # No alignment needed, just skip.
-    if not (new_coords_1 or new_coords_2):
+    patch1, patch2 = (x.append_dims(*dims).transpose(*dims) for x in (patch1, patch2))
+    if step1[2] is None:
         return patch1, patch2
-    # Update coordinate managers and reshape arrays, return new patches.
-    coord1 = patch1.coords.update(**new_coords_1)
-    coord2 = patch2.coords.update(**new_coords_2)
-    array1 = _apply_union_indexers(tuple(align_1), patch1.data)
-    array2 = _apply_union_indexers(tuple(align_2), patch2.data)
-    out1 = patch1.new(data=array1, coords=coord1)
-    out2 = patch2.new(data=array2, coords=coord2)
+    out1, out2 = (
+        x.new(data=_apply_union_indexers(step[2], x.data), coords=meta.coords)
+        for x, meta, step in ((patch1, meta1, step1), (patch2, meta2, step2))
+    )
     return out1, out2
 
 
 def _align_metadata(meta1: dc.PatchMeta, meta2: dc.PatchMeta):
     """
-    Return two patches' metadata aligned as `align_patch_coords` aligns them.
+    Return two patches' metadata aligned so their data broadcast together.
 
     Also return, for each, the step which aligns its array: the shape it is
     reshaped to, the axes it is then permuted by, and the indexer applied
     last (None for none); the step itself is None when nothing changes.
     """
     check_kind(meta1, meta2)
-    if meta1.coords == meta2.coords:
+    # Equal coords in another dim order still need transposing.
+    if meta1.coords == meta2.coords and meta1.dims == meta2.dims:
         return meta1, meta2, None, None
     shared_dims = set(meta1.dims) & set(meta2.dims)
     if not shared_dims:

@@ -11,7 +11,6 @@ import pandas as pd
 import dascore as dc
 from dascore.constants import samples_arg_description
 from dascore.exceptions import ParameterError
-from dascore.proc.coords import Squeeze
 from dascore.utils.docs import compose_docstring
 from dascore.utils.identity import operation_context, stamp, try_operation_id
 from dascore.utils.patch import (
@@ -163,8 +162,8 @@ class _NumpyPatchRoller(_PatchRollerInfo):
 class _PandasPatchRoller(_PatchRollerInfo):
     """A class to apply pandas rolling operations."""
 
-    def _call_rolling_func(self, name, *args, **kwargs):
-        """Helper function for calling a rolling function."""
+    def _call_rolling_func(self, name, /, *args, **kwargs):
+        """Call a rolling function; positional-only `name` frees it for kwargs."""
         data = _rolling_pandas(
             self.patch.data,
             name,
@@ -186,27 +185,27 @@ class _PandasPatchRoller(_PatchRollerInfo):
 
     def mean(self):
         """Apply mean."""
-        return self._call_rolling_func(name="mean")
+        return self._call_rolling_func("mean")
 
     def median(self):
         """Apply median to moving window."""
-        return self._call_rolling_func(name="median")
+        return self._call_rolling_func("median")
 
     def min(self):
         """Apply min to moving window."""
-        return self._call_rolling_func(name="min")
+        return self._call_rolling_func("min")
 
     def max(self):
         """Apply max to moving window."""
-        return self._call_rolling_func(name="max")
+        return self._call_rolling_func("max")
 
     def std(self):
         """Apply standard deviation to moving window."""
-        return self._call_rolling_func(name="std")
+        return self._call_rolling_func("std")
 
     def sum(self):
         """Apply sum to moving window."""
-        return self._call_rolling_func(name="sum")
+        return self._call_rolling_func("sum")
 
 
 def _start_index(window, step) -> int:
@@ -258,6 +257,13 @@ def _rolling_pandas(data, function, *, window, step, axis, center, args, kwargs)
     out = df.values if not axis else df.T.values
     # get rid of extra dims if original data doesn't have them.
     return np.squeeze(out) if out.ndim != data.ndim else out
+
+
+def _rolling_mean(data, *, window, step, axis, pandas):
+    """Return the uncentred rolling mean of the engine `rolling` chose."""
+    roll, mean = (_rolling_pandas, "mean") if pandas else (_rolling_numpy, np.mean)
+    options = {"window": window, "step": step, "axis": axis, "center": False}
+    return roll(data, mean, args=(), kwargs={}, **options)
 
 
 @compose_docstring(sample_explanation=samples_arg_description)
@@ -347,11 +353,8 @@ def rolling(
     # No overlap or step given means every sample gets a window.
     step = 1 if step is None else step
     engines = {"numpy": _NumpyPatchRoller, "pandas": _PandasPatchRoller}
-    # Read from the metadata alone, so an operation can roll metadata too.
     if (cls := engines.get(engine)) is None:
-        meta = patch.drop_data() if isinstance(patch, dc.Patch) else patch
-        squeezed = Squeeze().get_metadata(meta)[0]
-        pandas = step < 10 and len(squeezed.dims) < 2
+        pandas = step < 10 and sum(n != 1 for n in patch.shape) < 2
         cls = _PandasPatchRoller if pandas else _NumpyPatchRoller
     roll_hist = (
         f"rolling({dim}={value}, step={step}, overlap={overlap}, "

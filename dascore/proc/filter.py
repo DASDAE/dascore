@@ -24,14 +24,7 @@ from dascore.constants import samples_arg_description
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import FilterValueError, ParameterError, UnitError
 from dascore.proc.basic import Real
-from dascore.transform.fourier import (
-    Dft,
-    Idft,
-    _dft_kernel,
-    _idft_kernel,
-    _prefixed,
-    _unprefixed,
-)
+from dascore.transform.fourier import Dft, Idft, _dft_kernel
 from dascore.units import (
     convert_units,
     get_filter_units,
@@ -709,11 +702,10 @@ class SlopeFilter(PatchProcessor):
         slope = self._get_slope_array(out, self.directional, freq_dims)
         filt = self._maybe_transform_units(filt, out, freq_dims, dims)
         mask = self._get_taper_mask(filt, slope, self.invert)
-        plan = {"transform": transform, "mask": mask, **_prefixed("dft_", dft_plan)}
+        plan = {"transform": transform, "mask": mask, "dft": dft_plan, "idft": None}
         if transform:
-            out, idft_plan = Idft().get_metadata(out)
+            out, plan["idft"] = Idft().get_metadata(out)
             out = out.new(dtype=_result_dtype(out.dtype, real=True))
-            plan |= _prefixed("idft_", idft_plan)
         return out, plan
 
     def kernel(self, data, **plan):
@@ -726,11 +718,11 @@ class SlopeFilter(PatchProcessor):
         return self._filtered(data, array_namespace(data), nft, False, **plan)
 
     @staticmethod
-    def _filtered(data, xp, fft, cast, *, transform, mask, **plan):
+    def _filtered(data, xp, fft, cast, *, transform, mask, dft, idft):
         """Return the data transformed, masked and transformed back."""
         if transform:
-            data = _dft_kernel(data, xp, fft, cast=cast, **_unprefixed("dft_", plan))
+            data = _dft_kernel(data, xp, fft, cast=cast, **dft)
         data = data * asarray_like(mask, data)
         if not transform:
             return data
-        return Real().kernel(_idft_kernel(data, **_unprefixed("idft_", plan)))
+        return Real().kernel(Idft().kernel(data, **idft))

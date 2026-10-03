@@ -1411,6 +1411,8 @@ class AddDistanceTo(PatchProcessor):
         prefix = self.prefix
         new = {f"{prefix}_{i}": (None, np.atleast_1d(v)) for i, v in origin.items()}
         new[f"{prefix}_distance"] = (dims, distance)
+        # `coords.update`, not `update_coords`, which would record a second
+        # history entry for part of this operation.
         return meta.new(coords=coords.update(**new)), {}
 
 

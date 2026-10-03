@@ -11,16 +11,10 @@ from scipy.ndimage import uniform_filter1d
 
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
+from dascore.proc.basic import Angle
 from dascore.proc.taper import TaperRange, _scale_by
-from dascore.transform.fourier import (
-    Dft,
-    Idft,
-    _dft_kernel,
-    _idft_kernel,
-    _is_complex,
-    _prefixed,
-    _unprefixed,
-)
+from dascore.transform.fourier import Dft, Idft, _dft_kernel, _fft_input, _is_complex
+from dascore.utils.array_api import array_namespace, asarray_like
 from dascore.utils.transformatter import FourierTransformatter
 
 
@@ -153,14 +147,14 @@ class Whiten(PatchProcessor):
         smooth_size, water_level = self.smooth_size, self.water_level
         dim, freq_range = _get_dim_freq_range_from_kwargs(meta, self.model_extra or {})
         fft_dim = FourierTransformatter().rename_dims(dim)[0]
-        # Get frequency domain metadata; none if the input is transformed.
+        # Frequency-domain metadata; unchanged if the input is already transformed.
         dft = Dft(dim=dim, real=not _is_complex(meta.dtype))
         out, dft_plan = dft.get_metadata(meta)
         transform = out is not meta
         fft_coord = out.get_coord(fft_dim)
         plan = {"transform": transform, "axis": out.get_axis(fft_dim)}
-        plan |= {"window": None, "env": None, **_prefixed("dft_", dft_plan)}
-        # Smoothed amplitude spectra if smoothing, otherwise ones.
+        plan |= {"window": None, "env": None, "dft": dft_plan, "idft": None}
+        # The smoothing window in samples; None leaves unit amplitudes.
         if smooth_size is not None:
             _check_smooth(fft_coord, smooth_size, water_level)
             count = fft_coord.get_sample_count(smooth_size, enforce_lt_coord=True)
@@ -172,14 +166,13 @@ class Whiten(PatchProcessor):
             plan["env"] = taper.get_metadata(out)[1]["env"]
         # Convert back to time domain if input was in time-domain.
         if transform:
-            out, idft_plan = Idft().get_metadata(out)
-            plan |= _prefixed("idft_", idft_plan)
+            out, plan["idft"] = Idft().get_metadata(out)
         return out, plan
 
-    def numpy_kernel(self, data, *, transform, axis, window, env, **plan):
+    def numpy_kernel(self, data, *, transform, axis, window, env, dft, idft):
         """Return the data with flattened amplitudes and their phases kept."""
         if transform:
-            data = _dft_kernel(data, np, nft, cast=False, **_unprefixed("dft_", plan))
+            data = _dft_kernel(data, np, nft, cast=False, **dft)
         if window is None:
             amp = np.ones_like(data)
         else:
@@ -189,5 +182,38 @@ class Whiten(PatchProcessor):
         if env is not None:
             data = _scale_by(data, env)
         if transform:
-            data = _idft_kernel(data, **_unprefixed("idft_", plan))
+            data = Idft().kernel(data, **idft)
         return data
+
+    def kernel(self, data, *, transform, axis, window, env, dft, idft):
+        """As `numpy_kernel`, on the data's own backend."""
+        xp = array_namespace(data)
+        data = _dft_kernel(data, xp, xp.fft, cast=True, **dft) if transform else data
+        data = _fft_input(data, xp, True)
+        phases = xp.exp(1j * xp.astype(Angle().kernel(data), data.dtype))
+        if window is not None:
+            amp = xp.abs(data)
+            smooth = _wrapped_mean(amp, xp, window, axis)
+            if self.water_level is not None:
+                floor = self.water_level * xp.max(smooth)
+                smooth = xp.where(smooth < floor, floor, smooth)
+            phases = phases * (amp / smooth)
+        if env is not None:
+            phases = _scale_by(phases, env)
+        return Idft().kernel(phases, **idft) if transform else phases
+
+
+def _wrapped_mean(data, xp, window, axis):
+    """
+    Return `uniform_filter1d(mode="wrap")` of real data, as a circular
+    convolution, which leaves a backend's chunks along the axis alone.
+    """
+    size = data.shape[axis]
+    box = np.zeros(size)
+    box[window // 2 - np.arange(window)] = 1 / window
+    spectrum = xp.fft.rfft(data, axis=axis)
+    shape = [1] * data.ndim
+    shape[axis] = -1
+    box = xp.reshape(asarray_like(np.fft.rfft(box), spectrum), tuple(shape))
+    box = xp.astype(box, spectrum.dtype)
+    return xp.fft.irfft(spectrum * box, n=size, axis=axis)

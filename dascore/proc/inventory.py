@@ -494,5 +494,7 @@ class Enrich(PatchProcessor):
         if updates:
             out = out.update_attrs(**updates)
         if new_coords:
+            # `coords.update`, not `update_coords`: that would record a nested
+            # history entry pasting a repr of every added coordinate.
             out = out.new(coords=out.coords.update(**new_coords))
         return out, {}

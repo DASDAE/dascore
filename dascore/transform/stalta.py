@@ -11,12 +11,7 @@ from pydantic import ConfigDict
 
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError, UnitError
-from dascore.proc.rolling import (
-    _PandasPatchRoller,
-    _rolling_numpy,
-    _rolling_pandas,
-    rolling,
-)
+from dascore.proc.rolling import _PandasPatchRoller, _rolling_mean, rolling
 from dascore.units import get_quantity, get_quantity_str
 from dascore.utils.array import _is_offset_unit, _quantity
 from dascore.utils.misc import check_filter_kwargs
@@ -69,13 +64,15 @@ class Stalta(PatchProcessor):
         if lta <= sta:
             msg = f"The long-term window must exceed the short-term window, got {lta}."
             raise ParameterError(msg)
-        # `rolling` reads only the metadata, and is how its windows were found.
+        # Let `rolling` (metadata only) pick the window sizes and engine, so the
+        # result matches `patch.rolling(...).mean()`.
         sta_roll, lta_roll = (
             rolling(meta, samples=self.samples, **{dim: x}) for x in (sta, lta)
         )
         coords = sta_roll.get_coords()
         attrs, scale = meta.attrs, None
-        # The ratio of two patches in the same units, as their quotient has it.
+        # Units as dividing two patches in these units gives: the quotient's
+        # units, with any scale (e.g. '10 m/s') applied to both means.
         if (units := get_quantity(attrs.data_units)) is not None:
             if _is_offset_unit(units):
                 msg = f"{np.divide} is not defined for the offset units {units}."
@@ -93,20 +90,9 @@ class Stalta(PatchProcessor):
 
     def numpy_kernel(self, data, *, axis, sizes, pandas, scale):
         """Return the short-term rolling mean over the long-term one."""
-        roll = _rolling_pandas if pandas else _rolling_numpy
-        function = "mean" if pandas else np.mean
         sta, lta = (
-            roll(
-                data,
-                function,
-                window=size,
-                step=1,
-                axis=axis,
-                center=False,
-                args=(),
-                kwargs={},
-            )
-            for size in sizes
+            _rolling_mean(data, window=x, step=1, axis=axis, pandas=pandas)
+            for x in sizes
         )
         if scale is not None:
             sta, lta = sta * scale, lta * scale

@@ -773,12 +773,12 @@ class TestSignatureDrift:
 
 
 class TestPlan:
-    """A plan holds numbers, indices, or numeric arrays only."""
+    """A plan holds numbers, indices, plans, or non-object arrays only."""
 
     @pytest.mark.parametrize(
         "value",
-        ["time", {1: 2}, np.array(["a"]), object()],
-        ids=["string", "dict", "string_array", "object"],
+        ["time", {1: 2}, {"a": "time"}, np.array([None]), object()],
+        ids=["string", "int_keyed_dict", "dict_of_string", "object_array", "object"],
     )
     def test_refused(self, patch, value):
         """Anything else is refused before the kernel runs."""
@@ -812,7 +812,7 @@ class TestPlan:
                 Bad()(patch)
 
     def test_allowed(self, patch):
-        """Numbers, indices, nested sequences and numeric arrays pass."""
+        """Numbers, indices, nested sequences, plans and arrays pass."""
 
         class Good(PatchProcessor):
             """Plan every allowed kind."""
@@ -830,6 +830,8 @@ class TestPlan:
                     "f": slice(1, None, 2),
                     "g": (slice(None), Ellipsis, [1, 2]),
                     "h": None,
+                    "i": np.array(["a"]),
+                    "j": {"k": 1, "m": np.arange(2)},
                 }
 
             def kernel(self, data, **plan):

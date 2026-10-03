@@ -1291,7 +1291,11 @@ def _data_dependent_calls(patch, null_patch, int_patch, f32, dft_patch, m) -> di
         ),
         "where_missing_dim": lambda: patch.where(row_cond, other=0.5),
         "where_bad_float": lambda: patch.where(patch.data),
-        "where_bad_no_shared": lambda: patch.where(cond.rename_coords(distance="x")),
+        "where_bad_no_shared": lambda: patch.where(
+            cond.rename_coords(distance="x", time="y")
+        ),
+        # A pre-existing crash: the extra dimension's coord is sized as one.
+        "where_bad_extra_dim": lambda: patch.where(cond.rename_coords(distance="x")),
         "where_bad_disjoint": lambda: patch.where(
             cond.update_coords(time_min=np.datetime64("2030-01-01"))
         ),
@@ -1382,7 +1386,9 @@ def _composite_calls(patch, int_patch, f32, dft_patch, wacky, m, s) -> dict:
         "stalta_f32": lambda: f32_small.stalta(time=(5, 25), samples=True),
         "stalta_long": lambda: patch.envelope("time").stalta(time=(0.1, 0.5)),
         "stalta_bad_order": lambda: env.stalta(time=(0.1, 0.02)),
-        "stalta_bad_offset": lambda: env.set_units("degC").stalta(time=(5, 25)),
+        "stalta_bad_offset": lambda: env.set_units("degC").stalta(
+            time=(5, 25), samples=True
+        ),
         "stalta_bad_two": lambda: env.stalta(time=(1, 2), distance=(1, 2)),
         # fbe
         "fbe": lambda: small.fbe(time=(10, 50), window=0.1),
@@ -1397,6 +1403,9 @@ def _composite_calls(patch, int_patch, f32, dft_patch, wacky, m, s) -> dict:
         "fbe_long": lambda: patch.fbe(time=(10, 50), window=0.5),
         "fbe_bad_range": lambda: small.fbe(time=(10, 500), window=0.1),
         "fbe_bad_two": lambda: small.fbe(time=(1, 2), distance=(1, 2), window=1),
+        "fbe_bad_offset": lambda: small.set_units("degC").fbe(
+            time=(10, 50), window=0.1
+        ),
         # correlate
         "correlate_one": lambda: small.correlate(distance=3, samples=True),
         "correlate_value": lambda: small.correlate(distance=5),

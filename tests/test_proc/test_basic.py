@@ -18,10 +18,10 @@ from dascore.exceptions import (
     IncompatiblePatchError,
     ParameterError,
     PatchBroadcastError,
-    PatchCoordinateError,
 )
 from dascore.proc.basic import Pad, Where
 from dascore.utils.misc import _merge_tuples
+from dascore.utils.patch import align_patch_coords
 from dascore.warnings import NumpyFallbackWarning
 
 OP_NAMES = ("add", "sub", "pow", "truediv", "floordiv", "mul", "mod")
@@ -1591,23 +1591,50 @@ class TestWhereMetadata:
         assert out.dtype == random_patch.where(cond).dtype == np.float64
 
     def test_integers_filled_with_nan(self, random_patch):
-        """The NaN fill promotes integer data, which the metadata says first."""
+        """A NaN fill promotes integers; the metadata predicts it without data."""
         ints = random_patch.new(data=np.ones(random_patch.shape, dtype=np.int32))
         out, _ = Where(cond=ints.data > 0).get_metadata(ints.drop_data())
         assert out.dtype == ints.where(ints.data > 0).dtype == np.float64
 
-    def test_no_shared_dimension(self, random_patch):
-        """A condition sharing no dimension with the patch cannot align."""
-        cond = (random_patch > 0.5).rename_coords(distance="x", time="y")
-        with pytest.raises(PatchCoordinateError, match="no shared dimensions"):
-            random_patch.where(cond)
+    def test_transposed_condition(self, random_patch):
+        """A condition in the other dimension order is transposed to fit."""
+        out = random_patch.where(random_patch.transpose() > 0.5)
+        expected = np.where(random_patch.data > 0.5, random_patch.data, np.nan)
+        assert np.array_equal(out.data, expected, equal_nan=True)
 
-    def test_no_shared_values(self, random_patch):
-        """Nor can one which shares a dimension but none of its values."""
-        later = np.datetime64("2030-01-01")
-        cond = (random_patch > 0.5).update_coords(time_min=later)
-        with pytest.raises(PatchCoordinateError, match="share no values"):
-            random_patch.where(cond)
+    def test_aligns_as_arithmetic_does(self, random_patch):
+        """Where and arithmetic align a shifted, transposed, narrowed patch alike."""
+        other = random_patch.transpose().isel(time=slice(10, 1500), distance=slice(5))
+        mine, theirs = align_patch_coords(random_patch, other)
+        kept = random_patch.where(other > -np.inf)
+        filled = random_patch.where(other < -np.inf, other=other)
+        assert kept.coords == mine.coords == (random_patch + other).coords
+        assert np.array_equal(kept.data, mine.data)
+        assert np.array_equal(filled.data, theirs.data)
+
+    def test_datetime_other(self, random_patch):
+        """Datetime data are filled from a datetime patch."""
+        offsets = (random_patch.data * 1e6).astype("timedelta64[us]")
+        times = random_patch.new(data=np.datetime64("2020-01-01") + offsets)
+        later = times.new(data=times.data + np.timedelta64(1, "s"))
+        out = times.where(random_patch > 0.5, other=later)
+        expected = np.where(random_patch.data > 0.5, times.data, later.data)
+        assert np.array_equal(out.data, expected)
+
+    def test_string_other(self, random_patch):
+        """String data are filled from a string patch."""
+        strings = random_patch.new(data=np.where(random_patch.data > 0.5, "a", "b"))
+        other = strings.new(data=np.full(strings.shape, "c"))
+        out = strings.where(random_patch > 0.5, other=other)
+        assert np.array_equal(out.data, np.where(strings.data == "a", "a", "c"))
+
+    def test_other_on_another_backend(self, random_patch):
+        """An other patch on another backend fills numpy data."""
+        xp = pytest.importorskip("array_api_strict")
+        other = random_patch.new(data=xp.asarray(random_patch.data * 0))
+        out = random_patch.where(random_patch.data > 0.5, other=other)
+        expected = np.where(random_patch.data > 0.5, random_patch.data, 0)
+        assert np.array_equal(out.data, expected)
 
 
 class TestDropnaNoop:

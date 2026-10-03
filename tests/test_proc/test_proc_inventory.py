@@ -1195,7 +1195,7 @@ class TestEmptyIsUnambiguous:
 
 
 class TestEnrichProcessor:
-    """What the class says beyond the method."""
+    """Enrich as a class: runs on metadata; only inventory is positional."""
 
     def test_on_metadata(self, patch, inventory):
         """Enrich needs no data, so metadata runs it too."""

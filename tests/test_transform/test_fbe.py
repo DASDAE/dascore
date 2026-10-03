@@ -7,6 +7,7 @@ import pytest
 from numpy import timedelta64
 
 import dascore.units as ureg
+from dascore.exceptions import UnitError
 from dascore.transform.fbe import Fbe
 
 
@@ -126,3 +127,8 @@ class TestFbeMetadata:
         expected = 20 * np.log10(np.asarray((mean**0.5).data))
         out = row.fbe(time=(10, 50), window=0.1)
         assert np.array_equal(out.data, expected, equal_nan=True)
+
+    def test_offset_units_refused(self, random_patch):
+        """Temperatures cannot be squared, as the energy squares the data."""
+        with pytest.raises(UnitError, match="offset units"):
+            random_patch.set_units("degC").fbe(time=(10, 50), window=0.1)

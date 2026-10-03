@@ -17,6 +17,8 @@ class DispersionPhaseShift(PatchProcessor):
     """
     Compute dispersion images using the phase-shift method.
 
+    The patch must have time and distance dimensions (see notes).
+
     Parameters
     ----------
     phase_velocities

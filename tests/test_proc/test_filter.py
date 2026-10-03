@@ -683,4 +683,8 @@ class TestSlopeFilterMetadata:
         filt = [2e3, 2.2e3, 8e3, 2e4]
         either = random_patch.slope_filter(filt=filt)
         one_way = random_patch.slope_filter(filt=filt, directional=True)
-        assert not np.allclose(either.data, one_way.data)
+        # Reversing distance negates every slope, so the other way is this.
+        mirrored = random_patch.new(data=random_patch.data[::-1])
+        other_way = mirrored.slope_filter(filt=filt, directional=True).data[::-1]
+        assert not np.allclose(one_way.data, other_way)
+        assert np.allclose(either.data, one_way.data + other_way)

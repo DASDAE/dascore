@@ -1,13 +1,17 @@
 """Tests for signal whiten."""
 
+import warnings
+
 import numpy as np
 import pytest
+from scipy.ndimage import uniform_filter1d
 
 import dascore as dc
 from dascore import get_example_patch
 from dascore.exceptions import ParameterError
 from dascore.proc.whiten import Whiten
 from dascore.units import Hz
+from dascore.warnings import NumpyFallbackWarning
 
 
 class TestWhiten:
@@ -247,7 +251,33 @@ class TestWhitenMetadata:
         assert out.dtype == patch.whiten(smooth_size=5).dtype == np.float64
 
     def test_water_level_raises_the_floor(self, random_patch):
-        """A water level changes the smoothed spectrum it divides by."""
-        plain = random_patch.whiten(smooth_size=5)
+        """The smoothed spectrum is floored at the water level times its peak."""
         floored = random_patch.whiten(smooth_size=5, water_level=0.5)
-        assert not np.allclose(plain.data, floored.data)
+        spectrum = random_patch.dft("time", real=True)
+        axis = spectrum.get_axis("ft_time")
+        window = spectrum.get_coord("ft_time").get_sample_count(5)
+        amp = np.abs(spectrum.data)
+        smooth = uniform_filter1d(amp, window, axis=axis, mode="wrap")
+        smooth = np.maximum(smooth, 0.5 * smooth.max())
+        flat = amp / smooth * np.exp(1j * np.angle(spectrum.data))
+        expected = spectrum.new(data=flat).idft()
+        assert np.allclose(floored.data, expected.data)
+
+
+class TestWhitenOnDask:
+    """Whiten runs on dask natively, never through numpy."""
+
+    @pytest.mark.parametrize("transformed", [False, True])
+    @pytest.mark.parametrize(
+        "kwargs", [{}, {"smooth_size": 5, "water_level": 0.5, "time": (10, 40)}]
+    )
+    def test_native(self, random_patch, transformed, kwargs):
+        """Dask data come back dask, with no fallback warning, and numpy's values."""
+        da = pytest.importorskip("dask.array")
+        patch = random_patch.dft("time", real=True) if transformed else random_patch
+        lazy = patch.new(data=da.from_array(patch.data, chunks=(100, -1)))
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", NumpyFallbackWarning)
+            out = lazy.whiten(**kwargs)
+        assert isinstance(out.data, da.Array)
+        assert np.allclose(out.data.compute(), patch.whiten(**kwargs).data)

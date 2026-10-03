@@ -1394,11 +1394,16 @@ class Where(PatchProcessor):
         if not np.issubdtype(cond_dtype, np.bool_):
             msg = "Condition must be a boolean array or patch with boolean data"
             raise ValueError(msg)
-        other_dtype = other.dtype if isinstance(other, dc.PatchMeta) else array(other)
+        if isinstance(other, dc.PatchMeta):
+            # Another backend's dtype, which numpy cannot promote.
+            other_dtype = _as_numpy_dtype(other.dtype)
+        else:
+            other_dtype = array(other)
         out = meta.new(dtype=_result_dtype(meta.dtype, other_dtype))
         plan: dict[str, Any] = {f"{x}_steps": steps[x] for x in steps}
         for name, value in (("cond", self.cond), ("other", self.other)):
-            # A patch's data go in as numpy, as numpy took them.
+            # A patch's data go in as numpy, as the old `np.where` took them;
+            # `kernel` moves them to the data's backend.
             patch = isinstance(value, dc.Patch)
             plan[name] = to_numpy(value.data) if patch else None
         return out, plan
