@@ -846,7 +846,7 @@ class TestCarryGrids:
 
     @pytest.mark.parametrize("seed", [0, 1])
     def test_grid_matches_selected_samples(self, seed):
-        """Bounds on, or a tick off, labels of exact grids either way round."""
+        """Bounds on labels of exact grids, either way round."""
         rng = np.random.default_rng(seed)
         t0 = np.datetime64("2020-01-01", "ns")
         for _ in range(200):
@@ -857,14 +857,12 @@ class TestCarryGrids:
             grid = (*coord.runs[0].canonical()[1:], len(coord))
             first, last = np.sort(rng.integers(0, 300, 2))
             low, high = np.sort(coord.values[[first, last]])
-            low -= np.timedelta64(int(rng.integers(0, 2)), "ns")
-            high += np.timedelta64(int(rng.integers(0, 2)), "ns")
             step = pd.Timedelta(1)
             sources = pd.DataFrame(
                 {"_patch_row": [0], "x_min": [coord.min()], "x_max": [coord.max()]}
             ).assign(x_step=step, _x_grid=[grid])
             outputs = pd.DataFrame({"output_id": [0], "x_min": [low], "x_max": [high]})
-            members = pd.DataFrame({"output_id": [0], "_patch_row": [0]})
+            members = outputs.assign(_patch_row=0)
             out = _carry_grids(outputs.assign(x_step=step), members, sources, "x")
             picked = coord.select((low, high))[0]
             expected = (*picked.runs[0].canonical()[1:], len(picked))

@@ -18,6 +18,7 @@ from dascore.io.index.catalog import PatchCatalog
 from dascore.units import get_quantity, m, s
 from dascore.utils.chunk_plan import _ensure_patch_row
 from dascore.utils.explicit_ranges import known_coordinates
+from dascore.utils.patch_assembly import coord_from_row
 from tests.test_core.test_patch_chunk import (
     _T0,
     _assert_labels,
@@ -1692,16 +1693,16 @@ class TestChainedExplicitChunk:
         """
         Windows then a regular chunk on a 1/1024 s grid drop no sample.
 
-        A second piece shifted off the first's lattice (by ``shift`` ns)
+        A middle piece shifted off the others' lattice (by ``shift`` ns)
         joins no exact grid, and still matches the loaded patches.
         """
         values = _exact_values(300, sign=sign)
-        pieces = list(_cut_spools(None, values, [150, 150])[1])
+        pieces = list(_cut_spools(None, values, [100, 100, 100])[1])
         coord = pieces[1].get_coord("x")
         moved = coord.update(min=coord.min() + np.timedelta64(shift, "ns"))
         pieces[1] = pieces[1].update_coords(x=moved)
-        window = values.min() + np.array([2 * _STEP + _STEP // 3, 200 * _STEP])
-        _assert_chain_loads(tmp_path, pieces, dict(x=window[None]))
+        window = values.min() + np.array([2 * _STEP + _STEP // 3, 250 * _STEP])
+        _assert_chain_loads(tmp_path, pieces, dict(x=window[None]), count=5)
 
     def test_filled_chunk_then_regular_chunk(self, tmp_path):
         """A filled chunk across a hole then a regular chunk drop no sample."""
@@ -1709,6 +1710,39 @@ class TestChainedExplicitChunk:
         pieces = [whole.select(x=x, samples=True) for x in [(0, 140), (160, None)]]
         first = dict(x=120 * _STEP + _STEP // 3, keep_partial=True, fill_value=0)
         _assert_chain_loads(tmp_path, pieces, first, count=6)
+
+    def test_edge_padding_carries_no_grid(self):
+        """A window padded past its data is rebuilt on whole ticks, not the grid."""
+        whole = _cut_spools(None, _exact_values(30), [30])[0]
+        pieces = [whole.select(x=x, samples=True) for x in [(0, 10), (20, 30)]]
+        first = dc.spool(pieces).chunk(
+            x=15 * _STEP, fill_value=-1, tolerance=20, keep_partial=True
+        )[:1]
+        eager = dc.spool(list(first))
+        second = dict(x=5 * _STEP, keep_partial=True)
+        got, expected = first.chunk(**second), eager.chunk(**second)
+        assert [len(x.data[0]) for x in got] == [len(x.data[0]) for x in expected]
+
+    def test_trimmed_source_grid_is_not_reused(self):
+        """A selected row keeps its file's grid, which no longer fits its bounds."""
+        values = _exact_values(300)
+        mem = _cut_spools(None, values, [300])[1]
+        selected = mem.select(x=(values.values[1], values.values[-2]))
+        out = selected.chunk(x=values.values[[2, 200]][None, :])
+        row = out._df.iloc[0]
+        assert len(coord_from_row(row, "x")) == len(out[0].get_coord("x"))
+
+    def test_subdivided_grid_is_not_trusted(self):
+        """Subdivided rows copy the source grid; each output states its own."""
+        coord = _exact_values(300)
+        patch = dc.Patch(
+            np.zeros((2, 300)), coords={"d": [0, 1], "x": coord}, dims=("d", "x")
+        )
+        spool = dc.spool([patch, patch.update_coords(d=[2, 3])])
+        sources, rows = spool._plan_frames()
+        cuts = [[(coord.values[0], coord.values[n])] for n in (99, 199)]
+        out = spool._subdivided(sources, rows, cuts, "x")
+        assert [x.shape for x in out.chunk(d=None)] == [(2, 100), (2, 200)]
 
     @pytest.mark.parametrize("seed", range(len(_CHAINS)))
     def test_random_plans(self, sources, seed):

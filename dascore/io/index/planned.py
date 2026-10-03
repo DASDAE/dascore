@@ -52,6 +52,7 @@ from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     _concatenated_steps,
     _ensure_patch_row,
+    grid_fits,
     patch_local_adjusted_envelopes,
 )
 from dascore.utils.explicit_ranges import _select_manager, _source_manager
@@ -272,7 +273,9 @@ def _coord_record_from_row(
     data_id = _def_key_data_id(key)
     # the grid is the source's; once the def key (value identity) is gone,
     # so are the values it described
-    grid = row.get(f"_{name}_grid") if data_id or planned else None
+    grid = row.get(f"_{name}_grid")
+    if not (data_id or (planned and grid_fits(grid, lo, hi))):
+        grid = None
     exact = {}
     if isinstance(grid, tuple):
         *terms, length = grid
