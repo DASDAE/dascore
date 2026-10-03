@@ -127,7 +127,15 @@ def _is_temporal(dtype) -> bool:
 
 
 def xarray_to_patch(data_array) -> dc.Patch:
-    """Convert an xarray dataarray to a patch."""
+    """
+    Convert an xarray dataarray to a patch.
+
+    Raises
+    ------
+    PatchConversionError
+        If a dimension is stacked (has a MultiIndex); call ``unstack`` on it
+        first, or ``reset_index`` to keep its levels as coordinates along it.
+    """
     # this cant work if xarray isn't installed. This ensures it is.
     xr = optional_import("xarray")
     # a stacked dimension labels its samples with tuples; no patch dim can
