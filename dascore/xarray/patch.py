@@ -2,15 +2,21 @@
 
 from __future__ import annotations
 
+import re
+import warnings
 from collections.abc import Collection
+from pathlib import Path
+from tokenize import TokenError
 
 import numpy as np
+from pint.errors import PintError
 
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.coords import BaseCoord, get_coord
+from dascore.units import get_quantity, get_quantity_str, get_registry
 from dascore.utils.identity import operation_context
-from dascore.utils.misc import optional_import
+from dascore.utils.misc import optional_import, unbyte
 
 
 def _register_accessor() -> None:
@@ -68,6 +74,9 @@ def patch_to_xarray(patch: PatchType, lazy_coords: bool | Collection[str] = Fals
     Materialized labels, the default, cost 8 bytes a sample along each
     dimension, which beside a patch's data is little.
 
+    Units are strings, as the CF conventions state them: a coordinate's
+    under ``units``, the data's under both ``data_units`` and ``units``.
+
     Examples
     --------
     >>> import dascore as dc
@@ -92,6 +101,9 @@ def _to_dataarray(data, coord_manager, attrs, lazy_coords, held: bool):
     # Omit None-valued attrs because xarray backends may reject them during
     # NetCDF serialization, while a missing attr round-trips cleanly.
     attrs = {key: value for key, value in dict(attrs).items() if value is not None}
+    if "data_units" in attrs:  # CF states a variable's units as ``units``
+        attrs["units"] = _cf_unit_str(attrs["data_units"])
+        attrs["data_units"] = get_quantity_str(attrs["data_units"])
     coords, units, lazy = {}, {}, []
     for name, coord in coord_manager.coord_map.items():
         if coord._partial:
@@ -102,7 +114,7 @@ def _to_dataarray(data, coord_manager, attrs, lazy_coords, held: bool):
             # way the CF conventions do, as an attribute beside it.
             # A datetime says its units in its dtype, and xarray spends
             # that same attribute on saying how to serialize it.
-            units[name] = str(coord.units)
+            units[name] = _cf_unit_str(coord.units)
         # An index labels a dimension, so only a coordinate which defines
         # one can be served by it; a coordinate merely riding a dimension
         # states its values as any other does.
@@ -126,7 +138,12 @@ def _is_temporal(dtype) -> bool:
 
 
 def xarray_to_patch(data_array) -> dc.Patch:
-    """Convert an xarray dataarray to a patch."""
+    """
+    Convert an xarray dataarray to a patch.
+
+    A ``units`` attribute gives the data units unless it is the CF form of
+    ``data_units``; one that cannot be parsed warns and stays an attribute.
+    """
     # this cant work if xarray isn't installed. This ensures it is.
     _ = optional_import("xarray")
 
@@ -137,7 +154,7 @@ def xarray_to_patch(data_array) -> dc.Patch:
             coords={
                 i: _coord_from(data_array, i, x) for i, x in data_array.coords.items()
             },
-            attrs=dict(data_array.attrs.items()),
+            attrs=_cf_attrs(data_array.attrs, data_array.name),
             dims=data_array.dims,
             data=data_array.data,
         )
@@ -152,12 +169,70 @@ def _coord_from(data_array, name, coord):
     spell out every sample, which is what the lazy index exists to avoid.
     """
     index = data_array.xindexes.get(name)
-    units = coord.attrs.get("units")
+    units = None
+    if not _is_temporal(coord.dtype):
+        units = _cf_units(coord.attrs.get("units"), name)
     if isinstance(served := getattr(index, "coordinate", None), BaseCoord):
-        if units is not None and not _is_temporal(served.dtype):
+        if not _is_temporal(served.dtype):
             served = served.set_units(units)
         return coord.dims, served
     values = coord.values
-    if units is not None and not _is_temporal(values.dtype):
+    if units is not None:
         return coord.dims, get_coord(values=values, units=units)
     return coord.dims, values
+
+
+# CF's unit grammar: ``m s-1`` is m*s**-1; latitude and longitude are degrees.
+_CF_POWER = re.compile(r"((?<![\w.])[^\W\d]+|\))(-?\d+)\b")
+_CF_DEGREES = re.compile(r"\bdegrees?_?(north|east|N|E)\b")
+# what pint's parser raises for malformed strings such as "()" or "1/0"
+_PARSE_ERRORS = (
+    PintError,
+    TokenError,
+    AssertionError,
+    ArithmeticError,
+    ValueError,
+    TypeError,
+)
+
+
+def _cf_units(units, name):
+    """Parse a CF unit string; None, with a warning naming ``name``, if it fails."""
+    if units is None:
+        return None
+    text = _CF_POWER.sub(r"\1**\2", _CF_DEGREES.sub("degree", str(unbyte(units))))
+    try:
+        return get_quantity(text)
+    except _PARSE_ERRORS:
+        msg = f"Could not parse the units of {name!r}: {units!r}"
+        # point past dascore's own frames to the caller's line
+        skip = (str(Path(dc.__file__).parent),)
+        warnings.warn(msg, UserWarning, skip_file_prefixes=skip)
+        return None
+
+
+def _cf_unit_str(units) -> str:
+    """Units as CF writes them: ``m s-2``; strain, a ratio, is ``1``."""
+    quant, ureg = get_quantity(units), get_registry()
+    assert quant is not None, "callers pass set units"
+    scale, parts = quant.magnitude, []
+    for name, power in quant.unit_items():
+        if name.endswith("strain"):
+            scale *= ureg.Quantity(1, name).to("strain").magnitude ** power
+        else:
+            parts.append(ureg.get_symbol(name) + ("" if power == 1 else f"{power:g}"))
+    return " ".join(([] if scale == 1 and parts else [f"{scale:g}"]) + parts)
+
+
+def _cf_attrs(attrs, name) -> dict:
+    """A CF variable's attrs as patch attrs: an edited ``units`` wins."""
+    out = dict(attrs)
+    units, data_units = out.get("units"), out.get("data_units")
+    if units is not None and data_units and units == _cf_unit_str(data_units):
+        del out["units"]
+    elif units is not None:
+        # an edited units which cannot be read still says the old ones are wrong
+        out["data_units"] = _cf_units(units, name)
+        if out["data_units"] is not None:
+            del out["units"]
+    return out
