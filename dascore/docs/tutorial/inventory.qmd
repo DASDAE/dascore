@@ -177,7 +177,7 @@ assert "zone" in enriched.coords.coord_map
 assert set(enriched.get_array("coupling")) == {"trench", ""}
 ```
 
-The acquisition's `distance_map` performs the projection. Compatible distance units are converted; incompatible axes raise. An unresolved patch is returned unchanged with a warning, so enrichment never silently removes data.
+The acquisition's `distance_map` performs the projection. Compatible distance units are converted; incompatible axes raise. With two or more control points, channels outside the map's range are not placed; with one, the map extends in both directions, by `spatial_interval` per channel on the `channel` axis (which therefore needs `spatial_interval`) and one meter per meter on the `instrument_distance` axis. Channels that are not placed, or are placed beyond the ends of the optical path, get no coordinates from the path's tracks (`NaN`, or empty for text). This is normal for an interrogator that records past the end of the fiber, so it is not reported. An unresolved patch is returned unchanged with a warning, so enrichment never silently removes data.
 
 By default, scalar acquisition fields and `interrogator.*` fields become attributes, while geometry, coupling, and labels become coordinates. Position coordinates take the names the inventory's coordinate reference system declares, such as `easting`, `northing`, and `elevation`; an inventory left with the default CRS gets `x`, `y`, and `z`, and either spelling can be requested by name. `data_type` and `data_units` are excluded because processing may have changed the data; `sample_rate` and `spatial_interval` are excluded because the patch coordinates already state them. They can still be requested explicitly.
 

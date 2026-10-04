@@ -171,7 +171,7 @@ def _report_missing(context, name, on_missing, subject: str = "") -> None:
     """Raise or warn about a requested name the inventory does not define."""
     msg = (
         f"The inventory defines no {name!r} for {subject}"
-        f"{context.acquisition.code!r}; use on_missing to allow it."
+        f"{context.acquisition_key!r}; use on_missing to allow it."
     )
     warn_or_raise(msg, PatchError, behavior=on_missing)
 
@@ -233,19 +233,19 @@ def _apply_conflict(patch, new_attrs, conflict) -> tuple[dict, list]:
     return updates, drops
 
 
-def _get_channel_axes(patch, acquisition) -> list[tuple[str, str]]:
+def _get_channel_axes(patch, context) -> list[tuple[str, str]]:
     """Return every map axis the patch can be read on, with its coordinate."""
-    dist_map = acquisition.distance_map
+    key, dist_map = context.acquisition_key, context.acquisition.distance_map
     if dist_map is None:
         msg = (
-            f"Acquisition {acquisition.code!r} defines no distance_map, so "
+            f"Acquisition {key!r} defines no distance_map, so "
             "its channels cannot be placed on the optical path."
         )
         raise PatchError(msg)
     if out := map_axis_coords(dist_map, patch.coords.coord_map):
         return out
     msg = (
-        f"Acquisition {acquisition.code!r} maps {list(dist_map.axes)} onto "
+        f"Acquisition {key!r} maps {list(dist_map.axes)} onto "
         f"path distance, so it needs one of the {readable_on(dist_map)} "
         f"coordinates, and this patch has {sorted(patch.coords.coord_map)}. "
         "An acquisition whose patches carry interrogator meters is "
@@ -255,7 +255,7 @@ def _get_channel_axes(patch, acquisition) -> list[tuple[str, str]]:
     raise PatchError(msg)
 
 
-def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
+def _get_channel_distances(patch, context) -> tuple[str, str, np.ndarray]:
     """
     Return the channel coord name, its dimension, and optical distances.
 
@@ -263,8 +263,9 @@ def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
     consistent with the map about all of them. Picking one and moving on
     would answer a question the patch itself contradicts.
     """
+    key, acquisition = context.acquisition_key, context.acquisition
     resolved, failures = [], []
-    for axis, name in _get_channel_axes(patch, acquisition):
+    for axis, name in _get_channel_axes(patch, context):
         dims = patch.coords.dim_map[name]
         if len(dims) != 1:
             msg = f"The {name!r} coordinate must belong to exactly one dimension."
@@ -283,7 +284,7 @@ def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
         joined = "; ".join(failures)
         msg = (
             "None of the patch's coordinates could be placed on the path by "
-            f"{acquisition.code!r}: {joined}"
+            f"{key!r}: {joined}"
         )
         raise PatchError(msg)
     first = resolved[0]
@@ -296,7 +297,7 @@ def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
             msg = (
                 f"The patch's {first[0]!r} and {name!r} coordinates belong to "
                 f"different dimensions ({first[1]!r} and {dim!r}), so which "
-                f"one is the channel axis of {acquisition.code!r} is ambiguous."
+                f"one is the channel axis of {key!r} is ambiguous."
             )
             raise PatchError(msg)
         if not np.allclose(
@@ -306,7 +307,7 @@ def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
             msg = (
                 f"The patch's {first[0]!r} and {name!r} coordinates place its "
                 f"channels up to {offset} m apart on the path. The patch and "
-                f"the map of {acquisition.code!r} disagree; drop the "
+                f"the map of {key!r} disagree; drop the "
                 "coordinate which does not belong to this acquisition."
             )
             raise PatchError(msg)
@@ -395,7 +396,7 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
         if coords is True:
             return {}
         msg = (
-            f"No optical path is valid for {context.acquisition.code!r} at "
+            f"No optical path is valid for {context.acquisition_key!r} at "
             "the patch's time, so no per-channel coordinates can be resolved."
         )
         raise PatchError(msg)
@@ -404,7 +405,7 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
     if not names:
         # Nothing to project, so the patch needs no channel mapping.
         return {}
-    channel_name, dim, distances = _get_channel_distances(patch, context.acquisition)
+    channel_name, dim, distances = _get_channel_distances(patch, context)
     out = {}
     for name in names:
         if name == channel_name:

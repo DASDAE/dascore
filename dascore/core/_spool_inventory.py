@@ -1128,7 +1128,7 @@ def get_attr_values(inventory, contexts, name: str) -> list:
 # --- channel selection over index rows --------------------------------
 
 
-def _channel_placement(dims: set[str], acquisition) -> tuple:
+def _channel_placement(dims: set[str], context) -> tuple:
     """
     Return the dimension a row's channels are placed along, and its axis.
 
@@ -1143,22 +1143,22 @@ def _channel_placement(dims: set[str], acquisition) -> tuple:
     -------
     A `(name, axis)` pair, or `(None, reason)` naming why there is none.
     """
-    dist_map = acquisition.distance_map
+    key, dist_map = context.acquisition_key, context.acquisition.distance_map
     if dist_map is None:
         return None, (
-            f"{acquisition.code!r} defines no distance_map, so its channels "
+            f"{key!r} defines no distance_map, so its channels "
             "cannot be placed on the optical path"
         )
     found = map_axis_coords(dist_map, dims)
     if not found:
         return None, (
-            f"has dimensions {sorted(dims)}, and {acquisition.code!r} places "
+            f"has dimensions {sorted(dims)}, and {key!r} places "
             f"channels by one of {readable_on(dist_map)}"
         )
     if len({name for _, name in found}) > 1:
         return None, (
             f"carries {sorted(name for _, name in found)} as separate "
-            f"dimensions, so which of them {acquisition.code!r} places its "
+            f"dimensions, so which of them {key!r} places its "
             "channels by is ambiguous"
         )
     axis, name = found[0]
@@ -1247,7 +1247,7 @@ def _channel_placements(contexts, frame) -> tuple:
     for context, dims in zip(contexts, frame["dims"], strict=True):
         placement = (None, None)
         if context is not None:
-            placement = _channel_placement(set(dims.split(",")), context.acquisition)
+            placement = _channel_placement(set(dims.split(",")), context)
         placements.append(placement)
         # The second half of a placement is the axis when there is one and
         # the reason there is not, so only a nameless one carries a reason.

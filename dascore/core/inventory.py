@@ -1958,6 +1958,13 @@ class ResolvedContext(NamedTuple):
     acquisition: Acquisition
     optical_path: OpticalPath | None
 
+    @property
+    def acquisition_key(self) -> str:
+        """The acquisition_key this context answers, naming it in full."""
+        acq = self.acquisition
+        parts = (self.network.code, self.fiber_array.code, acq.location_code)
+        return ".".join((*parts, acq.code))
+
 
 class InventoryNames(NamedTuple):
     """

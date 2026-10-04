@@ -737,8 +737,9 @@ class TestNoOpticalPath:
 
     def test_named_coords_raise(self, patch, pathless):
         """A named request cannot be honored and says so."""
-        with pytest.raises(PatchError, match="No optical path"):
+        with pytest.raises(PatchError, match="No optical path") as info:
             patch.enrich(pathless, attrs=False, coords=("zone",))
+        assert repr(patch.attrs.acquisition_key) in str(info.value)
 
     def test_attrs_still_copy(self, patch, pathless):
         """The acquisition's own facts do not depend on a path."""
@@ -880,8 +881,10 @@ class TestProjectionDetails:
     def test_no_map_raises_when_coords_are_wanted(self, patch, inventory):
         """Without a map there is nothing to project the tracks onto."""
         no_map = _replace_acquisition(inventory, distance_map=None)
-        with pytest.raises(PatchError, match="no distance_map"):
+        with pytest.raises(PatchError, match="no distance_map") as info:
             patch.enrich(no_map, attrs=False, coords=("zone",))
+        # The full key, since an acquisition code repeats across arrays.
+        assert repr(patch.attrs.acquisition_key) in str(info.value)
 
     def test_empty_coord_request_needs_no_map(self, patch, inventory):
         """Asking for no coordinates asks nothing of the channel map."""
