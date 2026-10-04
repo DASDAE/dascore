@@ -22,9 +22,10 @@ import re
 from collections import defaultdict
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, NamedTuple
+from typing import Any, NamedTuple, get_args
 
 import pandas as pd
+from pydantic import ValidationError
 
 from dascore.core.inventory import (
     Acquisition,
@@ -328,9 +329,82 @@ def _build(model, data: dict, source: Path):
         raise InvalidInventoryError(msg)
     try:
         return model(**data)
+    except ValidationError as error:
+        problems = _explain(error, model, source)
+        msg = f"Could not read {model.__name__} from {_quote(source)}:\n{problems}"
+        raise InvalidInventoryError(msg) from error
     except Exception as error:
         msg = f"Could not read {model.__name__} from {_quote(source)}: {error}"
         raise InvalidInventoryError(msg) from error
+
+
+def _explain(error: ValidationError, model, source: Path | None) -> str:
+    """
+    Restate a validation error as one line per problem, each naming its file.
+
+    A track's rows were read from a table beside the object file, so a
+    problem in one is pinned to that table (and, where a row is one
+    object, to its line) rather than to the file the table was merged into.
+    With no source, the problem belongs to the tree rather than to a file.
+    """
+    lines = []
+    for item in error.errors(include_url=False):
+        loc, where = list(item["loc"]), ""
+        if source is not None:
+            where = _quote(source)
+            table = _TABLES.get(str(loc[0])) if loc else None
+            csv = source.parent / f"{loc[0]}.csv" if loc else source
+            if table is not None and csv.exists():
+                where, loc = _quote(csv), loc[1:]
+                # A point table's rows gather into objects, so its index is
+                # an object's, not a line's; an object table's row is its line.
+                if not table.points and loc and isinstance(loc[0], int):
+                    where, loc = f"{where} line {loc[0] + 2}", loc[1:]
+        field = ".".join(str(x) for x in loc)
+        prefix = f"{where}: " if where else ""
+        lines.append(f"  {prefix}{_problem(item, field, model)}")
+    return "\n".join(lines)
+
+
+def _problem(item: Mapping, field: str, model) -> str:
+    """Say what one pydantic error item means, in the format's own terms."""
+    kind, ctx = item["type"], item.get("ctx", {})
+    if kind == "missing":
+        return f"{field} is required but not stated."
+    top = item["loc"][0] if item["loc"] else None
+    if kind == "extra_forbidden":
+        msg = f"{field} is not a field this object has."
+        # Only a top-level field is one of this model's own to suggest from.
+        known = model.model_fields if len(item["loc"]) == 1 else ()
+        if close := difflib.get_close_matches(field, known, n=1):
+            msg += f" Did you mean {close[0]!r}?"
+        return msg
+    if kind == "union_tag_not_found":
+        what = f"{field} " if field else "This row "
+        tag = ctx["discriminator"].strip("'")
+        kinds = _union_tags(model.model_fields[top].annotation) if top else []
+        named = f": one of {kinds}" if kinds else ""
+        return f"{what}states no {tag}, which names what it is{named}."
+    if kind == "literal_error":
+        text = f"{field} is {item['input']!r}, but should be {ctx['expected']}."
+        return text
+    if kind in {"tuple_type", "list_type"}:
+        return f"{field} should be a list, not {item['input']!r}."
+    # A validator's own message is already in the format's terms, once the
+    # prefix pydantic puts before it is taken off.
+    text = str(ctx["error"]) if kind == "value_error" else item["msg"]
+    return f"{field}: {text}" if field else text
+
+
+def _union_tags(annotation) -> list[str]:
+    """Return the tags of the tagged models an annotation can hold."""
+    out = []
+    for arg in get_args(annotation):
+        if isinstance(arg, type) and TAG_FIELD in getattr(arg, "model_fields", {}):
+            out.append(arg.__name__)
+        else:
+            out += _union_tags(arg)
+    return out
 
 
 def _apply_identity(data: dict, container: _Container, name: str, source: Path):
@@ -564,6 +638,12 @@ def _load_path(directory: Path, crs, begins):
     attrs = _attrs_file(directory)
     data = _read_object(attrs)
     declared = data.get(TAG_FIELD)
+    if declared is None:
+        msg = (
+            f"{_quote(attrs)} declares no {TAG_FIELD}. Every object file "
+            f"states what it is, e.g. '{TAG_FIELD}: {OpticalPath.__name__}'."
+        )
+        raise InvalidInventoryError(msg)
     if declared != OpticalPath.__name__:
         msg = (
             f"{_quote(attrs)} declares {declared!r}, but a {_PATH_STEM} "
@@ -1231,8 +1311,9 @@ def _load_envelope(root: Path) -> dict[str, Any] | None:
     source = found[0]
     data = _read_object(source)
     if (declared := data.get(TAG_FIELD)) != Inventory.__name__:
+        stated = f"{TAG_FIELD} {declared!r}" if declared else f"no {TAG_FIELD}"
         msg = (
-            f"{_quote(source)} declares {TAG_FIELD} {declared!r}; the envelope "
+            f"{_quote(source)} declares {stated}; the envelope "
             f"declares '{TAG_FIELD}: {Inventory.__name__}'."
         )
         raise InvalidInventoryError(msg)
@@ -1360,7 +1441,15 @@ def load_directory(path: str | os.PathLike) -> Inventory:
             _check_epoch_duplicates(entries.get(name, []))
     resources = {x.model.resource_id: x.model for x in entries.get("resources", [])}
     networks = _assemble(entries)
-    return Inventory(**(envelope or {}), resources=resources, networks=networks).check()
+    try:
+        out = Inventory(**(envelope or {}), resources=resources, networks=networks)
+    except ValidationError as error:
+        # What only the whole tree can see, such as a reference naming no
+        # resource, raises the format's error like every per-file problem.
+        problems = _explain(error, Inventory, None)
+        msg = f"Could not assemble the inventory in {_quote(root)}:\n{problems}"
+        raise InvalidInventoryError(msg) from error
+    return out.check()
 
 
 def _load_file(path: Path) -> Inventory:

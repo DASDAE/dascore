@@ -3176,6 +3176,17 @@ class TestDepthLabel:
         assert crs.axis_index("depth") == 2
 
 
+class TestLabelGroup:
+    """A label belongs to a group."""
+
+    @pytest.mark.parametrize("group", [None, ""])
+    def test_group_is_required(self, group):
+        """A label with no group never becomes a coordinate, so it vanishes."""
+        kwargs = {} if group is None else {"group": group}
+        with pytest.raises(ValidationError, match="group"):
+            inv.OpticalPathLabel(distance_min=0.0, distance_max=1.0, **kwargs)
+
+
 class TestDistanceMapAxisAgreement:
     """Two input axes describe one interrogator."""
 

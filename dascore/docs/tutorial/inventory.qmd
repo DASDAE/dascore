@@ -106,7 +106,7 @@ Tracks use three shapes:
 | function | geometry columns, coupling, labels with values | partial | none | `""` or `NaN` |
 | membership | labels without values | partial | allowed | `False` |
 
-A label with an empty `value` states membership; a label with a value defines an interval coordinate. Literal `true` and `false` values are refused because an empty value already spells membership. One label group must consistently contain text, numbers, or membership. Numeric groups use `NaN` outside coverage and therefore project as floating-point coordinates.
+Every label names its `group`, the coordinate it becomes. A label with an empty `value` states membership; a label with a value defines an interval coordinate. Literal `true` and `false` values are refused because an empty value already spells membership. One label group must consistently contain text, numbers, or membership. Numeric groups use `NaN` outside coverage and therefore project as floating-point coordinates.
 
 Intervals are half-open, `[start, end)`, so adjacent rows can tile without overlap. Projection still includes the final channel at the end of a covered run.
 

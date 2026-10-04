@@ -807,7 +807,9 @@ class OpticalPathLabel(_IntervalModel):
     start and end) cover nothing and are exempt from the overlap rule.
     """
 
-    group: str = Field(default="", description="Name of the labelled variable.")
+    # Required: a label with no group never becomes a coordinate, so it
+    # could not be selected on or seen, and would vanish without a word.
+    group: str = Field(min_length=1, description="Name of the labelled variable.")
     value: LabelValue | None = Field(
         default=None,
         description=(
@@ -2254,9 +2256,20 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
             )
             for net in self.networks
         )
-        dangling = sorted({r for r, *_ in string_refs if r not in pool})
+        dangling: dict[str, set[str]] = {}
+        for rid, field, _ in string_refs:
+            if rid not in pool:
+                dangling.setdefault(rid, set()).add(field)
         if dangling:
-            msg = f"Dangling resource references: {dangling}."
+            named = "; ".join(
+                f"{rid!r} (from {', '.join(sorted(fields))})"
+                for rid, fields in sorted(dangling.items())
+            )
+            msg = (
+                f"Dangling resource references: {named}. A reference names "
+                "the resource_id of a resource, such as a file under "
+                "resources/, and no resource has these."
+            )
             raise InvalidInventoryError(msg)
         for rid, field, allowed in string_refs:
             if allowed and not isinstance(pool[rid], allowed):
