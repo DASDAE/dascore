@@ -41,7 +41,10 @@ from dascore.io.febus.core import FebusPatchAttrs
 from dascore.io.index import catalog, planned
 from dascore.io.index.schema import SOURCE_STAT_COLUMNS
 from dascore.units import get_quantity
-from dascore.utils.chunk_plan import patch_local_adjusted_envelopes
+from dascore.utils.chunk_plan import (
+    _adopt_lone_steps,
+    patch_local_adjusted_envelopes,
+)
 from dascore.utils.gaps import GapTolerance
 from dascore.utils.misc import get_middle_value, suppress_warnings
 from dascore.utils.patch import _get_merged_coord
@@ -5225,6 +5228,50 @@ class TestChunkMergeRegressions:
         spool = merge_spool(patches).chunk(time=value)
         (merged,) = spool
         np.testing.assert_array_equal(merged.data, [0, 10, 20, 30, 40, 50, 60])
+
+    def test_lone_sample_inside_a_patch_is_kept(self, merge_spool):
+        """A step-less sample within a patch's span is not trimmed as overlap."""
+        patches = [self._seconds_patch(0, 11), self._seconds_patch(25, 1, None)]
+        chunked = merge_spool(patches).chunk(time=None)
+        found = np.sort(np.concatenate([x.data for x in chunked]))
+        np.testing.assert_array_equal(found, [0, 10, 20, 25, *range(30, 101, 10)])
+
+    def test_lone_sample_publishes_no_step(self, merge_spool):
+        """A lone sample chunked alone states no step, as its patch does."""
+        patches = [
+            self._seconds_patch(0, 10),
+            self._seconds_patch(500, 1, None),
+            self._seconds_patch(1000, 10),
+        ]
+        chunked = merge_spool(patches).chunk(time=None)
+        stated = chunked.get_contents()["time_step"].tolist()
+        actual = [x.get_coord("time").step for x in chunked]
+        assert [pd.isnull(x) for x in stated] == [x is None for x in actual]
+
+    def test_explicit_window_finds_a_lone_sample(self, merge_spool):
+        """An explicit window around a lone sample in a gap returns it."""
+        patches = [
+            self._seconds_patch(0, 3),
+            self._seconds_patch(25, 1, None),
+            self._seconds_patch(30, 3),
+        ]
+        window = ORIGIN + np.array([[24, 26]]).astype("timedelta64[s]")
+        chunked = merge_spool(patches).chunk(time=window)
+        (patch,) = chunked
+        np.testing.assert_array_equal(patch.data, [25])
+        assert pd.isnull(chunked.get_contents()["time_step"].iloc[0])
+        assert patch.get_coord("time").step is None
+
+    def test_adopted_step_ignores_row_order(self):
+        """A lone sample adopts its cell's median step, whatever the order."""
+        steps = pd.to_timedelta([1.0, 1.04, 1.02, None], unit="s")
+        frame = pd.DataFrame({"time_step": steps})
+        cells = pd.Series(0, index=frame.index)
+        adopted = {
+            _adopt_lone_steps(frame.iloc[order], "time", cells)["time_step"].loc[3]
+            for order in ([0, 1, 2, 3], [1, 2, 0, 3])
+        }
+        assert adopted == {pd.Timedelta(1.02, unit="s")}
 
     def test_off_grid_samples_stay_in_order(self, merge_spool):
         """Snapping lone samples moves no label past its tolerance or order."""
