@@ -721,6 +721,14 @@ class Geometry(InventoryModel):
     @model_validator(mode="after")
     def _validate_geometry(self) -> Self:
         """Enforce paired, strictly increasing control points."""
+        if len(self.distance) == 1:
+            msg = (
+                "Geometry distance requires at least 2 control points, since "
+                "a segment covers a span of fiber. Fiber gathered at one "
+                "place, such as a spool, is two points with the same "
+                "position at the start and end distances of the spool."
+            )
+            raise InvalidInventoryError(msg)
         _check_control_points(self.distance, "Geometry distance", minimum=2)
         if not self.columns:
             msg = "Geometry states no columns, so it describes nothing."
@@ -1489,20 +1497,27 @@ class OpticalPath(TimeRangedModel):
         for first, second in itertools.combinations(self.geometry, 2):
             lo = max(first.interval[0], second.interval[0])
             hi = min(first.interval[1], second.interval[1])
-            if first.name != second.name and lo < hi:
+            if lo >= hi:
+                continue
+            where = f" on optical path {self.name!r}" if self.name else ""
+            pair = (
+                f"Geometry segments {first.name!r} (distance {first.interval}) "
+                f"and {second.name!r} (distance {second.interval}){where} "
+                f"overlap in optical distance from {lo} to {hi}"
+            )
+            # One message per pair, not per column, as for the axes.
+            if shared := sorted(first.columns.keys() & second.columns.keys()):
                 errors.append(
-                    f"Geometry segments {first.name!r} and {second.name!r} "
-                    f"both cover ({lo}, {hi}); segments which overlap state "
-                    "different columns of one stretch of fiber, so they "
-                    "share its name."
+                    f"{pair}, and both state the columns {shared}. Each "
+                    "column is stated by at most one segment at any distance "
+                    "along the path."
+                )
+            elif first.name != second.name:
+                errors.append(
+                    f"{pair}; segments which overlap state different columns "
+                    "of one stretch of fiber, so they share its name."
                 )
         for name in sorted(spans):
-            if (overlap := intervals_overlap(spans[name])) is not None:
-                errors.append(
-                    f"Overlapping geometry intervals {overlap[0]} and "
-                    f"{overlap[1]} for column {name!r}; a column is a "
-                    "function track."
-                )
             if len(stated := units.get(name, set())) > 1:
                 errors.append(
                     f"Geometry column {name!r} is stated in {sorted(stated)}; "
@@ -2464,7 +2479,7 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
         axis being two names to it.
         """
         errors = []
-        spans: dict[int, list[tuple[float, float]]] = {}
+        placed = []
         for segment in path.geometry:
             axes = axis_columns(segment, crs)
             errors += _axis_set_errors(segment, axes, crs)
@@ -2474,15 +2489,30 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
                     f"{what} states units for the axis column(s) {on_axes}; "
                     "the CRS states the units of its own axes."
                 )
-            for index in set(axes.values()):
-                spans.setdefault(index, []).append(segment.interval)
-        for index in sorted(spans):
-            if (overlap := intervals_overlap(spans[index])) is not None:
-                errors.append(
-                    f"Overlapping geometry intervals {overlap[0]} and "
-                    f"{overlap[1]} for axis {crs.coordinate_labels[index]!r}; "
-                    "an axis is a function track."
-                )
+            placed.append((segment, {v: k for k, v in axes.items()}))
+        # One message per pair of segments, not per axis: the overlap is in
+        # optical distance, which the axes share, so naming each axis would
+        # repeat one fault and read as if the x/y/z values were at fault.
+        for (first, a), (second, b) in itertools.combinations(placed, 2):
+            lo = max(first.interval[0], second.interval[0])
+            hi = min(first.interval[1], second.interval[1])
+            if not (shared := sorted(a.keys() & b.keys())) or lo >= hi:
+                continue
+            # Spelled as each segment's headers were, which the user wrote.
+            mine, theirs = [a[x] for x in shared], [b[x] for x in shared]
+            placing = (
+                f"both place the position columns {mine}"
+                if mine == theirs
+                else f"place the same axes, as {mine} and {theirs}"
+            )
+            where = f" on optical path {path.name!r}" if path.name else ""
+            errors.append(
+                f"Geometry segments {first.name!r} (distance {first.interval}) "
+                f"and {second.name!r} (distance {second.interval}){where} "
+                f"overlap in optical distance from {lo} to {hi}, and "
+                f"{placing}. Each axis is placed by at most one segment at "
+                "any distance along the path."
+            )
         return errors
 
     def resolve(self, acquisition_key: str, time=None) -> ResolvedContext:
