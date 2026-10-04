@@ -211,6 +211,8 @@ def _cut_pad(dim: str, pad, known: bool, timed: bool) -> list:
 
 def _itemsize(dtype) -> float:
     """Bytes per sample of a stated dtype, or NaN when none is stated."""
+    if dtype is None or pd.isna(dtype):  # numpy reads None as float64
+        return np.nan
     try:
         return float(np.dtype(dtype).itemsize)
     except TypeError:

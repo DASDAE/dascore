@@ -317,12 +317,12 @@ class TestLoad:
         """A row whose size cannot be told does not inflate the figure."""
         df = pd.DataFrame(
             {
-                "dims": ["time", "time", "time"],
-                "_dtype": ["float64", None, "float32"],
-                "_data_size": [None, 10, None],
-                "time_min": [0.0, 0.0, 0.0],
-                "time_max": [9.0, 9.0, 9.0],
-                "time_step": [np.nan, 1.0, 1.0],
+                "dims": ["time"] * 4,
+                "_dtype": ["float64", None, "float32", "not a dtype"],
+                "_data_size": [None, 10, None, 10],
+                "time_min": [0.0] * 4,
+                "time_max": [9.0] * 4,
+                "time_step": [np.nan, 1.0, 1.0, 1.0],
             }
         )
         assert _bytes_to_load(df) == 10 * 4
