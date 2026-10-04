@@ -552,6 +552,34 @@ def _cell_tolerance(tolerance: GapTolerance, sub, name) -> GapTolerance:
     return tolerance.resolve(sub[f"{name}_min"].dtype, units, name)
 
 
+def _adopt_lone_steps(df: pd.DataFrame, name: str, cells: pd.Series):
+    """
+    The relation with every lone sample planned at its cell's step.
+
+    `_cell_labels` puts a step-less lone sample in its cell's one
+    sampling; planning it at that step has continuity, gap reports and
+    sizing all treat it as one sample of that sampling. The median keeps
+    the choice independent of row order. `_{name}_adopted` marks those
+    rows, whose published step stays unknown.
+    """
+    step = df[f"{name}_step"]
+    if not step.isna().any():
+        return df
+    stated = step.groupby(cells).transform("median")
+    adopted = step.isna() & stated.notna()
+    return df.assign(
+        **{f"{name}_step": step.fillna(stated), f"_{name}_adopted": adopted}
+    )
+
+
+def _published(steps: np.ndarray, adopted: np.ndarray) -> np.ndarray:
+    """Steps as their rows state them: an adopted one is unknown again."""
+    if not adopted.any():
+        return steps
+    unknown = np.array([np.nan]).astype(steps.dtype)
+    return np.where(adopted, unknown, steps)
+
+
 def _continuity_group(start, stop, step, *tolerances: GapTolerance) -> pd.Series:
     """Label maximal near-contiguous runs (spec 2.4); any tolerance splits."""
     order, _, has_gap = gap_boundaries(start, stop, step, tolerances[0])
@@ -738,17 +766,43 @@ def _cell_labels(df, name, group_attrs, sampling_tolerance) -> pd.Series:
     Continuity is then evaluated *within* a cell, so unrelated patches
     can never bridge (or fabricate) a gap.
     """
-    _start, _stop, step = get_interval_columns(df, name)
+    start, stop, step = get_interval_columns(df, name)
     kind = _kind_codes(df, [x for x in group_attrs if x in df.columns])
     keys = [kind, *(df[x] for x in _cell_columns(df, name))]
     base = df.groupby(keys, dropna=False, sort=False).ngroup()
     samp = _sampling_group(step, sampling_tolerance)
+    # A lone sample states no step but fits any; one in a gap of its
+    # cell's only sampling joins it, so the gap it sits in is seen. One
+    # inside a stated envelope stays apart, where no overlap trims it.
+    lone = step.isna() & (start == stop)
+    if lone.any():
+        stated = samp.where(step.notna()).groupby(base)
+        lone &= stated.transform("nunique") == 1
+        lone &= ~_inside_stated(start, stop, step, base, lone)
+        samp = samp.mask(lone, stated.transform("first")).astype(np.int64)
     return base.astype(str) + "_" + samp.astype(str)
 
 
-def _partition(
-    df, name, group_attrs, tolerance, sampling_tolerance, keep_holes
-) -> pd.Series:
+def _inside_stated(start, stop, step, base, rows) -> pd.Series:
+    """Whether each of ``rows`` starts within a stated row of its cell."""
+    out = pd.Series(False, index=start.index)
+    has = step.notna()
+    # only the cells holding one of the rows are scanned
+    scanned = base.isin(base[rows].unique())
+    for _, index in start[scanned].groupby(base[scanned]).groups.items():
+        stated = has.loc[index]
+        lows, highs = start.loc[index][stated], stop.loc[index][stated]
+        order = np.argsort(lows.to_numpy(), kind="stable")
+        lows = lows.to_numpy()[order]
+        reach = np.maximum.accumulate(highs.to_numpy()[order])
+        values = start.loc[index][~stated].to_numpy()
+        pos = np.searchsorted(lows, values, side="right") - 1
+        inside = (pos >= 0) & (reach[np.maximum(pos, 0)] >= values)
+        out.loc[stated[~stated].index] = inside
+    return out
+
+
+def _partition(df, name, cell, tolerance, keep_holes) -> pd.Series:
     """
     Return partition labels: rows sharing a label may combine (spec 2).
 
@@ -757,7 +811,6 @@ def _partition(
     ``keep_holes``, a boundary missing a sample stays a partition break
     however loose the tolerance.
     """
-    cell = _cell_labels(df, name, group_attrs, sampling_tolerance)
     cont = pd.Series(0, index=df.index, dtype=np.int64)
     default = (GapTolerance.samples(DEFAULT_TOLERANCE),) if keep_holes else ()
     for _, index in df.groupby(cell, sort=False).groups.items():
@@ -1352,6 +1405,7 @@ def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance):
     cells = _cell_labels(
         df, name, group_attrs, dc.get_config().sampling_group_tolerance
     )
+    df = _adopt_lone_steps(df, name, cells)
     grouped = df.groupby(cells, sort=False)
     groups = grouped.groups
     mins = grouped[min_name].min()
@@ -1613,18 +1667,15 @@ def build_chunk_plan(
         outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
         return ChunkPlan(outputs, empty_members, name, value, params)
 
+    cells = _cell_labels(df, name, params["group"], params["sampling_group_tolerance"])
+    df = _adopt_lone_steps(df, name, cells)
     if explicit is not None:
-        df = df.assign(
-            _explicit_cell=_cell_labels(
-                df, name, params["group"], params["sampling_group_tolerance"]
-            )
-        )
+        df = df.assign(_explicit_cell=cells)
     labels = _partition(
         df,
         name,
-        params["group"],
+        cells,
         tolerance,
-        params["sampling_group_tolerance"],
         keep_holes=fill_value is None and not _bridge_holes,
     )
     per_partition = explicit is None and _needs_partition_resolution(value, overlap)
@@ -1641,6 +1692,12 @@ def build_chunk_plan(
     part_steps = np.array(  # D7: one step everywhere per partition
         [get_middle_value(step_all[a:b]) for a, b in zip(seg_starts, seg_ends)]
     )
+    adopted_col = f"_{name}_adopted"
+    adopted_all = (
+        sorted_df[adopted_col].to_numpy(dtype=bool)
+        if adopted_col in sorted_df
+        else np.zeros(len(sorted_df), dtype=bool)
+    )
     start_all = sorted_df[min_name].to_numpy()
     stop_all = sorted_df[max_name].to_numpy()
     lo_all, hi_all, mod_after, keep_row = _member_envelopes(sorted_df, seg_starts, name)
@@ -1653,6 +1710,7 @@ def build_chunk_plan(
     korig_min, korig_max = start_all[keep_row], stop_all[keep_row]
     kpids = sorted_df["_patch_row"].to_numpy()[keep_row]
     ksteps, kmod = step_all[keep_row], mod_after[keep_row]
+    kadopted = adopted_all[keep_row]
     koffsets = np.r_[0, np.cumsum(np.bincount(codes[keep_row], minlength=n_parts))]
     regular = explicit is None and not merge_mode
     if regular:
@@ -2009,13 +2067,20 @@ def build_chunk_plan(
         & (np.concatenate(m_hi) == korig_max[src_rows])
         & ~kmod[src_rows]
     )
+    member_ids = np.concatenate(m_out_ids)
+    if kadopted.any():
+        # an output only of adopted samples states no step, as they don't
+        alone = pd.Series(kadopted[src_rows]).groupby(member_ids).all()
+        lone = outputs["output_id"].isin(alone.index[alone.to_numpy()])
+        step_col = outputs[f"{name}_step"].to_numpy()
+        outputs[f"{name}_step"] = _published(step_col, lone.to_numpy())
     members = pd.DataFrame(
         {
-            "output_id": np.concatenate(m_out_ids),
+            "output_id": member_ids,
             "_patch_row": kpids[src_rows],
             min_name: np.concatenate(m_lo),
             max_name: np.concatenate(m_hi),
-            f"{name}_step": ksteps[src_rows],
+            f"{name}_step": _published(ksteps, kadopted)[src_rows],
             "_modified": ~unchanged,
         }
     )

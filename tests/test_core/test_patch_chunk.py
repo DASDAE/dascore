@@ -41,7 +41,10 @@ from dascore.io.febus.core import FebusPatchAttrs
 from dascore.io.index import catalog, planned
 from dascore.io.index.schema import SOURCE_STAT_COLUMNS
 from dascore.units import get_quantity
-from dascore.utils.chunk_plan import patch_local_adjusted_envelopes
+from dascore.utils.chunk_plan import (
+    _adopt_lone_steps,
+    patch_local_adjusted_envelopes,
+)
 from dascore.utils.gaps import GapTolerance
 from dascore.utils.misc import get_middle_value, suppress_warnings
 from dascore.utils.patch import _get_merged_coord
@@ -5165,3 +5168,119 @@ class TestChunkMergeRegressions:
         merged = merge_spool(patches).chunk(time=None)[0]
         assert merged.get_coord("time").step == step
         np.testing.assert_array_equal(merged.data, np.tile(np.arange(1500), 2))
+
+    @staticmethod
+    def _seconds_patch(start, count, step=10):
+        """A patch whose data are its time labels, in seconds from ORIGIN."""
+        seconds = np.arange(count) * float(step or 0) + start
+        coord = dc.core.get_coord(
+            data=ORIGIN + (seconds * 1e9).astype("timedelta64[ns]")
+        )
+        if step:
+            coord = dc.core.get_coord(
+                start=coord.min(), step=np.timedelta64(step, "s"), shape=(count,)
+            )
+        return dc.Patch(data=seconds, coords={"time": coord}, dims=("time",))
+
+    @staticmethod
+    def _merged_seconds(patches, spool):
+        """The merged labels in seconds, and every member's own, sorted."""
+        (merged,) = spool.chunk(time=None)
+        seconds = (merged.get_array("time") - ORIGIN) / np.timedelta64(1, "s")
+        expected = np.sort(np.concatenate([x.data for x in patches]))
+        return merged, seconds, expected
+
+    @pytest.mark.parametrize("shot_step", [321, None])
+    def test_crowded_samples_keep_their_labels(self, merge_spool, shot_step):
+        """Test shots inside one step of a stream join it at their own times."""
+        # A DTS stream sampled every 321 s, three one-shot test files, then
+        # the stream again; no seam is a whole step, so none can be snapped.
+        # A shot may state the stream's step, or none at all.
+        patches = [
+            self._seconds_patch(-9 * 321, 10, 321),
+            *(self._seconds_patch(x, 1, shot_step) for x in (197, 225, 260)),
+            self._seconds_patch(348, 10, 321),
+        ]
+        merged, seconds, expected = self._merged_seconds(patches, merge_spool(patches))
+        np.testing.assert_array_equal(seconds, expected)
+        np.testing.assert_array_equal(merged.data, expected)
+
+    def test_lone_sample_does_not_bridge_a_gap(self, merge_spool):
+        """A step-less sample far from a stream is measured by its step."""
+        patches = [
+            self._seconds_patch(0, 10),
+            self._seconds_patch(5_000, 1, None),
+            self._seconds_patch(10_010, 10),
+        ]
+        spool = merge_spool(patches)
+        assert len(spool.chunk(time=None)) == 3
+        assert len(spool.get_gaps("time")) == 2
+
+    @pytest.mark.parametrize("size", [70, "56 B"])
+    def test_lone_samples_size_by_their_step(self, merge_spool, size):
+        """Step-less samples inside a stream count as its samples when sizing."""
+        patches = [
+            self._seconds_patch(0, 2),
+            *(self._seconds_patch(x, 1, None) for x in (20, 30, 40)),
+            self._seconds_patch(50, 2),
+        ]
+        value = get_quantity(size) if isinstance(size, str) else size
+        spool = merge_spool(patches).chunk(time=value)
+        (merged,) = spool
+        np.testing.assert_array_equal(merged.data, [0, 10, 20, 30, 40, 50, 60])
+
+    def test_lone_sample_inside_a_patch_is_kept(self, merge_spool):
+        """A step-less sample within a patch's span is not trimmed as overlap."""
+        patches = [self._seconds_patch(0, 11), self._seconds_patch(25, 1, None)]
+        chunked = merge_spool(patches).chunk(time=None)
+        found = np.sort(np.concatenate([x.data for x in chunked]))
+        np.testing.assert_array_equal(found, [0, 10, 20, 25, *range(30, 101, 10)])
+
+    def test_lone_sample_publishes_no_step(self, merge_spool):
+        """A lone sample chunked alone states no step, as its patch does."""
+        patches = [
+            self._seconds_patch(0, 10),
+            self._seconds_patch(500, 1, None),
+            self._seconds_patch(1000, 10),
+        ]
+        chunked = merge_spool(patches).chunk(time=None)
+        stated = chunked.get_contents()["time_step"].tolist()
+        actual = [x.get_coord("time").step for x in chunked]
+        assert [pd.isnull(x) for x in stated] == [x is None for x in actual]
+
+    def test_explicit_window_finds_a_lone_sample(self, merge_spool):
+        """An explicit window around a lone sample in a gap returns it."""
+        patches = [
+            self._seconds_patch(0, 3),
+            self._seconds_patch(25, 1, None),
+            self._seconds_patch(30, 3),
+        ]
+        window = ORIGIN + np.array([[24, 26]]).astype("timedelta64[s]")
+        chunked = merge_spool(patches).chunk(time=window)
+        (patch,) = chunked
+        np.testing.assert_array_equal(patch.data, [25])
+        assert pd.isnull(chunked.get_contents()["time_step"].iloc[0])
+        assert patch.get_coord("time").step is None
+
+    def test_adopted_step_ignores_row_order(self):
+        """A lone sample adopts its cell's median step, whatever the order."""
+        steps = pd.to_timedelta([1.0, 1.04, 1.02, None], unit="s")
+        frame = pd.DataFrame({"time_step": steps})
+        cells = pd.Series(0, index=frame.index)
+        adopted = {
+            _adopt_lone_steps(frame.iloc[order], "time", cells)["time_step"].loc[3]
+            for order in ([0, 1, 2, 3], [1, 2, 0, 3])
+        }
+        assert adopted == {pd.Timedelta(1.02, unit="s")}
+
+    def test_off_grid_samples_stay_in_order(self, merge_spool):
+        """Snapping lone samples moves no label past its tolerance or order."""
+        patches = [
+            self._seconds_patch(0, 10),
+            *(self._seconds_patch(x, 1) for x in (93, 95)),
+            self._seconds_patch(100, 10),
+        ]
+        merged, seconds, expected = self._merged_seconds(patches, merge_spool(patches))
+        assert np.all(np.diff(seconds) > 0)
+        assert np.max(np.abs(seconds - expected)) <= 15
+        np.testing.assert_array_equal(merged.data, expected)
