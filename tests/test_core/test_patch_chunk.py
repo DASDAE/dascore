@@ -5165,3 +5165,75 @@ class TestChunkMergeRegressions:
         merged = merge_spool(patches).chunk(time=None)[0]
         assert merged.get_coord("time").step == step
         np.testing.assert_array_equal(merged.data, np.tile(np.arange(1500), 2))
+
+    @staticmethod
+    def _seconds_patch(start, count, step=10):
+        """A patch whose data are its time labels, in seconds from ORIGIN."""
+        seconds = np.arange(count) * float(step or 0) + start
+        coord = dc.core.get_coord(
+            data=ORIGIN + (seconds * 1e9).astype("timedelta64[ns]")
+        )
+        if step:
+            coord = dc.core.get_coord(
+                start=coord.min(), step=np.timedelta64(step, "s"), shape=(count,)
+            )
+        return dc.Patch(data=seconds, coords={"time": coord}, dims=("time",))
+
+    @staticmethod
+    def _merged_seconds(patches, spool):
+        """The merged labels in seconds, and every member's own, sorted."""
+        (merged,) = spool.chunk(time=None)
+        seconds = (merged.get_array("time") - ORIGIN) / np.timedelta64(1, "s")
+        expected = np.sort(np.concatenate([x.data for x in patches]))
+        return merged, seconds, expected
+
+    @pytest.mark.parametrize("shot_step", [321, None])
+    def test_crowded_samples_keep_their_labels(self, merge_spool, shot_step):
+        """Test shots inside one step of a stream join it at their own times."""
+        # A DTS stream sampled every 321 s, three one-shot test files, then
+        # the stream again; no seam is a whole step, so none can be snapped.
+        # A shot may state the stream's step, or none at all.
+        patches = [
+            self._seconds_patch(-9 * 321, 10, 321),
+            *(self._seconds_patch(x, 1, shot_step) for x in (197, 225, 260)),
+            self._seconds_patch(348, 10, 321),
+        ]
+        merged, seconds, expected = self._merged_seconds(patches, merge_spool(patches))
+        np.testing.assert_array_equal(seconds, expected)
+        np.testing.assert_array_equal(merged.data, expected)
+
+    def test_lone_sample_does_not_bridge_a_gap(self, merge_spool):
+        """A step-less sample far from a stream is measured by its step."""
+        patches = [
+            self._seconds_patch(0, 10),
+            self._seconds_patch(5_000, 1, None),
+            self._seconds_patch(10_010, 10),
+        ]
+        spool = merge_spool(patches)
+        assert len(spool.chunk(time=None)) == 3
+        assert len(spool.get_gaps("time")) == 2
+
+    @pytest.mark.parametrize("size", [70, "56 B"])
+    def test_lone_samples_size_by_their_step(self, merge_spool, size):
+        """Step-less samples inside a stream count as its samples when sizing."""
+        patches = [
+            self._seconds_patch(0, 2),
+            *(self._seconds_patch(x, 1, None) for x in (20, 30, 40)),
+            self._seconds_patch(50, 2),
+        ]
+        value = get_quantity(size) if isinstance(size, str) else size
+        spool = merge_spool(patches).chunk(time=value)
+        (merged,) = spool
+        np.testing.assert_array_equal(merged.data, [0, 10, 20, 30, 40, 50, 60])
+
+    def test_off_grid_samples_stay_in_order(self, merge_spool):
+        """Snapping lone samples moves no label past its tolerance or order."""
+        patches = [
+            self._seconds_patch(0, 10),
+            *(self._seconds_patch(x, 1) for x in (93, 95)),
+            self._seconds_patch(100, 10),
+        ]
+        merged, seconds, expected = self._merged_seconds(patches, merge_spool(patches))
+        assert np.all(np.diff(seconds) > 0)
+        assert np.max(np.abs(seconds - expected)) <= 15
+        np.testing.assert_array_equal(merged.data, expected)

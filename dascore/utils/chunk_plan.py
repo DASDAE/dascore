@@ -552,6 +552,21 @@ def _cell_tolerance(tolerance: GapTolerance, sub, name) -> GapTolerance:
     return tolerance.resolve(sub[f"{name}_min"].dtype, units, name)
 
 
+def _adopt_lone_steps(df: pd.DataFrame, name: str, cells: pd.Series):
+    """
+    The relation with every lone sample stating its cell's step.
+
+    `_cell_labels` puts a step-less lone sample in its cell's one
+    sampling; stating that step has continuity, gap reports and sizing
+    all treat it as one sample of that sampling.
+    """
+    step = df[f"{name}_step"]
+    if not step.isna().any():
+        return df
+    stated = step.groupby(cells).transform("first")
+    return df.assign(**{f"{name}_step": step.fillna(stated)})
+
+
 def _continuity_group(start, stop, step, *tolerances: GapTolerance) -> pd.Series:
     """Label maximal near-contiguous runs (spec 2.4); any tolerance splits."""
     order, _, has_gap = gap_boundaries(start, stop, step, tolerances[0])
@@ -738,17 +753,21 @@ def _cell_labels(df, name, group_attrs, sampling_tolerance) -> pd.Series:
     Continuity is then evaluated *within* a cell, so unrelated patches
     can never bridge (or fabricate) a gap.
     """
-    _start, _stop, step = get_interval_columns(df, name)
+    start, stop, step = get_interval_columns(df, name)
     kind = _kind_codes(df, [x for x in group_attrs if x in df.columns])
     keys = [kind, *(df[x] for x in _cell_columns(df, name))]
     base = df.groupby(keys, dropna=False, sort=False).ngroup()
     samp = _sampling_group(step, sampling_tolerance)
+    # A lone sample states no step but fits any; it joins its cell's
+    # sampling when the cell has only one, so the gap it sits in is seen.
+    lone = step.isna() & (start == stop)
+    stated = samp.where(step.notna()).groupby(base)
+    only = stated.transform("nunique") == 1
+    samp = samp.mask(lone & only, stated.transform("first")).astype(np.int64)
     return base.astype(str) + "_" + samp.astype(str)
 
 
-def _partition(
-    df, name, group_attrs, tolerance, sampling_tolerance, keep_holes
-) -> pd.Series:
+def _partition(df, name, cell, tolerance, keep_holes) -> pd.Series:
     """
     Return partition labels: rows sharing a label may combine (spec 2).
 
@@ -757,7 +776,6 @@ def _partition(
     ``keep_holes``, a boundary missing a sample stays a partition break
     however loose the tolerance.
     """
-    cell = _cell_labels(df, name, group_attrs, sampling_tolerance)
     cont = pd.Series(0, index=df.index, dtype=np.int64)
     default = (GapTolerance.samples(DEFAULT_TOLERANCE),) if keep_holes else ()
     for _, index in df.groupby(cell, sort=False).groups.items():
@@ -1352,6 +1370,7 @@ def _cell_gaps(df: pd.DataFrame, name: str, group_attrs, tolerance):
     cells = _cell_labels(
         df, name, group_attrs, dc.get_config().sampling_group_tolerance
     )
+    df = _adopt_lone_steps(df, name, cells)
     grouped = df.groupby(cells, sort=False)
     groups = grouped.groups
     mins = grouped[min_name].min()
@@ -1613,18 +1632,15 @@ def build_chunk_plan(
         outputs = pd.DataFrame(columns=[min_name, max_name, "output_id"])
         return ChunkPlan(outputs, empty_members, name, value, params)
 
+    cells = _cell_labels(df, name, params["group"], params["sampling_group_tolerance"])
+    df = _adopt_lone_steps(df, name, cells)
     if explicit is not None:
-        df = df.assign(
-            _explicit_cell=_cell_labels(
-                df, name, params["group"], params["sampling_group_tolerance"]
-            )
-        )
+        df = df.assign(_explicit_cell=cells)
     labels = _partition(
         df,
         name,
-        params["group"],
+        cells,
         tolerance,
-        params["sampling_group_tolerance"],
         keep_holes=fill_value is None and not _bridge_holes,
     )
     per_partition = explicit is None and _needs_partition_resolution(value, overlap)
