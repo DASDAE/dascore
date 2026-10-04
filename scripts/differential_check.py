@@ -30,13 +30,11 @@ import time
 import warnings
 from pathlib import Path
 from typing import Any
-from unittest import mock
 
 import numpy as np
 import pandas as pd
 
 import dascore as dc
-import dascore.core.inventory as inventory_module
 from dascore.examples import inventory_patch_pair
 from dascore.utils.signal import WINDOW_NAMES
 
@@ -1242,14 +1240,6 @@ def _spectral_calls(patch, with_nondim) -> dict:
     return calls
 
 
-def _fixed_inventory_pair():
-    """Return the example inventory pair with its random resource ids fixed."""
-    # The ids default to random uuids, which every enrich id would carry.
-    count = iter(range(1_000_000))
-    with mock.patch.object(inventory_module, "uuid4", lambda: f"id-{next(count)}"):
-        return inventory_patch_pair()
-
-
 def _data_dependent_calls(patch, null_patch, int_patch, f32, dft_patch, m) -> dict:
     """Return where, dropna, add_distance_to and enrich with every option."""
     cond = patch > 0.5
@@ -1263,7 +1253,7 @@ def _data_dependent_calls(patch, null_patch, int_patch, f32, dft_patch, m) -> di
     with_inf = _pinned(null_patch.new(data=inf), "with_inf")
     xyz = _pinned(dc.get_example_patch("random_patch_with_xyz"), "xyz")
     shot = pd.Series({"x": 10, "y": 10, "z": 0})
-    inv_patch, inventory = _fixed_inventory_pair()
+    inv_patch, inventory = inventory_patch_pair()
     inv_patch = _pinned(inv_patch, "inv_patch")
     bare = _pinned(inv_patch.update_attrs(acquisition_key=""), "inv_bare")
     stated = _pinned(inv_patch.update_attrs(gauge_length=3.0), "inv_stated")
