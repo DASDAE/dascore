@@ -236,6 +236,8 @@ class TestParenthesizedFactor:
         "m **  (2)",
         "m ^  (-1)",
         "1/(10 m)",
+        "(10 Ω)",
+        "(10 µm)",
     )
 
     @pytest.fixture(autouse=True)

@@ -30,7 +30,9 @@ from dascore.warnings import DASCoreWarning
 
 # A bracketed number with no unit in it, e.g. "(1e-9)", "[10^-9]": often an
 # annotation, which pint reads as a scale factor.
-_PAREN_NUMBER = re.compile(r"[(\[](?=[^)\]]*[\d⁰¹²³⁴⁵⁶⁷⁸⁹])[^a-df-zA-DF-Z()\[\]]*[)\]]")
+_PAREN_NUMBER = re.compile(
+    r"[(\[](?=[^)\]]*[\d⁰¹²³⁴⁵⁶⁷⁸⁹])[\d⁰¹²³⁴⁵⁶⁷⁸⁹⁻\s.,eE+\-*/^]*[)\]]"
+)
 _EXPONENT_END = re.compile(r"(\^|\*\*)\s*$")
 
 
