@@ -30,6 +30,7 @@ from dascore.exceptions import (
 )
 from dascore.models import ArrayLike
 from dascore.models.base import model_values
+from dascore.proc.inventory import Enrich
 from dascore.utils import identity
 from dascore.utils.misc import suppress_warnings
 
@@ -512,6 +513,55 @@ class TestCoords:
         out = patch.enrich(inventory, attrs=False)
         names = set(out.coords.coord_map)
         assert {"x", "y", "z", "zone", "noisy"}.issubset(names)
+
+    def test_blanket_names_axes_after_the_crs(self, patch, inventory):
+        """A blanket request names positions as the CRS does. See #1381."""
+        crs = CoordinateReferenceSystem(
+            authority="EPSG",
+            code="2056",
+            coordinate_labels=("easting", "northing", "elevation"),
+            units=("m", "m", "m"),
+        )
+        inv = inventory.new(coordinate_reference_system=crs)
+        out = patch.enrich(inv, attrs=False)
+        names = set(out.coords.coord_map)
+        assert {"easting", "northing", "elevation"}.issubset(names)
+        assert not {"x", "y", "z"} & names
+        # The canonical spellings stay available by name, with the same values.
+        named = patch.enrich(inv, attrs=False, coords=("x",))
+        assert np.array_equal(
+            named.get_array("x"), out.get_array("easting"), equal_nan=True
+        )
+
+    def test_blanket_keeps_canonical_names_for_the_default_crs(self, patch, inventory):
+        """The default CRS keeps x, y, z, stated or not: equal inventories agree."""
+        stated = inventory.new(coordinate_reference_system=CoordinateReferenceSystem())
+        for inv in (inventory, stated):
+            names = set(patch.enrich(inv, attrs=False).coords.coord_map)
+            assert {"x", "y", "z"}.issubset(names)
+            assert not {"longitude", "latitude"} & names
+
+    def test_blanket_label_naming_another_axis(self, patch, inventory):
+        """A label naming another canonical axis falls back to its own name."""
+        crs = CoordinateReferenceSystem(
+            authority="local",
+            code="section",
+            coordinate_labels=("x", "z"),
+            units=("m", "m"),
+        )
+        old = inventory.networks[0].fiber_arrays[0].optical_paths[0]
+        geometry = tuple(
+            segment.new(
+                columns={k: v for k, v in segment.columns.items() if k in ("x", "y")}
+            )
+            for segment in old.geometry
+        )
+        inv = inventory.new(coordinate_reference_system=crs).replace(
+            old, old.new(geometry=geometry)
+        )
+        names = set(patch.enrich(inv, attrs=False).coords.coord_map)
+        assert {"x", "y"}.issubset(names)
+        assert "z" not in names
 
     def test_blanket_adds_coupling(self, patch, inventory):
         """How a channel is coupled is a per-channel fact. See #1043."""
@@ -1191,3 +1241,18 @@ class TestEmptyIsUnambiguous:
         """The empty key is legal on a patch and names no entry."""
         with pytest.raises(InvalidInventoryError, match="empty acquisition_key"):
             inventory.resolve("")
+
+
+class TestEnrichProcessor:
+    """Enrich as a class: runs on metadata; only inventory is positional."""
+
+    def test_on_metadata(self, patch, inventory):
+        """Enrich needs no data, so metadata runs it too."""
+        out = patch.drop_data().enrich(inventory, coords=False)
+        assert isinstance(out, dc.PatchMeta)
+        assert out.attrs.gauge_length == 10.0
+
+    def test_options_are_keyword_only(self, inventory):
+        """Only the inventory may be given by position."""
+        with pytest.raises(TypeError, match="positional"):
+            Enrich(inventory, False)

@@ -18,6 +18,7 @@ from dascore.exceptions import (
     ParameterError,
     UnitError,
 )
+from dascore.proc.filter import SlopeFilter
 from dascore.units import Hz, convert_units, get_unit, m, percent, s
 from dascore.utils.misc import broadcast_for_index
 from dascore.utils.patch import get_dim_sampling_rate
@@ -657,3 +658,33 @@ class TestSlopeFilter:
         # The test passes if this line doesn't raise an error.
         out = example_patch.slope_filter(filt)
         assert isinstance(out, dc.Patch)
+
+
+class TestSlopeFilterMetadata:
+    """slope_filter works out its result from metadata alone."""
+
+    def test_single_precision(self, random_patch):
+        """The filtered data are real doubles, whatever went in."""
+        patch = random_patch.new(data=np.asarray(random_patch.data, np.float32))
+        filt = SlopeFilter(filt=[2e3, 2.2e3, 8e3, 2e4])
+        out, _ = filt.get_metadata(patch.drop_data())
+        assert out.dims == ("distance", "time")
+        assert out.dtype == filt(patch).dtype == np.float64
+
+    def test_invert_keeps_the_rest(self, random_patch):
+        """The filter and its notch split the data between them."""
+        filt = [2e3, 2.2e3, 8e3, 2e4]
+        kept = random_patch.slope_filter(filt=filt)
+        notched = random_patch.slope_filter(filt=filt, invert=True)
+        assert np.allclose(kept.data + notched.data, random_patch.data)
+
+    def test_directional_reads_the_sign(self, random_patch):
+        """Signed slopes pass one direction only, unsigned ones both."""
+        filt = [2e3, 2.2e3, 8e3, 2e4]
+        either = random_patch.slope_filter(filt=filt)
+        one_way = random_patch.slope_filter(filt=filt, directional=True)
+        # Reversing distance negates every slope, so the other way is this.
+        mirrored = random_patch.new(data=random_patch.data[::-1])
+        other_way = mirrored.slope_filter(filt=filt, directional=True).data[::-1]
+        assert not np.allclose(one_way.data, other_way)
+        assert np.allclose(either.data, one_way.data + other_way)
