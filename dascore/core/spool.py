@@ -130,6 +130,7 @@ from dascore.utils.explicit_ranges import (
     known_coordinates,
     looks_explicit,
 )
+from dascore.utils.identity import operation_context
 from dascore.utils.misc import (
     _spool_map,
     available_memory,
@@ -231,7 +232,7 @@ def _ratio_one(low, high, step) -> float:
     """How many steps one row's range spans, or NaN when that cannot be told."""
     try:
         return float(to_float(high - low)) / abs(float(to_float(step)))
-    except (TypeError, ValueError, ZeroDivisionError):
+    except (TypeError, ValueError, ZeroDivisionError, OverflowError):
         return np.nan
 
 
@@ -247,7 +248,7 @@ def _dim_counts(low: pd.Series, high: pd.Series, step: pd.Series) -> np.ndarray:
         with np.errstate(all="ignore"):
             span = np.asarray(to_float(high - low), dtype=np.float64)
             ratio = span / np.abs(np.asarray(to_float(step), dtype=np.float64))
-    except (TypeError, ValueError):  # text values, or values of several kinds
+    except (TypeError, ValueError, OverflowError):  # text, or several kinds
         rows = zip(low, high, step, strict=True)
         ratio = np.array([_ratio_one(*row) for row in rows], dtype=np.float64)
     counts = np.round(ratio) + 1
@@ -287,7 +288,9 @@ def _bytes_to_load(df: pd.DataFrame, lazy: Container[str] = frozenset()) -> int:
         return 0
     none = pd.Series(np.nan, index=df.index)
     known = pd.to_numeric(df.get("_data_size", none), errors="coerce")
-    samples = known.astype(np.float64).where(known.notna(), _estimated_samples(df))
+    samples = known.astype(np.float64)
+    if (unknown := known.isna()).any():
+        samples[unknown] = _estimated_samples(df[unknown])
     if "source_path" in df.columns:
         # a live patch which still states its size is presented as it is
         paths = df["source_path"]
@@ -306,7 +309,11 @@ def _is_lazy(data) -> bool:
 def _loaded(patch: dc.Patch) -> dc.Patch:
     """The patch with its data array in memory."""
     data = patch.data
-    return patch.to_patch(to_numpy(data)) if _is_lazy(data) else patch
+    if not _is_lazy(data):
+        return patch
+    # The array read is the one the patch described, so it keeps its id.
+    with operation_context():
+        return patch.to_patch(to_numpy(data))
 
 
 def _spool_input_message(data) -> str:

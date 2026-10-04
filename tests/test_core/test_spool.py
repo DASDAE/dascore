@@ -406,6 +406,28 @@ class TestLoad:
         assert len(loaded) == 2
         assert all(x == patch for x in loaded)
 
+    def test_loaded_lazy_patch_keeps_data_id(self, budget):
+        """The array read is the one described, so its id stands."""
+        from dascore.core.source import ArraySource  # noqa: PLC0415
+
+        budget(10**9)
+        lazy = LazyArray.from_source(ArraySource.full((10,), 1.0))
+        patch = self._line(lazy, np.arange(10))
+        loaded = dc.spool(patch).load()[0]
+        assert loaded.attrs.data_id == patch.attrs.data_id
+        assert isinstance(loaded.data, np.ndarray)
+
+    def test_wide_time_span_loads(self, budget):
+        """A span too wide for nanosecond arithmetic is unknown, not an error."""
+        budget(1)
+        years = ["1700-01-01", "1800-01-01", "2000-01-01", "2200-01-01"]
+        times = np.array(years, dtype="datetime64[ns]")
+        low, high = (pd.Series([x]) for x in times[[0, -1]])
+        step = pd.Series([np.timedelta64(1, "s")])
+        assert np.isnan(spool_module._dim_counts(low, high, step)).all()
+        patch = self._line(np.ones(4), times)
+        assert len(dc.spool(patch).load()) == 1
+
     def test_lazy_patch_is_read(self, random_patch, tmp_path, budget):
         """A patch holding a lazy array comes back holding the array itself."""
         budget(10**12)
