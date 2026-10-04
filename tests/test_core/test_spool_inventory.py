@@ -2731,8 +2731,9 @@ class TestChannelSelect:
         """Its channels cannot be placed, and guessing would trim wrongly."""
         without = _replace_acquisition(inventory, distance_map=None)
         spool = dc.spool(patch).attach_inventory(without)
-        with pytest.raises(PatchError, match="no distance_map"):
+        with pytest.raises(PatchError, match="no distance_map") as info:
             spool.select(coupling="trench")
+        assert repr(patch.attrs.acquisition_key) in str(info.value)
 
     def test_a_patch_without_the_axis_refuses(self, inventory, patch):
         """A patch carrying no dimension the map places channels by."""
