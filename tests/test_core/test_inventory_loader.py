@@ -2489,3 +2489,157 @@ class TestOneLoadingDoor:
         """The text reader refuses in the format's own words."""
         with pytest.raises(InvalidInventoryError, match="Could not parse YAML"):
             dc.inventory("this: [is not: yaml\nnor is this\n")
+
+
+class TestReadableErrors:
+    """A loading error names the file, and line, the problem is in."""
+
+    PATH = "fiber_arrays/DAS.L001/path/"
+
+    def _message(self, make_inventory, **files) -> str:
+        """Load TRACKS with some files replaced, returning the error text."""
+        changed = {f"{self.PATH}{k.replace('__', '.')}": v for k, v in files.items()}
+        with pytest.raises(InvalidInventoryError) as info:
+            make_inventory({**MINIMAL, **TRACKS, **changed})
+        return str(info.value)
+
+    def test_table_problem_names_table_and_line(self, make_inventory):
+        """Not the attrs file the table was merged into, nor a row index."""
+        text = "distance_min,distance_max,medium\n0,340,soil\n10,20,soil\n"
+        msg = self._message(make_inventory, coupling__csv=text)
+        assert "coupling.csv data row 1: coupling_type is required" in msg
+        assert "coupling.csv data row 2: coupling_type is required" in msg
+        assert "[type=" not in msg
+
+    def test_bad_choice_states_what_was_given(self, make_inventory):
+        """A refused value is quoted beside the values allowed."""
+        text = "distance_min,distance_max,coupling_type\n0,340,glued\n"
+        msg = self._message(make_inventory, coupling__csv=text)
+        assert "coupling_type is 'glued', but should be" in msg
+
+    def test_row_with_no_type_lists_types(self, make_inventory):
+        """A component row with no object_type is told what it may be."""
+        text = "distance_min,distance_max,name\n0,1000,fiber 1\n"
+        msg = self._message(make_inventory, optical_components__csv=text)
+        assert (
+            "optical_components.csv data row 1: This row states no object_type" in msg
+        )
+        assert "'FiberSegment'" in msg
+
+    def test_near_miss_field_is_suggested(self, make_inventory):
+        """The singular of a list field is the likeliest typo."""
+        attrs = "object_type: OpticalPath\nmeasurement: otdr-1\n"
+        msg = self._message(make_inventory, attrs__yaml=attrs)
+        assert "attrs.yaml: measurement is not a field" in msg
+        assert "Did you mean 'measurements'?" in msg
+
+    def test_scalar_for_list(self, make_inventory):
+        """One reference where a list of them belongs."""
+        attrs = "object_type: OpticalPath\nmeasurements: otdr-1\n"
+        msg = self._message(make_inventory, attrs__yaml=attrs)
+        assert "measurements should be a list, not 'otdr-1'" in msg
+
+    def test_dangling_reference_is_an_inventory_error(self, make_inventory):
+        """Only the tree can see it, but it is still the format's error."""
+        attrs = "object_type: OpticalPath\nmeasurements: [otdr-1]\n"
+        msg = self._message(make_inventory, attrs__yaml=attrs)
+        assert "Could not assemble the inventory" in msg
+        assert "'otdr-1' (from measurements)" in msg
+
+    def test_label_with_no_group(self, make_inventory):
+        """A label with no group could never be selected or seen."""
+        text = "distance_min,distance_max,value\n0,340,granite\n"
+        msg = self._message(make_inventory, labels__csv=text)
+        assert "labels.csv data row 1: group is required" in msg
+
+    def test_path_with_no_type(self, make_inventory):
+        """Said the way every other object file says it."""
+        msg = self._message(make_inventory, attrs__yaml="name: main\n")
+        assert "attrs.yaml declares no object_type" in msg
+
+    def test_envelope_with_no_type(self, make_inventory):
+        """Not 'declares object_type None'."""
+        files = {**MINIMAL, "inventory.yaml": "name: x\n"}
+        with pytest.raises(InvalidInventoryError, match="declares no object_type"):
+            make_inventory(files)
+
+    def test_point_table_names_table_not_line(self, make_inventory):
+        """A geometry segment gathers several rows, so no one line is named."""
+        text = "name,distance,longitude,latitude,elevation\nS100,100,inf,40,687\n"
+        text += "S100,102,-117.1,40.1,685\n"
+        msg = self._message(make_inventory, geometry__csv=text)
+        assert "geometry.csv: " in msg
+        assert "geometry.csv data row" not in msg
+
+    def test_non_string_key(self, make_inventory):
+        """YAML allows a numeric key, which no field can be named by."""
+        msg = self._message(
+            make_inventory, attrs__yaml="object_type: OpticalPath\n1: x\n"
+        )
+        assert "Could not read OpticalPath from" in msg
+
+    def test_shouted_suffix_still_names_table(self, make_inventory, tmp_path):
+        """A table spelled `.CSV` is read, so it is also the one blamed."""
+        files = {**MINIMAL, **TRACKS}
+        files.pop(f"{self.PATH}labels.csv")
+        files[f"{self.PATH}labels.CSV"] = "distance_min,distance_max,value\n0,340,a\n"
+        with pytest.raises(InvalidInventoryError, match=r"labels\.CSV data row 1"):
+            make_inventory(files)
+
+    def test_blank_lines_do_not_shift_rows(self, make_inventory):
+        """Data rows are counted, which blank lines cannot move."""
+        text = "distance_min,distance_max,value\n\n0,340,a\n"
+        msg = self._message(make_inventory, labels__csv=text)
+        assert "labels.csv data row 1: group is required" in msg
+
+    def test_envelope_problem_is_readable(self, make_inventory):
+        """The envelope's field typo is said in the format's words."""
+        files = {**MINIMAL, "inventory.yaml": "object_type: Inventory\ndescripton: x\n"}
+        with pytest.raises(InvalidInventoryError) as info:
+            make_inventory(files)
+        assert "inventory.yaml: descripton is not a field" in str(info.value)
+        assert "Did you mean 'description'?" in str(info.value)
+
+    def test_serialized_inventory_dangling_reference(self, tmp_path):
+        """One file, or one string, fails like the directory it came from."""
+        text = (
+            "object_type: Inventory\n"
+            "resources:\n"
+            "  otdr:\n"
+            "    object_type: OpticalMeasurement\n"
+            "    data: absent\n"
+        )
+        with pytest.raises(InvalidInventoryError, match="'absent' \\(from data\\)"):
+            dc.Inventory.from_yaml(text)
+        path = tmp_path / "inventory.yaml"
+        path.write_text(text)
+        with pytest.raises(InvalidInventoryError, match="Could not read an inventory"):
+            dc.inventory(path)
+
+    def test_envelope_non_string_key(self, make_inventory):
+        """Still names the envelope, though no field is named by a number."""
+        files = {**MINIMAL, "inventory.yaml": "object_type: Inventory\n1: x\n"}
+        with pytest.raises(InvalidInventoryError, match="Could not read the envelope"):
+            make_inventory(files)
+
+    def test_nested_near_miss_is_suggested(self, make_inventory):
+        """A typo'd table column is matched against the row's own fields."""
+        text = "distance_min,distance_max,coupling_type,medum\n0,340,trench,soil\n"
+        msg = self._message(make_inventory, coupling__csv=text)
+        assert "coupling.csv data row 1: medum is not a field" in msg
+        assert "Did you mean 'medium'?" in msg
+
+    def test_serialized_component_lists_types(self):
+        """A nested location still finds the union a component is one of."""
+        text = (
+            "object_type: Inventory\n"
+            "networks:\n"
+            "  - code: XX\n"
+            "    fiber_arrays:\n"
+            "      - code: L1\n"
+            "        optical_paths:\n"
+            "          - optical_components:\n"
+            "              - {distance_min: 0, distance_max: 1}\n"
+        )
+        with pytest.raises(InvalidInventoryError, match="'FiberSegment'"):
+            dc.Inventory.from_yaml(text)

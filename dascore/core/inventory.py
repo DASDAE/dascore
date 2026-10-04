@@ -14,6 +14,7 @@ Each object documents the rules it enforces.
 
 from __future__ import annotations
 
+import difflib
 import itertools
 from collections.abc import Mapping, Sized
 from contextlib import suppress
@@ -37,6 +38,7 @@ import numpy as np
 from pydantic import (
     AfterValidator,
     Field,
+    ValidationError,
     field_validator,
     model_validator,
 )
@@ -52,6 +54,7 @@ from dascore.models import (
     TimeRangedModel,
     UnitQuantity,
 )
+from dascore.models.registry import TAG_FIELD
 from dascore.utils.display import (
     NodeRepr,
     Repr,
@@ -815,7 +818,9 @@ class OpticalPathLabel(_IntervalModel):
     start and end) cover nothing and are exempt from the overlap rule.
     """
 
-    group: str = Field(default="", description="Name of the labelled variable.")
+    # Required: a label with no group never becomes a coordinate, so it
+    # could not be selected on or seen, and would vanish without a word.
+    group: str = Field(min_length=1, description="Name of the labelled variable.")
     value: LabelValue | None = Field(
         default=None,
         description=(
@@ -2276,9 +2281,20 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
             )
             for net in self.networks
         )
-        dangling = sorted({r for r, *_ in string_refs if r not in pool})
+        dangling: dict[str, set[str]] = {}
+        for rid, field, _ in string_refs:
+            if rid not in pool:
+                dangling.setdefault(rid, set()).add(field)
         if dangling:
-            msg = f"Dangling resource references: {dangling}."
+            named = "; ".join(
+                f"{rid!r} (from {', '.join(sorted(fields))})"
+                for rid, fields in sorted(dangling.items())
+            )
+            msg = (
+                f"Dangling resource references: {named}. A reference names "
+                "the resource_id of a resource, such as a file under "
+                "resources/, and no resource has these."
+            )
             raise InvalidInventoryError(msg)
         for rid, field, allowed in string_refs:
             if allowed and not isinstance(pool[rid], allowed):
@@ -2752,7 +2768,84 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
         if named := sorted(f"{x!r}" for x in data if not isinstance(x, str)):
             msg = f"{source} holds fields which are not named: {', '.join(named)}."
             raise InvalidInventoryError(msg)
-        return cls(**data).check()
+        try:
+            built = cls(**data)
+        except ValidationError as error:
+            problems = "\n".join(
+                f"  {_explain_problem(x, '.'.join(map(str, x['loc'])), cls)}"
+                for x in error.errors(include_url=False)
+            )
+            msg = f"Could not read an inventory from {source}:\n{problems}"
+            raise InvalidInventoryError(msg) from error
+        return built.check()
+
+
+def _explain_problem(item: Mapping, field: str, model) -> str:
+    """Say what one pydantic error item means, in the format's own terms."""
+    kind, ctx = item["type"], item.get("ctx", {})
+    if kind == "missing":
+        return f"{field} is required but not stated."
+    if kind == "extra_forbidden":
+        msg = f"{field} is not a field this object has."
+        # Suggest from the fields of the object the stray key sits in.
+        *parents, name = item["loc"]
+        owner = model if not parents else _model_held(_annotation_at(model, parents))
+        known = owner.model_fields if owner is not None else ()
+        if close := difflib.get_close_matches(str(name), known, n=1):
+            msg += f" Did you mean {close[0]!r}?"
+        return msg
+    if kind == "union_tag_not_found":
+        what = f"{field} " if field else "This row "
+        tag = ctx["discriminator"].strip("'")
+        kinds = _union_tags(_annotation_at(model, item["loc"]))
+        named = f": one of {kinds}" if kinds else ""
+        return f"{what}states no {tag}, which names what it is{named}."
+    if kind == "literal_error":
+        text = f"{field} is {item['input']!r}, but should be {ctx['expected']}."
+        return text
+    if kind in {"tuple_type", "list_type"}:
+        return f"{field} should be a list, not {item['input']!r}."
+    # A validator's own message is already in the format's terms, once the
+    # prefix pydantic puts before it is taken off.
+    text = str(ctx["error"]) if kind == "value_error" else item["msg"]
+    return f"{field}: {text}" if field else text
+
+
+def _annotation_at(model, loc) -> Any:
+    """
+    Return the annotation of the field an error location ends in.
+
+    The location walks down through nested models, a field name for each
+    model and an index for each item of a tuple, so each name is looked
+    up on the one model the field before it holds.
+    """
+    annotation = None
+    for key in loc:
+        if isinstance(key, int):
+            continue
+        if model is None or key not in model.model_fields:
+            return None
+        annotation = model.model_fields[key].annotation
+        model = _model_held(annotation)
+    return annotation
+
+
+def _model_held(annotation):
+    """Return the one model an annotation holds, or None if not just one."""
+    held = [x for x in _flat_args(annotation) if hasattr(x, "model_fields")]
+    return held[0] if len(held) == 1 else None
+
+
+def _flat_args(annotation) -> list:
+    """Return the types an annotation is built from, at every depth."""
+    args = get_args(annotation)
+    return [annotation] if not args else [y for x in args for y in _flat_args(x)]
+
+
+def _union_tags(annotation) -> list[str]:
+    """Return the tags of the tagged models an annotation can hold."""
+    args = _flat_args(annotation)
+    return [x.__name__ for x in args if TAG_FIELD in getattr(x, "model_fields", {})]
 
 
 def inventory_to_yaml(inventory: Inventory, path: str | Path | None = None) -> str:
