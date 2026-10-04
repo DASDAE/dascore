@@ -2507,8 +2507,8 @@ class TestReadableErrors:
         """Not the attrs file the table was merged into, nor a row index."""
         text = "distance_min,distance_max,medium\n0,340,soil\n10,20,soil\n"
         msg = self._message(make_inventory, coupling__csv=text)
-        assert "path/coupling.csv data row 1: coupling_type is required" in msg
-        assert "path/coupling.csv data row 2: coupling_type is required" in msg
+        assert "coupling.csv data row 1: coupling_type is required" in msg
+        assert "coupling.csv data row 2: coupling_type is required" in msg
         assert "[type=" not in msg
 
     def test_bad_choice_states_what_was_given(self, make_inventory):
@@ -2530,7 +2530,7 @@ class TestReadableErrors:
         """The singular of a list field is the likeliest typo."""
         attrs = "object_type: OpticalPath\nmeasurement: otdr-1\n"
         msg = self._message(make_inventory, attrs__yaml=attrs)
-        assert "path/attrs.yaml: measurement is not a field" in msg
+        assert "attrs.yaml: measurement is not a field" in msg
         assert "Did you mean 'measurements'?" in msg
 
     def test_scalar_for_list(self, make_inventory):
@@ -2555,7 +2555,7 @@ class TestReadableErrors:
     def test_path_with_no_type(self, make_inventory):
         """Said the way every other object file says it."""
         msg = self._message(make_inventory, attrs__yaml="name: main\n")
-        assert "path/attrs.yaml declares no object_type" in msg
+        assert "attrs.yaml declares no object_type" in msg
 
     def test_envelope_with_no_type(self, make_inventory):
         """Not 'declares object_type None'."""
@@ -2568,7 +2568,7 @@ class TestReadableErrors:
         text = "name,distance,longitude,latitude,elevation\nS100,100,inf,40,687\n"
         text += "S100,102,-117.1,40.1,685\n"
         msg = self._message(make_inventory, geometry__csv=text)
-        assert "path/geometry.csv: " in msg
+        assert "geometry.csv: " in msg
         assert "geometry.csv data row" not in msg
 
     def test_non_string_key(self, make_inventory):
