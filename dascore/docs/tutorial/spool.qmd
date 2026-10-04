@@ -261,7 +261,7 @@ Patches that cannot concatenate remain in separate output groups. Values are ord
 
 # Loading into memory
 
-[`Spool.load`](`dascore.core.spool.Spool.load`) reads every patch and returns a spool of in-memory patches, the way xarray's `load` does. The bytes the arrays take are added up from the spool contents first and compared with the memory available, so a spool which will not fit raises `InsufficientMemoryError` before anything is read rather than failing part way. The check needs `psutil`; without it the read goes ahead unchecked.
+[`Spool.load`](`dascore.core.spool.Spool.load`) reads every patch and returns a spool of in-memory patches, the way xarray's `load` does. The bytes the arrays take are estimated from the spool contents first and compared with the memory available, so a spool which will not fit raises `InsufficientMemoryError` before anything is read rather than failing part way. A patch whose size cannot be told from its metadata counts nothing. The check needs `psutil`; without it the read goes ahead unchecked.
 
 ```{python}
 loaded = spool.select(distance=(0, 100)).load()

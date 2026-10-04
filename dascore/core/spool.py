@@ -5,7 +5,14 @@ from __future__ import annotations
 import numbers
 import os
 import warnings
-from collections.abc import Callable, Generator, Iterator, Mapping, Sequence
+from collections.abc import (
+    Callable,
+    Container,
+    Generator,
+    Iterator,
+    Mapping,
+    Sequence,
+)
 from contextlib import suppress
 from dataclasses import replace
 from datetime import timedelta
@@ -84,6 +91,7 @@ from dascore.exceptions import (
     UnresolvedPatchError,
 )
 from dascore.units import Quantity
+from dascore.utils.array_api import backend_name, to_numpy
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
@@ -142,7 +150,7 @@ from dascore.utils.pd import (
     resolve_selector_namespaces,
     selector_spec_names,
 )
-from dascore.utils.time import to_timedelta64
+from dascore.utils.time import to_float, to_timedelta64
 
 if TYPE_CHECKING:
     from dascore.io.index.catalog import PatchCatalog
@@ -219,12 +227,38 @@ def _itemsize(dtype) -> float:
         return np.nan
 
 
+def _ratio_one(low, high, step) -> float:
+    """How many steps one row's range spans, or NaN when that cannot be told."""
+    try:
+        return float(to_float(high - low)) / abs(float(to_float(step)))
+    except (TypeError, ValueError, ZeroDivisionError):
+        return np.nan
+
+
+def _dim_counts(low: pd.Series, high: pd.Series, step: pd.Series) -> np.ndarray:
+    """
+    Samples each row's range holds at its step; NaN where that cannot be told.
+
+    A range counts ``(max - min) / |step| + 1`` samples, as the chunk
+    planner counts them. A range which ends between samples counts one
+    more than it holds.
+    """
+    try:
+        with np.errstate(all="ignore"):
+            span = np.asarray(to_float(high - low), dtype=np.float64)
+            ratio = span / np.abs(np.asarray(to_float(step), dtype=np.float64))
+    except (TypeError, ValueError):  # text values, or values of several kinds
+        rows = zip(low, high, step, strict=True)
+        ratio = np.array([_ratio_one(*row) for row in rows], dtype=np.float64)
+    counts = np.round(ratio) + 1
+    return np.where(np.isfinite(ratio) & (counts > 0), counts, np.nan)
+
+
 def _estimated_samples(df: pd.DataFrame) -> pd.Series:
     """
     Each row's sample count from its coordinate envelopes; NaN where unknowable.
 
-    A dimension counts ``(max - min) / step + 1`` samples; a row missing
-    any of those for one of its dimensions has no count.
+    A row missing the range or step of one of its dimensions has no count.
     """
     counts = pd.Series(1.0, index=df.index)
     dims = df["dims"].fillna("").astype(str).str.split(",")
@@ -234,24 +268,20 @@ def _estimated_samples(df: pd.DataFrame) -> pd.Series:
         if not set(cols).issubset(df.columns):
             counts[has] = np.nan
             continue
-        low, high, step = (df[c][has] for c in cols)
-        with np.errstate(all="ignore"):
-            ratio = pd.to_numeric((high - low) / step, errors="coerce")
-            ratio = ratio.astype(np.float64)
-        rounded = np.round(ratio) + 1
-        counts[has] *= rounded.where(np.isfinite(ratio) & (rounded > 0))
+        counts[has] *= _dim_counts(*(df[c][has] for c in cols))
     return counts
 
 
-def _bytes_to_load(df: pd.DataFrame) -> int:
+def _bytes_to_load(df: pd.DataFrame, lazy: Container[str] = frozenset()) -> int:
     """
-    The bytes reading a relation's arrays takes.
+    About the bytes reading a relation's arrays takes.
 
     A row stating its sample count is counted exactly; one trimmed by a
     selection or assembled by a plan states none and is estimated from
     its envelopes. A row whose size cannot be told (a dimension with no
-    step, or no dtype) counts nothing, as does a patch already in memory
-    presented as it is, so the figure is a floor.
+    step, or no dtype) counts nothing, nor does a patch already in memory
+    presented as it is; `lazy` names the live patches whose arrays are
+    not in memory yet.
     """
     if df.empty:
         return 0
@@ -260,16 +290,23 @@ def _bytes_to_load(df: pd.DataFrame) -> int:
     samples = known.astype(np.float64).where(known.notna(), _estimated_samples(df))
     if "source_path" in df.columns:
         # a live patch which still states its size is presented as it is
-        held = known.notna() & df["source_path"].map(is_memory_uri).to_numpy()
+        paths = df["source_path"]
+        held = known.notna() & paths.map(is_memory_uri).to_numpy()
+        held &= ~paths.map(lambda x: x in lazy).to_numpy()
         samples = samples.where(~held, 0.0)
     itemsize = df.get("_dtype", none).map(_itemsize)
     return int(np.nansum(samples.to_numpy() * itemsize.to_numpy(dtype=float)))
 
 
+def _is_lazy(data) -> bool:
+    """Whether an array's values are read only when asked for."""
+    return isinstance(data, LazyArray) or backend_name(data) == "dask"
+
+
 def _loaded(patch: dc.Patch) -> dc.Patch:
     """The patch with its data array in memory."""
     data = patch.data
-    return patch.to_patch(data.load()) if isinstance(data, LazyArray) else patch
+    return patch.to_patch(to_numpy(data)) if _is_lazy(data) else patch
 
 
 def _spool_input_message(data) -> str:
@@ -522,10 +559,10 @@ class Spool(NodeRepr, NamespaceOwner):
         Before anything is read, the bytes the arrays take are added up
         from the spool's contents and compared with the memory available,
         so a spool which will not fit is refused rather than read part way.
-        The figure is a floor: a patch which states its sample count is
-        counted exactly, one a selection trimmed or a plan assembled is
-        estimated from its coordinate ranges, and one whose size cannot
-        be told counts nothing. Patches already in memory count nothing
+        The figure is an estimate: a patch which states its sample count
+        is counted exactly, one a selection trimmed or a plan assembled is
+        counted from its coordinate ranges, and one whose size cannot be
+        told counts nothing. Patches already in memory count nothing
         either. Telling what is available needs ``psutil``, which is not a
         dependency; without it the read goes ahead unchecked.
 
@@ -548,7 +585,9 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> loaded = spool.load()
         >>> assert len(loaded) == len(spool)
         """
-        needed = _bytes_to_load(self._df)
+        live = self._catalog.resolver.live_entries()
+        lazy = {path for path, patch in live.items() if _is_lazy(patch.data)}
+        needed = _bytes_to_load(self._df, lazy)
         available = available_memory()
         if available is not None and needed > available:
             msg = (
@@ -557,7 +596,18 @@ class Spool(NodeRepr, NamespaceOwner):
                 "or iterate the spool and keep only what each patch yields."
             )
             raise InsufficientMemoryError(msg)
-        new = self.__class__([_loaded(patch) for patch in self])
+        from dascore.io.index.catalog import _patch_path  # noqa: PLC0415
+
+        patches, seen = [], set()
+        for patch in self:
+            patch = _loaded(patch)
+            # A spool of patches holds each instance once, and a row
+            # presented twice (an explicit window given twice, say) gives
+            # one instance twice; a fresh instance of it keeps the position.
+            key = _patch_path(patch)
+            patches.append(patch.new() if key in seen else patch)
+            seen.add(key)
+        new = self.__class__(patches)
         new._inventory = self._inventory
         new._on_unresolved = self._on_unresolved
         return new

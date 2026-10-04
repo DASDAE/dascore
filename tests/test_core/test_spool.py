@@ -333,6 +333,79 @@ class TestLoad:
         df = pd.DataFrame({"dims": ["time"], "_dtype": ["float64"]})
         assert _bytes_to_load(df) == 0
 
+    @staticmethod
+    def _line(data, x):
+        """A one-dimensional patch over coordinate x."""
+        return dc.Patch(data=data, coords={"x": x}, dims=("x",))
+
+    def test_descending_coords_estimated(self, tmp_path):
+        """A negative step counts samples like a positive one."""
+        path = tmp_path / "down.h5"
+        dc.write(self._line(np.ones(10), np.arange(10)[::-1]), path, "dasdae")
+        trimmed = dc.spool(path).select(x=(0, 1))
+        assert _bytes_to_load(trimmed._df) == sum(x.data.nbytes for x in trimmed)
+
+    def test_off_grid_trim_counts_at_most_one_extra(self, tmp_path):
+        """A range ending between samples counts one more per dimension."""
+        path = tmp_path / "grid.h5"
+        dc.write(self._line(np.ones(10), np.arange(10)), path, "dasdae")
+        trimmed = dc.spool(path).select(x=(0.1, 8.1))
+        actual = sum(x.data.nbytes for x in trimmed)
+        assert actual <= _bytes_to_load(trimmed._df) <= actual + 8
+
+    def test_text_coords_load(self, budget):
+        """Coordinates with no arithmetic leave the row's count unknown."""
+        budget(1)
+        patch = self._line(np.ones(3), np.array(["a", "b", "c"]))
+        assert len(dc.spool(patch).load()) == 1
+        df = dc.spool(patch).select(x=("a", "b"))._df
+        assert _bytes_to_load(df) == 0
+
+    def test_mixed_kinds_load(self, budget):
+        """Rows whose values are of different kinds are counted one by one."""
+        budget(1)
+        start = np.datetime64("2020-01-01")
+        patches = [
+            self._line(np.ones(3), np.array([0.0, 1.0, 3.0])),
+            self._line(np.ones(3), start + np.arange(3) * np.timedelta64(1, "s")),
+        ]
+        spool = dc.spool(patches)
+        assert len(spool.load()) == 2
+        counts = spool_module._estimated_samples(spool._df)
+        assert counts.isna().tolist() == [True, False]
+        assert counts.iloc[1] == 3
+
+    def test_live_lazy_patch_counted(self, budget):
+        """A held patch whose array is not read yet costs its size."""
+        from dascore.core.source import ArraySource  # noqa: PLC0415
+
+        budget(1)
+        lazy = LazyArray.from_source(ArraySource.full((10,), 1.0))
+        spool = dc.spool(self._line(lazy, np.arange(10)))
+        with pytest.raises(InsufficientMemoryError):
+            spool.load()
+
+    def test_dask_patch_loaded(self, budget):
+        """A dask array is read into memory like a lazy one, and counted."""
+        da = pytest.importorskip("dask.array")
+        spool = dc.spool(self._line(da.arange(10, chunks=5), np.arange(10)))
+        budget(1)
+        with pytest.raises(InsufficientMemoryError):
+            spool.load()
+        budget(10**9)
+        assert isinstance(spool.load()[0].data, np.ndarray)
+
+    def test_repeated_windows_kept(self, budget):
+        """A patch presented twice by explicit windows is loaded twice."""
+        budget(10**9)
+        patch = self._line(np.arange(3.0), np.arange(3.0))
+        windows = np.array([[0.0, 2.0], [0.0, 2.0]])
+        spool = dc.spool(patch).select(x=windows)
+        assert len(spool) == 2
+        loaded = spool.load()
+        assert len(loaded) == 2
+        assert all(x == patch for x in loaded)
+
     def test_lazy_patch_is_read(self, random_patch, tmp_path, budget):
         """A patch holding a lazy array comes back holding the array itself."""
         budget(10**12)
