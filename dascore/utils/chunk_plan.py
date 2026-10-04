@@ -2043,6 +2043,7 @@ def build_chunk_plan(
             fill_value=fill_value,
             skip=skip,
         )
+    outputs = _carry_grids(outputs, members, sorted_df, name)
     return ChunkPlan(outputs, members, name, value, params)
 
 
@@ -2781,6 +2782,66 @@ def build_subdivision_plan(df: pd.DataFrame, pieces, name: str) -> ChunkPlan:
         }
     )
     return ChunkPlan(outputs.reset_index(drop=True), members, name, None, {})
+
+
+def grid_fits(grid, low, high) -> bool:
+    """Whether an exact grid's first and last labels are the tick bounds given."""
+    if not isinstance(grid, tuple) or _value_family(low) in ("number", "text"):
+        return False
+    num, den, phase, count = grid
+    start, end = (int(to_int(x)) for x in ((high, low) if num < 0 else (low, high)))
+    return start + (phase + (count - 1) * num) // den == end
+
+
+def _lattice_span(lattice, low, high):
+    """The first and last sample k a lattice labels inside [low, high] ticks."""
+    num, den, _, ideal = lattice
+    top, bottom = (int(high) + 1) * den - ideal, int(low) * den - ideal
+    if num > 0:
+        return -(-bottom // num), -(-top // num) - 1
+    return top // num + 1, bottom // num
+
+
+def _carry_grids(outputs, members, sources, name):
+    """
+    Give outputs on one exact grid the grid of their samples.
+
+    A whole-tick envelope cannot restate a fractional step, so a later plan
+    over the output would cut on a drifting lattice. A grid's labels are
+    ``(ideal + k * num) // den`` ticks; members on one lattice share num,
+    den and ideal origin modulo num. A grid counts only where its labels
+    end on the row's bounds (a trimmed row's do not) and its members hold
+    every sample.
+    """
+    col, (low, high, _) = f"_{name}_grid", _dim_columns(outputs, name)
+    if col not in sources:
+        return outputs
+    lattice = {}  # source -> (num, den, ideal % |num|, ideal)
+    for pid, grid, lo, hi in zip(*(sources[x] for x in ("_patch_row", col, low, high))):
+        if grid_fits(grid, lo, hi):  # a trimmed row still states its source's
+            num, den, phase, _ = grid  # a descending grid starts at its max
+            ideal = int(to_int(hi if num < 0 else lo)) * den + phase
+            lattice[pid] = (num, den, ideal % abs(num), ideal)
+    first, kinds, held = {}, {}, {}
+    rows = zip(*(members[x] for x in ("output_id", "_patch_row", low, high)))
+    for out, pid, lo, hi in rows:
+        first.setdefault(out, pid)
+        kinds.setdefault(out, set()).add(lattice.get(pid, (None,))[:3])
+        if pid in lattice:
+            k0, k1 = _lattice_span(lattice[pid], to_int(lo), to_int(hi))
+            held[out] = held.get(out, 0) + k1 - k0 + 1
+    grids = []
+    for out, lo, hi in zip(outputs["output_id"], outputs[low], outputs[high]):
+        if len(kinds.get(out, ())) != 1 or first[out] not in lattice:
+            grids.append(None)
+            continue
+        num, den, _, ideal = lattice[first[out]]
+        k0, k1 = _lattice_span(lattice[first[out]], to_int(lo), to_int(hi))
+        # slicing keeps a reduced grid reduced: num and den set what divides phase
+        grid = (num, den, (ideal + k0 * num) % den, k1 - k0 + 1)
+        # a fill the members do not hold is padded on whole ticks, off the grid
+        grids.append(grid if grid[-1] == held[out] else None)
+    return outputs.assign(**{col: grids})
 
 
 def _report_incomplete(failures, behavior: WARN_LEVELS) -> None:
