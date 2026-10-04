@@ -2621,3 +2621,25 @@ class TestReadableErrors:
         files = {**MINIMAL, "inventory.yaml": "object_type: Inventory\n1: x\n"}
         with pytest.raises(InvalidInventoryError, match="Could not read the envelope"):
             make_inventory(files)
+
+    def test_nested_near_miss_is_suggested(self, make_inventory):
+        """A typo'd table column is matched against the row's own fields."""
+        text = "distance_min,distance_max,coupling_type,medum\n0,340,trench,soil\n"
+        msg = self._message(make_inventory, coupling__csv=text)
+        assert "coupling.csv data row 1: medum is not a field" in msg
+        assert "Did you mean 'medium'?" in msg
+
+    def test_serialized_component_lists_types(self):
+        """A nested location still finds the union a component is one of."""
+        text = (
+            "object_type: Inventory\n"
+            "networks:\n"
+            "  - code: XX\n"
+            "    fiber_arrays:\n"
+            "      - code: L1\n"
+            "        optical_paths:\n"
+            "          - optical_components:\n"
+            "              - {distance_min: 0, distance_max: 1}\n"
+        )
+        with pytest.raises(InvalidInventoryError, match="'FiberSegment'"):
+            dc.Inventory.from_yaml(text)
