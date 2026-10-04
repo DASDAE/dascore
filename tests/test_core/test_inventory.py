@@ -284,11 +284,13 @@ class TestGeometryColumns:
         columns = {"chainage": (0.0, 1.0), "depth": (0.0, 1.0)}
         first = inv.Geometry(name="a", distance=(0.0, 17.0), columns=columns)
         second = inv.Geometry(name="b", distance=(1.0, 14.0), columns=columns)
-        path = self._inventory(first, second).networks[0].fiber_arrays[0]
+        array = self._inventory(first, second).networks[0].fiber_arrays[0]
+        path = array.optical_paths[0].model_copy(update={"name": "lab"})
         with pytest.raises(InvalidInventoryError) as info:
-            path.optical_paths[0].check()
+            path.check()
         lines = str(info.value).splitlines()[1:]
         assert len(lines) == 1
+        assert "on optical path 'lab'" in lines[0]
         assert "optical distance from 1.0 to 14.0" in lines[0]
         assert "['chainage', 'depth']" in lines[0]
 
@@ -434,8 +436,12 @@ class TestGeometryColumnReviewFindings:
                 "elevation": (100.0, 110.0),
             },
         )
-        with pytest.raises(InvalidInventoryError, match="overlap in optical"):
+        with pytest.raises(InvalidInventoryError) as info:
             self._inventory(canonical, labelled).check()
+        # Each segment's own headers, not one segment's attributed to both.
+        assert "as ['x', 'y', 'z'] and ['longitude', 'latitude', 'elevation']" in (
+            str(info.value)
+        )
 
     def test_overlap_reported_once_in_distance(self):
         """One fault is one message, naming both segments and the distances."""

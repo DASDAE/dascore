@@ -1499,10 +1499,11 @@ class OpticalPath(TimeRangedModel):
             hi = min(first.interval[1], second.interval[1])
             if lo >= hi:
                 continue
+            where = f" on optical path {self.name!r}" if self.name else ""
             pair = (
                 f"Geometry segments {first.name!r} (distance {first.interval}) "
-                f"and {second.name!r} (distance {second.interval}) overlap in "
-                f"optical distance from {lo} to {hi}"
+                f"and {second.name!r} (distance {second.interval}){where} "
+                f"overlap in optical distance from {lo} to {hi}"
             )
             # One message per pair, not per column, as for the axes.
             if shared := sorted(first.columns.keys() & second.columns.keys()):
@@ -2490,15 +2491,20 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
             hi = min(first.interval[1], second.interval[1])
             if not (shared := sorted(a.keys() & b.keys())) or lo >= hi:
                 continue
-            # The first segment's spelling, which is a header the user wrote.
-            columns = [a[x] for x in shared]
+            # Spelled as each segment's headers were, which the user wrote.
+            mine, theirs = [a[x] for x in shared], [b[x] for x in shared]
+            placing = (
+                f"both place the position columns {mine}"
+                if mine == theirs
+                else f"place the same axes, as {mine} and {theirs}"
+            )
             where = f" on optical path {path.name!r}" if path.name else ""
             errors.append(
                 f"Geometry segments {first.name!r} (distance {first.interval}) "
                 f"and {second.name!r} (distance {second.interval}){where} "
-                f"overlap in optical distance from {lo} to {hi}, and both "
-                f"place the position columns {columns}. Each axis is placed "
-                "by at most one segment at any distance along the path."
+                f"overlap in optical distance from {lo} to {hi}, and "
+                f"{placing}. Each axis is placed by at most one segment at "
+                "any distance along the path."
             )
         return errors
 
