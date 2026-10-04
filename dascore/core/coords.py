@@ -3093,7 +3093,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             if (new_fit := self._fit_run(trial, tol, keep_step)) is not None:
                 run, fit = trial, new_fit
             else:
-                result.extend(self._settled(run, fit, nxt))
+                result.extend(self._settled(run, fit, nxt, keep_step))
                 run, fit = [nxt], self._fit_run([nxt], tol, keep_step)
         result.extend(self._settled(run, fit))
         runs, dtypes = zip(*result)
@@ -3105,20 +3105,23 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         step = ... if kept else None
         return self._with_runs(runs, dtype=np.result_type(*dtypes), step=step)
 
-    def _settled(self, run, fit, nxt=None) -> list[tuple]:
+    def _settled(self, run, fit, nxt=None, keep_step=False) -> list[tuple]:
         """
         The runs a stretch becomes, with their dtypes: its fit if it has one.
 
-        A fit holding its step can end past where the next run starts; the
-        stretch then keeps its own runs, so the labels stay in order.
+        A fit holding its step can end within half a step of where the next
+        run starts, or past it; the stretch then keeps its own runs, so the
+        labels stay in order and no two crowd one position. Any other fit
+        ends on the stretch's own last label.
         """
         if fit is None:
             return [(run[0], self.dtype)]
-        if nxt is not None:
+        if nxt is not None and keep_step:
             grid, dtype = fit
             last = grid.labels(np.array([len(grid) - 1]), dtype)[0]
             first = self._run_labels(nxt, [0])[0]
-            if (last >= first) if self.sorted else (last <= first):
+            ahead = first - last if self.sorted else last - first
+            if ahead * 2 < abs(grid.step(dtype)):
                 return [(x, self.dtype) for x in run]
         return [fit]
 
@@ -3176,20 +3179,22 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             return None
         if keep_step and not self._keeps_step(runs, labels, step):
             return None
+        # two labels within half a step would share one position, and
+        # re-fitting would push every later sample a step along
+        if keep_step and np.any(np.abs(np.diff(actual)) * 2 < abs(step)):
+            return None
         fit = candidate.runs[0]
         assert isinstance(fit, Grid)  # a re-fit is evenly sampled by construction
         return fit, candidate.dtype
 
     def _keeps_step(self, runs, labels, step) -> bool:
         """
-        Whether every seam between these runs is one position of their grid.
+        Whether any seam between these runs skips a position of their grid.
 
         A seam two steps wide or more skips a position, whether or not the
         later run sits on the earlier one's lattice, so it is a hole which
-        re-fitting would spread over the run. A seam under half a step puts
-        two samples on one position, and re-fitting would push every later
-        sample a step along. The slack absorbs nanosecond rounding of
-        fractional-rate steps and starts. A seam in between is
+        re-fitting would spread over the run. The slack absorbs nanosecond
+        rounding of fractional-rate steps and starts. A narrower seam is
         misalignment, and stays the tolerance's business. A run of stored
         labels is measured by the coordinate's step, or the fit's if none.
         """
@@ -3200,7 +3205,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             if _is_null(seam) or not seam:
                 continue  # no grid stated, so no position to have skipped
             span = abs(labels[num][0] - labels[num - 1][-1]) / abs(seam)
-            if span >= 2 - 1e-3 or span < 0.5:
+            if span >= 2 - 1e-3:
                 return False
         return True
 
