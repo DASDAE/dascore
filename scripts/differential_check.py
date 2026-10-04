@@ -1253,6 +1253,7 @@ def _data_dependent_calls(patch, null_patch, int_patch, f32, dft_patch, m) -> di
     with_inf = _pinned(null_patch.new(data=inf), "with_inf")
     xyz = _pinned(dc.get_example_patch("random_patch_with_xyz"), "xyz")
     shot = pd.Series({"x": 10, "y": 10, "z": 0})
+    # Resource ids are hashed from content, so the pair is the same every run.
     inv_patch, inventory = inventory_patch_pair()
     inv_patch = _pinned(inv_patch, "inv_patch")
     bare = _pinned(inv_patch.update_attrs(acquisition_key=""), "inv_bare")
