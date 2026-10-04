@@ -773,12 +773,26 @@ class TestSignatureDrift:
 
 
 class TestPlan:
-    """A plan holds numbers, indices, or numeric arrays only."""
+    """A plan holds numbers, indices, plans, or non-object arrays only."""
 
     @pytest.mark.parametrize(
         "value",
-        ["time", {1: 2}, np.array(["a"]), object()],
-        ids=["string", "dict", "string_array", "object"],
+        [
+            "time",
+            {1: 2},
+            {"a": "time"},
+            np.array([None]),
+            np.zeros(1, dtype=[("a", [("b", object)])]),
+            object(),
+        ],
+        ids=[
+            "string",
+            "int_keyed_dict",
+            "dict_of_string",
+            "object_array",
+            "nested_object_field",
+            "object",
+        ],
     )
     def test_refused(self, patch, value):
         """Anything else is refused before the kernel runs."""
@@ -812,7 +826,7 @@ class TestPlan:
                 Bad()(patch)
 
     def test_allowed(self, patch):
-        """Numbers, indices, nested sequences and numeric arrays pass."""
+        """Numbers, indices, nested sequences, plans and arrays pass."""
 
         class Good(PatchProcessor):
             """Plan every allowed kind."""
@@ -830,6 +844,8 @@ class TestPlan:
                     "f": slice(1, None, 2),
                     "g": (slice(None), Ellipsis, [1, 2]),
                     "h": None,
+                    "i": np.array(["a"]),
+                    "j": {"k": 1, "m": np.arange(2)},
                 }
 
             def kernel(self, data, **plan):
@@ -1136,7 +1152,7 @@ class TestRegisterKernelForms:
 
         assert SeamKernelNamed.kernel_for("named_backend") is _named
 
-    @pytest.mark.parametrize("name", ["no_such_operation_here", "where"])
+    @pytest.mark.parametrize("name", ["no_such_operation_here", "waterfall"])
     def test_a_name_with_no_processor_is_refused(self, name):
         """An unknown tag, or a patch function with no class, has no kernels."""
         with pytest.raises(ParameterError, match=name):

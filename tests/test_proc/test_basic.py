@@ -13,14 +13,16 @@ from scipy.fft import next_fast_len
 
 import dascore as dc
 from dascore import get_example_patch
+from dascore.core.processor import _is_plain
 from dascore.exceptions import (
     CoordError,
     IncompatiblePatchError,
     ParameterError,
     PatchBroadcastError,
 )
-from dascore.proc.basic import Pad
+from dascore.proc.basic import Pad, Where
 from dascore.utils.misc import _merge_tuples
+from dascore.utils.patch import align_patch_coords
 from dascore.warnings import NumpyFallbackWarning
 
 OP_NAMES = ("add", "sub", "pow", "truediv", "floordiv", "mul", "mod")
@@ -1577,3 +1579,97 @@ class TestDemean:
         assert np.isnan(out.data).sum() == 1
         means = np.nanmean(out.data, axis=out.get_axis(dim))
         assert np.allclose(means, 0)
+
+
+class TestWhereMetadata:
+    """Where works out the aligned result from metadata alone."""
+
+    def test_partial_condition(self, random_patch):
+        """A condition covering part of the patch narrows the result to it."""
+        cond = random_patch.isel(distance=slice(10, 200)) > 0.5
+        out, _ = Where(cond=cond).get_metadata(random_patch.drop_data())
+        assert out.shape == (190, 2000)
+        assert out.dtype == random_patch.where(cond).dtype == np.float64
+
+    def test_integers_filled_with_nan(self, random_patch):
+        """A NaN fill promotes integers; the metadata predicts it without data."""
+        ints = random_patch.new(data=np.ones(random_patch.shape, dtype=np.int32))
+        out, _ = Where(cond=ints.data > 0).get_metadata(ints.drop_data())
+        assert out.dtype == ints.where(ints.data > 0).dtype == np.float64
+
+    def test_transposed_condition(self, random_patch):
+        """A condition in the other dimension order is transposed to fit."""
+        out = random_patch.where(random_patch.transpose() > 0.5)
+        expected = np.where(random_patch.data > 0.5, random_patch.data, np.nan)
+        assert np.array_equal(out.data, expected, equal_nan=True)
+
+    def test_aligns_as_arithmetic_does(self, random_patch):
+        """Where and arithmetic align a shifted, transposed, narrowed patch alike."""
+        other = random_patch.transpose().isel(time=slice(10, 1500), distance=slice(5))
+        mine, theirs = align_patch_coords(random_patch, other)
+        kept = random_patch.where(other > -np.inf)
+        filled = random_patch.where(other < -np.inf, other=other)
+        assert kept.coords == mine.coords == (random_patch + other).coords
+        assert np.array_equal(kept.data, mine.data)
+        assert np.array_equal(filled.data, theirs.data)
+
+    def test_datetime_other(self, random_patch):
+        """Datetime data are filled from a datetime patch."""
+        offsets = (random_patch.data * 1e6).astype("timedelta64[us]")
+        times = random_patch.new(data=np.datetime64("2020-01-01") + offsets)
+        later = times.new(data=times.data + np.timedelta64(1, "s"))
+        out = times.where(random_patch > 0.5, other=later)
+        expected = np.where(random_patch.data > 0.5, times.data, later.data)
+        assert np.array_equal(out.data, expected)
+
+    def test_string_other(self, random_patch):
+        """String data are filled from a string patch."""
+        strings = random_patch.new(data=np.where(random_patch.data > 0.5, "a", "b"))
+        other = strings.new(data=np.full(strings.shape, "c"))
+        out = strings.where(random_patch > 0.5, other=other)
+        assert np.array_equal(out.data, np.where(strings.data == "a", "a", "c"))
+
+    def test_other_on_another_backend(self, random_patch):
+        """An other patch on another backend fills numpy data."""
+        xp = pytest.importorskip("array_api_strict")
+        other = random_patch.new(data=xp.asarray(random_patch.data * 0))
+        out = random_patch.where(random_patch.data > 0.5, other=other)
+        expected = np.where(random_patch.data > 0.5, random_patch.data, 0)
+        assert np.array_equal(out.data, expected)
+
+    def test_plan_holds_only_alignment(self, random_patch):
+        """The plan says how to align the operands, never carrying their data."""
+        cond = random_patch.transpose().isel(time=slice(10, 1500)) > 0.5
+        other = random_patch.isel(distance=slice(5, None))
+        _, plan = Where(cond=cond, other=other).get_metadata(random_patch.drop_data())
+        assert all(_is_plain(x) for x in plan.values())
+        flat = str(plan)
+        assert "array" not in flat and plan["cond_steps"] and plan["other_steps"]
+
+    def test_dask_condition_stays_lazy(self, random_patch):
+        """A lazy condition is read only when the lazy result is computed."""
+        dask_array = pytest.importorskip("dask.array")
+        reads = []
+
+        def count(block):
+            reads.append(block.shape)
+            return block
+
+        data = np.asarray(random_patch.data)
+        lazy = dask_array.from_array(data, chunks=(100, 500))
+        patch = random_patch.new(data=lazy)
+        cond_data = (lazy > 0.5).map_blocks(count, meta=np.empty((0, 0), bool))
+        cond = random_patch.new(data=cond_data).transpose()
+        out = patch.where(cond, other=0)
+        assert not reads
+        assert isinstance(out.data, dask_array.Array)
+        assert np.array_equal(np.asarray(out.data), np.where(data > 0.5, data, 0))
+        assert reads
+
+
+class TestDropnaNoop:
+    """Dropping nothing is no operation."""
+
+    def test_nothing_to_drop_is_the_patch(self, random_patch):
+        """The patch comes back itself, with nothing recorded."""
+        assert random_patch.dropna("time") is random_patch

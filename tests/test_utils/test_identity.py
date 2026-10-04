@@ -847,6 +847,10 @@ class TestPatchRules:
         """With ids off, no argument is encoded."""
         import dascore.utils.identity as identity  # noqa: PLC0415
 
+        @dc.patch_function()
+        def double(patch):
+            return patch.new(data=patch.data * 2)
+
         def _fail(*args, **kwargs):
             raise AssertionError("an id was computed with ids disabled")
 
@@ -855,9 +859,9 @@ class TestPatchRules:
             assert (patch + 1).attrs.data_id == ""
             assert patch.pass_filter(time=(1, 10)).attrs.data_id == ""
             assert patch.decimate(time=2).attrs.data_id == ""
-            # decimate is a processor now, so where keeps the ids-disabled
-            # path of a decorated patch function covered.
-            assert patch.where(np.asarray(patch.data) > 0).attrs.data_id == ""
+            # Every built-in operation is a processor now; a decorated
+            # function keeps that path covered.
+            assert double(patch).attrs.data_id == ""
             assert np.abs(patch).attrs.data_id == ""
 
     def test_two_patches(self, patch):

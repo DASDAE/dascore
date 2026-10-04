@@ -1380,11 +1380,16 @@ class TestReviewRegressions:
             inv.Inventory(resources={"wrong": cable})
 
     def test_duplicate_resource_ids_raise(self):
-        """Duplicate resource ids raise."""
+        """One resource id naming two different resources raises."""
+        first, second = inv.Cable(resource_id="x"), inv.Cable(resource_id="x", name="b")
         with pytest.raises(ValidationError, match="Duplicate resource_id"):
-            inv.Inventory(
-                resources=[inv.Cable(resource_id="x"), inv.Cable(resource_id="x")]
-            )
+            inv.Inventory(resources=[first, second])
+
+    def test_equal_unnamed_resources_are_one(self):
+        """Two unnamed resources with equal content pool as one (#1375)."""
+        first, second = inv.Interrogator(model="FI-1"), inv.Interrogator(model="FI-1")
+        assert first.resource_id == second.resource_id
+        assert len(inv.Inventory(resources=[first, second]).resources) == 1
 
     def test_columnless_geometry_raises(self):
         """A segment which measures nothing describes nothing."""
@@ -2211,7 +2216,7 @@ class TestImmutability:
     """Inventory fields cannot be written to."""
 
     @staticmethod
-    def _stocked_inventory(resource_id="fixed"):
+    def _stocked_inventory():
         """An inventory whose frozen mappings both carry contents."""
         cable = inv.Cable(resource_id="cable-01", name="c")
         segment = inv.FiberSegment(
@@ -2222,7 +2227,6 @@ class TestImmutability:
             optical_paths=(inv.OpticalPath(optical_components=(segment,)),),
         )
         return inv.Inventory(
-            resource_id=resource_id,
             extra_fields={"vendor": "x", "gain": 1.5},
             networks=(inv.Network(code="DAS", fiber_arrays=(array,)),),
         )
@@ -2276,7 +2280,6 @@ class TestImmutability:
 
     def test_equal_inventories_hash_equally(self):
         """Equality and hashing agree, so an inventory works as a dict key."""
-        # resource_id is pinned; it otherwise defaults to a fresh uuid.
         first, second = self._stocked_inventory(), self._stocked_inventory()
         assert first == second
         assert hash(first) == hash(second)
