@@ -757,8 +757,10 @@ class Stft(PatchProcessor):
     - Spectra are scaled by the sample spacing ``dt``, as dft's are, rather
       than by ``1 / sum(window)`` as `scipy.signal.stft` scales them.
 
-    Along time, one channel's stft equals this `scipy.signal.stft` call,
-    with ``x`` the channel's data and ``fs = 1 / dt``:
+    Along time, one channel's stft of real data equals this
+    `scipy.signal.stft` call, with ``x`` the channel's data, ``fs = 1 / dt``
+    and ``overlap`` in samples (0 for None); complex spectra are also
+    centred, as noted above:
 
     ```python
     import numpy as np
