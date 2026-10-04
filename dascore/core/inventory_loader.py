@@ -22,7 +22,7 @@ import re
 from collections import defaultdict
 from collections.abc import Mapping
 from pathlib import Path
-from typing import Any, NamedTuple, get_args
+from typing import Any, NamedTuple
 
 import pandas as pd
 from pydantic import ValidationError
@@ -40,6 +40,7 @@ from dascore.core.inventory import (
     OpticalMeasurement,
     OpticalPath,
     Station,
+    _explain_problem,
     _overlapping_epochs,
     _times_equal,
 )
@@ -338,6 +339,12 @@ def _build(model, data: dict, source: Path):
         raise InvalidInventoryError(msg) from error
 
 
+def _table_file(directory: Path, stem: str) -> Path | None:
+    """Return the table a stem was read from, spelled as it is on disk."""
+    want = f"{stem}{_CSV_SUFFIX}".casefold()
+    return next((x for x in directory.iterdir() if x.name.casefold() == want), None)
+
+
 def _explain(error: ValidationError, model, source: Path | None) -> str:
     """
     Restate a validation error as one line per problem, each naming its file.
@@ -353,58 +360,18 @@ def _explain(error: ValidationError, model, source: Path | None) -> str:
         if source is not None:
             where = _quote(source)
             table = _TABLES.get(str(loc[0])) if loc else None
-            csv = source.parent / f"{loc[0]}.csv" if loc else source
-            if table is not None and csv.exists():
+            csv = _table_file(source.parent, str(loc[0])) if table else None
+            if table is not None and csv is not None:
                 where, loc = _quote(csv), loc[1:]
                 # A point table's rows gather into objects, so its index is
-                # an object's, not a line's; an object table's row is its line.
+                # an object's; an object table's is its row's. Counted as data
+                # rows, since blank lines and quoted newlines move the lines.
                 if not table.points and loc and isinstance(loc[0], int):
-                    where, loc = f"{where} line {loc[0] + 2}", loc[1:]
+                    where, loc = f"{where} data row {loc[0] + 1}", loc[1:]
         field = ".".join(str(x) for x in loc)
         prefix = f"{where}: " if where else ""
-        lines.append(f"  {prefix}{_problem(item, field, model)}")
+        lines.append(f"  {prefix}{_explain_problem(item, field, model)}")
     return "\n".join(lines)
-
-
-def _problem(item: Mapping, field: str, model) -> str:
-    """Say what one pydantic error item means, in the format's own terms."""
-    kind, ctx = item["type"], item.get("ctx", {})
-    if kind == "missing":
-        return f"{field} is required but not stated."
-    top = item["loc"][0] if item["loc"] else None
-    if kind == "extra_forbidden":
-        msg = f"{field} is not a field this object has."
-        # Only a top-level field is one of this model's own to suggest from.
-        known = model.model_fields if len(item["loc"]) == 1 else ()
-        if close := difflib.get_close_matches(field, known, n=1):
-            msg += f" Did you mean {close[0]!r}?"
-        return msg
-    if kind == "union_tag_not_found":
-        what = f"{field} " if field else "This row "
-        tag = ctx["discriminator"].strip("'")
-        kinds = _union_tags(model.model_fields[top].annotation) if top else []
-        named = f": one of {kinds}" if kinds else ""
-        return f"{what}states no {tag}, which names what it is{named}."
-    if kind == "literal_error":
-        text = f"{field} is {item['input']!r}, but should be {ctx['expected']}."
-        return text
-    if kind in {"tuple_type", "list_type"}:
-        return f"{field} should be a list, not {item['input']!r}."
-    # A validator's own message is already in the format's terms, once the
-    # prefix pydantic puts before it is taken off.
-    text = str(ctx["error"]) if kind == "value_error" else item["msg"]
-    return f"{field}: {text}" if field else text
-
-
-def _union_tags(annotation) -> list[str]:
-    """Return the tags of the tagged models an annotation can hold."""
-    out = []
-    for arg in get_args(annotation):
-        if isinstance(arg, type) and TAG_FIELD in getattr(arg, "model_fields", {}):
-            out.append(arg.__name__)
-        else:
-            out += _union_tags(arg)
-    return out
 
 
 def _apply_identity(data: dict, container: _Container, name: str, source: Path):
@@ -1323,6 +1290,10 @@ def _load_envelope(root: Path) -> dict[str, Any] | None:
     # raises rather than surfacing as a bare pydantic error at the end.
     try:
         Inventory(**data)
+    except ValidationError as error:
+        problems = _explain(error, Inventory, source)
+        msg = f"Could not read the envelope from {_quote(source)}:\n{problems}"
+        raise InvalidInventoryError(msg) from error
     except Exception as error:
         msg = f"Could not read the envelope from {_quote(source)}: {error}"
         raise InvalidInventoryError(msg) from error

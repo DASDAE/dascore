@@ -14,6 +14,7 @@ Each object documents the rules it enforces.
 
 from __future__ import annotations
 
+import difflib
 import itertools
 from collections.abc import Mapping, Sized
 from contextlib import suppress
@@ -37,6 +38,7 @@ import numpy as np
 from pydantic import (
     AfterValidator,
     Field,
+    ValidationError,
     field_validator,
     model_validator,
 )
@@ -52,6 +54,7 @@ from dascore.models import (
     TimeRangedModel,
     UnitQuantity,
 )
+from dascore.models.registry import TAG_FIELD
 from dascore.utils.display import (
     NodeRepr,
     Repr,
@@ -2728,7 +2731,57 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
         if named := sorted(f"{x!r}" for x in data if not isinstance(x, str)):
             msg = f"{source} holds fields which are not named: {', '.join(named)}."
             raise InvalidInventoryError(msg)
-        return cls(**data).check()
+        try:
+            built = cls(**data)
+        except ValidationError as error:
+            problems = "\n".join(
+                f"  {_explain_problem(x, '.'.join(map(str, x['loc'])), cls)}"
+                for x in error.errors(include_url=False)
+            )
+            msg = f"Could not read an inventory from {source}:\n{problems}"
+            raise InvalidInventoryError(msg) from error
+        return built.check()
+
+
+def _explain_problem(item: Mapping, field: str, model) -> str:
+    """Say what one pydantic error item means, in the format's own terms."""
+    kind, ctx = item["type"], item.get("ctx", {})
+    if kind == "missing":
+        return f"{field} is required but not stated."
+    top = item["loc"][0] if item["loc"] else None
+    if kind == "extra_forbidden":
+        msg = f"{field} is not a field this object has."
+        # Only a top-level field is one of this model's own to suggest from.
+        known = model.model_fields if len(item["loc"]) == 1 else ()
+        if close := difflib.get_close_matches(field, known, n=1):
+            msg += f" Did you mean {close[0]!r}?"
+        return msg
+    if kind == "union_tag_not_found":
+        what = f"{field} " if field else "This row "
+        tag = ctx["discriminator"].strip("'")
+        kinds = _union_tags(model.model_fields[top].annotation) if top else []
+        named = f": one of {kinds}" if kinds else ""
+        return f"{what}states no {tag}, which names what it is{named}."
+    if kind == "literal_error":
+        text = f"{field} is {item['input']!r}, but should be {ctx['expected']}."
+        return text
+    if kind in {"tuple_type", "list_type"}:
+        return f"{field} should be a list, not {item['input']!r}."
+    # A validator's own message is already in the format's terms, once the
+    # prefix pydantic puts before it is taken off.
+    text = str(ctx["error"]) if kind == "value_error" else item["msg"]
+    return f"{field}: {text}" if field else text
+
+
+def _union_tags(annotation) -> list[str]:
+    """Return the tags of the tagged models an annotation can hold."""
+    out = []
+    for arg in get_args(annotation):
+        if isinstance(arg, type) and TAG_FIELD in getattr(arg, "model_fields", {}):
+            out.append(arg.__name__)
+        else:
+            out += _union_tags(arg)
+    return out
 
 
 def inventory_to_yaml(inventory: Inventory, path: str | Path | None = None) -> str:
