@@ -171,7 +171,7 @@ def _report_missing(context, name, on_missing, subject: str = "") -> None:
     """Raise or warn about a requested name the inventory does not define."""
     msg = (
         f"The inventory defines no {name!r} for {subject}"
-        f"{context.acquisition.code!r}; use on_missing to allow it."
+        f"{context.acquisition_key!r}; use on_missing to allow it."
     )
     warn_or_raise(msg, PatchError, behavior=on_missing)
 
@@ -396,7 +396,7 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
         if coords is True:
             return {}
         msg = (
-            f"No optical path is valid for {context.acquisition.code!r} at "
+            f"No optical path is valid for {context.acquisition_key!r} at "
             "the patch's time, so no per-channel coordinates can be resolved."
         )
         raise PatchError(msg)

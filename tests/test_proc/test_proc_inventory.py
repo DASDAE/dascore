@@ -737,8 +737,9 @@ class TestNoOpticalPath:
 
     def test_named_coords_raise(self, patch, pathless):
         """A named request cannot be honored and says so."""
-        with pytest.raises(PatchError, match="No optical path"):
+        with pytest.raises(PatchError, match="No optical path") as info:
             patch.enrich(pathless, attrs=False, coords=("zone",))
+        assert repr(patch.attrs.acquisition_key) in str(info.value)
 
     def test_attrs_still_copy(self, patch, pathless):
         """The acquisition's own facts do not depend on a path."""
