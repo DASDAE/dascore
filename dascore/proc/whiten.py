@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-import numpy.fft as nft
+import scipy.fft as sft
 from pydantic import ConfigDict
 from scipy.ndimage import uniform_filter1d
 
@@ -137,6 +137,7 @@ class Whiten(PatchProcessor):
     >>> white_patch = patch.whiten(smooth_size=0.1, distance=None)
     """
 
+    __version__ = "1.1"
     smooth_size: Any = None
     water_level: Any = None
 
@@ -163,7 +164,9 @@ class Whiten(PatchProcessor):
         if freq_range:
             _check_freq_range(fft_coord, freq_range)
             taper = TaperRange(**{fft_dim: freq_range})
-            plan["env"] = taper.get_metadata(out)[1]["env"]
+            env = taper.get_metadata(out)[1]["env"]
+            # At the spectrum's precision, so single precision stays single.
+            plan["env"] = np.asarray(env, dtype=np.finfo(out.dtype).dtype)
         # Convert back to time domain if input was in time-domain.
         if transform:
             out, plan["idft"] = Idft().get_metadata(out)
@@ -174,7 +177,7 @@ class Whiten(PatchProcessor):
     def numpy_kernel(self, data, *, transform, axis, window, env, dft, idft):
         """Return the data with flattened amplitudes and their phases kept."""
         if transform:
-            data = _dft_kernel(data, np, nft, cast=False, **dft)
+            data = _dft_kernel(data, np, sft, cast=False, **dft)
         if window is None:
             amp = np.ones_like(data)
         else:
@@ -184,7 +187,7 @@ class Whiten(PatchProcessor):
         if env is not None:
             data = _scale_by(data, env)
         if transform:
-            data = Idft().kernel(data, **idft)
+            data = Idft().numpy_kernel(data, **idft)
         return data
 
     def kernel(self, data, *, transform, axis, window, env, dft, idft):

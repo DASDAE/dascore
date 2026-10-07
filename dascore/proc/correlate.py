@@ -5,16 +5,22 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
-import numpy.fft as nft
+import scipy.fft as sft
 from pydantic import ConfigDict
 
 import dascore as dc
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
 from dascore.proc.basic import Pad
-from dascore.transform.fourier import Dft, Idft, _dft_kernel, _is_complex
+from dascore.transform.fourier import (
+    Dft,
+    Idft,
+    _dft_kernel,
+    _is_complex,
+    _operand,
+)
 from dascore.units import get_quantity
-from dascore.utils.array_api import array_namespace
+from dascore.utils.array_api import _result_dtype, array_namespace
 from dascore.utils.patch import get_dim_axis_value
 from dascore.utils.time import to_float
 
@@ -58,7 +64,7 @@ class CorrelateShift(PatchProcessor):
     >>> auto_patch = idft.correlate_shift(dim="time")
     """
 
-    __version__ = "1.1"
+    __version__ = "1.2"
     dim: Any
     undo_weighting: Any = True
 
@@ -81,13 +87,16 @@ class CorrelateShift(PatchProcessor):
         new_cm = cm._update_grid(dim, **{dim: new_coord}).rename_coord(
             **{dim: f"lag_{dim}"}
         )
-        weight = to_float(step) if self.undo_weighting else None
         out = meta.new(coords=new_cm)
+        if not self.undo_weighting:
+            return out, {"axis": axis, "step": None}
         units = get_quantity(meta.attrs.data_units)
-        if self.undo_weighting and units is not None and coord.units is not None:
+        if units is not None and coord.units is not None:
             # dividing by the step divides the units by the coordinate's too
             out = out.update_attrs(data_units=units / get_quantity(coord.units))
-        return out, {"axis": axis, "step": weight}
+        weight = _operand(to_float(step), meta.dtype)
+        dtype = _result_dtype(meta.dtype, weight)
+        return out.new(dtype=dtype), {"axis": axis, "step": weight}
 
     def kernel(self, data, *, axis, step):
         """Return the data shifted so zero lag is central, divided by the step."""
@@ -168,13 +177,14 @@ class Correlate(PatchProcessor):
     -----
     The result's data units are the square of the patch's (for example
     (m/s)**2 for velocity), as each value is a sum of products of the data.
+    Single-precision data are correlated in single precision.
 
     Correlation runs along the dimension not named in ``kwargs``. That dimension
     becomes a lag dimension prefixed with ``lag_``; for example, selecting a
     ``distance`` source transforms ``time`` into ``lag_time``.
     """
 
-    __version__ = "1.2"
+    __version__ = "1.3"
     samples: Any = False
 
     model_config = ConfigDict(extra="allow")
@@ -232,13 +242,13 @@ class Correlate(PatchProcessor):
         """Return each row or column correlated with the sources."""
         if transform:
             data = np.pad(data, plan["pad_width"])
-            data = _dft_kernel(data, np, nft, cast=False, **plan["dft"])
+            data = _dft_kernel(data, np, sft, cast=False, **plan["dft"])
         # The sources, along a third axis so they broadcast with the data.
         selector: list[Any] = [slice(None), slice(None), None]
         selector[source_axis] = index
         source = np.swapaxes(data[tuple(selector)], source_axis, -1)
         data = data[..., None] * np.conj(source)
         if transform:
-            data = Idft().kernel(data, **plan["idft"])
+            data = Idft().numpy_kernel(data, **plan["idft"])
             data = _shift_lags(data, **plan["shift"])
         return data

@@ -12,8 +12,8 @@ import sys
 from typing import Any, ClassVar
 
 import numpy as np
-import numpy.fft as nft
 import pandas as pd
+import scipy.fft as sft
 from pydantic import ConfigDict
 from scipy.ndimage import gaussian_filter as np_gauss
 from scipy.ndimage import median_filter as nd_median_filter
@@ -24,7 +24,7 @@ from dascore.constants import samples_arg_description
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import FilterValueError, ParameterError, UnitError
 from dascore.proc.basic import Real
-from dascore.transform.fourier import Dft, Idft, _dft_kernel
+from dascore.transform.fourier import Dft, Idft, _dft_kernel, _idft_kernel
 from dascore.units import (
     convert_units,
     get_filter_units,
@@ -614,6 +614,8 @@ class SlopeFilter(PatchProcessor):
     directional: Any = False
     invert: Any = False
 
+    __version__ = "1.1"
+
     @staticmethod
     def _check_inputs(patch, filt, dims):
         """Ensure inputs are valid."""
@@ -702,6 +704,8 @@ class SlopeFilter(PatchProcessor):
         slope = self._get_slope_array(out, self.directional, freq_dims)
         filt = self._maybe_transform_units(filt, out, freq_dims, dims)
         mask = self._get_taper_mask(filt, slope, self.invert)
+        # The double mask promotes single-precision spectra.
+        out = out.new(dtype=_result_dtype(out.dtype, mask.dtype))
         plan = {"transform": transform, "mask": mask, "dft": dft_plan, "idft": None}
         if transform:
             out, plan["idft"] = Idft().get_metadata(out)
@@ -714,8 +718,8 @@ class SlopeFilter(PatchProcessor):
         return self._filtered(data, xp, xp.fft, True, **plan)
 
     def numpy_kernel(self, data, **plan):
-        """As `kernel`, transforming with numpy, as dft does for numpy data."""
-        return self._filtered(data, array_namespace(data), nft, False, **plan)
+        """As `kernel`, transforming with scipy, as dft does for numpy data."""
+        return self._filtered(data, array_namespace(data), sft, False, **plan)
 
     @staticmethod
     def _filtered(data, xp, fft, cast, *, transform, mask, dft, idft):
@@ -725,4 +729,4 @@ class SlopeFilter(PatchProcessor):
         data = data * asarray_like(mask, data)
         if not transform:
             return data
-        return Real().kernel(Idft().kernel(data, **idft))
+        return Real().kernel(_idft_kernel(data, xp, fft, cast=cast, **idft))
