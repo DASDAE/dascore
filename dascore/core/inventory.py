@@ -14,6 +14,7 @@ Each object documents the rules it enforces.
 
 from __future__ import annotations
 
+import difflib
 import itertools
 from collections.abc import Mapping, Sized
 from contextlib import suppress
@@ -32,12 +33,12 @@ from typing import (
     get_args,
     get_origin,
 )
-from uuid import uuid4
 
 import numpy as np
 from pydantic import (
     AfterValidator,
     Field,
+    ValidationError,
     field_validator,
     model_validator,
 )
@@ -53,6 +54,7 @@ from dascore.models import (
     TimeRangedModel,
     UnitQuantity,
 )
+from dascore.models.registry import TAG_FIELD
 from dascore.utils.display import (
     NodeRepr,
     Repr,
@@ -123,14 +125,6 @@ Azimuth = Annotated[float, Field(ge=0, lt=360, allow_inf_nan=False)]
 Dip = Annotated[float, Field(ge=-90, le=90, allow_inf_nan=False)]
 LocationCodeStr = Annotated[
     str, AfterValidator(lambda value: check_code(value, allow_blank=True))
-]
-# Stable identifier for a shareable inventory resource.
-ResourceIdStr = Annotated[
-    str,
-    Field(
-        default_factory=lambda: str(uuid4()),
-        description="Stable identifier for this shareable inventory resource.",
-    ),
 ]
 
 
@@ -240,7 +234,7 @@ class CoordinateReferenceSystem(InventoryModel):
             raise InvalidInventoryError(msg)
         return self
 
-    def _repr_line(self) -> Text:
+    def _repr_line(self, description: str | None = None) -> Text:
         """
         One line naming the frame and its axes.
 
@@ -280,16 +274,37 @@ class CoordinateReferenceSystem(InventoryModel):
         raise InvalidInventoryError(msg)
 
 
-class ExternalResource(InventoryModel):
+class _PooledResource(InventoryModel):
+    """Base of the shareable resources an inventory pools by resource_id."""
+
+    resource_id: str = Field(
+        default="",
+        description=(
+            "Stable identifier for this shareable inventory resource; "
+            "hashed from its content when unstated."
+        ),
+    )
+
+    @model_validator(mode="after")
+    def _name_by_content(self) -> Self:
+        """Name an unnamed resource by hashing its content, so every reload agrees."""
+        if not self.resource_id:
+            rid = H("inventory_resource", _encode_model(self), encoded=True)
+            # As in Inventory._normalize_resources: the model is frozen.
+            object.__setattr__(self, "resource_id", rid)
+            self.__pydantic_fields_set__.add("resource_id")
+        return self
+
+
+class ExternalResource(_PooledResource):
     """External resource identified but not otherwise modeled by DASCore."""
 
     object_type: Literal["ExternalResource"] = _object_type_tag("ExternalResource")
-    resource_id: ResourceIdStr
     uri: str = Field(default="", description="URI or identifier for the resource.")
     name: str = Field(default="", description="Human-readable resource name.")
 
 
-class OpticalMeasurement(InventoryModel):
+class OpticalMeasurement(_PooledResource):
     """
     A characterization of the optical path or its components.
 
@@ -300,7 +315,6 @@ class OpticalMeasurement(InventoryModel):
     """
 
     object_type: Literal["OpticalMeasurement"] = _object_type_tag("OpticalMeasurement")
-    resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable measurement name.")
     method: str = Field(
         default="",
@@ -327,11 +341,10 @@ class OpticalMeasurement(InventoryModel):
     )
 
 
-class Interrogator(InventoryModel):
+class Interrogator(_PooledResource):
     """DFOS interrogator unit used for data collection."""
 
     object_type: Literal["Interrogator"] = _object_type_tag("Interrogator")
-    resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable resource name.")
     manufacturer: str = Field(default="", description="Manufacturer name.")
     model: str = Field(default="", description="Model number.")
@@ -339,11 +352,10 @@ class Interrogator(InventoryModel):
     instrument_type: str = Field(default="", description="General instrument category.")
 
 
-class Enclosure(InventoryModel):
+class Enclosure(_PooledResource):
     """Physical housing, pipe, duct, conduit, or carrier resource."""
 
     object_type: Literal["Enclosure"] = _object_type_tag("Enclosure")
-    resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable resource name.")
     enclosure_type: str = Field(
         default="",
@@ -364,11 +376,10 @@ class Enclosure(InventoryModel):
     )
 
 
-class Cable(InventoryModel):
+class Cable(_PooledResource):
     """Physical cable containing one or more fiber segments."""
 
     object_type: Literal["Cable"] = _object_type_tag("Cable")
-    resource_id: ResourceIdStr
     name: str = Field(default="", description="Human-readable resource name.")
     manufacturer: str = Field(default="", description="Manufacturer name.")
     model: str = Field(default="", description="Model name.")
@@ -392,13 +403,14 @@ _Resource: TypeAlias = Annotated[
 ]
 
 
-def _distance_line(model, skip=()) -> Text:
+def _distance_line(model, skip=(), description=None) -> Text:
     """One line for a model covering an interval of optical distance."""
     span = f"[{model.distance_min:g}, {model.distance_max:g}) m"
     return model_to_line(
         model,
         skip=(*skip, "distance_min", "distance_max"),
         extra={"distance": span},
+        description=description,
     )
 
 
@@ -439,9 +451,9 @@ class _IntervalModel(InventoryModel):
             raise InvalidInventoryError(msg)
         return self
 
-    def _repr_line(self) -> Text:
+    def _repr_line(self, description: str | None = None) -> Text:
         """One line stating the interval this item covers."""
-        return _distance_line(self)
+        return _distance_line(self, description=description)
 
     @property
     def optical_length(self) -> float:
@@ -712,6 +724,14 @@ class Geometry(InventoryModel):
     @model_validator(mode="after")
     def _validate_geometry(self) -> Self:
         """Enforce paired, strictly increasing control points."""
+        if len(self.distance) == 1:
+            msg = (
+                "Geometry distance requires at least 2 control points, since "
+                "a segment covers a span of fiber. Fiber gathered at one "
+                "place, such as a spool, is two points with the same "
+                "position at the start and end distances of the spool."
+            )
+            raise InvalidInventoryError(msg)
         _check_control_points(self.distance, "Geometry distance", minimum=2)
         if not self.columns:
             msg = "Geometry states no columns, so it describes nothing."
@@ -798,7 +818,9 @@ class OpticalPathLabel(_IntervalModel):
     start and end) cover nothing and are exempt from the overlap rule.
     """
 
-    group: str = Field(default="", description="Name of the labelled variable.")
+    # Required: a label with no group never becomes a coordinate, so it
+    # could not be selected on or seen, and would vanish without a word.
+    group: str = Field(min_length=1, description="Name of the labelled variable.")
     value: LabelValue | None = Field(
         default=None,
         description=(
@@ -919,7 +941,7 @@ class DistanceMap(InventoryModel):
             )
             raise InvalidInventoryError(msg)
 
-    def _repr_line(self) -> Text:
+    def _repr_line(self, description: str | None = None) -> Text:
         """
         One line naming the axes mapped and how many points do it.
 
@@ -1300,9 +1322,9 @@ class OpticalPath(TimeRangedModel):
         """
         return tuple(sorted(value, key=lambda x: x.interval))
 
-    def _repr_line(self) -> Text:
+    def _repr_line(self, description: str | None = None) -> Text:
         """One line naming the path, its extent, and its track sizes."""
-        return _distance_line(self)
+        return _distance_line(self, description=description)
 
     @property
     def optical_length(self) -> float:
@@ -1480,20 +1502,27 @@ class OpticalPath(TimeRangedModel):
         for first, second in itertools.combinations(self.geometry, 2):
             lo = max(first.interval[0], second.interval[0])
             hi = min(first.interval[1], second.interval[1])
-            if first.name != second.name and lo < hi:
+            if lo >= hi:
+                continue
+            where = f" on optical path {self.name!r}" if self.name else ""
+            pair = (
+                f"Geometry segments {first.name!r} (distance {first.interval}) "
+                f"and {second.name!r} (distance {second.interval}){where} "
+                f"overlap in optical distance from {lo} to {hi}"
+            )
+            # One message per pair, not per column, as for the axes.
+            if shared := sorted(first.columns.keys() & second.columns.keys()):
                 errors.append(
-                    f"Geometry segments {first.name!r} and {second.name!r} "
-                    f"both cover ({lo}, {hi}); segments which overlap state "
-                    "different columns of one stretch of fiber, so they "
-                    "share its name."
+                    f"{pair}, and both state the columns {shared}. Each "
+                    "column is stated by at most one segment at any distance "
+                    "along the path."
+                )
+            elif first.name != second.name:
+                errors.append(
+                    f"{pair}; segments which overlap state different columns "
+                    "of one stretch of fiber, so they share its name."
                 )
         for name in sorted(spans):
-            if (overlap := intervals_overlap(spans[name])) is not None:
-                errors.append(
-                    f"Overlapping geometry intervals {overlap[0]} and "
-                    f"{overlap[1]} for column {name!r}; a column is a "
-                    "function track."
-                )
             if len(stated := units.get(name, set())) > 1:
                 errors.append(
                     f"Geometry column {name!r} is stated in {sorted(stated)}; "
@@ -1832,9 +1861,11 @@ class FiberArray(TimeRangedModel):
         default=(), description="Optical paths associated with this fiber array."
     )
 
-    def _repr_line(self) -> Text:
+    def _repr_line(self, description: str | None = None) -> Text:
         """One line naming the array, without the things it holds."""
-        return model_to_line(self, skip=("acquisitions", "optical_paths"))
+        return model_to_line(
+            self, skip=("acquisitions", "optical_paths"), description=description
+        )
 
     def _repr_children(self) -> tuple[InventoryModel, ...]:
         """What an array holds, each of which prints itself."""
@@ -1893,9 +1924,11 @@ class Network(TimeRangedModel):
         default=(), description="Stations in this network."
     )
 
-    def _repr_line(self) -> Text:
+    def _repr_line(self, description: str | None = None) -> Text:
         """One line naming the network, without the things it holds."""
-        return model_to_line(self, skip=("fiber_arrays", "stations"))
+        return model_to_line(
+            self, skip=("fiber_arrays", "stations"), description=description
+        )
 
     def _repr_children(self) -> tuple[InventoryModel, ...]:
         """What a network holds, each of which prints itself."""
@@ -1944,6 +1977,13 @@ class ResolvedContext(NamedTuple):
     fiber_array: FiberArray
     acquisition: Acquisition
     optical_path: OpticalPath | None
+
+    @property
+    def acquisition_key(self) -> str:
+        """The acquisition_key this context answers, naming it in full."""
+        acq = self.acquisition
+        parts = (self.network.code, self.fiber_array.code, acq.location_code)
+        return ".".join((*parts, acq.code))
 
 
 class InventoryNames(NamedTuple):
@@ -2087,9 +2127,10 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
     schema_version: int = Field(
         default=1, description="Version of the inventory manifest envelope."
     )
+    # Empty unless stated, as CreationInfo's strings are, so the same files
+    # load to the same inventory; nothing refers to the manifest by this id.
     resource_id: str = Field(
-        default_factory=lambda: str(uuid4()),
-        description="Identifier for the inventory manifest.",
+        default="", description="Identifier for the inventory manifest."
     )
     creation_info: CreationInfo = Field(
         default_factory=CreationInfo,
@@ -2131,7 +2172,9 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
             return out
         out = {}
         for resource in value:
-            if resource.resource_id in out:
+            # Equal copies are one resource, as inline definitions are; two
+            # unnamed resources with equal content are named alike.
+            if out.get(resource.resource_id, resource) != resource:
                 msg = f"Duplicate resource_id {resource.resource_id!r}."
                 raise InvalidInventoryError(msg)
             out[resource.resource_id] = resource
@@ -2238,9 +2281,20 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
             )
             for net in self.networks
         )
-        dangling = sorted({r for r, *_ in string_refs if r not in pool})
+        dangling: dict[str, set[str]] = {}
+        for rid, field, _ in string_refs:
+            if rid not in pool:
+                dangling.setdefault(rid, set()).add(field)
         if dangling:
-            msg = f"Dangling resource references: {dangling}."
+            named = "; ".join(
+                f"{rid!r} (from {', '.join(sorted(fields))})"
+                for rid, fields in sorted(dangling.items())
+            )
+            msg = (
+                f"Dangling resource references: {named}. A reference names "
+                "the resource_id of a resource, such as a file under "
+                "resources/, and no resource has these."
+            )
             raise InvalidInventoryError(msg)
         for rid, field, allowed in string_refs:
             if allowed and not isinstance(pool[rid], allowed):
@@ -2441,7 +2495,7 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
         axis being two names to it.
         """
         errors = []
-        spans: dict[int, list[tuple[float, float]]] = {}
+        placed = []
         for segment in path.geometry:
             axes = axis_columns(segment, crs)
             errors += _axis_set_errors(segment, axes, crs)
@@ -2451,15 +2505,30 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
                     f"{what} states units for the axis column(s) {on_axes}; "
                     "the CRS states the units of its own axes."
                 )
-            for index in set(axes.values()):
-                spans.setdefault(index, []).append(segment.interval)
-        for index in sorted(spans):
-            if (overlap := intervals_overlap(spans[index])) is not None:
-                errors.append(
-                    f"Overlapping geometry intervals {overlap[0]} and "
-                    f"{overlap[1]} for axis {crs.coordinate_labels[index]!r}; "
-                    "an axis is a function track."
-                )
+            placed.append((segment, {v: k for k, v in axes.items()}))
+        # One message per pair of segments, not per axis: the overlap is in
+        # optical distance, which the axes share, so naming each axis would
+        # repeat one fault and read as if the x/y/z values were at fault.
+        for (first, a), (second, b) in itertools.combinations(placed, 2):
+            lo = max(first.interval[0], second.interval[0])
+            hi = min(first.interval[1], second.interval[1])
+            if not (shared := sorted(a.keys() & b.keys())) or lo >= hi:
+                continue
+            # Spelled as each segment's headers were, which the user wrote.
+            mine, theirs = [a[x] for x in shared], [b[x] for x in shared]
+            placing = (
+                f"both place the position columns {mine}"
+                if mine == theirs
+                else f"place the same axes, as {mine} and {theirs}"
+            )
+            where = f" on optical path {path.name!r}" if path.name else ""
+            errors.append(
+                f"Geometry segments {first.name!r} (distance {first.interval}) "
+                f"and {second.name!r} (distance {second.interval}){where} "
+                f"overlap in optical distance from {lo} to {hi}, and "
+                f"{placing}. Each axis is placed by at most one segment at "
+                "any distance along the path."
+            )
         return errors
 
     def resolve(self, acquisition_key: str, time=None) -> ResolvedContext:
@@ -2699,7 +2768,84 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
         if named := sorted(f"{x!r}" for x in data if not isinstance(x, str)):
             msg = f"{source} holds fields which are not named: {', '.join(named)}."
             raise InvalidInventoryError(msg)
-        return cls(**data).check()
+        try:
+            built = cls(**data)
+        except ValidationError as error:
+            problems = "\n".join(
+                f"  {_explain_problem(x, '.'.join(map(str, x['loc'])), cls)}"
+                for x in error.errors(include_url=False)
+            )
+            msg = f"Could not read an inventory from {source}:\n{problems}"
+            raise InvalidInventoryError(msg) from error
+        return built.check()
+
+
+def _explain_problem(item: Mapping, field: str, model) -> str:
+    """Say what one pydantic error item means, in the format's own terms."""
+    kind, ctx = item["type"], item.get("ctx", {})
+    if kind == "missing":
+        return f"{field} is required but not stated."
+    if kind == "extra_forbidden":
+        msg = f"{field} is not a field this object has."
+        # Suggest from the fields of the object the stray key sits in.
+        *parents, name = item["loc"]
+        owner = model if not parents else _model_held(_annotation_at(model, parents))
+        known = owner.model_fields if owner is not None else ()
+        if close := difflib.get_close_matches(str(name), known, n=1):
+            msg += f" Did you mean {close[0]!r}?"
+        return msg
+    if kind == "union_tag_not_found":
+        what = f"{field} " if field else "This row "
+        tag = ctx["discriminator"].strip("'")
+        kinds = _union_tags(_annotation_at(model, item["loc"]))
+        named = f": one of {kinds}" if kinds else ""
+        return f"{what}states no {tag}, which names what it is{named}."
+    if kind == "literal_error":
+        text = f"{field} is {item['input']!r}, but should be {ctx['expected']}."
+        return text
+    if kind in {"tuple_type", "list_type"}:
+        return f"{field} should be a list, not {item['input']!r}."
+    # A validator's own message is already in the format's terms, once the
+    # prefix pydantic puts before it is taken off.
+    text = str(ctx["error"]) if kind == "value_error" else item["msg"]
+    return f"{field}: {text}" if field else text
+
+
+def _annotation_at(model, loc) -> Any:
+    """
+    Return the annotation of the field an error location ends in.
+
+    The location walks down through nested models, a field name for each
+    model and an index for each item of a tuple, so each name is looked
+    up on the one model the field before it holds.
+    """
+    annotation = None
+    for key in loc:
+        if isinstance(key, int):
+            continue
+        if model is None or key not in model.model_fields:
+            return None
+        annotation = model.model_fields[key].annotation
+        model = _model_held(annotation)
+    return annotation
+
+
+def _model_held(annotation):
+    """Return the one model an annotation holds, or None if not just one."""
+    held = [x for x in _flat_args(annotation) if hasattr(x, "model_fields")]
+    return held[0] if len(held) == 1 else None
+
+
+def _flat_args(annotation) -> list:
+    """Return the types an annotation is built from, at every depth."""
+    args = get_args(annotation)
+    return [annotation] if not args else [y for x in args for y in _flat_args(x)]
+
+
+def _union_tags(annotation) -> list[str]:
+    """Return the tags of the tagged models an annotation can hold."""
+    args = _flat_args(annotation)
+    return [x.__name__ for x in args if TAG_FIELD in getattr(x, "model_fields", {})]
 
 
 def inventory_to_yaml(inventory: Inventory, path: str | Path | None = None) -> str:

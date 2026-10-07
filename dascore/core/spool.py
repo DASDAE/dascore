@@ -60,12 +60,14 @@ from dascore.core._spool_inventory import (
     normalize_enrich_kwargs,
     refuse_rows,
     report_unconformed,
+    report_unjudged,
     resolution_columns,
     resolve_channel_pieces,
     resolve_contexts,
     resolve_row_epochs,
     resolve_split_pieces,
     stated_channels,
+    unjudged_rows,
     unsubdividable,
 )
 from dascore.core.inventory import _SYSTEM_FACT_NAMES, Inventory
@@ -579,6 +581,20 @@ class Spool(NodeRepr, NamespaceOwner):
             Array ranges do not support ``samples=True`` or
             ``relative=True``. Attribute selectors retain their usual meaning.
 
+        Notes
+        -----
+        With an inventory attached, a patch that no single inventory context
+        describes does not match a name the inventory answers for: one
+        straddling an acquisition or optical-path change, reaching outside
+        every optical-path epoch, with no physical time to resolve at, or not
+        described at all. A straddler's parts could answer differently and
+        the others have no answer, and selection judges whole patches, so
+        such patches are dropped with one warning per call counting them.
+        [`conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`)
+        splits patches at optical-path changes first, so the described parts
+        can be selected; a patch spanning an acquisition change must instead
+        be split by time. Patches that resolve but do not match drop silently.
+
         Examples
         --------
         >>> import dascore as dc
@@ -593,6 +609,29 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> pieces = spool.select(distance=ranges)
         >>> # one box per row on two dimensions; row two's time end is open
         >>> boxes = spool.select(distance=ranges, time=[time, [time[0], None]])
+        """
+        out, unjudged = self._select_counted(
+            _attrs=_attrs,
+            _coords=_coords,
+            samples=samples,
+            relative=relative,
+            **kwargs,
+        )
+        report_unjudged(unjudged)
+        return out
+
+    def _select_counted(
+        self,
+        *,
+        _attrs: namespace_select_type = None,
+        _coords: namespace_select_type = None,
+        samples: bool = False,
+        relative: bool = False,
+        **kwargs,
+    ) -> tuple[Self, int]:
+        """
+        Select as `select` does, and count the patches dropped for having
+        no single inventory context, so a caller warns once for them all.
         """
         # Explicit windows are independent requests, so they need separate
         # plan outputs even when they name the same source samples.
@@ -628,16 +667,15 @@ class Spool(NodeRepr, NamespaceOwner):
 
             other_coords = drop_selector_names(_coords, set(explicit))
             other_kwargs = {k: v for k, v in kwargs.items() if k not in explicit}
-            base = self.select(
+            base, unjudged = self._select_counted(
                 _attrs=_attrs,
                 _coords=other_coords,
                 samples=False,
                 relative=False,
                 **other_kwargs,
             )
-            return base._new_from_catalog(
-                ExplicitSelectCatalog(base._catalog, explicit)
-            )
+            explicit_catalog = ExplicitSelectCatalog(base._catalog, explicit)
+            return base._new_from_catalog(explicit_catalog), unjudged
         if self._inventory is None:
             catalog = self._catalog.select(
                 _attrs=_attrs,
@@ -646,7 +684,7 @@ class Spool(NodeRepr, NamespaceOwner):
                 relative=relative,
                 **kwargs,
             )
-            return self._new_from_catalog(catalog)
+            return self._new_from_catalog(catalog), 0
         query = self._classify_query(_attrs, _coords, kwargs)
         channels = stated_channels(query.channels)
         # Neither keyword has anything to mean about a value the fiber
@@ -698,11 +736,15 @@ class Spool(NodeRepr, NamespaceOwner):
             **kwargs,
         )
         out = self._new_from_catalog(catalog)
+        # Patches no single inventory context describes cannot be judged,
+        # so they are left out; one warning per call counts them.
+        unjudged = 0
         if attr_query:
-            out = out._select_from_inventory(attr_query)
+            out, unjudged = out._select_from_inventory(attr_query)
         if channels:
-            out = out._select_channels(channels)
-        return out
+            out, more = out._select_channels(channels)
+            unjudged += more
+        return out, unjudged
 
     def unselect(
         self,
@@ -779,19 +821,23 @@ class Spool(NodeRepr, NamespaceOwner):
             raise ParameterError(msg)
         # The complement is taken against select itself rather than by
         # negating each predicate, so the two can never drift apart.
+        matched, unjudged = (
+            (self, 0) if not stated else self._select_counted(_attrs=stated)
+        )
         if not query.channels:
-            removed = self.select(_attrs=stated)._catalog.ordered_rows()
-            return self._restrict_to_rows(removed, keep=False)
+            report_unjudged(unjudged)
+            return self._restrict_to_rows(matched._catalog.ordered_rows(), keep=False)
         # With both, the complement is still one set: a patch keeps every
         # channel unless the attrs matched it, and the channels the fiber
         # query did not match when they did. Complementing the two halves
         # apart would drop a patch the whole selection never held.
-        matched = self if not stated else self.select(_attrs=stated)
-        return self._select_channels(
+        out, more = self._select_channels(
             stated_channels(query.channels),
             complement=True,
             applies_to=matched._catalog.ordered_rows(),
         )
+        report_unjudged(unjudged + more)
+        return out
 
     def _classify_query(self, _attrs, _coords, kwargs) -> _InventoryQuery:
         """
@@ -904,16 +950,24 @@ class Spool(NodeRepr, NamespaceOwner):
             The rows the query judges; any other row keeps every channel.
             `unselect` uses it to leave a patch its attrs never matched
             whole, which is what makes the two halves one complement.
+
+        Returns
+        -------
+        The selected spool, and how many judged patches had no single
+        inventory context to be judged by.
         """
         source_rows, working = self._plan_frames()
         if not len(working):
-            return self
+            return self, 0
         contexts = self._plan_contexts(working)
+        unjudged = unjudged_rows(contexts, along_fiber=True)
         if applies_to is not None:
             # A row the attrs did not match is a row the selection never
             # held, so it is left unjudged rather than judged and kept.
             judged = np.isin(working["_patch_row"].to_numpy(), np.asarray(applies_to))
             contexts[~judged] = None
+            unjudged &= judged
+        count = int(unjudged.sum())
         name, pieces, reasons = resolve_channel_pieces(
             self._resolved_inventory(),
             contexts,
@@ -925,37 +979,44 @@ class Spool(NodeRepr, NamespaceOwner):
         if name is None:
             # No row has a fiber to be judged along, so the query matched
             # nothing: an empty spool, or the whole of it complemented.
-            return self if complement else self._restrict_to_rows([])
+            return (self if complement else self._restrict_to_rows([])), count
         bounds = list(zip(working[f"{name}_min"], working[f"{name}_max"], strict=True))
         whole = [
             len(row) == 1 and tuple(row[0]) == pair
             for row, pair in zip(pieces, bounds, strict=True)
         ]
         if all(whole):  # every patch kept entire: nothing to plan
-            return self
+            return self, count
         if all(keep or not row for keep, row in zip(whole, pieces, strict=True)):
             # Every patch is kept whole or dropped, so this is a filter and
             # the relation it presents need not be rebuilt.
             kept = working["_patch_row"].to_numpy()[[bool(x) for x in pieces]]
-            return self._restrict_to_rows(kept)
-        return self._subdivided(source_rows, working, pieces, name)
+            return self._restrict_to_rows(kept), count
+        return self._subdivided(source_rows, working, pieces, name), count
 
-    def _select_from_inventory(self, query: dict) -> Self:
+    def _select_from_inventory(self, query: dict) -> tuple[Self, int]:
         """
         Keep rows whose effective inventory-backed values match.
 
         Explicit row values take precedence unless pending enrichment would replace
         or clear them. Otherwise values are resolved once per inventory epoch. Rows
         unresolved by the inventory do not match. Selection uses the same projection
-        and conflict rules as extraction.
+        and conflict rules as extraction. Also returns how many rows went
+        unmatched only because the inventory had to answer for them and could
+        not; a row another name already ruled out is not counted.
         """
         ids = np.asarray(self._catalog.ordered_rows(), dtype=np.int64)
         if not len(ids):
-            return self
+            return self, 0
         backend = self._catalog.backend
         known = set(backend.attr_names())
         contexts = None
         mask = np.ones(len(ids), dtype=bool)
+        # A row counts as unjudged when some name needed the inventory and
+        # found no context, unless another name already ruled it out; that
+        # is an ordinary miss.
+        unjudged = np.zeros(len(ids), dtype=bool)
+        missed = np.zeros(len(ids), dtype=bool)
         # How pending enrichment rewrites a stated header, if at all; the
         # `raise` policy refuses rather than rewrites, and `keep_first`
         # leaves the header standing.
@@ -983,11 +1044,14 @@ class Spool(NodeRepr, NamespaceOwner):
                 else np.empty(0, dtype=np.int64)
             )
             matched = np.isin(ids, index_ids)
+            asked = np.zeros(len(ids), dtype=bool)
             # A stated row is resolved too when enrichment will rewrite it.
             rewriting = name in rewritten
             if not stated.all() or rewriting:
                 if contexts is None:
                     contexts = self._row_contexts(ids)
+                # A stated row keeps its header where the inventory is silent.
+                asked = ~stated & unjudged_rows(contexts)
                 answers = get_attr_values(self._resolved_inventory(), contexts, name)
                 matched = effective_matches(
                     stated,
@@ -998,7 +1062,10 @@ class Spool(NodeRepr, NamespaceOwner):
                     conflict if rewriting else None,
                 )
             mask &= matched
-        return self._new_from_catalog(self._catalog.restrict(mask, ids=ids))
+            unjudged |= asked
+            missed |= ~matched & ~asked
+        out = self._new_from_catalog(self._catalog.restrict(mask, ids=ids))
+        return out, int((unjudged & ~missed).sum())
 
     def _row_contexts(self, ids) -> np.ndarray:
         """
@@ -1267,6 +1334,15 @@ class Spool(NodeRepr, NamespaceOwner):
         channels carrying that value. The outputs partition the fiber, so a patch
         containing several values may produce several patches.
 
+        A patch no single inventory context describes -- one straddling an
+        acquisition or optical-path change, reaching outside every
+        optical-path epoch, or not described at all -- produces nothing, and
+        one warning per call counts such patches. Run
+        [`conform_to_inventory`](`dascore.core.spool.Spool.conform_to_inventory`)
+        first to split patches at optical-path changes so the described parts
+        can be expanded; it refuses a patch spanning an acquisition change,
+        which must be split by time instead.
+
         Parameters
         ----------
         name
@@ -1333,6 +1409,7 @@ class Spool(NodeRepr, NamespaceOwner):
             glob_filter(include, exclude),
         )
         refuse_rows(source_rows, reasons, UNPLACEABLE)
+        report_unjudged(int(unjudged_rows(contexts, along_fiber=True).sum()))
         if dim is None:  # nothing to split: no row has a fiber to split on
             return self._restrict_to_rows([])
         pieces = [[piece for _, piece in row] for row in rows]

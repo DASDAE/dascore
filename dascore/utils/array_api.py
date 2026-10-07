@@ -12,6 +12,7 @@ lives in [compat](`dascore.compat`).
 from __future__ import annotations
 
 import warnings
+from importlib import import_module
 from pathlib import Path
 from typing import Any, TypeGuard
 
@@ -366,3 +367,26 @@ def nan_reduce(name: str, array: Any, axis=None, keepdims: bool = False) -> Any:
         out = getattr(np, f"nan{name}")(to_numpy(array), axis=axis, keepdims=keepdims)
         return asarray_like(out, array)
     return _nan_reduce(name, array, axis=axis, keepdims=keepdims)
+
+
+def _as_numpy_dtype(dtype) -> np.dtype:
+    """Return numpy's dtype of the name a dtype, numpy's or another backend's, has."""
+    return np.dtype(str(dtype).rsplit(".", 1)[-1])
+
+
+def _result_dtype(dtype, *promote, real: bool = False, like=None):
+    """
+    Return the dtype a kernel gives `dtype` data, in their backend.
+
+    `promote` is what numpy promotes the data with; `real` takes the real
+    counterpart, as an amplitude or an inverse real FFT does. `like` is a
+    dtype of the backend the result is spelt in, `dtype` by default.
+    """
+    like = dtype if like is None else like
+    out = np.result_type(_as_numpy_dtype(dtype), *promote)
+    if real and out.kind == "c":
+        out = np.finfo(out).dtype
+    if isinstance(like, np.dtype):
+        return out
+    # Another backend's dtypes are named as numpy's are, in its own package.
+    return getattr(import_module(type(like).__module__.split(".")[0]), out.name)
