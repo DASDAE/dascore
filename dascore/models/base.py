@@ -30,6 +30,7 @@ from dascore.models.registry import (
 )
 from dascore.models.types import DateTime64, FrozenDictType
 from dascore.utils.display import (
+    _MAX_VALUE_CELLS,
     RichRepr,
     Section,
     child_sections,
@@ -242,14 +243,14 @@ class InventoryModel(RichRepr, DascoreBaseModel):
         out.update(kwargs)
         return self.__class__(**out)
 
-    def _repr_line(self) -> Text:
+    def _repr_line(self, description: str | None = None) -> Text:
         """
         The one line which names this object and what it states.
 
         What a container puts on the line it gives this object, and the
         whole of the repr for one which holds nothing.
         """
-        return model_to_line(self)
+        return model_to_line(self, description=description)
 
     def _repr_children(self) -> tuple[InventoryModel, ...]:
         """
@@ -269,7 +270,15 @@ class InventoryModel(RichRepr, DascoreBaseModel):
         terminal shows by indenting and a panel shows by nesting.
         """
         children = child_sections(self._repr_children(), depth + 1)
-        return Section(self._repr_line(), children, depth)
+        title = self._repr_line()
+        description = getattr(self, "description", None)
+        if description and (
+            "\n" in description or Text(description).cell_len > _MAX_VALUE_CELLS
+        ):
+            compact = self._repr_line(description="…")
+            if compact != title:
+                return Section(title, children, depth, compact, description)
+        return Section(title, children, depth)
 
     def __rich__(self) -> Text:
         """The line naming this object, then whatever it holds."""

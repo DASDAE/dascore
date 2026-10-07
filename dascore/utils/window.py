@@ -122,6 +122,12 @@ def _percent_to_samples(value: Any, size: int) -> tuple[Any, bool]:
 def _check_not_negative(value: Any, name: str) -> None:
     """Refuse a step or overlap which retreats."""
     magnitude = value.magnitude if isinstance(value, Quantity) else value
+    if isinstance(magnitude, str):
+        msg = (
+            f"{name} must be a number or quantity, not the string {value!r}; "
+            "for a percentage use, e.g., 50 * dascore.units.percent."
+        )
+        raise ParameterError(msg)
     # A bare 0 would make numpy cast the timedelta to a generic unit.
     zero = to_timedelta64(0) if is_timedelta64(magnitude) else 0
     if magnitude is not None and magnitude < zero:

@@ -8,13 +8,13 @@ implementation.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from importlib import import_module
 from math import prod
 from operator import mul, truediv
 from typing import Any
 
 import numpy as np
 import numpy.fft as nft
+import scipy.fft as sft
 from pydantic import ConfigDict, Field
 
 import dascore as dc
@@ -23,12 +23,17 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.core.processor import PatchProcessor
-from dascore.exceptions import ParameterError, PatchError
+from dascore.exceptions import CoordError, ParameterError, PatchError
 from dascore.proc.basic import Pad, _pad_array
 from dascore.proc.tile_apply import Reassemble, TileApply
 from dascore.proc.units import _replace_data_units
 from dascore.units import Quantity, _quantities_equal, invert_quantity, percent
-from dascore.utils.array_api import array_namespace, asarray_like
+from dascore.utils.array_api import (
+    _as_numpy_dtype,
+    _result_dtype,
+    array_namespace,
+    asarray_like,
+)
 from dascore.utils.imports import lazy_import
 from dascore.utils.misc import iterate
 from dascore.utils.patch import (
@@ -360,6 +365,12 @@ class Dft(PatchProcessor):
         plan |= dict(scale=None, square=False, divisor=None, db=None)
         if not dims:  # no transformation needed.
             return meta, plan
+        # Check before padding so errors name dft rather than pad.
+        for name in dims:
+            if not len(meta.get_coord(name)):
+                msg = f"dft cannot transform {name}; the dimension is empty."
+                raise CoordError(msg)
+            meta.get_coord(name, require_evenly_sampled=True)
         # re-arrange list so real dim is last (if provided)
         if isinstance(real, str):
             assert real in dims, "real must be in provided dimensions."
@@ -722,6 +733,8 @@ class Stft(PatchProcessor):
     - Real data is transformed one-sided along the last windowed dimension
       and centred along the others, as [Patch.dft](`dascore.Patch.dft`) with
       ``real=True`` is; complex data is centred along every one.
+    - Data that single precision holds (eg float32, complex64, int16) gives
+      a complex64 output; wider data gives complex128.
     - The output is a stack of windows as
       [Patch.tile_apply](`dascore.Patch.tile_apply`) makes one, transformed
       along the window: the transformed dimension becomes the window
@@ -739,7 +752,7 @@ class Stft(PatchProcessor):
     [Patch.dft](`dascore.Patch.dft`), [Patch.istft](`dascore.Patch.istft`)
     """
 
-    __version__ = "2.1"
+    __version__ = "2.2"
 
     taper_window: Any = "hann"
     overlap: Any = Field(default_factory=lambda: _HALF_OVERLAP)
@@ -832,7 +845,9 @@ class Stft(PatchProcessor):
             for axis in tail:
                 tiles = sp_detrend(tiles, axis=axis, type="linear")
             tiles = tiles * _taper_like(get_window_nd(self.taper_window, size), tiles)
-        fft = nft.rfftn if real else nft.fftn
+        # scipy's transforms compute single precision data in single
+        # precision; numpy's use double internally, several times the memory.
+        fft = sft.rfftn if real else sft.fftn
         spectra = fft(tiles, s=nffts, axes=tail)
         centred = tail[:-1] if real else tail
         if centred:
@@ -970,26 +985,3 @@ def _stft_dims(patch) -> list[str]:
 def _is_complex(dtype) -> bool:
     """Whether a dtype, numpy's or another backend's, is complex."""
     return str(dtype).rsplit(".", 1)[-1].startswith("complex")
-
-
-def _as_numpy_dtype(dtype) -> np.dtype:
-    """Return numpy's dtype of the name a dtype, numpy's or another backend's, has."""
-    return np.dtype(str(dtype).rsplit(".", 1)[-1])
-
-
-def _result_dtype(dtype, *promote, real: bool = False, like=None):
-    """
-    Return the dtype a transform's kernel gives `dtype` data, in their backend.
-
-    `promote` is what numpy promotes the data with; `real` takes the real
-    counterpart, as an amplitude or an inverse real FFT does. `like` is a
-    dtype of the backend the result is spelt in, `dtype` by default.
-    """
-    like = dtype if like is None else like
-    out = np.result_type(_as_numpy_dtype(dtype), *promote)
-    if real and out.kind == "c":
-        out = np.finfo(out).dtype
-    if isinstance(like, np.dtype):
-        return out
-    # Another backend's dtypes are named as numpy's are, in its own package.
-    return getattr(import_module(type(like).__module__.split(".")[0]), out.name)

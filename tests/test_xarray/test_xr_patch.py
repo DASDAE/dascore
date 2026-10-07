@@ -61,6 +61,40 @@ class TestXarray:
         assert isinstance(patch2, dc.Patch)
 
 
+class TestCoordinateConversion:
+    """xarray coordinates become patch coordinates holding the same labels."""
+
+    @pytest.fixture
+    def xr(self):
+        """The optional xarray module."""
+        return pytest.importorskip("xarray")
+
+    @pytest.mark.parametrize("dim", ["time", "distance"])
+    def test_scalar_coordinate(self, xr, dim):
+        """A coordinate left scalar by a selection stays one scalar."""
+        patch = dc.get_example_patch()
+        array = patch_to_xarray(patch).isel({dim: 3})
+        out = xarray_to_patch(array)
+        coord = out.get_coord(dim)
+        assert coord.shape == ()
+        assert coord.values == patch.get_array(dim)[3]
+        assert xarray_to_patch(array.dc.abs()).get_coord(dim) == coord
+
+    def test_scalar_integer_without_units(self, xr):
+        """A scalar integer is one label, never the length of a partial coord."""
+        array = xr.DataArray(np.arange(3), dims="x", coords={"x": [5, 6, 7]})
+        coord = xarray_to_patch(array.isel(x=1)).get_coord("x")
+        assert coord.shape == () and coord.values == 6
+
+    @pytest.mark.parametrize("dtype", [np.float64, np.float32])
+    def test_float_axis_is_evenly_sampled(self, xr, dtype):
+        """An ordinary float axis converts to an evenly sampled coord."""
+        labels = np.linspace(0, 1, 1001, dtype=dtype)
+        array = xr.DataArray(np.zeros(1001), dims="x", coords={"x": labels})
+        assert xarray_to_patch(array).get_coord("x").evenly_sampled
+        assert array.dc.pass_filter(x=(None, 0.1)).shape == array.shape
+
+
 class TestPublishedPaths:
     """The conversions stay importable from where the docs published them."""
 
@@ -203,3 +237,31 @@ class TestCFUnits:
         path = tmp_path / ("out.nc" if writer == "to_netcdf" else "out.zarr")
         kwargs = {"engine": "h5netcdf"} if writer == "to_netcdf" else {}
         getattr(array.to_dataset(), writer)(path, **kwargs)
+
+
+class TestMultiIndex:
+    """A stacked dimension has no patch coordinate, so it is refused."""
+
+    def test_stacked_dimension_refused(self, random_patch):
+        """Converting a stacked array says how to make it convertible."""
+        pytest.importorskip("xarray")
+        stacked = patch_to_xarray(random_patch).stack(z=("distance", "time"))
+        with pytest.raises(dc.exceptions.PatchConversionError, match=r"unstack\('z'\)"):
+            xarray_to_patch(stacked)
+
+    def test_reset_index_converts(self, random_patch):
+        """With the index reset, the levels convert as coordinates along z."""
+        pytest.importorskip("xarray")
+        stacked = patch_to_xarray(random_patch).stack(z=("distance", "time"))
+        patch = xarray_to_patch(stacked.reset_index("z"))
+        assert patch.dims == ("z",)
+        assert patch.coords.dim_map["distance"] == ("z",)
+
+    def test_stacked_coord_on_another_dim_converts(self):
+        """A stacked coordinate riding an ordinary dimension still converts."""
+        xr = pytest.importorskip("xarray")
+        array = xr.DataArray(np.zeros((2, 2)), dims=("x", "y"))
+        array = array.assign_coords(x=[0, 1], y=[0, 1]).stack(z=("x", "y"))
+        array = array.to_dataset(name="v").rename_dims(z="row")["v"]
+        array = array.assign_coords(row=np.arange(4))
+        assert xarray_to_patch(array).dims == ("row",)

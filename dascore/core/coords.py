@@ -3093,9 +3093,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             if (new_fit := self._fit_run(trial, tol, keep_step)) is not None:
                 run, fit = trial, new_fit
             else:
-                result.append(fit or (run[0], self.dtype))
+                result.extend(self._settled(run, fit, nxt, keep_step))
                 run, fit = [nxt], self._fit_run([nxt], tol, keep_step)
-        result.append(fit or (run[0], self.dtype))
+        result.extend(self._settled(run, fit))
         runs, dtypes = zip(*result)
         # A re-fit spaces its labels evenly, which integers and coarse
         # times cannot always hold; the fit says what dtype they need.
@@ -3104,6 +3104,26 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         kept = all(_same_step(x.step(self.dtype), self.step) for x in refits)
         step = ... if kept else None
         return self._with_runs(runs, dtype=np.result_type(*dtypes), step=step)
+
+    def _settled(self, run, fit, nxt=None, keep_step=False) -> list[tuple]:
+        """
+        The runs a stretch becomes, with their dtypes: its fit if it has one.
+
+        A fit holding its step can end within half a step of where the next
+        run starts, or past it; the stretch then keeps its own runs, so the
+        labels stay in order and no two crowd one position. Any other fit
+        ends on the stretch's own last label.
+        """
+        if fit is None:
+            return [(run[0], self.dtype)]
+        if nxt is not None and keep_step:
+            grid, dtype = fit
+            last = grid.labels(np.array([len(grid) - 1]), dtype)[0]
+            first = self._run_labels(nxt, [0])[0]
+            ahead = first - last if self.sorted else last - first
+            if ahead * 2 < abs(grid.step(dtype)):
+                return [(x, self.dtype) for x in run]
+        return [fit]
 
     def _fit_tolerance(self, tolerance):
         """
@@ -3138,8 +3158,10 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         else:
             step = span / (count - 1)
             zero = 0
-        if keep_step and all(isinstance(x, Grid) for x in runs):
-            steps = [x.step(self.dtype) for x in runs]
+        # a lone label states no step, so it cannot disagree with one
+        stating = [x for x in runs if isinstance(x, Grid) or len(x) > 1]
+        if keep_step and stating and all(isinstance(x, Grid) for x in stating):
+            steps = [x.step(self.dtype) for x in stating]
             shared = steps[0]
             if shared != zero and (shared > zero) == ascending:
                 if all(_same_step(x, shared) for x in steps):
@@ -3155,13 +3177,17 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         deviation = np.max(np.abs(candidate.values - actual))
         if tol is not None and deviation > tol:
             return None
-        if keep_step and not self._keeps_step(runs, labels):
+        if keep_step and not self._keeps_step(runs, labels, step):
+            return None
+        # two labels within half a step would share one position, and
+        # re-fitting would push every later sample a step along
+        if keep_step and np.any(np.abs(np.diff(actual)) * 2 < abs(step)):
             return None
         fit = candidate.runs[0]
         assert isinstance(fit, Grid)  # a re-fit is evenly sampled by construction
         return fit, candidate.dtype
 
-    def _keeps_step(self, runs, labels) -> bool:
+    def _keeps_step(self, runs, labels, step) -> bool:
         """
         Whether any seam between these runs skips a position of their grid.
 
@@ -3169,14 +3195,16 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         later run sits on the earlier one's lattice, so it is a hole which
         re-fitting would spread over the run. The slack absorbs nanosecond
         rounding of fractional-rate steps and starts. A narrower seam is
-        misalignment, and stays the tolerance's business.
+        misalignment, and stays the tolerance's business. A run of stored
+        labels is measured by the coordinate's step, or the fit's if none.
         """
-        steps = [x.step(self.dtype) if isinstance(x, Grid) else self.step for x in runs]
+        stored = step if _is_null(self.step) else self.step
+        steps = [x.step(self.dtype) if isinstance(x, Grid) else stored for x in runs]
         for num in range(1, len(runs)):
-            step = steps[num - 1] if not _is_null(steps[num - 1]) else steps[num]
-            if _is_null(step) or not step:
+            seam = steps[num - 1] if not _is_null(steps[num - 1]) else steps[num]
+            if _is_null(seam) or not seam:
                 continue  # no grid stated, so no position to have skipped
-            span = abs(labels[num][0] - labels[num - 1][-1]) / abs(step)
+            span = abs(labels[num][0] - labels[num - 1][-1]) / abs(seam)
             if span >= 2 - 1e-3:
                 return False
         return True

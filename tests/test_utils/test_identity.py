@@ -38,6 +38,7 @@ from dascore.utils.identity import (
     try_operation_id,
     with_ids,
 )
+from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch_registry import _as_key, _signature, call_operation_id
 from dascore.warnings import DASCoreWarning
 
@@ -846,6 +847,10 @@ class TestPatchRules:
         """With ids off, no argument is encoded."""
         import dascore.utils.identity as identity  # noqa: PLC0415
 
+        @dc.patch_function()
+        def double(patch):
+            return patch.new(data=patch.data * 2)
+
         def _fail(*args, **kwargs):
             raise AssertionError("an id was computed with ids disabled")
 
@@ -854,9 +859,9 @@ class TestPatchRules:
             assert (patch + 1).attrs.data_id == ""
             assert patch.pass_filter(time=(1, 10)).attrs.data_id == ""
             assert patch.decimate(time=2).attrs.data_id == ""
-            # decimate is a processor now, so where keeps the ids-disabled
-            # path of a decorated patch function covered.
-            assert patch.where(np.asarray(patch.data) > 0).attrs.data_id == ""
+            # Every built-in operation is a processor now; a decorated
+            # function keeps that path covered.
+            assert double(patch).attrs.data_id == ""
             assert np.abs(patch).attrs.data_id == ""
 
     def test_two_patches(self, patch):
@@ -1017,6 +1022,20 @@ class TestMutationBoundary:
         with pytest.warns(DASCoreWarning, match="No id could be derived"):
             out = patch.update_attrs(odd=object())
         assert out.attrs.data_id not in ("", patch.attrs.data_id)
+
+    def test_a_repeated_refusal_warns_once(self, patch):
+        """The same refusal warns on its first call, not on every call."""
+        with pytest.warns(DASCoreWarning, match="No id could be derived"):
+            patch.tile_apply(lambda x: x, time=0.5, distance=50)
+        with suppress_warnings(DASCoreWarning, message="No id could", action="error"):
+            patch.tile_apply(lambda x: x, time=0.5, distance=50)
+
+    def test_a_raised_refusal_raises_again(self, patch):
+        """A filter turning the warning into an error holds on every call."""
+        for _ in range(2):
+            with suppress_warnings(DASCoreWarning, action="error"):
+                with pytest.raises(DASCoreWarning, match="No id could be"):
+                    patch.tile_apply(lambda x: x, time=0.5, distance=50)
 
     def test_an_operation_stamps_its_own_result(self, patch):
         """The replacements a patch function makes do not name themselves."""

@@ -5,7 +5,8 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import ParameterError, UnitError
-from dascore.units import m
+from dascore.proc.correlate import Correlate
+from dascore.units import get_quantity, m
 from dascore.utils.time import to_float
 
 
@@ -242,6 +243,30 @@ class TestCorrelatePaddedTransform:
         assert out.shape[out.get_axis("distance")] == 17
 
 
+class TestCorrelationUnits:
+    """Correlations carry the square of the data units."""
+
+    def test_both_routes_give_squared_units(self, random_patch):
+        """Correlate and the dft pipeline both give (m/s)**2 for m/s data."""
+        patch = random_patch.update_attrs(data_units="m/s")
+        direct = patch.correlate(distance=0, samples=True)
+        spectra = patch.dft("time", real=True)
+        piped = (spectra * spectra.conj()).idft().correlate_shift("time")
+        expected = get_quantity("m/s") ** 2
+        for out in (direct, piped):
+            assert get_quantity(out.attrs.data_units) == expected
+
+    def test_shift_leaves_units_it_does_not_rescale(self, random_patch):
+        """Without weighting undone, or without data units, units are kept."""
+        spectra = random_patch.update_attrs(data_units="m/s").dft("time", real=True)
+        product = (spectra * spectra.conj()).idft()
+        kept = product.correlate_shift("time", undo_weighting=False)
+        assert kept.attrs.data_units == product.attrs.data_units
+        unitless = random_patch.dft("time", real=True)
+        shifted = (unitless * unitless.conj()).idft().correlate_shift("time")
+        assert shifted.attrs.data_units is None
+
+
 class TestCorrelateErrors:
     """Tests for correlate input validation."""
 
@@ -279,3 +304,15 @@ class TestCorrelateShiftProcessor:
         single = random_patch.new(data=random_patch.data.astype(np.float32))
         assert single.correlate_shift("time").dtype == np.float64
         assert single.correlate_shift("time", undo_weighting=False).dtype == np.float32
+
+
+class TestCorrelateMetadata:
+    """Correlate works out its result from metadata alone."""
+
+    def test_lags_and_sources(self, random_patch):
+        """The lag axis spans the padded length, with one source column."""
+        corr = Correlate(distance=2, samples=True)
+        out, _ = corr.get_metadata(random_patch.drop_data())
+        assert out.dims == ("distance", "lag_time", "source_distance")
+        assert out.shape == (300, 4000, 1)
+        assert out.dtype == corr(random_patch).dtype == np.float64

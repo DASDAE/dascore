@@ -5,6 +5,7 @@ from __future__ import annotations
 import copy
 import gc
 import pickle
+import tracemalloc
 import weakref
 from concurrent.futures import ProcessPoolExecutor
 
@@ -16,7 +17,7 @@ from scipy.signal import detrend, windows
 import dascore as dc
 import dascore.proc.coords
 from dascore.compat import random_state
-from dascore.exceptions import ParameterError, PatchError
+from dascore.exceptions import CoordError, ParameterError, PatchError
 from dascore.transform.fourier import Dft, Idft, Istft, Stft, dft, idft
 from dascore.transform.spectral_descriptors import SpectralCentroid
 from dascore.units import get_quantity, get_quantity_str, percent, second
@@ -399,6 +400,17 @@ class TestDiscreteFourierTransform:
         with pytest.raises(ValueError, match="Unknown output"):
             sin_patch.dft("time", output="bad")
 
+    def test_uneven_dim_names_dft(self, wacky_dim_patch):
+        """An uneven dimension is refused in dft's name, not its padding's."""
+        with pytest.raises(CoordError, match=r"not evenly sampled as required by dft"):
+            wacky_dim_patch.dft("time")
+
+    def test_empty_dim_raises(self, random_patch):
+        """An empty dimension is refused as empty."""
+        empty = random_patch.select(time=(0, 0), samples=True)
+        with pytest.raises(CoordError, match=r"dft cannot transform time; .* empty"):
+            empty.dft("time")
+
     def test_db_true_with_fft_raises(self, sin_patch):
         """Ensure dB conversion is only accepted for spectral outputs."""
         with pytest.raises(ParameterError, match="db=True is only supported"):
@@ -575,6 +587,25 @@ class TestInverseDiscreteFourierTransform:
 
 class TestSTFT:
     """Tests for the short-time Fourier transform."""
+
+    def test_single_precision_peak_memory(self):
+        """float32 data are transformed in single precision, without a double copy."""
+        data = np.zeros((100, 50_000), dtype=np.float32)
+        time = dc.to_datetime64(0) + np.arange(50_000) * np.timedelta64(1, "ms")
+        coords = {"distance": np.arange(100.0), "time": time}
+        patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+        # Measured from here, leaving any tracing already running as it was.
+        was_tracing = tracemalloc.is_tracing()
+        tracemalloc.start()
+        tracemalloc.reset_peak()
+        before = tracemalloc.get_traced_memory()[0]
+        try:
+            out = patch.stft(time=256, samples=True)
+            peak = tracemalloc.get_traced_memory()[1] - before
+        finally:
+            if not was_tracing:
+                tracemalloc.stop()
+        assert peak < 3 * out.data.nbytes
 
     @pytest.mark.parametrize("detrend", [False, True])
     def test_single_precision_stays_single(self, random_patch, detrend):
@@ -1128,8 +1159,8 @@ class TestStftIdentity:
         """The default and an explicit half overlap keep their own ids."""
         default = chirp.stft(time=10 * second).attrs.data_id
         explicit = chirp.stft(time=10 * second, overlap=50 * percent).attrs.data_id
-        assert default == "b58639a01788bd9708b3bb7c94015993"
-        assert explicit == "348f576656aec44dd42c8450b4baafc9"
+        assert default == "f630eea773e7a629bb9b536291cfbf35"
+        assert explicit == "e54e55da12104a1f0e484fc9197ecd7c"
 
     @pytest.mark.concurrency
     def test_process_pool_stamps_the_serial_id(self, chirp):

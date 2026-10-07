@@ -199,6 +199,11 @@ class TestOverlap:
                 random_patch, {"distance": self.window * step}, overlap=-step
             )
 
+    def test_string_overlap_raises(self, random_patch):
+        """A percent string is refused with the quantity spelling to use."""
+        with pytest.raises(ParameterError, match=r"50 \* dascore.units.percent"):
+            random_patch.rolling(time=10, overlap="50%", samples=True)
+
     def test_invalid_percent_overlap_raises(self, random_patch):
         """A percent is between 0 and 100."""
         with pytest.raises(

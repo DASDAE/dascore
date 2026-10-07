@@ -5,7 +5,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Callable, Mapping, Sequence
 from contextlib import suppress
-from typing import Any, Literal
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -13,6 +13,7 @@ from pydantic import ConfigDict
 from scipy.fft import next_fast_len
 from scipy.ndimage import correlate1d
 
+import dascore as dc
 from dascore.compat import array
 from dascore.constants import PatchType, samples_arg_description
 from dascore.core.attrs import PatchAttrs
@@ -30,6 +31,8 @@ from dascore.models.base import values_equal
 from dascore.units import _quantities_equal, get_quantity
 from dascore.utils.array import _apply_binary_ufunc
 from dascore.utils.array_api import (
+    _as_numpy_dtype,
+    _result_dtype,
     array_namespace,
     asarray_like,
     backend_name,
@@ -50,12 +53,12 @@ from dascore.utils.identity import (
     strong_data_id,
     try_operation_id,
 )
-from dascore.utils.misc import _get_nullish
+from dascore.utils.misc import _get_nullish, broadcast_for_index
 from dascore.utils.moving import move_max
 from dascore.utils.patch import (
-    align_patch_coords,
+    _align_metadata,
+    _apply_alignment,
     get_dim_axis_value,
-    patch_function,
 )
 from dascore.utils.time import dtype_time_like
 from dascore.utils.window import resolve_window
@@ -971,20 +974,12 @@ class Standardize(PatchProcessor):
 apply_operator = _apply_binary_ufunc
 
 
-@patch_function()
-def dropna(
-    patch: PatchType,
-    dim,
-    how: Literal["any", "all"] = "any",
-    include_inf=True,
-) -> PatchType:
+class Dropna(PatchProcessor):
     """
     Return a patch with nullish values dropped along dimension.
 
     Parameters
     ----------
-    patch
-        The patch which may contain nullish values.
     dim
         The dimension along which to drop nullish values.
     how
@@ -1009,30 +1004,32 @@ def dropna(
     >>> # drop all distance labels that have all null values
     >>> out = patch.dropna("distance", how="all")
     """
-    axis = patch.get_axis(dim)
-    func = np.any if how == "any" else np.all
-    if include_inf:
-        to_drop = ~np.isfinite(patch.data)
-    else:
-        to_drop = pd.isnull(patch.data)
-    # need to iterate each non-dim axis and collapse with func
-    axes = set(range(len(patch.shape))) - {axis}
-    to_drop = func(to_drop, axis=tuple(axes))
-    if not np.any(to_drop):  # nothing nullish along this dimension
-        return patch
-    to_keep = ~to_drop
-    assert len(to_keep.shape) == 1
-    assert to_keep.shape[0] == patch.data.shape[axis]
-    # get slices for trimming data.
-    # Annotated because the entries are not all slices; ty reads the
-    # list as list[slice] from its initializer otherwise.
-    slices: list[Any] = [slice(None)] * len(patch.dims)
-    slices[axis] = to_keep
-    new_data = patch.data[tuple(slices)]
-    coord = patch.get_coord(dim)
-    cm = patch.coords.update(**{dim: coord[to_keep]})
-    attrs = patch.attrs
-    return patch.new(data=new_data, coords=cm, attrs=attrs)
+
+    dim: Any
+    how: Any = "any"
+    include_inf: Any = True
+
+    def get_metadata(self, meta):
+        """Return the metadata as it is, and the axis to drop along."""
+        # Which labels go depends on the values, so `reconcile` says.
+        return meta, {"axis": meta.get_axis(self.dim)}
+
+    def numpy_kernel(self, data, *, axis):
+        """Return the kept data and which labels they are; the data if none drop."""
+        func = np.any if self.how == "any" else np.all
+        to_drop = ~np.isfinite(data) if self.include_inf else pd.isnull(data)
+        # need to iterate each non-dim axis and collapse with func
+        to_drop = func(to_drop, axis=tuple(set(range(data.ndim)) - {axis}))
+        if not np.any(to_drop):  # nothing nullish along this dimension
+            return data
+        to_keep = ~to_drop
+        return data[broadcast_for_index(data.ndim, axis, to_keep)], to_keep
+
+    def reconcile(self, data, out, meta):
+        """Return the patch of the kept labels."""
+        data, to_keep = data
+        coord = meta.get_coord(self.dim)[to_numpy(to_keep)]
+        return out.new(coords=meta.coords.update(**{self.dim: coord})).to_patch(data)
 
 
 class Fillna(PatchProcessor):
@@ -1334,17 +1331,12 @@ class Roll(PatchProcessor):
         return array_namespace(data).roll(data, shift, axis=axis)
 
 
-@patch_function()
-def where(
-    patch: PatchType, cond: ArrayLike | PatchType, other: Any | PatchType = np.nan
-) -> PatchType:
+class Where(PatchProcessor):
     """
     Return elements from patch where condition is True, else fill with other.
 
     Parameters
     ----------
-    patch
-        The input patch
     cond
         Condition array. Should be a boolean array with the same shape as patch data,
         or a patch with boolean data that is broadcastable to the patch's shape.
@@ -1375,28 +1367,65 @@ def where(
     >>> # Replace values below threshold with 0
     >>> out = patch.where(patch.data > patch.data.mean(), other=0)
     """
-    cls = patch.__class__  # Use this so it works with subclasses
-    # Align patch and cond
-    if isinstance(cond, cls):
-        patch, cond = align_patch_coords(patch, cond)
-    # Align patch and other, may need to re-align cond
-    if isinstance(other, cls):
-        patch, other = align_patch_coords(patch, other)
-        if isinstance(cond, cls):
-            patch, cond = align_patch_coords(patch, cond)
 
-    cond = cond.data if isinstance(cond, cls) else cond
-    other = other.data if isinstance(other, cls) else other
-    cond_array, other_array = array(cond), array(other)
+    cond: Any
+    other: Any = np.nan
 
-    # Ensure condition is boolean
-    if not np.issubdtype(cond_array.dtype, np.bool_):
-        msg = "Condition must be a boolean array or patch with boolean data"
-        raise ValueError(msg)
+    def get_metadata(self, meta):
+        """Return the metadata aligned with any patch given, and how each aligns."""
+        cond, other = self.cond, self.other
+        steps: dict[str, list] = {"data": [], "cond": [], "other": []}
+        if cond_patch := isinstance(cond, dc.Patch):
+            cond = cond.drop_data()
+            meta, cond, data_step, cond_step = _align_metadata(meta, cond)
+            steps["data"].append(data_step)
+            steps["cond"].append(cond_step)
+        if isinstance(other, dc.Patch):
+            meta, other, data_step, other_step = _align_metadata(
+                meta, other.drop_data()
+            )
+            steps["data"].append(data_step)
+            steps["other"].append(other_step)
+            if cond_patch:
+                meta, cond, data_step, cond_step = _align_metadata(meta, cond)
+                steps["data"].append(data_step)
+                steps["cond"].append(cond_step)
+        cond_dtype = cond.dtype if cond_patch else array(cond).dtype
+        if not np.issubdtype(cond_dtype, np.bool_):
+            msg = "Condition must be a boolean array or patch with boolean data"
+            raise ValueError(msg)
+        if isinstance(other, dc.PatchMeta):
+            # Another backend's dtype, which numpy cannot promote.
+            other_dtype = _as_numpy_dtype(other.dtype)
+        else:
+            other_dtype = array(other)
+        out = meta.new(dtype=_result_dtype(meta.dtype, other_dtype))
+        # Only how to align: a patch operand's data stay where they are,
+        # lazy ones included, until the kernel reads them.
+        return out, {f"{x}_steps": steps[x] for x in steps}
 
-    # Use numpy.where to apply condition
-    new_data = np.where(cond_array, patch.data, other_array)
-    return patch.new(data=new_data)
+    def numpy_kernel(self, data, **plan):
+        """Return the data where the condition holds, else the other values."""
+        data, cond, other = self._aligned(data, to_numpy, **plan)
+        return np.where(array(cond), data, array(other))
+
+    def kernel(self, data, **plan):
+        """As `numpy_kernel`, on the data's own backend."""
+        data, cond, other = self._aligned(data, lambda x: x, **plan)
+        xp = array_namespace(data)
+        other = asarray_like(other, data)
+        # Promoted as numpy promotes, which some backends refuse to do.
+        dtype = _result_dtype(data.dtype, _as_numpy_dtype(other.dtype))
+        cast = (xp.astype(x, dtype) for x in (data, other))
+        return xp.where(asarray_like(cond, data), *cast)
+
+    def _aligned(self, data, convert, *, data_steps, cond_steps, other_steps):
+        """Return the data, condition and other values, aligned to each other."""
+        cond, other = (
+            _apply_alignment(convert(x.data), steps) if isinstance(x, dc.Patch) else x
+            for x, steps in ((self.cond, cond_steps), (self.other, other_steps))
+        )
+        return _apply_alignment(data, data_steps), cond, other
 
 
 class Flip(PatchProcessor):

@@ -9,9 +9,11 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore.core import get_coord
 from dascore.exceptions import ChunkError, ParameterError, UnitError
 from dascore.utils.chunk import get_intervals
 from dascore.utils.chunk_plan import (
+    _carry_grids,
     _normalize_chunk_units,
     build_chunk_plan,
     build_coverage_frame,
@@ -837,6 +839,34 @@ class TestSnappedCutExactness:
             # it opens starts at the next one.
             assert pieces[1][0] > on_grid
             assert pieces[1][0] >= cut
+
+
+class TestCarryGrids:
+    """An output's exact grid is the one its source's samples select."""
+
+    @pytest.mark.parametrize("seed", [0, 1])
+    def test_grid_matches_selected_samples(self, seed):
+        """Bounds on labels of exact grids, either way round."""
+        rng = np.random.default_rng(seed)
+        t0 = np.datetime64("2020-01-01", "ns")
+        for _ in range(200):
+            num, den = int(rng.choice([1, 3, 1000])), int(rng.choice([7, 1024, 3000]))
+            sign, offset = int(rng.choice([1, -1])), int(rng.integers(0, 50))
+            coord = get_coord(start=t0, step=(sign * num, den), shape=(offset + 300,))
+            coord = coord[offset:]
+            grid = (*coord.runs[0].canonical()[1:], len(coord))
+            first, last = np.sort(rng.integers(0, 300, 2))
+            low, high = np.sort(coord.values[[first, last]])
+            step = pd.Timedelta(1)
+            sources = pd.DataFrame(
+                {"_patch_row": [0], "x_min": [coord.min()], "x_max": [coord.max()]}
+            ).assign(x_step=step, _x_grid=[grid])
+            outputs = pd.DataFrame({"output_id": [0], "x_min": [low], "x_max": [high]})
+            members = outputs.assign(_patch_row=0)
+            out = _carry_grids(outputs.assign(x_step=step), members, sources, "x")
+            picked = coord.select((low, high))[0]
+            expected = (*picked.runs[0].canonical()[1:], len(picked))
+            assert out["_x_grid"].iloc[0] == expected
 
 
 class TestBuildGapFrame:

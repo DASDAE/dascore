@@ -14,6 +14,7 @@ from pint.errors import PintError
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.coords import BaseCoord, get_coord
+from dascore.exceptions import PatchConversionError
 from dascore.units import get_quantity, get_quantity_str, get_registry
 from dascore.utils.identity import operation_context
 from dascore.utils.misc import optional_import, unbyte
@@ -143,9 +144,27 @@ def xarray_to_patch(data_array) -> dc.Patch:
 
     A ``units`` attribute gives the data units unless it is the CF form of
     ``data_units``; one that cannot be parsed warns and stays an attribute.
+
+    Raises
+    ------
+    PatchConversionError
+        If a dimension is stacked (has a MultiIndex); call ``unstack`` on it
+        first, or ``reset_index`` to keep its levels as coordinates along it.
     """
     # this cant work if xarray isn't installed. This ensures it is.
-    _ = optional_import("xarray")
+    xr = optional_import("xarray")
+    # a stacked dimension labels its samples with tuples; no patch dim can
+    for index in data_array.xindexes.values():
+        dim = getattr(index, "dim", None)
+        if isinstance(index, xr.indexes.PandasMultiIndex) and (
+            data_array.xindexes.get(dim) is index
+        ):
+            msg = (
+                f"Cannot convert the stacked dimension {dim!r} to a patch; "
+                f"call .unstack({dim!r}) first, or .reset_index({dim!r}) to "
+                "keep its levels as coordinates along it."
+            )
+            raise PatchConversionError(msg)
 
     # A conversion, not new data: the array comes with the attrs which
     # describe it, as it does when a patch is built from a DataArray.
@@ -162,7 +181,7 @@ def xarray_to_patch(data_array) -> dc.Patch:
 
 def _coord_from(data_array, name, coord):
     """
-    The dims and values a patch coordinate is built from.
+    The dims and coordinate a patch holds.
 
     A lazily indexed coordinate is served by the DASCore coordinate it
     was built from, which comes back as it is: reading its values would
@@ -176,10 +195,8 @@ def _coord_from(data_array, name, coord):
         if not _is_temporal(served.dtype):
             served = served.set_units(units)
         return coord.dims, served
-    values = coord.values
-    if units is not None:
-        return coord.dims, get_coord(values=values, units=units)
-    return coord.dims, values
+    # a 0-d datetime reads as a numpy scalar, which get_coord takes as 1-d
+    return coord.dims, get_coord(data=np.asarray(coord.values), units=units)
 
 
 # CF's unit grammar: ``m s-1`` is m*s**-1; latitude and longitude are degrees.

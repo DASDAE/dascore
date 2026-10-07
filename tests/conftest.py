@@ -29,6 +29,7 @@ from dascore.examples import get_example_patch, get_example_spool
 from dascore.io.core import read
 from dascore.utils.coordmanager import merge_coord_managers
 from dascore.utils.downloader import fetch
+from dascore.utils.identity import _WARNED_RANDOM_IDS
 from dascore.utils.misc import register_func
 
 test_data_path = Path(__file__).parent.absolute() / "test_data"
@@ -197,6 +198,13 @@ def use_test_config():
     """Run tests with debug mode enabled unless overridden locally."""
     with _permanent_config(debug=True):
         yield
+
+
+@pytest.fixture(autouse=True)
+def fresh_random_id_warnings():
+    """Each test sees the random-id warning as a session's first call does."""
+    _WARNED_RANDOM_IDS.clear()
+    yield
 
 
 @pytest.fixture(autouse=True)
