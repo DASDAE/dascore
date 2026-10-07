@@ -2068,8 +2068,7 @@ class Spool(NodeRepr, NamespaceOwner):
             plus a second), which also works for patches whose sampling
             interval is unknown. Either way a boundary of one sample is
             contiguous. Without `fill_value` a missing sample always ends an
-            output, so a looser tolerance only matters with one (a
-            `DASCoreWarning` says so when it spans a gap). See
+            output, so a looser tolerance only matters with one. See
             `dascore.utils.gaps.GapTolerance`.
         conflict
             {conflict_desc}

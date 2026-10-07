@@ -76,7 +76,6 @@ from dascore.utils.time import (
     to_int,
     to_timedelta64,
 )
-from dascore.warnings import DASCoreWarning
 
 # Columns which never participate in conflict policing and never carry to
 # outputs: source bookkeeping (outputs are not file rows) and the two
@@ -553,23 +552,14 @@ def _cell_tolerance(tolerance: GapTolerance, sub, name) -> GapTolerance:
     return tolerance.resolve(sub[f"{name}_min"].dtype, units, name)
 
 
-def _continuity_group(
-    start, stop, step, tolerance: GapTolerance, hole: GapTolerance | None = None
-) -> tuple[pd.Series, bool]:
-    """
-    Label maximal near-contiguous runs (spec 2.4); `hole` also splits.
-
-    Also return whether `hole` split a run `tolerance` alone would join.
-    """
-    order, _, has_gap = gap_boundaries(start, stop, step, tolerance)
-    split = False
-    if hole is not None:
-        holes = gap_boundaries(start, stop, step, hole)[2]
-        split = bool((holes & ~has_gap).any())
-        has_gap |= holes
+def _continuity_group(start, stop, step, *tolerances: GapTolerance) -> pd.Series:
+    """Label maximal near-contiguous runs (spec 2.4); any tolerance splits."""
+    order, _, has_gap = gap_boundaries(start, stop, step, tolerances[0])
+    for tolerance in tolerances[1:]:
+        has_gap |= gap_boundaries(start, stop, step, tolerance)[2]
     out = pd.Series(0, index=start.index, dtype=np.int64)
     out.iloc[order] = np.cumsum(has_gap)
-    return out, split
+    return out
 
 
 def _normalize_chunk_units(df: pd.DataFrame, name: str) -> pd.DataFrame:
@@ -758,28 +748,25 @@ def _cell_labels(df, name, group_attrs, sampling_tolerance) -> pd.Series:
 
 def _partition(
     df, name, group_attrs, tolerance, sampling_tolerance, keep_holes
-) -> tuple[pd.Series, bool]:
+) -> pd.Series:
     """
     Return partition labels: rows sharing a label may combine (spec 2).
 
     A partition is a continuity run within a cell (see
     [`_cell_labels`](`dascore.utils.chunk_plan._cell_labels`)). With
     ``keep_holes``, a boundary missing a sample stays a partition break
-    however loose the tolerance; the flag says whether one split a run the
-    tolerance would join.
+    however loose the tolerance.
     """
     cell = _cell_labels(df, name, group_attrs, sampling_tolerance)
     cont = pd.Series(0, index=df.index, dtype=np.int64)
-    hole = GapTolerance.samples(DEFAULT_TOLERANCE) if keep_holes else None
-    split = False
+    default = (GapTolerance.samples(DEFAULT_TOLERANCE),) if keep_holes else ()
     for _, index in df.groupby(cell, sort=False).groups.items():
         sub = df.loc[index]
         s, e, st = get_interval_columns(sub, name)
         tol = _cell_tolerance(tolerance, sub, name)
-        labels, cell_split = _continuity_group(s, e, st, tol, hole)
-        split |= cell_split
+        labels = _continuity_group(s, e, st, tol, *default)
         cont.loc[index] = labels.astype(np.int64)
-    return cell + "_" + cont.astype(str), split
+    return cell + "_" + cont.astype(str)
 
 
 def _user_stacklevel() -> int:
@@ -1632,7 +1619,7 @@ def build_chunk_plan(
                 df, name, params["group"], params["sampling_group_tolerance"]
             )
         )
-    labels, split = _partition(
+    labels = _partition(
         df,
         name,
         params["group"],
@@ -1640,12 +1627,6 @@ def build_chunk_plan(
         params["sampling_group_tolerance"],
         keep_holes=fill_value is None and not _bridge_holes,
     )
-    if split:  # tolerance no longer bridges gaps by itself
-        msg = (
-            f"tolerance spans a gap along {name!r} but no fill_value was "
-            "given, so outputs split at gaps. Pass fill_value=... to merge."
-        )
-        warnings.warn(msg, DASCoreWarning, stacklevel=_user_stacklevel())
     per_partition = explicit is None and _needs_partition_resolution(value, overlap)
     if not per_partition and explicit is None:
         value_c, overlap_c = _coerce_length_overlap(value, overlap, df[min_name].dtype)

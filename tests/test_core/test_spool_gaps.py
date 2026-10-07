@@ -14,8 +14,6 @@ import dascore as dc
 from dascore.core.coords import concat_coords, get_coord
 from dascore.examples import random_spool
 from dascore.exceptions import ChunkError, ParameterError, UnitError
-from dascore.utils.misc import suppress_warnings
-from dascore.warnings import DASCoreWarning
 
 ONE_SECOND = np.timedelta64(1, "s")
 ONE_NS = np.timedelta64(1, "ns")
@@ -359,8 +357,7 @@ class TestChunkKeepsHoles:
     def test_only_fill_value_bridges(self):
         """A wide tolerance leaves a hole (#1217); fill_value closes it (#1216)."""
         spool = dc.spool([_time_runs_patch(2, samples=100)])
-        with pytest.warns(DASCoreWarning, match="fill_value"):
-            kept = spool.chunk(time=None, tolerance=100_000)
+        kept = spool.chunk(time=None, tolerance=100_000)
         assert len(kept) == 2
         assert len(kept.get_gaps()) == len(dc.spool(list(kept)).get_gaps()) == 1
         filled = spool.chunk(time=None, tolerance=100_000, fill_value=np.nan)
@@ -380,8 +377,7 @@ class TestChunkKeepsHoles:
         time = concat_coords(*runs)
         data = np.arange(float(len(time)))[None]
         patch = dc.Patch(data=data, coords={"distance": [0], "time": time}, dims=DIMS)
-        with pytest.warns(DASCoreWarning, match="fill_value"):
-            out = list(dc.spool([patch]).chunk(time=None, tolerance=10))
+        out = list(dc.spool([patch]).chunk(time=None, tolerance=10))
         assert len(out) == 2
         assert out == list(dc.spool([patch]))[::order]
 
@@ -431,10 +427,9 @@ class TestChunkKeepsHoles:
         later = patch.update_coords(time_min=float(starts[-1]) + 20 + shift)
         length = [None, 5.0, 13.0][int(rng.integers(3))]
         tolerance = float(rng.choice([1.5, 10.0, 100.0]))
-        with suppress_warnings(DASCoreWarning, message="tolerance spans a gap"):
-            chunked = dc.spool([patch, later]).chunk(
-                time=length, tolerance=tolerance, snap_coords=snap
-            )
+        chunked = dc.spool([patch, later]).chunk(
+            time=length, tolerance=tolerance, snap_coords=snap
+        )
         yielded = list(chunked)
         if snap:
             assert all(x.get_coord(d).runs_count == 1 for x in yielded for d in x.dims)
