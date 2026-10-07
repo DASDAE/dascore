@@ -21,6 +21,7 @@ from dascore.exceptions import PatchConversionError
 from dascore.io.index.planned import PlanResolver
 from dascore.units import get_quantity_str
 from dascore.utils.patch_assembly import PatchAssembler
+from dascore.xarray.patch import _cf_unit_str
 from tests.conftest import join_patches
 
 
@@ -1139,14 +1140,15 @@ def _assert_attrs_match(data, patch):
     """
     A segment's attrs are the patch's, as a store can hold them.
 
-    Its data units are a string, and it states no history, which the
-    index never holds; an id is stated only where the rows know chunk's,
-    and is then chunk's.
+    Data units appear as a string under ``data_units`` and in CF form under
+    ``units``; history is absent; an id appears only where the rows know
+    chunk's, and then equals it.
     """
     expected = {k: v for k, v in dict(patch.attrs).items() if v is not None}
     expected.pop("history", None)
     if (units := expected.get("data_units")) is not None:
         expected["data_units"] = get_quantity_str(units)
+        expected["units"] = _cf_unit_str(units)
     got = dict(data.attrs)
     for name in ("data_id", "origin_id"):
         if name not in got:

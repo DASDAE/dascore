@@ -823,7 +823,7 @@ class TestPatchRoundTrip:
         coord = get_coord(start=0.0, step=0.5, shape=(20,), units="m")
         patch = dc.Patch(data=np.arange(20), dims=("x",), coords={"x": coord})
         array = patch_to_xarray(patch, lazy_coords=True)
-        assert array["x"].attrs["units"] == "1 m"
+        assert array["x"].attrs["units"] == "m"
         array["x"].attrs["units"] = "ft"
         back = xarray_to_patch(array).get_coord("x")
         assert back == coord.set_units("ft")

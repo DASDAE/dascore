@@ -11,8 +11,8 @@ import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.core.source import ArraySource
 from dascore.io.utils import resolve_keyed_source, should_snap, windows_to_slices
-from dascore.units import get_quantity_str
 from dascore.xarray import patch_to_xarray
+from dascore.xarray.patch import _cf_attrs, _cf_units
 
 XDAS_PAYLOAD_VARIABLE = "__values__"
 
@@ -111,7 +111,7 @@ def get_scan_coord(coord, snap=True):
     values = coord.values
     if np.ndim(values) != 1:
         return values
-    units = coord.attrs.get("units")
+    units = _cf_units(coord.attrs.get("units"), coord.name)
     return dc.core.get_coord(data=values, units=units, snap=snap)
 
 
@@ -135,7 +135,7 @@ def dataset_to_patch_meta(
     for dim, size in zip(dims, shape, strict=True):
         coords.setdefault(dim, (dim, _get_dim_coord(dataset, dim, size)))
     meta = dc.PatchMeta(
-        attrs=dict(data_array.attrs),
+        attrs=_cf_attrs(data_array.attrs, data_var_name),
         coords=dc.get_coord_manager(coords=coords, dims=dims),
         dims=dims,
         dtype=str(data_array.dtype),
@@ -168,8 +168,5 @@ def spool_to_cf_dataset(spool):
         msg = "Multi-patch spools not yet supported for this format"
         raise NotImplementedError(msg)
     dataset = patch_to_xarray(patches[0]).rename("data").to_dataset()
-    attrs = dataset["data"].attrs
-    if "data_units" in attrs:  # a pint quantity; stores hold its string
-        attrs["data_units"] = get_quantity_str(attrs["data_units"])
     dataset.attrs["Conventions"] = "CF-1.8"
     return dataset

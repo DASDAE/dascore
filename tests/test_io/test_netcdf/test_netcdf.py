@@ -597,6 +597,49 @@ class TestNetCDFXarrayCompatibility:
         _assert_patch_round_trip_equal(dascore_patch, xarray_patch)
 
 
+class TestCFUnits:
+    """A file's CF ``units`` attributes read as units."""
+
+    @pytest.fixture
+    def cf_path(self, tmp_path):
+        """A CF file with data units and a geolocated, degrees_north coord."""
+        engine = _require_xarray_netcdf_engine()
+        xr = pytest.importorskip("xarray")
+        path = tmp_path / "cf.nc"
+        dataset = xr.Dataset(
+            {"data": (("distance", "time"), np.zeros((3, 4)), {"units": "m s-1"})},
+            coords={
+                "distance": ("distance", np.arange(3.0), {"units": "1 m"}),
+                "time": np.arange(4.0),
+                "latitude": ("distance", np.arange(3.0), {"units": "degrees_north"}),
+            },
+            attrs={"Conventions": "CF-1.8"},
+        )
+        dataset.to_netcdf(path, engine=engine)
+        return path
+
+    def test_read(self, cf_path):
+        """CF ``units`` strings read as data and coordinate units."""
+        patch = dc.read(cf_path)[0]
+        assert patch.attrs.data_units == dc.get_quantity("m/s")
+        assert "units" not in patch.attrs.model_dump()
+        assert patch.get_coord("latitude").units == dc.get_quantity("degree")
+        # a magnitude-bearing string, as older files hold, still reads
+        assert patch.get_coord("distance").units == dc.get_quantity("m")
+
+    def test_unparsed_units(self, tmp_path):
+        """Unparsed data units warn and stay an attr."""
+        engine = _require_xarray_netcdf_engine()
+        xr = pytest.importorskip("xarray")
+        path = tmp_path / "bogus.nc"
+        data = {"data": (("time",), np.zeros(4), {"units": "bogus"})}
+        dataset = xr.Dataset(data, attrs={"Conventions": "CF-1.8"})
+        dataset.to_netcdf(path, engine=engine)
+        with pytest.warns(UserWarning, match="bogus"):
+            patch = dc.spool(path)[0]
+        assert patch.attrs.model_dump()["units"] == "bogus"
+
+
 class TestNetCDFEdgeCases:
     """Test edge cases and error conditions."""
 
@@ -606,6 +649,7 @@ class TestNetCDFEdgeCases:
         class Coord:
             values: ClassVar = np.array([0.0, 1.0, 2.0, 5.0])
             attrs: ClassVar = {"units": "m"}
+            name = "distance"
 
         coord = netcdf_utils.get_scan_coord(Coord(), snap=False)
 
@@ -618,6 +662,7 @@ class TestNetCDFEdgeCases:
         class Coord:
             values: ClassVar = np.arange(4.0)
             attrs: ClassVar = {"units": "m"}
+            name = "distance"
 
         coord = netcdf_utils.get_scan_coord(Coord(), snap=True)
 
