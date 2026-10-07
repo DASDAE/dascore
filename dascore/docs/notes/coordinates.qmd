@@ -14,7 +14,7 @@ DASCore separates two jobs:
 Joining across a gap and fixing it are two visible steps:
 
 ```python
-joined = spool.chunk(time=None, tolerance=10)  # gaps up to 10 samples are kept as holes
+joined = spool.chunk(time=None, tolerance=10)  # seams up to 10 steps (9 missing samples) stay holes
 filled = joined.fill_gaps(time=10)             # insert the missing samples, or
 snapped = joined.snap_coords("time")           # spread the samples evenly
 ```
@@ -23,7 +23,7 @@ snapped = joined.snap_coords("time")           # spread the samples evenly
 
 ## Scope
 
-The sampling rules apply to one-dimensional, monotonic, numeric or datetime dimension coordinates; others have no step.
+The sampling rules apply to one-dimensional, monotonic, numeric or time-like (datetime or timedelta) dimension coordinates; others have no step.
 
 **Associated coordinates** run along a dimension without being one. Whatever an operation does along a dimension, it does to them; if it can't, it drops them with a warning (`fill_gaps` gives them NaN or NaT where it can). Selecting by a multi-dimensional one raises and suggests a mask. Units always survive.
 
@@ -50,11 +50,11 @@ A coordinate is described by its `step` (`None` if it has none) and two independ
 
 1. **Labels are what was recorded.** Only `snap_coords`, `fill_gaps`, a reader's `snap` (rule 3) and `chunk`'s piece shift (rule 6) change them; storing a label as a grid value within float precision doesn't count. Removing samples keeps the step, leaving holes; only an explicit stride gives a coarser step.
 
-2. **Inference finds a grid or nothing.** `get_coord(data=...)` checks every label against a fitted grid, not just the spacings, so drift can't hide: all on the grid is evenly sampled; all offsets and spacing errors under half a step, with no repeats, is jittered; anything else has no step. Inference never invents holes. With a stated step, labels are placed on that grid, skipped positions become holes, and two labels on one position raise. Integer and datetime grids are found exactly in their own tick unit; floats are judged in their stored dtype.
+2. **Inference finds a grid or nothing.** `get_coord(data=...)` checks every label against a fitted grid, not just the spacings, so drift can't hide: all on the grid at consecutive positions is evenly sampled; all offsets and spacing errors under half a step, with no repeats, is jittered; anything else has no step. Inference never invents holes. With a stated step, labels are placed on that grid, skipped positions become holes, and two labels on one position raise. Integer and datetime grids are found exactly in their own tick unit; floats are judged in their stored dtype.
 
 3. **Readers snap the coordinates `snap` names.** `dc.read`, `dc.scan`, `dc.spool` and every reader take `snap`:
    - `None` (default): the format's default names, shown in its reader's signature;
-   - `True`: every one-dimensional numeric or datetime dimension;
+   - `True`: every one-dimensional numeric or time-like dimension;
    - `False`: nothing; every coordinate exactly as stored;
    - a tuple such as `("time",)`: those names; a missing or unsnappable name raises.
 
@@ -68,7 +68,7 @@ A coordinate is described by its `step` (`None` if it has none) and two independ
 
 6. **`chunk` assembles.** It joins compatible pieces (`notes/patch_compatibility.qmd`) along the coordinate's direction, judging each seam from the recorded labels on either side.
    - **Gaps.** Missing samples within `tolerance` join and stay holes; wider gaps split, inside pieces too.
-   - **Offsets.** A piece off the output's grid by at most `max_shift` is shifted onto it as a block; further, but under half a step, it keeps its labels and the output is jittered. `max_shift=0` shifts nothing. After a file ending at 99 s with a 1 s step, a next file starting at 100.1 s is shifted, one at 100.3 s is jittered, and one at 103 s leaves a two-sample hole.
+   - **Offsets.** A piece off the output's grid by at most `max_shift` is shifted onto it as a block; further, but under half a step, it keeps its labels and the output is jittered. `max_shift=0` shifts nothing. After a file ending at 99 s with a 1 s step, a next file starting at 100.1 s is shifted, one at 100.3 s is jittered, and one at 103 s leaves a three-sample hole.
    - **Rates.** The grid is refitted over the whole output; a piece that drifts half a step or more from it (a slightly different rate) starts a new output.
    - A single sample takes its neighbours' step; pieces with no step join by recorded spacing.
    - **Overlaps.** The earlier piece wins; later samples fill only its holes.
@@ -109,7 +109,7 @@ These are the only thresholds.
 | `dascore.config.max_shift` | 0.2 steps | Default for `chunk` and the reader warning: above measured jitter (0.17), below a missing sample's effect. `snap_coords` has no default limit. |
 | `DEFAULT_TOLERANCE` | 1.5 steps | Default `tolerance`: only contiguous pieces join. |
 | `dascore.config.max_index_runs` | 256 | Runs stored per coordinate in the index. |
-| Float exactness | max(`_GRID_RTOL` × step, 4 ulp) | In the stored dtype; float64 holding float32 values counts as float32. |
+| Float exactness | max(`_GRID_RTOL` × \|step\|, 4 ulp) | In the stored dtype; float64 holding float32 values counts as float32. |
 | Fractional steps | ≥ 100 ticks | So an integer array missing one value isn't read as a fractional grid. |
 
 ## Methods that change coordinates
