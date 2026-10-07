@@ -276,8 +276,23 @@ class TestGeometryColumns:
         """Two segments may overlap unless they state the same column."""
         first = inv.Geometry(distance=(0.0, 60.0), columns={"depth": (0.0, 6.0)})
         second = inv.Geometry(distance=(50.0, 80.0), columns={"depth": (5.0, 8.0)})
-        with pytest.raises(InvalidInventoryError, match="for column 'depth'"):
+        with pytest.raises(InvalidInventoryError, match="columns \\['depth'\\]"):
             self._inventory(first, second).check()
+
+    def test_column_overlap_reported_once_per_pair(self):
+        """Two shared columns are one fault, stated in optical distance."""
+        columns = {"chainage": (0.0, 1.0), "depth": (0.0, 1.0)}
+        first = inv.Geometry(name="a", distance=(0.0, 17.0), columns=columns)
+        second = inv.Geometry(name="b", distance=(1.0, 14.0), columns=columns)
+        array = self._inventory(first, second).networks[0].fiber_arrays[0]
+        path = array.optical_paths[0].model_copy(update={"name": "lab"})
+        with pytest.raises(InvalidInventoryError) as info:
+            path.check()
+        lines = str(info.value).splitlines()[1:]
+        assert len(lines) == 1
+        assert "on optical path 'lab'" in lines[0]
+        assert "optical distance from 1.0 to 14.0" in lines[0]
+        assert "['chainage', 'depth']" in lines[0]
 
     def test_different_columns_may_overlap(self):
         """Each column is its own function track, so they are independent."""
@@ -421,8 +436,46 @@ class TestGeometryColumnReviewFindings:
                 "elevation": (100.0, 110.0),
             },
         )
-        with pytest.raises(InvalidInventoryError, match="for axis"):
+        with pytest.raises(InvalidInventoryError) as info:
             self._inventory(canonical, labelled).check()
+        # Each segment's own headers, not one segment's attributed to both.
+        assert "as ['x', 'y', 'z'] and ['longitude', 'latitude', 'elevation']" in (
+            str(info.value)
+        )
+
+    def test_overlap_reported_once_in_distance(self):
+        """One fault is one message, naming both segments and the distances."""
+        first = inv.Geometry(
+            name="a",
+            distance=(0.0, 17.0),
+            columns={"x": (0.0, 17.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
+        )
+        second = inv.Geometry(
+            name="b",
+            distance=(1.0, 14.0),
+            columns={"x": (5.0, 6.0), "y": (5.0, 6.0), "z": (5.0, 6.0)},
+        )
+        with pytest.raises(InvalidInventoryError) as info:
+            self._inventory(first, second).check()
+        lines = str(info.value).splitlines()[1:]
+        assert len(lines) == 1
+        assert "'a' (distance (0.0, 17.0))" in lines[0]
+        assert "'b' (distance (1.0, 14.0))" in lines[0]
+        assert "optical distance from 1.0 to 14.0" in lines[0]
+        assert "['x', 'y', 'z']" in lines[0]
+
+    def test_touching_segments_do_not_overlap(self):
+        """Coverage is half-open, so one may begin where the last ended."""
+        segments = [
+            inv.Geometry(
+                name=name,
+                distance=span,
+                columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
+            )
+            for name, span in (("a", (0.0, 10.0)), ("b", (10.0, 20.0)))
+        ]
+        inventory = self._inventory(*segments)
+        assert inventory.check() is inventory
 
     def test_an_axis_stated_twice_is_refused_when_placing(self):
         """Otherwise whichever spelling came last would win, silently."""
@@ -496,6 +549,11 @@ class TestGeometry:
     def test_requires_two_points(self):
         """Requires two points."""
         with pytest.raises(ValidationError, match="at least 2 control points"):
+            inv.Geometry(distance=(1.0,), columns={"x": (0.0,), "y": (0.0,)})
+
+    def test_one_point_suggests_a_repeated_position(self):
+        """A spool written as one row is told how to write it as two."""
+        with pytest.raises(ValidationError, match="same position"):
             inv.Geometry(distance=(1.0,), columns={"x": (0.0,), "y": (0.0,)})
 
     def test_strictly_increasing(self):
@@ -694,7 +752,7 @@ class TestPathTracks:
                 inv.Geometry(distance=(50.0, 80.0), **seg),
             ),
         )
-        with pytest.raises(InvalidInventoryError, match="Overlapping geometry"):
+        with pytest.raises(InvalidInventoryError, match="overlap in optical distance"):
             path.check()
 
     def test_boolean_labels_overlap_freely(self):
@@ -3174,6 +3232,17 @@ class TestDepthLabel:
             units=("meter", "meter", "meter"),
         )
         assert crs.axis_index("depth") == 2
+
+
+class TestLabelGroup:
+    """A label belongs to a group."""
+
+    @pytest.mark.parametrize("group", [None, ""])
+    def test_group_is_required(self, group):
+        """A label with no group never becomes a coordinate, so it vanishes."""
+        kwargs = {} if group is None else {"group": group}
+        with pytest.raises(ValidationError, match="group"):
+            inv.OpticalPathLabel(distance_min=0.0, distance_max=1.0, **kwargs)
 
 
 class TestDistanceMapAxisAgreement:

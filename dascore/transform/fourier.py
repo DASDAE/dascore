@@ -23,7 +23,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.core.processor import PatchProcessor
-from dascore.exceptions import ParameterError, PatchError
+from dascore.exceptions import CoordError, ParameterError, PatchError
 from dascore.proc.basic import Pad, _pad_array
 from dascore.proc.tile_apply import Reassemble, TileApply
 from dascore.proc.units import _replace_data_units
@@ -365,6 +365,12 @@ class Dft(PatchProcessor):
         plan |= dict(scale=None, square=False, divisor=None, db=None)
         if not dims:  # no transformation needed.
             return meta, plan
+        # Check before padding so errors name dft rather than pad.
+        for name in dims:
+            if not len(meta.get_coord(name)):
+                msg = f"dft cannot transform {name}; the dimension is empty."
+                raise CoordError(msg)
+            meta.get_coord(name, require_evenly_sampled=True)
         # re-arrange list so real dim is last (if provided)
         if isinstance(real, str):
             assert real in dims, "real must be in provided dimensions."
