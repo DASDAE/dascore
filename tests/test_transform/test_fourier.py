@@ -17,7 +17,7 @@ from scipy.signal import detrend, windows
 import dascore as dc
 import dascore.proc.coords
 from dascore.compat import random_state
-from dascore.exceptions import ParameterError, PatchError
+from dascore.exceptions import CoordError, ParameterError, PatchError
 from dascore.transform.fourier import Dft, Idft, Istft, Stft, dft, idft
 from dascore.transform.spectral_descriptors import SpectralCentroid
 from dascore.units import get_quantity, get_quantity_str, percent, second
@@ -399,6 +399,17 @@ class TestDiscreteFourierTransform:
         """Ensure invalid output types raise."""
         with pytest.raises(ValueError, match="Unknown output"):
             sin_patch.dft("time", output="bad")
+
+    def test_uneven_dim_names_dft(self, wacky_dim_patch):
+        """An uneven dimension is refused in dft's name, not its padding's."""
+        with pytest.raises(CoordError, match=r"not evenly sampled as required by dft"):
+            wacky_dim_patch.dft("time")
+
+    def test_empty_dim_raises(self, random_patch):
+        """An empty dimension is refused as empty."""
+        empty = random_patch.select(time=(0, 0), samples=True)
+        with pytest.raises(CoordError, match=r"dft cannot transform time; .* empty"):
+            empty.dft("time")
 
     def test_db_true_with_fft_raises(self, sin_patch):
         """Ensure dB conversion is only accepted for spectral outputs."""

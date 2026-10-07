@@ -2,9 +2,13 @@
 
 from __future__ import annotations
 
+import os
+import re
 import shutil
+import warnings
 from collections.abc import Sequence
 from functools import cache
+from pathlib import Path
 from threading import RLock
 from types import EllipsisType
 from typing import Any, cast
@@ -12,6 +16,7 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 import pint
+import pydantic
 from pint import DimensionalityError, Quantity, UndefinedUnitError, Unit
 from pint.facets.plain import PlainUnit
 from platformdirs import user_cache_path
@@ -21,6 +26,22 @@ from dascore.compat import is_array
 from dascore.exceptions import UnitError
 from dascore.utils.misc import _reinit_after_fork, iterate, unbyte
 from dascore.utils.time import dtype_time_like, is_datetime64, is_timedelta64, to_float
+from dascore.warnings import DASCoreWarning
+
+# A bracketed number with no unit in it, e.g. "(1e-9)", "[10^-9]": often an
+# annotation, which pint reads as a scale factor.
+_PAREN_NUMBER = re.compile(
+    r"[(\[](?=[^)\]]*[\d⁰¹²³⁴⁵⁶⁷⁸⁹])[\d⁰¹²³⁴⁵⁶⁷⁸⁹⁻\s.,eE+\-*/^]*[)\]]"
+)
+_EXPONENT_END = re.compile(r"(\^|\*\*)\s*$")
+
+
+def _has_bracketed_factor(text: str) -> bool:
+    """True if a bracketed number scales the unit; "m^(-1)" is an exponent."""
+    return any(
+        not _EXPONENT_END.search(text, 0, x.start())
+        for x in _PAREN_NUMBER.finditer(text)
+    )
 
 
 def _get_unit_registry():
@@ -104,6 +125,15 @@ def get_unit(value) -> Unit:
 @cache
 def _str_to_quant(quant_str):
     """Get quantity from a string; cache output."""
+    if isinstance(quant_str, str) and _has_bracketed_factor(quant_str):
+        # Cached, so this warns once per string per session.
+        msg = (
+            f"Unit string {quant_str!r} has a bracketed number, which is "
+            "parsed as a scale factor, not a label."
+        )
+        # Point at the caller, past dascore and the attrs validation.
+        skip = tuple(f"{Path(x.__file__).parent}{os.sep}" for x in (dc, pydantic))
+        warnings.warn(msg, DASCoreWarning, skip_file_prefixes=skip)
     with _UNIT_LOCK:
         if isinstance(quant_str, Unit):
             quant_str = str(quant_str)  # ensure unit is converted to quantity
@@ -138,6 +168,10 @@ def get_quantity(
 
     Returns None for None, Ellipsis, or an empty string (no units). Handle this before
     using the result in arithmetic.
+
+    A number in brackets, as in a label such as "nanostrain (1e-9)", is a
+    scale factor to the unit, so it warns; drop it, or give the unit it
+    names (e.g. "strain"), unless the factor is meant.
 
     Parameters
     ----------

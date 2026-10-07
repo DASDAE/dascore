@@ -52,6 +52,7 @@ from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     _concatenated_steps,
     _ensure_patch_row,
+    grid_fits,
     patch_local_adjusted_envelopes,
 )
 from dascore.utils.explicit_ranges import _select_manager, _source_manager
@@ -168,6 +169,7 @@ def _coord_record_from_row(
     name: str,
     dims: tuple[str, ...] | None = None,
     name_is_held: bool = False,
+    planned: bool = False,
 ) -> CoordRecord | None:
     """
     Build the envelope coord record for one output coordinate.
@@ -180,6 +182,8 @@ def _coord_record_from_row(
     `name_is_held` says the members hold this coordinate, so a record is
     written even when nothing about its values can be stated: the patch
     will carry it, and a catalog which omitted it would deny it.
+    `planned` says the row is the plan's own output along ``name``, whose
+    grid describes its samples without a def key.
     """
     dims = (name,) if dims is None else dims
     lo, hi = row.get(f"{name}_min"), row.get(f"{name}_max")
@@ -269,7 +273,9 @@ def _coord_record_from_row(
     data_id = _def_key_data_id(key)
     # the grid is the source's; once the def key (value identity) is gone,
     # so are the values it described
-    grid = row.get(f"_{name}_grid") if data_id else None
+    grid = row.get(f"_{name}_grid")
+    if not (data_id or (planned and grid_fits(grid, lo, hi))):
+        grid = None
     exact = {}
     if isinstance(grid, tuple):
         *terms, length = grid
@@ -435,6 +441,7 @@ def _output_records(
     token: str,
     aux_info: Mapping[int, Mapping[str, Mapping]] | None = None,
     sizes: Mapping[int, int] | None = None,
+    plan_dim: str | None = None,
 ) -> list[SourceRecord]:
     """
     Convert plan output rows into ingestible source records.
@@ -464,7 +471,7 @@ def _output_records(
         aux = aux_info.get(output_id, {})
         coords = []
         for name in dim_names:
-            record = _coord_record_from_row(row, name)
+            record = _coord_record_from_row(row, name, planned=name == plan_dim)
             if record is not None:
                 coords.append(record)
         # auxiliary (non-dimension) coordinates remain on the assembled
@@ -1205,6 +1212,7 @@ def derived_catalog(
         token,
         aux_info=aux_info,
         sizes=_whole_member_sizes(trims, sources),
+        plan_dim=name,
     )
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver, stamps=stamps)

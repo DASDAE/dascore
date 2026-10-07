@@ -9,20 +9,22 @@ from __future__ import annotations
 
 import datetime
 import sys
-from collections.abc import Sequence
 from typing import Any, ClassVar
 
 import numpy as np
 import pandas as pd
+import scipy.fft as sft
 from pydantic import ConfigDict
 from scipy.ndimage import gaussian_filter as np_gauss
 from scipy.ndimage import median_filter as nd_median_filter
 from scipy.ndimage import sobel as nd_sobel
 
 import dascore as dc
-from dascore.constants import PatchType, samples_arg_description
+from dascore.constants import samples_arg_description
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import FilterValueError, ParameterError, UnitError
+from dascore.proc.basic import Real
+from dascore.transform.fourier import Dft, Idft, _dft_kernel, _idft_kernel
 from dascore.units import (
     convert_units,
     get_filter_units,
@@ -31,7 +33,7 @@ from dascore.units import (
     percent,
     quant_sequence_to_quant_array,
 )
-from dascore.utils.array_api import asarray_like
+from dascore.utils.array_api import _result_dtype, array_namespace, asarray_like
 from dascore.utils.docs import compose_docstring
 from dascore.utils.imports import lazy_import
 from dascore.utils.misc import (
@@ -42,7 +44,6 @@ from dascore.utils.misc import (
 from dascore.utils.patch import (
     get_dim_axis_value,
     get_dim_sampling_rate,
-    patch_function,
     require_no_holes,
 )
 from dascore.utils.time import to_float
@@ -538,14 +539,7 @@ class GaussianFilter(_WindowFilter):
         )
 
 
-@patch_function(version="1.1")
-def slope_filter(
-    patch: PatchType,
-    filt: Sequence[float],
-    dims: tuple[str, str] = ("distance", "time"),
-    directional: bool = False,
-    invert: bool = False,
-) -> PatchType:
+class SlopeFilter(PatchProcessor):
     """
     Filter the patch over certain slopes in the 2D Fourier domain.
 
@@ -554,8 +548,6 @@ def slope_filter(
 
     Parameters
     ----------
-    patch
-        The patch to filter.
     filt
         A length 4 array of the form [va, vb, vc, vd]. If invert is False,
         the filter selects the apparent velocities between 'vb' and 'vc'
@@ -617,6 +609,14 @@ def slope_filter(
     The [FK recipe](`dascore/docs/recipes/fk.qmd`) provides additional examples.
     """
 
+    filt: Any
+    dims: Any = ("distance", "time")
+    directional: Any = False
+    invert: Any = False
+
+    __version__ = "1.1"
+
+    @staticmethod
     def _check_inputs(patch, filt, dims):
         """Ensure inputs are valid."""
         sorted_filt = np.all(filt[:-1] <= filt[1:])
@@ -627,6 +627,7 @@ def slope_filter(
             msg = f"Cant apply slope filter. {missing} are missing from patch."
             raise ParameterError(msg)
 
+    @staticmethod
     def _get_taper_mask(filt, slope, invert):
         """Get a mask for applying taper and attenuation."""
         fac = np.where(
@@ -643,13 +644,14 @@ def slope_filter(
         fac = fac if invert else 1.0 - fac
         return fac
 
+    @staticmethod
     def _get_slope_array(dft_patch, directional, freq_dims):
         """Get an array which specifies slope."""
         dim1, dim2 = freq_dims[-1], freq_dims[-2]
         dims = dft_patch.dims
         ndims = dft_patch.ndim
-        coord1 = dft_patch.get_array(dim1)
-        coord2 = dft_patch.get_array(dim2) + sys.float_info.epsilon
+        coord1 = dft_patch.coords.get_array(dim1)
+        coord2 = dft_patch.coords.get_array(dim2) + sys.float_info.epsilon
         # Need to add appropriate blank dims to keep overall shape of patch.
         ax1, ax2 = dims.index(dim1), dims.index(dim2)
         shape_1 = broadcast_for_index(ndims, ax1, value=slice(None), fill=None)
@@ -660,7 +662,8 @@ def slope_filter(
             slope = np.abs(slope)
         return slope
 
-    def _maybe_transform_units(filt, dft_patch, freq_dims):
+    @staticmethod
+    def _maybe_transform_units(filt, dft_patch, freq_dims, dims):
         """Handle units on filter."""
         # Hand the units/partial units in sequence.
         units = getattr(filt, "units", None)
@@ -691,17 +694,39 @@ def slope_filter(
         out = convert_units(array, new_units, units)
         return out
 
-    _check_inputs(patch, filt, dims)
-    freq_dims = tuple(f"ft_{x}" for x in dims)
-    dft_patch = patch.dft.func(patch, dims)  # ty: ignore[unresolved-attribute]
-    transformed = patch is not dft_patch
+    def get_metadata(self, meta):
+        """Return the filtered metadata, the transforms and the slope mask."""
+        filt, dims = self.filt, self.dims
+        self._check_inputs(meta, filt, dims)
+        freq_dims = tuple(f"ft_{x}" for x in dims)
+        out, dft_plan = Dft(dim=dims).get_metadata(meta)
+        transform = out is not meta
+        slope = self._get_slope_array(out, self.directional, freq_dims)
+        filt = self._maybe_transform_units(filt, out, freq_dims, dims)
+        mask = self._get_taper_mask(filt, slope, self.invert)
+        # The double mask promotes single-precision spectra.
+        out = out.new(dtype=_result_dtype(out.dtype, mask.dtype))
+        plan = {"transform": transform, "mask": mask, "dft": dft_plan, "idft": None}
+        if transform:
+            out, plan["idft"] = Idft().get_metadata(out)
+            out = out.new(dtype=_result_dtype(out.dtype, real=True))
+        return out, plan
 
-    slope = _get_slope_array(dft_patch, directional, freq_dims)
-    filt = _maybe_transform_units(filt, dft_patch, freq_dims)
+    def kernel(self, data, **plan):
+        """Return the data with the mask applied in the 2D Fourier domain."""
+        xp = array_namespace(data)
+        return self._filtered(data, xp, xp.fft, True, **plan)
 
-    mask = _get_taper_mask(filt, slope, invert)
-    new_data = dft_patch.data * asarray_like(mask, dft_patch.data)
-    out = dft_patch.update(data=new_data)
-    if transformed:
-        out = out.idft().real()
-    return out
+    def numpy_kernel(self, data, **plan):
+        """As `kernel`, transforming with scipy, as dft does for numpy data."""
+        return self._filtered(data, array_namespace(data), sft, False, **plan)
+
+    @staticmethod
+    def _filtered(data, xp, fft, cast, *, transform, mask, dft, idft):
+        """Return the data transformed, masked and transformed back."""
+        if transform:
+            data = _dft_kernel(data, xp, fft, cast=cast, **dft)
+        data = data * asarray_like(mask, data)
+        if not transform:
+            return data
+        return Real().kernel(_idft_kernel(data, xp, fft, cast=cast, **idft))

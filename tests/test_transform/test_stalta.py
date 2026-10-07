@@ -5,7 +5,8 @@ from __future__ import annotations
 import numpy as np
 import pytest
 
-from dascore.exceptions import ParameterError
+from dascore.exceptions import ParameterError, UnitError
+from dascore.transform.stalta import Stalta
 
 
 class TestStaLta:
@@ -85,3 +86,49 @@ class TestStaLta:
         """Ensure the long-term window must exceed the short-term window."""
         with pytest.raises(ParameterError, match="long-term window"):
             random_patch.stalta(time=(0.05, 0.01))
+
+
+class TestStaltaProcessor:
+    """Stalta as a class: keyword-only options and dtype from metadata."""
+
+    def test_samples_is_keyword_only(self):
+        """The windows are keywords, so samples cannot be given by position."""
+        with pytest.raises(TypeError, match="positional"):
+            Stalta(True, time=(5, 20))
+
+    def test_single_precision(self, random_patch):
+        """The ratio is double, and the metadata predicts it without data."""
+        patch = random_patch.new(data=np.asarray(random_patch.data, np.float32))
+        stalta = Stalta(time=(5, 20), samples=True)
+        out, _ = stalta.get_metadata(patch.drop_data())
+        assert out.dtype == stalta(patch).dtype == np.float64
+
+
+class TestStaltaUnits:
+    """The ratio's units are the quotient of two equal units."""
+
+    def test_scaled_units_cancel(self, random_patch):
+        """A scale in the units divides out, leaving a dimensionless ratio."""
+        kwargs = dict(time=(5, 20), samples=True)
+        out = random_patch.set_units("10 m/s").stalta(**kwargs)
+        assert str(out.attrs.data_units) == "1"
+        assert np.allclose(out.data, random_patch.stalta(**kwargs).data, equal_nan=True)
+
+    def test_offset_units_refused(self, random_patch):
+        """A temperature cannot be divided by one."""
+        with pytest.raises(UnitError, match="offset units"):
+            random_patch.set_units("degC").stalta(time=(5, 20), samples=True)
+
+    def test_scaled_units_as_a_quotient(self, random_patch):
+        """The scale goes into both means before dividing, as patch division does."""
+        scaled = random_patch.set_units("10 m/s")
+        sta, lta = (scaled.rolling(time=x, samples=True).mean() for x in (5, 20))
+        out = scaled.stalta(time=(5, 20), samples=True)
+        assert np.array_equal(out.data, (sta / lta).data, equal_nan=True)
+
+    def test_single_row_rolls_with_pandas(self, random_patch):
+        """A patch with one row rolls as `rolling` rolls it, through pandas."""
+        row = random_patch.isel(distance=slice(0, 1))
+        sta, lta = (row.rolling(time=x, samples=True).mean() for x in (5, 20))
+        out = row.stalta(time=(5, 20), samples=True)
+        assert np.array_equal(out.data, (sta / lta).data, equal_nan=True)

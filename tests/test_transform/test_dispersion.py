@@ -7,6 +7,7 @@ import dascore as dc
 from dascore import get_example_patch
 from dascore.exceptions import ParameterError
 from dascore.transform import dispersion_phase_shift
+from dascore.transform.dispersion import DispersionPhaseShift
 from dascore.utils.misc import suppress_warnings
 
 
@@ -162,3 +163,17 @@ class TestDispersion:
         full = patch.dispersion_phase_shift(vels, approx_resolution=2.5)
         cut = patch.new(data=data).dispersion_phase_shift(vels, approx_resolution=2.5)
         assert not np.allclose(full.data, cut.data)
+
+
+class TestDispersionMetadata:
+    """dispersion_phase_shift works out its result from metadata alone."""
+
+    def test_velocities_by_frequencies(self, random_patch):
+        """One row per velocity, one column per frequency kept."""
+        shift = DispersionPhaseShift(
+            phase_velocities=np.arange(100.0, 1500.0, 100.0), approx_freq=(5, 70)
+        )
+        out, _ = shift.get_metadata(random_patch.drop_data())
+        assert out.dims == ("velocity", "frequency")
+        assert out.shape == (14, 520)
+        assert out.dtype == shift(random_patch).dtype == np.float64

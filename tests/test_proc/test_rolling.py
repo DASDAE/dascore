@@ -10,6 +10,7 @@ import dascore as dc
 import dascore.proc.coords
 from dascore.config import config_context
 from dascore.exceptions import ParameterError
+from dascore.proc.rolling import _NumpyPatchRoller, _PandasPatchRoller
 from dascore.units import m
 from dascore.utils.misc import all_close
 from dascore.utils.pd import rolling_df
@@ -181,6 +182,12 @@ class TestRolling:
         with pytest.raises(ParameterError, match=msg):
             range_patch_3d.rolling(time=1, engine="pandas").mean()
 
+    def test_default_engine_ignores_length_one_dims(self, random_patch):
+        """A patch with one long dimension rolls through pandas, as 1D ones do."""
+        row = random_patch.isel(distance=slice(0, 1))
+        assert isinstance(row.rolling(time=5, samples=True), _PandasPatchRoller)
+        assert isinstance(random_patch.rolling(time=5, samples=True), _NumpyPatchRoller)
+
     def test_misc(self, random_patch):
         """Test miscellaneous functionality."""
         time_step = random_patch.get_coord("time").step
@@ -253,6 +260,18 @@ class TestRolling:
             lambda frame: np.percentile(frame, 80) + 1
         )
         assert all_close(out, expected)
+
+    def test_pandas_apply_passes_name_keyword(self):
+        """A `name` keyword reaches the applied function."""
+
+        def scaled_mean(frame, name):
+            """Return the mean, doubled when named so."""
+            return frame.mean() * (2 if name == "double" else 1)
+
+        patch = dc.get_example_patch("random_das", shape=(3, 20))
+        roller = patch.rolling(time=3, samples=True, engine="pandas")
+        out = roller.apply(scaled_mean, name="double")
+        assert all_close(out.data, roller.mean().data * 2)
 
 
 class TestRollingMetadata:

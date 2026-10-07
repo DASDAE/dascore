@@ -931,8 +931,8 @@ def _checked_plan(processor: PatchProcessor, plan: dict[str, Any]) -> dict[str, 
             msg = (
                 f"{type(processor).__name__}.get_metadata returned "
                 f"{key}={value!r}; a plan may hold only ints, floats, bools, "
-                "slices, None, Ellipsis, tuples or lists of those, and "
-                "numeric arrays, so the kernel never sees a patch."
+                "slices, None, Ellipsis, tuples, lists or str-keyed dicts of "
+                "those, and non-object arrays, so the kernel never sees a patch."
             )
             raise ParameterError(msg)
     return plan
@@ -942,10 +942,10 @@ def _is_plain(value) -> bool:
     """
     Whether a plan value is one a kernel may take.
 
-    Numbers and numeric arrays are the computation's; slices, None,
-    Ellipsis and sequences of them are how an index into the data is
-    spelled. Anything else -- a patch, a coord manager, a string -- would
-    put metadata back in front of a kernel.
+    Numbers and arrays are the computation's; slices, None, Ellipsis and
+    sequences of them are how an index into the data is spelled. Anything
+    else -- a patch, a coord manager, a string -- would put metadata back
+    in front of a kernel.
     """
     if value is None or value is Ellipsis:
         return True
@@ -955,7 +955,12 @@ def _is_plain(value) -> bool:
         return all(_is_plain(x) for x in (value.start, value.stop, value.step))
     if isinstance(value, tuple | list):
         return all(_is_plain(x) for x in value)
-    return isinstance(value, np.ndarray) and value.dtype.kind in "biufc"
+    # A composite's plan nests the plans of the operations it runs.
+    if isinstance(value, dict):
+        return all(isinstance(x, str) and _is_plain(y) for x, y in value.items())
+    # Data of any dtype but object, which could hold anything: `where`
+    # fills with datetime and string data.
+    return isinstance(value, np.ndarray) and not value.dtype.hasobject
 
 
 def _via_numpy(numpy_kernel, name: str):

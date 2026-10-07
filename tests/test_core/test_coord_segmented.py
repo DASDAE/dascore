@@ -578,6 +578,57 @@ class TestSimplifyAndSnap:
         assert out.evenly_sampled
         assert np.max(np.abs(out.values - coord.values)) <= 0.5
 
+    def test_keep_step_refuses_to_crowd_a_grid(self):
+        """Samples within half a step of their neighbors keep their labels."""
+        coord = concat_coords(
+            get_coord(start=0.0, stop=100.0, step=10.0),
+            *(get_coord(start=x, stop=x + 10.0, step=10.0) for x in (94.0, 96.0)),
+            get_coord(start=100.0, stop=200.0, step=10.0),
+        )
+        out = coord.fuse(15.0, keep_step=True)
+        assert np.array_equal(out.values, coord.values)
+
+    def test_keep_step_refit_stops_short_of_the_next_run(self):
+        """A refit drifting past where the next run starts is not taken."""
+        coord = concat_coords(
+            *(get_coord(start=x, stop=x + 10.0, step=10.0) for x in (0.0, 6.0, 12.0)),
+            get_coord(start=18.0, stop=28.0, step=10.0),
+            get_coord(start=24.0, stop=124.0, step=10.0),
+        )
+        out = coord.fuse(15.0, keep_step=True)
+        assert out.sorted
+        assert np.array_equal(out.values, coord.values)
+
+    def test_keep_step_refuses_to_crowd_inside_a_stored_run(self):
+        """Stored labels closer than half a step are not spread onto a grid."""
+        coord = concat_coords(
+            get_coord(start=0.0, stop=100.0, step=10.0),
+            get_coord(data=np.array([96.0, 97.0, 98.2])),
+            get_coord(start=107.2, stop=207.2, step=10.0),
+        )
+        out = coord.fuse(20.0, keep_step=True)
+        assert out.runs_count == 3
+        stream = (coord.values < 96) | (coord.values > 98.2)
+        assert np.array_equal(out.values[stream], coord.values[stream])
+
+    def test_keep_step_refit_does_not_crowd_the_next_run(self):
+        """A refit ending within half a step of the next label is not taken."""
+        coord = concat_coords(
+            *(get_coord(start=x, stop=x + 10.0, step=10.0) for x in (0, 6, 12, 21))
+        )
+        out = coord.fuse(8.0, keep_step=True)
+        assert np.array_equal(out.values, coord.values)
+
+    def test_keep_step_measures_crowding_by_the_fit(self):
+        """A lone sample stating a coarser step joins an exact finer grid."""
+        coord = concat_coords(
+            get_coord(start=0.0, stop=10.0, step=10.0),
+            get_coord(start=1.0, stop=4.0, step=1.0),
+        )
+        out = coord.fuse(0.5, keep_step=True)
+        assert out.evenly_sampled
+        assert np.array_equal(out.values, coord.values)
+
     def test_keep_step_allows_a_refit_of_disagreeing_steps(self):
         """Segments stating different steps have no one step to keep."""
         coord = concat_coords(

@@ -9,6 +9,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import PatchType
 from dascore.core.coords import BaseCoord, get_coord
+from dascore.exceptions import PatchConversionError
 from dascore.utils.identity import operation_context
 from dascore.utils.misc import optional_import
 
@@ -126,9 +127,29 @@ def _is_temporal(dtype) -> bool:
 
 
 def xarray_to_patch(data_array) -> dc.Patch:
-    """Convert an xarray dataarray to a patch."""
+    """
+    Convert an xarray dataarray to a patch.
+
+    Raises
+    ------
+    PatchConversionError
+        If a dimension is stacked (has a MultiIndex); call ``unstack`` on it
+        first, or ``reset_index`` to keep its levels as coordinates along it.
+    """
     # this cant work if xarray isn't installed. This ensures it is.
-    _ = optional_import("xarray")
+    xr = optional_import("xarray")
+    # a stacked dimension labels its samples with tuples; no patch dim can
+    for index in data_array.xindexes.values():
+        dim = getattr(index, "dim", None)
+        if isinstance(index, xr.indexes.PandasMultiIndex) and (
+            data_array.xindexes.get(dim) is index
+        ):
+            msg = (
+                f"Cannot convert the stacked dimension {dim!r} to a patch; "
+                f"call .unstack({dim!r}) first, or .reset_index({dim!r}) to "
+                "keep its levels as coordinates along it."
+            )
+            raise PatchConversionError(msg)
 
     # A conversion, not new data: the array comes with the attrs which
     # describe it, as it does when a patch is built from a DataArray.

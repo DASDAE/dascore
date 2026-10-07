@@ -5,6 +5,7 @@ import pytest
 
 import dascore as dc
 from dascore.exceptions import ParameterError, UnitError
+from dascore.proc.correlate import Correlate
 from dascore.units import get_quantity, m
 from dascore.utils.time import to_float
 
@@ -332,3 +333,15 @@ class TestCorrelateShiftProcessor:
         """Half precision is divided by a fine step without overflowing."""
         half = random_patch.new(data=np.full(random_patch.shape, 1000, np.float16))
         assert np.all(np.isfinite(half.correlate_shift("time").data))
+
+
+class TestCorrelateMetadata:
+    """Correlate works out its result from metadata alone."""
+
+    def test_lags_and_sources(self, random_patch):
+        """The lag axis spans the padded length, with one source column."""
+        corr = Correlate(distance=2, samples=True)
+        out, _ = corr.get_metadata(random_patch.drop_data())
+        assert out.dims == ("distance", "lag_time", "source_distance")
+        assert out.shape == (300, 4000, 1)
+        assert out.dtype == corr(random_patch).dtype == np.float64

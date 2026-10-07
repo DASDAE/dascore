@@ -5,38 +5,24 @@ from __future__ import annotations
 from typing import Any
 
 import numpy as np
+import scipy.fft as sft
+from pydantic import ConfigDict
 
 import dascore as dc
-from dascore.constants import PatchType
 from dascore.core.processor import PatchProcessor
 from dascore.exceptions import ParameterError
-from dascore.transform.fourier import _operand, _result_dtype
-from dascore.units import get_quantity
-from dascore.utils.array_api import array_namespace
-from dascore.utils.patch import (
-    get_dim_axis_value,
-    patch_function,
+from dascore.proc.basic import Pad
+from dascore.transform.fourier import (
+    Dft,
+    Idft,
+    _dft_kernel,
+    _is_complex,
+    _operand,
 )
+from dascore.units import get_quantity
+from dascore.utils.array_api import _result_dtype, array_namespace
+from dascore.utils.patch import get_dim_axis_value
 from dascore.utils.time import to_float
-
-
-def _get_source_fft(patch, dim, source, source_axis, samples):
-    """
-    Get an array of coordinate sources.
-
-    This function will place the new sources in a third dimension so
-    they broadcast with the original fft matrix.
-    """
-    # Extract an array containing just the sources
-    coord_source = patch.get_coord(dim)
-    index_source = coord_source.get_next_index(source, samples=samples)
-    selector = [slice(None), slice(None), None]
-    selector[source_axis] = np.atleast_1d(index_source)
-    source = patch.data[tuple(selector)]
-    # Now transpose source so source dim is list. Essentially we just
-    # need to swap the source axis with the last axis.
-    out = np.swapaxes(source, source_axis, -1)
-    return out
 
 
 class CorrelateShift(PatchProcessor):
@@ -114,26 +100,26 @@ class CorrelateShift(PatchProcessor):
 
     def kernel(self, data, *, axis, step):
         """Return the data shifted so zero lag is central, divided by the step."""
-        xp = array_namespace(data)
-        # fftshift is this roll, but some backends shift only floats.
-        data = xp.roll(data, data.shape[axis] // 2, axis=axis)
-        if step is None:
-            return data
-        if not xp.isdtype(data.dtype, ("real floating", "complex floating")):
-            # numpy promotes integers to float64 here; some backends refuse to.
-            data = xp.astype(data, xp.float64)
-        # Divide by the step as a 0-d array: like a numpy scalar, and unlike
-        # a python float, it sets the result's dtype, and every backend
-        # accepts it.
-        return data / (xp.asarray(step) if isinstance(step, np.generic) else step)
+        return _shift_lags(data, axis=axis, step=step)
 
 
-@patch_function(data_type="correlation", version="1.3")
-def correlate(
-    patch: PatchType,
-    samples: bool = False,
-    **kwargs,
-) -> PatchType:
+def _shift_lags(data, *, axis, step):
+    """Return the data shifted so zero lag is central, divided by the step."""
+    xp = array_namespace(data)
+    # fftshift is this roll, but some backends shift only floats.
+    data = xp.roll(data, data.shape[axis] // 2, axis=axis)
+    if step is None:
+        return data
+    if not xp.isdtype(data.dtype, ("real floating", "complex floating")):
+        # numpy promotes integers to float64 here; some backends refuse to.
+        data = xp.astype(data, xp.float64)
+    # Divide by the step as a 0-d array: like a numpy scalar, and unlike
+    # a python float, it sets the result's dtype, and every backend
+    # accepts it.
+    return data / (xp.asarray(step) if isinstance(step, np.generic) else step)
+
+
+class Correlate(PatchProcessor):
     """
     Correlate source row/columns in a 2D patch with all other row/columns.
 
@@ -146,8 +132,6 @@ def correlate(
 
     Parameters
     ----------
-    patch
-        Two-dimensional patch in the original or frequency domain.
     samples
         Interpret source selectors as sample indices rather than coordinate
         values.
@@ -199,46 +183,72 @@ def correlate(
     becomes a lag dimension prefixed with ``lag_``; for example, selecting a
     ``distance`` source transforms ``time`` into ``lag_time``.
     """
-    if "lag" in kwargs:
-        msg = "The 'lag' parameter was removed. Select on the lag coordinate instead."
-        raise TypeError(msg)
-    if len(patch.dims) != 2:
-        msg = "must be a 2D patch."
-        raise ParameterError(msg)
-    dim, source_axis, source = get_dim_axis_value(patch, kwargs=kwargs)[0]
-    # Get the axis and coord over which fft should be calculated.
-    fft_axis = next(iter(set(range(len(patch.dims))) - {source_axis}))
-    fft_dim = patch.dims[fft_axis]
-    # Determine if the input patch has already been transformed.
-    input_dft = fft_dim.startswith("ft_")
-    is_real = not np.issubdtype(patch.data.dtype, np.complexfloating)
-    if not input_dft:  # Standard dft workflow for correlation
-        # Note: we use .func here to avoid getting these added to the history.
-        padded = patch.pad.func(patch, **{fft_dim: "correlate"})  # ty: ignore[unresolved-attribute]
-        patch = padded.dft.func(padded, fft_dim, real=fft_dim if is_real else None)
-    # Get the sources.
-    source = patch.get_coord(dim).values if source is None else source
-    source_fft = _get_source_fft(patch, dim, source, source_axis, samples)
-    # Need to insert new axis so the arrays broadcast correctly.
-    fft_patch_array = patch.data[..., None]
-    fft_prod = fft_patch_array * np.conj(source_fft)
-    # Create frequency domain patch with results
-    source = getattr(source, "magnitude", source)  # strips units
-    new_coord = dc.get_coord(data=np.atleast_1d(source))
-    dim_name = f"source_{dim}"
-    cm = patch.coords.update(**{dim_name: (dim_name, new_coord)})
-    out = patch.update(data=fft_prod, coords=cm)
-    lag_dim = fft_dim.removeprefix("ft_")
-    if (unpadded := f"_{lag_dim}_unpadded") in out.coords.coord_map:
-        # The product is a correlation circular over the padded length, so
-        # idft must keep all of it; trimming would drop the negative lags.
-        coords = out.coords.update(**{unpadded: (None, out.get_coord(lag_dim))})
-        out = out.update(coords=coords)
-    if (units := get_quantity(patch.attrs.data_units)) is not None:
-        # a product of two spectra carries their units twice
-        out = out.update_attrs(data_units=units**2)
-    # Undo fft if this function did one, shift, and update coord.
-    if not input_dft:
-        idft = out.idft.func(out)
-        out = idft.correlate_shift.func(idft, fft_dim)
-    return out
+
+    __version__ = "1.3"
+    samples: Any = False
+
+    model_config = ConfigDict(extra="allow")
+    data_type = "correlation"
+
+    def get_metadata(self, meta):
+        """Return the correlation's metadata, and each step's plan."""
+        extras = self.model_extra or {}
+        if "lag" in extras:
+            msg = (
+                "The 'lag' parameter was removed. Select on the lag coordinate instead."
+            )
+            raise TypeError(msg)
+        if len(meta.dims) != 2:
+            msg = "must be a 2D patch."
+            raise ParameterError(msg)
+        dim, source_axis, source = get_dim_axis_value(meta, kwargs=extras)[0]
+        # Get the axis and coord over which fft should be calculated.
+        fft_axis = next(iter(set(range(len(meta.dims))) - {source_axis}))
+        fft_dim = meta.dims[fft_axis]
+        # Determine if the input patch has already been transformed.
+        transform = not fft_dim.startswith("ft_")
+        plan: dict[str, Any] = {"transform": transform, "source_axis": source_axis}
+        if transform:  # Standard dft workflow for correlation
+            meta, pad = Pad(**{fft_dim: "correlate"}).get_metadata(meta)
+            real = None if _is_complex(meta.dtype) else fft_dim
+            meta, dft = Dft(dim=fft_dim, real=real).get_metadata(meta)
+            plan |= pad | {"dft": dft}
+        # Get the sources.
+        coord = meta.get_coord(dim)
+        source = coord.values if source is None else source
+        index = coord.get_next_index(source, samples=self.samples)
+        plan["index"] = np.atleast_1d(index)
+        source = getattr(source, "magnitude", source)  # strips units
+        new_coord = dc.get_coord(data=np.atleast_1d(source))
+        dim_name = f"source_{dim}"
+        out = meta.new(coords=meta.coords.update(**{dim_name: (dim_name, new_coord)}))
+        lag_dim = fft_dim.removeprefix("ft_")
+        if (unpadded := f"_{lag_dim}_unpadded") in out.coords.coord_map:
+            # The product is a correlation circular over the padded length, so
+            # idft must keep all of it; trimming would drop the negative lags.
+            coords = out.coords.update(**{unpadded: (None, out.get_coord(lag_dim))})
+            out = out.new(coords=coords)
+        if (units := get_quantity(meta.attrs.data_units)) is not None:
+            # a product of two spectra carries their units twice
+            out = out.update_attrs(data_units=units**2)
+        # Undo fft if this function did one, shift, and update coord.
+        if transform:
+            out, idft = Idft().get_metadata(out)
+            out, shift = CorrelateShift(dim=fft_dim).get_metadata(out)
+            plan |= {"idft": idft, "shift": shift}
+        return out, plan
+
+    def numpy_kernel(self, data, *, transform, source_axis, index, **plan):
+        """Return each row or column correlated with the sources."""
+        if transform:
+            data = np.pad(data, plan["pad_width"])
+            data = _dft_kernel(data, np, sft, cast=False, **plan["dft"])
+        # The sources, along a third axis so they broadcast with the data.
+        selector: list[Any] = [slice(None), slice(None), None]
+        selector[source_axis] = index
+        source = np.swapaxes(data[tuple(selector)], source_axis, -1)
+        data = data[..., None] * np.conj(source)
+        if transform:
+            data = Idft().numpy_kernel(data, **plan["idft"])
+            data = _shift_lags(data, **plan["shift"])
+        return data
