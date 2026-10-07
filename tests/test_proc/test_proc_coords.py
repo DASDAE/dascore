@@ -471,6 +471,14 @@ class TestSelect:
         new_coords = patch.coords.update(**coord_dict)
         return patch.new(coords=new_coords)
 
+    def test_scalar_suggests_an_array(self, random_patch):
+        """A single value points to the forms select accepts, which work."""
+        match = r"np\.array\(\[value\]\).*Patch\.sel on a dimension.*boolean mask"
+        with pytest.raises(ParameterError, match=match):
+            random_patch.select(distance=10)
+        value = random_patch.get_array("distance")[10]
+        assert random_patch.select(distance=np.array([value])).shape[0] == 1
+
     def _assert_coord_unchanged(self, original_patch, selected_patch, coord_name):
         """Helper to assert a coordinate remains unchanged."""
         assert np.array_equal(
@@ -2334,3 +2342,20 @@ class TestFillGaps:
         coord = NumericCoord.from_labels(values, step=1.0)
         with pytest.raises(CoordError, match="drift"):
             _fill_layout(coord)
+
+
+class TestAddDistanceToMetadata:
+    """add_distance_to needs no data, so metadata runs it too."""
+
+    def test_on_metadata(self, random_patch_with_xyz):
+        """The distances are worked out from the coordinates alone."""
+        meta = random_patch_with_xyz.drop_data()
+        out = meta.add_distance_to(pd.Series({"x": 10, "y": 10}))
+        assert isinstance(out, dc.PatchMeta)
+        assert out.get_coord("origin_distance").values[0] == pytest.approx(200**0.5)
+
+    def test_ord_picks_the_norm(self, random_patch_with_xyz):
+        """ord=1 sums the offsets rather than taking the Euclidean norm."""
+        shot = pd.Series({"x": 10, "y": 10})
+        out = random_patch_with_xyz.add_distance_to(shot, ord=1)
+        assert out.get_coord("origin_distance").values[0] == 20

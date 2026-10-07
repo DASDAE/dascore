@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
-from typing import get_args
+from typing import Any, get_args
 
 import numpy as np
 
 import dascore as dc
 from dascore.constants import (
-    ENRICH_CONFLICT,
     INVENTORY_ATTRS,
-    ON_MISSING,
-    PatchType,
     enrich_attrs_description,
     enrich_conflict_description,
     enrich_coords_description,
@@ -35,11 +32,12 @@ from dascore.core._spool_inventory import (
 )
 from dascore.core.coords import BaseCoord, get_coord
 from dascore.core.inventory import (
+    CoordinateReferenceSystem,
     Interrogator,
-    Inventory,
     ResolvedContext,
     axis_columns,
 )
+from dascore.core.processor import PatchProcessor
 from dascore.exceptions import (
     InvalidInventoryError,
     ParameterError,
@@ -49,7 +47,6 @@ from dascore.exceptions import (
 from dascore.utils.attrs import _is_missing
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate, validate_acquisition_key, warn_or_raise
-from dascore.utils.patch import patch_function
 from dascore.utils.time import to_datetime64
 
 
@@ -176,7 +173,7 @@ def _report_missing(context, name, on_missing, subject: str = "") -> None:
     """Raise or warn about a requested name the inventory does not define."""
     msg = (
         f"The inventory defines no {name!r} for {subject}"
-        f"{context.acquisition.code!r}; use on_missing to allow it."
+        f"{context.acquisition_key!r}; use on_missing to allow it."
     )
     warn_or_raise(msg, PatchError, behavior=on_missing)
 
@@ -238,19 +235,19 @@ def _apply_conflict(patch, new_attrs, conflict) -> tuple[dict, list]:
     return updates, drops
 
 
-def _get_channel_axes(patch, acquisition) -> list[tuple[str, str]]:
+def _get_channel_axes(patch, context) -> list[tuple[str, str]]:
     """Return every map axis the patch can be read on, with its coordinate."""
-    dist_map = acquisition.distance_map
+    key, dist_map = context.acquisition_key, context.acquisition.distance_map
     if dist_map is None:
         msg = (
-            f"Acquisition {acquisition.code!r} defines no distance_map, so "
+            f"Acquisition {key!r} defines no distance_map, so "
             "its channels cannot be placed on the optical path."
         )
         raise PatchError(msg)
     if out := map_axis_coords(dist_map, patch.coords.coord_map):
         return out
     msg = (
-        f"Acquisition {acquisition.code!r} maps {list(dist_map.axes)} onto "
+        f"Acquisition {key!r} maps {list(dist_map.axes)} onto "
         f"path distance, so it needs one of the {readable_on(dist_map)} "
         f"coordinates, and this patch has {sorted(patch.coords.coord_map)}. "
         "An acquisition whose patches carry interrogator meters is "
@@ -260,7 +257,7 @@ def _get_channel_axes(patch, acquisition) -> list[tuple[str, str]]:
     raise PatchError(msg)
 
 
-def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
+def _get_channel_distances(patch, context) -> tuple[str, str, np.ndarray]:
     """
     Return the channel coord name, its dimension, and optical distances.
 
@@ -268,8 +265,9 @@ def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
     consistent with the map about all of them. Picking one and moving on
     would answer a question the patch itself contradicts.
     """
+    key, acquisition = context.acquisition_key, context.acquisition
     resolved, failures = [], []
-    for axis, name in _get_channel_axes(patch, acquisition):
+    for axis, name in _get_channel_axes(patch, context):
         dims = patch.coords.dim_map[name]
         if len(dims) != 1:
             msg = f"The {name!r} coordinate must belong to exactly one dimension."
@@ -288,7 +286,7 @@ def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
         joined = "; ".join(failures)
         msg = (
             "None of the patch's coordinates could be placed on the path by "
-            f"{acquisition.code!r}: {joined}"
+            f"{key!r}: {joined}"
         )
         raise PatchError(msg)
     first = resolved[0]
@@ -301,7 +299,7 @@ def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
             msg = (
                 f"The patch's {first[0]!r} and {name!r} coordinates belong to "
                 f"different dimensions ({first[1]!r} and {dim!r}), so which "
-                f"one is the channel axis of {acquisition.code!r} is ambiguous."
+                f"one is the channel axis of {key!r} is ambiguous."
             )
             raise PatchError(msg)
         if not np.allclose(
@@ -311,7 +309,7 @@ def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
             msg = (
                 f"The patch's {first[0]!r} and {name!r} coordinates place its "
                 f"channels up to {offset} m apart on the path. The patch and "
-                f"the map of {acquisition.code!r} disagree; drop the "
+                f"the map of {key!r} disagree; drop the "
                 "coordinate which does not belong to this acquisition."
             )
             raise PatchError(msg)
@@ -322,6 +320,30 @@ def _get_channel_distances(patch, acquisition) -> tuple[str, str, np.ndarray]:
 # which is absolute: a relative tolerance would widen to a whole channel
 # tens of kilometers down the fiber, where a disagreement matters most.
 _DISTANCE_TOLERANCE = 1e-6
+
+
+# What an inventory which states no coordinate reference system has.
+_DEFAULT_CRS = CoordinateReferenceSystem()
+_CANONICAL_AXES = ("x", "y", "z")
+
+
+def _axis_name(crs, index: int) -> str:
+    """
+    Return the name a blanket request copies one canonical axis under.
+
+    The CRS's own label, unless the CRS is the default one or the label
+    would resolve to a different axis (a two-axis CRS labelled x and z).
+    An inventory which never states a CRS gets the default, and its
+    geometry is as often local x, y, z as the WGS 84 the default names, so
+    those keep their canonical names, as they always have.
+    """
+    label = crs.coordinate_labels[index]
+    if crs == _DEFAULT_CRS:
+        return _CANONICAL_AXES[index]
+    try:
+        return label if crs.axis_index(label) == index else _CANONICAL_AXES[index]
+    except InvalidInventoryError:
+        return _CANONICAL_AXES[index]
 
 
 def _get_blanket_coord_names(inventory, path) -> list[str]:
@@ -337,11 +359,11 @@ def _get_blanket_coord_names(inventory, path) -> list[str]:
     grouted with hanging fiber has to select on.
     """
     crs = inventory.coordinate_reference_system
-    axis_names = crs.coordinate_labels
-    # The axes are copied under their canonical names, and only where some
-    # segment actually places the fiber; the rest come under their own.
+    # The axes are copied under the names the CRS gives them, and only where
+    # some segment actually places the fiber; the rest come under their own.
     axes = {x for segment in path.geometry for x in axis_columns(segment, crs)}
-    out = ["x", "y", "z"][: len(axis_names)] if axes else []
+    count = len(crs.coordinate_labels)
+    out = [_axis_name(crs, index) for index in range(count)] if axes else []
     out += [x for x in path.geometry_columns() if x not in axes]
     seen = dict.fromkeys(x.group for x in path.labels)
     out += [x for x in seen if x]
@@ -417,7 +439,7 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
             return {}
         if on_missing == "raise":
             msg = (
-                f"No optical path is valid for {context.acquisition.code!r} at "
+                f"No optical path is valid for {context.acquisition_key!r} at "
                 "the patch's time, so no per-channel coordinates can be resolved."
             )
             raise PatchError(msg)
@@ -431,9 +453,7 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
     if not names:
         # Nothing to project, so the patch needs no channel mapping.
         return {}
-    channel = (
-        None if path is None else _get_channel_distances(patch, context.acquisition)
-    )
+    channel = None if path is None else _get_channel_distances(patch, context)
     out = {}
     for name in names:
         if channel is not None and name == channel[0]:
@@ -459,7 +479,7 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
             if existing is not None:
                 continue  # no answer leaves the patch's coordinate standing
         # Only a null fill without a path gets here unmapped.
-        channel = channel or _get_channel_distances(patch, context.acquisition)
+        channel = channel or _get_channel_distances(patch, context)
         if values is None:
             values = np.full(len(channel[2]), np.nan)
         elif existing is not None:
@@ -481,24 +501,13 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
     return out
 
 
-@patch_function()
 @compose_docstring(
     attrs_desc=enrich_attrs_description,
     coords_desc=enrich_coords_description,
     on_missing_desc=enrich_on_missing_description,
     conflict_desc=enrich_conflict_description,
 )
-def enrich(
-    patch: PatchType,
-    inventory: Inventory,
-    *,
-    attrs: bool | tuple[str, ...] = True,
-    coords: bool | tuple[str, ...] = True,
-    acquisition_key: str | None = None,
-    time=None,
-    on_missing: ON_MISSING = "raise",
-    conflict: ENRICH_CONFLICT = "raise",
-) -> PatchType:
+class Enrich(PatchProcessor):
     """
     Copy inventory metadata onto a patch.
 
@@ -509,8 +518,6 @@ def enrich(
 
     Parameters
     ----------
-    patch
-        The patch to enrich.
     inventory
         The inventory to resolve against.
     {attrs_desc}
@@ -538,32 +545,41 @@ def enrich(
     ...     inventory, attrs=("gauge_length",), coords=("x", "y", "z"),
     ... )
     """
-    validate_enrich_conflict(conflict)
-    if on_missing not in VALID_ON_MISSING:
-        msg = f"on_missing must be one of {VALID_ON_MISSING}, got {on_missing!r}."
-        raise ParameterError(msg)
-    validate_enrich_selection(attrs, coords)
-    source_id = _get_acquisition_key(patch, acquisition_key)
-    times = _get_resolution_times(patch, time)
-    context = _resolve_context(inventory, source_id, times)
-    new_attrs = _get_attr_values(inventory, context, attrs, on_missing)
-    updates, drops = _apply_conflict(patch, new_attrs, conflict)
-    new_coords = {}
-    if coords is not False:
-        new_coords = _get_coords(inventory, context, patch, coords, on_missing)
-    out = patch
-    if drops:
-        out = out.new(attrs=dc.PatchAttrs.from_dict(dict(out.attrs)).drop(*drops))
-    if updates:
-        out = out.update_attrs(**updates)
-    if new_coords:
-        # The raw function: enrich is the operation worth recording, and the
-        # nested entry would paste a rendered repr of every added coordinate
-        # into the history of every patch enriched.
-        # Through the class rather than the module: the method is written
-        # in `PatchMeta`, and `raw_function` is the operation without this
-        # call's history. ty does not see attributes attached at import.
-        out = dc.PatchMeta.update_coords.raw_function(  # ty: ignore[unresolved-attribute]
-            out, **new_coords
-        )
-    return out
+
+    inventory: Any
+    attrs: Any = True
+    coords: Any = True
+    acquisition_key: Any = None
+    time: Any = None
+    on_missing: Any = "raise"
+    conflict: Any = "raise"
+
+    _positional_fields = ("inventory",)
+
+    def get_metadata(self, meta):
+        """Return the metadata with the inventory's attrs and coordinates."""
+        inventory, attrs, coords = self.inventory, self.attrs, self.coords
+        on_missing = self.on_missing
+        validate_enrich_conflict(self.conflict)
+        if on_missing not in VALID_ON_MISSING:
+            msg = f"on_missing must be one of {VALID_ON_MISSING}, got {on_missing!r}."
+            raise ParameterError(msg)
+        validate_enrich_selection(attrs, coords)
+        source_id = _get_acquisition_key(meta, self.acquisition_key)
+        times = _get_resolution_times(meta, self.time)
+        context = _resolve_context(inventory, source_id, times)
+        new_attrs = _get_attr_values(inventory, context, attrs, on_missing)
+        updates, drops = _apply_conflict(meta, new_attrs, self.conflict)
+        new_coords = {}
+        if coords is not False:
+            new_coords = _get_coords(inventory, context, meta, coords, on_missing)
+        out = meta
+        if drops:
+            out = out.new(attrs=dc.PatchAttrs.from_dict(dict(out.attrs)).drop(*drops))
+        if updates:
+            out = out.update_attrs(**updates)
+        if new_coords:
+            # `coords.update`, not `update_coords`: that would record a nested
+            # history entry pasting a repr of every added coordinate.
+            out = out.new(coords=out.coords.update(**new_coords))
+        return out, {}
