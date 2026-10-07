@@ -164,7 +164,9 @@ class Whiten(PatchProcessor):
         if freq_range:
             _check_freq_range(fft_coord, freq_range)
             taper = TaperRange(**{fft_dim: freq_range})
-            plan["env"] = taper.get_metadata(out)[1]["env"]
+            env = taper.get_metadata(out)[1]["env"]
+            # At the spectrum's precision, so single precision stays single.
+            plan["env"] = np.asarray(env, dtype=np.finfo(out.dtype).dtype)
         # Convert back to time domain if input was in time-domain.
         if transform:
             out, plan["idft"] = Idft().get_metadata(out)

@@ -250,23 +250,26 @@ class TestWhitenMetadata:
         assert out.shape == (300, 2000)
         assert out.dtype == patch.whiten(smooth_size=5).dtype == np.float32
 
+    @pytest.mark.parametrize("band", [{}, {"time": (10, 40)}])
     @pytest.mark.parametrize("transformed", [False, True])
     @pytest.mark.parametrize("smooth_size", [None, 5])
     @pytest.mark.parametrize(
         "dtype", [np.float32, np.float64, np.complex64, np.complex128]
     )
     def test_metadata_dtype_is_the_kernels(
-        self, random_patch, dtype, transformed, smooth_size
+        self, random_patch, dtype, transformed, smooth_size, band
     ):
-        """Metadata state the dtype whiten's data come out in."""
+        """Metadata state the dtype whiten's data come out in, band or not."""
         patch = random_patch.isel(distance=slice(0, 20), time=slice(0, 256))
         patch = patch.dft("time") if transformed else patch
         data = np.asarray(patch.data)
         # A real spectrum, such as amplitudes, keeps only the real part.
         data = data if np.dtype(dtype).kind == "c" else data.real
         patch = patch.new(data=data.astype(dtype))
-        out, _ = Whiten(smooth_size=smooth_size).get_metadata(patch.drop_data())
-        assert out.dtype == patch.whiten(smooth_size=smooth_size).dtype
+        out, _ = Whiten(smooth_size=smooth_size, **band).get_metadata(patch.drop_data())
+        whitened = patch.whiten(smooth_size=smooth_size, **band)
+        assert out.dtype == whitened.dtype
+        assert np.finfo(out.dtype).bits == np.finfo(dtype).bits
 
     def test_water_level_raises_the_floor(self, random_patch):
         """The smoothed spectrum is floored at the water level times its peak."""
