@@ -749,18 +749,19 @@ class Stft(PatchProcessor):
       first sample, and every window reaching the data is kept, zero padded
       at both ends. The first window starts ``(ceil(n / hop) - 1) * hop``
       samples before the data: none when windows abut, ``overlap`` at 50%
-      overlap.
+      overlap with an even ``n``.
     - The transformed coordinate is each window's centre, its sample
       ``n // 2``, and each spectrum's phase is referred to that centre.
       Centres fall on samples 0, hop, 2 * hop, ... only when ``n // 2`` is a
       multiple of ``hop``, as at 50% overlap with an even ``n``.
-    - Spectra are scaled by the sample spacing ``dt``, as dft's are, rather
-      than by ``1 / sum(window)`` as `scipy.signal.stft` scales them.
+    - Spectra are scaled by the product of the windowed dimensions' sample
+      spacings (``dt`` along time alone), as dft's are, rather than by
+      ``1 / sum(window)`` as `scipy.signal.stft` scales them.
 
-    Along time, one channel's stft of real data equals this
-    `scipy.signal.stft` call, with ``x`` the channel's data, ``fs = 1 / dt``
-    and ``overlap`` in samples (0 for None); complex spectra are also
-    centred, as noted above:
+    Along time, with the default taper, no detrend and no ``nfft``, one
+    channel's stft of real data equals this `scipy.signal.stft` call, with
+    ``x`` the channel's data, ``fs = 1 / dt`` and ``overlap`` in samples
+    (0 for None); complex spectra are also centred, as noted above:
 
     ```python
     import numpy as np
