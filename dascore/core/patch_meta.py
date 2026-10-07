@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping, Sequence
 from contextlib import suppress
 from functools import cached_property
-from typing import Any, Self
+from typing import TYPE_CHECKING, Any, Self
 from uuid import uuid4
 
 import numpy as np
@@ -14,6 +14,7 @@ import pandas as pd
 import dascore as dc
 import dascore.proc
 import dascore.proc.coords
+from dascore.constants import ENRICH_CONFLICT, ON_MISSING
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.source import ArraySource
@@ -46,6 +47,10 @@ from dascore.utils.time import to_float
 # The lineage fields an equality check leaves out, shared with the patch's
 # own `equals` so the two cannot drift apart.
 _LINEAGE = dascore.proc.basic._LINEAGE
+
+
+if TYPE_CHECKING:
+    from dascore.core.inventory import Inventory
 
 
 def _attr_values_equal(one, two) -> bool:
@@ -420,6 +425,36 @@ class PatchMeta(NodeRepr):
             units=units,
             extrapolate=extrapolate,
             max_gap=max_gap,
+        ).run(self)
+
+    def add_distance_to(
+        self, origin: pd.Series, ord=None, prefix: str = "origin"
+    ) -> Self:
+        """Calculate the distance to "origin" and create new coordinate."""
+        return dascore.proc.coords.AddDistanceTo(
+            origin=origin, ord=ord, prefix=prefix
+        ).run(self)
+
+    def enrich(
+        self,
+        inventory: Inventory,
+        *,
+        attrs: bool | tuple[str, ...] = True,
+        coords: bool | tuple[str, ...] = True,
+        acquisition_key: str | None = None,
+        time=None,
+        on_missing: ON_MISSING = "raise",
+        conflict: ENRICH_CONFLICT = "raise",
+    ) -> Self:
+        """Copy inventory metadata onto a patch."""
+        return dascore.proc.inventory.Enrich(
+            inventory=inventory,
+            attrs=attrs,
+            coords=coords,
+            acquisition_key=acquisition_key,
+            time=time,
+            on_missing=on_missing,
+            conflict=conflict,
         ).run(self)
 
     update = dascore.proc.update

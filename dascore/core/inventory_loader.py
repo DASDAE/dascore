@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import pandas as pd
+from pydantic import ValidationError
 
 from dascore.core.inventory import (
     Acquisition,
@@ -39,6 +40,7 @@ from dascore.core.inventory import (
     OpticalMeasurement,
     OpticalPath,
     Station,
+    _explain_problem,
     _overlapping_epochs,
     _times_equal,
 )
@@ -328,9 +330,48 @@ def _build(model, data: dict, source: Path):
         raise InvalidInventoryError(msg)
     try:
         return model(**data)
+    except ValidationError as error:
+        problems = _explain(error, model, source)
+        msg = f"Could not read {model.__name__} from {_quote(source)}:\n{problems}"
+        raise InvalidInventoryError(msg) from error
     except Exception as error:
         msg = f"Could not read {model.__name__} from {_quote(source)}: {error}"
         raise InvalidInventoryError(msg) from error
+
+
+def _table_file(directory: Path, stem: str) -> Path | None:
+    """Return the table a stem was read from, spelled as it is on disk."""
+    want = f"{stem}{_CSV_SUFFIX}".casefold()
+    return next((x for x in directory.iterdir() if x.name.casefold() == want), None)
+
+
+def _explain(error: ValidationError, model, source: Path | None) -> str:
+    """
+    Restate a validation error as one line per problem, each naming its file.
+
+    A track's rows were read from a table beside the object file, so a
+    problem in one is pinned to that table (and, where a row is one
+    object, to its line) rather than to the file the table was merged into.
+    With no source, the problem belongs to the tree rather than to a file.
+    """
+    lines = []
+    for item in error.errors(include_url=False):
+        loc, where = list(item["loc"]), ""
+        if source is not None:
+            where = _quote(source)
+            table = _TABLES.get(str(loc[0])) if loc else None
+            csv = _table_file(source.parent, str(loc[0])) if table else None
+            if table is not None and csv is not None:
+                where, loc = _quote(csv), loc[1:]
+                # A point table's rows gather into objects, so its index is
+                # an object's; an object table's is its row's. Counted as data
+                # rows, since blank lines and quoted newlines move the lines.
+                if not table.points and loc and isinstance(loc[0], int):
+                    where, loc = f"{where} data row {loc[0] + 1}", loc[1:]
+        field = ".".join(str(x) for x in loc)
+        prefix = f"{where}: " if where else ""
+        lines.append(f"  {prefix}{_explain_problem(item, field, model)}")
+    return "\n".join(lines)
 
 
 def _apply_identity(data: dict, container: _Container, name: str, source: Path):
@@ -564,6 +605,12 @@ def _load_path(directory: Path, crs, begins):
     attrs = _attrs_file(directory)
     data = _read_object(attrs)
     declared = data.get(TAG_FIELD)
+    if declared is None:
+        msg = (
+            f"{_quote(attrs)} declares no {TAG_FIELD}. Every object file "
+            f"states what it is, e.g. '{TAG_FIELD}: {OpticalPath.__name__}'."
+        )
+        raise InvalidInventoryError(msg)
     if declared != OpticalPath.__name__:
         msg = (
             f"{_quote(attrs)} declares {declared!r}, but a {_PATH_STEM} "
@@ -1231,8 +1278,9 @@ def _load_envelope(root: Path) -> dict[str, Any] | None:
     source = found[0]
     data = _read_object(source)
     if (declared := data.get(TAG_FIELD)) != Inventory.__name__:
+        stated = f"{TAG_FIELD} {declared!r}" if declared else f"no {TAG_FIELD}"
         msg = (
-            f"{_quote(source)} declares {TAG_FIELD} {declared!r}; the envelope "
+            f"{_quote(source)} declares {stated}; the envelope "
             f"declares '{TAG_FIELD}: {Inventory.__name__}'."
         )
         raise InvalidInventoryError(msg)
@@ -1242,6 +1290,10 @@ def _load_envelope(root: Path) -> dict[str, Any] | None:
     # raises rather than surfacing as a bare pydantic error at the end.
     try:
         Inventory(**data)
+    except ValidationError as error:
+        problems = _explain(error, Inventory, source)
+        msg = f"Could not read the envelope from {_quote(source)}:\n{problems}"
+        raise InvalidInventoryError(msg) from error
     except Exception as error:
         msg = f"Could not read the envelope from {_quote(source)}: {error}"
         raise InvalidInventoryError(msg) from error
@@ -1360,7 +1412,15 @@ def load_directory(path: str | os.PathLike) -> Inventory:
             _check_epoch_duplicates(entries.get(name, []))
     resources = {x.model.resource_id: x.model for x in entries.get("resources", [])}
     networks = _assemble(entries)
-    return Inventory(**(envelope or {}), resources=resources, networks=networks).check()
+    try:
+        out = Inventory(**(envelope or {}), resources=resources, networks=networks)
+    except ValidationError as error:
+        # What only the whole tree can see, such as a reference naming no
+        # resource, raises the format's error like every per-file problem.
+        problems = _explain(error, Inventory, None)
+        msg = f"Could not assemble the inventory in {_quote(root)}:\n{problems}"
+        raise InvalidInventoryError(msg) from error
+    return out.check()
 
 
 def _load_file(path: Path) -> Inventory:

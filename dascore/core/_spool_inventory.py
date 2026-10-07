@@ -376,6 +376,44 @@ def report_unconformed(rows: pd.DataFrame, on_unresolved: str) -> None:
     warnings.warn(msg, UserWarning, stacklevel=3)
 
 
+def unjudged_rows(contexts, *, along_fiber: bool = False) -> np.ndarray:
+    """
+    Return which rows have no single inventory context to be judged by.
+
+    Along the fiber, a row whose context lies outside every epoch of its
+    optical paths has no channels to judge either.
+    """
+    return np.array(
+        [
+            context is None or (along_fiber and _outside_paths(context))
+            for context in contexts
+        ],
+        dtype=bool,
+    )
+
+
+def report_unjudged(count: int) -> None:
+    """
+    Warn once that a verb treated `count` unjudged patches as misses.
+
+    The warning points at the verb's caller, two frames above this one.
+    """
+    if not count:
+        return
+    msg = (
+        f"{count} patch(es) resolve to no single inventory context, so they "
+        "were treated as not matching: each straddles a change of "
+        "acquisition or optical path, reaches outside every optical-path "
+        "epoch, has no physical time to resolve at, or is not described by "
+        "the inventory. Spool.conform_to_inventory splits patches at "
+        "optical-path changes so the described parts can be used; pass it "
+        "on_unresolved='ignore' to drop the rest. It refuses a patch spanning "
+        "an acquisition change; select the time on each side of the change "
+        "instead."
+    )
+    warnings.warn(msg, UserWarning, stacklevel=3)
+
+
 def refuse_rows(source_rows: pd.DataFrame, reasons, summary: str) -> None:
     """
     Raise naming the patches an inventory verb cannot handle, and why.
@@ -1128,7 +1166,7 @@ def get_attr_values(inventory, contexts, name: str) -> list:
 # --- channel selection over index rows --------------------------------
 
 
-def _channel_placement(dims: set[str], acquisition) -> tuple:
+def _channel_placement(dims: set[str], context) -> tuple:
     """
     Return the dimension a row's channels are placed along, and its axis.
 
@@ -1143,22 +1181,22 @@ def _channel_placement(dims: set[str], acquisition) -> tuple:
     -------
     A `(name, axis)` pair, or `(None, reason)` naming why there is none.
     """
-    dist_map = acquisition.distance_map
+    key, dist_map = context.acquisition_key, context.acquisition.distance_map
     if dist_map is None:
         return None, (
-            f"{acquisition.code!r} defines no distance_map, so its channels "
+            f"{key!r} defines no distance_map, so its channels "
             "cannot be placed on the optical path"
         )
     found = map_axis_coords(dist_map, dims)
     if not found:
         return None, (
-            f"has dimensions {sorted(dims)}, and {acquisition.code!r} places "
+            f"has dimensions {sorted(dims)}, and {key!r} places "
             f"channels by one of {readable_on(dist_map)}"
         )
     if len({name for _, name in found}) > 1:
         return None, (
             f"carries {sorted(name for _, name in found)} as separate "
-            f"dimensions, so which of them {acquisition.code!r} places its "
+            f"dimensions, so which of them {key!r} places its "
             "channels by is ambiguous"
         )
     axis, name = found[0]
@@ -1247,7 +1285,7 @@ def _channel_placements(contexts, frame) -> tuple:
     for context, dims in zip(contexts, frame["dims"], strict=True):
         placement = (None, None)
         if context is not None:
-            placement = _channel_placement(set(dims.split(",")), context.acquisition)
+            placement = _channel_placement(set(dims.split(",")), context)
         placements.append(placement)
         # The second half of a placement is the axis when there is one and
         # the reason there is not, so only a nameless one carries a reason.

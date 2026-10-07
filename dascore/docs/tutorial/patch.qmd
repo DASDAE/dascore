@@ -464,6 +464,16 @@ print(displacement.attrs.data_units)
 
 Array operands must broadcast against patch data. Coordinate-aware alignment occurs only for another Patch; a bare NumPy array contributes no coordinate or metadata information.
 
+A bare array therefore follows NumPy's rules: it lines up with the *last* axes, whatever the dimensions are called. Weighting a `(distance, time)` patch by a per-channel array `w` with `patch * w` scales along time instead, and raises nothing when the two lengths happen to match. To weight along a named dimension, wrap the array in a patch on that dimension:
+
+```{python}
+distance = patch.get_array("distance")
+w = np.cos(distance)
+w_patch = dc.Patch(data=w, coords={"distance": distance}, dims=("distance",))
+weighted = patch * w_patch
+assert np.allclose(weighted.data, patch.data * w[:, None])
+```
+
 NumPy ufuncs operate directly on patches, and DASCore patch ufuncs support named-dimension reduction and accumulation.
 
 ```{python}

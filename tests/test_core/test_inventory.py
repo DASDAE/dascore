@@ -276,8 +276,23 @@ class TestGeometryColumns:
         """Two segments may overlap unless they state the same column."""
         first = inv.Geometry(distance=(0.0, 60.0), columns={"depth": (0.0, 6.0)})
         second = inv.Geometry(distance=(50.0, 80.0), columns={"depth": (5.0, 8.0)})
-        with pytest.raises(InvalidInventoryError, match="for column 'depth'"):
+        with pytest.raises(InvalidInventoryError, match="columns \\['depth'\\]"):
             self._inventory(first, second).check()
+
+    def test_column_overlap_reported_once_per_pair(self):
+        """Two shared columns are one fault, stated in optical distance."""
+        columns = {"chainage": (0.0, 1.0), "depth": (0.0, 1.0)}
+        first = inv.Geometry(name="a", distance=(0.0, 17.0), columns=columns)
+        second = inv.Geometry(name="b", distance=(1.0, 14.0), columns=columns)
+        array = self._inventory(first, second).networks[0].fiber_arrays[0]
+        path = array.optical_paths[0].model_copy(update={"name": "lab"})
+        with pytest.raises(InvalidInventoryError) as info:
+            path.check()
+        lines = str(info.value).splitlines()[1:]
+        assert len(lines) == 1
+        assert "on optical path 'lab'" in lines[0]
+        assert "optical distance from 1.0 to 14.0" in lines[0]
+        assert "['chainage', 'depth']" in lines[0]
 
     def test_different_columns_may_overlap(self):
         """Each column is its own function track, so they are independent."""
@@ -421,8 +436,46 @@ class TestGeometryColumnReviewFindings:
                 "elevation": (100.0, 110.0),
             },
         )
-        with pytest.raises(InvalidInventoryError, match="for axis"):
+        with pytest.raises(InvalidInventoryError) as info:
             self._inventory(canonical, labelled).check()
+        # Each segment's own headers, not one segment's attributed to both.
+        assert "as ['x', 'y', 'z'] and ['longitude', 'latitude', 'elevation']" in (
+            str(info.value)
+        )
+
+    def test_overlap_reported_once_in_distance(self):
+        """One fault is one message, naming both segments and the distances."""
+        first = inv.Geometry(
+            name="a",
+            distance=(0.0, 17.0),
+            columns={"x": (0.0, 17.0), "y": (0.0, 0.0), "z": (0.0, 0.0)},
+        )
+        second = inv.Geometry(
+            name="b",
+            distance=(1.0, 14.0),
+            columns={"x": (5.0, 6.0), "y": (5.0, 6.0), "z": (5.0, 6.0)},
+        )
+        with pytest.raises(InvalidInventoryError) as info:
+            self._inventory(first, second).check()
+        lines = str(info.value).splitlines()[1:]
+        assert len(lines) == 1
+        assert "'a' (distance (0.0, 17.0))" in lines[0]
+        assert "'b' (distance (1.0, 14.0))" in lines[0]
+        assert "optical distance from 1.0 to 14.0" in lines[0]
+        assert "['x', 'y', 'z']" in lines[0]
+
+    def test_touching_segments_do_not_overlap(self):
+        """Coverage is half-open, so one may begin where the last ended."""
+        segments = [
+            inv.Geometry(
+                name=name,
+                distance=span,
+                columns={"x": (0.0, 1.0), "y": (0.0, 1.0), "z": (0.0, 1.0)},
+            )
+            for name, span in (("a", (0.0, 10.0)), ("b", (10.0, 20.0)))
+        ]
+        inventory = self._inventory(*segments)
+        assert inventory.check() is inventory
 
     def test_an_axis_stated_twice_is_refused_when_placing(self):
         """Otherwise whichever spelling came last would win, silently."""
@@ -496,6 +549,11 @@ class TestGeometry:
     def test_requires_two_points(self):
         """Requires two points."""
         with pytest.raises(ValidationError, match="at least 2 control points"):
+            inv.Geometry(distance=(1.0,), columns={"x": (0.0,), "y": (0.0,)})
+
+    def test_one_point_suggests_a_repeated_position(self):
+        """A spool written as one row is told how to write it as two."""
+        with pytest.raises(ValidationError, match="same position"):
             inv.Geometry(distance=(1.0,), columns={"x": (0.0,), "y": (0.0,)})
 
     def test_strictly_increasing(self):
@@ -694,7 +752,7 @@ class TestPathTracks:
                 inv.Geometry(distance=(50.0, 80.0), **seg),
             ),
         )
-        with pytest.raises(InvalidInventoryError, match="Overlapping geometry"):
+        with pytest.raises(InvalidInventoryError, match="overlap in optical distance"):
             path.check()
 
     def test_boolean_labels_overlap_freely(self):
@@ -1380,11 +1438,16 @@ class TestReviewRegressions:
             inv.Inventory(resources={"wrong": cable})
 
     def test_duplicate_resource_ids_raise(self):
-        """Duplicate resource ids raise."""
+        """One resource id naming two different resources raises."""
+        first, second = inv.Cable(resource_id="x"), inv.Cable(resource_id="x", name="b")
         with pytest.raises(ValidationError, match="Duplicate resource_id"):
-            inv.Inventory(
-                resources=[inv.Cable(resource_id="x"), inv.Cable(resource_id="x")]
-            )
+            inv.Inventory(resources=[first, second])
+
+    def test_equal_unnamed_resources_are_one(self):
+        """Two unnamed resources with equal content pool as one (#1375)."""
+        first, second = inv.Interrogator(model="FI-1"), inv.Interrogator(model="FI-1")
+        assert first.resource_id == second.resource_id
+        assert len(inv.Inventory(resources=[first, second]).resources) == 1
 
     def test_columnless_geometry_raises(self):
         """A segment which measures nothing describes nothing."""
@@ -2098,6 +2161,66 @@ class TestPanel:
             html = inventory._repr_html_()
         assert "... 3 more" in html
 
+    def test_long_description_opens_to_full_text(self):
+        """A long note stays out of the summary but is readable on click."""
+        description = "A long deployment note " * 10 + "<final detail>"
+        array = inv.FiberArray(
+            code="FA1", name="name description: stays", description=description
+        )
+        panel = inv.Inventory(
+            networks=(inv.Network(code="XT", fiber_arrays=(array,)),)
+        )._repr_html_()
+        summary = next(
+            x
+            for x in re.findall(r"<summary>(.*?)</summary>", panel)
+            if "FiberArray" in x
+        )
+        visible = re.sub(r"<[^>]+>", "", summary)
+        assert "description: …" in visible
+        assert description not in summary
+        assert "code: FA1" in visible
+        assert "name description: stays" in visible
+        assert "&lt;final detail&gt;" in panel
+        assert panel.count("&lt;final detail&gt;") == 1
+
+    def test_short_description_stays_in_summary(self):
+        """A short note needs no extra disclosure."""
+        array = inv.FiberArray(code="FA1", description="near portal")
+        panel = inv.Inventory(
+            networks=(inv.Network(code="XT", fiber_arrays=(array,)),)
+        )._repr_html_()
+        assert "description: near portal" in re.sub(r"<[^>]+>", "", panel)
+        assert 'class="dc-body dc-description"' not in panel
+
+    def test_multiline_description_starts_closed(self):
+        """A short note with a newline also stays out of the title."""
+        array = inv.FiberArray(code="FA1", description="first line\nsecond line")
+        panel = inv.Inventory(
+            networks=(inv.Network(code="XT", fiber_arrays=(array,)),)
+        )._repr_html_()
+        leaf = re.search(
+            r'<details class="dc-nest dc-d1"([^>]*)>'
+            r"<summary>(.*?)</summary>(.*?)</details>",
+            panel,
+            re.DOTALL,
+        )
+        assert leaf is not None
+        assert "open" not in leaf.group(1)
+        assert "description: …" in re.sub(r"<[^>]+>", "", leaf.group(2))
+        assert "first line\nsecond line" in leaf.group(3)
+
+    def test_long_parent_note_does_not_hide_children(self):
+        """A network's children remain visible while its note stays folded."""
+        network = inv.Network(
+            code="XT",
+            description="A network note " * 10,
+            fiber_arrays=(inv.FiberArray(code="FA1"),),
+        )
+        panel = inv.Inventory(networks=(network,))._repr_html_()
+        assert '<details class="dc-nest dc-d0" open>' in panel
+        assert '<details class="dc-note"><summary>description: …</summary>' in panel
+        assert "FiberArray" in panel
+
 
 class TestObjectTypeTag:
     """The union members' own tag field is invisible to users."""
@@ -2151,7 +2274,7 @@ class TestImmutability:
     """Inventory fields cannot be written to."""
 
     @staticmethod
-    def _stocked_inventory(resource_id="fixed"):
+    def _stocked_inventory():
         """An inventory whose frozen mappings both carry contents."""
         cable = inv.Cable(resource_id="cable-01", name="c")
         segment = inv.FiberSegment(
@@ -2162,7 +2285,6 @@ class TestImmutability:
             optical_paths=(inv.OpticalPath(optical_components=(segment,)),),
         )
         return inv.Inventory(
-            resource_id=resource_id,
             extra_fields={"vendor": "x", "gain": 1.5},
             networks=(inv.Network(code="DAS", fiber_arrays=(array,)),),
         )
@@ -2216,7 +2338,6 @@ class TestImmutability:
 
     def test_equal_inventories_hash_equally(self):
         """Equality and hashing agree, so an inventory works as a dict key."""
-        # resource_id is pinned; it otherwise defaults to a fresh uuid.
         first, second = self._stocked_inventory(), self._stocked_inventory()
         assert first == second
         assert hash(first) == hash(second)
@@ -3111,6 +3232,17 @@ class TestDepthLabel:
             units=("meter", "meter", "meter"),
         )
         assert crs.axis_index("depth") == 2
+
+
+class TestLabelGroup:
+    """A label belongs to a group."""
+
+    @pytest.mark.parametrize("group", [None, ""])
+    def test_group_is_required(self, group):
+        """A label with no group never becomes a coordinate, so it vanishes."""
+        kwargs = {} if group is None else {"group": group}
+        with pytest.raises(ValidationError, match="group"):
+            inv.OpticalPathLabel(distance_min=0.0, distance_max=1.0, **kwargs)
 
 
 class TestDistanceMapAxisAgreement:

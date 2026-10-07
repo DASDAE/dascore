@@ -187,6 +187,8 @@ class Section:
     title: Text
     body: tuple[Raw | Table | Section, ...] = ()
     depth: int = 0
+    html_title: Text | None = None
+    description: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -507,7 +509,8 @@ def _title_lines(node: Section) -> int:
     often does -- and both a `summary` and a `.dc-line` keep it, so a
     block which counted its title as one line would fold a level late.
     """
-    return node.title.plain.count("\n") + 1
+    title = node.html_title if node.html_title is not None else node.title
+    return title.plain.count("\n") + 1
 
 
 @_visible_lines.register
@@ -521,13 +524,20 @@ def _section_lines(node: Section) -> int:
     # same subtree a second time at every level, which is exponential in
     # how deep the tree goes.
     lines = _body_lines(node)
-    shown = lines if lines <= get_config().display_html_open_lines else 0
+    shown = lines if _section_opens(node, lines) else 0
     return _title_lines(node) + shown
 
 
 def _body_lines(node: Section) -> int:
     """How many lines opening a section would show."""
-    return sum(_visible_lines(x) for x in node.body)
+    return sum(_visible_lines(x) for x in node.body) + bool(node.description)
+
+
+def _section_opens(node: Section, lines: int) -> bool:
+    """Whether a section starts open in an HTML repr."""
+    return bool(node.body or not node.description) and (
+        lines <= get_config().display_html_open_lines
+    )
 
 
 def _nest_classes(depth: int) -> tuple[str, ...]:
@@ -548,7 +558,7 @@ def _html_section(node: Section) -> str:
     # A title is the bare line: the indentation a terminal draws nesting
     # with is added when a terminal draws it, and here the nesting is
     # the markup.
-    title = node.title
+    title = node.html_title if node.html_title is not None else node.title
     if title.plain.startswith(_SECTION_MARKER):
         title = title[len(_SECTION_MARKER) :]
     title = _text_to_html(title)
@@ -557,8 +567,18 @@ def _html_section(node: Section) -> str:
     if not lines:
         # Nothing to fold, so nothing to offer folding.
         return f'<div class="{" ".join(("dc-line", *nest))}">{title}</div>'
-    state = " open" if lines <= get_config().display_html_open_lines else ""
+    state = " open" if _section_opens(node, lines) else ""
     body = "".join(_render_html(x) for x in node.body)
+    if node.description:
+        full = _text_to_html(Text(node.description))
+        prose = f'<pre class="dc-body dc-description">description: {full}</pre>'
+        if node.body:
+            body = (
+                '<details class="dc-note"><summary>description: …</summary>'
+                f"{prose}</details>"
+            ) + body
+        else:
+            body = prose
     css = f' class="{" ".join(nest)}"' if nest else ""
     return f"<details{css}{state}><summary>{title}</summary>{body}</details>"
 
@@ -1435,7 +1455,7 @@ def _value_to_text(name: str, value, style=None, truncate: bool = True) -> Text:
     return text
 
 
-def model_to_line(model, skip=(), style=None, extra=None) -> Text:
+def model_to_line(model, skip=(), style=None, extra=None, description=None) -> Text:
     """
     Get a one-line summary of a pydantic model.
 
@@ -1453,6 +1473,8 @@ def model_to_line(model, skip=(), style=None, extra=None) -> Text:
     extra
         Derived values to state after the fields, such as an interval a
         model computes rather than stores.
+    description
+        Replacement for a stated description in the HTML summary.
     """
     key_style = dascore_styles["keys"]
     # Started empty and appended to: a Text built as Text(x, style=...) makes
@@ -1463,6 +1485,8 @@ def model_to_line(model, skip=(), style=None, extra=None) -> Text:
     base += Text(model.__class__.__name__, style=style)
     base += Text("(")
     fields = {**stated_fields(model, skip=skip), **dict(extra or {})}
+    if description is not None and "description" in fields:
+        fields["description"] = description
     for name, value in fields.items():
         base += Text(f" {name}: ", key_style)
         base += _value_to_text(name, value)
