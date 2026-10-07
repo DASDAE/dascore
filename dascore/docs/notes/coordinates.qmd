@@ -1,0 +1,163 @@
+---
+title: Coordinate Guidelines
+---
+
+These rules govern DASCore's coordinates. If code disagrees with them, fix the code, or change this note first in its own pull request and log why.
+
+## The model
+
+DASCore separates two jobs:
+
+- **Assembly** (`select`, `chunk`, `concatenate`) decides which samples belong together and keeps labels as recorded; `chunk` may only shift a whole piece by up to `max_shift`.
+- **Regularization** (`snap_coords`, `fill_gaps`, on patches and spools) makes a coordinate evenly sampled. Only it moves individual labels or adds samples, and only when asked.
+
+Joining across a gap and fixing it are two visible steps:
+
+```python
+joined = spool.chunk(time=None, tolerance=10)  # gaps up to 10 samples are kept as holes
+filled = joined.fill_gaps(time=10)             # insert the missing samples, or
+snapped = joined.snap_coords("time")           # spread the samples evenly
+```
+
+`time` is only an example; no dimension name is special.
+
+## Scope
+
+The sampling rules apply to one-dimensional, monotonic, numeric or datetime dimension coordinates; others have no step.
+
+**Associated coordinates** run along a dimension without being one. Whatever an operation does along a dimension, it does to them; if it can't, it drops them with a warning (`fill_gaps` gives them NaN or NaT where it can). Selecting by a multi-dimensional one raises and suggests a mask. Units always survive.
+
+## Terms
+
+- **Step**: the spacing the labels follow. Integer and datetime steps are exact fractions of a tick, so rates like 1024 Hz are exact (labels are grid values rounded down to whole ticks).
+- **Grid**: a step plus an origin.
+- **Offset**: how far a label sits from its grid position.
+- **Hole** (gap): a grid position with no sample.
+- **Seam**: where one piece or run ends and the next begins.
+
+A coordinate is described by its `step` (`None` if it has none) and two independent flags:
+
+| | No holes | Holes (`gapped`) |
+|---|---|---|
+| **On the grid** | evenly sampled | gapped |
+| **Offsets under half a step** (`jittered`) | jittered | jittered and gapped |
+
+`coord.evenly_sampled` means a step, not jittered and not gapped. A coordinate with no step is irregular.
+
+## Rules
+
+### Labels
+
+1. **Labels are what was recorded.** Only `snap_coords`, `fill_gaps`, a reader's `snap` (rule 3) and `chunk`'s piece shift (rule 6) change them; storing a label as a grid value within float precision doesn't count. Removing samples keeps the step, leaving holes; only an explicit stride gives a coarser step.
+
+2. **Inference finds a grid or nothing.** `get_coord(data=...)` checks every label against a fitted grid, not just the spacings, so drift can't hide: all on the grid is evenly sampled; all offsets and spacing errors under half a step, with no repeats, is jittered; anything else has no step. Inference never invents holes. With a stated step, labels are placed on that grid, skipped positions become holes, and two labels on one position raise. Integer and datetime grids are found exactly in their own tick unit; floats are judged in their stored dtype.
+
+3. **Readers snap the coordinates `snap` names.** `dc.read`, `dc.scan`, `dc.spool` and every reader take `snap`:
+   - `None` (default): the format's default names, shown in its reader's signature;
+   - `True`: every one-dimensional numeric or datetime dimension;
+   - `False`: nothing; every coordinate exactly as stored;
+   - a tuple such as `("time",)`: those names; a missing or unsnappable name raises.
+
+   A snapped coordinate is assumed to have no holes inside a file or patch; gaps show up between files, where `chunk` sees them. One shared helper builds every snapped grid, from a reliable stated start and acquisition rate, else from the first and last stored labels and the count, so interrogators with unlocked clocks still come back evenly sampled. It checks the grid against stored labels (the ends, plus a few interior ones for end-point grids) and warns, naming the file, beyond `max_shift`. The index records its `snap` and rescans when opened with another. A conformance test holds every format to this rule.
+
+4. **Operations check what they need.** FFTs, filters and other operations assuming contiguous samples use `get_coord(dim, require_evenly_sampled=True)`, and the error names `fill_gaps` and `snap_coords`. `coord.step` is set whenever there is a step, jittered or not.
+
+### Joining
+
+5. **Tolerance is the widest seam `chunk` may join**, in steps or, as a quantity or timedelta, a distance; a seam skipping `m` positions spans `m + 1` steps. Pieces with no step join only under a distance. How far labels move is `max_shift`, never `tolerance`.
+
+6. **`chunk` assembles.** It joins compatible pieces (`notes/patch_compatibility.qmd`) along the coordinate's direction, judging each seam from the recorded labels on either side.
+   - **Gaps.** Missing samples within `tolerance` join and stay holes; wider gaps split, inside pieces too.
+   - **Offsets.** A piece off the output's grid by at most `max_shift` is shifted onto it as a block; further, but under half a step, it keeps its labels and the output is jittered. `max_shift=0` shifts nothing. After a file ending at 99 s with a 1 s step, a next file starting at 100.1 s is shifted, one at 100.3 s is jittered, and one at 103 s leaves a two-sample hole.
+   - **Rates.** The grid is refitted over the whole output; a piece that drifts half a step or more from it (a slightly different rate) starts a new output.
+   - A single sample takes its neighbours' step; pieces with no step join by recorded spacing.
+   - **Overlaps.** The earlier piece wins; later samples fill only its holes.
+   - `chunk_plan` records per piece why each output starts, the shift, and how many samples were dropped.
+
+7. **`concatenate` joins exactly**, in order, keeping every label; it never shifts, splits or fills. Different steps give no step; overlapping labels give an unordered coordinate and a warning.
+
+### Selecting and windows
+
+8. **Ranges and windows.**
+   - Picking by value (`select`, `sel`, ranges, annotations) includes both ends; positions (`isel`, `samples=True`) and windows exclude the end, as in xarray. Reversed bounds are swapped; on a descending coordinate, start and end mean the lower and upper values.
+   - `Spool.select` and `chunk` accept ranges, `(n, 2)` arrays of ranges, or annotation sets. `Spool.select` returns each source's matching part, unjoined; `chunk` joins each range into one output, or labelled fragments if it splits. Arrays on several dimensions pair row by row; `join_dim` (default: the first) names the joining one. On `Patch.select` an array still lists values to pick, as released.
+   - `chunk(dim=length, overlap=o)` starts windows at `start + k * (length - o)` exactly, so counts may differ by one; negative overlap skips; `samples=True` counts samples. Jittered coordinates are windowed by grid position.
+
+9. **Completeness applies to `chunk` only.** An output is complete when both edge positions hold samples; interior holes are judged by `tolerance`. `on_incomplete` (`"drop"`, `"keep"`, `"warn"`, `"raise"`) handles the rest, defaulting to `"drop"` for windows and `"raise"` for ranges. Outputs with no step are kept; `select` just clips.
+
+### Regularizing
+
+10. **`snap_coords` and `fill_gaps`.**
+    - `snap_coords(*dims)` works as released: sort, keep the end labels and the count, spread samples evenly; evenly sampled coordinates are left alone. `max_shift=` raises on larger moves, and moves over one step warn, since a hole is being spread. `step=` places labels on that grid instead, keeping holes.
+    - `fill_gaps(**{dim: tolerance})` fills holes up to that size (all, if none given) with `fill_value` (NaN), without moving labels. Jittered or stepless coordinates raise, pointing to `snap_coords(step=...)`, as does a `fill_value` the dtype can't hold.
+    - Without names they apply to every eligible dimension. On spools they are lazy and per patch, using the index where possible and otherwise reading only the coordinate.
+
+### Reports and storage
+
+11. **Reports match `chunk`.** `get_gaps(tolerance=t)` lists the splits and kept holes of `chunk(tolerance=t)`, with span and missing-sample count. `get_coverage` counts missing samples (unknown without a step). `get_contents` adds `{dim}_jittered` and `{dim}_gapped` beside `{dim}_step`, filterable with `select`.
+
+12. **The index mirrors the coordinate**: one row per patch, a coordinate table (step, flags, envelope, offset bounds) and a run table matching the in-memory runs, which never contain holes. Gap logic is written once over runs, so memory and index agree. Undecidable cases read the coordinate lazily. Beyond `max_index_runs`, a coordinate is stored as an envelope with a warning naming the file and the fix.
+
+13. **Writers keep steps and holes, or refuse**, saying to regularize or split first. They never silently split, stretch, fill or drop a step.
+
+## Constants
+
+These are the only thresholds.
+
+| Name | Value | Use |
+|---|---|---|
+| `dascore.config.max_shift` | 0.2 steps | Default for `chunk` and the reader warning: above measured jitter (0.17), below a missing sample's effect. `snap_coords` has no default limit. |
+| `DEFAULT_TOLERANCE` | 1.5 steps | Default `tolerance`: only contiguous pieces join. |
+| `dascore.config.max_index_runs` | 256 | Runs stored per coordinate in the index. |
+| Float exactness | max(`_GRID_RTOL` × step, 4 ulp) | In the stored dtype; float64 holding float32 values counts as float32. |
+| Fractional steps | ≥ 100 ticks | So an integer array missing one value isn't read as a fractional grid. |
+
+## Methods that change coordinates
+
+| Job | Patch | Spool | Notes |
+|---|---|---|---|
+| Pick | `select`, `sel`, `isel`, `unselect` | `select`, `unselect` | `select` for compatibility, `sel`/`isel` for xarray users. |
+| Reorder | `order`, `sort_coords` | `sort` | |
+| Change coordinates | `update_coords` | | All changes go through it, including `coords_from_df`, `add_distance_to`, `enrich`. |
+| Rebuild | `replace` | | Everything at once; `update` and `new` remain. |
+| Remove, rename | `drop_coords`, `rename_coords` | | `drop_coords(to_attrs=True)` replaces `squeeze_coords`. |
+| Assemble | | `chunk`, `concatenate` | |
+| Split at holes | `split_gaps` | | `dc.spool([patch])` no longer splits. |
+| Regularize | `snap_coords`, `fill_gaps` | `snap_coords`, `fill_gaps` | |
+| Sum patches | | `stack` | Along `dim_vary`, keeps the first patch's labels. |
+
+Processing that changes a grid (`resample`, `decimate`, `dft`) states the step it produces.
+
+## Deprecations and breaks
+
+Released behaviour is deprecated with a warning for at least one release rather than changed outright, unless there is a compelling reason, which the decisions log records. Unreleased features (`Spool.cut`, `squeeze_coords`, `sampling_group_tolerance`, half-open annotation ranges) change freely.
+
+| In v0.1.24 | Deprecation |
+|---|---|
+| `chunk` snaps outputs, stretching across gaps and rates | Kept one release, warning where the new rules differ; then holes are kept |
+| `chunk(snap_coords=...)` | Warns; `True` keeps the released result, `False` means `max_shift=0` |
+| `chunk(keep_partial=True)` | Warns; means `on_incomplete="keep"` |
+| `get_coord(data=...)` snapping within 0.1% | Warns where rule 2 differs, then switches |
+| `order` dropping missing values | Warns, then raises |
+| `coords_from_df` overwriting coordinates | Warns, then refuses |
+| `concatenate_patches`, `merge_patches` | Warn, then are removed in 0.2 |
+
+Afterwards, gapped `chunk` outputs refuse filters until regularized, reading warns when stored times disagree with the grid, Sentek time (which repeats) is unordered, and writing holes to formats that can't store them raises.
+
+## Future work
+
+Coordinates will hold a mapping of keys to any array-like, real or virtual, carried through `snap_coords` and similar so recorded labels survive. Not yet designed.
+
+## Decisions log
+
+- 2026-10-04: Assembly and regularization are separate; a design with join modes proved too complex.
+- 2026-10-04: An explicit `tolerance` joins across gaps, and patches may hold holes, reversing those parts of #1236.
+- 2026-10-05: The index returns to a run table, reversing #1284, so memory and index share one model.
+- 2026-10-05: `snap_coords` keeps its released behaviour, adding `max_shift` (after silent large moves in #803, #896, #1418) and `step`.
+- 2026-10-05: Boundaries follow xarray: picks include both ends, positions exclude the end.
+- 2026-10-06: Selection keeps the step (a draft that coarsened it erased real holes); completeness checks edge positions (a draft using `tolerance` there let truncated windows pass).
+- 2026-10-06: A prototype on ~5,800 Febus files set `max_shift` to 0.2 (half a step let a missing sample snap) and seams by recorded labels (projecting from the first piece dropped real samples). Filed #1419, #1420.
+- 2026-10-07: Readers assume no holes inside a file (clocks may be unlocked from sampling); `snap=None` means the format's defaults.
+- 2026-10-07: Jitter and holes are independent flags, replacing a level ladder; `require_evenly_sampled` stays.
+- 2026-10-07: `max_shift=0` replaces a `snap_jitter` flag.
+- 2026-10-07: Released behaviour is deprecated rather than changed outright, unless there is a compelling reason.

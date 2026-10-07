@@ -248,6 +248,9 @@ website:
         - text: Documentation Strategy
           href: notes/doc_strategy.qmd
 
+        - text: Coordinate Guidelines
+          href: notes/coordinates.qmd
+
         - text: Coordinate Internals
           href: notes/coordinate_internals.qmd
 
