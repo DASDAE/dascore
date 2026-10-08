@@ -16,6 +16,7 @@ import math
 import os
 import stat
 import tempfile
+import warnings
 from contextlib import suppress
 from functools import partial
 from pathlib import Path
@@ -42,6 +43,7 @@ from dascore.utils.paths import (
     requires_local_directory,
 )
 from dascore.utils.progress import track, validate_progress_level
+from dascore.warnings import DASCoreWarning
 
 
 def _directory_signature(path: Path) -> tuple[int, int]:
@@ -407,6 +409,15 @@ class DBDirectoryIndexer:
         changes stay in the calling thread. The caller owns the client.
         """
         progress = validate_progress_level(progress)
+        legacy = self.path / ".dascore_index.h5"
+        if legacy.exists() and self._is_legacy_or_foreign_index(legacy):
+            msg = (
+                f"{self.path} holds a legacy .dascore_index.h5, which DASCore "
+                f"no longer uses and can be deleted; the index is now "
+                f"{self.index_path}, so delete that file to reset the index."
+            )
+            skip = (str(Path(dc.__file__).parent),)
+            warnings.warn(msg, DASCoreWarning, skip_file_prefixes=skip)
         files = self._walk()
         stats = self._backend.source_stats()
         stored = {

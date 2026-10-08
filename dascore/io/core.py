@@ -109,6 +109,7 @@ from dascore.utils.remote_io import (
     remote_cache_scope,
     suppress_gc_pause_warning,
 )
+from dascore.warnings import DASCoreWarning
 
 # What the scan dispatchers accept: one resource or patch, or an
 # iterable of them (`_iterate_scan_inputs` flattens its input with
@@ -1043,6 +1044,7 @@ class FiberIO:
             raise InvalidFiberIOError(msg)
         # register fiber_io; a mixin may sit ahead of the FiberIO ancestor
         parent = next(x for x in cls.__mro__[1:] if issubclass(x, FiberIO))
+        _warn_old_interface(cls)  # first, so an error leaves nothing registered
         parent.manager.register_fiberio(cls())
         # decorate methods for type-casting
         for name, param_ind in cls._automatic_type_casters.items():
@@ -1061,6 +1063,24 @@ class FiberIO:
         }
         # Only the class's own hooks: another base may supply the rest.
         cls._hook_pairs = FrozenDict(own)
+
+
+def _warn_old_interface(cls):
+    """Warn when a subclass only overrides the removed reader methods."""
+
+    def overridden(name):
+        return not _is_wrapped_func(getattr(cls, name), getattr(FiberIO, name))
+
+    new = ("get_version", "get_metadata", "read_array")
+    over = [x for x in ("get_format", "scan", "read") if overridden(x)]
+    if over and not any(overridden(x) for x in new):
+        msg = (
+            f"FiberIO {cls.__name__} overrides {', '.join(over)} but none of "
+            f"{', '.join(new)}, through which DASCore now detects and reads "
+            "formats; without them its files may not be found or read."
+        )
+        skip = (str(Path(dc.__file__).parent),)
+        warnings.warn(msg, DASCoreWarning, skip_file_prefixes=skip)
 
 
 # The public methods each private FiberIO hook is paired with.

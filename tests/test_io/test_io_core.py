@@ -7,6 +7,7 @@ import io
 import os
 import shutil
 import threading
+import warnings
 from dataclasses import replace
 from fractions import Fraction
 from pathlib import Path
@@ -71,6 +72,7 @@ from dascore.utils.io import (
 )
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_datetime64
+from dascore.warnings import DASCoreWarning
 
 tvar = TypeVar("tvar", int, float, str, Path)
 
@@ -751,6 +753,64 @@ class TestFormatter:
 
             class EmptyFormatter(FiberIO):
                 """formatter with no name."""
+
+    def test_old_interface_warns(self):
+        """Overriding only the removed reader methods warns at definition."""
+        with pytest.warns(DASCoreWarning, match="get_version, get_metadata") as rec:
+
+            class OldStyle(FiberIO):
+                name = "_old_style_format"
+
+                def get_format(self, resource: H5Reader, **kwargs):
+                    return False
+
+        assert rec[0].filename == __file__
+
+    def test_old_interface_as_error_registers_nothing(self):
+        """A warning raised as an error leaves the name free for a fixed class."""
+        with suppress_warnings(DASCoreWarning, action="error"):
+            with pytest.raises(DASCoreWarning):
+
+                class Broken(FiberIO):
+                    name = "_old_then_fixed_format"
+
+                    def get_format(self, resource: H5Reader, **kwargs):
+                        return False
+
+            class Fixed(FiberIO):
+                name = "_old_then_fixed_format"
+
+                def get_version(self, resource: H5Reader):
+                    return None
+
+        found = FiberIO.manager.get_fiberio(format="_old_then_fixed_format")
+        assert isinstance(found, Fixed)
+
+    def test_old_interface_from_a_mixin_warns(self):
+        """The removed methods warn when a mixin supplies them too."""
+
+        class OldMixin:
+            def get_format(self, resource: H5Reader, **kwargs):
+                return False
+
+        with pytest.warns(DASCoreWarning, match="overrides get_format"):
+
+            class OldStyle(OldMixin, FiberIO):
+                name = "_old_mixin_format"
+
+    def test_new_interface_with_read_is_silent(self):
+        """A reader which also overrides read, as Sintela does, is fine."""
+        with warnings.catch_warnings():
+            warnings.filterwarnings("error", category=DASCoreWarning)
+
+            class NewStyle(FiberIO):
+                name = "_new_style_format"
+
+                def get_version(self, resource: H5Reader):
+                    return None
+
+                def read(self, resource, **kwargs):
+                    return dc.spool([])
 
     def test_empty_formatter_undefined_methods(self, random_patch):
         """
