@@ -1364,6 +1364,27 @@ class TestApplyOperator:
         assert np.issubdtype(out.dtype, np.bool_)
         assert not out.all()
 
+    @pytest.mark.parametrize(
+        "op",
+        [lambda a, b: a & b, lambda a, b: a | b, lambda a, b: a ^ b],
+        ids=["and", "or", "xor"],
+    )
+    def test_logical_ops(self, random_patch, op):
+        """Boolean patches combine with &, | and ^, either way round (#1328)."""
+        mask, other = random_patch > 0.5, random_patch.data < 0.7
+        expected = op(mask.data, other)
+        assert np.array_equal(op(mask, mask.new(data=other)).data, expected)
+        assert np.array_equal(op(mask, other).data, expected)
+        assert np.array_equal(op(other, mask).data, expected)
+        assert np.array_equal(op(True, mask).data, op(True, mask.data))
+
+    def test_invert_and_abs(self, random_patch):
+        """~ inverts a boolean patch and abs() is np.abs."""
+        mask = random_patch > 0.5
+        assert np.array_equal((~mask).data, ~mask.data)
+        shifted = random_patch - 0.5
+        assert np.array_equal(abs(shifted).data, np.abs(shifted.data))
+
     def test_reverse_subtraction(self):
         """Test that reverse subtraction works correctly."""
         patch = dc.get_example_patch("random_das")
