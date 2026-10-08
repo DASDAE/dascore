@@ -184,7 +184,7 @@ def _get_time_coord(node, snap=True):
     # correct time coordinate from time array if the values are "close" but off.
     if 0 < diff < 10:
         time_array = time_array[:].astype("datetime64[us]")
-        time_coord = get_coord(data=time_array)
+        time_coord = get_coord(data=time_array, snap=True)
     return time_coord
 
 

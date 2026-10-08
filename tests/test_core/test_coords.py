@@ -3376,14 +3376,17 @@ class TestFractionalSnap:
         step = np.timedelta64(1, "ms")
         values = self.t0 + np.arange(100) * step
         values[1:-1:7] += np.timedelta64(1, "ns")
-        out = get_coord(data=values)
+        with pytest.warns(FutureWarning, match="0.1.26"):
+            out = get_coord(data=values)
         assert out == get_coord(start=self.t0, step=step, shape=(100,))
+        assert get_coord(data=values, snap=False).jittered
 
     def test_off_grid_label_falls_through(self):
         """Labels no fractional grid holds keep the rounded median step."""
         values = get_coord(start=self.t0, step=(1, 1024), shape=(60,)).values.copy()
         values[30] += np.timedelta64(1, "ns")
-        out = get_coord(data=values)
+        with pytest.warns(FutureWarning, match="0.1.26"):
+            out = get_coord(data=values)
         step = np.timedelta64(976562, "ns")
         assert out == get_coord(start=self.t0, step=step, shape=(60,))
 
@@ -3393,14 +3396,16 @@ class TestFractionalSnap:
         values = self.t0 + np.arange(100) * step
         values[[1, -1]] += tick
         values[2] -= tick
-        out = get_coord(data=values)
+        with pytest.warns(FutureWarning, match="0.1.26"):
+            out = get_coord(data=values)
         assert out == get_coord(start=self.t0, step=step, shape=(100,))
 
     def test_offsets_past_int64_fall_through(self):
         """A grid whose offsets would overflow int64 keeps the median step."""
         num = 617 * 10**15 + 1
         values = np.array([k * num // 617 for k in range(1000)], dtype=np.int64)
-        out = get_coord(data=values)
+        with pytest.warns(FutureWarning, match="0.1.26"):
+            out = get_coord(data=values)
         assert out == get_coord(start=0, step=10**15, shape=(1000,))
 
     def test_integer_fractional_grid(self):

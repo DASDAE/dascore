@@ -1273,12 +1273,11 @@ def _uneven_message(name: str, coord, caller: str) -> str:
         )
         if applies
     ]
-    split = " split at its holes with Patch.split_gaps," if coord.gapped else ""
+    split = ", Patch.split_gaps to split at them" if coord.gapped else ""
     return (
         f"Coordinate {name} is not evenly sampled as required by {caller}: "
-        f"{' and '.join(why) or 'it has no step'}. Fill its holes with "
-        f"Patch.fill_gaps,{split} or put it on a grid with Patch.snap_coords "
-        "first."
+        f"{' and '.join(why) or 'it has no step'}. Use Patch.fill_gaps to "
+        f"fill holes{split}, or Patch.snap_coords to put the labels on a grid."
     )
 
 
@@ -1288,8 +1287,8 @@ def _require_evenly_sampled(patch, dims, operation: str) -> None:
 
     A coordinate with holes raises, as ``get_coord(require_evenly_sampled=True)``
     does. Until DASCore 0.1.26 one which is only irregular or jittered warns
-    and the operation uses its labels as recorded, as 0.1.24 did; it then
-    raises too.
+    and the operation uses its labels as recorded, as 0.1.24 did; then each
+    caller calls ``patch.get_coord(dim, require_evenly_sampled=True)``.
     """
     for dim in iterate(dims):
         coord = patch.get_coord(dim)

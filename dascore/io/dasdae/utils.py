@@ -399,8 +399,8 @@ def _read_coord(node, name, attrs2, snap):
             return NumericCoord(runs=tuple(runs), units=units, step=node_step)
         if node_step is not None:
             coord = get_coord(data=array, units=units, step=node_step, snap=False)
-            if snap and coord._grid is None and not coord.gapped:
-                # labels near their step snap where asked, as stepless ones do
+            if snap and coord.jittered and not coord.gapped:
+                # jittered labels snap where asked, as stepless ones do
                 return get_coord(data=array, units=units, snap=True)
             return coord
         if snap or np.ndim(array) != 1:

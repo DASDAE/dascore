@@ -2846,29 +2846,24 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     @property
     def jittered(self) -> bool:
         """Whether some label sits off the step's grid, by under half a step."""
-        return self._jittered()
+        return self._placement()[0]
 
     @property
     def gapped(self) -> bool:
         """Whether a position of the step's grid holds no sample."""
-        return self._gapped()
+        return self._placement()[1]
 
     @cached_method
-    def _jittered(self) -> bool:
-        """Whether stored labels miss their step's grid by more than rounding."""
-        stored = any(isinstance(x, Labels) for x in self.runs)
-        if _is_null(self.step) or self._partial or not stored:
-            return False  # grids, and seams between them, sit on the step
+    def _placement(self) -> tuple[bool, bool]:
+        """Whether the labels are jittered, and gapped, on their step's grid."""
+        if _is_null(self.step) or self._partial:
+            return False, False
+        if not any(isinstance(x, Labels) for x in self.runs):
+            # grids, and seams between them, sit on the step
+            return False, not self.missing().complete
         values = np.asarray(self.values)
         counts = _on_grid(_diffs(values), self.step, jitter=True)
-        return not _on_step_grid(values, counts, self.step)
-
-    @cached_method
-    def _gapped(self) -> bool:
-        """Whether the step's grid misses positions between the ends."""
-        if _is_null(self.step) or self._partial:
-            return False
-        return not self.missing().complete
+        return not _on_step_grid(values, counts, self.step), bool(np.any(counts > 1))
 
     @property
     def step_exact(self) -> Fraction | None:
@@ -2942,12 +2937,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             return get_coord(data=values, units=self.units, snap=False)
         edges = np.flatnonzero(diffs != stride) + 1
         fractional = any(isinstance(x, Grid) and x.step_den > 1 for x in self.runs)
-        if (
-            len(indices) >= 1_000
-            and len(edges) >= len(indices) // 10
-            and not fractional
-        ):
-            # holes in more than a tenth of the samples: their labels are stored
+        if len(edges) >= 64 and len(edges) * 100 >= len(indices) and not fractional:
+            # many short stretches: their labels are stored, not a run each
             runs = [self._get_index_values(indices)]
         else:
             runs = []
@@ -4567,7 +4558,7 @@ def get_coord(
         data = np.asarray(data)
         # special case for ndim arrays.
         if data.ndim > 1:
-            return None, None, None, False
+            return None, None, None, False, False
         is_monotonic = is_strictly_monotonic(data)
         # the array cannot be evenly sampled if it isn't monotonic
         if is_monotonic:
@@ -4575,7 +4566,7 @@ def get_coord(
                 # signed, so descending uints do not wrap; booleans refuse
                 diffs = _diffs(data) if data.dtype.kind == "u" else data[1:] - data[:-1]
             except TypeError:
-                return None, None, None, False
+                return None, None, None, False, False
             # sort once and derive the unique values from the sorted array
             # (np.unique would sort a second copy).
             sorted_diffs = np.sort(diffs)
@@ -4586,13 +4577,14 @@ def get_coord(
                 mask[0] = True
                 np.not_equal(sorted_diffs[1:], sorted_diffs[:-1], out=mask[1:])
                 unique_diff = sorted_diffs[mask]
-            if len(unique_diff) == 1 or all_diffs_close_enough(unique_diff):
+            uniform = len(unique_diff) == 1
+            if uniform or all_diffs_close_enough(unique_diff):
                 _min = data[0]
                 # this is a poor man's median that preserves dtype
                 _step = sorted_diffs[len(sorted_diffs) // 2]
                 _max = _new_max(data, _min, _step)
-                return _min, _max + _step, _step, is_monotonic
-        return None, None, None, is_monotonic
+                return _min, _max + _step, _step, is_monotonic, uniform
+        return None, None, None, is_monotonic, False
 
     if segments is not None:
         # shape/dtype/step are derived fields, so they legitimately appear
@@ -4694,7 +4686,7 @@ def get_coord(
                 return out
         return _exact_coord(data, step=step, units=units)
     if released:
-        start, stop, step, monotonic = _maybe_get_start_stop_step(data)
+        start, stop, step, monotonic, uniform = _maybe_get_start_stop_step(data)
         if start is not None:
             # labels flooring a fractional-step grid keep it; the median step
             # below is rounded and drifts
@@ -4703,6 +4695,8 @@ def get_coord(
             out = _range_coord(dict(start=start, stop=stop, step=step), units)
             # The change_length call helps with float off by one issues.
             out = out.change_length(len(data))
+            if uniform:  # one spacing: the grid restates the labels
+                return out
             return _released_or_exact(out, data, units, warn=snap is None)
         # labels the 0.1% snap leaves alone may still be jittered
         if monotonic and data.ndim == 1 and not pd.isnull(data).any():
@@ -4745,8 +4739,11 @@ def _released_or_exact(snapped, data, units, warn: bool) -> BaseCoord:
     count instead, as `snap` does, and others keep no step.
     """
     if data.dtype.kind == "f":
-        moved = np.abs(snapped.values.astype(np.float64) - data.astype(np.float64))
-        if np.max(moved) <= _float_allowance(data, snapped.step):
+        moved = np.max(np.abs(snapped.values - data))
+        # the cheap bound first; the allowance looks at the stored dtype
+        if moved <= _GRID_RTOL * abs(snapped.step) or (
+            moved <= _float_allowance(data, snapped.step)
+        ):
             return snapped
     elif np.array_equal(snapped.values, data):
         return snapped

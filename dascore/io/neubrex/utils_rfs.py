@@ -26,7 +26,7 @@ def _get_coord_manager(h5fi, snap=True):
         # Unix stamps are in us for test files, not sure if always true.
         unix_stamps = dc.to_datetime64(h5fi["stamps_unix"][:] / 1_000_000)
         if should_snap(snap, "time"):
-            time_coord = dc.get_coord(data=unix_stamps).snap()
+            time_coord = dc.get_coord(data=unix_stamps, snap=True).snap()
         else:
             time_coord = get_coord(data=unix_stamps, snap=False)
         return time_coord
