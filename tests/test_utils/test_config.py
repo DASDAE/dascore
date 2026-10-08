@@ -74,6 +74,12 @@ class TestSetConfig:
         with pytest.raises(ValueError, match="sampling_group_tolerance"):
             set_config(sampling_group_tolerance=0)
 
+    @pytest.mark.parametrize("value", [-0.1, 0.5])
+    def test_max_shift_must_be_under_half_a_step(self, value):
+        """A label half a step off its grid belongs to the next position."""
+        with pytest.raises(ValueError, match="max_shift"):
+            set_config(max_shift=value)
+
     def test_unknown_field_raises(self):
         """A misspelled override raises rather than being silently ignored."""
         with pytest.raises(ValueError, match="dispplay_float_precision"):
@@ -209,6 +215,10 @@ class TestConfigDefaults:
     def test_sampling_group_tolerance_default(self):
         """The default sampling group tolerance is 5%."""
         assert get_config().sampling_group_tolerance == 0.05
+
+    def test_max_shift_default(self):
+        """Labels may sit up to a fifth of a step off their grid unremarked."""
+        assert get_config().max_shift == 0.2
 
 
 class TestMapConfigBinding:
