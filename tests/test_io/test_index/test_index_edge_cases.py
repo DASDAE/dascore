@@ -8,6 +8,7 @@ full line coverage.
 
 from __future__ import annotations
 
+import dataclasses
 import datetime
 import gc
 import json
@@ -1322,6 +1323,28 @@ class TestPivotEdge:
         assert len(df) == 1
         assert not [c for c in df.columns if c.endswith("_def_key")]
         back.close()
+
+    def test_coord_without_data_id_trims_envelope(self, tmp_path, monkeypatch):
+        """
+        A held coordinate with no data id has no identity key, yet a
+        selection on it still trims the envelope the spool presents.
+        """
+
+        def no_time_id(name, summary):
+            record = _coord_record(name, summary)
+            if name != "time":
+                return record
+            return dataclasses.replace(record, data_id=None)
+
+        monkeypatch.setattr("dascore.io.index.ingest._coord_record", no_time_id)
+        patch = dc.get_example_patch()
+        dc.write(patch, tmp_path / "a.h5", "dasdae")
+        spool = dc.spool(tmp_path).update()
+        assert spool._catalog.to_df()["_time_def_key"].isna().all()
+        time = patch.get_coord("time").values
+        contents = spool.select(time=(time[10], time[40])).get_contents()
+        assert contents["time_min"].tolist() == [time[10]]
+        assert contents["time_max"].tolist() == [time[40]]
 
 
 class TestCompositeSourceIdentity:

@@ -31,6 +31,10 @@ class _SchemaBackend:
         """Return names from the parent schema."""
         return self.catalog.parent.backend.coord_names()
 
+    def coord_held_everywhere(self, name):
+        """Return whether every parent patch holds it, as each piece then does."""
+        return self.catalog.parent.backend.coord_held_everywhere(name)
+
     def __getattr__(self, name):
         return getattr(self.catalog._materialized().backend, name)
 

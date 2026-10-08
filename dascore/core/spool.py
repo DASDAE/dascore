@@ -687,6 +687,7 @@ class Spool(NodeRepr, NamespaceOwner):
             return self._new_from_catalog(catalog), 0
         query = self._classify_query(_attrs, _coords, kwargs)
         channels = stated_channels(query.channels)
+        partial = self._partly_stated_coords(_attrs, query)
         # Neither keyword has anything to mean about a value the fiber
         # states: it has no sample numbering of its own -- the channels it
         # describes are the patch's -- and no endpoints to be relative to,
@@ -696,16 +697,17 @@ class Spool(NodeRepr, NamespaceOwner):
         # bare `...` names a fiber coordinate without asking anything of
         # it, so it must not veto a flag the rest of the query needs.
         for flag, label in ((samples, "samples"), (relative, "relative")):
-            if not (channels and flag):
+            if not ((channels or partial) and flag):
                 continue
             msg = (
-                f"{sorted(channels)} name coordinates the inventory "
+                f"{sorted({**channels, **partial})} name coordinates the inventory "
                 f"defines along the fiber, which {label}=True cannot describe: it "
                 "asks about the patch's own axis, and these say what is "
                 "attached to each channel of it."
             )
             raise InvalidSpoolQueryError(msg)
-        _coords, kwargs = query.coords, query.kwargs
+        _coords = drop_selector_names(query.coords, partial)
+        kwargs = {k: v for k, v in query.kwargs.items() if k not in partial}
         attr_query: dict = {}
         # A name the attached inventory could contribute is evaluated per
         # row rather than pushed into SQL: the index states it for some
@@ -741,6 +743,9 @@ class Spool(NodeRepr, NamespaceOwner):
         unjudged = 0
         if attr_query:
             out, unjudged = out._select_from_inventory(attr_query)
+        for name, value in partial.items():
+            out, more = out._select_partly_stated(name, value)
+            unjudged += more
         if channels:
             out, more = out._select_channels(channels)
             unjudged += more
@@ -888,6 +893,66 @@ class Spool(NodeRepr, NamespaceOwner):
             {k: v for k, v in kwargs.items() if k not in channels},
         )
 
+    def _partly_stated_coords(self, _attrs, query: _InventoryQuery) -> dict:
+        """
+        Return the coordinate selectors some rows cannot answer themselves.
+
+        These name a coordinate the index knows, so `_classify_query`
+        leaves them to SQL, but which some rows do not hold and the
+        attached inventory defines along the fiber. SQL would drop those
+        rows, while enrichment gives them the inventory's projection.
+        A no-op selector selects everything either way and is left alone.
+        """
+        _, coords = resolve_selector_namespaces(
+            query.known_attrs | query.selectable,
+            query.known_coords,
+            _attrs=_attrs,
+            _coords=query.coords,
+            kwargs=query.kwargs,
+        )
+        backend = self._catalog.backend
+        # Asked of the whole index first, so the usual coordinate every
+        # patch holds neither realizes the view nor reads the inventory.
+        asked = {
+            name: value
+            for name, value in stated_channels(coords).items()
+            if value is not None and not backend.coord_held_everywhere(name)
+        }
+        if not asked:
+            return {}
+        ids = self._catalog.ordered_rows()
+        asked = {
+            name: value
+            for name, value in asked.items()
+            if backend.coord_unstated_ids(name, ids)
+        }
+        if not asked:
+            return {}
+        names = set(self._resolved_inventory().get_names().coords)
+        return {name: value for name, value in asked.items() if name in names}
+
+    def _select_partly_stated(self, name: str, value) -> tuple[Self, int]:
+        """
+        Select on a coordinate some rows hold and the inventory defines.
+
+        A row holding it is judged by its own values, which enrichment
+        never overwrites; any other row by the inventory's projection,
+        exactly as when no row holds it at all. Returns the spool and the
+        count of unjudged patches, as `_select_channels` does.
+        """
+        catalog = self._catalog
+        ids = np.asarray(catalog.ordered_rows(), dtype=np.int64)
+        lacking = np.isin(ids, list(catalog.backend.coord_unstated_ids(name, ids)))
+        if lacking.all():
+            # No row holds it -- a view can drop every row which did --
+            # so there is nothing for the index to judge.
+            return self._select_channels({name: value})
+        matched = np.isin(ids, catalog.select(_coords={name: value}).ordered_rows())
+        # The trim leaves the rows lacking the coordinate untouched on load.
+        trimmed = catalog.trim({name: value}).restrict(matched | lacking, ids=ids)
+        out = self._new_from_catalog(trimmed)
+        return out._select_channels({name: value}, applies_to=ids[lacking])
+
     def _channel_selectors(
         self, requested, known, known_coords, _coords, kwargs
     ) -> dict:
@@ -960,11 +1025,13 @@ class Spool(NodeRepr, NamespaceOwner):
         if not len(working):
             return self, 0
         contexts = self._plan_contexts(working)
+        rows = working["_patch_row"].to_numpy()
+        judged = np.ones(len(rows), dtype=bool)
         unjudged = unjudged_rows(contexts, along_fiber=True)
         if applies_to is not None:
             # A row the attrs did not match is a row the selection never
             # held, so it is left unjudged rather than judged and kept.
-            judged = np.isin(working["_patch_row"].to_numpy(), np.asarray(applies_to))
+            judged = np.isin(rows, np.asarray(applies_to))
             contexts[~judged] = None
             unjudged &= judged
         count = int(unjudged.sum())
@@ -977,10 +1044,17 @@ class Spool(NodeRepr, NamespaceOwner):
         )
         refuse_rows(source_rows, reasons, UNPLACEABLE)
         if name is None:
-            # No row has a fiber to be judged along, so the query matched
-            # nothing: an empty spool, or the whole of it complemented.
-            return (self if complement else self._restrict_to_rows([])), count
+            # No judged row has a fiber to be judged along, so the query
+            # matched none of them: only the unjudged rows, or the whole
+            # spool complemented.
+            out = self if complement else self._restrict_to_rows(rows[~judged])
+            return out, count
         bounds = list(zip(working[f"{name}_min"], working[f"{name}_max"], strict=True))
+        # An unjudged row keeps every channel whichever half is kept.
+        pieces = [
+            row if keep else [pair]
+            for row, keep, pair in zip(pieces, judged, bounds, strict=True)
+        ]
         whole = [
             len(row) == 1 and tuple(row[0]) == pair
             for row, pair in zip(pieces, bounds, strict=True)
@@ -990,7 +1064,7 @@ class Spool(NodeRepr, NamespaceOwner):
         if all(keep or not row for keep, row in zip(whole, pieces, strict=True)):
             # Every patch is kept whole or dropped, so this is a filter and
             # the relation it presents need not be rebuilt.
-            kept = working["_patch_row"].to_numpy()[[bool(x) for x in pieces]]
+            kept = rows[[bool(x) for x in pieces]]
             return self._restrict_to_rows(kept), count
         return self._subdivided(source_rows, working, pieces, name), count
 
