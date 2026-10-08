@@ -42,9 +42,9 @@ from dascore.utils.misc import (
     check_filter_range,
 )
 from dascore.utils.patch import (
+    _require_evenly_sampled,
     get_dim_axis_value,
     get_dim_sampling_rate,
-    require_no_holes,
 )
 from dascore.utils.time import to_float
 from dascore.utils.window import resolve_window
@@ -210,7 +210,7 @@ class SobelFilter(PatchProcessor):
             )
             raise FilterValueError(msg)
         # the kernel smooths along every other axis too
-        require_no_holes(meta, meta.dims, "sobel_filter")
+        _require_evenly_sampled(meta, meta.dims, "sobel_filter")
         return meta, {"axis": meta.get_axis(self.dim)}
 
     def numpy_kernel(self, data, *, axis):

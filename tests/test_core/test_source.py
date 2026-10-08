@@ -308,8 +308,10 @@ class TestCarry:
 
     def test_read_not_contiguous(self, path):
         """Samples picked apart are not what the windows alone would load."""
-        sub = dc.read(path, distance=np.array([1, 5, 9]), samples=True)[0]
-        assert sub.shape[0] == 3 and not sub._source.loadable
+        spool = dc.read(path, distance=np.array([1, 5, 9]), samples=True)
+        # the holes between them are kept, and dc.spool splits at holes
+        assert sum(x.shape[0] for x in spool) == 3
+        assert not any(x._source.loadable for x in spool)
 
     def test_other_data(self, patch):
         """Metadata given data cannot know the source still loads them."""

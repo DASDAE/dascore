@@ -1263,20 +1263,43 @@ def _get_dx_or_spacing_and_axes(
     return tuple(out), tuple(axes)
 
 
-def require_no_holes(patch, dims, operation: str) -> None:
-    """
-    Raise CoordError if a dimension's declared step has missing samples.
+def _uneven_message(name: str, coord, caller: str) -> str:
+    """Why a coordinate is not evenly sampled for caller, and what fixes it."""
+    why = [
+        text
+        for text, applies in (
+            ("its labels sit off the grid of its step", coord.jittered),
+            ("it has missing samples", coord.gapped),
+        )
+        if applies
+    ]
+    split = " split at its holes with Patch.split_gaps," if coord.gapped else ""
+    return (
+        f"Coordinate {name} is not evenly sampled as required by {caller}: "
+        f"{' and '.join(why) or 'it has no step'}. Fill its holes with "
+        f"Patch.fill_gaps,{split} or put it on a grid with Patch.snap_coords "
+        "first."
+    )
 
-    A coordinate with no declared step is an irregular grid, not a hole.
+
+def _require_evenly_sampled(patch, dims, operation: str) -> None:
+    """
+    Require evenly sampled dims for an operation 0.1.24 ran on any labels.
+
+    A coordinate with holes raises, as ``get_coord(require_evenly_sampled=True)``
+    does. Until DASCore 0.1.26 one which is only irregular or jittered warns
+    and the operation uses its labels as recorded, as 0.1.24 did; it then
+    raises too.
     """
     for dim in iterate(dims):
-        if not patch.get_coord(dim).missing().complete:
-            msg = (
-                f"Coordinate {dim} is not evenly sampled as required by "
-                f"{operation}; it has missing samples. Use Patch.split_gaps, "
-                "Patch.fill_gaps or Spool.chunk(fill_value=...) first."
-            )
+        coord = patch.get_coord(dim)
+        if coord.evenly_sampled:
+            continue
+        msg = _uneven_message(dim, coord, operation)
+        if coord.gapped:
             raise CoordError(msg)
+        msg += f" Until DASCore 0.1.26 {operation} uses its labels; it then raises."
+        warnings.warn(msg, FutureWarning, stacklevel=2)
 
 
 def align_patch_coords(

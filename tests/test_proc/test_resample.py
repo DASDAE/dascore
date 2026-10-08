@@ -413,8 +413,9 @@ class TestDecimateHoles:
             holed_patch.decimate(time=2)
 
     def test_stepless_runs(self, stepless_seam_patch):
-        """Step-less labels are an irregular grid and still decimate."""
-        out = stepless_seam_patch.decimate(time=2)
+        """Step-less labels still decimate until 0.1.26, with a warning."""
+        with pytest.warns(FutureWarning, match="0.1.26"):
+            out = stepless_seam_patch.decimate(time=2)
         assert out.shape == (1, 60)
 
     def test_raw_striding_runs(self, holed_patch):

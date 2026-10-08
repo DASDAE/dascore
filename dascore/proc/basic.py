@@ -1109,7 +1109,7 @@ def _padded_coord(coord, pad_tuple, expand_coords):
     # an integer coordinate to hold a NaN nothing is going to write.
     if not any(pad_tuple):
         return coord
-    if expand_coords and coord.evenly_sampled:
+    if expand_coords and coord._grid is not None:
         # Extend the grid itself: rebuilding from the rounded step would
         # move every label of a fractional grid.
         total = len(coord) + pad_tuple[0] + pad_tuple[1]

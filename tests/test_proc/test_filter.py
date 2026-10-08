@@ -230,8 +230,9 @@ class TestSobelFilter:
             holed_patch.sobel_filter("distance")
 
     def test_stepless_runs(self, stepless_seam_patch):
-        """Step-less labels are an irregular grid and still filter."""
-        out = stepless_seam_patch.sobel_filter("time")
+        """Step-less labels still filter until 0.1.26, with a warning."""
+        with pytest.warns(FutureWarning, match="0.1.26"):
+            out = stepless_seam_patch.sobel_filter("time")
         assert out.shape == stepless_seam_patch.shape
 
 

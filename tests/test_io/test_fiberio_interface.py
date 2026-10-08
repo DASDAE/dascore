@@ -96,17 +96,31 @@ class TestDerivedRead:
             "quality": (1, 1),
             "receiver": (1, 1),
         }
-        out = reader.read("memory", **selection)[0]
+        spool = reader.read("memory", **selection)
+        # The picked samples keep their steps, leaving holes, at which
+        # dc.spool splits: one patch per sample here.
+        selected = whole.select(**selection)
+        assert len(spool) == len(dc.spool([selected])) == 4
         expected = reader.data[np.ix_([1, 3], [3, 5])]
-        np.testing.assert_array_equal(out.data, expected)
-        np.testing.assert_array_equal(out.get_coord("distance").values, [1, 3])
-        np.testing.assert_array_equal(out.get_coord("time").values, [3, 5])
+        np.testing.assert_array_equal(selected.data, expected)
+        np.testing.assert_array_equal(selected.get_coord("distance").values, [1, 3])
+        np.testing.assert_array_equal(selected.get_coord("time").values, [3, 5])
+        samples = {
+            (x.get_array("distance")[0], x.get_array("time")[0]): x.data[0, 0]
+            for x in spool
+        }
+        assert samples == {
+            (dist, time): expected[i, j]
+            for i, dist in enumerate([1, 3])
+            for j, time in enumerate([3, 5])
+        }
         assert reader.calls == [(((1, 4), (3, 6)), "part")]
-        assert out.attrs.history == reader.metadata.attrs.history
-        # The source cannot load these samples, so the id derives -- as the
+        assert spool[0].attrs.history == reader.metadata.attrs.history
+        # The source cannot load these samples, so the ids derive -- as the
         # same selection made on the loaded patch does.
-        assert out.attrs.data_id == whole.select(**selection).attrs.data_id
-        assert out.attrs.data_id != reader.metadata.attrs.data_id
+        read_ids = sorted(x.attrs.data_id for x in spool)
+        assert read_ids == sorted(x.attrs.data_id for x in dc.spool([selected]))
+        assert reader.metadata.attrs.data_id not in read_ids
 
     def test_sample_selection(self, reader):
         """Half-open sample bounds are passed through as exact array windows."""

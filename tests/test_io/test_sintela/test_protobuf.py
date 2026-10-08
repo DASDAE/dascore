@@ -2185,8 +2185,12 @@ class TestWindowedTimeseriesReads:
         """Read supports residual sample indexers after loading their bounds."""
         selectors = dict(time=selection, samples=True)
         expected = dc.read(windowed_path)[0].select(**selectors)
-        actual = dc.read(windowed_path, **selectors)[0]
-        assert actual.equals(expected, only_required_attrs=True)
+        # picked samples keep the step, and dc.spool splits at the holes
+        pieces = dc.spool([expected])
+        actual = dc.read(windowed_path, **selectors)
+        assert len(actual) == len(pieces)
+        for read, piece in zip(actual, pieces, strict=True):
+            assert read.equals(piece, only_required_attrs=True)
 
     @pytest.mark.parametrize(
         "builder", [_build_band_payloads, _build_real_fft_payloads]

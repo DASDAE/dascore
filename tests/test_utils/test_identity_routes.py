@@ -210,7 +210,9 @@ class TestWindowComposition:
         distance = patch.get_array("distance")
         out = dc.read(terra15_path, distance=distance[::2])[0]
         assert out.attrs.data_id != patch.attrs.data_id
-        assert out.attrs.data_id == patch.select(distance=distance[::2]).attrs.data_id
+        # picked values keep the step, and dc.spool splits at the holes
+        selected = dc.spool([patch.select(distance=distance[::2])])[0]
+        assert out.attrs.data_id == selected.attrs.data_id
 
     def test_dasdae_round_trip_windows_stored_id(self, tmp_path):
         """A round trip, then a select, windows the stored id."""

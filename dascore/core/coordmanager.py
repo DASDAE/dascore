@@ -805,8 +805,13 @@ class CoordManager(RichRepr, DascoreBaseModel):
             if (drop or coord._partial) and old_dims and not new_dims:
                 continue
             key = tuple(indices.get(dim, slice(None)) for dim in old_dims)
-            # Keep slice results compact, including floating grids, as select does.
-            if coord.evenly_sampled and isinstance(key[0], slice):
+            # A slice or monotonic positions keep the runs and the step, as
+            # select does; removed samples leave holes.
+            ordered = isinstance(key[0], slice) or (
+                isinstance(key[0], np.ndarray) and key[0].size
+            )
+            one_dim = isinstance(coord, NumericCoord) and coord.ndim == 1
+            if one_dim and not coord._partial and ordered:
                 new_coord = coord[key[0]]
                 if not new_coord.size:
                     new_coord = NumericCoord.from_labels(
@@ -1522,20 +1527,24 @@ def _get_coord_dim_map(coords, dims):
         # stored labels can be left non-canonical by slicing (e.g. an evenly
         # spaced subset that should collapse to a grid), and a partial coord
         # stating a whole range should canonicalize to one.
-        if isinstance(coord, BaseCoord) and coord.evenly_sampled:
+        if isinstance(coord, BaseCoord) and coord._grid is not None:
             return coord
         original = coord if isinstance(coord, BaseCoord) else None
         stored = isinstance(coord, NumericCoord) and coord.runs_count == 1
         if stored and isinstance(coord.runs[0], Labels):
             # Rebuilding from the run would hand back the same labels, so
-            # the values are read again for the inference to see them.
-            coord = dict(data=coord.values, units=coord.units, step=coord.step)
-        elif hasattr(coord, "model_dump"):
-            coord = coord.model_dump(exclude_defaults=True)
-        if isinstance(coord, Mapping):  # input is a dict
-            out = get_coord(**coord)
+            # the values are read again for the inference to see them,
+            # exactly: they were stored as they are, and a scalar stays one.
+            snap = False if coord.ndim else None
+            values, units, step = coord.values, coord.units, coord.step
+            out = get_coord(data=values, units=units, step=step, snap=snap)
         else:
-            out = get_coord(data=coord)
+            if hasattr(coord, "model_dump"):
+                coord = coord.model_dump(exclude_defaults=True)
+            if isinstance(coord, Mapping):  # input is a dict
+                out = get_coord(**coord)
+            else:
+                out = get_coord(data=coord)
         if _canonicalization_moved_values(original, out):
             return original
         return out
