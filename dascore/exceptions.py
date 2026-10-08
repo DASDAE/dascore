@@ -165,6 +165,10 @@ class InvalidSpoolError(ValueError, DASCoreError):
     """Raised when something is wrong with a spool."""
 
 
+class InsufficientMemoryError(MemoryError, DASCoreError):
+    """Raised when data to be read into memory will not fit in what is available."""
+
+
 class UnitError(ValueError, DASCoreError):
     """Raised when an issue is encountered with unit handling."""
 
