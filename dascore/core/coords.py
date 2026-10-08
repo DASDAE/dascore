@@ -2113,7 +2113,10 @@ def _float_run(values) -> tuple[Grid, np.dtype]:
     )
     stated = None
     if not pd.isnull(shape):
-        length = stated = int(next(iter(iterate(shape))))
+        length = int(next(iter(iterate(shape))))
+        # A range the shape completes has its length, whatever the rounding.
+        if any(pd.isnull(x) for x in (start, stop, step)):
+            stated = length
         if pd.isnull(start):
             start = stop - step * length
         if pd.isnull(stop):

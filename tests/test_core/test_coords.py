@@ -1302,6 +1302,11 @@ class TestRangeCoord:
         kwargs = {given: np.float32(1e5), "step": np.float32(0.01)}
         assert len(get_coord(**kwargs, shape=(20,))) == 20
 
+    def test_shape_does_not_override_a_stated_stop(self):
+        """With start, stop and step all given, the stop bounds the range."""
+        coord = get_coord(start=0.0, stop=10.0, step=1.0)
+        assert len(coord.new(start=2.0)) == 8
+
     def test_empty_slice_units(self):
         """An empty compact slice keeps its coordinate units without expansion."""
         coord = get_coord(start=0, stop=10, step=1, units="m")
