@@ -767,7 +767,8 @@ def _apply_binary_ufunc(
     # same id, though they are different operations. Guarded, so that a
     # process which has turned the ids off does not hash operands for a
     # value nothing will read.
-    rest = () if other_is_patch else (other,)
+    # After any swap above, `other` is the operand which is not the patch.
+    rest = () if isinstance(other, dc.Patch) else (other,)
     given = [x for x in (patch, other) if isinstance(x, dc.Patch)]
     operation = ids_enabled() and try_operation_id(
         "Ufunc",

@@ -1378,6 +1378,12 @@ class TestApplyOperator:
         assert np.array_equal(op(other, mask).data, expected)
         assert np.array_equal(op(True, mask).data, op(True, mask.data))
 
+    def test_reflected_operand_names_the_result(self, random_patch):
+        """A different left operand gives a different data id."""
+        mask = random_patch > 0.5
+        assert (10 - random_patch).attrs.data_id != (20 - random_patch).attrs.data_id
+        assert (True ^ mask).attrs.data_id != (False ^ mask).attrs.data_id
+
     def test_invert_and_abs(self, random_patch):
         """~ inverts a boolean patch and abs() is np.abs."""
         mask = random_patch > 0.5
