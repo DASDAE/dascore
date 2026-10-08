@@ -106,9 +106,7 @@ def map_fiber(
         A matplotlib colormap string or instance. Set to None to not plot the
         colorbar.
     scale
-        Controls the saturation level of the colorbar. None clips it to
-        Tukey's fence (1.5 interquartile ranges beyond the quartiles), and
-        ``(0, 1)`` shows the full range. A single
+        If not None, controls the saturation level of the colorbar. A single
         number is symmetric: with `scale_type="relative"` the limits sit that
         fraction of half the data range either side of the mean, and with
         `scale_type="absolute"` they are -abs(scale) and abs(scale). A pair

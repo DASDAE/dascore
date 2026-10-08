@@ -255,12 +255,11 @@ def waterfall(
         Matplotlib colormap. None selects one from the patch ``data_type``.
     scale
         Color limits. None, the default, clips them to Tukey's fence (1.5
-        interquartile ranges beyond the quartiles), so outliers saturate and
-        the colorbar's end triangles are the only sign; ``scale=(0, 1)``
-        shows the full data range. A scalar produces symmetric limits: a
-        fraction of half the data range around its mean when relative, or
-        ``±abs(scale)`` when
-        absolute. A relative pair maps fractions from 0 to 1 onto the data
+        interquartile ranges beyond the quartiles), so outliers saturate;
+        ``scale=(0, 1)`` shows the full data range. A scalar produces
+        symmetric limits: a fraction of half the data range around its mean
+        when relative, or ``±abs(scale)`` when absolute. A relative pair maps
+        fractions from 0 to 1 onto the data
         minimum and maximum; an absolute pair gives the limits directly.
         Percent quantities are converted to fractions.
     scale_type
