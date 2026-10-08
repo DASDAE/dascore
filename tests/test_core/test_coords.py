@@ -1296,6 +1296,12 @@ class TestReduceCoord:
 class TestRangeCoord:
     """Tests for evenly sampled coords."""
 
+    @pytest.mark.parametrize("given", ["start", "stop"])
+    def test_float32_shape_far_from_zero(self, given):
+        """A float32 range built with a shape has that many samples (#1365)."""
+        kwargs = {given: np.float32(1e5), "step": np.float32(0.01)}
+        assert len(get_coord(**kwargs, shape=(20,))) == 20
+
     def test_empty_slice_units(self):
         """An empty compact slice keeps its coordinate units without expansion."""
         coord = get_coord(start=0, stop=10, step=1, units="m")

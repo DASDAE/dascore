@@ -2111,8 +2111,9 @@ def _float_run(values) -> tuple[Grid, np.dtype]:
     start, stop, step, shape = (
         values.get(x, None) for x in ("start", "stop", "step", "shape")
     )
+    stated = None
     if not pd.isnull(shape):
-        length = int(next(iter(iterate(shape))))
+        length = stated = int(next(iter(iterate(shape))))
         if pd.isnull(start):
             start = stop - step * length
         if pd.isnull(stop):
@@ -2128,6 +2129,9 @@ def _float_run(values) -> tuple[Grid, np.dtype]:
         stop = start + step * int(_maybe_unpack(np.ceil(span)))
     start_equal_stop = _maybe_unpack(start == stop)
     length = 1 if start_equal_stop else int(_round_ratio(stop - start, step, 0))
+    # A stop worked out from the shape can round past it, as in float32.
+    if stated is not None and not start_equal_stop:
+        length = stated
     # step should have the same sign as stop-start, see #321. Compare signs
     # via direct comparisons (rather than np.sign) since np.sign(datetime64)
     # returns a datetime64 which includes precision, so even if the sign is
