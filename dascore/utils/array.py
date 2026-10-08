@@ -741,6 +741,9 @@ def _apply_binary_ufunc(
     if other_is_patch and not patch_is_patch:
         patch, other = other, patch
         reversed = True
+    # Whether the operand which is not `patch` is one, before alignment
+    # replaces it with its data.
+    other_is_patch = isinstance(other, dc.Patch)
 
     # Taken before the operands are aligned and possibly replaced below:
     # what went in is what decides which data comes out.
@@ -767,8 +770,7 @@ def _apply_binary_ufunc(
     # same id, though they are different operations. Guarded, so that a
     # process which has turned the ids off does not hash operands for a
     # value nothing will read.
-    # After any swap above, `other` is the operand which is not the patch.
-    rest = () if isinstance(other, dc.Patch) else (other,)
+    rest = () if other_is_patch else (other,)
     given = [x for x in (patch, other) if isinstance(x, dc.Patch)]
     operation = ids_enabled() and try_operation_id(
         "Ufunc",
