@@ -39,6 +39,7 @@ pytest dascore --doctest-modules
 - Dataframes: snake_case columns, getitem not getattr, non-inplace unless required.
 - Type hints on public functions. NumPy-style docstrings with short examples, short docstrings on private objects, comments only where intent is unclear.
 - Suppress warnings only through `dascore.utils.misc.suppress_warnings`.
+- Before changing code that creates, joins, splits, selects, reports on, or stores coordinates, read `dascore/docs/notes/coordinates.qmd` and follow it. If a change conflicts with it, change that note first, in its own PR.
 
 ## Docs
 
