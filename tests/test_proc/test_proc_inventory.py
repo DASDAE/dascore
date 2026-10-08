@@ -8,6 +8,7 @@ import pytest
 from pydantic import ValidationError
 
 import dascore as dc
+from dascore.core.coords import get_coord
 from dascore.core.inventory import (
     Acquisition,
     CoordinateReferenceSystem,
@@ -694,6 +695,114 @@ class TestCoords:
                 inventory, attrs=False, coords=("nope",), on_missing=on_missing
             )
         assert np.array_equal(out.get_coord("nope").values, own)
+
+    def test_uncovered_channels_keep_the_patch_coord(self, patch, inventory):
+        """Channels the inventory leaves unset keep what the patch states."""
+        medium = patch.enrich(inventory, attrs=False, coords=("coupling.medium",))
+        projected = medium.get_coord("coupling.medium").values
+        assert "" in projected  # the path covers only part of the patch
+        own = np.full(len(projected), "soil")
+        held = patch.update_coords(**{"coupling.medium": ("distance", own)})
+        out = held.enrich(inventory, attrs=False, coords=("coupling.medium",))
+        assert np.array_equal(out.get_coord("coupling.medium").values, own)
+
+    def test_wholly_uncovered_patch_keeps_its_coord(self, patch, inventory):
+        """An inventory stating nothing for any channel leaves the coord alone."""
+        name = "coupling.medium"
+        projected = patch.enrich(inventory, attrs=False, coords=(name,))
+        unset = projected.get_coord(name).values == ""
+        assert unset.any() and not unset.all()
+        outside = patch.select(distance=unset)
+        own = np.full(len(outside.get_coord("distance")), "soil")
+        held = outside.update_coords(**{name: ("distance", own)})
+        out = held.enrich(inventory, attrs=False, coords=(name,))
+        assert out.get_coord(name) == held.get_coord(name)
+
+    def test_unset_patch_channels_are_filled(self, patch, inventory):
+        """The inventory fills the channels the patch leaves unset."""
+        full = patch.enrich(inventory, attrs=False, coords=("x",)).get_coord("x")
+        partial = full.values.copy()
+        partial[: len(partial) // 2] = np.nan
+        held = patch.update_coords(
+            x=("distance", get_coord(data=partial, units=full.units))
+        )
+        out = held.enrich(inventory, attrs=False, coords=("x",))
+        assert np.array_equal(out.get_coord("x").values, full.values, equal_nan=True)
+
+    def test_unitless_unset_patch_coord_is_replaced(self, patch, inventory):
+        """A patch coordinate with every channel unset takes the inventory's."""
+        full = patch.enrich(inventory, attrs=False, coords=("x",)).get_coord("x")
+        assert full.units is not None
+        held = patch.update_coords(x=("distance", np.full(len(full), np.nan)))
+        out = held.enrich(inventory, attrs=False, coords=("x",))
+        assert out.get_coord("x") == full
+
+    def test_rounding_noise_is_a_refresh(self, patch, inventory):
+        """Float values within rounding of the inventory's keep the patch's."""
+        full = patch.enrich(inventory, attrs=False, coords=("x",)).get_coord("x")
+        noisy = full.values * (1 + 1e-12)
+        assert not np.array_equal(noisy, full.values)
+        held = patch.update_coords(
+            x=("distance", get_coord(data=noisy, units=full.units))
+        )
+        out = held.enrich(inventory, attrs=False, coords=("x",))
+        assert np.array_equal(out.get_coord("x").values, noisy)
+
+    def test_float_difference_beyond_rounding_disagrees(self, patch, inventory):
+        """A float value off by more than rounding is a real disagreement."""
+        full = patch.enrich(inventory, attrs=False, coords=("x",)).get_coord("x")
+        off = full.values.copy()
+        off[0] *= 1 + 1e-3
+        assert off[0] != full.values[0]
+        held = patch.update_coords(
+            x=("distance", get_coord(data=off, units=full.units))
+        )
+        with pytest.raises(PatchError, match="already has a 'x'"):
+            held.enrich(inventory, attrs=False, coords=("x",))
+
+    def test_object_strings_with_gaps_are_filled(self, patch, inventory):
+        """A string coordinate held as objects with None gaps still merges."""
+        name = "coupling.medium"
+        full = patch.enrich(inventory, attrs=False, coords=(name,)).get_coord(name)
+        gappy = full.values.astype(object)
+        gappy[gappy == ""] = None
+        gappy[np.flatnonzero(gappy != None)[:5]] = None  # noqa: E711
+        held = patch.update_coords(**{name: ("distance", gappy)})
+        out = held.enrich(inventory, attrs=False, coords=(name,))
+        merged = out.get_coord(name).values
+        assert set(merged[full.values != ""]) == {"soil"}
+
+    def test_complementary_values_of_another_kind_disagree(self, patch, inventory):
+        """Numbers where the inventory states strings are not merged into them."""
+        name = "coupling.medium"
+        projected = patch.enrich(inventory, attrs=False, coords=(name,))
+        unset = projected.get_coord(name).values == ""
+        own = np.where(unset, 1.0, np.nan)
+        held = patch.update_coords(**{name: ("distance", own)})
+        with pytest.raises(PatchError, match=f"already has a '{name}'"):
+            held.enrich(inventory, attrs=False, coords=(name,))
+
+    def test_coord_on_another_dim_is_not_merged(self, patch, inventory):
+        """Matching length is not matching channels; another dim disagrees."""
+        full = patch.enrich(inventory, attrs=False, coords=("x",)).get_coord("x")
+        partial = full.values.copy()
+        partial[:10] = np.nan
+        short = patch.select(time=(0, len(partial)), samples=True)
+        held = short.update_coords(
+            x=("time", get_coord(data=partial, units=full.units))
+        )
+        with pytest.raises(PatchError, match="already has a 'x'"):
+            held.enrich(inventory, attrs=False, coords=("x",))
+
+    @pytest.mark.parametrize("on_missing", ["ignore", "null"])
+    def test_no_path_honors_on_missing(self, patch, inventory, on_missing):
+        """With no valid path, a named coordinate is missing like any other."""
+        array = inventory.networks[0].fiber_arrays[0]
+        no_path = inventory.replace(array, array.new(optical_paths=()))
+        out = patch.enrich(
+            no_path, attrs=False, coords=("nope",), on_missing=on_missing
+        )
+        assert ("nope" in out.coords.coord_map) == (on_missing == "null")
 
     def test_missing_coord_null(self, patch, inventory):
         """It can instead be filled with the missing marker."""

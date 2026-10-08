@@ -630,16 +630,24 @@ def effective_matches(
     return out
 
 
+def numbers_close(first, second):
+    """
+    Return (elementwise) whether numbers agree to within rounding noise.
+
+    Unit conversion and float32 headers leave such noise in numbers.
+    """
+    return np.isclose(first, second, rtol=1e-6, atol=0)
+
+
 def header_agrees(header, answer) -> bool:
     """True if a stated header value agrees with the inventory's answer."""
     if values_equal(header, answer):
         return True
-    # Unit conversion and float32 headers leave rounding noise in numbers.
     numbers = all(
         isinstance(x, Real) and not isinstance(x, bool | np.bool_)
         for x in (header, answer)
     )
-    return numbers and bool(np.isclose(header, answer, rtol=1e-6, atol=0))
+    return numbers and bool(numbers_close(header, answer))
 
 
 # --- shared projection primitives -------------------------------------
