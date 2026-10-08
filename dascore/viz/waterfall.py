@@ -254,8 +254,12 @@ def waterfall(
     cmap
         Matplotlib colormap. None selects one from the patch ``data_type``.
     scale
-        Color limits. A scalar produces symmetric limits: a fraction of half
-        the data range around its mean when relative, or ``±abs(scale)`` when
+        Color limits. None, the default, clips them to Tukey's fence (1.5
+        interquartile ranges beyond the quartiles), so outliers saturate and
+        the colorbar's end triangles are the only sign; ``scale=(0, 1)``
+        shows the full data range. A scalar produces symmetric limits: a
+        fraction of half the data range around its mean when relative, or
+        ``±abs(scale)`` when
         absolute. A relative pair maps fractions from 0 to 1 onto the data
         minimum and maximum; an absolute pair gives the limits directly.
         Percent quantities are converted to fractions.
@@ -322,7 +326,8 @@ def waterfall(
     Empty dimensions raise `ParameterError`. Time-like Y axes are inverted by
     seismic convention; call ``ax.invert_yaxis()`` to undo this. Since version
     0.1.13, ``scale=None`` uses a statistical fence to limit outliers; use
-    ``scale=1.0`` for the full data range.
+    ``scale=(0, 1)`` for the full data range. A scalar such as ``scale=1.0``
+    centres on the mean, so it can still clip skewed data.
     """
     if 0 in patch.shape:
         msg = "Cannot plot a Patch with an empty dimension."
