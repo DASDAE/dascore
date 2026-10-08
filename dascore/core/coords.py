@@ -1713,32 +1713,34 @@ def _fitted_step(values):
     """
     The step fitted over the labels' span, or None where they have none.
 
-    Every label must sit within half a step of the fitted grid, and every
-    spacing within half a step of the step kept (whole ticks for integers
-    and time), so a skipped position is never read as jitter.
+    Every label must sit within half a step of the grid fitted through the
+    end labels, and of a grid of the step kept (whole ticks of the labels'
+    own unit for integers and time), and every spacing within half a step
+    of one step, so a skipped position is never read as jitter.
     """
     if values.dtype.kind not in "iumMf" or len(values) < 2:
         return None
-    diffs = _diffs(values)
+    rel = np.concatenate([[0], np.cumsum(_diffs(values).astype(np.float64))])
+    fit = rel[-1] / (len(values) - 1)
+    if not fit or not np.isfinite(fit):
+        return None
+    # every label against the grid fitted through the end labels
+    if np.max(np.abs(rel / fit - np.arange(len(values)))) >= 0.5:
+        return None
     if values.dtype.kind == "f":
-        rel = values.astype(np.float64) - float(values[0])
-        gaps = diffs.astype(np.float64)
-        fit = step = rel[-1] / (len(values) - 1)
-    else:
-        gaps = diffs.astype(np.int64)  # in the labels' own tick unit
-        rel = np.concatenate([[0], np.cumsum(gaps)]).astype(np.float64)
-        fit = rel[-1] / (len(values) - 1)
-        step = round(fit)
-    if not step or not np.isfinite(fit):
-        return None
-    offsets = rel / fit - np.arange(len(values))
-    errors = gaps / step - 1
-    if np.max(np.abs(offsets)) >= 0.5 or np.max(np.abs(errors)) >= 0.5:
-        return None
-    if values.dtype.kind in "mM":
+        step = fit
+    elif values.dtype.kind in "mM":
         unit, count = np.datetime_data(values.dtype.str)
-        return np.timedelta64(int(step) * count, cast("Any", unit))
-    return float(step) if values.dtype.kind == "f" else int(step)
+        step = np.timedelta64(round(fit) * count, cast("Any", unit))
+    else:
+        step = round(fit)
+    try:
+        counts = _on_grid(_diffs(values), step, jitter=True)
+    except CoordError:
+        return None
+    if np.any(counts != 1) or _grid_spread(values, counts, step) >= 1:
+        return None
+    return step
 
 
 def _ticks_as(ticks, dtype) -> np.ndarray:
@@ -2948,8 +2950,24 @@ get_coord(start=0.0, stop=20.0, step=1.0)
                 )
                 runs.extend(self._window_runs(span, self.step))
         with suppress(CoordError, ValidationError):
-            return self._with_runs(runs)
+            out = self._with_runs(runs)
+            if not self.jittered or self._kept_positions(out, indices):
+                return out
         return self._with_runs(runs, step=None)
+
+    def _kept_positions(self, out, indices) -> bool:
+        """
+        Whether jittered labels taken at these indices keep their positions.
+
+        Positions are read back from the spacings, so jitter wider than half
+        a step between two kept labels can place them a position off; their
+        step then states nothing true.
+        """
+        values = np.asarray(self.values)
+        counts = _on_grid(_diffs(values), self.step, jitter=True)
+        kept = np.concatenate([[0], np.cumsum(counts)])[indices]
+        read = _on_grid(_diffs(out.values), out.step, jitter=True)
+        return bool(np.array_equal(np.abs(np.diff(kept)), read))
 
     def _slice_runs(self, indices: range) -> BaseCoord:
         """The coordinate holding the samples a range of positions names."""

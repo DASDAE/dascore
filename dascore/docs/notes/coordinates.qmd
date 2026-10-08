@@ -162,4 +162,4 @@ Coordinates will hold a mapping of keys to any array-like, real or virtual, carr
 - 2026-10-07: Jitter and holes are independent flags, replacing a level ladder; `require_evenly_sampled` stays.
 - 2026-10-07: `max_shift=0` replaces a `snap_jitter` flag.
 - 2026-10-07: Released behaviour is deprecated rather than changed outright, unless there is a compelling reason.
-- 2026-10-08: The released `get_coord(data=...)` snap is not kept where its median step moves a label half a step or more, which relabels samples (#1419): an exact grid is used, jittered labels are snapped from their end labels and count, and others get no step.
+- 2026-10-08: The released `get_coord(data=...)` snap is not kept where its median step moves a label half a step or more, which relabels samples (#1419): an exact grid is used, jittered labels are snapped from their end labels and count, and others get no step. Where rule 2 itself finds a grid (a fractional step, or labels within float exactness), that grid is used without a warning: the coordinate stays evenly sampled, and only labels the snap had moved return to their recorded values.

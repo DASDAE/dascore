@@ -136,6 +136,15 @@ class TestInference:
         assert coord.jittered and coord.step == MS
         np.testing.assert_array_equal(coord.values, values)
 
+    @pytest.mark.parametrize("snap", [None, False])
+    def test_rounded_step_must_fit(self, snap):
+        """Integer jitter keeps a whole-tick step only where it fits the labels."""
+        values = np.floor(np.arange(1000) * 100.4).astype("int64")
+        values[1::3] += 2
+        coord = get_coord(data=values, snap=snap)
+        assert coord.step is None
+        np.testing.assert_array_equal(coord.values, values)
+
     def test_drift_has_no_step(self):
         """Drift is caught by checking every label, not just the spacings."""
         coord = get_coord(data=_drifting_floats(), snap=False)
@@ -348,6 +357,15 @@ class TestSelectionKeepsStep:
         """Only an explicit stride gives a coarser step."""
         out = coord[::2]
         assert out.step == 2 and out.evenly_sampled
+
+    def test_jittered_holes_keep_their_positions(self):
+        """A hole in jittered labels counts the samples removed, or states no step."""
+        jittered = get_coord(data=[0.0, 1.1, 1.9, 3.05, 4.0], step=1.0)
+        out = jittered[np.array([0, 3, 4])]
+        assert out.step == 1.0 and out.missing().count == 2
+        # 2.8 is nearer three steps than the two it was taken from
+        wide = get_coord(data=[0.0, 1.4, 2.8], step=1.0)
+        assert wide[np.array([0, 2])].step is None
 
     def test_reorder(self, coord):
         """Reordered samples have no step."""
