@@ -231,18 +231,21 @@ class TestChunkPlanDF:
         assert out.equals(out2)
 
     def test_chunk_on_split(self, terra15_file_spool):
-        """Ensure chunking which creates a slice at the end time works."""
+        """
+        Ensure chunking which creates a slice at the end time works.
+
+        The file's time is an exact fractional grid spanning its stored end
+        labels, which the public contents frame rounds; chunking the spool
+        plans on the exact grid.
+        """
         df = terra15_file_spool.get_contents()
         dur = (df["time_max"] - df["time_min"]).iloc[0]
-        seg_len = dur / 3
-        dt = df["time_step"].iloc[0]
-        chunk_df = build_chunk_plan(df, keep_partial=True, time=seg_len).outputs
+        out = list(terra15_file_spool.chunk(time=dur / 3, keep_partial=True))
         # three thirds of the span, then the last sample on its own
-        assert len(chunk_df) == 4
-        assert chunk_df["time_min"].iloc[-1] == df["time_max"].iloc[0]
-        duration = chunk_df["time_max"] - chunk_df["time_min"]
-        samples = (duration / dt).round() + 1
-        assert samples.sum() == round(dur / dt) + 1
+        assert len(out) == 4
+        assert out[-1].get_coord("time").min() == df["time_max"].iloc[0]
+        sizes = [len(x.get_coord("time")) for x in out]
+        assert sum(sizes) == len(terra15_file_spool[0].get_coord("time"))
 
     def test_nan_in_df(self, contiguous_df):
         """A null envelope row breaks continuity when dropped."""
