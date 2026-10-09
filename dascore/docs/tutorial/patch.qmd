@@ -474,6 +474,14 @@ weighted = patch * w_patch
 assert np.allclose(weighted.data, patch.data * w[:, None])
 ```
 
+Comparisons such as `patch > 0` give a boolean patch, which `~`, `&`, `|` and `^` invert and combine, and which [`Patch.where`](`dascore.Patch.where`) accepts as a condition. `abs(patch)` is `np.abs(patch)`. `==` is different: `patch == other` is [`Patch.equals`](`dascore.Patch.equals`), a single bool, so use `np.equal(patch, other)` for an elementwise mask.
+
+```{python}
+mask = (patch > 0) & ~(patch > 1)
+assert mask.data.dtype == bool
+assert np.array_equal(abs(patch).data, np.abs(patch.data))
+```
+
 NumPy ufuncs operate directly on patches, and DASCore patch ufuncs support named-dimension reduction and accumulation.
 
 ```{python}

@@ -741,6 +741,9 @@ def _apply_binary_ufunc(
     if other_is_patch and not patch_is_patch:
         patch, other = other, patch
         reversed = True
+    # Whether the operand which is not `patch` is one, before alignment
+    # replaces it with its data.
+    other_is_patch = isinstance(other, dc.Patch)
 
     # Taken before the operands are aligned and possibly replaced below:
     # what went in is what decides which data comes out.
