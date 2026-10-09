@@ -2610,6 +2610,11 @@ def _grid_snapped(starts, stops, origin, step):
     wrong. Returns the snapped edges and a mask dropping any window which
     holds no position at all.
     """
+    # A frame hands times over as pandas scalars, which numpy arrays refuse.
+    origin, step = (
+        x.to_numpy() if isinstance(x, pd.Timestamp | pd.Timedelta) else x
+        for x in (origin, step)
+    )
     lo = np.ceil((starts - origin) / step - _GRID_SNAP_RTOL)
     hi = np.floor((stops - origin) / step + _GRID_SNAP_RTOL)
     # An edge a pending selection left unstated has no position, which
