@@ -55,10 +55,10 @@ from dascore.io.core import (
 from dascore.io.dasdae.core import DASDAEV1
 from dascore.io.utils import (
     convert_attr_units,
-    get_gridded_coord,
     resolve_keyed_source,
     slice_dataset,
     step_from_rate,
+    stored_coord,
     windows_to_slices,
 )
 from dascore.utils.downloader import fetch
@@ -72,7 +72,7 @@ from dascore.utils.io import (
 )
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.time import to_datetime64
-from dascore.warnings import DASCoreWarning
+from dascore.warnings import DASCoreWarning, SnapWarning
 
 tvar = TypeVar("tvar", int, float, str, Path)
 
@@ -401,24 +401,60 @@ class TestExactCoord:
         assert len(coord.get_discontinuities("gaps")) == 1
 
 
-class TestGetGriddedCoord:
-    """Tests for forcing a stored array onto the grid it restates."""
+class _CountingLabels:
+    """An array of stored labels which records which positions are read."""
 
-    @pytest.fixture(scope="class")
+    def __init__(self, values):
+        self.values = np.asarray(values)
+        self.dtype, self.ndim = self.values.dtype, self.values.ndim
+        self.read = []
+
+    def __len__(self):
+        return len(self.values)
+
+    def __getitem__(self, item):
+        out = self.values[item]
+        self.read.extend(np.atleast_1d(np.arange(len(self.values))[item]).tolist())
+        return out
+
+
+class TestStoredCoord:
+    """Tests for the one helper which builds every snapped reader grid."""
+
+    @pytest.fixture()
     def same_span(self):
-        """An even array (inside get_coord's evenness tolerance) and a
-        jittered one (outside it) stating the same span.
-        """
+        """An even array and a jittered one stating the same span."""
         n = 2_000
         even = np.linspace(850.0, 1049.9, n)
         jittered = even.copy()
         jittered[1:-1] += np.random.default_rng(1).normal(0, 5e-4, n - 2)
         return even, jittered
 
+    @pytest.fixture()
+    def jittered_times(self):
+        """Epoch seconds from a 100 Hz clock with a little jitter."""
+        jitter = np.random.default_rng(2).uniform(-5e-4, 5e-4, 1_000)
+        return 1_700_000_000.0 + np.arange(1_000) / 100 + jitter
+
+    def test_unnamed_labels_are_exact(self, jittered_times):
+        """A coordinate snap does not name comes back as stored."""
+        out = stored_coord(jittered_times, ("distance",), name="time")
+        np.testing.assert_array_equal(out.values, jittered_times)
+        assert not out.evenly_sampled
+
+    def test_named_labels_are_gridded(self, jittered_times):
+        """A named coordinate spans its first and last labels evenly."""
+        out = stored_coord(
+            jittered_times, ("time",), name="time", decode=dc.to_datetime64
+        )
+        assert out.evenly_sampled
+        assert len(out) == len(jittered_times)
+        assert out.min() == dc.to_datetime64(jittered_times[0])
+        assert out.max() == dc.to_datetime64(jittered_times[-1])
+
     def test_grid_depends_only_on_span_and_count(self, same_span):
         """Arrays stating the same span agree on every sample."""
-        first, second = (get_gridded_coord(x, units="m") for x in same_span)
-
+        first, second = (stored_coord(x, True, name="distance") for x in same_span)
         np.testing.assert_array_equal(first.values, second.values)
         assert first.max() == same_span[0][-1]
 
@@ -428,10 +464,115 @@ class TestGetGriddedCoord:
         first = np.array(values, dtype=np.float32)
         second = first.copy()
         second[3] = np.nextafter(second[3], np.float32(1))
-
-        out = [get_gridded_coord(x, units="m").values for x in (first, second)]
-
+        out = [stored_coord(x, True, name="distance").values for x in (first, second)]
         np.testing.assert_array_equal(*out)
+
+    def test_end_grid_reads_ends_and_quartiles(self, jittered_times):
+        """A grid spanning the ends reads five labels, never the array."""
+        labels = _CountingLabels(jittered_times)
+        stored_coord(labels, True, name="time", decode=dc.to_datetime64)
+        assert sorted(labels.read) == [0, 250, 500, 750, 999]
+
+    def test_stated_grid_reads_only_ends(self, jittered_times):
+        """A stated start and step are checked against the end labels."""
+        labels = _CountingLabels(jittered_times)
+        start = dc.to_datetime64(jittered_times[0])
+        out = stored_coord(
+            labels,
+            True,
+            name="time",
+            decode=dc.to_datetime64,
+            start=start,
+            step=step_from_rate(100),
+        )
+        assert sorted(labels.read) == [0, 999]
+        assert out.min() == start
+        assert out.step == dc.to_timedelta64(0.01)
+
+    def test_exact_fractional_step(self):
+        """1024 Hz labels rounded to whole ns keep their exact grid."""
+        grid = dc.get_coord(
+            start=np.datetime64("2020-01-01"), step=(1, 1024), shape=(4097,)
+        )
+        out = stored_coord(grid.values, True, name="time")
+        assert out.step_exact == 1 / 1024
+        np.testing.assert_array_equal(out.values, grid.values)
+
+    def test_central_hole_warns(self, jittered_times):
+        """One missing sample moves the middle of an end grid half a step."""
+        holed = np.delete(np.arange(1_001.0), 500)
+        with pytest.warns(SnapWarning, match="holed.h5.*up to 0.5 steps"):
+            out = stored_coord(holed, True, name="distance", where="holed.h5")
+        assert out.evenly_sampled
+
+    def test_stated_grid_disagreeing_warns(self, jittered_times):
+        """A rate which does not match the stored end label warns."""
+        start = dc.to_datetime64(jittered_times[0])
+        with pytest.warns(SnapWarning, match="stated start and step"):
+            stored_coord(
+                jittered_times,
+                True,
+                name="time",
+                decode=dc.to_datetime64,
+                start=start,
+                step=step_from_rate(100.1),
+            )
+
+    def test_names_open_resource(self, tmp_path):
+        """The warning names the file an open HDF5 resource reads."""
+        path = tmp_path / "holes.h5"
+        with h5py.File(path, "w") as h5:
+            h5["distance"] = np.delete(np.arange(101.0), 50)
+        with h5py.File(path, "r") as h5, pytest.warns(SnapWarning, match="holes.h5"):
+            stored_coord(h5["distance"], True, name="distance", where=h5)
+
+    def test_jitter_within_max_shift_is_quiet(self, jittered_times):
+        """Jitter under max_shift snaps without a word, above it warns."""
+        decode = dc.to_datetime64
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            stored_coord(jittered_times, True, name="time", decode=decode)
+        with config_context(max_shift=0.01), pytest.warns(SnapWarning):
+            stored_coord(jittered_times, True, name="time", decode=decode)
+
+    def test_float32_rounding_is_not_disagreement(self):
+        """Labels a float32 cannot resolve better do not warn."""
+        # A 27.264 ms grid stored as float32 seconds near 174000 s, where a
+        # float32 resolves only 15.625 ms, so some labels repeat.
+        stored = (173998.08 + np.arange(18_339) * 0.027264).astype(np.float32)
+        start = np.datetime64("2023-03-28T15:56:53.619")
+        decode = lambda x: start + dc.to_timedelta64(x.astype(np.float64))  # noqa: E731
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            out = stored_coord(stored, True, name="time", decode=decode)
+        assert out.evenly_sampled
+
+    def test_count_trims_unwritten_labels(self, jittered_times):
+        """Only the first `count` labels are samples."""
+        padded = np.concatenate([jittered_times, np.zeros(10)])
+        out = stored_coord(
+            padded,
+            True,
+            name="time",
+            decode=dc.to_datetime64,
+            count=len(jittered_times),
+        )
+        assert len(out) == len(jittered_times)
+        assert out.max() == dc.to_datetime64(jittered_times[-1])
+
+    def test_lone_label(self):
+        """One label keeps a stated step, and has none otherwise."""
+        start = np.datetime64("2020-01-01")
+        assert stored_coord([start], True, name="time").step is None
+        step = np.timedelta64(1, "s")
+        out = stored_coord([start], True, name="time", start=start, step=step)
+        assert out.evenly_sampled and out.step == step
+
+    def test_labels_which_do_not_advance(self):
+        """Labels all alike cannot span a grid, so they stay as stored."""
+        with pytest.warns(SnapWarning, match="do not advance"):
+            out = stored_coord(np.ones(4), True, name="distance")
+        np.testing.assert_array_equal(out.values, np.ones(4))
 
 
 class TestFormatManager:
