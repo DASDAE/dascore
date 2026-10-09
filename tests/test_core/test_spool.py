@@ -1259,6 +1259,44 @@ class TestGetSpool:
             np.testing.assert_array_equal(loaded.data, expected.data)
 
 
+class TestSpoolSnap:
+    """A file spool reads its patches under the snap it was opened with."""
+
+    @pytest.fixture(scope="class")
+    def exact(self, terra15_das_example_path):
+        """The file's patch with its stored time labels."""
+        return dc.read(terra15_das_example_path, snap=False)[0]
+
+    def test_rows_and_patches_follow_snap(self, terra15_das_example_path, exact):
+        """Scanned rows and loaded patches both keep the stored labels."""
+        spool = dc.spool(terra15_das_example_path, snap=False)
+        default = dc.read(terra15_das_example_path)[0]
+        assert exact.get_coord("time") != default.get_coord("time")
+        assert spool[0].get_coord("time") == exact.get_coord("time")
+        contents = spool.get_contents()
+        assert contents["time_max"].iloc[0] == exact.get_coord("time").max()
+
+    def test_snap_survives_chunk_update_and_pickle(
+        self, terra15_das_example_path, exact
+    ):
+        """Derived and refreshed spools still read the stored labels."""
+        spool = dc.spool(terra15_das_example_path, snap=False)
+        others = (
+            spool.chunk(time=None),
+            spool.update(),
+            copy.deepcopy(spool),
+            dc.spool([dc.get_example_patch()]) + spool,
+        )
+        for other in others:
+            patch = next(x for x in other if x.dims == exact.dims)
+            assert patch.get_coord("time") == exact.get_coord("time")
+
+    def test_directory_spool_refuses_snap(self, tmp_path):
+        """A directory index does not yet record snap, so it is refused."""
+        with pytest.raises(ParameterError, match="snap"):
+            dc.spool(tmp_path, snap=False)
+
+
 class TestSpoolBehaviorOptionalImports:
     """
     Tests for spool behavior when handling optional formats which require

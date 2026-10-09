@@ -18,7 +18,7 @@ from collections.abc import (
 )
 from contextlib import contextmanager, suppress
 from dataclasses import replace
-from functools import cached_property, wraps
+from functools import cache, cached_property, wraps
 from pathlib import Path
 from threading import RLock
 from typing import (
@@ -64,7 +64,12 @@ from dascore.exceptions import (
     RemoteCacheError,
     UnknownFiberFormatError,
 )
-from dascore.io.utils import selection_windows, slice_dataset, validate_windows
+from dascore.io.utils import (
+    _DASCORE_DIR,
+    selection_windows,
+    slice_dataset,
+    validate_windows,
+)
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.hdf5 import H5Reader, _ManagedH5pyFile
 from dascore.utils.identity import (
@@ -753,9 +758,12 @@ class FiberIO:
         The coordinates declare the array's dimensions and shape, and the
         metadata declares its dtype. Multi-patch readers put their logical key
         in `ArraySource`. The framework supplies the source path, format,
-        and version. `snap` accepts True, False, a coordinate name, or a tuple of
-        names. `snap=False` preserves stored coordinate values when
-        available; neither setting includes unwritten samples.
+        and version. `snap` names the dimensions whose stored labels come
+        back on a grid (built by `dascore.io.utils.stored_coord`): True for
+        every one-dimensional numeric or time-like dimension, False for
+        none, or a name or tuple of names. Its default here is the format's
+        default, which `read` and `scan` use when given None. Neither setting
+        includes unwritten samples.
         """
         msg = f"FiberIO: {self.name} has no get_metadata method"
         raise NotImplementedError(msg)
@@ -842,15 +850,17 @@ class FiberIO:
         Coordinate queries are resolved on the original sample grid without
         recording a processing operation. `source_patch_key` selects logical
         patches, and matching attribute queries filter metadata before data
-        are read. `snap` defaults to True; the older `snap_dims` spelling is
-        also accepted, with explicit `snap` taking precedence. Pass a coordinate
-        name or tuple of names to snap only those coordinates. `samples=True`
-        interprets coordinate selections as sample indices. `source_patch_key`
-        accepts one logical key or an iterable of keys.
+        are read. `snap` names the dimensions whose stored labels come back
+        on a grid: None (the default) the format's own names, True every
+        one-dimensional numeric or time-like dimension, False none, or a
+        name or tuple of names, each of which must be such a dimension. The
+        deprecated `snap_dims` spelling still works, with a warning, and an
+        explicit `snap` wins. `samples=True` interprets coordinate selections
+        as sample indices. `source_patch_key` accepts one logical key or an
+        iterable of keys.
         """
         provenance_source = select.pop("_provenance_source", None)
-        snap_dims = select.pop("snap_dims", True)
-        snap = snap_dims if snap is None else snap
+        snap = _resolve_snap(self, snap, select.pop("snap_dims", None))
         wanted = normalize_source_patch_keys(source_patch_key)
         relative = select.pop("relative", False)
         out = []
@@ -859,6 +869,7 @@ class FiberIO:
                 manager, snap, keys=wanted
             )
             patches = [_validate_metadata(patch) for patch in patches]
+            _check_snap_names(patches, snap, self)
             origins = [patch._source or ArraySource() for patch in patches]
             if provenance_source is not None:
                 patches = _stamp_source_ids(
@@ -868,6 +879,7 @@ class FiberIO:
                     provenance_source,
                     describe=self.input_type != "directory",
                     snap=snap,
+                    default_snap=_default_snap(type(self)),
                 )
             selected, requests = [], []
             for index, (patch, origin) in enumerate(zip(patches, origins, strict=True)):
@@ -947,9 +959,14 @@ class FiberIO:
         return dc.spool(out)
 
     def scan(
-        self, resource, *, snap: snap_type = True, timestamp=None, **kwargs
+        self, resource, *, snap: snap_type | None = None, timestamp=None, **kwargs
     ) -> list[dc.PatchMeta]:
-        """Return patch metadata; the dispatcher attaches source provenance."""
+        """
+        Return patch metadata; the dispatcher attaches source provenance.
+
+        `snap` is as for `read`.
+        """
+        snap = _resolve_snap(self, snap)
         if self.input_type == "directory":
             resource = coerce_to_upath(resource)
             resource = resource if resource.is_dir() else resource.parent
@@ -971,6 +988,7 @@ class FiberIO:
                     raise
                 warnings.warn(str(exc), UserWarning, stacklevel=2)
                 return []
+        _check_snap_names(patches, snap, self)
         if timestamp is not None:
             patches = [
                 patch
@@ -1110,6 +1128,50 @@ def _paired_hook(fiber_io: FiberIO, hook: str) -> Callable:
     ):
         return getattr(FiberIO, hook).__get__(fiber_io)
     return getattr(fiber_io, hook)
+
+
+@cache
+def _default_snap(cls: type[FiberIO]) -> snap_type:
+    """The names a format snaps unless told otherwise: its hook's default."""
+    param = inspect.signature(cls.get_metadata).parameters.get("snap")
+    if param is None or param.default is inspect.Parameter.empty:
+        return True
+    return param.default
+
+
+def _resolve_snap(fiber_io: FiberIO, snap, snap_dims=None) -> snap_type:
+    """
+    Return the snap a read or scan uses: the format's default for None.
+
+    `snap_dims` is the spelling DASCore 0.1.24's Terra15 reader took; it
+    still works, with a warning, and an explicit `snap` wins.
+    """
+    if snap_dims is not None:
+        msg = (
+            "snap_dims is deprecated and will be removed in a future version; "
+            "pass snap, which takes the same values."
+        )
+        warnings.warn(msg, DeprecationWarning, skip_file_prefixes=(_DASCORE_DIR,))
+        snap = snap_dims if snap is None else snap
+    return _default_snap(type(fiber_io)) if snap is None else snap
+
+
+def _check_snap_names(patches, snap: snap_type, fiber_io: FiberIO) -> None:
+    """Raise if `snap` names what a patch has no snappable dimension of."""
+    if isinstance(snap, bool):
+        return
+    for patch in patches:
+        for name in iterate(snap):
+            coord = patch.coords.coord_map.get(name)
+            if name in patch.dims and np.dtype(coord.dtype).kind in "iufmM":
+                continue
+            msg = (
+                f"snap names {name!r}, but this {fiber_io.name} patch has no "
+                f"numeric or time-like dimension of that name; its dimensions "
+                f"are {patch.dims}. Name only those, or pass snap=True to "
+                "snap them all."
+            )
+            raise ParameterError(msg)
 
 
 class H5ArrayMixin:
@@ -1418,22 +1480,24 @@ def _stamp_source_ids(
     *,
     indices: Sequence[int] | None = None,
     describe: bool = False,
-    snap: snap_type = True,
+    snap: snap_type | None = None,
+    default_snap: snap_type = True,
 ) -> list[dc.Patch]:
     """
     Stamp selected patches, retaining their original source ordinals and keys.
 
     `describe` makes each source loadable; only for whole, unselected arrays
     which `read_array` can find by key. `snap` is the decode option the
-    metadata were read under: a non-default one makes a different array of
-    the same bytes, so it is an operation on the stored thing.
+    metadata were read under: one other than the format's `default_snap`
+    makes a different array of the same bytes, so it is an operation on the
+    stored thing.
     """
     indices = range(len(patches)) if indices is None else indices
     if not indices:
         return []
     path, size_bytes, mtime_ns = source_identity(source)
     reload_path = str(_get_reloadable_source_path(source) or "")
-    decode = read_operation_id(snap)
+    decode = read_operation_id(snap, default_snap)
     out = []
     for index in indices:
         patch = patches[index]
@@ -1482,6 +1546,7 @@ def read(
     file_version: str | None = None,
     time: time_select_type | None = None,
     distance: float_select_type | None = None,
+    snap: snap_type | None = None,
     **kwargs,
 ) -> dc.Spool:
     """
@@ -1503,6 +1568,16 @@ def read(
         An optional tuple of time ranges.
     distance
         An optional tuple of distances.
+    snap
+        The dimensions whose stored labels come back on a grid. None (the
+        default) snaps the names the format's reader defaults to, shown in
+        its `get_metadata` signature; True every one-dimensional numeric or
+        time-like dimension; False none, returning every coordinate exactly
+        as stored; a name or tuple of names those dimensions, raising if a
+        patch has no such dimension. A reader warns, naming the file, where
+        a stored label sits more than `dascore.config.max_shift` steps off
+        its grid. See rule 3 of the
+        [coordinate guidelines](`dascore/docs/notes/coordinates.qmd`).
     *kwargs
         All kwargs are passed to the format-specific read functions.
 
@@ -1533,6 +1608,7 @@ def read(
                 _provenance_source=source,
                 time=time,
                 distance=distance,
+                snap=snap,
                 _pre_cast=True,
                 **kwargs,
             )
@@ -1849,7 +1925,7 @@ def _iter_scan_results(
     timestamp: float | None = None,
     progress: PROGRESS_LEVELS | Progress = "standard",
     *,
-    snap: snap_type = True,
+    snap: snap_type | None = None,
 ) -> Generator[tuple[dc.PatchMeta, int], None, None]:
     """
     Yield raw scan results with dispatcher-owned source information.
@@ -1922,7 +1998,9 @@ def _iter_scan_results(
                     except DependencyError as exc:
                         warnings.warn(str(exc), UserWarning, stacklevel=2)
                         continue
-                    except (RemoteCacheError, DASDAEUnpickleError):
+                    # A caller's error, such as a snap naming no dimension,
+                    # is not a broken file.
+                    except (RemoteCacheError, DASDAEUnpickleError, ParameterError):
                         raise
                     except PermissionError:
                         _warn_permission_denied(patch_source)
@@ -1957,6 +2035,7 @@ def _iter_scan_results(
                         indices=indices,
                         describe=fiber_io.input_type != "directory",
                         snap=snap,
+                        default_snap=_default_snap(type(fiber_io)),
                     )
                     for result in patches:
                         output_count += 1
@@ -1976,7 +2055,7 @@ def scan_payloads(
     ext: str | None = None,
     timestamp: float | None = None,
     progress: PROGRESS_LEVELS | Progress = "standard",
-    snap: snap_type = True,
+    snap: snap_type | None = None,
 ) -> list[dc.PatchMeta]:
     """
     Scan a potential patch source and return full coordinate payloads.
@@ -1996,10 +2075,15 @@ def scan_payloads(
     progress
         The type of progress bar to use. None disables the progress bar.
     snap
-        If True (the default), formats may represent stored sample times as an
-        idealized uniform range. If False, returned coords represent stored
-        coordinate values exactly when the format exposes them. A coordinate name
-        or tuple of names enables snapping only for those coordinates.
+        The dimensions whose stored labels come back on a grid. None (the
+        default) snaps the names the format's reader defaults to, shown in
+        its `get_metadata` signature; True every one-dimensional numeric or
+        time-like dimension; False none, returning every coordinate exactly
+        as stored; a name or tuple of names those dimensions, raising if a
+        patch has no such dimension. A reader warns, naming the file, where
+        a stored label sits more than `dascore.config.max_shift` steps off
+        its grid. See rule 3 of the
+        [coordinate guidelines](`dascore/docs/notes/coordinates.qmd`).
 
     Returns
     -------
@@ -2033,6 +2117,7 @@ def scan(
     ext: str | None = None,
     timestamp: float | None = None,
     progress: PROGRESS_LEVELS | Progress = "standard",
+    snap: snap_type | None = None,
 ) -> list[PatchSummary]:
     """
     Scan a potential patch source and return its patch summaries.
@@ -2057,6 +2142,16 @@ def scan(
     progress
         Progress display. None disables it, ``"basic"`` suits low-latency
         operations, and a ``rich.progress.Progress`` subclass customizes it.
+    snap
+        The dimensions whose stored labels come back on a grid. None (the
+        default) snaps the names the format's reader defaults to, shown in
+        its `get_metadata` signature; True every one-dimensional numeric or
+        time-like dimension; False none, returning every coordinate exactly
+        as stored; a name or tuple of names those dimensions, raising if a
+        patch has no such dimension. A reader warns, naming the file, where
+        a stored label sits more than `dascore.config.max_shift` steps off
+        its grid. See rule 3 of the
+        [coordinate guidelines](`dascore/docs/notes/coordinates.qmd`).
 
     Returns
     -------
@@ -2082,6 +2177,7 @@ def scan(
             ext=ext,
             timestamp=timestamp,
             progress=progress,
+            snap=snap,
         )
     ]
 

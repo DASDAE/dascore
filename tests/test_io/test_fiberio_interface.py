@@ -9,7 +9,11 @@ import pytest
 import dascore as dc
 from dascore.core.coords import NumericCoord
 from dascore.core.source import ArraySource
-from dascore.exceptions import InvalidFiberFileError, InvalidFiberIOError
+from dascore.exceptions import (
+    InvalidFiberFileError,
+    InvalidFiberIOError,
+    ParameterError,
+)
 from dascore.io import FiberIO, H5Reader
 from dascore.io import core as io_core
 from dascore.io.dasdae.core import DASDAEV2
@@ -53,6 +57,17 @@ class _ArrayReader(FiberIO):
         """Record the requested bounding window and return its cells."""
         self.calls.append((windows, key))
         return slice_dataset(self.data, windows)
+
+
+class _TimeSnapReader(_ArrayReader):
+    """A reader whose format snaps time unless told otherwise."""
+
+    name = "_interface_contract_time_snap"
+
+    def get_metadata(self, resource, *, snap=("time",)) -> list[dc.Patch]:
+        """Return metadata without touching samples."""
+        self.snaps.append(snap)
+        return [self.metadata]
 
 
 class _StreamReader(FiberIO):
@@ -125,16 +140,21 @@ class TestDerivedRead:
 
     @pytest.mark.parametrize(
         "options, expected",
-        [
-            ({}, True),
-            ({"snap": False}, False),
-            ({"snap_dims": False}, False),
-            ({"snap": True, "snap_dims": False}, True),
-        ],
+        [({}, True), ({"snap": None}, True), ({"snap": False}, False)],
     )
     def test_snap_forwarding(self, reader, options, expected):
-        """Both spellings select the metadata mode; explicit snap takes precedence."""
+        """The metadata hook gets the snap asked for, its own default for None."""
         reader.read("memory", **options)
+        assert reader.snaps == [expected]
+
+    @pytest.mark.parametrize(
+        "options, expected",
+        [({"snap_dims": False}, False), ({"snap": True, "snap_dims": False}, True)],
+    )
+    def test_snap_dims_is_deprecated(self, reader, options, expected):
+        """The released spelling still works, with a warning; snap wins."""
+        with pytest.warns(DeprecationWarning, match="snap_dims"):
+            reader.read("memory", **options)
         assert reader.snaps == [expected]
 
     def test_null_attr_hints_do_not_filter(self, reader):
@@ -155,6 +175,21 @@ class TestDerivedRead:
         assert not isinstance(metadata, dc.Patch)
         assert metadata.summary.dtype == str(reader.data.dtype)
         assert reader.snaps == [False]
+
+    @pytest.mark.parametrize("snap", [("depth",), "quality", ("time", "receiver")])
+    @pytest.mark.parametrize("method", ["read", "scan"])
+    def test_unsnappable_name_raises(self, reader, method, snap):
+        """A name the patch has no one-dimensional dimension of raises."""
+        with pytest.raises(ParameterError, match="snap"):
+            getattr(reader, method)("memory", snap=snap)
+
+    @pytest.mark.parametrize("method", ["read", "scan"])
+    def test_default_is_the_formats(self, method):
+        """None means the names the format's metadata hook defaults to."""
+        reader = _TimeSnapReader()
+        getattr(reader, method)("memory")
+        getattr(reader, method)("memory", snap=True)
+        assert reader.snaps == [("time",), True]
 
     @pytest.mark.parametrize("failure", ["shape", "dtype"])
     def test_bad_array_contract_raises(self, reader, monkeypatch, failure):
