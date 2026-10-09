@@ -22,6 +22,19 @@ resample_mod = importlib.import_module("dascore.proc.resample")
 class TestInterpolate:
     """Tests for interpolating data along an axis in patch."""
 
+    def test_values_sit_at_their_labels(self, random_patch):
+        """Nearly regular samples snap, and the data are taken at the snap."""
+        distance = random_patch.get_array("distance").astype(np.float64)
+        data = np.broadcast_to(distance[:, None], random_patch.shape)
+        patch = random_patch.new(data=data.copy())
+        samples = np.arange(10.0, 50.0)
+        samples[1::2] += 1e-4  # within the released 0.1% snapping
+        out = patch.interpolate(distance=samples)
+        labels = out.get_array("distance")
+        axis = out.get_axis("distance")
+        assert not np.array_equal(labels, samples)
+        np.testing.assert_allclose(np.take(out.data, 0, axis=1 - axis), labels)
+
     def test_interp_upsample_distance(self, random_patch):
         """Ensure interpolation between distance works."""
         start, stop, step = get_start_stop_step(random_patch, "distance")

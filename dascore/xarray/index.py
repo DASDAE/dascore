@@ -201,10 +201,8 @@ class CoordIndex(CoordinateTransformIndex):
             raise ValueError(msg)
         values = np.asarray(variable.values)
         units = variable.attrs.get("units")
+        # read exactly: a range only where it reproduces every label
         coord = get_coord(data=values, snap=False)
-        # a range is kept only where it reproduces the labels exactly
-        if not np.array_equal(coord._get_index_values(np.arange(len(coord))), values):
-            coord = _array_coord(values, None)
         if units is not None and not dtype_time_like(coord.dtype):
             coord = coord.set_units(units)
         return cls(CoordTransform(name, coord, variable.dims[0]))

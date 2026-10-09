@@ -747,7 +747,7 @@ def patch_to_dataframe(patch: PatchType) -> pd.DataFrame:
     # create dataframe
     df = pd.DataFrame(patch.data, index=index_values, columns=col_values)
     # assign index names and attrs
-    df.attrs = patch.attrs.model_dump()
+    df.attrs.update(patch.attrs.model_dump())
     df.index.name = dims[0]
     df.columns.name = dims[1]
     return df

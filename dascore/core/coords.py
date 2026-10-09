@@ -1718,8 +1718,10 @@ def _fitted_step(values):
     own unit for integers and time), and every spacing within half a step
     of one step, so a skipped position is never read as jitter.
     """
-    if values.dtype.kind not in "iumMf" or len(values) < 2:
-        return None
+    if values.dtype.kind == "u" and int(np.max(values)) > np.iinfo(np.int64).max:
+        return None  # their spacings would wrap in int64
+    if values.dtype.kind in "mM" and _tick_scale(values.dtype) is None:
+        return None  # months and years have no fixed length
     rel = np.concatenate([[0], np.cumsum(_diffs(values).astype(np.float64))])
     fit = rel[-1] / (len(values) - 1)
     if not fit or not np.isfinite(fit):
@@ -2908,12 +2910,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             # A grid states no label the arithmetic cannot restate, so the
             # result may be read back as one.
             return get_coord(data=out, units=self.units)
-        # Stored labels are held exactly, and a stride or a reorder can
-        # take the result off the declared grid, which then states nothing.
-        step = self.step
-        if step is not None and np.ndim(out) == 1 and is_strictly_monotonic(out):
-            with suppress(CoordError, ValidationError):
-                return get_coord(data=out, units=self.units, step=step, snap=False)
+        # arrays of positions were taken above; anything else is read exactly
         return get_coord(data=out, units=self.units, snap=False)
 
     def _take(self, item) -> BaseCoord | None:
@@ -2931,9 +2928,12 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             indices = np.flatnonzero(indices)
         if indices.ndim != 1 or indices.dtype.kind not in "iu" or not len(indices):
             return None
-        indices = np.where(indices < 0, indices + len(self), indices)
+        if indices.dtype.kind == "i":  # unsigned ones are never negative
+            indices = np.where(indices < 0, indices + len(self), indices)
         if indices.min() < 0 or indices.max() >= len(self):
             return None
+        # signed, so a descending stride does not wrap
+        indices = indices.astype(np.intp)
         diffs = np.diff(indices)
         if len(diffs) and np.all(diffs == diffs[0]) and diffs[0]:
             # positions one stride apart are that stride, as a slice states it
@@ -2942,7 +2942,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             )
             return self._slice_runs(span)
         stride = 1 if np.all(diffs > 0) else -1 if np.all(diffs < 0) else 0
-        if not stride:
+        if not stride or _is_null(self.step):
+            # a reorder has no step, and labels with none gain none
             values = self._get_index_values(indices)
             return get_coord(data=values, units=self.units, snap=False)
         edges = np.flatnonzero(diffs != stride) + 1
@@ -3866,6 +3867,16 @@ def _runs_step(runs, declared, dtype, sources):
                 msg = "A declared step needs one-dimensional, monotonic values."
                 raise CoordError(msg)
         list(_skips(runs, step, dtype, sources))
+        if stored and len(runs) > 1:  # offsets may drift across the seams too
+            values = np.concatenate(
+                [
+                    _source(sources, x, dtype)
+                    if isinstance(x, Labels)
+                    else x.labels(np.arange(len(x)), dtype)
+                    for x in runs
+                ]
+            )
+            _check_drift(values, _on_grid(_diffs(values), step, jitter=True), step)
     except CoordError:
         if strict:
             raise
@@ -4077,7 +4088,8 @@ def _labels_to_runs(values, step) -> tuple[tuple, np.dtype, Any]:
     if values.dtype.kind == "f":
         steps.append((values[-1] - values[0]) / (len(values) - 1))
     for spacing in steps:
-        with suppress(CoordError, OverflowError, ValueError), np.errstate(all="ignore"):
+        errors = (CoordError, OverflowError, TypeError, ValueError)
+        with suppress(*errors), np.errstate(all="ignore"):
             grid, _ = _range_run(
                 dict(start=values[0], step=spacing, shape=values.shape)
             )
@@ -4762,6 +4774,8 @@ def _released_or_exact(snapped, data, units, warn: bool) -> BaseCoord:
     (#1419); jittered labels are then snapped from their end labels and
     count instead, as `snap` does, and others keep no step.
     """
+    # integer and time labels the snap restates were one spacing apart,
+    # which get_coord kept already; floats may round
     if data.dtype.kind == "f":
         moved = np.max(np.abs(snapped.values - data))
         # the cheap bound first; the allowance looks at the stored dtype
@@ -4769,8 +4783,6 @@ def _released_or_exact(snapped, data, units, warn: bool) -> BaseCoord:
             moved <= _float_allowance(data, snapped.step)
         ):
             return snapped
-    elif np.array_equal(snapped.values, data):
-        return snapped
     exact = _exact_coord(data, units=units)
     if exact.evenly_sampled:  # as a grid, which the released result was
         return exact if exact._grid is not None else exact.snap()

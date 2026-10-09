@@ -1507,10 +1507,6 @@ def _canonicalization_moved_values(original, out) -> bool:
     # sampled coord cannot reach here; the caller returns it first.
     if original is None or not out.evenly_sampled:
         return False
-    # A partial coord's values are all NaN, so it has nothing to lose;
-    # canonicalizing it is the whole point.
-    if original._partial:
-        return False
     # Canonicalization re-labels a coordinate, it never resamples one.
     assert original.shape == out.shape
     return not np.array_equal(original.values, out.values)
@@ -1529,7 +1525,6 @@ def _get_coord_dim_map(coords, dims):
         # stating a whole range should canonicalize to one.
         if isinstance(coord, BaseCoord) and coord._grid is not None:
             return coord
-        original = coord if isinstance(coord, BaseCoord) else None
         stored = isinstance(coord, NumericCoord) and coord.runs_count == 1
         if stored and isinstance(coord.runs[0], Labels):
             # Rebuilding from the run would hand back the same labels, so
@@ -1545,8 +1540,6 @@ def _get_coord_dim_map(coords, dims):
                 out = get_coord(**coord)
             else:
                 out = get_coord(data=coord)
-        if _canonicalization_moved_values(original, out):
-            return original
         return out
 
     def _coord_from_simple(name, coord):

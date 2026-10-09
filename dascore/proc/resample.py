@@ -242,6 +242,9 @@ class Interpolate(PatchProcessor):
             # Text or objects: let scipy refuse them, as it did unplanned.
             _interp(coord_num, coord_num, samples_num, 0, self.kind)
         coord_new = dc.core.get_coord(data=samples, snap=True)
+        # evaluated at the labels the samples become, which the released
+        # snap may move
+        samples_num = to_int(coord_new.values)
         updates = {dim: (cm.dim_map[dim], coord_new)}
         updates |= _interpolate_associated(cm, dim, coord_num, samples_num, self.kind)
         plan = {"axis": axis, "coord": coord_num, "samples": samples_num}

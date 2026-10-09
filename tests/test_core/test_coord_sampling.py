@@ -5,6 +5,7 @@ from __future__ import annotations
 import warnings
 from fractions import Fraction
 
+import h5py
 import numpy as np
 import pytest
 from pydantic import ValidationError
@@ -13,6 +14,7 @@ import dascore as dc
 import dascore.utils.patch
 from dascore.core.coords import NumericCoord, get_coord
 from dascore.exceptions import CoordError
+from dascore.io.dasdae.utils import _read_coord, _save_coord
 
 T0 = np.datetime64("2024-01-01T00:00:00", "ns")
 MS = np.timedelta64(1, "ms")
@@ -226,6 +228,16 @@ class TestMicrosecondGrid:
         values = np.concatenate([x.get_coord("time").values for x in chunks])
         np.testing.assert_array_equal(values, coord.values)
 
+    def test_dasdae_holes_keep_the_exact_step(self, tmp_path):
+        """A fractional grid with a hole is stored and read back on its grid."""
+        time = get_coord(start=T0, step=(1, 1024), shape=(4000,))
+        holed = time[np.r_[0:2000, 2010:4000]]
+        with h5py.File(tmp_path / "holed.h5", "w") as h5:
+            _save_coord(holed, "_coord_time", h5, compact=True)
+            back = _read_coord(h5["_coord_time"], "time", {}, snap=False)
+        assert back.step_exact == Fraction(1, 1024) and not back.jittered
+        assert back.gapped and np.array_equal(back.values, holed.values)
+
     def test_dasdae_round_trip(self, coord, labels, tmp_path):
         """DASDAE stores the grid and reads back the same labels."""
         data = np.zeros((len(coord), 2))
@@ -248,6 +260,20 @@ class TestMicrosecondGrid:
         missing = holed.missing()
         assert missing.count == 5
         np.testing.assert_array_equal(missing.positions(), labels[10:15])
+
+    def test_month_labels(self):
+        """Months have no length in ticks, so they find no fractional grid."""
+        values = np.array(["2020-01", "2020-03", "2020-04"], dtype="M8[M]")
+        coord = get_coord(data=values, snap=False)
+        np.testing.assert_array_equal(coord.values, values)
+
+    def test_coarse_grid_past_nanoseconds(self):
+        """A seconds grid whose nanoseconds overflow int64 keeps its labels."""
+        ticks = (np.arange(300, dtype=np.int64) * 1000) // 3
+        values = np.datetime64("3000-01-01T00:00:00", "s") + ticks.astype("m8[s]")
+        coord = get_coord(data=values, snap=False)
+        assert coord._grid is None
+        np.testing.assert_array_equal(coord.values, values)
 
 
 class TestStatedStep:
@@ -280,6 +306,21 @@ class TestStatedStep:
         """Labels drifting half a step or more from the stated grid raise."""
         with pytest.raises(CoordError, match="half a step"):
             get_coord(data=np.arange(100) * 1.02, step=1.0)
+
+    def test_unsigned_past_int64(self):
+        """Unsigned labels past the int64 range are kept, with no step."""
+        values = np.array([0, 2**64 - 1], dtype=np.uint64)
+        coord = get_coord(data=values, snap=False)
+        np.testing.assert_array_equal(coord.values, values)
+
+    def test_drift_across_runs_drops_the_step(self):
+        """Offsets accumulating over many joined runs leave no common grid."""
+        pieces = [
+            NumericCoord.from_labels(np.array([1.8 * k, 1.8 * k + 0.9]), step=1.0)
+            for k in range(6)
+        ]
+        assert all(x.step == 1.0 for x in pieces)
+        assert dc.core.coords.concat_coords(*pieces).step is None
 
     def test_stored_drift_raises(self):
         """Stored labels drifting from their step are refused when built too."""
@@ -367,6 +408,33 @@ class TestSelectionKeepsStep:
         # 2.8 is nearer three steps than the two it was taken from
         wide = get_coord(data=[0.0, 1.4, 2.8, 3.6], step=1.0)
         assert wide[np.array([0, 2, 3])].step is None
+
+    def test_stepless_take_stays_stepless(self):
+        """Removing samples from labels with no step invents no grid."""
+        coord = get_coord(data=[0, 1, 3, 4, 5], snap=False)
+        assert coord.step is None
+        assert coord[np.array([0, 1, 3, 4])].step is None
+
+    def test_unsigned_descending_positions(self, coord):
+        """Unsigned positions running backwards are a backwards stride."""
+        out = coord[np.array([5, 3, 1], dtype=np.uint64)]
+        assert out == coord[5:0:-2]
+
+    def test_positions_past_the_end_raise(self, coord):
+        """Positions outside the coordinate are refused, as numpy refuses them."""
+        with pytest.raises(IndexError):
+            coord[np.array([0, 50])]
+
+    def test_stored_grid_stacks(self):
+        """Tiles of labels on their step within rounding are placed by that step."""
+        values = np.linspace(0, 100, 1001, dtype=np.float32)[:100]
+        distance = get_coord(data=values, snap=False)
+        assert distance.evenly_sampled and distance._grid is None
+        patch = dc.get_example_patch().select(distance=(0, 100), samples=True)
+        patch = patch.update_coords(distance=distance)
+        out = patch.tile_apply(lambda x: x, mode="stack", distance=10, samples=True)
+        offsets = out.get_coord("distance_offset").values
+        np.testing.assert_allclose(offsets, np.arange(10) * 0.1, atol=1e-5)
 
     def test_reorder(self, coord):
         """Reordered samples have no step."""
