@@ -7,7 +7,6 @@ import pytest
 
 import dascore as dc
 import dascore.proc.coords
-from dascore.exceptions import CoordError
 from dascore.transform.integrate import Integrate, integrate
 from dascore.units import get_quantity
 from dascore.utils.misc import broadcast_for_index
@@ -269,9 +268,9 @@ class TestHoles:
     """Integration must not integrate across a coordinate hole."""
 
     @pytest.mark.parametrize("definite", [True, False])
-    def test_refuses_holes(self, holed_patch, definite):
-        """A declared step with missing samples refuses."""
-        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
+    def test_holes_warn(self, holed_patch, definite):
+        """Missing samples integrate by their labels until 0.1.26, with a warning."""
+        with pytest.warns(FutureWarning, match=r"not evenly sampled.*split_gaps"):
             holed_patch.integrate("time", definite=definite)
 
     def test_stepless_runs(self, stepless_seam_patch):

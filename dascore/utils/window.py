@@ -24,7 +24,7 @@ import numpy as np
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import Quantity, is_percent
 from dascore.utils.misc import get_parent_code_name
-from dascore.utils.patch import get_dim_axis_value
+from dascore.utils.patch import _uneven_message, get_dim_axis_value
 from dascore.utils.tiles import TilePlan, get_tile_plan
 from dascore.utils.time import is_timedelta64, to_float, to_timedelta64
 
@@ -274,8 +274,7 @@ def resolve_window(
     for dim, _, value in dim_axis_values:
         coord = coords[dim] = patch.coords.get_coord(dim)
         if require_evenly_sampled and not coord.evenly_sampled:
-            extra = f"as required by {get_parent_code_name()}"
-            msg = f"Coordinate {dim} is not evenly sampled {extra}"
+            msg = _uneven_message(dim, coord, get_parent_code_name())
             raise CoordError(msg)
         count, in_samples = _to_samples(
             coord,

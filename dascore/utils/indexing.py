@@ -339,7 +339,7 @@ def label_indexer(
         else:
             tolerance = compatible(tolerance)
     if (
-        coord.evenly_sampled
+        coord._grid is not None
         # a scalar only on an integer grid whose labels cannot repeat
         and (labels.ndim == 1 or (labels.ndim == 0 and _unique_grid(coord)))
         and method is None

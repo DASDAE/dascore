@@ -349,9 +349,10 @@ class TestSelectionKeepsStep:
         assert out.missing().count == 5
 
     def test_regular_mask(self, coord):
-        """Keeping every other sample by mask leaves holes, not a coarser step."""
+        """Samples one stride apart, by mask or array, are that stride."""
         out = coord[np.arange(20) % 2 == 0]
-        assert out.step == 1 and out.gapped
+        assert out == coord[::2]
+        assert coord[np.array([1, 4, 7])] == coord[1:8:3]
 
     def test_stride(self, coord):
         """Only an explicit stride gives a coarser step."""
@@ -364,8 +365,8 @@ class TestSelectionKeepsStep:
         out = jittered[np.array([0, 3, 4])]
         assert out.step == 1.0 and out.missing().count == 2
         # 2.8 is nearer three steps than the two it was taken from
-        wide = get_coord(data=[0.0, 1.4, 2.8], step=1.0)
-        assert wide[np.array([0, 2])].step is None
+        wide = get_coord(data=[0.0, 1.4, 2.8, 3.6], step=1.0)
+        assert wide[np.array([0, 2, 3])].step is None
 
     def test_reorder(self, coord):
         """Reordered samples have no step."""

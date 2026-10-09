@@ -2921,7 +2921,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         The samples at an array of positions, evaluating only those.
 
         Strictly monotonic positions keep the step: removing samples leaves
-        holes, not a coarser step. Others (a reorder or a repeat) have none.
+        holes, not a coarser step, unless the positions are one stride
+        apart, as a strided slice is. Others (a reorder or a repeat) have
+        none.
         None where ``item`` is not an array of positions within the coord.
         """
         indices = np.asarray(item)
@@ -2933,6 +2935,12 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         if indices.min() < 0 or indices.max() >= len(self):
             return None
         diffs = np.diff(indices)
+        if len(diffs) and np.all(diffs == diffs[0]) and diffs[0]:
+            # positions one stride apart are that stride, as a slice states it
+            span = range(
+                int(indices[0]), int(indices[-1]) + np.sign(diffs[0]), diffs[0]
+            )
+            return self._slice_runs(span)
         stride = 1 if np.all(diffs > 0) else -1 if np.all(diffs < 0) else 0
         if not stride:
             values = self._get_index_values(indices)
@@ -4716,13 +4724,11 @@ def get_coord(
             if uniform:  # one spacing: the grid restates the labels
                 return out
             return _released_or_exact(out, data, units, warn=snap is None)
-        # labels the 0.1% snap leaves alone may still be jittered
-        if monotonic and data.ndim == 1 and not pd.isnull(data).any():
-            return _exact_coord(data, units=units)
     else:
         monotonic = data.ndim == 1 and is_strictly_monotonic(data)
-        if monotonic and not pd.isnull(data).any():
-            return _exact_coord(data, units=units)
+    # labels the 0.1% snap leaves alone may still be jittered
+    if monotonic and data.ndim == 1 and not pd.isnull(data).any():
+        return _exact_coord(data, units=units)
     if not monotonic and np.all(pd.isnull(data)):
         # The values say nothing, but their type still does: an array of
         # NaT came from datetimes and should stay datetimes, as the empty
@@ -4766,8 +4772,8 @@ def _released_or_exact(snapped, data, units, warn: bool) -> BaseCoord:
     elif np.array_equal(snapped.values, data):
         return snapped
     exact = _exact_coord(data, units=units)
-    if exact.evenly_sampled:
-        return exact
+    if exact.evenly_sampled:  # as a grid, which the released result was
+        return exact if exact._grid is not None else exact.snap()
     shift = _shift(snapped, data)
     if shift >= 0.5:
         if not exact.jittered:
@@ -4779,8 +4785,8 @@ def _released_or_exact(snapped, data, units, warn: bool) -> BaseCoord:
             f"get_coord(data=...) snapped labels lying up to {shift:.2g} steps "
             "off a grid onto it, as DASCore 0.1.24 did. From DASCore 0.1.26 "
             "inference keeps labels as recorded, so these will be jittered or "
-            "have no step. Pass snap=False to get that now; snap_coords snaps "
-            "explicitly."
+            "have no step. Pass snap=False, or a coordinate built with it, to "
+            "get that now; snap_coords snaps explicitly."
         )
         warnings.warn(msg, FutureWarning, stacklevel=3)
     return snapped

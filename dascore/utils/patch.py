@@ -1061,12 +1061,7 @@ def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
     if isinstance(d_dim, np.timedelta64):
         d_dim = d_dim / np.timedelta64(1, "s")
     if pd.isnull(d_dim) or not coord.evenly_sampled:
-        calling_function = get_parent_code_name()
-        msg = (
-            f"Patch coordinate {dim} is not evenly sampled as required by "
-            f"{calling_function}. This can be fixed with Patch.snap_coords or "
-            f"Patch.interpolate."
-        )
+        msg = _uneven_message(dim, coord, get_parent_code_name())
         raise CoordDataError(msg)
     return 1.0 / d_dim
 
@@ -1285,18 +1280,16 @@ def _require_evenly_sampled(patch, dims, operation: str) -> None:
     """
     Require evenly sampled dims for an operation 0.1.24 ran on any labels.
 
-    A coordinate with holes raises, as ``get_coord(require_evenly_sampled=True)``
-    does. Until DASCore 0.1.26 one which is only irregular or jittered warns
-    and the operation uses its labels as recorded, as 0.1.24 did; then each
-    caller calls ``patch.get_coord(dim, require_evenly_sampled=True)``.
+    Until DASCore 0.1.26 an unevenly sampled coordinate warns and the
+    operation uses its labels as recorded, as 0.1.24 did (where a selection
+    leaving holes gave labels with no step); then each caller calls
+    ``patch.get_coord(dim, require_evenly_sampled=True)``.
     """
     for dim in iterate(dims):
         coord = patch.get_coord(dim)
         if coord.evenly_sampled:
             continue
         msg = _uneven_message(dim, coord, operation)
-        if coord.gapped:
-            raise CoordError(msg)
         msg += f" Until DASCore 0.1.26 {operation} uses its labels; it then raises."
         warnings.warn(msg, FutureWarning, stacklevel=2)
 
@@ -1918,7 +1911,8 @@ def _concatenate_group(
             ]
         values = np.concatenate(_joinable(members, dim), axis=0)
         coords = first.coords.update(
-            **{dim: dc.core.coords.get_coord(data=values, units=units)}
+            # the released snap, until concatenation joins labels exactly
+            **{dim: dc.core.coords.get_coord(data=values, units=units, snap=True)}
         )
         # coordinates riding the dimension which every member states the
         # same way join along it too; resizing the dimension drops them

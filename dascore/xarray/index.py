@@ -201,7 +201,7 @@ class CoordIndex(CoordinateTransformIndex):
             raise ValueError(msg)
         values = np.asarray(variable.values)
         units = variable.attrs.get("units")
-        coord = get_coord(data=values)
+        coord = get_coord(data=values, snap=False)
         # a range is kept only where it reproduces the labels exactly
         if not np.array_equal(coord._get_index_values(np.arange(len(coord))), values):
             coord = _array_coord(values, None)
