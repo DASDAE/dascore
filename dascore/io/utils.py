@@ -368,6 +368,8 @@ def stored_coord(
         values = values.astype(f"{values.dtype.kind}8[ns]")
     elif values.dtype.kind == "f":  # float32 step arithmetic splits equal spans
         values = values.astype(np.float64)
+    elif values.dtype.kind in "iu":  # a descending or wide grid needs room
+        values = values.astype(np.int64)
     if not stated:
         start = values[0]
         if count == 1:

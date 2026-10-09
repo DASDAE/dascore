@@ -38,7 +38,7 @@ import dascore as dc
 from dascore.compat import UPath
 from dascore.constants import PROGRESS_LEVELS, ExecutorType, namespace_select_type
 from dascore.core.summary import normalize_source_patch_key
-from dascore.exceptions import MissingPatchError
+from dascore.exceptions import MissingPatchError, ParameterError
 from dascore.io.core import _resolve_read_spool
 from dascore.io.index.backend import get_backend
 from dascore.io.index.indexer import DBDirectoryIndexer, scan_unit_stats
@@ -330,7 +330,14 @@ class CompositeResolver(PatchResolver):
         """Keep the paths, and snaps, another resolver reopens sources by."""
         file = getattr(resolver, "file", resolver)
         self.file._upaths.update(getattr(file, "_upaths", {}))
-        self.file._snaps.update(getattr(file, "_snaps", {}))
+        for path, snap in getattr(file, "_snaps", {}).items():
+            if self.file._snaps.setdefault(path, snap) != snap:
+                msg = (
+                    f"Spools reading {path} under different snap options "
+                    f"({self.file._snaps[path]!r} and {snap!r}) cannot be "
+                    "combined; open the file once."
+                )
+                raise ParameterError(msg)
 
     def absorb(self, resolver: PatchResolver, paths=None) -> None:
         """
@@ -845,7 +852,8 @@ class PatchCatalog:
         records = summaries_to_records(summaries, mtimes_ns=mtimes, sizes_bytes=sizes)
         remote = isinstance(path, UPath) and not is_local_path(path)
         upaths = {str(path): path} if remote else {}
-        snaps = {} if snap is None else {str(x.source_path): snap for x in summaries}
+        # recorded even when None, so a union can see two snaps of one file
+        snaps = {str(x.source_path): snap for x in summaries}
         out = cls(resolver=FileResolver(upaths=upaths, snaps=snaps))
         out.backend.write_sources(records)
         out._invalidate()

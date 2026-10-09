@@ -1291,6 +1291,12 @@ class TestSpoolSnap:
             patch = next(x for x in other if x.dims == exact.dims)
             assert patch.get_coord("time") == exact.get_coord("time")
 
+    def test_one_file_under_two_snaps_does_not_combine(self, terra15_das_example_path):
+        """Rows of one file read under two snaps cannot share a resolver."""
+        exact = dc.spool(terra15_das_example_path, snap=False)
+        with pytest.raises(ParameterError, match="snap"):
+            exact + dc.spool(terra15_das_example_path)
+
     def test_directory_spool_refuses_snap(self, tmp_path):
         """A directory index does not yet record snap, so it is refused."""
         with pytest.raises(ParameterError, match="snap"):

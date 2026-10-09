@@ -568,6 +568,16 @@ class TestStoredCoord:
         out = stored_coord([start], True, name="time", start=start, step=step)
         assert out.evenly_sampled and out.step == step
 
+    @pytest.mark.parametrize(
+        "labels",
+        [np.array([4, 2, 0], np.uint32), np.array([-20000, 0, 20000], np.int16)],
+    )
+    def test_narrow_integer_labels(self, labels):
+        """A span wider than the stored integer dtype still gives its grid."""
+        out = stored_coord(labels, True, name="distance")
+        assert out.evenly_sampled
+        np.testing.assert_array_equal(out.values, labels.astype(np.int64))
+
     def test_labels_which_do_not_advance(self):
         """Labels all alike cannot span a grid, so they stay as stored."""
         with pytest.warns(SnapWarning, match="do not advance"):
