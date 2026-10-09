@@ -176,10 +176,11 @@ def _get_time_coord(node, snap=True):
     time_array = node[time_names[0]]
     assert len(time_array) > 0, "Missing time array in ProdML file."
     start = time_array.attrs.get("PartStartTime")
-    rate = node.attrs.get("OutputDataRate")
-    if start is not None and rate is not None:
+    # the stored dtype matters: a float32 rate is read as what it holds
+    rate = _maybe_unpack(node.attrs.get("OutputDataRate", np.nan))
+    if start is not None and float(rate) > 0:  # NaN, a missing rate, is not
         start = dc.to_datetime64(unbyte(start).split("+")[0].rstrip("Z"))
-        step = step_from_rate(_maybe_unpack(rate))
+        step = step_from_rate(rate)
     else:
         start = step = None
     return stored_coord(

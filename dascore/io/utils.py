@@ -366,6 +366,8 @@ def stored_coord(
     values = decode(stored)
     if values.dtype.kind in "mM":
         values = values.astype(f"{values.dtype.kind}8[ns]")
+    elif values.dtype.kind == "f":  # float32 step arithmetic splits equal spans
+        values = values.astype(np.float64)
     if not stated:
         start = values[0]
         if count == 1:
