@@ -400,7 +400,9 @@ def _read_coord(node, name, attrs2, snap):
             for values in np.split(array, np.cumsum(lengths)[:-1]):
                 grid = get_coord(data=values, snap=False)._grid
                 runs.append(values if grid is None else grid)
-            return NumericCoord(runs=tuple(runs), units=units, step=node_step)
+            return NumericCoord(
+                runs=tuple(runs), units=units, step=node_step, dtype=array.dtype
+            )
         if node_step is not None:
             coord = get_coord(data=array, units=units, step=node_step, snap=False)
             if snap and coord.jittered and not coord.gapped:
