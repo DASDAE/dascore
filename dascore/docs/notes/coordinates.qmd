@@ -138,7 +138,7 @@ Released behaviour is deprecated with a warning for at least one release rather 
 | `chunk(snap_coords=...)` | Warns; `True` keeps the released result, `False` means `max_shift=0` |
 | `chunk(keep_partial=True)` | Warns; means `on_incomplete="keep"` |
 | `get_coord(data=...)` snapping within 0.1% | Warns where rule 2 differs, then switches |
-| `taper`, `sobel_filter`, filtered `decimate`, `differentiate` and `integrate` on irregular or jittered coordinates | Warn, then require an evenly sampled coordinate |
+| `taper`, `sobel_filter`, filtered `decimate`, `differentiate` and `integrate` on coordinates which are not evenly sampled | Warn, then require an evenly sampled coordinate |
 | `order` dropping missing values | Warns, then raises |
 | `coords_from_df` overwriting coordinates | Warns, then refuses |
 | `concatenate_patches`, `merge_patches` | Warn, then are removed in 0.2 |
