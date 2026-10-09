@@ -26,7 +26,7 @@ class DASHDF5(H5ArrayMixin, FiberIO):
         return _get_cf_version_str(resource) or None
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type = ("time",)
     ) -> list[dc.PatchMeta]:
         """Get metadata from file."""
         coords = _get_cf_coords(resource, snap=snap)

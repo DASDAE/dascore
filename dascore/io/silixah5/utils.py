@@ -215,7 +215,7 @@ def _get_carina_distance_coord(attrs_dict, resource, n_columns):
             start=start + physical[0] * step, step=step, shape=(n_columns,), units="m"
         )
     else:
-        coord = get_coord(data=start + physical * step, units="m")
+        coord = get_coord(data=start + physical * step, units="m", snap=False)
     return coord
 
 

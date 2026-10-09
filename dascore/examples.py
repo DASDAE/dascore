@@ -47,10 +47,10 @@ EXAMPLE_SPOOLS = {}
 EXAMPLE_INVENTORIES = {}
 
 
-def _load_example_patch_from_file(path: str | Path) -> dc.Patch:
+def _load_example_patch_from_file(path: str | Path, snap=None) -> dc.Patch:
     """Load the first patch from an example file without spool indirection."""
     with config_context(allow_dasdae_format_unpickle=True):
-        return dc.read(path)[0]
+        return dc.read(path, snap=snap)[0]
 
 
 @register_func(EXAMPLE_PATCHES, key="random_das")
@@ -308,7 +308,8 @@ def example_event_1():
     An induced event recorded on a borehole fiber  from @stanvek2022fracture.
     """
     path = fetch("example_dasdae_event_1.h5")
-    return _load_example_patch_from_file(path)
+    # Its times were written with a nanosecond of float rounding.
+    return _load_example_patch_from_file(path, snap=("time",))
 
 
 @register_func(EXAMPLE_PATCHES, key="example_event_2")
@@ -316,8 +317,7 @@ def example_event_2():
     """
     [`example_event_1`](`dascore.examples.example_event_1`) with pre-processing.
     """
-    path = fetch("example_dasdae_event_1.h5")
-    patch = _load_example_patch_from_file(path).update_attrs(data_type="strain_rate")
+    patch = example_event_1().update_attrs(data_type="strain_rate")
     # We convert time to relative time in seconds to match the figure in
     # the publication.
     delta_time = patch.coords.get_array("time") - patch.coords.min("time")

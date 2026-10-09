@@ -10,7 +10,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.core.source import ArraySource
-from dascore.io.utils import resolve_keyed_source, should_snap, windows_to_slices
+from dascore.io.utils import resolve_keyed_source, stored_coord, windows_to_slices
 from dascore.xarray import patch_to_xarray
 from dascore.xarray.patch import _cf_attrs, _cf_units
 
@@ -106,13 +106,13 @@ def _get_dim_coord(h5file, coord_name: str, coord_len: int) -> np.ndarray:
     return np.arange(coord_len)
 
 
-def get_scan_coord(coord, snap=True):
-    """Return a coordinate for scanning; snap only controls exactness."""
+def get_scan_coord(coord, snap: snap_type = False, where=""):
+    """Return a coordinate for scanning, on a grid if `snap` names it."""
     values = coord.values
     if np.ndim(values) != 1:
         return values
     units = _cf_units(coord.attrs.get("units"), coord.name)
-    return dc.core.get_coord(data=values, units=units, snap=snap)
+    return stored_coord(values, snap, name=coord.name, where=where, units=units)
 
 
 def _get_patch_key(data_var_name):
@@ -121,14 +121,15 @@ def _get_patch_key(data_var_name):
 
 
 def dataset_to_patch_meta(
-    dataset, snap: snap_type = True, key: str | None = None
+    dataset, snap: snap_type = (), key: str | None = None
 ) -> list[dc.PatchMeta]:
     """Describe an open dataset's payload without reading it; ``key`` sets its key."""
     data_var_name = get_xarray_data_var_name(dataset)
     data_array = dataset[data_var_name]
     dims, shape = data_array.dims, data_array.shape
+    where = dataset.encoding.get("source", "")
     coords = {
-        name: (coord.dims, get_scan_coord(coord, snap=should_snap(snap, name)))
+        name: (coord.dims, get_scan_coord(coord, snap if name in dims else (), where))
         for name, coord in data_array.coords.items()
     }
     # A dimension the dataset gives no coordinate is rebuilt on its own.

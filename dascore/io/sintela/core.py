@@ -70,7 +70,7 @@ class SintelaBinaryV3(FiberIO):
         return None
 
     def get_metadata(
-        self, resource: BinaryReader, *, snap: snap_type = True
+        self, resource: BinaryReader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Scan a file, return summary information on the contents."""
         attrs, coords, header = _get_attrs_coords_header(resource, SintelaPatchAttrs)
@@ -116,7 +116,7 @@ class SintelaProtobufV1(FiberIO):
         return self.version if tag else None
 
     def get_metadata(
-        self, resource: BinaryReader, *, snap: snap_type = True
+        self, resource: BinaryReader, *, snap: snap_type = ("time",)
     ) -> list[dc.PatchMeta]:
         """Scan a Sintela protobuf recording."""
         return scan_payload(resource, snap=snap)

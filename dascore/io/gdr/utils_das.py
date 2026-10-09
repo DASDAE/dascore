@@ -10,7 +10,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.core import get_coord
-from dascore.io.utils import convert_attr_units, should_snap
+from dascore.io.utils import convert_attr_units, stored_coord
 from dascore.utils.hdf5 import extract_h5_attrs, h5_matches_structure
 from dascore.utils.misc import unbyte
 
@@ -78,6 +78,11 @@ def _get_attrs_coords_and_data(resource, snap):
     return attrs, coords, data
 
 
+def _nanoseconds(values) -> np.ndarray:
+    """Decode stored times, integer nanoseconds since the epoch."""
+    return np.asarray(values).astype(np.int64).astype("datetime64[ns]")
+
+
 def _get_coord_manager(resource, snap=True):
     """Get a coordinate manager from the file."""
 
@@ -85,14 +90,9 @@ def _get_coord_manager(resource, snap=True):
         """Get the time coordinate."""
         # TODO: I am not sure if time will always be in ns, check on it.
         time = resource["DasRawData/DasTimeArray"]
-        length = len(time)
-        if not should_snap(snap, "time") or length < 2:
-            values = np.array(time).astype("datetime64[ns]")
-            return get_coord(data=values, snap=False)
-        t1 = np.int64(time[0]).astype("datetime64[ns]")
-        t2 = np.int64(time[-1]).astype("datetime64[ns]")
-        step = (t2 - t1) / (length - 1)
-        return get_coord(start=t1, stop=t2, step=step).change_length(length)
+        return stored_coord(
+            time, snap, name="time", where=resource, decode=_nanoseconds
+        )
 
     def get_dist_coord(resource, length):
         """Get distance coordinates."""

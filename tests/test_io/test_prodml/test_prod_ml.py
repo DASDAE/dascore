@@ -15,6 +15,7 @@ from dascore.io.core import read
 from dascore.io.prodml.utils import _get_prodml_version_str, _get_root_attrs
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings
+from dascore.warnings import SnapWarning
 
 
 @pytest.fixture(scope="session")
@@ -115,6 +116,61 @@ class TestProdMLFile:
         """Ensure "unitless" data units don't prevent reading the file."""
         patch = dc.read(unitless_patch_path)[0]
         assert patch.attrs.data_units is None
+
+
+class TestStoredTimes:
+    """The time grid comes from the header and is checked against the file."""
+
+    @staticmethod
+    def _copy(tmp_path, name="prodml_2.0.h5"):
+        """Copy a ProdML file, returning the path and its raw time node name."""
+        path = shutil.copy2(fetch(name), tmp_path / name)
+        return path, "Acquisition/Raw[0]/RawDataTime"
+
+    @pytest.fixture()
+    def jumped_path(self, tmp_path):
+        """Stored times jump 20 samples halfway, the header unchanged (#1420)."""
+        path, node = self._copy(tmp_path)
+        with h5py.File(path, "r+") as h5:
+            stored = h5[node][...]
+            stored[len(stored) // 2 :] += 20 * 5_000  # 200 Hz in us
+            h5[node][...] = stored
+        return path
+
+    def test_grid_is_start_and_rate(self):
+        """A clean file reads its stated grid without a warning."""
+        path = fetch("prodml_2.0.h5")
+        with suppress_warnings(UserWarning, action="error"):
+            time = dc.read(path)[0].get_coord("time")
+        assert time.evenly_sampled
+        assert time.step == np.timedelta64(5, "ms")
+        assert time.min() == np.datetime64("1970-01-01T00:00:00")
+
+    def test_disagreeing_times_warn(self, jumped_path):
+        """The grid is kept, and the file and disagreement are named."""
+        with pytest.warns(SnapWarning, match="prodml_2.0.h5.*20 steps"):
+            time = dc.read(jumped_path)[0].get_coord("time")
+        assert time.evenly_sampled
+        assert time.step == np.timedelta64(5, "ms")
+
+    def test_snap_false_shows_the_jump(self, jumped_path):
+        """The stored times come back exactly."""
+        time = dc.read(jumped_path, snap=False)[0].get_coord("time")
+        with h5py.File(jumped_path) as h5:
+            stored = h5["Acquisition/Raw[0]/RawDataTime"][...]
+        expected = stored.astype("datetime64[us]").astype("datetime64[ns]")
+        np.testing.assert_array_equal(time.values, expected)
+        assert not time.evenly_sampled
+
+    def test_no_rate_spans_the_stored_times(self, tmp_path):
+        """Without OutputDataRate the grid spans the first and last times."""
+        path, node = self._copy(tmp_path)
+        with h5py.File(path, "r+") as h5:
+            del h5["Acquisition/Raw[0]"].attrs["OutputDataRate"]
+            stored = h5[node][...].astype("datetime64[us]")
+        time = dc.read(path)[0].get_coord("time")
+        assert time.evenly_sampled
+        assert (time.min(), time.max()) == (stored[0], stored[-1])
 
 
 class TestReadQuantXV2:

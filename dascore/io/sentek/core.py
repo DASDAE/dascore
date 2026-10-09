@@ -10,7 +10,7 @@ from dascore.io.core import FiberIO
 from dascore.io.utils import slice_dataset
 from dascore.utils.io import BinaryReader, LocalBinaryReader
 
-from .utils import _get_patch_attrs, _get_version
+from .utils import _get_layout, _get_patch_attrs, _get_version
 
 
 class SentekV5(FiberIO):
@@ -27,7 +27,7 @@ class SentekV5(FiberIO):
         key: str = "",
     ) -> np.ndarray:
         """Decode the stored layout into the metadata's axis order, then select."""
-        _, _, offsets = _get_patch_attrs(resource)
+        _, offsets = _get_layout(resource)
         resource.seek(offsets[0])
         data = np.fromfile(resource, dtype=np.float32, count=offsets[1] * offsets[2])
         data = data.reshape((offsets[1], offsets[2])).T
@@ -38,7 +38,7 @@ class SentekV5(FiberIO):
         return _match[1] if (_match := _get_version(resource)) else None
 
     def get_metadata(
-        self, resource: BinaryReader, *, snap: snap_type = True
+        self, resource: BinaryReader, *, snap: snap_type = ("time",)
     ) -> list[dc.PatchMeta]:
         """Extract metadata from sentek file."""
         attrs, coords, _ = _get_patch_attrs(resource, snap=snap)

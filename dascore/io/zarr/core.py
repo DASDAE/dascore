@@ -127,7 +127,7 @@ class ZarrV3(FiberIO):
         return None
 
     def get_metadata(
-        self, resource: UPath, *, snap: snap_type = True
+        self, resource: UPath, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Describe each patch from its metadata and coordinates."""
         return [

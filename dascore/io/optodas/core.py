@@ -38,7 +38,7 @@ class OptoDASV8(FiberIO):
         return _get_opto_das_version_str(resource) or None
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Scan a OptoDAS file, return summary information about the file's contents."""
         attrs, coords = _get_opto_das_attrs(resource, snap=snap)

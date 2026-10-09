@@ -37,26 +37,31 @@ _DASCORE_DIR = str(Path(dc.__file__).parent)
 
 def cf_time_values(node, index=slice(None)):
     """Time labels, decoding CF units such as 'milliseconds since 2017-09-18'."""
-    units = str(unbyte(_maybe_unpack(node.attrs.get("units", ""))))
+    values = decode_cf_time(node.attrs, np.atleast_1d(node[index]))
+    return values if isinstance(index, slice) else values[0]
+
+
+def decode_cf_time(attrs, raw) -> np.ndarray:
+    """Decode stored times by the CF `units` (and `calendar`) in `attrs`."""
+    units = str(unbyte(_maybe_unpack(attrs.get("units", ""))))
     unit, *rest = re.split(r" since ", units, maxsplit=1, flags=re.IGNORECASE)
     origin = rest[0] if rest else ""
     if not origin:
-        return dc.to_datetime64(node[index])
-    calendar = str(unbyte(_maybe_unpack(node.attrs.get("calendar", "standard"))))
+        return dc.to_datetime64(raw)
+    calendar = str(unbyte(_maybe_unpack(attrs.get("calendar", "standard"))))
     if calendar.lower() not in _CF_CALENDARS:
         msg = f"Time uses the unsupported CF calendar {calendar!r}."
         raise InvalidFiberFileError(msg)
     try:
         name = cast("Any", unit.strip())  # CF names a unit pandas also knows
-        offsets = pd.to_timedelta(np.atleast_1d(node[index]), unit=name)
+        offsets = pd.to_timedelta(raw, unit=name)
         # pandas raises where numpy would wrap past the nanosecond range
         out = (pd.Timestamp(origin.strip()) + offsets).as_unit("ns")
     except (ValueError, OverflowError) as exc:
         msg = f"Cannot decode the time units {units!r}."
         raise InvalidFiberFileError(msg) from exc
     out = out.tz_convert(None) if out.tz is not None else out
-    values = out.to_numpy()
-    return values if isinstance(index, slice) else values[0]
+    return out.to_numpy()
 
 
 def should_snap(snap: snap_type, name: str) -> bool:

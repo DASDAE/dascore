@@ -7,7 +7,7 @@ import numpy as np
 import dascore as dc
 import dascore.core
 from dascore.core.coords import get_coord
-from dascore.io.utils import should_snap
+from dascore.io.utils import stored_coord
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
@@ -54,8 +54,14 @@ def _get_coord_manager(fi, snap=True):
             coord = get_coord(min=start, max=stop, step=step, units=unit)
         else:  # and distance
             # The channels are ints so we multiply by step to get distance.
-            distance = fi["/header/channels"][:] * step
-            coord = get_coord(data=distance, units=unit, snap=should_snap(snap, dim))
+            coord = stored_coord(
+                fi["/header/channels"],
+                snap,
+                name=dim,
+                where=fi,
+                decode=lambda channels, step=step: channels * step,
+                units=unit,
+            )
         coords[dim] = coord
     out = dascore.core.get_coord_manager(coords=coords, dims=dims)
     return out

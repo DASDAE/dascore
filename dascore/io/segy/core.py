@@ -53,7 +53,7 @@ class SegyV1_0(FiberIO):  # noqa
             return out
 
     def get_metadata(
-        self, resource: LocalPath, *, snap: snap_type = True
+        self, resource: LocalPath, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """
         Used to get metadata about a file without reading the whole file.

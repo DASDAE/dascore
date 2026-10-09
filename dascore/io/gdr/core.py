@@ -37,7 +37,7 @@ class GDR_V1(H5ArrayMixin, FiberIO):  # noqa
         return _match[1] if (_match := _get_version(resource)) else None
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type = ("time",)
     ) -> list[dc.PatchMeta]:
         """Get the attributes of a resource belong to this type."""
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap)

@@ -68,7 +68,7 @@ class TestNodeCodec:
         """A coordinate reads back equal to what was written."""
         coord = CASES[name]
         _save_coord(coord, name, h5, compact=True)
-        back = _read_coord(h5[name], name, {}, snap=True)
+        back = _read_coord(h5[name], name, {}, snap=False)
         assert back == coord
         assert back.dtype == coord.dtype
 
@@ -77,7 +77,7 @@ class TestNodeCodec:
         coord = get_coord(start=T0, step=(1, 1024), shape=(10**9,))
         _save_coord(coord, "long", h5, compact=True)
         assert h5["long"].shape == (0,)
-        back = _read_coord(h5["long"], "long", {}, snap=True)
+        back = _read_coord(h5["long"], "long", {}, snap=False)
         assert back == coord
 
     def test_every_node_states_its_class(self, h5):
@@ -95,7 +95,7 @@ class TestNodeCodec:
         coord = get_coord(start=start, step=np.longdouble("0.1"), shape=(10,))
         _save_coord(coord, "wide", h5, compact=True)
         assert h5["wide"].shape == (10,)
-        back = _read_coord(h5["wide"], "wide", {}, snap=True)
+        back = _read_coord(h5["wide"], "wide", {}, snap=False)
         assert back.dtype == coord.dtype
         assert np.array_equal(back.values, coord.values)
 
@@ -109,7 +109,7 @@ class TestNodeCodec:
         jitter = NumericCoord.from_labels(np.array([0.0, 1.0, 2.0005, 3.0, 4.0]))
         coord = concat_coords(jitter, get_coord(start=10.0, stop=15.0, step=1.0))
         _save_coord(coord, "jitter", h5, compact=True)
-        back = _read_coord(h5["jitter"], "jitter", {}, snap=True)
+        back = _read_coord(h5["jitter"], "jitter", {}, snap=False)
         np.testing.assert_array_equal(back.values, coord.values)
 
     @pytest.mark.parametrize(
@@ -123,7 +123,7 @@ class TestNodeCodec:
         name = f"slice_{indexer.start}_{indexer.stop}_{indexer.step}"
         _save_coord(coord, name, h5, compact=True)
         assert h5[name].shape == (0,)
-        back = _read_coord(h5[name], name, {}, snap=True)
+        back = _read_coord(h5[name], name, {}, snap=False)
         assert back.values.tobytes() == parent.values[indexer].tobytes()
         assert back.data_id == coord.data_id
 
@@ -134,7 +134,7 @@ class TestNodeCodec:
         coord = parent[89:2:-2]
         name = f"window_{type(step).__name__}"
         _save_coord(coord, name, h5, compact=True)
-        back = _read_coord(h5[name], name, {}, snap=True)
+        back = _read_coord(h5[name], name, {}, snap=False)
         assert back.values.tobytes() == parent.values[89:2:-2].tobytes()
         assert back.data_id == coord.data_id
 
@@ -144,7 +144,7 @@ class TestNodeCodec:
             start=np.float32(92.97747), step=0.49223355932786406, shape=(5_482_063,)
         )
         _save_coord(coord, "mixed", h5, compact=True)
-        back = _read_coord(h5["mixed"], "mixed", {}, snap=True)
+        back = _read_coord(h5["mixed"], "mixed", {}, snap=False)
         assert len(back) == len(coord)
         assert back == coord
 

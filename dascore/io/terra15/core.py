@@ -12,9 +12,10 @@ from dascore.utils.hdf5 import H5Reader
 
 from .utils import (
     _get_distance_coord,
-    _get_scanned_time_info,
     _get_terra15_version_str,
+    _get_time_node,
     _get_version_data_node,
+    _get_written_count,
     _scan_terra15,
 )
 
@@ -31,7 +32,7 @@ class Terra15FormatterV4(FiberIO):
         return _get_terra15_version_str(resource) or None
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type = ("time",)
     ) -> list[dc.PatchMeta]:
         """Scan a terra15 v2 file, return summary information."""
         _version, data_node = _get_version_data_node(resource)
@@ -46,13 +47,11 @@ class Terra15FormatterV4(FiberIO):
         Besides the requested block, only the time node's ends and the
         header are read (the whole time node for an unfinished file, to
         count the rows it actually wrote). Unwritten trailing rows are
-        always excluded. ``snap`` and ``snap_dims`` are accepted for
-        consistency with `read`; timestamp regularization does not affect
-        positional array windows.
+        always excluded; `snap` does not affect positional array windows.
         """
         _, data_node = _get_version_data_node(resource)
         data = data_node["data"]
-        _, _, time_len, _ = _get_scanned_time_info(data_node)
+        time_len = _get_written_count(_get_time_node(data_node))
         shape = (time_len, len(_get_distance_coord(resource)))
         return slice_dataset(data, windows, shape)
 
