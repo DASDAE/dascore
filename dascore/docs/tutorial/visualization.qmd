@@ -10,7 +10,7 @@ DASCore plots are available from the object they describe: `Patch.viz`, `Spool.v
 
 ## Waterfall
 
-[`Patch.viz.waterfall`](`dascore.viz.waterfall`) plots patch data as an image. Its default 1.5×IQR color limits reduce the influence of outliers.
+[`Patch.viz.waterfall`](`dascore.viz.waterfall`) plots patch data as an image. Its default color limits clip to 1.5×IQR beyond the quartiles, so outliers saturate; pass `scale=(0, 1)` to show the full data range.
 
 ```{python}
 import dascore as dc

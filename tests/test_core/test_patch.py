@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from rich.text import Text
 
 import dascore as dc
+import dascore.utils.array as array_module
 from dascore.compat import random_state
 from dascore.core import Patch, PatchMeta
 from dascore.core.coords import BaseCoord
@@ -1363,6 +1364,46 @@ class TestApplyOperator:
         out = random_patch > random_patch
         assert np.issubdtype(out.dtype, np.bool_)
         assert not out.all()
+
+    @pytest.mark.parametrize(
+        "op",
+        [lambda a, b: a & b, lambda a, b: a | b, lambda a, b: a ^ b],
+        ids=["and", "or", "xor"],
+    )
+    def test_logical_ops(self, random_patch, op):
+        """Boolean patches combine with &, | and ^, either way round (#1328)."""
+        mask, other = random_patch > 0.5, random_patch.data < 0.7
+        expected = op(mask.data, other)
+        assert np.array_equal(op(mask, mask.new(data=other)).data, expected)
+        assert np.array_equal(op(mask, other).data, expected)
+        assert np.array_equal(op(other, mask).data, expected)
+        assert np.array_equal(op(True, mask).data, op(True, mask.data))
+
+    def test_reflected_operand_names_the_result(self, random_patch):
+        """A different left operand gives a different data id."""
+        mask = random_patch > 0.5
+        assert (10 - random_patch).attrs.data_id != (20 - random_patch).attrs.data_id
+        assert (True ^ mask).attrs.data_id != (False ^ mask).attrs.data_id
+
+    def test_patch_operand_data_is_not_hashed(self, random_patch, monkeypatch):
+        """Two patches' data never become operation parameters."""
+        seen = []
+        original = array_module.try_operation_id
+
+        def spy(kind, params):
+            seen.append(params["operands"])
+            return original(kind, params)
+
+        monkeypatch.setattr(array_module, "try_operation_id", spy)
+        _ = random_patch + random_patch
+        assert seen == [()]
+
+    def test_invert_and_abs(self, random_patch):
+        """~ inverts a boolean patch and abs() is np.abs."""
+        mask = random_patch > 0.5
+        assert np.array_equal((~mask).data, ~mask.data)
+        shifted = random_patch - 0.5
+        assert np.array_equal(abs(shifted).data, np.abs(shifted.data))
 
     def test_reverse_subtraction(self):
         """Test that reverse subtraction works correctly."""

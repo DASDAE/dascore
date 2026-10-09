@@ -258,6 +258,17 @@ class TestExplicitSelect:
 class TestExplicitChunk:
     """Each requested output is checked against actual coverage."""
 
+    def test_filled_window_past_datetime_data(self):
+        """A filled window past datetime data is refused like a numeric one (#1389)."""
+        patch = dc.get_example_patch()
+        time = patch.get_coord("time")
+        windows = np.array([[time.min(), time.max() + np.timedelta64(2, "s")]])
+        spool = dc.spool([patch])
+        with pytest.raises(ChunkError, match="incomplete"):
+            spool.chunk(time=windows, fill_value=0)
+        kept = spool.chunk(time=windows, fill_value=0, keep_partial=True)
+        assert kept[0].shape == patch.shape
+
     def test_plan_and_loaded_windows_agree(self):
         """Repeated and unsorted requests retain individual outputs."""
         spool = dc.spool(_patch(np.arange(10)))

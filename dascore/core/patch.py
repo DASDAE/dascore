@@ -200,6 +200,21 @@ class Patch(NamespaceOwner, PatchMeta):
     def __le__(self, other):
         return apply_ufunc(np.less_equal, self, other)
 
+    def __and__(self, other):
+        return apply_ufunc(np.bitwise_and, self, other)
+
+    def __or__(self, other):
+        return apply_ufunc(np.bitwise_or, self, other)
+
+    def __xor__(self, other):
+        return apply_ufunc(np.bitwise_xor, self, other)
+
+    def __invert__(self):
+        return apply_ufunc(np.invert, self)
+
+    def __abs__(self):
+        return apply_ufunc(np.absolute, self)
+
     def __bool__(self):
         return dascore.proc.basic.bool_patch(self)
 
@@ -228,6 +243,18 @@ class Patch(NamespaceOwner, PatchMeta):
     def __rmod__(self, other):
         """Reverse modulo: other % self."""
         return apply_ufunc(np.mod, other, self)
+
+    def __rand__(self, other):
+        """Reverse and: other & self."""
+        return apply_ufunc(np.bitwise_and, other, self)
+
+    def __ror__(self, other):
+        """Reverse or: other | self."""
+        return apply_ufunc(np.bitwise_or, other, self)
+
+    def __rxor__(self, other):
+        """Reverse xor: other ^ self."""
+        return apply_ufunc(np.bitwise_xor, other, self)
 
     def __neg__(self):
         # Through the ufunc, not `update`: `-patch` and `np.negative(patch)`
