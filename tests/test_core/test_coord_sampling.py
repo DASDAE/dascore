@@ -238,6 +238,17 @@ class TestMicrosecondGrid:
         assert back.step_exact == Fraction(1, 1024) and not back.jittered
         assert back.gapped and np.array_equal(back.values, holed.values)
 
+    def test_dasdae_strided_run_keeps_its_step(self, tmp_path):
+        """A stored run one stride apart reads back on its declared step."""
+        sparse = get_coord(data=np.arange(0, 2000, 2), step=1)
+        dense = get_coord(start=3000, stop=3010, step=1)
+        coord = dc.core.coords.concat_coords(sparse, dense)
+        with h5py.File(tmp_path / "strided.h5", "w") as h5:
+            _save_coord(coord, "_coord_x", h5, compact=True)
+            back = _read_coord(h5["_coord_x"], "x", {}, snap=False)
+        assert back.step == 1 and back.gapped
+        np.testing.assert_array_equal(back.values, coord.values)
+
     def test_dasdae_round_trip(self, coord, labels, tmp_path):
         """DASDAE stores the grid and reads back the same labels."""
         data = np.zeros((len(coord), 2))

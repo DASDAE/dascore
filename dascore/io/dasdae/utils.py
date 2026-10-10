@@ -395,10 +395,14 @@ def _read_coord(node, name, attrs2, snap):
         # grid it declares, never a range to rebuild
         array = _read_array(node)
         if (lengths := node_attrs.get(_EXACT)) is not None:
-            # each run read exactly, so a fractional grid keeps its exact step
+            # each run read exactly, so a fractional grid keeps its exact
+            # step; a grid of another spacing is labels on the declared one
             runs = []
             for values in np.split(array, np.cumsum(lengths)[:-1]):
                 grid = get_coord(data=values, snap=False)._grid
+                if grid is not None and node_step is not None:
+                    if np.abs(grid.step(array.dtype)) != np.abs(node_step):
+                        grid = None
                 runs.append(values if grid is None else grid)
             return NumericCoord(
                 runs=tuple(runs), units=units, step=node_step, dtype=array.dtype
