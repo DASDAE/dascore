@@ -313,13 +313,17 @@ def stored_coord(
     step the file states when both are given, such as a start time and its
     acquisition rate; otherwise it spans the first and last labels in their
     count, so labels from a clock unlocked from sampling still come back
-    evenly sampled. The samples are assumed to hold no hole. The grid is
-    checked against the end labels, and a grid spanning them against the
-    quartile labels too, and a `SnapWarning` naming the file is issued where
-    one sits further than `dascore.config.max_shift` steps from it, beyond
-    what its stored precision resolves. Only those labels are read. A
-    coordinate `snap` does not name, or which is not numeric or time-like,
-    comes back exactly as stored.
+    evenly sampled. A spanning step is a whole number of ticks where that
+    keeps the last label within its stored precision, else an exact
+    fraction of one. The grid is checked against the end labels, and a grid
+    spanning them against the quartile labels too. Where one sits further than
+    `dascore.config.max_shift` steps from it, beyond what its stored
+    precision resolves (a hole, or a clock running apart), the labels are
+    returned as stored with a `SnapWarning` naming the file, as they are
+    when they end in missing values or do not advance. Only the checked
+    labels are read unless they are kept. A coordinate `snap` does not
+    name, or which is not numeric or time-like, comes back exactly as
+    stored.
 
     Parameters
     ----------
@@ -370,30 +374,30 @@ def stored_coord(
         values = values.astype(np.float64)
     elif values.dtype.kind in "iu":  # a descending or wide grid needs room
         values = values.astype(np.int64)
+    resolution, reason = _resolution(stored, decode), None
     if not stated:
         start = values[0]
         if count == 1:
             return get_coord(data=values, step=step, units=units)
-        step = _span_step(start, values[-1], count)
-        if not step:
-            msg = f"the stored {name} labels do not advance, so span no grid"
-            _warn_snap(msg, where)
-            return get_coord(data=decode(labels[:count]), units=units, snap=False)
-    grid = get_coord(start=start, step=step, shape=(count,), units=units)
-    size = _step_size(step, values.dtype.kind)
-    shift = float(np.max(np.abs(_offsets(values, start, size, positions))))
-    max_shift = dc.get_config().max_shift
-    if shift > max_shift + _resolution(stored, decode) / abs(size):
-        how = "its stated start and step" if stated else "its first and last labels"
-        msg = (
-            f"the stored {name} labels sit up to {shift:.2g} steps off the "
-            f"grid built from {how}, more than dascore.config.max_shift "
-            f"({max_shift}). The file may hold a gap, or its clock may run "
-            "apart from its sampling; pass snap=False to read the labels "
-            "as stored"
-        )
-        _warn_snap(msg, where)
-    return grid
+        if pd.isnull(values[[0, -1]]).any():
+            reason = "end in missing values"
+        elif not (step := _span_step(start, values[-1], count, resolution)):
+            reason = "do not advance"
+    if reason is None:
+        size = _step_size(step, values.dtype.kind)
+        shift = float(np.max(np.abs(_offsets(values, start, size, positions))))
+        max_shift = dc.get_config().max_shift
+        if not shift <= max_shift + resolution / abs(size):  # NaN labels fail too
+            how = "stated start and step" if stated else "first and last labels"
+            reason = (
+                f"sit up to {shift:.2g} steps off the grid built from its {how}, "
+                f"more than dascore.config.max_shift ({max_shift}); the file may "
+                "hold a gap, or its clock may run apart from its sampling"
+            )
+    if reason is None:
+        return get_coord(start=start, step=step, shape=(count,), units=units)
+    _warn_snap(f"the stored {name} labels {reason}", where)
+    return get_coord(data=decode(labels[:count]), units=units, snap=False)
 
 
 def _checked_positions(count: int, quartiles: bool) -> np.ndarray:
@@ -403,20 +407,22 @@ def _checked_positions(count: int, quartiles: bool) -> np.ndarray:
     return np.unique(ends + inner)
 
 
-def _span_step(first, last, count: int):
+def _span_step(first, last, count: int, resolution: float = 0.0):
     """
     The step spreading `count` labels from `first` to `last`.
 
-    Time and integer labels get an exact fraction of a tick, its
-    denominator bounded so that no grid position overflows int64.
+    Time and integer labels get a whole number of ticks where that keeps the
+    last label within the labels' stored `resolution`, as a released reader
+    gave them, and otherwise an exact fraction of a tick, its denominator
+    bounded so that no grid position overflows int64.
     """
     if not isinstance(first, np.generic) or first.dtype.kind not in "iumM":
         return (float(last) - float(first)) / (count - 1)
     timelike = first.dtype.kind in "mM"
     ticks = int((last - first).astype(np.int64)) if timelike else int(last - first)
     exact = Fraction(ticks, count - 1).limit_denominator(2**62 // max(abs(ticks), 1))
-    if exact.denominator == 1:
-        whole = int(exact)
+    whole = round(exact)
+    if whole and abs(whole - exact) * (count - 1) <= max(resolution, 0.5):
         return np.timedelta64(whole, "ns") if timelike else whole
     return exact / 10**9 if timelike else exact
 
@@ -457,8 +463,11 @@ def _resolution(stored, decode) -> float:
 
 
 def _warn_snap(message: str, where) -> None:
-    """Warn about snapping stored labels, naming the file they came from."""
-    msg = f"{_resource_name(where)}: {message}."
+    """Warn that stored labels are kept rather than snapped, naming the file."""
+    msg = (
+        f"{_resource_name(where)}: {message}, so they are kept as stored; "
+        "Patch.snap_coords puts them on a grid."
+    )
     warnings.warn(msg, SnapWarning, skip_file_prefixes=(_DASCORE_DIR,))
 
 

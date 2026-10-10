@@ -381,9 +381,14 @@ def _node_step(attrs):
 
 
 def _read_coord(node, name, attrs2, snap):
-    """Rebuild one coordinate from its node, on a grid if `snap`."""
+    """
+    Rebuild one coordinate from its node, on a grid if `snap` and jittered.
+
+    Only labels written jittered snap: holes and irregular labels are what
+    was written, not a grid's noise.
+    """
     coord = _read_stored_coord(node, name, attrs2)
-    if not snap or coord.evenly_sampled or coord.ndim != 1:
+    if not (snap and coord.jittered) or coord.gapped:
         return coord
     units = coord.units
     return stored_coord(coord.values, True, name=name, where=node.file, units=units)
@@ -441,7 +446,7 @@ def _read_stored_coord(node, name, attrs2):
     return get_coord(data=array, units=units, step=step, snap=False)
 
 
-def _get_coords(patch_group, dims, attrs2, snap=False):
+def _get_coords(patch_group, dims, attrs2, snap=True):
     """Get the coordinates from a patch group."""
     coord_dict = {}  # just store coordinates here
     coord_dim_dict = {}  # stores {coord_name: ((dims, ...), coord)}
@@ -491,7 +496,7 @@ def _get_patch_group(h5, source_patch_key=""):
     return resolve_keyed_source(waveforms, key, where=str(h5.filename))
 
 
-def _get_metadata_from_group(group, legacy: bool = True, snap=False):
+def _get_metadata_from_group(group, legacy: bool = True, snap=True):
     """Build one data-less patch from a stored DASDAE patch group."""
     attrs = group.attrs
     out = {}
@@ -623,7 +628,7 @@ def _get_file_version(h5):
     return unbyte(h5.attrs.get("__DASDAE_version__", ""))
 
 
-def _get_contents_from_patch_groups_generic(h5, snap=False, keys=frozenset()):
+def _get_contents_from_patch_groups_generic(h5, snap=True, keys=frozenset()):
     """Get DASDAE scan summaries from a generic HDF5 handle, of `keys` if given."""
     waveforms = h5.get("waveforms")
     if waveforms is None:

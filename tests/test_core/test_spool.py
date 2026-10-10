@@ -1296,6 +1296,18 @@ class TestSpoolSnap:
         exact = dc.spool(terra15_das_example_path, snap=False)
         with pytest.raises(ParameterError, match="snap"):
             exact + dc.spool(terra15_das_example_path)
+        # spellings of the format's default are one snap
+        default = dc.spool(terra15_das_example_path)
+        combined = default + dc.spool(terra15_das_example_path, snap="time")
+        assert combined[0].get_coord("time") == default[0].get_coord("time")
+
+    def test_explicit_ranges_follow_snap(self, terra15_das_example_path, exact):
+        """A range selection plans on the labels the spool's patches hold."""
+        spool = dc.spool(terra15_das_example_path, snap=False)
+        labels = exact.get_coord("time").values
+        bounds = np.array([[labels[100], labels[200]]])
+        out = spool.select(time=bounds)[0]
+        assert out.equals(exact.select(time=(labels[100], labels[200])))
 
     def test_directory_spool_refuses_snap(self, tmp_path):
         """A directory index does not yet record snap, so it is refused."""

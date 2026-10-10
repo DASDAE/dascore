@@ -449,8 +449,10 @@ class TestStoredCoord:
         )
         assert out.evenly_sampled
         assert len(out) == len(jittered_times)
-        assert out.min() == dc.to_datetime64(jittered_times[0])
-        assert out.max() == dc.to_datetime64(jittered_times[-1])
+        # the ends within the 256 ns float64 epoch seconds resolve here
+        ends = dc.to_datetime64(jittered_times[[0, -1]])
+        offsets = np.array([out.min(), out.max()]) - ends
+        assert np.all(np.abs(offsets) <= np.timedelta64(256, "ns"))
 
     def test_grid_depends_only_on_span_and_count(self, same_span):
         """Arrays stating the same span agree on every sample."""
@@ -498,18 +500,27 @@ class TestStoredCoord:
         assert out.step_exact == 1 / 1024
         np.testing.assert_array_equal(out.values, grid.values)
 
-    def test_central_hole_warns(self, jittered_times):
+    def test_central_hole_keeps_labels(self):
         """One missing sample moves the middle of an end grid half a step."""
         holed = np.delete(np.arange(1_001.0), 500)
-        with pytest.warns(SnapWarning, match="holed.h5.*up to 0.5 steps"):
+        match = "holed.h5.*up to 0.5 steps.*kept as stored"
+        with pytest.warns(SnapWarning, match=match):
             out = stored_coord(holed, True, name="distance", where="holed.h5")
-        assert out.evenly_sampled
+        np.testing.assert_array_equal(out.values, holed)
 
-    def test_stated_grid_disagreeing_warns(self, jittered_times):
+    def test_hole_near_an_end_keeps_labels(self):
+        """The quartile labels see a hole wherever it sits."""
+        for hole in (3, 400, 995):
+            holed = np.delete(np.arange(1_001.0), hole)
+            with pytest.warns(SnapWarning, match="kept as stored"):
+                out = stored_coord(holed, True, name="distance")
+            assert not out.evenly_sampled
+
+    def test_stated_grid_disagreeing_keeps_labels(self, jittered_times):
         """A rate which does not match the stored end label warns."""
         start = dc.to_datetime64(jittered_times[0])
         with pytest.warns(SnapWarning, match="stated start and step"):
-            stored_coord(
+            out = stored_coord(
                 jittered_times,
                 True,
                 name="time",
@@ -517,6 +528,37 @@ class TestStoredCoord:
                 start=start,
                 step=step_from_rate(100.1),
             )
+        np.testing.assert_array_equal(out.values, dc.to_datetime64(jittered_times))
+
+    @pytest.mark.parametrize(
+        "labels",
+        [
+            np.array([0.0, 1.0, 2.0, 3.0, np.nan]),
+            np.array(["2020-01-01", "2020-01-02", "NaT"], dtype="datetime64[ns]"),
+        ],
+    )
+    def test_missing_end_label_keeps_labels(self, labels):
+        """A missing end label spans no grid, so the labels are kept."""
+        with pytest.warns(SnapWarning, match="missing"):
+            out = stored_coord(labels, True, name="time")
+        assert len(out) == len(labels)
+        assert (
+            np.isnat(out.values[-1])
+            if labels.dtype.kind == "M"
+            else np.isnan(out.values[-1])
+        )
+
+    def test_whole_tick_step_within_stored_precision(self):
+        """A whole-nanosecond step is used where it keeps the ends in precision."""
+        # float64 epoch seconds resolve 256 ns here, so their span is no
+        # whole number of ns a step, but a 1 ms step keeps the ends within it
+        labels = 1_600_000_000.0 + np.arange(2_000) * 0.001
+        decoded = dc.to_datetime64(labels)
+        span = (decoded[-1] - decoded[0]).astype(np.int64)
+        assert span % 1999
+        out = stored_coord(labels, True, name="time", decode=dc.to_datetime64)
+        assert out.step == np.timedelta64(1_000_000, "ns")
+        assert out.step_exact == Fraction(1, 1000)
 
     def test_names_open_resource(self, tmp_path):
         """The warning names the file an open HDF5 resource reads."""
@@ -558,7 +600,8 @@ class TestStoredCoord:
             count=len(jittered_times),
         )
         assert len(out) == len(jittered_times)
-        assert out.max() == dc.to_datetime64(jittered_times[-1])
+        offset = out.max() - dc.to_datetime64(jittered_times[-1])
+        assert abs(offset) <= np.timedelta64(256, "ns")
 
     def test_lone_label(self):
         """One label keeps a stated step, and has none otherwise."""
@@ -580,7 +623,7 @@ class TestStoredCoord:
 
     def test_labels_which_do_not_advance(self):
         """Labels all alike cannot span a grid, so they stay as stored."""
-        with pytest.warns(SnapWarning, match="do not advance"):
+        with pytest.warns(SnapWarning, match="do not advance.*kept as stored"):
             out = stored_coord(np.ones(4), True, name="distance")
         np.testing.assert_array_equal(out.values, np.ones(4))
 

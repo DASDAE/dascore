@@ -1070,16 +1070,30 @@ class TestSnapConformance:
         dc.scan(path, snap=False)
 
     def test_snapped_dims_are_evenly_sampled(self, io_path_tuple):
-        """snap=True, and the default, put each dimension they name on a grid."""
+        """
+        snap=True, and the default, put each dimension they name on a grid.
+
+        Unless the stored labels sit off it by more than max_shift: then the
+        reader warns and keeps them as stored.
+        """
         io, path = io_path_tuple
         default = _default_snap(type(io))
         with skip_missing():
-            spools = {True: dc.read(path, snap=True), default: dc.read(path)}
-        for snap, spool in spools.items():
-            for patch in spool:
+            stored = dc.read(path, snap=False)
+        for snap in (True, default):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                spool = dc.read(path, snap=snap)
+            said = " ".join(str(x.message) for x in caught if x.category is SnapWarning)
+            for patch, raw in zip(spool, stored, strict=True):
                 for dim in _snappable_dims(patch):
-                    if should_snap(snap, dim):
-                        assert patch.get_coord(dim).evenly_sampled, (snap, dim)
+                    if not should_snap(snap, dim):
+                        continue
+                    coord = patch.get_coord(dim)
+                    kept = f"stored {dim} labels" in said and "kept as stored" in said
+                    assert coord.evenly_sampled or (
+                        kept and coord == raw.get_coord(dim)
+                    ), (snap, dim)
 
     def test_stored_labels_are_checked(self, io_path_tuple, monkeypatch):
         """Each dimension stored unevenly is snapped by the shared, checked grid."""

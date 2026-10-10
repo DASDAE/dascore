@@ -83,12 +83,15 @@ class TestFebusBSL:
         """Time spans its stored ends evenly; snap=False keeps its jitter."""
         time = bsl_patch.get_coord("time")
         assert "datetime64" in str(np.dtype(time.dtype))
-        assert time.min() == np.datetime64("2026-06-03T15:18:13.422442752")
-        assert time.max() == np.datetime64("2026-06-03T15:28:08.829897728")
         assert time.evenly_sampled
         stored = dc.read(bsl_path, snap=False)[0].get_coord("time")
         assert stored.jittered and not stored.evenly_sampled
-        assert (stored.min(), stored.max()) == (time.min(), time.max())
+        assert stored.min() == np.datetime64("2026-06-03T15:18:13.422442752")
+        assert stored.max() == np.datetime64("2026-06-03T15:28:08.829897728")
+        # a whole-ns step keeps the ends within the 256 ns the stored
+        # float64 epoch seconds resolve
+        assert time.min() == stored.min()
+        assert abs(time.max() - stored.max()) <= np.timedelta64(256, "ns")
 
     def test_sample_span_coord(self, bsl_path, bsl_patch):
         """Each sample covers a window; its exact length should be kept."""

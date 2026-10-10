@@ -147,11 +147,11 @@ class TestStoredTimes:
         assert time.min() == np.datetime64("1970-01-01T00:00:00")
 
     def test_disagreeing_times_warn(self, jumped_path):
-        """The grid is kept, and the file and disagreement are named."""
-        with pytest.warns(SnapWarning, match="prodml_2.0.h5.*20 steps"):
+        """The stored times are kept, and the file and disagreement named."""
+        match = "prodml_2.0.h5.*20 steps.*kept as stored"
+        with pytest.warns(SnapWarning, match=match):
             time = dc.read(jumped_path)[0].get_coord("time")
-        assert time.evenly_sampled
-        assert time.step == np.timedelta64(5, "ms")
+        assert time == dc.read(jumped_path, snap=False)[0].get_coord("time")
 
     def test_snap_false_shows_the_jump(self, jumped_path):
         """The stored times come back exactly."""

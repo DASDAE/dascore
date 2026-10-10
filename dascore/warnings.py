@@ -19,10 +19,10 @@ class NumpyFallbackWarning(DASCoreWarning):
 
 class SnapWarning(DASCoreWarning):
     """
-    Issued when a reader snaps stored labels which sit off its grid.
+    Issued when a reader keeps stored labels it was asked to snap.
 
-    A reader puts the labels `snap` names on a grid, and warns when a label
-    sits further from it than `dascore.config.max_shift` steps: the file may
-    hold a gap, or its clock may run apart from its sampling. Pass
-    `snap=False` to read the labels as stored.
+    A reader puts the labels `snap` names on a grid, unless a label sits
+    further from it than `dascore.config.max_shift` steps: the file may hold
+    a gap, or its clock may run apart from its sampling. Those labels are
+    kept as stored; `Patch.snap_coords` puts them on a grid.
     """

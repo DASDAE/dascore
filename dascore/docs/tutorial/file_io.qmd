@@ -77,7 +77,7 @@ DASCore reads, but does not write, NetCDF files in the XDAS layout. Each signal,
 
 ## Snapping coordinates on read
 
-Many instruments store a timestamp per sample, from a clock that jitters or runs apart from the sampling. Readers put the dimensions a format stores this way on a grid, from the start and rate the file states or else from its first and last labels, and warn, naming the file, where a stored label sits more than `dascore.config.max_shift` (a fifth of a step) off that grid. `snap` chooses the dimensions: by default the format's own (its reader's `get_metadata` signature shows them), `True` for all, `False` for none, or a tuple of names. `dc.read`, `dc.scan`, `dc.scan_payloads` and `dc.spool` of a file all take it.
+Many instruments store a timestamp per sample, from a clock that jitters or runs apart from the sampling. Readers put the dimensions a format stores this way on a grid, from the start and rate the file states or else from its first and last labels, and check the grid against a few stored labels. Where one sits more than `dascore.config.max_shift` (a fifth of a step) off it, the file may hold a gap, so the labels are kept as stored, with a warning naming the file. `snap` chooses the dimensions: by default the format's own (its reader's `get_metadata` signature shows them), `True` for all, `False` for none, or a tuple of names. `dc.read`, `dc.scan`, `dc.scan_payloads` and `dc.spool` of a file all take it.
 
 ```{python}
 path = dc.utils.downloader.fetch("terra15_das_1_trimmed.hdf5")

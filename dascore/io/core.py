@@ -1574,9 +1574,9 @@ def read(
         its `get_metadata` signature; True every one-dimensional numeric or
         time-like dimension; False none, returning every coordinate exactly
         as stored; a name or tuple of names those dimensions, raising if a
-        patch has no such dimension. A reader warns, naming the file, where
-        a stored label sits more than `dascore.config.max_shift` steps off
-        its grid. See rule 3 of the
+        patch has no such dimension. Where a stored label sits more than
+        `dascore.config.max_shift` steps off its grid, a reader keeps the
+        labels as stored and warns, naming the file. See rule 3 of the
         [coordinate guidelines](`dascore/docs/notes/coordinates.qmd`).
     *kwargs
         All kwargs are passed to the format-specific read functions.
@@ -2080,9 +2080,9 @@ def scan_payloads(
         its `get_metadata` signature; True every one-dimensional numeric or
         time-like dimension; False none, returning every coordinate exactly
         as stored; a name or tuple of names those dimensions, raising if a
-        patch has no such dimension. A reader warns, naming the file, where
-        a stored label sits more than `dascore.config.max_shift` steps off
-        its grid. See rule 3 of the
+        patch has no such dimension. Where a stored label sits more than
+        `dascore.config.max_shift` steps off its grid, a reader keeps the
+        labels as stored and warns, naming the file. See rule 3 of the
         [coordinate guidelines](`dascore/docs/notes/coordinates.qmd`).
 
     Returns
@@ -2148,9 +2148,9 @@ def scan(
         its `get_metadata` signature; True every one-dimensional numeric or
         time-like dimension; False none, returning every coordinate exactly
         as stored; a name or tuple of names those dimensions, raising if a
-        patch has no such dimension. A reader warns, naming the file, where
-        a stored label sits more than `dascore.config.max_shift` steps off
-        its grid. See rule 3 of the
+        patch has no such dimension. Where a stored label sits more than
+        `dascore.config.max_shift` steps off its grid, a reader keeps the
+        labels as stored and warns, naming the file. See rule 3 of the
         [coordinate guidelines](`dascore/docs/notes/coordinates.qmd`).
 
     Returns

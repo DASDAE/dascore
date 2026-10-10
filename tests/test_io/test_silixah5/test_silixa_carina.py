@@ -87,7 +87,7 @@ class TestSilixaCarina:
         assert np.isclose(distance.min(), -101.584763 + 50 * step)
 
     def test_gapped_channel_map_snaps_when_asked(self, carina_path, tmp_path):
-        """A gapped map is spread onto a grid when asked, with a warning."""
+        """A gapped map asked to snap keeps its channel distances, warning."""
         path = tmp_path / "gapped_map.h5"
         shutil.copy(carina_path, path)
         with h5py.File(path, "a") as h5:
@@ -95,10 +95,9 @@ class TestSilixaCarina:
             h5["ChannelMap"][143] = -1
         stored = SilixaH5V2().read(path)[0].get_coord("distance")
         for snap in (True, ("distance",)):
-            with pytest.warns(SnapWarning, match="gapped_map.h5"):
+            with pytest.warns(SnapWarning, match="gapped_map.h5.*kept as stored"):
                 out = SilixaH5V2().read(path, snap=snap)[0].get_coord("distance")
-            assert out.evenly_sampled
-            assert np.allclose((out.min(), out.max()), (stored.min(), stored.max()))
+            assert out == stored
 
     def test_partial_files_not_claimed(self, tmp_path):
         """Files missing the ChannelMap or the attr family aren't claimed."""

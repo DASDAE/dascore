@@ -39,7 +39,7 @@ from dascore.compat import UPath
 from dascore.constants import PROGRESS_LEVELS, ExecutorType, namespace_select_type
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import MissingPatchError, ParameterError
-from dascore.io.core import _resolve_read_spool
+from dascore.io.core import FiberIO, _resolve_read_spool, _resolve_snap
 from dascore.io.index.backend import get_backend
 from dascore.io.index.indexer import DBDirectoryIndexer, scan_unit_stats
 from dascore.io.index.ingest import SourceRecord, patch_record, summaries_to_records
@@ -51,6 +51,7 @@ from dascore.io.index.query import (
 )
 from dascore.io.index.schema import SPOOL_LATE_RENAMES
 from dascore.utils.gaps import contiguous_windows
+from dascore.utils.identity import _snap_names
 from dascore.utils.misc import (
     _canonical_range,
     express_range_for_coord,
@@ -331,10 +332,11 @@ class CompositeResolver(PatchResolver):
         file = getattr(resolver, "file", resolver)
         self.file._upaths.update(getattr(file, "_upaths", {}))
         for path, snap in getattr(file, "_snaps", {}).items():
-            if self.file._snaps.setdefault(path, snap) != snap:
+            held = self.file._snaps.setdefault(path, snap)
+            if _snap_names(held) != _snap_names(snap):
                 msg = (
                     f"Spools reading {path} under different snap options "
-                    f"({self.file._snaps[path]!r} and {snap!r}) cannot be "
+                    f"({held!r} and {snap!r}) cannot be "
                     "combined; open the file once."
                 )
                 raise ParameterError(msg)
@@ -852,8 +854,16 @@ class PatchCatalog:
         records = summaries_to_records(summaries, mtimes_ns=mtimes, sizes_bytes=sizes)
         remote = isinstance(path, UPath) and not is_local_path(path)
         upaths = {str(path): path} if remote else {}
-        # recorded even when None, so a union can see two snaps of one file
-        snaps = {str(x.source_path): snap for x in summaries}
+        # the format's default named, so a union can compare two spools
+        snaps = {
+            str(x.source_path): _resolve_snap(
+                FiberIO.manager.get_fiberio(
+                    format=x.source_format, version=x.source_version
+                ),
+                snap,
+            )
+            for x in summaries
+        }
         out = cls(resolver=FileResolver(upaths=upaths, snaps=snaps))
         out.backend.write_sources(records)
         out._invalidate()

@@ -230,22 +230,44 @@ class TestChunkPlanDF:
         out2 = build_chunk_plan(contiguous_df, overlap=10, time=20).outputs
         assert out.equals(out2)
 
-    def test_chunk_on_split(self, terra15_file_spool):
+    def test_chunk_on_split(self, terra15_v6_path):
         """
         Ensure chunking which creates a slice at the end time works.
 
-        The file's time is an exact fractional grid spanning its stored end
-        labels, which the public contents frame rounds; chunking the spool
-        plans on the exact grid.
+        The v6 file's GPS times snap to a whole-nanosecond grid; the v5
+        file's sit 1.3 steps off any grid, so it reads as stored.
         """
-        df = terra15_file_spool.get_contents()
+        df = dc.spool(terra15_v6_path).get_contents()
         dur = (df["time_max"] - df["time_min"]).iloc[0]
-        out = list(terra15_file_spool.chunk(time=dur / 3, keep_partial=True))
+        seg_len = dur / 3
+        dt = df["time_step"].iloc[0]
+        chunk_df = build_chunk_plan(df, keep_partial=True, time=seg_len).outputs
         # three thirds of the span, then the last sample on its own
-        assert len(out) == 4
-        assert out[-1].get_coord("time").min() == df["time_max"].iloc[0]
-        sizes = [len(x.get_coord("time")) for x in out]
-        assert sum(sizes) == len(terra15_file_spool[0].get_coord("time"))
+        assert len(chunk_df) == 4
+        assert chunk_df["time_min"].iloc[-1] == df["time_max"].iloc[0]
+        duration = chunk_df["time_max"] - chunk_df["time_min"]
+        samples = (duration / dt).round() + 1
+        assert samples.sum() == round(dur / dt) + 1
+
+    @pytest.mark.xfail(
+        reason="#1428: get_contents rounds an exact fractional step to whole "
+        "ns, so a plan built from it drifts off the grid (spool.chunk is exact)",
+        strict=True,
+    )
+    def test_chunk_contents_on_fractional_grid(self):
+        """A plan from public contents keeps every sample of a 1024 Hz grid."""
+        time = dc.get_coord(
+            start=np.datetime64("2020-01-01"), step=(1, 1024), shape=(3001,)
+        )
+        coords = {"distance": np.arange(3), "time": time}
+        patch = dc.Patch(
+            data=np.zeros((3, 3001)), coords=coords, dims=("distance", "time")
+        )
+        df = dc.spool([patch]).get_contents()
+        dur = (df["time_max"] - df["time_min"]).iloc[0]
+        chunk_df = build_chunk_plan(df, keep_partial=True, time=dur / 3).outputs
+        # three thirds of the span, then the last sample on its own
+        assert len(chunk_df) == 4
 
     def test_nan_in_df(self, contiguous_df):
         """A null envelope row breaks continuity when dropped."""
