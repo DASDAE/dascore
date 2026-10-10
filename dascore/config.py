@@ -159,6 +159,16 @@ class DascoreConfig(BaseModel):
         default_factory=lambda: _get_cache_root() / "indexes" / "path_map",
         description="Directory of per-data-directory external index-location entries.",
     )
+    max_index_runs: int = Field(
+        default=256,
+        ge=1,
+        description=(
+            "Runs a spool index stores per coordinate. A coordinate of more "
+            "runs (stretches between its holes, or of another sampling) is "
+            "stored by its envelope, step and flags, with a warning, and "
+            "read from its source when a report or plan needs its runs."
+        ),
+    )
 
     # Progress display.
     progress_basic_refresh_per_second: float = Field(

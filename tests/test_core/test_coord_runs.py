@@ -25,7 +25,7 @@ from dascore.core.coords import (
 from dascore.exceptions import CoordError, ParameterError
 from dascore.io.dasdae.utils import _read_coord
 from dascore.units import get_quantity
-from dascore.utils.gaps import GapTolerance, get_gap_edges
+from dascore.utils.gaps import GapTolerance, get_gap_edges, run_holes
 
 PRESENT = [1, 3, 4, 10, 11, 12]
 T0 = np.datetime64("2020-01-01T00:00:00")
@@ -1268,3 +1268,75 @@ class TestRefactorParity:
         tolerance = dc.get_quantity("2")
         assert coord.get_discontinuities("gaps", tolerance=tolerance).empty
         assert coord.fuse(tolerance).runs_count == 1
+
+
+class TestRunRecords:
+    """A coordinate's runs, cut at their holes, as an index stores them."""
+
+    @pytest.mark.parametrize(
+        "coord",
+        [
+            get_coord(start=0, step=1, shape=(10,)),
+            get_coord(data=PRESENT, step=1),
+            get_coord(data=np.array([9, 8, 7, 4, 3, 1, 0]), step=-1),
+            get_coord(data=np.delete(np.arange(1500), np.arange(2, 1500, 3)), step=1),
+            concat_coords(
+                get_coord(data=np.delete(np.arange(9), [2, 5]), step=1),
+                get_coord(start=20, step=1, shape=(3,)),
+            ),
+            concat_coords(
+                get_coord(start=T0, step=(1, 1024), shape=(30,)),
+                get_coord(start=T0, step=(1, 1024), shape=(60,))[33:],
+            ),
+            get_coord(data=[0.0, 1.1, 1.95, 3.02, 6.01], step=1.0),
+        ],
+    )
+    def test_agree_with_missing(self, coord):
+        """The positions records skip are the holes missing counts."""
+        records = coord._run_records()
+        holes = run_holes(records)
+        assert sum(x.count for x in records) == len(coord)
+        assert sum(holes) == coord.missing().count
+        assert coord.gapped == bool(sum(holes))
+        assert all(x.count for x in records)
+        # a record ends where its next one starts, or at a hole
+        ends = [x.position + x.count for x in records[:-1]]
+        starts = [x.position for x in records[1:]]
+        assert [b - a for a, b in zip(ends, starts)] == holes[1:]
+
+    def test_envelopes(self):
+        """Each record spans its own labels, whichever way they run."""
+        coord = get_coord(data=np.array([9, 8, 7, 4, 3, 1, 0]), step=-1)
+        records = coord._run_records()
+        assert [(x.min, x.max) for x in records] == [(7, 9), (3, 4), (0, 1)]
+        assert [x.position for x in records] == [0, 5, 8]
+        assert {x.step for x in records} == {-1}
+
+    def test_stepless_runs_keep_their_own(self):
+        """Runs sharing no step have no positions, and keep each one's step."""
+        coord = concat_coords(
+            get_coord(start=0.0, step=1.0, shape=(3,)),
+            get_coord(start=3.0, step=1.5, shape=(3,)),
+        )
+        records = coord._run_records()
+        assert [(x.step, x.position) for x in records] == [(1.0, None), (1.5, None)]
+        assert run_holes(records) == [0, 0]
+
+    def test_one_record(self):
+        """Irregular, blank and N-dimensional coordinates are one record."""
+        coords = [
+            get_coord(data=[1.0, 2.5, 7.0]),
+            get_coord(shape=(4,)),
+            get_coord(data=np.ones((2, 3))),
+        ]
+        for coord in coords:
+            (record,) = coord._run_records()
+            assert record.count == len(coord) and record.position is None
+
+    def test_offset_bounds(self):
+        """Offsets are steps from the grid through the first label."""
+        jittered = get_coord(data=[0.0, 1.1, 1.95, 3.02, 6.01], step=1.0)
+        low, high = jittered._offset_bounds()
+        assert low == pytest.approx(-0.05) and high == pytest.approx(0.1)
+        assert get_coord(data=PRESENT, step=1)._offset_bounds() == (0.0, 0.0)
+        assert get_coord(data=[1.0, 2.5, 7.0])._offset_bounds() is None

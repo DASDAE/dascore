@@ -294,46 +294,116 @@ def gap_boundaries(start, stop, step, tolerance: GapTolerance):
     return order, reach, has_gap
 
 
+@dataclass(frozen=True, slots=True)
+class RunRecord:
+    """
+    One run of a coordinate's labels, holding no hole.
+
+    A coordinate states its runs as these, and a spool index stores them
+    as rows, so the gap questions below get one answer whichever is asked.
+
+    ``count`` samples span the labels ``min`` to ``max``. ``step`` is the
+    spacing the run keeps: the coordinate's, or a grid run's own where the
+    coordinate has none; None where it keeps none. ``position`` is where
+    the run's first sample sits on the coordinate's grid, its first sample
+    being 0; None where the coordinate has no grid.
+    """
+
+    count: int
+    min: Any
+    max: Any
+    step: Any = None
+    position: int | None = None
+
+
+def run_holes(records) -> list[int]:
+    """The positions missing before each run; 0 where none are or none are known."""
+    out, end = [], None
+    for record in records:
+        known = end is not None and record.position is not None
+        out.append(record.position - end if known else 0)
+        end = None if record.position is None else record.position + record.count
+    return out
+
+
+def _seam(before: RunRecord, after: RunRecord) -> float:
+    """How far one run starts from where the run before it ends."""
+    ascending = before.step > np.zeros_like(before.step)
+    end = before.max if ascending else before.min
+    start = after.min if ascending else after.max
+    return abs(to_float(start - end))
+
+
+def contiguous_runs(records, step=None, jittered: bool = False) -> list[RunRecord]:
+    """
+    Join a coordinate's runs into the stretches its holes leave.
+
+    On a coordinate with a step a stretch ends at each hole, and keeps the
+    step unless the labels are jittered. On one without, it ends where a
+    run changes step or starts further from its predecessor than the
+    default tolerance allows, and keeps a step only as one lone run; runs
+    holding labels with no step (e.g. an exact array of jittered times)
+    are irregular rather than gapped, so they make one stretch.
+
+    Examples
+    --------
+    >>> from dascore.utils.gaps import RunRecord, contiguous_runs
+    >>> runs = [RunRecord(3, 0, 2, 1, 0), RunRecord(2, 5, 6, 1, 5)]
+    >>> [(x.count, x.min, x.max) for x in contiguous_runs(runs, step=1)]
+    [(3, 0, 2), (2, 5, 6)]
+    """
+    if not records:
+        return []
+    stepless = pd.isnull(step)
+    if stepless and any(pd.isnull(x.step) for x in records):
+        groups = [list(records)]
+    else:
+        holes = run_holes(records)
+        groups = [[records[0]]]
+        for num in range(1, len(records)):
+            before, after = records[num - 1], records[num]
+            if stepless:
+                width = DEFAULT_TOLERANCE * to_float(abs(after.step))
+                split = after.step != before.step or _seam(before, after) > width
+            else:
+                split = holes[num] > 0
+            if split:
+                groups.append([after])
+            else:
+                groups[-1].append(after)
+    out = []
+    for group in groups:
+        if not stepless:
+            kept = None if jittered else step
+        else:
+            kept = group[0].step if len(group) == 1 else None
+        out.append(
+            RunRecord(
+                count=sum(x.count for x in group),
+                min=min(x.min for x in group),
+                max=max(x.max for x in group),
+                step=kept,
+                position=group[0].position,
+            )
+        )
+    return out
+
+
 def contiguous_windows(coord) -> list[tuple[int, int]]:
     """
     The positional ``(start, stop)`` windows over which a coordinate is contiguous.
 
-    A window ends where a run changes step or starts further from its
-    predecessor than the default tolerance allows, and at every hole
-    [missing](`dascore.core.coords.BaseCoord.missing`) reports; runs joined
-    by sub-sample jitter are one window. Runs holding labels with no shared
-    step (e.g. an exact array of jittered times) are irregular rather than
-    gapped, so they are one window too.
+    One window per stretch
+    [`contiguous_runs`](`dascore.utils.gaps.contiguous_runs`) joins the
+    coordinate's runs into, so a window ends at every hole
+    [missing](`dascore.core.coords.BaseCoord.missing`) reports, and runs
+    joined by sub-sample jitter are one window.
     """
-    numeric = hasattr(type(coord), "segments")
-    if not numeric or coord.evenly_sampled:
+    if not hasattr(type(coord), "_run_records") or coord.evenly_sampled:
         return [(0, len(coord))]
-    segments = coord.segments
-    if pd.isnull(coord.step) and not all(x.evenly_sampled for x in segments):
-        return [(0, len(coord))]
-    starts, offset, last, last_step = set(), 0, None, None
-    for seg in segments:
-        step = coord.step if pd.isnull(seg.step) else seg.step
-        # endpoints only, so a long grid run is never materialized
-        first, end = seg._get_index_values([0, -1])
-        if last is not None and (
-            pd.isnull(step)
-            or step != last_step
-            or abs(to_float(first - last)) > DEFAULT_TOLERANCE * to_float(abs(step))
-        ):
-            starts.add(offset)
-        last, last_step = end, step
-        # a dense stored run may hold holes of the declared step too
-        if holes := [first for first, _ in seg.missing().iter_runs()]:
-            values = np.asarray(seg.values)
-            if seg.reverse_sorted:
-                found = len(values) - np.searchsorted(values[::-1], holes, "right")
-            else:
-                found = np.searchsorted(values, holes)
-            starts.update((offset + found).tolist())
-        offset += len(seg)
-    bounds = sorted(starts - {0})
-    return list(zip([0, *bounds], [*bounds, len(coord)], strict=True))
+    runs = contiguous_runs(coord._run_records(), coord.step, coord.jittered)
+    stops = np.cumsum([x.count for x in runs]).tolist()
+    return list(zip([0, *stops[:-1]], stops, strict=True))
 
 
 # --- mesh edges for plotting

@@ -10,6 +10,8 @@ from dascore.exceptions import ParameterError, UnitError
 from dascore.units import get_quantity
 from dascore.utils.gaps import (
     GapTolerance,
+    RunRecord,
+    contiguous_runs,
     gap_boundaries,
     get_gap_edges,
     is_monotonic_and_finite,
@@ -201,3 +203,47 @@ class TestGapBoundaries:
         """Nothing lies behind the first run."""
         _, _, has_gap = gap_boundaries([10.0], [12.0], [1.0], GapTolerance.samples(1.5))
         assert has_gap.tolist() == [False]
+
+
+class TestContiguousRuns:
+    """Runs joined into the stretches their holes leave."""
+
+    def test_holes_end_stretches(self):
+        """On a step, only skipped positions end a stretch."""
+        runs = [
+            RunRecord(3, 0, 2, 1, 0),
+            RunRecord(2, 3, 4, 1, 3),
+            RunRecord(1, 9, 9, 1, 9),
+        ]
+        out = contiguous_runs(runs, step=1)
+        assert [(x.count, x.min, x.max, x.step) for x in out] == [
+            (5, 0, 4, 1),
+            (1, 9, 9, 1),
+        ]
+        jittered = contiguous_runs(runs, step=1, jittered=True)
+        assert {x.step for x in jittered} == {None}
+
+    def test_stepless_runs_split_by_sampling(self):
+        """Without a step, a change of step or a wide seam ends a stretch."""
+        runs = [
+            RunRecord(3, 0.0, 2.0, 1.0),
+            RunRecord(3, 3.0, 4.0, 0.5),
+            RunRecord(2, 4.6, 5.1, 0.5),
+            RunRecord(2, 9.0, 9.5, 0.5),
+        ]
+        out = contiguous_runs(runs)
+        assert [(x.count, x.step) for x in out] == [(3, 1.0), (5, None), (2, 0.5)]
+
+    def test_descending_seams(self):
+        """A descending run's seam is measured from its lowest label."""
+        runs = [RunRecord(3, 3.0, 5.0, -1.0), RunRecord(2, 0.0, 1.0, -1.0)]
+        assert len(contiguous_runs(runs)) == 2
+        near = [RunRecord(3, 3.0, 5.0, -1.0), RunRecord(2, 1.0, 2.0, -1.0)]
+        assert len(contiguous_runs(near)) == 1
+
+    def test_runs_without_steps_are_one(self):
+        """Irregular labels name no hole, so they are one stretch."""
+        runs = [RunRecord(3, 0.0, 2.0, 1.0), RunRecord(3, 9.0, 12.0)]
+        (out,) = contiguous_runs(runs)
+        assert (out.count, out.min, out.max, out.step) == (6, 0.0, 12.0, None)
+        assert contiguous_runs([]) == []
