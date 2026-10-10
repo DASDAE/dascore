@@ -1281,6 +1281,22 @@ class TestTreeMatchesChunk:
         spool = to_spool([x.update_coords(latitude=latitude) for x in patches[:2]])
         self._assert_matches(spool.io.to_xarray(), spool.chunk(time=None))
 
+    def test_merge_dim_coord_differs(self, patches, to_spool):
+        """
+        A coordinate on time which differs per member does not conflict.
+
+        The tree does not carry associated coordinates, so only the data
+        and dimension coordinates are compared with chunk's patch.
+        """
+        members = [
+            x.update_coords(
+                power=("time", np.full(len(x.get_coord("time")), float(num)))
+            ).update_attrs(history=[])
+            for num, x in enumerate(patches[:2])
+        ]
+        spool = to_spool(members)
+        self._assert_matches(spool.io.to_xarray(), spool.chunk(time=None))
+
     @pytest.mark.parametrize(
         "select, window",
         [

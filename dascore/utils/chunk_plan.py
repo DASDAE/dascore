@@ -1191,6 +1191,35 @@ def _member_envelopes(sorted_df: pd.DataFrame, seg_starts: np.ndarray, name: str
     return lo, hi, modified, keep
 
 
+# Prefixes the dims standing in for the envelope of a riding coordinate.
+_RIDES = "<rides the merged dimension> "
+
+
+def _mark_riders(df: pd.DataFrame, name: str) -> tuple[pd.DataFrame, set[str]]:
+    """
+    Replace the envelopes of coordinates riding dim `name` with a marker.
+
+    Such a coordinate is concatenated along `name` sample for sample, so
+    its envelope differs member by member by design; only whether a
+    member holds it, and on which dims, is policed. Each row's own
+    coordinate dims decide, so the same name on another dim is still
+    compared by value.
+    A null envelope (a member without the coordinate) stays null.
+    Returns the marked frame and the marked columns.
+    """
+    marked = {}
+    for coord in _identified_coords(df) - {name}:
+        if (dims := df.get(f"_{coord}_dims")) is None:
+            continue
+        rides = dims.map(lambda x: isinstance(x, str) and name in x.split(","))
+        if not rides.any():
+            continue
+        for suffix in ("_min", "_max", "_step"):
+            if (col := f"{coord}{suffix}") in df.columns:
+                marked[col] = df[col].where(~rides | df[col].isna(), _RIDES + dims)
+    return df.assign(**marked), set(marked)
+
+
 def _carried_columns(
     sorted_df: pd.DataFrame,
     codes: np.ndarray,
@@ -1212,8 +1241,10 @@ def _carried_columns(
     A conflict raises for the first active partition (in output order)
     and its first conflicting column, exactly as per-partition policing
     did; partitions which produced no outputs (`active` False) are never
-    policed.
+    policed. Coordinates riding `name` are policed only for being held
+    (`_mark_riders`) and carry no envelope.
     """
+    sorted_df, riders = _mark_riders(sorted_df, name)
     n_parts = len(seg_starts)
     first = sorted_df.iloc[seg_starts].reset_index(drop=True)
     has_dims = "dims" in sorted_df.columns
@@ -1283,6 +1314,10 @@ def _carried_columns(
             if not (keeps & active).any():
                 continue  # dropped by every active partition: omit entirely
             values = firsts[col]
+            if col in riders:
+                # the derived catalog describes riders from the members
+                marker = values.map(lambda x: str(x).startswith(_RIDES))
+                keeps = keeps & ~marker.to_numpy(dtype=bool)
             carried[col] = values if keeps.all() else values.where(keeps)
     # Structural (dimension) def keys carry — single-valued by
     # partitioning — and canonical units carry for every dimension, the
