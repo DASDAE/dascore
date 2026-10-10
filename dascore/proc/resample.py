@@ -17,10 +17,10 @@ from dascore.utils.array_api import array_namespace
 from dascore.utils.imports import lazy_import
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch import (
+    _require_evenly_sampled,
     drop_associated_coords,
     get_dim_axis_value,
     get_start_stop_step,
-    require_no_holes,
 )
 from dascore.utils.time import dtype_time_like, to_int, to_timedelta64
 
@@ -109,7 +109,7 @@ class Decimate(_DecimateFields):
         dim, axis, factor = get_dim_axis_value(meta, kwargs=extras)[0]
         coords, slices = meta.coords.decimate(**{dim: int(factor)})
         if self.filter_type:
-            require_no_holes(meta, dim, "filtered decimate")
+            _require_evenly_sampled(meta, dim, "filtered decimate")
             coords = coords._update_grid(dim)
             # scipy's own refusal of a factor which is not an integer.
             operator.index(factor)
@@ -241,7 +241,10 @@ class Interpolate(PatchProcessor):
         if np.asarray(samples_num).dtype.kind not in "biufc":
             # Text or objects: let scipy refuse them, as it did unplanned.
             _interp(coord_num, coord_num, samples_num, 0, self.kind)
-        coord_new = dc.core.get_coord(data=samples)
+        coord_new = dc.core.get_coord(data=samples, snap=True)
+        # evaluated at the labels the samples become, which the released
+        # snap may move
+        samples_num = to_int(coord_new.values)
         updates = {dim: (cm.dim_map[dim], coord_new)}
         updates |= _interpolate_associated(cm, dim, coord_num, samples_num, self.kind)
         plan = {"axis": axis, "coord": coord_num, "samples": samples_num}

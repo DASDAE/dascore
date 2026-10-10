@@ -3387,14 +3387,17 @@ class TestFractionalSnap:
         step = np.timedelta64(1, "ms")
         values = self.t0 + np.arange(100) * step
         values[1:-1:7] += np.timedelta64(1, "ns")
-        out = get_coord(data=values)
+        with pytest.warns(FutureWarning, match="0.1.26"):
+            out = get_coord(data=values)
         assert out == get_coord(start=self.t0, step=step, shape=(100,))
+        assert get_coord(data=values, snap=False).jittered
 
     def test_off_grid_label_falls_through(self):
         """Labels no fractional grid holds keep the rounded median step."""
         values = get_coord(start=self.t0, step=(1, 1024), shape=(60,)).values.copy()
         values[30] += np.timedelta64(1, "ns")
-        out = get_coord(data=values)
+        with pytest.warns(FutureWarning, match="0.1.26"):
+            out = get_coord(data=values)
         step = np.timedelta64(976562, "ns")
         assert out == get_coord(start=self.t0, step=step, shape=(60,))
 
@@ -3404,14 +3407,16 @@ class TestFractionalSnap:
         values = self.t0 + np.arange(100) * step
         values[[1, -1]] += tick
         values[2] -= tick
-        out = get_coord(data=values)
+        with pytest.warns(FutureWarning, match="0.1.26"):
+            out = get_coord(data=values)
         assert out == get_coord(start=self.t0, step=step, shape=(100,))
 
     def test_offsets_past_int64_fall_through(self):
         """A grid whose offsets would overflow int64 keeps the median step."""
         num = 617 * 10**15 + 1
         values = np.array([k * num // 617 for k in range(1000)], dtype=np.int64)
-        out = get_coord(data=values)
+        with pytest.warns(FutureWarning, match="0.1.26"):
+            out = get_coord(data=values)
         assert out == get_coord(start=0, step=10**15, shape=(1000,))
 
     def test_integer_fractional_grid(self):
@@ -3453,19 +3458,31 @@ class TestDeclaredStepSnap:
         with pytest.raises(CoordError, match="finite non-zero"):
             get_coord(data=np.array([0.0, 1.0, 2.0]), step=np.inf)
 
-    @pytest.mark.parametrize(("start", "step"), [(1e12, 1e-3), (1e6, 1.4e-10)])
-    def test_unrepresentable_grid_is_not_snapped(self, start, step):
-        """A grid floats cannot hold at these labels is not claimed for them."""
-        values = start + np.arange(300) * step
+    def test_unrepresentable_grid_is_not_snapped(self):
+        """A step floats cannot place labels on is not claimed for them."""
+        values = 1e6 + np.arange(300) * 1.4e-10
         with pytest.raises(CoordError):
-            get_coord(data=values, step=step)
+            get_coord(data=values, step=1.4e-10)
 
-    @pytest.mark.parametrize("offset", [2e-6, 0.5])
-    def test_labels_off_the_grid_are_refused(self, offset):
-        """Labels further off the declared grid than rounding raise."""
+    def test_labels_within_ulps_keep_the_step(self):
+        """Labels a few ulps off a far grid are on it, and are kept as stored."""
+        values = 1e12 + np.arange(300) * 1e-3
+        out = get_coord(data=values, step=1e-3)
+        assert out.evenly_sampled and np.array_equal(out.values, values)
+
+    def test_labels_off_the_grid_are_jittered(self):
+        """Labels further off the declared grid than rounding are jittered."""
         values = np.arange(300) * 0.1
-        values[1::2] += 0.1 * offset
-        with pytest.raises(CoordError):
+        values[1::2] += 0.1 * 2e-6
+        out = get_coord(data=values, step=0.1)
+        assert out.jittered and out.step == 0.1
+        assert np.array_equal(out.values, values)
+
+    def test_labels_half_a_step_off_are_refused(self):
+        """Labels half a step off the declared grid raise."""
+        values = np.arange(300) * 0.1
+        values[1::2] += 0.05
+        with pytest.raises(CoordError, match="not on a grid"):
             get_coord(data=values, step=0.1)
 
     def test_exact_read_does_not_snap(self):

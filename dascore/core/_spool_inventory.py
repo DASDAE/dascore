@@ -833,7 +833,7 @@ def _get_track_coord(path, track, field, distances):
     kind = kinds.pop() if len(kinds) == 1 else "string"
     filled = _fill_from_intervals(distances, intervals, values, kind)
     if units := _TRACK_FIELD_UNITS.get(f"{track}.{field}"):
-        return get_coord(data=filled, units=units)
+        return get_coord(data=filled, units=units, snap=False)
     return filled
 
 
@@ -854,7 +854,7 @@ def _get_geometry_coord(inventory, path, label, distances):
     # axis_index refuses a label this CRS has no axis for, and the array is
     # one column per axis, so the index is always one of its columns.
     coords = path.coordinates_at(distances, crs)
-    return get_coord(data=coords[:, index], units=crs.units[index])
+    return get_coord(data=coords[:, index], units=crs.units[index], snap=False)
 
 
 def _get_geometry_column_coord(path, name, distances):
@@ -865,14 +865,14 @@ def _get_geometry_column_coord(path, name, distances):
     # The path has already refused two segments measuring one column in two
     # units, so whichever states it states the one they agree on.
     units = next((x.units[name] for x in path.geometry if name in x.units), None)
-    return get_coord(data=values, units=units)
+    return get_coord(data=values, units=units, snap=False)
 
 
 def get_coord_values(inventory, path, name, distances):
     """Return the values of one requested coordinate, or None if undefined."""
     if name == "distance":
         # The distances are already the optical path's, in meters.
-        return get_coord(data=distances, units="m")
+        return get_coord(data=distances, units="m", snap=False)
     track, _, field = name.partition(".")
     if track in _TRACK_NAMES:
         # A bare track name means the track's identity: which coupling

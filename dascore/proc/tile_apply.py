@@ -60,10 +60,14 @@ def _offset_values(coord, offsets: np.ndarray):
     Return coordinate values `offsets` samples from the coordinate's first sample.
 
     From the first sample, not the minimum: a descending coordinate steps
-    down from where it starts. Only a range has a step, so only a range
-    gets here.
+    down from where it starts. Only an evenly sampled coordinate gets here;
+    stored labels on their step's grid are restated as that grid.
     """
-    grid = coord.runs[0]
+    grid = coord._grid
+    if grid is None:
+        shape = coord.shape
+        grid = get_coord(start=coord.values[0], step=coord.step, shape=shape)._grid
+        assert grid is not None  # a start, step and shape state one grid
     if coord.dtype.kind in "iu":
         # Evaluate the exact grid in Python integers so padded positions can
         # promote beyond the source dtype instead of wrapping at its limits.

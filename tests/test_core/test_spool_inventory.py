@@ -1468,7 +1468,8 @@ class TestSelectPartlyHeldCoord:
     def test_held_rows_trim_by_their_own(self, spool):
         """A holding patch is trimmed on its values, the other on the fiber's."""
         out = spool.select(y=(40.005, 40.02))
-        assert self._extents(out) == [("bare", 16, 60), ("held", 16, 49)]
+        # channel 15 is at y = 40.005 exactly, and picks include both ends
+        assert self._extents(out) == [("bare", 15, 60), ("held", 15, 49)]
 
     def test_window_without_holders(self, spool):
         """A window dropping every holding row leaves the fiber to judge."""
@@ -1486,7 +1487,7 @@ class TestSelectPartlyHeldCoord:
         lazy = spool.attach_inventory(path)
         path.unlink()
         out = lazy.select(tag="held").select(y=(40.005, 40.02))
-        assert self._extents(out) == [("held", 16, 49)]
+        assert self._extents(out) == [("held", 15, 49)]
 
     def test_open_range_does_not_veto_a_flag(self, spool):
         """A range open at both ends asks nothing, so `samples` still works."""

@@ -7,7 +7,7 @@ import pytest
 
 import dascore as dc
 import dascore.proc.coords
-from dascore.exceptions import CoordError, ParameterError
+from dascore.exceptions import ParameterError
 from dascore.proc.taper import taper
 from dascore.units import m, percent
 from dascore.utils.misc import broadcast_for_index
@@ -350,14 +350,16 @@ class TestTaperErrors:
 class TestTaperHoles:
     """Tapering must not treat a coordinate with holes as one record."""
 
-    def test_refuses_holes(self, holed_patch):
-        """A declared step with missing samples refuses."""
-        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
-            holed_patch.taper(time=0.1)
+    def test_holes_warn(self, holed_patch):
+        """Missing samples taper by their labels until 0.1.26, with a warning."""
+        with pytest.warns(FutureWarning, match=r"not evenly sampled.*split_gaps"):
+            out = holed_patch.taper(time=0.1)
+        assert out.shape == holed_patch.shape
 
     def test_stepless_runs(self, stepless_seam_patch):
-        """Step-less labels are an irregular grid and still taper."""
-        out = stepless_seam_patch.taper(time=0.1)
+        """Step-less labels still taper until 0.1.26, with a warning."""
+        with pytest.warns(FutureWarning, match="0.1.26"):
+            out = stepless_seam_patch.taper(time=0.1)
         assert out.shape == stepless_seam_patch.shape
 
 

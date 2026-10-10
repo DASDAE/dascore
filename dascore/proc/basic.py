@@ -1111,9 +1111,11 @@ def _padded_coord(coord, pad_tuple, expand_coords):
         return coord
     if expand_coords and coord.evenly_sampled:
         # Extend the grid itself: rebuilding from the rounded step would
-        # move every label of a fractional grid.
+        # move every label of a fractional grid. Stored labels on their
+        # step within float rounding are restated as that grid.
+        base = coord if coord._grid is not None else coord.snap()
         total = len(coord) + pad_tuple[0] + pad_tuple[1]
-        return coord._with_runs((coord.runs[0].sliced(-pad_tuple[0], 1, total),))
+        return base._with_runs((base.runs[0].sliced(-pad_tuple[0], 1, total),))
     return _grown_coord(coord, pad_tuple, _get_nullish)
 
 

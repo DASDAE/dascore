@@ -196,7 +196,8 @@ def _coord_from(data_array, name, coord):
             served = served.set_units(units)
         return coord.dims, served
     # a 0-d datetime reads as a numpy scalar, which get_coord takes as 1-d
-    return coord.dims, get_coord(data=np.asarray(coord.values), units=units)
+    values = np.asarray(coord.values)
+    return coord.dims, get_coord(data=values, units=units, snap=True)
 
 
 # CF's unit grammar: ``m s-1`` is m*s**-1; latitude and longitude are degrees.

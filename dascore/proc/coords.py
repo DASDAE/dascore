@@ -32,6 +32,7 @@ from dascore.utils.misc import (
     iterate,
 )
 from dascore.utils.patch import (
+    _uneven_message,
     drop_associated_coords,
     get_dim_axis_value,
 )
@@ -188,12 +189,15 @@ def get_coord(
     require_sorted
         If True, require the coordinate to be sorted or raise Error.
     require_evenly_sampled
-        If True, require the coordinate to be evenly sampled or raise Error.
+        If True, require the coordinate to be evenly sampled or raise Error:
+        it must have a step and be neither jittered nor gapped (see
+        [`NumericCoord`](`dascore.core.coords.NumericCoord`)).
 
     Raises
     ------
     [`CoordError`](`dascore.exceptions.CoordError`) if the coordinate does
-    not exist or does not meet the imposed requirements.
+    not exist or does not meet the imposed requirements. An unevenly sampled
+    coordinate's error says why and names `fill_gaps` and `snap_coords`.
 
     Examples
     --------
@@ -217,9 +221,7 @@ def get_coord(
         msg = f"Coordinate '{name}' not found in Patch coordinates: {coords}"
         raise CoordError(msg)
     if require_evenly_sampled and not coord.evenly_sampled:
-        extra = f"as required by {get_parent_code_name()}"  # adds caller name
-        msg = f"Coordinate {name} is not evenly sampled {extra}"
-        raise CoordError(msg)
+        raise CoordError(_uneven_message(name, coord, get_parent_code_name()))
     if require_sorted and not (coord.sorted or coord.reverse_sorted):
         extra = f"as required by {get_parent_code_name()}"  # adds caller name
         msg = f"Coordinate {name} is not sorted {extra}"

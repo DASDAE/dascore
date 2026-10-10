@@ -279,7 +279,7 @@ class TestNamedSnap:
             h5.attrs["dims"] = "time,distance"
             h5["data"] = data
             h5["time"] = [0.0, 1.000001, 2.0, 3.0, 4.0][:count]
-            h5["distance"] = [0.0, 1.00000001, 2.0]
+            h5["distance"] = [0.0, 1.0001, 2.0]
         if file_format == "NeubrexRFS":
             with h5py.File(path, "a") as h5:
                 h5["depth"] = h5["distance"][:]

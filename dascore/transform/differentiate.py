@@ -15,7 +15,7 @@ from dascore.utils.patch import (
     _get_data_type_from_dims,
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
-    require_no_holes,
+    _require_evenly_sampled,
 )
 
 
@@ -71,7 +71,7 @@ def _strided_diff(order, data, axes, dx_or_spacing, step):
 
 def _derivative_metadata(meta, dims, step):
     """Return the attrs of a derivative over dims, and the kernel's plan."""
-    require_no_holes(meta, dims, "differentiate")
+    _require_evenly_sampled(meta, dims, "differentiate")
     dx_or_spacing, axes = _get_dx_or_spacing_and_axes(meta, dims)
     if step > 1 and len(axes) > 1:
         msg = "Step in patch.differentiate can only be used along one axis."

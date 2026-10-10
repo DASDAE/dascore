@@ -13,7 +13,6 @@ from scipy import ndimage, signal
 import dascore as dc
 from dascore.exceptions import (
     CoordDataError,
-    CoordError,
     FilterValueError,
     ParameterError,
     UnitError,
@@ -128,7 +127,7 @@ class TestPassFilter:
 
     def test_uneven_sampling_raises(self, wacky_dim_patch):
         """A nice error message should be raised if the samples aren't even."""
-        match = r"is not evenly sampled.*Patch.snap_coords or Patch.interpolate"
+        match = r"is not evenly sampled.*fill_gaps.*snap_coords"
         with pytest.raises(CoordDataError, match=match):
             wacky_dim_patch.pass_filter(time=(10, 100))
 
@@ -221,17 +220,18 @@ class TestSobelFilter:
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
-    def test_refuses_holes(self, holed_patch):
-        """A declared step with missing samples refuses."""
-        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
+    def test_holes_warn(self, holed_patch):
+        """Missing samples filter until 0.1.26, with a warning."""
+        with pytest.warns(FutureWarning, match=r"not evenly sampled.*split_gaps"):
             holed_patch.sobel_filter("time")
         # the kernel also smooths along time when filtering distance
-        with pytest.raises(CoordError, match="not evenly sampled"):
+        with pytest.warns(FutureWarning, match="not evenly sampled"):
             holed_patch.sobel_filter("distance")
 
     def test_stepless_runs(self, stepless_seam_patch):
-        """Step-less labels are an irregular grid and still filter."""
-        out = stepless_seam_patch.sobel_filter("time")
+        """Step-less labels still filter until 0.1.26, with a warning."""
+        with pytest.warns(FutureWarning, match="0.1.26"):
+            out = stepless_seam_patch.sobel_filter("time")
         assert out.shape == stepless_seam_patch.shape
 
 
