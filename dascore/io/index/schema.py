@@ -33,7 +33,9 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 30 scans each format under
+# changes, not only when a column does. Version 31 states a coordinate's
+# step beside its jittered and gapped flags and offset bounds, and its
+# runs in coord_runs. Version 30 scans each format under
 # its own default snap through one shared grid. Version 29 reads XDAS-layout
 # NetCDF files as XDAS, not NETCDF_CF. Version 28 grids a stored distance
 # array in float64 from its end values, not a median step. Version 27 drops the per-run
@@ -54,7 +56,7 @@ from typing import NamedTuple, get_args, get_type_hints
 # version 15 stored source coordinate and numeric attribute dtypes.
 # Earlier indexes lack the metadata required for reconstruction and are
 # rebuilt when opened.
-INDEX_VERSION = 30
+INDEX_VERSION = 31
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -211,6 +213,42 @@ class CoordDefRow(NamedTuple):
     step_numerator: int | None
     step_denominator: int | None
     origin_offset: int | None
+    # How the labels sit on the step (the coordinate's own, stated in the
+    # step columns whether or not the row is exact): off it by under half
+    # a step, and missing positions of it.
+    jittered: bool
+    gapped: bool
+    # The furthest the labels sit below and above the grid through the
+    # first one, in steps; NULL without a step.
+    offset_min: float | None
+    offset_max: float | None
+    # Runs the coordinate is, cut at its holes; the coord_runs table holds
+    # them when there are several and no more than max_index_runs. NULL
+    # where the summary said nothing of them.
+    run_count: int | None
+
+
+class CoordRunRow(NamedTuple):
+    """
+    A row of the coord_runs table: one run of a coordinate, holding no hole.
+
+    The runs of a definition of several, in order, as
+    `dascore.utils.gaps.RunRecord` states them: the envelope columns are
+    named by storage type as the definition's are, and `position` is the
+    run's first sample's place on the coordinate's grid (NULL without one),
+    so the positions between two runs are holes.
+    """
+
+    coord_row: int
+    run: int
+    count: int
+    position: int | None
+    min_float: float | None
+    max_float: float | None
+    step_float: float | None
+    min_int: int | None
+    max_int: int | None
+    step_int: int | None
 
 
 class PatchCoordRow(NamedTuple):
@@ -257,6 +295,7 @@ TABLE_ROWS = MappingProxyType(
         "attrs": AttrsRow,
         "attr_meta": AttrMetaRow,
         "coord_defs": CoordDefRow,
+        "coord_runs": CoordRunRow,
         "patch_coords": PatchCoordRow,
         "coord_variants": CoordVariantRow,
     }
@@ -317,6 +356,13 @@ TABLE_CONSTRAINTS = MappingProxyType(
             "CHECK (value_kind IN ('num', 'time', 'str'))",
             "CHECK (is_exact IN (0, 1))",
             "CHECK (is_relative IS NULL OR is_relative IN (0, 1))",
+            "CHECK (jittered IN (0, 1))",
+            "CHECK (gapped IN (0, 1))",
+        ),
+        "coord_runs": (
+            "PRIMARY KEY (coord_row, run)",
+            "FOREIGN KEY (coord_row) REFERENCES coord_defs(coord_row) "
+            "ON DELETE CASCADE",
         ),
         "patch_coords": (
             "PRIMARY KEY (patch_row, coord_name)",
@@ -419,7 +465,7 @@ SPOOL_LATE_RENAMES = MappingProxyType(
 # None). Every other access path is covered by a PRIMARY KEY or UNIQUE
 # autoindex above — patch_coords(patch_row, coord_name),
 # sources(base_uri, source_path), patches(source_row, source_patch_key),
-# coord_defs(def_key)
+# coord_defs(def_key), coord_runs(coord_row, run)
 # — and duplicating them measured ~25% extra file size and slower writes
 # for no query gain. `idx_cdefs_grid` lists the definitions whose grid
 # the envelope cannot restate -- a fractional step or offset, or a

@@ -55,6 +55,7 @@ from dascore.io.index.schema import (
     TRIGGERS,
     WHAT_IS_THIS,
     CoordDefRow,
+    CoordRunRow,
     MetaDataRow,
     PatchCoordRow,
     PatchRow,
@@ -532,16 +533,18 @@ class SQLiteIndexBackend:
             mapping.update(zip(found["def_key"], (int(x) for x in found["coord_row"])))
         new_keys = [k for k in keys if k not in mapping]
         next_id = self._next_id("coord_defs", "coord_row")
-        def_rows = []
+        def_rows, run_rows = [], []
         # CoordRecord names every def column after id, key, and data_id
         columns = CoordDefRow._fields[3:]
         for key in new_keys:
             c = defs_needed[key]
             values = (getattr(c, name) for name in columns)
             def_rows.append((next_id, key, c.data_id, *values))
+            run_rows.extend((next_id, num, *run) for num, run in enumerate(c.runs))
             mapping[key] = next_id
             next_id += 1
         self._bulk_insert("coord_defs", CoordDefRow._fields, def_rows)
+        self._bulk_insert("coord_runs", CoordRunRow._fields, run_rows)
         return mapping
 
     def _bulk_insert(self, table: str, columns: tuple, rows: list) -> None:
@@ -1006,6 +1009,7 @@ class SQLiteIndexBackend:
             attrs = self._fetch_df("SELECT * FROM attrs")
             links = self._fetch_df("SELECT * FROM patch_coords")
             defs = self._fetch_df("SELECT * FROM coord_defs")
+            runs = self._fetch_df("SELECT * FROM coord_runs")
         else:
             ids = [int(x) for x in patch_rows]
             patches = self._fetch_in("SELECT * FROM patches", "patch_row", ids)
@@ -1019,8 +1023,9 @@ class SQLiteIndexBackend:
                 [int(x) for x in links["coord_row"].unique()] if not links.empty else []
             )
             defs = self._fetch_in("SELECT * FROM coord_defs", "coord_row", def_ids)
+            runs = self._fetch_in("SELECT * FROM coord_runs", "coord_row", def_ids)
         return assemble_source_records(
-            sources, patches, attrs, links, defs, self._attr_meta()
+            sources, patches, attrs, links, defs, self._attr_meta(), runs
         )
 
     def _flatten(
@@ -1241,7 +1246,7 @@ class SQLiteIndexBackend:
         ids = out["patch_row"].tolist()
         link_sql = (
             "SELECT pc.patch_row, pc.coord_name, cd.def_key, cd.data_id, "
-            "cd.value_kind, pc.dtype, cd.is_relative, cd.units, "
+            "cd.value_kind, pc.dtype, cd.is_relative, cd.units, cd.is_exact, "
             "cd.min_float, cd.max_float, cd.step_float, "
             "cd.min_int, cd.max_int, cd.step_int, cd.min_str, cd.max_str "
             "FROM patch_coords pc "
@@ -1258,6 +1263,9 @@ class SQLiteIndexBackend:
         if coords.empty:
             return out
         coords = self._add_envelope_objects(coords)
+        # the relation states the step of a range only; a jittered or
+        # gapped coordinate's step is the index's (see coord_runs)
+        coords.loc[coords["is_exact"] == 0, "_env_step"] = None
         # the exact grid where the envelope cannot restate it (None
         # elsewhere), so a row rebuilds the coordinate the file holds
         grids = self._grids(None if most else coords["def_key"].unique())

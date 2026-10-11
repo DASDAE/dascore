@@ -25,6 +25,7 @@ from typing import SupportsInt, TypedDict, cast
 import numpy as np
 import pandas as pd
 
+from dascore.config import get_config
 from dascore.core.attrs import PatchAttrs
 from dascore.core.summary import PatchSummary, normalize_source_patch_key
 from dascore.exceptions import InvalidInventoryError
@@ -32,12 +33,14 @@ from dascore.io.index.schema import (
     KINDS,
     RESERVED_ATTR_COLUMNS,
     CoordDefRow,
+    CoordRunRow,
     PatchCoordRow,
     PatchRow,
     SourceRow,
 )
 from dascore.units import get_quantity, get_quantity_str
 from dascore.utils.attrs import _is_missing
+from dascore.utils.gaps import RunRecord
 from dascore.utils.misc import validate_acquisition_key
 from dascore.utils.paths import parse_hive_path_attrs
 from dascore.utils.pd import iter_rows
@@ -83,6 +86,66 @@ class _ExactFields(TypedDict):
     origin_offset: int | None
 
 
+class _SamplingFields(TypedDict):
+    """The CoordRecord fields saying how labels sit on the step."""
+
+    jittered: bool
+    gapped: bool
+    offset_min: float | None
+    offset_max: float | None
+    run_count: int | None
+
+
+def stored_runs(records, kind: str, absolute: bool = True) -> tuple[tuple, ...]:
+    """
+    The coord_runs columns of run records, past the id and run number.
+
+    Times are stored as nanoseconds and numbers as floats, as a
+    definition's envelope is; `index_runs` reads them back.
+    """
+    out = []
+    for record in records or ():
+        step = None if pd.isnull(record.step) else record.step
+        if kind == "time":
+            convert = to_datetime64 if absolute else to_timedelta64
+            ends = (None, None, None, _to_ns(convert(record.min)))
+            ends += (_to_ns(convert(record.max)),)
+            ends += (None if step is None else _to_ns(to_timedelta64(step)),)
+        else:
+            ends = (float(record.min), float(record.max))
+            ends += (None if step is None else float(step), None, None, None)
+        out.append((int(record.count), record.position, *ends))
+    return tuple(out)
+
+
+def index_runs(rows, kind: str, absolute: bool = True) -> tuple[RunRecord, ...]:
+    """
+    The run records stored coord_runs columns hold, as `stored_runs` wrote them.
+
+    Times come back as nanosecond datetimes (timedeltas when relative) and
+    numbers as floats, so a run read from an index compares as one built
+    from the coordinate does.
+    """
+    out = []
+    for count, position, *ends in rows:
+        if kind == "time":
+            ns = ends[3:]
+            stamp = "M8[ns]" if absolute else "m8[ns]"
+            low, high = (np.asarray(int(x)).astype(stamp)[()] for x in ns[:2])
+            step = _null_or(ns[2], lambda x: np.timedelta64(int(x), "ns"))
+        else:
+            low, high = float(ends[0]), float(ends[1])
+            step = _null_or(ends[2], float)
+        position = _null_or(position, int)
+        out.append(RunRecord(int(count), low, high, step, position))
+    return tuple(out)
+
+
+def _null_or(value, convert):
+    """None for a missing cell, else the value converted."""
+    return None if value is None or pd.isnull(value) else convert(value)
+
+
 @dataclass(frozen=True)
 class CoordRecord:
     """One patch-coord entry (typed columns split by kind)."""
@@ -106,7 +169,14 @@ class CoordRecord:
     step_numerator: int | None = None
     step_denominator: int | None = None
     origin_offset: int | None = None
+    jittered: bool = False
+    gapped: bool = False
+    offset_min: float | None = None
+    offset_max: float | None = None
+    run_count: int | None = None
     data_id: str | None = None
+    # the coord_runs rows of the definition, past its id and run number
+    runs: tuple[tuple, ...] = ()
 
     @property
     def def_key(self) -> str:
@@ -122,7 +192,7 @@ class CoordRecord:
         """
         if self.data_id:
             return f"fp:{self.data_id}"
-        fields = tuple(getattr(self, f) for f in _COORD_DEF_FIELDS)
+        fields = tuple(getattr(self, f) for f in (*_COORD_DEF_FIELDS, "runs"))
         digest = hashlib.sha256(repr(fields).encode()).hexdigest()[:32]
         return f"sum:{digest}"
 
@@ -441,6 +511,15 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
         step_denominator=getattr(summary, "step_denominator", None),
         origin_offset=getattr(summary, "origin_offset", None),
     )
+    # how the labels sit on the step, which the step columns state whether
+    # or not the row rebuilds a range
+    sampling = _SamplingFields(
+        jittered=bool(getattr(summary, "jittered", False)),
+        gapped=bool(getattr(summary, "gapped", False)),
+        offset_min=getattr(summary, "offset_min", None),
+        offset_max=getattr(summary, "offset_max", None),
+        run_count=getattr(summary, "run_count", None),
+    )
     if dtype.kind in "mM":  # datetime64 ("M") / timedelta64 ("m")
         is_datetime = dtype.kind == "M"
         convert = to_datetime64 if is_datetime else to_timedelta64
@@ -451,7 +530,9 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
             min_int=_to_ns(convert(summary.min)),
             max_int=_to_ns(convert(summary.max)),
             step_int=None if pd.isnull(step) else _to_ns(to_timedelta64(step)),
+            runs=stored_runs(getattr(summary, "runs", None), "time", is_datetime),
             **exact,
+            **sampling,
             **common,
         )
     if np.issubdtype(dtype, np.number):
@@ -466,7 +547,9 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
             min_float=float(summary.min),
             max_float=float(summary.max),
             step_float=None if pd.isnull(step) else float(step),
+            runs=stored_runs(getattr(summary, "runs", None), "num"),
             **exact,
+            **sampling,
             **common,
         )
     if dtype.kind in "USO":
@@ -488,10 +571,15 @@ def _envelope(coords: tuple[CoordRecord, ...], name: str, kind: str):
     for rec in coords:
         if rec.coord_name != name or rec.value_kind != kind:
             continue
+        # the step of a range only, as the patch rows cache it
         if kind == "time" and not rec.is_relative:
-            return rec.min_int, rec.max_int, rec.step_int
+            return rec.min_int, rec.max_int, rec.step_int if rec.is_exact else None
         if kind == "num":
-            return rec.min_float, rec.max_float, rec.step_float
+            return (
+                rec.min_float,
+                rec.max_float,
+                rec.step_float if rec.is_exact else None,
+            )
     return None, None, None
 
 
@@ -527,6 +615,23 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
         attrs_complete=attrs_complete,
         attr_dtypes=attr_dtypes,
     )
+
+
+def _warn_unstored_runs(path: str, summary: PatchSummary) -> None:
+    """Say which coordinates of a source are stored without their runs."""
+    for name, coord in summary.coords.items():
+        count = getattr(coord, "run_count", None) or 0
+        if count < 2 or getattr(coord, "runs", None) is not None:
+            continue
+        msg = (
+            f"{path}: coordinate {name!r} holds {count} runs, more than "
+            f"dascore.config.max_index_runs ({get_config().max_index_runs}). "
+            "The index stores its envelope, so reports and plans read the "
+            "coordinate from the file each time they need its runs. Raise "
+            "max_index_runs (dc.set_config) or split the file at its holes "
+            "(Patch.split_gaps) to index every run."
+        )
+        warnings.warn(msg, UserWarning, stacklevel=3)
 
 
 def summaries_to_records(
@@ -577,6 +682,7 @@ def summaries_to_records(
         first = group[0]
         patches = []
         for num, summary in enumerate(group):
+            _warn_unstored_runs(path, summary)
             record = patch_record(summary)
             if record.source_patch_key == "" and len(group) > 1:
                 # positional identity within the source, per design doc
@@ -633,7 +739,7 @@ def summaries_to_records(
 _COORD_DEF_FIELDS = tuple(
     f.name
     for f in fields(CoordRecord)
-    if f.name not in ("coord_name", "coord_dims", "data_id")
+    if f.name not in ("coord_name", "coord_dims", "data_id", "runs")
 )
 _PATCH_ROW_FIELDS = tuple(
     f.name
@@ -665,9 +771,9 @@ def _py_scalar(value, as_bool: bool = False):
     return value
 
 
-def coord_record(link, cdef) -> CoordRecord:
+def coord_record(link, cdef, runs: tuple[tuple, ...] = ()) -> CoordRecord:
     """
-    The coordinate record a stored link and its definition describe.
+    The coordinate record a stored link, its definition and its runs describe.
 
     The link's dtype wins over the definition's: definitions are shared
     by value, and a link keeps the dtype its patch stated.
@@ -677,12 +783,28 @@ def coord_record(link, cdef) -> CoordRecord:
         coord_dims=link.coord_dims,
         data_id=_py_scalar(cdef.data_id),
         dtype=link.dtype,
+        runs=runs,
         **{
             f: _py_scalar(getattr(cdef, f), f in _COORD_DEF_BOOLS)
             for f in _COORD_DEF_FIELDS
             if f != "dtype"
         },
     )
+
+
+def _runs_by_def(runs: pd.DataFrame) -> dict[int, tuple[tuple, ...]]:
+    """Each definition's stored run columns, in run order, by coord row."""
+    if runs.empty:
+        return {}
+    runs = runs.sort_values(["coord_row", "run"])
+    columns = list(CoordRunRow._fields[2:])
+    return {
+        _int_key(key): tuple(
+            tuple(_py_scalar(x) for x in row)
+            for row in group[columns].itertuples(index=False)
+        )
+        for key, group in runs.groupby("coord_row")
+    }
 
 
 def assemble_source_records(
@@ -692,6 +814,7 @@ def assemble_source_records(
     links: pd.DataFrame,
     defs: pd.DataFrame,
     meta: pd.DataFrame,
+    runs: pd.DataFrame | None = None,
 ) -> list[SourceRecord]:
     """
     Assemble source records from already-fetched index frames.
@@ -722,6 +845,7 @@ def assemble_source_records(
         )
     }
     def_map = {int(row.coord_row): row for row in iter_rows(defs, CoordDefRow)}
+    def_runs = _runs_by_def(pd.DataFrame() if runs is None else runs)
     attr_rows = (
         {int(k): v for k, v in attrs.set_index("patch_row").to_dict("index").items()}
         if not attrs.empty
@@ -754,7 +878,8 @@ def assemble_source_records(
                     )
             coords = []
             for link in iter_rows(link_groups.get(pid, pd.DataFrame()), PatchCoordRow):
-                coords.append(coord_record(link, def_map[int(link.coord_row)]))
+                row = int(link.coord_row)
+                coords.append(coord_record(link, def_map[row], def_runs.get(row, ())))
             patch_records.append(
                 PatchRecord(
                     source_patch_key=normalize_source_patch_key(patch.source_patch_key),
