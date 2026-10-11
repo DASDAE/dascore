@@ -162,6 +162,15 @@ class TestStoredTimes:
         np.testing.assert_array_equal(time.values, expected)
         assert not time.evenly_sampled
 
+    def test_unusable_header_grid_reads_as_stored(self, tmp_path):
+        """Header grid fields are only parsed when time is snapped."""
+        path, node = self._copy(tmp_path)
+        with h5py.File(path, "r+") as h5:
+            h5[node].attrs["PartStartTime"] = "not a time"
+            stored = h5[node][...].astype("datetime64[us]")
+        time = dc.read(path, snap=False)[0].get_coord("time")
+        np.testing.assert_array_equal(time.values, stored.astype("datetime64[ns]"))
+
     def test_no_rate_spans_the_stored_times(self, tmp_path):
         """Without OutputDataRate the grid spans the first and last times."""
         path, node = self._copy(tmp_path)

@@ -134,7 +134,9 @@ def dataset_to_patch_meta(
     }
     # A dimension the dataset gives no coordinate is rebuilt on its own.
     for dim, size in zip(dims, shape, strict=True):
-        coords.setdefault(dim, (dim, _get_dim_coord(dataset, dim, size)))
+        if dim not in coords:
+            values = _get_dim_coord(dataset, dim, size)
+            coords[dim] = (dim, stored_coord(values, snap, name=dim, where=where))
     meta = dc.PatchMeta(
         attrs=_cf_attrs(data_array.attrs, data_var_name),
         coords=dc.get_coord_manager(coords=coords, dims=dims),

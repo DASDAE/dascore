@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 import re
 import warnings
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -372,10 +373,12 @@ def stored_coord(
         values = values.astype(f"{values.dtype.kind}8[ns]")
     elif values.dtype.kind == "f":  # float32 step arithmetic splits equal spans
         values = values.astype(np.float64)
-    elif values.dtype.kind in "iu":  # a descending or wide grid needs room
-        values = values.astype(np.int64)
     resolution, reason = _resolution(stored, decode), None
-    if not stated:
+    if values.dtype.kind in "iu":  # a descending or wide grid needs room
+        if values.max() > np.iinfo(np.int64).max:
+            reason = "exceed what int64 holds"
+        values = values.astype(np.int64)
+    if not stated and reason is None:
         start = values[0]
         if count == 1:
             return get_coord(data=values, step=step, units=units)
@@ -384,10 +387,10 @@ def stored_coord(
         elif not (step := _span_step(start, values[-1], count, resolution)):
             reason = "do not advance"
     if reason is None:
-        size = _step_size(step, values.dtype.kind)
-        shift = float(np.max(np.abs(_offsets(values, start, size, positions))))
+        ticks = _step_ticks(step, values.dtype.kind)
+        shift = float(np.max(np.abs(_offsets(values, start, ticks, positions))))
         max_shift = dc.get_config().max_shift
-        if not shift <= max_shift + resolution / abs(size):  # NaN labels fail too
+        if not shift <= max_shift + resolution / abs(float(ticks)):  # NaN fails
             how = "stated start and step" if stated else "first and last labels"
             reason = (
                 f"sit up to {shift:.2g} steps off the grid built from its {how}, "
@@ -427,20 +430,31 @@ def _span_step(first, last, count: int, resolution: float = 0.0):
     return exact / 10**9 if timelike else exact
 
 
-def _step_size(step, kind: str) -> float:
-    """A step as a float, in nanoseconds for time-like coordinates."""
+def _step_ticks(step, kind: str) -> Fraction | float:
+    """A step in ticks (nanoseconds for time-like ones), exactly if it is."""
     if isinstance(step, np.timedelta64):
-        return float(step.astype("timedelta64[ns]").astype(np.int64))
-    return float(step) * (10**9 if kind in "mM" else 1)
+        return Fraction(int(step.astype("timedelta64[ns]").astype(np.int64)))
+    if kind in "mM":
+        return Fraction(step) * 10**9
+    return Fraction(step) if kind in "iu" else float(step)
 
 
-def _offsets(values, start, size: float, positions) -> np.ndarray:
-    """How far each label sits from its grid position, in steps."""
+def _offsets(values, start, ticks, positions) -> np.ndarray:
+    """
+    How far each label sits from the grid's label at its position, in steps.
+
+    Time and integer grids floor each position to a whole tick, as their
+    labels do, so a fractional step is judged at the labels it gives.
+    """
     if values.dtype.kind in "mM":
-        rel = (values - start).astype("timedelta64[ns]").astype(np.float64)
+        rel = (values - start).astype("timedelta64[ns]").astype(np.int64)
+    elif values.dtype.kind in "iu":
+        rel = values - int(start)
     else:
         rel = values.astype(np.float64) - float(start)
-    return (rel - positions * size) / size
+        return (rel - positions * ticks) / ticks
+    grid = np.array([math.floor(k * ticks) for k in positions.tolist()])
+    return (rel - grid) / float(ticks)
 
 
 def _resolution(stored, decode) -> float:

@@ -17,6 +17,7 @@ from dascore.exceptions import InvalidSpoolError, PatchError
 from dascore.io.utils import (
     convert_attr_units,
     resolve_keyed_source,
+    should_snap,
     step_from_rate,
     stored_coord,
 )
@@ -175,14 +176,14 @@ def _get_time_coord(node, snap=True):
     assert len(time_names) == 1, f"Found bad time information in prodml {node=}"
     time_array = node[time_names[0]]
     assert len(time_array) > 0, "Missing time array in ProdML file."
-    start = time_array.attrs.get("PartStartTime")
-    # the stored dtype matters: a float32 rate is read as what it holds
-    rate = _maybe_unpack(node.attrs.get("OutputDataRate", np.nan))
-    if start is not None and float(rate) > 0:  # NaN, a missing rate, is not
-        start = dc.to_datetime64(unbyte(start).split("+")[0].rstrip("Z"))
-        step = step_from_rate(rate)
-    else:
-        start = step = None
+    start = step = None
+    if should_snap(snap, "time"):  # only a grid needs the header's terms
+        stated = time_array.attrs.get("PartStartTime")
+        # the stored dtype matters: a float32 rate is read as what it holds
+        rate = _maybe_unpack(node.attrs.get("OutputDataRate", np.nan))
+        if stated is not None and float(rate) > 0:  # NaN, a missing rate, is not
+            start = dc.to_datetime64(unbyte(stated).split("+")[0].rstrip("Z"))
+            step = step_from_rate(rate)
     return stored_coord(
         time_array,
         snap,

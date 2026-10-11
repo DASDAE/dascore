@@ -621,6 +621,20 @@ class TestStoredCoord:
         assert out.evenly_sampled
         np.testing.assert_array_equal(out.values, labels.astype(np.int64))
 
+    def test_unsigned_labels_beyond_int64(self):
+        """Unsigned labels int64 cannot hold are kept, never wrapped negative."""
+        labels = np.array([2**63, 2**63 + 10, 2**63 + 20], dtype=np.uint64)
+        with pytest.warns(SnapWarning, match="kept as stored"):
+            out = stored_coord(labels, True, name="distance")
+        np.testing.assert_array_equal(out.values, labels)
+
+    def test_checks_the_floored_labels(self):
+        """A fractional-tick grid is checked at the labels it floors to."""
+        labels = np.array([0, 3, 5, 8, 10, 13])  # 13/5 ticks; floors to 2 and 7
+        with pytest.warns(SnapWarning, match="kept as stored"):
+            out = stored_coord(labels, True, name="distance")
+        np.testing.assert_array_equal(out.values, labels)
+
     def test_labels_which_do_not_advance(self):
         """Labels all alike cannot span a grid, so they stay as stored."""
         with pytest.warns(SnapWarning, match="do not advance.*kept as stored"):
