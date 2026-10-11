@@ -755,7 +755,7 @@ class TestReviewRoundTwo:
         base = dc.get_example_patch().select(distance=(0, 6), samples=True)
         patch = base.update_coords(distance=coord)
         back = dc.read(dc.write(patch, tmp_path / "seg.h5", "dasdae")).sort("distance")
-        pieces = list(dc.spool([patch]))
+        pieces = list(patch.split_gaps())
         assert len(back) == len(pieces) == 5
         for read, piece in zip(back, pieces, strict=True):
             assert read.get_coord("distance") == piece.get_coord("distance")
@@ -1219,7 +1219,8 @@ class TestRefactorParity:
         first = np.delete(np.arange(10) * 0.1 + 0.3, 4)
         second = np.arange(10, 20) * 0.1 + 0.3
         spool = dc.spool([patch(first), patch(second)])
-        assert spool.get_contents()["distance_step"].tolist() == [0.1] * 3
+        assert len(spool) == 2 and len(spool.get_coverage("distance")) == 1
+        assert len(spool.get_gaps("distance")) == 1
         assert len(spool.chunk(distance=None)) == 2
         (out,) = spool.chunk(distance=None, tolerance=2, fill_value=np.nan)
         assert out.get_coord("distance").step == pytest.approx(0.1)
