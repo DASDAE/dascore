@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import h5py
 import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
 from dascore.core.coords import concat_coords, get_coord
 from dascore.core.summary import PatchSummary
+from dascore.io.dasdae.utils import _save_patch
 from dascore.io.index.backend import get_backend
 from dascore.io.index.ingest import (
     index_runs,
@@ -18,6 +21,7 @@ from dascore.io.index.ingest import (
 from tests.conftest import join_patches
 
 MS = np.timedelta64(1, "ms")
+HOLE = pd.Timedelta(12, "ms")
 
 
 @pytest.fixture(scope="module")
@@ -156,3 +160,120 @@ class TestRunCap:
             records = _records(_runs_patch(257))
         (time,) = [x for x in records[0].patches[0].coords if x.coord_name == "time"]
         assert len(time.runs) == 257
+
+
+def _write_whole(patch, path):
+    """Write a patch to a DASDAE file holes and all, which dc.write splits."""
+    dc.write(patch.split_gaps()[0], path, "dasdae")
+    with h5py.File(path, "a") as h5:
+        del h5["waveforms"][next(iter(h5["waveforms"]))]
+        _save_patch(patch, h5["waveforms"], "whole", compact=True)
+    return path
+
+
+@pytest.fixture(scope="module")
+def gapped_directory(gapped_patch, tmp_path_factory):
+    """A directory holding the gapped patch whole and a contiguous one after it."""
+    path = tmp_path_factory.mktemp("runs")
+    _write_whole(gapped_patch, path / "gapped.h5")
+    later = gapped_patch.get_coord("time").max() + 10 * 1000 * MS
+    whole = dc.get_example_patch().update_coords(time_min=later)
+    dc.write(whole, path / "whole.h5", "dasdae")
+    return dc.spool(path).update()
+
+
+class TestReports:
+    """Gap reports see holes inside a patch, from memory or from a directory."""
+
+    def test_directory_gaps(self, gapped_directory):
+        """The hole inside the gapped patch and the space after it are both gaps."""
+        assert len(gapped_directory) == 2
+        gaps = gapped_directory.get_gaps().sort_values("time_min")
+        assert len(gaps) == 2
+        assert gaps["gap_size"].iloc[0] == HOLE
+
+    def test_memory_gaps(self, gapped_patch):
+        """An in-memory spool of the gapped patch reports its hole, once."""
+        spool = dc.spool([gapped_patch])
+        assert len(spool) == 1
+        assert spool.get_gaps()["gap_size"].tolist() == [HOLE]
+        (coverage,) = spool.get_coverage().to_dict("records")
+        assert coverage["gap_total"] == HOLE
+        assert coverage["covered"] == coverage["span"] - HOLE
+
+    def test_memory_and_directory_agree(self, gapped_directory):
+        """A memory spool of a directory's patches reports what it does."""
+        memory = dc.spool(list(gapped_directory))
+        columns = ["time_min", "time_max", "time_step", "gap_size"]
+        for name in ("get_gaps", "get_coverage"):
+            disk, mem = (getattr(x, name)() for x in (gapped_directory, memory))
+            shared = [x for x in disk.columns if x in columns or x == "coverage"]
+            pd.testing.assert_frame_equal(disk[shared], mem[shared])
+        contents = [x.get_contents() for x in (gapped_directory, memory)]
+        shared = ["time_min", "time_max", "time_step", "data_size"]
+        pd.testing.assert_frame_equal(contents[0][shared], contents[1][shared])
+
+    def test_selection_clips_runs(self, gapped_directory, gapped_patch):
+        """A view trimmed past the hole reports no hole."""
+        t0 = gapped_patch.get_coord("time").min()
+        view = gapped_directory.select(time=(t0 + 1500 * MS, None))
+        assert len(view.get_gaps()) == 1  # only the space between the files
+
+    def test_selection_within_one_run(self, gapped_patch):
+        """A view inside the first run keeps one row and no gap."""
+        t0 = gapped_patch.get_coord("time").min()
+        view = dc.spool([gapped_patch]).select(time=(t0, t0 + 500 * MS))
+        assert view.get_gaps().empty
+        assert len(view.get_coverage()) == 1
+
+    def test_selection_inside_the_hole(self, gapped_patch):
+        """A view holding no sample of the patch reports nothing of it."""
+        t0 = gapped_patch.get_coord("time").min()
+        view = dc.spool([gapped_patch]).select(time=(t0 + 1003 * MS, t0 + 1008 * MS))
+        assert view.get_coverage().empty
+        assert view.get_gaps().empty
+
+
+class TestPlans:
+    """Chunk plans cut a patch at its holes and read each piece once."""
+
+    def test_members_are_runs(self, gapped_directory):
+        """Each run is a trimmed member; runs in one output are read once."""
+        members = gapped_directory.chunk_plan(time=None).members
+        assert len(members) == 3 and members["_modified"].sum() == 2
+        bridged = gapped_directory.chunk_plan(time=None, tolerance=5, fill_value=np.nan)
+        assert len(bridged.members) == 2
+
+    def test_chunk_outputs(self, gapped_directory):
+        """Chunk splits at the hole, and its outputs report it as a gap."""
+        chunked = gapped_directory.chunk(time=None)
+        assert len(chunked) == 3
+        assert not any(x.get_coord("time").gapped for x in chunked)
+        assert chunked.get_gaps().sort_values("time_min")["gap_size"].iloc[0] == HOLE
+        joined = gapped_directory.chunk(time=None, tolerance=10_000, fill_value=np.nan)
+        assert joined.get_gaps().empty
+
+    def test_other_dimension_keeps_runs(self, gapped_patch):
+        """Chunking along distance keeps each output's holes along time."""
+        chunked = dc.spool([gapped_patch]).chunk(distance=100)
+        assert len(chunked.get_gaps()) == len(chunked)
+
+
+@pytest.fixture(scope="module")
+def crowded(tmp_path_factory):
+    """A directory whose one file holds a coordinate of 300 runs."""
+    path = tmp_path_factory.mktemp("crowded")
+    _write_whole(_runs_patch(300), path / "crowded.h5")
+    with pytest.warns(UserWarning, match="300 runs"):
+        return dc.spool(path).update()
+
+
+class TestRunsPastTheCap:
+    """A coordinate stored as its envelope is read when its runs are needed."""
+
+    def test_reports_read_the_file(self, crowded):
+        """Reports and plans see every hole the index did not store."""
+        backend = crowded._catalog.backend
+        assert backend._fetch_df("SELECT * FROM coord_runs").empty
+        assert len(crowded.get_gaps()) == 299
+        assert len(crowded.chunk(time=None)) == 300

@@ -107,8 +107,10 @@ from dascore.utils.chunk_plan import (
     build_coverage_frame,
     build_gap_frame,
     build_subdivision_plan,
+    coalesce_runs,
     refuse_riders,
     subdivision_pieces,
+    with_runs,
 )
 from dascore.utils.concurrency import _prefetch
 from dascore.utils.display import (
@@ -128,6 +130,7 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.explicit_ranges import (
     ExplicitRanges,
+    _source_manager,
     explicit_windows,
     known_coordinates,
     looks_explicit,
@@ -2094,13 +2097,46 @@ class Spool(NodeRepr, NamespaceOwner):
         resolver = self._catalog.resolver
         same_dim = isinstance(resolver, PlanResolver) and resolver.dim == dim
         base = collapse_working_df(self._catalog) if same_dim else None
+        # a collapsed re-plan's members are already cut at their holes
+        cut = base is None
         if base is None:
             base = self._catalog.to_df().reset_index(drop=True)
+            if "_patch_row" in base.columns:
+                # the patch row in this catalog's index, which derived
+                # catalogs find their members' runs by
+                base = base.assign(_index_row=base["_patch_row"])
         base = _ensure_patch_row(base)
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
         working = _drop_patch_local_empty(working)
+        # a sample or relative selection resolves against the whole patch at
+        # load, so its runs cannot be planned apart
+        local = any(s or r for _, s, r in self._catalog.residuals)
+        if cut and dim is not None and not local:
+            working = self._with_runs(working, dim, modified=True)
         base = base[base["_patch_row"].isin(working["_patch_row"])]
         return base.reset_index(drop=True), working.reset_index(drop=True)
+
+    def _with_runs(self, df: pd.DataFrame, dim: str, modified=False) -> pd.DataFrame:
+        """
+        The relation with each patch cut at the holes its coordinate holds.
+
+        The index states a coordinate's runs (see
+        [`with_runs`](`dascore.utils.chunk_plan.with_runs`)); one stored
+        without them, past `max_index_runs`, is read from its source.
+        """
+        if df.empty or "_patch_row" not in df.columns:
+            return df
+        catalog, files = self._catalog, {}
+        indexed = catalog.backend.coord_runs(dim, df["_patch_row"].dropna().unique())
+
+        def read(row):
+            """The row's coordinate, read from its source as the catalog names it."""
+            rows = catalog.to_df()
+            (source,) = rows[rows["_patch_row"] == row["_patch_row"]].to_dict("records")
+            coords = _source_manager(catalog.resolver, source, files, projection=dim)
+            return None if coords is None else coords.coord_map.get(dim)
+
+        return with_runs(df, dim, indexed, read, modified=modified)
 
     def _build_chunk_plan(self, dim_kwargs, **params):
         """Build one plan from this spool's current source rows."""
@@ -2116,7 +2152,7 @@ class Spool(NodeRepr, NamespaceOwner):
         if trims := {k: v for k, v in windows.items() if k != name}:
             lookup = partial(known_coordinates, self._catalog)  # members' only
             plan = _trim_explicit(plan, source_rows, trims, lookup)
-        return source_rows, plan
+        return source_rows, coalesce_runs(plan, working)
 
     def chunk_plan(
         self,
@@ -2267,7 +2303,7 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> assert random_spool().get_gaps().empty
         """
         out = build_gap_frame(
-            self._report_relation(),
+            self._with_runs(self._report_relation(), dim),
             dim,
             tolerance=tolerance,
             group=group,
@@ -2345,7 +2381,7 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> assert (random_spool().get_coverage()["coverage"] == 1).all()
         """
         out = build_coverage_frame(
-            self._report_relation(),
+            self._with_runs(self._report_relation(), dim),
             dim,
             tolerance=tolerance,
             group=group,

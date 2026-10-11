@@ -2264,6 +2264,21 @@ def _check_write_kwargs(fiber_io, kwargs):
 _PathT = TypeVar("_PathT", bound=path_types)
 
 
+def _contiguous_pieces(patch_or_spool) -> dc.Spool:
+    """
+    A spool of the patches, each one holding holes cut at them.
+
+    Writers see contiguous patches only, as they did when a spool cut
+    every patch at its holes; a spool whose index states no coordinate
+    of several runs is passed on as it is.
+    """
+    if isinstance(patch_or_spool, dc.Patch):
+        return patch_or_spool.split_gaps()
+    if not patch_or_spool._catalog.backend.holds_runs():
+        return patch_or_spool
+    return dc.spool([x for patch in patch_or_spool for x in patch.split_gaps()])
+
+
 def write(
     patch_or_spool,
     path: _PathT,
@@ -2320,9 +2335,7 @@ def write(
         raise ParameterError(msg)
     fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=file_version)
     _check_write_kwargs(fiber_io, kwargs)
-    if not isinstance(patch_or_spool, dc.Spool):
-        # dc.spool splits a patch with holes into its pieces
-        patch_or_spool = dc.spool([patch_or_spool])
+    patch_or_spool = _contiguous_pieces(patch_or_spool)
     if not fiber_io.multi_patch_write and (count := len(patch_or_spool)) > 1:
         msg = (
             f"Format {fiber_io.name} writes one patch per file, but there are "

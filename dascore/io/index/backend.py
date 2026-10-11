@@ -17,6 +17,7 @@ import warnings
 import weakref
 from contextlib import contextmanager, suppress
 from pathlib import Path
+from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -29,13 +30,19 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.index.ingest import (
+    _COORD_DEF_FIELDS,
+    CoordRecord,
     SourceRecord,
     _envelope,
+    _int_key,
+    _runs_by_def,
     assemble_source_records,
     attr_column_name,
     coord_dtype_is_stateable,
+    coord_record,
     dump_path_attrs,
     hive_typed_attrs,
+    index_runs,
 )
 from dascore.io.index.query import (
     Query,
@@ -65,6 +72,7 @@ from dascore.io.index.schema import (
     quote,
 )
 from dascore.units import convert_units
+from dascore.utils.gaps import RunRecord
 
 # Structural columns whose ns-integer storage maps to pandas time types.
 _TIME_COLS = {"time_min": "datetime", "time_max": "datetime", "time_step": "timedelta"}
@@ -1419,6 +1427,84 @@ class SQLiteIndexBackend:
         )
         return set(self._fetch_df(sql)["coord_name"].astype(str))
 
+    def holds_runs(self) -> bool:
+        """Whether any coordinate the index holds is several runs."""
+        return not self._fetch_df(_SEVERAL_RUNS + " LIMIT 1").empty
+
+    def coord_runs(self, name: str, patch_rows) -> dict[int, IndexedRuns]:
+        """
+        The runs of coordinate ``name``, by patch row, where it holds several.
+
+        Only coordinates of several runs are returned, so an archive of
+        contiguous patches answers from the partial index on run_count
+        without reading a run. A coordinate stored without its runs (past
+        max_index_runs) comes back with None for them.
+        """
+        if not self.holds_runs():
+            return {}
+        ids = [int(x) for x in patch_rows]
+        sql = (
+            "SELECT pc.patch_row, cd.value_kind, cd.is_relative, cd.jittered, "
+            "cd.step_float AS coord_step_float, cd.step_int AS coord_step_int, "
+            f"cr.{', cr.'.join(CoordRunRow._fields[2:])} "
+            "FROM patch_coords pc "
+            "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
+            "LEFT JOIN coord_runs cr ON cr.coord_row = cd.coord_row "
+            "WHERE pc.coord_name = ? AND cd.run_count > 1 "
+            "AND pc.patch_row IN (SELECT value FROM json_each(?)) "
+            "ORDER BY pc.patch_row, cr.run"
+        )
+        df = self._fetch_df(sql, [name, json.dumps(ids)])
+        out = {}
+        columns = list(CoordRunRow._fields[2:])
+        for patch_row, group in df.groupby("patch_row", sort=False):
+            first = group.iloc[0]
+            kind, absolute = first["value_kind"], not bool(first["is_relative"])
+            if kind == "time":
+                step = first["coord_step_int"]
+                step = None if pd.isnull(step) else np.timedelta64(int(step), "ns")
+            else:
+                step = first["coord_step_float"]
+                step = None if pd.isnull(step) else float(step)
+            stored = group[columns].dropna(subset=["count"])
+            rows = list(stored.itertuples(index=False, name=None))
+            records = index_runs(rows, kind, absolute) if rows else None
+            row = _int_key(patch_row)
+            out[row] = IndexedRuns(records, step, bool(first["jittered"]))
+        return out
+
+    def patch_runs(self, patch_rows) -> dict[int, dict[str, CoordRecord]]:
+        """
+        Each patch's coordinates of several runs, as records, by patch row.
+
+        Patches without one are absent; an index without any answers from
+        the partial index on run_count.
+        """
+        if not self.holds_runs():
+            return {}
+        ids = json.dumps([int(x) for x in patch_rows])
+        fields = ", ".join(f"cd.{x}" for x in _COORD_DEF_FIELDS if x != "dtype")
+        sql = (
+            "SELECT pc.patch_row, pc.coord_name, pc.coord_dims, pc.dtype, "
+            f"cd.coord_row, cd.data_id, {fields} FROM patch_coords pc "
+            "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
+            "WHERE cd.run_count > 1 "
+            "AND pc.patch_row IN (SELECT value FROM json_each(?))"
+        )
+        links = self._fetch_df(sql, [ids])
+        if links.empty:
+            return {}
+        rows = [int(x) for x in links["coord_row"].unique()]
+        runs = _runs_by_def(
+            self._fetch_in("SELECT * FROM coord_runs", "coord_row", rows)
+        )
+        out: dict[int, dict[str, CoordRecord]] = {}
+        keys = zip(links["patch_row"], links["coord_row"], strict=True)
+        for link, (patch_row, coord_row) in zip(links.itertuples(index=False), keys):
+            record = coord_record(link, link, runs.get(int(coord_row), ()))
+            out.setdefault(int(patch_row), {})[record.coord_name] = record
+        return out
+
     def coord_dims_map(self) -> dict[str, str]:
         """Return each coord name's dims string (first observed wins)."""
         df = self._fetch_df("SELECT DISTINCT coord_name, coord_dims FROM patch_coords")
@@ -1426,6 +1512,19 @@ class SQLiteIndexBackend:
         for name, dims in zip(df["coord_name"], df["coord_dims"]):
             out.setdefault(str(name), str(dims))
         return out
+
+
+# The definitions holding several runs, which a partial index lists.
+_SEVERAL_RUNS = "SELECT 1 FROM coord_defs WHERE run_count > 1"
+
+
+class IndexedRuns(NamedTuple):
+    """A coordinate's runs as an index states them, with its step and jitter."""
+
+    # None where the coordinate was stored without them
+    records: tuple[RunRecord, ...] | None
+    step: Any
+    jittered: bool
 
 
 def get_backend(path: str | Path) -> SQLiteIndexBackend:

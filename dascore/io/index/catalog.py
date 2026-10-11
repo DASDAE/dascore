@@ -17,7 +17,6 @@ Selection composes Query predicates without running SQL; realization
 from __future__ import annotations
 
 import abc
-import itertools
 import json
 import operator
 import os
@@ -50,7 +49,6 @@ from dascore.io.index.query import (
     resolve_query,
 )
 from dascore.io.index.schema import SPOOL_LATE_RENAMES
-from dascore.utils.gaps import contiguous_windows
 from dascore.utils.identity import _snap_names
 from dascore.utils.misc import (
     _canonical_range,
@@ -223,24 +221,12 @@ def _patch_path(patch: dc.Patch) -> str:
 
 def _live_entries(patches: Sequence[dc.Patch]) -> dict[str, dc.Patch]:
     """
-    Key live patches by identity; a patch with holes enters as its pieces.
+    Key live patches by identity, holes and all.
 
-    Each piece is a view, one per product of the dimensions' contiguous
-    windows, whose identity extends its patch's, so re-adding either the
-    patch or a piece is idempotent.
+    A patch with holes is one entry, as it is one row; the index states
+    its runs, so reports and plans see the holes inside it.
     """
-    out = {}
-    for patch in {_patch_path(x): x for x in patches}.values():
-        windows = [contiguous_windows(patch.get_coord(x)) for x in patch.dims]
-        if all(len(x) == 1 for x in windows):
-            out[_patch_path(patch)] = patch
-            continue
-        for num, window in enumerate(itertools.product(*windows)):
-            select = dict(zip(patch.dims, window, strict=True))
-            piece = patch.select(samples=True, **select)
-            piece._instance_id = f"{patch._instance_id}/{num}"
-            out[_patch_path(piece)] = piece
-    return out
+    return {_patch_path(x): x for x in patches}
 
 
 class FileResolver(PatchResolver):

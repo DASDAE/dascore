@@ -3800,7 +3800,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         """
         step, dtype = self.step, self.dtype
         if self._partial or self.ndim != 1 or not len(self):
-            return (RunRecord(len(self), self.min(), self.max()),)
+            count = self.shape[0] if self.ndim else 1
+            return (RunRecord(count, self.min(), self.max()),)
         if _is_null(step):
             return tuple(
                 RunRecord(

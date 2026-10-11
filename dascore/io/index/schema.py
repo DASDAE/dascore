@@ -512,6 +512,9 @@ TRIGGERS = MappingProxyType(
 INDEXES = (
     ("idx_pcoords_name", "patch_coords", "coord_name", None),
     ("idx_cdefs_grid", "coord_defs", "def_key", GRID_NEEDED),
+    # the few definitions of several runs, so an archive of contiguous
+    # patches says it has none without scanning every definition
+    ("idx_cdefs_runs", "coord_defs", "coord_row", "run_count > 1"),
 )
 
 

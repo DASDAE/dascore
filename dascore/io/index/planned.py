@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import Mapping
+from dataclasses import replace
 
 import numpy as np
 import pandas as pd
@@ -1214,8 +1215,78 @@ def derived_catalog(
         sizes=_whole_member_sizes(trims, sources),
         plan_dim=name,
     )
+    if parent is not None and "_index_row" in sources.columns:
+        # a filled output holds no hole along the dimension it filled
+        filled = merge_kwargs.get("fill_value") is not None
+        records = _with_parent_runs(
+            records, parent.backend, trims, sources, name, filled
+        )
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver, stamps=stamps)
+
+
+def _with_parent_runs(
+    records,
+    parent_backend,
+    trims: pd.DataFrame,
+    sources: pd.DataFrame,
+    name: str,
+    filled: bool = False,
+) -> list:
+    """
+    The records with the runs their members' coordinates hold in the parent.
+
+    An output of one member holds that member's values, perhaps trimmed,
+    so it takes the member's runs; the reports clip runs to each row's
+    envelope. An output of several takes runs only for a coordinate which
+    kept its identity, and so equals each member's; never along the
+    dimension it merged, nor along one it ``filled``. Members find their
+    runs through the parent's patch rows (``_index_row``).
+    """
+    index_rows = dict(zip(sources["_patch_row"], sources["_index_row"], strict=True))
+    members: dict[str, list] = {}
+    for output_id, patch_row in zip(trims["output_id"], trims["_patch_row"]):
+        members.setdefault(str(int(output_id)), []).append(index_rows.get(patch_row))
+    known = {x for ids in members.values() for x in ids if pd.notna(x)}
+    runs = parent_backend.patch_runs(known)
+    if not runs:
+        return records
+    out = []
+    for source in records:
+        patches = []
+        for patch in source.patches:
+            ids = list(dict.fromkeys(members.get(patch.source_patch_key, [])))
+            held = runs.get(ids[0], {}) if ids and pd.notna(ids[0]) else {}
+            coords = []
+            for coord in patch.coords:
+                merged = name in str(coord.coord_dims).split(",")
+                parent = held.get(coord.coord_name)
+                several = len(ids) > 1 and (merged or not coord.data_id)
+                if parent is None or several or (filled and merged):
+                    coords.append(coord)
+                    continue
+                same = (parent.value_kind, parent.is_relative, parent.units)
+                if same != (coord.value_kind, coord.is_relative, coord.units):
+                    coords.append(coord)
+                    continue
+                carried = {x: getattr(parent, x) for x in _CARRIED_RUN_FIELDS}
+                coords.append(replace(coord, **carried))
+            patches.append(replace(patch, coords=tuple(coords)))
+        out.append(replace(source, patches=tuple(patches)))
+    return out
+
+
+# What a coordinate's runs say of it, beyond its envelope.
+_CARRIED_RUN_FIELDS = (
+    "step_float",
+    "step_int",
+    "jittered",
+    "gapped",
+    "offset_min",
+    "offset_max",
+    "run_count",
+    "runs",
+)
 
 
 def _aux_info_for_unfed(
@@ -1298,7 +1369,9 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
     # the re-plan builds new member rows from these, so what the index
     # measured of each source has to travel with them
     members = resolver.source_stats_of(members)
-    working = members.drop(columns=["output_id"])
+    # members name their patch in the catalog they were planned from,
+    # whose runs this one does not hold
+    working = members.drop(columns=["output_id", "_index_row"], errors="ignore")
     working = patch_local_adjusted_envelopes(
         working, catalog.residuals, drop_empty=True
     )
