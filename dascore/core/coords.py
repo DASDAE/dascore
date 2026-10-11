@@ -31,6 +31,7 @@ from uuid import uuid4
 import numpy as np
 import pandas as pd
 from pydantic import (
+    Field,
     ValidationError,
     field_validator,
     model_validator,
@@ -235,7 +236,10 @@ class CoordSummary(DascoreBaseModel):
     A summary for coordinates.
 
     Provides enough information for indexing coordinates and creating range
-    coordinates.
+    coordinates. Like the coordinate, it states a `step` (None if it has
+    none) and whether the labels are `jittered` or `gapped` on it; `runs`
+    are the coordinate's run records, kept for a coordinate of more than
+    one and at most `max_index_runs`.
     """
 
     # Defaulted because the before-validator below derives it from min
@@ -252,11 +256,20 @@ class CoordSummary(DascoreBaseModel):
     step_numerator: int | None = None
     step_denominator: int | None = None
     origin_offset: int | None = None
+    jittered: bool = False
+    gapped: bool = False
+    # How far, in steps, labels sit from the grid through the first one.
+    offset_min: float | None = None
+    offset_max: float | None = None
+    # How many runs the coordinate is, cut at its holes; None when unknown.
+    run_count: int | None = None
+    # Left out of the repr, which a long list would swamp.
+    runs: tuple[RunRecord, ...] | None = Field(default=None, repr=False)
 
     @property
     def is_range_like(self) -> bool:
         """Return True when the summary can reconstruct an evenly sampled coord."""
-        return not pd.isnull(self.step)
+        return not (pd.isnull(self.step) or self.jittered or self.gapped)
 
     @model_validator(mode="before")
     @classmethod
@@ -3855,19 +3868,30 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         return components
 
     def to_summary(self, dims=()) -> CoordSummary:
-        """Get the summary info about the coord, exact grid included."""
+        """Get the summary info about the coord: its grid, flags and runs."""
         summary = super().to_summary(dims=dims)
-        if (grid := self._grid) is None or not grid.exact:
-            return summary
-        if _tick_scale(self.dtype) != 1:
-            # Labels in a coarser time unit floor a nanosecond grid, which
-            # plans laid on whole nanoseconds would cut between; the row
-            # states no step, so they read the labels themselves.
-            return summary.model_copy(update={"step": None})
-        terms = grid.canonical()[1:]
-        return summary.model_copy(
-            update=dict(zip(_EXACT_GRID_FIELDS, terms, strict=True))
-        )
+        records = self._run_records()
+        update: dict[str, Any] = {"run_count": len(records)}
+        if 1 < len(records) <= dc.get_config().max_index_runs:
+            update["runs"] = records
+        if (bounds := self._offset_bounds()) is not None:
+            update.update(
+                step=self.step,
+                jittered=self.jittered,
+                gapped=self.gapped,
+                offset_min=bounds[0],
+                offset_max=bounds[1],
+            )
+        if (grid := self._grid) is not None and grid.exact:
+            if _tick_scale(self.dtype) != 1:
+                # Labels in a coarser time unit floor a nanosecond grid, which
+                # plans laid on whole nanoseconds would cut between; the row
+                # states no step, so they read the labels themselves.
+                update["step"] = None
+            else:
+                terms = grid.canonical()[1:]
+                update.update(zip(_EXACT_GRID_FIELDS, terms, strict=True))
+        return summary.model_copy(update=update)
 
     def _repr_fields(self) -> tuple[tuple[str, Text, bool], ...]:
         fields = super()._repr_fields()

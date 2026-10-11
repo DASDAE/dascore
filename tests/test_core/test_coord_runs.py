@@ -149,11 +149,15 @@ class TestDeclaredStep:
         coord = get_coord(start=0, stop=6, step=1).update(values=rolled)
         assert coord.step is None
 
-    def test_summary_stays_an_envelope(self, design_case):
-        """A summary with a step rebuilds a range, which runs are not."""
-        assert design_case.to_summary().step is None
+    def test_summary_states_step_and_holes(self, design_case):
+        """A summary states the step and its holes, and rebuilds no range."""
+        summary = design_case.to_summary()
+        assert summary.step == 1 and summary.gapped and not summary.is_range_like
         array = get_coord(data=np.arange(3000)[np.arange(3000) % 3 != 2], step=1)
-        assert array.to_summary().step is None
+        summary = array.to_summary()
+        assert summary.gapped and summary.run_count == 1000 and summary.runs is None
+        with pytest.raises(CoordError, match="not evenly sampled"):
+            summary.to_coord()
 
     def test_mixed_steps_cannot_say_what_is_missing(self):
         """Runs of different steps share no grid to be missing from."""
