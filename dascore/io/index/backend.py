@@ -329,7 +329,10 @@ class SQLiteIndexBackend:
             sql = f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({column})"
             self._execute(sql if where is None else f"{sql} WHERE {where}")
         self._create_triggers()
-        row = MetaDataRow(WHAT_IS_THIS, INDEX_VERSION, dc.__version__, 0, 0)
+        shift = dc.get_config().max_shift
+        row = MetaDataRow(
+            WHAT_IS_THIS, INDEX_VERSION, dc.__version__, 0, 0, "null", shift
+        )
         self._bulk_insert("meta_data", MetaDataRow._fields, [row])
 
     def _create_triggers(self) -> None:
@@ -565,6 +568,13 @@ class SQLiteIndexBackend:
         self._executemany(sql, rows)
 
     # --- writes ------------------------------------------------------
+
+    def set_decode(self, snap: str, max_shift: float) -> None:
+        """Record the snap (as JSON) and max_shift the sources are scanned under."""
+        with self._transaction():
+            self._execute(
+                "UPDATE meta_data SET snap = ?, max_shift = ?", (snap, max_shift)
+            )
 
     def mark_initial_update_done(self) -> None:
         """Persist successful completion of a directory index's first update."""

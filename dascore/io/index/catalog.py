@@ -35,6 +35,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.compat import UPath
+from dascore.config import config_context, get_config
 from dascore.constants import PROGRESS_LEVELS, ExecutorType, namespace_select_type
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import MissingPatchError, ParameterError
@@ -237,13 +238,46 @@ class FileResolver(PatchResolver):
         root: Path | str | None = None,
         upaths: Mapping | None = None,
         snaps: Mapping | None = None,
+        snap=None,
+        max_shift: float | None = None,
     ):
         self._root = Path(root) if root is not None else None
         # Rows hold path strings; a remote path's storage options live only
         # on the UPath it was given as, so that is kept to reopen it.
         self._upaths = dict(upaths or {})
-        # Likewise the snap a source was scanned under, which its reads use.
+        # Likewise the snap a source was scanned under, which its reads use,
+        # by path, or for every source (a directory's); and the max_shift
+        # its readers judged grids by.
         self._snaps = dict(snaps or {})
+        self._snap = snap
+        self._shifts: dict[str, float] = {}
+        shift = get_config().max_shift if max_shift is None else max_shift
+        self._max_shift = shift
+
+    def decode(self, path: str):
+        """The snap and max_shift a source was scanned under, which reads repeat."""
+        return self._snaps.get(path, self._snap), self._shifts.get(
+            path, self._max_shift
+        )
+
+    def hold_decodes(self, decodes: Mapping) -> None:
+        """
+        Read these sources under these decodes, refusing one held otherwise.
+
+        Rows of one source decoded two ways cannot share a resolver, which
+        reads each path one way.
+        """
+        for path, (snap, shift) in decodes.items():
+            held_snap = self._snaps.setdefault(path, snap)
+            held_shift = self._shifts.setdefault(path, shift)
+            snaps = (held_snap, snap)
+            if _snap_names(held_snap) != _snap_names(snap) or held_shift != shift:
+                msg = (
+                    f"Spools reading {path} under different snap options "
+                    f"({snaps[0]!r} and {snaps[1]!r}, max_shift {held_shift} and "
+                    f"{shift}) cannot be combined; open the file once."
+                )
+                raise ParameterError(msg)
 
     def _read(self, path, row: Mapping, trim: dict, source_patch_key: str):
         """
@@ -260,9 +294,11 @@ class FileResolver(PatchResolver):
             kwargs["file_format"] = row["source_format"]
         if row.get("source_version"):
             kwargs["file_version"] = row["source_version"]
-        if (snap := self._snaps.get(str(row.get("source_path")))) is not None:
+        snap, shift = self.decode(str(row.get("source_path")))
+        if snap is not None:
             kwargs["snap"] = snap
-        return dc.read(**kwargs, **id_kwargs, **trim)
+        with config_context(max_shift=shift):
+            return dc.read(**kwargs, **id_kwargs, **trim)
 
     def resolve_path(self, path: str | Path) -> str | Path:
         """Resolve a row's source path against the catalog root."""
@@ -314,18 +350,11 @@ class CompositeResolver(PatchResolver):
         return self.plans
 
     def absorb_upaths(self, resolver: PatchResolver):
-        """Keep the paths, and snaps, another resolver reopens sources by."""
+        """Keep the paths, and decodes, another resolver reopens sources by."""
         file = getattr(resolver, "file", resolver)
         self.file._upaths.update(getattr(file, "_upaths", {}))
-        for path, snap in getattr(file, "_snaps", {}).items():
-            held = self.file._snaps.setdefault(path, snap)
-            if _snap_names(held) != _snap_names(snap):
-                msg = (
-                    f"Spools reading {path} under different snap options "
-                    f"({held!r} and {snap!r}) cannot be "
-                    "combined; open the file once."
-                )
-                raise ParameterError(msg)
+        if isinstance(file, FileResolver):
+            self.file.hold_decodes({x: file.decode(x) for x in file._snaps})
 
     def absorb(self, resolver: PatchResolver, paths=None) -> None:
         """
@@ -375,6 +404,19 @@ def _live_records(registry: Mapping[str, dc.Patch]):
             )
         )
     return records
+
+
+def _directory_decodes(catalog, records) -> dict:
+    """The decode each source of a directory catalog is read under, by path."""
+    resolver = catalog.resolver
+    out = {}
+    for record in records:
+        fiber_io = FiberIO.manager.get_fiberio(
+            format=record.source_format, version=record.format_version
+        )
+        snap = _resolve_snap(fiber_io, resolver._snap)
+        out[record.source_path] = (snap, resolver._max_shift)
+    return out
 
 
 def _absolutize_record(record, root):
@@ -798,6 +840,10 @@ class PatchCatalog:
             # along; the rest of the registry stays with its own catalog
             member_paths = {record.source_path for record in records}
             resolver.absorb(catalog.resolver, paths=member_paths)
+            if root is not None:
+                # a directory's sources read under its one decode, named
+                # per source so a file spool of one of them can be compared
+                resolver.file.hold_decodes(_directory_decodes(catalog, records))
         backend.write_sources(list(merged.values()))
         out._invalidate()
         return out
@@ -858,14 +904,22 @@ class PatchCatalog:
     @classmethod
     def from_directory(
         cls,
-        path: str | Path,
+        path: str | Path | DBDirectoryIndexer,
         index_path: str | Path | None = None,
+        snap=None,
     ) -> PatchCatalog:
-        """Catalog over a directory of fiber files."""
-        syncer = DBDirectoryIndexer(path, index_path=index_path)
+        """Catalog over a directory of fiber files, read under `snap`."""
+        syncer = (
+            path
+            if isinstance(path, DBDirectoryIndexer)
+            else DBDirectoryIndexer(path, index_path=index_path, snap=snap)
+        )
+        resolver = FileResolver(
+            root=syncer.path, snap=syncer.snap, max_shift=syncer.max_shift
+        )
         return cls(
             backend=syncer._backend,
-            resolver=FileResolver(root=syncer.path),
+            resolver=resolver,
             syncer=syncer,
             default_order=_DIRECTORY_ORDER,
         )

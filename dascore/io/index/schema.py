@@ -34,9 +34,10 @@ from typing import NamedTuple, get_args, get_type_hints
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
 # changes, not only when a column does. Version 31 states a coordinate's
-# step beside its jittered and gapped flags and offset bounds, and its
-# runs in coord_runs. Version 30 scans each format under
-# its own default snap through one shared grid. Version 29 reads XDAS-layout
+# step beside its jittered and gapped flags and offset bounds, its runs in
+# coord_runs, and the snap and max_shift an index was scanned under.
+# Version 30 scans each format under its own default snap through one
+# shared grid. Version 29 reads XDAS-layout
 # NetCDF files as XDAS, not NETCDF_CF. Version 28 grids a stored distance
 # array in float64 from its end values, not a median step. Version 27 drops the per-run
 # coordinate links (`run_index`). Version 26 scans labels flooring a
@@ -88,6 +89,12 @@ class MetaDataRow(NamedTuple):
     last_indexed_ns: int
     # every patch in the index, kept by the counting triggers
     patch_count: int
+    # The decode the sources were scanned under, which reads repeat: the
+    # `snap` option as JSON (null for each format's default) and the
+    # max_shift readers judged grids by. A directory index opened under
+    # another is rescanned.
+    snap: str
+    max_shift: float
 
 
 class SourceRow(NamedTuple):

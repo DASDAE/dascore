@@ -2771,7 +2771,7 @@ class Spool(NodeRepr, NamespaceOwner):
     # --- construction --------------------------------------------------
 
     @classmethod
-    def _from_directory(cls, path, index_path=None) -> Self:
+    def _from_directory(cls, path, index_path=None, snap=None) -> Self:
         """
         Create a spool over a directory of fiber files.
 
@@ -2785,21 +2785,10 @@ class Spool(NodeRepr, NamespaceOwner):
         the first question only an inventory can answer. See
         [`attach_inventory`](`dascore.core.spool.Spool.attach_inventory`).
         """
-        from dascore.io.index.catalog import FileResolver, PatchCatalog  # noqa: PLC0415
-        from dascore.io.index.indexer import DBDirectoryIndexer  # noqa: PLC0415
+        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
         out = cls()
-        if isinstance(path, DBDirectoryIndexer):
-            from dascore.io.index.catalog import _DIRECTORY_ORDER  # noqa: PLC0415
-
-            out._catalog = PatchCatalog(
-                backend=path._backend,
-                resolver=FileResolver(root=path.path),
-                syncer=path,
-                default_order=_DIRECTORY_ORDER,
-            )
-        else:
-            out._catalog = PatchCatalog.from_directory(path, index_path=index_path)
+        out._catalog = PatchCatalog.from_directory(path, index_path, snap=snap)
         # Filling the slot at the moment the spool is opened is what makes
         # `remove_inventory` stick: nothing refills it afterwards, so no
         # sentinel is needed to tell unset from deliberately emptied.
@@ -3342,9 +3331,10 @@ def spool(obj: path_types | Spool | Sequence[PatchType], **kwargs) -> Spool:
         An object from which a spool can be derived.
     **kwargs
         For a path, `file_format` and `file_version` name its format, and
-        for a single file `snap` chooses which dimensions its patches read
-        on a grid, as in [`read`](`dascore.read`); a directory's index does
-        not record `snap` yet, so it is refused there.
+        `snap` chooses which dimensions its patches read on a grid, as in
+        [`read`](`dascore.read`). A directory's index records the `snap`,
+        and `dascore.config.max_shift`, it was scanned under, and rescans
+        when opened with others.
 
     Examples
     --------
@@ -3370,18 +3360,11 @@ def spool(obj: path_types | Spool | Sequence[PatchType], **kwargs) -> Spool:
 @spool.register(Path)
 @spool.register(UPath)
 def _spool_from_str(path, snap=None, **kwargs):
-    """Get a spool from a path; a file's patches read under `snap`."""
+    """Get a spool from a path; its patches read under `snap`."""
     path = coerce_to_upath(resolve_example_uri(path))
     # A local directory was passed; index it.
     if is_local_path(path) and path.is_dir():
-        if snap is not None:
-            msg = (
-                "snap applies to a spool of one file, but not yet to a "
-                "directory, whose index does not record the snap it was "
-                f"built with: {path}"
-            )
-            raise ParameterError(msg)
-        return Spool._from_directory(path, **kwargs)
+        return Spool._from_directory(path, snap=snap, **kwargs)
     # A single file, or a remote directory one reader reads whole (e.g. a
     # zarr store); its patches load lazily. Remote directories of files
     # cannot be indexed.

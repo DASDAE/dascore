@@ -36,6 +36,7 @@ from dascore.io.index.ingest import (
     hive_path_attrs,
     summaries_to_records,
 )
+from dascore.utils.identity import _snap_names
 from dascore.utils.misc import _iter_filesystem
 from dascore.utils.paths import (
     coerce_to_local_path,
@@ -81,13 +82,18 @@ def scan_unit_stats(path) -> tuple[int | None, int | None]:
     return status.st_mtime_ns, status.st_size
 
 
-def _scan_batch(paths, config):
+def _scan_batch(paths, config, snap=None):
     """Scan a source batch using the caller's DASCore configuration."""
     with config_context(config):
-        return dc.scan(paths, progress=None)
+        return dc.scan(paths, progress=None, snap=snap)
 
 
-def _scan_with_client(paths, client, progress):
+def snap_text(snap) -> str:
+    """The JSON an index records a snap option as; null for each format's default."""
+    return json.dumps(None if snap is None else _snap_names(snap))
+
+
+def _scan_with_client(paths, client, progress, snap=None):
     """Collect ordered scan batches from a caller-owned executor."""
     # Standard-library pools expose capacity here. Map-only clients can omit
     # it; host CPU count still gives them several batches to schedule.
@@ -96,7 +102,7 @@ def _scan_with_client(paths, client, progress):
         workers = os.cpu_count() or 1
     size = max(1, math.ceil(len(paths) / (4 * workers)))
     batches = [paths[start : start + size] for start in range(0, len(paths), size)]
-    func = partial(_scan_batch, config=get_config())
+    func = partial(_scan_batch, config=get_config(), snap=snap)
     results = client.map(func, batches)
     summaries = []
     try:
@@ -189,6 +195,11 @@ class DBDirectoryIndexer:
     index_path
         Where to keep the index; defaults to a hidden entry at the top of
         the data directory.
+    snap
+        The dimensions each file's patches are read on a grid, as in
+        [`read`](`dascore.read`). The index records it beside
+        `dascore.config.max_shift`, and an index scanned under others is
+        rescanned.
     """
 
     ext: str | None = None
@@ -200,11 +211,13 @@ class DBDirectoryIndexer:
         self,
         path: str | Path | UPath,
         index_path: str | Path | None = None,
+        snap=None,
     ):
         path = UPath(path).absolute() if isinstance(path, UPath) else Path(path)
         requires_local_directory(path, label="DBDirectoryIndexer")
         self.path = Path(coerce_to_local_path(path)).absolute()
         self.index_path = Path(self._find_index_path(index_path))
+        self.snap, self.max_shift = snap, get_config().max_shift
         try:
             self._backend = get_backend(self.index_path)
         except InvalidIndexVersionError:
@@ -218,6 +231,24 @@ class DBDirectoryIndexer:
         # update instead of trusting a merely nonempty SQLite file.
         metadata = self._backend.get_metadata()
         self._initial_update_done = bool(metadata["last_indexed_ns"])
+        decode = (snap_text(snap), self.max_shift)
+        if (metadata["snap"], metadata["max_shift"]) != decode:
+            if self._initial_update_done:
+                self._rescan(metadata, decode)
+            self._backend.set_decode(*decode)
+
+    def _rescan(self, metadata, decode) -> None:
+        """Start the index again, its files decoded otherwise than it states."""
+        msg = (
+            f"The index of {self.path} was scanned with snap={metadata['snap']} "
+            f"and max_shift={metadata['max_shift']}; rescanning its files with "
+            f"snap={decode[0]} and max_shift={decode[1]}."
+        )
+        warnings.warn(msg, UserWarning, stacklevel=4)
+        self._backend.close()
+        self.index_path.unlink()
+        self._backend = get_backend(self.index_path)
+        self._initial_update_done = False
 
     @property
     def _index_name(self) -> str:
@@ -466,11 +497,13 @@ class DBDirectoryIndexer:
             # full-archive mtime/size maps for a tiny update).
             changed_stats = {rel: files[rel] for rel in changed}
             scan_paths = [stat[2] for stat in changed_stats.values()]
-            summaries = (
-                dc.scan(scan_paths, progress=progress)
-                if client is None
-                else _scan_with_client(scan_paths, client, progress)
-            )
+            # scanned under the decode the index records, as reads are
+            with config_context(max_shift=self.max_shift):
+                summaries = (
+                    dc.scan(scan_paths, progress=progress, snap=self.snap)
+                    if client is None
+                    else _scan_with_client(scan_paths, client, progress, self.snap)
+                )
             # scan reports absolute source paths; stat maps use them too
             records = summaries_to_records(
                 summaries,
