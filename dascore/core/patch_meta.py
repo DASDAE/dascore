@@ -457,8 +457,9 @@ class PatchMeta(NodeRepr):
             conflict=conflict,
         ).run(self)
 
+    # The wholesale rebuild; update and new (its name before 0.1.0) remain.
+    replace = dascore.proc.update
     update = dascore.proc.update
-    # Before 0.1.0 update was called new, this is for backwards compatibility.
     new = dascore.proc.update
     update_attrs = dascore.proc.update_attrs
     check_coords = check_patch_coords
