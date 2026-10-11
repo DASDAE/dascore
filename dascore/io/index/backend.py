@@ -34,7 +34,6 @@ from dascore.io.index.ingest import (
     CoordRecord,
     SourceRecord,
     _envelope,
-    _int_key,
     _runs_by_def,
     assemble_source_records,
     attr_column_name,
@@ -1464,23 +1463,23 @@ class SQLiteIndexBackend:
             "AND pc.patch_row IN (SELECT value FROM json_each(?)) "
             "ORDER BY pc.patch_row, cr.run"
         )
-        df = self._fetch_df(sql, [name, json.dumps(ids)])
+        # plain rows: the engine's integers are exact, and a frame per
+        # patch would cost more than the lookup
+        with self._lock:
+            rows = self._con.execute(sql, [name, json.dumps(ids)]).fetchall()
+        grouped: dict[int, list] = {}
+        for row in rows:
+            grouped.setdefault(row[0], []).append(row)
         out = {}
-        columns = list(CoordRunRow._fields[2:])
-        for patch_row, group in df.groupby("patch_row", sort=False):
-            first = group.iloc[0]
-            kind, absolute = first["value_kind"], not bool(first["is_relative"])
+        for patch_row, group in grouped.items():
+            _, kind, relative, jittered, step_float, step_int = group[0][:6]
             if kind == "time":
-                step = first["coord_step_int"]
-                step = None if pd.isnull(step) else np.timedelta64(int(step), "ns")
+                step = None if step_int is None else np.timedelta64(step_int, "ns")
             else:
-                step = first["coord_step_float"]
-                step = None if pd.isnull(step) else float(step)
-            stored = group[columns].dropna(subset=["count"])
-            rows = list(stored.itertuples(index=False, name=None))
-            records = index_runs(rows, kind, absolute) if rows else None
-            row = _int_key(patch_row)
-            out[row] = IndexedRuns(records, step, bool(first["jittered"]))
+                step = step_float
+            stored = [x[6:] for x in group if x[6] is not None]
+            records = index_runs(stored, kind, not relative) if stored else None
+            out[patch_row] = IndexedRuns(records, step, bool(jittered))
         return out
 
     def patch_runs(self, patch_rows) -> dict[int, dict[str, CoordRecord]]:
