@@ -326,7 +326,9 @@ class Dft(PatchProcessor):
     Single-precision data (float16, float32, complex64) are transformed in
     single precision and give complex64; other data give complex128.
     Frequency coordinates remain ordered, use reciprocal units, and are named
-    with an ``ft_`` prefix (for example, ``time`` becomes ``ft_time``).
+    with an ``ft_`` prefix (for example, ``time`` becomes ``ft_time``). Each is
+    evenly sampled with a step of ``1 / (n * step)``, where ``n`` is the
+    transformed (padded) length and ``step`` the dimension's step.
 
     A non-dimensional coordinate measured on one transformed dimension is
     removed from the output coordinates but retained for

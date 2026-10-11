@@ -726,10 +726,11 @@ class Select(_Query):
 
     {select_params}
 
-    For xarray-compatible indexing, use [`Patch.sel`](`dascore.Patch.sel`) for labels or
-    [`Patch.isel`](`dascore.Patch.isel`) for sample positions. These methods preserve
-    indexer order and repetitions and remove dimensions selected with scalar indexers.
-    `select` preserves dimensions and filters values in source order.
+    `select` is DASCore's own selection, kept for backwards compatibility. Code
+    written for xarray can use [`Patch.sel`](`dascore.Patch.sel`) for labels or
+    [`Patch.isel`](`dascore.Patch.isel`) for sample positions instead. These methods
+    preserve indexer order and repetitions and remove dimensions selected with scalar
+    indexers. `select` preserves dimensions and filters values in source order.
 
     Parameters
     ----------
@@ -813,9 +814,11 @@ class Isel(PatchProcessor):
     """
     Select sample positions with xarray-compatible dimension indexing.
 
-    Supports the `DataArray.isel` operations described below. Use
-    [`Patch.select`](`dascore.Patch.select`) for DASCore's tuple range notation,
-    relative selections, and filtering that preserves dimensions and source order.
+    `isel` exists for xarray compatibility: it supports the `DataArray.isel`
+    operations described below, so code written for xarray works on patches.
+    [`Patch.select`](`dascore.Patch.select`), kept for backwards compatibility,
+    has DASCore's tuple range notation, relative selections, and filtering that
+    preserves dimensions and source order.
 
     Parameters
     ----------
@@ -891,9 +894,11 @@ class Sel(PatchProcessor):
     """
     Select coordinate labels with xarray-compatible dimension indexing.
 
-    Supports the `DataArray.sel` operations described below. Use
-    [`Patch.select`](`dascore.Patch.select`) for DASCore's tuple range notation,
-    relative selections, and filtering that preserves dimensions and source order.
+    `sel` exists for xarray compatibility: it supports the `DataArray.sel`
+    operations described below, so code written for xarray works on patches.
+    [`Patch.select`](`dascore.Patch.select`), kept for backwards compatibility,
+    has DASCore's tuple range notation, relative selections, and filtering that
+    preserves dimensions and source order.
 
     Parameters
     ----------
