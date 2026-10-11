@@ -1769,6 +1769,14 @@ def merge_compatible_coords_attrs(
     return coord_out, attrs
 
 
+@deprecate(
+    info=(
+        "concatenate_patches is deprecated. Use Spool.concatenate instead, "
+        "for example dascore.spool(patches).concatenate(time=None), which "
+        "partitions incompatible patches rather than skipping them."
+    ),
+    removed_in="0.2.0",
+)
 @compose_docstring(check_bev=check_behavior_description)
 def concatenate_patches(
     patches: Sequence[dc.Patch] | dc.Spool,

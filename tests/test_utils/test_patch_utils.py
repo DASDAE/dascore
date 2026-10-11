@@ -325,6 +325,7 @@ class TestHistory:
             out = add_one(patch)
         assert out.attrs.history == original_history
 
+    @pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
     def test_concatenate_history_disabled(self, random_patch):
         """Concatenate should use the shared history helper."""
         with config_context(patch_history="disabled"):
@@ -739,6 +740,7 @@ class TestMergeCompatibleCoordsAttrs:
         assert set(coord.dims) == (set(patch1.dims) | set(patch2.dims))
 
 
+@pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
 class TestConcatenate:
     """Tests for concatenating spools."""
 
@@ -755,6 +757,12 @@ class TestConcatenate:
 
         assert len(out) == 1
         assert out[0].get_coord("time").max() == patch_2.get_coord("time").max()
+
+    def test_concatenate_patches_deprecated(self, random_patch):
+        """concatenate_patches warns, pointing to Spool.concatenate."""
+        with pytest.warns(DeprecationWarning, match="Spool.concatenate"):
+            out = concatenate_patches([random_patch, random_patch], time=None)
+        assert len(out) == 1
 
     def test_aggregated_patches_keep_their_dim_kind(self, random_spool):
         """
@@ -919,7 +927,7 @@ class TestConcatenate:
     def test_different_kind_skipped_before_dims(self, random_patch):
         """A different-kind patch is skipped whatever its dimensions."""
         other = random_patch.update_attrs(tag="other").rename_coords(time="money")
-        with suppress_warnings(action="error"):
+        with suppress_warnings(UserWarning, action="error"):
             out = concatenate_patches(
                 [random_patch, other], time=None, check_behavior="ignore"
             )

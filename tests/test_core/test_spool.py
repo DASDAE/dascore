@@ -1829,6 +1829,7 @@ class TestConcatenatePartitions:
         kinds = {x.get_coord("epoch").values.dtype.kind for x in out}
         assert kinds == {"M", "f"}
 
+    @pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
     def test_coordinate_riding_the_dimension_is_joined(self, pair):
         """A coordinate every member carries along the dimension follows it."""
         first, other = pair
@@ -1856,6 +1857,7 @@ class TestConcatenatePartitions:
         assert np.allclose(values[:n], irregular.get_coord("distance").values)
         assert np.all(np.diff(values) < 0)
 
+    @pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
     def test_coordinate_attached_differently_conflicts(self):
         """Equal values on different dimensions are different coordinates."""
         base = dc.get_example_patch()
@@ -1889,6 +1891,7 @@ class TestConcatenatePartitions:
         joined = [x for x in out if x.shape[x.get_axis("range")] == 2 * n]
         assert len(joined) == 1
 
+    @pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
     def test_rider_only_on_the_first_is_left_out_directly(self, pair):
         """The direct function drops a rider a later patch lacks, as the plan does."""
         first, other = pair
@@ -1975,6 +1978,7 @@ class TestConcatenatePartitions:
             with pytest.raises(CoordMergeError, match="clock"):
                 spool[0]
 
+    @pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
     def test_direct_concatenation_picks_the_lowest_spelling(self, pair):
         """Without a plan, the rider joins in the units of its lowest member."""
         first, other = pair

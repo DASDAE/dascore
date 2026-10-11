@@ -2703,8 +2703,9 @@ class Spool(NodeRepr, NamespaceOwner):
         -----
         - [`Spool.chunk`](`dascore.Spool.chunk`) performs a similar
           operation but accounts for coordinate values.
-        - [`concatenate_patches`](`dascore.utils.patch.concatenate_patches`)
-          concatenates a list of patches directly, relative to the first.
+        - [`concatenate_patches`](`dascore.utils.patch.concatenate_patches`),
+          deprecated in favour of this method, concatenates a list of
+          patches directly, relative to the first.
         """
         from dascore.io.index.planned import derived_catalog  # noqa: PLC0415
 
