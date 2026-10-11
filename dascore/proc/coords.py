@@ -1106,6 +1106,8 @@ class Order(_Query):
       but it will also change the patch order to match the inputs exactly.
       If there are repeated values in the requested values or in the patch
       coordinate arrays, the data will end up being repeated as well.
+    - Values (or, with `samples`, positions) the coordinate does not hold
+      are dropped with a `FutureWarning`; from DASCore 0.1.26 they raise.
     """
 
     def get_metadata(self, meta):

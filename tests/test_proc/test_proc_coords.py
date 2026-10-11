@@ -30,6 +30,7 @@ from dascore.exceptions import (
 )
 from dascore.units import get_quantity
 from dascore.utils.gaps import GapTolerance
+from dascore.utils.misc import suppress_warnings
 from dascore.warnings import DASCoreWarning
 
 
@@ -1021,6 +1022,26 @@ class TestOrder:
         """Ensure copy creates a copy of the data array."""
         out = random_patch.order(time=[1, 2, 3], samples=True, copy=True)
         assert isinstance(out.data, np.ndarray)
+
+    def test_missing_values_warn(self, random_patch):
+        """Values the coordinate does not hold are dropped with a warning."""
+        dist = random_patch.get_array("distance")
+        with pytest.warns(FutureWarning, match="0.1.26"):
+            out = random_patch.order(distance=[dist[2], -1000.0, dist[1]])
+        assert np.all(out.get_array("distance") == dist[[2, 1]])
+
+    def test_missing_samples_warn(self, random_patch):
+        """Positions past the end are dropped with a warning; -1 is held."""
+        size = random_patch.coord_shapes["time"][0]
+        with pytest.warns(FutureWarning, match="does not hold"):
+            out = random_patch.order(time=[0, size, -1], samples=True)
+        assert out.coord_shapes["time"] == (2,)
+
+    def test_found_values_do_not_warn(self, random_patch):
+        """Ordering by values the coordinate holds is silent."""
+        dist = random_patch.get_array("distance")
+        with suppress_warnings(FutureWarning, action="error"):
+            random_patch.order(distance=dist[[3, 1]])
 
 
 class TestAppendDims:

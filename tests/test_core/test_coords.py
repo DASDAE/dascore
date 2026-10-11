@@ -1131,7 +1131,8 @@ class TestOrder:
         values = np.concatenate([values1, values2])
         # Ensure this still gets some output.
         in_coord = np.isin(values, long_coord.values)
-        out, reduction = long_coord.order(values)
+        with pytest.warns(FutureWarning, match="does not hold"):
+            out, reduction = long_coord.order(values)
         assert in_coord.sum() == len(out) == len(long_coord.values[reduction])
 
     def test_duplicate_array_samples(self, long_coord):
@@ -1165,7 +1166,8 @@ class TestOrder:
         # if by some chance there are any overlaps just bail out.
         if np.any(np.isin(values2, long_coord.values)):
             return
-        out, red = long_coord.order(values2)
+        with pytest.warns(FutureWarning, match="does not hold"):
+            out, red = long_coord.order(values2)
         assert out.shape == red.shape
         assert len(out) == 0
 
@@ -1175,7 +1177,8 @@ class TestOrder:
         an empty coordinate.
         """
         bad_indices = np.arange(len(long_coord)) + len(long_coord)
-        out, red = long_coord.order(bad_indices, samples=True)
+        with pytest.warns(FutureWarning, match="does not hold"):
+            out, red = long_coord.order(bad_indices, samples=True)
         assert out.shape == red.shape
         assert len(out) == 0
 
