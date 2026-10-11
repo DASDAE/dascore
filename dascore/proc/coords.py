@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import warnings
 from functools import partial
+from pathlib import Path
 from typing import Any, ClassVar, Self
 
 import numpy as np
@@ -571,8 +572,10 @@ class CoordsFromDf(PatchProcessor):
     Notes
     -----
     * Exactly one of the column names in the dataframe must map to one of
-      the patch.dims. This will either add new coordinates, or update existing
-      ones if they already exist.
+      the patch.dims. The other columns become new coordinates, set through
+      [`update_coords`](`dascore.Patch.update_coords`). Overwriting an
+      existing coordinate warns, and from DASCore 0.1.26 raises; drop it
+      first with [`drop_coords`](`dascore.Patch.drop_coords`).
 
     * This function uses linear interpolation between the nearest two points
       to get values in patch coords that aren't in the dataframe. Row order
@@ -642,11 +645,20 @@ class CoordsFromDf(PatchProcessor):
             values[unsurveyed] = np.nan
             new_coords[coord] = (anchor_dim, values)
 
-        coords = meta.coords.update(**new_coords)
+        if overwritten := sorted(set(new_coords) & set(meta.coords.coord_map)):
+            msg = (
+                f"coords_from_df overwrote existing coordinates {overwritten}; "
+                "from DASCore 0.1.26 it refuses. Drop them first with "
+                "Patch.drop_coords, or set them with Patch.update_coords."
+            )
+            prefix = str(Path(dc.__file__).parent)
+            warnings.warn(msg, FutureWarning, skip_file_prefixes=(prefix,))
+        # update_coords is the one setter; its metadata half records no history.
+        out, _ = UpdateCoords(**new_coords).get_metadata(meta)
         # Only coordinates are named, so the conversion never scales data.
         if self.units is not None:
-            coords = coords.convert_units(**self.units)
-        return meta.new(coords=coords), {}
+            out = out.new(coords=out.coords.convert_units(**self.units))
+        return out, {}
 
 
 def _check_coord_names(patch: PatchType, kwargs) -> None:
@@ -1409,9 +1421,9 @@ class AddDistanceTo(PatchProcessor):
         prefix = self.prefix
         new = {f"{prefix}_{i}": (None, np.atleast_1d(v)) for i, v in origin.items()}
         new[f"{prefix}_distance"] = (dims, distance)
-        # `coords.update`, not `update_coords`, which would record a second
+        # update_coords' metadata half: the one setter, recording no second
         # history entry for part of this operation.
-        return meta.new(coords=coords.update(**new)), {}
+        return UpdateCoords(**new).get_metadata(meta)
 
 
 def get_axis(self: PatchType, dim: str) -> int:

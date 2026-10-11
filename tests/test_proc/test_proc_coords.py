@@ -461,6 +461,19 @@ class TestCoordsFromDf:
         with pytest.raises(ParameterError, match="Exactly one column"):
             random_patch.coords_from_df(bad_df)
 
+    def test_overwrite_warns(self, random_patch, coord_df):
+        """Overwriting an existing coordinate warns, ahead of refusing it."""
+        patch = random_patch.coords_from_df(coord_df)
+        name = next(x for x in coord_df.columns if x != "distance")
+        with pytest.warns(FutureWarning, match=name):
+            out = patch.coords_from_df(coord_df)
+        assert out.coords.get_coord(name) == patch.coords.get_coord(name)
+
+    def test_new_coords_do_not_warn(self, random_patch, coord_df):
+        """Adding coordinates the patch lacks is silent."""
+        with suppress_warnings(FutureWarning, action="error"):
+            random_patch.coords_from_df(coord_df)
+
 
 class TestSelect:
     """Tests for selecting data from patch."""
