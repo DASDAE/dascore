@@ -350,6 +350,20 @@ class DropCoords(PatchProcessor):
     *coords
         One or more coordinates to drop. Each can be a coordinate name or
         a sequence of them.
+    to_attrs
+        If True, store each dropped coordinate's value as an attribute of
+        the same name; each must hold one non-null value throughout, and
+        its units are not kept. With no names given, every non-dimensional
+        coordinate holding one value moves, skipping private coordinates
+        and names the attrs reserve.
+
+    Raises
+    ------
+    ParameterError
+        If a named coordinate is a dimension.
+    CoordError
+        With `to_attrs`, if a named coordinate is absent, private, reserved
+        by the attrs, or not one non-null value throughout.
 
     Examples
     --------
@@ -360,9 +374,16 @@ class DropCoords(PatchProcessor):
     >>> pa_no_lat = pa.drop_coords("latitude")
     >>> # A sequence of names works as well.
     >>> pa_no_lat = pa.drop_coords(["latitude"])
+    >>> # Move a coordinate holding one value into the attrs.
+    >>> ones = np.ones(pa.coord_shapes["distance"])
+    >>> out = pa.update_coords(quality=("distance", ones)).drop_coords(
+    ...     "quality", to_attrs=True
+    ... )
+    >>> assert out.attrs["quality"] == 1
     """
 
     coords: tuple[Any, ...] = ()
+    to_attrs: bool = False
 
     @field_validator("coords", mode="before")
     @classmethod
@@ -376,6 +397,9 @@ class DropCoords(PatchProcessor):
         if dim_coords := names & set(meta.dims):
             msg = f"Cannot drop dimensional coordinates: {dim_coords}"
             raise ParameterError(msg)
+        if self.to_attrs:
+            # An empty sequence names nothing; no names at all is the sweep.
+            return _coords_to_attrs(meta, names if self.coords else None), {}
         # Only non-dimensional coordinates get here, so no axis is emptied
         # and the data are untouched: there is nothing for a kernel to do.
         coords, _ = meta.coords.drop_coords(*names)
@@ -384,10 +408,13 @@ class DropCoords(PatchProcessor):
         return meta.new(coords=coords), {}
 
 
-def _squeeze_value(meta, name: str):
+def _attr_value(meta, name: str):
     """Return the lone value of a coord, or raise CoordError if it has none."""
     if name not in meta.coords.coord_map or name in meta.dims:
-        msg = f"Cannot squeeze {name!r}: it is not a non-dimensional coordinate."
+        msg = (
+            f"Cannot move {name!r} to the attrs: it is not a non-dimensional "
+            "coordinate."
+        )
         raise CoordError(msg)
     # Fields, methods, and names the attrs rewrite are the attrs' own; a
     # private coord belongs to the operation which made it (eg stft).
@@ -395,12 +422,15 @@ def _squeeze_value(meta, name: str):
     reserved = {"coords", "dims", "patch_id", "processing_id"}
     reserved |= set(meta.attrs.model_extra or {})  # never overwrite an attr
     if name in attrs.model_fields or hasattr(attrs, name) or name in reserved:
-        raise CoordError(f"Cannot squeeze {name!r}: the attrs reserve that name.")
+        msg = f"Cannot move {name!r} to the attrs: the attrs reserve that name."
+        raise CoordError(msg)
     if name.startswith("_"):
-        raise CoordError(f"Cannot squeeze {name!r}: it is private.")
+        raise CoordError(f"Cannot move {name!r} to the attrs: it is private.")
     values = np.asarray(meta.coords.coord_map[name].values).reshape(-1)
     if not values.size or pd.isnull(values).any() or not np.all(values == values[0]):
-        msg = f"Cannot squeeze {name!r}: its values are not one non-null value."
+        msg = (
+            f"Cannot move {name!r} to the attrs: its values are not one non-null value."
+        )
         raise CoordError(msg)
     # Times stay numpy scalars, as the other attrs hold them.
     value = values[0]
@@ -409,63 +439,22 @@ def _squeeze_value(meta, name: str):
     )
 
 
-class SqueezeCoords(PatchProcessor):
-    """
-    Move non-dimensional coordinates holding one value into the attrs.
-
-    Each coordinate is dropped and its value stored as an attribute of the
-    same name; units are not kept and dimensions are never touched.
-
-    Parameters
-    ----------
-    *coords
-        The coordinates to squeeze, as names or sequences of them. If none
-        are given, every non-dimensional coordinate whose values are all one
-        non-null value is squeezed, skipping private coordinates and names
-        the attrs reserve.
-
-    Raises
-    ------
-    CoordError
-        If a named coordinate is absent, a dimension, private, reserved by
-        the attrs, or not one non-null value throughout.
-
-    Examples
-    --------
-    >>> import numpy as np
-    >>> import dascore as dc
-    >>> patch = dc.get_example_patch()
-    >>> ones = np.ones(patch.coord_shapes["distance"])
-    >>> patch = patch.update_coords(quality=("distance", ones))
-    >>> out = patch.squeeze_coords()
-    >>> assert "quality" not in out.coords.coord_map
-    >>> assert out.attrs["quality"] == 1
-    """
-
-    coords: tuple[Any, ...] = ()
-
-    @field_validator("coords", mode="before")
-    @classmethod
-    def _one_name(cls, value):
-        """Say how a single coordinate name is spelled here."""
-        return _refuse_one_name(cls, "coords", value)
-
-    def get_metadata(self, meta):
-        """Return the coordinates without the squeezed ones, and the new attrs."""
-        values = {}
-        if self.coords:  # named: each must qualify
-            for name in [x for coord in self.coords for x in iterate(coord)]:
-                values[name] = _squeeze_value(meta, name)
-        else:  # sweep: take whatever qualifies
-            for name in meta.coords.coord_map:
-                try:
-                    values[name] = _squeeze_value(meta, name)
-                except CoordError:
-                    continue
-        if not values:
-            return meta, {}
-        coords, _ = meta.coords.drop_coords(*values)
-        return meta.new(coords=coords, attrs=meta.attrs.update(**values)), {}
+def _coords_to_attrs(meta, names):
+    """Return the metadata with the named coordinates (None: all that can) as attrs."""
+    values = {}
+    if names is not None:  # named: each must qualify
+        for name in names:
+            values[name] = _attr_value(meta, name)
+    else:  # sweep: take whatever qualifies
+        for name in meta.coords.coord_map:
+            try:
+                values[name] = _attr_value(meta, name)
+            except CoordError:
+                continue
+    if not values:
+        return meta
+    coords, _ = meta.coords.drop_coords(*values)
+    return meta.new(coords=coords, attrs=meta.attrs.update(**values))
 
 
 class DropPrivateCoords(PatchProcessor):

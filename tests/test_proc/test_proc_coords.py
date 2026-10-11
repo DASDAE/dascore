@@ -195,7 +195,7 @@ class TestDropCoords:
             random_patch.drop_coords(["time"])
 
 
-class TestSqueezeCoords:
+class TestDropCoordsToAttrs:
     """Tests for moving single-valued coordinates into the attrs."""
 
     @pytest.fixture()
@@ -217,7 +217,7 @@ class TestSqueezeCoords:
 
     def test_sweep(self, patch):
         """Every qualifying coordinate, and only those, becomes an attr."""
-        out = patch.squeeze_coords()
+        out = patch.drop_coords(to_attrs=True)
         moved = {"quality", "station", "when"}
         assert set(out.coords.coord_map) == set(patch.coords.coord_map) - moved
         assert out.dims == patch.dims
@@ -225,7 +225,7 @@ class TestSqueezeCoords:
 
     def test_values(self, patch):
         """Times stay numpy datetimes, other values become python scalars."""
-        out = patch.squeeze_coords()
+        out = patch.drop_coords(to_attrs=True)
         assert type(out.attrs["quality"]) is float
         assert out.attrs["quality"] == 2.0
         assert out.attrs["station"] == "A"
@@ -234,7 +234,7 @@ class TestSqueezeCoords:
         assert out.attrs.tag == patch.attrs.tag
 
     def test_object_values(self, random_patch):
-        """Object coords squeeze; one holding a missing value is left alone."""
+        """Object coords move; one holding a missing value is left alone."""
         (size,) = random_patch.coord_shapes["distance"]
         held = np.full(size, 2, dtype=object)
         gappy = held.copy()
@@ -242,16 +242,16 @@ class TestSqueezeCoords:
         patch = random_patch.update_coords(
             held=("distance", held), gappy=("distance", gappy)
         )
-        out = patch.squeeze_coords()
+        out = patch.drop_coords(to_attrs=True)
         assert out.attrs["held"] == 2
         assert "gappy" in out.coords.coord_map
 
     def test_existing_attr_kept(self, patch):
-        """A coordinate sharing an existing attr's name is not squeezed."""
+        """A coordinate sharing an existing attr's name is not moved."""
         patch = patch.update_attrs(quality=3)
-        assert patch.squeeze_coords().attrs["quality"] == 3
+        assert patch.drop_coords(to_attrs=True).attrs["quality"] == 3
         with pytest.raises(CoordError, match="reserve"):
-            patch.squeeze_coords("quality")
+            patch.drop_coords("quality", to_attrs=True)
 
     def test_reader_attrs_reserved(self, random_patch):
         """A field a reader's attrs declare is not overwritten."""
@@ -262,55 +262,53 @@ class TestSqueezeCoords:
         (size,) = random_patch.coord_shapes["distance"]
         patch = random_patch.update(attrs=_Attrs(**random_patch.attrs.model_dump()))
         patch = patch.update_coords(gauge_length=("distance", np.full(size, "x")))
-        out = patch.squeeze_coords()
+        out = patch.drop_coords(to_attrs=True)
         assert "gauge_length" in out.coords.coord_map
 
     def test_named(self, patch):
         """Named coordinates, bare or in sequences, are the only ones moved."""
-        out = patch.squeeze_coords("quality", ["station"])
+        out = patch.drop_coords("quality", ["station"], to_attrs=True)
         assert {"quality", "station"}.isdisjoint(out.coords.coord_map)
         assert "when" in out.coords.coord_map
         assert out.attrs["station"] == "A"
 
     @pytest.mark.parametrize(
         "name",
-        [
-            "time",
-            "bob",
-            "varied",
-            "nothing",
-            "tag",
-            "update",
-            "patch_id",
-            "_window",
-        ],
+        ["bob", "varied", "nothing", "tag", "update", "patch_id", "_window"],
     )
     def test_named_refused(self, patch, name):
-        """Named coordinates which cannot be squeezed raise."""
-        with pytest.raises(CoordError, match="Cannot squeeze"):
-            patch.squeeze_coords("quality", name)
+        """Named coordinates which cannot be moved raise."""
+        with pytest.raises(CoordError, match="Cannot move"):
+            patch.drop_coords("quality", name, to_attrs=True)
+
+    def test_dimension_refused(self, patch):
+        """A dimension is never dropped, into the attrs or not."""
+        with pytest.raises(ParameterError, match="dimensional coordinates"):
+            patch.drop_coords("time", to_attrs=True)
 
     def test_noop(self, patch, random_patch):
-        """Nothing to squeeze, or an empty selection, returns the patch."""
-        assert random_patch.squeeze_coords() is random_patch
-        assert patch.squeeze_coords([]) is patch
+        """Nothing to move, or an empty selection, returns the patch."""
+        assert random_patch.drop_coords(to_attrs=True) is random_patch
+        assert patch.drop_coords([], to_attrs=True) is patch
 
     def test_length_one_dim(self, patch):
-        """A length-one dimension is never squeezed."""
+        """A length-one dimension is never moved."""
         flat = patch.select(time=0, samples=True)
-        assert flat.squeeze_coords().dims == patch.dims
-        with pytest.raises(CoordError, match="Cannot squeeze"):
-            flat.squeeze_coords("time")
+        assert flat.drop_coords(to_attrs=True).dims == patch.dims
 
     def test_empty_coord(self, patch):
-        """An empty coordinate holds no value to squeeze."""
+        """An empty coordinate holds no value to move."""
         empty = patch.select(distance=(None, -1))
-        assert "quality" in empty.squeeze_coords().coords.coord_map
+        assert "quality" in empty.drop_coords(to_attrs=True).coords.coord_map
 
     def test_metadata(self, patch):
         """The operation runs on metadata alone."""
-        out = patch.drop_data().squeeze_coords("quality")
+        out = patch.drop_data().drop_coords("quality", to_attrs=True)
         assert out.attrs["quality"] == 2.0
+
+    def test_squeeze_coords_removed(self, patch):
+        """The unreleased squeeze_coords spelling is gone."""
+        assert not hasattr(patch, "squeeze_coords")
 
 
 class TestCoordsFromDf:
