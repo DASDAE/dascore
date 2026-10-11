@@ -1180,7 +1180,7 @@ class TestStackPatches:
             stack_patches(spool, dim_vary="time", check_behavior="warn")
         # Or the incompatible patch skipped without a word -- skipped
         # being the point: a quiet policy must not stack it anyway.
-        with suppress_warnings(action="error"):
+        with suppress_warnings(UserWarning, action="error"):
             quiet = stack_patches(spool, dim_vary="time", check_behavior="ignore")
         assert np.allclose(quiet.data, patch1.data)
 
@@ -1265,6 +1265,21 @@ class TestStackPatches:
         assert dist_coords.max() == orig_dist_coords.max()
         assert dist_coords.step == orig_dist_coords.step
         assert dist_coords.units == orig_dist_coords.units
+
+    def test_relabelling_dim_vary_warns(self):
+        """Labelling dim_vary from zero warns; the first patch's labels follow."""
+        spool = dc.get_example_spool()
+        with pytest.warns(FutureWarning, match="first patch's labels"):
+            out = stack_patches(spool, dim_vary="time")
+        time = spool[0].get_coord("time")
+        assert out.get_coord("time").min() == time.update_limits(min=0).min()
+
+    def test_labels_from_zero_do_not_warn(self, random_patch):
+        """A dim_vary already starting at zero keeps its labels without a warning."""
+        patch = random_patch.update_coords(distance_min=0)
+        with suppress_warnings(FutureWarning, action="error"):
+            out = stack_patches([patch, patch], dim_vary="distance")
+        assert out.get_coord("distance") == patch.get_coord("distance")
 
 
 class TestGetPatchName:

@@ -2106,7 +2106,10 @@ def stack_patches(
     dim_vary
         The name of the dimension which can be different in values
         (but not shape) and patches still added together.
-        If None, all dimension values must be equal.
+        If None, all dimension values must be equal. Its labels in the
+        output start at zero, keeping the first patch's step, as DASCore
+        0.1.24 gave them, with a `FutureWarning`; from DASCore 0.1.26 they
+        are the first patch's labels.
     {check_desc}
 
     Examples
@@ -2153,6 +2156,13 @@ def stack_patches(
     if dim_vary:  # adjust dim_vary to start at 0 for junk dimension indicator
         coord_to_change = stack_coords.coord_map[dim_vary]
         new_dim = coord_to_change.update_limits(min=0)
+        if new_dim != coord_to_change:
+            msg = (
+                f"stack labels {dim_vary!r} from zero, as DASCore 0.1.24 did; "
+                "from DASCore 0.1.26 it keeps the first patch's labels."
+            )
+            prefix = str(Path(__file__).parent.parent)
+            warnings.warn(msg, FutureWarning, skip_file_prefixes=(prefix,))
         stack_coords = stack_coords.update_coords(**{dim_vary: new_dim})
     with operation_context():
         return dc.Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)
