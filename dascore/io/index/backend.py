@@ -1436,6 +1436,20 @@ class SQLiteIndexBackend:
         )
         return set(self._fetch_df(sql)["coord_name"].astype(str))
 
+    def patch_ids_by_key(self) -> dict[str, int]:
+        """Each patch's row, by its source patch key (a plan's output id)."""
+        df = self._fetch_df("SELECT patch_row, source_patch_key FROM patches")
+        keys = df["source_patch_key"].astype(str)
+        return dict(zip(keys, df["patch_row"].astype(int), strict=True))
+
+    def clear(self) -> None:
+        """Delete every source and coordinate, as before a first scan."""
+        with self._transaction():
+            self._execute("DELETE FROM sources")
+            self._execute("DELETE FROM coord_runs")
+            self._execute("DELETE FROM coord_defs")
+            self._execute("UPDATE meta_data SET last_indexed_ns = 0")
+
     def holds_runs(self) -> bool:
         """Whether any coordinate the index holds is several runs."""
         return not self._fetch_df(_SEVERAL_RUNS + " LIMIT 1").empty

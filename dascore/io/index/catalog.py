@@ -406,16 +406,19 @@ def _live_records(registry: Mapping[str, dc.Patch]):
     return records
 
 
-def _directory_decodes(catalog, records) -> dict:
-    """The decode each source of a directory catalog is read under, by path."""
-    resolver = catalog.resolver
+def directory_decodes(resolver, sources) -> dict:
+    """
+    The decode each source a directory resolver reads is read under, by path.
+
+    ``sources`` are ``(path, format, version)``; its one snap is spelled per
+    source as the format's names, so a file spool of one can be compared.
+    """
+    if not isinstance(resolver, FileResolver) or resolver._root is None:
+        return {}
     out = {}
-    for record in records:
-        fiber_io = FiberIO.manager.get_fiberio(
-            format=record.source_format, version=record.format_version
-        )
-        snap = _resolve_snap(fiber_io, resolver._snap)
-        out[record.source_path] = (snap, resolver._max_shift)
+    for path, file_format, version in sources:
+        fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=version)
+        out[str(path)] = (_resolve_snap(fiber_io, resolver._snap), resolver._max_shift)
     return out
 
 
@@ -840,10 +843,11 @@ class PatchCatalog:
             # along; the rest of the registry stays with its own catalog
             member_paths = {record.source_path for record in records}
             resolver.absorb(catalog.resolver, paths=member_paths)
-            if root is not None:
-                # a directory's sources read under its one decode, named
-                # per source so a file spool of one of them can be compared
-                resolver.file.hold_decodes(_directory_decodes(catalog, records))
+            # a directory's sources read under its one decode
+            sources = [
+                (x.source_path, x.source_format, x.format_version) for x in records
+            ]
+            resolver.file.hold_decodes(directory_decodes(catalog.resolver, sources))
         backend.write_sources(list(merged.values()))
         out._invalidate()
         return out

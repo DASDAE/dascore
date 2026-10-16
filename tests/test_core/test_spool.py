@@ -1353,6 +1353,25 @@ class TestDirectorySpoolSnap:
                 spool = dc.spool(directory)
             assert spool._catalog.backend.get_metadata()["max_shift"] == 0.3
 
+    def test_derived_spools_keep_the_snap(self, directory, terra15_exact):
+        """Chunked and concatenated directory spools read under its snap."""
+        spool = dc.spool(directory, snap=False).update()
+        for derived in (spool.chunk(time=None), spool.concatenate(time=None)):
+            patch = derived[0]
+            assert patch.get_coord("time") == terra15_exact.get_coord("time")
+
+    def test_spools_opened_under_two_snaps_before_scanning(self, directory):
+        """The index is scanned under the snap it records, whichever opened it."""
+        first = dc.spool(directory)
+        second = dc.spool(directory, snap=False)
+        first.update()
+        with pytest.warns(UserWarning, match="rescanning"):
+            second.update()
+        metadata = second._catalog.backend.get_metadata()
+        assert metadata["snap"] == "[]"
+        reopened = dc.spool(directory, snap=False)
+        assert not reopened.get_contents()["time_step"].notna().any()
+
     def test_directory_and_file_under_two_snaps(self, directory):
         """A directory and one of its files read under two snaps do not combine."""
         path = directory / "terra15.hdf5"

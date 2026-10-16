@@ -37,6 +37,7 @@ from dascore.io.index.catalog import (
     PatchResolver,
     _row_source_patch_key,
     apply_exact_residuals,
+    directory_decodes,
 )
 from dascore.io.index.indexer import scan_unit_stats
 from dascore.io.index.ingest import (
@@ -1171,6 +1172,12 @@ def derived_catalog(
                 anchors.get("source_path", pd.Series(dtype=str)).astype(str)
             )
         loader.absorb(parent.resolver, paths=member_paths)
+        # a directory's members read under the decode it scanned them with
+        rows = member_rows if anchors is None else pd.concat([member_rows, anchors])
+        columns = ["source_path", "source_format", "source_version"]
+        if set(columns) <= set(rows.columns):
+            stated = rows[columns].drop_duplicates().itertuples(index=False)
+            loader.file.hold_decodes(directory_decodes(parent.resolver, stated))
     coord_dims_map = {} if parent is None else parent.backend.coord_dims_map()
     # a coordinate riding a dimension it is not named for, on any member,
     # is associated; the array path rebuilds dimension coordinates only
@@ -1369,9 +1376,12 @@ def collapse_working_df(catalog: PatchCatalog) -> pd.DataFrame | None:
     # the re-plan builds new member rows from these, so what the index
     # measured of each source has to travel with them
     members = resolver.source_stats_of(members)
-    # members name their patch in the catalog they were planned from,
-    # whose runs this one does not hold
-    working = members.drop(columns=["output_id", "_index_row"], errors="ignore")
+    # each member stands in for the output holding it, so its index row is
+    # that output's patch in this catalog, which carries the member's runs
+    ids = catalog.backend.patch_ids_by_key()
+    index_ids = [ids.get(str(int(x))) for x in members["output_id"]]
+    working = members.assign(_index_row=pd.array(index_ids, dtype="Int64"))
+    working = working.drop(columns=["output_id"])
     working = patch_local_adjusted_envelopes(
         working, catalog.residuals, drop_empty=True
     )

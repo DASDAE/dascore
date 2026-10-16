@@ -298,3 +298,22 @@ class TestSelections:
         (patch,) = view
         assert row["time_min"] == patch.get_coord("time").min()
         assert row["time_max"] == patch.get_coord("time").max() == t0 + 1000 * MS
+
+
+class TestReviewFindings:
+    """Runs and decodes survive what the review found losing them."""
+
+    def test_sample_selection_reports_the_loaded_runs(self):
+        """A sample selection's report reads the runs the patch loads with."""
+        time = get_coord(data=np.array([0, 1, 2, 6, 7, 8]), step=1)
+        patch = dc.Patch(data=np.zeros(6), coords={"time": time}, dims=("time",))
+        view = dc.spool([patch]).select(time=(3, 6), samples=True)
+        (loaded,) = view
+        assert not loaded.get_coord("time").gapped
+        assert view.get_gaps().empty
+
+    def test_replanning_keeps_runs_of_another_dim(self, gapped_patch):
+        """A collapsed re-plan still carries the time runs of its members."""
+        once = dc.spool([gapped_patch]).chunk(distance=100)
+        twice = once.chunk(distance=100)
+        assert len(twice.get_gaps()) == len(once.get_gaps()) == len(once)

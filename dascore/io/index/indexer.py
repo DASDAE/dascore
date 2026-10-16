@@ -229,26 +229,31 @@ class DBDirectoryIndexer:
         # Schema creation alone is not a successful directory scan. Read the
         # transactional marker so a new process retries an interrupted first
         # update instead of trusting a merely nonempty SQLite file.
-        metadata = self._backend.get_metadata()
-        self._initial_update_done = bool(metadata["last_indexed_ns"])
-        decode = (snap_text(snap), self.max_shift)
-        if (metadata["snap"], metadata["max_shift"]) != decode:
-            if self._initial_update_done:
-                self._rescan(metadata, decode)
-            self._backend.set_decode(*decode)
+        self._check_decode()
 
-    def _rescan(self, metadata, decode) -> None:
-        """Start the index again, its files decoded otherwise than it states."""
-        msg = (
-            f"The index of {self.path} was scanned with snap={metadata['snap']} "
-            f"and max_shift={metadata['max_shift']}; rescanning its files with "
-            f"snap={decode[0]} and max_shift={decode[1]}."
+    def _check_decode(self) -> None:
+        """
+        Start the index again where its files were scanned under another decode.
+
+        Checked when opened and again before each update, since another
+        spool of the directory may have changed it in between.
+        """
+        metadata = self._backend.get_metadata()
+        decode = (snap_text(self.snap), self.max_shift)
+        stored = (metadata["snap"], metadata["max_shift"])
+        if stored != decode and metadata["last_indexed_ns"]:
+            msg = (
+                f"The index of {self.path} was scanned with snap={stored[0]} "
+                f"and max_shift={stored[1]}; rescanning its files with "
+                f"snap={decode[0]} and max_shift={decode[1]}."
+            )
+            warnings.warn(msg, UserWarning, stacklevel=5)
+            self._backend.clear()
+        if stored != decode:
+            self._backend.set_decode(*decode)
+        self._initial_update_done = bool(
+            metadata["last_indexed_ns"] and stored == decode
         )
-        warnings.warn(msg, UserWarning, stacklevel=4)
-        self._backend.close()
-        self.index_path.unlink()
-        self._backend = get_backend(self.index_path)
-        self._initial_update_done = False
 
     @property
     def _index_name(self) -> str:
@@ -440,6 +445,7 @@ class DBDirectoryIndexer:
         changes stay in the calling thread. The caller owns the client.
         """
         progress = validate_progress_level(progress)
+        self._check_decode()
         legacy = self.path / ".dascore_index.h5"
         if legacy.exists() and self._is_legacy_or_foreign_index(legacy):
             msg = (

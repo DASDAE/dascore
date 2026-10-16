@@ -130,6 +130,7 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.explicit_ranges import (
     ExplicitRanges,
+    _select_manager,
     _source_manager,
     explicit_windows,
     known_coordinates,
@@ -2127,14 +2128,21 @@ class Spool(NodeRepr, NamespaceOwner):
         if df.empty or "_patch_row" not in df.columns:
             return df
         catalog, files = self._catalog, {}
+        residuals = catalog.residuals
         indexed = catalog.backend.coord_runs(dim, df["_patch_row"].dropna().unique())
+        if any(samples or relative for _, samples, relative in residuals):
+            # a sample or relative selection resolves against the loaded
+            # coordinate, which the stored runs do not know, so it is read
+            indexed = {k: v._replace(records=None) for k, v in indexed.items()}
 
         def read(row):
-            """The row's coordinate, read from its source as the catalog names it."""
+            """The row's coordinate, read from its source and selected as it loads."""
             rows = catalog.to_df()
             (source,) = rows[rows["_patch_row"] == row["_patch_row"]].to_dict("records")
             coords = _source_manager(catalog.resolver, source, files, projection=dim)
-            return None if coords is None else coords.coord_map.get(dim)
+            if coords is None:
+                return None
+            return _select_manager(coords, residuals).coord_map.get(dim)
 
         return with_runs(df, dim, indexed, read, modified=modified)
 
