@@ -2437,6 +2437,112 @@ class TestChunkWithAssociatedCoords:
                 assert set(np.unique(other.get_array("label"))) == labels
 
 
+class TestMergeDimCoords:
+    """Coordinates riding the merge dimension are concatenated, not policed."""
+
+    @staticmethod
+    def _with_coord(patch, name, dim, value):
+        """Return patch with a constant `name` coordinate on `dim`, history cleared."""
+        values = np.full(len(patch.get_coord(dim)), value)
+        return patch.update_coords(**{name: (dim, values)}).update_attrs(history=[])
+
+    @pytest.fixture
+    def halves(self):
+        """Two adjacent halves of the example patch along time."""
+        patch = dc.get_example_patch()
+        first = patch.select(time=(None, 750), samples=True)
+        second = patch.select(time=(750, None), samples=True)
+        return first, second
+
+    @pytest.fixture
+    def power_halves(self, halves):
+        """The halves with a time coordinate holding a different value each."""
+        first, second = halves
+        return (
+            self._with_coord(first, "power", "time", 1.0),
+            self._with_coord(second, "power", "time", 2.0),
+        )
+
+    @pytest.fixture(params=["memory", "directory"])
+    def make_spool(self, request, tmp_path):
+        """Build an in-memory spool or one indexed from a directory."""
+
+        def _make(patches):
+            spool = dc.spool(list(patches))
+            if request.param == "memory":
+                return spool
+            ex.spool_to_directory(spool, path=tmp_path)
+            return dc.spool(tmp_path).update()
+
+        return _make
+
+    def test_rider_concatenated(self, power_halves, make_spool):
+        """Differing values along time merge into one patch, sample for sample."""
+        out = make_spool(power_halves).chunk(time=None)
+        assert len(out) == 1
+        power = out[0].get_array("power")
+        expected = np.concatenate([x.get_array("power") for x in power_halves])
+        assert np.array_equal(power, expected)
+
+    def test_explicit_window(self, power_halves, make_spool):
+        """An explicit window spanning both members concatenates the rider."""
+        time = [x.get_coord("time") for x in power_halves]
+        window = [(time[0].min(), time[1].max())]
+        out = make_spool(power_halves).chunk(time=window)
+        assert len(out) == 1
+        assert set(np.unique(out[0].get_array("power"))) == {1.0, 2.0}
+
+    def test_missing_rider_conflicts(self, halves, power_halves, make_spool):
+        """A member lacking the rider conflicts with one which holds it."""
+        with pytest.raises(CoordMergeError, match="power"):
+            list(make_spool([power_halves[0], halves[1]]).chunk(time=None))
+
+    def test_rider_dims_differ(self, halves, power_halves, make_spool):
+        """Members holding the rider on different dims conflict."""
+        second = halves[1]
+        shape = (len(second.get_coord("distance")), len(second.get_coord("time")))
+        values = np.full(shape, 2.0)
+        second = second.update_coords(power=(("distance", "time"), values))
+        second = second.update_attrs(history=[])
+        with pytest.raises(CoordMergeError, match="power"):
+            list(make_spool([power_halves[0], second]).chunk(time=None))
+
+    def test_same_name_on_other_dim(self, power_halves, make_spool):
+        """
+        Riding is decided per patch, not by the name across the spool.
+
+        An unrelated patch holding `power` on distance neither blocks the
+        merge, nor exempts members holding it on distance from agreeing.
+        """
+        first, second = power_halves
+        other = self._with_coord(first, "power", "distance", 3.0)
+        other = other.update_attrs(tag="other")
+        out = make_spool([other, first, second]).chunk(time=None)
+        assert len(out) == 2
+        on_distance = [
+            self._with_coord(x.drop_coords("power"), "power", "distance", v)
+            for x, v in zip(power_halves, (1.0, 2.0))
+        ]
+        rider = second.update_attrs(tag="other")
+        with pytest.raises(CoordMergeError, match="power"):
+            list(make_spool([rider, *on_distance]).chunk(time=None))
+
+    def test_other_dim_coord_conflicts(self, power_halves, make_spool):
+        """A coordinate on distance must still agree between members."""
+        first, second = power_halves
+        first = self._with_coord(first, "gain", "distance", 1.0)
+        second = self._with_coord(second, "gain", "distance", 2.0)
+        with pytest.raises(CoordMergeError, match="gain"):
+            list(make_spool([first, second]).chunk(time=None))
+
+    def test_attr_conflicts(self, power_halves, make_spool):
+        """Attrs must still agree when a rider is present."""
+        first, second = power_halves
+        second = second.update_attrs(my_attr="other")
+        with pytest.raises(CoordMergeError, match="my_attr"):
+            list(make_spool([first, second]).chunk(time=None))
+
+
 class _Route:
     """Which route a merge took: its loads, its outcomes, and a forced fallback."""
 
