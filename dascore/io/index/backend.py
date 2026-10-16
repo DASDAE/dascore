@@ -1240,7 +1240,8 @@ class SQLiteIndexBackend:
             return out
         ids = out["patch_row"].tolist()
         link_sql = (
-            "SELECT pc.patch_row, pc.coord_name, cd.def_key, cd.data_id, "
+            "SELECT pc.patch_row, pc.coord_name, pc.coord_dims, cd.def_key, "
+            "cd.data_id, "
             "cd.value_kind, pc.dtype, cd.is_relative, cd.units, "
             "cd.min_float, cd.max_float, cd.step_float, "
             "cd.min_int, cd.max_int, cd.step_int, cd.min_str, cd.max_str "
@@ -1293,6 +1294,10 @@ class SQLiteIndexBackend:
             # to 299.0 by 1.0 labels integers, and a member rebuilt from
             # the row must match the patch the file would give
             out[f"_{name}_coord_dtype"] = out["patch_row"].map(dtypes)
+            # the dims the coordinate lies on in each patch: chunking
+            # concatenates a coordinate riding the merged dimension
+            dims = dict(zip(pids, group["coord_dims"]))
+            out[f"_{name}_dims"] = out["patch_row"].map(dims)
             # the ORIGINAL unit spelling, matching the native envelope
             # values; chunk partitioning normalizes compatible spellings
             # to one unit per dimensionality before using this
