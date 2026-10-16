@@ -95,7 +95,7 @@ class WavIO(FiberIO):
         # Ensure we have a 2D patch which has a time dimension.
         check_patch_coords(patch, ("time",))
         assert len(patch.dims) == 2, "only 2D patches supported for this function."
-        time = patch.get_coord("time").step
+        time = patch.get_coord("time", require_evenly_sampled=True).step
 
         # handle resampling and normalization
         pat = patch.transpose("time", ...)

@@ -655,9 +655,9 @@ class TestLegacySnapStep:
             single = _read_coord(h5["_coord_x"], "x", {"x_step": 2.0}, snap=True)
             jittered = _read_coord(h5["_coord_y"], "y", {"y_step": 1.0}, snap=True)
         assert single.evenly_sampled and single.step == 2.0
-        # longer values keep today's tolerant reading; the nominal step is
-        # not a claim they must meet
-        assert jittered.step is None or jittered.evenly_sampled
+        # longer values are read as they are; the nominal step is not a
+        # claim they must meet, and they are jittered on their own step
+        assert jittered.jittered and jittered.step != 1.0
         np.testing.assert_allclose(jittered.values, [0.0, 1.0, 2.05], atol=0.06)
 
 

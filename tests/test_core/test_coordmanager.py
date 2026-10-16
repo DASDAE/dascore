@@ -1126,7 +1126,7 @@ class TestPreserveBaseCoord:
         that happens to be evenly sampled is canonicalized rather than left as
         an irregular array coordinate.
         """
-        coord = dc.get_coord(data=np.array([0.0, 1.0, 3.0]))
+        coord = dc.get_coord(data=np.array([0.0, 1.0, 5.0]))
         patch = dc.Patch(data=np.arange(3.0), coords={"x": coord}, dims=("x",))
         out = patch.select(x=(0, 2), samples=True)  # indices 0..2 -> [0, 1]
         new_coord = out.coords.coord_map["x"]

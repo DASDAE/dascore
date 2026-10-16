@@ -11,7 +11,7 @@ from scipy import signal as sp_signal
 
 import dascore as dc
 from dascore.compat import random_state
-from dascore.exceptions import CoordError, FilterValueError, ParameterError
+from dascore.exceptions import FilterValueError, ParameterError
 from dascore.units import Hz, m, s
 from dascore.utils.patch import get_start_stop_step
 from dascore.warnings import DASCoreWarning
@@ -21,6 +21,19 @@ resample_mod = importlib.import_module("dascore.proc.resample")
 
 class TestInterpolate:
     """Tests for interpolating data along an axis in patch."""
+
+    def test_values_sit_at_their_labels(self, random_patch):
+        """Nearly regular samples snap, and the data are taken at the snap."""
+        distance = random_patch.get_array("distance").astype(np.float64)
+        data = np.broadcast_to(distance[:, None], random_patch.shape)
+        patch = random_patch.new(data=data.copy())
+        samples = np.arange(10.0, 50.0)
+        samples[1::2] += 1e-4  # within the released 0.1% snapping
+        out = patch.interpolate(distance=samples)
+        labels = out.get_array("distance")
+        axis = out.get_axis("distance")
+        assert not np.array_equal(labels, samples)
+        np.testing.assert_allclose(np.take(out.data, 0, axis=1 - axis), labels)
 
     def test_interp_upsample_distance(self, random_patch):
         """Ensure interpolation between distance works."""
@@ -407,14 +420,16 @@ class TestResample:
 class TestDecimateHoles:
     """Filtered decimation must not filter across a coordinate hole."""
 
-    def test_filtered_refuses_holes(self, holed_patch):
-        """A declared step with missing samples refuses the filter."""
-        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
-            holed_patch.decimate(time=2)
+    def test_filtered_holes_warn(self, holed_patch):
+        """Missing samples decimate until 0.1.26, with a warning."""
+        with pytest.warns(FutureWarning, match=r"not evenly sampled.*split_gaps"):
+            out = holed_patch.decimate(time=2)
+        assert out.shape == (1, 60)
 
     def test_stepless_runs(self, stepless_seam_patch):
-        """Step-less labels are an irregular grid and still decimate."""
-        out = stepless_seam_patch.decimate(time=2)
+        """Step-less labels still decimate until 0.1.26, with a warning."""
+        with pytest.warns(FutureWarning, match="0.1.26"):
+            out = stepless_seam_patch.decimate(time=2)
         assert out.shape == (1, 60)
 
     def test_raw_striding_runs(self, holed_patch):

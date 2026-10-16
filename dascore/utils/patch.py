@@ -1061,12 +1061,7 @@ def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
     if isinstance(d_dim, np.timedelta64):
         d_dim = d_dim / np.timedelta64(1, "s")
     if pd.isnull(d_dim) or not coord.evenly_sampled:
-        calling_function = get_parent_code_name()
-        msg = (
-            f"Patch coordinate {dim} is not evenly sampled as required by "
-            f"{calling_function}. This can be fixed with Patch.snap_coords or "
-            f"Patch.interpolate."
-        )
+        msg = _uneven_message(dim, coord, get_parent_code_name())
         raise CoordDataError(msg)
     return 1.0 / d_dim
 
@@ -1263,20 +1258,40 @@ def _get_dx_or_spacing_and_axes(
     return tuple(out), tuple(axes)
 
 
-def require_no_holes(patch, dims, operation: str) -> None:
-    """
-    Raise CoordError if a dimension's declared step has missing samples.
+def _uneven_message(name: str, coord, caller: str) -> str:
+    """Why a coordinate is not evenly sampled for caller, and what fixes it."""
+    why = [
+        text
+        for text, applies in (
+            ("its labels sit off the grid of its step", coord.jittered),
+            ("it has missing samples", coord.gapped),
+        )
+        if applies
+    ]
+    split = ", Patch.split_gaps to split at them" if coord.gapped else ""
+    return (
+        f"Coordinate {name} is not evenly sampled as required by {caller}: "
+        f"{' and '.join(why) or 'it has no step'}. Use Patch.fill_gaps to "
+        f"fill holes{split}, or Patch.snap_coords to put the labels on a grid."
+    )
 
-    A coordinate with no declared step is an irregular grid, not a hole.
+
+def _require_evenly_sampled(patch, dims, operation: str) -> None:
+    """
+    Require evenly sampled dims for an operation 0.1.24 ran on any labels.
+
+    Until DASCore 0.1.26 an unevenly sampled coordinate warns and the
+    operation uses its labels as recorded, as 0.1.24 did (where a selection
+    leaving holes gave labels with no step); then each caller calls
+    ``patch.get_coord(dim, require_evenly_sampled=True)``.
     """
     for dim in iterate(dims):
-        if not patch.get_coord(dim).missing().complete:
-            msg = (
-                f"Coordinate {dim} is not evenly sampled as required by "
-                f"{operation}; it has missing samples. Use Patch.split_gaps, "
-                "Patch.fill_gaps or Spool.chunk(fill_value=...) first."
-            )
-            raise CoordError(msg)
+        coord = patch.get_coord(dim)
+        if coord.evenly_sampled:
+            continue
+        msg = _uneven_message(dim, coord, operation)
+        msg += f" Until DASCore 0.1.26 {operation} uses its labels; it then raises."
+        warnings.warn(msg, FutureWarning, stacklevel=2)
 
 
 def align_patch_coords(
@@ -1896,7 +1911,8 @@ def _concatenate_group(
             ]
         values = np.concatenate(_joinable(members, dim), axis=0)
         coords = first.coords.update(
-            **{dim: dc.core.coords.get_coord(data=values, units=units)}
+            # the released snap, until concatenation joins labels exactly
+            **{dim: dc.core.coords.get_coord(data=values, units=units, snap=True)}
         )
         # coordinates riding the dimension which every member states the
         # same way join along it too; resizing the dimension drops them

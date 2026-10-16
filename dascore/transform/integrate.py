@@ -14,7 +14,7 @@ from dascore.utils.patch import (
     _get_data_type_from_dims,
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
-    require_no_holes,
+    _require_evenly_sampled,
 )
 
 _TRAP_FUNC = getattr(np, "trapezoid" if hasattr(np, "trapezoid") else "trapz")
@@ -134,7 +134,7 @@ class Integrate(PatchProcessor):
     def get_metadata(self, meta):
         """Return the integral's coords, units and data_type, and the spacing."""
         dims = iterate(self.dim if self.dim is not None else meta.dims)
-        require_no_holes(meta, dims, "integrate")
+        _require_evenly_sampled(meta, dims, "integrate")
         dxs_or_vals, axes = _get_dx_or_spacing_and_axes(meta, dims)
         coords = _get_definite_coords(meta, dims) if self.definite else meta.coords
         new_units = _get_data_units_from_dims(meta, dims, mul)

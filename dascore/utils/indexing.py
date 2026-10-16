@@ -110,7 +110,7 @@ def _range_searchsorted(coord, bounds, side, *, estimate=True):
     if (
         estimate
         and bounds.dtype.kind in "iufmM"
-        and coord.evenly_sampled
+        and coord._grid is not None
         and coord.step
     ):
         # Reuse select's arithmetic lookup, but verify its bracket against
@@ -203,7 +203,7 @@ def _label_index(coord, probes, require_unique=False):
         # pandas needs every label unique, not just those near the probes;
         # array segments are strictly monotonic, so only ranges can repeat
         for part in coord.segments:
-            if part.evenly_sampled:
+            if part._grid is not None:
                 _require_unique_range(part)
     pieces = [positions]
     values = np.asarray(probes)
@@ -268,7 +268,7 @@ def _same_kind(coord, labels) -> bool:
 
 def _exact_slice(coord, start, stop, step) -> slice | None:
     """A label slice on an ascending integer grid, or None to ask pandas."""
-    grid = coord.runs[0] if coord.evenly_sampled else None
+    grid = coord._grid
     if not (grid is not None and grid.exact and grid.step_num > 0):
         return None
     # np.timedelta64 subclasses np.integer, so a duration step is refused here
@@ -339,7 +339,7 @@ def label_indexer(
         else:
             tolerance = compatible(tolerance)
     if (
-        coord.evenly_sampled
+        coord._grid is not None
         # a scalar only on an integer grid whose labels cannot repeat
         and (labels.ndim == 1 or (labels.ndim == 0 and _unique_grid(coord)))
         and method is None

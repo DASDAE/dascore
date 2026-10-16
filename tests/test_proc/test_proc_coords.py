@@ -2118,8 +2118,15 @@ class TestFillGaps:
 
     def test_no_step_raises(self):
         """An array coordinate without a declared step has no grid to fill."""
-        patch = _gapped_patch(get_coord(data=np.array([0.0, 1.0, 3.5])), dim="x")
+        patch = _gapped_patch(get_coord(data=np.array([0.0, 1.0, 5.0])), dim="x")
         with pytest.raises(CoordError, match="declared step"):
+            patch.fill_gaps("x")
+
+    def test_jittered_raises(self):
+        """Labels off their step's grid are snapped, not filled."""
+        coord = get_coord(data=np.array([0.0, 1.1, 1.9, 5.05, 6.0]), step=1.0)
+        patch = _gapped_patch(coord, dim="x")
+        with pytest.raises(CoordError, match="snap_coords"):
             patch.fill_gaps("x")
 
     def test_dense_array_with_step(self):
@@ -2340,7 +2347,8 @@ class TestFillGaps:
         values = np.arange(2_000_010) * (1 + 4e-7)
         values = np.delete(values, [5])
         coord = NumericCoord.from_labels(values, step=1.0)
-        with pytest.raises(CoordError, match="drift"):
+        assert coord.jittered  # 0.8 steps of drift: offsets of 0.4 at most
+        with pytest.raises(CoordError, match="snap_coords"):
             _fill_layout(coord)
 
 

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from functools import cached_property
-from typing import Any, Self
+from typing import Any, Self, cast
 
 import numpy as np
 import pandas as pd
@@ -47,7 +47,7 @@ def sensible_model_equals(self: BaseModel | Mapping, other: object) -> bool:
     if isinstance(other, BaseModel):
         d2 = other.model_dump()
     elif isinstance(other, Mapping):
-        d2 = other
+        d2 = cast("Mapping[str, Any]", other)
     else:  # nothing else can carry the same fields
         return NotImplemented
     if not set(d1) == set(d2):  # different keys, not equal

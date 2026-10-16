@@ -18,6 +18,7 @@ from dascore.core.coords import (
     Grid,
     NumericCoord,
     _grid_coord,
+    _grid_terms,
     _scalar_dtype,
     get_coord,
 )
@@ -192,19 +193,17 @@ def _save_coord(coord, name, group, compact: bool, options=None):
 
     `CoordRange` is the format's own name, not a class's tag.
     """
-    grid = coord.runs[0] if getattr(coord, "evenly_sampled", False) else None
+    grid = coord._grid
     object_type = get_model_tag(type(coord))
     if compact and grid is not None and not _extended_float(coord):
         object_type = _RANGE
         node = group.create_dataset(name, shape=(0,), dtype="int64")
-        origin, num, den, phase = grid.canonical()[:4]
+        origin, num = grid.canonical()[:2]
         node.attrs["dtype"] = str(coord.dtype)
         node.attrs["length"] = len(coord)
         if grid.exact:
-            terms = (num, den, phase)
-            node.attrs["start"] = _raw(
-                np.asarray(origin).astype(coord.dtype)[()], coord.dtype
-            )
+            terms = _grid_terms(grid, coord.dtype)
+            node.attrs["start"] = _raw(grid.labels(0, coord.dtype)[()], coord.dtype)
             for field, value in zip(_EXACT_GRID_FIELDS, terms, strict=True):
                 node.attrs[field] = value
         else:
@@ -256,7 +255,7 @@ def _save_coords(patch, patch_group, compact: bool, options):
 def _check_storable(patch):
     """Refuse a patch version 1 cannot store, before touching the file."""
     for name, coord in patch.coords.coord_map.items():
-        grid = coord.runs[0] if getattr(coord, "evenly_sampled", False) else None
+        grid = coord._grid
         if grid is not None and grid.exact and grid.step_den != 1:
             # Version 1 stores one whole-tick step and rebuilds the range
             # from it, which would quietly move every label off its grid.
@@ -349,7 +348,7 @@ def _read_range(node, units):
     shape = (int(attrs["length"]),)
     if "step_numerator" in attrs:
         terms = (int(attrs[name]) for name in _EXACT_GRID_FIELDS)
-        return _grid_coord(terms, units, start=start, shape=shape)
+        return _grid_coord(terms, units, dtype=dtype, start=start, shape=shape)
     if "parent_count" in attrs:
         start = np.asarray(attrs["grid_origin"]).astype(dtype)[()]
     step = attrs.get("grid_step", attrs["step"])
@@ -396,12 +395,26 @@ def _read_coord(node, name, attrs2, snap):
         # grid it declares, never a range to rebuild
         array = _read_array(node)
         if (lengths := node_attrs.get(_EXACT)) is not None:
-            runs = np.split(array, np.cumsum(lengths)[:-1])
-            return NumericCoord(runs=tuple(runs), units=units, step=node_step)
+            # each run read exactly, so a fractional grid keeps its exact
+            # step; a grid of another spacing is labels on the declared one
+            runs = []
+            for values in np.split(array, np.cumsum(lengths)[:-1]):
+                grid = get_coord(data=values, snap=False)._grid
+                if grid is not None and node_step is not None:
+                    if np.abs(grid.step(array.dtype)) != np.abs(node_step):
+                        grid = None
+                runs.append(values if grid is None else grid)
+            return NumericCoord(
+                runs=tuple(runs), units=units, step=node_step, dtype=array.dtype
+            )
         if node_step is not None:
-            return get_coord(data=array, units=units, step=node_step, snap=False)
+            coord = get_coord(data=array, units=units, step=node_step, snap=False)
+            if snap and coord.jittered and not coord.gapped:
+                # jittered labels snap where asked, as stepless ones do
+                return get_coord(data=array, units=units, snap=True)
+            return coord
         if snap or np.ndim(array) != 1:
-            return get_coord(data=array, units=units)
+            return get_coord(data=array, units=units, snap=True)
         return get_coord(data=array, units=units, snap=False)
     step = node_step if node_step is not None else attrs2.get(f"{name}_step", None)
     shape = tuple(node.shape)
@@ -421,7 +434,8 @@ def _read_coord(node, name, attrs2, snap):
         # a legacy file's jittered values need not; it names the spacing
         # only for a single sample, where the values cannot.
         single = np.ndim(array) == 1 and len(array) == 1
-        return get_coord(data=array, units=units, step=step if single else None)
+        step = step if single else None
+        return get_coord(data=array, units=units, step=step, snap=True)
     return get_coord(data=array, units=units, snap=False)
 
 

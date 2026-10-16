@@ -36,7 +36,10 @@ Coordinates expose values, units, data type, ordering, sampling regularity, limi
 |---|---|
 | `sorted` | Whether the coordinate reports ascending ordering |
 | `reverse_sorted` | Whether the coordinate reports descending ordering |
-| `evenly_sampled` | Whether one step describes every value |
+| `step` | The spacing of the grid the values follow, or `None` if they follow none |
+| `jittered` | Whether some value sits off that grid, by under half a step |
+| `gapped` | Whether positions of that grid hold no value |
+| `evenly_sampled` | Whether there is a step and the values are neither jittered nor gapped |
 | `dtype` | NumPy data type |
 | `data` | Array of coordinate values |
 | `units` | Physical units, if present |
