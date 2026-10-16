@@ -257,7 +257,8 @@ def _save_coords(patch, patch_group, compact: bool, options):
 def _check_storable(patch):
     """Refuse a patch version 1 cannot store, before touching the file."""
     for name, coord in patch.coords.coord_map.items():
-        if coord.step is not None and not coord.evenly_sampled:
+        uneven = coord.step is not None and not coord.evenly_sampled
+        if uneven and not coord._partial:
             # Version 1 states a step only beside a grid; other labels read
             # back with the step inference finds, which has no holes.
             back = get_coord(data=coord.values, units=coord.units, snap=False)

@@ -135,20 +135,24 @@ def get_scan_coord(coord, snap: snap_type = False, where=""):
 
 def _stated_step(name, coord):
     """
-    The step labels which are not one grid need written beside them, or None.
+    The step a coordinate's labels need written beside them, or None.
 
-    A grid's labels state their step and need none. Labels whose step does
-    not place them back as they are (two on one position, or a step finer
-    than a tick) cannot be stored, so the writer refuses them (rule 13 of
-    the coordinate guidelines).
+    Labels which restate their coordinate (a grid of several samples, or
+    stepless labels) need none. Others, such as a lone sample or labels
+    with holes or jitter, store their step; where even that does not place
+    them back as they are (two on one position, or a step finer than a
+    tick), the writer refuses them (rule 13 of the coordinate guidelines).
     """
-    if coord.ndim != 1 or coord.step is None or coord.evenly_sampled:
+    if coord.ndim != 1 or coord.step is None or coord._partial:
+        return None
+    flags = (coord.step, coord.jittered, coord.gapped)
+    inferred = get_coord(data=coord.values, units=coord.units, snap=False)
+    if (inferred.step, inferred.jittered, inferred.gapped) == flags:
         return None
     try:
         back = get_coord(data=coord.values, step=coord.step, units=coord.units)
     except CoordError:
         back = None
-    flags = (coord.step, coord.jittered, coord.gapped)
     if back is None or (back.step, back.jittered, back.gapped) != flags:
         why = "NetCDF and Zarr, which store labels with one step"
         raise CoordError(_uneven_message(name, coord, why))

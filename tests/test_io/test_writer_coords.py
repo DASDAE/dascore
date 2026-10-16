@@ -55,6 +55,7 @@ def cases():
         "jittered": patch.update_coords(time=jittered),
         "stepless": patch.update_coords(time=dc.get_coord(data=stepless, snap=False)),
         "distance gaps": patch.unselect(distance=(10, 20), samples=True),
+        "one channel": patch.select(distance=(0, 1), samples=True),
     }
 
 
@@ -72,7 +73,8 @@ class TestWriterCoordinates:
 
     @pytest.mark.parametrize("fio", WRITERS, ids=_label)
     @pytest.mark.parametrize(
-        "case", ["even", "time gaps", "jittered", "stepless", "distance gaps"]
+        "case",
+        ["even", "one channel", "time gaps", "jittered", "stepless", "distance gaps"],
     )
     def test_keeps_or_refuses(self, fio, case, cases, tmp_path):
         """A writer stores the coordinate as it is, or says how to fix it."""
@@ -80,8 +82,10 @@ class TestWriterCoordinates:
         path = tmp_path / NAMES.get(fio.name.upper(), "out.h5")
         # SEGY writes channel numbers, and WAV no distance grid at all.
         time_only = fio.name.upper() in {"SEGY", "WAV"}
+        if case == "one channel" and fio.name.upper() == "SEGY":
+            pytest.skip("SEGY states a channel spacing, which one channel lacks")
         keeps = (
-            case == "even"
+            case in {"even", "one channel"}
             or _label(fio) in EXACT
             or (_label(fio) == "DASDAE 1" and case == "stepless")
             or (time_only and case == "distance gaps")

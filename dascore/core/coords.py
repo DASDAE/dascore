@@ -628,7 +628,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             msg = "Using an array input for select with samples requires integer dtype."
             raise CoordError(msg)
         # Filter out bad indices
-        held = np.abs(array) < len(self)
+        held = (array >= -len(self)) & (array < len(self))
         _warn_order_missing(array[~held])
         array = array[held]
         return self[array], array

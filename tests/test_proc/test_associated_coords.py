@@ -84,6 +84,10 @@ class TestDroppedWithWarning:
         "func",
         [
             lambda x: x.mean("time"),
+            lambda x: x.mean("time", dim_reduce="squeeze"),
+            lambda x: x.phase_weighted_stack(
+                "time", transform_dim="distance", dim_reduce="squeeze"
+            ),
             lambda x: x.first("time"),
             lambda x: x.idxmax("time"),
             lambda x: x.integrate("time", definite=True),
