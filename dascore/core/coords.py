@@ -1325,7 +1325,9 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             values = update_fields.pop("values", None)
             out = out.update_limits(**update_fields)
             if values is not None:
-                out = get_coord(data=values, units=units)
+                # new values are in the units given, else the coordinate's own
+                kept = self.units if units is None else units
+                out = get_coord(data=values, units=kept)
         if units is not None:
             out = out.convert_units(units)
         return out

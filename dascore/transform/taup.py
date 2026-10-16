@@ -77,9 +77,10 @@ class TauP(PatchProcessor):
         p_vals = 1.0 / convert_units(velocities, to_units="m/s")
         slowness = np.concatenate((-np.flip(p_vals), p_vals))
         attrs = meta.attrs.update(category="taup")
-        coords = dict(slowness=slowness, time=time)
-        dims = ["slowness", "time"]
-        out = meta.new(coords=coords, attrs=attrs, dims=dims, dtype=np.float64)
+        # Slowness replaces distance, and what rides it; time keeps its own.
+        coords = meta_cop.coords.drop_associated("distance", "Transforming")
+        coords = coords.update(distance=slowness).rename_coord(distance="slowness")
+        out = meta.new(coords=coords, attrs=attrs, dtype=np.float64)
         out, _ = SetUnits(slowness="s/m", time="s").get_metadata(out)
         # Chooses code version based on whether distance between channels
         # is uniform or not

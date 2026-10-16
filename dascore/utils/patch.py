@@ -85,7 +85,6 @@ from dascore.utils.patch_registry import (
 )
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.time import to_float
-from dascore.warnings import DASCoreWarning
 
 _DimAxisValue = namedtuple("_DimAxisValue", ["dim", "axis", "value"])
 
@@ -774,26 +773,9 @@ def drop_associated_coords(coords, dim: str, action: str):
     """
     Drop, with a warning, the non-dimensional coordinates along a dimension.
 
-    Use when an operation changes the dimension's samples, leaving those
-    coordinates' values unknown; `action` begins the warning, eg
-    "Resampling". Cell edges are left for the grid update, which drops them
-    without a warning.
+    See [`CoordManager.drop_associated`](`dascore.core.CoordManager.drop_associated`).
     """
-    edges = dc.core.coordmanager._cell_edge_names(dim, coords.coord_map)
-    associated = sorted(
-        name
-        for name, coord_dims in coords.dim_map.items()
-        if name != dim and dim in coord_dims and name not in edges
-    )
-    if not associated:
-        return coords
-    names = ", ".join(associated)
-    msg = f"{action} dimension {dim!r} dropped associated coordinates: {names}."
-    # Point the warning at the first frame outside dascore; a fixed
-    # stacklevel breaks as the processor call depth varies.
-    prefix = str(Path(__file__).parent.parent)
-    warnings.warn(msg, DASCoreWarning, skip_file_prefixes=(prefix,))
-    return coords.drop_coords(*associated)[0]
+    return coords.drop_associated(dim, action)
 
 
 def get_start_stop_step(patch: PatchType, dim):
@@ -1362,7 +1344,7 @@ def _align_metadata(meta1: dc.PatchMeta, meta2: dc.PatchMeta):
         coord1, coord2 = (x.coord_map[dim] for x in managers)
         if coord1 == coord2:
             continue
-        ncoord1, ncoord2, sli1, sli2 = coord1.align_to(coord2)
+        ncoord1, _, sli1, sli2 = coord1.align_to(coord2)
         if not len(ncoord1):
             msg = (
                 f"Cannot align patches: they share no values along dimension "
@@ -1371,14 +1353,16 @@ def _align_metadata(meta1: dc.PatchMeta, meta2: dc.PatchMeta):
             )
             raise PatchCoordinateError(msg)
         axis = dims.index(dim)
-        new_coords[0][dim], new_coords[1][dim] = ncoord1, ncoord2
+        new_coords[0][dim], new_coords[1][dim] = sli1, sli2
         indexers[0][axis], indexers[1][axis] = sli1, sli2
     out = []
     for meta, cm, step, new, index in zip(
         (meta1, meta2), managers, steps, new_coords, indexers
     ):
         indexer = tuple(index) if any(new_coords) else None
-        out.append((meta.new(coords=cm.update(**new)), (*step, indexer)))
+        # Indexed, not replaced, so coordinates riding a dimension follow it.
+        coords = cm.isel(**new)[0] if new else cm
+        out.append((meta.new(coords=coords), (*step, indexer)))
     (out1, step1), (out2, step2) = out
     return out1, out2, step1, step2
 
@@ -1918,12 +1902,10 @@ def _concatenate_group(
                 x if x.units is None else x.convert_units(units) for x in members
             ]
         values = np.concatenate(_joinable(members, dim), axis=0)
-        coords = first.coords.update(
-            # the released snap, until concatenation joins labels exactly
-            **{dim: dc.core.coords.get_coord(data=values, units=units, snap=True)}
-        )
+        # the released snap, until concatenation joins labels exactly
+        joined_dim = dc.core.coords.get_coord(data=values, units=units, snap=True)
         # coordinates riding the dimension which every member states the
-        # same way join along it too; resizing the dimension drops them
+        # same way join along it too; resizing the dimension drops the rest
         riders = {}
         for name, cdims in first.coords.dim_map.items():
             if name == dim or dim not in cdims:
@@ -1953,8 +1935,7 @@ def _concatenate_group(
             # states nothing takes the kind of the members which do
             joined = np.concatenate(_joinable(members, dim), axis=rider_axis)
             riders[name] = (cdims, dc.core.coords.get_coord(data=joined, units=units))
-        if riders:
-            coords = coords.update(**riders)
+        coords = first.coords.update(**{dim: joined_dim}, **riders)
     warn_if_histories_differ([x.attrs for x in patches], "Concatenating")
     attrs = _maybe_add_history_str(attrs, "concatenate")
     attrs = stamp(attrs, [x.attrs for x in patches], operation)

@@ -110,6 +110,9 @@ class DispersionPhaseShift(PatchProcessor):
             msg = "Combination of frequency resolution and range is not an array"
             raise ParameterError(msg)
         attrs = meta.attrs.update(category="dispersion")
+        # Neither dimension survives, so nothing riding them can.
+        for dim in ("time", "distance"):
+            meta.coords.drop_associated(dim, "Transforming")
         coords = dict(velocity=phase_velocities, frequency=w / (2 * np.pi))
         dims = ["velocity", "frequency"]
         out = meta.new(coords=coords, attrs=attrs, dims=dims, dtype=np.float64)

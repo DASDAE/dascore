@@ -30,7 +30,8 @@ from dascore.io.core import read
 from dascore.utils.coordmanager import merge_coord_managers
 from dascore.utils.downloader import fetch
 from dascore.utils.identity import _WARNED_RANDOM_IDS
-from dascore.utils.misc import register_func
+from dascore.utils.misc import register_func, suppress_warnings
+from dascore.warnings import DASCoreWarning
 
 test_data_path = Path(__file__).parent.absolute() / "test_data"
 
@@ -302,7 +303,9 @@ def cm_multidim() -> dc.CoordManager:
 def cm_degenerate_time(cm_multidim) -> dc.CoordManager:
     """A coordinate manager with len 1 time array."""
     new_time = dc.to_datetime64(["2017-09-18T01:00:01"])
-    out = cm_multidim.update(time=new_time)
+    # resizing time drops what rides it, which is what this fixture wants
+    with suppress_warnings(DASCoreWarning):
+        out = cm_multidim.update(time=new_time)
     return out
 
 

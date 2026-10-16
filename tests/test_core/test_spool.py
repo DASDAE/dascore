@@ -43,6 +43,7 @@ from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim
 from dascore.utils.time import to_datetime64, to_timedelta64
 from dascore.viz.spool import _lane_names
+from dascore.warnings import DASCoreWarning
 
 
 def _gigo(garbage):
@@ -1897,7 +1898,8 @@ class TestConcatenatePartitions:
         first, other = pair
         nt = first.shape[first.get_axis("time")]
         a = first.update_coords(clock=("time", np.arange(nt) * 1.0))
-        out = dc.utils.patch.concatenate_patches([a, other], time=None)[0]
+        with pytest.warns(DASCoreWarning, match="clock"):
+            out = dc.utils.patch.concatenate_patches([a, other], time=None)[0]
         assert "clock" not in out.coords.coord_map
         assert out.shape[out.get_axis("time")] == 2 * nt
 
