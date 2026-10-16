@@ -2295,6 +2295,16 @@ def write(
     [`ParameterError`](`dascore.exceptions.ParameterError`)
         - The path is an ``examples://`` name, which is read-only.
         - An option the format's writer does not accept.
+    [`CoordError`](`dascore.exceptions.CoordError`)
+        - The format cannot store a coordinate's holes, jitter or step.
+
+    Notes
+    -----
+    A patch reaches the format's writer whole. Writers keep each
+    coordinate's step, holes and jitter, or refuse, saying to regularize
+    ([`Patch.snap_coords`](`dascore.Patch.snap_coords`),
+    [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`)) or split
+    ([`Patch.split_gaps`](`dascore.Patch.split_gaps`)) first.
 
     Examples
     --------
@@ -2320,14 +2330,17 @@ def write(
         raise ParameterError(msg)
     fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=file_version)
     _check_write_kwargs(fiber_io, kwargs)
-    if not isinstance(patch_or_spool, dc.Spool):
-        # dc.spool splits a patch with holes into its pieces
-        patch_or_spool = dc.spool([patch_or_spool])
-    if not fiber_io.multi_patch_write and (count := len(patch_or_spool)) > 1:
+    # A patch goes to its writer whole, holes and all, which the writer
+    # keeps or refuses; a spool would cut it at them.
+    count = 1
+    if not isinstance(patch_or_spool, dc.Patch):
+        if not isinstance(patch_or_spool, dc.Spool):
+            patch_or_spool = dc.spool([patch_or_spool])
+        count = len(patch_or_spool)
+    if not fiber_io.multi_patch_write and count > 1:
         msg = (
             f"Format {fiber_io.name} writes one patch per file, but there are "
-            f"{count} (a patch with holes is one per contiguous piece). Write "
-            "each patch to its own file."
+            f"{count}. Write each patch to its own file."
         )
         raise ParameterError(msg)
     with IOResourceManager(path) as man:
