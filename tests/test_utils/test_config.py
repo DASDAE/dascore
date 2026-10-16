@@ -220,6 +220,12 @@ class TestConfigDefaults:
         """Labels may sit up to a fifth of a step off their grid unremarked."""
         assert get_config().max_shift == 0.2
 
+    def test_max_index_runs_default(self):
+        """An index stores up to 256 runs per coordinate, and at least one."""
+        assert get_config().max_index_runs == 256
+        with pytest.raises(ValueError, match="max_index_runs"):
+            DascoreConfig(max_index_runs=0)
+
 
 class TestMapConfigBinding:
     """Spool.map applies the config active when map() was called."""

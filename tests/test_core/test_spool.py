@@ -1309,10 +1309,84 @@ class TestSpoolSnap:
         out = spool.select(time=bounds)[0]
         assert out.equals(exact.select(time=(labels[100], labels[200])))
 
-    def test_directory_spool_refuses_snap(self, tmp_path):
-        """A directory index does not yet record snap, so it is refused."""
+
+@pytest.fixture(scope="module")
+def terra15_exact(terra15_das_example_path):
+    """The Terra15 example's patch with its stored time labels."""
+    return dc.read(terra15_das_example_path, snap=False)[0]
+
+
+class TestDirectorySpoolSnap:
+    """A directory index records the snap and max_shift it was scanned under."""
+
+    @pytest.fixture()
+    def directory(self, terra15_das_example_path, tmp_path):
+        """A directory holding a copy of the Terra15 example file."""
+        shutil.copy(terra15_das_example_path, tmp_path / "terra15.hdf5")
+        return tmp_path
+
+    def test_rows_and_patches_follow_snap(self, directory, terra15_exact):
+        """Scanned rows and loaded patches both keep the stored labels."""
+        spool = dc.spool(directory, snap=False).update()
+        assert spool[0].get_coord("time") == terra15_exact.get_coord("time")
+        contents = spool.get_contents()
+        assert contents["time_max"].iloc[0] == terra15_exact.get_coord("time").max()
+        assert spool._catalog.backend.get_metadata()["snap"] == "[]"
+
+    def test_another_snap_rescans(self, directory, terra15_exact):
+        """Opened with another snap, the index is rebuilt; with the same, kept."""
+        default = dc.spool(directory).update()
+        assert default[0].get_coord("time") != terra15_exact.get_coord("time")
+        with pytest.warns(UserWarning, match="rescanning"):
+            spool = dc.spool(directory, snap=False)
+        assert spool[0].get_coord("time") == terra15_exact.get_coord("time")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            again = dc.spool(directory, snap=False).update()
+        assert again[0].get_coord("time") == terra15_exact.get_coord("time")
+
+    def test_another_max_shift_rescans(self, directory):
+        """The max_shift readers judge grids by is part of the decode."""
+        dc.spool(directory).update()
+        with dc.config_context(max_shift=0.3):
+            with pytest.warns(UserWarning, match="rescanning"):
+                spool = dc.spool(directory)
+            assert spool._catalog.backend.get_metadata()["max_shift"] == 0.3
+
+    def test_derived_spools_keep_the_snap(self, directory, terra15_exact):
+        """Chunked and concatenated directory spools read under its snap."""
+        spool = dc.spool(directory, snap=False).update()
+        for derived in (spool.chunk(time=None), spool.concatenate(time=None)):
+            patch = derived[0]
+            assert patch.get_coord("time") == terra15_exact.get_coord("time")
+
+    def test_lazy_reads_keep_the_snap(self, directory, terra15_exact):
+        """A range plan reading coordinates reads them under the index's snap."""
+        spool = dc.spool(directory, snap=False).update()
+        labels = terra15_exact.get_coord("time").values
+        out = spool.select(time=np.array([[labels[100], labels[200]]]))[0]
+        assert out.equals(terra15_exact.select(time=(labels[100], labels[200])))
+
+    def test_spools_opened_under_two_snaps_before_scanning(self, directory):
+        """The index is scanned under the snap it records, whichever opened it."""
+        first = dc.spool(directory)
+        second = dc.spool(directory, snap=False)
+        first.update()
+        with pytest.warns(UserWarning, match="rescanning"):
+            second.update()
+        metadata = second._catalog.backend.get_metadata()
+        assert metadata["snap"] == "[]"
+        reopened = dc.spool(directory, snap=False)
+        assert not reopened.get_contents()["time_step"].notna().any()
+
+    def test_directory_and_file_under_two_snaps(self, directory):
+        """A directory and one of its files read under two snaps do not combine."""
+        path = directory / "terra15.hdf5"
         with pytest.raises(ParameterError, match="snap"):
-            dc.spool(tmp_path, snap=False)
+            dc.spool(directory, snap=False).update() + dc.spool(path)
+        with pytest.warns(UserWarning, match="rescanning"):
+            default = dc.spool(directory)
+        assert len(default + dc.spool(path)) == 1
 
 
 class TestSpoolBehaviorOptionalImports:

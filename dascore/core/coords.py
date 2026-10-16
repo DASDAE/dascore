@@ -7,6 +7,7 @@ current coord-family and string-coordinate design notes.
 from __future__ import annotations
 
 import abc
+import dataclasses
 import itertools
 import math
 import re
@@ -31,6 +32,7 @@ from uuid import uuid4
 import numpy as np
 import pandas as pd
 from pydantic import (
+    Field,
     ValidationError,
     field_validator,
     model_validator,
@@ -71,7 +73,7 @@ from dascore.utils.display import (
     span_text,
 )
 from dascore.utils.docs import compose_docstring, get_docstring
-from dascore.utils.gaps import GapTolerance
+from dascore.utils.gaps import GapTolerance, RunRecord, run_holes
 from dascore.utils.identity import H
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
@@ -230,12 +232,28 @@ def _scalar_dtype(dtype: np.dtype, name: str) -> np.dtype:
     return np.dtype(f"timedelta64[{unit}]") if name == "step" else dtype
 
 
+def _conformed_run(run, dtype) -> RunRecord:
+    """A run record, or its dumped mapping, with values in a summary's dtype."""
+    fields = run if isinstance(run, Mapping) else dataclasses.asdict(run)
+    values = {
+        name: ensure_consistent_dtype(fields.get(name), name, dtype)
+        for name in ("min", "max", "step")
+    }
+    position = fields.get("position")
+    if position is not None and not _is_null(position):
+        position = int(position)
+    return RunRecord(int(fields["count"]), position=position, **values)
+
+
 class CoordSummary(DascoreBaseModel):
     """
     A summary for coordinates.
 
     Provides enough information for indexing coordinates and creating range
-    coordinates.
+    coordinates. Like the coordinate, it states a `step` (None if it has
+    none) and whether the labels are `jittered` or `gapped` on it; `runs`
+    are the coordinate's run records, kept for a coordinate of more than
+    one and at most `max_index_runs`.
     """
 
     # Defaulted because the before-validator below derives it from min
@@ -252,11 +270,20 @@ class CoordSummary(DascoreBaseModel):
     step_numerator: int | None = None
     step_denominator: int | None = None
     origin_offset: int | None = None
+    jittered: bool = False
+    gapped: bool = False
+    # How far, in steps, labels sit from the grid through the first one.
+    offset_min: float | None = None
+    offset_max: float | None = None
+    # How many runs the coordinate is, cut at its holes; None when unknown.
+    run_count: int | None = None
+    # Left out of the repr, which a long list would swamp.
+    runs: tuple[RunRecord, ...] | None = Field(default=None, repr=False)
 
     @property
     def is_range_like(self) -> bool:
         """Return True when the summary can reconstruct an evenly sampled coord."""
-        return not pd.isnull(self.step)
+        return not (pd.isnull(self.step) or self.jittered or self.gapped)
 
     @model_validator(mode="before")
     @classmethod
@@ -273,6 +300,8 @@ class CoordSummary(DascoreBaseModel):
             for name in ["min", "max", "step"]:
                 val = data.get(name)
                 data[name] = ensure_consistent_dtype(val, name, dtype)
+            if runs := data.get("runs"):
+                data["runs"] = tuple(_conformed_run(x, dtype) for x in runs)
         return data
 
     @model_validator(mode="after")
@@ -1667,13 +1696,13 @@ def _float_allowance(values, step) -> float:
     return max(_GRID_RTOL * abs(float(step)), ulps)
 
 
-def _grid_spread(values, counts, step) -> float:
+def _grid_offsets(values, counts, step) -> tuple[np.ndarray, float]:
     """
-    How far apart the labels' offsets from their grid positions spread, in steps.
+    Each label's offset from its position on the grid through the first.
 
-    Positions are the running total of ``counts``. Every label is checked,
-    so drift shows even where each spacing is close to a whole number of
-    steps.
+    Positions are the running total of ``counts``. Offsets are in ticks
+    (time and integer) or units, returned with the step's size in the same,
+    so integer offsets stay exact until divided.
     """
     positions = np.concatenate([[0], np.cumsum(counts)])
     if values.dtype.kind in "iumM":
@@ -1682,11 +1711,20 @@ def _grid_spread(values, counts, step) -> float:
             ticks = ticks.astype("timedelta64[ns]").astype(np.int64)
         size = abs(_to_tick(step))
         rel = np.concatenate([[0], np.cumsum(ticks)])
-        offsets = rel - positions * _to_tick(step)
-    else:
-        size = abs(float(step))
-        rel = np.asarray(values, dtype=np.float64) - float(values[0])
-        offsets = rel - positions * float(step)
+        return rel - positions * _to_tick(step), size
+    size = abs(float(step))
+    rel = np.asarray(values, dtype=np.float64) - float(values[0])
+    return rel - positions * float(step), size
+
+
+def _grid_spread(values, counts, step) -> float:
+    """
+    How far apart the labels' offsets from their grid positions spread, in steps.
+
+    Every label is checked, so drift shows even where each spacing is close
+    to a whole number of steps.
+    """
+    offsets, size = _grid_offsets(values, counts, step)
     return float(np.max(offsets) - np.min(offsets)) / size
 
 
@@ -2857,24 +2895,33 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     @property
     def jittered(self) -> bool:
         """Whether some label sits off the step's grid, by under half a step."""
-        return self._placement()[0]
+        return self._offset_bounds() not in (None, (0.0, 0.0))
 
     @property
     def gapped(self) -> bool:
         """Whether a position of the step's grid holds no sample."""
-        return self._placement()[1]
+        if _is_null(self.step) or self._partial:
+            return False
+        return any(run_holes(self._run_records()))
 
     @cached_method
-    def _placement(self) -> tuple[bool, bool]:
-        """Whether the labels are jittered, and gapped, on their step's grid."""
+    def _offset_bounds(self) -> tuple[float, float] | None:
+        """
+        How far, in steps, the labels sit from the grid through the first.
+
+        None without a step; zeros where every label sits on the grid.
+        """
         if _is_null(self.step) or self._partial:
-            return False, False
+            return None
         if not any(isinstance(x, Labels) for x in self.runs):
             # grids, and seams between them, sit on the step
-            return False, not self.missing().complete
+            return (0.0, 0.0)
         values = np.asarray(self.values)
         counts = _on_grid(_diffs(values), self.step, jitter=True)
-        return not _on_step_grid(values, counts, self.step), bool(np.any(counts > 1))
+        if _on_step_grid(values, counts, self.step):
+            return (0.0, 0.0)
+        offsets, size = _grid_offsets(values, counts, self.step)
+        return (float(np.min(offsets)) / size, float(np.max(offsets)) / size)
 
     @property
     def step_exact(self) -> Fraction | None:
@@ -3747,7 +3794,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     def _holes(self) -> list[tuple]:
         """Each hole as ``(first missing label, last missing label, count)``."""
         step, rows = self.step, []  # signed with the runs' direction
-        for before, count, grid in _skips(self.runs, step, self.dtype, self.sources):
+        skips = _skips(self.runs, step, self.dtype, self.sources)
+        for _, _, before, count, grid in skips:
             if count and grid is None:
                 rows.append(_hole(before, step, count))
             elif count:
@@ -3756,6 +3804,54 @@ get_coord(start=0.0, stop=20.0, step=1.0)
                 ends = _ticks_as(grid.end_ticks, self.dtype)
                 rows.append((*ends, count, grid))
         return rows
+
+    @cached_method
+    def _run_records(self) -> tuple[RunRecord, ...]:
+        """
+        Each run, cut at the holes inside it, as a spool index stores it.
+
+        With a step, positions count steps from the first sample, so the
+        positions between two records are holes; without one, each run is
+        a record keeping its own step, if any.
+        """
+        step, dtype = self.step, self.dtype
+        if self._partial or self.ndim != 1 or not len(self):
+            count = self.shape[0] if self.ndim else 1
+            return (RunRecord(count, self.min(), self.max()),)
+        if _is_null(step):
+            return tuple(
+                RunRecord(
+                    len(run),
+                    *self._run_extent(run, 0, len(run)),
+                    step=run.step(dtype) if isinstance(run, Grid) else None,
+                )
+                for run in self.runs
+            )
+        holes: dict[int, list[tuple[int, int]]] = {}
+        for num, index, _, count, _ in _skips(self.runs, step, dtype, self.sources):
+            holes.setdefault(num, []).append((index, count))
+        out, position = [], 0
+        for num, run in enumerate(self.runs):
+            start = 0
+            for index, count in holes.get(num, ()):
+                if index:  # a hole inside a run ends a record there
+                    extent = self._run_extent(run, start, index)
+                    out.append(RunRecord(index - start, *extent, step, position))
+                    position += index - start
+                    start = index
+                position += count
+            extent = self._run_extent(run, start, len(run))
+            out.append(RunRecord(len(run) - start, *extent, step, position))
+            position += len(run) - start
+        return tuple(out)
+
+    def _run_extent(self, run, start: int, stop: int) -> tuple[Any, Any]:
+        """The least and greatest label of samples start to stop of one run."""
+        if isinstance(run, Grid):
+            ends = run.labels([start, stop - 1], self.dtype)
+        else:
+            ends = self._run_labels(run)[start:stop]
+        return np.nanmin(ends), np.nanmax(ends)
 
     # --- identity, summary and display
 
@@ -3789,19 +3885,30 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         return components
 
     def to_summary(self, dims=()) -> CoordSummary:
-        """Get the summary info about the coord, exact grid included."""
+        """Get the summary info about the coord: its grid, flags and runs."""
         summary = super().to_summary(dims=dims)
-        if (grid := self._grid) is None or not grid.exact:
-            return summary
-        if _tick_scale(self.dtype) != 1:
-            # Labels in a coarser time unit floor a nanosecond grid, which
-            # plans laid on whole nanoseconds would cut between; the row
-            # states no step, so they read the labels themselves.
-            return summary.model_copy(update={"step": None})
-        terms = grid.canonical()[1:]
-        return summary.model_copy(
-            update=dict(zip(_EXACT_GRID_FIELDS, terms, strict=True))
-        )
+        records = self._run_records()
+        update: dict[str, Any] = {"run_count": len(records)}
+        if 1 < len(records) <= dc.get_config().max_index_runs:
+            update["runs"] = records
+        if (bounds := self._offset_bounds()) is not None:
+            update.update(
+                step=self.step,
+                jittered=self.jittered,
+                gapped=self.gapped,
+                offset_min=bounds[0],
+                offset_max=bounds[1],
+            )
+        if (grid := self._grid) is not None and grid.exact:
+            if _tick_scale(self.dtype) != 1:
+                # Labels in a coarser time unit floor a nanosecond grid, which
+                # plans laid on whole nanoseconds would cut between; the row
+                # states no step, so they read the labels themselves.
+                update["step"] = None
+            else:
+                terms = grid.canonical()[1:]
+                update.update(zip(_EXACT_GRID_FIELDS, terms, strict=True))
+        return summary.model_copy(update=update)
 
     def _repr_fields(self) -> tuple[tuple[str, Text, bool], ...]:
         fields = super()._repr_fields()
@@ -3909,9 +4016,11 @@ def _check_grid_spacings(runs, step, dtype):
 
 def _skips(runs, step, dtype, sources):
     """
-    Yield ``(label before, count, lattice run)`` per stretch of skipped positions.
+    Yield ``(run, index, label before, count, lattice run)`` per stretch skipped.
 
-    Raises where a spacing is not a whole number of steps. Stored labels
+    ``run`` and ``index`` place the first sample after the stretch: the
+    run it is in and its index there, 0 for the seam before a run. Raises
+    where a spacing is not a whole number of steps. Stored labels
     may be jittered: each of their spacings, and a seam beside them, is
     the nearest whole number of steps, missed by under half a step. A seam
     between runs of one lattice counts on that lattice (the run before
@@ -3922,20 +4031,20 @@ def _skips(runs, step, dtype, sources):
             prev = runs[num - 1]
             gap = _lattice_gap(prev, run)
             if gap is not None and gap >= 0 and prev.step(dtype) == step:
-                yield None, gap, prev
+                yield num, 0, None, gap, prev
             else:
                 before = _run_edges(prev, dtype, sources)[-1]
                 after = _run_edges(run, dtype, sources)[0]
                 stored = isinstance(prev, Labels) or isinstance(run, Labels)
                 deltas = _diffs([before, after])
                 count = _on_grid(deltas, step, jitter=stored)[0]
-                yield before, int(count) - 1, None
+                yield num, 0, before, int(count) - 1, None
         if isinstance(run, Labels) and len(run) > 1:
             values = _source(sources, run, dtype)
             counts = _on_grid(_diffs(values), step, jitter=True)
             _check_drift(values, counts, step)
             for i in np.flatnonzero(counts > 1):
-                yield values[i], int(counts[i]) - 1, None
+                yield num, int(i) + 1, values[i], int(counts[i]) - 1, None
 
 
 def _run_edges(run, dtype, sources) -> np.ndarray:

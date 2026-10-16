@@ -179,7 +179,7 @@ class TestVersion2Files:
         dc.write(gapped_patch, tmp_path / "gap.h5", "dasdae")
         tree = dc.spool(tmp_path).update().io.to_xarray()
         leaves = [x for x in tree.subtree if "data" in x.data_vars]
-        pieces = list(dc.spool([gapped_patch]))
+        pieces = list(gapped_patch.split_gaps())
         assert len(leaves) == len(pieces)
         for leaf, piece in zip(leaves, pieces, strict=True):
             assert np.array_equal(leaf["data"].values, piece.data)
@@ -272,7 +272,7 @@ class TestMultiRunRoundTrip:
             coord = concat_coords(full, other)
         data = np.arange(float(len(coord)))
         patch = dc.Patch(data=data, coords={"time": coord}, dims=("time",))
-        pieces = list(dc.spool([patch]))
+        pieces = list(patch.split_gaps())
         back = dc.read(dc.write(patch, tmp_path / "runs.h5", "dasdae")).sort("time")
         assert len(back) == len(pieces)
         for read, piece in zip(back, pieces, strict=True):
