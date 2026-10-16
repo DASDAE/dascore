@@ -277,3 +277,24 @@ class TestRunsPastTheCap:
         assert backend._fetch_df("SELECT * FROM coord_runs").empty
         assert len(crowded.get_gaps()) == 299
         assert len(crowded.chunk(time=None)) == 300
+
+
+class TestSelections:
+    """A range selection sees a patch's holes, as its patch does."""
+
+    def test_range_inside_a_hole(self, gapped_patch, gapped_directory):
+        """A range holding no sample of a patch selects no row of it."""
+        t0 = gapped_patch.get_coord("time").min()
+        window = (t0 + 1003 * MS, t0 + 1008 * MS)
+        for spool in (dc.spool([gapped_patch]), gapped_directory):
+            view = spool.select(time=window)
+            assert len(view) == len(view.get_contents()) == len(list(view)) == 0
+
+    def test_range_ending_in_a_hole(self, gapped_patch):
+        """A row's envelope ends at the last sample the range reaches."""
+        t0 = gapped_patch.get_coord("time").min()
+        view = dc.spool([gapped_patch]).select(time=(t0 + 500 * MS, t0 + 1005 * MS))
+        (row,) = view.get_contents().to_dict("records")
+        (patch,) = view
+        assert row["time_min"] == patch.get_coord("time").min()
+        assert row["time_max"] == patch.get_coord("time").max() == t0 + 1000 * MS

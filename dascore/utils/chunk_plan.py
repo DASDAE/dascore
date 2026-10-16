@@ -136,24 +136,17 @@ class ChunkPlan:
         return self.value is None
 
 
-def with_runs(df: pd.DataFrame, dim: str, indexed, read, modified=False):
+def _stretches(df: pd.DataFrame, dim: str, indexed, read):
     """
-    The relation with each row cut into the stretches its coordinate's runs leave.
+    The rows cut at their holes, and each stretch clipped to its row.
 
-    ``indexed`` maps a ``_patch_row`` to the runs its index states (an
-    `IndexedRuns`), and ``read`` returns a row's coordinate where the index
-    stored it without them. Each stretch
-    [`contiguous_runs`](`dascore.utils.gaps.contiguous_runs`) joins is the
-    row with the stretch's envelope and step, clipped to the row's own
-    envelope, so a selection trims it; a row none of whose stretches
-    survive the clip lies in a hole and is dropped. ``modified`` marks the
-    stretches to load as selections of their patch, and `coalesce_runs`
-    reads the stretches landing in one output back as one member.
+    Returns the positions of the rows cut, and ``(position, low, high,
+    step)`` for each stretch which survives its row's envelope.
     """
-    lo, hi, step = (f"{dim}_{x}" for x in ("min", "max", "step"))
+    lo, hi = f"{dim}_min", f"{dim}_max"
+    cut, out = [], []
     if not indexed or df.empty or not {lo, hi, "_patch_row"} <= set(df.columns):
-        return df
-    cut, rows, values = [], [], []
+        return cut, out
     candidates = df["_patch_row"].isin(list(indexed)) & df[lo].notna()
     for index in np.flatnonzero(candidates.to_numpy()):
         row = df.iloc[index]
@@ -168,15 +161,31 @@ def with_runs(df: pd.DataFrame, dim: str, indexed, read, modified=False):
         for stretch in stretches:
             low, high = max(stretch.min, row[lo]), min(stretch.max, row[hi])
             if low <= high:
-                rows.append(index)
-                values.append((low, high, stretch.step))
+                out.append((index, low, high, stretch.step))
+    return cut, out
+
+
+def with_runs(df: pd.DataFrame, dim: str, indexed, read, modified=False):
+    """
+    The relation with each row cut into the stretches its coordinate's runs leave.
+
+    ``indexed`` maps a ``_patch_row`` to the runs its index states (an
+    `IndexedRuns`), and ``read`` returns a row's coordinate where the index
+    stored it without them. Each stretch
+    [`contiguous_runs`](`dascore.utils.gaps.contiguous_runs`) joins is the
+    row with the stretch's envelope and step, clipped to the row's own
+    envelope, so a selection trims it; a row none of whose stretches
+    survive the clip lies in a hole and is dropped. ``modified`` marks the
+    stretches to load as selections of their patch, and `coalesce_runs`
+    reads the stretches landing in one output back as one member.
+    """
+    cut, stretches = _stretches(df, dim, indexed, read)
     if not cut:
         return df
-    split = df.iloc[rows].copy()
-    for num, col in enumerate((lo, hi, step)):
-        column = pd.Series([x[num] for x in values], index=split.index, dtype=object)
-        dtype = df[col].dtype if col in df.columns else np.dtype(object)
-        split[col] = column if dtype == np.dtype(object) else column.astype(dtype)
+    split = df.iloc[[x[0] for x in stretches]].copy()
+    names = (f"{dim}_min", f"{dim}_max", f"{dim}_step")
+    for num, col in enumerate(names, start=1):
+        _set_column(split, col, [x[num] for x in stretches], df)
     if modified:
         split["_modified"] = True
     kept = df.drop(index=df.index[cut])
@@ -184,6 +193,37 @@ def with_runs(df: pd.DataFrame, dim: str, indexed, read, modified=False):
     if modified:
         out["_modified"] = out["_modified"].astype("boolean").fillna(False).astype(bool)
     return out
+
+
+def clip_to_runs(df: pd.DataFrame, dim: str, indexed, read) -> pd.DataFrame:
+    """
+    The relation with each row's envelope narrowed to the samples it holds.
+
+    A row whose envelope a selection trimmed may start or end in a hole of
+    its coordinate; its envelope shrinks to the stretches the trim reaches,
+    and a row reaching none lies in a hole and is dropped. Arguments are as
+    for `with_runs`.
+    """
+    cut, stretches = _stretches(df, dim, indexed, read)
+    if not cut:
+        return df
+    reached = pd.DataFrame(stretches, columns=["row", "low", "high", "step"])
+    bounds = reached.groupby("row").agg(low=("low", "min"), high=("high", "max"))
+    out = df.copy(deep=False)
+    rows = bounds.index.to_numpy(dtype=np.int64)
+    for col, values in ((f"{dim}_min", bounds["low"]), (f"{dim}_max", bounds["high"])):
+        column = out[col].astype(object).to_numpy(copy=True)
+        column[rows] = values.to_numpy()
+        _set_column(out, col, column, df)
+    empty = sorted(set(cut) - set(rows.tolist()))
+    return out.drop(index=out.index[empty])
+
+
+def _set_column(frame: pd.DataFrame, col: str, values, like: pd.DataFrame) -> None:
+    """Set a column of python values, in the dtype ``like`` holds it in."""
+    column = pd.Series(list(values), index=frame.index, dtype=object)
+    dtype = like[col].dtype if col in like.columns else np.dtype(object)
+    frame[col] = column if dtype == np.dtype(object) else column.astype(dtype)
 
 
 def coalesce_runs(plan: ChunkPlan, working: pd.DataFrame) -> ChunkPlan:

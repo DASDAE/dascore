@@ -1334,6 +1334,7 @@ class PatchCatalog:
             )
 
             df = patch_local_adjusted_envelopes(df, self._residuals, drop_empty=False)
+            df = self._clipped_to_runs(df)
             df = _forget_what_a_trim_invalidates(df, self._residuals).reset_index(
                 drop=True
             )
@@ -1345,6 +1346,40 @@ class PatchCatalog:
             # Re-read the revision: bootstrapping the backend above can
             # bump it, and this frame reflects the state after that.
             return self._df_cache.set(df, self._revision.value)
+
+    def _trimmed_names(self) -> set[str]:
+        """The coordinates a value range trims, which may end in a hole."""
+        return {
+            name
+            for coords, samples, relative in self._residuals
+            if not (samples or relative)
+            for name in coords
+        }
+
+    def _runs_may_trim(self) -> bool:
+        """Whether a value range may land in a hole, which SQL cannot see."""
+        return bool(self._trimmed_names()) and self.backend.holds_runs()
+
+    def _clipped_to_runs(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Narrow trimmed envelopes to the runs they reach (see `clip_to_runs`)."""
+        if df.empty or "_patch_row" not in df.columns or not self._runs_may_trim():
+            return df
+        # Circular imports: chunk planning and range lookups use the catalog.
+        from dascore.utils.chunk_plan import clip_to_runs  # noqa: PLC0415
+        from dascore.utils.explicit_ranges import _source_manager  # noqa: PLC0415
+
+        files: dict = {}
+        for name in self._trimmed_names():
+            indexed = self.backend.coord_runs(name, df["_patch_row"])
+
+            def read(row, name=name):
+                """The row's coordinate, read from its source."""
+                row = row.to_dict()
+                coords = _source_manager(self.resolver, row, files, projection=name)
+                return None if coords is None else coords.coord_map.get(name)
+
+            df = clip_to_runs(df, name, indexed, read)
+        return df
 
     def _has_relative_selection(self) -> bool:
         """Whether patch-relative bounds can remove SQL candidate rows."""
@@ -1368,7 +1403,7 @@ class PatchCatalog:
                 )
             ):
                 return True
-        return False
+        return self._runs_may_trim()
 
     def __len__(self) -> int:
         with self._revision.lock:
@@ -1387,6 +1422,9 @@ class PatchCatalog:
                     patch_local = True
                 elif patch_local:
                     return len(self.to_df())
+            # A range landing in a hole drops a row SQL kept.
+            if self._runs_may_trim():
+                return len(self.to_df())
             # Otherwise SQL candidacy already accounts for every drop, so the
             # count matches len(to_df()) without projecting or pivoting.
             return self.backend.count(list(self._queries) or None, patch_rows=self._ids)
