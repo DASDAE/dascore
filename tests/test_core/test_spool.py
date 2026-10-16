@@ -1360,6 +1360,13 @@ class TestDirectorySpoolSnap:
             patch = derived[0]
             assert patch.get_coord("time") == terra15_exact.get_coord("time")
 
+    def test_lazy_reads_keep_the_snap(self, directory, terra15_exact):
+        """A range plan reading coordinates reads them under the index's snap."""
+        spool = dc.spool(directory, snap=False).update()
+        labels = terra15_exact.get_coord("time").values
+        out = spool.select(time=np.array([[labels[100], labels[200]]]))[0]
+        assert out.equals(terra15_exact.select(time=(labels[100], labels[200])))
+
     def test_spools_opened_under_two_snaps_before_scanning(self, directory):
         """The index is scanned under the snap it records, whichever opened it."""
         first = dc.spool(directory)

@@ -8,7 +8,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
-from dascore.core.coords import concat_coords, get_coord
+from dascore.core.coords import CoordSummary, concat_coords, get_coord
 from dascore.core.summary import PatchSummary
 from dascore.io.dasdae.utils import _save_patch
 from dascore.io.index.backend import get_backend
@@ -317,3 +317,28 @@ class TestReviewFindings:
         once = dc.spool([gapped_patch]).chunk(distance=100)
         twice = once.chunk(distance=100)
         assert len(twice.get_gaps()) == len(once.get_gaps()) == len(once)
+
+    def test_cap_applies_at_ingest(self):
+        """A summary taken under a larger cap still stores no more runs."""
+        patch = _runs_patch(10)
+        with dc.config_context(max_index_runs=20):
+            assert len(patch.summary.coords["time"].runs) == 10
+        with dc.config_context(max_index_runs=5):
+            spool = dc.spool([patch])
+            assert spool._catalog.backend._fetch_df("SELECT * FROM coord_runs").empty
+            assert len(spool.get_gaps()) == 9
+
+    def test_runs_survive_a_summary_dump(self, gapped_patch):
+        """A summary rebuilt from its dump, even as text, states the same runs."""
+        summary = gapped_patch.get_coord("time").to_summary()
+        dumped = summary.model_dump()
+        assert CoordSummary(**dumped).runs == summary.runs
+        as_text = [{k: str(v) for k, v in x.items()} for x in dumped["runs"]]
+        assert CoordSummary(**{**dumped, "runs": as_text}).runs == summary.runs
+
+    def test_merged_outputs_state_no_parent_runs(self, gapped_directory):
+        """Outputs along the planned dimension hold no hole, and say so."""
+        chunked = gapped_directory.chunk(time=None)
+        backend = chunked._catalog.backend
+        assert backend._fetch_df("SELECT * FROM coord_runs").empty
+        assert backend._fetch_df("SELECT * FROM coord_defs WHERE gapped = 1").empty

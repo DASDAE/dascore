@@ -1223,22 +1223,13 @@ def derived_catalog(
         plan_dim=name,
     )
     if parent is not None and "_index_row" in sources.columns:
-        # a filled output holds no hole along the dimension it filled
-        filled = merge_kwargs.get("fill_value") is not None
-        records = _with_parent_runs(
-            records, parent.backend, trims, sources, name, filled
-        )
+        records = _with_parent_runs(records, parent.backend, trims, sources, name)
     backend.write_sources(records)
     return PatchCatalog(backend=backend, resolver=resolver, stamps=stamps)
 
 
 def _with_parent_runs(
-    records,
-    parent_backend,
-    trims: pd.DataFrame,
-    sources: pd.DataFrame,
-    name: str,
-    filled: bool = False,
+    records, parent_backend, trims: pd.DataFrame, sources: pd.DataFrame, name: str
 ) -> list:
     """
     The records with the runs their members' coordinates hold in the parent.
@@ -1246,9 +1237,9 @@ def _with_parent_runs(
     An output of one member holds that member's values, perhaps trimmed,
     so it takes the member's runs; the reports clip runs to each row's
     envelope. An output of several takes runs only for a coordinate which
-    kept its identity, and so equals each member's; never along the
-    dimension it merged, nor along one it ``filled``. Members find their
-    runs through the parent's patch rows (``_index_row``).
+    kept its identity, and so equals each member's. None takes runs along
+    the planned dimension, which the plan cut at its holes (or filled).
+    Members find their runs through the parent's patch rows (``_index_row``).
     """
     index_rows = dict(zip(sources["_patch_row"], sources["_index_row"], strict=True))
     members: dict[str, list] = {}
@@ -1266,10 +1257,10 @@ def _with_parent_runs(
             held = runs.get(ids[0], {}) if ids and pd.notna(ids[0]) else {}
             coords = []
             for coord in patch.coords:
-                merged = name in str(coord.coord_dims).split(",")
+                planned = name in str(coord.coord_dims).split(",")
                 parent = held.get(coord.coord_name)
-                several = len(ids) > 1 and (merged or not coord.data_id)
-                if parent is None or several or (filled and merged):
+                several = len(ids) > 1 and not coord.data_id
+                if parent is None or planned or several:
                     coords.append(coord)
                     continue
                 same = (parent.value_kind, parent.is_relative, parent.units)

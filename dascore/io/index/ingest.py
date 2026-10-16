@@ -520,6 +520,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
         offset_max=getattr(summary, "offset_max", None),
         run_count=getattr(summary, "run_count", None),
     )
+    runs = _indexed_runs(summary)
     if dtype.kind in "mM":  # datetime64 ("M") / timedelta64 ("m")
         is_datetime = dtype.kind == "M"
         convert = to_datetime64 if is_datetime else to_timedelta64
@@ -530,7 +531,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
             min_int=_to_ns(convert(summary.min)),
             max_int=_to_ns(convert(summary.max)),
             step_int=None if pd.isnull(step) else _to_ns(to_timedelta64(step)),
-            runs=stored_runs(getattr(summary, "runs", None), "time", is_datetime),
+            runs=stored_runs(runs, "time", is_datetime),
             **exact,
             **sampling,
             **common,
@@ -547,7 +548,7 @@ def _coord_record(name: str, summary) -> CoordRecord | None:
             min_float=float(summary.min),
             max_float=float(summary.max),
             step_float=None if pd.isnull(step) else float(step),
-            runs=stored_runs(getattr(summary, "runs", None), "num"),
+            runs=stored_runs(runs, "num"),
             **exact,
             **sampling,
             **common,
@@ -617,11 +618,22 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
     )
 
 
+def _indexed_runs(summary):
+    """
+    The runs a summary states, if no more than the index stores now.
+
+    A summary may be cached from under another `max_index_runs`, so the
+    cap is applied where the runs are stored.
+    """
+    runs = getattr(summary, "runs", None)
+    return runs if runs and len(runs) <= get_config().max_index_runs else None
+
+
 def _warn_unstored_runs(path: str, summary: PatchSummary) -> None:
     """Say which coordinates of a source are stored without their runs."""
     for name, coord in summary.coords.items():
         count = getattr(coord, "run_count", None) or 0
-        if count < 2 or getattr(coord, "runs", None) is not None:
+        if count < 2 or _indexed_runs(coord) is not None:
             continue
         msg = (
             f"{path}: coordinate {name!r} holds {count} runs, more than "

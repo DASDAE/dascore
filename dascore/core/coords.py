@@ -7,6 +7,7 @@ current coord-family and string-coordinate design notes.
 from __future__ import annotations
 
 import abc
+import dataclasses
 import itertools
 import math
 import re
@@ -231,6 +232,19 @@ def _scalar_dtype(dtype: np.dtype, name: str) -> np.dtype:
     return np.dtype(f"timedelta64[{unit}]") if name == "step" else dtype
 
 
+def _conformed_run(run, dtype) -> RunRecord:
+    """A run record, or its dumped mapping, with values in a summary's dtype."""
+    fields = run if isinstance(run, Mapping) else dataclasses.asdict(run)
+    values = {
+        name: ensure_consistent_dtype(fields.get(name), name, dtype)
+        for name in ("min", "max", "step")
+    }
+    position = fields.get("position")
+    if position is not None and not _is_null(position):
+        position = int(position)
+    return RunRecord(int(fields["count"]), position=position, **values)
+
+
 class CoordSummary(DascoreBaseModel):
     """
     A summary for coordinates.
@@ -286,6 +300,8 @@ class CoordSummary(DascoreBaseModel):
             for name in ["min", "max", "step"]:
                 val = data.get(name)
                 data[name] = ensure_consistent_dtype(val, name, dtype)
+            if runs := data.get("runs"):
+                data["runs"] = tuple(_conformed_run(x, dtype) for x in runs)
         return data
 
     @model_validator(mode="after")

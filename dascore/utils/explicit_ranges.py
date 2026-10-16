@@ -9,6 +9,7 @@ from typing import Any, cast
 import numpy as np
 import pandas as pd
 
+from dascore.config import config_context
 from dascore.exceptions import ChunkError, ParameterError
 from dascore.units import Quantity, convert_units
 from dascore.utils.misc import express_range_for_coord
@@ -137,14 +138,16 @@ def file_source_coords(resolver, row, files=None):
         str(row.get("source_version") or ""),
     )
     if key not in files:
-        payloads = dc.scan_payloads(
-            resolved,
-            file_format=key[1] or None,
-            file_version=key[2] or None,
-            progress=None,
-            # the snap the source's patches are read under, as its rows were
-            snap=getattr(file_resolver, "_snaps", {}).get(path),
-        )
+        # the decode the source's patches are read under, as its rows were
+        snap, shift = file_resolver.decode(path)
+        with config_context(max_shift=shift):
+            payloads = dc.scan_payloads(
+                resolved,
+                file_format=key[1] or None,
+                file_version=key[2] or None,
+                progress=None,
+                snap=snap,
+            )
         by_key = {
             str(payload._source.key): payload
             for payload in payloads
