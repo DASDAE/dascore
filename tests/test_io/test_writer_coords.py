@@ -16,18 +16,33 @@ import pytest
 import dascore as dc
 from dascore.exceptions import CoordError, MissingOptionalDependencyError
 from dascore.io import FiberIO
+from dascore.io.dasdae import DASDAEV1, DASDAEV2
+from dascore.io.netcdf import NetCDFCFV18
+from dascore.io.pickle import PickleIO
+from dascore.io.prodml import ProdMLV2_1
+from dascore.io.rsf import RSFV1
+from dascore.io.segy.core import SegyV0_0, SegyV0_100, SegyV1_0, SegyV2_0, SegyV2_1
+from dascore.io.wav import WavIO
+from dascore.io.zarr import ZarrV2, ZarrV3
 from dascore.utils.misc import suppress_warnings
 
-FiberIO.manager.load_plugins()
-WRITERS = sorted(
-    (
-        fio
-        for versions in FiberIO.manager._format_version.values()
-        for fio in versions.values()
-        if fio.implements_write
-    ),
-    key=lambda x: (x.name, x.version),
-)
+# Every writer DASCore ships, checked against the plugin manager below.
+WRITERS = [
+    DASDAEV1(),
+    DASDAEV2(),
+    NetCDFCFV18(),
+    PickleIO(),
+    ProdMLV2_1(),
+    RSFV1(),
+    SegyV0_0(),
+    SegyV0_100(),
+    SegyV1_0(),
+    SegyV2_0(),
+    SegyV2_1(),
+    WavIO(),
+    ZarrV2(),
+    ZarrV3(),
+]
 # Formats which store any coordinate's labels with its step.
 EXACT = {"DASDAE 2", "PICKLE ", "NETCDF_CF 1.8", "ZARR 2", "ZARR 3"}
 # File names, for formats which care.
@@ -70,6 +85,17 @@ def _stored(fio, path):
 
 class TestWriterCoordinates:
     """Each writer keeps a coordinate's step, flags and holes, or refuses."""
+
+    def test_every_writer_listed(self):
+        """The list covers every writer DASCore registers."""
+        FiberIO.manager.load_plugins()
+        registered = {
+            _label(fio)
+            for versions in FiberIO.manager._format_version.values()
+            for fio in versions.values()
+            if fio.implements_write and type(fio).__module__.startswith("dascore.io")
+        }
+        assert registered == {_label(x) for x in WRITERS}
 
     @pytest.mark.parametrize("fio", WRITERS, ids=_label)
     @pytest.mark.parametrize(

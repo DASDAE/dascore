@@ -2343,9 +2343,18 @@ def write(
             f"{count}. Write each patch to its own file."
         )
         raise ParameterError(msg)
-    with IOResourceManager(path) as man:
-        func = fiber_io.write
-        required_type = _required_resource_type(func)
-        resource = man.get_resource(required_type)
-        func(patch_or_spool, resource, _pre_cast=True, **kwargs)
+    # A writer refusing a patch may do so after its file was opened; a file
+    # this call created is then removed rather than left empty.
+    local = is_local_path(target) and coerce_to_local_path(target)
+    fresh = bool(local) and not local.exists()
+    try:
+        with IOResourceManager(path) as man:
+            func = fiber_io.write
+            required_type = _required_resource_type(func)
+            resource = man.get_resource(required_type)
+            func(patch_or_spool, resource, _pre_cast=True, **kwargs)
+    except Exception:
+        if fresh and local.is_file():
+            local.unlink()
+        raise
     return path

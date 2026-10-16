@@ -23,6 +23,7 @@ from dascore.core.coords import (
     get_coord,
 )
 from dascore.exceptions import CoordError, ParameterError
+from dascore.io.dasdae import DASDAEV2
 from dascore.io.dasdae.utils import _read_coord
 from dascore.units import get_quantity
 from dascore.utils.gaps import GapTolerance, get_gap_edges
@@ -378,7 +379,9 @@ class TestFractionalGaps:
         patch = dc.Patch(
             data=np.ones(len(coord)), coords={"time": coord}, dims=("time",)
         )
-        dc.write(patch, tmp_path / "gapped.h5", "dasdae")
+        # Written split, since this directory index cannot yet hold a
+        # patch with holes whole; a writer leaves splitting to the caller.
+        dc.write(patch.split_gaps(), tmp_path / "gapped.h5", "dasdae")
         dc.spool(tmp_path).update()
         spool = dc.spool(tmp_path).select(time=(full.values[2], full.values[-3]))
         assert spool.get_gaps(tolerance=2).empty
@@ -559,21 +562,26 @@ class TestReviewFindings:
         assert len(spool.chunk(tolerance=GapTolerance.absolute(2), **kwargs)) == 1
         assert len(spool.chunk(tolerance=GapTolerance.absolute(1), **kwargs)) == 2
 
-    @pytest.mark.parametrize("version", ["1", "2"])
-    def test_dasdae_round_trip(self, tmp_path, version):
-        """Either version writes a dense coordinate with holes as its pieces."""
+    @pytest.fixture()
+    def dense_patch(self):
+        """A patch whose distance is one dense stored run with holes."""
         dense = get_coord(data=np.arange(3000)[np.arange(3000) % 3 != 2], step=1)
         assert _is_stored(dense)
         time = dc.get_example_patch().get_coord("time")[:3]
         coords = {"distance": dense, "time": time}
         data = np.zeros((len(dense), 3))
-        patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
-        path = dc.write(patch, tmp_path / "out.h5", "dasdae", file_version=version)
-        back = dc.read(path).sort("distance")
-        assert len(back) == dense.missing().count + 1
-        assert all(x.get_coord("distance").evenly_sampled for x in back)
-        values = np.concatenate([x.get_coord("distance").values for x in back])
-        np.testing.assert_array_equal(values, dense.values)
+        return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+    def test_dasdae_round_trip(self, tmp_path, dense_patch):
+        """Version 2 writes a dense coordinate with holes whole, its runs intact."""
+        path = dc.write(dense_patch, tmp_path / "out.h5", "dasdae")
+        (meta,) = DASDAEV2().get_metadata(path, snap=False)
+        assert meta.get_coord("distance") == dense_patch.get_coord("distance")
+
+    def test_dasdae_v1_refuses_holes(self, tmp_path, dense_patch):
+        """Version 1 stores no step beside labels, so it refuses holes."""
+        with pytest.raises(CoordError, match="split_gaps"):
+            dc.write(dense_patch, tmp_path / "out.h5", "dasdae", file_version="1")
 
     def test_offset_grids_share_no_step(self):
         """Runs of one step on grids half a step apart declare no common grid."""
