@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import math
 import re
 import warnings
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from fractions import Fraction
+from pathlib import Path
 from typing import Any, cast
 
 import numpy as np
@@ -14,7 +16,7 @@ import pandas as pd
 import dascore as dc
 from dascore.constants import INVENTORY_ATTRS, snap_type
 from dascore.core.coordmanager import CoordManager
-from dascore.core.coords import BaseCoord, get_coord
+from dascore.core.coords import BaseCoord, _stored_float_dtype, get_coord
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import (
     InvalidFiberFileError,
@@ -27,32 +29,40 @@ from dascore.models import ArrayLike
 from dascore.units import convert_units, get_quantity_str
 from dascore.utils.misc import _maybe_unpack, _to_slice, iterate, unbyte
 from dascore.utils.time import to_exact_fraction
+from dascore.warnings import SnapWarning
 
 _CF_CALENDARS = frozenset(("standard", "gregorian", "proleptic_gregorian"))
+# Warnings point past DASCore to the caller which read the file.
+_DASCORE_DIR = str(Path(dc.__file__).parent)
 
 
 def cf_time_values(node, index=slice(None)):
     """Time labels, decoding CF units such as 'milliseconds since 2017-09-18'."""
-    units = str(unbyte(_maybe_unpack(node.attrs.get("units", ""))))
+    values = decode_cf_time(node.attrs, np.atleast_1d(node[index]))
+    return values if isinstance(index, slice) else values[0]
+
+
+def decode_cf_time(attrs, raw) -> np.ndarray:
+    """Decode stored times by the CF `units` (and `calendar`) in `attrs`."""
+    units = str(unbyte(_maybe_unpack(attrs.get("units", ""))))
     unit, *rest = re.split(r" since ", units, maxsplit=1, flags=re.IGNORECASE)
     origin = rest[0] if rest else ""
     if not origin:
-        return dc.to_datetime64(node[index])
-    calendar = str(unbyte(_maybe_unpack(node.attrs.get("calendar", "standard"))))
+        return dc.to_datetime64(raw)
+    calendar = str(unbyte(_maybe_unpack(attrs.get("calendar", "standard"))))
     if calendar.lower() not in _CF_CALENDARS:
         msg = f"Time uses the unsupported CF calendar {calendar!r}."
         raise InvalidFiberFileError(msg)
     try:
         name = cast("Any", unit.strip())  # CF names a unit pandas also knows
-        offsets = pd.to_timedelta(np.atleast_1d(node[index]), unit=name)
+        offsets = pd.to_timedelta(raw, unit=name)
         # pandas raises where numpy would wrap past the nanosecond range
         out = (pd.Timestamp(origin.strip()) + offsets).as_unit("ns")
     except (ValueError, OverflowError) as exc:
         msg = f"Cannot decode the time units {units!r}."
         raise InvalidFiberFileError(msg) from exc
     out = out.tz_convert(None) if out.tz is not None else out
-    values = out.to_numpy()
-    return values if isinstance(index, slice) else values[0]
+    return out.to_numpy()
 
 
 def should_snap(snap: snap_type, name: str) -> bool:
@@ -284,44 +294,206 @@ def slice_dataset(
     return dataset[windows_to_slices(windows, shape)]
 
 
-def get_gridded_coord(values, units=None) -> BaseCoord:
+def stored_coord(
+    labels,
+    snap: snap_type,
+    *,
+    name: str,
+    where: Any = "",
+    decode: Callable[[np.ndarray], np.ndarray] | None = None,
+    start=None,
+    step=None,
+    count: int | None = None,
+    units=None,
+) -> BaseCoord:
     """
-    Return a stored coordinate array forced onto an even grid.
+    Return a coordinate a file stores as labels, on a grid if `snap` names it.
 
-    For axes the instrument samples on a fixed grid, where the stored values
-    only restate that grid and any departure from it is representation noise.
-    Such an array can jitter past the tolerance `get_coord` uses to recognize
-    an even coordinate and leave a monotonic coord with no step.
-
-    The grid spans the smallest and largest stored values in the stored
-    sample count, never a median step, so files stating the same span agree
-    on every sample and merge.
+    Every reader builds its snapped grids here (rule 3 of the coordinate
+    guidelines, `notes/coordinates.qmd`). The grid comes from the start and
+    step the file states when both are given, such as a start time and its
+    acquisition rate; otherwise it spans the first and last labels in their
+    count, so labels from a clock unlocked from sampling still come back
+    evenly sampled. A spanning step is a whole number of ticks where that
+    keeps the last label within its stored precision, else an exact
+    fraction of one. The grid is checked against the end labels, and a grid
+    spanning them against the quartile labels too. Where one sits further than
+    `dascore.config.max_shift` steps from it, beyond what its stored
+    precision resolves (a hole, or a clock running apart), the labels are
+    returned as stored with a `SnapWarning` naming the file, as they are
+    when they end in missing values or do not advance. Only the checked
+    labels are read unless they are kept. A coordinate `snap` does not
+    name, or which is not numeric or time-like, comes back exactly as
+    stored.
 
     Parameters
     ----------
-    values
-        The stored coordinate values.
+    labels
+        The stored labels: an array, or anything indexed like one, such as
+        an HDF5 dataset.
+    snap
+        The reader's `snap` option; see `should_snap`.
+    name
+        The coordinate's name.
+    where
+        The file, or the open resource, named in the warning.
+    decode
+        Turns stored labels into coordinate values, such as
+        `dascore.to_datetime64` for epoch seconds.
+    start
+        The first label the file states, as a coordinate value.
+    step
+        The step the file states, such as `step_from_rate(rate)`.
+    count
+        How many leading labels are samples; all of them if None.
     units
-        Units to attach to the returned coordinate.
+        The coordinate's units.
 
     Examples
     --------
     >>> import numpy as np
-    >>> from dascore.io.utils import get_gridded_coord
-    >>> # an even grid restated in float32, as some formats store it
-    >>> values = np.linspace(4000.0, 4009.9, 100, dtype=np.float32)
-    >>> coord = get_gridded_coord(values.astype(np.float64), units="m")
-    >>> float(round(coord.step, 4))
-    0.1
+    >>> from dascore.io.utils import stored_coord
+    >>> # distances stored with a little noise
+    >>> labels = np.arange(10.0) + np.array([0, 1, -1, 0, 2, 0, -2, 1, 0, 0]) / 100
+    >>> exact = stored_coord(labels, False, name="distance")
+    >>> grid = stored_coord(labels, ("distance",), name="distance")
+    >>> assert grid.evenly_sampled and not exact.evenly_sampled
     """
-    values = np.atleast_1d(np.asarray(values))
-    # Grid floats in float64; float32 step arithmetic split equal spans.
-    if values.dtype.kind == "f":
+    decode = np.asarray if decode is None else decode
+    labels = labels if hasattr(labels, "dtype") else np.asarray(labels)
+    count = len(labels) if count is None else count
+    snappable = labels.ndim == 1 and np.dtype(labels.dtype).kind in "iufmM"
+    if not (should_snap(snap, name) and snappable and count):
+        return get_coord(data=decode(labels[:count]), units=units, snap=False)
+    stated = start is not None and step is not None
+    positions = _checked_positions(count, quartiles=not stated)
+    stored = np.asarray(labels[positions.tolist()])
+    values = decode(stored)
+    if values.dtype.kind in "mM":
+        values = values.astype(f"{values.dtype.kind}8[ns]")
+    elif values.dtype.kind == "f":  # float32 step arithmetic splits equal spans
         values = values.astype(np.float64)
-    # snap=True would fit a jitter-dependent median step.
-    coord = get_coord(data=values, units=units, snap=False)
-    # A lone sample states no spacing, and snap would invent a step of 1.
-    return coord.snap() if len(coord) > 1 else coord
+    resolution, reason = _resolution(stored, decode), None
+    if values.dtype.kind in "iu":  # a descending or wide grid needs room
+        if values.max() > np.iinfo(np.int64).max:
+            reason = "exceed what int64 holds"
+        values = values.astype(np.int64)
+    if not stated and reason is None:
+        start = values[0]
+        if count == 1:
+            return get_coord(data=values, step=step, units=units)
+        if pd.isnull(values[[0, -1]]).any():
+            reason = "end in missing values"
+        elif not (step := _span_step(start, values[-1], count, resolution)):
+            reason = "do not advance"
+    if reason is None:
+        ticks = _step_ticks(step, values.dtype.kind)
+        shift = float(np.max(np.abs(_offsets(values, start, ticks, positions))))
+        max_shift = dc.get_config().max_shift
+        if not shift <= max_shift + resolution / abs(float(ticks)):  # NaN fails
+            how = "stated start and step" if stated else "first and last labels"
+            reason = (
+                f"sit up to {shift:.2g} steps off the grid built from its {how}, "
+                f"more than dascore.config.max_shift ({max_shift}); the file may "
+                "hold a gap, or its clock may run apart from its sampling"
+            )
+    if reason is None:
+        return get_coord(start=start, step=step, shape=(count,), units=units)
+    _warn_snap(f"the stored {name} labels {reason}", where)
+    return get_coord(data=decode(labels[:count]), units=units, snap=False)
+
+
+def _checked_positions(count: int, quartiles: bool) -> np.ndarray:
+    """The positions of the labels a grid is checked against, ascending."""
+    ends = [0, count - 1]
+    inner = [count // 4, count // 2, (3 * count) // 4] if quartiles else []
+    return np.unique(ends + inner)
+
+
+def _span_step(first, last, count: int, resolution: float = 0.0):
+    """
+    The step spreading `count` labels from `first` to `last`.
+
+    Time and integer labels get a whole number of ticks where that keeps the
+    last label within the labels' stored `resolution`, as a released reader
+    gave them, and otherwise an exact fraction of a tick, its denominator
+    bounded so that no grid position overflows int64.
+    """
+    if not isinstance(first, np.generic) or first.dtype.kind not in "iumM":
+        return (float(last) - float(first)) / (count - 1)
+    timelike = first.dtype.kind in "mM"
+    ticks = int((last - first).astype(np.int64)) if timelike else int(last - first)
+    exact = Fraction(ticks, count - 1).limit_denominator(2**62 // max(abs(ticks), 1))
+    whole = round(exact)
+    if whole and abs(whole - exact) * (count - 1) <= max(resolution, 0.5):
+        return np.timedelta64(whole, "ns") if timelike else whole
+    return exact / 10**9 if timelike else exact
+
+
+def _step_ticks(step, kind: str) -> Fraction | float:
+    """A step in ticks (nanoseconds for time-like ones), exactly if it is."""
+    if isinstance(step, np.timedelta64):
+        return Fraction(int(step.astype("timedelta64[ns]").astype(np.int64)))
+    if kind in "mM":
+        return Fraction(step) * 10**9
+    return Fraction(step) if kind in "iu" else float(step)
+
+
+def _offsets(values, start, ticks, positions) -> np.ndarray:
+    """
+    How far each label sits from the grid's label at its position, in steps.
+
+    Time and integer grids floor each position to a whole tick, as their
+    labels do, so a fractional step is judged at the labels it gives.
+    """
+    if values.dtype.kind in "mM":
+        rel = (values - start).astype("timedelta64[ns]").astype(np.int64)
+    elif values.dtype.kind in "iu":
+        rel = values - int(start)
+    else:
+        rel = values.astype(np.float64) - float(start)
+        return (rel - positions * ticks) / ticks
+    grid = np.array([math.floor(k * ticks) for k in positions.tolist()])
+    return (rel - grid) / float(ticks)
+
+
+def _resolution(stored, decode) -> float:
+    """
+    The spacing of stored float labels near the largest, as decoded.
+
+    A float stores a grid label only as closely as it can hold it, and a
+    grid spanning two such labels inherits their rounding. Integer labels
+    are held exactly.
+    """
+    if stored.dtype.kind != "f":
+        return 0.0
+    dtype = _stored_float_dtype(stored)
+    top = dtype.type(np.max(np.abs(stored)))
+    pair = np.array([top, np.nextafter(top, dtype.type(np.inf))], dtype=stored.dtype)
+    gap = np.abs(np.diff(decode(pair)))[0]
+    if isinstance(gap, np.timedelta64):
+        return float(gap.astype("timedelta64[ns]").astype(np.int64))
+    return float(gap)
+
+
+def _warn_snap(message: str, where) -> None:
+    """Warn that stored labels are kept rather than snapped, naming the file."""
+    msg = (
+        f"{_resource_name(where)}: {message}, so they are kept as stored; "
+        "Patch.snap_coords puts them on a grid."
+    )
+    warnings.warn(msg, SnapWarning, skip_file_prefixes=(_DASCORE_DIR,))
+
+
+def _resource_name(where) -> str:
+    """How a file, or an open resource reading one, names itself."""
+    if isinstance(where, str | Path):
+        return str(where) or "a file"
+    for attr in ("_dascore_source_path", "filename", "name"):
+        value = getattr(where, attr, None)
+        if isinstance(value, str | Path) and str(value):
+            return str(value)
+    return "a file"
 
 
 def step_from_rate(rate) -> Fraction | np.timedelta64:

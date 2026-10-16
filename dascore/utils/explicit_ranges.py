@@ -142,6 +142,8 @@ def file_source_coords(resolver, row, files=None):
             file_format=key[1] or None,
             file_version=key[2] or None,
             progress=None,
+            # the snap the source's patches are read under, as its rows were
+            snap=getattr(file_resolver, "_snaps", {}).get(path),
         )
         by_key = {
             str(payload._source.key): payload

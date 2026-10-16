@@ -26,7 +26,7 @@ class JingleV1(FiberIO):
     def get_version(self, resource) -> str | None:
         """Return the resource's Jingle version, or None for another family."""
 
-    def get_metadata(self, resource, *, snap: snap_type = True) -> list[dc.Patch]:
+    def get_metadata(self, resource, *, snap: snap_type = ()) -> list[dc.Patch]:
         """Describe each logical patch without retaining its sample array."""
         return [
             dc.Patch(
@@ -51,13 +51,14 @@ Writing is optional: implement `write(self, spool, resource, **kwargs)` when sup
 
 [`scan_payloads`](`dascore.scan_payloads`) exposes this metadata with source provenance attached. [`scan`](`dascore.scan`) returns `PatchSummary` objects, and [`scan_to_df`](`dascore.scan_to_df`) flattens those summaries for indexing. Metadata and loaded patches describe the same shape, dtype, and coordinates for a given snap mode. Their attrs also agree, except that Sintela protobuf reads collect additional META records while loading samples.
 
-The metadata hook accepts one option, `snap`:
+The metadata hook accepts one option, `snap`, which names the dimensions whose stored labels come back on a grid (rule 3 of [the coordinate guidelines](`dascore/docs/notes/coordinates.qmd`)):
 
-- `snap=True` may idealize stored coordinates as uniform ranges.
-- `snap=False` preserves stored coordinate values exactly.
-- `snap="time"` or `snap=("time", "distance")` enables snapping only for the named coordinates. Use `should_snap(snap, name)` in coordinate builders rather than testing the truthiness of `snap`.
+- its default in your `get_metadata` signature is the format's own: the dimensions it stores as labels restating a grid, such as `("time",)` for interrogator timestamps; `()` when a header states every grid; `True` for every dimension. `read` and `scan` use it when given `snap=None`.
+- `snap=True` snaps every one-dimensional numeric or time-like dimension.
+- `snap=False` returns every coordinate exactly as stored.
+- `snap="time"` or `snap=("time", "distance")` snaps those dimensions; the framework raises for a name the patch has no such dimension of.
 
-For stored per-sample arrays, use `get_coord(data=array, snap=False)` rather than `get_coord(data=array)`, whose tolerance may hide jitter. Header-defined start/step/count coordinates may treat `snap=False` as a no-op. Snapping changes coordinate labels, not the number of written samples. Both modes must trim unwritten storage rows.
+Build every coordinate a file stores as labels with [`stored_coord`](`dascore.io.utils.stored_coord`), passing `snap` and the coordinate's name. It returns the labels exactly unless `snap` names them, and otherwise builds the one grid DASCore readers share: from a start and step the file states (pass both when reliable, such as a start time and the acquisition rate), else from the first and last labels and the count. It reads only the labels it checks; where one sits more than `dascore.config.max_shift` steps off the grid (beyond the labels' stored precision), it warns, naming the file, and returns the labels as stored. Header-defined start/step/count coordinates need nothing: every `snap` gives the same grid. Snapping changes coordinate labels, not the number of written samples. Both modes must trim unwritten storage rows (`stored_coord(count=...)`).
 
 Exact metadata can retain large coordinate arrays; request it for targeted files rather than whole directories. Formats such as Pickle may need to deserialize sample data to obtain metadata, but must return patches that do not retain those arrays.
 
@@ -67,7 +68,7 @@ Multi-patch formats attach a stable native key with `source=ArraySource(key=...)
 
 `ArraySource` is framework plumbing stored privately on `patch._source`; it is separate from scientific attrs. Readers supply the logical key, and the dispatcher fills the path, format, and version. Directory readers may also supply an internal member path for timestamp filtering and to pin array loading to the corresponding metadata entry; public source provenance still names the requested resource. Public summaries retain the existing `source_path`, `source_format`, `source_version`, and `source_patch_key` fields. When a multi-patch resource supplies no native keys, public scans and reads expose positional keys such as `"0"` and `"1"`; these keys can be passed back to `read` while source IDs retain their original ordinal-based derivation. Source retention through processing is not guaranteed, and no lazy `Patch.load()` is provided.
 
-The shared `read` exposes keyword-only `samples=False` and `source_patch_key=""` parameters. `samples=True` interprets coordinate bounds as sample indices. It accepts one or multiple `source_patch_key` values, selects metadata, and loads matching arrays. `snap="time"` or `snap=("time", "distance")` snaps only the named coordinates; `True` enables all and `False` (or an empty tuple) disables all. Reader coordinate builders use `dascore.io.utils.should_snap`, which handles names through `iterate`. `snap=None` preserves compatibility with `snap_dims`: the effective default is `True`, and explicit `snap` takes precedence over the alias. Source IDs are derived before selection, so selecting a subset keeps the original logical patch identity. Stored IDs remain authoritative.
+The shared `read` exposes keyword-only `samples=False` and `source_patch_key=""` parameters. `samples=True` interprets coordinate bounds as sample indices. It accepts one or multiple `source_patch_key` values, selects metadata, and loads matching arrays. `snap` is as above; `snap=None` reads the format's default, and the deprecated `snap_dims` spelling still works, with a warning, an explicit `snap` taking precedence. Source IDs are derived before selection, so selecting a subset keeps the original logical patch identity. Stored IDs remain authoritative.
 
 ## Choose attrs
 

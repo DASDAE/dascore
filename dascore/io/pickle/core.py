@@ -11,7 +11,12 @@ import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.core.summary import normalize_source_patch_key
 from dascore.io import ArraySource, BinaryReader, BinaryWriter, FiberIO
-from dascore.io.utils import resolve_keyed_source, slice_dataset
+from dascore.io.utils import (
+    resolve_keyed_source,
+    should_snap,
+    slice_dataset,
+    stored_coord,
+)
 from dascore.utils.io import IOResourceManager
 
 
@@ -82,12 +87,12 @@ class PickleIO(FiberIO):
             return None
 
     def get_metadata(
-        self, resource: _PickleReader, *, snap: snap_type = True
+        self, resource: _PickleReader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Decode a pickle to describe its patches without retaining their arrays."""
         return [
             dc.PatchMeta(
-                coords=p.coords,
+                coords=_snap_dims(p, snap),
                 attrs=p.attrs.drop("_source_patch_key"),
                 dtype=p.dtype,
                 source=ArraySource(key=key),
@@ -111,3 +116,13 @@ class PickleIO(FiberIO):
     def write(self, spool, resource: BinaryWriter, **kwargs):
         """Write a Patch/Spool to disk."""
         pickle.dump(spool, resource)
+
+
+def _snap_dims(patch, snap):
+    """A pickled patch's coordinates, with the dimensions `snap` names gridded."""
+    grids = {
+        dim: stored_coord(coord.values, True, name=dim, units=coord.units)
+        for dim in patch.dims
+        if should_snap(snap, dim) and not (coord := patch.get_coord(dim)).evenly_sampled
+    }
+    return patch.coords.update(**grids)

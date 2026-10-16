@@ -386,6 +386,7 @@ class Spool(NodeRepr, NamespaceOwner):
     _file_path = None
     _file_format = None
     _file_version = None
+    _file_snap = None
 
     def __init__(
         self,
@@ -2775,6 +2776,7 @@ class Spool(NodeRepr, NamespaceOwner):
         path,
         file_format: str | None = None,
         file_version: str | None = None,
+        snap=None,
     ) -> Self:
         """
         Create a spool over a single (multi-patch capable) fiber file.
@@ -2789,6 +2791,9 @@ class Spool(NodeRepr, NamespaceOwner):
             The format name, sniffed from the file when not given.
         file_version
             The format version, sniffed from the file when not given.
+        snap
+            The dimensions its patches are read on a grid, as in
+            [`read`](`dascore.read`).
 
         Notes
         -----
@@ -2815,11 +2820,12 @@ class Spool(NodeRepr, NamespaceOwner):
             _format, _version = dc.get_format(path, file_format, file_version)
         out = cls()
         out._catalog = PatchCatalog.from_file(
-            path, file_format=_format, file_version=_version
+            path, file_format=_format, file_version=_version, snap=snap
         )
         out._file_path = path
         out._file_format = _format
         out._file_version = _version
+        out._file_snap = snap
         return out
 
     # --- capabilities --------------------------------------------------
@@ -2901,7 +2907,7 @@ class Spool(NodeRepr, NamespaceOwner):
             getattr(formatter, "index", lambda _: None)(self._file_path)
             # Sniffed rather than reused: noticing that the file changed is
             # what update is for, and it may now hold another version.
-            refreshed = self._from_file(self._file_path)
+            refreshed = self._from_file(self._file_path, snap=self._file_snap)
             # _from_file builds a spool from the file alone, but an attached
             # inventory is the caller's state rather than the file's, and
             # re-reading the file is no reason to stop enriching.
@@ -3298,6 +3304,11 @@ def spool(obj: path_types | Spool | Sequence[PatchType], **kwargs) -> Spool:
     ----------
     obj
         An object from which a spool can be derived.
+    **kwargs
+        For a path, `file_format` and `file_version` name its format, and
+        for a single file `snap` chooses which dimensions its patches read
+        on a grid, as in [`read`](`dascore.read`); a directory's index does
+        not record `snap` yet, so it is refused there.
 
     Examples
     --------
@@ -3322,11 +3333,18 @@ def spool(obj: path_types | Spool | Sequence[PatchType], **kwargs) -> Spool:
 @spool.register(str)
 @spool.register(Path)
 @spool.register(UPath)
-def _spool_from_str(path, **kwargs):
-    """Get a spool from a path."""
+def _spool_from_str(path, snap=None, **kwargs):
+    """Get a spool from a path; a file's patches read under `snap`."""
     path = coerce_to_upath(resolve_example_uri(path))
     # A local directory was passed; index it.
     if is_local_path(path) and path.is_dir():
+        if snap is not None:
+            msg = (
+                "snap applies to a spool of one file, but not yet to a "
+                "directory, whose index does not record the snap it was "
+                f"built with: {path}"
+            )
+            raise ParameterError(msg)
         return Spool._from_directory(path, **kwargs)
     # A single file, or a remote directory one reader reads whole (e.g. a
     # zarr store); its patches load lazily. Remote directories of files
@@ -3342,7 +3360,7 @@ def _spool_from_str(path, **kwargs):
                 )
                 raise InvalidSpoolError(msg) from exc
             raise
-        return Spool._from_file(path, _format, _version)
+        return Spool._from_file(path, _format, _version, snap=snap)
     else:
         msg = (
             f"could not get spool from argument: {path}. "

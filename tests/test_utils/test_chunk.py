@@ -230,9 +230,14 @@ class TestChunkPlanDF:
         out2 = build_chunk_plan(contiguous_df, overlap=10, time=20).outputs
         assert out.equals(out2)
 
-    def test_chunk_on_split(self, terra15_file_spool):
-        """Ensure chunking which creates a slice at the end time works."""
-        df = terra15_file_spool.get_contents()
+    def test_chunk_on_split(self, terra15_v6_path):
+        """
+        Ensure chunking which creates a slice at the end time works.
+
+        The v6 file's GPS times snap to a whole-nanosecond grid; the v5
+        file's sit 1.3 steps off any grid, so it reads as stored.
+        """
+        df = dc.spool(terra15_v6_path).get_contents()
         dur = (df["time_max"] - df["time_min"]).iloc[0]
         seg_len = dur / 3
         dt = df["time_step"].iloc[0]
@@ -243,6 +248,26 @@ class TestChunkPlanDF:
         duration = chunk_df["time_max"] - chunk_df["time_min"]
         samples = (duration / dt).round() + 1
         assert samples.sum() == round(dur / dt) + 1
+
+    @pytest.mark.xfail(
+        reason="#1428: get_contents rounds an exact fractional step to whole "
+        "ns, so a plan built from it drifts off the grid (spool.chunk is exact)",
+        strict=True,
+    )
+    def test_chunk_contents_on_fractional_grid(self):
+        """A plan from public contents keeps every sample of a 1024 Hz grid."""
+        time = dc.get_coord(
+            start=np.datetime64("2020-01-01"), step=(1, 1024), shape=(3001,)
+        )
+        coords = {"distance": np.arange(3), "time": time}
+        patch = dc.Patch(
+            data=np.zeros((3, 3001)), coords=coords, dims=("distance", "time")
+        )
+        df = dc.spool([patch]).get_contents()
+        dur = (df["time_max"] - df["time_min"]).iloc[0]
+        chunk_df = build_chunk_plan(df, keep_partial=True, time=dur / 3).outputs
+        # three thirds of the span, then the last sample on its own
+        assert len(chunk_df) == 4
 
     def test_nan_in_df(self, contiguous_df):
         """A null envelope row breaks continuity when dropped."""

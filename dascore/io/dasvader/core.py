@@ -43,7 +43,7 @@ class DASVaderV1(FiberIO):
         return self.version if _is_dasvader_jld2(resource) else None
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Scan a DASVader file, return summary information about the file."""
         rec = resource["dDAS"][()]

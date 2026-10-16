@@ -53,12 +53,12 @@ A coordinate is described by its `step` (`None` if it has none) and two independ
 2. **Inference finds a grid or nothing.** `get_coord(data=...)` checks every label against a fitted grid, not just the spacings, so drift can't hide: all on the grid at consecutive positions is evenly sampled; all offsets and spacing errors under half a step, with no repeats, is jittered; anything else has no step. Inference never invents holes. With a stated step, labels are placed on that grid, skipped positions become holes, and two labels on one position raise. Integer and datetime grids are found exactly in their own tick unit; floats are judged in their stored dtype.
 
 3. **Readers snap the coordinates `snap` names.** `dc.read`, `dc.scan`, `dc.spool` and every reader take `snap`:
-   - `None` (default): the format's default names, shown in its reader's signature;
+   - `None` (default): the format's default names, shown in its reader's signature: the dimensions it stores as labels restating a grid (none where a header states every grid; DASDAE snaps only coordinates it stored jittered, and DASCore's other formats none, so what they wrote reads back);
    - `True`: every one-dimensional numeric or time-like dimension;
    - `False`: nothing; every coordinate exactly as stored;
    - a tuple such as `("time",)`: those names; a missing or unsnappable name raises.
 
-   A snapped coordinate is assumed to have no holes inside a file or patch; gaps show up between files, where `chunk` sees them. One shared helper builds every snapped grid, from a reliable stated start and acquisition rate, else from the first and last stored labels and the count, so interrogators with unlocked clocks still come back evenly sampled. It checks the grid against stored labels (the ends, plus a few interior ones for end-point grids) and warns, naming the file, beyond `max_shift`. The index records its `snap` and rescans when opened with another. A conformance test holds every format to this rule.
+   Readers assume no holes inside a file or patch; gaps show up between files, where `chunk` sees them. One shared helper builds every snapped grid, from a reliable stated start and acquisition rate, else from the first and last stored labels and the count (a whole number of ticks where that keeps the ends within their stored precision, else an exact fraction of one), so interrogators with unlocked clocks still come back evenly sampled. It checks the grid against stored labels (the ends, plus a few interior ones for end-point grids). Where one sits further than `max_shift` off it, beyond what its stored precision resolves, the file holds a gap or a clock running apart, so the helper keeps the stored labels and warns, naming the file. The index records its `snap` and rescans when opened with another. A conformance test holds every format to this rule.
 
 4. **Operations check what they need.** FFTs, filters and other operations assuming contiguous samples use `get_coord(dim, require_evenly_sampled=True)`, and the error names `fill_gaps` and `snap_coords`. `coord.step` is set whenever there is a step, jittered or not.
 
@@ -106,7 +106,7 @@ These are the only thresholds.
 
 | Name | Value | Use |
 |---|---|---|
-| `dascore.config.max_shift` | 0.2 steps | Default for `chunk` and the reader warning: above measured jitter (0.17), below a missing sample's effect. `snap_coords` has no default limit. |
+| `dascore.config.max_shift` | 0.2 steps | Default for `chunk` and the reader check: above measured jitter (0.17), below a missing sample's effect. `snap_coords` has no default limit. |
 | `DEFAULT_TOLERANCE` | 1.5 steps | Default `tolerance`: only contiguous pieces join. |
 | `dascore.config.max_index_runs` | 256 | Runs stored per coordinate in the index. |
 | Float exactness | max(`_GRID_RTOL` × \|step\|, 4 ulp) | In the stored dtype; float64 holding float32 values counts as float32. |
@@ -142,8 +142,9 @@ Released behaviour is deprecated with a warning for at least one release rather 
 | `order` dropping missing values | Warns, then raises |
 | `coords_from_df` overwriting coordinates | Warns, then refuses |
 | `concatenate_patches`, `merge_patches` | Warn, then are removed in 0.2 |
+| Terra15 `read(snap_dims=...)` | Warns; means `snap` |
 
-Afterwards, gapped `chunk` outputs refuse filters until regularized, reading warns when stored times disagree with the grid, Sentek time (which repeats) is unordered, and writing holes to formats that can't store them raises.
+Afterwards, gapped `chunk` outputs refuse filters until regularized, and writing holes to formats that can't store them raises. Some reader changes are not deprecated first (see the decisions log): stored labels a grid disagrees with are kept, with a warning, rather than stretched onto it (Terra15 v5 and NeubrexRFS times among the registry files); NeubrexRFS times and Sentek distances read as stored; and Febus G1 sweep times and NeubrexRFS distances snap.
 
 ## Future work
 
@@ -163,3 +164,7 @@ Coordinates will hold a mapping of keys to any array-like, real or virtual, carr
 - 2026-10-07: `max_shift=0` replaces a `snap_jitter` flag.
 - 2026-10-07: Released behaviour is deprecated rather than changed outright, unless there is a compelling reason.
 - 2026-10-08: The released `get_coord(data=...)` snap is not kept where its median step moves a label half a step or more, which relabels samples (#1419): an exact grid is used, jittered labels are snapped from their end labels and count, and others get no step. Where rule 2 itself finds a grid (a fractional step, or labels within float exactness), that grid is used without a warning: the coordinate stays evenly sampled, and only labels the snap had moved return to their recorded values.
+- 2026-10-09: A format's default names are the dimensions it stores as labels restating a grid. Sentek's distances are sensor positions 1.94 to 2.85 m apart, which the released reader moved up to 0.78 m onto a grid one step short, so they read as stored. Its repeated times are float32 rounding of the 27.264 ms grid its header states, and snap without a warning, so Sentek time stays ordered rather than becoming unordered as first written. DASDAE snaps only coordinates it stored jittered: near-even labels snap as released (filters still run on such files) and the holes and irregular labels it wrote read back as written.
+- 2026-10-09: The reader check allows the precision labels were stored in (one unit in the last place, in their stored float dtype): a grid spanning two rounded labels inherits their rounding. A spanning step is a whole number of ticks where it keeps the ends within that precision, as released readers gave it, and an exact fraction otherwise, since whole ticks drift past `max_shift` over an hour at 1 kHz.
+- 2026-10-10: Where the check fails, the reader keeps the stored labels and warns, rather than returning a grid that moves them further: a ten-sweep gap inside a Febus BSL file moved labels 25 s onto a grid. Unlocked clocks, measured at 0.17 steps or less, still snap. Not deprecated first: the released grids for Terra15 v5 (1.3 steps) and NeubrexRFS DSS (2.0) and DTS (9.2) times relabel samples.
+- 2026-10-10: NeubrexRFS time is not a default name: its labels are irregular measurement times (minutes to days apart), which v0.1.24 moved by up to 50 h onto a grid. Febus G1 sweep times and NeubrexRFS float32 distances, which v0.1.24 kept as stored (their jitter exceeds its 0.1%), now snap by default within `max_shift`; `snap=False` keeps them.

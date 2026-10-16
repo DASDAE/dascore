@@ -12,7 +12,13 @@ import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.core.summary import normalize_source_patch_keys
 from dascore.io import FiberIO
-from dascore.io.core import _selected_read_attrs, _stamp_source_ids
+from dascore.io.core import (
+    _check_snap_names,
+    _default_snap,
+    _resolve_snap,
+    _selected_read_attrs,
+    _stamp_source_ids,
+)
 from dascore.io.utils import selection_windows, windows_to_slices
 from dascore.models import OptionalFiniteFloat
 from dascore.utils.io import (
@@ -64,7 +70,7 @@ class SintelaBinaryV3(FiberIO):
         return None
 
     def get_metadata(
-        self, resource: BinaryReader, *, snap: snap_type = True
+        self, resource: BinaryReader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Scan a file, return summary information on the contents."""
         attrs, coords, header = _get_attrs_coords_header(resource, SintelaPatchAttrs)
@@ -110,7 +116,7 @@ class SintelaProtobufV1(FiberIO):
         return self.version if tag else None
 
     def get_metadata(
-        self, resource: BinaryReader, *, snap: snap_type = True
+        self, resource: BinaryReader, *, snap: snap_type = ("time",)
     ) -> list[dc.PatchMeta]:
         """Scan a Sintela protobuf recording."""
         return scan_payload(resource, snap=snap)
@@ -140,8 +146,7 @@ class SintelaProtobufV1(FiberIO):
         indexing would require a header walk through every recording, so this
         reader retains its streaming assembly path instead of the shared read.
         """
-        snap_dims = kwargs.pop("snap_dims", True)
-        snap = snap_dims if snap is None else snap
+        snap = _resolve_snap(self, snap, kwargs.pop("snap_dims", None))
         wanted = normalize_source_patch_keys(source_patch_key)
         if wanted and "0" not in wanted:
             return dc.spool([])
@@ -183,9 +188,15 @@ class SintelaProtobufV1(FiberIO):
             if not np.size(data):
                 return dc.spool([])
             patches = [dc.Patch(data=data, coords=coords, attrs=attrs)]
+            _check_snap_names(patches, snap, self)
             if (source := kwargs.get("_provenance_source")) is not None:
                 patches = _stamp_source_ids(
-                    patches, self.name, self.version, source, snap=snap
+                    patches,
+                    self.name,
+                    self.version,
+                    source,
+                    snap=snap,
+                    default_snap=_default_snap(type(self)),
                 )
                 if selectors:
                     # This reader never describes a loadable source, so a

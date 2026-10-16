@@ -11,6 +11,7 @@ from dascore.io.utils import (
     drop_blank_attrs,
     get_attr_names,
     step_from_rate,
+    stored_coord,
 )
 from dascore.utils.misc import maybe_get_items
 
@@ -124,8 +125,8 @@ def _validate_attrs(attrs_dict, attr_cls):
     return attr_cls.model_validate(attrs_sub)
 
 
-def _get_attr(resource, attr_cls):
-    """Get the attribute class and coordinates."""
+def _get_attr(resource, attr_cls, snap=()):
+    """Get the attribute class and coordinates; a header states both grids."""
     attrs, coords = _get_attr_dict(resource)
     return _validate_attrs(attrs, attr_cls), coords
 
@@ -178,7 +179,7 @@ def _get_carina_time_coord(attrs_dict, n_time):
     return get_coord(start=start, step=step_from_rate(rate), shape=(n_time,))
 
 
-def _get_carina_distance_coord(attrs_dict, resource, n_columns):
+def _get_carina_distance_coord(attrs_dict, resource, n_columns, snap=()):
     """
     Distance from Start Distance/SpatialResolution through the ChannelMap.
 
@@ -215,11 +216,12 @@ def _get_carina_distance_coord(attrs_dict, resource, n_columns):
             start=start + physical[0] * step, step=step, shape=(n_columns,), units="m"
         )
     else:
-        coord = get_coord(data=start + physical * step, units="m")
+        values = start + physical * step
+        coord = stored_coord(values, snap, name="distance", where=resource, units="m")
     return coord
 
 
-def _get_carina_attrs_and_coords(resource):
+def _get_carina_attrs_and_coords(resource, snap=()):
     """Get the attr dict and coordinates for a Carina-variant file."""
     attrs_dict = maybe_get_items(
         resource.attrs, _CARINA_ATTR_MAP, unpack_names=set(_CARINA_ATTR_MAP)
@@ -228,7 +230,7 @@ def _get_carina_attrs_and_coords(resource):
     convert_attr_units(attrs_dict, "pulse_width", "s", from_units=_PULSE_WIDTH_UNITS)
     n_time, n_columns = resource[_CARINA_DATA_NAME].shape
     time_coord = _get_carina_time_coord(attrs_dict, n_time)
-    distance_coord = _get_carina_distance_coord(attrs_dict, resource, n_columns)
+    distance_coord = _get_carina_distance_coord(attrs_dict, resource, n_columns, snap)
     coords = get_coord_manager(
         {"time": time_coord, "distance": distance_coord},
         dims=("time", "distance"),
@@ -236,7 +238,7 @@ def _get_carina_attrs_and_coords(resource):
     return attrs_dict, coords
 
 
-def _get_carina_attr(resource, attr_cls):
+def _get_carina_attr(resource, attr_cls, snap=()):
     """Get the attribute class and coordinates for a Carina-variant file."""
-    attrs, coords = _get_carina_attrs_and_coords(resource)
+    attrs, coords = _get_carina_attrs_and_coords(resource, snap)
     return _validate_attrs(attrs, attr_cls), coords
