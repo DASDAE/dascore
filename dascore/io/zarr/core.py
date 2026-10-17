@@ -176,8 +176,7 @@ class ZarrV3(FiberIO):
             ``shards`` needs zarr format 3.
         """
         zarr = optional_import("zarr")  # xarray is required by the conversion
-        # Not dc.spool, which would cut a patch with holes into pieces.
-        spool = [spool] if isinstance(spool, dc.Patch) else spool
+        spool = dc.spool([spool]) if isinstance(spool, dc.Patch) else spool
         names = get_patch_names(spool).str.replace("/", "_", regex=False)
         names = names.mask(names == "", "patch")  # "" would name the root
         if resource.exists() and not _marked_zarr_format(resource):

@@ -736,11 +736,13 @@ class TestRoundTrips:
         assert out == time_gap_coord
 
     def test_to_summary(self, float_gap_coord):
-        """Summaries carry exact min/max and a null step."""
+        """Summaries carry exact min/max, the step, its hole and its runs."""
         summary = float_gap_coord.to_summary()
         assert summary.min == 0.0
         assert summary.max == 24.0
-        assert summary.step is None
+        assert summary.step == 1.0 and summary.gapped
+        assert not summary.is_range_like
+        assert [(x.count, x.position) for x in summary.runs] == [(10, 0), (10, 15)]
         assert summary.len == 20
         assert summary.data_id == float_gap_coord.data_id
 

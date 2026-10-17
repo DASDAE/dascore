@@ -4,7 +4,7 @@ title: Spool Index
 
 Directory and in-memory spools use the same metadata model. The persisted directory index is one SQLite file named `.dascore_index.sqlite3`; in-memory spools use the same schema in an in-memory SQLite database. The index stores summaries and source identities, not patch data.
 
-## Why eight tables?
+## Why nine tables?
 
 The schema separates records with different lifetimes and cardinalities. This avoids repeating source and coordinate metadata on every patch and gives SQLite enforceable ownership boundaries.
 
@@ -16,10 +16,15 @@ The schema separates records with different lifetimes and cardinalities. This av
 | `attrs` | patch | Stores typed attribute values in dynamically added columns |
 | `attr_meta` | attribute name and value kind | Maps original attribute names to typed storage columns and canonical units |
 | `coord_defs` | unique coordinate value definition | Stores coordinate summaries and deduplicates identical definitions |
+| `coord_runs` | run of a coordinate definition | Stores the runs of a coordinate with several, which hold no hole, so reports and plans see holes inside a patch |
 | `patch_coords` | coordinate attached to a patch | Links patches to coordinate definitions while retaining the coordinate name and dimensions |
 | `coord_variants` | distinct coordinate name, dtype, kind, units, and relativity | Counts the patches stating each variant, so coordinate discovery reads a few rows rather than every link |
 
 `coord_defs` and `patch_coords` are deliberately separate. Many patches can share a distance coordinate, so `coord_defs` stores it once and `patch_coords` supplies the many-to-many attachment. Range coordinates receive the coordinate's exact `data_id`, reconstructed from the coordinate values when a scan did not supply one. Non-range coordinates only receive a merge-compatibility identity when the scan provides one. A coordinate is hashed in the units it was written in, so one length spelled in metres and in centimetres is two definitions — as it must be, since the stored envelopes are in the original spelling too. This distinction prevents a matching envelope from being mistaken for matching coordinate values while retaining the deduplication needed by future merge planning.
+
+The index mirrors the coordinate (rule 12 of the [coordinate guidelines](coordinates.qmd)). A `coord_defs` row states the coordinate's envelope and step, whether its labels are `jittered` or `gapped` on that step, how far they sit from the grid through the first label (`offset_min` and `offset_max`, in steps), and how many runs it is (`run_count`). A coordinate of several runs stores them in `coord_runs`, in order: each run's sample count, envelope, step, and `position` on the coordinate's grid, so the positions between two runs are its holes. Runs never contain holes: a stored array of labels with holes is cut at them. The same records come from a coordinate in memory (`dascore.utils.gaps.RunRecord`), and one function joins them into the stretches between holes, so a spool of patches in memory and a directory of the same patches report the same gaps. Past `dascore.config.max_index_runs` (256) runs a coordinate is stored by its envelope, step and flags alone, with a warning naming the file; a report or plan which needs its runs reads the coordinate from its source. The flat relation states `{dim}_step` for evenly sampled coordinates only.
+
+A directory index also records the `snap` it was scanned under and the `max_shift` its readers judged grids by; opened with another, it rescans every file, and it reads patches under the ones it recorded.
 
 `coord_variants` and `meta_data.patch_count` are summaries rather than records. Triggers update them in the transaction that changes the rows they count, so every connection keeps them exact, including one writing straight through SQL, and a spool's coordinate names, kinds and units, and a root spool's length, cost the same on a large archive as on a small one.
 
@@ -139,7 +144,7 @@ assert row["source_path"].startswith("memorypatch://")
 assert cat.resolve_row(row.to_dict()) is patch
 ```
 
-A patch whose dimensional coordinates have holes enters as its contiguous pieces, keyed below its own path (`memorypatch://<instance_id>/<n>`), so adding it twice still leaves one entry per piece.
+A patch whose dimensional coordinates have holes enters whole, as one row; the index states its runs, so reports and plans see its holes. Adding it twice still leaves one entry.
 
 File-backed patches are identified by `(base_uri, source_path, source_patch_key)` instead; their rows resolve through readers rather than the registry.
 

@@ -454,8 +454,10 @@ def _assert_coords_attrs_match(patch):
         summary_coord = summary.get_coord_summary(dim)
         assert coord.min() == summary_coord.min
         assert coord.max() == summary_coord.max
-        # a summary's step rebuilds a range, so only an even coord states it
-        assert (coord.step if coord.evenly_sampled else None) == summary_coord.step
+        # a summary states the step and how the labels sit on it
+        flags = (summary_coord.jittered, summary_coord.gapped)
+        assert flags == (coord.jittered, coord.gapped)
+        assert summary_coord.step is None or summary_coord.step == coord.step
 
 
 def _assert_op_or_close(val1, val2, op):

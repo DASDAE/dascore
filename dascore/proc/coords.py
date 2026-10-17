@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import warnings
 from functools import partial
 from pathlib import Path
@@ -25,6 +26,7 @@ from dascore.exceptions import (
 )
 from dascore.utils.array_api import array_namespace
 from dascore.utils.docs import compose_docstring
+from dascore.utils.gaps import contiguous_windows
 from dascore.utils.indexing import get_indexers, label_indexer
 from dascore.utils.misc import (
     _apply_union_indexers,
@@ -1450,14 +1452,15 @@ def get_axis(self: PatchType, dim: str) -> int:
 
 def split_gaps(self: PatchType) -> dc.Spool:
     """
-    Split the patch into contiguous patches, as a spool holds it.
+    Split the patch into contiguous patches.
 
-    This is ``dc.spool([patch])``: the patch splits at every boundary
-    between a dimension's evenly sampled runs and at every hole
-    [missing](`dascore.core.coords.BaseCoord.missing`) reports; irregular
-    labels sharing no step stay one piece. Each
-    output is a view of the patch's data; a patch without holes comes back
-    unchanged.
+    The patch splits at every hole
+    [missing](`dascore.core.coords.BaseCoord.missing`) reports and where
+    runs sharing no step change step or leave a gap; irregular labels
+    sharing no step stay one piece. Two gapped dimensions give one piece
+    per pair of stretches. Each output is a view of the patch's data; a
+    patch without holes comes back unchanged. A spool holds a patch with
+    holes whole, so this is the one way to split it.
 
     Parameters
     ----------
@@ -1483,7 +1486,14 @@ def split_gaps(self: PatchType) -> dc.Spool:
     >>> spool = patch.split_gaps()
     >>> assert len(spool) == 2
     """
-    return dc.spool([self])
+    windows = [contiguous_windows(self.get_coord(x)) for x in self.dims]
+    if all(len(x) == 1 for x in windows):
+        return dc.spool([self])
+    pieces = [
+        self.select(samples=True, **dict(zip(self.dims, window, strict=True)))
+        for window in itertools.product(*windows)
+    ]
+    return dc.spool(pieces)
 
 
 def _fill_scalar(value, dtype) -> np.ndarray:

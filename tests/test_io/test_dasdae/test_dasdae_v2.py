@@ -176,12 +176,10 @@ class TestVersion2Files:
         """A directory holding a written gapped patch converts (#1218)."""
         pytest.importorskip("xarray")
         pytest.importorskip("dask")
-        # Written split, which a writer leaves to the caller, since this
-        # directory index cannot yet hold a patch with holes whole.
-        dc.write(gapped_patch.split_gaps(), tmp_path / "gap.h5", "dasdae")
+        dc.write(gapped_patch, tmp_path / "gap.h5", "dasdae")
         tree = dc.spool(tmp_path).update().io.to_xarray()
         leaves = [x for x in tree.subtree if "data" in x.data_vars]
-        pieces = list(dc.spool([gapped_patch]))
+        pieces = list(gapped_patch.split_gaps())
         assert len(leaves) == len(pieces)
         for leaf, piece in zip(leaves, pieces, strict=True):
             assert np.array_equal(leaf["data"].values, piece.data)
@@ -257,12 +255,12 @@ class TestVersion2Files:
 
 
 class TestMultiRunRoundTrip:
-    """A coordinate of several exact runs is written as its pieces."""
+    """A coordinate of several exact runs is written whole, as its runs."""
 
     @pytest.mark.parametrize("rate", [1000, 1024, 3000])
     @pytest.mark.parametrize("layout", ["hole", "strided", "off_lattice"])
     def test_round_trip(self, rate, layout, tmp_path):
-        """Each piece reads back with the coordinate and data it was written with."""
+        """The patch reads back with the coordinate and data it was written with."""
         full = get_coord(start=T0, step=(1, rate), shape=(60,))
         if layout == "hole":
             coord = concat_coords(full[:10], full[11:])
@@ -274,10 +272,7 @@ class TestMultiRunRoundTrip:
             coord = concat_coords(full, other)
         data = np.arange(float(len(coord)))
         patch = dc.Patch(data=data, coords={"time": coord}, dims=("time",))
-        pieces = list(dc.spool([patch]))
-        back = dc.read(dc.write(patch, tmp_path / "runs.h5", "dasdae")).sort("time")
-        assert len(back) == len(pieces)
-        for read, piece in zip(back, pieces, strict=True):
-            out, expected = read.get_coord("time"), piece.get_coord("time")
-            assert out == expected and out.step_exact == expected.step_exact
-            np.testing.assert_array_equal(read.data, piece.data)
+        (read,) = dc.read(dc.write(patch, tmp_path / "runs.h5", "dasdae"))
+        out = read.get_coord("time")
+        assert out == coord and out.step_exact == coord.step_exact
+        np.testing.assert_array_equal(read.data, patch.data)

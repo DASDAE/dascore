@@ -107,8 +107,10 @@ from dascore.utils.chunk_plan import (
     build_coverage_frame,
     build_gap_frame,
     build_subdivision_plan,
+    coalesce_runs,
     refuse_riders,
     subdivision_pieces,
+    with_runs,
 )
 from dascore.utils.concurrency import _prefetch
 from dascore.utils.display import (
@@ -128,6 +130,8 @@ from dascore.utils.docs import compose_docstring
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.explicit_ranges import (
     ExplicitRanges,
+    _select_manager,
+    _source_manager,
     explicit_windows,
     known_coordinates,
     looks_explicit,
@@ -2094,13 +2098,53 @@ class Spool(NodeRepr, NamespaceOwner):
         resolver = self._catalog.resolver
         same_dim = isinstance(resolver, PlanResolver) and resolver.dim == dim
         base = collapse_working_df(self._catalog) if same_dim else None
+        # a collapsed re-plan's members are already cut at their holes
+        cut = base is None
         if base is None:
             base = self._catalog.to_df().reset_index(drop=True)
+            if "_patch_row" in base.columns:
+                # the patch row in this catalog's index, which derived
+                # catalogs find their members' runs by
+                base = base.assign(_index_row=base["_patch_row"])
         base = _ensure_patch_row(base)
         working = base.drop(columns=list(self._drop_columns), errors="ignore")
         working = _drop_patch_local_empty(working)
+        # a sample or relative selection resolves against the whole patch at
+        # load, so its runs cannot be planned apart
+        local = any(s or r for _, s, r in self._catalog.residuals)
+        if cut and dim is not None and not local:
+            working = self._with_runs(working, dim, modified=True)
         base = base[base["_patch_row"].isin(working["_patch_row"])]
         return base.reset_index(drop=True), working.reset_index(drop=True)
+
+    def _with_runs(self, df: pd.DataFrame, dim: str, modified=False) -> pd.DataFrame:
+        """
+        The relation with each patch cut at the holes its coordinate holds.
+
+        The index states a coordinate's runs (see
+        [`with_runs`](`dascore.utils.chunk_plan.with_runs`)); one stored
+        without them, past `max_index_runs`, is read from its source.
+        """
+        if df.empty or "_patch_row" not in df.columns:
+            return df
+        catalog, files = self._catalog, {}
+        residuals = catalog.residuals
+        indexed = catalog.backend.coord_runs(dim, df["_patch_row"].dropna().unique())
+        if any(samples or relative for _, samples, relative in residuals):
+            # a sample or relative selection resolves against the loaded
+            # coordinate, which the stored runs do not know, so it is read
+            indexed = {k: v._replace(records=None) for k, v in indexed.items()}
+
+        def read(row):
+            """The row's coordinate, read from its source and selected as it loads."""
+            rows = catalog.to_df()
+            (source,) = rows[rows["_patch_row"] == row["_patch_row"]].to_dict("records")
+            coords = _source_manager(catalog.resolver, source, files, projection=dim)
+            if coords is None:
+                return None
+            return _select_manager(coords, residuals).coord_map.get(dim)
+
+        return with_runs(df, dim, indexed, read, modified=modified)
 
     def _build_chunk_plan(self, dim_kwargs, **params):
         """Build one plan from this spool's current source rows."""
@@ -2116,7 +2160,7 @@ class Spool(NodeRepr, NamespaceOwner):
         if trims := {k: v for k, v in windows.items() if k != name}:
             lookup = partial(known_coordinates, self._catalog)  # members' only
             plan = _trim_explicit(plan, source_rows, trims, lookup)
-        return source_rows, plan
+        return source_rows, coalesce_runs(plan, working)
 
     def chunk_plan(
         self,
@@ -2267,7 +2311,7 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> assert random_spool().get_gaps().empty
         """
         out = build_gap_frame(
-            self._report_relation(),
+            self._with_runs(self._report_relation(), dim),
             dim,
             tolerance=tolerance,
             group=group,
@@ -2345,7 +2389,7 @@ class Spool(NodeRepr, NamespaceOwner):
         >>> assert (random_spool().get_coverage()["coverage"] == 1).all()
         """
         out = build_coverage_frame(
-            self._report_relation(),
+            self._with_runs(self._report_relation(), dim),
             dim,
             tolerance=tolerance,
             group=group,
@@ -2736,7 +2780,7 @@ class Spool(NodeRepr, NamespaceOwner):
     # --- construction --------------------------------------------------
 
     @classmethod
-    def _from_directory(cls, path, index_path=None) -> Self:
+    def _from_directory(cls, path, index_path=None, snap=None) -> Self:
         """
         Create a spool over a directory of fiber files.
 
@@ -2750,21 +2794,10 @@ class Spool(NodeRepr, NamespaceOwner):
         the first question only an inventory can answer. See
         [`attach_inventory`](`dascore.core.spool.Spool.attach_inventory`).
         """
-        from dascore.io.index.catalog import FileResolver, PatchCatalog  # noqa: PLC0415
-        from dascore.io.index.indexer import DBDirectoryIndexer  # noqa: PLC0415
+        from dascore.io.index.catalog import PatchCatalog  # noqa: PLC0415
 
         out = cls()
-        if isinstance(path, DBDirectoryIndexer):
-            from dascore.io.index.catalog import _DIRECTORY_ORDER  # noqa: PLC0415
-
-            out._catalog = PatchCatalog(
-                backend=path._backend,
-                resolver=FileResolver(root=path.path),
-                syncer=path,
-                default_order=_DIRECTORY_ORDER,
-            )
-        else:
-            out._catalog = PatchCatalog.from_directory(path, index_path=index_path)
+        out._catalog = PatchCatalog.from_directory(path, index_path, snap=snap)
         # Filling the slot at the moment the spool is opened is what makes
         # `remove_inventory` stick: nothing refills it afterwards, so no
         # sentinel is needed to tell unset from deliberately emptied.
@@ -3307,9 +3340,10 @@ def spool(obj: path_types | Spool | Sequence[PatchType], **kwargs) -> Spool:
         An object from which a spool can be derived.
     **kwargs
         For a path, `file_format` and `file_version` name its format, and
-        for a single file `snap` chooses which dimensions its patches read
-        on a grid, as in [`read`](`dascore.read`); a directory's index does
-        not record `snap` yet, so it is refused there.
+        `snap` chooses which dimensions its patches read on a grid, as in
+        [`read`](`dascore.read`). A directory's index records the `snap`,
+        and `dascore.config.max_shift`, it was scanned under, and rescans
+        when opened with others.
 
     Examples
     --------
@@ -3335,18 +3369,11 @@ def spool(obj: path_types | Spool | Sequence[PatchType], **kwargs) -> Spool:
 @spool.register(Path)
 @spool.register(UPath)
 def _spool_from_str(path, snap=None, **kwargs):
-    """Get a spool from a path; a file's patches read under `snap`."""
+    """Get a spool from a path; its patches read under `snap`."""
     path = coerce_to_upath(resolve_example_uri(path))
     # A local directory was passed; index it.
     if is_local_path(path) and path.is_dir():
-        if snap is not None:
-            msg = (
-                "snap applies to a spool of one file, but not yet to a "
-                "directory, whose index does not record the snap it was "
-                f"built with: {path}"
-            )
-            raise ParameterError(msg)
-        return Spool._from_directory(path, **kwargs)
+        return Spool._from_directory(path, snap=snap, **kwargs)
     # A single file, or a remote directory one reader reads whole (e.g. a
     # zarr store); its patches load lazily. Remote directories of files
     # cannot be indexed.

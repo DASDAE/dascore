@@ -76,6 +76,13 @@ def _get_null_step_value(summary: CoordSummary):
     return None
 
 
+# How a coordinate sits on its step, which the flat fields leave to the
+# index: a flat step is the step of a range, as it always has been.
+_UNFLATTENED_FIELDS = frozenset(
+    {"jittered", "gapped", "offset_min", "offset_max", "run_count", "runs"}
+)
+
+
 def _flatten_coord_summary(
     coord_name: str,
     summary: CoordSummary,
@@ -90,11 +97,11 @@ def _flatten_coord_summary(
     if dim_tuple and coord_name not in exclude:
         out[coord_name] = (summary_dict["min"], summary_dict["max"])
     for field, value in summary_dict.items():
-        if field in exclude:
+        if field in exclude or field in _UNFLATTENED_FIELDS:
             continue
         if field == "dims":
             value = ",".join(value) if value else ""
-        elif field == "step" and value is None:
+        elif field == "step" and not summary.is_range_like:
             value = _get_null_step_value(summary)
         out[f"{coord_name}_{field}"] = value
     return out

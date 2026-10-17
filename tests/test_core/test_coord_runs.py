@@ -26,7 +26,7 @@ from dascore.exceptions import CoordError, ParameterError
 from dascore.io.dasdae import DASDAEV2
 from dascore.io.dasdae.utils import _read_coord
 from dascore.units import get_quantity
-from dascore.utils.gaps import GapTolerance, get_gap_edges
+from dascore.utils.gaps import GapTolerance, get_gap_edges, run_holes
 
 PRESENT = [1, 3, 4, 10, 11, 12]
 T0 = np.datetime64("2020-01-01T00:00:00")
@@ -150,11 +150,15 @@ class TestDeclaredStep:
         coord = get_coord(start=0, stop=6, step=1).update(values=rolled)
         assert coord.step is None
 
-    def test_summary_stays_an_envelope(self, design_case):
-        """A summary with a step rebuilds a range, which runs are not."""
-        assert design_case.to_summary().step is None
+    def test_summary_states_step_and_holes(self, design_case):
+        """A summary states the step and its holes, and rebuilds no range."""
+        summary = design_case.to_summary()
+        assert summary.step == 1 and summary.gapped and not summary.is_range_like
         array = get_coord(data=np.arange(3000)[np.arange(3000) % 3 != 2], step=1)
-        assert array.to_summary().step is None
+        summary = array.to_summary()
+        assert summary.gapped and summary.run_count == 1000 and summary.runs is None
+        with pytest.raises(CoordError, match="not evenly sampled"):
+            summary.to_coord()
 
     def test_mixed_steps_cannot_say_what_is_missing(self):
         """Runs of different steps share no grid to be missing from."""
@@ -379,9 +383,7 @@ class TestFractionalGaps:
         patch = dc.Patch(
             data=np.ones(len(coord)), coords={"time": coord}, dims=("time",)
         )
-        # Written split, since this directory index cannot yet hold a
-        # patch with holes whole; a writer leaves splitting to the caller.
-        dc.write(patch.split_gaps(), tmp_path / "gapped.h5", "dasdae")
+        dc.write(patch, tmp_path / "gapped.h5", "dasdae")
         dc.spool(tmp_path).update()
         spool = dc.spool(tmp_path).select(time=(full.values[2], full.values[-3]))
         assert spool.get_gaps(tolerance=2).empty
@@ -752,18 +754,15 @@ class TestReviewRoundTwo:
         assert GapTolerance.samples(np.inf).count == np.inf
 
     def test_dasdae_keeps_declared_steps_on_array_segments(self, tmp_path):
-        """Array segments with a declared step are written as stepped pieces."""
+        """Array segments with a declared step are written whole, keeping it."""
         left = NumericCoord.from_labels(np.array([0.0, 2.0, 3.0]), step=1.0)
         right = NumericCoord.from_labels(np.array([6.0, 9.0, 11.0]), step=1.0)
         coord = concat_coords(left, right)
         base = dc.get_example_patch().select(distance=(0, 6), samples=True)
         patch = base.update_coords(distance=coord)
-        back = dc.read(dc.write(patch, tmp_path / "seg.h5", "dasdae")).sort("distance")
-        pieces = list(dc.spool([patch]))
-        assert len(back) == len(pieces) == 5
-        for read, piece in zip(back, pieces, strict=True):
-            assert read.get_coord("distance") == piece.get_coord("distance")
-        assert back[1].get_coord("distance").step == 1.0
+        (back,) = dc.read(dc.write(patch, tmp_path / "seg.h5", "dasdae"))
+        out = back.get_coord("distance")
+        assert out == coord and out.step == 1.0 and out.gapped
 
     def test_singleton_edges_use_the_declared_step(self, recwarn):
         """A single value with a step gets a cell of that width, without a warning."""
@@ -850,14 +849,15 @@ class TestReviewRoundThree:
         assert coord.runs_count == 1 and coord.sorted
 
     def test_descending_single_sample_segments(self, tmp_path):
-        """Segments of one sample are written as pieces holding their data."""
+        """Descending segments of one sample are written whole, with their data."""
         coord = get_coord(data=np.array([9, 7, 4]), step=1)
         base = dc.get_example_patch().select(distance=(0, 3), samples=True)
         patch = base.update_coords(distance=coord)
-        back = dc.read(dc.write(patch, tmp_path / "down.h5", "dasdae")).sort("distance")
-        values = np.concatenate([x.get_coord("distance").values for x in back])
-        assert np.array_equal(values, [4, 7, 9])
-        assert np.array_equal(np.concatenate([x.data for x in back]), patch.data[::-1])
+        (back,) = dc.read(dc.write(patch, tmp_path / "down.h5", "dasdae"))
+        out = back.get_coord("distance")
+        assert (out.step, out.gapped) == (coord.step, coord.gapped)
+        assert np.array_equal(out.values, coord.values)
+        assert np.array_equal(back.data, patch.data)
 
     def test_unit_conversion_keeps_the_seam(self):
         """Converting units scales each run rather than re-reading the labels."""
@@ -1223,7 +1223,8 @@ class TestRefactorParity:
         first = np.delete(np.arange(10) * 0.1 + 0.3, 4)
         second = np.arange(10, 20) * 0.1 + 0.3
         spool = dc.spool([patch(first), patch(second)])
-        assert spool.get_contents()["distance_step"].tolist() == [0.1] * 3
+        assert len(spool) == 2 and len(spool.get_coverage("distance")) == 1
+        assert len(spool.get_gaps("distance")) == 1
         assert len(spool.chunk(distance=None)) == 2
         (out,) = spool.chunk(distance=None, tolerance=2, fill_value=np.nan)
         assert out.get_coord("distance").step == pytest.approx(0.1)
@@ -1276,3 +1277,75 @@ class TestRefactorParity:
         tolerance = dc.get_quantity("2")
         assert coord.get_discontinuities("gaps", tolerance=tolerance).empty
         assert coord.fuse(tolerance).runs_count == 1
+
+
+class TestRunRecords:
+    """A coordinate's runs, cut at their holes, as an index stores them."""
+
+    @pytest.mark.parametrize(
+        "coord",
+        [
+            get_coord(start=0, step=1, shape=(10,)),
+            get_coord(data=PRESENT, step=1),
+            get_coord(data=np.array([9, 8, 7, 4, 3, 1, 0]), step=-1),
+            get_coord(data=np.delete(np.arange(1500), np.arange(2, 1500, 3)), step=1),
+            concat_coords(
+                get_coord(data=np.delete(np.arange(9), [2, 5]), step=1),
+                get_coord(start=20, step=1, shape=(3,)),
+            ),
+            concat_coords(
+                get_coord(start=T0, step=(1, 1024), shape=(30,)),
+                get_coord(start=T0, step=(1, 1024), shape=(60,))[33:],
+            ),
+            get_coord(data=[0.0, 1.1, 1.95, 3.02, 6.01], step=1.0),
+        ],
+    )
+    def test_agree_with_missing(self, coord):
+        """The positions records skip are the holes missing counts."""
+        records = coord._run_records()
+        holes = run_holes(records)
+        assert sum(x.count for x in records) == len(coord)
+        assert sum(holes) == coord.missing().count
+        assert coord.gapped == bool(sum(holes))
+        assert all(x.count for x in records)
+        # a record ends where its next one starts, or at a hole
+        ends = [x.position + x.count for x in records[:-1]]
+        starts = [x.position for x in records[1:]]
+        assert [b - a for a, b in zip(ends, starts)] == holes[1:]
+
+    def test_envelopes(self):
+        """Each record spans its own labels, whichever way they run."""
+        coord = get_coord(data=np.array([9, 8, 7, 4, 3, 1, 0]), step=-1)
+        records = coord._run_records()
+        assert [(x.min, x.max) for x in records] == [(7, 9), (3, 4), (0, 1)]
+        assert [x.position for x in records] == [0, 5, 8]
+        assert {x.step for x in records} == {-1}
+
+    def test_stepless_runs_keep_their_own(self):
+        """Runs sharing no step have no positions, and keep each one's step."""
+        coord = concat_coords(
+            get_coord(start=0.0, step=1.0, shape=(3,)),
+            get_coord(start=3.0, step=1.5, shape=(3,)),
+        )
+        records = coord._run_records()
+        assert [(x.step, x.position) for x in records] == [(1.0, None), (1.5, None)]
+        assert run_holes(records) == [0, 0]
+
+    def test_one_record(self):
+        """Irregular, blank and N-dimensional coordinates are one record."""
+        coords = [
+            get_coord(data=[1.0, 2.5, 7.0]),
+            get_coord(shape=(4,)),
+            get_coord(data=np.ones((2, 3))),
+        ]
+        for coord in coords:
+            (record,) = coord._run_records()
+            assert record.count == len(coord) and record.position is None
+
+    def test_offset_bounds(self):
+        """Offsets are steps from the grid through the first label."""
+        jittered = get_coord(data=[0.0, 1.1, 1.95, 3.02, 6.01], step=1.0)
+        low, high = jittered._offset_bounds()
+        assert low == pytest.approx(-0.05) and high == pytest.approx(0.1)
+        assert get_coord(data=PRESENT, step=1)._offset_bounds() == (0.0, 0.0)
+        assert get_coord(data=[1.0, 2.5, 7.0])._offset_bounds() is None

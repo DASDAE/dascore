@@ -67,12 +67,13 @@ class WavIO(FiberIO):
             if is_local_path(resource)
             else coerce_to_upath(resource)
         )
-        # Not dc.spool, which would cut a patch with holes into pieces.
-        patches = [spool] if isinstance(spool, dc.Patch) else spool
-        if len(patches) != 1:
+        # dc.write always hands over a spool, but a direct call may pass a
+        # bare patch; dc.spool leaves a spool alone.
+        spool = dc.spool(spool)
+        if len(spool) != 1:
             msg = "Only single patch spools can be written to wav"
             raise ParameterError(msg)
-        patch = patches[0]
+        patch = spool[0]
         # write a single wav file, maybe multi-channeled.
         data, sr = self._get_wav_data(patch, resample_frequency)
         if resource.name.endswith(".wav"):
