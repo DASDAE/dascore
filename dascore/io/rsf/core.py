@@ -8,6 +8,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.io.core import FiberIO
+from dascore.io.utils import require_grid
 from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
 from dascore.utils.time import to_float
 
@@ -60,14 +61,13 @@ class RSFV1(FiberIO):
         - Patch datatype is converted to float32 for compatibility with
         Madagascar (may be able to keep dtype in the future)
         """
-        assert len(spool) == 1
-        patch = spool[0]
+        patches = [spool] if isinstance(spool, dc.Patch) else spool
+        assert len(patches) == 1
+        patch = patches[0]
+        require_grid(patch, patch.dims, "RSF")
         axis_lengths = patch.shape
         axis_origs = [to_float(patch.get_coord(x).values[0]) for x in patch.dims]
-        axis_steps = [
-            to_float(patch.get_coord(x, require_evenly_sampled=True).step)
-            for x in patch.dims
-        ]
+        axis_steps = [to_float(patch.get_coord(x).step) for x in patch.dims]
         axis_names = patch.dims
         axis_units = [patch.get_coord(x).units.units for x in patch.dims]
 

@@ -401,16 +401,14 @@ class PatchMeta(NodeRepr):
         """Update the coordinates of the patch."""
         return dascore.proc.coords.UpdateCoords(**kwargs).run(self)
 
-    def drop_coords(self, *coords: str | Iterable[str]) -> Self:
+    def drop_coords(self, *coords: str | Iterable[str], to_attrs: bool = False) -> Self:
         """Drop coordinates from the patch."""
         # By name, never positionally: `coords` is one field holding them
         # all, and `DropCoords(*coords)` would hand the first to the first
         # field and refuse the rest.
-        return dascore.proc.coords.DropCoords(coords=coords).run(self)
-
-    def squeeze_coords(self, *coords: str | Iterable[str]) -> Self:
-        """Move single-valued non-dimensional coordinates into the attrs."""
-        return dascore.proc.coords.SqueezeCoords(coords=coords).run(self)
+        return dascore.proc.coords.DropCoords(coords=coords, to_attrs=to_attrs).run(
+            self
+        )
 
     def coords_from_df(
         self,
@@ -457,8 +455,9 @@ class PatchMeta(NodeRepr):
             conflict=conflict,
         ).run(self)
 
+    # The wholesale rebuild; update and new (its name before 0.1.0) remain.
+    replace = dascore.proc.update
     update = dascore.proc.update
-    # Before 0.1.0 update was called new, this is for backwards compatibility.
     new = dascore.proc.update
     update_attrs = dascore.proc.update_attrs
     check_coords = check_patch_coords

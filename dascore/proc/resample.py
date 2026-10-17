@@ -77,11 +77,15 @@ class Decimate(_DecimateFields):
     - If the decimation dimension is small, this can fail due to lack of
       padding values.
 
+    - The decimated dimension keeps its first label, and its step is the
+      factor times the old step.
+
     - Coordinates measured on the decimated dimension are decimated with
       it: taking every nth value of a dimension takes every nth value of
       everything indexed by it.
 
-    - With a filter, missing samples (holes in the step) raise; use
+    - With a filter, a dimension which is not evenly sampled (holes or
+      jitter) warns, and raises from DASCore 0.1.26; use
       [split_gaps](`dascore.Patch.split_gaps`) or
       [fill_gaps](`dascore.Patch.fill_gaps`) first.
 
@@ -294,6 +298,9 @@ class Resample(PatchProcessor):
     Notes
     -----
     - Unless `samples` is `True`, this function requires a sampling_period.
+    - The resampled dimension keeps its first label and is evenly sampled at
+      the requested sampling period; with `samples=True`, its step is the old
+      step times the old length over the new one.
     - The resulting Patch can be slightly shorter than the input Patch.
     - Coordinates associated with the resampled dimension are dropped because
       resampling cannot safely infer their new values. A `DASCoreWarning` names

@@ -43,6 +43,7 @@ from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim
 from dascore.utils.time import to_datetime64, to_timedelta64
 from dascore.viz.spool import _lane_names
+from dascore.warnings import DASCoreWarning
 
 
 def _gigo(garbage):
@@ -1903,6 +1904,7 @@ class TestConcatenatePartitions:
         kinds = {x.get_coord("epoch").values.dtype.kind for x in out}
         assert kinds == {"M", "f"}
 
+    @pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
     def test_coordinate_riding_the_dimension_is_joined(self, pair):
         """A coordinate every member carries along the dimension follows it."""
         first, other = pair
@@ -1930,6 +1932,7 @@ class TestConcatenatePartitions:
         assert np.allclose(values[:n], irregular.get_coord("distance").values)
         assert np.all(np.diff(values) < 0)
 
+    @pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
     def test_coordinate_attached_differently_conflicts(self):
         """Equal values on different dimensions are different coordinates."""
         base = dc.get_example_patch()
@@ -1963,12 +1966,14 @@ class TestConcatenatePartitions:
         joined = [x for x in out if x.shape[x.get_axis("range")] == 2 * n]
         assert len(joined) == 1
 
+    @pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
     def test_rider_only_on_the_first_is_left_out_directly(self, pair):
         """The direct function drops a rider a later patch lacks, as the plan does."""
         first, other = pair
         nt = first.shape[first.get_axis("time")]
         a = first.update_coords(clock=("time", np.arange(nt) * 1.0))
-        out = dc.utils.patch.concatenate_patches([a, other], time=None)[0]
+        with pytest.warns(DASCoreWarning, match="clock"):
+            out = dc.utils.patch.concatenate_patches([a, other], time=None)[0]
         assert "clock" not in out.coords.coord_map
         assert out.shape[out.get_axis("time")] == 2 * nt
 
@@ -2049,6 +2054,7 @@ class TestConcatenatePartitions:
             with pytest.raises(CoordMergeError, match="clock"):
                 spool[0]
 
+    @pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
     def test_direct_concatenation_picks_the_lowest_spelling(self, pair):
         """Without a plan, the rider joins in the units of its lowest member."""
         first, other = pair

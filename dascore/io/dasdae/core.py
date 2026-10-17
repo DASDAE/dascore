@@ -84,7 +84,8 @@ class DASDAEV1(FiberIO):
         # A lone patch held in memory is named from its summary, as the spool
         # names it; asking the spool costs a catalog query, most of the write.
         resolver = getattr(getattr(patches, "_catalog", None), "resolver", None)
-        if isinstance(resolver, LiveResolver) and len(patches) == 1:
+        lone = isinstance(resolver, LiveResolver) and len(patches) == 1
+        if lone or isinstance(spool, dc.Patch):
             # Kept, so the patch is built (and enriched) only once.
             patches = [patches[0]]
             # A live spool's path names nothing, and an unset value is no column.

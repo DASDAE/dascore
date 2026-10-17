@@ -2264,21 +2264,6 @@ def _check_write_kwargs(fiber_io, kwargs):
 _PathT = TypeVar("_PathT", bound=path_types)
 
 
-def _contiguous_pieces(patch_or_spool) -> dc.Spool:
-    """
-    A spool of the patches, each one holding holes cut at them.
-
-    Writers see contiguous patches only, as they did when a spool cut
-    every patch at its holes; a spool whose index states no coordinate
-    of several runs is passed on as it is.
-    """
-    if isinstance(patch_or_spool, dc.Patch):
-        return patch_or_spool.split_gaps()
-    if not patch_or_spool._catalog.backend.holds_runs():
-        return patch_or_spool
-    return dc.spool([x for patch in patch_or_spool for x in patch.split_gaps()])
-
-
 def write(
     patch_or_spool,
     path: _PathT,
@@ -2310,6 +2295,16 @@ def write(
     [`ParameterError`](`dascore.exceptions.ParameterError`)
         - The path is an ``examples://`` name, which is read-only.
         - An option the format's writer does not accept.
+    [`CoordError`](`dascore.exceptions.CoordError`)
+        - The format cannot store a coordinate's holes, jitter or step.
+
+    Notes
+    -----
+    A patch reaches the format's writer whole. Writers keep each
+    coordinate's step, holes and jitter, or refuse, saying to regularize
+    ([`Patch.snap_coords`](`dascore.Patch.snap_coords`),
+    [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`)) or split
+    ([`Patch.split_gaps`](`dascore.Patch.split_gaps`)) first.
 
     Examples
     --------
@@ -2335,17 +2330,27 @@ def write(
         raise ParameterError(msg)
     fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=file_version)
     _check_write_kwargs(fiber_io, kwargs)
-    patch_or_spool = _contiguous_pieces(patch_or_spool)
+    if not isinstance(patch_or_spool, dc.Spool):
+        # a spool holds a patch with holes whole; its writer keeps or refuses them
+        patch_or_spool = dc.spool([patch_or_spool])
     if not fiber_io.multi_patch_write and (count := len(patch_or_spool)) > 1:
         msg = (
             f"Format {fiber_io.name} writes one patch per file, but there are "
-            f"{count} (a patch with holes is one per contiguous piece). Write "
-            "each patch to its own file."
+            f"{count}. Write each patch to its own file."
         )
         raise ParameterError(msg)
-    with IOResourceManager(path) as man:
-        func = fiber_io.write
-        required_type = _required_resource_type(func)
-        resource = man.get_resource(required_type)
-        func(patch_or_spool, resource, _pre_cast=True, **kwargs)
+    # A writer refusing a patch may do so after its file was opened; a file
+    # this call created is then removed rather than left empty.
+    local = is_local_path(target) and coerce_to_local_path(target)
+    fresh = bool(local) and not local.exists()
+    try:
+        with IOResourceManager(path) as man:
+            func = fiber_io.write
+            required_type = _required_resource_type(func)
+            resource = man.get_resource(required_type)
+            func(patch_or_spool, resource, _pre_cast=True, **kwargs)
+    except Exception:
+        if fresh and local.is_file():
+            local.unlink()
+        raise
     return path

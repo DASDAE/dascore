@@ -56,7 +56,9 @@ def _reduce_meta(meta, dim, dim_reduce):
         axis = meta.get_axis(name)
         new_coord = meta.get_coord(name).reduce_coord(dim_reduce=dim_reduce)
         if new_coord is None:
-            coords = meta.coords.drop_coords(name)[0]
+            # The dimension goes, and what rode it can go nowhere else.
+            coords = meta.coords.drop_associated(name, "Reducing")
+            coords = coords.drop_coords(name)[0]
         else:
             coords = meta.coords.update(**{name: new_coord})
         attrs = meta.attrs.model_dump(exclude={"coords", "dims"}, exclude_unset=True)

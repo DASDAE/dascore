@@ -14,7 +14,7 @@ from dascore.core.coords import _is_translation_equivariant, _reduce_time_like
 from dascore.exceptions import CoordError, ParameterError
 from dascore.proc.aggregate import _AGG_FUNCS
 from dascore.utils.misc import broadcast_for_index
-from dascore.warnings import NumpyFallbackWarning
+from dascore.warnings import DASCoreWarning, NumpyFallbackWarning
 
 
 class TestReduceTimeLike:
@@ -243,7 +243,8 @@ class TestBasicAggregations:
             auxiliary=("time", np.arange(ntime)),
         )
 
-        out = patch.mean("time")
+        with pytest.warns(DASCoreWarning, match="auxiliary"):
+            out = patch.mean("time")
 
         assert out.shape == (len(patch.get_coord("distance")), 1)
         assert out.coords.shape == out.shape

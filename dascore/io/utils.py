@@ -19,6 +19,7 @@ from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import BaseCoord, _stored_float_dtype, get_coord
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import (
+    CoordError,
     InvalidFiberFileError,
     MissingPatchError,
     ParameterError,
@@ -28,6 +29,7 @@ from dascore.exceptions import (
 from dascore.models import ArrayLike
 from dascore.units import convert_units, get_quantity_str
 from dascore.utils.misc import _maybe_unpack, _to_slice, iterate, unbyte
+from dascore.utils.patch import _uneven_message
 from dascore.utils.time import to_exact_fraction
 from dascore.warnings import SnapWarning
 
@@ -68,6 +70,20 @@ def decode_cf_time(attrs, raw) -> np.ndarray:
 def should_snap(snap: snap_type, name: str) -> bool:
     """Return whether the all/none or named-coordinate option enables snapping."""
     return snap if isinstance(snap, bool) else name in iterate(snap)
+
+
+def require_grid(patch, dims: str | Iterable[str], writer: str) -> None:
+    """
+    Refuse dimensions a format stores only as a grid, saying how to make one.
+
+    Writers keep a coordinate's step and holes, or refuse (rule 13 of the
+    coordinate guidelines, `notes/coordinates.qmd`); a format which stores
+    a start and a step cannot hold holes, jitter or labels with no step.
+    """
+    for dim in iterate(dims):
+        coord = patch.get_coord(dim)
+        if not coord.evenly_sampled:
+            raise CoordError(_uneven_message(dim, coord, f"the {writer} writer"))
 
 
 def get_attr_names(attr_cls) -> set[str]:

@@ -16,6 +16,7 @@ from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidSpoolError, PatchError
 from dascore.io.utils import (
     convert_attr_units,
+    require_grid,
     resolve_keyed_source,
     should_snap,
     step_from_rate,
@@ -283,8 +284,9 @@ def _get_single_patch(spool):
     if not data.size or not valid_dtype:
         msg = "ProdML writing supports nonempty standard integer or float dtypes."
         raise PatchError(msg)
+    require_grid(patch, ("time", "distance"), "ProdML")
     for name in ("time", "distance"):
-        coord = patch.get_coord(name, require_sorted=True, require_evenly_sampled=True)
+        coord = patch.get_coord(name, require_sorted=True)
         if not coord.sorted:
             raise PatchError(f"ProdML {name} coordinates must be increasing.")
     return patch
