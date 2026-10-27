@@ -44,6 +44,7 @@ from dascore.exceptions import (
     PatchError,
     UnresolvedPatchError,
 )
+from dascore.proc.coords import UpdateCoords
 from dascore.utils.attrs import _is_missing
 from dascore.utils.docs import compose_docstring
 from dascore.utils.misc import iterate, validate_acquisition_key, warn_or_raise
@@ -579,7 +580,7 @@ class Enrich(PatchProcessor):
         if updates:
             out = out.update_attrs(**updates)
         if new_coords:
-            # `coords.update`, not `update_coords`: that would record a nested
+            # update_coords' metadata half: the one setter, without a nested
             # history entry pasting a repr of every added coordinate.
-            out = out.new(coords=out.coords.update(**new_coords))
+            out, _ = UpdateCoords(**new_coords).get_metadata(out)
         return out, {}

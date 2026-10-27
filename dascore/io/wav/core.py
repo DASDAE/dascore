@@ -12,6 +12,7 @@ from dascore.compat import UPath
 from dascore.constants import ONE_SECOND
 from dascore.exceptions import ParameterError
 from dascore.io.core import FiberIO
+from dascore.io.utils import require_grid
 from dascore.utils.patch import check_patch_coords
 from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
 
@@ -95,7 +96,8 @@ class WavIO(FiberIO):
         # Ensure we have a 2D patch which has a time dimension.
         check_patch_coords(patch, ("time",))
         assert len(patch.dims) == 2, "only 2D patches supported for this function."
-        time = patch.get_coord("time", require_evenly_sampled=True).step
+        require_grid(patch, "time", "WAV")
+        time = patch.get_coord("time").step
 
         # handle resampling and normalization
         pat = patch.transpose("time", ...)

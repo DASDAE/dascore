@@ -23,6 +23,7 @@ from dascore.core.coords import (
     get_coord,
 )
 from dascore.exceptions import CoordError, ParameterError
+from dascore.io.dasdae import DASDAEV2
 from dascore.io.dasdae.utils import _read_coord
 from dascore.units import get_quantity
 from dascore.utils.gaps import GapTolerance, get_gap_edges, run_holes
@@ -563,21 +564,26 @@ class TestReviewFindings:
         assert len(spool.chunk(tolerance=GapTolerance.absolute(2), **kwargs)) == 1
         assert len(spool.chunk(tolerance=GapTolerance.absolute(1), **kwargs)) == 2
 
-    @pytest.mark.parametrize("version", ["1", "2"])
-    def test_dasdae_round_trip(self, tmp_path, version):
-        """Either version writes a dense coordinate with holes as its pieces."""
+    @pytest.fixture()
+    def dense_patch(self):
+        """A patch whose distance is one dense stored run with holes."""
         dense = get_coord(data=np.arange(3000)[np.arange(3000) % 3 != 2], step=1)
         assert _is_stored(dense)
         time = dc.get_example_patch().get_coord("time")[:3]
         coords = {"distance": dense, "time": time}
         data = np.zeros((len(dense), 3))
-        patch = dc.Patch(data=data, coords=coords, dims=("distance", "time"))
-        path = dc.write(patch, tmp_path / "out.h5", "dasdae", file_version=version)
-        back = dc.read(path).sort("distance")
-        assert len(back) == dense.missing().count + 1
-        assert all(x.get_coord("distance").evenly_sampled for x in back)
-        values = np.concatenate([x.get_coord("distance").values for x in back])
-        np.testing.assert_array_equal(values, dense.values)
+        return dc.Patch(data=data, coords=coords, dims=("distance", "time"))
+
+    def test_dasdae_round_trip(self, tmp_path, dense_patch):
+        """Version 2 writes a dense coordinate with holes whole, its runs intact."""
+        path = dc.write(dense_patch, tmp_path / "out.h5", "dasdae")
+        (meta,) = DASDAEV2().get_metadata(path, snap=False)
+        assert meta.get_coord("distance") == dense_patch.get_coord("distance")
+
+    def test_dasdae_v1_refuses_holes(self, tmp_path, dense_patch):
+        """Version 1 stores no step beside labels, so it refuses holes."""
+        with pytest.raises(CoordError, match="split_gaps"):
+            dc.write(dense_patch, tmp_path / "out.h5", "dasdae", file_version="1")
 
     def test_offset_grids_share_no_step(self):
         """Runs of one step on grids half a step apart declare no common grid."""
@@ -748,18 +754,15 @@ class TestReviewRoundTwo:
         assert GapTolerance.samples(np.inf).count == np.inf
 
     def test_dasdae_keeps_declared_steps_on_array_segments(self, tmp_path):
-        """Array segments with a declared step are written as stepped pieces."""
+        """Array segments with a declared step are written whole, keeping it."""
         left = NumericCoord.from_labels(np.array([0.0, 2.0, 3.0]), step=1.0)
         right = NumericCoord.from_labels(np.array([6.0, 9.0, 11.0]), step=1.0)
         coord = concat_coords(left, right)
         base = dc.get_example_patch().select(distance=(0, 6), samples=True)
         patch = base.update_coords(distance=coord)
-        back = dc.read(dc.write(patch, tmp_path / "seg.h5", "dasdae")).sort("distance")
-        pieces = list(patch.split_gaps())
-        assert len(back) == len(pieces) == 5
-        for read, piece in zip(back, pieces, strict=True):
-            assert read.get_coord("distance") == piece.get_coord("distance")
-        assert back[1].get_coord("distance").step == 1.0
+        (back,) = dc.read(dc.write(patch, tmp_path / "seg.h5", "dasdae"))
+        out = back.get_coord("distance")
+        assert out == coord and out.step == 1.0 and out.gapped
 
     def test_singleton_edges_use_the_declared_step(self, recwarn):
         """A single value with a step gets a cell of that width, without a warning."""
@@ -846,14 +849,15 @@ class TestReviewRoundThree:
         assert coord.runs_count == 1 and coord.sorted
 
     def test_descending_single_sample_segments(self, tmp_path):
-        """Segments of one sample are written as pieces holding their data."""
+        """Descending segments of one sample are written whole, with their data."""
         coord = get_coord(data=np.array([9, 7, 4]), step=1)
         base = dc.get_example_patch().select(distance=(0, 3), samples=True)
         patch = base.update_coords(distance=coord)
-        back = dc.read(dc.write(patch, tmp_path / "down.h5", "dasdae")).sort("distance")
-        values = np.concatenate([x.get_coord("distance").values for x in back])
-        assert np.array_equal(values, [4, 7, 9])
-        assert np.array_equal(np.concatenate([x.data for x in back]), patch.data[::-1])
+        (back,) = dc.read(dc.write(patch, tmp_path / "down.h5", "dasdae"))
+        out = back.get_coord("distance")
+        assert (out.step, out.gapped) == (coord.step, coord.gapped)
+        assert np.array_equal(out.values, coord.values)
+        assert np.array_equal(back.data, patch.data)
 
     def test_unit_conversion_keeps_the_seam(self):
         """Converting units scales each run rather than re-reading the labels."""

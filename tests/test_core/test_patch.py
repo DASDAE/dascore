@@ -409,6 +409,25 @@ class TestNew:
         assert out.shape == other.shape
 
 
+class TestReplace:
+    """Tests for `Patch.replace`, the wholesale rebuild `update` and `new` share."""
+
+    def test_replace_rebuilds_coords(self, random_patch_with_lat_lon):
+        """A coords mapping is the whole coordinate set; others are dropped."""
+        patch = random_patch_with_lat_lon
+        coords = {dim: patch.get_coord(dim) for dim in patch.dims}
+        out = patch.replace(coords=coords)
+        assert set(out.coords.coord_map) == set(patch.dims)
+        assert out == patch.update(coords=coords) == patch.new(coords=coords)
+
+    def test_metadata_replace(self, random_patch):
+        """Metadata has the same rebuild."""
+        meta = random_patch.drop_data()
+        out = meta.replace(attrs={"station": "x"})
+        assert isinstance(out, dc.PatchMeta)
+        assert out.attrs.station == "x"
+
+
 class TestPatchSummary:
     """Tests for patch summary helpers and selection fallbacks."""
 

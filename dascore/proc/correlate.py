@@ -83,7 +83,8 @@ class CorrelateShift(PatchProcessor):
         )
         new_coord = _new_coord.change_length(len(coord))
         assert len(new_coord) == len(coord)
-        cm = meta.coords
+        # Each lag mixes every sample, so nothing riding them carries over.
+        cm = meta.coords.drop_associated(dim, "Correlating along")
         new_cm = cm._update_grid(dim, **{dim: new_coord}).rename_coord(
             **{dim: f"lag_{dim}"}
         )
@@ -218,8 +219,11 @@ class Correlate(PatchProcessor):
         source = coord.values if source is None else source
         index = coord.get_next_index(source, samples=self.samples)
         plan["index"] = np.atleast_1d(index)
-        source = getattr(source, "magnitude", source)  # strips units
-        new_coord = dc.get_coord(data=np.atleast_1d(source))
+        if self.samples:  # the sources are positions, which have no units
+            new_coord = dc.get_coord(data=np.atleast_1d(source))
+        else:  # values, as the dimension states them
+            values = coord._get_compatible_value(np.atleast_1d(source))
+            new_coord = dc.get_coord(data=values, units=coord.units)
         dim_name = f"source_{dim}"
         out = meta.new(coords=meta.coords.update(**{dim_name: (dim_name, new_coord)}))
         lag_dim = fft_dim.removeprefix("ft_")
