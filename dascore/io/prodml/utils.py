@@ -18,11 +18,19 @@ from dascore.io.utils import (
     convert_attr_units,
     resolve_keyed_source,
     should_snap,
+    step_from_rate,
+    stored_coord,
 )
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.units import get_quantity_str
 from dascore.utils.hdf5 import create_dataset, encode_h5_strings, staged_group
-from dascore.utils.misc import iterate, maybe_get_items, register_func, unbyte
+from dascore.utils.misc import (
+    _maybe_unpack,
+    iterate,
+    maybe_get_items,
+    register_func,
+    unbyte,
+)
 
 # --- Getting format/version
 
@@ -156,36 +164,41 @@ def _get_distance_coord(acq):
 
 
 def _get_time_coord(node, snap=True):
-    """Get the time information from a Raw node."""
+    """
+    Get the time coordinate from a Raw or Fbe node.
+
+    The grid starts at the node's `PartStartTime` and steps at its
+    `OutputDataRate`, checked against the first and last stored times; a
+    node without a rate spans the stored times instead. `PartEndTime` is
+    not used, as it can be wrong (#414).
+    """
     time_names = [x for x in node.keys() if x.endswith("DataTime")]
     assert len(time_names) == 1, f"Found bad time information in prodml {node=}"
-    time_name = time_names[0]
-    time_array = node[time_name]
-    array_len = len(time_array)
-    assert array_len > 0, "Missing time array in ProdML file."
-    if not should_snap(snap, "time"):
-        values = time_array[:].astype("datetime64[us]")
-        return get_coord(data=values, units="s", snap=False)
-    time_attrs = time_array.attrs
-    start_str = unbyte(time_attrs["PartStartTime"]).split("+")[0]
-    start = dc.to_datetime64(start_str.rstrip("Z"))
-    end_str = unbyte(time_attrs["PartEndTime"]).split("+")[0]
-    end = dc.to_datetime64(end_str.rstrip("Z"))
-    step = (end - start) / (array_len - 1)
-    time_coord = get_coord(start=start, stop=end + step, step=step, units="s")
-    # Sometimes the "PartEndTime" can be wrong. Check for this and try to
-    # compensate. See #414.
-    last = np.asarray(time_array[-1:]).astype("datetime64[us]")[0]
-    tc_max = np.asarray(time_coord.max()).astype("datetime64[us]")
-    diff = float(np.abs((tc_max - last) / step))
-    # Note: just in case the time array is not in microseconds as it should
-    # be, we prefer to use the iso 8601 strings in the 'PartStartTime' attrs
-    # because they are less likely to get messed up. Therefore, we only
-    # correct time coordinate from time array if the values are "close" but off.
-    if 0 < diff < 10:
-        time_array = time_array[:].astype("datetime64[us]")
-        time_coord = get_coord(data=time_array, snap=True)
-    return time_coord
+    time_array = node[time_names[0]]
+    assert len(time_array) > 0, "Missing time array in ProdML file."
+    start = step = None
+    if should_snap(snap, "time"):  # only a grid needs the header's terms
+        stated = time_array.attrs.get("PartStartTime")
+        # the stored dtype matters: a float32 rate is read as what it holds
+        rate = _maybe_unpack(node.attrs.get("OutputDataRate", np.nan))
+        if stated is not None and float(rate) > 0:  # NaN, a missing rate, is not
+            start = dc.to_datetime64(unbyte(stated).split("+")[0].rstrip("Z"))
+            step = step_from_rate(rate)
+    return stored_coord(
+        time_array,
+        snap,
+        name="time",
+        where=node.file,
+        decode=_microseconds,
+        start=start,
+        step=step,
+        units="s",
+    )
+
+
+def _microseconds(values) -> np.ndarray:
+    """Decode stored times, integer microseconds since the epoch."""
+    return np.asarray(values).astype("datetime64[us]")
 
 
 def _yield_data_nodes(fi) -> Iterator[_ProdMLNodeInfo]:

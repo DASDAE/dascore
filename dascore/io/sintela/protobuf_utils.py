@@ -56,7 +56,7 @@ from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.utils import should_snap, windows_to_slices
+from dascore.io.utils import stored_coord, windows_to_slices
 from dascore.models import OptionalFiniteFloat, PositiveFiniteFloat, PositiveInt
 from dascore.utils.misc import optional_import, suppress_warnings
 
@@ -806,7 +806,7 @@ def _get_times(times: list[np.datetime64 | None], snap: snap_type = True):
     supported input.
     """
     values = np.asarray(times, dtype="datetime64[ns]")
-    return get_coord(data=values, snap=should_snap(snap, "time"))
+    return stored_coord(values, snap, name="time")
 
 
 def _assert_float_equal(name: str, values: list[float], *, rtol: float = 1e-6):
@@ -1596,7 +1596,7 @@ def _get_endpoint_metadata(resource):
     return metadata, meta
 
 
-def read_payload(resource, *, snap: snap_type = True, windows: windows_type = ()):
+def read_payload(resource, *, snap: snap_type = False, windows: windows_type = ()):
     """Decode a Sintela protobuf file into data, coords, and attrs."""
     endpoints = _get_endpoint_metadata(resource)
     if endpoints is not None:

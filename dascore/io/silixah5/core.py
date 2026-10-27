@@ -41,10 +41,10 @@ class SilixaH5V1(H5ArrayMixin, FiberIO):
         return self._version_check(resource, self.version) or None
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Scan a Silixa HDF5 file, return summary information on the contents."""
-        attrs, coords = self._attr_getter(resource, SilixaPatchAttrs)
+        attrs, coords = self._attr_getter(resource, SilixaPatchAttrs, snap)
         return self._dataset_meta(attrs, coords, resource[self._data_name])
 
 

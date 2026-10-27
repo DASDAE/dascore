@@ -31,7 +31,7 @@ class ProdMLV2_0(FiberIO):  # noqa
         return _get_prodml_version_str(resource) or None
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type = ("time",)
     ) -> list[dc.PatchMeta]:
         """Scan a prodml file, return summary information about the file's contents."""
         out: list[dc.PatchMeta] = []

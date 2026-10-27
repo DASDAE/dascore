@@ -80,7 +80,7 @@ class Febus2(FiberIO):
         return _get_febus_version_str(resource) or None
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Scan a febus file, return summary information about the file's contents."""
         out = []
@@ -139,7 +139,7 @@ class FebusG1CSV1(FiberIO):
         return self.version if is_g1_file else None
 
     def get_metadata(
-        self, resource: TextReader, *, snap: snap_type = True
+        self, resource: TextReader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Get the coords and attrs of a G1 file."""
         coords, attrs = _get_g1_coords_and_attrs(resource)
@@ -178,7 +178,7 @@ class FebusMTXH5V1(FiberIO):
         return self.version if version == self.version else None
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type = ("time", "distance")
     ) -> list[dc.PatchMeta]:
         """Scan a Febus MTX HDF5 file."""
         attrs = _get_mtx_attrs(resource)
@@ -219,7 +219,7 @@ class FebusBSLH5V1(FiberIO):
         return self.version if version == self.version else None
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type = ("time", "distance")
     ) -> list[dc.PatchMeta]:
         """Scan a Febus BSL HDF5 file."""
         attrs = _get_bsl_attrs(resource)
@@ -267,7 +267,7 @@ class FebusT1V1(FiberIO):
         return self.version if _is_t1_file(resource) else None
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type = ("time", "distance")
     ) -> list[dc.PatchMeta]:
         """Return a list with one PatchAttrs for the file's temperature data."""
         return [_scan_t1(resource, snap=snap)]

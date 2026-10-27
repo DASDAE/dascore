@@ -652,8 +652,8 @@ class TestLegacySnapStep:
         with h5py.File(tmp_path / "legacy.h5", "w") as h5:
             h5.create_dataset("_coord_x", data=np.array([5.0]))
             h5.create_dataset("_coord_y", data=np.array([0.0, 1.0, 2.05]))
-            single = _read_coord(h5["_coord_x"], "x", {"x_step": 2.0}, snap=True)
-            jittered = _read_coord(h5["_coord_y"], "y", {"y_step": 1.0}, snap=True)
+            single = _read_coord(h5["_coord_x"], "x", {"x_step": 2.0}, snap=False)
+            jittered = _read_coord(h5["_coord_y"], "y", {"y_step": 1.0}, snap=False)
         assert single.evenly_sampled and single.step == 2.0
         # longer values are read as they are; the nominal step is not a
         # claim they must meet, and they are jittered on their own step

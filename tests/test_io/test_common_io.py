@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import warnings
 from contextlib import suppress
 from functools import cache
 from io import BufferedIOBase, BytesIO, UnsupportedOperation
@@ -25,12 +26,14 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+import dascore.core.coords as coords_module
 from dascore.constants import INVENTORY_ATTRS, STORAGE_PROVENANCE_ATTRS
-from dascore.exceptions import CoordError, UnknownFiberFormatError
+from dascore.exceptions import CoordError, ParameterError, UnknownFiberFormatError
 from dascore.io import BinaryReader, FiberIO
+from dascore.io import utils as io_utils
 from dascore.io.ai4eps import AI4EPSV1
 from dascore.io.ap_sensing import APSensingV10
-from dascore.io.core import _required_resource_type
+from dascore.io.core import _default_snap, _required_resource_type
 from dascore.io.dasdae import DASDAEV1, DASDAEV2
 from dascore.io.dashdf5 import DASHDF5
 from dascore.io.febus import Febus1, Febus2, FebusBSLH5V1, FebusMTXH5V1, FebusT1V1
@@ -55,11 +58,13 @@ from dascore.io.terra15 import (
     Terra15FormatterV6,
 )
 from dascore.io.uptech import UptechH5V1
+from dascore.io.utils import should_snap
 from dascore.io.xdas import XdasV1
 from dascore.io.zarr import ZarrV2, ZarrV3
 from dascore.utils.downloader import fetch, get_registry_df
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.misc import all_close, iterate, order_range_tuple
+from dascore.warnings import SnapWarning
 from tests.test_io._common_io_test_utils import (
     get_flat_io_test,
     skip_missing,
@@ -1017,6 +1022,119 @@ class TestScan:
             mirrored = {f"{c}_{f}" for c in names for f in fields}
             bad = mirrored & set(summary.attrs.model_dump())
             assert not bad, f"attrs mirror coord metadata: {sorted(bad)}"
+
+
+def _snappable_dims(patch):
+    """The dimensions of more than one numeric or time-like label."""
+    return [
+        dim
+        for dim in patch.dims
+        if len(coord := patch.get_coord(dim)) > 1
+        and np.dtype(coord.dtype).kind in "iufmM"
+    ]
+
+
+def _refuse(*args, **kwargs):
+    """Stand in for a way of moving labels, which must not run."""
+    raise AssertionError("a label was regularized")
+
+
+class TestSnapConformance:
+    """
+    Every format follows rule 3 of the coordinate guidelines.
+
+    `snap=False` moves no label, a snapped dimension is evenly sampled and
+    its grid is checked against the stored labels, the default is the names
+    the reader's signature shows, and scans agree with reads.
+    """
+
+    def test_default_is_in_the_signature(self, io_path_tuple):
+        """snap=None reads what the default the reader states reads."""
+        io, path = io_path_tuple
+        default = _default_snap(type(io))
+        assert isinstance(default, bool) or all(isinstance(x, str) for x in default)
+        with skip_missing():
+            implicit = dc.read(path)
+        explicit = dc.read(path, snap=default)
+        assert [x.coords for x in implicit] == [x.coords for x in explicit]
+
+    def test_snap_false_moves_no_label(self, io_path_tuple, monkeypatch):
+        """Nothing which puts labels on a grid runs under snap=False."""
+        _, path = io_path_tuple
+        with skip_missing():
+            dc.read(path)  # downloads, and imports optional dependencies
+        monkeypatch.setattr(io_utils, "_checked_positions", _refuse)
+        monkeypatch.setattr(coords_module, "_released_or_exact", _refuse)
+        monkeypatch.setattr(coords_module.NumericCoord, "snap", _refuse)
+        dc.read(path, snap=False)
+        dc.scan(path, snap=False)
+
+    def test_snapped_dims_are_evenly_sampled(self, io_path_tuple):
+        """
+        snap=True, and the default, put each dimension they name on a grid.
+
+        Unless the stored labels sit off it by more than max_shift: then the
+        reader warns and keeps them as stored.
+        """
+        io, path = io_path_tuple
+        default = _default_snap(type(io))
+        with skip_missing():
+            stored = dc.read(path, snap=False)
+        for snap in (True, default):
+            with warnings.catch_warnings(record=True) as caught:
+                warnings.simplefilter("always")
+                spool = dc.read(path, snap=snap)
+            said = " ".join(str(x.message) for x in caught if x.category is SnapWarning)
+            for patch, raw in zip(spool, stored, strict=True):
+                for dim in _snappable_dims(patch):
+                    if not should_snap(snap, dim):
+                        continue
+                    coord = patch.get_coord(dim)
+                    kept = f"stored {dim} labels" in said and "kept as stored" in said
+                    assert coord.evenly_sampled or (
+                        kept and coord == raw.get_coord(dim)
+                    ), (snap, dim)
+
+    def test_stored_labels_are_checked(self, io_path_tuple, monkeypatch):
+        """Each dimension stored unevenly is snapped by the shared, checked grid."""
+        _, path = io_path_tuple
+        with skip_missing():
+            stored = dc.read(path, snap=False)
+        uneven = {
+            dim
+            for patch in stored
+            for dim in _snappable_dims(patch)
+            if not patch.get_coord(dim).evenly_sampled
+        }
+        # every checked label is ten steps off: each such grid must say so
+        far = lambda values, start, size, positions: np.full(len(positions), 10.0)  # noqa: E731
+        monkeypatch.setattr(io_utils, "_offsets", far)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            dc.read(path, snap=True)
+        said = " ".join(str(x.message) for x in caught if x.category is SnapWarning)
+        for dim in uneven:
+            assert f"stored {dim} labels" in said, dim
+
+    @pytest.mark.parametrize("snap", [None, False, True])
+    def test_scan_matches_read(self, io_path_tuple, snap):
+        """Scans and reads under one snap describe the same coordinates."""
+        _, path = io_path_tuple
+        with skip_missing():
+            read = dc.read(path, snap=snap)
+        scanned = dc.scan_payloads(path, snap=snap)
+        assert [x.coords for x in scanned] == [x.coords for x in read]
+
+    @pytest.mark.parametrize("snap", [("not_a_dimension",), "not_a_dimension"])
+    def test_unknown_name_raises(self, io_path_tuple, snap):
+        """A name no patch has a dimension of raises, in reads and scans."""
+        _, path = io_path_tuple
+        with skip_missing():
+            dc.scan(path)
+        with pytest.raises(ParameterError, match="not_a_dimension"):
+            dc.read(path, snap=snap)
+        with pytest.raises(ParameterError, match="not_a_dimension"):
+            dc.scan(path, snap=snap)
 
 
 class TestWrite:

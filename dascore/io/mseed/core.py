@@ -101,11 +101,11 @@ class MSeedV2(FiberIO):
         return _match[1] if (_match := _detect_format(resource)) else None
 
     def get_metadata(
-        self, resource: LocalPath, *, snap: snap_type = True
+        self, resource: LocalPath, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Scan a MiniSEED file."""
         pymseed = optional_import("pymseed")
-        return _scan_patches(resource, pymseed)
+        return _scan_patches(resource, pymseed, snap)
 
     def _prepare_read(self, manager, snap, keys=frozenset()):
         """Share one header scan across every logical patch in this read."""
@@ -116,7 +116,7 @@ class MSeedV2(FiberIO):
         def load(requests):
             return self._read_arrays(resource, pymseed, headers, groups, requests)
 
-        return _metadata_from_summaries(summaries), load
+        return _metadata_from_summaries(summaries, snap), load
 
     def read_array(
         self,

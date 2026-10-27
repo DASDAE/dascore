@@ -35,7 +35,7 @@ from dascore.io.dasdae._compat import (
     strip_legacy_coord_fields,
     translate_legacy_attrs,
 )
-from dascore.io.utils import resolve_keyed_source, should_snap
+from dascore.io.utils import resolve_keyed_source, should_snap, stored_coord
 from dascore.models.registry import get_model_tag, resolve_tagged_model
 from dascore.utils.array import (
     convert_bytes_to_strings,
@@ -381,7 +381,21 @@ def _node_step(attrs):
 
 
 def _read_coord(node, name, attrs2, snap):
-    """Rebuild one coordinate from its node."""
+    """
+    Rebuild one coordinate from its node, on a grid if `snap` and jittered.
+
+    Only labels written jittered snap: holes and irregular labels are what
+    was written, not a grid's noise.
+    """
+    coord = _read_stored_coord(node, name, attrs2)
+    if not (snap and coord.jittered) or coord.gapped:
+        return coord
+    units = coord.units
+    return stored_coord(coord.values, True, name=name, where=node.file, units=units)
+
+
+def _read_stored_coord(node, name, attrs2):
+    """Rebuild one coordinate from its node exactly as stored."""
     node_attrs = node.attrs
     units = node_attrs.get("units", None) or attrs2.get(f"{name}_units", None)
     object_type = unbyte(node_attrs.get(_OBJECT_TYPE, ""))
@@ -407,15 +421,9 @@ def _read_coord(node, name, attrs2, snap):
             return NumericCoord(
                 runs=tuple(runs), units=units, step=node_step, dtype=array.dtype
             )
-        if node_step is not None:
-            coord = get_coord(data=array, units=units, step=node_step, snap=False)
-            if snap and coord.jittered and not coord.gapped:
-                # jittered labels snap where asked, as stepless ones do
-                return get_coord(data=array, units=units, snap=True)
-            return coord
-        if snap or np.ndim(array) != 1:
+        if np.ndim(array) != 1:  # a scalar or many-dimensional coordinate
             return get_coord(data=array, units=units, snap=True)
-        return get_coord(data=array, units=units, snap=False)
+        return get_coord(data=array, units=units, step=node_step, snap=False)
     step = node_step if node_step is not None else attrs2.get(f"{name}_step", None)
     shape = tuple(node.shape)
     can_use_range_fast_path = (
@@ -429,14 +437,13 @@ def _read_coord(node, name, attrs2, snap):
         stop = start + node_step * shape[0]
         return get_coord(start=start, stop=stop, step=node_step, units=units)
     array = _read_array(node)
-    if snap or np.ndim(array) != 1:
-        # A stored nominal step is a grid claim the values must meet, which
-        # a legacy file's jittered values need not; it names the spacing
-        # only for a single sample, where the values cannot.
-        single = np.ndim(array) == 1 and len(array) == 1
-        step = step if single else None
-        return get_coord(data=array, units=units, step=step, snap=True)
-    return get_coord(data=array, units=units, snap=False)
+    if np.ndim(array) != 1:  # a scalar or many-dimensional coordinate
+        return get_coord(data=array, units=units, snap=True)
+    # A stored nominal step is a grid claim the values must meet, which a
+    # legacy file's jittered values need not; it names the spacing only for
+    # a single sample, where the values cannot.
+    step = step if len(array) == 1 else None
+    return get_coord(data=array, units=units, step=step, snap=False)
 
 
 def _get_coords(patch_group, dims, attrs2, snap=True):
@@ -448,7 +455,8 @@ def _get_coords(patch_group, dims, attrs2, snap=True):
         if not name.startswith("_coord_"):
             continue
         name = name.removeprefix("_coord_")
-        coord_dict[name] = _read_coord(node, name, attrs2, should_snap(snap, name))
+        named = name in dims and should_snap(snap, name)
+        coord_dict[name] = _read_coord(node, name, attrs2, named)
     # associates coordinates with dimensions
     group_attrs = patch_group.attrs
     c_dims = [x for x in group_attrs if x.startswith("_cdims")]

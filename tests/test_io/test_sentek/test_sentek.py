@@ -12,6 +12,7 @@ from dascore.compat import random_state
 from dascore.io.sentek import SentekV5
 from dascore.io.sentek.utils import _get_patch_attrs
 from dascore.utils.downloader import fetch
+from dascore.utils.misc import suppress_warnings
 
 
 class TestSentekV5:
@@ -81,8 +82,8 @@ class TestStoredLayout:
         assert metadata.attrs.origin_id == full.attrs.origin_id
         assert metadata.dtype == data.dtype
 
-    def test_default_scan_reads_only_endpoints(self, stored_file):
-        """Default scans read coordinate endpoints without reading signal samples."""
+    def test_default_scan_reads_no_signal(self, stored_file):
+        """Default scans read the header and labels, never a signal sample."""
         path, data, _, _ = stored_file
 
         class HeaderReader(BytesIO):
@@ -100,7 +101,22 @@ class TestStoredLayout:
         _, coords, offsets = _get_patch_attrs(stream)
         assert coords.shape == data.shape
         assert offsets[0] == (6 + sum(data.shape)) * 4
-        assert stream.read_bytes == 10 * 4
+        assert stream.read_bytes == offsets[0]
+
+    def test_real_file_coords(self):
+        """Time snaps to its float32 offsets' grid; distances are as stored."""
+        path = fetch("DASDMSShot00_20230328155653619.das")
+        stored = dc.read(path, snap=False)[0]
+        with suppress_warnings(UserWarning, action="error"):
+            patch = dc.read(path)[0]
+        time, distance = patch.get_coord("time"), patch.get_coord("distance")
+        assert time.evenly_sampled
+        # within the 1/64 s float32 offsets resolve near 174,000 s
+        ends = np.array([time.min(), time.max()])
+        stored_ends = np.array([stored.coords.min("time"), stored.coords.max("time")])
+        assert np.all(np.abs(ends - stored_ends) <= np.timedelta64(15_625, "us"))
+        assert distance == stored.get_coord("distance")
+        assert distance.jittered
 
     def test_real_file_signal_boundary(self):
         """The real recording has exactly the declared payload after both arrays."""

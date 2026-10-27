@@ -38,8 +38,8 @@ import dascore as dc
 from dascore.compat import UPath
 from dascore.constants import PROGRESS_LEVELS, ExecutorType, namespace_select_type
 from dascore.core.summary import normalize_source_patch_key
-from dascore.exceptions import MissingPatchError
-from dascore.io.core import _resolve_read_spool
+from dascore.exceptions import MissingPatchError, ParameterError
+from dascore.io.core import FiberIO, _resolve_read_spool, _resolve_snap
 from dascore.io.index.backend import get_backend
 from dascore.io.index.indexer import DBDirectoryIndexer, scan_unit_stats
 from dascore.io.index.ingest import SourceRecord, patch_record, summaries_to_records
@@ -51,6 +51,7 @@ from dascore.io.index.query import (
 )
 from dascore.io.index.schema import SPOOL_LATE_RENAMES
 from dascore.utils.gaps import contiguous_windows
+from dascore.utils.identity import _snap_names
 from dascore.utils.misc import (
     _canonical_range,
     express_range_for_coord,
@@ -245,11 +246,18 @@ def _live_entries(patches: Sequence[dc.Patch]) -> dict[str, dc.Patch]:
 class FileResolver(PatchResolver):
     """Load patches through dc.read; remoteness is the path layer's job."""
 
-    def __init__(self, root: Path | str | None = None, upaths: Mapping | None = None):
+    def __init__(
+        self,
+        root: Path | str | None = None,
+        upaths: Mapping | None = None,
+        snaps: Mapping | None = None,
+    ):
         self._root = Path(root) if root is not None else None
         # Rows hold path strings; a remote path's storage options live only
         # on the UPath it was given as, so that is kept to reopen it.
         self._upaths = dict(upaths or {})
+        # Likewise the snap a source was scanned under, which its reads use.
+        self._snaps = dict(snaps or {})
 
     def _read(self, path, row: Mapping, trim: dict, source_patch_key: str):
         """
@@ -266,6 +274,8 @@ class FileResolver(PatchResolver):
             kwargs["file_format"] = row["source_format"]
         if row.get("source_version"):
             kwargs["file_version"] = row["source_version"]
+        if (snap := self._snaps.get(str(row.get("source_path")))) is not None:
+            kwargs["snap"] = snap
         return dc.read(**kwargs, **id_kwargs, **trim)
 
     def resolve_path(self, path: str | Path) -> str | Path:
@@ -318,9 +328,18 @@ class CompositeResolver(PatchResolver):
         return self.plans
 
     def absorb_upaths(self, resolver: PatchResolver):
-        """Keep the storage-aware paths another resolver reopens sources by."""
+        """Keep the paths, and snaps, another resolver reopens sources by."""
         file = getattr(resolver, "file", resolver)
         self.file._upaths.update(getattr(file, "_upaths", {}))
+        for path, snap in getattr(file, "_snaps", {}).items():
+            held = self.file._snaps.setdefault(path, snap)
+            if _snap_names(held) != _snap_names(snap):
+                msg = (
+                    f"Spools reading {path} under different snap options "
+                    f"({held!r} and {snap!r}) cannot be "
+                    "combined; open the file once."
+                )
+                raise ParameterError(msg)
 
     def absorb(self, resolver: PatchResolver, paths=None) -> None:
         """
@@ -803,13 +822,15 @@ class PatchCatalog:
         path: str | Path,
         file_format: str | None = None,
         file_version: str | None = None,
+        snap=None,
     ) -> PatchCatalog:
         """
         Catalog over a single fiber file.
 
         The file is scanned eagerly (one row per contained patch) into an
         in-memory backend; patches load through the file resolver on
-        demand. There is no syncer — a changed file needs a new catalog.
+        demand, under the `snap` it was scanned with. There is no syncer —
+        a changed file needs a new catalog.
         """
         # Measured the way the directory indexer measures it, so a row
         # from either carries the same promise about its source. The scan
@@ -821,7 +842,11 @@ class PatchCatalog:
         source = coerce_to_local_path(path)
         mtime, size = scan_unit_stats(source)
         summaries = dc.scan(
-            path, file_format=file_format, file_version=file_version, progress=None
+            path,
+            file_format=file_format,
+            file_version=file_version,
+            progress=None,
+            snap=snap,
         )
         mtimes, sizes = {}, {}
         if mtime is not None and scan_unit_stats(source) == (mtime, size):
@@ -829,7 +854,17 @@ class PatchCatalog:
         records = summaries_to_records(summaries, mtimes_ns=mtimes, sizes_bytes=sizes)
         remote = isinstance(path, UPath) and not is_local_path(path)
         upaths = {str(path): path} if remote else {}
-        out = cls(resolver=FileResolver(upaths=upaths))
+        # the format's default named, so a union can compare two spools
+        snaps = {
+            str(x.source_path): _resolve_snap(
+                FiberIO.manager.get_fiberio(
+                    format=x.source_format, version=x.source_version
+                ),
+                snap,
+            )
+            for x in summaries
+        }
+        out = cls(resolver=FileResolver(upaths=upaths, snaps=snaps))
         out.backend.write_sources(records)
         out._invalidate()
         return out

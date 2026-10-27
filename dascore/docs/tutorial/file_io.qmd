@@ -75,6 +75,16 @@ Writing builds the new store beside the path and then moves it into place. On ob
 
 DASCore reads, but does not write, NetCDF files in the XDAS layout. Each signal, including those in nested groups, becomes a patch whose `source_patch_key` is its path in the file (for example `"network/fiber_a/signal"`). Tie-point and sampled coordinates are decoded exactly without reading samples, and CF scale, offset and fill values are applied. A signal whose tie points leave a gap, overlap or change the step becomes one patch per evenly sampled stretch, keyed `"<path>#0"`, `"<path>#1"`, and so on. A virtual dataset whose source is missing raises; tile manifests are not supported.
 
+## Snapping coordinates on read
+
+Many instruments store a timestamp per sample, from a clock that jitters or runs apart from the sampling. Readers put the dimensions a format stores this way on a grid, from the start and rate the file states or else from its first and last labels, and check the grid against a few stored labels. Where one sits more than `dascore.config.max_shift` (a fifth of a step) off it, the file may hold a gap, so the labels are kept as stored, with a warning naming the file. `snap` chooses the dimensions: by default the format's own (its reader's `get_metadata` signature shows them), `True` for all, `False` for none, or a tuple of names. `dc.read`, `dc.scan`, `dc.scan_payloads` and `dc.spool` of a file all take it.
+
+```{python}
+path = dc.utils.downloader.fetch("terra15_das_1_trimmed.hdf5")
+gridded = dc.read(path)[0].get_coord("time")  # on a grid
+stored = dc.read(path, snap=False)[0].get_coord("time")  # the GPS times
+```
+
 # Scanning metadata
 
 [`dc.scan`](`dascore.scan`) returns [`PatchSummary`](`dascore.PatchSummary`) objects without loading patch arrays.

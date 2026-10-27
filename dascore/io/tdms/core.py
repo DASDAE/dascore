@@ -59,7 +59,7 @@ class TDMSFormatterV4713(FiberIO):
         return patches, load
 
     def get_metadata(
-        self, resource: BinaryReader, *, snap: snap_type = True
+        self, resource: BinaryReader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Scan a tdms file, return summary information about the file's contents."""
         out, fileinfo = _get_all_attrs(resource)

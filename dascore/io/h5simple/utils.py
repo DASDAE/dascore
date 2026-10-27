@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
+from functools import partial
+
 import numpy as np
 
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
-from dascore.core import get_coord
-from dascore.io.utils import cf_time_values, should_snap
+from dascore.io.utils import decode_cf_time, stored_coord
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
@@ -36,20 +37,10 @@ def _get_attrs_coords_and_data(h5, snap):
     return attr_dict, cm, data
 
 
-def _get_coord(v, snap, name):
-    """Get the coord values from a node."""
-    length = len(v)
-    if should_snap(snap, name) and length > 1:
-        start = v[0] if name != "time" else cf_time_values(v, 0)
-        stop = v[-1] if name != "time" else cf_time_values(v, -1)
-        duration = stop - start
-        step = duration / (length - 1)
-        coord = get_coord(min=start, max=stop + step, step=step)
-        assert len(coord) == length
-    else:
-        values = v[:] if name != "time" else cf_time_values(v)
-        coord = get_coord(data=values, snap=False)
-    return coord
+def _get_coord(v, snap, name, where):
+    """Get the coord from a node; time is CF-encoded."""
+    decode = partial(decode_cf_time, v.attrs) if name == "time" else None
+    return stored_coord(v, snap, name=name, where=where, decode=decode)
 
 
 def _name_missing_dim(coord_shape_dict, data_node) -> int:
@@ -97,7 +88,11 @@ def _get_coords_and_dims(data_node, time_node, other_nodes, snap=True, dims=None
     if "channel" in dims and "channel" not in other_nodes:
         length = data_node.shape[dims.index("channel")]
         other_nodes["channel"] = np.arange(length)
-    coords = {i: _get_coord(v, snap=snap, name=i) for i, v in other_nodes.items()}
+    where = data_node.file
+    coords = {
+        name: _get_coord(node, snap if name in dims else False, name, where)
+        for name, node in other_nodes.items()
+    }
     return dims, coords
 
 
