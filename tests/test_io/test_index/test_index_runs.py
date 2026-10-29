@@ -337,6 +337,7 @@ class TestReviewFindings:
             spool = dc.spool([few, many])
             view = spool.select(time=(t0 + 30_000 * MS, t0 + 150_000 * MS))
             contents = view.get_contents()
+        assert sorted(contents["station"]) == ["", "b"]
         assert (contents["time_min"] == t0 + 60_000 * MS).all()
         assert (contents["time_max"] == t0 + 120_009 * MS).all()
 
@@ -363,7 +364,12 @@ class TestReviewFindings:
         many = _runs_patch(10).update_attrs(station="b")
         with dc.config_context(max_index_runs=5):
             spool = dc.spool([_runs_patch(3), many])
-            assert len(spool.get_gaps()) == 2  # only the stored runs' holes
+            gaps = spool.get_gaps()
+            contents = spool.get_contents()
+        # only the stored runs' holes; the capped patch stays, envelope whole
+        assert len(gaps) == 2 and set(gaps["station"]) == {""}
+        (capped,) = contents[contents["station"] == "b"].to_dict("records")
+        assert capped["time_max"] - capped["time_min"] == pd.Timedelta(540_009, "ms")
 
     def test_runs_survive_a_summary_dump(self, gapped_patch):
         """A summary rebuilt from its dump, even as text, states the same runs."""

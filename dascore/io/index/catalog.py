@@ -427,7 +427,8 @@ def _absolutize_record(record, root):
     path = record.source_path
     if "://" in path or Path(path).is_absolute():
         return record
-    resolved = str(Path(root) / (path if path != "." else ""))
+    # POSIX, as the index stores paths, so one file's rows and decodes match
+    resolved = (Path(root) / (path if path != "." else "")).as_posix()
     return replace(record, source_path=resolved, base_uri=None)
 
 

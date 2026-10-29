@@ -144,12 +144,14 @@ class TestWriterCoordinates:
         with pytest.raises(CoordError, match="split_gaps"):
             dc.write(cases["time gaps"], path, fio.name, fio.version)
 
+    @pytest.mark.parametrize("size", [2_000, 2_100_000])
     @pytest.mark.parametrize("fio", [NetCDFCFV18(), ZarrV3()], ids=_label)
-    def test_fractional_step_with_holes_refused(self, fio, tmp_path):
+    def test_fractional_step_with_holes_refused(self, fio, size, tmp_path):
         """A 1024 Hz grid with a hole has no whole-tick step to store."""
         start = np.datetime64("2020-01-01T00:00:00", "ns")
-        time = dc.get_coord(start=start, step=(1, 1024), shape=(2000,))
-        patch = dc.Patch(data=np.zeros(2000), coords={"time": time}, dims=("time",))
+        time = dc.get_coord(start=start, step=(1, 1024), shape=(size,))
+        data = np.zeros(size, dtype=np.int8)
+        patch = dc.Patch(data=data, coords={"time": time}, dims=("time",))
         holed = patch.unselect(time=(500, 501), samples=True)
         path = tmp_path / NAMES.get(fio.name.upper(), "out.h5")
         with pytest.raises(CoordError, match="NetCDF and Zarr"):

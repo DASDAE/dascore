@@ -148,8 +148,11 @@ def _stated_step(name, coord):
     inferred = get_coord(data=coord.values, units=coord.units, snap=False)
     if (inferred.step, inferred.jittered, inferred.gapped) == flags:
         return None
-    back = get_coord(data=coord.values, step=coord.step, units=coord.units)
-    if (back.step, back.jittered, back.gapped) != flags:
+    try:
+        back = get_coord(data=coord.values, step=coord.step, units=coord.units)
+    except CoordError:  # a long fractional grid drifts off its whole-tick step
+        back = None
+    if back is None or (back.step, back.jittered, back.gapped) != flags:
         why = "NetCDF and Zarr, which store labels with one step"
         raise CoordError(_uneven_message(name, coord, why))
     step = coord.step
