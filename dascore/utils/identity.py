@@ -50,6 +50,7 @@ from uuid import uuid4
 
 import numpy as np
 import pandas as pd
+from pandas.core.util.hashing import hash_pandas_object
 from pint import Quantity, Unit
 
 from dascore.exceptions import ParameterError
@@ -798,7 +799,7 @@ def _encode_dataframe(df: pd.DataFrame | pd.Series) -> Any:
     kinds = [getattr(x, "categories", pd.Index([], dtype=x)).dtype for x in dtypes]
     if any(isinstance(x, np.dtype) and x.hasobject for x in kinds):
         _refuse(df, "holds object columns")
-    values = pd.util.hash_pandas_object(df, index=True).to_numpy()
+    values = hash_pandas_object(df, index=True).to_numpy()
     return {
         _DATAFRAME: {
             "columns": [_encode_value(x) for x in frame.columns],
