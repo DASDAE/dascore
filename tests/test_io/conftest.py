@@ -24,6 +24,7 @@ from urllib.request import urlopen
 import pytest
 
 from dascore.compat import UPath
+from dascore.io import core as io_core
 from dascore.utils.downloader import fetch
 from tests.conftest import _link_or_copy
 from tests.test_io._common_io_test_utils import skip_on_timeout
@@ -357,3 +358,16 @@ def to_http_range_path(
         return out
 
     return _convert
+
+
+@pytest.fixture
+def stored_reads(monkeypatch):
+    """Count the lazy loads which open the file through its reader."""
+    calls, original = [], io_core._open_stored_reader
+
+    def counted(*args, **kwargs):
+        calls.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(io_core, "_open_stored_reader", counted)
+    return calls

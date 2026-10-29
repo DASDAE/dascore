@@ -176,11 +176,7 @@ def validate_windows(windows: Sequence[Any]) -> tuple[Any, ...]:
 
 
 def _in_bounds_slices(windows, shape) -> tuple[slice, ...] | None:
-    """
-    Return the slices of in-bounds integer pairs, as lazy loads send.
-
-    Anything else returns None for `windows_to_slices` to check and resolve.
-    """
+    """Fast path for in-bounds integer pairs, as lazy loads send; else None."""
     if type(windows) is not tuple or len(windows) > len(shape):
         return None
     out = []

@@ -786,7 +786,7 @@ class PlanResolver(PatchResolver):
             key=key,
             origin_id="" if origin is None or pd.isnull(origin) else str(origin),
             offsets=tuple(map(int, offsets.split())),
-            chunk_rows=int(row["_chunk_rows"]) if offsets else 0,
+            chunk_rows=int(row["_data_chunk_rows"]) if offsets else 0,
             mtime_ns=mtime,
             size_bytes=size,
         )

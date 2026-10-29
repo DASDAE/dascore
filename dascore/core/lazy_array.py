@@ -58,6 +58,7 @@ AXIS_FIELDS = ("out_start", "out_stop", "src_axis", "src_start", "src_extent")
 _LAYOUT_DEFAULTS = MappingProxyType(
     {"offsets": "", "chunk_rows": 0, "mtime_ns": None, "size_bytes": None}
 )
+_LAYOUT_NUMBERS = ("chunk_rows", "mtime_ns", "size_bytes")
 
 # The columns of the sources table besides `filled`, in the frame's order.
 SOURCE_FIELDS = (
@@ -597,10 +598,20 @@ def _members_of(frame: pd.DataFrame) -> _Members:
         values = (
             frame[name].to_numpy(object) if name in frame else [default] * len(frame)
         )
+        if name in _LAYOUT_DEFAULTS:
+            # a join with an older frame leaves NaN, and parquet gives floats
+            values = [_layout_value(name, x, default) for x in values]
         columns[name] = _Column.of(values)
     cast = columns.pop("cast")
     sources, rows = _sources_of_columns(columns, frame["filled"].to_numpy(bool))
     return _Members(sources, rows, cast)
+
+
+def _layout_value(name: str, value: Any, default: Any) -> Any:
+    """Return a layout cell of a frame as a source states it."""
+    if value is None or pd.isna(value):
+        return default
+    return int(value) if name in _LAYOUT_NUMBERS else value
 
 
 def _table(blocks: Sequence[_Block]) -> LazyTable:
@@ -1215,8 +1226,7 @@ class LazyArray:
             if name in _STRING_FIELDS:
                 out[name] = _spread(inverse, column.at(used), ndim)
             else:
-                # numbers, which an empty array must not type as text
-                kind = object if name in SOURCE_FIELDS[8:-1] else None
+                kind = object if name in _LAYOUT_NUMBERS else None
                 out[name] = _spread(column.codes[rows], column.values, ndim, kind)
         out["cast"] = _spread(members.cast.codes, members.cast.values, ndim)
         out["filled"] = np.repeat(members.filled, ndim)
@@ -1389,8 +1399,8 @@ def _block_of_sources(
             msg = f"{source} does not state the extent of its whole array."
             raise ParameterError(msg)
     fields = ("path", "format", "version", "key", "origin_id", "filled", "value")
+    fields += tuple(_LAYOUT_DEFAULTS)
     columns: dict[str, Any] = {x: [getattr(y, x) for y in sources] for x in fields}
-    columns |= {x: [getattr(y, x) for y in sources] for x in _LAYOUT_DEFAULTS}
     columns["offsets"] = [" ".join(map(str, x.offsets)) for x in sources]
     columns["source_dtype"] = [np.dtype(x.dtype) for x in sources]
     if casts is not None and is_list_like(casts):

@@ -160,18 +160,14 @@ class TestFacilityId:
 class TestOffsetReads:
     """A PRODML array's chunks are read from their offsets, gaps and all."""
 
-    def test_windows_equal_hdf5(self, monkeypatch):
+    def test_windows_equal_hdf5(self, stored_reads):
         """Windows across separated chunks equal h5py's, with no HDF5 open."""
         path = fetch("prodml_2.1.h5")
-
-        def refuse(*args, **kwargs):
-            raise AssertionError("the load opened HDF5")
-
         source = dc.read(path)[0]._source
         offsets = source.offsets
         assert any(b - a != 1024 * 512 * 2 for a, b in itertools.pairwise(offsets))
-        monkeypatch.setattr("dascore.io.core._open_stored_reader", refuse)
         with h5py.File(path, "r") as h5:
             node = h5["Acquisition/Raw[0]/RawData"]
             for window in [(slice(None),), (slice(1000, 3100),), (slice(11999, None),)]:
                 np.testing.assert_array_equal(source[window].load(), node[window])
+        assert not stored_reads

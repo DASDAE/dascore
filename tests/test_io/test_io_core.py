@@ -2407,6 +2407,7 @@ class TestWindowsToSlices:
         out = windows_to_slices(((..., 3), (-2, 50)), (9, 7))
         assert out == (slice(0, 3), slice(5, 7))
         assert windows_to_slices(((4, None),), (9,)) == (slice(4, 9),)
+        assert windows_to_slices(((2, 50),), (9,)) == (slice(2, 9),)
 
     def test_empty_window_stays_empty(self):
         """A reversed window is empty, never negative-length."""
@@ -2531,21 +2532,21 @@ class TestStepFromRate:
 class TestOffsetReads:
     """A dataset reader's plain arrays load from their offsets alone."""
 
-    @pytest.fixture
-    def refuse_reader(self, monkeypatch):
-        """Fail any load which opens the file through its reader."""
-
-        def refuse(*args, **kwargs):
-            raise AssertionError("the load opened the file's reader")
-
-        monkeypatch.setattr(io_core, "_open_stored_reader", refuse)
-
     @pytest.mark.parametrize(
         "name", ["ap_sensing_1.hdf5", "gdr_1.h5", "ai4eps_1.h5", "neubrex_das_1.h5"]
     )
-    def test_mixin_readers(self, name, refuse_reader):
+    def test_mixin_readers(self, name, stored_reads):
         """Readers describing their arrays by dataset load them from offsets."""
         patch = dc.read(fetch(name))[0]
         source = patch._source
         assert source.offsets
         np.testing.assert_array_equal(source[2:9].load(), patch.data[2:9])
+        assert not stored_reads
+
+    def test_explicit_path_uses_reader(self, stored_reads):
+        """A resource opened from a given path is read by its reader."""
+        path = fetch("gdr_1.h5")
+        patch = dc.read(path)[0]
+        with io_core._open_array_reader(patch._source, path=path) as load:
+            np.testing.assert_array_equal(load(patch._source), patch.data)
+        assert len(stored_reads) == 1

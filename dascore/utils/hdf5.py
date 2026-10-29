@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 import numpy as np
 import pandas as pd
 from h5py import File as H5pyFile
+from h5py import h5t
 
 from dascore.compat import UPath
 from dascore.config import get_config
@@ -459,14 +460,20 @@ def unpack_scalar_h5_dataset(dataset):
     return value
 
 
+# The most chunks whose offsets a layout records; past it each lookup and
+# index row costs more than plain reads save.
+MAX_LAYOUT_CHUNKS = 1024
+
+
 def stored_byte_layout(dataset) -> tuple[tuple[int, ...], int] | None:
     """
     Return where plain file reads find a dataset's rows, if they can.
 
     The offsets are of each chunk along the first axis, in row order, or
     of the whole array when it is contiguous; the int is the rows each one
-    holds. None unless the dataset is in a local file, unfiltered, wholly
-    written, and stored in chunks of whole rows.
+    holds. None unless the dataset is in a local file, stored as the dtype
+    it reads as, unfiltered, wholly written, and in at most
+    `MAX_LAYOUT_CHUNKS` chunks of whole rows.
 
     Examples
     --------
@@ -479,17 +486,20 @@ def stored_byte_layout(dataset) -> tuple[tuple[int, ...], int] | None:
     >>> assert rows == 1024 and len(offsets) == 12
     """
     shape, chunks, plist = dataset.shape, dataset.chunks, dataset.id.get_create_plist()
+    # The bytes are the array only when HDF5 would not convert them on read.
     plain = dataset.file.driver == "sec2" and not dataset.dtype.hasobject
-    if not shape or not plain or dataset.is_virtual or plist.get_nfilters():
+    plain = plain and dataset.id.get_type().equal(h5t.py_create(dataset.dtype))
+    if not shape or not plain or plist.get_nfilters():
         return None
     if chunks is None:
         offset = dataset.id.get_offset()
         return None if offset is None else ((offset,), shape[0])
     count = -(-shape[0] // chunks[0])
-    if chunks[1:] != shape[1:] or dataset.id.get_num_chunks() != count:
+    if chunks[1:] != shape[1:] or count > MAX_LAYOUT_CHUNKS:
         return None
-    found = [dataset.id.get_chunk_info(x) for x in range(count)]
-    found.sort(key=lambda x: x.chunk_offset)
+    if dataset.id.get_num_chunks() != count:
+        return None
+    found = (dataset.id.get_chunk_info(x) for x in range(count))
     return tuple(x.byte_offset for x in found), chunks[0]
 
 

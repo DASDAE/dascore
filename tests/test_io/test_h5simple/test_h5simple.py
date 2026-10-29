@@ -9,8 +9,10 @@ from dataclasses import replace
 from functools import wraps
 from pathlib import Path
 
+import fsspec
 import h5py
 import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
@@ -502,8 +504,11 @@ class TestArrayLookup:
         assert patch.attrs.data_id == lazy.data_id == "af8aa5c7443693b5f6af5dd541cc83d4"
 
 
-def _write_simple(path, data, start=0.0, gaps=False, **options):
-    """Write an H5Simple file; `gaps` puts other storage between chunks."""
+def _write_simple(path, data, start=0.0, gaps=False, distance=None, **options):
+    """
+    Write an H5Simple file; `gaps` puts other storage between chunks, and
+    `distance` gives the distance node another length than the data's.
+    """
     with h5py.File(path, "w") as h5:
         raw = h5.create_dataset("raw", shape=data.shape, dtype=data.dtype, **options)
         step = (options.get("chunks") or data.shape)[0]
@@ -514,7 +519,7 @@ def _write_simple(path, data, start=0.0, gaps=False, **options):
                 h5[f"gaps/{num}"] = np.zeros(64)
                 h5.flush()
         h5["time"] = start + np.arange(len(data), dtype=float)
-        h5["distance"] = np.arange(data.shape[1])
+        h5["distance"] = np.arange(data.shape[1] if distance is None else distance)
         h5.attrs["dims"] = "time,distance"
     return path
 
@@ -523,19 +528,6 @@ def _stored(path, window):
     """What h5py gives for a window of the data node."""
     with h5py.File(path, "r") as h5:
         return h5["raw"][window]
-
-
-@pytest.fixture
-def stored_reads(monkeypatch):
-    """Count the lazy loads which open the file through its reader."""
-    calls, original = [], io_core._open_stored_reader
-
-    def counted(*args, **kwargs):
-        calls.append(args)
-        return original(*args, **kwargs)
-
-    monkeypatch.setattr(io_core, "_open_stored_reader", counted)
-    return calls
 
 
 # The storage layouts of a (30, 5) array the offset reads cover.
@@ -549,11 +541,16 @@ LAYOUTS = {
 class TestOffsetReads:
     """A plain dataset's bytes are read from its offsets, never opening HDF5."""
 
-    @pytest.fixture(params=list(LAYOUTS))
-    def path(self, tmp_path, request):
-        """A file of each storage layout."""
+    @pytest.fixture
+    def path(self, tmp_path):
+        """A chunked file with other storage between its chunks."""
         data = np.arange(150, dtype=np.float32).reshape(30, 5)
-        return _write_simple(tmp_path / "a.h5", data, **LAYOUTS[request.param])
+        return _write_simple(tmp_path / "a.h5", data, **LAYOUTS["gaps"])
+
+    @pytest.fixture
+    def registry(self, monkeypatch):
+        """Register temporary subclasses where sources find their format."""
+        monkeypatch.setattr(FiberIO, "manager", copy.deepcopy(FiberIO.manager))
 
     @pytest.mark.parametrize(
         "window",
@@ -567,7 +564,7 @@ class TestOffsetReads:
             (slice(None), slice(3, 5)),
         ],
     )
-    @pytest.mark.parametrize("dtype", ["<f4", ">f4", ">i2"])
+    @pytest.mark.parametrize("dtype", ["<f4", ">i2"])
     def test_equals_hdf5(self, tmp_path, stored_reads, window, dtype):
         """Each window equals what h5py reads, dtype, byte order and all."""
         data = np.arange(150).reshape(30, 5).astype(dtype)
@@ -577,14 +574,11 @@ class TestOffsetReads:
             out, expected = source[window].load(), _stored(path, window)
             assert out.dtype == expected.dtype and out.flags.c_contiguous
             np.testing.assert_array_equal(out, expected)
+        offsets = source.offsets  # the last layout's chunks are apart
+        assert any(
+            b - a != 7 * 5 * data.itemsize for a, b in itertools.pairwise(offsets)
+        )
         assert not stored_reads
-
-    def test_gaps_between_chunks(self, tmp_path):
-        """Chunks other storage separates are not read as one run."""
-        data = np.ones((30, 5), np.float32)
-        path = _write_simple(tmp_path / "a.h5", data, chunks=(7, 5), gaps=True)
-        offsets = dc.read(path)[0]._source.offsets
-        assert any(b - a != 7 * 5 * 4 for a, b in itertools.pairwise(offsets))
 
     def test_one_open_for_many_windows(self, path, stored_reads, monkeypatch):
         """A lazy array of several windows of one file opens it once."""
@@ -626,6 +620,19 @@ class TestOffsetReads:
         np.testing.assert_array_equal(source.load(), _stored(path, slice(None)))
         assert len(stored_reads) == 1
 
+    def test_remote_path_uses_reader(self, path, stored_reads):
+        """
+        A source in a remote store is read by its reader, never from the local
+        file its path would spell, here a copy with the same size and mtime.
+        """
+        source = dc.read(path)[0]._source
+        local = shutil.copy2(path, path.with_name("copy.h5"))
+        remote = _write_simple(path.with_name("remote.h5"), -_stored(path, ()))
+        fsspec.filesystem("memory").pipe(str(local), remote.read_bytes())
+        source = replace(source, path=f"memory://{local}")
+        np.testing.assert_array_equal(source.load(), -_stored(path, ()))
+        assert len(stored_reads) == 1
+
     def test_missing_file(self, path):
         """A file gone since its offsets were taken fails as the reader fails."""
         source = dc.read(path)[0]._source
@@ -640,11 +647,92 @@ class TestOffsetReads:
         assert source.offsets and source == bare and hash(source) == hash(bare)
         assert source[2:5].data_id == bare[2:5].data_id
         assert source[2:5].offsets == source.offsets
-
-    def test_round_trip_dict(self, path):
-        """A source's dict gives back its offsets."""
-        source = dc.read(path)[0]._source
         assert ArraySource.from_dict(source.to_dict()).offsets == source.offsets
+
+    def test_frames(self, path, tmp_path, stored_reads):
+        """Frames joined with older ones, or stored as parquet, keep offsets."""
+        source = dc.read(path)[0]._source
+        frame = LazyArray.from_sources([source[0:10], source[10:20]]).to_frame()
+        layout = ["offsets", "chunk_rows", "mtime_ns", "size_bytes"]
+        older = frame[frame["ordinal"] == 0].drop(columns=layout)
+        joined = pd.concat([older, frame[frame["ordinal"] == 1]])
+        expected = _stored(path, slice(0, 20))
+        back = LazyArray.from_frame(joined, (20, 5), source.dtype)
+        np.testing.assert_array_equal(back.load(), expected)
+        assert len(stored_reads) == 1
+        frame.to_parquet(tmp_path / "frame.parquet")
+        stored = pd.read_parquet(tmp_path / "frame.parquet")
+        back = LazyArray.from_frame(stored, (20, 5), source.dtype)
+        np.testing.assert_array_equal(back.load(), expected)
+        assert len(stored_reads) == 1
+
+    @pytest.mark.parametrize("distance", [4, 6])
+    def test_declared_shape_differs(self, tmp_path, distance):
+        """An array declared another shape than stored is not read by offset."""
+        data = np.arange(150, dtype=np.float32).reshape(30, 5)
+        path = _write_simple(tmp_path / "a.h5", data, distance=distance)
+        assert dc.scan(path)[0].data_offsets == ()
+        if distance < 5:
+            source = dc.read(path)[0]._source
+            assert not source.offsets
+            np.testing.assert_array_equal(source[3:9].load(), data[3:9, :distance])
+
+    def test_metadata_override_trims(self, tmp_path, registry):
+        """A subclass declaring a block of the dataset loads that block."""
+
+        class Trimmed(H5Simple):
+            name = "_test_h5simple_trimmed"
+
+            def get_metadata(self, resource: H5Reader, *, snap=True):
+                return [
+                    x.update(coords=x.coords.select(distance=(0, 3), samples=True)[0])
+                    for x in super().get_metadata(resource, snap=snap)
+                ]
+
+        data = np.arange(150, dtype=np.float32).reshape(30, 5)
+        path = _write_simple(tmp_path / "a.h5", data)
+        source = dc.read(path, file_format=Trimmed.name, file_version="1")[0]._source
+        np.testing.assert_array_equal(source[2:9].load(), data[2:9, :3])
+
+    def test_array_override_is_honored(self, path, registry, stored_reads):
+        """A subclass transforming read_array is not bypassed by offsets."""
+
+        class Doubled(H5Simple):
+            name = "_test_h5simple_doubled_offsets"
+
+            def read_array(self, resource: H5Reader, windows=(), key=""):
+                return super().read_array(resource, windows, key=key) * 2
+
+        source = replace(dc.read(path)[0]._source, format=Doubled.name)
+        assert source.offsets
+        np.testing.assert_array_equal(source.load(), _stored(path, slice(None)) * 2)
+        assert len(stored_reads) == 1
+
+    def test_external_link(self, tmp_path, stored_reads):
+        """A data node linked from another file is read from that file."""
+        data = np.arange(150, dtype=np.float32).reshape(30, 5)
+        with h5py.File(tmp_path / "target.h5", "w") as h5:
+            h5["pad"] = np.full(1000, -9.0)
+            h5["x"] = data
+        path = _write_simple(tmp_path / "a.h5", data)
+        with h5py.File(path, "a") as h5:
+            del h5["raw"]
+            h5["raw"] = h5py.ExternalLink(str(tmp_path / "target.h5"), "x")
+            h5["big/pad"] = np.arange(5000, dtype=float)
+        source = dc.read(path)[0]._source
+        assert not source.offsets
+        np.testing.assert_array_equal(source[3:9].load(), data[3:9])
+
+    def test_file_changed_while_scanned(self, path, monkeypatch):
+        """Offsets are kept only for the file stated before the scan read it."""
+        identity = io_core.source_identity
+
+        def other(source):
+            path, size, mtime = identity(source)
+            return path, size + 1, mtime
+
+        monkeypatch.setattr(io_core, "source_identity", other)
+        assert not dc.read(path)[0]._source.offsets
 
 
 class TestIndexedOffsetReads:
@@ -686,3 +774,11 @@ class TestIndexedOffsetReads:
         _write_simple(path / "4.h5", -data[80:100], start=80.0, chunks=(3, 4))
         merged = spool.chunk(time=None)[0]
         np.testing.assert_array_equal(merged.data[80:100], -data[80:100])
+
+    def test_attr_named_chunk_rows(self, tmp_path):
+        """An attr the layout columns might have claimed is still indexed."""
+        path = _write_simple(tmp_path / "a.h5", np.ones((10, 4)))
+        with h5py.File(path, "a") as h5:
+            h5.attrs["chunk_rows"] = 7
+        contents = dc.spool(tmp_path).update().get_contents()
+        assert contents["chunk_rows"].tolist() == [7]

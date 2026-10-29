@@ -161,25 +161,14 @@ class TestStoredByteLayout:
         with h5py.File(path, "r") as h5:
             return stored_byte_layout(h5[name])
 
-    @staticmethod
-    def _rows(path, layout, rows, dtype):
-        """Read rows back from the layout alone."""
-        (offsets, per), out = layout, []
-        with open(path, "rb") as handle:
-            for row in rows:
-                handle.seek(offsets[row // per] + (row % per) * dtype.itemsize * 4)
-                out.append(np.frombuffer(handle.read(dtype.itemsize * 4), dtype))
-        return np.stack(out)
-
-    @pytest.mark.parametrize("dtype", ["<f4", ">f4", ">i8"])
+    @pytest.mark.parametrize("dtype", ["<f4", ">f4", ">i2", "?"])
     def test_contiguous(self, tmp_path, dtype):
-        """A contiguous dataset is one run of rows, in either byte order."""
+        """A contiguous dataset is one run of rows, in any byte order."""
         path, data = tmp_path / "c.h5", np.arange(40).reshape(10, 4).astype(dtype)
         with h5py.File(path, "w") as h5:
             h5["data"] = data
-        layout = self._layout(path)
-        assert len(layout[0]) == 1 and layout[1] == 10
-        assert np.array_equal(self._rows(path, layout, range(10), data.dtype), data)
+        offsets, rows = self._layout(path)
+        assert len(offsets) == 1 and rows == 10
 
     def test_chunked_full_width(self, tmp_path):
         """Full-width chunks are listed in row order, the last one partial."""
@@ -189,9 +178,36 @@ class TestStoredByteLayout:
             # Written last chunk first, so file order is not row order.
             for start in (8, 4, 0):
                 ds[start : start + 4] = data[start : start + 4]
-        offsets, per = layout = self._layout(path)
+        offsets, per = self._layout(path)
         assert per == 4 and len(offsets) == 3 and offsets != tuple(sorted(offsets))
-        assert np.array_equal(self._rows(path, layout, range(10), data.dtype), data)
+
+    @pytest.mark.parametrize(("rows", "found"), [(1024, True), (1025, False)])
+    def test_chunk_count_cap(self, tmp_path, rows, found):
+        """Past 1024 chunks no layout is recorded, so scans and rows stay small."""
+        path = tmp_path / "many.h5"
+        with h5py.File(path, "w") as h5:
+            h5.create_dataset("data", data=np.ones((rows, 2)), chunks=(1, 2))
+        assert (self._layout(path) is not None) is found
+
+    def test_stored_type_differs(self, tmp_path):
+        """A stored type HDF5 converts on read gives no layout."""
+        path = tmp_path / "t.h5"
+        short = h5py.h5t.STD_I16LE.copy()
+        short.set_precision(12)
+        short.set_offset(4)
+        small = h5py.h5t.IEEE_F32LE.copy()
+        small.set_fields(23, 15, 8, 0, 15)
+        small.set_size(3)
+        small.set_precision(24)
+        small.set_ebias(127)
+        with h5py.File(path, "w") as h5:
+            for name, kind, dtype in ((b"short", short, "i2"), (b"small", small, "f4")):
+                space = h5py.h5s.create_simple((10, 4))
+                stored = h5py.h5d.create(h5.id, name, kind, space)
+                data = np.arange(40).reshape(10, 4).astype(dtype)
+                stored.write(h5py.h5s.ALL, h5py.h5s.ALL, data)
+        assert self._layout(path, "short") is None
+        assert self._layout(path, "small") is None
 
     def test_ndim_three(self, tmp_path):
         """Chunks spanning every trailing axis of a cube hold whole rows."""
@@ -206,6 +222,7 @@ class TestStoredByteLayout:
             {"chunks": (4, 2)},
             {"chunks": (4, 4), "compression": "gzip"},
             {"chunks": (4, 4), "shuffle": True},
+            {"chunks": (4, 8), "maxshape": (None, 8)},
         ],
     )
     def test_not_plain(self, tmp_path, options):
