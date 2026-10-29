@@ -146,6 +146,8 @@ class PatchRecord:
     # whether ``attrs`` holds every attr the patch defines
     attrs_complete: bool = True
     attr_dtypes: str | None = None
+    data_offsets: str | None = None
+    chunk_rows: int | None = None
 
 
 @dataclass(frozen=True)
@@ -526,6 +528,8 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
         coords=coords,
         attrs_complete=attrs_complete,
         attr_dtypes=attr_dtypes,
+        data_offsets=" ".join(map(str, summary.data_offsets)) or None,
+        chunk_rows=summary.chunk_rows or None,
     )
 
 

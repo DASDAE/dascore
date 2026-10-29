@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, replace
+from dataclasses import asdict, dataclass, field, replace
 from math import isfinite, isnan, prod
 from typing import Any
 
@@ -62,6 +62,14 @@ class ArraySource:
     value
         The constant of a `filled` array. Such a source has no path and
         reads nothing; see [`full`](`dascore.core.source.ArraySource.full`).
+    offsets, chunk_rows
+        Where the whole array's rows are stored in the file, a run of
+        `chunk_rows` rows at each offset, for a reader which says so; empty
+        when they cannot be read without the reader.
+    mtime_ns, size_bytes
+        The file's modification time and size when the offsets were taken,
+        which must still hold for them to be used. Neither these nor the
+        offsets are part of which array a source is.
 
     Examples
     --------
@@ -93,6 +101,10 @@ class ArraySource:
     extent: tuple[int, ...] = ()
     filled: bool = False
     value: Any = None
+    offsets: tuple[int, ...] = field(default=(), compare=False)
+    chunk_rows: int = field(default=0, compare=False)
+    mtime_ns: int | None = field(default=None, compare=False)
+    size_bytes: int | None = field(default=None, compare=False)
 
     @classmethod
     def full(
@@ -244,6 +256,7 @@ class ArraySource:
         out["shape"] = tuple(out.get("shape", ()))
         out["extent"] = tuple(out.get("extent", ()))
         out["windows"] = tuple((a, b) for a, b in out.get("windows", ()))
+        out["offsets"] = tuple(out.get("offsets", ()))
         if out.get("dtype") is not None:
             out["dtype"] = np.dtype(out["dtype"])
         if isinstance(out.get("value"), str):

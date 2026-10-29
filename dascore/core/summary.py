@@ -172,6 +172,8 @@ def _build_patch_summary_payload(
     source_format="",
     source_version="",
     source_patch_key="",
+    data_offsets=(),
+    chunk_rows=0,
 ) -> dict[str, Any]:
     """Build the canonical structured payload used to validate PatchSummary."""
     source_patch_key = normalize_source_patch_key(source_patch_key)
@@ -205,6 +207,8 @@ def _build_patch_summary_payload(
         "source_format": normalized_source_format,
         "source_version": normalized_source_version,
         "source_patch_key": source_patch_key,
+        "data_offsets": tuple(data_offsets),
+        "chunk_rows": int(chunk_rows),
     }
 
 
@@ -222,6 +226,9 @@ class PatchSummary(DascoreBaseModel):
     source_format: str = ""
     source_version: str = ""
     source_patch_key: str = ""
+    # Where a reader which says so keeps the data's rows; see ArraySource.
+    data_offsets: tuple[int, ...] = ()
+    chunk_rows: int = 0
 
     @model_validator(mode="before")
     @classmethod
@@ -256,6 +263,8 @@ class PatchSummary(DascoreBaseModel):
                 source_format=data.get("source_format", data.get("file_format", "")),
                 source_version=data.get("source_version", data.get("file_version", "")),
                 source_patch_key=key,
+                data_offsets=data.get("data_offsets", ()),
+                chunk_rows=data.get("chunk_rows", 0),
             )
         msg = (
             "PatchSummary requires structured `attrs`/`coords` input. "
@@ -283,6 +292,8 @@ class PatchSummary(DascoreBaseModel):
             source_format=patch._source.format if patch._source else "",
             source_version=patch._source.version if patch._source else "",
             source_patch_key=patch._source.key if patch._source else "",
+            data_offsets=patch._source.offsets if patch._source else (),
+            chunk_rows=patch._source.chunk_rows if patch._source else 0,
         )
 
     def dump_structured(self) -> dict[str, Any]:

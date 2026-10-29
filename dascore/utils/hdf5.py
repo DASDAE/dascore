@@ -459,6 +459,40 @@ def unpack_scalar_h5_dataset(dataset):
     return value
 
 
+def stored_byte_layout(dataset) -> tuple[tuple[int, ...], int] | None:
+    """
+    Return where plain file reads find a dataset's rows, if they can.
+
+    The offsets are of each chunk along the first axis, in row order, or
+    of the whole array when it is contiguous; the int is the rows each one
+    holds. None unless the dataset is in a local file, unfiltered, wholly
+    written, and stored in chunks of whole rows.
+
+    Examples
+    --------
+    >>> import h5py
+    >>> from dascore.utils.downloader import fetch
+    >>> from dascore.utils.hdf5 import stored_byte_layout
+    >>>
+    >>> with h5py.File(fetch("prodml_2.1.h5"), "r") as h5:
+    ...     offsets, rows = stored_byte_layout(h5["Acquisition/Raw[0]/RawData"])
+    >>> assert rows == 1024 and len(offsets) == 12
+    """
+    shape, chunks, plist = dataset.shape, dataset.chunks, dataset.id.get_create_plist()
+    plain = dataset.file.driver == "sec2" and not dataset.dtype.hasobject
+    if not shape or not plain or dataset.is_virtual or plist.get_nfilters():
+        return None
+    if chunks is None:
+        offset = dataset.id.get_offset()
+        return None if offset is None else ((offset,), shape[0])
+    count = -(-shape[0] // chunks[0])
+    if chunks[1:] != shape[1:] or dataset.id.get_num_chunks() != count:
+        return None
+    found = [dataset.id.get_chunk_info(x) for x in range(count)]
+    found.sort(key=lambda x: x.chunk_offset)
+    return tuple(x.byte_offset for x in found), chunks[0]
+
+
 def h5_matches_structure(h5file: H5pyFile, structure: Sequence[str]):
     """
     Check if an H5 file matches a spec given by a structure.

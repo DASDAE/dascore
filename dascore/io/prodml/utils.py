@@ -570,8 +570,8 @@ def _get_fbe_data(node_info):
 
 def _yield_prodml_attrs_coords(
     fi, *, snap=True
-) -> Iterator[tuple[dc.PatchAttrs, dc.CoordManager, str, str]]:
-    """Scan a prodML file, return metadata."""
+) -> Iterator[tuple[dc.PatchAttrs, dc.CoordManager, str, str, h5py.Dataset]]:
+    """Scan a prodML file, return metadata and each node's dataset."""
     acq = fi["Acquisition"]
     # Get the information common to all from root attributes.
     base_info = _get_root_attrs(acq.attrs)
@@ -580,7 +580,8 @@ def _yield_prodml_attrs_coords(
     for node_info in _yield_data_nodes(fi):
         func = _NODE_ATTRS_PROCESSORS[node_info.patch_type]
         attr, coords, dtype = func(node_info, d_coord, base_info, snap=snap)
-        yield attr, coords, node_info.name, dtype
+        data = _NODE_DATA_PROCESSORS[node_info.patch_type](node_info)
+        yield attr, coords, node_info.name, dtype, data
 
 
 def _get_dims_from_attrs(attrs):

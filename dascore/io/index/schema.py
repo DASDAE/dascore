@@ -33,7 +33,8 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 29 reads XDAS-layout
+# changes, not only when a column does. Version 30 records where a plain
+# HDF5 array's bytes are (`data_offsets`, `chunk_rows`). Version 29 reads XDAS-layout
 # NetCDF files as XDAS, not NETCDF_CF. Version 28 grids a stored distance
 # array in float64 from its end values, not a median step. Version 27 drops the per-run
 # coordinate links (`run_index`). Version 26 scans labels flooring a
@@ -53,7 +54,7 @@ from typing import NamedTuple, get_args, get_type_hints
 # version 15 stored source coordinate and numeric attribute dtypes.
 # Earlier indexes lack the metadata required for reconstruction and are
 # rebuilt when opened.
-INDEX_VERSION = 29
+INDEX_VERSION = 30
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
@@ -144,6 +145,10 @@ class PatchRow(NamedTuple):
     attrs_complete: int
     # JSON mapping for numeric attrs whose scalar dtype SQL would erase.
     attr_dtypes: str | None
+    # Space separated byte offsets of the data array's chunks of
+    # `chunk_rows` rows, for a reader which reads them plainly; else NULL.
+    data_offsets: str | None
+    chunk_rows: int | None
 
 
 class AttrsRow(NamedTuple):
@@ -347,6 +352,8 @@ RESERVED_ATTR_COLUMNS = frozenset(
         "data_size",
         "attrs_complete",
         "attr_dtypes",
+        "data_offsets",
+        "chunk_rows",
         # These named structural columns until version 9 dropped them.
         # They stay reserved: the spool gives them a meaning whether or
         # not a column holds one, and un-reserving a name silently turns
@@ -409,6 +416,8 @@ SPOOL_LATE_RENAMES = MappingProxyType(
         "data_size": "_data_size",
         "attrs_complete": "_attrs_complete",
         "attr_dtypes": "_attr_dtypes",
+        "data_offsets": "_data_offsets",
+        "chunk_rows": "_chunk_rows",
         "mtime_ns": SOURCE_STAT_COLUMNS[0],
         "size_bytes": SOURCE_STAT_COLUMNS[1],
     }

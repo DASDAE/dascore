@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import secrets
 from collections.abc import Mapping
+from functools import cached_property
 
 import numpy as np
 import pandas as pd
@@ -747,6 +748,14 @@ class PlanResolver(PatchResolver):
         taken = rows.index.to_numpy()
         return rows.assign(**{k: v[taken] for k, v in self._source_stats.items()})
 
+    @cached_property
+    def _stats_by_path(self) -> dict[str, tuple[int, int]]:
+        """What the index measured of each member's source, by its stored path."""
+        none = np.empty(0, np.int64)  # an index which measured nothing
+        stats = [self._source_stats.get(x, none).tolist() for x in SOURCE_STAT_COLUMNS]
+        paths = self.member_rows["source_path"].map(_row_str)
+        return dict(zip(paths, zip(*stats)))
+
     def _member_array_source(self, row: Mapping, shape) -> ArraySource | None:
         """
         Name the whole stored array a member is part of; nothing is read.
@@ -767,12 +776,19 @@ class PlanResolver(PatchResolver):
         if not isinstance(dtype, str) or not dtype:
             return None
         origin = row.get("data_id")
+        offsets = _row_str(row.get("_data_offsets"))
+        unknown = (None, None)
+        mtime, size = self._stats_by_path.get(path, unknown) if offsets else unknown
         source = ArraySource(
             path=str(loader.resolve_path(path)),
             format=_row_str(row.get("source_format")),
             version=_row_str(row.get("source_version")),
             key=key,
             origin_id="" if origin is None or pd.isnull(origin) else str(origin),
+            offsets=tuple(map(int, offsets.split())),
+            chunk_rows=int(row["_chunk_rows"]) if offsets else 0,
+            mtime_ns=mtime,
+            size_bytes=size,
         )
         return source.describe(shape, dtype)
 

@@ -53,6 +53,12 @@ NEW_AXIS = -1
 # The per member per axis matrices, in the order the digest takes them.
 AXIS_FIELDS = ("out_start", "out_stop", "src_axis", "src_start", "src_extent")
 
+# Where each source's bytes are, as space separated offsets, and the file
+# they were found in, with the value a source which records none has.
+_LAYOUT_DEFAULTS = MappingProxyType(
+    {"offsets": "", "chunk_rows": 0, "mtime_ns": None, "size_bytes": None}
+)
+
 # The columns of the sources table besides `filled`, in the frame's order.
 SOURCE_FIELDS = (
     "base_uri",
@@ -62,6 +68,7 @@ SOURCE_FIELDS = (
     "key",
     "origin_id",
     "dtype",
+    *_LAYOUT_DEFAULTS,
     "value",
 )
 
@@ -293,6 +300,10 @@ class _Sources:
     key: _Column
     origin_id: _Strings
     dtype: _Column
+    offsets: _Column
+    chunk_rows: _Column
+    mtime_ns: _Column
+    size_bytes: _Column
     value: _Column
     filled: np.ndarray
     # Whether the columns of one value have been folded; see LazyTable.
@@ -582,7 +593,10 @@ def _members_of(frame: pd.DataFrame) -> _Members:
     }
     # A frame written before members stated these reads them as empty.
     for name in (*SOURCE_FIELDS[4:], "cast"):
-        values = frame[name].to_numpy(object) if name in frame else [""] * len(frame)
+        default = _LAYOUT_DEFAULTS.get(name, "")
+        values = (
+            frame[name].to_numpy(object) if name in frame else [default] * len(frame)
+        )
         columns[name] = _Column.of(values)
     cast = columns.pop("cast")
     sources, rows = _sources_of_columns(columns, frame["filled"].to_numpy(bool))
@@ -1201,7 +1215,9 @@ class LazyArray:
             if name in _STRING_FIELDS:
                 out[name] = _spread(inverse, column.at(used), ndim)
             else:
-                out[name] = _spread(column.codes[rows], column.values, ndim)
+                # numbers, which an empty array must not type as text
+                kind = object if name in SOURCE_FIELDS[8:-1] else None
+                out[name] = _spread(column.codes[rows], column.values, ndim, kind)
         out["cast"] = _spread(members.cast.codes, members.cast.values, ndim)
         out["filled"] = np.repeat(members.filled, ndim)
         # The values are python scalars of several types, which stay objects.
@@ -1374,6 +1390,8 @@ def _block_of_sources(
             raise ParameterError(msg)
     fields = ("path", "format", "version", "key", "origin_id", "filled", "value")
     columns: dict[str, Any] = {x: [getattr(y, x) for y in sources] for x in fields}
+    columns |= {x: [getattr(y, x) for y in sources] for x in _LAYOUT_DEFAULTS}
+    columns["offsets"] = [" ".join(map(str, x.offsets)) for x in sources]
     columns["source_dtype"] = [np.dtype(x.dtype) for x in sources]
     if casts is not None and is_list_like(casts):
         # Normalized first, since a structured spec is a list, which no key is.
@@ -1420,6 +1438,10 @@ def _block_of_columns(
         "path": _Column([x[1] for x in split], path.codes),
         **{x: _broadcast(columns[x], count, x) for x in SOURCE_FIELDS[2:6]},
         "dtype": dtypes.map(_dtype_text),
+        **{
+            x: _broadcast(columns.get(x, default), count, x)
+            for x, default in _LAYOUT_DEFAULTS.items()
+        },
         "value": _broadcast(columns.get("value"), count, "value"),
     }
     cast = _broadcast(columns["cast_via"], count, "cast_via").map(
@@ -1491,6 +1513,10 @@ def _sources_of(block: _Block) -> list[ArraySource]:
                 extent=tuple(stored),
                 filled=filled[member],
                 value=at["value"][member],
+                offsets=tuple(map(int, at["offsets"][member].split())),
+                chunk_rows=at["chunk_rows"][member],
+                mtime_ns=at["mtime_ns"][member],
+                size_bytes=at["size_bytes"][member],
             )
         )
     return out

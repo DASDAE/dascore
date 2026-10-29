@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import itertools
 import shutil
 from dataclasses import replace
 from functools import wraps
@@ -18,6 +19,7 @@ from dascore.core.lazy_array import LazyArray
 from dascore.core.source import ArraySource
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io import FiberIO
+from dascore.io import core as io_core
 from dascore.io.h5simple.core import H5Simple
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import H5Reader
@@ -498,3 +500,189 @@ class TestArrayLookup:
         lazy = LazyArray.from_source(patch._source)
         assert patch._source.key == ""
         assert patch.attrs.data_id == lazy.data_id == "af8aa5c7443693b5f6af5dd541cc83d4"
+
+
+def _write_simple(path, data, start=0.0, gaps=False, **options):
+    """Write an H5Simple file; `gaps` puts other storage between chunks."""
+    with h5py.File(path, "w") as h5:
+        raw = h5.create_dataset("raw", shape=data.shape, dtype=data.dtype, **options)
+        step = (options.get("chunks") or data.shape)[0]
+        for num, row in enumerate(range(0, len(data), step)):
+            raw[row : row + step] = data[row : row + step]
+            if gaps:  # flushed, so the chunk is placed before the gap
+                h5.flush()
+                h5[f"gaps/{num}"] = np.zeros(64)
+                h5.flush()
+        h5["time"] = start + np.arange(len(data), dtype=float)
+        h5["distance"] = np.arange(data.shape[1])
+        h5.attrs["dims"] = "time,distance"
+    return path
+
+
+def _stored(path, window):
+    """What h5py gives for a window of the data node."""
+    with h5py.File(path, "r") as h5:
+        return h5["raw"][window]
+
+
+@pytest.fixture
+def stored_reads(monkeypatch):
+    """Count the lazy loads which open the file through its reader."""
+    calls, original = [], io_core._open_stored_reader
+
+    def counted(*args, **kwargs):
+        calls.append(args)
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(io_core, "_open_stored_reader", counted)
+    return calls
+
+
+# The storage layouts of a (30, 5) array the offset reads cover.
+LAYOUTS = {
+    "contiguous": {},
+    "chunked": {"chunks": (7, 5)},
+    "gaps": {"chunks": (7, 5), "gaps": True},
+}
+
+
+class TestOffsetReads:
+    """A plain dataset's bytes are read from its offsets, never opening HDF5."""
+
+    @pytest.fixture(params=list(LAYOUTS))
+    def path(self, tmp_path, request):
+        """A file of each storage layout."""
+        data = np.arange(150, dtype=np.float32).reshape(30, 5)
+        return _write_simple(tmp_path / "a.h5", data, **LAYOUTS[request.param])
+
+    @pytest.mark.parametrize(
+        "window",
+        [
+            (slice(None),),
+            (slice(3, 9),),
+            (slice(5, 16),),
+            (slice(25, 30),),
+            (slice(4, 4),),
+            (slice(2, 23), slice(1, 4)),
+            (slice(None), slice(3, 5)),
+        ],
+    )
+    @pytest.mark.parametrize("dtype", ["<f4", ">f4", ">i2"])
+    def test_equals_hdf5(self, tmp_path, stored_reads, window, dtype):
+        """Each window equals what h5py reads, dtype, byte order and all."""
+        data = np.arange(150).reshape(30, 5).astype(dtype)
+        for name, options in LAYOUTS.items():
+            path = _write_simple(tmp_path / f"{name}.h5", data, **options)
+            source = dc.read(path)[0]._source
+            out, expected = source[window].load(), _stored(path, window)
+            assert out.dtype == expected.dtype and out.flags.c_contiguous
+            np.testing.assert_array_equal(out, expected)
+        assert not stored_reads
+
+    def test_gaps_between_chunks(self, tmp_path):
+        """Chunks other storage separates are not read as one run."""
+        data = np.ones((30, 5), np.float32)
+        path = _write_simple(tmp_path / "a.h5", data, chunks=(7, 5), gaps=True)
+        offsets = dc.read(path)[0]._source.offsets
+        assert any(b - a != 7 * 5 * 4 for a, b in itertools.pairwise(offsets))
+
+    def test_one_open_for_many_windows(self, path, stored_reads, monkeypatch):
+        """A lazy array of several windows of one file opens it once."""
+        source, opened = dc.read(path)[0]._source, []
+        original = open
+
+        def counted(*args, **kwargs):
+            opened.append(args[0])
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr("builtins.open", counted)
+        array = LazyArray.from_sources([source[20:30], source[0:4], source[9:12]])
+        expected = np.concatenate(
+            [_stored(path, slice(*x)) for x in ((20, 30), (0, 4), (9, 12))]
+        )
+        np.testing.assert_array_equal(array.load(), expected)
+        assert len(opened) == 1 and not stored_reads
+
+    def test_narrow_window_uses_reader(self, tmp_path, stored_reads):
+        """A window of few columns of a wide array is left to the reader."""
+        data = np.arange(500, dtype=np.float32).reshape(10, 50)
+        path = _write_simple(tmp_path / "wide.h5", data)
+        source = dc.read(path)[0]._source
+        np.testing.assert_array_equal(source[:, 3:8].load(), data[:, 3:8])
+        assert len(stored_reads) == 1
+
+    def test_rewritten_file_uses_reader(self, path, stored_reads):
+        """A file changed since its offsets were taken is read by its reader."""
+        source = dc.read(path)[0]._source
+        data = -np.arange(150, dtype=np.float32).reshape(30, 5)
+        _write_simple(path, data, chunks=(3, 5), gaps=True)
+        np.testing.assert_array_equal(source[2:20].load(), data[2:20])
+        assert len(stored_reads) == 1
+
+    def test_offsets_past_the_end(self, path, stored_reads):
+        """Offsets which find too few bytes leave the read to the reader."""
+        source = dc.read(path)[0]._source
+        source = replace(source, offsets=(source.size_bytes,) * len(source.offsets))
+        np.testing.assert_array_equal(source.load(), _stored(path, slice(None)))
+        assert len(stored_reads) == 1
+
+    def test_missing_file(self, path):
+        """A file gone since its offsets were taken fails as the reader fails."""
+        source = dc.read(path)[0]._source
+        path.unlink()
+        with pytest.raises(FileNotFoundError):
+            source.load()
+
+    def test_offsets_are_not_identity(self, path):
+        """Where the bytes are says nothing about which array a source is."""
+        source = dc.read(path)[0]._source
+        bare = replace(source, offsets=(), chunk_rows=0, mtime_ns=None, size_bytes=None)
+        assert source.offsets and source == bare and hash(source) == hash(bare)
+        assert source[2:5].data_id == bare[2:5].data_id
+        assert source[2:5].offsets == source.offsets
+
+    def test_round_trip_dict(self, path):
+        """A source's dict gives back its offsets."""
+        source = dc.read(path)[0]._source
+        assert ArraySource.from_dict(source.to_dict()).offsets == source.offsets
+
+
+class TestIndexedOffsetReads:
+    """Offsets survive an index, so merged lazy loads open no HDF5 file."""
+
+    @pytest.fixture
+    def directory(self, tmp_path):
+        """Contiguous and chunked files, end to end in time, indexed."""
+        data = np.arange(6 * 20 * 4, dtype=np.float64).reshape(120, 4)
+        for num in range(6):
+            options = {"chunks": (6, 4), "gaps": num % 2} if num > 2 else {}
+            part = data[num * 20 : (num + 1) * 20]
+            _write_simple(tmp_path / f"{num}.h5", part, start=num * 20.0, **options)
+        dc.spool(tmp_path).update()
+        return tmp_path, data
+
+    def test_merge(self, directory, stored_reads):
+        """A reopened index merges every file from its offsets."""
+        path, data = directory
+        merged = dc.spool(path).chunk(time=None)[0]
+        np.testing.assert_array_equal(merged.data, data)
+        assert not stored_reads
+
+    def test_trimmed_merge(self, directory, stored_reads):
+        """A selection across files reads only its rows, from the offsets."""
+        path, data = directory
+        spool = (
+            dc.spool(path)
+            .select(time=tuple(dc.to_datetime64([15.5, 70.5])))
+            .chunk(time=None)
+        )
+        np.testing.assert_array_equal(spool[0].data, data[16:71])
+        assert not stored_reads
+
+    def test_rewritten_file(self, directory, stored_reads):
+        """A file rewritten after indexing is not read from stale offsets."""
+        path, data = directory
+        spool = dc.spool(path)
+        _write_simple(path / "4.h5", -data[80:100], start=80.0, chunks=(3, 4))
+        merged = spool.chunk(time=None)[0]
+        np.testing.assert_array_equal(merged.data[80:100], -data[80:100])

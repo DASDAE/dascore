@@ -2526,3 +2526,26 @@ class TestStepFromRate:
         coord = get_coord(start=t0, step=step_from_rate(1024.0), shape=(1024,))
         assert coord.step_exact == Fraction(1, 1024)
         assert coord.min() + coord.coord_range() == t0 + np.timedelta64(1, "s")
+
+
+class TestOffsetReads:
+    """A dataset reader's plain arrays load from their offsets alone."""
+
+    @pytest.fixture
+    def refuse_reader(self, monkeypatch):
+        """Fail any load which opens the file through its reader."""
+
+        def refuse(*args, **kwargs):
+            raise AssertionError("the load opened the file's reader")
+
+        monkeypatch.setattr(io_core, "_open_stored_reader", refuse)
+
+    @pytest.mark.parametrize(
+        "name", ["ap_sensing_1.hdf5", "gdr_1.h5", "ai4eps_1.h5", "neubrex_das_1.h5"]
+    )
+    def test_mixin_readers(self, name, refuse_reader):
+        """Readers describing their arrays by dataset load them from offsets."""
+        patch = dc.read(fetch(name))[0]
+        source = patch._source
+        assert source.offsets
+        np.testing.assert_array_equal(source[2:9].load(), patch.data[2:9])
