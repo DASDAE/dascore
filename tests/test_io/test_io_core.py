@@ -508,6 +508,12 @@ class TestStoredCoord:
             out = stored_coord(holed, True, name="distance", where="holed.h5")
         np.testing.assert_array_equal(out.values, holed)
 
+    def test_nameless_resource(self):
+        """A resource giving no name is called a file."""
+        holed = np.delete(np.arange(1_001.0), 500)
+        with pytest.warns(SnapWarning, match="^a file: "):
+            stored_coord(holed, True, name="distance", where=io.BytesIO())
+
     def test_hole_near_an_end_keeps_labels(self):
         """The quartile labels see a hole wherever it sits."""
         for hole in (3, 400, 995):
