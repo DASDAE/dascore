@@ -360,13 +360,15 @@ def label_indexer(
     )
     if labels.ndim == 0 and method is None:
         result = index.get_loc(labels[()])
-        if positions is not None and isinstance(result, np.ndarray):
-            # Pandas returns arrays for partial dates on descending indexes.
-            # A range's matching interval is contiguous, including omitted samples.
-            matches = np.flatnonzero(result) if result.dtype.kind == "b" else result
-            if not len(matches):
-                return slice(0, 0)
-            result = slice(int(matches[0]), int(matches[-1]) + 1)
+        if positions is not None and not np.isscalar(result):
+            # A partial date matches an interval, which pandas reports as a
+            # slice, mask or positions by version; it spans omitted samples.
+            matches = np.arange(len(index))[result]
+            result = (
+                slice(int(matches[0]), int(matches[-1]) + 1)
+                if len(matches)
+                else slice(0, 0)
+            )
         return _restore_indexer(result, positions)
     result = index.get_indexer(
         np.atleast_1d(labels), method=method, tolerance=tolerance
