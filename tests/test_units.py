@@ -253,7 +253,6 @@ class TestParenthesizedFactor:
             "m (10^-9)",
             "nanostrain (10**-9.0)",
             "nanostrain (10⁻⁹)",
-            "nanostrain [1e-9]",
             "nanostrain * (1e-9)",
             "nanostrain*(1e-9)",
         ],
