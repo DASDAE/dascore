@@ -170,6 +170,14 @@ class TestStoredByteLayout:
         offsets, rows = self._layout(path)
         assert len(offsets) == 1 and rows == 10
 
+    def test_windows_driver(self, tmp_path, monkeypatch):
+        """A local file on Windows names its driver for that platform."""
+        path = tmp_path / "w.h5"
+        with h5py.File(path, "w") as h5:
+            h5["data"] = np.ones((10, 4))
+        monkeypatch.setattr(h5py.File, "driver", property(lambda self: "windows"))
+        assert self._layout(path) is not None
+
     def test_chunked_full_width(self, tmp_path):
         """Full-width chunks are listed in row order, the last one partial."""
         path, data = tmp_path / "k.h5", np.arange(40.0).reshape(10, 4)

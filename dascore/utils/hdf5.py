@@ -464,6 +464,9 @@ def unpack_scalar_h5_dataset(dataset):
 # index row costs more than plain reads save.
 MAX_LAYOUT_CHUNKS = 1024
 
+# What h5py names the plain local-file driver: Windows builds call it so.
+_LOCAL_DRIVERS = frozenset({"sec2", "windows"})
+
 
 def stored_byte_layout(dataset) -> tuple[tuple[int, ...], int] | None:
     """
@@ -486,8 +489,11 @@ def stored_byte_layout(dataset) -> tuple[tuple[int, ...], int] | None:
     >>> assert rows == 1024 and len(offsets) == 12
     """
     shape, chunks, plist = dataset.shape, dataset.chunks, dataset.id.get_create_plist()
-    # The bytes are the array only when HDF5 would not convert them on read.
-    plain = dataset.file.driver == "sec2" and not dataset.dtype.hasobject
+    # The bytes are the array only in a local file, read only (a writer may
+    # hold samples not yet flushed), whose stored type is the type read.
+    file = dataset.file
+    plain = file.driver in _LOCAL_DRIVERS and file.mode == "r"
+    plain = plain and not dataset.dtype.hasobject
     plain = plain and dataset.id.get_type().equal(h5t.py_create(dataset.dtype))
     if not shape or not plain or plist.get_nfilters():
         return None
@@ -497,10 +503,12 @@ def stored_byte_layout(dataset) -> tuple[tuple[int, ...], int] | None:
     count = -(-shape[0] // chunks[0])
     if chunks[1:] != shape[1:] or count > MAX_LAYOUT_CHUNKS:
         return None
-    if dataset.id.get_num_chunks() != count:
+    iterate = getattr(dataset.id, "chunk_iter", None)  # h5py >= 3.8
+    if iterate is None or dataset.id.get_num_chunks() != count:
         return None
-    found = (dataset.id.get_chunk_info(x) for x in range(count))
-    return tuple(x.byte_offset for x in found), chunks[0]
+    found: list[tuple[tuple[int, ...], int]] = []
+    iterate(lambda x: found.append((x.chunk_offset, x.byte_offset)))
+    return tuple(x for _, x in sorted(found)), chunks[0]
 
 
 def h5_matches_structure(h5file: H5pyFile, structure: Sequence[str]):

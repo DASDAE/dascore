@@ -26,7 +26,7 @@ import pandas as pd
 import dascore as dc
 from dascore.core.coordmanager import CoordManager
 from dascore.core.coords import _EXACT_GRID_FIELDS, CoordSummary
-from dascore.core.source import ArraySource
+from dascore.core.source import ArraySource, _text_offsets
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io.core import FiberIO
 from dascore.io.index.backend import get_backend
@@ -785,7 +785,7 @@ class PlanResolver(PatchResolver):
             version=_row_str(row.get("source_version")),
             key=key,
             origin_id="" if origin is None or pd.isnull(origin) else str(origin),
-            offsets=tuple(map(int, offsets.split())),
+            offsets=_text_offsets(offsets),
             chunk_rows=int(row["_data_chunk_rows"]) if offsets else 0,
             mtime_ns=mtime,
             size_bytes=size,

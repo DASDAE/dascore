@@ -509,6 +509,11 @@ def _get_data_node(h5, source_patch_key=""):
     # default read refuses such a key rather than picking one
     nodes = [(info.name, info) for info in _yield_data_nodes(h5)]
     info = resolve_keyed_source(nodes, source_patch_key, where=str(h5.filename))
+    return _node_dataset(info)
+
+
+def _node_dataset(info):
+    """Return the dataset holding a node's data."""
     return _NODE_DATA_PROCESSORS[info.patch_type](info)
 
 
@@ -580,8 +585,7 @@ def _yield_prodml_attrs_coords(
     for node_info in _yield_data_nodes(fi):
         func = _NODE_ATTRS_PROCESSORS[node_info.patch_type]
         attr, coords, dtype = func(node_info, d_coord, base_info, snap=snap)
-        data = _NODE_DATA_PROCESSORS[node_info.patch_type](node_info)
-        yield attr, coords, node_info.name, dtype, data
+        yield attr, coords, node_info.name, dtype, _node_dataset(node_info)
 
 
 def _get_dims_from_attrs(attrs):

@@ -43,7 +43,7 @@ from numpy.typing import ArrayLike, DTypeLike
 from pandas.api.types import infer_dtype, is_list_like
 
 import dascore as dc
-from dascore.core.source import ArraySource
+from dascore.core.source import ArraySource, _offsets_text, _text_offsets
 from dascore.exceptions import ParameterError
 from dascore.utils.identity import DIGEST_SIZE, H, dtype_description
 
@@ -53,8 +53,9 @@ NEW_AXIS = -1
 # The per member per axis matrices, in the order the digest takes them.
 AXIS_FIELDS = ("out_start", "out_stop", "src_axis", "src_start", "src_extent")
 
-# Where each source's bytes are, as space separated offsets, and the file
-# they were found in, with the value a source which records none has.
+# Each layout column of a source, with the value one recording no offsets
+# has: space separated offsets, rows per offset, and the file stat they were
+# taken under.
 _LAYOUT_DEFAULTS = MappingProxyType(
     {"offsets": "", "chunk_rows": 0, "mtime_ns": None, "size_bytes": None}
 )
@@ -592,7 +593,8 @@ def _members_of(frame: pd.DataFrame) -> _Members:
     columns = {
         x: _Column.of(frame[x].astype(str).to_numpy(object)) for x in SOURCE_FIELDS[:4]
     }
-    # A frame written before members stated these reads them as empty.
+    # A frame written before members stated these reads them as empty, or
+    # the layout default.
     for name in (*SOURCE_FIELDS[4:], "cast"):
         default = _LAYOUT_DEFAULTS.get(name, "")
         values = (
@@ -1226,8 +1228,9 @@ class LazyArray:
             if name in _STRING_FIELDS:
                 out[name] = _spread(inverse, column.at(used), ndim)
             else:
-                kind = object if name in _LAYOUT_NUMBERS else None
-                out[name] = _spread(column.codes[rows], column.values, ndim, kind)
+                out[name] = _spread(column.codes[rows], column.values, ndim)
+                if name in _LAYOUT_NUMBERS:  # exact through parquet, nulls too
+                    out[name] = pd.array(out[name], dtype="Int64")
         out["cast"] = _spread(members.cast.codes, members.cast.values, ndim)
         out["filled"] = np.repeat(members.filled, ndim)
         # The values are python scalars of several types, which stay objects.
@@ -1401,7 +1404,7 @@ def _block_of_sources(
     fields = ("path", "format", "version", "key", "origin_id", "filled", "value")
     fields += tuple(_LAYOUT_DEFAULTS)
     columns: dict[str, Any] = {x: [getattr(y, x) for y in sources] for x in fields}
-    columns["offsets"] = [" ".join(map(str, x.offsets)) for x in sources]
+    columns["offsets"] = [_offsets_text(x.offsets) for x in sources]
     columns["source_dtype"] = [np.dtype(x.dtype) for x in sources]
     if casts is not None and is_list_like(casts):
         # Normalized first, since a structured spec is a list, which no key is.
@@ -1523,7 +1526,7 @@ def _sources_of(block: _Block) -> list[ArraySource]:
                 extent=tuple(stored),
                 filled=filled[member],
                 value=at["value"][member],
-                offsets=tuple(map(int, at["offsets"][member].split())),
+                offsets=_text_offsets(at["offsets"][member]),
                 chunk_rows=at["chunk_rows"][member],
                 mtime_ns=at["mtime_ns"][member],
                 size_bytes=at["size_bytes"][member],

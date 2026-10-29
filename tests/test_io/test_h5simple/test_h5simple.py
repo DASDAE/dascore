@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import io
 import itertools
 import shutil
 from dataclasses import replace
@@ -23,6 +24,7 @@ from dascore.exceptions import UnknownFiberFormatError
 from dascore.io import FiberIO
 from dascore.io import core as io_core
 from dascore.io.h5simple.core import H5Simple
+from dascore.io.index.planned import PlanResolver
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import H5Reader
 
@@ -643,14 +645,17 @@ class TestOffsetReads:
     def test_offsets_are_not_identity(self, path):
         """Where the bytes are says nothing about which array a source is."""
         source = dc.read(path)[0]._source
-        bare = replace(source, offsets=(), chunk_rows=0, mtime_ns=None, size_bytes=None)
+        bare = source._without_layout()
         assert source.offsets and source == bare and hash(source) == hash(bare)
         assert source[2:5].data_id == bare[2:5].data_id
         assert source[2:5].offsets == source.offsets
         assert ArraySource.from_dict(source.to_dict()).offsets == source.offsets
 
     def test_frames(self, path, tmp_path, stored_reads):
-        """Frames joined with older ones, or stored as parquet, keep offsets."""
+        """
+        A frame joined with one stating no layout loads, through the reader;
+        one with empty layout cells keeps its offsets exactly through parquet.
+        """
         source = dc.read(path)[0]._source
         frame = LazyArray.from_sources([source[0:10], source[10:20]]).to_frame()
         layout = ["offsets", "chunk_rows", "mtime_ns", "size_bytes"]
@@ -660,10 +665,12 @@ class TestOffsetReads:
         back = LazyArray.from_frame(joined, (20, 5), source.dtype)
         np.testing.assert_array_equal(back.load(), expected)
         assert len(stored_reads) == 1
-        frame.to_parquet(tmp_path / "frame.parquet")
+        filled = ArraySource.full((4, 5), 0.0, dtype=source.dtype)
+        array = LazyArray.from_sources([source[0:10], filled])
+        array.to_frame().to_parquet(tmp_path / "frame.parquet")
         stored = pd.read_parquet(tmp_path / "frame.parquet")
-        back = LazyArray.from_frame(stored, (20, 5), source.dtype)
-        np.testing.assert_array_equal(back.load(), expected)
+        back = LazyArray.from_frame(stored, array.shape, array.dtype)
+        np.testing.assert_array_equal(back.load(), array.load())
         assert len(stored_reads) == 1
 
     @pytest.mark.parametrize("distance", [4, 6])
@@ -724,15 +731,86 @@ class TestOffsetReads:
         np.testing.assert_array_equal(source[3:9].load(), data[3:9])
 
     def test_file_changed_while_scanned(self, path, monkeypatch):
-        """Offsets are kept only for the file stated before the scan read it."""
-        identity = io_core.source_identity
+        """
+        Offsets are kept only for the file stated before the scan read it,
+        however the file stats after.
+        """
+        identity, calls = io_core.source_identity, []
 
-        def other(source):
+        def first_differs(source):
             path, size, mtime = identity(source)
-            return path, size + 1, mtime
+            calls.append(path)
+            return path, size + (len(calls) == 1), mtime
 
-        monkeypatch.setattr(io_core, "source_identity", other)
+        monkeypatch.setattr(io_core, "source_identity", first_differs)
         assert not dc.read(path)[0]._source.offsets
+        calls.clear()
+        assert not dc.scan(path)[0].data_offsets
+
+    def test_rewritten_between_loads(self, path):
+        """A file rewritten while its handle is open is not read from offsets."""
+        source = dc.read(path)[0]._source
+        data = -np.arange(150, dtype=np.float32).reshape(30, 5)
+        with io_core._open_array_reader(source) as load:
+            np.testing.assert_array_equal(load(source[0:5]), _stored(path, slice(5)))
+            with h5py.File(path, "w") as h5:
+                h5["pad"] = np.full(4000, 7.0)
+            _write_simple(path.with_name("new.h5"), data, chunks=(3, 5))
+            path.write_bytes(path.with_name("new.h5").read_bytes())
+            np.testing.assert_array_equal(load(source[5:20]), data[5:20])
+
+    def test_writable_handle(self, path):
+        """A file open for writing may hold samples its bytes do not."""
+        with h5py.File(path, "r+") as h5:
+            h5["raw"][:] = _stored(path, ()) + 100
+            source = dc.read(path)[0]._source
+            assert not source.offsets
+            np.testing.assert_array_equal(source.load(), h5["raw"][()])
+
+    @pytest.mark.parametrize("most", [None, 7])
+    def test_reads_in_pieces(self, tmp_path, monkeypatch, most):
+        """
+        Abutting chunks are one read, and a read returning fewer bytes than
+        asked, as one over 2 GiB does, is continued rather than given up.
+        """
+        data = np.arange(150, dtype=np.float32).reshape(30, 5)
+        path = _write_simple(tmp_path / "a.h5", data, **LAYOUTS["chunked"])
+        source, reads, original = dc.read(path)[0]._source, [], open
+
+        class Partial(io.FileIO):
+            def readinto(self, view):
+                reads.append(len(view))
+                return super().readinto(view[:most])
+
+        def partial_open(file, mode="r", buffering=-1):
+            assert buffering == 0
+            return Partial(file, mode.replace("b", ""))
+
+        monkeypatch.setattr("builtins.open", partial_open)
+        np.testing.assert_array_equal(source.load(), data)
+        monkeypatch.setattr("builtins.open", original)
+        assert len(reads) == (1 if most is None else -(-data.nbytes // most))
+
+    def test_wrapped_array_hooks(self, monkeypatch, registry):
+        """
+        A marked read_array wrapped with functools.wraps is not marked, so a
+        load goes through the wrapper.
+        """
+        source = dc.read(fetch("prodml_2.1.h5"))[0]._source
+        expected = replace(source, offsets=()).load()[2:9] * 2
+        for name, version in (("PRODML", "2.1"), ("GDR_DAS", "1")):
+            owner = type(FiberIO.manager.get_fiberio(format=name, version=version))
+            original = owner.read_array
+
+            @wraps(original)
+            def doubled(*args, _original=original, **kwargs):
+                return _original(*args, **kwargs) * 2
+
+            monkeypatch.setattr(owner, "read_array", doubled)
+        np.testing.assert_array_equal(source[2:9].load(), expected)
+        # A dataset reader's own key path bypasses read_array either way.
+        gdr = FiberIO.manager.get_fiberio(format="GDR_DAS", version="1")
+        assert not io_core._returns_bytes(gdr)
 
 
 class TestIndexedOffsetReads:
@@ -767,18 +845,17 @@ class TestIndexedOffsetReads:
         np.testing.assert_array_equal(spool[0].data, data[16:71])
         assert not stored_reads
 
-    def test_rewritten_file(self, directory, stored_reads):
-        """A file rewritten after indexing is not read from stale offsets."""
+    def test_rewritten_file(self, directory, stored_reads, monkeypatch):
+        """
+        A file rewritten after indexing, past the merge's own check of its
+        sources, is read by its reader rather than from stale offsets.
+        """
         path, data = directory
         spool = dc.spool(path)
-        _write_simple(path / "4.h5", -data[80:100], start=80.0, chunks=(3, 4))
+        _write_simple(
+            path / "4.h5", -data[80:100], start=80.0, chunks=(3, 4), gaps=True
+        )
+        monkeypatch.setattr(PlanResolver, "_sources_unchanged", lambda *_: True)
         merged = spool.chunk(time=None)[0]
         np.testing.assert_array_equal(merged.data[80:100], -data[80:100])
-
-    def test_attr_named_chunk_rows(self, tmp_path):
-        """An attr the layout columns might have claimed is still indexed."""
-        path = _write_simple(tmp_path / "a.h5", np.ones((10, 4)))
-        with h5py.File(path, "a") as h5:
-            h5.attrs["chunk_rows"] = 7
-        contents = dc.spool(tmp_path).update().get_contents()
-        assert contents["chunk_rows"].tolist() == [7]
+        assert len(stored_reads) == 1

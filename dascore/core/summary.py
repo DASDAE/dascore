@@ -226,7 +226,8 @@ class PatchSummary(DascoreBaseModel):
     source_format: str = ""
     source_version: str = ""
     source_patch_key: str = ""
-    # Where a reader which says so keeps the data's rows; see ArraySource.
+    # Where the data's rows are stored, for a reader marked as returning
+    # stored bytes; see ArraySource.
     data_offsets: tuple[int, ...] = ()
     data_chunk_rows: int = 0
 

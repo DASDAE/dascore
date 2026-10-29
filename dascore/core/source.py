@@ -16,6 +16,17 @@ from dascore.utils.identity import H, dtype_description
 # Where an array is, which names it when nothing better does.
 _LOCATION_FIELDS = ("path", "format", "version", "key")
 
+
+def _offsets_text(offsets: tuple[int, ...]) -> str:
+    """Return offsets as the space separated text frames and indexes keep."""
+    return " ".join(map(str, offsets))
+
+
+def _text_offsets(text: str) -> tuple[int, ...]:
+    """Return the offsets `_offsets_text` wrote."""
+    return tuple(map(int, text.split()))
+
+
 # The dtype kinds a constant may take: bool, uint, int and float.
 _REAL_KINDS = frozenset("buif")
 
@@ -63,13 +74,13 @@ class ArraySource:
         The constant of a `filled` array. Such a source has no path and
         reads nothing; see [`full`](`dascore.core.source.ArraySource.full`).
     offsets, chunk_rows
-        Where the whole array's rows are stored in the file, a run of
-        `chunk_rows` rows at each offset, for a reader which says so; empty
-        when they cannot be read without the reader.
+        Byte offsets of the whole array's rows in the file, `chunk_rows`
+        rows at each, for a reader marked as returning stored bytes; empty
+        when only the reader can read them.
     mtime_ns, size_bytes
         The file's modification time and size when the offsets were taken,
-        which must still hold for them to be used. Neither these nor the
-        offsets are part of which array a source is.
+        which must still hold for them to be used. These and the offsets
+        are excluded from equality: they locate an array, not identify it.
 
     Examples
     --------
@@ -190,6 +201,10 @@ class ArraySource:
         windows = tuple((0, x) for x in shape)
         dtype = np.dtype(dtype)
         return replace(self, windows=windows, shape=shape, dtype=dtype, extent=shape)
+
+    def _without_layout(self) -> ArraySource:
+        """Return this source recording no byte offsets."""
+        return replace(self, offsets=(), chunk_rows=0, mtime_ns=None, size_bytes=None)
 
     def detach(self) -> ArraySource:
         """Return the provenance alone, for an array this no longer loads."""

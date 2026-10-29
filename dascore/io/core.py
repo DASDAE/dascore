@@ -706,12 +706,18 @@ def _is_wrapped_func(func1, func2):
     return func is func2
 
 
+# The array hooks marked as returning stored bytes. A registry rather than
+# an attribute, which `functools.wraps` would copy onto any wrapper.
+_BYTE_HOOKS: set[Callable] = set()
+
+
 def _returns_stored_bytes(func: Callable) -> Callable:
     """
-    Mark an array hook as returning its dataset's bytes as stored, so the
-    offsets a source records may stand in for it; `wraps` keeps the mark.
+    Mark an array hook as returning its dataset's stored bytes.
+
+    The source's offsets may then stand in for it; a wrapper is not marked.
     """
-    setattr(func, "_returns_stored_bytes", True)
+    _BYTE_HOOKS.add(func)
     return func
 
 
@@ -1068,6 +1074,8 @@ class FiberIO:
             arg_name = list(sig.parameters)[param_ind]
             required_type = get_type_hints(method).get(arg_name)
             method_wrapped = _type_caster(method, sig, required_type, arg_name)
+            if method in _BYTE_HOOKS:  # the caster's wrapper keeps the mark
+                _BYTE_HOOKS.add(method_wrapped)
             setattr(cls, name, method_wrapped)
         # Keep the methods each hook was written against, so subclass and
         # runtime wrappers of them take effect.
@@ -1354,7 +1362,7 @@ def _returns_bytes(fiberio: FiberIO) -> bool:
     hook = _paired_hook(fiberio, "_prepare_array_reader")
     if getattr(hook, "__func__", None) is FiberIO._prepare_array_reader:
         hook = fiberio.read_array
-    return getattr(hook, "_returns_stored_bytes", False)
+    return getattr(hook, "__func__", None) in _BYTE_HOOKS
 
 
 def _open_bytes(source: ArraySource):
@@ -1371,9 +1379,10 @@ def _read_bytes(handle, stat, source: ArraySource) -> np.ndarray | None:
     """
     Read a source's window from its offsets, or return None for its reader.
 
-    Rows covering the window are read whole, abutting chunks in one read,
-    unless that is over four times the bytes asked for or the file is not
-    the one the offsets were taken from.
+    The window's rows are read at full width, abutting chunks in one read,
+    then sliced. None when that is over four times the bytes asked for, the
+    file's stat is not the one recorded, before or after the reads (nothing
+    locks the file), or a read reaches the end of the file.
     """
     if not source.offsets or stat != (source.size_bytes, source.mtime_ns):
         return None
@@ -1393,9 +1402,13 @@ def _read_bytes(handle, stat, source: ArraySource) -> np.ndarray | None:
     view, done = memoryview(out.reshape(-1).view(np.uint8)), 0
     for offset, size in spans:
         handle.seek(offset)
-        if handle.readinto(view[done : done + size]) != size:
-            return None
-        done += size
+        stop = done + size
+        while done < stop:  # one read returns at most about 2 GiB
+            if not (got := handle.readinto(view[done:stop])):
+                return None
+            done += got
+    if _size_and_mtime(os.fstat(handle.fileno())) != stat:
+        return None
     return np.ascontiguousarray(out[(slice(None), *(slice(*x) for x in rest))])
 
 
@@ -1413,9 +1426,10 @@ def _open_array_reader(
     ``path`` opens the resource in place of the source's string, for a
     path which carries more (a remote store's options).
 
-    A source recording where its bytes are in a local file, unchanged
-    since, is read from there with plain file reads, and the resource is
-    opened only for the sources which cannot be.
+    Without `path`, a source recording where its bytes are in a local file,
+    unchanged since, is read with plain file reads when its reader is marked
+    as returning stored bytes; the resource is opened only for the sources
+    which cannot be.
     """
     fiberio = FiberIO.manager.get_fiberio(format=source.format, version=source.version)
     with ExitStack() as stack:
@@ -1547,9 +1561,9 @@ def _stamp_source_ids(
     which `read_array` can find by key. `snap` is the decode option the
     metadata were read under: a non-default one makes a different array of
     the same bytes, so it is an operation on the stored thing. `identity` is
-    the source's, taken before its metadata were read; a source's byte
-    offsets are kept only when it is the stat of the file they are in and
-    the patch is the array as stored.
+    the source's stat, taken before its metadata were read; byte offsets are
+    kept only when their recorded stat matches it and the patch has the
+    stored shape.
     """
     indices = range(len(patches)) if indices is None else indices
     if not indices:
@@ -1566,9 +1580,7 @@ def _stamp_source_ids(
             origin.offsets
             and (origin.extent, origin.size_bytes, origin.mtime_ns) != stated
         ):
-            origin = replace(
-                origin, offsets=(), chunk_rows=0, mtime_ns=None, size_bytes=None
-            )
+            origin = origin._without_layout()
         origin = replace(
             origin,
             path=reload_path,

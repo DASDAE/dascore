@@ -26,6 +26,7 @@ import numpy as np
 import pandas as pd
 
 from dascore.core.attrs import PatchAttrs
+from dascore.core.source import _offsets_text
 from dascore.core.summary import PatchSummary, normalize_source_patch_key
 from dascore.exceptions import InvalidInventoryError
 from dascore.io.index.schema import (
@@ -528,7 +529,7 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
         coords=coords,
         attrs_complete=attrs_complete,
         attr_dtypes=attr_dtypes,
-        data_offsets=" ".join(map(str, summary.data_offsets)) or None,
+        data_offsets=_offsets_text(summary.data_offsets) or None,
         data_chunk_rows=summary.data_chunk_rows or None,
     )
 

@@ -34,10 +34,10 @@ from typing import NamedTuple, get_args, get_type_hints
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
 # changes, not only when a column does. Version 30 records where a plain
-# HDF5 array's bytes are (`data_offsets`, `data_chunk_rows`). Version 29
-# reads XDAS-layout
-# NetCDF files as XDAS, not NETCDF_CF. Version 28 grids a stored distance
-# array in float64 from its end values, not a median step. Version 27 drops the per-run
+# HDF5 array's bytes are (`data_offsets`, `data_chunk_rows`).
+# Version 29 reads XDAS-layout NetCDF files as XDAS, not NETCDF_CF.
+# Version 28 grids a stored distance array in float64 from its end values,
+# not a median step. Version 27 drops the per-run
 # coordinate links (`run_index`). Version 26 scans labels flooring a
 # fractional-step grid as that grid, not a rounded step. Version 25 includes the step
 # runs on one fractional grid now state in their ids. Version 24 identifies a
@@ -147,7 +147,8 @@ class PatchRow(NamedTuple):
     # JSON mapping for numeric attrs whose scalar dtype SQL would erase.
     attr_dtypes: str | None
     # Space separated byte offsets of the data array's chunks of
-    # `data_chunk_rows` rows, for a reader which reads them plainly; else NULL.
+    # `data_chunk_rows` rows, for a reader marked as returning stored bytes;
+    # else NULL.
     data_offsets: str | None
     data_chunk_rows: int | None
 
