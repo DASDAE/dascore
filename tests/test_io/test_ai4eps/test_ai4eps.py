@@ -87,16 +87,38 @@ class TestAI4EPS:
         patch = AI4EPSV1().read(path)[0]
         assert not patch.attrs.data_units
 
-    def test_near_miss_not_claimed(self, tmp_path):
-        """A file with generic timing attrs but no event metadata isn't claimed."""
+    @pytest.mark.parametrize("end_time", ["00:00:00.03", "00:00:00.04"])
+    @pytest.mark.filterwarnings("error:AI4EPS file end_time")
+    def test_without_event_id(self, tmp_path, end_time):
+        """Acquisition-complete exports read without event IDs or format hints."""
+        path = tmp_path / "eventless.h5"
+        values = np.arange(12).reshape(3, 4)
+        with h5py.File(path, "w") as h5:
+            dataset = h5.create_dataset("data", data=values)
+            dataset.attrs.update(
+                begin_time="2020-01-01T00:00:00",
+                end_time=f"2020-01-01T{end_time}",
+                dt_s=0.01,
+                dx_m=8,
+                unit="m/s",
+            )
+        assert dc.get_format(path) == ("AI4EPS", "1")
+        patch = dc.read(path)[0]
+        assert not patch.attrs.event_id
+        assert np.array_equal(patch.data, values)
+        assert dc.scan(path)[0].coords["time"].max == dc.to_datetime64(
+            "2020-01-01T00:00:00.03"
+        )
+
+    def test_missing_acquisition_units_not_claimed(self, tmp_path):
+        """A research array without acquisition units still needs an explicit map."""
         path = tmp_path / "near_miss.h5"
         with h5py.File(path, "w") as h5:
             dataset = h5.create_dataset("data", data=np.zeros((3, 4)))
-            dataset.attrs["begin_time"] = "2020-01-01T00:00:00"
-            # end_time is present so this test pins the event_id
-            # requirement specifically.
-            dataset.attrs["end_time"] = "2020-01-01T00:00:00.04"
-            dataset.attrs["dt_s"] = 0.01
-            dataset.attrs["dx_m"] = 8
-            dataset.attrs["unit"] = "m/s"
+            dataset.attrs.update(
+                begin_time="2020-01-01T00:00:00",
+                end_time="2020-01-01T00:00:00.04",
+                dt_s=0.01,
+                dx_m=8,
+            )
         assert not AI4EPSV1().get_format(path)

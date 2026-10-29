@@ -4,9 +4,9 @@ from __future__ import annotations
 
 import fnmatch
 from collections import defaultdict
-from collections.abc import Collection, Generator, Iterator, Mapping
+from collections.abc import Collection, Generator, Hashable, Iterator, Mapping
 from functools import cache
-from typing import TypeVar, cast
+from typing import Any, TypeVar, cast
 
 import numpy as np
 import pandas as pd
@@ -747,7 +747,8 @@ def patch_to_dataframe(patch: PatchType) -> pd.DataFrame:
     # create dataframe
     df = pd.DataFrame(patch.data, index=index_values, columns=col_values)
     # assign index names and attrs
-    df.attrs = patch.attrs.model_dump()
+    attrs: dict[Hashable, Any] = {**patch.attrs.model_dump()}
+    df.attrs = attrs
     df.index.name = dims[0]
     df.columns.name = dims[1]
     return df
