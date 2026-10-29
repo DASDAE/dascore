@@ -914,6 +914,21 @@ class TestMiniSeedUtils:
         path.write_bytes(b"MS\x04" + bytes(45))
         assert mseed_utils._detect_format(path) is False
 
+    @pytest.mark.parametrize("channel", [b"Z  ", b"HZ "])
+    def test_padded_channel(self, tmp_path, channel):
+        """Legacy right-padded channels detect and decode through public IO."""
+        path = _write_mseed(
+            tmp_path / "padded.mseed",
+            format_version=2,
+            source_ids=["FDSN:BP_D0000__H_S_F"],
+        )
+        with path.open("r+b") as stream:
+            stream.seek(15)
+            stream.write(channel)
+        assert dc.get_format(path) == ("MSEED", "2")
+        patch = dc.read(path)[0]
+        assert np.array_equal(patch.data, np.arange(10)[None, :])
+
     @pytest.mark.parametrize(
         "field,value",
         (
@@ -922,6 +937,8 @@ class TestMiniSeedUtils:
             ("reserved", b"X"),
             ("station", b"     "),
             ("channel", b"H F"),
+            ("channel", b"   "),
+            ("channel", b" Z "),
             ("network", b"  "),
             ("year", bytes.fromhex("0700")),
             ("data_offset", bytes.fromhex("002f")),

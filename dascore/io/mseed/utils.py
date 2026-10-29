@@ -368,7 +368,7 @@ def _detect_mseed_v2_header(header: bytes) -> bool:
         return False
     if not _is_seed_code(header[8:13]):
         return False
-    if not _is_seed_code(header[15:18], allow_space=False):
+    if not _is_seed_code(header[15:18].rstrip(b" "), allow_space=False):
         return False
     if not _is_seed_code(header[18:20]):
         return False

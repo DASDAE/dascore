@@ -20,7 +20,6 @@ _REQUIRED_STRUCTURE = (
     "data.dt_s",
     "data.dx_m",
     "data.unit",
-    "data.event_id",
 )
 
 # Maps event attrs stored in the file to their PatchAttrs names.
@@ -65,14 +64,19 @@ def _get_coords(dataset):
         step=dc.to_timedelta64(float(_maybe_unpack(attrs["dt_s"]))),
         shape=(n_time,),
     )
-    # end_time is redundant (begin_time + n * dt_s); warn if the file
-    # disagrees with itself so bad timing doesn't pass silently.
+    # Exports use either the last sample or the exclusive stop as end_time.
+    # Both describe the same samples; only warn on an actual disagreement.
     end_time = _to_utc_datetime64(attrs["end_time"])
     expected_stop = time.min() + n_time * time.step
-    if abs(end_time - expected_stop) > time.step / 2:
+    expected_last = expected_stop - time.step
+    if (
+        min(abs(end_time - expected_last), abs(end_time - expected_stop))
+        > time.step / 2
+    ):
         warnings.warn(
             f"AI4EPS file end_time ({end_time}) is inconsistent with "
-            f"begin_time + n_samples * dt_s ({expected_stop}); using the latter.",
+            f"the last sample ({expected_last}) and exclusive stop "
+            f"({expected_stop}); using begin_time, sample count and dt_s.",
             UserWarning,
             stacklevel=2,
         )
