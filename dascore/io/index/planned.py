@@ -1264,9 +1264,7 @@ def _with_parent_runs(
                     coords.append(coord)
                     continue
                 same = (parent.value_kind, parent.is_relative, parent.units)
-                if same != (coord.value_kind, coord.is_relative, coord.units):
-                    coords.append(coord)
-                    continue
+                assert same == (coord.value_kind, coord.is_relative, coord.units)
                 carried = {x: getattr(parent, x) for x in _CARRIED_RUN_FIELDS}
                 coords.append(replace(coord, **carried))
             patches.append(replace(patch, coords=tuple(coords)))

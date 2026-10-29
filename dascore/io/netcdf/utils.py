@@ -138,8 +138,9 @@ def _stated_step(name, coord):
     Labels which restate their coordinate (a grid of several samples, or
     stepless labels) need none. Others, such as a lone sample or labels
     with holes or jitter, store their step; where even that does not place
-    them back as they are (two on one position, or a step finer than a
-    tick), the writer refuses them (rule 13 of the coordinate guidelines).
+    them back as they are (a 1024 Hz grid with holes, whose step is not a
+    whole tick), the writer refuses them (rule 13 of the coordinate
+    guidelines).
     """
     if coord.ndim != 1 or coord.step is None or coord._partial:
         return None
@@ -147,11 +148,8 @@ def _stated_step(name, coord):
     inferred = get_coord(data=coord.values, units=coord.units, snap=False)
     if (inferred.step, inferred.jittered, inferred.gapped) == flags:
         return None
-    try:
-        back = get_coord(data=coord.values, step=coord.step, units=coord.units)
-    except CoordError:
-        back = None
-    if back is None or (back.step, back.jittered, back.gapped) != flags:
+    back = get_coord(data=coord.values, step=coord.step, units=coord.units)
+    if (back.step, back.jittered, back.gapped) != flags:
         why = "NetCDF and Zarr, which store labels with one step"
         raise CoordError(_uneven_message(name, coord, why))
     step = coord.step

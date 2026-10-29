@@ -8,6 +8,7 @@ import pandas as pd
 import pytest
 
 import dascore as dc
+import dascore.core.spool as spool_module
 from dascore.core.coords import CoordSummary, concat_coords, get_coord
 from dascore.core.summary import PatchSummary
 from dascore.io.dasdae.utils import _save_patch
@@ -327,6 +328,42 @@ class TestReviewFindings:
             spool = dc.spool([patch])
             assert spool._catalog.backend._fetch_df("SELECT * FROM coord_runs").empty
             assert len(spool.get_gaps()) == 9
+
+    def test_capped_coordinate_trimmed_by_value(self):
+        """A range clips a patch past the cap to its runs, as a stored one."""
+        t0 = np.datetime64("2020-01-01T00:00:00")
+        few, many = _runs_patch(3), _runs_patch(10).update_attrs(station="b")
+        with dc.config_context(max_index_runs=5):
+            spool = dc.spool([few, many])
+            view = spool.select(time=(t0 + 30_000 * MS, t0 + 150_000 * MS))
+            contents = view.get_contents()
+        assert (contents["time_min"] == t0 + 60_000 * MS).all()
+        assert (contents["time_max"] == t0 + 120_009 * MS).all()
+
+    def test_stepless_runs_keep_their_envelope(self):
+        """Runs without a common step leave no hole to clip a range to."""
+        labels = get_coord(data=np.array([0.0, 1.0, 3.0, 4.5]), snap=False)
+        grid = get_coord(start=10.0, step=1.0, shape=(5,))
+        coords = {"distance": np.arange(2), "time": concat_coords(labels, grid)}
+        patch = dc.Patch(
+            data=np.zeros((2, 9)), coords=coords, dims=("distance", "time")
+        )
+        contents = dc.spool([patch]).select(time=(1, 12)).get_contents()
+        assert contents[["time_min", "time_max"]].values.tolist() == [[1.0, 12.0]]
+
+    def test_chunk_of_contiguous_members(self, gapped_patch):
+        """Members holding no runs carry none, though others in the index do."""
+        whole = dc.get_example_patch().update_attrs(station="b")
+        spool = dc.spool([gapped_patch, whole]).select(station="b")
+        assert spool.chunk(distance=None).get_gaps().empty
+
+    def test_unreadable_source_planned_whole(self, monkeypatch):
+        """A capped row whose coordinate cannot be read back is planned uncut."""
+        monkeypatch.setattr(spool_module, "_source_manager", lambda *_, **__: None)
+        many = _runs_patch(10).update_attrs(station="b")
+        with dc.config_context(max_index_runs=5):
+            spool = dc.spool([_runs_patch(3), many])
+            assert len(spool.get_gaps()) == 2  # only the stored runs' holes
 
     def test_runs_survive_a_summary_dump(self, gapped_patch):
         """A summary rebuilt from its dump, even as text, states the same runs."""
