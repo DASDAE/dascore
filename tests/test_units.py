@@ -262,6 +262,10 @@ class TestParenthesizedFactor:
         with pytest.warns(DASCoreWarning, match="bracketed number"):
             get_quantity(unit)
 
+    def test_square_brackets_detected(self):
+        """Square brackets count too; newer pint refuses them, so test detection."""
+        assert units._has_bracketed_factor("nanostrain [1e-9]")
+
     def test_patch_attrs_warn_at_the_caller(self, random_patch):
         """Setting the label as data units warns at the line that set it."""
         with pytest.warns(DASCoreWarning, match="bracketed number") as rec:
