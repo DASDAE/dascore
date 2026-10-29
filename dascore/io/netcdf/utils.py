@@ -96,13 +96,11 @@ def _get_tie_point_coord(h5file, coord_name: str, coord_len: int) -> np.ndarray 
     return values
 
 
-def _get_dim_coord(h5file, coord_name: str, coord_len: int) -> np.ndarray:
+def _get_dim_coord(dataset, coord_name: str, coord_len: int) -> np.ndarray:
     """Return one dimension coordinate for a coord-less payload variable."""
-    tied_values = _get_tie_point_coord(h5file, coord_name, coord_len)
+    tied_values = _get_tie_point_coord(dataset, coord_name, coord_len)
     if tied_values is not None:
         return tied_values
-    if coord_name in h5file:
-        return h5file[coord_name][:]
     return np.arange(coord_len)
 
 
