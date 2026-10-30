@@ -43,7 +43,7 @@ from numpy.typing import ArrayLike, DTypeLike
 from pandas.api.types import infer_dtype, is_list_like
 
 import dascore as dc
-from dascore.core.source import ArraySource
+from dascore.core.source import ArraySource, _offsets_text, _text_offsets
 from dascore.exceptions import ParameterError
 from dascore.utils.identity import DIGEST_SIZE, H, dtype_description
 
@@ -52,6 +52,14 @@ NEW_AXIS = -1
 
 # The per member per axis matrices, in the order the digest takes them.
 AXIS_FIELDS = ("out_start", "out_stop", "src_axis", "src_start", "src_extent")
+
+# Each layout column of a source, with the value one recording no offsets
+# has: space separated offsets, rows per offset, and the file stat they were
+# taken under.
+_LAYOUT_DEFAULTS = MappingProxyType(
+    {"offsets": "", "chunk_rows": 0, "mtime_ns": None, "size_bytes": None}
+)
+_LAYOUT_NUMBERS = ("chunk_rows", "mtime_ns", "size_bytes")
 
 # The columns of the sources table besides `filled`, in the frame's order.
 SOURCE_FIELDS = (
@@ -62,6 +70,7 @@ SOURCE_FIELDS = (
     "key",
     "origin_id",
     "dtype",
+    *_LAYOUT_DEFAULTS,
     "value",
 )
 
@@ -293,6 +302,10 @@ class _Sources:
     key: _Column
     origin_id: _Strings
     dtype: _Column
+    offsets: _Column
+    chunk_rows: _Column
+    mtime_ns: _Column
+    size_bytes: _Column
     value: _Column
     filled: np.ndarray
     # Whether the columns of one value have been folded; see LazyTable.
@@ -580,13 +593,27 @@ def _members_of(frame: pd.DataFrame) -> _Members:
     columns = {
         x: _Column.of(frame[x].astype(str).to_numpy(object)) for x in SOURCE_FIELDS[:4]
     }
-    # A frame written before members stated these reads them as empty.
+    # A frame written before members stated these reads them as empty, or
+    # the layout default.
     for name in (*SOURCE_FIELDS[4:], "cast"):
-        values = frame[name].to_numpy(object) if name in frame else [""] * len(frame)
+        default = _LAYOUT_DEFAULTS.get(name, "")
+        values = (
+            frame[name].to_numpy(object) if name in frame else [default] * len(frame)
+        )
+        if name in _LAYOUT_DEFAULTS:
+            # a join with an older frame leaves NaN, and parquet gives floats
+            values = [_layout_value(name, x, default) for x in values]
         columns[name] = _Column.of(values)
     cast = columns.pop("cast")
     sources, rows = _sources_of_columns(columns, frame["filled"].to_numpy(bool))
     return _Members(sources, rows, cast)
+
+
+def _layout_value(name: str, value: Any, default: Any) -> Any:
+    """Return a layout cell of a frame as a source states it."""
+    if value is None or pd.isna(value):
+        return default
+    return int(value) if name in _LAYOUT_NUMBERS else value
 
 
 def _table(blocks: Sequence[_Block]) -> LazyTable:
@@ -1202,6 +1229,8 @@ class LazyArray:
                 out[name] = _spread(inverse, column.at(used), ndim)
             else:
                 out[name] = _spread(column.codes[rows], column.values, ndim)
+                if name in _LAYOUT_NUMBERS:  # exact through parquet, nulls too
+                    out[name] = pd.array(out[name], dtype="Int64")
         out["cast"] = _spread(members.cast.codes, members.cast.values, ndim)
         out["filled"] = np.repeat(members.filled, ndim)
         # The values are python scalars of several types, which stay objects.
@@ -1373,7 +1402,9 @@ def _block_of_sources(
             msg = f"{source} does not state the extent of its whole array."
             raise ParameterError(msg)
     fields = ("path", "format", "version", "key", "origin_id", "filled", "value")
+    fields += tuple(_LAYOUT_DEFAULTS)
     columns: dict[str, Any] = {x: [getattr(y, x) for y in sources] for x in fields}
+    columns["offsets"] = [_offsets_text(x.offsets) for x in sources]
     columns["source_dtype"] = [np.dtype(x.dtype) for x in sources]
     if casts is not None and is_list_like(casts):
         # Normalized first, since a structured spec is a list, which no key is.
@@ -1420,6 +1451,10 @@ def _block_of_columns(
         "path": _Column([x[1] for x in split], path.codes),
         **{x: _broadcast(columns[x], count, x) for x in SOURCE_FIELDS[2:6]},
         "dtype": dtypes.map(_dtype_text),
+        **{
+            x: _broadcast(columns.get(x, default), count, x)
+            for x, default in _LAYOUT_DEFAULTS.items()
+        },
         "value": _broadcast(columns.get("value"), count, "value"),
     }
     cast = _broadcast(columns["cast_via"], count, "cast_via").map(
@@ -1491,6 +1526,10 @@ def _sources_of(block: _Block) -> list[ArraySource]:
                 extent=tuple(stored),
                 filled=filled[member],
                 value=at["value"][member],
+                offsets=_text_offsets(at["offsets"][member]),
+                chunk_rows=at["chunk_rows"][member],
+                mtime_ns=at["mtime_ns"][member],
+                size_bytes=at["size_bytes"][member],
             )
         )
     return out

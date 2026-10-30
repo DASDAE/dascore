@@ -175,6 +175,23 @@ def validate_windows(windows: Sequence[Any]) -> tuple[Any, ...]:
     return tuple(windows)
 
 
+def _in_bounds_slices(windows, shape) -> tuple[slice, ...] | None:
+    """Fast path for in-bounds integer pairs, as lazy loads send; else None."""
+    if type(windows) is not tuple or len(windows) > len(shape):
+        return None
+    out = []
+    for window, size in zip(windows, shape):
+        if type(window) is not tuple or len(window) != 2:
+            return None
+        start, stop = window
+        if type(start) is not int or type(stop) is not int:
+            return None
+        if not 0 <= start <= stop <= size:
+            return None
+        out.append(slice(start, stop))
+    return (*out, *(slice(0, size) for size in shape[len(out) :]))
+
+
 def windows_to_slices(
     windows: Sequence[Any], shape: Sequence[int]
 ) -> tuple[slice, ...]:
@@ -195,6 +212,8 @@ def windows_to_slices(
     shape
         The array's shape.
     """
+    if (fast := _in_bounds_slices(windows, shape)) is not None:
+        return fast
     windows = validate_windows(windows)
     if len(windows) > len(shape):
         msg = (

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 from contextlib import closing
 
 import h5py
@@ -16,8 +17,10 @@ from dascore.utils.hdf5 import (
     extract_h5_attrs,
     get_h5py_file,
     h5_matches_structure,
+    stored_byte_layout,
     unpack_scalar_h5_dataset,
 )
+from tests.conftest import needs_chunk_iter
 
 
 @pytest.mark.parametrize(
@@ -149,3 +152,135 @@ class TestUnpackScalarH5Dataset:
                 assert unpack_scalar_h5_dataset(h5["value"]) == 5.0
             with pytest.warns(DeprecationWarning, match="unpack_scalar_h5_dataset"):
                 assert unpack_scalar_h5_dataset(h5["wrapped"]) == 5.0
+
+
+class TestStoredByteLayout:
+    """Where plain file reads find a dataset's rows, if they can."""
+
+    @staticmethod
+    def _layout(path, name="data"):
+        with h5py.File(path, "r") as h5:
+            return stored_byte_layout(h5[name])
+
+    @pytest.mark.parametrize("dtype", ["<f4", ">f4", ">i2", "?"])
+    def test_contiguous(self, tmp_path, dtype):
+        """A contiguous dataset is one run of rows, in any byte order."""
+        path, data = tmp_path / "c.h5", np.arange(40).reshape(10, 4).astype(dtype)
+        with h5py.File(path, "w") as h5:
+            h5["data"] = data
+        offsets, rows = self._layout(path)
+        assert len(offsets) == 1 and rows == 10
+
+    def test_windows_driver(self, tmp_path, monkeypatch):
+        """A local file on Windows names its driver for that platform."""
+        path = tmp_path / "w.h5"
+        with h5py.File(path, "w") as h5:
+            h5["data"] = np.ones((10, 4))
+        monkeypatch.setattr(h5py.File, "driver", property(lambda self: "windows"))
+        assert self._layout(path) is not None
+
+    @needs_chunk_iter
+    def test_chunked_full_width(self, tmp_path):
+        """Full-width chunks are listed in row order, the last one partial."""
+        path, data = tmp_path / "k.h5", np.arange(40.0).reshape(10, 4)
+        with h5py.File(path, "w") as h5:
+            ds = h5.create_dataset("data", shape=(10, 4), dtype="f8", chunks=(4, 4))
+            # Written last chunk first, so file order is not row order.
+            for start in (8, 4, 0):
+                ds[start : start + 4] = data[start : start + 4]
+        offsets, per = self._layout(path)
+        assert per == 4 and len(offsets) == 3 and offsets != tuple(sorted(offsets))
+
+    @needs_chunk_iter
+    @pytest.mark.parametrize(("rows", "found"), [(1024, True), (1025, False)])
+    def test_chunk_count_cap(self, tmp_path, rows, found):
+        """Past 1024 chunks no layout is recorded, so scans and rows stay small."""
+        path = tmp_path / "many.h5"
+        with h5py.File(path, "w") as h5:
+            h5.create_dataset("data", data=np.ones((rows, 2)), chunks=(1, 2))
+        assert (self._layout(path) is not None) is found
+
+    def test_stored_type_differs(self, tmp_path):
+        """A stored type HDF5 converts on read gives no layout."""
+        path = tmp_path / "t.h5"
+        short = h5py.h5t.STD_I16LE.copy()
+        short.set_precision(12)
+        short.set_offset(4)
+        small = h5py.h5t.IEEE_F32LE.copy()
+        small.set_fields(23, 15, 8, 0, 15)
+        small.set_size(3)
+        small.set_precision(24)
+        small.set_ebias(127)
+        with h5py.File(path, "w") as h5:
+            for name, kind, dtype in ((b"short", short, "i2"), (b"small", small, "f4")):
+                space = h5py.h5s.create_simple((10, 4))
+                stored = h5py.h5d.create(h5.id, name, kind, space)
+                data = np.arange(40).reshape(10, 4).astype(dtype)
+                stored.write(h5py.h5s.ALL, h5py.h5s.ALL, data)
+        assert self._layout(path, "short") is None
+        assert self._layout(path, "small") is None
+
+    @needs_chunk_iter
+    def test_ndim_three(self, tmp_path):
+        """Chunks spanning every trailing axis of a cube hold whole rows."""
+        path = tmp_path / "cube.h5"
+        with h5py.File(path, "w") as h5:
+            h5.create_dataset("data", data=np.ones((6, 2, 3)), chunks=(2, 2, 3))
+        assert self._layout(path)[1] == 2
+
+    @pytest.mark.parametrize(
+        "options",
+        [
+            {"chunks": (4, 2)},
+            {"chunks": (4, 4), "compression": "gzip"},
+            {"chunks": (4, 4), "shuffle": True},
+            {"chunks": (4, 8), "maxshape": (None, 8)},
+        ],
+    )
+    def test_not_plain(self, tmp_path, options):
+        """Partial-width chunks and filtered storage give no layout."""
+        path = tmp_path / "f.h5"
+        with h5py.File(path, "w") as h5:
+            h5.create_dataset("data", data=np.ones((10, 4)), **options)
+        assert self._layout(path) is None
+
+    @pytest.mark.parametrize("chunks", [None, (4, 4)])
+    def test_unallocated(self, tmp_path, chunks):
+        """A dataset with storage never written gives no layout."""
+        path = tmp_path / "u.h5"
+        with h5py.File(path, "w") as h5:
+            ds = h5.create_dataset("data", shape=(10, 4), chunks=chunks)
+            if chunks:
+                ds[:4] = 1  # one chunk of three
+        assert self._layout(path) is None
+
+    def test_scalar_and_strings(self, tmp_path):
+        """A scalar, or variable-length strings, give no layout."""
+        path = tmp_path / "s.h5"
+        with h5py.File(path, "w") as h5:
+            h5["scalar"] = 1.0
+            h5["text"] = encode_h5_strings(["a", "b"]).astype(object)
+        assert self._layout(path, "scalar") is None
+        assert self._layout(path, "text") is None
+
+    def test_external_and_virtual(self, tmp_path):
+        """Storage outside the file, or mapped from other datasets, gives none."""
+        path, raw = tmp_path / "e.h5", tmp_path / "raw.bin"
+        np.ones((10, 4)).tofile(raw)
+        with h5py.File(path, "w") as h5:
+            h5.create_dataset(
+                "external", shape=(10, 4), dtype="f8", external=[(raw, 0, 320)]
+            )
+            h5["base"] = np.ones((10, 4))
+            layout = h5py.VirtualLayout(shape=(10, 4), dtype="f8")
+            layout[:] = h5py.VirtualSource(h5["base"])
+            h5.create_virtual_dataset("virtual", layout)
+        assert self._layout(path, "external") is None
+        assert self._layout(path, "virtual") is None
+
+    def test_file_object(self):
+        """A file opened on a python file object is not one plain reads find."""
+        buffer = io.BytesIO()
+        with h5py.File(buffer, "w") as h5:
+            h5["data"] = np.ones((10, 4))
+            assert stored_byte_layout(h5["data"]) is None

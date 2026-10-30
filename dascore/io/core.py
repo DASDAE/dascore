@@ -6,6 +6,7 @@ Das Data.
 from __future__ import annotations
 
 import inspect
+import os
 import re
 import warnings
 from collections import defaultdict
@@ -16,9 +17,10 @@ from collections.abc import (
     Iterator,
     Sequence,
 )
-from contextlib import contextmanager, suppress
+from contextlib import ExitStack, contextmanager, suppress
 from dataclasses import replace
 from functools import cached_property, wraps
+from math import prod
 from pathlib import Path
 from threading import RLock
 from typing import (
@@ -66,7 +68,7 @@ from dascore.exceptions import (
 )
 from dascore.io.utils import selection_windows, slice_dataset, validate_windows
 from dascore.utils.downloader import resolve_example_uri
-from dascore.utils.hdf5 import H5Reader, _ManagedH5pyFile
+from dascore.utils.hdf5 import H5Reader, _ManagedH5pyFile, stored_byte_layout
 from dascore.utils.identity import (
     _without_ids,
     derive,
@@ -704,6 +706,21 @@ def _is_wrapped_func(func1, func2):
     return func is func2
 
 
+# The array hooks marked as returning stored bytes. A registry rather than
+# an attribute, which `functools.wraps` would copy onto any wrapper.
+_BYTE_HOOKS: set[Callable] = set()
+
+
+def _returns_stored_bytes(func: Callable) -> Callable:
+    """
+    Mark an array hook as returning its dataset's stored bytes.
+
+    The source's offsets may then stand in for it; a wrapper is not marked.
+    """
+    _BYTE_HOOKS.add(func)
+    return func
+
+
 class FiberIO:
     """
     Interface for a fiber data format; subclass it to add format support.
@@ -854,6 +871,9 @@ class FiberIO:
         wanted = normalize_source_patch_keys(source_patch_key)
         relative = select.pop("relative", False)
         out = []
+        identity = None
+        if provenance_source is not None:
+            identity = source_identity(provenance_source)
         with IOResourceManager(resource) as manager:
             patches, load = _paired_hook(self, "_prepare_read")(
                 manager, snap, keys=wanted
@@ -868,6 +888,7 @@ class FiberIO:
                     provenance_source,
                     describe=self.input_type != "directory",
                     snap=snap,
+                    identity=identity,
                 )
             selected, requests = [], []
             for index, (patch, origin) in enumerate(zip(patches, origins, strict=True)):
@@ -1053,6 +1074,8 @@ class FiberIO:
             arg_name = list(sig.parameters)[param_ind]
             required_type = get_type_hints(method).get(arg_name)
             method_wrapped = _type_caster(method, sig, required_type, arg_name)
+            if method in _BYTE_HOOKS:  # the caster's wrapper keeps the mark
+                _BYTE_HOOKS.add(method_wrapped)
             setattr(cls, name, method_wrapped)
         # Keep the methods each hook was written against, so subclass and
         # runtime wrappers of them take effect.
@@ -1126,10 +1149,11 @@ class H5ArrayMixin:
     @staticmethod
     def _dataset_meta(attrs, coords, dataset: H5pyDataset) -> list[dc.PatchMeta]:
         """Return a one-item PatchMeta list whose array is `dataset`."""
-        source = ArraySource(key=dataset.name)
+        source = _dataset_source(dataset, key=dataset.name)
         dtype = str(dataset.dtype)
         return [dc.PatchMeta(attrs=attrs, coords=coords, dtype=dtype, source=source)]
 
+    @_returns_stored_bytes
     def read_array(
         self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
@@ -1138,6 +1162,28 @@ class H5ArrayMixin:
             metadata_func = cast(_TypeCasterMethod, self.get_metadata)
             key = metadata_func(resource, _pre_cast=True)[0]._source.key
         return slice_dataset(resource[key], windows)
+
+
+def _dataset_source(dataset: H5pyDataset, key: str = "") -> ArraySource:
+    """
+    Return a source for a dataset, with its offsets if plain reads find them.
+
+    The stored shape and the stat of the file holding the dataset come
+    with them, for `_stamp_source_ids` to check against what was scanned.
+    """
+    layout = stored_byte_layout(dataset)
+    if layout is None:
+        return ArraySource(key=key)
+    size, mtime = _size_and_mtime(os.fstat(dataset.file.id.get_vfd_handle()))
+    offsets, rows = layout
+    return ArraySource(
+        key=key,
+        offsets=offsets,
+        chunk_rows=rows,
+        extent=tuple(dataset.shape),
+        mtime_ns=mtime,
+        size_bytes=size,
+    )
 
 
 @_reinit_after_fork
@@ -1311,6 +1357,61 @@ def _array_reader(
     return _paired_hook(fiberio, "_prepare_array_reader")(resource, key=key)
 
 
+def _returns_bytes(fiberio: FiberIO) -> bool:
+    """Whether a reader's arrays are its datasets' bytes as stored."""
+    hook = _paired_hook(fiberio, "_prepare_array_reader")
+    if getattr(hook, "__func__", None) is FiberIO._prepare_array_reader:
+        hook = fiberio.read_array
+    return getattr(hook, "__func__", None) in _BYTE_HOOKS
+
+
+def _open_bytes(source: ArraySource):
+    """Open the local file a source records offsets in, or return None."""
+    if not is_local_path(source.path):
+        return None
+    try:
+        return open(coerce_to_local_path(source.path), "rb", buffering=0)
+    except OSError:
+        return None
+
+
+def _read_bytes(handle, stat, source: ArraySource) -> np.ndarray | None:
+    """
+    Read a source's window from its offsets, or return None for its reader.
+
+    The window's rows are read at full width, abutting chunks in one read,
+    then sliced. None when that is over four times the bytes asked for, the
+    file's stat is not the one recorded, before or after the reads (nothing
+    locks the file), or a read reaches the end of the file.
+    """
+    if not source.offsets or stat != (source.size_bytes, source.mtime_ns):
+        return None
+    dtype, (start, stop), *rest = np.dtype(source.dtype), *source.windows
+    row, per = prod(source.extent[1:]) * dtype.itemsize, source.chunk_rows
+    if (stop - start) * row > 4 * source.size * dtype.itemsize:
+        return None
+    spans: list[list[int]] = []
+    for chunk in range(start // per, -(-stop // per)):
+        low, high = max(start, chunk * per), min(stop, (chunk + 1) * per)
+        offset = source.offsets[chunk] + (low - chunk * per) * row
+        if spans and sum(spans[-1]) == offset:
+            spans[-1][1] += (high - low) * row
+        else:
+            spans.append([offset, (high - low) * row])
+    out = np.empty((stop - start, *source.extent[1:]), dtype)
+    view, done = memoryview(out.reshape(-1).view(np.uint8)), 0
+    for offset, size in spans:
+        handle.seek(offset)
+        stop = done + size
+        while done < stop:  # one read returns at most about 2 GiB
+            if not (got := handle.readinto(view[done:stop])):
+                return None
+            done += got
+    if _size_and_mtime(os.fstat(handle.fileno())) != stat:
+        return None
+    return np.ascontiguousarray(out[(slice(None), *(slice(*x) for x in rest))])
+
+
 @contextmanager
 def _open_array_reader(
     source: ArraySource, path=None
@@ -1324,8 +1425,40 @@ def _open_array_reader(
     when the context exits, however it exits; the arrays stay valid.
     ``path`` opens the resource in place of the source's string, for a
     path which carries more (a remote store's options).
+
+    Without `path`, a source recording where its bytes are in a local file,
+    unchanged since, is read with plain file reads when its reader is marked
+    as returning stored bytes; the resource is opened only for the sources
+    which cannot be.
     """
     fiberio = FiberIO.manager.get_fiberio(format=source.format, version=source.version)
+    with ExitStack() as stack:
+        handle = stat = fallback = None
+        if path is None and source.offsets and _returns_bytes(fiberio):
+            handle = _open_bytes(source)
+        if handle is not None:
+            stack.enter_context(handle)
+            stat = _size_and_mtime(os.fstat(handle.fileno()))
+
+        def load(source: ArraySource) -> np.ndarray:
+            nonlocal fallback
+            if (
+                handle is not None
+                and (out := _read_bytes(handle, stat, source)) is not None
+            ):
+                return out
+            if fallback is None:
+                fallback = stack.enter_context(
+                    _open_stored_reader(fiberio, source, path)
+                )
+            return fallback(source)
+
+        yield load
+
+
+@contextmanager
+def _open_stored_reader(fiberio: FiberIO, source: ArraySource, path=None):
+    """Open a source's resource, and yield a loader of sources in it."""
     readers = {}
 
     def load(source: ArraySource) -> np.ndarray:
@@ -1419,6 +1552,7 @@ def _stamp_source_ids(
     indices: Sequence[int] | None = None,
     describe: bool = False,
     snap: snap_type = True,
+    identity: tuple[str, int | None, int | None] | None = None,
 ) -> list[dc.Patch]:
     """
     Stamp selected patches, retaining their original source ordinals and keys.
@@ -1426,19 +1560,29 @@ def _stamp_source_ids(
     `describe` makes each source loadable; only for whole, unselected arrays
     which `read_array` can find by key. `snap` is the decode option the
     metadata were read under: a non-default one makes a different array of
-    the same bytes, so it is an operation on the stored thing.
+    the same bytes, so it is an operation on the stored thing. `identity` is
+    the source's stat, taken before its metadata were read; byte offsets are
+    kept only when their recorded stat matches it and the patch has the
+    stored shape.
     """
     indices = range(len(patches)) if indices is None else indices
     if not indices:
         return []
-    path, size_bytes, mtime_ns = source_identity(source)
+    path, size_bytes, mtime_ns = identity or source_identity(source)
     reload_path = str(_get_reloadable_source_path(source) or "")
     decode = read_operation_id(snap)
     out = []
     for index in indices:
         patch = patches[index]
+        origin = patch._source or ArraySource()
+        stated = (tuple(patch.shape), size_bytes, mtime_ns)
+        if (
+            origin.offsets
+            and (origin.extent, origin.size_bytes, origin.mtime_ns) != stated
+        ):
+            origin = origin._without_layout()
         origin = replace(
-            patch._source or ArraySource(),
+            origin,
             path=reload_path,
             format=file_format,
             version=file_version,
@@ -1911,6 +2055,7 @@ def _iter_scan_results(
                     scan_kwargs = {"_pre_cast": True}
                     if snap is not None:
                         scan_kwargs["snap"] = snap
+                    identity = source_identity(man.source)
                     try:
                         source = fiber_io.scan(resource, **scan_kwargs)
                     except MissingOptionalDependencyError as ex:
@@ -1957,6 +2102,7 @@ def _iter_scan_results(
                         indices=indices,
                         describe=fiber_io.input_type != "directory",
                         snap=snap,
+                        identity=identity,
                     )
                     for result in patches:
                         output_count += 1

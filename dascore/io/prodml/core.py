@@ -6,8 +6,8 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type, windows_type
-from dascore.core.source import ArraySource
 from dascore.io import FiberIO
+from dascore.io.core import _dataset_source, _returns_stored_bytes
 from dascore.io.utils import slice_dataset
 
 from ...utils.hdf5 import H5Reader, H5Writer, h5_encoding
@@ -35,19 +35,16 @@ class ProdMLV2_0(FiberIO):  # noqa
     ) -> list[dc.PatchMeta]:
         """Scan a prodml file, return summary information about the file's contents."""
         out: list[dc.PatchMeta] = []
-        for attrs, coords, source_patch_key, dtype in _yield_prodml_attrs_coords(
+        for attrs, coords, key, dtype, data in _yield_prodml_attrs_coords(
             resource, snap=snap
         ):
+            source = _dataset_source(data, key=key)
             out.append(
-                dc.PatchMeta(
-                    attrs=attrs,
-                    coords=coords,
-                    dtype=dtype,
-                    source=ArraySource(key=source_patch_key),
-                )
+                dc.PatchMeta(attrs=attrs, coords=coords, dtype=dtype, source=source)
             )
         return out
 
+    @_returns_stored_bytes
     def read_array(
         self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:

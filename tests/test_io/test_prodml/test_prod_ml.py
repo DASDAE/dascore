@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import shutil
 
 import h5py
@@ -15,6 +16,7 @@ from dascore.io.core import read
 from dascore.io.prodml.utils import _get_prodml_version_str, _get_root_attrs
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings
+from tests.conftest import needs_chunk_iter
 
 
 @pytest.fixture(scope="session")
@@ -154,3 +156,20 @@ class TestFacilityId:
         """Several names are one comma separated name, not a tuple."""
         out = _get_root_attrs({"FacilityId": np.array([b"well_a", b"well_b"])})
         assert out["facility_id"] == "well_a,well_b"
+
+
+class TestOffsetReads:
+    """A PRODML array's chunks are read from their offsets, gaps and all."""
+
+    @needs_chunk_iter
+    def test_windows_equal_hdf5(self, stored_reads):
+        """Windows across separated chunks equal h5py's, with no HDF5 open."""
+        path = fetch("prodml_2.1.h5")
+        source = dc.read(path)[0]._source
+        offsets = source.offsets
+        assert any(b - a != 1024 * 512 * 2 for a, b in itertools.pairwise(offsets))
+        with h5py.File(path, "r") as h5:
+            node = h5["Acquisition/Raw[0]/RawData"]
+            for window in [(slice(None),), (slice(1000, 3100),), (slice(11999, None),)]:
+                np.testing.assert_array_equal(source[window].load(), node[window])
+        assert not stored_reads
