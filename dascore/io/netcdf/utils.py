@@ -31,6 +31,23 @@ def get_xarray_data_var_name(dataset) -> str | None:
     raise ValueError(msg)
 
 
+def get_xarray_data_var_names(dataset) -> list[str | None]:
+    """
+    Return the payload variable names, one patch each.
+
+    Without a single payload, the data variables sharing the dimensions of
+    the one with the most dimensions are each a payload; scalars and
+    lower-dimensional helper variables are not.
+    """
+    try:
+        return [get_xarray_data_var_name(dataset)]
+    except ValueError:
+        dims = max((x.dims for x in dataset.data_vars.values()), key=len, default=())
+        if not dims:
+            raise
+    return [name for name, var in dataset.data_vars.items() if var.dims == dims]
+
+
 def parse_cf_version(cf_version: str) -> tuple[int, int]:
     """Parse a CF version string into comparable major/minor integers."""
     parts = cf_version.split(".")

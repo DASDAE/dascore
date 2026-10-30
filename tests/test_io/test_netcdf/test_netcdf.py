@@ -25,6 +25,7 @@ from dascore.io.netcdf.utils import (
     is_netcdf4_file,
 )
 from dascore.models import ArrayLike
+from dascore.utils.downloader import fetch
 from dascore.utils.remote_io import (
     clear_remote_file_cache,
     get_remote_cache_path,
@@ -1078,3 +1079,61 @@ class TestPlainNetCDF4:
                 dc.read(path)
         else:
             assert len(dc.read(path)[0].get_coord("time")) == 3
+
+
+class TestNoCFNetCDF:
+    """NetCDF-4 files stating no CF version read as NETCDF_CF version 0."""
+
+    @pytest.fixture
+    def cable_path(self, tmp_path):
+        """A DTS file with up and down cable variables and helper variables."""
+        xr = pytest.importorskip("xarray")
+        pytest.importorskip("h5netcdf")
+        dims = ("depth", "time")
+        start = np.datetime64("2022-03-14T22:46:08", "ns")
+        coords = {
+            "depth": ("depth", np.arange(3.0), {"units": "meters"}),
+            "time": start + np.arange(4) * np.timedelta64(60, "s"),
+        }
+        data = {
+            "up_data": (dims, np.ones((3, 4))),
+            "down_data": (dims, np.zeros((3, 4))),
+            "length": ((), 3.0),
+            "reference": (("time",), np.ones(4)),
+        }
+        path = tmp_path / "cables.nc"
+        xr.Dataset(data, coords=coords).to_netcdf(path, engine="h5netcdf")
+        return path
+
+    def test_each_shared_variable_is_a_patch(self, cable_path):
+        """Variables sharing the payload dimensions read as keyed patches."""
+        assert dc.get_format(cable_path) == ("NETCDF_CF", "0")
+        patches = {x._source.key: x for x in dc.spool(cable_path)}
+        assert set(patches) == {"up_data", "down_data"}
+        assert np.all(patches["up_data"].data == 1)
+        assert np.all(patches["down_data"].data == 0)
+        patch = patches["up_data"]
+        assert patch.get_coord("time").min() == np.datetime64("2022-03-14T22:46:08")
+        assert patch.get_coord("depth").units == dc.get_quantity("m")
+
+    def test_selection_reads_the_keyed_variable(self, cable_path):
+        """A window reads only its own variable's samples."""
+        end = np.datetime64("2022-03-14T22:47:08")
+        spool = dc.spool(cable_path).select(time=(None, end))
+        assert sorted(x.data.sum() for x in spool) == [0, 6]
+
+    def test_claimed_after_older_versions(self, tmp_path):
+        """A netCDF-written file of an older format version stays that format."""
+        path = tmp_path / "silixa.bin"
+        path.write_bytes(fetch("silixa_h5_1.hdf5").read_bytes())
+        with h5py.File(path, "r+") as h5:
+            h5.attrs["_NCProperties"] = "version=2,netcdf=4.9.0"
+            assert netcdf_core.NetCDFNoCF().get_format(h5) == ("NETCDF_CF", "0")
+        assert dc.get_format(path)[1] == "1"
+
+    def test_not_the_next_files_guess(self, cable_path):
+        """A netCDF-written file of another format after one is still that format."""
+        other = cable_path.parent / "silixa.h5"
+        other.write_bytes(fetch("silixa_h5_ingv_1.h5").read_bytes())
+        formats = [x.source_format for x in dc.scan([cable_path, other])]
+        assert formats == ["NETCDF_CF", "NETCDF_CF", "Silixa_H5"]

@@ -311,7 +311,9 @@ class _FiberIOManager:
             priority_fiber_ios.append(fiber_ios[0])
             if len(fiber_ios) > 1:
                 second_class_fiber_ios.extend(fiber_ios[1:])
-        maybe_ios = priority_fiber_ios + second_class_fiber_ios
+        maybe_ios = sorted(
+            priority_fiber_ios + second_class_fiber_ios, key=lambda x: x.fallback
+        )
         # Now filter to input_type
         valid_fiberio_by_type = self._get_fiber_io_by_input_type(input_type)
         out = tuple(x for x in maybe_ios if x in valid_fiberio_by_type)
@@ -733,6 +735,9 @@ class FiberIO:
     input_type: Literal["file", "directory"] = "file"
     # True when a single resource can hold more than one patch.
     multi_patch_write: bool = False
+    # True for a reader of a broad family, tried after every other reader
+    # and never as the next file's first guess.
+    fallback: bool = False
 
     manager = _FiberIOManager(FIBER_IO_GROUP)
 
@@ -2051,7 +2056,8 @@ def _iter_scan_results(
                     # Cache this fiber io to given preferential treatment next
                     # iteration. This speeds up the common case of many files
                     # with the same format.
-                    fiber_io_hint[fiber_io.input_type] = fiber_io
+                    if not fiber_io.fallback:
+                        fiber_io_hint[fiber_io.input_type] = fiber_io
                     scan_kwargs = {"_pre_cast": True}
                     if snap is not None:
                         scan_kwargs["snap"] = snap

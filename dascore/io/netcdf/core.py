@@ -11,6 +11,7 @@ import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
+from dascore.io.utils import resolve_keyed_source
 from dascore.io.xdas.utils import is_xdas_file
 from dascore.utils.hdf5 import H5Reader, get_h5py_file
 from dascore.utils.misc import optional_import
@@ -18,6 +19,7 @@ from dascore.utils.misc import optional_import
 from .utils import (
     dataset_to_patch_meta,
     get_cf_version,
+    get_xarray_data_var_names,
     is_netcdf4_file,
     parse_cf_version,
     read_dataset_array,
@@ -92,6 +94,14 @@ def _int_for_bool(attrs: dict) -> dict:
     return {i: convert(v) for i, v in attrs.items()}
 
 
+def _payload_datasets(dataset) -> dict:
+    """Map each payload's name to a dataset holding it as the only payload."""
+    names = get_xarray_data_var_names(dataset)
+    if len(names) == 1:
+        return {names[0]: dataset}
+    return {name: dataset[[name]] for name in names}
+
+
 class NetCDFCFV18(FiberIO):
     """NetCDF-4 IO using xarray for read/write and CF markers for detection."""
 
@@ -125,6 +135,9 @@ class NetCDFCFV18(FiberIO):
         """
         with _open_xarray_dataset(resource) as dataset:
             where = str(getattr(resource, "filename", "the resource"))
+            payloads = _payload_datasets(dataset)
+            if len(payloads) > 1:
+                dataset = resolve_keyed_source(payloads, key, where)
             return read_dataset_array(dataset, windows, key, where)
 
     def write(self, spool, resource: Path, encoding: dict | None = None, **kwargs):
@@ -156,4 +169,30 @@ class NetCDFCFV18(FiberIO):
         file is not downloaded.
         """
         with _open_xarray_dataset(resource) as dataset:
-            return dataset_to_patch_meta(dataset, snap)
+            return [
+                meta
+                for payload in _payload_datasets(dataset).values()
+                for meta in dataset_to_patch_meta(payload, snap)
+            ]
+
+
+class NetCDFNoCF(NetCDFCFV18):
+    """
+    NetCDF-4 files which state no CF version, read as NETCDF_CF version 0.
+
+    Version 0 is a fallback, tried after every other format, and only
+    claims a file the netCDF library wrote (``_NCProperties``). Units that do not parse
+    are kept as text and coordinates are decoded only as xarray decodes
+    them; nothing beyond the CF reading is inferred. Writing always uses
+    the newest version.
+    """
+
+    version = "0"
+    preferred_extensions = ()
+    fallback = True
+
+    def get_version(self, resource: H5Reader, **kwargs) -> str | None:
+        """Return "0" for a netCDF-4 file with no CF version."""
+        if "_NCProperties" not in resource.attrs or is_xdas_file(resource):
+            return None
+        return None if get_cf_version(resource) else self.version
