@@ -23,7 +23,9 @@ The Skills navigation and CLI use one catalog. Membership in `dascore/docs/skill
 
 ## Install the agent bootstrap
 
-Export the small native `SKILL.md` into the skill location supported by your agent. Installing the Python package does not change agent configuration. Use the selected project's Python executable in the following commands.
+Installing the Python package does not change agent configuration. Ask your agent to install the small native `SKILL.md`:
+
+> Run `python -m dascore skill --bootstrap` with this project's Python and save its output as `SKILL.md` in your personal `dascore` skill directory.
 
 Personal skills use these locations:
 
@@ -32,22 +34,7 @@ Personal skills use these locations:
 | [Codex](https://developers.openai.com/codex/skills) | `~/.agents/skills/dascore/` |
 | [Claude Code](https://code.claude.com/docs/en/skills) | `~/.claude/skills/dascore/` |
 
-Run this Python example in the selected environment, changing `.agents` to `.claude` for Claude Code. It works on Windows, macOS, and Linux, preserves the exported UTF-8 bytes, and checks that export succeeded before replacing an existing skill:
-
-```python
-import subprocess
-import sys
-from pathlib import Path
-
-content = subprocess.check_output(
-    [sys.executable, "-m", "dascore", "skill", "--bootstrap"]
-)
-directory = Path.home() / ".agents" / "skills" / "dascore"
-directory.mkdir(parents=True, exist_ok=True)
-(directory / "SKILL.md").write_bytes(content)
-```
-
-Other agents that support [Agent Skills](https://agentskills.io/specification) can use the same exported file in their supported skill directory. Reload or restart the agent if the new skill is not visible.
+Other agents that support [Agent Skills](https://agentskills.io/specification) can use the same file in their supported skill directory. Reload or restart the agent if the new skill is not visible. The installed package also ships the file at `dascore/.agents/skills/dascore/SKILL.md`, the layout that tools discovering skills inside installed packages look for.
 
 The bootstrap tells the agent to identify the project's environment, verify `dascore doc` provenance, and retain that environment's absolute Python executable and documentation directory. It loads the current routing recipe and specialized skills through the CLI, and searches the reported directory using the agent's existing file tools. It contains neither a fixed interpreter path nor a copied inventory procedure.
 

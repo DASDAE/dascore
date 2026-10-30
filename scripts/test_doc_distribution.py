@@ -91,7 +91,7 @@ class TestDocumentationDistribution:
             wheel_names = set(archive.namelist())
         for names in (source_names, wheel_names):
             assert "dascore/docs/skills.yml" in names
-            assert "dascore/skills/dascore/SKILL.md" in names
+            assert "dascore/.agents/skills/dascore/SKILL.md" in names
             assert "dascore/docs/recipes/dascore.qmd" in names
             assert "dascore/docs/tutorial/patch.qmd" in names
             assert "dascore/docs/recipes/tunnel_inventory.qmd" in names
