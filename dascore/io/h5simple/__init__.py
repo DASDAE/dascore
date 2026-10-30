@@ -10,7 +10,7 @@ kept as ``data_units_description``, with a warning. A root ``time_units`` attr
 of the form "<unit> relative to ..." makes time a timedelta coordinate of
 offsets from that unstated origin (and is not kept as an attr); add the origin
 with
-``patch.update_coords(time=patch.get_coord("time") + origin)``.
+``patch.update_coords(time=patch.get_coord("time") + dc.to_datetime64(origin))``.
 """
 from __future__ import annotations
 
