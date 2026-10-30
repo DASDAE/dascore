@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime
 import warnings
 
 import numpy as np
@@ -16,58 +15,76 @@ from dascore.core import get_coord_manager
 from dascore.exceptions import InvalidSpoolError, PatchError
 from dascore.utils.misc import optional_import
 
+# Bytes per sample for each SEG-Y data sample format code.
+_SAMPLE_BYTES = {1: 4, 2: 4, 3: 2, 5: 4, 6: 8, 8: 1, 9: 8, 10: 4, 11: 2, 12: 8}
 
-def twos_comp(bytes_):
+
+def twos_comp(bytes_, byteorder="big"):
     """Get twos complement of bytestring."""
-    bits = len(bytes_) * 8
-    val = int.from_bytes(bytes_, "big")
-    if (val & (1 << (bits - 1))) != 0:  # if sign bit is set e.g., 8bit: 128-255
-        val = val - (1 << bits)  # compute negative value
-    return val  # return positive value as is
+    return int.from_bytes(bytes_, byteorder, signed=True)
 
 
-def _get_segy_version(fp):
+def _parse_binary_header(fp):
     """
-    Determine if file handle contains segy data.
+    Return (byte order, version) if the file holds SEG-Y data, else None.
 
-    Returns (segy, version) if so else False.
-
-    Based on ObsPy's implementation written by Lion Krischer.
+    The format code (1 to 16) is plausible in only one byte order, which
+    settles it. Based on ObsPy's implementation written by Lion Krischer.
     https://github.com/obspy/obspy/blob/master/obspy/io/segy/core.py
     """
     # Read 400byte header into byte string.
     fp.seek(3200)
     header = fp.read(400)
-    data_trace_count = twos_comp(header[12:14])
-    auxiliary_trace_count = twos_comp(header[14:16])
-    sample_interval = twos_comp(header[16:18])
-    samples_per_trace = twos_comp(header[20:22])
-    data_format_code = twos_comp(header[24:26])
-    format_number_major = twos_comp(header[300:301])
-    format_number_minor = twos_comp(header[301:302])
-    fixed_len_flag = twos_comp(header[302:304])
-
-    checks = (
-        # First check that some samples are defined.
-        samples_per_trace > 0,
-        # Then ensure the sample intervals is defined. This can be defined in trace
-        # header so 0 is ok, but not negative numbers.
-        sample_interval >= 0,
-        # Ensure the data sample format code is valid using range in 2,1 standard
-        1 <= data_format_code <= 16,
-        # Check version code
-        format_number_major in {0, 1, 2, 3},
-        # Sanity checks for other values.
-        data_trace_count >= 0,
-        auxiliary_trace_count >= 0,
-        format_number_minor in {0, 1, 2, 3, 100},
-        fixed_len_flag in {0, 1},
-    )
-    if all(checks):
-        version = f"{format_number_major}.{format_number_minor}"
-        return "segy", version
+    major, minor = header[300:302] if len(header) == 400 else (-1, -1)
+    for endian in ("big", "little"):
+        traces, auxiliary, interval, _, samples, _, code = (
+            twos_comp(header[i : i + 2], endian) for i in range(12, 26, 2)
+        )
+        fixed_length, extended = (
+            twos_comp(header[i : i + 2], endian) for i in (302, 304)
+        )
+        checks = (
+            # First check that some samples are defined.
+            samples > 0,
+            # Then ensure the sample intervals is defined. This can be defined
+            # in trace header so 0 is ok, but not negative numbers.
+            interval >= 0,
+            # Ensure the data sample format code is valid (2.1 standard range).
+            1 <= code <= 16,
+            major in {0, 1, 2, 3},
+            # Sanity checks for other values.
+            traces >= 0,
+            auxiliary >= 0,
+            fixed_length in {0, 1},
+        )
+        if all(checks):
+            break
     else:
+        return None
+    if minor not in {0, 1, 2, 3, 100}:
+        # Some producers write a non-standard minor revision (eg 1.80); read
+        # those as the major revision when whole traces fill the file exactly.
+        sample_bytes = _SAMPLE_BYTES.get(code, 0)
+        size = fp.seek(0, 2) - 3600 - 3200 * max(extended, 0)
+        if not sample_bytes or size <= 0 or size % (240 + samples * sample_bytes):
+            return None
+        minor = 0
+    return endian, f"{major}.{minor}"
+
+
+def _get_segy_version(fp):
+    """Return ("segy", version) if the file handle holds segy data, else False."""
+    if (parsed := _parse_binary_header(fp)) is None:
         return False
+    return "segy", parsed[1]
+
+
+def _open_segy(path, segyio):
+    """Open a SEG-Y file with segyio in the byte order its header uses."""
+    with open(path, "rb") as fp:
+        parsed = _parse_binary_header(fp)
+    endian = parsed[0] if parsed else "big"
+    return segyio.open(str(path), ignore_geometry=True, endian=endian)
 
 
 def _get_coords(fi):
@@ -102,7 +119,12 @@ def _get_coords(fi):
 
 
 def _get_time_from_header(header):
-    """Creates a datetime64 object from SEGY header date information."""
+    """
+    Get the start time from the SEGY trace header date fields.
+
+    The fields are added up, so a second of 60 rolls into the next minute.
+    Without a valid date, time is relative to the first sample.
+    """
     segyio = optional_import("segyio")
     trace_field = segyio.TraceField
 
@@ -111,11 +133,18 @@ def _get_time_from_header(header):
     hour = header[trace_field.HourOfDay]
     minute = header[trace_field.MinuteOfHour]
     second = header[trace_field.SecondOfMinute]
-    # make those timedate64
-    fmt = "%Y.%j.%H.%M.%S"
-    s = f"{year}.{julday}.{hour}.{minute}.{second}"
-    time = datetime.datetime.strptime(s, fmt)
-    return dc.to_datetime64(time)
+    valid = (1 <= julday <= 366, 0 <= hour <= 23, 0 <= minute <= 59)
+    if year <= 0 or not all(valid) or not 0 <= second <= 60:
+        msg = (
+            f"SEG-Y trace header date ({year}.{julday} {hour}:{minute}:{second}) "
+            "is not a valid time, so the time coordinate is relative to the "
+            "first sample. Set the start with patch.update_coords(time_min=...)."
+        )
+        warnings.warn(msg, UserWarning)
+        return np.timedelta64(0, "ns")
+    start = np.datetime64(f"{year:04d}-01-01", "ns")
+    seconds = (((julday - 1) * 24 + hour) * 60 + minute) * 60 + second
+    return start + np.timedelta64(seconds, "s")
 
 
 def _get_patch_with_channel_coord(patch):
