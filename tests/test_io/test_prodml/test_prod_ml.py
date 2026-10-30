@@ -282,7 +282,7 @@ class TestProducerVariants:
     def test_drifting_clock_keeps_sample_count(self, tmp_path):
         """
         A long file whose spacing is not whole nanoseconds snaps to exactly
-        as many samples as it holds, ending within a step of its stated end.
+        as many samples as it holds, ending on its stated end.
         """
         count, start = 140_001, np.datetime64("2024-01-01", "ns")
         even = start + np.arange(count) * np.timedelta64(100, "us")
@@ -301,4 +301,4 @@ class TestProducerVariants:
             times.attrs["PartEndTime"] = (str(time[-1]) + "Z").encode()
         out = dc.read(path)[0]
         assert out.shape == (count, 2)
-        assert abs(out.get_coord("time").max() - time[-1]) < np.timedelta64(100, "us")
+        assert out.get_coord("time").max() == time[-1]

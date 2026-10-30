@@ -5,6 +5,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass
+from fractions import Fraction
 from uuid import uuid4
 
 import h5py
@@ -191,9 +192,12 @@ def _get_time_coord(node, snap=True):
         return get_coord(start=start, step=step_from_rate(rate), shape=(1,), units="s")
     end_str = unbyte(time_attrs["PartEndTime"]).split("+")[0]
     end = dc.to_datetime64(end_str.rstrip("Z"))
-    # A shape, not a stop, so rounding the step cannot change the count.
+    # A shape, not a stop, fixes the count. The step is exact, so the grid
+    # ends on `end`, with its denominator bounded so the grid's integer
+    # arithmetic (count * numerator, in ns) stays within int64.
     span = int((end - start).astype("timedelta64[ns]").astype(np.int64))
-    step = np.timedelta64(round(span / (array_len - 1)), "ns")
+    bound = 2**62 // (array_len * (span // (array_len - 1) + 1))
+    step = Fraction(span, array_len - 1).limit_denominator(max(bound, 1)) / 10**9
     time_coord = get_coord(start=start, step=step, shape=(array_len,), units="s")
     # Sometimes the "PartEndTime" can be wrong. Check for this and try to
     # compensate. See #414. We prefer the iso 8601 strings to the time array,
@@ -202,7 +206,8 @@ def _get_time_coord(node, snap=True):
     last = _as_datetime(time_array[-1:])[0]
     unit = "ns" if last.dtype == np.dtype("datetime64[ns]") else "us"
     precision = np.timedelta64(1, unit)
-    if precision < abs(end - last) < 10 * step:
+    gap = abs(end - last)
+    if precision < gap and gap * (array_len - 1) < 10 * (end - start):
         time_coord = get_coord(data=_as_datetime(time_array[:]))
     return time_coord
 
