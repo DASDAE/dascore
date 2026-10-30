@@ -183,6 +183,13 @@ def _write_segy_file(path, endian="big", revision=(1, 0), date=(2016, 22, 1, 23,
 class TestSegyCompatibility:
     """Tests for SEG-Y files that bend the standard."""
 
+    def test_hdf5_signature_is_not_segy(self, tmp_path):
+        """An HDF5 file is not SEG-Y, whatever its bytes at 3200 hold."""
+        path, _ = _write_segy_file(tmp_path / "h5.sgy")
+        with open(path, "r+b") as fp:
+            fp.write(b"\x89HDF\r\n\x1a\n")
+        assert SegyV1_0().get_format(path) is False
+
     def test_nonstandard_minor_revision(self, tmp_path):
         """A minor revision such as 1.80 reads as revision 1.0."""
         path, data = _write_segy_file(tmp_path / "rev.sgy", revision=(1, 80))
