@@ -37,16 +37,17 @@ def get_shared_payload_names(dataset) -> list[str]:
     Return the payloads of a dataset with no single payload variable.
 
     They are the data variables on the dimensions of the largest variable
-    of the highest rank, so scalars, lower-rank helpers and smaller
-    variables on other dimensions (such as a time bounds table) are left out.
+    of the highest rank, in any order. Scalars, lower-rank helpers, smaller
+    variables on other dimensions and CF ``bounds`` tables are left out.
     """
-    variables = dataset.data_vars.values()
-    if not (rank := max((x.ndim for x in variables), default=0)):
+    bounds = {x.attrs.get("bounds") for x in dataset.variables.values()}
+    variables = {k: v for k, v in dataset.data_vars.items() if k not in bounds}
+    if not (rank := max((x.ndim for x in variables.values()), default=0)):
         msg = "No suitable data variable found in the dataset"
         raise ValueError(msg)
-    tops = [x for x in variables if x.ndim == rank]
-    dims = max(tops, key=lambda x: x.size).dims
-    return [name for name, var in dataset.data_vars.items() if var.dims == dims]
+    tops = [x for x in variables.values() if x.ndim == rank]
+    dims = set(max(tops, key=lambda x: x.size).dims)
+    return [name for name, var in variables.items() if set(var.dims) == dims]
 
 
 def parse_cf_version(cf_version: str) -> tuple[int, int]:

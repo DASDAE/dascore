@@ -101,11 +101,16 @@ def _payload_datasets(dataset) -> dict:
         return {get_xarray_data_var_name(dataset): dataset}
     except ValueError:
         names = get_shared_payload_names(dataset)
+    # Siblings differ only by name, so it tags them unless their own tags
+    # already tell them apart; otherwise chunking would merge them.
+    tags = {x: dataset[x].attrs.get("tag") or x for x in names}
+    if len(set(tags.values())) < len(tags):
+        tags = {x: x for x in names}
     out = {}
     for name in names:
         sub = dataset[[name]]
-        if len(names) > 1:  # siblings differ only by name, so it is their tag
-            sub[name] = sub[name].assign_attrs(tag=sub[name].attrs.get("tag", name))
+        if len(names) > 1:
+            sub[name] = sub[name].assign_attrs(tag=tags[name])
         out[name] = sub
     return out
 

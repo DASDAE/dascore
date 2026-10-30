@@ -1085,7 +1085,7 @@ class TestNoCFNetCDF:
     """NetCDF-4 files version 1.8 does not take read as NETCDF_CF version 0."""
 
     @staticmethod
-    def _write_cables(path, cables=("up_data", "down_data"), attrs=None):
+    def _write_cables(path, cables=("up_data", "down_data"), attrs=None, tag=None):
         """A DTS file of cable variables beside helpers of other shapes."""
         xr = pytest.importorskip("xarray")
         pytest.importorskip("h5netcdf")
@@ -1097,7 +1097,8 @@ class TestNoCFNetCDF:
         }
         # the bounds table comes first and has the cables' rank
         data = {"time_bounds": (("time", "nv"), np.zeros((4, 2)))}
-        data |= {x: (dims, np.full((3, 4), i)) for i, x in enumerate(cables)}
+        tags = {} if tag is None else {"tag": tag}
+        data |= {x: (dims, np.full((3, 4), i), tags) for i, x in enumerate(cables)}
         data |= {"length": ((), 3.0), "reference": (("time",), np.ones(4))}
         dataset = xr.Dataset(data, coords=coords, attrs=attrs or {})
         dataset.to_netcdf(path, engine="h5netcdf")
@@ -1134,10 +1135,31 @@ class TestNoCFNetCDF:
         spool = dc.spool(cable_path).select(time=(None, end))
         assert sorted(x.data.sum() for x in spool) == [0, 6]
 
-    def test_variables_stay_apart_when_chunked(self, cable_path):
+    @pytest.mark.parametrize("tag", [None, "", "fiber"])
+    def test_variables_stay_apart_when_chunked(self, tmp_path, tag):
         """Chunking does not merge one variable into the other."""
-        spool = dc.spool(cable_path).chunk(time=None)
+        path = self._write_cables(tmp_path / "cables.nc", tag=tag)
+        spool = dc.spool(path).chunk(time=None)
         assert sorted(x.attrs.tag for x in spool) == ["down_data", "up_data"]
+
+    def test_bounds_and_order(self, tmp_path):
+        """A bounds table is not a payload; dimension order does not matter."""
+        xr = pytest.importorskip("xarray")
+        time = ("time", np.arange(4.0), {"bounds": "time_bounds"})
+        dataset = xr.Dataset(
+            {
+                "time_bounds": (("time", "nv"), np.zeros((4, 2))),
+                "a": (("time", "x"), np.ones((4, 3))),
+                "b": (("x", "time"), np.ones((3, 4))),
+            },
+            coords={"time": time},
+        )
+        dataset.to_netcdf(tmp_path / "ab.nc", engine="h5netcdf")
+        spool = dc.spool(tmp_path / "ab.nc")
+        assert sorted(x._source.key for x in spool) == ["a", "b"]
+        single = dataset.drop_vars(["a", "b"]).assign(t=(("time",), np.ones(4)))
+        single.to_netcdf(tmp_path / "t.nc", engine="h5netcdf")
+        assert [x._source.key for x in dc.spool(tmp_path / "t.nc")] == ["t"]
 
     def test_claims_what_version_1_8_does_not(self, tmp_path, minimal_cf_netcdf_path):
         """An old CF version is version 0; CF 1.8 and groups-only files are not."""
