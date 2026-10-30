@@ -10,6 +10,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.core.source import ArraySource
+from dascore.exceptions import InvalidFiberFileError
 from dascore.io.utils import resolve_keyed_source, should_snap, windows_to_slices
 from dascore.xarray import patch_to_xarray
 from dascore.xarray.patch import _cf_attrs, _cf_units
@@ -31,20 +32,20 @@ def get_xarray_data_var_name(dataset) -> str | None:
     raise ValueError(msg)
 
 
-def get_xarray_data_var_names(dataset) -> list[str | None]:
+def get_shared_payload_names(dataset) -> list[str]:
     """
-    Return the payload variable names, one patch each.
+    Return the payloads of a dataset with no single payload variable.
 
-    Without a single payload, the data variables sharing the dimensions of
-    the one with the most dimensions are each a payload; scalars and
-    lower-dimensional helper variables are not.
+    They are the data variables on the dimensions of the largest variable
+    of the highest rank, so scalars, lower-rank helpers and smaller
+    variables on other dimensions (such as a time bounds table) are left out.
     """
-    try:
-        return [get_xarray_data_var_name(dataset)]
-    except ValueError:
-        dims = max((x.dims for x in dataset.data_vars.values()), key=len, default=())
-        if not dims:
-            raise
+    variables = dataset.data_vars.values()
+    if not (rank := max((x.ndim for x in variables), default=0)):
+        msg = "No suitable data variable found in the dataset"
+        raise ValueError(msg)
+    tops = [x for x in variables if x.ndim == rank]
+    dims = max(tops, key=lambda x: x.size).dims
     return [name for name, var in dataset.data_vars.items() if var.dims == dims]
 
 
@@ -126,6 +127,10 @@ def _get_dim_coord(h5file, coord_name: str, coord_len: int) -> np.ndarray:
 def get_scan_coord(coord, snap=True):
     """Return a coordinate for scanning; snap only controls exactness."""
     values = coord.values
+    if values.dtype == object:
+        # e.g. times on a non-standard calendar, decoded as cftime objects
+        msg = f"Coordinate {coord.name!r} holds objects DASCore cannot store."
+        raise InvalidFiberFileError(msg)
     if np.ndim(values) != 1:
         return values
     units = _cf_units(coord.attrs.get("units"), coord.name)

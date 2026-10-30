@@ -735,8 +735,8 @@ class FiberIO:
     input_type: Literal["file", "directory"] = "file"
     # True when a single resource can hold more than one patch.
     multi_patch_write: bool = False
-    # True for a reader of a broad family, tried after every other reader
-    # and never as the next file's first guess.
+    # True for a catch-all reader, tried after every other reader and never
+    # as the next file's first guess.
     fallback: bool = False
 
     manager = _FiberIOManager(FIBER_IO_GROUP)

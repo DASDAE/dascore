@@ -87,7 +87,8 @@ def _write_dasdae_v2():
     """Write the version 2 example before any fixture fetches it."""
     dc.write(dc.get_example_patch("random_das"), _DASDAE_V2_PATH, "dasdae")
     for io, path in (_ZARR_PATHS | _NETCDF_PATHS).items():
-        io.write(dc.get_example_patch("random_das"), path)
+        writer = NetCDFCFV18() if isinstance(io, NetCDFNoCF) else io
+        writer.write(dc.get_example_patch("random_das"), path)
     for io, path in _NETCDF_PATHS.items():
         # H5Simple also claims a root "data" beside "time"; not under test here.
         with h5py.File(path, "r+") as handle:
@@ -532,8 +533,8 @@ class TestGetFormat:
                     path = fetch(key)
                 out = io_instance.get_format(path)
                 if out and isinstance(io_instance, NetCDFNoCF):
-                    # It claims any netCDF-written file; being tried last
-                    # leaves those to their own formats.
+                    # It claims netCDF-written files with no CF version, such
+                    # as Silixa's; being tried last leaves them to their formats.
                     assert dc.get_format(path) != out
                 elif out:
                     _format_name, version = out
