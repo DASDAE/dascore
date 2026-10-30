@@ -8,6 +8,7 @@ from typing import Any
 import numpy as np
 
 from dascore.compat import is_array
+from dascore.core.coords import get_coord
 from dascore.core.processor import PatchProcessor
 from dascore.utils.misc import broadcast_for_index, iterate
 from dascore.utils.patch import (
@@ -32,11 +33,15 @@ def _quasi_mean(array):
 
 def _get_definite_coords(meta, dims):
     """Return coords with each dim collapsed to one sample, keeping its min and max."""
-    new_coords = {x: _quasi_mean(meta.get_coord(x).values) for x in dims}
+    new_coords = {}
     for name in dims:
-        coord = meta.get_coord(name).values
-        new_coords[f"pre_integrate_{name}_min"] = (name, np.asarray([coord.min()]))
-        new_coords[f"pre_integrate_{name}_max"] = (name, np.asarray([coord.max()]))
+        coord = meta.get_coord(name)
+        # the label and the bounds keep the dimension's units
+        new_coords[name] = coord.update(values=_quasi_mean(coord.values))
+        for end in ("min", "max"):
+            value = np.asarray([getattr(coord.values, end)()])
+            bound = get_coord(data=value, units=coord.units)
+            new_coords[f"pre_integrate_{name}_{end}"] = (name, bound)
     return meta.coords.update(**new_coords)
 
 

@@ -25,6 +25,7 @@ from dascore.core.coords import (
 from dascore.core.source import ArraySource
 from dascore.core.summary import normalize_source_patch_key
 from dascore.exceptions import (
+    CoordError,
     InvalidFiberFileError,
     PatchAttributeError,
 )
@@ -44,6 +45,7 @@ from dascore.utils.array import (
 )
 from dascore.utils.hdf5 import create_dataset, staged_group
 from dascore.utils.misc import unbyte
+from dascore.utils.patch import _uneven_message
 from dascore.utils.time import to_int
 
 _ATTR_PREFIX = "_attrs_"
@@ -255,6 +257,18 @@ def _save_coords(patch, patch_group, compact: bool, options):
 def _check_storable(patch):
     """Refuse a patch version 1 cannot store, before touching the file."""
     for name, coord in patch.coords.coord_map.items():
+        uneven = coord.step is not None and not coord.evenly_sampled
+        if uneven and not coord._partial:
+            # Version 1 states a step only beside a grid; other labels read
+            # back with the step inference finds, which has no holes.
+            back = get_coord(data=coord.values, units=coord.units, snap=False)
+            if (back.step, back.jittered, back.gapped) != (
+                coord.step,
+                coord.jittered,
+                coord.gapped,
+            ):
+                why = "DASDAE format 1, which stores a step only for a grid"
+                raise CoordError(_uneven_message(name, coord, why))
         grid = coord._grid
         if grid is not None and grid.exact and grid.step_den != 1:
             # Version 1 stores one whole-tick step and rebuilds the range

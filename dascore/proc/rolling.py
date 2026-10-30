@@ -66,11 +66,12 @@ class _PatchRollerInfo:
         Accounts for centered or non-centered coordinates. If the window
         length is even, the first half value is used.
         """
-        # Without a step the dimension is unchanged; reuse the coord manager.
-        if self.step == 1:
-            return self.patch.coords._update_grid(self.dim)
-        coord = self.patch.get_coord(self.dim)[:: self.step]
-        return self.patch.coords._update_grid(self.dim, **{self.dim: coord})
+        coords = self.patch.coords
+        # A step strides the labels, and what rides them, as decimate does.
+        if self.step != 1:
+            coords, _ = coords.isel(**{self.dim: slice(None, None, self.step)})
+        # Each output sample summarizes a window, not the input's cell.
+        return coords._update_grid(self.dim)
 
     def _get_attrs_with_apply_history(self, func_or_str):
         """Get new attrs that has history from apply attached."""

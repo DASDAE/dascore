@@ -736,11 +736,13 @@ class TestRoundTrips:
         assert out == time_gap_coord
 
     def test_to_summary(self, float_gap_coord):
-        """Summaries carry exact min/max and a null step."""
+        """Summaries carry exact min/max, the step, its hole and its runs."""
         summary = float_gap_coord.to_summary()
         assert summary.min == 0.0
         assert summary.max == 24.0
-        assert summary.step is None
+        assert summary.step == 1.0 and summary.gapped
+        assert not summary.is_range_like
+        assert [(x.count, x.position) for x in summary.runs] == [(10, 0), (10, 15)]
         assert summary.len == 20
         assert summary.data_id == float_gap_coord.data_id
 
@@ -1122,29 +1124,27 @@ class TestSplitGapsAndWrite:
         assert len(spool) == 1
         assert spool[0] == patch
 
-    @pytest.mark.parametrize(
-        ("name", "version"), [("dasdae", "1"), ("dasdae", "2"), ("pickle", None)]
-    )
+    @pytest.mark.parametrize(("name", "version"), [("dasdae", "2"), ("pickle", None)])
     def test_write_round_trip(self, gapped_patch, tmp_path, name, version):
-        """A gapped patch is written as contiguous patches that round trip."""
+        """A gapped patch is written whole and its samples round trip."""
         path = tmp_path / "gapped.h5"
         dc.write(gapped_patch, path, name, file_version=version)
-        spool = dc.spool(path)
-        assert len(spool) == 2
-        patches = sorted(spool, key=lambda p: p.get_coord("distance").min())
+        # read back whole, or as its pieces where a spool still cuts it
+        patches = sorted(dc.read(path), key=lambda p: p.get_coord("distance").min())
         combined = np.concatenate([p.data for p in patches])
         assert np.array_equal(combined, gapped_patch.data)
         coords = np.concatenate([p.get_coord("distance").values for p in patches])
         assert np.array_equal(coords, gapped_patch.get_coord("distance").values)
 
     @pytest.mark.parametrize(
-        ("name", "ext"), [("wav", "wav"), ("rsf", "rsf"), ("prodml", "h5")]
+        ("name", "version", "ext"),
+        [("rsf", None, "rsf"), ("prodml", None, "h5"), ("dasdae", "1", "h5")],
     )
-    def test_single_patch_format_refuses(self, gapped_patch, tmp_path, name, ext):
-        """A format holding one patch per file refuses the pieces, writing nothing."""
+    def test_grid_format_refuses(self, gapped_patch, tmp_path, name, version, ext):
+        """A format which cannot store holes refuses the patch, writing nothing."""
         path = tmp_path / f"out.{ext}"
-        with pytest.raises(ParameterError, match="one patch per file"):
-            dc.write(gapped_patch, path, name)
+        with pytest.raises(CoordError, match="split_gaps"):
+            dc.write(gapped_patch, path, name, file_version=version)
         assert not path.exists()
 
     def test_write_contiguous_unaffected(self, tmp_path):

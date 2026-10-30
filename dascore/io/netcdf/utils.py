@@ -9,12 +9,24 @@ import numpy as np
 
 import dascore as dc
 from dascore.constants import snap_type, windows_type
+from dascore.core.coords import get_coord
 from dascore.core.source import ArraySource
-from dascore.io.utils import resolve_keyed_source, stored_coord, windows_to_slices
+from dascore.exceptions import CoordError
+from dascore.io.utils import (
+    resolve_keyed_source,
+    should_snap,
+    stored_coord,
+    windows_to_slices,
+)
+from dascore.utils.patch import _uneven_message
+from dascore.utils.time import to_int
 from dascore.xarray import patch_to_xarray
 from dascore.xarray.patch import _cf_attrs, _cf_units
 
 XDAS_PAYLOAD_VARIABLE = "__values__"
+# The attribute holding the step of labels which are not one grid, so they
+# read back with their holes and jitter (in nanoseconds for times).
+STEP_ATTR = "dascore_step"
 
 
 def get_xarray_data_var_name(dataset) -> str | None:
@@ -110,7 +122,41 @@ def get_scan_coord(coord, snap: snap_type = False, where=""):
     if np.ndim(values) != 1:
         return values
     units = _cf_units(coord.attrs.get("units"), coord.name)
+    step = coord.attrs.get(STEP_ATTR)
+    if step is not None and not should_snap(snap, coord.name):
+        # labels written with their step: holes and jitter read back
+        if values.dtype.kind in "mM":
+            step = np.timedelta64(int(step), "ns")
+        return get_coord(data=values, step=step, units=units)
     return stored_coord(values, snap, name=coord.name, where=where, units=units)
+
+
+def _stated_step(name, coord):
+    """
+    The step a coordinate's labels need written beside them, or None.
+
+    Labels which restate their coordinate (a grid of several samples, or
+    stepless labels) need none. Others, such as a lone sample or labels
+    with holes or jitter, store their step; where even that does not place
+    them back as they are (a 1024 Hz grid with holes, whose step is not a
+    whole tick), the writer refuses them (rule 13 of the coordinate
+    guidelines).
+    """
+    if coord.ndim != 1 or coord.step is None or coord._partial:
+        return None
+    flags = (coord.step, coord.jittered, coord.gapped)
+    inferred = get_coord(data=coord.values, units=coord.units, snap=False)
+    if (inferred.step, inferred.jittered, inferred.gapped) == flags:
+        return None
+    try:
+        back = get_coord(data=coord.values, step=coord.step, units=coord.units)
+    except CoordError:  # a long fractional grid drifts off its whole-tick step
+        back = None
+    if back is None or (back.step, back.jittered, back.gapped) != flags:
+        why = "NetCDF and Zarr, which store labels with one step"
+        raise CoordError(_uneven_message(name, coord, why))
+    step = coord.step
+    return to_int(step) if isinstance(step, np.timedelta64) else step
 
 
 def _get_patch_key(data_var_name):
@@ -168,6 +214,10 @@ def spool_to_cf_dataset(spool):
     if len(patches) > 1:
         msg = "Multi-patch spools not yet supported for this format"
         raise NotImplementedError(msg)
-    dataset = patch_to_xarray(patches[0]).rename("data").to_dataset()
+    patch = patches[0]
+    dataset = patch_to_xarray(patch).rename("data").to_dataset()
+    for name, coord in patch.coords.coord_map.items():
+        if (step := _stated_step(name, coord)) is not None:
+            dataset[name].attrs[STEP_ATTR] = step
     dataset.attrs["Conventions"] = "CF-1.8"
     return dataset

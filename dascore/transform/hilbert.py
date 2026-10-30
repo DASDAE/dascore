@@ -260,7 +260,10 @@ class PhaseWeightedStack(PatchProcessor):
             "squeeze": self.dim_reduce == "squeeze",
         }
         new_coord = stack_coord.reduce_coord(dim_reduce=self.dim_reduce)
-        cm = meta.coords.update(**{stack_dim: new_coord})
+        cm = meta.coords
+        if new_coord is None:  # squeezed out, taking what rode it
+            cm = cm.drop_associated(stack_dim, "Stacking")
+        cm = cm.update(**{stack_dim: new_coord})
         return meta.new(coords=cm), plan
 
     def numpy_kernel(self, data, *, transform_axis, stack_axis, squeeze):

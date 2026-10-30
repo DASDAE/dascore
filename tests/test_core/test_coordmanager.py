@@ -33,6 +33,7 @@ from dascore.utils.misc import (
     get_middle_value,
     suppress_warnings,
 )
+from dascore.warnings import DASCoreWarning
 
 COORDS = {
     "time": dc.to_datetime64(np.arange(10, 100, 10)),
@@ -989,13 +990,31 @@ class TestUpdate:
         cm = cm_multidim
         new_dist = cm.get_array("distance")[:10]
         dropped_coords = set(cm.coord_map) - set(cm.dims)
-        out = cm.update(distance=new_dist)
+        with pytest.warns(DASCoreWarning, match="Changing the length"):
+            out = cm.update(distance=new_dist)
         assert dropped_coords.isdisjoint(set(out.coord_map))
+
+    def test_size_change_keeps_resupplied_coords(self, cm_multidim):
+        """A rider given alongside its resized dimension is kept, silently."""
+        cm = cm_multidim
+        new_dist = cm.get_array("distance")[:10]
+        riders = {
+            name: (dims, cm.get_array(name)[:10])
+            for name, dims in cm.dim_map.items()
+            if dims == ("distance",) and name != "distance"
+        }
+        assert riders
+        with suppress_warnings(DASCoreWarning, action="error"):
+            out = cm.drop_coords(*[x for x, d in cm.dim_map.items() if len(d) > 1])[
+                0
+            ].update(distance=new_dist, **riders)
+        assert set(riders) <= set(out.coord_map)
 
     def test_update_degenerate(self, coord_manager):
         """Tests for updating coord with degenerate coordinates."""
         cm = coord_manager
-        out = cm.update(time=cm.coord_map["time"].empty())
+        with suppress_warnings(DASCoreWarning):  # riders of time are dropped
+            out = cm.update(time=cm.coord_map["time"].empty())
         assert out.shape[out.get_axis("time")] == 0
         assert len(out.coord_map["time"]) == 0
 
@@ -1006,7 +1025,8 @@ class TestUpdate:
         """
         cm = cm_multidim
         degen_time = cm.coord_map["time"].empty()
-        new = cm.update(time=degen_time)
+        with pytest.warns(DASCoreWarning, match="Changing the length"):
+            new = cm.update(time=degen_time)
         assert new != cm
         # any coords with time as a dim (but not time itself) should be gone.
         has_time = [i for i, v in cm.dim_map.items() if ("time" in v and i != "time")]

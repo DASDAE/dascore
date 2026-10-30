@@ -415,7 +415,13 @@ def update(
     source: ArraySource | None = None,
 ) -> PatchType:
     """
-    Return a copy of the Patch with updated data, coords, dims, or attrs.
+    Return a copy of the Patch with replaced data, coords, dims, or attrs.
+
+    This rebuilds the patch wholesale: `replace`, `update` and `new` are
+    the same method. A `coords` mapping becomes the whole coordinate set,
+    so coordinates it does not name are dropped; use
+    [`update_coords`](`dascore.Patch.update_coords`) to change some
+    coordinates and keep the rest.
 
     The kind is preserved: a patch gives back a patch, and a `PatchMeta`
     gives back metadata. Use
@@ -443,6 +449,14 @@ def update(
     source
         Internal I/O source metadata. If omitted, retain the current source.
 
+    Examples
+    --------
+    >>> import dascore as dc
+    >>> patch = dc.get_example_patch()
+    >>> # Replace the data, keeping the coordinates and attrs.
+    >>> doubled = patch.replace(data=patch.data * 2)
+    >>> # Replace every coordinate; ones not named are dropped.
+    >>> bare = patch.replace(coords={x: patch.get_coord(x) for x in patch.dims})
     """
     coords = coords if coords is not None else self.coords
     if dims is None:
@@ -1026,10 +1040,11 @@ class Dropna(PatchProcessor):
         return data[broadcast_for_index(data.ndim, axis, to_keep)], to_keep
 
     def reconcile(self, data, out, meta):
-        """Return the patch of the kept labels."""
+        """Return the patch of the kept labels, and of what rides them."""
         data, to_keep = data
-        coord = meta.get_coord(self.dim)[to_numpy(to_keep)]
-        return out.new(coords=meta.coords.update(**{self.dim: coord})).to_patch(data)
+        positions = np.flatnonzero(to_numpy(to_keep))
+        coords, _ = meta.coords.isel(**{self.dim: positions})
+        return out.new(coords=coords).to_patch(data)
 
 
 class Fillna(PatchProcessor):
@@ -1293,7 +1308,8 @@ class Roll(PatchProcessor):
     samples
         If True, the roll is a number of samples; else in coordinate units.
     update_coord
-        if True, updates coord based on rolled amount
+        If True, roll the dimension's labels, and the coordinates riding
+        it, with the data.
     **kwargs
         specifies dimension and number of elements to roll
 
@@ -1324,8 +1340,9 @@ class Roll(PatchProcessor):
         count = coord.get_sample_count(value, samples=self.samples)
         out = meta
         if self.update_coord:
-            new = coord.update(values=np.roll(coord.values, count))
-            out = meta.new(coords=meta.coords.update(**{dim: new}))
+            # Rolled by position, so what rides the labels rolls with them.
+            positions = np.roll(np.arange(len(coord)), count)
+            out = meta.new(coords=meta.coords.isel(**{dim: positions})[0])
         return out, {"axis": axis, "shift": count}
 
     def kernel(self, data, *, axis, shift):

@@ -53,6 +53,7 @@ import pandas as pd
 from pandas.core.util.hashing import hash_pandas_object
 from pint import Quantity, Unit
 
+from dascore.config import DascoreConfig, get_config
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel, model_values
 from dascore.models.registry import TAG_FIELD, get_model_tag
@@ -469,11 +470,20 @@ def read_operation_id(snap, default=True) -> str | None:
     other than the format's `default` makes a different array; the default,
     which None asks for, reads the stored thing itself and derives nothing.
     Which dimensions are named, and how, is the same decode however it was
-    spelled.
+    spelled. Where anything is snapped, `dascore.config.max_shift` decides
+    which labels are put on a grid, so another one is part of the decode.
     """
-    if snap is None or (names := _snap_names(snap)) == _snap_names(default):
-        return None
-    return operation_id("Read", {"snap": names or False})
+    names = _snap_names(default if snap is None else snap)
+    options: dict[str, Any] = {}
+    if names != _snap_names(default):
+        options["snap"] = names or False
+    if names and (shift := get_config().max_shift) != _DEFAULT_MAX_SHIFT:
+        options["max_shift"] = shift
+    return operation_id("Read", options) if options else None
+
+
+# The max_shift a read assumes when its identity names none.
+_DEFAULT_MAX_SHIFT = DascoreConfig.model_fields["max_shift"].default
 
 
 def _snap_names(snap) -> bool | list[str]:

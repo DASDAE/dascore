@@ -143,6 +143,7 @@ Released behaviour is deprecated with a warning for at least one release rather 
 | `coords_from_df` overwriting coordinates | Warns, then refuses |
 | `concatenate_patches`, `merge_patches` | Warn, then are removed in 0.2 |
 | Terra15 `read(snap_dims=...)` | Warns; means `snap` |
+| `Spool.stack` relabelling `dim_vary` to start at zero | Warns where labels move, then keeps the first patch's labels |
 
 Afterwards, gapped `chunk` outputs refuse filters until regularized, and writing holes to formats that can't store them raises. Some reader changes are not deprecated first (see the decisions log): stored labels a grid disagrees with are kept, with a warning, rather than stretched onto it (Terra15 v5 and NeubrexRFS times among the registry files); NeubrexRFS times and Sentek distances read as stored; and Febus G1 sweep times and NeubrexRFS distances snap.
 
@@ -168,3 +169,4 @@ Coordinates will hold a mapping of keys to any array-like, real or virtual, carr
 - 2026-10-09: The reader check allows the precision labels were stored in (one unit in the last place, in their stored float dtype): a grid spanning two rounded labels inherits their rounding. A spanning step is a whole number of ticks where it keeps the ends within that precision, as released readers gave it, and an exact fraction otherwise, since whole ticks drift past `max_shift` over an hour at 1 kHz.
 - 2026-10-10: Where the check fails, the reader keeps the stored labels and warns, rather than returning a grid that moves them further: a ten-sweep gap inside a Febus BSL file moved labels 25 s onto a grid. Unlocked clocks, measured at 0.17 steps or less, still snap. Not deprecated first: the released grids for Terra15 v5 (1.3 steps) and NeubrexRFS DSS (2.0) and DTS (9.2) times relabel samples.
 - 2026-10-10: NeubrexRFS time is not a default name: its labels are irregular measurement times (minutes to days apart), which v0.1.24 moved by up to 50 h onto a grid. Febus G1 sweep times and NeubrexRFS float32 distances, which v0.1.24 kept as stored (their jitter exceeds its 0.1%), now snap by default within `max_shift`; `snap=False` keeps them.
+- 2026-10-11: `Spool.stack` relabelled `dim_vary` to start at zero (1970 for times) in v0.1.24, which rule 1 forbids and the methods table did not record; it warns for one release, then keeps the first patch's labels.

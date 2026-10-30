@@ -17,6 +17,7 @@ import warnings
 import weakref
 from contextlib import contextmanager, suppress
 from pathlib import Path
+from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
@@ -29,13 +30,18 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.index.ingest import (
+    _COORD_DEF_FIELDS,
+    CoordRecord,
     SourceRecord,
     _envelope,
+    _runs_by_def,
     assemble_source_records,
     attr_column_name,
     coord_dtype_is_stateable,
+    coord_record,
     dump_path_attrs,
     hive_typed_attrs,
+    index_runs,
 )
 from dascore.io.index.query import (
     Query,
@@ -55,6 +61,7 @@ from dascore.io.index.schema import (
     TRIGGERS,
     WHAT_IS_THIS,
     CoordDefRow,
+    CoordRunRow,
     MetaDataRow,
     PatchCoordRow,
     PatchRow,
@@ -64,6 +71,7 @@ from dascore.io.index.schema import (
     quote,
 )
 from dascore.units import convert_units
+from dascore.utils.gaps import RunRecord
 
 # Structural columns whose ns-integer storage maps to pandas time types.
 _TIME_COLS = {"time_min": "datetime", "time_max": "datetime", "time_step": "timedelta"}
@@ -320,7 +328,10 @@ class SQLiteIndexBackend:
             sql = f"CREATE INDEX IF NOT EXISTS {index_name} ON {table} ({column})"
             self._execute(sql if where is None else f"{sql} WHERE {where}")
         self._create_triggers()
-        row = MetaDataRow(WHAT_IS_THIS, INDEX_VERSION, dc.__version__, 0, 0)
+        shift = dc.get_config().max_shift
+        row = MetaDataRow(
+            WHAT_IS_THIS, INDEX_VERSION, dc.__version__, 0, 0, "null", shift
+        )
         self._bulk_insert("meta_data", MetaDataRow._fields, [row])
 
     def _create_triggers(self) -> None:
@@ -532,16 +543,18 @@ class SQLiteIndexBackend:
             mapping.update(zip(found["def_key"], (int(x) for x in found["coord_row"])))
         new_keys = [k for k in keys if k not in mapping]
         next_id = self._next_id("coord_defs", "coord_row")
-        def_rows = []
+        def_rows, run_rows = [], []
         # CoordRecord names every def column after id, key, and data_id
         columns = CoordDefRow._fields[3:]
         for key in new_keys:
             c = defs_needed[key]
             values = (getattr(c, name) for name in columns)
             def_rows.append((next_id, key, c.data_id, *values))
+            run_rows.extend((next_id, num, *run) for num, run in enumerate(c.runs))
             mapping[key] = next_id
             next_id += 1
         self._bulk_insert("coord_defs", CoordDefRow._fields, def_rows)
+        self._bulk_insert("coord_runs", CoordRunRow._fields, run_rows)
         return mapping
 
     def _bulk_insert(self, table: str, columns: tuple, rows: list) -> None:
@@ -554,6 +567,13 @@ class SQLiteIndexBackend:
         self._executemany(sql, rows)
 
     # --- writes ------------------------------------------------------
+
+    def set_decode(self, snap: str, max_shift: float) -> None:
+        """Record the snap (as JSON) and max_shift the sources are scanned under."""
+        with self._transaction():
+            self._execute(
+                "UPDATE meta_data SET snap = ?, max_shift = ?", (snap, max_shift)
+            )
 
     def mark_initial_update_done(self) -> None:
         """Persist successful completion of a directory index's first update."""
@@ -1006,6 +1026,7 @@ class SQLiteIndexBackend:
             attrs = self._fetch_df("SELECT * FROM attrs")
             links = self._fetch_df("SELECT * FROM patch_coords")
             defs = self._fetch_df("SELECT * FROM coord_defs")
+            runs = self._fetch_df("SELECT * FROM coord_runs")
         else:
             ids = [int(x) for x in patch_rows]
             patches = self._fetch_in("SELECT * FROM patches", "patch_row", ids)
@@ -1019,8 +1040,9 @@ class SQLiteIndexBackend:
                 [int(x) for x in links["coord_row"].unique()] if not links.empty else []
             )
             defs = self._fetch_in("SELECT * FROM coord_defs", "coord_row", def_ids)
+            runs = self._fetch_in("SELECT * FROM coord_runs", "coord_row", def_ids)
         return assemble_source_records(
-            sources, patches, attrs, links, defs, self._attr_meta()
+            sources, patches, attrs, links, defs, self._attr_meta(), runs
         )
 
     def _flatten(
@@ -1242,7 +1264,7 @@ class SQLiteIndexBackend:
         link_sql = (
             "SELECT pc.patch_row, pc.coord_name, pc.coord_dims, cd.def_key, "
             "cd.data_id, "
-            "cd.value_kind, pc.dtype, cd.is_relative, cd.units, "
+            "cd.value_kind, pc.dtype, cd.is_relative, cd.units, cd.is_exact, "
             "cd.min_float, cd.max_float, cd.step_float, "
             "cd.min_int, cd.max_int, cd.step_int, cd.min_str, cd.max_str "
             "FROM patch_coords pc "
@@ -1259,6 +1281,9 @@ class SQLiteIndexBackend:
         if coords.empty:
             return out
         coords = self._add_envelope_objects(coords)
+        # the relation states the step of a range only; a jittered or
+        # gapped coordinate's step is the index's (see coord_runs)
+        coords.loc[coords["is_exact"] == 0, "_env_step"] = None
         # the exact grid where the envelope cannot restate it (None
         # elsewhere), so a row rebuilds the coordinate the file holds
         grids = self._grids(None if most else coords["def_key"].unique())
@@ -1416,6 +1441,98 @@ class SQLiteIndexBackend:
         )
         return set(self._fetch_df(sql)["coord_name"].astype(str))
 
+    def patch_ids_by_key(self) -> dict[str, int]:
+        """Each patch's row, by its source patch key (a plan's output id)."""
+        df = self._fetch_df("SELECT patch_row, source_patch_key FROM patches")
+        keys = df["source_patch_key"].astype(str)
+        return dict(zip(keys, df["patch_row"].astype(int), strict=True))
+
+    def clear(self) -> None:
+        """Delete every source and coordinate, as before a first scan."""
+        with self._transaction():
+            self._execute("DELETE FROM sources")
+            self._execute("DELETE FROM coord_runs")
+            self._execute("DELETE FROM coord_defs")
+            self._execute("UPDATE meta_data SET last_indexed_ns = 0")
+
+    def holds_runs(self) -> bool:
+        """Whether any coordinate the index holds is several runs."""
+        return not self._fetch_df(_SEVERAL_RUNS + " LIMIT 1").empty
+
+    def coord_runs(self, name: str, patch_rows) -> dict[int, IndexedRuns]:
+        """
+        The runs of coordinate ``name``, by patch row, where it holds several.
+
+        Only coordinates of several runs are returned, so an archive of
+        contiguous patches answers from the partial index on run_count
+        without reading a run. A coordinate stored without its runs (past
+        max_index_runs) comes back with None for them.
+        """
+        if not self.holds_runs():
+            return {}
+        ids = [int(x) for x in patch_rows]
+        sql = (
+            "SELECT pc.patch_row, cd.value_kind, cd.is_relative, cd.jittered, "
+            "cd.step_float AS coord_step_float, cd.step_int AS coord_step_int, "
+            f"cr.{', cr.'.join(CoordRunRow._fields[2:])} "
+            "FROM patch_coords pc "
+            "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
+            "LEFT JOIN coord_runs cr ON cr.coord_row = cd.coord_row "
+            "WHERE pc.coord_name = ? AND cd.run_count > 1 "
+            "AND pc.patch_row IN (SELECT value FROM json_each(?)) "
+            "ORDER BY pc.patch_row, cr.run"
+        )
+        # plain rows: the engine's integers are exact, and a frame per
+        # patch would cost more than the lookup
+        with self._lock:
+            rows = self._con.execute(sql, [name, json.dumps(ids)]).fetchall()
+        grouped: dict[int, list] = {}
+        for row in rows:
+            grouped.setdefault(row[0], []).append(row)
+        out = {}
+        for patch_row, group in grouped.items():
+            _, kind, relative, jittered, step_float, step_int = group[0][:6]
+            if kind == "time":
+                step = None if step_int is None else np.timedelta64(step_int, "ns")
+            else:
+                step = step_float
+            stored = [x[6:] for x in group if x[6] is not None]
+            records = index_runs(stored, kind, not relative) if stored else None
+            out[patch_row] = IndexedRuns(records, step, bool(jittered))
+        return out
+
+    def patch_runs(self, patch_rows) -> dict[int, dict[str, CoordRecord]]:
+        """
+        Each patch's coordinates of several runs, as records, by patch row.
+
+        Patches without one are absent; an index without any answers from
+        the partial index on run_count.
+        """
+        if not self.holds_runs():
+            return {}
+        ids = json.dumps([int(x) for x in patch_rows])
+        fields = ", ".join(f"cd.{x}" for x in _COORD_DEF_FIELDS if x != "dtype")
+        sql = (
+            "SELECT pc.patch_row, pc.coord_name, pc.coord_dims, pc.dtype, "
+            f"cd.coord_row, cd.data_id, {fields} FROM patch_coords pc "
+            "JOIN coord_defs cd ON cd.coord_row = pc.coord_row "
+            "WHERE cd.run_count > 1 "
+            "AND pc.patch_row IN (SELECT value FROM json_each(?))"
+        )
+        links = self._fetch_df(sql, [ids])
+        if links.empty:
+            return {}
+        rows = [int(x) for x in links["coord_row"].unique()]
+        runs = _runs_by_def(
+            self._fetch_in("SELECT * FROM coord_runs", "coord_row", rows)
+        )
+        out: dict[int, dict[str, CoordRecord]] = {}
+        keys = zip(links["patch_row"], links["coord_row"], strict=True)
+        for link, (patch_row, coord_row) in zip(links.itertuples(index=False), keys):
+            record = coord_record(link, link, runs.get(int(coord_row), ()))
+            out.setdefault(int(patch_row), {})[record.coord_name] = record
+        return out
+
     def coord_dims_map(self) -> dict[str, str]:
         """Return each coord name's dims string (first observed wins)."""
         df = self._fetch_df("SELECT DISTINCT coord_name, coord_dims FROM patch_coords")
@@ -1423,6 +1540,19 @@ class SQLiteIndexBackend:
         for name, dims in zip(df["coord_name"], df["coord_dims"]):
             out.setdefault(str(name), str(dims))
         return out
+
+
+# The definitions holding several runs, which a partial index lists.
+_SEVERAL_RUNS = "SELECT 1 FROM coord_defs WHERE run_count > 1"
+
+
+class IndexedRuns(NamedTuple):
+    """A coordinate's runs as an index states them, with its step and jitter."""
+
+    # None where the coordinate was stored without them
+    records: tuple[RunRecord, ...] | None
+    step: Any
+    jittered: bool
 
 
 def get_backend(path: str | Path) -> SQLiteIndexBackend:
