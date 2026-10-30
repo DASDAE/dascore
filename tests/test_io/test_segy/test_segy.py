@@ -233,6 +233,8 @@ class TestSegyCompatibility:
         time = patch.get_coord("time")
         assert time.min() == np.timedelta64(0, "ns")
         assert time.step == np.timedelta64(1, "ms")
-        start = np.datetime64("2013-09-11T17:53:29")
-        new = patch.update_coords(time=patch.get_coord("time") + start)
-        assert new.get_coord("time").min() == start
+        start = "2013-09-11T17:53:29"  # any form dc.to_datetime64 takes
+        new = patch.update_coords(
+            time=patch.get_coord("time") + dc.to_datetime64(start)
+        )
+        assert new.get_coord("time").min() == np.datetime64(start)
