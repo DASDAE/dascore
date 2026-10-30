@@ -158,16 +158,24 @@ def _get_distance_coord(acq):
     return get_coord(start=start, step=step, shape=(num_dist_channels,), units=units)
 
 
-def _as_datetime(values):
-    """
-    Integer times since the epoch as datetime64, read as nanoseconds above 1e17.
+def _part_time(attrs, name):
+    """A PartStartTime/PartEndTime attr as naive datetime64."""
+    return dc.to_datetime64(unbyte(attrs[name]).split("+")[0].rstrip("Z"))
 
-    ProdML states microseconds, but some producers write nanoseconds;
-    1e17 is the year 5138 in microseconds and 1973 in nanoseconds.
+
+def _time_unit(time_array) -> str:
     """
-    values = np.asarray(values)
-    unit = "ns" if np.abs(values).max() > 1e17 else "us"
-    return values.astype(np.int64).astype(f"datetime64[{unit}]")
+    The unit of a ProdML time array: its Uom attr, else whichever of µs or
+    ns puts the first label on PartStartTime (µs, as ProdML states, on a tie).
+
+    Some producers write nanoseconds without saying so.
+    """
+    uom = str(unbyte(time_array.attrs.get("Uom", "")))
+    if uom in {"us", "ns"}:
+        return uom
+    start = _part_time(time_array.attrs, "PartStartTime").astype("datetime64[us]")
+    first, start_us = int(time_array[0]), int(start.astype(np.int64))
+    return "ns" if abs(first / 1000 - start_us) < abs(first - start_us) else "us"
 
 
 def _get_time_coord(node, snap=True):
@@ -178,11 +186,12 @@ def _get_time_coord(node, snap=True):
     time_array = node[time_name]
     array_len = len(time_array)
     assert array_len > 0, "Missing time array in ProdML file."
+    unit = _time_unit(time_array)
+    dtype = f"datetime64[{unit}]"
     if not should_snap(snap, "time"):
-        return get_coord(data=_as_datetime(time_array[:]), units="s", snap=False)
-    time_attrs = time_array.attrs
-    start_str = unbyte(time_attrs["PartStartTime"]).split("+")[0]
-    start = dc.to_datetime64(start_str.rstrip("Z"))
+        values = time_array[:].astype(np.int64).astype(dtype)
+        return get_coord(data=values, units="s", snap=False)
+    start = _part_time(time_array.attrs, "PartStartTime")
     if array_len == 1:
         # One time states no spacing: step from the node's OutputDataRate,
         # or no step when that rate is missing, zero or not finite.
@@ -190,8 +199,7 @@ def _get_time_coord(node, snap=True):
         if not (np.isfinite(rate) and rate > 0):
             return get_coord(data=np.array([start]), units="s")
         return get_coord(start=start, step=step_from_rate(rate), shape=(1,), units="s")
-    end_str = unbyte(time_attrs["PartEndTime"]).split("+")[0]
-    end = dc.to_datetime64(end_str.rstrip("Z"))
+    end = _part_time(time_array.attrs, "PartEndTime")
     # A shape, not a stop, fixes the count. The step is exact, so the grid
     # ends on `end`, with its denominator bounded so the grid's integer
     # arithmetic (count * numerator, in ns) stays within int64.
@@ -203,12 +211,11 @@ def _get_time_coord(node, snap=True):
     # compensate. See #414. We prefer the iso 8601 strings to the time array,
     # which is less often right, so only use the array when its last time is
     # off from the stated end by more than its precision, yet "close".
-    last = _as_datetime(time_array[-1:])[0]
-    unit = "ns" if last.dtype == np.dtype("datetime64[ns]") else "us"
-    precision = np.timedelta64(1, unit)
+    last = np.int64(time_array[-1]).astype(dtype)
+    precision = np.timedelta64(1, "ns") if unit == "ns" else np.timedelta64(1, "us")
     gap = abs(end - last)
     if precision < gap and gap * (array_len - 1) < 10 * (end - start):
-        time_coord = get_coord(data=_as_datetime(time_array[:]))
+        time_coord = get_coord(data=time_array[:].astype(np.int64).astype(dtype))
     return time_coord
 
 

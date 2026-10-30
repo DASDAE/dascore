@@ -13,11 +13,7 @@ import pytest
 import dascore as dc
 from dascore.core.coords import get_coord
 from dascore.io.core import read
-from dascore.io.prodml.utils import (
-    _as_datetime,
-    _get_prodml_version_str,
-    _get_root_attrs,
-)
+from dascore.io.prodml.utils import _get_prodml_version_str, _get_root_attrs
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings
 from tests.conftest import needs_chunk_iter
@@ -183,7 +179,7 @@ def _write_variant(path, patch, rows=None, ns_times=False, rate=None):
     """
     Write a patch as ProdML, then bend it like some producers do: keep only
     the first `rows` samples (ending the part where it starts, so for
-    rows=1), store times in ns, or change OutputDataRate (None keeps it,
+    rows=1), store times in ns without a Uom, or change OutputDataRate (None keeps it,
     False deletes it).
     """
     patch.io.write(path, "prodml")
@@ -192,6 +188,8 @@ def _write_variant(path, patch, rows=None, ns_times=False, rate=None):
         times, data = raw["RawDataTime"][:], raw["RawData"][:]
         time_attrs = dict(raw["RawDataTime"].attrs)
         data_attrs = dict(raw["RawData"].attrs)
+        if ns_times:  # as the producer does, with no Uom saying so
+            time_attrs.pop("Uom", None)
         if rows is not None:
             time_attrs["PartEndTime"] = time_attrs["PartStartTime"]
             times, data = times[:rows], data[:rows]
@@ -235,6 +233,22 @@ class TestProducerVariants:
             assert np.array_equal(out.get_coord("time").values, expected.values)
             assert np.array_equal(out.data, patch.transpose(*out.dims).data)
 
+    @pytest.mark.parametrize("start, uom", [("1971-06-01", None), ("1970-01-01", "ns")])
+    def test_ns_times_found_from_metadata(self, patch, tmp_path, start, uom):
+        """
+        Nanosecond times are found by the time array's Uom or, without one,
+        by which unit puts the first label on PartStartTime (any epoch); at
+        the epoch itself only the Uom can tell.
+        """
+        patch = patch.update_coords(time_min=np.datetime64(start))
+        path = _write_variant(tmp_path / "ns.h5", patch, ns_times=True)
+        if uom:
+            with h5py.File(path, "r+") as h5:
+                h5["Acquisition/Raw[0]/RawDataTime"].attrs["Uom"] = uom
+        for snap in (True, False):
+            time = dc.read(path, snap=snap)[0].get_coord("time")
+            assert np.array_equal(time.values, patch.get_coord("time").values)
+
     @pytest.mark.parametrize("rate, step", [(0.5, 2), (False, None), (0.0, None)])
     def test_single_time_uses_output_rate(self, patch, tmp_path, rate, step):
         """One sample takes its step from a usable OutputDataRate, or has none."""
@@ -273,7 +287,8 @@ class TestProducerVariants:
             values[1:-1] += np.tile([jitter, -jitter], len(values) // 2)[:-2]
             values[-1] += last_shift
             times[:] = values
-            end = _as_datetime(values[-1:])[0] + np.timedelta64(end_shift, "ns")
+            last = np.datetime64(int(values[-1]), "ns" if ns_times else "us")
+            end = last + np.timedelta64(end_shift, "ns")
             times.attrs["PartEndTime"] = (str(end) + "Z").encode()
         time = dc.read(path)[0].get_coord("time")
         assert time.step is not None

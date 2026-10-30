@@ -5,7 +5,9 @@
 DASCore does not write.
 
 Reading accepts a ``SchemaVersion`` attr in place of ``schemaVersion`` and
-integer times in nanoseconds as well as microseconds. A node with a single
+integer times in nanoseconds as well as microseconds, taking the unit from
+the time array's ``Uom`` or, without one, from which unit puts the first time
+on ``PartStartTime``. A node with a single
 time sample takes its step from the node's ``OutputDataRate``, or has no step
 when that rate is missing, zero or not finite.
 
