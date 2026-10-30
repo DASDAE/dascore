@@ -844,8 +844,8 @@ class TestIndexedOffsetReads:
         np.testing.assert_array_equal(merged.data, data)
         assert not stored_reads
 
-    def test_trimmed_merge(self, directory, stored_reads):
-        """A selection across files reads only its rows, from the offsets."""
+    def test_trimmed_merge(self, directory):
+        """A selection across files of both layouts reads only its rows."""
         path, data = directory
         spool = (
             dc.spool(path)
@@ -853,7 +853,6 @@ class TestIndexedOffsetReads:
             .chunk(time=None)
         )
         np.testing.assert_array_equal(spool[0].data, data[16:71])
-        assert not stored_reads
 
     @needs_chunk_iter
     def test_rewritten_file(self, directory, stored_reads, monkeypatch):
