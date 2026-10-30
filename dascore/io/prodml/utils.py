@@ -214,7 +214,8 @@ def _get_time_coord(node, snap=True):
     last = np.int64(time_array[-1]).astype(dtype)
     precision = np.timedelta64(1, "ns") if unit == "ns" else np.timedelta64(1, "us")
     gap = abs(end - last)
-    if precision < gap and gap * (array_len - 1) < 10 * (end - start):
+    off = precision < gap and gap * (array_len - 1) < 10 * (end - start)
+    if off or span <= 0:  # or the stated part has no length to grid
         time_coord = get_coord(data=time_array[:].astype(np.int64).astype(dtype))
     return time_coord
 

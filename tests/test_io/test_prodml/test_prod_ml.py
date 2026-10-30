@@ -257,6 +257,15 @@ class TestProducerVariants:
         assert time.min() == patch.get_coord("time").min() and len(time) == 1
         assert time.step == (step and np.timedelta64(step, "s"))
 
+    def test_zero_length_part_uses_labels(self, patch, tmp_path):
+        """A PartEndTime equal to PartStartTime yields the stored labels."""
+        path = _write_variant(tmp_path / "flat.h5", patch)
+        with h5py.File(path, "r+") as h5:
+            attrs = h5["Acquisition/Raw[0]/RawDataTime"].attrs
+            attrs["PartEndTime"] = attrs["PartStartTime"]
+        time = dc.read(path)[0].get_coord("time")
+        assert np.array_equal(time.values, patch.get_coord("time").values)
+
     def test_wrong_end_time_uses_ns_labels(self, patch, tmp_path):
         """A PartEndTime a few steps off yields the recorded ns labels (#414)."""
         path = _write_variant(tmp_path / "late.h5", patch, ns_times=True)
