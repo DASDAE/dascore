@@ -66,7 +66,7 @@ def _parse_binary_header(fp):
             break
     else:
         return None
-    if endian == "little" and major == 0:
+    if endian == "little" and major == 0 and minor in {1, 2, 3}:
         # segyio writes the revision as one little-endian word (00 01 = 1.0).
         major, minor = minor, major
     if minor not in {0, 1, 2, 3, 100}:

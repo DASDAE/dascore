@@ -196,8 +196,10 @@ class TestSegyCompatibility:
             fi.write(b"\x00" * 10)
         assert SegyV1_0().get_format(path) is False
 
-    @pytest.mark.parametrize("revision", [(1, 0), (0, 1)])
-    def test_little_endian(self, tmp_path, revision):
+    @pytest.mark.parametrize(
+        "revision, version", [((1, 0), "1.0"), ((0, 1), "1.0"), ((0, 100), "0.100")]
+    )
+    def test_little_endian(self, tmp_path, revision, version):
         """
         Little-endian files are detected and read like big-endian ones, with
         the revision as two bytes or as one little-endian word (segyio).
@@ -206,7 +208,7 @@ class TestSegyCompatibility:
         little, _ = _write_segy_file(
             tmp_path / "little.sgy", endian="little", revision=revision
         )
-        assert dc.get_format(little) == dc.get_format(big)
+        assert dc.get_format(little) == ("segy", version)
         patch = dc.spool(little)[0]
         assert patch == dc.spool(big)[0]
         assert np.array_equal(patch.select(channel=(1, 2)).data, data[:, 1:])
