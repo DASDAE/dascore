@@ -13,7 +13,11 @@ import pytest
 import dascore as dc
 from dascore.core.coords import get_coord
 from dascore.io.core import read
-from dascore.io.prodml.utils import _get_prodml_version_str, _get_root_attrs
+from dascore.io.prodml.utils import (
+    _as_datetime,
+    _get_prodml_version_str,
+    _get_root_attrs,
+)
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings
 from tests.conftest import needs_chunk_iter
@@ -250,20 +254,27 @@ class TestProducerVariants:
         time = dc.read(path)[0].get_coord("time")
         assert np.array_equal(time.values, patch.get_coord("time").values)
 
-    def test_jittered_ns_times_keep_a_step(self, patch, tmp_path):
+    @pytest.mark.parametrize(
+        "ns_times, last_shift, end_shift", [(True, 1, 1), (False, 0, 500)]
+    )
+    def test_jittered_times_keep_a_step(
+        self, patch, tmp_path, ns_times, last_shift, end_shift
+    ):
         """
-        Jittered labels between exact ends snap to an even grid, even when
-        that grid's step is not a whole number of nanoseconds.
+        Jittered labels between ends that agree to the labels' precision
+        snap to an even grid: ns labels with a step of no whole ns, and µs
+        labels beside an end stated to the ns.
         """
-        path = _write_variant(tmp_path / "jitter.h5", patch, ns_times=True)
+        path = _write_variant(tmp_path / "jitter.h5", patch, ns_times=ns_times)
         with h5py.File(path, "r+") as h5:
             times = h5["Acquisition/Raw[0]/RawDataTime"]
             values = times[:]
-            values[1:-1] += np.tile([20_000, -20_000], len(values) // 2)[:-2]
-            values[-1] += 1
+            jitter = 20_000 if ns_times else 20
+            values[1:-1] += np.tile([jitter, -jitter], len(values) // 2)[:-2]
+            values[-1] += last_shift
             times[:] = values
-            end = str(values[-1].astype("datetime64[ns]")) + "Z"
-            times.attrs["PartEndTime"] = end.encode()
+            end = _as_datetime(values[-1:])[0] + np.timedelta64(end_shift, "ns")
+            times.attrs["PartEndTime"] = (str(end) + "Z").encode()
         time = dc.read(path)[0].get_coord("time")
         assert time.step is not None
         assert time.min() == patch.get_coord("time").min()
@@ -271,7 +282,7 @@ class TestProducerVariants:
     def test_drifting_clock_keeps_sample_count(self, tmp_path):
         """
         A long file whose spacing is not whole nanoseconds snaps to exactly
-        as many samples as it holds, ending on its stated end.
+        as many samples as it holds, ending within a step of its stated end.
         """
         count, start = 140_001, np.datetime64("2024-01-01", "ns")
         even = start + np.arange(count) * np.timedelta64(100, "us")
@@ -290,4 +301,4 @@ class TestProducerVariants:
             times.attrs["PartEndTime"] = (str(time[-1]) + "Z").encode()
         out = dc.read(path)[0]
         assert out.shape == (count, 2)
-        assert out.get_coord("time").max() == time[-1]
+        assert abs(out.get_coord("time").max() - time[-1]) < np.timedelta64(100, "us")

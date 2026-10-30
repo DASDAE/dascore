@@ -5,7 +5,6 @@ from __future__ import annotations
 import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass
-from fractions import Fraction
 from uuid import uuid4
 
 import h5py
@@ -192,17 +191,18 @@ def _get_time_coord(node, snap=True):
         return get_coord(start=start, step=step_from_rate(rate), shape=(1,), units="s")
     end_str = unbyte(time_attrs["PartEndTime"]).split("+")[0]
     end = dc.to_datetime64(end_str.rstrip("Z"))
-    # An exact step, so the grid holds array_len samples and ends on `end`.
+    # A shape, not a stop, so rounding the step cannot change the count.
     span = int((end - start).astype("timedelta64[ns]").astype(np.int64))
-    step = Fraction(span, (array_len - 1) * 1_000_000_000)
+    step = np.timedelta64(round(span / (array_len - 1)), "ns")
     time_coord = get_coord(start=start, step=step, shape=(array_len,), units="s")
     # Sometimes the "PartEndTime" can be wrong. Check for this and try to
     # compensate. See #414. We prefer the iso 8601 strings to the time array,
     # which is less often right, so only use the array when its last time is
-    # "close" to the stated end but off.
+    # off from the stated end by more than its precision, yet "close".
     last = _as_datetime(time_array[-1:])[0]
-    diff = float(np.abs((end - last) / (end - start))) * (array_len - 1)
-    if 0 < diff < 10:
+    unit = "ns" if last.dtype == np.dtype("datetime64[ns]") else "us"
+    precision = np.timedelta64(1, unit)
+    if precision < abs(end - last) < 10 * step:
         time_coord = get_coord(data=_as_datetime(time_array[:]))
     return time_coord
 
