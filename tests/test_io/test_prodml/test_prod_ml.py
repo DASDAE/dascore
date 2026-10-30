@@ -173,3 +173,87 @@ class TestOffsetReads:
             for window in [(slice(None),), (slice(1000, 3100),), (slice(11999, None),)]:
                 np.testing.assert_array_equal(source[window].load(), node[window])
         assert not stored_reads
+
+
+def _write_variant(path, patch, rows=None, ns_times=False, rate=None):
+    """
+    Write a patch as ProdML, then bend it like some producers do: keep only
+    `rows` time samples, store times in ns, or change OutputDataRate (None
+    keeps it, False deletes it).
+    """
+    patch.io.write(path, "prodml")
+    with h5py.File(path, "r+") as h5:
+        raw = h5["Acquisition/Raw[0]"]
+        times, data = raw["RawDataTime"][:], raw["RawData"][:]
+        time_attrs = dict(raw["RawDataTime"].attrs)
+        data_attrs = dict(raw["RawData"].attrs)
+        if rows is not None:
+            time_attrs["PartEndTime"] = time_attrs["PartStartTime"]
+            times, data = times[:rows], data[:rows]
+        for name, values, attrs in (
+            ("RawDataTime", times * (1000 if ns_times else 1), time_attrs),
+            ("RawData", data, data_attrs),
+        ):
+            del raw[name]
+            raw.create_dataset(name, data=values).attrs.update(attrs)
+        if rate is False:
+            del raw.attrs["OutputDataRate"]
+        elif rate is not None:
+            raw.attrs["OutputDataRate"] = rate
+    return path
+
+
+class TestProducerVariants:
+    """ProdML files that bend the schema the way real producers do."""
+
+    @pytest.fixture(scope="class")
+    def patch(self):
+        """A small patch with whole microsecond times."""
+        patch = dc.get_example_patch().select(distance=(0, 20), samples=True)
+        return patch.transpose("time", "distance")
+
+    def test_capitalized_version_and_ns_times(self, patch, tmp_path):
+        """
+        A SchemaVersion attr and nanosecond times read like the standard
+        spelling and microseconds; a wrong OutputDataRate is not used.
+        """
+        path = _write_variant(tmp_path / "v.h5", patch, ns_times=True, rate=25.0)
+        with h5py.File(path, "r+") as h5:
+            attrs = h5["Acquisition"].attrs
+            attrs["SchemaVersion"] = attrs.pop("schemaVersion")
+        assert dc.get_format(path) == ("PRODML", "2.1")
+        expected = patch.get_coord("time")
+        for snap in (True, False):
+            out = dc.read(path, snap=snap)[0]
+            assert out.attrs.schema_version == "2.1"
+            assert np.array_equal(out.get_coord("time").values, expected.values)
+            assert np.array_equal(out.data, patch.transpose(*out.dims).data)
+
+    def test_single_time_uses_output_rate(self, patch, tmp_path):
+        """One sample takes its step from OutputDataRate, or has none."""
+        start = patch.get_coord("time").min()
+        stated = _write_variant(tmp_path / "rate.h5", patch, rows=1, rate=0.5)
+        unstated = _write_variant(tmp_path / "none.h5", patch, rows=1, rate=False)
+        time = dc.read(stated)[0].get_coord("time")
+        assert time.min() == start and len(time) == 1
+        assert time.step == np.timedelta64(2, "s")
+        time = dc.read(unstated)[0].get_coord("time")
+        assert time.min() == start and time.step is None
+
+    def test_jittered_ns_times_keep_a_step(self, patch, tmp_path):
+        """
+        Jittered labels between exact ends snap to an even grid, even when
+        that grid's step is not a whole number of nanoseconds.
+        """
+        path = _write_variant(tmp_path / "jitter.h5", patch, ns_times=True)
+        with h5py.File(path, "r+") as h5:
+            times = h5["Acquisition/Raw[0]/RawDataTime"]
+            values = times[:]
+            values[1:-1] += np.tile([20_000, -20_000], len(values) // 2)[:-2]
+            values[-1] += 1
+            times[:] = values
+            end = str(values[-1].astype("datetime64[ns]")) + "Z"
+            times.attrs["PartEndTime"] = end.encode()
+        time = dc.read(path)[0].get_coord("time")
+        assert time.step is not None
+        assert time.min() == patch.get_coord("time").min()

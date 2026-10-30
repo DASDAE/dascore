@@ -18,6 +18,7 @@ from dascore.io.utils import (
     convert_attr_units,
     resolve_keyed_source,
     should_snap,
+    step_from_rate,
 )
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.units import get_quantity_str
@@ -30,9 +31,10 @@ _EXPECTED_ATTRS = (
     "NumberOfLoci",
     "SpatialSamplingInterval",
     "StartLocusIndex",
-    "schemaVersion",
     "uuid",
 )
+# Most producers spell the version attr this way; some capitalize it.
+_VERSION_ATTRS = ("schemaVersion", "SchemaVersion")
 
 _ROOT_ATTRS = {
     "PulseWidth": "pulse_width",
@@ -51,6 +53,7 @@ _ROOT_ATTRS = {
     "FacilityId": "facility_id",
     "ServiceCompanyName": "service_company_name",
     "schemaVersion": "schema_version",
+    "SchemaVersion": "schema_version",
 }
 
 # The units patch attrs use for the measures ProdML tags with a uom.
@@ -116,12 +119,11 @@ def _get_prodml_version_str(hdf_fi) -> str:
     if acquisition is None:
         return ""
     attrs = acquisition.attrs
-    is_prodml = set(_EXPECTED_ATTRS).issubset(set(attrs))
-    if not is_prodml:
+    version_name = next((x for x in _VERSION_ATTRS if x in attrs), None)
+    if version_name is None or not set(_EXPECTED_ATTRS).issubset(set(attrs)):
         return ""
     # in some prodml schemaVersion is str, in other float; this handles both.
-    version_str = str(unbyte(attrs["schemaVersion"]))
-    return version_str
+    return str(unbyte(attrs[version_name]))
 
 
 def _get_root_attrs(attrs):
@@ -155,8 +157,20 @@ def _get_distance_coord(acq):
     return get_coord(start=start, step=step, shape=(num_dist_channels,), units=units)
 
 
+def _as_datetime(values):
+    """
+    Integer times since the epoch as datetime64.
+
+    ProdML states microseconds, but some producers write nanoseconds;
+    1e17 is the year 5138 in microseconds and 1973 in nanoseconds.
+    """
+    values = np.asarray(values)
+    unit = "ns" if len(values) and np.abs(values).max() > 1e17 else "us"
+    return values.astype(np.int64).astype(f"datetime64[{unit}]")
+
+
 def _get_time_coord(node, snap=True):
-    """Get the time information from a Raw node."""
+    """Get the time information from a Raw node (or the parent of Fbe data)."""
     time_names = [x for x in node.keys() if x.endswith("DataTime")]
     assert len(time_names) == 1, f"Found bad time information in prodml {node=}"
     time_name = time_names[0]
@@ -164,27 +178,32 @@ def _get_time_coord(node, snap=True):
     array_len = len(time_array)
     assert array_len > 0, "Missing time array in ProdML file."
     if not should_snap(snap, "time"):
-        values = time_array[:].astype("datetime64[us]")
-        return get_coord(data=values, units="s", snap=False)
+        return get_coord(data=_as_datetime(time_array[:]), units="s", snap=False)
     time_attrs = time_array.attrs
     start_str = unbyte(time_attrs["PartStartTime"]).split("+")[0]
     start = dc.to_datetime64(start_str.rstrip("Z"))
     end_str = unbyte(time_attrs["PartEndTime"]).split("+")[0]
     end = dc.to_datetime64(end_str.rstrip("Z"))
+    if array_len == 1:
+        # One time states no spacing; use the node's declared output rate.
+        rate = float(unbyte(node.attrs.get("OutputDataRate", np.nan)))
+        if not (np.isfinite(rate) and rate > 0):
+            return get_coord(data=np.array([start]), units="s")
+        return get_coord(start=start, step=step_from_rate(rate), shape=(1,), units="s")
     step = (end - start) / (array_len - 1)
     time_coord = get_coord(start=start, stop=end + step, step=step, units="s")
     # Sometimes the "PartEndTime" can be wrong. Check for this and try to
     # compensate. See #414.
-    last = np.asarray(time_array[-1:]).astype("datetime64[us]")[0]
+    last = _as_datetime(time_array[-1:])[0]
     tc_max = np.asarray(time_coord.max()).astype("datetime64[us]")
     diff = float(np.abs((tc_max - last) / step))
     # Note: just in case the time array is not in microseconds as it should
     # be, we prefer to use the iso 8601 strings in the 'PartStartTime' attrs
     # because they are less likely to get messed up. Therefore, we only
-    # correct time coordinate from time array if the values are "close" but off.
-    if 0 < diff < 10:
-        time_array = time_array[:].astype("datetime64[us]")
-        time_coord = get_coord(data=time_array)
+    # correct time coordinate from time array if the values are "close" but off
+    # (by more than the rounding of the step to nanoseconds).
+    if 0.5 < diff < 10:
+        time_coord = get_coord(data=_as_datetime(time_array[:]))
     return time_coord
 
 
