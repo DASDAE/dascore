@@ -157,8 +157,8 @@ class TestSegyWrite:
             segy.write(random_spool, tmp_path)
 
 
-def _write_segy_file(path, endian="big", minor=0, date=(2016, 22, 1, 23, 59)):
-    """Write a small SEG-Y file the way various producers lay them out."""
+def _write_segy_file(path, endian="big", revision=(1, 0), date=(2016, 22, 1, 23, 59)):
+    """Write a 3-trace SEG-Y file with the given byte order, revision bytes and date."""
     segyio = pytest.importorskip("segyio")
     data = np.arange(3 * 20, dtype=np.float32).reshape(3, 20)
     spec = segyio.spec()
@@ -174,10 +174,9 @@ def _write_segy_file(path, endian="big", minor=0, date=(2016, 22, 1, 23, 59)):
         for num, trace in enumerate(data):
             fi.header[num] = header
             fi.trace[num] = trace
-    # The revision is one byte each for major and minor in either byte order.
     with path.open("r+b") as fi:
         fi.seek(3500)
-        fi.write(bytes([1, minor]))
+        fi.write(bytes(revision))
     return path, data.T
 
 
@@ -186,21 +185,27 @@ class TestSegyCompatibility:
 
     def test_nonstandard_minor_revision(self, tmp_path):
         """A minor revision such as 1.80 reads as revision 1.0."""
-        path, data = _write_segy_file(tmp_path / "rev.sgy", minor=80)
+        path, data = _write_segy_file(tmp_path / "rev.sgy", revision=(1, 80))
         assert dc.get_format(path) == ("segy", "1.0")
         assert np.array_equal(dc.spool(path)[0].data, data)
 
     def test_nonstandard_minor_needs_whole_traces(self, tmp_path):
         """A non-standard revision is only claimed when whole traces fill the file."""
-        path, _ = _write_segy_file(tmp_path / "rev.sgy", minor=80)
+        path, _ = _write_segy_file(tmp_path / "rev.sgy", revision=(1, 80))
         with path.open("ab") as fi:
             fi.write(b"\x00" * 10)
         assert SegyV1_0().get_format(path) is False
 
-    def test_little_endian(self, tmp_path):
-        """Little-endian files are detected and read like big-endian ones."""
+    @pytest.mark.parametrize("revision", [(1, 0), (0, 1)])
+    def test_little_endian(self, tmp_path, revision):
+        """
+        Little-endian files are detected and read like big-endian ones, with
+        the revision as two bytes or as one little-endian word (segyio).
+        """
         big, data = _write_segy_file(tmp_path / "big.sgy")
-        little, _ = _write_segy_file(tmp_path / "little.sgy", endian="little")
+        little, _ = _write_segy_file(
+            tmp_path / "little.sgy", endian="little", revision=revision
+        )
         assert dc.get_format(little) == dc.get_format(big)
         patch = dc.spool(little)[0]
         assert patch == dc.spool(big)[0]
@@ -212,10 +217,20 @@ class TestSegyCompatibility:
         time = dc.spool(path)[0].get_coord("time")
         assert time.min() == np.datetime64("2016-01-22T01:24:00")
 
-    def test_missing_date_is_relative(self, tmp_path):
-        """Without a date, time starts at zero and keeps its step."""
-        path, _ = _write_segy_file(tmp_path / "nodate.sgy", date=(0, 0, 0, 0, 0))
-        with pytest.warns(UserWarning, match="not a valid time"):
-            time = dc.spool(path)[0].get_coord("time")
+    @pytest.mark.parametrize(
+        "date", [(0, 0, 0, 0, 0), (2016, 0, 1, 2, 3), (16, 22, 1, 2, 3)]
+    )
+    def test_invalid_date_is_relative(self, tmp_path, date):
+        """
+        Without a valid year and day (none, day 0, two-digit year), time
+        starts at zero, keeps its step and takes the start the warning gives.
+        """
+        path, _ = _write_segy_file(tmp_path / "nodate.sgy", date=date)
+        with pytest.warns(UserWarning, match="not valid"):
+            patch = dc.spool(path)[0]
+        time = patch.get_coord("time")
         assert time.min() == np.timedelta64(0, "ns")
         assert time.step == np.timedelta64(1, "ms")
+        start = np.datetime64("2013-09-11T17:53:29")
+        new = patch.update_coords(time=patch.get_coord("time") + start)
+        assert new.get_coord("time").min() == start

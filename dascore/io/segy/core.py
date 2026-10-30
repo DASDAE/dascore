@@ -13,8 +13,8 @@ from dascore.utils.misc import optional_import
 
 from .utils import (
     _get_coords,
-    _get_segy_version,
     _open_segy,
+    _parse_binary_header,
     _write_segy,
 )
 
@@ -33,7 +33,7 @@ class SegyV1_0(FiberIO):  # noqa
 
     def get_version(self, resource: LocalBinaryReader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
-        return _match[1] if (_match := _get_segy_version(resource)) else None
+        return _match[1] if (_match := _parse_binary_header(resource)) else None
 
     def read_array(
         self,

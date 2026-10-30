@@ -15,12 +15,13 @@ from dascore.core import get_coord_manager
 from dascore.exceptions import InvalidSpoolError, PatchError
 from dascore.utils.misc import optional_import
 
-# Bytes per sample for each SEG-Y data sample format code.
-_SAMPLE_BYTES = {1: 4, 2: 4, 3: 2, 5: 4, 6: 8, 8: 1, 9: 8, 10: 4, 11: 2, 12: 8}
+# Bytes per sample of each SEG-Y (rev 2.1) data sample format code.
+_SAMPLE_BYTES = {1: 4, 2: 4, 3: 2, 4: 4, 5: 4, 6: 8, 7: 3, 8: 1}
+_SAMPLE_BYTES |= {9: 8, 10: 4, 11: 2, 12: 8, 15: 3, 16: 1}
 
 
 def twos_comp(bytes_, byteorder="big"):
-    """Get twos complement of bytestring."""
+    """Decode a signed integer from bytes."""
     return int.from_bytes(bytes_, byteorder, signed=True)
 
 
@@ -29,13 +30,17 @@ def _parse_binary_header(fp):
     Return (byte order, version) if the file holds SEG-Y data, else None.
 
     The format code (1 to 16) is plausible in only one byte order, which
-    settles it. Based on ObsPy's implementation written by Lion Krischer.
+    settles it. A non-standard minor revision (eg 1.80) is reported as
+    "major.0", and only when whole traces fill the file. Based on ObsPy's
+    implementation written by Lion Krischer.
     https://github.com/obspy/obspy/blob/master/obspy/io/segy/core.py
     """
     # Read 400byte header into byte string.
     fp.seek(3200)
     header = fp.read(400)
-    major, minor = header[300:302] if len(header) == 400 else (-1, -1)
+    if len(header) < 400:
+        return None
+    major, minor = header[300:302]
     for endian in ("big", "little"):
         traces, auxiliary, interval, _, samples, _, code = (
             twos_comp(header[i : i + 2], endian) for i in range(12, 26, 2)
@@ -46,8 +51,8 @@ def _parse_binary_header(fp):
         checks = (
             # First check that some samples are defined.
             samples > 0,
-            # Then ensure the sample intervals is defined. This can be defined
-            # in trace header so 0 is ok, but not negative numbers.
+            # The interval may be 0 (defined in the trace headers) but not
+            # negative.
             interval >= 0,
             # Ensure the data sample format code is valid (2.1 standard range).
             1 <= code <= 16,
@@ -61,6 +66,9 @@ def _parse_binary_header(fp):
             break
     else:
         return None
+    if endian == "little" and major == 0:
+        # segyio writes the revision as one little-endian word (00 01 = 1.0).
+        major, minor = minor, major
     if minor not in {0, 1, 2, 3, 100}:
         # Some producers write a non-standard minor revision (eg 1.80); read
         # those as the major revision when whole traces fill the file exactly.
@@ -70,13 +78,6 @@ def _parse_binary_header(fp):
             return None
         minor = 0
     return endian, f"{major}.{minor}"
-
-
-def _get_segy_version(fp):
-    """Return ("segy", version) if the file handle holds segy data, else False."""
-    if (parsed := _parse_binary_header(fp)) is None:
-        return False
-    return "segy", parsed[1]
 
 
 def _open_segy(path, segyio):
@@ -123,7 +124,8 @@ def _get_time_from_header(header):
     Get the start time from the SEGY trace header date fields.
 
     The fields are added up, so a second of 60 rolls into the next minute.
-    Without a valid date, time is relative to the first sample.
+    Without a usable year and day, warn and return timedelta64(0), so time
+    is relative to the first sample.
     """
     segyio = optional_import("segyio")
     trace_field = segyio.TraceField
@@ -133,12 +135,13 @@ def _get_time_from_header(header):
     hour = header[trace_field.HourOfDay]
     minute = header[trace_field.MinuteOfHour]
     second = header[trace_field.SecondOfMinute]
-    valid = (1 <= julday <= 366, 0 <= hour <= 23, 0 <= minute <= 59)
-    if year <= 0 or not all(valid) or not 0 <= second <= 60:
+    # Years outside datetime64[ns] (eg two-digit years) would wrap silently.
+    if not (1678 <= year <= 2261 and 1 <= julday <= 366):
         msg = (
-            f"SEG-Y trace header date ({year}.{julday} {hour}:{minute}:{second}) "
-            "is not a valid time, so the time coordinate is relative to the "
-            "first sample. Set the start with patch.update_coords(time_min=...)."
+            f"SEG-Y trace header date (year {year}, day {julday}) is not "
+            "valid, so the time coordinate is relative to the first sample. "
+            "To set the start: "
+            'patch.update_coords(time=patch.get_coord("time") + start).'
         )
         warnings.warn(msg, UserWarning)
         return np.timedelta64(0, "ns")
