@@ -869,3 +869,42 @@ class TestIndexedOffsetReads:
         merged = spool.chunk(time=None)[0]
         np.testing.assert_array_equal(merged.data[80:100], -data[80:100])
         assert len(stored_reads) == 1
+
+
+class TestPublishedProductAttrs:
+    """Root attrs of research products, which describe rather than declare."""
+
+    @pytest.fixture()
+    def event_path(self, tmp_path):
+        """A small event cut: seconds about an origin, units given as prose."""
+        path = tmp_path / "event.h5"
+        with h5py.File(path, "w") as h5:
+            h5["data"] = np.arange(6 * 2, dtype=np.float32).reshape(6, 2)
+            h5["time"] = np.arange(6) * 0.02 - 0.06
+            h5["channel_ids"] = np.array([0, 25])
+            h5.attrs["data_units"] = "same as input DAS data"
+            h5.attrs["time_units"] = "seconds relative to catalog origin time"
+        return path
+
+    def test_prose_units_are_kept_as_text(self, event_path):
+        """Units that are not units warn and survive as original_data_units."""
+        with pytest.warns(UserWarning, match="are not units"):
+            patch = dc.read(event_path)[0]
+        assert patch.attrs.data_units is None
+        assert patch.attrs.original_data_units == "same as input DAS data"
+
+    @pytest.mark.parametrize("snap", [True, False])
+    def test_relative_times_are_timedeltas(self, event_path, snap):
+        """Seconds relative to an unstated origin read as offsets, not epochs."""
+        with pytest.warns(UserWarning, match="are not units"):
+            time = dc.read(event_path, snap=snap)[0].get_coord("time")
+        expected = (np.arange(6) * 20 - 60).astype("timedelta64[ms]")
+        assert np.array_equal(time.values, expected)
+
+    def test_relative_to_unknown_unit_is_unchanged(self, event_path):
+        """A time_units naming no time unit leaves the time decoding as it was."""
+        with h5py.File(event_path, "r+") as h5:
+            h5.attrs["time_units"] = "samples relative to trigger"
+            del h5.attrs["data_units"]
+        time = dc.read(event_path)[0].get_coord("time")
+        assert np.issubdtype(time.dtype, np.datetime64)

@@ -137,3 +137,64 @@ patch = dc.io.xarray_to_patch(array)
 ```
 
 The distance origin here is relative to the first released channel. Data units remain unknown; the conversion does not assign strain or strain-rate units without source metadata. Choose the mapping from the release documentation rather than applying this layout to arbitrary HDF5 files.
+
+A reduced AP Sensing release, such as the Cape Muroto tremor files, keeps the `DAQ`, `Metadata` and `DAS` groups but drops the version attributes, interrogator, time zone and data rate the AP Sensing reader needs, so it is not read automatically. Its 1,079 positions over about 55 km are spaced roughly ten times the stated `SpatialSampling`, and `DAQ/RepetitionFrequency` may or may not be the output rate. Read such a file with h5py as above, taking the time step and positions from the release's documentation.
+
+## Research NetCDF files
+
+NetCDF products that do not follow the CF conventions DASCore reads open with xarray and convert with `dascore.io.xarray_to_patch` once their variables are chosen and labelled. Keep each variable in its own patch, set units from the file's own description, and keep the time labels the file states. These examples use files from three published DTS datasets.
+
+A temperature-by-depth record, where xarray decodes the CF time but the units need DASCore's spelling (Speulderbos soil temperature, `dts_data.nc`):
+
+```{python}
+#| eval: false
+import xarray as xr
+
+import dascore as dc
+
+array = xr.open_dataset("dts_data.nc")["dts_temperature"]
+array["depth"].attrs["units"] = "cm"
+array.attrs = {"data_units": "degC", "data_type": "temperature"}
+patch = dc.io.xarray_to_patch(array)
+```
+
+Separate up and down cable variables, as separate patches (EGS Collab, `AML_DTS.nc`, whose file-level `units` attribute is "degrees C"):
+
+```{python}
+#| eval: false
+import xarray as xr
+
+import dascore as dc
+
+dataset = xr.open_dataset("AML_DTS.nc")
+patches = []
+for name in ("up_data", "down_data"):
+    array = dataset[name]
+    array["depth"].attrs["units"] = "m"
+    array.attrs = {"data_units": "degC", "data_type": "temperature", "tag": name}
+    patches.append(dc.io.xarray_to_patch(array))
+spool = dc.spool(patches)
+```
+
+A statistics product with variable-specific units and MATLAB datenum times, here the temperature variance of the averaged cables (Helsinki SMEAR III, `DTS_statistics_SMEARIII_Karttunen_et_al.nc`):
+
+```{python}
+#| eval: false
+import numpy as np
+import xarray as xr
+
+import dascore as dc
+
+dataset = xr.open_dataset(
+    "DTS_statistics_SMEARIII_Karttunen_et_al.nc", decode_times=False
+)
+array = dataset["var_av"]  # units "K**2"; each variable has its own
+# MATLAB datenum counts days from 0000-01-00; day 719529 is 1970-01-01.
+days = array["time"].values - 719529
+time = np.datetime64("1970-01-01") + np.round(days * 86_400e3).astype("timedelta64[ms]")
+array = array.assign_coords(time=time)
+array.attrs = {"data_units": array.attrs["units"]}
+patch = dc.io.xarray_to_patch(array)
+```
+
+Each statistic covers an averaging period the release documents; the time labels are as stated, not shifted to period centres.

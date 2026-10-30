@@ -7,7 +7,7 @@ import numpy as np
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
 from dascore.exceptions import InvalidFiberFileError
-from dascore.units import get_quantity
+from dascore.io.utils import parse_units
 from dascore.utils.misc import maybe_get_items
 
 # Root attributes which must all be present for a file to be considered
@@ -45,16 +45,6 @@ def _read_attrs(resource) -> dict:
     return maybe_get_items(
         resource.attrs, identity_map, unpack_names=set(_REQUIRED_ATTRS)
     )
-
-
-def _safe_units(raw_units):
-    """Map the unit description to a parseable unit string, or None."""
-    mapped = _UNIT_MAP.get(raw_units, raw_units)
-    try:
-        get_quantity(mapped)
-    except Exception:
-        return None
-    return mapped
 
 
 def _get_coords(attrs, shape):
@@ -119,9 +109,10 @@ def _get_coords(attrs, shape):
 
 def _get_attrs_dict(attrs) -> dict:
     """Extract patch attributes from the root attrs."""
+    units = attrs["raw_data_units"]
     return {
         "data_category": "DAS",
-        "data_units": _safe_units(attrs["raw_data_units"]),
+        "data_units": parse_units(_UNIT_MAP.get(units, units)),
         "gauge_length": float(attrs["GL m"]),
         "scale_factor_to_strain": float(attrs["scale factor to strain"]),
     }

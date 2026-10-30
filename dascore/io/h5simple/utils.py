@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
+import re
+import warnings
+from typing import Any, cast
+
 import numpy as np
+import pandas as pd
 
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
 from dascore.core import get_coord
-from dascore.io.utils import cf_time_values, should_snap
+from dascore.io.utils import cf_time_values, parse_units, should_snap
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
@@ -31,23 +36,56 @@ def _get_attrs_coords_and_data(h5, snap):
     skip = DEFAULT_ATTRS | FILE_FORMAT_ATTR_NAMES | set(STORAGE_PROVENANCE_ATTRS)
     attr_names = set(attrs) - skip
     attr_dict = {x: unbyte(attrs[x]) for x in attr_names}
-    cm, data = _get_cm_and_data(h5, snap, dims=attr_dict.get("dims"))
+    # Some files describe their units in prose ("same as input DAS data");
+    # keep that text, but leave the patch without units rather than fail.
+    units = attr_dict.get("data_units")
+    if units is not None and parse_units(units) is None:
+        attr_dict["original_data_units"] = attr_dict.pop("data_units")
+        msg = f"data_units {units!r} are not units; kept as original_data_units."
+        warnings.warn(msg, UserWarning)
+    relative = _relative_time_unit(attr_dict.get("time_units"))
+    cm, data = _get_cm_and_data(h5, snap, dims=attr_dict.get("dims"), relative=relative)
     attr_dict.pop("dims", None)
     return attr_dict, cm, data
 
 
-def _get_coord(v, snap, name):
+def _relative_time_unit(time_units) -> str | None:
+    """
+    The unit of times stated as offsets, eg "seconds relative to catalog
+    origin time", whose origin is no time the file gives; else None.
+    """
+    match = re.match(r"\s*(\w+) relative to", str(time_units or ""))
+    if match is None:
+        return None
+    unit = cast("Any", match.group(1))  # a time unit pandas knows, if any
+    try:
+        pd.to_timedelta(0, unit=unit)
+    except ValueError:
+        return None
+    return unit
+
+
+def _time_values(node, index=slice(None), relative=None):
+    """Time labels: CF-decoded datetimes, or offsets in a relative unit."""
+    if relative is None:
+        return cf_time_values(node, index)
+    offsets = pd.to_timedelta(np.atleast_1d(node[index]), unit=relative)
+    values = offsets.to_numpy()
+    return values if isinstance(index, slice) else values[0]
+
+
+def _get_coord(v, snap, name, relative=None):
     """Get the coord values from a node."""
     length = len(v)
     if should_snap(snap, name) and length > 1:
-        start = v[0] if name != "time" else cf_time_values(v, 0)
-        stop = v[-1] if name != "time" else cf_time_values(v, -1)
+        start = v[0] if name != "time" else _time_values(v, 0, relative)
+        stop = v[-1] if name != "time" else _time_values(v, -1, relative)
         duration = stop - start
         step = duration / (length - 1)
         coord = get_coord(min=start, max=stop + step, step=step)
         assert len(coord) == length
     else:
-        values = v[:] if name != "time" else cf_time_values(v)
+        values = v[:] if name != "time" else _time_values(v, relative=relative)
         coord = get_coord(data=values, snap=False)
     return coord
 
@@ -89,7 +127,9 @@ def _get_dims(data_node, time_node, other_nodes, dims=None):
     return tuple(coord_shape_dict[x] for x in data_node.shape), other_nodes
 
 
-def _get_coords_and_dims(data_node, time_node, other_nodes, snap=True, dims=None):
+def _get_coords_and_dims(
+    data_node, time_node, other_nodes, snap=True, dims=None, relative=None
+):
     """Get dims tuple and coord dict."""
     dims, other_nodes = _get_dims(data_node, time_node, other_nodes, dims)
     other_nodes["time"] = time_node
@@ -97,7 +137,10 @@ def _get_coords_and_dims(data_node, time_node, other_nodes, snap=True, dims=None
     if "channel" in dims and "channel" not in other_nodes:
         length = data_node.shape[dims.index("channel")]
         other_nodes["channel"] = np.arange(length)
-    coords = {i: _get_coord(v, snap=snap, name=i) for i, v in other_nodes.items()}
+    coords = {
+        i: _get_coord(v, snap=snap, name=i, relative=relative)
+        for i, v in other_nodes.items()
+    }
     return dims, coords
 
 
@@ -119,10 +162,12 @@ def _get_nodes(h5):
     )
 
 
-def _get_cm_and_data(h5, snap=False, dims=None):
+def _get_cm_and_data(h5, snap=False, dims=None, relative=None):
     """Extract coordinate manager and data node."""
     data_node, time_node, other_nodes = _get_nodes(h5)
-    dims, coords = _get_coords_and_dims(data_node, time_node, other_nodes, snap, dims)
+    dims, coords = _get_coords_and_dims(
+        data_node, time_node, other_nodes, snap, dims, relative
+    )
     return dc.core.get_coord_manager(coords, dims=dims), data_node
 
 
