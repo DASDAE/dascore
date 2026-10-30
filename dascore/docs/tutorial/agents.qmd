@@ -25,7 +25,7 @@ The Skills navigation and CLI use one catalog. Membership in `dascore/docs/skill
 
 Installing the Python package does not change agent configuration. Ask your agent to install the small native `SKILL.md`:
 
-> Run `python -m dascore skill --bootstrap` with this project's Python and save its output as `SKILL.md` in your personal `dascore` skill directory.
+> Run `python -m dascore skill --bootstrap` with this project's Python and save its output as UTF-8 `SKILL.md` in your personal `dascore` skill directory. Replace an existing file only if the command succeeds.
 
 Personal skills use these locations:
 
@@ -34,11 +34,11 @@ Personal skills use these locations:
 | [Codex](https://developers.openai.com/codex/skills) | `~/.agents/skills/dascore/` |
 | [Claude Code](https://code.claude.com/docs/en/skills) | `~/.claude/skills/dascore/` |
 
-Other agents that support [Agent Skills](https://agentskills.io/specification) can use the same file in their supported skill directory. Reload or restart the agent if the new skill is not visible. The installed package also ships the file at `dascore/.agents/skills/dascore/SKILL.md`, the layout that tools discovering skills inside installed packages look for.
+Other agents that support [Agent Skills](https://agentskills.io/specification) can use the same file in their supported skill directory. Reload or restart the agent if the new skill is not visible. The package also ships the file at `dascore/.agents/skills/dascore/SKILL.md` inside `site-packages`, the conventional location for skill installers that link skills from a project's dependencies; agents do not read it there directly.
 
 The bootstrap tells the agent to identify the project's environment, verify `dascore doc` provenance, and retain that environment's absolute Python executable and documentation directory. It loads the current routing recipe and specialized skills through the CLI, and searches the reported directory using the agent's existing file tools. It contains neither a fixed interpreter path nor a copied inventory procedure.
 
-Install the bootstrap once per agent location. Recipes and API documentation follow the selected DASCore installation, so switching projects also requires selecting that project's interpreter. Update the exported bootstrap when its installation or discovery instructions change.
+Install the bootstrap once per agent location. Recipes and API documentation follow the selected DASCore installation, so switching projects also requires selecting that project's interpreter. Reinstall the bootstrap after upgrading DASCore if its installation or discovery instructions changed.
 
 ## Check the connection
 
