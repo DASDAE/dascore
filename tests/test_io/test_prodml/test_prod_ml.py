@@ -178,8 +178,9 @@ class TestOffsetReads:
 def _write_variant(path, patch, rows=None, ns_times=False, rate=None):
     """
     Write a patch as ProdML, then bend it like some producers do: keep only
-    `rows` time samples, store times in ns, or change OutputDataRate (None
-    keeps it, False deletes it).
+    the first `rows` samples (ending the part where it starts, so for
+    rows=1), store times in ns, or change OutputDataRate (None keeps it,
+    False deletes it).
     """
     patch.io.write(path, "prodml")
     with h5py.File(path, "r+") as h5:
@@ -215,7 +216,8 @@ class TestProducerVariants:
     def test_capitalized_version_and_ns_times(self, patch, tmp_path):
         """
         A SchemaVersion attr and nanosecond times read like the standard
-        spelling and microseconds; a wrong OutputDataRate is not used.
+        spelling and microseconds; several samples ignore a wrong
+        OutputDataRate.
         """
         path = _write_variant(tmp_path / "v.h5", patch, ns_times=True, rate=25.0)
         with h5py.File(path, "r+") as h5:
@@ -229,16 +231,24 @@ class TestProducerVariants:
             assert np.array_equal(out.get_coord("time").values, expected.values)
             assert np.array_equal(out.data, patch.transpose(*out.dims).data)
 
-    def test_single_time_uses_output_rate(self, patch, tmp_path):
-        """One sample takes its step from OutputDataRate, or has none."""
-        start = patch.get_coord("time").min()
-        stated = _write_variant(tmp_path / "rate.h5", patch, rows=1, rate=0.5)
-        unstated = _write_variant(tmp_path / "none.h5", patch, rows=1, rate=False)
-        time = dc.read(stated)[0].get_coord("time")
-        assert time.min() == start and len(time) == 1
-        assert time.step == np.timedelta64(2, "s")
-        time = dc.read(unstated)[0].get_coord("time")
-        assert time.min() == start and time.step is None
+    @pytest.mark.parametrize("rate, step", [(0.5, 2), (False, None), (0.0, None)])
+    def test_single_time_uses_output_rate(self, patch, tmp_path, rate, step):
+        """One sample takes its step from a usable OutputDataRate, or has none."""
+        path = _write_variant(tmp_path / "one.h5", patch, rows=1, rate=rate)
+        time = dc.read(path)[0].get_coord("time")
+        assert time.min() == patch.get_coord("time").min() and len(time) == 1
+        assert time.step == (step and np.timedelta64(step, "s"))
+
+    def test_wrong_end_time_uses_ns_labels(self, patch, tmp_path):
+        """A PartEndTime a few steps off yields the recorded ns labels (#414)."""
+        path = _write_variant(tmp_path / "late.h5", patch, ns_times=True)
+        with h5py.File(path, "r+") as h5:
+            times = h5["Acquisition/Raw[0]/RawDataTime"]
+            late = times[-1] + 2 * 4_000_000
+            end = str(np.datetime64(int(late), "ns")) + "Z"
+            times.attrs["PartEndTime"] = end.encode()
+        time = dc.read(path)[0].get_coord("time")
+        assert np.array_equal(time.values, patch.get_coord("time").values)
 
     def test_jittered_ns_times_keep_a_step(self, patch, tmp_path):
         """
@@ -257,3 +267,27 @@ class TestProducerVariants:
         time = dc.read(path)[0].get_coord("time")
         assert time.step is not None
         assert time.min() == patch.get_coord("time").min()
+
+    def test_drifting_clock_keeps_sample_count(self, tmp_path):
+        """
+        A long file whose spacing is not whole nanoseconds snaps to exactly
+        as many samples as it holds, ending on its stated end.
+        """
+        count, start = 140_001, np.datetime64("2024-01-01", "ns")
+        even = start + np.arange(count) * np.timedelta64(100, "us")
+        patch = dc.Patch(
+            data=np.zeros((count, 2), dtype=np.float32),
+            coords={"time": even, "distance": [0.0, 1.0]},
+            dims=("time", "distance"),
+        )
+        path = _write_variant(tmp_path / "drift.h5", patch, ns_times=True)
+        # Spacing 100,000.45 ns: rounding the step loses 0.6 of a sample.
+        drift = np.round(np.arange(count) * 100_000.45).astype("timedelta64[ns]")
+        time = start + drift
+        with h5py.File(path, "r+") as h5:
+            times = h5["Acquisition/Raw[0]/RawDataTime"]
+            times[:] = time.astype(np.int64)
+            times.attrs["PartEndTime"] = (str(time[-1]) + "Z").encode()
+        out = dc.read(path)[0]
+        assert out.shape == (count, 2)
+        assert out.get_coord("time").max() == time[-1]

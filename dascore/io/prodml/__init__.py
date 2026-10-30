@@ -7,7 +7,7 @@ DASCore does not write.
 Reading accepts a ``SchemaVersion`` attr in place of ``schemaVersion`` and
 integer times in nanoseconds as well as microseconds. A node with a single
 time sample takes its step from the node's ``OutputDataRate``, or has no step
-when the rate is missing.
+when that rate is missing, zero or not finite.
 
 More info about ProdML can be found here:
 https://www.energistics.org/prodml-developers-users

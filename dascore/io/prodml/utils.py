@@ -5,6 +5,7 @@ from __future__ import annotations
 import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass
+from fractions import Fraction
 from uuid import uuid4
 
 import h5py
@@ -122,7 +123,7 @@ def _get_prodml_version_str(hdf_fi) -> str:
     version_name = next((x for x in _VERSION_ATTRS if x in attrs), None)
     if version_name is None or not set(_EXPECTED_ATTRS).issubset(set(attrs)):
         return ""
-    # in some prodml schemaVersion is str, in other float; this handles both.
+    # the version is a str in some files and a float in others; handle both.
     return str(unbyte(attrs[version_name]))
 
 
@@ -159,13 +160,13 @@ def _get_distance_coord(acq):
 
 def _as_datetime(values):
     """
-    Integer times since the epoch as datetime64.
+    Integer times since the epoch as datetime64, read as nanoseconds above 1e17.
 
     ProdML states microseconds, but some producers write nanoseconds;
     1e17 is the year 5138 in microseconds and 1973 in nanoseconds.
     """
     values = np.asarray(values)
-    unit = "ns" if len(values) and np.abs(values).max() > 1e17 else "us"
+    unit = "ns" if np.abs(values).max() > 1e17 else "us"
     return values.astype(np.int64).astype(f"datetime64[{unit}]")
 
 
@@ -182,27 +183,26 @@ def _get_time_coord(node, snap=True):
     time_attrs = time_array.attrs
     start_str = unbyte(time_attrs["PartStartTime"]).split("+")[0]
     start = dc.to_datetime64(start_str.rstrip("Z"))
-    end_str = unbyte(time_attrs["PartEndTime"]).split("+")[0]
-    end = dc.to_datetime64(end_str.rstrip("Z"))
     if array_len == 1:
-        # One time states no spacing; use the node's declared output rate.
+        # One time states no spacing: step from the node's OutputDataRate,
+        # or no step when that rate is missing, zero or not finite.
         rate = float(unbyte(node.attrs.get("OutputDataRate", np.nan)))
         if not (np.isfinite(rate) and rate > 0):
             return get_coord(data=np.array([start]), units="s")
         return get_coord(start=start, step=step_from_rate(rate), shape=(1,), units="s")
-    step = (end - start) / (array_len - 1)
-    time_coord = get_coord(start=start, stop=end + step, step=step, units="s")
+    end_str = unbyte(time_attrs["PartEndTime"]).split("+")[0]
+    end = dc.to_datetime64(end_str.rstrip("Z"))
+    # An exact step, so the grid holds array_len samples and ends on `end`.
+    span = int((end - start).astype("timedelta64[ns]").astype(np.int64))
+    step = Fraction(span, (array_len - 1) * 1_000_000_000)
+    time_coord = get_coord(start=start, step=step, shape=(array_len,), units="s")
     # Sometimes the "PartEndTime" can be wrong. Check for this and try to
-    # compensate. See #414.
+    # compensate. See #414. We prefer the iso 8601 strings to the time array,
+    # which is less often right, so only use the array when its last time is
+    # "close" to the stated end but off.
     last = _as_datetime(time_array[-1:])[0]
-    tc_max = np.asarray(time_coord.max()).astype("datetime64[us]")
-    diff = float(np.abs((tc_max - last) / step))
-    # Note: just in case the time array is not in microseconds as it should
-    # be, we prefer to use the iso 8601 strings in the 'PartStartTime' attrs
-    # because they are less likely to get messed up. Therefore, we only
-    # correct time coordinate from time array if the values are "close" but off
-    # (by more than the rounding of the step to nanoseconds).
-    if 0.5 < diff < 10:
+    diff = float(np.abs((end - last) / (end - start))) * (array_len - 1)
+    if 0 < diff < 10:
         time_coord = get_coord(data=_as_datetime(time_array[:]))
     return time_coord
 
