@@ -40,21 +40,24 @@ def _get_attrs_coords_and_data(h5, snap):
     # keep that text, but leave the patch without units rather than fail.
     units = attr_dict.get("data_units")
     if units is not None and parse_units(units) is None:
-        attr_dict["original_data_units"] = attr_dict.pop("data_units")
-        msg = f"data_units {units!r} are not units; kept as original_data_units."
+        attr_dict["data_units_description"] = attr_dict.pop("data_units")
+        msg = f"data_units {units!r} are not units; kept as data_units_description."
         warnings.warn(msg, UserWarning)
     relative = _relative_time_unit(attr_dict.get("time_units"))
     cm, data = _get_cm_and_data(h5, snap, dims=attr_dict.get("dims"), relative=relative)
     attr_dict.pop("dims", None)
+    if relative is not None:  # spent on the time coordinate
+        attr_dict.pop("time_units")
     return attr_dict, cm, data
 
 
 def _relative_time_unit(time_units) -> str | None:
     """
-    The unit of times stated as offsets, eg "seconds relative to catalog
-    origin time", whose origin is no time the file gives; else None.
+    Return the unit of offset times, eg "seconds" from "seconds relative to
+    catalog origin time" (an origin the file does not state), else None.
     """
-    match = re.match(r"\s*(\w+) relative to", str(time_units or ""))
+    text = "" if time_units is None else str(unbyte(_maybe_unpack(time_units)))
+    match = re.match(r"\s*(\w+) relative to", text, flags=re.IGNORECASE)
     if match is None:
         return None
     unit = cast("Any", match.group(1))  # a time unit pandas knows, if any
@@ -70,7 +73,9 @@ def _time_values(node, index=slice(None), relative=None):
     if relative is None:
         return cf_time_values(node, index)
     offsets = pd.to_timedelta(np.atleast_1d(node[index]), unit=relative)
-    values = offsets.to_numpy()
+    # pandas keeps a unit's own resolution (whole seconds), which would
+    # truncate the snapped step; nanoseconds, as cf_time_values gives.
+    values = offsets.as_unit("ns").to_numpy()
     return values if isinstance(index, slice) else values[0]
 
 
