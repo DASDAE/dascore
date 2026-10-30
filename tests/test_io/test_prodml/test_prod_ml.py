@@ -16,6 +16,7 @@ from dascore.io.core import read
 from dascore.io.prodml.utils import _get_prodml_version_str, _get_root_attrs
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings
+from tests.conftest import needs_chunk_iter
 
 
 @pytest.fixture(scope="session")
@@ -160,6 +161,7 @@ class TestFacilityId:
 class TestOffsetReads:
     """A PRODML array's chunks are read from their offsets, gaps and all."""
 
+    @needs_chunk_iter
     def test_windows_equal_hdf5(self, stored_reads):
         """Windows across separated chunks equal h5py's, with no HDF5 open."""
         path = fetch("prodml_2.1.h5")

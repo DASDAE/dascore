@@ -20,6 +20,7 @@ from dascore.utils.hdf5 import (
     stored_byte_layout,
     unpack_scalar_h5_dataset,
 )
+from tests.conftest import needs_chunk_iter
 
 
 @pytest.mark.parametrize(
@@ -178,6 +179,7 @@ class TestStoredByteLayout:
         monkeypatch.setattr(h5py.File, "driver", property(lambda self: "windows"))
         assert self._layout(path) is not None
 
+    @needs_chunk_iter
     def test_chunked_full_width(self, tmp_path):
         """Full-width chunks are listed in row order, the last one partial."""
         path, data = tmp_path / "k.h5", np.arange(40.0).reshape(10, 4)
@@ -189,6 +191,7 @@ class TestStoredByteLayout:
         offsets, per = self._layout(path)
         assert per == 4 and len(offsets) == 3 and offsets != tuple(sorted(offsets))
 
+    @needs_chunk_iter
     @pytest.mark.parametrize(("rows", "found"), [(1024, True), (1025, False)])
     def test_chunk_count_cap(self, tmp_path, rows, found):
         """Past 1024 chunks no layout is recorded, so scans and rows stay small."""
@@ -217,6 +220,7 @@ class TestStoredByteLayout:
         assert self._layout(path, "short") is None
         assert self._layout(path, "small") is None
 
+    @needs_chunk_iter
     def test_ndim_three(self, tmp_path):
         """Chunks spanning every trailing axis of a cube hold whole rows."""
         path = tmp_path / "cube.h5"

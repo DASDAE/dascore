@@ -27,6 +27,7 @@ from dascore.io.h5simple.core import H5Simple
 from dascore.io.index.planned import PlanResolver
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import H5Reader
+from tests.conftest import needs_chunk_iter
 
 
 class TestH5Simple:
@@ -554,6 +555,7 @@ class TestOffsetReads:
         """Register temporary subclasses where sources find their format."""
         monkeypatch.setattr(FiberIO, "manager", copy.deepcopy(FiberIO.manager))
 
+    @needs_chunk_iter
     @pytest.mark.parametrize(
         "window",
         [
@@ -582,6 +584,7 @@ class TestOffsetReads:
         )
         assert not stored_reads
 
+    @needs_chunk_iter
     def test_one_open_for_many_windows(self, path, stored_reads, monkeypatch):
         """A lazy array of several windows of one file opens it once."""
         source, opened = dc.read(path)[0]._source, []
@@ -642,6 +645,7 @@ class TestOffsetReads:
         with pytest.raises(FileNotFoundError):
             source.load()
 
+    @needs_chunk_iter
     def test_offsets_are_not_identity(self, path):
         """Where the bytes are says nothing about which array a source is."""
         source = dc.read(path)[0]._source
@@ -651,6 +655,7 @@ class TestOffsetReads:
         assert source[2:5].offsets == source.offsets
         assert ArraySource.from_dict(source.to_dict()).offsets == source.offsets
 
+    @needs_chunk_iter
     def test_frames(self, path, tmp_path, stored_reads):
         """
         A frame joined with one stating no layout loads, through the reader;
@@ -665,6 +670,7 @@ class TestOffsetReads:
         back = LazyArray.from_frame(joined, (20, 5), source.dtype)
         np.testing.assert_array_equal(back.load(), expected)
         assert len(stored_reads) == 1
+        pytest.importorskip("pyarrow")
         filled = ArraySource.full((4, 5), 0.0, dtype=source.dtype)
         array = LazyArray.from_sources([source[0:10], filled])
         array.to_frame().to_parquet(tmp_path / "frame.parquet")
@@ -701,6 +707,7 @@ class TestOffsetReads:
         source = dc.read(path, file_format=Trimmed.name, file_version="1")[0]._source
         np.testing.assert_array_equal(source[2:9].load(), data[2:9, :3])
 
+    @needs_chunk_iter
     def test_array_override_is_honored(self, path, registry, stored_reads):
         """A subclass transforming read_array is not bypassed by offsets."""
 
@@ -747,6 +754,7 @@ class TestOffsetReads:
         calls.clear()
         assert not dc.scan(path)[0].data_offsets
 
+    @needs_chunk_iter
     def test_rewritten_between_loads(self, path):
         """A file rewritten while its handle is open is not read from offsets."""
         source = dc.read(path)[0]._source
@@ -767,6 +775,7 @@ class TestOffsetReads:
             assert not source.offsets
             np.testing.assert_array_equal(source.load(), h5["raw"][()])
 
+    @needs_chunk_iter
     @pytest.mark.parametrize("most", [None, 7])
     def test_reads_in_pieces(self, tmp_path, monkeypatch, most):
         """
@@ -827,6 +836,7 @@ class TestIndexedOffsetReads:
         dc.spool(tmp_path).update()
         return tmp_path, data
 
+    @needs_chunk_iter
     def test_merge(self, directory, stored_reads):
         """A reopened index merges every file from its offsets."""
         path, data = directory
@@ -845,6 +855,7 @@ class TestIndexedOffsetReads:
         np.testing.assert_array_equal(spool[0].data, data[16:71])
         assert not stored_reads
 
+    @needs_chunk_iter
     def test_rewritten_file(self, directory, stored_reads, monkeypatch):
         """
         A file rewritten after indexing, past the merge's own check of its
