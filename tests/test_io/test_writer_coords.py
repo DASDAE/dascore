@@ -9,6 +9,7 @@ cannot store holes or jitter raises, saying to regularize or split first.
 from __future__ import annotations
 
 import pickle
+from contextlib import contextmanager
 
 import numpy as np
 import pytest
@@ -74,6 +75,15 @@ def cases():
     }
 
 
+@contextmanager
+def _skip_without_dependency(fio):
+    """Skip a writer whose optional dependency is not installed."""
+    try:
+        yield
+    except MissingOptionalDependencyError:
+        pytest.skip(f"{fio.name} needs an optional dependency")
+
+
 def _stored(fio, path):
     """What the file holds, as metadata, read without snapping."""
     if fio.name.upper() == "PICKLE":  # the stored object itself
@@ -118,14 +128,12 @@ class TestWriterCoordinates:
         )
         args = (patch, path, fio.name, fio.version)
         if not keeps:
-            with pytest.raises(CoordError, match="snap_coords"):
-                dc.write(*args)
+            with _skip_without_dependency(fio):
+                with pytest.raises(CoordError, match="snap_coords"):
+                    dc.write(*args)
             return
-        try:
-            with suppress_warnings(UserWarning):  # SEGY's lost distance
-                dc.write(*args)
-        except MissingOptionalDependencyError:
-            pytest.skip(f"{fio.name} needs an optional dependency")
+        with _skip_without_dependency(fio), suppress_warnings(UserWarning):
+            dc.write(*args)  # SEGY warns its distance is lost
         if fio.name.upper() in {"WAV", "RSF"}:  # no reader
             return
         (meta,) = _stored(fio, path)
@@ -141,8 +149,9 @@ class TestWriterCoordinates:
         if _label(fio) in EXACT:
             return
         path = tmp_path / NAMES.get(fio.name.upper(), "out.h5")
-        with pytest.raises(CoordError, match="split_gaps"):
-            dc.write(cases["time gaps"], path, fio.name, fio.version)
+        with _skip_without_dependency(fio):
+            with pytest.raises(CoordError, match="split_gaps"):
+                dc.write(cases["time gaps"], path, fio.name, fio.version)
 
     @pytest.mark.parametrize("size", [2_000, 2_100_000])
     @pytest.mark.parametrize("fio", [NetCDFCFV18(), ZarrV3()], ids=_label)
@@ -154,5 +163,6 @@ class TestWriterCoordinates:
         patch = dc.Patch(data=data, coords={"time": time}, dims=("time",))
         holed = patch.unselect(time=(500, 501), samples=True)
         path = tmp_path / NAMES.get(fio.name.upper(), "out.h5")
-        with pytest.raises(CoordError, match="NetCDF and Zarr"):
-            dc.write(holed, path, fio.name, fio.version)
+        with _skip_without_dependency(fio):
+            with pytest.raises(CoordError, match="NetCDF and Zarr"):
+                dc.write(holed, path, fio.name, fio.version)
