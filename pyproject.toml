@@ -93,7 +93,7 @@ extras = [
     "rocket-fft",
     "segyio",
     "bottleneck",
-    "pymseed[numpy]",
+    "pymseed[numpy]>=0.9.1",
     "protobuf",
 ]
 
