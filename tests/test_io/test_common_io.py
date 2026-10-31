@@ -95,7 +95,7 @@ _WITSML_FILES = {
     WITSMLV1411(): (_WITSML_DIR / "brady_like.xml", brady_like),
     WITSMLV1400(): (_WITSML_DIR / "cranfield_like.xml", cranfield_like),
 }
-# Nor is any seismic ASDF file; its tests' example is written instead.
+# No shipped file is seismic ASDF, so the example its tests build is written.
 _ASDF_PATH = Path(mkdtemp("asdf")) / "example_asdf.h5"
 
 
@@ -327,10 +327,6 @@ _SCAN_COST_MAX_FRACTION = 0.25
 # also what a reader that just started bypassing the handle would produce.
 # WITSML is XML, which has no index to seek by, so its scan parses the file.
 IGNORE_SCAN_CHECK = frozenset({"SEGY", "MSEED", "WITSML"})
-
-# These stack a patch from one 1D dataset per channel, so no array of the
-# patch's shape exists to slice; their own tests check the windowed reads.
-STACKED_HDF5_FORMATS = frozenset({"ASDF"})
 
 
 class _CountingHandle(BufferedIOBase):
@@ -725,8 +721,8 @@ class TestRead:
         resource_type = _required_resource_type(io.read_array)
         if resource_type is None or not issubclass(resource_type, H5Reader):
             pytest.skip(f"{io.name} has no HDF5 read_array override")
-        if io.name in STACKED_HDF5_FORMATS:
-            pytest.skip(f"{io.name} stacks one dataset per channel")
+        if io.name == "ASDF":
+            pytest.skip("ASDF slices one 1D dataset per channel instead")
         with skip_missing():
             payload = dc.scan(path)[0]
         key = payload.source_patch_key

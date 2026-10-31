@@ -884,6 +884,15 @@ class TestMiniSeedUtils:
         coords = mseed_utils._get_coords([segment])
         assert tuple(coords["channel"].values) == (0,)
 
+    def test_groups_arrive_in_channel_order(self):
+        """Groups list stations in channel order, not source ID order."""
+        long, short = (
+            _trace_summary(station=x, source_id=f"FDSN:XX_{x}__H_S_F")
+            for x in ("ABC", "AB")
+        )
+        ((_, group),) = mseed_utils._group_segments([long, short])
+        assert [x.station for x in group] == ["AB", "ABC"]
+
     def test_source_patch_key_uses_group_key_fields(self):
         """Source patch IDs are built from the typed MiniSEED group key."""
         group_key = mseed_utils._TraceGroupKey(

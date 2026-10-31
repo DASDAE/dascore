@@ -16,10 +16,11 @@ import dascore as dc
 from dascore.constants import ONE_BILLION, snap_type
 from dascore.core import get_coord, get_coord_manager
 from dascore.core.source import ArraySource
-from dascore.io.utils import stored_coord
+from dascore.io.utils import stored_coord, windows_to_slices
 from dascore.utils.io import LocalPath, _read_file_header
 
 _T = TypeVar("_T", bound="_TraceSummary")
+_T2 = TypeVar("_T2", bound="_SourceTrace")
 
 _TEXT_ENCODING = 0
 _INT16_ENCODING = 1
@@ -262,10 +263,20 @@ def _get_group_key(segment: _SourceTrace) -> _TraceGroupKey:
 def _group_segments(
     segments: Sequence[_SourceTrace], get_key: Callable = _get_group_key
 ):
-    """Yield compatible segment groups."""
-    segments = sorted(segments, key=lambda x: (get_key(x), x.source_id))
+    """Yield compatible segment groups, each in channel order."""
+    segments = sorted(segments, key=lambda x: (get_key(x), x.station, x.source_id))
     for key, group in groupby(segments, key=get_key):
         yield key, list(group)
+
+
+def _allocate_rows(
+    traces: Sequence[_T2], windows
+) -> tuple[Sequence[_T2], slice, np.ndarray]:
+    """Select a group's windowed traces and allocate their output rows."""
+    dtype = np.result_type(*[item.dtype for item in traces])
+    channels, time = windows_to_slices(windows, (len(traces), traces[0].sample_count))
+    selected = traces[channels]
+    return selected, time, np.empty((len(selected), time.stop - time.start), dtype)
 
 
 def _get_channel_map(segments: Sequence[_SourceTrace]) -> dict[str, int]:
@@ -363,17 +374,12 @@ def _scan_patches(path, pymseed, snap: snap_type = ()) -> list[dc.PatchMeta]:
     return _metadata_from_summaries(_scan_segments(path, pymseed), snap)
 
 
-def _metadata_from_summaries(
-    all_segments,
-    snap: snap_type = (),
-    get_key: Callable = _get_group_key,
-    describe: Callable = _metadata_from_segments,
-):
+def _metadata_from_summaries(all_segments, snap: snap_type = ()):
     """Build metadata without repeating the record scan."""
     payloads = []
     channel_map = _get_channel_map(all_segments)
-    for group_key, segments in _group_segments(all_segments, get_key):
-        payload = describe(group_key, segments, channel_map, snap)
+    for group_key, segments in _group_segments(all_segments):
+        payload = _metadata_from_segments(group_key, segments, channel_map, snap)
         payloads.append(payload)
     return sorted(payloads, key=lambda x: x.coords.get_coord("channel").min())
 

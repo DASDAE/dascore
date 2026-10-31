@@ -7,10 +7,11 @@ import numpy as np
 import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
-from dascore.io.utils import resolve_keyed_source, windows_to_slices
+from dascore.io.mseed.utils import _allocate_rows
+from dascore.io.utils import resolve_keyed_source
 from dascore.utils.hdf5 import H5Reader
 
-from .utils import VERSION, get_asdf_version, get_metadata, group_traces, scan_traces
+from .utils import VERSION, _scan, get_asdf_version, get_metadata, scan_groups
 
 
 class ASDFV1(FiberIO):
@@ -28,40 +29,39 @@ class ASDFV1(FiberIO):
         self, resource: H5Reader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Scan the waveforms' names and attrs."""
-        return get_metadata(scan_traces(resource), snap)
+        groups, channel_map = scan_groups(resource)
+        return get_metadata(groups, channel_map, snap)
 
     def _prepare_read(self, manager, snap, keys=frozenset()):
-        """Share one waveform scan across every logical patch in this read."""
+        """Scan once for the read, opening only the wanted keys' waveforms."""
         resource = manager.get_resource(H5Reader)
-        traces = scan_traces(resource)
-        groups = group_traces(traces)
+        groups, channel_map = _scan(resource, keys) if keys else scan_groups(resource)
 
         def load(requests):
             for windows, key in requests:
-                yield self._read_group(resource, groups, windows, key)
+                yield self._reader(resource, groups, key)(windows)
 
-        return get_metadata(traces, snap), load
+        return get_metadata(groups, channel_map, snap), load
 
     def read_array(
         self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
         """Stack the keyed group's selected channels and time window."""
-        groups = group_traces(scan_traces(resource))
-        return self._read_group(resource, groups, windows, key)
+        return self._prepare_array_reader(resource, key=key)(windows)
+
+    def _prepare_array_reader(self, resource: H5Reader, *, key: str = ""):
+        """Resolve the keyed group from the handle's one shared scan."""
+        return self._reader(resource, scan_groups(resource)[0], key)
 
     @staticmethod
-    def _read_group(resource, groups, windows, key):
-        """Read only the selected slice of each selected waveform."""
-        traces = sorted(
-            resolve_keyed_source(groups, key, str(resource.filename)),
-            key=lambda item: (item.station, item.source_id),
-        )
-        dtype = np.result_type(*[item.dtype for item in traces])
-        channels, time = windows_to_slices(
-            windows, (len(traces), traces[0].sample_count)
-        )
-        selected = traces[channels]
-        array = np.empty((len(selected), time.stop - time.start), dtype=dtype)
-        for row, trace in enumerate(selected):
-            array[row] = resource[trace.path][time]
-        return array
+    def _reader(resource, groups, key):
+        """Return a reader of the keyed group's windows."""
+        _, traces = resolve_keyed_source(groups, key, str(resource.filename))
+
+        def read(windows):
+            selected, time, array = _allocate_rows(traces, windows)
+            for row, trace in enumerate(selected):
+                array[row] = resource[trace.path][time]
+            return array
+
+        return read

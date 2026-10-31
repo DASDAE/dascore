@@ -10,10 +10,11 @@ StationXML, events, provenance and auxiliary data are ignored.
 Traces map to patches as in the MiniSEED reader: 2D ``("channel", "time")``
 patches with per-channel ``source_id`` (``NET.STA.LOC.CHA``), ``network``,
 ``station``, ``location`` and ``seed_channel`` coords, where ``channel`` is
-a stable integer source index, not distance. Traces join one patch only
-when they share network, location, SEED channel, start time, sample rate,
-sample count and waveform tag. The ``tag`` attr is
-``NET.LOC.CHA.<waveform tag>``, so groups stay apart under ``chunk``.
+an integer source index that a source keeps in every patch of the file, not
+distance. Traces join one patch only when they share network, location,
+SEED channel, start time, sample rate, sample count and waveform tag. The
+``tag`` attr is ``NET.LOC.CHA.<waveform tag>``, so ``chunk`` never merges
+groups that differ in those codes or waveform tag.
 
 Some DAS archives give every fiber point its own location code, which
 reads as one single-channel patch per point. Join them along ``channel``
