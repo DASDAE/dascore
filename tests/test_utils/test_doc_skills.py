@@ -22,15 +22,19 @@ class TestSkills:
             yield
 
     def test_catalog(self):
-        """The first release exposes the routing and inventory procedures."""
+        """The catalog exposes each catalogued procedure with its metadata."""
         skills = doc_skills.get_skills()
         assert {name: info["target"] for name, info in skills.items()} == {
             "dascore": "recipes/dascore",
             "make-inventory": "recipes/tunnel_inventory",
+            "migrate-to-v1": "migrations/dascore_1.0_migration",
+            "test-beta": "migrations/test_latest_beta",
         }
         assert all(x["title"] and x["description"] for x in skills.values())
 
-    @pytest.mark.parametrize("name", ["dascore", "make-inventory"])
+    @pytest.mark.parametrize(
+        "name", ["dascore", "make-inventory", "migrate-to-v1", "test-beta"]
+    )
     def test_same_document(self, cache, name):
         """Skill retrieval returns the exact canonical cached documentation page."""
         target = doc_skills.get_skills()[name]["target"]
@@ -51,7 +55,11 @@ class TestSkills:
         "args, code, message",
         [
             (["skill"], 2, "Provide a skill name"),
-            (["skill", "unknown"], 1, "Available skills: dascore, make-inventory"),
+            (
+                ["skill", "unknown"],
+                1,
+                "Available skills: dascore, make-inventory, migrate-to-v1, test-beta",
+            ),
             (["skill", "dascore", "--bootstrap"], 2, "Use a skill name"),
         ],
     )

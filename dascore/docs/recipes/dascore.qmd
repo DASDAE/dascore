@@ -36,6 +36,6 @@ python -m dascore skills
 python -m dascore skill make-inventory
 ```
 
-The skills catalog selects ordinary documentation recipes. Use `make-inventory` to create or repair observing-system metadata, validate it, round-trip its serialization, and test attachment to representative data.
+The skills catalog selects ordinary documentation recipes. Use `make-inventory` to create or repair observing-system metadata, validate it, round-trip its serialization, and test attachment to representative data. Use `migrate-to-v1` to update code written for DASCore 0.1.x, and `test-beta` to try the latest pre-release on a project and draft reports of what breaks.
 
 For other scientific workflows, search the documentation and state the assumptions that affect processing: physical quantity and units, coordinate semantics, sampling, gaps, and chunk boundaries. Validate a small case before applying the workflow to an archive. Keep uncertain deployment facts and scientific interpretations explicit.
