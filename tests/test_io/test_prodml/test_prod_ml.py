@@ -173,3 +173,156 @@ class TestOffsetReads:
             for window in [(slice(None),), (slice(1000, 3100),), (slice(11999, None),)]:
                 np.testing.assert_array_equal(source[window].load(), node[window])
         assert not stored_reads
+
+
+def _write_variant(path, patch, rows=None, ns_times=False, rate=None):
+    """
+    Write a patch as ProdML, then bend it like some producers do: keep only
+    the first `rows` samples (ending the part where it starts, so for
+    rows=1), store times in ns without a Uom, or change OutputDataRate (None keeps it,
+    False deletes it).
+    """
+    patch.io.write(path, "prodml")
+    with h5py.File(path, "r+") as h5:
+        raw = h5["Acquisition/Raw[0]"]
+        times, data = raw["RawDataTime"][:], raw["RawData"][:]
+        time_attrs = dict(raw["RawDataTime"].attrs)
+        data_attrs = dict(raw["RawData"].attrs)
+        if ns_times:  # as the producer does, with no Uom saying so
+            time_attrs.pop("Uom", None)
+        if rows is not None:
+            time_attrs["PartEndTime"] = time_attrs["PartStartTime"]
+            times, data = times[:rows], data[:rows]
+        for name, values, attrs in (
+            ("RawDataTime", times * (1000 if ns_times else 1), time_attrs),
+            ("RawData", data, data_attrs),
+        ):
+            del raw[name]
+            raw.create_dataset(name, data=values).attrs.update(attrs)
+        if rate is False:
+            del raw.attrs["OutputDataRate"]
+        elif rate is not None:
+            raw.attrs["OutputDataRate"] = rate
+    return path
+
+
+class TestProducerVariants:
+    """ProdML files that bend the schema the way real producers do."""
+
+    @pytest.fixture(scope="class")
+    def patch(self):
+        """A small patch with whole microsecond times."""
+        patch = dc.get_example_patch().select(distance=(0, 20), samples=True)
+        return patch.transpose("time", "distance")
+
+    def test_capitalized_version_and_ns_times(self, patch, tmp_path):
+        """
+        A SchemaVersion attr and nanosecond times read like the standard
+        spelling and microseconds; several samples ignore a wrong
+        OutputDataRate.
+        """
+        path = _write_variant(tmp_path / "v.h5", patch, ns_times=True, rate=25.0)
+        with h5py.File(path, "r+") as h5:
+            attrs = h5["Acquisition"].attrs
+            attrs["SchemaVersion"] = attrs.pop("schemaVersion")
+        assert dc.get_format(path) == ("PRODML", "2.1")
+        expected = patch.get_coord("time")
+        for snap in (True, False):
+            out = dc.read(path, snap=snap)[0]
+            assert out.attrs.schema_version == "2.1"
+            assert np.array_equal(out.get_coord("time").values, expected.values)
+            assert np.array_equal(out.data, patch.transpose(*out.dims).data)
+
+    @pytest.mark.parametrize("start, uom", [("1971-06-01", None), ("1970-01-01", "ns")])
+    def test_ns_times_found_from_metadata(self, patch, tmp_path, start, uom):
+        """
+        Nanosecond times are found by the time array's Uom or, without one,
+        by which unit puts the first label on PartStartTime (any epoch); at
+        the epoch itself only the Uom can tell.
+        """
+        patch = patch.update_coords(time_min=np.datetime64(start))
+        path = _write_variant(tmp_path / "ns.h5", patch, ns_times=True)
+        if uom:
+            with h5py.File(path, "r+") as h5:
+                h5["Acquisition/Raw[0]/RawDataTime"].attrs["Uom"] = uom
+        for snap in (True, False):
+            time = dc.read(path, snap=snap)[0].get_coord("time")
+            assert np.array_equal(time.values, patch.get_coord("time").values)
+
+    @pytest.mark.parametrize("rate, step", [(0.5, 2), (False, None), (0.0, None)])
+    def test_single_time_uses_output_rate(self, patch, tmp_path, rate, step):
+        """One sample takes its step from a usable OutputDataRate, or has none."""
+        path = _write_variant(tmp_path / "one.h5", patch, rows=1, rate=rate)
+        time = dc.read(path)[0].get_coord("time")
+        assert time.min() == patch.get_coord("time").min() and len(time) == 1
+        assert time.step == (step and np.timedelta64(step, "s"))
+
+    def test_zero_length_part_uses_labels(self, patch, tmp_path):
+        """A PartEndTime equal to PartStartTime yields the stored labels."""
+        path = _write_variant(tmp_path / "flat.h5", patch)
+        with h5py.File(path, "r+") as h5:
+            attrs = h5["Acquisition/Raw[0]/RawDataTime"].attrs
+            attrs["PartEndTime"] = attrs["PartStartTime"]
+        time = dc.read(path)[0].get_coord("time")
+        assert np.array_equal(time.values, patch.get_coord("time").values)
+
+    def test_wrong_end_time_uses_ns_labels(self, patch, tmp_path):
+        """A PartEndTime a few steps off yields the recorded ns labels (#414)."""
+        path = _write_variant(tmp_path / "late.h5", patch, ns_times=True)
+        with h5py.File(path, "r+") as h5:
+            times = h5["Acquisition/Raw[0]/RawDataTime"]
+            late = times[-1] + 2 * 4_000_000
+            end = str(np.datetime64(int(late), "ns")) + "Z"
+            times.attrs["PartEndTime"] = end.encode()
+        time = dc.read(path)[0].get_coord("time")
+        assert np.array_equal(time.values, patch.get_coord("time").values)
+
+    @pytest.mark.parametrize(
+        "ns_times, last_shift, end_shift", [(True, 1, 1), (False, 0, 500)]
+    )
+    def test_jittered_times_keep_a_step(
+        self, patch, tmp_path, ns_times, last_shift, end_shift
+    ):
+        """
+        Jittered labels between ends that agree to the labels' precision
+        snap to an even grid: ns labels with a step of no whole ns, and µs
+        labels beside an end stated to the ns.
+        """
+        path = _write_variant(tmp_path / "jitter.h5", patch, ns_times=ns_times)
+        with h5py.File(path, "r+") as h5:
+            times = h5["Acquisition/Raw[0]/RawDataTime"]
+            values = times[:]
+            jitter = 20_000 if ns_times else 20
+            values[1:-1] += np.tile([jitter, -jitter], len(values) // 2)[:-2]
+            values[-1] += last_shift
+            times[:] = values
+            last = np.datetime64(int(values[-1]), "ns" if ns_times else "us")
+            end = last + np.timedelta64(end_shift, "ns")
+            times.attrs["PartEndTime"] = (str(end) + "Z").encode()
+        time = dc.read(path)[0].get_coord("time")
+        assert time.step is not None
+        assert time.min() == patch.get_coord("time").min()
+
+    def test_drifting_clock_keeps_sample_count(self, tmp_path):
+        """
+        A long file whose spacing is not whole nanoseconds snaps to exactly
+        as many samples as it holds, ending on its stated end.
+        """
+        count, start = 140_001, np.datetime64("2024-01-01", "ns")
+        even = start + np.arange(count) * np.timedelta64(100, "us")
+        patch = dc.Patch(
+            data=np.zeros((count, 2), dtype=np.float32),
+            coords={"time": even, "distance": [0.0, 1.0]},
+            dims=("time", "distance"),
+        )
+        path = _write_variant(tmp_path / "drift.h5", patch, ns_times=True)
+        # Spacing 100,000.45 ns: rounding the step loses 0.6 of a sample.
+        drift = np.round(np.arange(count) * 100_000.45).astype("timedelta64[ns]")
+        time = start + drift
+        with h5py.File(path, "r+") as h5:
+            times = h5["Acquisition/Raw[0]/RawDataTime"]
+            times[:] = time.astype(np.int64)
+            times.attrs["PartEndTime"] = (str(time[-1]) + "Z").encode()
+        out = dc.read(path)[0]
+        assert out.shape == (count, 2)
+        assert out.get_coord("time").max() == time[-1]

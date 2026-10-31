@@ -140,8 +140,8 @@ def _get_time_from_header(header):
         msg = (
             f"SEG-Y trace header date (year {year}, day {julday}) is not "
             "valid, so the time coordinate is relative to the first sample. "
-            "To set the start: "
-            'patch.update_coords(time=patch.get_coord("time") + start).'
+            "To set the start: patch.update_coords(time="
+            'patch.get_coord("time") + dc.to_datetime64(start)).'
         )
         warnings.warn(msg, UserWarning)
         return np.timedelta64(0, "ns")

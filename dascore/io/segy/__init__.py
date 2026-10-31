@@ -10,7 +10,7 @@ Notes
 - A trace header second of 60 rolls into the next minute. A header without a
   valid year and day gives a time coordinate relative to the first sample,
   with a warning; set the start with
-  `patch.update_coords(time=patch.get_coord("time") + start)`.
+  `patch.update_coords(time=patch.get_coord("time") + dc.to_datetime64(start))`.
 - Segy standards found at: https://library.seg.org/pb-assets/technical-standards
 
 segy v1 spec: seg_y_rev1-1686080991247.pdf

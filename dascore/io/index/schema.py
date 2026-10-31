@@ -33,8 +33,12 @@ from typing import NamedTuple, get_args, get_type_hints
 # Version of the index schema, independent of dascore's version. Bump it
 # when an index written by an older dascore would be read wrongly rather
 # than merely incompletely -- including when what a *stored value* means
-# changes, not only when a column does. Version 31 reads H5Simple times
+# changes, not only when a column does. Version 32 reads H5Simple times
 # stated "<unit> relative to ..." as timedelta offsets, not epoch datetimes.
+# Version 31 snaps ProdML time to a
+# grid of the stored length, comparing the stated end with the last label to
+# the label's precision (fractional rates gained a step), and reads
+# single-sample, `SchemaVersion` and nanosecond-time ProdML files.
 # Version 30 records where a plain
 # HDF5 array's bytes are (`data_offsets`, `data_chunk_rows`).
 # Version 29 reads XDAS-layout NetCDF files as XDAS, not NETCDF_CF.
@@ -57,7 +61,7 @@ from typing import NamedTuple, get_args, get_type_hints
 # version 15 stored source coordinate and numeric attribute dtypes.
 # Earlier indexes lack the metadata required for reconstruction and are
 # rebuilt when opened.
-INDEX_VERSION = 31
+INDEX_VERSION = 32
 # Identity string so any tool can sanity-check what it opened.
 WHAT_IS_THIS = "dascore_spool_index"
 
