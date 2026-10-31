@@ -49,8 +49,8 @@ _SEED_CHARS_WITH_SPACE = _SEED_CHARS + b" "
 
 
 @dataclass(frozen=True)
-class _TraceSummary:
-    """MiniSEED trace identity and timing metadata."""
+class _SourceTrace:
+    """A SEED-identified trace's identity and timing, shared with ASDF."""
 
     source_id: str
     network: str
@@ -61,10 +61,6 @@ class _TraceSummary:
     start_ns: int
     sample_rate: float
     sample_count: int
-    sample_type: str
-    encoding: str
-    publication_version: int
-    record_length: int
     dtype: str
 
     @property
@@ -81,6 +77,16 @@ class _TraceSummary:
     def next_start_ns(self) -> int:
         """Return the expected start time of the next contiguous segment."""
         return self.start_ns + _duration_ns(self.sample_rate, self.sample_count)
+
+
+@dataclass(frozen=True)
+class _TraceSummary(_SourceTrace):
+    """MiniSEED trace identity, timing and record metadata."""
+
+    sample_type: str
+    encoding: str
+    publication_version: int
+    record_length: int
 
 
 @dataclass(frozen=True, order=True)
@@ -240,7 +246,7 @@ def _scan_segments(path: LocalPath, pymseed) -> list[_TraceSummary]:
     return _coalesce_source_summaries(summaries)
 
 
-def _get_group_key(segment: _TraceSummary) -> _TraceGroupKey:
+def _get_group_key(segment: _SourceTrace) -> _TraceGroupKey:
     """Return the compatibility key used to merge traces into a patch."""
     return _TraceGroupKey(
         format_version=segment.format_version,
@@ -253,14 +259,16 @@ def _get_group_key(segment: _TraceSummary) -> _TraceGroupKey:
     )
 
 
-def _group_segments(segments: Sequence[_T]):
+def _group_segments(
+    segments: Sequence[_SourceTrace], get_key: Callable = _get_group_key
+):
     """Yield compatible segment groups."""
-    segments = sorted(segments, key=lambda x: (_get_group_key(x), x.source_id))
-    for key, group in groupby(segments, key=_get_group_key):
+    segments = sorted(segments, key=lambda x: (get_key(x), x.source_id))
+    for key, group in groupby(segments, key=get_key):
         yield key, list(group)
 
 
-def _get_channel_map(segments: Sequence[_TraceSummary]) -> dict[str, int]:
+def _get_channel_map(segments: Sequence[_SourceTrace]) -> dict[str, int]:
     """Return stable channel indices for MiniSEED sources."""
     source_ids = dict.fromkeys(
         x.source_id for x in sorted(segments, key=lambda y: (y.station, y.source_id))
@@ -281,7 +289,7 @@ def _source_patch_key(group_key: _TraceGroupKey) -> str:
 
 
 def _get_coords(
-    segments: Sequence[_TraceSummary],
+    segments: Sequence[_SourceTrace],
     channel_map: dict[str, int] | None = None,
     snap: snap_type = (),
 ):
@@ -319,9 +327,6 @@ def _metadata_from_segments(
 ) -> dc.PatchMeta:
     """Create the metadata of compatible MiniSEED record summaries."""
     first = min(segments, key=lambda item: (item.station, item.source_id))
-    coords = get_coord_manager(
-        _get_coords(segments, channel_map, snap), dims=("channel", "time")
-    )
     attrs = {
         "data_type": "",
         "tag": ".".join((first.network, first.location, first.seed_channel)),
@@ -331,11 +336,25 @@ def _metadata_from_segments(
         "mseed_publication_version": first.publication_version,
         "mseed_record_length": first.record_length,
     }
+    return _patch_meta(segments, attrs, _source_patch_key(group_key), channel_map, snap)
+
+
+def _patch_meta(
+    segments: Sequence[_SourceTrace],
+    attrs: dict,
+    key: str,
+    channel_map: dict[str, int] | None = None,
+    snap: snap_type = (),
+) -> dc.PatchMeta:
+    """Create the metadata of one group of compatible traces."""
+    coords = get_coord_manager(
+        _get_coords(segments, channel_map, snap), dims=("channel", "time")
+    )
     return dc.PatchMeta(
         attrs=attrs,
         coords=coords,
         dtype=np.result_type(*[segment.dtype for segment in segments]),
-        source=ArraySource(key=_source_patch_key(group_key)),
+        source=ArraySource(key=key),
     )
 
 
@@ -344,12 +363,17 @@ def _scan_patches(path, pymseed, snap: snap_type = ()) -> list[dc.PatchMeta]:
     return _metadata_from_summaries(_scan_segments(path, pymseed), snap)
 
 
-def _metadata_from_summaries(all_segments, snap: snap_type = ()):
+def _metadata_from_summaries(
+    all_segments,
+    snap: snap_type = (),
+    get_key: Callable = _get_group_key,
+    describe: Callable = _metadata_from_segments,
+):
     """Build metadata without repeating the record scan."""
     payloads = []
     channel_map = _get_channel_map(all_segments)
-    for group_key, segments in _group_segments(all_segments):
-        payload = _metadata_from_segments(group_key, segments, channel_map, snap)
+    for group_key, segments in _group_segments(all_segments, get_key):
+        payload = describe(group_key, segments, channel_map, snap)
         payloads.append(payload)
     return sorted(payloads, key=lambda x: x.coords.get_coord("channel").min())
 

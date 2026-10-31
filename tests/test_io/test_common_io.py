@@ -33,6 +33,7 @@ from dascore.io import BinaryReader, FiberIO
 from dascore.io import utils as io_utils
 from dascore.io.ai4eps import AI4EPSV1
 from dascore.io.ap_sensing import APSensingV10
+from dascore.io.asdf import ASDFV1
 from dascore.io.core import _default_snap, _required_resource_type
 from dascore.io.dasdae import DASDAEV1, DASDAEV2
 from dascore.io.dashdf5 import DASHDF5
@@ -71,6 +72,7 @@ from tests.test_io._common_io_test_utils import (
     skip_missing,
     skip_timeout,
 )
+from tests.test_io.test_asdf.test_asdf import write_asdf
 from tests.test_io.test_witsml.test_witsml import brady_like, cranfield_like
 
 # No shipped file is DASDAE version 2 yet: the current writer makes one
@@ -93,6 +95,8 @@ _WITSML_FILES = {
     WITSMLV1411(): (_WITSML_DIR / "brady_like.xml", brady_like),
     WITSMLV1400(): (_WITSML_DIR / "cranfield_like.xml", cranfield_like),
 }
+# Nor is any seismic ASDF file; its tests' example is written instead.
+_ASDF_PATH = Path(mkdtemp("asdf")) / "example_asdf.h5"
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -110,6 +114,7 @@ def _write_dasdae_v2():
                 del handle.attrs["Conventions"]
     for path, make_text in _WITSML_FILES.values():
         path.write_text(make_text())
+    write_asdf(_ASDF_PATH)
 
 
 # --- Fixtures
@@ -124,6 +129,7 @@ def _write_dasdae_v2():
 COMMON_IO_READ_TESTS = {
     AI4EPSV1(): ("ai4eps_1.h5",),
     APSensingV10(): ("ap_sensing_1.hdf5",),
+    ASDFV1(): (str(_ASDF_PATH),),
     DASDAEV1(): ("example_dasdae_event_1.h5",),
     DASDAEV2(): (str(_DASDAE_V2_PATH),),
     DASHDF5(): ("PoroTomo_iDAS_1.h5",),
@@ -321,6 +327,10 @@ _SCAN_COST_MAX_FRACTION = 0.25
 # also what a reader that just started bypassing the handle would produce.
 # WITSML is XML, which has no index to seek by, so its scan parses the file.
 IGNORE_SCAN_CHECK = frozenset({"SEGY", "MSEED", "WITSML"})
+
+# These stack a patch from one 1D dataset per channel, so no array of the
+# patch's shape exists to slice; their own tests check the windowed reads.
+STACKED_HDF5_FORMATS = frozenset({"ASDF"})
 
 
 class _CountingHandle(BufferedIOBase):
@@ -715,6 +725,8 @@ class TestRead:
         resource_type = _required_resource_type(io.read_array)
         if resource_type is None or not issubclass(resource_type, H5Reader):
             pytest.skip(f"{io.name} has no HDF5 read_array override")
+        if io.name in STACKED_HDF5_FORMATS:
+            pytest.skip(f"{io.name} stacks one dataset per channel")
         with skip_missing():
             payload = dc.scan(path)[0]
         key = payload.source_patch_key
