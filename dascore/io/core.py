@@ -568,22 +568,33 @@ class _FiberIOManager:
                 fiber_io_hint=fiber_io_hint,
                 input_type=input_type,
             )
+            # A reader needing a download the config refuses is passed over;
+            # the first refusal is raised only if no reader claims the file,
+            # and a resource type once refused is not built again.
+            cache_error, refused = None, set()
             for fiber_io in iterator:
                 # We need to wrap this in try except to make it robust to what
                 # may happen in each fiber_ios get_format method, many of which
                 # may be third party code.
                 func = fiber_io.get_format
                 required_type = _required_resource_type(fiber_io.get_version)
+                if required_type in refused:
+                    continue
                 func_input = None
                 try:
                     # Get resource has to be in the try block because it can also
                     # raise, in which case the format doesn't belong.
                     func_input = man.get_resource(required_type)
                     format_version = func(func_input, _pre_cast=True)
-                except (RemoteCacheError, PermissionError):
-                    # A remote fetch failure or denied access is a real error,
-                    # not a "wrong format" signal, so it must propagate rather
-                    # than be swallowed by the robustness handler below.
+                except RemoteCacheError as exc:
+                    cache_error = cache_error or exc
+                    if func_input is None:
+                        refused.add(required_type)
+                    continue
+                except PermissionError:
+                    # Denied access is a real error, not a "wrong format"
+                    # signal, so it must propagate rather than be swallowed
+                    # by the robustness handler below.
                     raise
                 # For robustness, we need to catch everything else here.
                 except Exception:
@@ -593,9 +604,10 @@ class _FiberIOManager:
                     getattr(func_input, "seek", lambda x: None)(0)
                 if format_version:
                     return format_version
-            else:
-                msg = f"Could not determine file format of {man.source}"
-                raise UnknownFiberFormatError(msg)
+            if cache_error is not None:
+                raise cache_error
+            msg = f"Could not determine file format of {man.source}"
+            raise UnknownFiberFormatError(msg)
 
     def _get_input_type_name(self, obj):
         """Get the name of the IO type."""

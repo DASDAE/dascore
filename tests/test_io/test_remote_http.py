@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from urllib.request import Request, urlopen
 
 import pytest
@@ -10,6 +11,7 @@ from upath import UPath
 import dascore as dc
 from dascore.config import config_context
 from dascore.exceptions import InvalidSpoolError, RemoteCacheError
+from dascore.utils.downloader import fetch
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import clear_remote_file_cache, get_remote_cache_path
 
@@ -151,6 +153,22 @@ class TestHTTPFormatAndSpool:
         assert spool_2
         cached_files_3 = list(get_remote_cache_path().rglob(fname))
         assert cached_files_3 == cached_files_2
+
+    def test_http_mseed_past_first_block_falls_back_to_cache(
+        self, http_regression_das_path, http_regression_data_root
+    ):
+        """
+        A server without byte ranges serves only a file's first block, so a
+        MiniSEED stream read past it needs the local copy, as HDF5 does.
+        """
+        local = Path(http_regression_data_root) / "das" / "etna_twice.mseed"
+        local.write_bytes(Path(fetch("etna_9n_3chan_10s.mseed")).read_bytes() * 2)
+        path = UPath(str(http_regression_das_path / local.name), block_size=4096)
+        assert dc.get_format(path) == ("MSEED", "2")
+        with pytest.raises(RemoteCacheError, match="allow_remote_cache_for"):
+            dc.scan(path)
+        assert list(dc.read(path)) == list(dc.read(local))
+        assert list(get_remote_cache_path().rglob(local.name))
 
     def test_http_range_server_supports_partial_reads(
         self, http_range_das_path, ensure_http_fetch_file

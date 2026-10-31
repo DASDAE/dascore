@@ -29,8 +29,12 @@ from dascore.utils.paths import (
     is_local_path,
     is_pathlike,
 )
+from dascore.utils.remote_io import (
+    _FallbackFileObj,
+    get_local_handle,
+    is_no_range_http_error,
+)
 from dascore.utils.remote_io import ensure_local_file as _ensure_local_file
-from dascore.utils.remote_io import get_local_handle
 from dascore.utils.time import to_float
 from dascore.xarray.patch import (  # noqa: F401  published under this module
     patch_to_xarray,
@@ -95,15 +99,6 @@ def _annotate_handle_path(handle, resource):
     return handle
 
 
-def _read_file_header(path, length: int) -> bytes:
-    """Return the first bytes from a file-like path or empty bytes on IO errors."""
-    try:
-        with open(path, "rb") as fi:
-            return fi.read(length)
-    except OSError:
-        return b""
-
-
 class BinaryReader(io.BytesIO):
     """Base file for reading binary files."""
 
@@ -138,6 +133,26 @@ class LocalBinaryReader(BinaryReader):
                 resource.seek(0)
             return resource
         return get_local_handle(resource, super().get_handle)
+
+
+class StreamBinaryReader(BinaryReader):
+    """
+    A binary reader which streams remote resources.
+
+    It moves to a local copy only if the server cannot serve the byte
+    ranges a read past a remote file's first block needs.
+    """
+
+    @classmethod
+    def get_handle(cls, resource):
+        """Get the binary handle, streaming remote resources when possible."""
+        if not isinstance(resource, UPath):
+            return super().get_handle(resource)
+        return _FallbackFileObj(
+            remote_opener=lambda: BinaryReader.get_handle(resource),
+            local_opener=lambda: _ensure_local_file(resource).open(cls.mode),
+            error_predicate=is_no_range_http_error,
+        )
 
 
 class BinaryWriter(BinaryReader):

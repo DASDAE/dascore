@@ -841,12 +841,79 @@ class TestBrokenEntryPoint:
 class TestGetFormatErrors:
     """Errors which must not be mistaken for a format mismatch."""
 
+    @pytest.fixture
+    def needs_local_first(self, monkeypatch):
+        """
+        Detect with two versions of a reader needing a local file and one
+        refusing a download itself, asked first, then one which streams.
+
+        They are defined once the manager is swapped, so they register only
+        with this one.
+        """
+        manager = _FiberIOManager("dascore.fiber_io")
+        manager.__dict__["_eps"] = pd.Series({}, dtype=object)
+        monkeypatch.setattr(FiberIO, "manager", manager)
+
+        class _NeedsLocal(FiberIO):
+            name = "_needs_local"
+            version = "1"
+            preferred_extensions = ("rcx",)
+
+            def get_version(self, resource: LocalPath, **kwargs) -> str | None:
+                return self.version
+
+        class _NeedsLocalV2(_NeedsLocal):
+            version = "2"
+
+        class _RefusesItself(_NeedsLocal):
+            version = "3"
+
+            def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
+                raise RemoteCacheError("refused by the reader")
+
+        class _Streams(FiberIO):
+            name = "_streams"
+            version = "1"
+
+            def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
+                return self.version if resource.read(4) == b"RCX1" else None
+
+        assert len(manager._get_prioritized_list()) == 4
+
+    @pytest.mark.parametrize(
+        ("content", "expected"), [(b"RCX1", ("_streams", "1")), (b"none", None)]
+    )
+    def test_reader_needing_download_is_skipped(
+        self, needs_local_first, monkeypatch, content, expected
+    ):
+        """
+        Readers which need a download they may not make are passed over, a
+        refused resource built once; the first refusal surfaces only when no
+        other reader claims the file.
+        """
+        built, get_resource = [], IOResourceManager.get_resource
+
+        def _spy(self, required_type):
+            built.append(required_type)
+            return get_resource(self, required_type)
+
+        monkeypatch.setattr(IOResourceManager, "get_resource", _spy)
+        path = UPath(f"memory://dascore/skip_local/{content.decode()}.rcx")
+        path.write_bytes(content)
+        if expected is None:
+            with pytest.raises(RemoteCacheError, match="allow_remote_cache_for"):
+                dc.get_format(path)
+        else:
+            assert dc.get_format(path) == expected
+        assert built.count(LocalPath) == 1
+
     def test_remote_cache_error_propagates(self, monkeypatch, tmp_path):
         """A remote fetch failure is a real error, not a wrong-format signal.
 
         The loop over FiberIOs swallows exceptions so a reader which does
-        not recognize a file can be skipped; a cache failure has to escape
-        that handler instead of being reported as an unknown format.
+        not recognize a file can be skipped; a cache failure no reader gets
+        past has to escape that handler instead of being reported as an
+        unknown format.
         """
         path = tmp_path / "unfetchable.h5"
         path.write_bytes(b"not really an h5 file")
