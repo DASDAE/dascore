@@ -22,7 +22,7 @@ runs:
       shell: bash
       run: |
         python_default="3.13"
-        python_test_matrix='["3.11","3.12","3.13","3.14"]'
+        python_test_matrix='["3.11","3.12","3.13","3.14","3.15"]'
         python_min_deps_matrix='["3.13","3.14"]'
 
         echo "python-default=$python_default" >> "$GITHUB_OUTPUT"
