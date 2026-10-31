@@ -34,7 +34,9 @@ class AI4EPSV1(H5ArrayMixin, FiberIO):
     Each file holds one event in a "data" dataset of shape
     (channel, time) whose attributes provide the acquisition metadata
     (begin_time, dt_s, dx_m, unit) and event metadata (event_id,
-    magnitude, hypocenter location).
+    magnitude, hypocenter location). Event metadata, including event_id, is
+    optional; acquisition timing, spacing and units are required for detection.
+    The declared end_time can name either the last sample or the exclusive stop.
     """
 
     name = "AI4EPS"

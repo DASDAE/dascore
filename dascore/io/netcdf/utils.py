@@ -11,7 +11,7 @@ import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.core.coords import get_coord
 from dascore.core.source import ArraySource
-from dascore.exceptions import CoordError
+from dascore.exceptions import CoordError, InvalidFiberFileError
 from dascore.io.utils import (
     resolve_keyed_source,
     should_snap,
@@ -41,6 +41,24 @@ def get_xarray_data_var_name(dataset) -> str | None:
         return next(iter(dataset.data_vars))
     msg = "No suitable data variable found in the dataset"
     raise ValueError(msg)
+
+
+def get_shared_payload_names(dataset) -> list[str]:
+    """
+    Return the payloads of a dataset with no single payload variable.
+
+    They are the data variables on the dimensions of the largest variable
+    of the highest rank, in any order. Scalars, lower-rank helpers, smaller
+    variables on other dimensions and CF ``bounds`` tables are left out.
+    """
+    bounds = {x.attrs.get("bounds") for x in dataset.variables.values()}
+    variables = {k: v for k, v in dataset.data_vars.items() if k not in bounds}
+    if not (rank := max((x.ndim for x in variables.values()), default=0)):
+        msg = "No suitable data variable found in the dataset"
+        raise ValueError(msg)
+    tops = [x for x in variables.values() if x.ndim == rank]
+    dims = set(max(tops, key=lambda x: x.size).dims)
+    return [name for name, var in variables.items() if set(var.dims) == dims]
 
 
 def parse_cf_version(cf_version: str) -> tuple[int, int]:
@@ -119,6 +137,10 @@ def _get_dim_coord(dataset, coord_name: str, coord_len: int) -> np.ndarray:
 def get_scan_coord(coord, snap: snap_type = False, where=""):
     """Return a coordinate for scanning, on a grid if `snap` names it."""
     values = coord.values
+    if values.dtype == object:
+        # e.g. times on a non-standard calendar, decoded as cftime objects
+        msg = f"Coordinate {coord.name!r} holds objects DASCore cannot store."
+        raise InvalidFiberFileError(msg)
     if np.ndim(values) != 1:
         return values
     units = _cf_units(coord.attrs.get("units"), coord.name)

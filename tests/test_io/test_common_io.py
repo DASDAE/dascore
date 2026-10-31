@@ -40,7 +40,7 @@ from dascore.io.febus import Febus1, Febus2, FebusBSLH5V1, FebusMTXH5V1, FebusT1
 from dascore.io.gdr import GDR_V1
 from dascore.io.h5simple import H5Simple
 from dascore.io.mseed.core import MSeedV2
-from dascore.io.netcdf import NetCDFCFV18
+from dascore.io.netcdf import NetCDFCFV18, NetCDFNoCF
 from dascore.io.neubrex import NeubrexDASV1, NeubrexRFSV1
 from dascore.io.odh4 import ODH4V1
 from dascore.io.optodas import OptoDASV8
@@ -80,9 +80,10 @@ _DASDAE_V2_PATH = Path(mkdtemp("dasdae_v2")) / "example_dasdae_v2.h5"
 _HAS_ZARR = all(importlib.util.find_spec(x) for x in ("zarr", "xarray"))
 _ZARR_IOS = (ZarrV3(), ZarrV2()) if _HAS_ZARR else ()
 _ZARR_PATHS = {io: Path(mkdtemp("zarr")) / "example.zarr" for io in _ZARR_IOS}
-# The shipped NetCDF file is XDAS's layout, so generic NetCDF gets its own.
+# The shipped NetCDF file is XDAS's layout, so generic NetCDF gets its own,
+# with and without a CF version.
 _HAS_NETCDF = all(importlib.util.find_spec(x) for x in ("h5netcdf", "xarray"))
-_NETCDF_IOS = (NetCDFCFV18(),) if _HAS_NETCDF else ()
+_NETCDF_IOS = (NetCDFCFV18(), NetCDFNoCF()) if _HAS_NETCDF else ()
 _NETCDF_PATHS = {io: Path(mkdtemp("netcdf")) / "example.nc" for io in _NETCDF_IOS}
 
 
@@ -91,11 +92,14 @@ def _write_dasdae_v2():
     """Write the version 2 example before any fixture fetches it."""
     dc.write(dc.get_example_patch("random_das"), _DASDAE_V2_PATH, "dasdae")
     for io, path in (_ZARR_PATHS | _NETCDF_PATHS).items():
-        io.write(dc.get_example_patch("random_das"), path)
-    for path in _NETCDF_PATHS.values():
+        writer = NetCDFCFV18() if isinstance(io, NetCDFNoCF) else io
+        writer.write(dc.get_example_patch("random_das"), path)
+    for io, path in _NETCDF_PATHS.items():
         # H5Simple also claims a root "data" beside "time"; not under test here.
         with h5py.File(path, "r+") as handle:
             handle.move("data", "strain")
+            if isinstance(io, NetCDFNoCF):
+                del handle.attrs["Conventions"]
 
 
 # --- Fixtures
@@ -536,7 +540,11 @@ class TestGetFormat:
                 with skip_timeout():
                     path = fetch(key)
                 out = io_instance.get_format(path)
-                if out:
+                if out and isinstance(io_instance, NetCDFNoCF):
+                    # It claims netCDF-written files with no CF version, such
+                    # as Silixa's; being tried last leaves them to their formats.
+                    assert dc.get_format(path) != out
+                elif out:
                     _format_name, version = out
                     assert version != io_instance.version
 

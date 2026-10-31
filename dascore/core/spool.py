@@ -3059,6 +3059,9 @@ class Spool(NodeRepr, NamespaceOwner):
                 # what the index can state, not what the patch is
                 "_attrs_complete",
                 "_attr_dtypes",
+                # where a file keeps a patch's bytes is not what it is
+                "_data_offsets",
+                "_data_chunk_rows",
                 # when a source was last written and how big it is says
                 # what backs the row, not what the row describes
                 *SOURCE_STAT_COLUMNS,

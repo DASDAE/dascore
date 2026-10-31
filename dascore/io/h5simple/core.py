@@ -9,6 +9,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
+from dascore.io.core import _dataset_source, _returns_stored_bytes
 from dascore.io.utils import slice_dataset
 from dascore.io.xdas.utils import is_xdas_file
 from dascore.utils.hdf5 import H5Reader
@@ -43,14 +44,15 @@ class H5Simple(FiberIO):
         """
         return self._prepare_array_reader(resource, key=key)(windows)
 
+    @_returns_stored_bytes
     def _prepare_array_reader(self, resource: H5Reader, *, key: str = ""):
         """Find the data node once, for any number of windows."""
-        if key and key in resource and hasattr(node := resource[key], "shape"):
+        if key and hasattr(node := resource.get(key), "shape"):
             return partial(slice_dataset, node)
         nodes = [
             node
             for name in DATA_ARRAY_NAMES
-            if name in resource and hasattr(node := resource[name], "shape")
+            if hasattr(node := resource.get(name), "shape")
         ]
         assert len(nodes) == 1, f"{resource} doesn't have exactly one data node."
         data_node = nodes[0]
@@ -77,4 +79,8 @@ class H5Simple(FiberIO):
         """Parse metadata and retain its data node for a subsequent read."""
         attrs, cm, data = _get_attrs_coords_and_data(resource, snap)
         attrs = dc.PatchAttrs.from_dict(attrs)
-        return [dc.PatchMeta(attrs=attrs, coords=cm, dtype=str(data.dtype))], data
+        source = _dataset_source(data)
+        meta = dc.PatchMeta(
+            attrs=attrs, coords=cm, dtype=str(data.dtype), source=source
+        )
+        return [meta], data

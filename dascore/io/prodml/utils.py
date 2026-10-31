@@ -39,9 +39,10 @@ _EXPECTED_ATTRS = (
     "NumberOfLoci",
     "SpatialSamplingInterval",
     "StartLocusIndex",
-    "schemaVersion",
     "uuid",
 )
+# Most producers spell the version attr this way; some capitalize it.
+_VERSION_ATTRS = ("schemaVersion", "SchemaVersion")
 
 _ROOT_ATTRS = {
     "PulseWidth": "pulse_width",
@@ -60,6 +61,7 @@ _ROOT_ATTRS = {
     "FacilityId": "facility_id",
     "ServiceCompanyName": "service_company_name",
     "schemaVersion": "schema_version",
+    "SchemaVersion": "schema_version",
 }
 
 # The units patch attrs use for the measures ProdML tags with a uom.
@@ -125,12 +127,11 @@ def _get_prodml_version_str(hdf_fi) -> str:
     if acquisition is None:
         return ""
     attrs = acquisition.attrs
-    is_prodml = set(_EXPECTED_ATTRS).issubset(set(attrs))
-    if not is_prodml:
+    version_name = next((x for x in _VERSION_ATTRS if x in attrs), None)
+    if version_name is None or not set(_EXPECTED_ATTRS).issubset(set(attrs)):
         return ""
-    # in some prodml schemaVersion is str, in other float; this handles both.
-    version_str = str(unbyte(attrs["schemaVersion"]))
-    return version_str
+    # the version is a str in some files and a float in others; handle both.
+    return str(unbyte(attrs[version_name]))
 
 
 def _get_root_attrs(attrs):
@@ -164,6 +165,31 @@ def _get_distance_coord(acq):
     return get_coord(start=start, step=step, shape=(num_dist_channels,), units=units)
 
 
+def _part_time(attrs, name):
+    """A PartStartTime/PartEndTime attr as naive datetime64."""
+    return dc.to_datetime64(unbyte(attrs[name]).split("+")[0].rstrip("Z"))
+
+
+def _time_unit(time_array) -> str:
+    """
+    The unit of a ProdML time array: its Uom attr, else whichever of µs or
+    ns puts the first label on PartStartTime (µs, as ProdML states, on a tie
+    or without a usable PartStartTime).
+
+    Some producers write nanoseconds without saying so.
+    """
+    uom = str(unbyte(time_array.attrs.get("Uom", "")))
+    if uom in {"us", "ns"}:
+        return uom
+    try:
+        start = _part_time(time_array.attrs, "PartStartTime")
+    except (KeyError, ValueError):
+        return "us"
+    start = start.astype("datetime64[us]")
+    first, start_us = int(time_array[0]), int(start.astype(np.int64))
+    return "ns" if abs(first / 1000 - start_us) < abs(first - start_us) else "us"
+
+
 def _get_time_coord(node, snap=True):
     """
     Get the time coordinate from a Raw or Fbe node.
@@ -177,29 +203,25 @@ def _get_time_coord(node, snap=True):
     assert len(time_names) == 1, f"Found bad time information in prodml {node=}"
     time_array = node[time_names[0]]
     assert len(time_array) > 0, "Missing time array in ProdML file."
+    unit = _time_unit(time_array)
     start = step = None
     if should_snap(snap, "time"):  # only a grid needs the header's terms
         stated = time_array.attrs.get("PartStartTime")
         # the stored dtype matters: a float32 rate is read as what it holds
         rate = _maybe_unpack(node.attrs.get("OutputDataRate", np.nan))
         if stated is not None and float(rate) > 0:  # NaN, a missing rate, is not
-            start = dc.to_datetime64(unbyte(stated).split("+")[0].rstrip("Z"))
+            start = _part_time(time_array.attrs, "PartStartTime")
             step = step_from_rate(rate)
     return stored_coord(
         time_array,
         snap,
         name="time",
         where=node.file,
-        decode=_microseconds,
+        decode=lambda values: np.asarray(values).astype(f"datetime64[{unit}]"),
         start=start,
         step=step,
         units="s",
     )
-
-
-def _microseconds(values) -> np.ndarray:
-    """Decode stored times, integer microseconds since the epoch."""
-    return np.asarray(values).astype("datetime64[us]")
 
 
 def _yield_data_nodes(fi) -> Iterator[_ProdMLNodeInfo]:
@@ -524,6 +546,11 @@ def _get_data_node(h5, source_patch_key=""):
     # default read refuses such a key rather than picking one
     nodes = [(info.name, info) for info in _yield_data_nodes(h5)]
     info = resolve_keyed_source(nodes, source_patch_key, where=str(h5.filename))
+    return _node_dataset(info)
+
+
+def _node_dataset(info):
+    """Return the dataset holding a node's data."""
     return _NODE_DATA_PROCESSORS[info.patch_type](info)
 
 
@@ -585,8 +612,8 @@ def _get_fbe_data(node_info):
 
 def _yield_prodml_attrs_coords(
     fi, *, snap=True
-) -> Iterator[tuple[dc.PatchAttrs, dc.CoordManager, str, str]]:
-    """Scan a prodML file, return metadata."""
+) -> Iterator[tuple[dc.PatchAttrs, dc.CoordManager, str, str, h5py.Dataset]]:
+    """Scan a prodML file, return metadata and each node's dataset."""
     acq = fi["Acquisition"]
     # Get the information common to all from root attributes.
     base_info = _get_root_attrs(acq.attrs)
@@ -595,7 +622,7 @@ def _yield_prodml_attrs_coords(
     for node_info in _yield_data_nodes(fi):
         func = _NODE_ATTRS_PROCESSORS[node_info.patch_type]
         attr, coords, dtype = func(node_info, d_coord, base_info, snap=snap)
-        yield attr, coords, node_info.name, dtype
+        yield attr, coords, node_info.name, dtype, _node_dataset(node_info)
 
 
 def _get_dims_from_attrs(attrs):

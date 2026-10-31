@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import re
+import warnings
 from functools import partial
+from typing import Any, cast
 
 import numpy as np
+import pandas as pd
 
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
-from dascore.io.utils import decode_cf_time, stored_coord
+from dascore.io.utils import decode_cf_time, parse_units, stored_coord
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
@@ -32,14 +36,54 @@ def _get_attrs_coords_and_data(h5, snap):
     skip = DEFAULT_ATTRS | FILE_FORMAT_ATTR_NAMES | set(STORAGE_PROVENANCE_ATTRS)
     attr_names = set(attrs) - skip
     attr_dict = {x: unbyte(attrs[x]) for x in attr_names}
-    cm, data = _get_cm_and_data(h5, snap, dims=attr_dict.get("dims"))
+    # Some files describe their units in prose ("same as input DAS data");
+    # keep that text, but leave the patch without units rather than fail.
+    units = attr_dict.get("data_units")
+    if units is not None and parse_units(units) is None:
+        attr_dict["data_units_description"] = attr_dict.pop("data_units")
+        msg = f"data_units {units!r} are not units; kept as data_units_description."
+        warnings.warn(msg, UserWarning)
+    relative = _relative_time_unit(attr_dict.get("time_units"))
+    cm, data = _get_cm_and_data(h5, snap, dims=attr_dict.get("dims"), relative=relative)
     attr_dict.pop("dims", None)
+    if relative is not None:  # spent on the time coordinate
+        attr_dict.pop("time_units")
     return attr_dict, cm, data
 
 
-def _get_coord(v, snap, name, where):
-    """Get the coord from a node; time is CF-encoded."""
-    decode = partial(decode_cf_time, v.attrs) if name == "time" else None
+def _relative_time_unit(time_units) -> str | None:
+    """
+    Return the unit of offset times, eg "seconds" from "seconds relative to
+    catalog origin time" (an origin the file does not state), else None.
+    """
+    text = "" if time_units is None else str(unbyte(_maybe_unpack(time_units)))
+    match = re.match(r"\s*(\w+) relative to", text, flags=re.IGNORECASE)
+    if match is None:
+        return None
+    unit = cast("Any", match.group(1))  # a time unit pandas knows, if any
+    try:
+        pd.to_timedelta(0, unit=unit)
+    except ValueError:
+        return None
+    return unit
+
+
+def _relative_offsets(unit, raw) -> np.ndarray:
+    """Decode stored times as offsets in a relative unit."""
+    # pandas keeps a unit's own resolution (whole seconds), which would
+    # truncate the snapped step; nanoseconds, as decode_cf_time gives.
+    return pd.to_timedelta(np.atleast_1d(raw), unit=unit).as_unit("ns").to_numpy()
+
+
+def _get_coord(v, snap, name, where, relative=None):
+    """Get the coord from a node; time is CF-encoded or relative offsets."""
+    decode = None
+    if name == "time":
+        decode = (
+            partial(decode_cf_time, v.attrs)
+            if relative is None
+            else partial(_relative_offsets, relative)
+        )
     return stored_coord(v, snap, name=name, where=where, decode=decode)
 
 
@@ -80,7 +124,9 @@ def _get_dims(data_node, time_node, other_nodes, dims=None):
     return tuple(coord_shape_dict[x] for x in data_node.shape), other_nodes
 
 
-def _get_coords_and_dims(data_node, time_node, other_nodes, snap=True, dims=None):
+def _get_coords_and_dims(
+    data_node, time_node, other_nodes, snap=True, dims=None, relative=None
+):
     """Get dims tuple and coord dict."""
     dims, other_nodes = _get_dims(data_node, time_node, other_nodes, dims)
     other_nodes["time"] = time_node
@@ -90,7 +136,7 @@ def _get_coords_and_dims(data_node, time_node, other_nodes, snap=True, dims=None
         other_nodes["channel"] = np.arange(length)
     where = data_node.file
     coords = {
-        name: _get_coord(node, snap if name in dims else False, name, where)
+        name: _get_coord(node, snap if name in dims else False, name, where, relative)
         for name, node in other_nodes.items()
     }
     return dims, coords
@@ -114,10 +160,12 @@ def _get_nodes(h5):
     )
 
 
-def _get_cm_and_data(h5, snap=False, dims=None):
+def _get_cm_and_data(h5, snap=False, dims=None, relative=None):
     """Extract coordinate manager and data node."""
     data_node, time_node, other_nodes = _get_nodes(h5)
-    dims, coords = _get_coords_and_dims(data_node, time_node, other_nodes, snap, dims)
+    dims, coords = _get_coords_and_dims(
+        data_node, time_node, other_nodes, snap, dims, relative
+    )
     return dc.core.get_coord_manager(coords, dims=dims), data_node
 
 

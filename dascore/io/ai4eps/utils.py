@@ -8,7 +8,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
-from dascore.units import get_quantity
+from dascore.io.utils import parse_units
 from dascore.utils.hdf5 import h5_matches_structure
 from dascore.utils.misc import _maybe_unpack, maybe_get_items, unbyte
 
@@ -20,7 +20,6 @@ _REQUIRED_STRUCTURE = (
     "data.dt_s",
     "data.dx_m",
     "data.unit",
-    "data.event_id",
 )
 
 # Maps event attrs stored in the file to their PatchAttrs names.
@@ -41,15 +40,6 @@ def _is_ai4eps(resource) -> bool:
     return len(getattr(resource["data"], "shape", None) or ()) == 2
 
 
-def _safe_units(raw_units):
-    """Return the unit string if parseable, else None (don't crash scans)."""
-    try:
-        get_quantity(raw_units)
-    except Exception:
-        return None
-    return raw_units
-
-
 def _to_utc_datetime64(value):
     """Convert an ISO time string (possibly tz-aware) to naive UTC datetime64."""
     # to_datetime64 converts tz-aware pd.Timestamps to their naive UTC value.
@@ -65,14 +55,19 @@ def _get_coords(dataset):
         step=dc.to_timedelta64(float(_maybe_unpack(attrs["dt_s"]))),
         shape=(n_time,),
     )
-    # end_time is redundant (begin_time + n * dt_s); warn if the file
-    # disagrees with itself so bad timing doesn't pass silently.
+    # Exports use either the last sample or the exclusive stop as end_time.
+    # Both describe the same samples; only warn on an actual disagreement.
     end_time = _to_utc_datetime64(attrs["end_time"])
     expected_stop = time.min() + n_time * time.step
-    if abs(end_time - expected_stop) > time.step / 2:
+    expected_last = expected_stop - time.step
+    if (
+        min(abs(end_time - expected_last), abs(end_time - expected_stop))
+        > time.step / 2
+    ):
         warnings.warn(
             f"AI4EPS file end_time ({end_time}) is inconsistent with "
-            f"begin_time + n_samples * dt_s ({expected_stop}); using the latter.",
+            f"the last sample ({expected_last}) and exclusive stop "
+            f"({expected_stop}); using begin_time, sample count and dt_s.",
             UserWarning,
             stacklevel=2,
         )
@@ -92,7 +87,7 @@ def _get_attrs_dict(dataset) -> dict:
     attrs = dataset.attrs
     out = {
         "data_category": "DAS",
-        "data_units": _safe_units(unbyte(_maybe_unpack(attrs["unit"]))),
+        "data_units": parse_units(unbyte(_maybe_unpack(attrs["unit"]))),
     }
     out.update(
         maybe_get_items(attrs, _EVENT_ATTR_MAP, unpack_names=set(_EVENT_ATTR_MAP))

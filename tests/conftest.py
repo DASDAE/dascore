@@ -49,6 +49,12 @@ warnings.filterwarnings("default", category=UserWarning)
 # emscripten is one.
 _NO_LINK = (OSError, NotImplementedError)
 
+# Chunk offsets come from H5Dchunk_iter, which Pyodide's HDF5 lacks.
+needs_chunk_iter = pytest.mark.skipif(
+    not hasattr(h5py.h5d.DatasetID, "chunk_iter"),
+    reason="h5py has no chunk_iter, so chunked datasets are not read by offset",
+)
+
 
 def _link_or_copy(source: Path, dest: Path) -> None:
     """Populate one file path using the cheapest available local copy."""

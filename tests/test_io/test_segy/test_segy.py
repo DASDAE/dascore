@@ -155,3 +155,93 @@ class TestSegyWrite:
         segy = SegyV1_0()
         with pytest.raises(InvalidSpoolError):
             segy.write(random_spool, tmp_path)
+
+
+def _write_segy_file(path, endian="big", revision=(1, 0), date=(2016, 22, 1, 23, 59)):
+    """Write a 3-trace SEG-Y file with the given byte order, revision bytes and date."""
+    segyio = pytest.importorskip("segyio")
+    data = np.arange(3 * 20, dtype=np.float32).reshape(3, 20)
+    spec = segyio.spec()
+    spec.format, spec.samples, spec.endian = 5, range(20), endian
+    spec.ilines, spec.xlines = range(3), [1]
+    field = segyio.TraceField
+    names = ("YearDataRecorded", "DayOfYear", "HourOfDay")
+    names += ("MinuteOfHour", "SecondOfMinute")
+    header = {getattr(field, name): value for name, value in zip(names, date)}
+    header.update({field.TRACE_SAMPLE_INTERVAL: 1000, field.TRACE_SAMPLE_COUNT: 20})
+    with segyio.create(str(path), spec) as fi:
+        fi.bin.update({segyio.BinField.Interval: 1000})
+        for num, trace in enumerate(data):
+            fi.header[num] = header
+            fi.trace[num] = trace
+    with path.open("r+b") as fi:
+        fi.seek(3500)
+        fi.write(bytes(revision))
+    return path, data.T
+
+
+class TestSegyCompatibility:
+    """Tests for SEG-Y files that bend the standard."""
+
+    def test_hdf5_signature_is_not_segy(self, tmp_path):
+        """An HDF5 file is not SEG-Y, whatever its bytes at 3200 hold."""
+        path, _ = _write_segy_file(tmp_path / "h5.sgy")
+        with open(path, "r+b") as fp:
+            fp.write(b"\x89HDF\r\n\x1a\n")
+        assert SegyV1_0().get_format(path) is False
+
+    def test_nonstandard_minor_revision(self, tmp_path):
+        """A minor revision such as 1.80 reads as revision 1.0."""
+        path, data = _write_segy_file(tmp_path / "rev.sgy", revision=(1, 80))
+        assert dc.get_format(path) == ("segy", "1.0")
+        assert np.array_equal(dc.spool(path)[0].data, data)
+
+    def test_nonstandard_minor_needs_whole_traces(self, tmp_path):
+        """A non-standard revision is only claimed when whole traces fill the file."""
+        path, _ = _write_segy_file(tmp_path / "rev.sgy", revision=(1, 80))
+        with path.open("ab") as fi:
+            fi.write(b"\x00" * 10)
+        assert SegyV1_0().get_format(path) is False
+
+    @pytest.mark.parametrize(
+        "revision, version", [((1, 0), "1.0"), ((0, 1), "1.0"), ((0, 100), "0.100")]
+    )
+    def test_little_endian(self, tmp_path, revision, version):
+        """
+        Little-endian files are detected and read like big-endian ones, with
+        the revision as two bytes or as one little-endian word (segyio).
+        """
+        big, data = _write_segy_file(tmp_path / "big.sgy")
+        little, _ = _write_segy_file(
+            tmp_path / "little.sgy", endian="little", revision=revision
+        )
+        assert dc.get_format(little) == ("segy", version)
+        patch = dc.spool(little)[0]
+        assert patch == dc.spool(big)[0]
+        assert np.array_equal(patch.select(channel=(1, 2)).data, data[:, 1:])
+
+    def test_second_60_rolls_over(self, tmp_path):
+        """A header second of 60 is the start of the next minute."""
+        path, _ = _write_segy_file(tmp_path / "s60.sgy", date=(2016, 22, 1, 23, 60))
+        time = dc.spool(path)[0].get_coord("time")
+        assert time.min() == np.datetime64("2016-01-22T01:24:00")
+
+    @pytest.mark.parametrize(
+        "date", [(0, 0, 0, 0, 0), (2016, 0, 1, 2, 3), (16, 22, 1, 2, 3)]
+    )
+    def test_invalid_date_is_relative(self, tmp_path, date):
+        """
+        Without a valid year and day (none, day 0, two-digit year), time
+        starts at zero, keeps its step and takes the start the warning gives.
+        """
+        path, _ = _write_segy_file(tmp_path / "nodate.sgy", date=date)
+        with pytest.warns(UserWarning, match="not valid"):
+            patch = dc.spool(path)[0]
+        time = patch.get_coord("time")
+        assert time.min() == np.timedelta64(0, "ns")
+        assert time.step == np.timedelta64(1, "ms")
+        start = "2013-09-11T17:53:29"  # any form dc.to_datetime64 takes
+        new = patch.update_coords(
+            time=patch.get_coord("time") + dc.to_datetime64(start)
+        )
+        assert new.get_coord("time").min() == np.datetime64(start)

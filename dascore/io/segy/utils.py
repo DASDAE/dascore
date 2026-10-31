@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import datetime
 import warnings
 
 import numpy as np
@@ -17,58 +16,82 @@ from dascore.exceptions import InvalidSpoolError, PatchError
 from dascore.io.utils import require_grid
 from dascore.utils.misc import optional_import
 
-
-def twos_comp(bytes_):
-    """Get twos complement of bytestring."""
-    bits = len(bytes_) * 8
-    val = int.from_bytes(bytes_, "big")
-    if (val & (1 << (bits - 1))) != 0:  # if sign bit is set e.g., 8bit: 128-255
-        val = val - (1 << bits)  # compute negative value
-    return val  # return positive value as is
+# Bytes per sample of each SEG-Y (rev 2.1) data sample format code.
+_SAMPLE_BYTES = {1: 4, 2: 4, 3: 2, 4: 4, 5: 4, 6: 8, 7: 3, 8: 1}
+_SAMPLE_BYTES |= {9: 8, 10: 4, 11: 2, 12: 8, 15: 3, 16: 1}
 
 
-def _get_segy_version(fp):
+def twos_comp(bytes_, byteorder="big"):
+    """Decode a signed integer from bytes."""
+    return int.from_bytes(bytes_, byteorder, signed=True)
+
+
+def _parse_binary_header(fp):
     """
-    Determine if file handle contains segy data.
+    Return (byte order, version) if the file holds SEG-Y data, else None.
 
-    Returns (segy, version) if so else False.
-
-    Based on ObsPy's implementation written by Lion Krischer.
+    The format code (1 to 16) is plausible in only one byte order, which
+    settles it. A non-standard minor revision (eg 1.80) is reported as
+    "major.0", and only when whole traces fill the file. Based on ObsPy's
+    implementation written by Lion Krischer.
     https://github.com/obspy/obspy/blob/master/obspy/io/segy/core.py
     """
+    # A SEG-Y file opens with a textual header, never an HDF5 signature;
+    # the binary header checks alone can pass on an HDF5 file's bytes.
+    fp.seek(0)
+    if fp.read(8) == b"\x89HDF\r\n\x1a\n":
+        return None
     # Read 400byte header into byte string.
     fp.seek(3200)
     header = fp.read(400)
-    data_trace_count = twos_comp(header[12:14])
-    auxiliary_trace_count = twos_comp(header[14:16])
-    sample_interval = twos_comp(header[16:18])
-    samples_per_trace = twos_comp(header[20:22])
-    data_format_code = twos_comp(header[24:26])
-    format_number_major = twos_comp(header[300:301])
-    format_number_minor = twos_comp(header[301:302])
-    fixed_len_flag = twos_comp(header[302:304])
-
-    checks = (
-        # First check that some samples are defined.
-        samples_per_trace > 0,
-        # Then ensure the sample intervals is defined. This can be defined in trace
-        # header so 0 is ok, but not negative numbers.
-        sample_interval >= 0,
-        # Ensure the data sample format code is valid using range in 2,1 standard
-        1 <= data_format_code <= 16,
-        # Check version code
-        format_number_major in {0, 1, 2, 3},
-        # Sanity checks for other values.
-        data_trace_count >= 0,
-        auxiliary_trace_count >= 0,
-        format_number_minor in {0, 1, 2, 3, 100},
-        fixed_len_flag in {0, 1},
-    )
-    if all(checks):
-        version = f"{format_number_major}.{format_number_minor}"
-        return "segy", version
+    if len(header) < 400:
+        return None
+    major, minor = header[300:302]
+    for endian in ("big", "little"):
+        traces, auxiliary, interval, _, samples, _, code = (
+            twos_comp(header[i : i + 2], endian) for i in range(12, 26, 2)
+        )
+        fixed_length, extended = (
+            twos_comp(header[i : i + 2], endian) for i in (302, 304)
+        )
+        checks = (
+            # First check that some samples are defined.
+            samples > 0,
+            # The interval may be 0 (defined in the trace headers) but not
+            # negative.
+            interval >= 0,
+            # Ensure the data sample format code is valid (2.1 standard range).
+            1 <= code <= 16,
+            major in {0, 1, 2, 3},
+            # Sanity checks for other values.
+            traces >= 0,
+            auxiliary >= 0,
+            fixed_length in {0, 1},
+        )
+        if all(checks):
+            break
     else:
-        return False
+        return None
+    if endian == "little" and major == 0 and minor in {1, 2, 3}:
+        # segyio writes the revision as one little-endian word (00 01 = 1.0).
+        major, minor = minor, major
+    if minor not in {0, 1, 2, 3, 100}:
+        # Some producers write a non-standard minor revision (eg 1.80); read
+        # those as the major revision when whole traces fill the file exactly.
+        sample_bytes = _SAMPLE_BYTES.get(code, 0)
+        size = fp.seek(0, 2) - 3600 - 3200 * max(extended, 0)
+        if not sample_bytes or size <= 0 or size % (240 + samples * sample_bytes):
+            return None
+        minor = 0
+    return endian, f"{major}.{minor}"
+
+
+def _open_segy(path, segyio):
+    """Open a SEG-Y file with segyio in the byte order its header uses."""
+    with open(path, "rb") as fp:
+        parsed = _parse_binary_header(fp)
+    endian = parsed[0] if parsed else "big"
+    return segyio.open(str(path), ignore_geometry=True, endian=endian)
 
 
 def _get_coords(fi):
@@ -103,7 +126,13 @@ def _get_coords(fi):
 
 
 def _get_time_from_header(header):
-    """Creates a datetime64 object from SEGY header date information."""
+    """
+    Get the start time from the SEGY trace header date fields.
+
+    The fields are added up, so a second of 60 rolls into the next minute.
+    Without a usable year and day, warn and return timedelta64(0), so time
+    is relative to the first sample.
+    """
     segyio = optional_import("segyio")
     trace_field = segyio.TraceField
 
@@ -112,11 +141,19 @@ def _get_time_from_header(header):
     hour = header[trace_field.HourOfDay]
     minute = header[trace_field.MinuteOfHour]
     second = header[trace_field.SecondOfMinute]
-    # make those timedate64
-    fmt = "%Y.%j.%H.%M.%S"
-    s = f"{year}.{julday}.{hour}.{minute}.{second}"
-    time = datetime.datetime.strptime(s, fmt)
-    return dc.to_datetime64(time)
+    # Years outside datetime64[ns] (eg two-digit years) would wrap silently.
+    if not (1678 <= year <= 2261 and 1 <= julday <= 366):
+        msg = (
+            f"SEG-Y trace header date (year {year}, day {julday}) is not "
+            "valid, so the time coordinate is relative to the first sample. "
+            "To set the start: patch.update_coords(time="
+            'patch.get_coord("time") + dc.to_datetime64(start)).'
+        )
+        warnings.warn(msg, UserWarning)
+        return np.timedelta64(0, "ns")
+    start = np.datetime64(f"{year:04d}-01-01", "ns")
+    seconds = (((julday - 1) * 24 + hour) * 60 + minute) * 60 + second
+    return start + np.timedelta64(seconds, "s")
 
 
 def _get_patch_with_channel_coord(patch):

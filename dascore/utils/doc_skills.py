@@ -64,6 +64,6 @@ def read_skill(name: str) -> str:
 
 def read_bootstrap() -> str:
     """Return the native agent entry point verbatim for explicit installation."""
-    return (PACKAGE_PATH / "skills" / "dascore" / "SKILL.md").read_text(
+    return (PACKAGE_PATH / ".agents" / "skills" / "dascore" / "SKILL.md").read_text(
         encoding="utf-8"
     )

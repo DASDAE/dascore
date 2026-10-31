@@ -104,3 +104,38 @@ patch_from_stream = dc.io.obspy_to_patch(stream)
 :::{.callout-note}
 `obspy_to_patch` requires every trace to have the same data length and the requested dimension in `stats` (`distance` by default).
 :::
+
+## Research HDF5 arrays
+
+An HDF5 array with timing and spacing attributes may need an explicit mapping when it lacks the units required by a reader. For example, the [Taiwan MiDAS release](https://doi.org/10.5281/zenodo.15241981) includes `original_foreshock.h5`, with a channel-by-time `data` array and `begin_time`, `dt_s`, and `dx_m` attributes, but no data units. After downloading that file, this example reads its first 1,000 time samples and converts them through xarray:
+
+```{python}
+#| eval: false
+import h5py
+import numpy as np
+import xarray as xr
+
+import dascore as dc
+
+with h5py.File("original_foreshock.h5", "r") as source:
+    dataset = source["data"]
+    values = dataset[:, :1000]
+    start = dc.to_datetime64(dataset.attrs["begin_time"])
+    interval = dc.to_timedelta64(float(dataset.attrs["dt_s"]))
+    spacing = float(dataset.attrs["dx_m"])
+
+array = xr.DataArray(
+    values,
+    dims=("distance", "time"),
+    coords={
+        "time": start + np.arange(values.shape[1]) * interval,
+        "distance": ("distance", np.arange(values.shape[0]) * spacing, {"units": "m"}),
+    },
+    attrs={"data_category": "DAS"},
+)
+patch = dc.io.xarray_to_patch(array)
+```
+
+The distance origin here is relative to the first released channel. Data units remain unknown; the conversion does not assign strain or strain-rate units without source metadata. Choose the mapping from the release documentation rather than applying this layout to arbitrary HDF5 files.
+
+A reduced AP Sensing release, such as the Cape Muroto tremor files, keeps the `DAQ`, `Metadata` and `DAS` groups but drops the version attributes, interrogator, time zone and data rate the AP Sensing reader needs, so it is not read automatically. The file alone does not settle its sampling: `DAQ/PositionEnd` over the 1,079 channels gives about 51 m, ten times the stated `SpatialSampling` of 5.1 m, and nothing says whether `DAQ/RepetitionFrequency` (100) is the output rate. Read such a file with h5py as above once the release's documentation confirms the time step and channel spacing.
