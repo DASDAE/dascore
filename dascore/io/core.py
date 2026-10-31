@@ -1107,7 +1107,7 @@ _HOOK_METHODS = FrozenDict(
     {
         "_prepare_read": ("get_metadata", "read_array"),
         "_prepare_array_reader": ("read_array",),
-        "_read_stored": ("read_array",),
+        "_read_stored": ("read_array", "_prepare_array_reader"),
     }
 )
 

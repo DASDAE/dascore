@@ -727,6 +727,22 @@ class TestOffsetReads:
         np.testing.assert_array_equal(source.load(), expected)
         assert len(stored_reads) == 1
 
+    @needs_chunk_iter
+    def test_prepare_override_is_honored(self, path, registry):
+        """A subclass transforming the array hook read_array calls is honored."""
+
+        class Doubled(H5Simple):
+            name = "_test_doubled_prepare_offsets"
+
+            def _prepare_array_reader(self, resource, *, key=""):
+                read = super()._prepare_array_reader(resource, key=key)
+                return lambda windows: read(windows) * 2
+
+        source = dc.read(path)[0]._source
+        expected = source.load() * 2
+        source = replace(source, format=Doubled.name)
+        np.testing.assert_array_equal(source.load(), expected)
+
     def test_external_link(self, tmp_path, stored_reads):
         """A data node linked from another file is read from that file."""
         data = np.arange(150, dtype=np.float32).reshape(30, 5)
