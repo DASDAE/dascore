@@ -270,6 +270,10 @@ class _ScanBehaviorFormatter(FiberIO):
             raise InvalidFiberFileError("Invalid file")
         if behavior == "os_error":
             raise OSError("Simulated OS issue")
+        if behavior == "key_error":
+            raise KeyError("Data/Temperature")
+        if behavior == "index_error":
+            raise IndexError("offset past the end")
         if behavior == "remote_cache_error":
             raise RemoteCacheError("metadata cache blocked")
         if behavior == "patch_attrs":
@@ -290,7 +294,7 @@ class _ScanBehaviorFormatter(FiberIO):
                 }
             ]
         msg = f"no scan behavior called {behavior!r}"
-        raise LookupError(msg)
+        raise AssertionError(msg)
 
 
 def _misbehaving_scan_path(tmp_path, behavior: str) -> Path:
@@ -1368,15 +1372,22 @@ class TestReloadableSourcePath:
         with pytest.raises(NotImplementedError):
             fio.scan(bad_input)
 
-    @pytest.mark.parametrize("behavior", ["os_error", "invalid_file"])
-    def test_bad_checksum(self, tmp_path, behavior):
-        """Test for when format is identified but can't read part of file #346"""
-        path = _misbehaving_scan_path(tmp_path, behavior)
-        # Ensure scanning doesn't raise and warns
-        msg = "Failed to scan"
-        with pytest.warns(UserWarning, match=msg):
-            scan = dc.scan(path)
-        assert not len(scan)
+    @pytest.mark.parametrize(
+        ("behavior", "error"),
+        [
+            ("os_error", "OSError"),
+            ("invalid_file", "InvalidFiberFileError"),
+            ("key_error", "KeyError"),
+            ("index_error", "IndexError"),
+        ],
+    )
+    def test_bad_checksum(self, tmp_path, behavior, error):
+        """A file that fails to scan warns, naming the error, and is skipped #346"""
+        _misbehaving_scan_path(tmp_path, behavior)
+        dc.write(dc.get_example_patch(), tmp_path / "good.h5", "DASDAE")
+        with pytest.warns(UserWarning, match=f"Failed to scan .*{error}"):
+            scan = dc.scan(tmp_path)
+        assert len(scan) == 1
 
     def test_remote_cache_error_is_not_swallowed(self, tmp_path):
         """Remote cache policy errors during scan should propagate to callers."""

@@ -2078,9 +2078,17 @@ def _iter_scan_results(
                     except PermissionError:
                         _warn_permission_denied(patch_source)
                         continue
-                    # This happens if the file is corrupt see #346.
-                    except (OSError, InvalidFiberFileError, ValueError, TypeError):
-                        warnings.warn(f"Failed to scan {resource}", UserWarning)
+                    # This happens if the file is corrupt see #346; a parser
+                    # missing a key or offset raises a LookupError.
+                    except (
+                        OSError,
+                        InvalidFiberFileError,
+                        ValueError,
+                        TypeError,
+                        LookupError,
+                    ) as exc:
+                        msg = f"Failed to scan {resource}: {type(exc).__name__}: {exc}"
+                        warnings.warn(msg, UserWarning)
                         continue
                     # Existing directory members can change without updating
                     # its mtime. Keep every member until source IDs and positional
