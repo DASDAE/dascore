@@ -2087,7 +2087,8 @@ def _iter_scan_results(
                         TypeError,
                         LookupError,
                     ) as exc:
-                        msg = f"Failed to scan {resource}: {type(exc).__name__}: {exc}"
+                        error = f"{type(exc).__name__}: {exc}"
+                        msg = f"Failed to scan {patch_source}: {error}"
                         warnings.warn(msg, UserWarning)
                         continue
                     # Existing directory members can change without updating

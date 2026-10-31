@@ -1385,7 +1385,7 @@ class TestReloadableSourcePath:
         """A file that fails to scan warns, naming the error, and is skipped #346"""
         _misbehaving_scan_path(tmp_path, behavior)
         dc.write(dc.get_example_patch(), tmp_path / "good.h5", "DASDAE")
-        with pytest.warns(UserWarning, match=f"Failed to scan .*{error}"):
+        with pytest.warns(UserWarning, match=f"Failed to scan .*{behavior}.*{error}"):
             scan = dc.scan(tmp_path)
         assert len(scan) == 1
 
