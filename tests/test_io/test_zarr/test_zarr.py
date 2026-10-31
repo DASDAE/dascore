@@ -336,6 +336,24 @@ class TestRemote:
         assert spool.chunk(time=None)[0] == zarr_patch
         assert all(x == zarr_patch for x in spool + dc.spool([zarr_patch]))
 
+    def test_window_read_skips_coords(self, zarr_patch):
+        """A windowed read loads no other coordinate chunk than time's ends."""
+        fsspec.register_implementation("zarrcount", CountMemory, clobber=True)
+        upath.registry.register_implementation("zarrcount", MemoryPath, clobber=True)
+        path = UPath("zarrcount://dascore_zarr_count/window.zarr")
+        encoding = {"time": {"chunks": (100,)}, "distance": {"chunks": (100,)}}
+        dc.write(zarr_patch, path, "zarr", encoding=encoding)
+        CountMemory.read.clear()
+        out = ZarrV3().read_array(path, windows=((0, 5), (0, 5)))
+        assert np.array_equal(out, zarr_patch.data[:5, :5])
+        # the "/x/c/" filters below match real chunk keys
+        assert [x for x in CountMemory.read if "/data/c/" in x]
+        last = (zarr_patch.shape[zarr_patch.get_axis("time")] - 1) // 100
+        time = {x for x in CountMemory.read if "/time/c/" in x}
+        assert {x.rsplit("/", 1)[-1] for x in time} <= {"0", str(last)}
+        others = ("/distance/c/", "/latitude/c/")
+        assert not [x for x in CountMemory.read if any(o in x for o in others)]
+
 
 class TestReplace:
     """A write replaces a store, or nothing, and never half of one."""
