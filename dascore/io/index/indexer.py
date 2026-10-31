@@ -194,7 +194,8 @@ class DBDirectoryIndexer:
         The directory to index.
     index_path
         Where to keep the index; defaults to a hidden entry at the top of
-        the data directory.
+        the data directory, or the dascore cache when the directory is
+        read-only or is itself one store (e.g. zarr).
     snap
         The dimensions each file's patches are read on a grid, as in
         [`read`](`dascore.read`). The index records it beside
@@ -280,9 +281,9 @@ class DBDirectoryIndexer:
         """
         Find where the index lives (or should live).
 
-        Mirrors the historic DirectoryIndexer behavior: in-directory by
-        default; when the data directory is read-only the index lives in
-        the dascore cache and its location is recorded in the index map.
+        In-directory by default; when the data directory is read-only or
+        is itself one store, the index lives in the dascore cache. Only a
+        custom location is recorded in the index map.
         """
         map_dir = self.index_map_dir
         if index_path:
@@ -292,8 +293,12 @@ class DBDirectoryIndexer:
             _set_mapped_index_path(self.path, index_path, map_dir)
             return index_path
         expected = self.path / self._index_name
+        # A directory one reader takes whole (e.g. a zarr store) is replaced
+        # whole when rewritten, taking an index inside it along; its index
+        # lives in the cache, as a read-only directory's does.
+        unit = self._directory_format(self.path)
         with suppress(PermissionError):
-            if expected.exists():
+            if not unit and expected.exists():
                 return expected
         mapped = _get_mapped_index_path(self.path, map_dir)
         if mapped is not None and not self._is_legacy_or_foreign_index(mapped):
@@ -301,7 +306,7 @@ class DBDirectoryIndexer:
             # the retired PyTables (.h5) index; those are not usable and
             # a fresh SQLite index is built in their place.
             return mapped
-        if not directory_writable(self.path):
+        if unit or not directory_writable(self.path):
             # A stable digest, not hash(): str/Path hashing is randomized
             # per process (PYTHONHASHSEED), so hash() would name a new
             # index file every session and orphan the previous one. The

@@ -276,8 +276,16 @@ class TestDirectorySpool:
         (tmp_path / "b.raw").write_bytes(b"2")
         assert scan_unit_stats(tmp_path) != before
 
-    def test_index_in_store_is_not_a_change(self, zarr_patch, tmp_path):
-        """A spool of one store keeps its index inside and does not re-index."""
+    def test_store_spool_writes_no_index(self, zarr_patch, tmp_path):
+        """A spool of one store keeps its index outside, writing nothing into it."""
+        path = tmp_path / "a.zarr"
+        dc.write(zarr_patch, path, "zarr", file_version="2")
+        before = sorted(path.rglob("*"))
+        assert dc.spool(path).update()[0] == zarr_patch
+        assert sorted(path.rglob("*")) == before
+
+    def test_second_update_not_a_change(self, zarr_patch, tmp_path):
+        """A store spool's second update does not re-index the store."""
         path = tmp_path / "a.zarr"
         dc.write(zarr_patch, path, "zarr", file_version="2")
         spool = dc.spool(path).update()
@@ -285,6 +293,15 @@ class TestDirectorySpool:
         before = sources()["last_indexed_ns"].max()
         spool.update()
         assert sources()["last_indexed_ns"].max() == before
+
+    def test_rewrite_under_open_spool(self, zarr_patch, tmp_path):
+        """A store rewritten under an open spool is re-indexed on update."""
+        path = tmp_path / "a.zarr"
+        dc.write(zarr_patch, path, "zarr")
+        spool = dc.spool(path).update()
+        later = zarr_patch.update_coords(time_min=np.datetime64("2030-01-01"))
+        dc.write(later, path, "zarr")
+        assert spool.update()[0] == later
 
 
 class TestScanDirectory:

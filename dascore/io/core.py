@@ -1304,7 +1304,7 @@ def _directory_members(path) -> list:
     chunk; a member rewritten in place with those untouched goes unseen.
     Otherwise every file counts, sorted by relative path. Hidden files are
     members (zarr format 2 keeps its metadata in them); only a DASCore index
-    inside the unit is not, or indexing would change it.
+    inside the unit (an older version put one there) is not.
     """
     for fiber_io in FiberIO.manager._get_prioritized_list("directory"):
         if members := fiber_io.unit_members(path):

@@ -50,7 +50,7 @@ index_path = Path(tempfile.mkdtemp()) / "index.h5"
 external_index = dc.spool(directory, index_path=index_path).update()
 ```
 
-Pass `index_path=` when the data directory is not writable. New spools normally rediscover an external index; an index inside the data directory takes precedence. Remote `UPath` resources also work; see [Working with remote patches](remote_patches.qmd) for cache policy.
+Pass `index_path=` when the data directory is not writable. New spools normally rediscover an external index; an index inside the data directory takes precedence. A directory that is itself one store, such as a zarr store, keeps its index in the DASCore cache instead, so rewriting the store does not take the index with it. Remote `UPath` resources also work; see [Working with remote patches](remote_patches.qmd) for cache policy.
 
 ## Path attributes
 
