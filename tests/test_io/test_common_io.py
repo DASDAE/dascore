@@ -55,6 +55,7 @@ from dascore.io.terra15 import (
     Terra15FormatterV6,
 )
 from dascore.io.uptech import UptechH5V1
+from dascore.io.witsml import WITSMLV1400, WITSMLV1411
 from dascore.io.xdas import XdasV1
 from dascore.io.zarr import ZarrV2, ZarrV3
 from dascore.utils.downloader import fetch, get_registry_df
@@ -65,6 +66,7 @@ from tests.test_io._common_io_test_utils import (
     skip_missing,
     skip_timeout,
 )
+from tests.test_io.test_witsml.test_witsml import brady_like, cranfield_like
 
 # No shipped file is DASDAE version 2 yet: the current writer makes one
 # (see `_write_dasdae_v2`) so the format sits in the same matrix as the
@@ -80,6 +82,12 @@ _ZARR_PATHS = {io: Path(mkdtemp("zarr")) / "example.zarr" for io in _ZARR_IOS}
 _HAS_NETCDF = all(importlib.util.find_spec(x) for x in ("h5netcdf", "xarray"))
 _NETCDF_IOS = (NetCDFCFV18(), NetCDFNoCF()) if _HAS_NETCDF else ()
 _NETCDF_PATHS = {io: Path(mkdtemp("netcdf")) / "example.nc" for io in _NETCDF_IOS}
+# WITSML DTS logs are written from the synthetic examples their tests build.
+_WITSML_DIR = Path(mkdtemp("witsml"))
+_WITSML_FILES = {
+    WITSMLV1411(): (_WITSML_DIR / "brady_like.xml", brady_like),
+    WITSMLV1400(): (_WITSML_DIR / "cranfield_like.xml", cranfield_like),
+}
 
 
 @pytest.fixture(scope="session", autouse=True)
@@ -95,6 +103,8 @@ def _write_dasdae_v2():
             handle.move("data", "strain")
             if isinstance(io, NetCDFNoCF):
                 del handle.attrs["Conventions"]
+    for path, make_text in _WITSML_FILES.values():
+        path.write_text(make_text())
 
 
 # --- Fixtures
@@ -148,6 +158,7 @@ COMMON_IO_READ_TESTS = {
     MSeedV2(): ("etna_9n_3chan_10s.mseed",),
     UptechH5V1(): ("uptech_as1000_1.hdf5",),
     **{io: (str(path),) for io, path in (_ZARR_PATHS | _NETCDF_PATHS).items()},
+    **{io: (str(path),) for io, (path, _) in _WITSML_FILES.items()},
 }
 
 # This tuple is for fiber io which support a write method and can write
@@ -303,7 +314,8 @@ _SCAN_COST_MAX_FRACTION = 0.25
 # These hand the resource to a library which opens the file itself, so no
 # byte reaches our handle. Listed rather than detected: an empty count is
 # also what a reader that just started bypassing the handle would produce.
-IGNORE_SCAN_CHECK = frozenset({"SEGY", "MSEED"})
+# WITSML is XML, which has no index to seek by, so its scan parses the file.
+IGNORE_SCAN_CHECK = frozenset({"SEGY", "MSEED", "WITSML"})
 
 
 class _CountingHandle(BufferedIOBase):
