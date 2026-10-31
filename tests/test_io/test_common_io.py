@@ -82,7 +82,7 @@ _ZARR_PATHS = {io: Path(mkdtemp("zarr")) / "example.zarr" for io in _ZARR_IOS}
 _HAS_NETCDF = all(importlib.util.find_spec(x) for x in ("h5netcdf", "xarray"))
 _NETCDF_IOS = (NetCDFCFV18(), NetCDFNoCF()) if _HAS_NETCDF else ()
 _NETCDF_PATHS = {io: Path(mkdtemp("netcdf")) / "example.nc" for io in _NETCDF_IOS}
-# WITSML DTS logs are written from the trimmed examples their tests build.
+# WITSML DTS logs are written from the synthetic examples their tests build.
 _WITSML_DIR = Path(mkdtemp("witsml"))
 _WITSML_FILES = {
     WITSMLV1411(): (_WITSML_DIR / "brady_like.xml", brady_like),
@@ -314,7 +314,8 @@ _SCAN_COST_MAX_FRACTION = 0.25
 # These hand the resource to a library which opens the file itself, so no
 # byte reaches our handle. Listed rather than detected: an empty count is
 # also what a reader that just started bypassing the handle would produce.
-IGNORE_SCAN_CHECK = frozenset({"SEGY", "MSEED"})
+# WITSML is XML, which has no index to seek by, so its scan parses the file.
+IGNORE_SCAN_CHECK = frozenset({"SEGY", "MSEED", "WITSML"})
 
 
 class _CountingHandle(BufferedIOBase):
