@@ -38,7 +38,6 @@ pandas 3 stores text columns as strings rather than `object`, which can affect c
 | `MemorySpool`, `DirectorySpool`, `FileSpool`, `dascore.clients` | `dc.spool(...)`, which returns a `dc.Spool` |
 | `select_kwargs` | call `spool.select(...)` |
 | `spool.map(func, progress=True)` | `spool.map(func)`; `progress` takes `"standard"`, `"basic"`, `None`, or `False` |
-| `spool.get_lazy_patch(i)` | `spool[i]`, which loads the patch's data |
 | `dascore.io.PatchFileSummary` | `dc.PatchSummary` |
 | `dascore.io.indexer.DirectoryIndexer` | `dc.spool(path)` |
 | `dascore.io.sintela_binary` | `dascore.io.sintela` (reading through `dc.read` is unchanged) |
