@@ -869,3 +869,59 @@ class TestIndexedOffsetReads:
         merged = spool.chunk(time=None)[0]
         np.testing.assert_array_equal(merged.data[80:100], -data[80:100])
         assert len(stored_reads) == 1
+
+
+def _event_file(path, time, time_units, data_units="m/s"):
+    """Write a small event cut: one data array, times, and channel ids."""
+    with h5py.File(path, "w") as h5:
+        h5["data"] = np.zeros((len(time), 2), dtype=np.float32)
+        h5["time"] = time
+        h5["channel_ids"] = np.array([0, 25])
+        h5.attrs["data_units"] = data_units
+        h5.attrs["time_units"] = time_units
+    return path
+
+
+class TestPublishedProductAttrs:
+    """Root attrs of research products, which describe rather than declare."""
+
+    def test_prose_units_are_kept_as_text(self, tmp_path):
+        """Units that are not units warn and survive as a description."""
+        units = "same as input DAS data"
+        path = _event_file(tmp_path / "e.h5", np.arange(3.0), "s", units)
+        with pytest.warns(UserWarning, match="are not units"):
+            patch = dc.read(path)[0]
+        assert patch.attrs.data_units is None
+        assert patch.attrs.data_units_description == units
+
+    @pytest.mark.parametrize(
+        "time, time_units, scale",
+        [
+            (np.arange(6) * 0.02 - 0.06, "seconds relative to catalog origin", 1e3),
+            (np.arange(21) * 0.5, "Seconds Relative To trigger", 1e3),
+            (np.arange(4) * 2.0, np.array([b"milliseconds relative to trigger"]), 1),
+        ],
+    )
+    @pytest.mark.parametrize("snap", [True, False])
+    def test_relative_times_are_timedeltas(
+        self, tmp_path, time, time_units, scale, snap
+    ):
+        """
+        Offsets from an unstated origin read as timedeltas in the stated
+        unit (any case, and from a one-element array attr), for read and
+        scan alike, and time_units is spent rather than kept.
+        """
+        path = _event_file(tmp_path / "e.h5", time, time_units)
+        patch = dc.read(path, snap=snap)[0]
+        expected = np.round(time * scale).astype("timedelta64[ms]")
+        assert np.array_equal(patch.get_coord("time").values, expected)
+        assert "time_units" not in dict(patch.attrs)
+        assert dc.scan(path)[0].coords["time"].max == expected[-1]
+
+    @pytest.mark.parametrize("time_units", ["seconds", "samples relative to x"])
+    def test_other_time_units_are_unchanged(self, tmp_path, time_units):
+        """time_units naming no relative time unit decodes times as before."""
+        path = _event_file(tmp_path / "e.h5", np.arange(3.0), time_units)
+        patch = dc.read(path)[0]
+        assert np.issubdtype(patch.get_coord("time").dtype, np.datetime64)
+        assert patch.attrs.time_units == time_units

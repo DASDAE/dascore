@@ -137,3 +137,5 @@ patch = dc.io.xarray_to_patch(array)
 ```
 
 The distance origin here is relative to the first released channel. Data units remain unknown; the conversion does not assign strain or strain-rate units without source metadata. Choose the mapping from the release documentation rather than applying this layout to arbitrary HDF5 files.
+
+A reduced AP Sensing release, such as the Cape Muroto tremor files, keeps the `DAQ`, `Metadata` and `DAS` groups but drops the version attributes, interrogator, time zone and data rate the AP Sensing reader needs, so it is not read automatically. The file alone does not settle its sampling: `DAQ/PositionEnd` over the 1,079 channels gives about 51 m, ten times the stated `SpatialSampling` of 5.1 m, and nothing says whether `DAQ/RepetitionFrequency` (100) is the output rate. Read such a file with h5py as above once the release's documentation confirms the time step and channel spacing.

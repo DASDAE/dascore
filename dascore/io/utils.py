@@ -24,7 +24,7 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.models import ArrayLike
-from dascore.units import convert_units, get_quantity_str
+from dascore.units import convert_units, get_quantity, get_quantity_str
 from dascore.utils.misc import _maybe_unpack, _to_slice, iterate, unbyte
 from dascore.utils.time import to_exact_fraction
 
@@ -115,6 +115,15 @@ def convert_attr_units(attrs: dict, name: str, to_units: str, from_units="") -> 
         warnings.warn(msg, UserWarning, stacklevel=2)
         attrs.pop(name)
     return attrs
+
+
+def parse_units(raw_units) -> str | None:
+    """Return the unit string if it parses as units, else None (scans don't crash)."""
+    try:
+        get_quantity(raw_units)
+    except Exception:
+        return None
+    return raw_units
 
 
 def drop_blank_attrs(attrs: dict, names: Iterable[str]) -> dict:

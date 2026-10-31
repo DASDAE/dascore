@@ -8,7 +8,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.core import get_coord, get_coord_manager
-from dascore.units import get_quantity
+from dascore.io.utils import parse_units
 from dascore.utils.hdf5 import h5_matches_structure
 from dascore.utils.misc import _maybe_unpack, maybe_get_items, unbyte
 
@@ -38,15 +38,6 @@ def _is_ai4eps(resource) -> bool:
     if not h5_matches_structure(resource, _REQUIRED_STRUCTURE):
         return False
     return len(getattr(resource["data"], "shape", None) or ()) == 2
-
-
-def _safe_units(raw_units):
-    """Return the unit string if parseable, else None (don't crash scans)."""
-    try:
-        get_quantity(raw_units)
-    except Exception:
-        return None
-    return raw_units
 
 
 def _to_utc_datetime64(value):
@@ -96,7 +87,7 @@ def _get_attrs_dict(dataset) -> dict:
     attrs = dataset.attrs
     out = {
         "data_category": "DAS",
-        "data_units": _safe_units(unbyte(_maybe_unpack(attrs["unit"]))),
+        "data_units": parse_units(unbyte(_maybe_unpack(attrs["unit"]))),
     }
     out.update(
         maybe_get_items(attrs, _EVENT_ATTR_MAP, unpack_names=set(_EVENT_ATTR_MAP))
