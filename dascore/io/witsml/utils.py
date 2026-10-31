@@ -19,6 +19,7 @@ NS = f"{{{_W['w']}}}"
 _HEAD_BYTES = 4096
 # Header elements, stated on the log, its blockInfo or its logData.
 _HEADER = (
+    "dataDelimiter",
     "endDateTimeIndex",
     "endIndex",
     "indexCurve",
@@ -116,7 +117,7 @@ def _get_columns(log, where: str) -> tuple[list[str], list[str]]:
     """
     if names := _text(log, "w:logData/w:mnemonicList"):
         units = _text(log, "w:logData/w:unitList")
-        return [x.strip() for x in names.split(",")], units.split(",")
+        return [x.strip() for x in names.split(",")], units.split(",") if units else []
     mnemonics = {
         x.get("uid"): _text(x, "w:mnemonic") for x in log.iterfind("w:logCurveInfo", _W)
     }
@@ -164,12 +165,19 @@ def read_log(resource) -> WitsmlLog:
         _text(x, "w:mnemonic"): _children(x) for x in log.iterfind("w:logCurveInfo", _W)
     }
     columns, listed = _get_columns(log, where)
+    if "" in columns or len(set(columns)) < len(columns):
+        msg = f"{where} names a data column twice or not at all: {columns}"
+        raise InvalidFiberFileError(msg)
     units = {x: curves.get(x, {}).get("unit", "") for x in columns}
-    units.update(zip(columns, listed, strict=False))
+    if listed and len(listed) != len(columns):
+        msg = f"{where} lists {len(listed)} units for {len(columns)} columns."
+        raise InvalidFiberFileError(msg)
+    units.update(zip(columns, listed))
     nulls = {
         x: curves.get(x, {}).get("nullValue") or header["nullValue"] for x in columns
     }
-    rows = [str(x.text or "").split(",") for x in log.iterfind("w:logData/w:data", _W)]
+    sep = header["dataDelimiter"] or ","
+    rows = [str(x.text or "").split(sep) for x in log.iterfind("w:logData/w:data", _W)]
     out = WitsmlLog(where, header, columns, units, nulls, rows)
     if missing := (set(curves) | {out.index}) - set(columns):
         msg = f"{where} declares curves {sorted(missing)} its data columns lack."

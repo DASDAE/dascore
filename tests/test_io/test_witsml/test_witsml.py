@@ -209,6 +209,23 @@ class TestRead:
         # TMP's own nullValue replaces the log's
         assert np.isnan(patches["TMP"].data[:, 0]).tolist() == [0, 0, 0, 0, 1, 0]
 
+    def test_no_unit_list_and_delimiter(self, tmp_path):
+        """Without a unitList curves keep their own units; dataDelimiter splits rows."""
+        path = tmp_path / "plain.xml"
+        text = _edit(
+            _BRADY,
+            ("<unitList>m, mW, none, none, none, degC</unitList>", ""),
+            ("<indexCurve>", "<dataDelimiter>;</dataDelimiter><indexCurve>"),
+        )
+        path.write_text(
+            re.sub(r"(<data>[^<]*)", lambda m: m[1].replace(",", ";"), text)
+        )
+        patch = _by_tag(dc.read(path))["TMP"]
+        assert dc.get_quantity(patch.get_coord("distance").units) == dc.get_quantity(
+            "m"
+        )
+        assert patch.data[[0, -1], 0].tolist() == [5.5, 10.5]
+
 
 class TestDistance:
     """Distance runs over the header's ends by default, as stored on request."""
@@ -265,6 +282,10 @@ _INVALID = {
     "two-block-info": _edit(_CRANFIELD, ("  <logData>", "  <blockInfo/><logData>")),
     "no-column-index": _edit(_CRANFIELD, ("<columnIndex>2</columnIndex>", "")),
     "unknown-curve-id": _edit(_CRANFIELD, ("<curveId>st-id<", "<curveId>XX<")),
+    "repeated-column": _edit(
+        _BRADY, ("ST, AST,", "ST, ST,"), ("<mnemonic>AST<", "<mnemonic>ST<")
+    ),
+    "short-unit-list": _edit(_BRADY, ("m, mW, none", "m, none")),
 }
 
 
