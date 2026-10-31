@@ -11,6 +11,7 @@ import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.exceptions import MissingOptionalDependencyError
 from dascore.io import FiberIO
+from dascore.io.utils import resolve_keyed_source
 from dascore.io.xdas.utils import is_xdas_file
 from dascore.utils.hdf5 import H5Reader, get_h5py_file
 from dascore.utils.misc import optional_import
@@ -18,6 +19,8 @@ from dascore.utils.misc import optional_import
 from .utils import (
     dataset_to_patch_meta,
     get_cf_version,
+    get_shared_payload_names,
+    get_xarray_data_var_name,
     is_netcdf4_file,
     parse_cf_version,
     read_dataset_array,
@@ -92,7 +95,79 @@ def _int_for_bool(attrs: dict) -> dict:
     return {i: convert(v) for i, v in attrs.items()}
 
 
-class NetCDFCFV18(FiberIO):
+def _payload_datasets(dataset) -> dict:
+    """Map each payload's name to a dataset holding it as the only payload."""
+    try:
+        return {get_xarray_data_var_name(dataset): dataset}
+    except ValueError:
+        names = get_shared_payload_names(dataset)
+    # Siblings differ only by name, so it tags them unless their own tags
+    # already tell them apart; otherwise chunking would merge them.
+    tags = {x: dataset[x].attrs.get("tag") or x for x in names}
+    if len(set(tags.values())) < len(tags):
+        tags = {x: x for x in names}
+    out = {}
+    for name in names:
+        sub = dataset[[name]]
+        if len(names) > 1:
+            sub[name] = sub[name].assign_attrs(tag=tags[name])
+        out[name] = sub
+    return out
+
+
+def _takes_cf(resource: H5Reader) -> bool:
+    """Return True for a non-XDAS netCDF-4 file stating CF 1.6 or later."""
+    if not is_netcdf4_file(resource) or is_xdas_file(resource):
+        return False
+    cf_version = get_cf_version(resource)
+    if not cf_version:
+        return False
+    try:
+        return parse_cf_version(cf_version) >= (1, 6)
+    except (TypeError, ValueError):
+        return False
+
+
+class _NetCDFReader:
+    """Read NetCDF-4 through xarray, one patch per payload variable."""
+
+    def read_array(
+        self, resource: H5Reader, windows: windows_type = (), key: str = ""
+    ) -> np.ndarray:
+        """
+        Slice the keyed payload variable through xarray.
+
+        The selection goes through xarray rather than the stored dataset
+        so CF decoding (scaling, offsets, fill values) applies exactly as
+        it does in `read`.
+        """
+        with _open_xarray_dataset(resource) as dataset:
+            where = str(getattr(resource, "filename", "the resource"))
+            payloads = _payload_datasets(dataset)
+            if len(payloads) > 1:
+                dataset = resolve_keyed_source(payloads, key, where)
+            else:
+                (dataset,) = payloads.values()
+            return read_dataset_array(dataset, windows, key, where)
+
+    def get_metadata(
+        self, resource: H5Reader, *, snap: snap_type = True
+    ) -> list[dc.PatchMeta]:
+        """Scan NetCDF file metadata, one per payload, without loading arrays.
+
+        Remote resources are streamed via the ``h5netcdf`` engine over the
+        existing ``h5py`` handle, so only metadata bytes are fetched and the
+        file is not downloaded.
+        """
+        with _open_xarray_dataset(resource) as dataset:
+            return [
+                meta
+                for payload in _payload_datasets(dataset).values()
+                for meta in dataset_to_patch_meta(payload, snap)
+            ]
+
+
+class NetCDFCFV18(_NetCDFReader, FiberIO):
     """NetCDF-4 IO using xarray for read/write and CF markers for detection."""
 
     name = "NETCDF_CF"
@@ -101,31 +176,7 @@ class NetCDFCFV18(FiberIO):
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
-        if not is_netcdf4_file(resource) or is_xdas_file(resource):
-            return None
-        cf_version = get_cf_version(resource)
-        if not cf_version:
-            return None
-        try:
-            if parse_cf_version(cf_version) >= (1, 6):
-                return self.version
-        except (TypeError, ValueError):
-            pass
-        return None
-
-    def read_array(
-        self, resource: H5Reader, windows: windows_type = (), key: str = ""
-    ) -> np.ndarray:
-        """
-        Slice the payload variable through xarray.
-
-        The selection goes through xarray rather than the stored dataset
-        so CF decoding (scaling, offsets, fill values) applies exactly as
-        it does in `read`.
-        """
-        with _open_xarray_dataset(resource) as dataset:
-            where = str(getattr(resource, "filename", "the resource"))
-            return read_dataset_array(dataset, windows, key, where)
+        return self.version if _takes_cf(resource) else None
 
     def write(self, spool, resource: Path, encoding: dict | None = None, **kwargs):
         """
@@ -146,14 +197,25 @@ class NetCDFCFV18(FiberIO):
         dataset["data"].attrs = _int_for_bool(dataset["data"].attrs)
         dataset.to_netcdf(resource, encoding=encoding)
 
-    def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
-    ) -> list[dc.PatchMeta]:
-        """Scan NetCDF file metadata without loading the full payload array.
 
-        Remote resources are streamed via the ``h5netcdf`` engine over the
-        existing ``h5py`` handle, so only metadata bytes are fetched and the
-        file is not downloaded.
-        """
-        with _open_xarray_dataset(resource) as dataset:
-            return dataset_to_patch_meta(dataset, snap)
+class NetCDFNoCF(_NetCDFReader, FiberIO):
+    """
+    NetCDF-4 files version 1.8 does not take, read as NETCDF_CF version 0.
+
+    These state no CF version, or one older than 1.6. Version 0 is a
+    fallback, tried after every other format, and claims only a file
+    written through netCDF (``_NCProperties``) with a dimensioned root
+    variable. It reads like version 1.8 and infers nothing more; it does
+    not write.
+    """
+
+    name = "NETCDF_CF"
+    version = "0"
+    fallback = True
+
+    def get_version(self, resource: H5Reader, **kwargs) -> str | None:
+        """Return "0" for a netCDF-4 file that version 1.8 does not take."""
+        if "_NCProperties" not in resource.attrs or _takes_cf(resource):
+            return None
+        has_variable = any("DIMENSION_LIST" in resource[x].attrs for x in resource)
+        return self.version if has_variable else None

@@ -35,6 +35,11 @@ def _parse_binary_header(fp):
     implementation written by Lion Krischer.
     https://github.com/obspy/obspy/blob/master/obspy/io/segy/core.py
     """
+    # A SEG-Y file opens with a textual header, never an HDF5 signature;
+    # the binary header checks alone can pass on an HDF5 file's bytes.
+    fp.seek(0)
+    if fp.read(8) == b"\x89HDF\r\n\x1a\n":
+        return None
     # Read 400byte header into byte string.
     fp.seek(3200)
     header = fp.read(400)

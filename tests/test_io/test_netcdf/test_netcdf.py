@@ -25,6 +25,7 @@ from dascore.io.netcdf.utils import (
     is_netcdf4_file,
 )
 from dascore.models import ArrayLike
+from dascore.utils.downloader import fetch
 from dascore.utils.remote_io import (
     clear_remote_file_cache,
     get_remote_cache_path,
@@ -1078,3 +1079,126 @@ class TestPlainNetCDF4:
                 dc.read(path)
         else:
             assert len(dc.read(path)[0].get_coord("time")) == 3
+
+
+class TestNoCFNetCDF:
+    """NetCDF-4 files version 1.8 does not take read as NETCDF_CF version 0."""
+
+    @staticmethod
+    def _write_cables(path, cables=("up_data", "down_data"), attrs=None, tag=None):
+        """A DTS file of cable variables beside helpers of other shapes."""
+        xr = pytest.importorskip("xarray")
+        pytest.importorskip("h5netcdf")
+        dims = ("depth", "time")
+        start = np.datetime64("2022-03-14T22:46:08", "ns")
+        coords = {
+            "depth": ("depth", np.arange(3.0), {"units": "meters"}),
+            "time": start + np.arange(4) * np.timedelta64(60, "s"),
+        }
+        # the bounds table comes first and has the cables' rank
+        data = {"time_bounds": (("time", "nv"), np.zeros((4, 2)))}
+        tags = {} if tag is None else {"tag": tag}
+        data |= {x: (dims, np.full((3, 4), i), tags) for i, x in enumerate(cables)}
+        data |= {"length": ((), 3.0), "reference": (("time",), np.ones(4))}
+        dataset = xr.Dataset(data, coords=coords, attrs=attrs or {})
+        dataset.to_netcdf(path, engine="h5netcdf")
+        return path
+
+    @pytest.fixture
+    def cable_path(self, tmp_path):
+        """A file with up and down cables."""
+        return self._write_cables(tmp_path / "cables.nc")
+
+    def test_each_shared_variable_is_a_patch(self, cable_path):
+        """Variables sharing the payload dimensions read as keyed patches."""
+        assert dc.get_format(cable_path) == ("NETCDF_CF", "0")
+        patches = {x._source.key: x for x in dc.spool(cable_path)}
+        assert set(patches) == {"up_data", "down_data"}
+        assert np.all(patches["up_data"].data == 0)
+        assert np.all(patches["down_data"].data == 1)
+        patch = patches["down_data"]
+        assert patch.attrs.tag == "down_data"
+        assert patch.get_coord("time").min() == np.datetime64("2022-03-14T22:46:08")
+        assert patch.get_coord("depth").units == dc.get_quantity("m")
+
+    def test_one_variable_with_helpers(self, tmp_path):
+        """One payload beside helper variables reads, keeping its own tag."""
+        path = self._write_cables(tmp_path / "one.nc", cables=("up_data",))
+        (patch,) = dc.spool(path)
+        assert patch._source.key == "up_data"
+        assert patch.shape == (3, 4)
+        assert patch.attrs.tag == ""
+
+    def test_selection_reads_the_keyed_variable(self, cable_path):
+        """A window reads only its own variable's samples."""
+        end = np.datetime64("2022-03-14T22:47:08")
+        spool = dc.spool(cable_path).select(time=(None, end))
+        assert sorted(x.data.sum() for x in spool) == [0, 6]
+
+    @pytest.mark.parametrize("tag", [None, "", "fiber"])
+    def test_variables_stay_apart_when_chunked(self, tmp_path, tag):
+        """Chunking does not merge one variable into the other."""
+        path = self._write_cables(tmp_path / "cables.nc", tag=tag)
+        spool = dc.spool(path).chunk(time=None)
+        assert sorted(x.attrs.tag for x in spool) == ["down_data", "up_data"]
+
+    def test_bounds_and_order(self, tmp_path):
+        """A bounds table is not a payload; dimension order does not matter."""
+        xr = pytest.importorskip("xarray")
+        time = ("time", np.arange(4.0), {"bounds": "time_bounds"})
+        dataset = xr.Dataset(
+            {
+                "time_bounds": (("time", "nv"), np.zeros((4, 2))),
+                "a": (("time", "x"), np.ones((4, 3))),
+                "b": (("x", "time"), np.ones((3, 4))),
+            },
+            coords={"time": time},
+        )
+        dataset.to_netcdf(tmp_path / "ab.nc", engine="h5netcdf")
+        spool = dc.spool(tmp_path / "ab.nc")
+        assert sorted(x._source.key for x in spool) == ["a", "b"]
+        single = dataset.drop_vars(["a", "b"]).assign(t=(("time",), np.ones(4)))
+        single.to_netcdf(tmp_path / "t.nc", engine="h5netcdf")
+        assert [x._source.key for x in dc.spool(tmp_path / "t.nc")] == ["t"]
+
+    def test_claims_what_version_1_8_does_not(self, tmp_path, minimal_cf_netcdf_path):
+        """An old CF version is version 0; CF 1.8 and groups-only files are not."""
+        old_cf = self._write_cables(
+            tmp_path / "old.nc", attrs={"Conventions": "CF-1.5"}
+        )
+        assert dc.get_format(old_cf) == ("NETCDF_CF", "0")
+        grouped = tmp_path / "grouped.nc"
+        pytest.importorskip("xarray").Dataset({"a": (("t",), np.ones(3))}).to_netcdf(
+            grouped, engine="h5netcdf", group="g"
+        )
+        io = netcdf_core.NetCDFNoCF()
+        for path in (minimal_cf_netcdf_path, grouped):
+            with h5py.File(path) as h5:
+                assert io.get_format(h5) is False
+        assert not io.implements_write
+
+    def test_fallbacks_are_tried_last(self):
+        """Every fallback reader comes after every other reader."""
+        flags = [x.fallback for x in dc.io.FiberIO.manager._get_prioritized_list()]
+        assert True in flags
+        assert flags == sorted(flags)
+
+    def test_not_the_next_files_guess(self, cable_path):
+        """A Silixa file scanned after a version 0 file is still Silixa."""
+        other = cable_path.parent / "silixa.h5"
+        other.write_bytes(fetch("silixa_h5_ingv_1.h5").read_bytes())
+        formats = [x.source_format for x in dc.scan([cable_path, other])]
+        assert formats == ["NETCDF_CF", "NETCDF_CF", "Silixa_H5"]
+
+    def test_object_coordinate_skips_only_its_file(self, cable_path):
+        """A time on a non-standard calendar fails its own file, not the scan."""
+        xr = pytest.importorskip("xarray")
+        attrs = {"units": "days since 2000-01-01", "calendar": "noleap"}
+        dataset = xr.Dataset(
+            {"a": (("time", "x"), np.ones((3, 2)))},
+            coords={"time": ("time", [0, 1, 2], attrs)},
+        )
+        dataset.to_netcdf(cable_path.parent / "noleap.nc", engine="h5netcdf")
+        with pytest.warns(UserWarning, match="Failed to scan"):
+            contents = dc.spool(cable_path.parent).update().get_contents()
+        assert set(contents["source_patch_key"]) == {"up_data", "down_data"}
