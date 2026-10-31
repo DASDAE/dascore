@@ -42,11 +42,12 @@ import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io import FiberIO
-from dascore.io.utils import resolve_keyed_source, windows_to_slices
+from dascore.io.utils import resolve_keyed_source
 from dascore.utils.io import LocalPath
 from dascore.utils.misc import optional_import
 
 from .utils import (
+    _allocate_rows,
     _can_merge_summaries,
     _coalesce_source_traces,
     _detect_format,
@@ -140,15 +141,9 @@ class MSeedV2(FiberIO):
         """Copy selected record slices directly into their final output arrays."""
         arrays, copies = [], defaultdict(list)
         for windows, key in requests:
-            summaries = sorted(
-                resolve_keyed_source(groups, key),
-                key=lambda item: (item.station, item.source_id),
+            selected, time, array = _allocate_rows(
+                resolve_keyed_source(groups, key), windows
             )
-            dtype = np.result_type(*[item.dtype for item in summaries])
-            shape = (len(summaries), summaries[0].sample_count)
-            channels, time = windows_to_slices(windows, shape)
-            selected = summaries[channels]
-            array = np.empty((len(selected), time.stop - time.start), dtype=dtype)
             arrays.append(array)
             for row, summary in enumerate(selected):
                 offset = 0
