@@ -53,7 +53,7 @@ class NeubrexRFSV1(H5ArrayMixin, FiberIO):
         return self.version if rfs_utils._is_neubrex(resource) else None
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type = ("distance",)
     ) -> list[dc.PatchMeta]:
         """Get the attributes of a resource belong to this type."""
         cm = rfs_utils._get_coord_manager(resource, snap)
@@ -75,7 +75,7 @@ class NeubrexDASV1(H5ArrayMixin, FiberIO):
         return self.version if das_utils._is_neubrex(resource) else None
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Get the attributes of this format from File."""
         acoustic = resource["Acoustic"]

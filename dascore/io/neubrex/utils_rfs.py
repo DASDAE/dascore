@@ -1,8 +1,7 @@
 """Utilities functions for Neubrex IO support"""
 
 import dascore as dc
-from dascore.core.coords import get_coord
-from dascore.io.utils import should_snap
+from dascore.io.utils import stored_coord
 from dascore.utils.misc import maybe_get_items
 
 
@@ -20,26 +19,16 @@ def _is_neubrex(h5fi):
 
 def _get_coord_manager(h5fi, snap=True):
     """Get a coordinate manager from the file."""
-
-    def _get_time_coord(h5fi, snap):
-        """Get the time coordinate."""
-        # Unix stamps are in us for test files, not sure if always true.
-        unix_stamps = dc.to_datetime64(h5fi["stamps_unix"][:] / 1_000_000)
-        if should_snap(snap, "time"):
-            time_coord = dc.get_coord(data=unix_stamps).snap()
-        else:
-            time_coord = get_coord(data=unix_stamps, snap=False)
-        return time_coord
-
-    def _get_dist_coord(h5fi):
-        """Get the distance (depth) coordinate."""
-        depth = h5fi["depth"][:]
-        return get_coord(data=depth, snap=should_snap(snap, "distance"))
-
-    coords = {
-        "time": _get_time_coord(h5fi, snap=snap),
-        "distance": _get_dist_coord(h5fi),
-    }
+    # Unix stamps are in us for test files, not sure if always true.
+    time = stored_coord(
+        h5fi["stamps_unix"],
+        snap,
+        name="time",
+        where=h5fi,
+        decode=lambda x: dc.to_datetime64(x / 1_000_000),
+    )
+    distance = stored_coord(h5fi["depth"], snap, name="distance", where=h5fi)
+    coords = {"time": time, "distance": distance}
     return dc.get_coord_manager(coords=coords, dims=("time", "distance"))
 
 

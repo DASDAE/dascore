@@ -190,7 +190,8 @@ class VelocityToStrainRateEdgeless(PatchProcessor):
         # Need to get distance values between current ones.
         dists = coord.values
         new_dist = (dists[step_multiple:] + dists[:-step_multiple]) / 2
-        new_coords = meta.coords.update(distance=new_dist)
+        # midpoints keep the distance units; what rode the channels cannot
+        new_coords = meta.coords.update(distance=coord.update(values=new_dist))
 
         # Handle unit conversions.
         new_data_units = None

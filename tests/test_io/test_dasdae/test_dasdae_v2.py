@@ -68,7 +68,7 @@ class TestNodeCodec:
         """A coordinate reads back equal to what was written."""
         coord = CASES[name]
         _save_coord(coord, name, h5, compact=True)
-        back = _read_coord(h5[name], name, {}, snap=True)
+        back = _read_coord(h5[name], name, {}, snap=False)
         assert back == coord
         assert back.dtype == coord.dtype
 
@@ -77,7 +77,7 @@ class TestNodeCodec:
         coord = get_coord(start=T0, step=(1, 1024), shape=(10**9,))
         _save_coord(coord, "long", h5, compact=True)
         assert h5["long"].shape == (0,)
-        back = _read_coord(h5["long"], "long", {}, snap=True)
+        back = _read_coord(h5["long"], "long", {}, snap=False)
         assert back == coord
 
     def test_every_node_states_its_class(self, h5):
@@ -95,7 +95,7 @@ class TestNodeCodec:
         coord = get_coord(start=start, step=np.longdouble("0.1"), shape=(10,))
         _save_coord(coord, "wide", h5, compact=True)
         assert h5["wide"].shape == (10,)
-        back = _read_coord(h5["wide"], "wide", {}, snap=True)
+        back = _read_coord(h5["wide"], "wide", {}, snap=False)
         assert back.dtype == coord.dtype
         assert np.array_equal(back.values, coord.values)
 
@@ -109,7 +109,7 @@ class TestNodeCodec:
         jitter = NumericCoord.from_labels(np.array([0.0, 1.0, 2.0005, 3.0, 4.0]))
         coord = concat_coords(jitter, get_coord(start=10.0, stop=15.0, step=1.0))
         _save_coord(coord, "jitter", h5, compact=True)
-        back = _read_coord(h5["jitter"], "jitter", {}, snap=True)
+        back = _read_coord(h5["jitter"], "jitter", {}, snap=False)
         np.testing.assert_array_equal(back.values, coord.values)
 
     @pytest.mark.parametrize(
@@ -123,7 +123,7 @@ class TestNodeCodec:
         name = f"slice_{indexer.start}_{indexer.stop}_{indexer.step}"
         _save_coord(coord, name, h5, compact=True)
         assert h5[name].shape == (0,)
-        back = _read_coord(h5[name], name, {}, snap=True)
+        back = _read_coord(h5[name], name, {}, snap=False)
         assert back.values.tobytes() == parent.values[indexer].tobytes()
         assert back.data_id == coord.data_id
 
@@ -134,7 +134,7 @@ class TestNodeCodec:
         coord = parent[89:2:-2]
         name = f"window_{type(step).__name__}"
         _save_coord(coord, name, h5, compact=True)
-        back = _read_coord(h5[name], name, {}, snap=True)
+        back = _read_coord(h5[name], name, {}, snap=False)
         assert back.values.tobytes() == parent.values[89:2:-2].tobytes()
         assert back.data_id == coord.data_id
 
@@ -144,7 +144,7 @@ class TestNodeCodec:
             start=np.float32(92.97747), step=0.49223355932786406, shape=(5_482_063,)
         )
         _save_coord(coord, "mixed", h5, compact=True)
-        back = _read_coord(h5["mixed"], "mixed", {}, snap=True)
+        back = _read_coord(h5["mixed"], "mixed", {}, snap=False)
         assert len(back) == len(coord)
         assert back == coord
 
@@ -179,7 +179,7 @@ class TestVersion2Files:
         dc.write(gapped_patch, tmp_path / "gap.h5", "dasdae")
         tree = dc.spool(tmp_path).update().io.to_xarray()
         leaves = [x for x in tree.subtree if "data" in x.data_vars]
-        pieces = list(dc.spool([gapped_patch]))
+        pieces = list(gapped_patch.split_gaps())
         assert len(leaves) == len(pieces)
         for leaf, piece in zip(leaves, pieces, strict=True):
             assert np.array_equal(leaf["data"].values, piece.data)
@@ -255,12 +255,12 @@ class TestVersion2Files:
 
 
 class TestMultiRunRoundTrip:
-    """A coordinate of several exact runs is written as its pieces."""
+    """A coordinate of several exact runs is written whole, as its runs."""
 
     @pytest.mark.parametrize("rate", [1000, 1024, 3000])
     @pytest.mark.parametrize("layout", ["hole", "strided", "off_lattice"])
     def test_round_trip(self, rate, layout, tmp_path):
-        """Each piece reads back with the coordinate and data it was written with."""
+        """The patch reads back with the coordinate and data it was written with."""
         full = get_coord(start=T0, step=(1, rate), shape=(60,))
         if layout == "hole":
             coord = concat_coords(full[:10], full[11:])
@@ -272,10 +272,7 @@ class TestMultiRunRoundTrip:
             coord = concat_coords(full, other)
         data = np.arange(float(len(coord)))
         patch = dc.Patch(data=data, coords={"time": coord}, dims=("time",))
-        pieces = list(dc.spool([patch]))
-        back = dc.read(dc.write(patch, tmp_path / "runs.h5", "dasdae")).sort("time")
-        assert len(back) == len(pieces)
-        for read, piece in zip(back, pieces, strict=True):
-            out, expected = read.get_coord("time"), piece.get_coord("time")
-            assert out == expected and out.step_exact == expected.step_exact
-            np.testing.assert_array_equal(read.data, piece.data)
+        (read,) = dc.read(dc.write(patch, tmp_path / "runs.h5", "dasdae"))
+        out = read.get_coord("time")
+        assert out == coord and out.step_exact == coord.step_exact
+        np.testing.assert_array_equal(read.data, patch.data)

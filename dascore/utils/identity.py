@@ -53,6 +53,7 @@ import pandas as pd
 from pandas.core.util.hashing import hash_pandas_object
 from pint import Quantity, Unit
 
+from dascore.config import DascoreConfig, get_config
 from dascore.exceptions import ParameterError
 from dascore.models.base import DascoreBaseModel, model_values
 from dascore.models.registry import TAG_FIELD, get_model_tag
@@ -461,21 +462,38 @@ def _only_the_window_moved(coords, new_coords) -> bool:
     )
 
 
-def read_operation_id(snap) -> str | None:
+def read_operation_id(snap, default=True) -> str | None:
     """
     Return the id of decoding a resource under non-default options, or None.
 
-    `snap` changes which coordinates the same bytes decode to, so a
-    non-default value makes a different array; the default reads the
-    stored thing itself and derives nothing. Which dimensions are named,
-    and how, is the same decode however it was spelled.
+    `snap` changes which coordinates the same bytes decode to, so a value
+    other than the format's `default` makes a different array; the default,
+    which None asks for, reads the stored thing itself and derives nothing.
+    Which dimensions are named, and how, is the same decode however it was
+    spelled. Where anything is snapped, `dascore.config.max_shift` decides
+    which labels are put on a grid, so another one is part of the decode.
     """
+    names = _snap_names(default if snap is None else snap)
+    options: dict[str, Any] = {}
+    if names != _snap_names(default):
+        options["snap"] = names or False
+    if names and (shift := get_config().max_shift) != _DEFAULT_MAX_SHIFT:
+        options["max_shift"] = shift
+    return operation_id("Read", options) if options else None
+
+
+# The max_shift a read assumes when its identity names none.
+_DEFAULT_MAX_SHIFT = DascoreConfig.model_fields["max_shift"].default
+
+
+def _snap_names(snap) -> bool | list[str]:
+    """True for every dimension, else the sorted names a snap option gives."""
     if snap is True:
-        return None
+        return True
     # No dimension named is snapping turned off, and a name given twice is
     # given once.
     names = () if snap is False else {snap} if isinstance(snap, str) else set(snap)
-    return operation_id("Read", {"snap": sorted(names) or False})
+    return sorted(names)
 
 
 def with_ids(attrs):

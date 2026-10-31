@@ -32,7 +32,7 @@ class XdasV1(FiberIO):
         return self.version if is_xdas_file(resource) else None
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Describe each signal from its coordinates; no samples are read."""
         return [meta for meta, *_ in get_pieces(resource, snap).values()]

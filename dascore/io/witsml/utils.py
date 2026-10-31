@@ -11,7 +11,7 @@ import numpy as np
 import dascore as dc
 from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.utils import get_gridded_coord, parse_units, should_snap
+from dascore.io.utils import parse_units, stored_coord
 
 _W = {"w": "http://www.witsml.org/schemas/1series"}
 NS = f"{{{_W['w']}}}"
@@ -205,14 +205,20 @@ def get_coords(log: WitsmlLog, snap) -> dc.CoordManager:
     ``sample_span`` how long the reading ran.
     """
     units = _get_units(log.units[log.index])
-    if not should_snap(snap, "distance"):
-        distance = get_coord(data=log.column(log.index), units=units, snap=False)
-    elif log.header["startIndex"] and log.header["endIndex"]:
+    labels = log.column(log.index)
+    start = step = None
+    if log.header["startIndex"] and log.header["endIndex"] and len(labels) > 1:
         start, end = float(log.header["startIndex"]), float(log.header["endIndex"])
-        grid = np.linspace(start, end, len(log.rows))
-        distance = get_gridded_coord(grid, units=units)
-    else:
-        distance = get_gridded_coord(log.column(log.index), units=units)
+        step = (end - start) / (len(labels) - 1)
+    distance = stored_coord(
+        labels,
+        snap,
+        name="distance",
+        where=log.where,
+        start=start,
+        step=step,
+        units=units,
+    )
     start = dc.to_datetime64(log.get("startDateTimeIndex", "minDateTimeIndex"))
     end = dc.to_datetime64(log.get("endDateTimeIndex", "maxDateTimeIndex"))
     coords = {

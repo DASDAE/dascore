@@ -7,15 +7,18 @@ current coord-family and string-coordinate design notes.
 from __future__ import annotations
 
 import abc
+import dataclasses
 import itertools
 import math
 import re
+import warnings
 from collections.abc import Mapping, Sequence, Sized
 from contextlib import suppress
 from dataclasses import dataclass, field, replace
 from datetime import timedelta
 from fractions import Fraction
 from functools import cache
+from pathlib import Path
 from types import EllipsisType
 from typing import (
     TYPE_CHECKING,
@@ -30,6 +33,7 @@ from uuid import uuid4
 import numpy as np
 import pandas as pd
 from pydantic import (
+    Field,
     ValidationError,
     field_validator,
     model_validator,
@@ -70,7 +74,7 @@ from dascore.utils.display import (
     span_text,
 )
 from dascore.utils.docs import compose_docstring, get_docstring
-from dascore.utils.gaps import GapTolerance
+from dascore.utils.gaps import GapTolerance, RunRecord, run_holes
 from dascore.utils.identity import H
 from dascore.utils.mapping import FrozenDict
 from dascore.utils.misc import (
@@ -147,6 +151,20 @@ def _is_translation_equivariant(func, data):
         return bool(np.allclose(shifted, expected, equal_nan=True))
     except TypeError:
         return True
+
+
+def _warn_order_missing(missing) -> None:
+    """Warn that order dropped values (or positions) the coordinate lacks."""
+    if not len(missing):
+        return
+    shown = ", ".join([str(x) for x in missing[:3]] + ["..."] * (len(missing) > 3))
+    msg = (
+        f"order dropped {len(missing)} value(s) the coordinate does not hold "
+        f"({shown}); from DASCore 0.1.26 it raises. Select only values the "
+        "coordinate holds."
+    )
+    prefix = str(Path(dc.__file__).parent)
+    warnings.warn(msg, FutureWarning, skip_file_prefixes=(prefix,))
 
 
 def _reduce_time_like(func, data):
@@ -229,12 +247,28 @@ def _scalar_dtype(dtype: np.dtype, name: str) -> np.dtype:
     return np.dtype(f"timedelta64[{unit}]") if name == "step" else dtype
 
 
+def _conformed_run(run, dtype) -> RunRecord:
+    """A run record, or its dumped mapping, with values in a summary's dtype."""
+    fields = run if isinstance(run, Mapping) else dataclasses.asdict(run)
+    values = {
+        name: ensure_consistent_dtype(fields.get(name), name, dtype)
+        for name in ("min", "max", "step")
+    }
+    position = fields.get("position")
+    if position is not None and not _is_null(position):
+        position = int(position)
+    return RunRecord(int(fields["count"]), position=position, **values)
+
+
 class CoordSummary(DascoreBaseModel):
     """
     A summary for coordinates.
 
     Provides enough information for indexing coordinates and creating range
-    coordinates.
+    coordinates. Like the coordinate, it states a `step` (None if it has
+    none) and whether the labels are `jittered` or `gapped` on it; `runs`
+    are the coordinate's run records, kept for a coordinate of more than
+    one and at most `max_index_runs`.
     """
 
     # Defaulted because the before-validator below derives it from min
@@ -251,11 +285,20 @@ class CoordSummary(DascoreBaseModel):
     step_numerator: int | None = None
     step_denominator: int | None = None
     origin_offset: int | None = None
+    jittered: bool = False
+    gapped: bool = False
+    # How far, in steps, labels sit from the grid through the first one.
+    offset_min: float | None = None
+    offset_max: float | None = None
+    # How many runs the coordinate is, cut at its holes; None when unknown.
+    run_count: int | None = None
+    # Left out of the repr, which a long list would swamp.
+    runs: tuple[RunRecord, ...] | None = Field(default=None, repr=False)
 
     @property
     def is_range_like(self) -> bool:
         """Return True when the summary can reconstruct an evenly sampled coord."""
-        return not pd.isnull(self.step)
+        return not (pd.isnull(self.step) or self.jittered or self.gapped)
 
     @model_validator(mode="before")
     @classmethod
@@ -272,6 +315,8 @@ class CoordSummary(DascoreBaseModel):
             for name in ["min", "max", "step"]:
                 val = data.get(name)
                 data[name] = ensure_consistent_dtype(val, name, dtype)
+            if runs := data.get("runs"):
+                data["runs"] = tuple(_conformed_run(x, dtype) for x in runs)
         return data
 
     @model_validator(mode="after")
@@ -519,6 +564,7 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
     _rich_style = dascore_styles["default_coord"]
     _evenly_sampled = False
     _partial = False
+    _grid = None  # the one evenly sampled run of a numeric coordinate
 
     @property
     def data(self) -> ArrayLike:
@@ -585,7 +631,9 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
         """Select values based on an array of values."""
         coord_array = self.values
         # First simply filter arg values to only include those in the index
-        values_to_find = values_to_find[np.isin(values_to_find, coord_array)]
+        held = np.isin(values_to_find, coord_array)
+        _warn_order_missing(values_to_find[~held])
+        values_to_find = values_to_find[held]
         # Handle fast cases for sorted and reverse sorted coords.
         if self.sorted:
             inds = self._get_value_index(coord_array, values_to_find)
@@ -609,7 +657,9 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             msg = "Using an array input for select with samples requires integer dtype."
             raise CoordError(msg)
         # Filter out bad indices
-        array = array[np.abs(array) < len(self)]
+        held = (array >= -len(self)) & (array < len(self))
+        _warn_order_missing(array[~held])
+        array = array[held]
         return self[array], array
 
     def _select_by_value_array(self, array):
@@ -931,6 +981,16 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
     def evenly_sampled(self) -> bool:
         """Returns True if the coord is evenly sampled."""
         return self._evenly_sampled
+
+    @property
+    def jittered(self) -> bool:
+        """Whether some label sits off the coordinate's grid by under half a step."""
+        return False
+
+    @property
+    def gapped(self) -> bool:
+        """Whether a position of the coordinate's grid holds no sample."""
+        return False
 
     @property
     @abc.abstractmethod
@@ -1294,7 +1354,9 @@ class BaseCoord(RichRepr, DascoreBaseModel, abc.ABC):
             values = update_fields.pop("values", None)
             out = out.update_limits(**update_fields)
             if values is not None:
-                out = get_coord(data=values, units=units)
+                # new values are in the units given, else the coordinate's own
+                kept = self.units if units is None else units
+                out = get_coord(data=values, units=kept)
         if units is not None:
             out = out.convert_units(units)
         return out
@@ -1541,6 +1603,12 @@ _NS_PER_S = 10**9
 # A float spacing this close to a whole number of steps is on the grid;
 # a float grid such as 0.1 cannot be held exactly, an off-grid label can.
 _GRID_RTOL = 1e-6
+# A float label this many units in the last place of the largest label, in
+# the dtype it was stored in, from its grid position is still on the grid.
+_GRID_ULPS = 4
+# Inference accepts a fractional step only this many ticks long or more; a
+# finer one would read an integer array missing one value as a grid.
+_MIN_FRACTION_TICKS = 100
 _BLANK_QUERY_MSG = "A coordinate without labels selects only by samples."
 
 
@@ -1602,26 +1670,153 @@ def _diffs(values) -> np.ndarray:
     return np.diff(values)
 
 
-def _on_grid(deltas, step) -> np.ndarray:
+def _on_grid(deltas, step, jitter: bool = False) -> np.ndarray:
     """
     The whole number of steps in each spacing, raising when one is not whole.
 
     Ticks (time and integer) must divide exactly; floats within a relative
-    tolerance of the step.
+    tolerance of the step. With ``jitter`` a spacing is the nearest whole
+    number of steps, at least one, and may miss it by under half a step.
     """
     deltas, step = np.asarray(deltas), np.asarray(step)
     if deltas.dtype.kind in "mM":
         deltas, step = deltas.astype("timedelta64[ns]").astype(np.int64), _to_tick(step)
-    if np.issubdtype(deltas.dtype, np.integer):
+    exact = np.issubdtype(deltas.dtype, np.integer)
+    if exact and not jitter:
         counts, remainder = np.divmod(deltas, step)
         off = remainder != 0
     else:
         counts = np.round(deltas / step)
-        off = np.abs(deltas - counts * step) > np.abs(step) * _GRID_RTOL
+        miss = np.abs(deltas - counts * step)
+        off = 2 * miss >= np.abs(step) if jitter else miss > np.abs(step) * _GRID_RTOL
+    if jitter and np.any(counts < 1):
+        msg = f"Values are not on a grid of step {step}: two sit on one position."
+        raise CoordError(msg)
     if np.any(off):
-        msg = f"Values are not on a grid of step {step}: spacing {deltas[off][0]}."
+        msg = f"Values are not on a grid of step {step}: spacing {deltas[off][0]}"
+        msg += ", half a step or more off it." if jitter else "."
         raise CoordError(msg)
     return counts.astype(np.int64)
+
+
+def _stored_float_dtype(values) -> np.dtype:
+    """The dtype float labels were stored in: float32 if float64 ones fit it."""
+    if values.dtype == np.float64:
+        with np.errstate(over="ignore", invalid="ignore"):
+            narrow = values.astype(np.float32)
+        if np.array_equal(narrow, values):
+            return np.dtype(np.float32)
+    return values.dtype
+
+
+def _float_allowance(values, step) -> float:
+    """How far a float label may sit from its grid position and be on it."""
+    dtype = _stored_float_dtype(values)
+    scale = dtype.type(np.max(np.abs(values)))
+    ulps = _GRID_ULPS * float(np.spacing(scale))
+    return max(_GRID_RTOL * abs(float(step)), ulps)
+
+
+def _grid_offsets(values, counts, step) -> tuple[np.ndarray, float]:
+    """
+    Each label's offset from its position on the grid through the first.
+
+    Positions are the running total of ``counts``. Offsets are in ticks
+    (time and integer) or units, returned with the step's size in the same,
+    so integer offsets stay exact until divided.
+    """
+    positions = np.concatenate([[0], np.cumsum(counts)])
+    if values.dtype.kind in "iumM":
+        ticks = _diffs(values)
+        if ticks.dtype.kind == "m":
+            ticks = ticks.astype("timedelta64[ns]").astype(np.int64)
+        size = abs(_to_tick(step))
+        rel = np.concatenate([[0], np.cumsum(ticks)])
+        return rel - positions * _to_tick(step), size
+    size = abs(float(step))
+    rel = np.asarray(values, dtype=np.float64) - float(values[0])
+    return rel - positions * float(step), size
+
+
+def _grid_spread(values, counts, step) -> float:
+    """
+    How far apart the labels' offsets from their grid positions spread, in steps.
+
+    Every label is checked, so drift shows even where each spacing is close
+    to a whole number of steps.
+    """
+    offsets, size = _grid_offsets(values, counts, step)
+    return float(np.max(offsets) - np.min(offsets)) / size
+
+
+def _check_drift(values, counts, step) -> None:
+    """Raise where labels at these positions drift half a step from the grid."""
+    if _grid_spread(values, counts, step) >= 1:
+        msg = (
+            f"Values are not on a grid of step {step}: they drift half a step "
+            "or more from it. State the step they follow, or snap them with "
+            "snap_coords."
+        )
+        raise CoordError(msg)
+
+
+def _on_step_grid(values, counts, step) -> bool:
+    """Whether labels at these positions sit on the step's grid, as stored."""
+    spread = _grid_spread(values, counts, step)
+    if values.dtype.kind == "f":
+        return spread * abs(float(step)) <= 2 * _float_allowance(values, step)
+    return spread == 0
+
+
+def _fitted_step(values):
+    """
+    The step fitted over the labels' span, or None where they have none.
+
+    Every label must sit within half a step of the grid fitted through the
+    end labels, and of a grid of the step kept (whole ticks of the labels'
+    own unit for integers and time), and every spacing within half a step
+    of one step, so a skipped position is never read as jitter.
+    """
+    if values.dtype.kind == "u" and int(np.max(values)) > np.iinfo(np.int64).max:
+        return None  # their spacings would wrap in int64
+    if values.dtype.kind in "mM" and _tick_scale(values.dtype) is None:
+        return None  # months and years have no fixed length
+    rel = np.concatenate([[0], np.cumsum(_diffs(values).astype(np.float64))])
+    fit = rel[-1] / (len(values) - 1)
+    if not fit or not np.isfinite(fit):
+        return None
+    # every label against the grid fitted through the end labels
+    if np.max(np.abs(rel / fit - np.arange(len(values)))) >= 0.5:
+        return None
+    if values.dtype.kind == "f":
+        step = fit
+    elif values.dtype.kind in "mM":
+        unit, count = np.datetime_data(values.dtype.str)
+        step = np.timedelta64(round(fit) * count, cast("Any", unit))
+    else:
+        step = round(fit)
+    try:
+        counts = _on_grid(_diffs(values), step, jitter=True)
+    except CoordError:
+        return None
+    if np.any(counts != 1) or _grid_spread(values, counts, step) >= 1:
+        return None
+    return step
+
+
+def _ticks_as(ticks, dtype) -> np.ndarray:
+    """
+    Labels of ``dtype`` from an exact grid's ticks.
+
+    Time grids count nanoseconds, so a coarser unit takes each label as the
+    floor of the nanosecond one; the floor of a floor is the floor, so a
+    grid found in microseconds keeps every microsecond label.
+    """
+    dtype = np.dtype(dtype)
+    ticks = np.asarray(ticks)
+    if dtype.kind in "mM" and np.datetime_data(dtype.str)[0] != "ns":
+        return ticks.astype(f"{dtype.kind}8[ns]").astype(dtype)
+    return ticks.astype(dtype)
 
 
 def _to_tick(value) -> int:
@@ -1800,7 +1995,7 @@ class Grid:
         if self.exact:
             offset = self.phase
             ticks = (offset + indices.astype(np.int64) * self.step_num) // self.step_den
-            return np.asarray(self.origin + ticks).astype(dtype)
+            return _ticks_as(self.origin + ticks, dtype)
         indices = self.k0 + indices * self.stride
         start, step = self.origin, self.step_num
         num = self.count if self.parent_count is None else self.parent_count
@@ -2184,7 +2379,7 @@ def _promoted(values, dtype) -> Grid | None:
     diffs = _diffs(values)
     # A zero step would make one label answer for every sample, which
     # repeated labels do not; they stay as they are.
-    if len(np.unique(diffs)) != 1 or diffs[0] == diffs[0] * 0:
+    if len(np.unique(diffs)) != 1 or _is_null(diffs[0]) or diffs[0] == diffs[0] * 0:
         return None
     grid, _ = _range_run(dict(start=values[0], step=diffs[0], shape=(len(values),)))
     return grid if _grid_holds(grid, values, dtype) else None
@@ -2200,14 +2395,31 @@ def _simplest_between(low: Fraction, high: Fraction) -> Fraction:
     return whole + 1 / _simplest_between(1 / (high - whole), 1 / (low - whole))
 
 
+def _tick_scale(dtype) -> int | None:
+    """Nanoseconds per tick of a time dtype, 1 for integers, else None."""
+    dtype = np.dtype(dtype)
+    if dtype.kind in "iu":
+        return 1
+    if dtype.kind not in "mM":
+        return None
+    unit, count = np.datetime_data(dtype.str)
+    if unit in ("Y", "M", "generic"):  # no fixed length in nanoseconds
+        return None
+    nanoseconds = np.timedelta64(count, cast("Any", unit)) / np.timedelta64(1, "ns")
+    return int(nanoseconds) if float(nanoseconds).is_integer() else None
+
+
 def _fractional_grid(values) -> Grid | None:
-    """The simplest fractional-step grid whose labels are these exactly, if any."""
+    """
+    The simplest fractional-step grid whose labels are these exactly, if any.
+
+    The grid is searched in the labels' own tick unit (microseconds for
+    labels stored in microseconds) and must step at least
+    ``_MIN_FRACTION_TICKS`` ticks. A time grid counts nanoseconds.
+    """
     count = len(values)
     # the array's own kind, since object arrays can hold non-integral labels
-    if (
-        values.dtype.kind not in "iumM"
-        or _exact_dtype(values[0], values[-1], None, None) is None
-    ):
+    if (scale := _tick_scale(values.dtype)) is None:
         return None
     # astype, not view, honours byte order; ints and uints widen before any
     # subtraction can wrap.
@@ -2215,6 +2427,8 @@ def _fractional_grid(values) -> Grid | None:
     first, span = int(wide[0]), int(wide[-1]) - int(wide[0])
     if not span % (count - 1) or abs(first) + abs(span) >= 2**63:
         return None  # a span the count divides admits only a whole-tick grid
+    if abs(Fraction(span, count - 1)) < _MIN_FRACTION_TICKS:
+        return None
     ticks = wide - wide[0]
     index = np.arange(count, dtype=np.int64)
     offsets, scratch = np.empty_like(ticks), np.empty_like(ticks)
@@ -2235,7 +2449,12 @@ def _fractional_grid(values) -> Grid | None:
         offsets -= np.multiply(index, num, out=scratch)
         top, bottom = int(np.argmax(offsets)), int(np.argmin(offsets))
         if offsets[top] - offsets[bottom] < den:
-            return Grid(first, num, den, count, phase=int(offsets[top]))
+            phase = int(offsets[top]) * scale
+            grid = Grid(first * scale, num * scale, den, count, phase=phase)
+            with suppress(CoordError):  # nanoseconds can overflow a coarse unit
+                _check_grid(grid, values.dtype)
+                return grid
+            return None
         bound = Fraction(int(ticks[top] - ticks[bottom]) - 1, top - bottom)
         low, high = (bound, high) if top > bottom else (low, bound)
     return None
@@ -2338,6 +2557,11 @@ class NumericCoord(BaseCoord):
     coordinate with holes in it, where each boundary records a break in
     sampling without changing any label.
 
+    How the labels are sampled is said by `step` (None where they have no
+    grid) and two independent flags: `gapped`, where positions of the grid
+    hold no sample, and `jittered`, where labels sit off it by under half a
+    step. `evenly_sampled` means a step, neither jittered nor gapped.
+
     Coordinates are normally built with
     [`get_coord`](`dascore.core.coords.get_coord`) rather than directly.
 
@@ -2354,6 +2578,7 @@ class NumericCoord(BaseCoord):
     >>> other = get_coord(start=15.0, stop=25.0, step=1.0)
     >>> gappy = concat_coords(coord, other)
     >>> assert gappy.runs_count == 2 and gappy.missing().count == 5
+    >>> assert gappy.gapped and gappy.step == 1.0
     >>>
     >>> # Runs which continue exactly fuse back into one.
     >>> assert concat_coords(coord, get_coord(start=10.0, stop=20.0, step=1.0)) == \
@@ -2491,8 +2716,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         values
             The labels, of any shape.
         step
-            The grid the labels sit on; every spacing is then a whole
-            number of steps.
+            The grid the labels sit on; every spacing is then within half a
+            step of a whole number of steps. Labels off the grid make the
+            coordinate jittered, and skipped positions make it gapped.
         units
             Units for the coordinate.
         """
@@ -2512,7 +2738,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         return tuple(self._with_runs((x,)) for x in self.runs)
 
     @property
-    def _grid(self) -> Grid | None:
+    def _grid(self) -> Grid | None:  # type: ignore[override]
         """The one grid the coordinate is, or None."""
         runs = self.runs
         if len(runs) == 1 and isinstance(runs[0], Grid):
@@ -2669,8 +2895,54 @@ get_coord(start=0.0, stop=20.0, step=1.0)
 
     @property
     def evenly_sampled(self) -> bool:
-        """Returns True if the coord is one evenly sampled run."""
-        return self._grid is not None
+        """
+        Whether the coordinate has a step and is neither jittered nor gapped.
+
+        Examples
+        --------
+        >>> from dascore.core.coords import get_coord
+        >>> assert get_coord(start=0, stop=10, step=1).evenly_sampled
+        >>> holes = get_coord(data=[0, 1, 2, 5, 6], step=1)
+        >>> assert holes.gapped and not holes.evenly_sampled
+        >>> jitter = get_coord(data=[0.0, 1.1, 1.95, 3.02], step=1.0)
+        >>> assert jitter.jittered and jitter.step == 1.0
+        """
+        if self._grid is not None:
+            return True
+        if _is_null(self.step) or self._partial:
+            return False
+        return not (self.jittered or self.gapped)
+
+    @property
+    def jittered(self) -> bool:
+        """Whether some label sits off the step's grid, by under half a step."""
+        return self._offset_bounds() not in (None, (0.0, 0.0))
+
+    @property
+    def gapped(self) -> bool:
+        """Whether a position of the step's grid holds no sample."""
+        if _is_null(self.step) or self._partial:
+            return False
+        return any(run_holes(self._run_records()))
+
+    @cached_method
+    def _offset_bounds(self) -> tuple[float, float] | None:
+        """
+        How far, in steps, the labels sit from the grid through the first.
+
+        None without a step; zeros where every label sits on the grid.
+        """
+        if _is_null(self.step) or self._partial:
+            return None
+        if not any(isinstance(x, Labels) for x in self.runs):
+            # grids, and seams between them, sit on the step
+            return (0.0, 0.0)
+        values = np.asarray(self.values)
+        counts = _on_grid(_diffs(values), self.step, jitter=True)
+        if _on_step_grid(values, counts, self.step):
+            return (0.0, 0.0)
+        offsets, size = _grid_offsets(values, counts, self.step)
+        return (float(np.min(offsets)) / size, float(np.max(offsets)) / size)
 
     @property
     def step_exact(self) -> Fraction | None:
@@ -2704,6 +2976,8 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             if not len(indices):
                 return get_coord(data=np.empty(0, dtype=self.dtype), units=self.units)
             return self._slice_runs(indices)
+        if self.ndim == 1 and (taken := self._take(item)) is not None:
+            return taken
         out = self.values[item]
         if not np.ndim(out):
             return out
@@ -2711,19 +2985,89 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             # A grid states no label the arithmetic cannot restate, so the
             # result may be read back as one.
             return get_coord(data=out, units=self.units)
-        # Stored labels are held exactly, and a stride or a reorder can
-        # take the result off the declared grid, which then states nothing.
-        step = self.step
-        if step is not None and np.ndim(out) == 1 and is_strictly_monotonic(out):
-            with suppress(CoordError, ValidationError):
-                return get_coord(data=out, units=self.units, step=step, snap=False)
+        # arrays of positions were taken above; anything else is read exactly
         return get_coord(data=out, units=self.units, snap=False)
+
+    def _take(self, item) -> BaseCoord | None:
+        """
+        The samples at an array of positions, evaluating only those.
+
+        Strictly monotonic positions keep the step: removing samples leaves
+        holes, not a coarser step, unless the positions are one stride
+        apart, as a strided slice is. Others (a reorder or a repeat) have
+        none.
+        None where ``item`` is not an array of positions within the coord.
+        """
+        indices = np.asarray(item)
+        if indices.dtype == np.bool_ and indices.shape == self.shape:
+            indices = np.flatnonzero(indices)
+        if indices.ndim != 1 or indices.dtype.kind not in "iu" or not len(indices):
+            return None
+        if indices.dtype.kind == "i":  # unsigned ones are never negative
+            indices = np.where(indices < 0, indices + len(self), indices)
+        if indices.min() < 0 or indices.max() >= len(self):
+            return None
+        # signed, so a descending stride does not wrap
+        indices = indices.astype(np.intp)
+        diffs = np.diff(indices)
+        if len(diffs) and np.all(diffs == diffs[0]) and diffs[0]:
+            # positions one stride apart are that stride, as a slice states it
+            span = range(
+                int(indices[0]), int(indices[-1]) + np.sign(diffs[0]), diffs[0]
+            )
+            return self._slice_runs(span)
+        stride = 1 if np.all(diffs > 0) else -1 if np.all(diffs < 0) else 0
+        if not stride or _is_null(self.step):
+            # a reorder has no step, and labels with none gain none
+            values = self._get_index_values(indices)
+            return get_coord(data=values, units=self.units, snap=False)
+        edges = np.flatnonzero(diffs != stride) + 1
+        fractional = any(isinstance(x, Grid) and x.step_den > 1 for x in self.runs)
+        if len(edges) >= 64 and len(edges) * 100 >= len(indices) and not fractional:
+            # many short stretches: their labels are stored, not a run each
+            runs = [self._get_index_values(indices)]
+        else:
+            runs = []
+            for first, stop in zip(np.r_[0, edges], np.r_[edges, len(indices)]):
+                span = range(
+                    int(indices[first]), int(indices[stop - 1]) + stride, stride
+                )
+                runs.extend(self._window_runs(span, self.step))
+        with suppress(CoordError, ValidationError):
+            out = self._with_runs(runs)
+            if not self.jittered or self._kept_positions(out, indices):
+                return out
+        return self._with_runs(runs, step=None)
+
+    def _kept_positions(self, out, indices) -> bool:
+        """
+        Whether jittered labels taken at these indices keep their positions.
+
+        Positions are read back from the spacings, so jitter wider than half
+        a step between two kept labels can place them a position off; their
+        step then states nothing true.
+        """
+        values = np.asarray(self.values)
+        counts = _on_grid(_diffs(values), self.step, jitter=True)
+        kept = np.concatenate([[0], np.cumsum(counts)])[indices]
+        read = _on_grid(_diffs(out.values), out.step, jitter=True)
+        return bool(np.array_equal(np.abs(np.diff(kept)), read))
 
     def _slice_runs(self, indices: range) -> BaseCoord:
         """The coordinate holding the samples a range of positions names."""
-        stride = indices.step
         # a stride multiplies every spacing, the declared step included
-        step = None if _is_null(self.step) else self.step * abs(stride)
+        step = None if _is_null(self.step) else self.step * abs(indices.step)
+        runs = self._window_runs(indices, step)
+        # the widened step holds where the kept samples sit on it, else the
+        # runs restate one
+        if step is not None:
+            with suppress(CoordError, ValidationError):
+                return self._with_runs(runs, step=step)
+        return self._with_runs(runs, step=None)
+
+    def _window_runs(self, indices: range, step) -> list:
+        """The runs holding the samples a range of positions names, in order."""
+        stride = indices.step
         out = []
         offsets = self._run_offsets()
         # only the runs the positions reach, found by bisection
@@ -2745,13 +3089,7 @@ get_coord(start=0.0, stop=20.0, step=1.0)
                 window = run.window(first, stride, count)
                 out.append(self._promoted_labels(window, step))
         # a backwards range reads the runs from the last one
-        runs = out if stride > 0 else out[::-1]
-        # the widened step holds where the kept samples sit on it, else the
-        # runs restate one
-        if step is not None:
-            with suppress(CoordError, ValidationError):
-                return self._with_runs(runs, step=step)
-        return self._with_runs(runs, step=None)
+        return out if stride > 0 else out[::-1]
 
     def _promoted_labels(self, window: Labels, step) -> Grid | Labels:
         """A trimmed window as the grid it is, unless it contradicts the step."""
@@ -2941,8 +3279,15 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         labels past the next tick in that direction.
         """
         values = np.atleast_1d(values)
-        if values.dtype.kind in "mM":  # already nanoseconds, the tick
-            return values.astype("int64")
+        if values.dtype.kind in "mM":  # nanoseconds are the tick
+            ticks = values.astype(f"{values.dtype.kind}8[ns]").astype("int64")
+            if (scale := _tick_scale(self.dtype) or 1) > 1:
+                # a coarser unit floors each label: the labels past a bound
+                # are those whose grid value is past its edge in that unit
+                if forward == self.sorted:
+                    return -((-ticks) // scale) * scale
+                return (ticks // scale) * scale + scale - 1
+            return ticks
         if values.dtype.kind == "f":
             values = (np.ceil if forward == self.sorted else np.floor)(values)
         # A bound past the int64 range lies past the coordinate either way.
@@ -3060,9 +3405,10 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         Snap the coordinates to evenly sampled grid points.
 
         The min and max remain unchanged; every interior value may move
-        without bound.
+        without bound. Stored labels on their step's grid within float
+        rounding become that grid.
         """
-        if self.evenly_sampled or self._partial:
+        if self._grid is not None or self._partial:
             return self
         min_v, max_v = self.min(), self.max()
         if len(self) == 1:
@@ -3109,8 +3455,12 @@ get_coord(start=0.0, stop=20.0, step=1.0)
         # a run re-fit at another cadence no longer sits on the old step
         refits = [x for x in runs if isinstance(x, Grid) and x not in self.runs]
         kept = all(_same_step(x.step(self.dtype), self.step) for x in refits)
-        step = ... if kept else None
-        return self._with_runs(runs, dtype=np.result_type(*dtypes), step=step)
+        dtype = np.result_type(*dtypes)
+        if kept:
+            # refitting jittered runs need not leave their seams on one grid
+            with suppress(CoordError, ValidationError):
+                return self._with_runs(runs, dtype=dtype)
+        return self._with_runs(runs, dtype=dtype, step=None)
 
     def _settled(self, run, fit, nxt=None, keep_step=False) -> list[tuple]:
         """
@@ -3362,8 +3712,11 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             info["shape"] = self.shape
         if grid.exact and "step" not in kwargs:
             # the rounded step would move every label of a fractional grid
-            terms = (grid.step_num, grid.step_den, grid.phase)
-            return _grid_coord(terms, **{**info, **kwargs})
+            terms = _grid_terms(grid, self.dtype)
+            spec = {**info, **kwargs}
+            spec.pop("dtype", None)  # the grid's ticks state it
+            dtype = self.dtype if dtype_time_like(self.dtype) else None
+            return _grid_coord(terms, dtype=dtype, **spec)
         return get_coord(**{**info, **kwargs})
 
     # --- units
@@ -3462,15 +3815,64 @@ get_coord(start=0.0, stop=20.0, step=1.0)
     def _holes(self) -> list[tuple]:
         """Each hole as ``(first missing label, last missing label, count)``."""
         step, rows = self.step, []  # signed with the runs' direction
-        for before, count, grid in _skips(self.runs, step, self.dtype, self.sources):
+        skips = _skips(self.runs, step, self.dtype, self.sources)
+        for _, _, before, count, grid in skips:
             if count and grid is None:
                 rows.append(_hole(before, step, count))
             elif count:
                 grid = grid.sliced(len(grid), 1, count)
                 # Python integers, as a long outage overflows int64 ticks
-                ends = np.asarray(grid.end_ticks).astype(self.dtype)
+                ends = _ticks_as(grid.end_ticks, self.dtype)
                 rows.append((*ends, count, grid))
         return rows
+
+    @cached_method
+    def _run_records(self) -> tuple[RunRecord, ...]:
+        """
+        Each run, cut at the holes inside it, as a spool index stores it.
+
+        With a step, positions count steps from the first sample, so the
+        positions between two records are holes; without one, each run is
+        a record keeping its own step, if any.
+        """
+        step, dtype = self.step, self.dtype
+        if self._partial or self.ndim != 1 or not len(self):
+            count = self.shape[0] if self.ndim else 1
+            return (RunRecord(count, self.min(), self.max()),)
+        if _is_null(step):
+            return tuple(
+                RunRecord(
+                    len(run),
+                    *self._run_extent(run, 0, len(run)),
+                    step=run.step(dtype) if isinstance(run, Grid) else None,
+                )
+                for run in self.runs
+            )
+        holes: dict[int, list[tuple[int, int]]] = {}
+        for num, index, _, count, _ in _skips(self.runs, step, dtype, self.sources):
+            holes.setdefault(num, []).append((index, count))
+        out, position = [], 0
+        for num, run in enumerate(self.runs):
+            start = 0
+            for index, count in holes.get(num, ()):
+                if index:  # a hole inside a run ends a record there
+                    extent = self._run_extent(run, start, index)
+                    out.append(RunRecord(index - start, *extent, step, position))
+                    position += index - start
+                    start = index
+                position += count
+            extent = self._run_extent(run, start, len(run))
+            out.append(RunRecord(len(run) - start, *extent, step, position))
+            position += len(run) - start
+        return tuple(out)
+
+    def _run_extent(self, run, start: int, stop: int) -> tuple[Any, Any]:
+        """The least and greatest label of samples start to stop of one run."""
+        if isinstance(run, Grid):
+            ends = run.labels([start, stop - 1], self.dtype)
+        else:
+            ends = self._run_labels(run)[start:stop]
+        return np.nanmin(ends), np.nanmax(ends)
 
     # --- identity, summary and display
 
@@ -3499,25 +3901,35 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             str(np.dtype(self.dtype)),
             tuple(self._run_identity(x) for x in self.runs),
         )
-        if not self.evenly_sampled and not _is_null(self.step):
+        if self._grid is None and not _is_null(self.step):
             components += (("step", self._hash_scalar(self.step, "step")),)
         return components
 
     def to_summary(self, dims=()) -> CoordSummary:
-        """Get the summary info about the coord, exact grid included."""
+        """Get the summary info about the coord: its grid, flags and runs."""
         summary = super().to_summary(dims=dims)
-        if (grid := self._grid) is not None:
-            if not grid.exact:
-                return summary
-            terms = grid.canonical()[1:]
-            return summary.model_copy(
-                update=dict(zip(_EXACT_GRID_FIELDS, terms, strict=True))
+        records = self._run_records()
+        update: dict[str, Any] = {"run_count": len(records)}
+        if 1 < len(records) <= dc.get_config().max_index_runs:
+            update["runs"] = records
+        if (bounds := self._offset_bounds()) is not None:
+            update.update(
+                step=self.step,
+                jittered=self.jittered,
+                gapped=self.gapped,
+                offset_min=bounds[0],
+                offset_max=bounds[1],
             )
-        if self.runs_count == 1 and not _is_null(self.step):
-            # labels on a declared grid state its step when none is missing
-            if self.missing().complete:
-                return summary.model_copy(update={"step": self.step})
-        return summary
+        if (grid := self._grid) is not None and grid.exact:
+            if _tick_scale(self.dtype) != 1:
+                # Labels in a coarser time unit floor a nanosecond grid, which
+                # plans laid on whole nanoseconds would cut between; the row
+                # states no step, so they read the labels themselves.
+                update["step"] = None
+            else:
+                terms = grid.canonical()[1:]
+                update.update(zip(_EXACT_GRID_FIELDS, terms, strict=True))
+        return summary.model_copy(update=update)
 
     def _repr_fields(self) -> tuple[tuple[str, Text, bool], ...]:
         fields = super()._repr_fields()
@@ -3590,6 +4002,16 @@ def _runs_step(runs, declared, dtype, sources):
                 msg = "A declared step needs one-dimensional, monotonic values."
                 raise CoordError(msg)
         list(_skips(runs, step, dtype, sources))
+        if stored and len(runs) > 1:  # offsets may drift across the seams too
+            values = np.concatenate(
+                [
+                    _source(sources, x, dtype)
+                    if isinstance(x, Labels)
+                    else x.labels(np.arange(len(x)), dtype)
+                    for x in runs
+                ]
+            )
+            _check_drift(values, _on_grid(_diffs(values), step, jitter=True), step)
     except CoordError:
         if strict:
             raise
@@ -3615,28 +4037,35 @@ def _check_grid_spacings(runs, step, dtype):
 
 def _skips(runs, step, dtype, sources):
     """
-    Yield ``(label before, count, lattice run)`` per stretch of skipped positions.
+    Yield ``(run, index, label before, count, lattice run)`` per stretch skipped.
 
-    Raises where a spacing is not a whole number of steps. A seam between
-    runs of one lattice counts on that lattice (the run before it), since
-    floored labels of a fractional one need not divide it.
+    ``run`` and ``index`` place the first sample after the stretch: the
+    run it is in and its index there, 0 for the seam before a run. Raises
+    where a spacing is not a whole number of steps. Stored labels
+    may be jittered: each of their spacings, and a seam beside them, is
+    the nearest whole number of steps, missed by under half a step. A seam
+    between runs of one lattice counts on that lattice (the run before
+    it), since floored labels of a fractional one need not divide it.
     """
     for num, run in enumerate(runs):
         if num:
             prev = runs[num - 1]
             gap = _lattice_gap(prev, run)
             if gap is not None and gap >= 0 and prev.step(dtype) == step:
-                yield None, gap, prev
+                yield num, 0, None, gap, prev
             else:
                 before = _run_edges(prev, dtype, sources)[-1]
                 after = _run_edges(run, dtype, sources)[0]
-                count = _on_grid(np.asarray([after - before]), step)[0]
-                yield before, int(count) - 1, None
+                stored = isinstance(prev, Labels) or isinstance(run, Labels)
+                deltas = _diffs([before, after])
+                count = _on_grid(deltas, step, jitter=stored)[0]
+                yield num, 0, before, int(count) - 1, None
         if isinstance(run, Labels) and len(run) > 1:
             values = _source(sources, run, dtype)
-            counts = _on_grid(_diffs(values), step)
+            counts = _on_grid(_diffs(values), step, jitter=True)
+            _check_drift(values, counts, step)
             for i in np.flatnonzero(counts > 1):
-                yield values[i], int(counts[i]) - 1, None
+                yield num, int(i) + 1, values[i], int(counts[i]) - 1, None
 
 
 def _run_edges(run, dtype, sources) -> np.ndarray:
@@ -3776,36 +4205,52 @@ def _check_chain(coords, ascending: bool) -> None:
             raise CoordError(msg)
 
 
-def _labels_to_runs(values, step) -> tuple[tuple, np.dtype]:
+def _labels_to_runs(values, step) -> tuple[tuple, np.dtype, Any]:
     """
-    The runs exact labels state: one grid where one restates them, else one
-    stored run. A declared step also splits the labels at their holes.
+    The runs labels state, their dtype, and the step they sit on.
+
+    A declared step places them on its grid. Otherwise they are one grid
+    where one restates them, else one stored run, whose step is fitted
+    where every label sits within half a step of it.
     """
     if not _is_null(step):
-        return _step_runs(values, step)
+        return (*_step_runs(values, step), step)
+    if values.dtype.kind not in "iufmM":  # labels which need not subtract
+        return (values,), values.dtype, None
     if (grid := _fractional_grid(values)) is not None and _grid_holds(
         grid, values, values.dtype
     ):
-        return (grid,), values.dtype
+        return (grid,), values.dtype, None
     steps = [_diffs(values)[0]]
     if values.dtype.kind == "f":
         steps.append((values[-1] - values[0]) / (len(values) - 1))
     for spacing in steps:
-        with suppress(CoordError, OverflowError, ValueError), np.errstate(all="ignore"):
+        errors = (CoordError, OverflowError, TypeError, ValueError)
+        with suppress(*errors), np.errstate(all="ignore"):
             grid, _ = _range_run(
                 dict(start=values[0], step=spacing, shape=values.shape)
             )
             if _grid_holds(grid, values, values.dtype):
-                return (grid,), values.dtype
-    return (values,), values.dtype
+                return (grid,), values.dtype, None
+    return (values,), values.dtype, _fitted_step(values)
 
 
 def _step_runs(values, step) -> tuple[tuple, np.dtype]:
-    """One grid of the declared step per stretch of consecutive positions."""
+    """
+    Labels placed on a declared step's grid.
+
+    Each spacing is the nearest whole number of steps; more than one is a
+    hole. Labels on the grid make one grid per stretch of consecutive
+    positions, jittered ones stay one stored run, and two labels on one
+    position, or labels drifting half a step from the grid, raise.
+    """
     magnitude = np.abs(np.asarray(step))[()]
     signed = magnitude if values[-1] > values[0] else -magnitude
-    # every spacing must be a whole number of steps; more is a hole
-    splits = np.flatnonzero(_on_grid(_diffs(values), signed) != 1) + 1
+    counts = _on_grid(_diffs(values), signed, jitter=True)
+    if not _on_step_grid(values, counts, signed):
+        _check_drift(values, counts, signed)
+        return (values,), values.dtype
+    splits = np.flatnonzero(counts != 1) + 1
     # past a thousand samples, holes in more than a tenth of them stay stored
     if len(values) >= 1_000 and len(splits) + 1 > len(values) // 10:
         return (values,), values.dtype
@@ -3887,6 +4332,12 @@ def _fill_layout(
 
 def _fill_pieces(coord: NumericCoord) -> list[tuple[int, Grid]]:
     """The runs of consecutive grid positions, each with its source offset."""
+    if coord.jittered:
+        msg = (
+            "Filling gaps needs labels on their step's grid; these sit off it. "
+            "Use snap_coords to put them on a grid first."
+        )
+        raise CoordError(msg)
     pieces: list[tuple[int, Grid]] = []
     grids = [x.step(coord.dtype) for x in coord.runs if isinstance(x, Grid)]
     for run, offset in zip(coord.runs, coord._run_offsets()):
@@ -3909,15 +4360,7 @@ def _fill_pieces(coord: NumericCoord) -> list[tuple[int, Grid]]:
             grid, _ = _range_run(
                 dict(start=values[first], step=step, shape=(stop - first,))
             )
-            # floats pass _on_grid per spacing; the run must not drift
-            labels = grid.labels(np.arange(stop - first), coord.dtype)
-            drift = np.abs(labels - values[first:stop])
-            if values.dtype.kind == "f" and np.max(drift) > abs(step) / 2:
-                msg = (
-                    f"Values drift more than half a step from the grid of "
-                    f"step {step}; use snap_coords before filling gaps."
-                )
-                raise CoordError(msg)
+            # a jittered coordinate, whose labels could drift, raised above
             pieces.append((int(offset) + first, grid))
     return pieces
 
@@ -4153,7 +4596,7 @@ def get_coord(
     segments: tuple[BaseCoord, ...] | list[BaseCoord] | None = None,
     runs: tuple[Grid | Labels, ...] | None = None,
     sources: Mapping[str, np.ndarray] | None = None,
-    snap: bool = True,
+    snap: bool | None = None,
 ) -> BaseCoord:
     """
     Return a coordinate from provided inputs.
@@ -4197,9 +4640,16 @@ def get_coord(
         than recomputed, so a dump is a contract: pass back the arrays it
         named, not arrays of your own under its keys.
     snap
-        If True (default), nearly evenly sampled data is read as one grid.
-        If False, data stays in one exact grid or one stored-label run;
-        no label is moved.
+        How labels without a stated step are read. False reads them exactly:
+        labels on a fitted grid, at consecutive positions, are evenly
+        sampled; labels within half a step of it (offsets and spacings) keep
+        that step and are jittered; anything else has no step. Integer and
+        time labels are judged exactly in their own tick unit, floats within
+        a few units in the last place of the dtype they were stored in. No
+        label is moved. None (default) also snaps labels within 0.1% of one
+        spacing onto a grid, as DASCore 0.1.24 did, warning where that
+        differs from reading them exactly; from DASCore 0.1.26 it reads
+        them exactly. True snaps the same way without the warning.
 
     Notes
     -----
@@ -4283,16 +4733,15 @@ def get_coord(
         data = np.asarray(data)
         # special case for ndim arrays.
         if data.ndim > 1:
-            return None, None, None, False
-        view2 = data[1:]
-        view1 = data[:-1]
+            return None, None, None, False, False
         is_monotonic = is_strictly_monotonic(data)
         # the array cannot be evenly sampled if it isn't monotonic
         if is_monotonic:
             try:
-                diffs = view2 - view1
+                # signed, so descending uints do not wrap; booleans refuse
+                diffs = _diffs(data) if data.dtype.kind == "u" else data[1:] - data[:-1]
             except TypeError:
-                return None, None, None, False
+                return None, None, None, False, False
             # sort once and derive the unique values from the sorted array
             # (np.unique would sort a second copy).
             sorted_diffs = np.sort(diffs)
@@ -4303,13 +4752,14 @@ def get_coord(
                 mask[0] = True
                 np.not_equal(sorted_diffs[1:], sorted_diffs[:-1], out=mask[1:])
                 unique_diff = sorted_diffs[mask]
-            if len(unique_diff) == 1 or all_diffs_close_enough(unique_diff):
+            uniform = len(unique_diff) == 1
+            if uniform or all_diffs_close_enough(unique_diff):
                 _min = data[0]
                 # this is a poor man's median that preserves dtype
                 _step = sorted_diffs[len(sorted_diffs) // 2]
                 _max = _new_max(data, _min, _step)
-                return _min, _max + _step, _step, is_monotonic
-        return None, None, None, is_monotonic
+                return _min, _max + _step, _step, is_monotonic, uniform
+        return None, None, None, is_monotonic, False
 
     if segments is not None:
         # shape/dtype/step are derived fields, so they legitimately appear
@@ -4376,8 +4826,9 @@ def get_coord(
         )
     if isinstance(data, BaseCoord):  # just return coordinate
         return data
+    released = snap is not False  # the 0.1% snapping, for one more release
     # An exact read takes a squeezed sample as one label, as readers did
-    if not isinstance(data, np.ndarray) or not (snap or data.ndim):
+    if not isinstance(data, np.ndarray) or not (released or data.ndim):
         data = np.atleast_1d(data)
     if _is_text_coercible_array(data):
         if units not in (None, ""):
@@ -4400,7 +4851,7 @@ def get_coord(
         step = _declared_step(step, data.dtype)
         step = step[()] if isinstance(step, np.ndarray) and not step.ndim else step
         real_step = isinstance(step, float | int | np.floating | np.integer)
-        if snap and real_step and data.dtype.kind == "f" and data.ndim == 1:
+        if released and real_step and data.dtype.kind == "f" and data.ndim == 1:
             # the labels' order gives the grid's direction
             signed = abs(step) if data[-1] >= data[0] else -abs(step)
             spec = dict(start=data[0], step=signed, shape=data.shape)
@@ -4409,8 +4860,8 @@ def get_coord(
             if len(out) == len(data) and np.allclose(out.values, data, 0, tol):
                 return out
         return _exact_coord(data, step=step, units=units)
-    if snap:
-        start, stop, step, monotonic = _maybe_get_start_stop_step(data)
+    if released:
+        start, stop, step, monotonic, uniform = _maybe_get_start_stop_step(data)
         if start is not None:
             # labels flooring a fractional-step grid keep it; the median step
             # below is rounded and drifts
@@ -4418,11 +4869,15 @@ def get_coord(
                 return NumericCoord(runs=(grid,), units=units, dtype=data.dtype)
             out = _range_coord(dict(start=start, stop=stop, step=step), units)
             # The change_length call helps with float off by one issues.
-            return out.change_length(len(data))
+            out = out.change_length(len(data))
+            if uniform:  # one spacing: the grid restates the labels
+                return out
+            return _released_or_exact(out, data, units, warn=snap is None)
     else:
         monotonic = data.ndim == 1 and is_strictly_monotonic(data)
-        if monotonic and not pd.isnull(data).any():
-            return _exact_coord(data, units=units)
+    # labels the 0.1% snap leaves alone may still be jittered
+    if monotonic and data.ndim == 1 and not pd.isnull(data).any():
+        return _exact_coord(data, units=units)
     if not monotonic and np.all(pd.isnull(data)):
         # The values say nothing, but their type still does: an array of
         # NaT came from datetimes and should stay datetimes, as the empty
@@ -4436,16 +4891,66 @@ def get_coord(
     return NumericCoord.from_labels(data, units=units)
 
 
+def _shift(coord, data) -> float:
+    """The furthest a coordinate's label sits from the data's, in steps."""
+    if dtype_time_like(data.dtype):
+        moved = np.abs(to_int(coord.values) - to_int(data)).astype(np.float64)
+        return float(np.max(moved)) / abs(to_int(coord.step))
+    moved = np.abs(coord.values.astype(np.float64) - data.astype(np.float64))
+    return float(np.max(moved)) / abs(float(coord.step))
+
+
+def _released_or_exact(snapped, data, units, warn: bool) -> BaseCoord:
+    """
+    The released snap of labels within 0.1% of one spacing, or the exact coord.
+
+    DASCore 0.1.24 snapped such labels onto a grid. Where that moves them by
+    more than rounding, the snap is kept for one more release, with a warning
+    when ``warn``, unless the exact coordinate is evenly sampled too. Its
+    median step can move a label half a step or more, relabelling samples
+    (#1419); jittered labels are then snapped from their end labels and
+    count instead, as `snap` does, and others keep no step.
+    """
+    # integer and time labels the snap restates were one spacing apart,
+    # which get_coord kept already; floats may round
+    if data.dtype.kind == "f":
+        moved = np.max(np.abs(snapped.values - data))
+        # the cheap bound first; the allowance looks at the stored dtype
+        if moved <= _GRID_RTOL * abs(snapped.step) or (
+            moved <= _float_allowance(data, snapped.step)
+        ):
+            return snapped
+    exact = _exact_coord(data, units=units)
+    if exact.evenly_sampled:  # as a grid, which the released result was
+        return exact if exact._grid is not None else exact.snap()
+    shift = _shift(snapped, data)
+    if shift >= 0.5:
+        if not exact.jittered:
+            return exact
+        snapped = exact.snap()
+        shift = _shift(snapped, data)
+    if warn:
+        msg = (
+            f"get_coord(data=...) snapped labels lying up to {shift:.2g} steps "
+            "off a grid onto it, as DASCore 0.1.24 did. From DASCore 0.1.26 "
+            "inference keeps labels as recorded, so these will be jittered or "
+            "have no step. Pass snap=False, or a coordinate built with it, to "
+            "get that now; snap_coords snaps explicitly."
+        )
+        warnings.warn(msg, FutureWarning, stacklevel=3)
+    return snapped
+
+
 def _blank_coord(shape, start=None, stop=None, step=None, units=None, dtype=None):
     """The coordinate of samples whose labels are unknown."""
     run = Blank(shape, start, stop)
     return NumericCoord(runs=(run,), step=step, units=units, dtype=dtype)
 
 
-def _range_coord(spec: dict, units) -> BaseCoord:
+def _range_coord(spec: dict, units, dtype=None) -> BaseCoord:
     """The evenly sampled coordinate a set of range inputs describes."""
-    grid, dtype = _range_run(spec)
-    return NumericCoord(runs=(grid,), units=units, dtype=dtype)
+    grid, inferred = _range_run(spec)
+    return NumericCoord(runs=(grid,), units=units, dtype=dtype or inferred)
 
 
 def _same_step(step, other) -> bool:
@@ -4455,13 +4960,39 @@ def _same_step(step, other) -> bool:
     return bool(step == other)
 
 
-def _grid_coord(terms, units=None, **spec) -> BaseCoord:
-    """The range ``spec`` states on an exact grid of ``_EXACT_GRID_FIELDS`` terms."""
+def _grid_terms(grid: Grid, dtype) -> tuple[int, int, int]:
+    """
+    The ``_EXACT_GRID_FIELDS`` terms of an exact grid, from its first label.
+
+    The offset is the grid's origin past its first label, in ``1 / den``
+    ticks. It is the phase, unless a coarse time unit floors the first
+    label below the grid's nanosecond origin.
+    """
+    first = _to_tick(grid.labels(0, dtype)[()])
+    offset = (grid.origin - first) * grid.step_den + grid.phase
+    return grid.step_num, grid.step_den, offset
+
+
+def _grid_coord(terms, units=None, dtype=None, **spec) -> BaseCoord:
+    """
+    The range ``spec`` states on an exact grid of ``_EXACT_GRID_FIELDS`` terms.
+
+    ``start`` is the first label, and ``dtype`` the labels' own; see
+    [`_grid_terms`](`dascore.core.coords._grid_terms`).
+    """
     if (shape := spec.get("shape")) is not None:
         spec["shape"] = shape = tuple(np.atleast_1d(shape).tolist())
     if shape is not None and (len(shape) != 1 or not shape[0]):
         return get_coord(**spec, units=units)  # no range holds it: a partial
-    return _range_coord({**spec, **dict(zip(_EXACT_GRID_FIELDS, terms))}, units)
+    num, den, offset = (int(x) for x in terms)
+    if dtype is not None and dtype_time_like(dtype) and _tick_scale(dtype) != 1:
+        # a coarser unit floors the first label below the nanosecond origin
+        whole, offset = divmod(offset, den)
+        start = np.asarray(spec["start"])
+        start = start.astype(f"{start.dtype.kind}8[ns]")[()]
+        spec["start"] = start + np.timedelta64(whole, "ns")
+    fields = dict(zip(_EXACT_GRID_FIELDS, (num, den, offset)))
+    return _range_coord({**spec, **fields}, units, dtype=dtype)
 
 
 def _exact_coord(values, step=None, units=None) -> BaseCoord:
@@ -4472,5 +5003,5 @@ def _exact_coord(values, step=None, units=None) -> BaseCoord:
         if values.ndim != 1 or not is_strictly_monotonic(values):
             msg = "A declared step needs one-dimensional, monotonic values."
             raise CoordError(msg)
-    runs, dtype = _labels_to_runs(values, step)
+    runs, dtype, step = _labels_to_runs(values, step)
     return NumericCoord(runs=runs, units=units, dtype=dtype, step=step)

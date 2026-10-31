@@ -41,10 +41,12 @@ print(new_cm)
 
 from __future__ import annotations
 
+import warnings
 from collections import defaultdict
 from collections.abc import Iterable, Mapping, Sequence
 from itertools import zip_longest
 from math import prod
+from pathlib import Path
 from types import EllipsisType
 from typing import Annotated, Any, Self, cast
 
@@ -90,6 +92,7 @@ from dascore.utils.misc import (
     cached_method,
     iterate,
 )
+from dascore.warnings import DASCoreWarning
 
 MaybeArray = ArrayLike | np.ndarray | None
 
@@ -106,10 +109,22 @@ def _ensure_1d_coord(coord, coord_name: str):
     """Ensure multi-dims are not used."""
     if not len(coord.shape) == 1:
         msg = (
-            "Only 1 dimensional coordinates can be used for selection "
-            f"{coord_name} has {len(coord.shape)} dimensions."
+            "Only 1 dimensional coordinates can be used for selection; "
+            f"{coord_name} has {len(coord.shape)} dimensions. Use a mask "
+            f"instead, such as patch.where(cond) with cond built from "
+            f"patch.get_array({coord_name!r})."
         )
         raise CoordError(msg)
+
+
+def _warn_dropped(dim: str, names, action: str) -> None:
+    """Warn, from the caller's line, that riders of a dimension were dropped."""
+    msg = f"{action} dimension {dim!r} dropped associated coordinates: "
+    msg += f"{', '.join(sorted(names))}."
+    # Point the warning at the first frame outside dascore; a fixed
+    # stacklevel breaks as the processor call depth varies.
+    prefix = str(Path(__file__).parent.parent)
+    warnings.warn(msg, DASCoreWarning, skip_file_prefixes=(prefix,))
 
 
 def _cell_edge_names(dim, coord_map):
@@ -345,6 +360,20 @@ class CoordManager(RichRepr, DascoreBaseModel):
                         out.append(coord_name)
             return out
 
+        def _warn_resized(dropped, coord_map, kwargs):
+            """Say which riders of a resized dimension are lost, not replaced."""
+            for dim in set(coord_map) & set(self.dims):
+                if len(coord_map[dim]) == len(self.coord_map[dim]):
+                    continue
+                skip = {dim, *kwargs, *_cell_edge_names(dim, self.coord_map)}
+                names = [
+                    x
+                    for x in dropped
+                    if dim in self.dim_map[x] and x not in skip and x[0] != "_"
+                ]
+                if names:
+                    _warn_dropped(dim, names, "Changing the length of")
+
         def _divide_kwargs(kwargs):
             """Divide kwargs into coords to update, drop, add, etc."""
             prefix = self.dims
@@ -381,6 +410,7 @@ class CoordManager(RichRepr, DascoreBaseModel):
             coord_to_drop.extend(names)
         # find coords to drop because their dimension changed.
         indirect_coord_drops = _get_dim_change_drop(coord_map, dim_map)
+        _warn_resized(indirect_coord_drops, coord_map, kwargs)
         # drop coords then call get_coords to handle adding new ones.
         coords, _ = self.drop_coords(*(coord_to_drop + indirect_coord_drops))
         out = coords._get_dim_coord_dict()
@@ -415,6 +445,28 @@ class CoordManager(RichRepr, DascoreBaseModel):
         return cm.update(
             **{name: value for name, value in kwargs.items() if name not in names}
         )
+
+    def drop_associated(self, dim: str, action: str) -> Self:
+        """
+        Drop, with a warning, the non-dimensional coordinates along a dimension.
+
+        Use when an operation changes the dimension's samples in a way its
+        associated coordinates cannot follow, leaving their values unknown;
+        `action` begins the warning, eg "Resampling". Cell edges are left
+        for the grid update, which drops them without a warning, and
+        private coordinates belong to the operations which made them.
+        """
+        edges = _cell_edge_names(dim, self.coord_map)
+        names = [
+            name
+            for name, coord_dims in self.dim_map.items()
+            if name != dim and dim in coord_dims and name not in edges
+        ]
+        if not names:
+            return self
+        if public := [x for x in names if not x.startswith("_")]:
+            _warn_dropped(dim, public, action)
+        return self.drop_coords(*names)[0]
 
     # we need this here to maintain backwards compatibility
     update_coords = update
@@ -805,8 +857,13 @@ class CoordManager(RichRepr, DascoreBaseModel):
             if (drop or coord._partial) and old_dims and not new_dims:
                 continue
             key = tuple(indices.get(dim, slice(None)) for dim in old_dims)
-            # Keep slice results compact, including floating grids, as select does.
-            if coord.evenly_sampled and isinstance(key[0], slice):
+            # A slice or monotonic positions keep the runs and the step, as
+            # select does; removed samples leave holes.
+            ordered = isinstance(key[0], slice) or (
+                isinstance(key[0], np.ndarray) and key[0].size
+            )
+            one_dim = isinstance(coord, NumericCoord) and coord.ndim == 1
+            if one_dim and not coord._partial and ordered:
                 new_coord = coord[key[0]]
                 if not new_coord.size:
                     new_coord = NumericCoord.from_labels(
@@ -1502,10 +1559,6 @@ def _canonicalization_moved_values(original, out) -> bool:
     # sampled coord cannot reach here; the caller returns it first.
     if original is None or not out.evenly_sampled:
         return False
-    # A partial coord's values are all NaN, so it has nothing to lose;
-    # canonicalizing it is the whole point.
-    if original._partial:
-        return False
     # Canonicalization re-labels a coordinate, it never resamples one.
     assert original.shape == out.shape
     return not np.array_equal(original.values, out.values)
@@ -1522,22 +1575,23 @@ def _get_coord_dim_map(coords, dims):
         # stored labels can be left non-canonical by slicing (e.g. an evenly
         # spaced subset that should collapse to a grid), and a partial coord
         # stating a whole range should canonicalize to one.
-        if isinstance(coord, BaseCoord) and coord.evenly_sampled:
+        if isinstance(coord, BaseCoord) and coord._grid is not None:
             return coord
-        original = coord if isinstance(coord, BaseCoord) else None
         stored = isinstance(coord, NumericCoord) and coord.runs_count == 1
         if stored and isinstance(coord.runs[0], Labels):
             # Rebuilding from the run would hand back the same labels, so
-            # the values are read again for the inference to see them.
-            coord = dict(data=coord.values, units=coord.units, step=coord.step)
-        elif hasattr(coord, "model_dump"):
-            coord = coord.model_dump(exclude_defaults=True)
-        if isinstance(coord, Mapping):  # input is a dict
-            out = get_coord(**coord)
+            # the values are read again for the inference to see them,
+            # exactly: they were stored as they are, and a scalar stays one.
+            snap = False if coord.ndim else None
+            values, units, step = coord.values, coord.units, coord.step
+            out = get_coord(data=values, units=units, step=step, snap=snap)
         else:
-            out = get_coord(data=coord)
-        if _canonicalization_moved_values(original, out):
-            return original
+            if hasattr(coord, "model_dump"):
+                coord = coord.model_dump(exclude_defaults=True)
+            if isinstance(coord, Mapping):  # input is a dict
+                out = get_coord(**coord)
+            else:
+                out = get_coord(data=coord)
         return out
 
     def _coord_from_simple(name, coord):

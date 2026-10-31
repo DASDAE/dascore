@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 import dascore as dc
 from dascore.core.attrs import PatchAttrs
 from dascore.core.coordmanager import get_coord_manager
 from dascore.core.coords import get_coord
-from dascore.io.utils import should_snap
+from dascore.io.utils import stored_coord
 from dascore.utils.misc import maybe_get_items
-from dascore.utils.time import to_datetime64, to_timedelta64
+from dascore.utils.time import to_datetime64
 
 # --- Getting format/version
 
@@ -44,26 +46,17 @@ def _get_time_node(data_node):
     return time
 
 
-def _get_scanned_time_info(data_node):
-    """Get the min, max, len, and dt from time array."""
-    time = _get_time_node(data_node)
-    t_len = len(time)
-    # first try fast path by tacking first/last of time
-    tmin, tmax = time[0], time[-1]
-    # This doesn't work if an incomplete datablock exists at the end of
-    # the file. In this case we need to read/filter time array (slower).
-    if tmin > tmax:
-        time = time[:]
-        time_filtered = time[time > 0]
-        t_len = len(time_filtered)
-        tmin, tmax = time_filtered[0], time_filtered[-1]
-    # surprisingly, using gps time column, dt is much different than dt
-    # reported in data attrs so we calculate it this way.
-    dt = (tmax - tmin) / (t_len - 1)
-    starttime = to_datetime64(tmin)
-    time_step = to_timedelta64(dt)
-    endtime = starttime + time_step * (t_len - 1)
-    return starttime, endtime, t_len, time_step
+def _get_written_count(time) -> int:
+    """
+    How many leading rows of the time node the file has written.
+
+    An unfinished file ends in rows whose time is still zero, which only
+    reading the whole node can count; a finished one ascends to its end.
+    """
+    count = len(time)
+    if count > 1 and time[0] > time[-1]:
+        return int(np.count_nonzero(time[:] > 0))
+    return count
 
 
 def _get_version_data_node(root):
@@ -83,7 +76,7 @@ def _scan_terra15(h5_fi, data_node, *, snap=True) -> list[dc.PatchMeta]:
     """Scan a terra15 file, return metadata."""
     out = _get_default_attrs(h5_fi.attrs)
     coords = {
-        "time": _get_time_coord(data_node, snap_dims=snap),
+        "time": _get_time_coord(data_node, snap=snap),
         "distance": _get_distance_coord(h5_fi),
     }
     coord_manager = get_coord_manager(coords=coords, dims=tuple(coords))
@@ -97,13 +90,6 @@ def _scan_terra15(h5_fi, data_node, *, snap=True) -> list[dc.PatchMeta]:
 
 
 # --- Reading patch
-
-
-def _get_raw_time_coord(data_node, time_len):
-    """Read timestamps for the written samples without regularizing them."""
-    time = _get_time_node(data_node)[:time_len]
-    values = to_datetime64(time)
-    return get_coord(data=values, units="s", snap=False)
 
 
 def _get_default_attrs(root_node_attrs):
@@ -126,14 +112,24 @@ def _get_default_attrs(root_node_attrs):
     return out
 
 
-def _get_time_coord(data_node, snap_dims=True):
-    """Get the time coordinate."""
-    t_min, t_max, time_len, d_time = _get_scanned_time_info(data_node)
-    if should_snap(snap_dims, "time"):
-        time_coord = get_coord(start=t_min, stop=t_max + d_time, step=d_time, units="s")
-    else:
-        time_coord = _get_raw_time_coord(data_node, time_len)
-    return time_coord
+def _get_time_coord(data_node, snap=True):
+    """
+    Get the time coordinate of the written rows.
+
+    Per-sample GPS times jitter, even backwards (#71), so the snapped grid
+    spans the first and last written times (#72); the stated `dt_computer`
+    is the computer clock's, which can be off by percent.
+    """
+    time = _get_time_node(data_node)
+    return stored_coord(
+        time,
+        snap,
+        name="time",
+        where=data_node.file,
+        decode=to_datetime64,
+        count=_get_written_count(time),
+        units="s",
+    )
 
 
 def _get_distance_coord(root):

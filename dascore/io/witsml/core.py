@@ -29,7 +29,7 @@ class WITSMLV1411(FiberIO):
         return self.version if ok else None
 
     def get_metadata(
-        self, resource: BinaryReader, *, snap: snap_type = True
+        self, resource: BinaryReader, *, snap: snap_type = ("distance",)
     ) -> list[dc.PatchMeta]:
         """Describe each curve, keyed and tagged by its mnemonic."""
         log = read_log(resource)

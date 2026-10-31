@@ -15,7 +15,7 @@ import dascore as dc
 from dascore.core import get_coord
 from dascore.core.source import ArraySource
 from dascore.exceptions import InvalidFiberFileError
-from dascore.io.utils import cf_time_values, should_snap
+from dascore.io.utils import cf_time_values, stored_coord
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 _MAPPINGS = ("coordinate_interpolation", "coordinate_sampling")
@@ -214,11 +214,11 @@ def _dims(node) -> tuple[str, ...]:
     return tuple(node.dims[i][0].name.rsplit("/", 1)[-1] for i in range(node.ndim))
 
 
-def _stored(node, snap):
-    """Return a coordinate from stored labels."""
+def _stored(node, snap=()):
+    """Return a coordinate from stored labels, on a grid if `snap` names it."""
     name = node.name.rsplit("/", 1)[-1]
-    snap = should_snap(snap, name)
-    return get_coord(data=_values(node), units=_units(node), snap=snap)
+    values, units = _values(node), _units(node)
+    return stored_coord(values, snap, name=name, where=node.file, units=units)
 
 
 def _signal_pieces(group, node, aux, snap):
@@ -245,7 +245,7 @@ def _signal_pieces(group, node, aux, snap):
         if name in group and group[name].ndim == 1:
             other_dims = _dims(group[name])
             if set(other_dims) <= set(dims):
-                other[name] = (other_dims, _stored(group[name], snap))
+                other[name] = (other_dims, _stored(group[name]))
     for combo in product(*(runs[x] for x in dims)):
         coords = {dim: coord for dim, (_, coord) in zip(dims, combo, strict=True)}
         firsts = dict(zip(dims, (first for first, _ in combo), strict=True))
@@ -309,7 +309,7 @@ def _iter_signals(group):
             yield from _iter_signals(child)
 
 
-def get_pieces(h5, snap=True) -> dict[str, tuple]:
+def get_pieces(h5, snap=()) -> dict[str, tuple]:
     """
     Map each patch key to its (metadata, dataset, sample offsets).
 

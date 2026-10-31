@@ -8,13 +8,14 @@ from typing import Any
 import numpy as np
 
 from dascore.compat import is_array
+from dascore.core.coords import get_coord
 from dascore.core.processor import PatchProcessor
 from dascore.utils.misc import broadcast_for_index, iterate
 from dascore.utils.patch import (
     _get_data_type_from_dims,
     _get_data_units_from_dims,
     _get_dx_or_spacing_and_axes,
-    require_no_holes,
+    _require_evenly_sampled,
 )
 
 _TRAP_FUNC = getattr(np, "trapezoid" if hasattr(np, "trapezoid") else "trapz")
@@ -32,11 +33,15 @@ def _quasi_mean(array):
 
 def _get_definite_coords(meta, dims):
     """Return coords with each dim collapsed to one sample, keeping its min and max."""
-    new_coords = {x: _quasi_mean(meta.get_coord(x).values) for x in dims}
+    new_coords = {}
     for name in dims:
-        coord = meta.get_coord(name).values
-        new_coords[f"pre_integrate_{name}_min"] = (name, np.asarray([coord.min()]))
-        new_coords[f"pre_integrate_{name}_max"] = (name, np.asarray([coord.max()]))
+        coord = meta.get_coord(name)
+        # the label and the bounds keep the dimension's units
+        new_coords[name] = coord.update(values=_quasi_mean(coord.values))
+        for end in ("min", "max"):
+            value = np.asarray([getattr(coord.values, end)()])
+            bound = get_coord(data=value, units=coord.units)
+            new_coords[f"pre_integrate_{name}_{end}"] = (name, bound)
     return meta.coords.update(**new_coords)
 
 
@@ -134,7 +139,7 @@ class Integrate(PatchProcessor):
     def get_metadata(self, meta):
         """Return the integral's coords, units and data_type, and the spacing."""
         dims = iterate(self.dim if self.dim is not None else meta.dims)
-        require_no_holes(meta, dims, "integrate")
+        _require_evenly_sampled(meta, dims, "integrate")
         dxs_or_vals, axes = _get_dx_or_spacing_and_axes(meta, dims)
         coords = _get_definite_coords(meta, dims) if self.definite else meta.coords
         new_units = _get_data_units_from_dims(meta, dims, mul)

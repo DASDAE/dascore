@@ -32,7 +32,7 @@ class APSensingV10(H5ArrayMixin, FiberIO):
         return _get_version_string(resource) or None
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Scan an AP sensing file, return summary info about the contents."""
         coords = _get_coords(resource)

@@ -37,7 +37,7 @@ class ODH4V1(H5ArrayMixin, FiberIO):
         return self.version if _is_odh4(resource) else None
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Scan an ODH4 file, return summary info about the contents."""
         file_attrs = _read_attrs(resource)

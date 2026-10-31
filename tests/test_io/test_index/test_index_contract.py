@@ -958,10 +958,8 @@ class TestLineageIds:
                 assert row["data_id"] == selected.attrs.data_id
                 assert noop_row.equals(spool._df.iloc[index][columns])
                 assert selected.shape == source.shape
-            if percent_bound and source.get_coord("distance").dtype == np.dtype(
-                "float32"
-            ):
-                assert selected.shape != source.shape
+            # the whole span keeps every sample, float32 or not
+            assert selected.shape == source.shape
 
     def test_relative_metadata_tracks_each_row(self, tmp_path):
         """A shared relative window trims only the longer source patch."""

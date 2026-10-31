@@ -30,6 +30,7 @@ from dascore.utils.remote_io import (
     clear_remote_file_cache,
     get_remote_cache_path,
 )
+from dascore.warnings import SnapWarning
 from tests.test_io.test_fiberio_interface import TestNamedSnap as _NamedSnapCases
 
 pytest.importorskip("xarray")
@@ -1024,6 +1025,25 @@ class TestPlainNetCDF4:
         dataset.to_netcdf(path, engine="h5netcdf")
         time = dc.read(path, file_format="NETCDF_CF")[0].get_array("time")
         np.testing.assert_array_equal(time, start + np.arange(5) * step)
+
+    def test_tie_point_labels_go_through_the_reader_grid(self, tmp_path):
+        """A dimension rebuilt from tie points is snapped by the checked grid."""
+        xr = pytest.importorskip("xarray")
+        pytest.importorskip("h5netcdf")
+        dataset = xr.Dataset(
+            {
+                "data": (("time",), np.arange(5.0)),
+                "time_values": (("time_points",), [0.0, 3.0, 8.0]),
+                "time_indices": (("time_points",), [0, 1, 4]),
+            },
+            attrs={"Conventions": "CF-1.8"},
+        )
+        path = tmp_path / "uneven_ties.nc"
+        dataset.to_netcdf(path, engine="h5netcdf")
+        stored = dc.read(path, file_format="NETCDF_CF", snap=False)[0]
+        with pytest.warns(SnapWarning, match="stored time labels.*kept as stored"):
+            out = dc.read(path, file_format="NETCDF_CF", snap=True)[0]
+        assert out.get_coord("time") == stored.get_coord("time")
 
     def test_utc_offset(self, tmp_path):
         """A reference time with a UTC offset is converted to UTC."""

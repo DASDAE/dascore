@@ -4,11 +4,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-import numpy as np
-
 import dascore as dc
 from dascore.core import get_coord
-from dascore.io.utils import should_snap
+from dascore.io.utils import stored_coord
 from dascore.utils.misc import unbyte
 
 # --- Getting format/version
@@ -41,22 +39,19 @@ _CF_DIMS = ("channel", "time")
 def _get_cf_coords(hdf_fi, snap=True) -> dc.core.CoordManager:
     """Get a coordinate manager of full file range."""
 
-    def _coord(values, name, units=None):
-        """Return a tolerant or exact coordinate from stored values."""
-        values = np.asarray(values)
-        return get_coord(data=values, units=units, snap=should_snap(snap, name))
-
-    def _get_spatialcoord(hdf_fi, code):
-        """Get spatial coord."""
-        return _coord(hdf_fi[code], code, units=hdf_fi[code].attrs["units"])
+    def _exact(name, units=None):
+        """The stored labels of a coordinate along a dimension."""
+        return get_coord(data=hdf_fi[name][:], units=units, snap=False)
 
     coords_map = {
-        "channel": _coord(hdf_fi["channel"][:], "channel"),
-        "trace": _coord(hdf_fi["trace"][:], "trace"),
-        "time": _coord(dc.to_datetime64(hdf_fi["t"][:]), "time"),
-        "x": _get_spatialcoord(hdf_fi, "x"),
-        "y": _get_spatialcoord(hdf_fi, "y"),
-        "z": _get_spatialcoord(hdf_fi, "z"),
+        "channel": stored_coord(hdf_fi["channel"], snap, name="channel", where=hdf_fi),
+        "trace": _exact("trace"),
+        "time": stored_coord(
+            hdf_fi["t"], snap, name="time", where=hdf_fi, decode=dc.to_datetime64
+        ),
+        "x": _exact("x", hdf_fi["x"].attrs["units"]),
+        "y": _exact("y", hdf_fi["y"].attrs["units"]),
+        "z": _exact("z", hdf_fi["z"].attrs["units"]),
     }
     dim_map = {
         "time": ("time",),

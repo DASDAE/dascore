@@ -108,6 +108,18 @@ class DascoreConfig(BaseModel):
             "separate groups."
         ),
     )
+    max_shift: float = Field(
+        default=0.2,
+        ge=0,
+        lt=0.5,
+        description=(
+            "Furthest, in steps, a label may sit from the grid it is put on "
+            "before DASCore says so; readers warn when stored labels sit "
+            "further than this from the grid they build. It is above the "
+            "jitter measured in real files and below what one missing "
+            "sample does to a grid spread over a file."
+        ),
+    )
     patch_kind_attrs: tuple[str, ...] = Field(
         default=(
             "acquisition_key",
@@ -146,6 +158,16 @@ class DascoreConfig(BaseModel):
     directory_index_map_dir: Path = Field(
         default_factory=lambda: _get_cache_root() / "indexes" / "path_map",
         description="Directory of per-data-directory external index-location entries.",
+    )
+    max_index_runs: int = Field(
+        default=256,
+        ge=1,
+        description=(
+            "Runs a spool index stores per coordinate. A coordinate of more "
+            "runs (stretches between its holes, or of another sampling) is "
+            "stored by its envelope, step and flags, with a warning, and "
+            "read from its source when a report or plan needs its runs."
+        ),
     )
 
     # Progress display.

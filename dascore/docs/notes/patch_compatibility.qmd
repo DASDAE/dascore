@@ -64,7 +64,7 @@ Patches of different kinds are never combined, whatever their coordinates. What 
 | Operation | Different kind |
 |---|---|
 | operators, ufuncs | raises [`IncompatiblePatchError`](`dascore.exceptions.IncompatiblePatchError`) — the operation must yield one patch and cannot |
-| `concatenate_patches`, `stack` | skipped, per `check_behavior` (`"warn"` by default, `"raise"`, or `"ignore"`) — these operate relative to the first patch |
+| `concatenate_patches` (deprecated), `stack` | skipped, per `check_behavior` (`"warn"` by default, `"raise"`, or `"ignore"`) — these operate relative to the first patch |
 | `Spool.chunk`, `Spool.concatenate` | separate outputs, never an error — a spool operation partitions |
 
 ```{python}

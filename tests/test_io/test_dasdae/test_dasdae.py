@@ -702,7 +702,9 @@ class TestLegacyFixtureCompatibility:
             group.create_dataset("_coord_distance", data=np.array([0.0, 1.0, 3.0]))
             group.create_dataset("data", data=np.zeros(3))
             summary = _get_metadata_from_group(group)
-        assert summary.coords["distance"].step is None
+        # the labels are jittered on their own fitted step, not the legacy one
+        distance = summary.coords["distance"]
+        assert not distance.evenly_sampled and distance.step != 1.0
 
     def test_decode_legacy_attr_bytes_falls_back_to_text(self):
         """Undecodable legacy bytes should fall back to plain text."""

@@ -9,6 +9,7 @@ import pytest
 import dascore as dc
 from dascore.io.uptech import UptechH5V1
 from dascore.utils.downloader import fetch
+from dascore.warnings import SnapWarning
 from tests.test_io.test_common_io import skip_timeout
 
 # An epoch (in seconds) recent enough that float64 timestamps only resolve
@@ -163,7 +164,7 @@ class TestTimeValidation:
         assert patch.shape == (100, 3)
 
     def test_irregular_timing_preserved(self, tmp_path):
-        """Genuinely uneven timing is kept, not silently regularized."""
+        """Genuinely uneven timing is kept, with a warning when snapped."""
         offsets = np.array([0.0, 0.3, 1.0, 1.4, 2.0])
         path = _write_uptech(
             tmp_path / "irregular.hdf5",
@@ -171,7 +172,10 @@ class TestTimeValidation:
             time=_T0 + offsets,
             acquisition_frequency=2.0,
         )
-        coord = UptechH5V1().read(path)[0].get_coord("time")
+        with pytest.warns(SnapWarning, match="irregular.hdf5.*kept as stored"):
+            kept = UptechH5V1().read(path)[0].get_coord("time")
+        coord = UptechH5V1().read(path, snap=False)[0].get_coord("time")
+        assert kept == coord
         assert not coord.evenly_sampled
         assert np.array_equal(coord.values, dc.to_datetime64(_T0 + offsets))
 

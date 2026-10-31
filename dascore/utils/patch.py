@@ -85,7 +85,6 @@ from dascore.utils.patch_registry import (
 )
 from dascore.utils.paths import is_memory_uri
 from dascore.utils.time import to_float
-from dascore.warnings import DASCoreWarning
 
 _DimAxisValue = namedtuple("_DimAxisValue", ["dim", "axis", "value"])
 
@@ -774,26 +773,9 @@ def drop_associated_coords(coords, dim: str, action: str):
     """
     Drop, with a warning, the non-dimensional coordinates along a dimension.
 
-    Use when an operation changes the dimension's samples, leaving those
-    coordinates' values unknown; `action` begins the warning, eg
-    "Resampling". Cell edges are left for the grid update, which drops them
-    without a warning.
+    See [`CoordManager.drop_associated`](`dascore.core.CoordManager.drop_associated`).
     """
-    edges = dc.core.coordmanager._cell_edge_names(dim, coords.coord_map)
-    associated = sorted(
-        name
-        for name, coord_dims in coords.dim_map.items()
-        if name != dim and dim in coord_dims and name not in edges
-    )
-    if not associated:
-        return coords
-    names = ", ".join(associated)
-    msg = f"{action} dimension {dim!r} dropped associated coordinates: {names}."
-    # Point the warning at the first frame outside dascore; a fixed
-    # stacklevel breaks as the processor call depth varies.
-    prefix = str(Path(__file__).parent.parent)
-    warnings.warn(msg, DASCoreWarning, skip_file_prefixes=(prefix,))
-    return coords.drop_coords(*associated)[0]
+    return coords.drop_associated(dim, action)
 
 
 def get_start_stop_step(patch: PatchType, dim):
@@ -1061,12 +1043,7 @@ def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
     if isinstance(d_dim, np.timedelta64):
         d_dim = d_dim / np.timedelta64(1, "s")
     if pd.isnull(d_dim) or not coord.evenly_sampled:
-        calling_function = get_parent_code_name()
-        msg = (
-            f"Patch coordinate {dim} is not evenly sampled as required by "
-            f"{calling_function}. This can be fixed with Patch.snap_coords or "
-            f"Patch.interpolate."
-        )
+        msg = _uneven_message(dim, coord, get_parent_code_name())
         raise CoordDataError(msg)
     return 1.0 / d_dim
 
@@ -1263,20 +1240,40 @@ def _get_dx_or_spacing_and_axes(
     return tuple(out), tuple(axes)
 
 
-def require_no_holes(patch, dims, operation: str) -> None:
-    """
-    Raise CoordError if a dimension's declared step has missing samples.
+def _uneven_message(name: str, coord, caller: str) -> str:
+    """Why a coordinate is not evenly sampled for caller, and what fixes it."""
+    why = [
+        text
+        for text, applies in (
+            ("its labels sit off the grid of its step", coord.jittered),
+            ("it has missing samples", coord.gapped),
+        )
+        if applies
+    ]
+    split = ", Patch.split_gaps to split at them" if coord.gapped else ""
+    return (
+        f"Coordinate {name} is not evenly sampled as required by {caller}: "
+        f"{' and '.join(why) or 'it has no step'}. Use Patch.fill_gaps to "
+        f"fill holes{split}, or Patch.snap_coords to put the labels on a grid."
+    )
 
-    A coordinate with no declared step is an irregular grid, not a hole.
+
+def _require_evenly_sampled(patch, dims, operation: str) -> None:
+    """
+    Require evenly sampled dims for an operation 0.1.24 ran on any labels.
+
+    Until DASCore 0.1.26 an unevenly sampled coordinate warns and the
+    operation uses its labels as recorded, as 0.1.24 did (where a selection
+    leaving holes gave labels with no step); then each caller calls
+    ``patch.get_coord(dim, require_evenly_sampled=True)``.
     """
     for dim in iterate(dims):
-        if not patch.get_coord(dim).missing().complete:
-            msg = (
-                f"Coordinate {dim} is not evenly sampled as required by "
-                f"{operation}; it has missing samples. Use Patch.split_gaps, "
-                "Patch.fill_gaps or Spool.chunk(fill_value=...) first."
-            )
-            raise CoordError(msg)
+        coord = patch.get_coord(dim)
+        if coord.evenly_sampled:
+            continue
+        msg = _uneven_message(dim, coord, operation)
+        msg += f" Until DASCore 0.1.26 {operation} uses its labels; it then raises."
+        warnings.warn(msg, FutureWarning, stacklevel=2)
 
 
 def align_patch_coords(
@@ -1347,7 +1344,7 @@ def _align_metadata(meta1: dc.PatchMeta, meta2: dc.PatchMeta):
         coord1, coord2 = (x.coord_map[dim] for x in managers)
         if coord1 == coord2:
             continue
-        ncoord1, ncoord2, sli1, sli2 = coord1.align_to(coord2)
+        ncoord1, _, sli1, sli2 = coord1.align_to(coord2)
         if not len(ncoord1):
             msg = (
                 f"Cannot align patches: they share no values along dimension "
@@ -1356,14 +1353,16 @@ def _align_metadata(meta1: dc.PatchMeta, meta2: dc.PatchMeta):
             )
             raise PatchCoordinateError(msg)
         axis = dims.index(dim)
-        new_coords[0][dim], new_coords[1][dim] = ncoord1, ncoord2
+        new_coords[0][dim], new_coords[1][dim] = sli1, sli2
         indexers[0][axis], indexers[1][axis] = sli1, sli2
     out = []
     for meta, cm, step, new, index in zip(
         (meta1, meta2), managers, steps, new_coords, indexers
     ):
         indexer = tuple(index) if any(new_coords) else None
-        out.append((meta.new(coords=cm.update(**new)), (*step, indexer)))
+        # Indexed, not replaced, so coordinates riding a dimension follow it.
+        coords = cm.isel(**new)[0] if new else cm
+        out.append((meta.new(coords=coords), (*step, indexer)))
     (out1, step1), (out2, step2) = out
     return out1, out2, step1, step2
 
@@ -1754,6 +1753,14 @@ def merge_compatible_coords_attrs(
     return coord_out, attrs
 
 
+@deprecate(
+    info=(
+        "concatenate_patches is deprecated. Use Spool.concatenate instead, "
+        "for example dascore.spool(patches).concatenate(time=None), which "
+        "partitions incompatible patches rather than skipping them."
+    ),
+    removed_in="0.2.0",
+)
 @compose_docstring(check_bev=check_behavior_description)
 def concatenate_patches(
     patches: Sequence[dc.Patch] | dc.Spool,
@@ -1895,11 +1902,10 @@ def _concatenate_group(
                 x if x.units is None else x.convert_units(units) for x in members
             ]
         values = np.concatenate(_joinable(members, dim), axis=0)
-        coords = first.coords.update(
-            **{dim: dc.core.coords.get_coord(data=values, units=units)}
-        )
+        # the released snap, until concatenation joins labels exactly
+        joined_dim = dc.core.coords.get_coord(data=values, units=units, snap=True)
         # coordinates riding the dimension which every member states the
-        # same way join along it too; resizing the dimension drops them
+        # same way join along it too; resizing the dimension drops the rest
         riders = {}
         for name, cdims in first.coords.dim_map.items():
             if name == dim or dim not in cdims:
@@ -1929,8 +1935,7 @@ def _concatenate_group(
             # states nothing takes the kind of the members which do
             joined = np.concatenate(_joinable(members, dim), axis=rider_axis)
             riders[name] = (cdims, dc.core.coords.get_coord(data=joined, units=units))
-        if riders:
-            coords = coords.update(**riders)
+        coords = first.coords.update(**{dim: joined_dim}, **riders)
     warn_if_histories_differ([x.attrs for x in patches], "Concatenating")
     attrs = _maybe_add_history_str(attrs, "concatenate")
     attrs = stamp(attrs, [x.attrs for x in patches], operation)
@@ -2090,7 +2095,10 @@ def stack_patches(
     dim_vary
         The name of the dimension which can be different in values
         (but not shape) and patches still added together.
-        If None, all dimension values must be equal.
+        If None, all dimension values must be equal. Its labels in the
+        output start at zero, keeping the first patch's step, as DASCore
+        0.1.24 gave them, with a `FutureWarning`; from DASCore 0.1.26 they
+        are the first patch's labels.
     {check_desc}
 
     Examples
@@ -2137,6 +2145,13 @@ def stack_patches(
     if dim_vary:  # adjust dim_vary to start at 0 for junk dimension indicator
         coord_to_change = stack_coords.coord_map[dim_vary]
         new_dim = coord_to_change.update_limits(min=0)
+        if new_dim != coord_to_change:
+            msg = (
+                f"stack labels {dim_vary!r} from zero, as DASCore 0.1.24 did; "
+                "from DASCore 0.1.26 it keeps the first patch's labels."
+            )
+            prefix = str(Path(__file__).parent.parent)
+            warnings.warn(msg, FutureWarning, skip_file_prefixes=(prefix,))
         stack_coords = stack_coords.update_coords(**{dim_vary: new_dim})
     with operation_context():
         return dc.Patch(stack_arr, stack_coords, init_patch.dims, stack_attrs)

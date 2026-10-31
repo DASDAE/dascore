@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import warnings
+from functools import partial
 from typing import Any, cast
 
 import numpy as np
@@ -11,8 +12,7 @@ import pandas as pd
 
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
-from dascore.core import get_coord
-from dascore.io.utils import cf_time_values, parse_units, should_snap
+from dascore.io.utils import decode_cf_time, parse_units, stored_coord
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
@@ -68,31 +68,23 @@ def _relative_time_unit(time_units) -> str | None:
     return unit
 
 
-def _time_values(node, index=slice(None), relative=None):
-    """Time labels: CF-decoded datetimes, or offsets in a relative unit."""
-    if relative is None:
-        return cf_time_values(node, index)
-    offsets = pd.to_timedelta(np.atleast_1d(node[index]), unit=relative)
+def _relative_offsets(unit, raw) -> np.ndarray:
+    """Decode stored times as offsets in a relative unit."""
     # pandas keeps a unit's own resolution (whole seconds), which would
-    # truncate the snapped step; nanoseconds, as cf_time_values gives.
-    values = offsets.as_unit("ns").to_numpy()
-    return values if isinstance(index, slice) else values[0]
+    # truncate the snapped step; nanoseconds, as decode_cf_time gives.
+    return pd.to_timedelta(np.atleast_1d(raw), unit=unit).as_unit("ns").to_numpy()
 
 
-def _get_coord(v, snap, name, relative=None):
-    """Get the coord values from a node."""
-    length = len(v)
-    if should_snap(snap, name) and length > 1:
-        start = v[0] if name != "time" else _time_values(v, 0, relative)
-        stop = v[-1] if name != "time" else _time_values(v, -1, relative)
-        duration = stop - start
-        step = duration / (length - 1)
-        coord = get_coord(min=start, max=stop + step, step=step)
-        assert len(coord) == length
-    else:
-        values = v[:] if name != "time" else _time_values(v, relative=relative)
-        coord = get_coord(data=values, snap=False)
-    return coord
+def _get_coord(v, snap, name, where, relative=None):
+    """Get the coord from a node; time is CF-encoded or relative offsets."""
+    decode = None
+    if name == "time":
+        decode = (
+            partial(decode_cf_time, v.attrs)
+            if relative is None
+            else partial(_relative_offsets, relative)
+        )
+    return stored_coord(v, snap, name=name, where=where, decode=decode)
 
 
 def _name_missing_dim(coord_shape_dict, data_node) -> int:
@@ -142,9 +134,10 @@ def _get_coords_and_dims(
     if "channel" in dims and "channel" not in other_nodes:
         length = data_node.shape[dims.index("channel")]
         other_nodes["channel"] = np.arange(length)
+    where = data_node.file
     coords = {
-        i: _get_coord(v, snap=snap, name=i, relative=relative)
-        for i, v in other_nodes.items()
+        name: _get_coord(node, snap if name in dims else False, name, where, relative)
+        for name, node in other_nodes.items()
     }
     return dims, coords
 

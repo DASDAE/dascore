@@ -43,6 +43,7 @@ from dascore.utils.misc import suppress_warnings
 from dascore.utils.patch_assembly import _estimate_merge_samples, _get_varying_dim
 from dascore.utils.time import to_datetime64, to_timedelta64
 from dascore.viz.spool import _lane_names
+from dascore.warnings import DASCoreWarning
 
 
 def _gigo(garbage):
@@ -1259,6 +1260,136 @@ class TestGetSpool:
             np.testing.assert_array_equal(loaded.data, expected.data)
 
 
+class TestSpoolSnap:
+    """A file spool reads its patches under the snap it was opened with."""
+
+    @pytest.fixture(scope="class")
+    def exact(self, terra15_das_example_path):
+        """The file's patch with its stored time labels."""
+        return dc.read(terra15_das_example_path, snap=False)[0]
+
+    def test_rows_and_patches_follow_snap(self, terra15_das_example_path, exact):
+        """Scanned rows and loaded patches both keep the stored labels."""
+        spool = dc.spool(terra15_das_example_path, snap=False)
+        default = dc.read(terra15_das_example_path)[0]
+        assert exact.get_coord("time") != default.get_coord("time")
+        assert spool[0].get_coord("time") == exact.get_coord("time")
+        contents = spool.get_contents()
+        assert contents["time_max"].iloc[0] == exact.get_coord("time").max()
+
+    def test_snap_survives_chunk_update_and_pickle(
+        self, terra15_das_example_path, exact
+    ):
+        """Derived and refreshed spools still read the stored labels."""
+        spool = dc.spool(terra15_das_example_path, snap=False)
+        others = (
+            spool.chunk(time=None),
+            spool.update(),
+            copy.deepcopy(spool),
+            dc.spool([dc.get_example_patch()]) + spool,
+        )
+        for other in others:
+            patch = next(x for x in other if x.dims == exact.dims)
+            assert patch.get_coord("time") == exact.get_coord("time")
+
+    def test_one_file_under_two_snaps_does_not_combine(self, terra15_das_example_path):
+        """Rows of one file read under two snaps cannot share a resolver."""
+        exact = dc.spool(terra15_das_example_path, snap=False)
+        with pytest.raises(ParameterError, match="snap"):
+            exact + dc.spool(terra15_das_example_path)
+        # spellings of the format's default are one snap
+        default = dc.spool(terra15_das_example_path)
+        combined = default + dc.spool(terra15_das_example_path, snap="time")
+        assert combined[0].get_coord("time") == default[0].get_coord("time")
+
+    def test_explicit_ranges_follow_snap(self, terra15_das_example_path, exact):
+        """A range selection plans on the labels the spool's patches hold."""
+        spool = dc.spool(terra15_das_example_path, snap=False)
+        labels = exact.get_coord("time").values
+        bounds = np.array([[labels[100], labels[200]]])
+        out = spool.select(time=bounds)[0]
+        assert out.equals(exact.select(time=(labels[100], labels[200])))
+
+
+@pytest.fixture(scope="module")
+def terra15_exact(terra15_das_example_path):
+    """The Terra15 example's patch with its stored time labels."""
+    return dc.read(terra15_das_example_path, snap=False)[0]
+
+
+class TestDirectorySpoolSnap:
+    """A directory index records the snap and max_shift it was scanned under."""
+
+    @pytest.fixture()
+    def directory(self, terra15_das_example_path, tmp_path):
+        """A directory holding a copy of the Terra15 example file."""
+        shutil.copy(terra15_das_example_path, tmp_path / "terra15.hdf5")
+        return tmp_path
+
+    def test_rows_and_patches_follow_snap(self, directory, terra15_exact):
+        """Scanned rows and loaded patches both keep the stored labels."""
+        spool = dc.spool(directory, snap=False).update()
+        assert spool[0].get_coord("time") == terra15_exact.get_coord("time")
+        contents = spool.get_contents()
+        assert contents["time_max"].iloc[0] == terra15_exact.get_coord("time").max()
+        assert spool._catalog.backend.get_metadata()["snap"] == "[]"
+
+    def test_another_snap_rescans(self, directory, terra15_exact):
+        """Opened with another snap, the index is rebuilt; with the same, kept."""
+        default = dc.spool(directory).update()
+        assert default[0].get_coord("time") != terra15_exact.get_coord("time")
+        with pytest.warns(UserWarning, match="rescanning"):
+            spool = dc.spool(directory, snap=False)
+        assert spool[0].get_coord("time") == terra15_exact.get_coord("time")
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            again = dc.spool(directory, snap=False).update()
+        assert again[0].get_coord("time") == terra15_exact.get_coord("time")
+
+    def test_another_max_shift_rescans(self, directory):
+        """The max_shift readers judge grids by is part of the decode."""
+        dc.spool(directory).update()
+        with dc.config_context(max_shift=0.3):
+            with pytest.warns(UserWarning, match="rescanning"):
+                spool = dc.spool(directory)
+            assert spool._catalog.backend.get_metadata()["max_shift"] == 0.3
+
+    def test_derived_spools_keep_the_snap(self, directory, terra15_exact):
+        """Chunked and concatenated directory spools read under its snap."""
+        spool = dc.spool(directory, snap=False).update()
+        for derived in (spool.chunk(time=None), spool.concatenate(time=None)):
+            patch = derived[0]
+            assert patch.get_coord("time") == terra15_exact.get_coord("time")
+
+    def test_lazy_reads_keep_the_snap(self, directory, terra15_exact):
+        """A range plan reading coordinates reads them under the index's snap."""
+        spool = dc.spool(directory, snap=False).update()
+        labels = terra15_exact.get_coord("time").values
+        out = spool.select(time=np.array([[labels[100], labels[200]]]))[0]
+        assert out.equals(terra15_exact.select(time=(labels[100], labels[200])))
+
+    def test_spools_opened_under_two_snaps_before_scanning(self, directory):
+        """The index is scanned under the snap it records, whichever opened it."""
+        first = dc.spool(directory)
+        second = dc.spool(directory, snap=False)
+        first.update()
+        with pytest.warns(UserWarning, match="rescanning"):
+            second.update()
+        metadata = second._catalog.backend.get_metadata()
+        assert metadata["snap"] == "[]"
+        reopened = dc.spool(directory, snap=False)
+        assert not reopened.get_contents()["time_step"].notna().any()
+
+    def test_directory_and_file_under_two_snaps(self, directory):
+        """A directory and one of its files read under two snaps do not combine."""
+        path = directory / "terra15.hdf5"
+        with pytest.raises(ParameterError, match="snap"):
+            dc.spool(directory, snap=False).update() + dc.spool(path)
+        with pytest.warns(UserWarning, match="rescanning"):
+            default = dc.spool(directory)
+        assert len(default + dc.spool(path)) == 1
+
+
 class TestSpoolBehaviorOptionalImports:
     """
     Tests for spool behavior when handling optional formats which require
@@ -1773,6 +1904,7 @@ class TestConcatenatePartitions:
         kinds = {x.get_coord("epoch").values.dtype.kind for x in out}
         assert kinds == {"M", "f"}
 
+    @pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
     def test_coordinate_riding_the_dimension_is_joined(self, pair):
         """A coordinate every member carries along the dimension follows it."""
         first, other = pair
@@ -1800,6 +1932,7 @@ class TestConcatenatePartitions:
         assert np.allclose(values[:n], irregular.get_coord("distance").values)
         assert np.all(np.diff(values) < 0)
 
+    @pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
     def test_coordinate_attached_differently_conflicts(self):
         """Equal values on different dimensions are different coordinates."""
         base = dc.get_example_patch()
@@ -1833,12 +1966,14 @@ class TestConcatenatePartitions:
         joined = [x for x in out if x.shape[x.get_axis("range")] == 2 * n]
         assert len(joined) == 1
 
+    @pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
     def test_rider_only_on_the_first_is_left_out_directly(self, pair):
         """The direct function drops a rider a later patch lacks, as the plan does."""
         first, other = pair
         nt = first.shape[first.get_axis("time")]
         a = first.update_coords(clock=("time", np.arange(nt) * 1.0))
-        out = dc.utils.patch.concatenate_patches([a, other], time=None)[0]
+        with pytest.warns(DASCoreWarning, match="clock"):
+            out = dc.utils.patch.concatenate_patches([a, other], time=None)[0]
         assert "clock" not in out.coords.coord_map
         assert out.shape[out.get_axis("time")] == 2 * nt
 
@@ -1919,6 +2054,7 @@ class TestConcatenatePartitions:
             with pytest.raises(CoordMergeError, match="clock"):
                 spool[0]
 
+    @pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
     def test_direct_concatenation_picks_the_lowest_spelling(self, pair):
         """Without a plan, the rider joins in the units of its lowest member."""
         first, other = pair

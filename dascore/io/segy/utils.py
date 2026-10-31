@@ -13,6 +13,7 @@ import dascore as dc
 from dascore import to_float
 from dascore.core import get_coord_manager
 from dascore.exceptions import InvalidSpoolError, PatchError
+from dascore.io.utils import require_grid
 from dascore.utils.misc import optional_import
 
 # Bytes per sample of each SEG-Y (rev 2.1) data sample format code.
@@ -196,7 +197,8 @@ def _get_segy_compatible_patch(spool, round_error_max=3e-9):
         patch = _get_patch_with_channel_coord(patch)
     # Ensure there will be no loss in the time sampling.
     # segy supports us precision
-    time = patch.get_coord("time", require_evenly_sampled=True)
+    require_grid(patch, ("time", "channel"), "SEGY")
+    time = patch.get_coord("time")
     time_step = dc.to_float(time.step)
     new_samp = np.round(time_step, 6)
     round_error = np.abs(new_samp - time_step).max()

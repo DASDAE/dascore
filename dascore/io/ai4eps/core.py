@@ -48,7 +48,7 @@ class AI4EPSV1(H5ArrayMixin, FiberIO):
         return self.version if _is_ai4eps(resource) else None
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Scan an AI4EPS file, return summary info about the contents."""
         dataset = resource["data"]

@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
+import numpy as np
+
 import dascore as dc
 from dascore import get_coord_manager
-from dascore.core.coords import get_coord
-from dascore.io.utils import (
-    drop_blank_attrs,
-    get_gridded_coord,
-    should_snap,
-)
+from dascore.io.utils import drop_blank_attrs, stored_coord
 from dascore.utils.hdf5 import H5Reader
 from dascore.utils.misc import maybe_get_items
 
@@ -27,20 +24,22 @@ def _get_distance_coord(fi, snap=True):
     """
     Get the distances from the T1 file.
 
-    The interrogator fixes the spatial sampling, so the snapped path puts the
-    stored values back on the grid they restate.
+    The interrogator fixes the spatial sampling, so the stored values
+    restate a grid.
     """
     dist = fi["Data/Distance"][()]
-    if should_snap(snap, "distance"):
-        return get_gridded_coord(dist, units="m")
-    return get_coord(data=dist, units="m", snap=False)
+    return stored_coord(dist, snap, name="distance", where=fi, units="m")
 
 
 def _get_time_coord(fi, snap=True):
     """Get the times from the T1 file"""
-    ts = fi["Data/Time"][()].squeeze()
-    times = (ts * 1e9).astype("datetime64[ns]")
-    return get_coord(data=times, units="s", snap=should_snap(snap, "time"))
+    ts = np.atleast_1d(fi["Data/Time"][()].squeeze())
+    return stored_coord(ts, snap, name="time", where=fi, decode=_seconds, units="s")
+
+
+def _seconds(values):
+    """Decode stored epoch seconds to datetimes."""
+    return (values * 1e9).astype("datetime64[ns]")
 
 
 def _get_coords(fi, snap=True) -> dc.CoordManager:

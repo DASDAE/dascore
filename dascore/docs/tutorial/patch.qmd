@@ -157,7 +157,7 @@ assert first.attrs.data_id != other.attrs.data_id
 
 A parameter left at its default is the same call as one which passes that default, so adding a defaulted parameter to an operation changes no ID; changing what a default *does* requires raising the operation's version. An ID is never knowingly false: when a parameter cannot be described faithfully (a closure, an object of an unknown type), or an input carries no ID, the result receives a random `data_id` instead of a derived one.
 
-Trimming a stored patch is not a route. While a patch is still exactly what its source loads, narrowing it to a window of that array names the window rather than the call which reached it, so `dc.read(path, time=window)`, `dc.read(path)[0].select(time=window)` and `spool.select(time=window)` all name one array, and selecting twice lands where selecting once does. Once anything else has been done to the patch, or the selection is one the stored array cannot be sliced to, the result derives like any other operation's. Reading under non-default decode options, such as `snap=False`, is itself an operation on the stored thing, so it names a different array than the default read of the same file.
+Trimming a stored patch is not a route. While a patch is still exactly what its source loads, narrowing it to a window of that array names the window rather than the call which reached it, so `dc.read(path, time=window)`, `dc.read(path)[0].select(time=window)` and `spool.select(time=window)` all name one array, and selecting twice lands where selecting once does. Once anything else has been done to the patch, or the selection is one the stored array cannot be sliced to, the result derives like any other operation's. Reading under a decode option other than the format's default, such as a `snap` which names other dimensions, is itself an operation on the stored thing, so it names a different array than the default read of the same file.
 
 When a file does not contain an `origin_id`, DASCore derives one from the format, version, path, patch key, file size, and modification time. Repeated reads and metadata scans therefore agree without hashing the data array. Copying the same bytes to another path produces a different derived ID, and overwriting a path also changes it. Formats that store the IDs (DASDAE) restore both when the file is read elsewhere, so a route continues across a save.
 
@@ -402,7 +402,9 @@ rebuilt = dc.Patch(
 
 To change an association, pass the same values with a new dimension tuple. This changes coordinate metadata without reshaping the patch.
 
-Coordinates not associated with a dimension use `(None, values)`. [`Patch.drop_coords`](`dascore.Patch.drop_coords`) removes non-dimensional coordinates; dimension coordinates cannot be dropped. [`Patch.squeeze_coords`](`dascore.Patch.squeeze_coords`) moves non-dimensional coordinates holding a single value into the attrs.
+Associated coordinates follow what an operation does along their dimension: selecting, `dropna`, a rolling step, `roll(update_coord=True)` and aligning two patches index them the same way. Operations whose output samples they cannot describe, such as reductions, resampling, correlation lags or midpoints, drop them with a `DASCoreWarning` naming them. Their units always survive.
+
+Coordinates not associated with a dimension use `(None, values)`. [`Patch.drop_coords`](`dascore.Patch.drop_coords`) removes non-dimensional coordinates; dimension coordinates cannot be dropped. With `to_attrs=True` it moves non-dimensional coordinates holding a single value into the attrs instead.
 
 ```{python}
 detached = located.update_coords(latitude=(None, latitude))

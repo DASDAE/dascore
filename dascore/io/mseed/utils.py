@@ -13,9 +13,10 @@ from typing import Literal, TypeVar
 import numpy as np
 
 import dascore as dc
-from dascore.constants import ONE_BILLION
+from dascore.constants import ONE_BILLION, snap_type
 from dascore.core import get_coord, get_coord_manager
 from dascore.core.source import ArraySource
+from dascore.io.utils import stored_coord
 from dascore.utils.io import LocalPath, _read_file_header
 
 _T = TypeVar("_T", bound="_TraceSummary")
@@ -280,7 +281,9 @@ def _source_patch_key(group_key: _TraceGroupKey) -> str:
 
 
 def _get_coords(
-    segments: Sequence[_TraceSummary], channel_map: dict[str, int] | None = None
+    segments: Sequence[_TraceSummary],
+    channel_map: dict[str, int] | None = None,
+    snap: snap_type = (),
 ):
     """Return DASCore coordinates from compatible MiniSEED segments."""
     segments = sorted(segments, key=lambda x: (x.station, x.source_id))
@@ -294,7 +297,7 @@ def _get_coords(
     )
     start = np.datetime64(first.start_ns, "ns")
     return {
-        "channel": get_coord(data=np.asarray(channel_values)),
+        "channel": stored_coord(np.asarray(channel_values), snap, name="channel"),
         "time": get_coord(
             start=start,
             step=first.sample_step,
@@ -312,11 +315,12 @@ def _metadata_from_segments(
     group_key,
     segments: list[_TraceSummary],
     channel_map: dict[str, int] | None = None,
+    snap: snap_type = (),
 ) -> dc.PatchMeta:
     """Create the metadata of compatible MiniSEED record summaries."""
     first = min(segments, key=lambda item: (item.station, item.source_id))
     coords = get_coord_manager(
-        _get_coords(segments, channel_map), dims=("channel", "time")
+        _get_coords(segments, channel_map, snap), dims=("channel", "time")
     )
     attrs = {
         "data_type": "",
@@ -335,17 +339,17 @@ def _metadata_from_segments(
     )
 
 
-def _scan_patches(path, pymseed) -> list[dc.PatchMeta]:
+def _scan_patches(path, pymseed, snap: snap_type = ()) -> list[dc.PatchMeta]:
     """Return the metadata of each patch in a MiniSEED file."""
-    return _metadata_from_summaries(_scan_segments(path, pymseed))
+    return _metadata_from_summaries(_scan_segments(path, pymseed), snap)
 
 
-def _metadata_from_summaries(all_segments):
+def _metadata_from_summaries(all_segments, snap: snap_type = ()):
     """Build metadata without repeating the record scan."""
     payloads = []
     channel_map = _get_channel_map(all_segments)
     for group_key, segments in _group_segments(all_segments):
-        payload = _metadata_from_segments(group_key, segments, channel_map=channel_map)
+        payload = _metadata_from_segments(group_key, segments, channel_map, snap)
         payloads.append(payload)
     return sorted(payloads, key=lambda x: x.coords.get_coord("channel").min())
 

@@ -1356,6 +1356,28 @@ class TestEquivalentSpellings:
         assert read_operation_id(("time", "time")) == read_operation_id("time")
         assert read_operation_id("time") != read_operation_id(False)
         assert read_operation_id(True) is None
+        assert read_operation_id(None) is None
+
+    def test_snap_matching_the_format_default(self):
+        """A snap naming what the format snaps anyway is the default read."""
+        from dascore.utils.identity import read_operation_id  # noqa: PLC0415
+
+        default = ("time", "distance")
+        assert read_operation_id(("distance", "time"), default) is None
+        assert read_operation_id(None, default) is None
+        assert read_operation_id(True, default) is not None
+        assert read_operation_id(False, ()) is None
+
+    def test_max_shift_is_part_of_a_snapped_read(self):
+        """Another max_shift decodes snapped labels differently, never others."""
+        from dascore.utils.identity import read_operation_id  # noqa: PLC0415
+
+        unsnapped = read_operation_id(False)
+        with dc.config_context(max_shift=0.3):
+            assert read_operation_id(True) is not None
+            assert read_operation_id(None) is not None
+            assert read_operation_id(False) == unsnapped
+            assert read_operation_id(False, ()) is None
 
     def test_set_dims_restating_a_dimension(self, patch):
         """Naming a dimension as itself changes nothing, so neither do the ids."""

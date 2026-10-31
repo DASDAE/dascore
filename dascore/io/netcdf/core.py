@@ -151,7 +151,7 @@ class _NetCDFReader:
             return read_dataset_array(dataset, windows, key, where)
 
     def get_metadata(
-        self, resource: H5Reader, *, snap: snap_type = True
+        self, resource: H5Reader, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Scan NetCDF file metadata, one per payload, without loading arrays.
 

@@ -5,7 +5,6 @@ from __future__ import annotations
 import warnings
 from collections.abc import Iterator
 from dataclasses import dataclass
-from fractions import Fraction
 from uuid import uuid4
 
 import h5py
@@ -17,14 +16,22 @@ from dascore.core.coords import get_coord
 from dascore.exceptions import InvalidSpoolError, PatchError
 from dascore.io.utils import (
     convert_attr_units,
+    require_grid,
     resolve_keyed_source,
     should_snap,
     step_from_rate,
+    stored_coord,
 )
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.units import get_quantity_str
 from dascore.utils.hdf5 import create_dataset, encode_h5_strings, staged_group
-from dascore.utils.misc import iterate, maybe_get_items, register_func, unbyte
+from dascore.utils.misc import (
+    _maybe_unpack,
+    iterate,
+    maybe_get_items,
+    register_func,
+    unbyte,
+)
 
 # --- Getting format/version
 
@@ -166,58 +173,55 @@ def _part_time(attrs, name):
 def _time_unit(time_array) -> str:
     """
     The unit of a ProdML time array: its Uom attr, else whichever of µs or
-    ns puts the first label on PartStartTime (µs, as ProdML states, on a tie).
+    ns puts the first label on PartStartTime (µs, as ProdML states, on a tie
+    or without a usable PartStartTime).
 
     Some producers write nanoseconds without saying so.
     """
     uom = str(unbyte(time_array.attrs.get("Uom", "")))
     if uom in {"us", "ns"}:
         return uom
-    start = _part_time(time_array.attrs, "PartStartTime").astype("datetime64[us]")
+    try:
+        start = _part_time(time_array.attrs, "PartStartTime")
+    except (KeyError, ValueError):
+        return "us"
+    start = start.astype("datetime64[us]")
     first, start_us = int(time_array[0]), int(start.astype(np.int64))
     return "ns" if abs(first / 1000 - start_us) < abs(first - start_us) else "us"
 
 
 def _get_time_coord(node, snap=True):
-    """Get the time information from a Raw node (or the parent of Fbe data)."""
+    """
+    Get the time coordinate from a Raw or Fbe node.
+
+    The grid starts at the node's `PartStartTime` and steps at its
+    `OutputDataRate`, checked against the first and last stored times; a
+    node without a rate spans the stored times instead. `PartEndTime` is
+    not used, as it can be wrong (#414).
+    """
     time_names = [x for x in node.keys() if x.endswith("DataTime")]
     assert len(time_names) == 1, f"Found bad time information in prodml {node=}"
-    time_name = time_names[0]
-    time_array = node[time_name]
-    array_len = len(time_array)
-    assert array_len > 0, "Missing time array in ProdML file."
+    time_array = node[time_names[0]]
+    assert len(time_array) > 0, "Missing time array in ProdML file."
     unit = _time_unit(time_array)
-    dtype = f"datetime64[{unit}]"
-    if not should_snap(snap, "time"):
-        values = time_array[:].astype(np.int64).astype(dtype)
-        return get_coord(data=values, units="s", snap=False)
-    start = _part_time(time_array.attrs, "PartStartTime")
-    if array_len == 1:
-        # One time states no spacing: step from the node's OutputDataRate,
-        # or no step when that rate is missing, zero or not finite.
-        rate = float(unbyte(node.attrs.get("OutputDataRate", np.nan)))
-        if not (np.isfinite(rate) and rate > 0):
-            return get_coord(data=np.array([start]), units="s")
-        return get_coord(start=start, step=step_from_rate(rate), shape=(1,), units="s")
-    end = _part_time(time_array.attrs, "PartEndTime")
-    # A shape, not a stop, fixes the count. The step is exact, so the grid
-    # ends on `end`, with its denominator bounded so the grid's integer
-    # arithmetic (count * numerator, in ns) stays within int64.
-    span = int((end - start).astype("timedelta64[ns]").astype(np.int64))
-    bound = 2**62 // (array_len * (span // (array_len - 1) + 1))
-    step = Fraction(span, array_len - 1).limit_denominator(max(bound, 1)) / 10**9
-    time_coord = get_coord(start=start, step=step, shape=(array_len,), units="s")
-    # Sometimes the "PartEndTime" can be wrong. Check for this and try to
-    # compensate. See #414. We prefer the iso 8601 strings to the time array,
-    # which is less often right, so only use the array when its last time is
-    # off from the stated end by more than its precision, yet "close".
-    last = np.int64(time_array[-1]).astype(dtype)
-    precision = np.timedelta64(1, "ns") if unit == "ns" else np.timedelta64(1, "us")
-    gap = abs(end - last)
-    off = precision < gap and gap * (array_len - 1) < 10 * (end - start)
-    if off or span <= 0:  # or the stated part has no length to grid
-        time_coord = get_coord(data=time_array[:].astype(np.int64).astype(dtype))
-    return time_coord
+    start = step = None
+    if should_snap(snap, "time"):  # only a grid needs the header's terms
+        stated = time_array.attrs.get("PartStartTime")
+        # the stored dtype matters: a float32 rate is read as what it holds
+        rate = _maybe_unpack(node.attrs.get("OutputDataRate", np.nan))
+        if stated is not None and float(rate) > 0:  # NaN, a missing rate, is not
+            start = _part_time(time_array.attrs, "PartStartTime")
+            step = step_from_rate(rate)
+    return stored_coord(
+        time_array,
+        snap,
+        name="time",
+        where=node.file,
+        decode=lambda values: np.asarray(values).astype(f"datetime64[{unit}]"),
+        start=start,
+        step=step,
+        units="s",
+    )
 
 
 def _yield_data_nodes(fi) -> Iterator[_ProdMLNodeInfo]:
@@ -302,8 +306,9 @@ def _get_single_patch(spool):
     if not data.size or not valid_dtype:
         msg = "ProdML writing supports nonempty standard integer or float dtypes."
         raise PatchError(msg)
+    require_grid(patch, ("time", "distance"), "ProdML")
     for name in ("time", "distance"):
-        coord = patch.get_coord(name, require_sorted=True, require_evenly_sampled=True)
+        coord = patch.get_coord(name, require_sorted=True)
         if not coord.sorted:
             raise PatchError(f"ProdML {name} coordinates must be increasing.")
     return patch

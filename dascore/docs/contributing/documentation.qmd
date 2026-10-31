@@ -43,7 +43,7 @@ def add_value(patch: PatchType, value: int | float = 0) -> PatchType:
 
 Docstring examples use [doctest](https://docs.python.org/3/library/doctest.html). Quarto options such as `>>> #| code-fold: true` and headings such as `>>> ### Detail` are preserved in generated API pages.
 
-For IO contracts, document only the formatter's responsibility. `FiberIO.scan()` returns patch-local attrs and a full `CoordManager`; the public scan pipeline adds source path, format, and version. Formats with stored per-sample coordinates use `snap=False` for exact values.
+For IO contracts, document only the formatter's responsibility. `FiberIO.scan()` returns patch-local attrs and a full `CoordManager`; the public scan pipeline adds source path, format, and version. Formats with stored per-sample coordinates return them exactly with `snap=False`.
 
 # Build and test
 

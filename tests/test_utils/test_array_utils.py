@@ -38,7 +38,7 @@ from dascore.utils.array import (
 )
 from dascore.utils.array_api import array_namespace, backend_name
 from dascore.utils.misc import suppress_warnings
-from dascore.warnings import NumpyFallbackWarning
+from dascore.warnings import DASCoreWarning, NumpyFallbackWarning
 
 
 def to_backend_array(patch, array):
@@ -1211,9 +1211,10 @@ class TestNumpyFunctionHandlers:
         assert out.get_coord("time") == random_patch.get_coord("time")
 
     def test_diff_associated_coords(self, random_patch_with_lat_lon):
-        """Coordinates along the differenced dimension are dropped."""
+        """Coordinates along the differenced dimension are dropped, with a warning."""
         patch = random_patch_with_lat_lon
-        assert "latitude" not in np.diff(patch, axis=0).coords.coord_map
+        with pytest.warns(DASCoreWarning, match="latitude"):
+            assert "latitude" not in np.diff(patch, axis=0).coords.coord_map
         kept = np.diff(patch, axis=1).get_array("latitude")
         assert np.array_equal(kept, patch.get_array("latitude"))
 

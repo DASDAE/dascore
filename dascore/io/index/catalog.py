@@ -17,7 +17,6 @@ Selection composes Query predicates without running SQL; realization
 from __future__ import annotations
 
 import abc
-import itertools
 import json
 import operator
 import os
@@ -36,10 +35,11 @@ import pandas as pd
 
 import dascore as dc
 from dascore.compat import UPath
+from dascore.config import config_context, get_config
 from dascore.constants import PROGRESS_LEVELS, ExecutorType, namespace_select_type
 from dascore.core.summary import normalize_source_patch_key
-from dascore.exceptions import MissingPatchError
-from dascore.io.core import _resolve_read_spool
+from dascore.exceptions import MissingPatchError, ParameterError
+from dascore.io.core import FiberIO, _resolve_read_spool, _resolve_snap
 from dascore.io.index.backend import get_backend
 from dascore.io.index.indexer import DBDirectoryIndexer, scan_unit_stats
 from dascore.io.index.ingest import SourceRecord, patch_record, summaries_to_records
@@ -50,7 +50,7 @@ from dascore.io.index.query import (
     resolve_query,
 )
 from dascore.io.index.schema import SPOOL_LATE_RENAMES
-from dascore.utils.gaps import contiguous_windows
+from dascore.utils.identity import _snap_names
 from dascore.utils.misc import (
     _canonical_range,
     express_range_for_coord,
@@ -222,34 +222,62 @@ def _patch_path(patch: dc.Patch) -> str:
 
 def _live_entries(patches: Sequence[dc.Patch]) -> dict[str, dc.Patch]:
     """
-    Key live patches by identity; a patch with holes enters as its pieces.
+    Key live patches by identity, holes and all.
 
-    Each piece is a view, one per product of the dimensions' contiguous
-    windows, whose identity extends its patch's, so re-adding either the
-    patch or a piece is idempotent.
+    A patch with holes is one entry, as it is one row; the index states
+    its runs, so reports and plans see the holes inside it.
     """
-    out = {}
-    for patch in {_patch_path(x): x for x in patches}.values():
-        windows = [contiguous_windows(patch.get_coord(x)) for x in patch.dims]
-        if all(len(x) == 1 for x in windows):
-            out[_patch_path(patch)] = patch
-            continue
-        for num, window in enumerate(itertools.product(*windows)):
-            select = dict(zip(patch.dims, window, strict=True))
-            piece = patch.select(samples=True, **select)
-            piece._instance_id = f"{patch._instance_id}/{num}"
-            out[_patch_path(piece)] = piece
-    return out
+    return {_patch_path(x): x for x in patches}
 
 
 class FileResolver(PatchResolver):
     """Load patches through dc.read; remoteness is the path layer's job."""
 
-    def __init__(self, root: Path | str | None = None, upaths: Mapping | None = None):
+    def __init__(
+        self,
+        root: Path | str | None = None,
+        upaths: Mapping | None = None,
+        snaps: Mapping | None = None,
+        snap=None,
+        max_shift: float | None = None,
+    ):
         self._root = Path(root) if root is not None else None
         # Rows hold path strings; a remote path's storage options live only
         # on the UPath it was given as, so that is kept to reopen it.
         self._upaths = dict(upaths or {})
+        # Likewise the snap a source was scanned under, which its reads use,
+        # by path, or for every source (a directory's); and the max_shift
+        # its readers judged grids by.
+        self._snaps = dict(snaps or {})
+        self._snap = snap
+        self._shifts: dict[str, float] = {}
+        shift = get_config().max_shift if max_shift is None else max_shift
+        self._max_shift = shift
+
+    def decode(self, path: str):
+        """The snap and max_shift a source was scanned under, which reads repeat."""
+        return self._snaps.get(path, self._snap), self._shifts.get(
+            path, self._max_shift
+        )
+
+    def hold_decodes(self, decodes: Mapping) -> None:
+        """
+        Read these sources under these decodes, refusing one held otherwise.
+
+        Rows of one source decoded two ways cannot share a resolver, which
+        reads each path one way.
+        """
+        for path, (snap, shift) in decodes.items():
+            held_snap = self._snaps.setdefault(path, snap)
+            held_shift = self._shifts.setdefault(path, shift)
+            snaps = (held_snap, snap)
+            if _snap_names(held_snap) != _snap_names(snap) or held_shift != shift:
+                msg = (
+                    f"Spools reading {path} under different snap options "
+                    f"({snaps[0]!r} and {snaps[1]!r}, max_shift {held_shift} and "
+                    f"{shift}) cannot be combined; open the file once."
+                )
+                raise ParameterError(msg)
 
     def _read(self, path, row: Mapping, trim: dict, source_patch_key: str):
         """
@@ -266,7 +294,11 @@ class FileResolver(PatchResolver):
             kwargs["file_format"] = row["source_format"]
         if row.get("source_version"):
             kwargs["file_version"] = row["source_version"]
-        return dc.read(**kwargs, **id_kwargs, **trim)
+        snap, shift = self.decode(str(row.get("source_path")))
+        if snap is not None:
+            kwargs["snap"] = snap
+        with config_context(max_shift=shift):
+            return dc.read(**kwargs, **id_kwargs, **trim)
 
     def resolve_path(self, path: str | Path) -> str | Path:
         """Resolve a row's source path against the catalog root."""
@@ -318,9 +350,11 @@ class CompositeResolver(PatchResolver):
         return self.plans
 
     def absorb_upaths(self, resolver: PatchResolver):
-        """Keep the storage-aware paths another resolver reopens sources by."""
+        """Keep the paths, and decodes, another resolver reopens sources by."""
         file = getattr(resolver, "file", resolver)
         self.file._upaths.update(getattr(file, "_upaths", {}))
+        if isinstance(file, FileResolver):
+            self.file.hold_decodes({x: file.decode(x) for x in file._snaps})
 
     def absorb(self, resolver: PatchResolver, paths=None) -> None:
         """
@@ -372,12 +406,29 @@ def _live_records(registry: Mapping[str, dc.Patch]):
     return records
 
 
+def directory_decodes(resolver, sources) -> dict:
+    """
+    The decode each source a directory resolver reads is read under, by path.
+
+    ``sources`` are ``(path, format, version)``; its one snap is spelled per
+    source as the format's names, so a file spool of one can be compared.
+    """
+    if not isinstance(resolver, FileResolver) or resolver._root is None:
+        return {}
+    out = {}
+    for path, file_format, version in sources:
+        fiber_io = FiberIO.manager.get_fiberio(format=file_format, version=version)
+        out[str(path)] = (_resolve_snap(fiber_io, resolver._snap), resolver._max_shift)
+    return out
+
+
 def _absolutize_record(record, root):
     """Return a source record whose relative path is resolved against root."""
     path = record.source_path
     if "://" in path or Path(path).is_absolute():
         return record
-    resolved = str(Path(root) / (path if path != "." else ""))
+    # POSIX, as the index stores paths, so one file's rows and decodes match
+    resolved = (Path(root) / (path if path != "." else "")).as_posix()
     return replace(record, source_path=resolved, base_uri=None)
 
 
@@ -793,6 +844,11 @@ class PatchCatalog:
             # along; the rest of the registry stays with its own catalog
             member_paths = {record.source_path for record in records}
             resolver.absorb(catalog.resolver, paths=member_paths)
+            # a directory's sources read under its one decode
+            sources = [
+                (x.source_path, x.source_format, x.format_version) for x in records
+            ]
+            resolver.file.hold_decodes(directory_decodes(catalog.resolver, sources))
         backend.write_sources(list(merged.values()))
         out._invalidate()
         return out
@@ -803,13 +859,15 @@ class PatchCatalog:
         path: str | Path,
         file_format: str | None = None,
         file_version: str | None = None,
+        snap=None,
     ) -> PatchCatalog:
         """
         Catalog over a single fiber file.
 
         The file is scanned eagerly (one row per contained patch) into an
         in-memory backend; patches load through the file resolver on
-        demand. There is no syncer — a changed file needs a new catalog.
+        demand, under the `snap` it was scanned with. There is no syncer —
+        a changed file needs a new catalog.
         """
         # Measured the way the directory indexer measures it, so a row
         # from either carries the same promise about its source. The scan
@@ -821,7 +879,11 @@ class PatchCatalog:
         source = coerce_to_local_path(path)
         mtime, size = scan_unit_stats(source)
         summaries = dc.scan(
-            path, file_format=file_format, file_version=file_version, progress=None
+            path,
+            file_format=file_format,
+            file_version=file_version,
+            progress=None,
+            snap=snap,
         )
         mtimes, sizes = {}, {}
         if mtime is not None and scan_unit_stats(source) == (mtime, size):
@@ -829,7 +891,18 @@ class PatchCatalog:
         records = summaries_to_records(summaries, mtimes_ns=mtimes, sizes_bytes=sizes)
         remote = isinstance(path, UPath) and not is_local_path(path)
         upaths = {str(path): path} if remote else {}
-        out = cls(resolver=FileResolver(upaths=upaths))
+        # the format's default named, so a union can compare two spools;
+        # keyed as the rows store the path, which is POSIX
+        snaps = {
+            str(x.source_path).replace("\\", "/"): _resolve_snap(
+                FiberIO.manager.get_fiberio(
+                    format=x.source_format, version=x.source_version
+                ),
+                snap,
+            )
+            for x in summaries
+        }
+        out = cls(resolver=FileResolver(upaths=upaths, snaps=snaps))
         out.backend.write_sources(records)
         out._invalidate()
         return out
@@ -837,14 +910,22 @@ class PatchCatalog:
     @classmethod
     def from_directory(
         cls,
-        path: str | Path,
+        path: str | Path | DBDirectoryIndexer,
         index_path: str | Path | None = None,
+        snap=None,
     ) -> PatchCatalog:
-        """Catalog over a directory of fiber files."""
-        syncer = DBDirectoryIndexer(path, index_path=index_path)
+        """Catalog over a directory of fiber files, read under `snap`."""
+        syncer = (
+            path
+            if isinstance(path, DBDirectoryIndexer)
+            else DBDirectoryIndexer(path, index_path=index_path, snap=snap)
+        )
+        resolver = FileResolver(
+            root=syncer.path, snap=syncer.snap, max_shift=syncer.max_shift
+        )
         return cls(
             backend=syncer._backend,
-            resolver=FileResolver(root=syncer.path),
+            resolver=resolver,
             syncer=syncer,
             default_order=_DIRECTORY_ORDER,
         )
@@ -1259,6 +1340,7 @@ class PatchCatalog:
             )
 
             df = patch_local_adjusted_envelopes(df, self._residuals, drop_empty=False)
+            df = self._clipped_to_runs(df)
             df = _forget_what_a_trim_invalidates(df, self._residuals).reset_index(
                 drop=True
             )
@@ -1270,6 +1352,40 @@ class PatchCatalog:
             # Re-read the revision: bootstrapping the backend above can
             # bump it, and this frame reflects the state after that.
             return self._df_cache.set(df, self._revision.value)
+
+    def _trimmed_names(self) -> set[str]:
+        """The coordinates a value range trims, which may end in a hole."""
+        return {
+            name
+            for coords, samples, relative in self._residuals
+            if not (samples or relative)
+            for name in coords
+        }
+
+    def _runs_may_trim(self) -> bool:
+        """Whether a value range may land in a hole, which SQL cannot see."""
+        return bool(self._trimmed_names()) and self.backend.holds_runs()
+
+    def _clipped_to_runs(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Narrow trimmed envelopes to the runs they reach (see `clip_to_runs`)."""
+        if df.empty or "_patch_row" not in df.columns or not self._runs_may_trim():
+            return df
+        # Circular imports: chunk planning and range lookups use the catalog.
+        from dascore.utils.chunk_plan import clip_to_runs  # noqa: PLC0415
+        from dascore.utils.explicit_ranges import _source_manager  # noqa: PLC0415
+
+        files: dict = {}
+        for name in self._trimmed_names():
+            indexed = self.backend.coord_runs(name, df["_patch_row"])
+
+            def read(row, name=name):
+                """The row's coordinate, read from its source."""
+                row = row.to_dict()
+                coords = _source_manager(self.resolver, row, files, projection=name)
+                return None if coords is None else coords.coord_map.get(name)
+
+            df = clip_to_runs(df, name, indexed, read)
+        return df
 
     def _has_relative_selection(self) -> bool:
         """Whether patch-relative bounds can remove SQL candidate rows."""
@@ -1293,7 +1409,7 @@ class PatchCatalog:
                 )
             ):
                 return True
-        return False
+        return self._runs_may_trim()
 
     def __len__(self) -> int:
         with self._revision.lock:
@@ -1312,6 +1428,9 @@ class PatchCatalog:
                     patch_local = True
                 elif patch_local:
                     return len(self.to_df())
+            # A range landing in a hole drops a row SQL kept.
+            if self._runs_may_trim():
+                return len(self.to_df())
             # Otherwise SQL candidacy already accounts for every drop, so the
             # count matches len(to_df()) without projecting or pivoting.
             return self.backend.count(list(self._queries) or None, patch_rows=self._ids)

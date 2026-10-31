@@ -309,46 +309,57 @@ def _time_runs_patch(count, samples=10):
 
 
 class TestGappedPatchRows:
-    """A spool row never holds a hole: a gapped patch enters as its pieces."""
+    """A spool holds a patch with holes whole; its index states the holes."""
 
     @pytest.mark.parametrize("count", [2, 256, 257, 1440])
-    def test_one_row_per_run(self, count):
-        """Every run is a row, so gaps, coverage and chunk see every hole."""
+    def test_holes_are_seen_through_runs(self, count):
+        """Gaps, coverage and chunk see every hole of the one row."""
         spool = dc.spool([_time_runs_patch(count)])
-        assert len(spool) == count
+        assert len(spool) == 1
         assert len(spool.get_gaps()) == count - 1
         assert spool.get_coverage()["coverage"].iloc[0] < 1
         assert len(spool.chunk(time=None)) == count
 
-    def test_pieces_are_views(self):
-        """The pieces share the gapped patch's data; a plain patch is itself."""
+    def test_split_gaps_gives_views(self):
+        """split_gaps cuts the pieces as views; a plain patch is itself."""
         patch = _time_runs_patch(3)
-        pieces = list(dc.spool([patch]).sort("time"))
+        pieces = list(patch.split_gaps().sort("time"))
         assert len(pieces) == 3
         assert all(np.shares_memory(x.data, patch.data) for x in pieces)
         data = np.concatenate([x.data for x in pieces], axis=1)
         assert np.array_equal(data, patch.data)
         plain = _time_runs_patch(1)
         assert dc.spool([plain])[0] is plain
+        assert dc.spool([patch])[0] is patch
 
     def test_two_gapped_dims_give_the_product(self):
-        """Holes in two dimensions give one piece per pair of runs."""
+        """Holes in two dimensions split into one piece per pair of runs."""
         distance = concat_coords(
             get_coord(start=0, step=1, shape=(2,)),
             get_coord(start=10, step=1, shape=(1,)),
         )
         patch = _time_runs_patch(3).update_coords(distance=distance)
-        assert len(dc.spool([patch])) == 6
+        spool = dc.spool([patch])
+        assert len(spool) == 1
+        assert len(spool.get_gaps("distance")) == 1
         assert len(patch.split_gaps()) == 6
 
+    def test_read_selection_with_holes_is_one_patch(self, tmp_path):
+        """A read picking labels which leave holes gives one gapped patch."""
+        patch = dc.get_example_patch()
+        path = dc.write(patch, tmp_path / "one.h5", "dasdae")
+        values = patch.get_coord("distance").values
+        (out,) = dc.read(path, distance=values[[1, 2, 5]])
+        assert out.get_coord("distance").gapped
+        assert len(dc.spool([patch.select(distance=values[[1, 2, 5]])])) == 1
+
     def test_identity_is_stable(self):
-        """A gapped patch, or one of its pieces, given again is the same entry."""
+        """A gapped patch given again is the same entry."""
         patch = _time_runs_patch(3)
-        assert len(dc.spool([patch, patch])) == 3
+        assert len(dc.spool([patch, patch])) == 1
         spool = dc.spool([patch])
         spool._catalog.add(patch)
-        spool._catalog.add(spool[0])
-        assert len(spool) == len(spool + dc.spool(list(spool))) == 3
+        assert len(spool) == len(spool + dc.spool(list(spool))) == 1
 
 
 class TestChunkKeepsHoles:
@@ -379,7 +390,7 @@ class TestChunkKeepsHoles:
         patch = dc.Patch(data=data, coords={"distance": [0], "time": time}, dims=DIMS)
         out = list(dc.spool([patch]).chunk(time=None, tolerance=10))
         assert len(out) == 2
-        assert out == list(dc.spool([patch]))[::order]
+        assert out == list(patch.split_gaps())[::order]
 
     def test_overlapping_or_stepless_members_join(self):
         """Overlapping members, or labels with no step, name no lattice to break."""
