@@ -7,7 +7,7 @@ import numpy as np
 import dascore as dc
 import dascore.core
 from dascore.core.coords import get_coord
-from dascore.io.utils import should_snap
+from dascore.io.utils import _scale_stored, should_snap
 from dascore.utils.misc import _maybe_unpack, unbyte
 
 # --- Getting format/version
@@ -104,4 +104,4 @@ def _apply_data_scale(fi, data):
     if (scale := _get_data_scale(fi)) is None:
         return data
     # Storage scaling applies to floating-point data as well as integers.
-    return data.astype(_get_data_dtype(fi), copy=False) * scale
+    return _scale_stored(data, _get_data_dtype(fi), scale)

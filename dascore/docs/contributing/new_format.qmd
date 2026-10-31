@@ -96,6 +96,8 @@ Use [`slice_dataset`](`dascore.io.utils.slice_dataset`) for a dataset already in
 
 The built-in TDMS, H5Simple, and MiniSEED readers retain parsed headers or dataset handles for the duration of a read through a private preparation helper. MiniSEED batches selected windows into one sample-reading pass. This optimization adds no work to scans and stores no state on the formatter. Subclass overrides and runtime wrappers of either public hook restore the shared path, so inherited optimizations cannot bypass them.
 
+A reader whose arrays are its HDF5 datasets as stored, apart from a scale, can record their byte offsets with `_dataset_source` and define `_read_stored = staticmethod(_read_bytes)` (both in `dascore.io.core`) to load windows with plain file reads. Like the other private hooks, it is used only with the `read_array` it was written for.
+
 Resource annotations belong on each hook independently. A format can scan with `BinaryReader` and load arrays with `LocalBinaryReader`, for example.
 
 ## Accept managed resources

@@ -7,6 +7,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
+from dascore.io.core import _dataset_source, _read_bytes
 from dascore.io.utils import slice_dataset
 from dascore.models import OptionalFiniteFloat, UTF8Str
 from dascore.utils.hdf5 import H5Reader
@@ -14,6 +15,7 @@ from dascore.utils.hdf5 import H5Reader
 from .utils import (
     _apply_data_scale,
     _get_data_dtype,
+    _get_data_scale,
     _get_opto_das_attrs,
     _get_opto_das_version_str,
 )
@@ -32,6 +34,7 @@ class OptoDASV8(FiberIO):
     name = "OptoDAS"
     preferred_extensions = ("hdf5", "h5")
     version = "8"
+    _read_stored = staticmethod(_read_bytes)
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
@@ -43,11 +46,9 @@ class OptoDASV8(FiberIO):
         """Scan a OptoDAS file, return summary information about the file's contents."""
         attrs, coords = _get_opto_das_attrs(resource, snap=snap)
         attrs = OptoDASPatchAttrs.from_dict(attrs)
-        return [
-            dc.PatchMeta(
-                attrs=attrs, coords=coords, dtype=str(_get_data_dtype(resource))
-            )
-        ]
+        source = _dataset_source(resource["data"], scale=_get_data_scale(resource))
+        dtype = str(_get_data_dtype(resource))
+        return [dc.PatchMeta(attrs=attrs, coords=coords, dtype=dtype, source=source)]
 
     def read_array(
         self, resource: H5Reader, windows: windows_type = (), key: str = ""

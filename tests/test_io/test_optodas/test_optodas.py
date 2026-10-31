@@ -6,9 +6,11 @@ import shutil
 
 import h5py
 import numpy as np
+import pandas as pd
 import pytest
 
 import dascore as dc
+from dascore.core.lazy_array import LazyArray
 from dascore.io.optodas import OptoDASV8
 from dascore.utils.downloader import fetch
 
@@ -118,3 +120,62 @@ class TestDataScale:
         expected = dc.read(scaled_file)[0].select(samples=True, time=(1, 4))
         np.testing.assert_array_equal(out, expected.data)
         assert str(out.dtype) == dc.scan(scaled_file)[0].dtype
+
+
+class TestOffsetReads:
+    """OptoDAS loads from offsets, scaling the stored samples as its reader does."""
+
+    @pytest.fixture(params=["opto_das_1.hdf5", "decimated_optodas.hdf5"])
+    def source(self, request):
+        """The source of an example file, which records offsets and a scale."""
+        return dc.read(fetch(request.param))[0]._source
+
+    def test_equals_reader(self, source, stored_reads):
+        """Offset loads equal the reader's, dtype too, without opening HDF5."""
+        width = source.shape[1]
+        windows = [(), (slice(2, 9),), (slice(3, 11), slice(width // 3, width))]
+        loaded = [source[x].load() for x in windows]
+        assert source.scale is not None and source.stored_dtype
+        assert not stored_reads
+        for window, out in zip(windows, loaded):
+            expected = source._without_layout()[window].load()
+            assert out.dtype == expected.dtype and out.flags.c_contiguous
+            np.testing.assert_array_equal(out, expected)
+
+    def test_indexed(self, source, tmp_path, stored_reads):
+        """
+        A reopened index keeps the scale, so a member it names loads from
+        offsets. (An OptoDAS distance is no grid the index states, so merges
+        read the patches instead.)
+        """
+        expected = source._without_layout().load()
+        shutil.copy2(source.path, tmp_path / "a.hdf5")
+        dc.spool(tmp_path).update()
+        resolver = dc.spool(tmp_path).chunk(time=None)._catalog.resolver
+        row = resolver.member_rows.iloc[0].to_dict()
+        stored_reads.clear()
+        out = resolver._member_array_source(row, expected.shape).load()
+        assert out.dtype == expected.dtype and not stored_reads
+        np.testing.assert_array_equal(out, expected)
+
+    def test_frame_parquet(self, source, tmp_path):
+        """A frame keeps the scale and stored dtype through parquet."""
+        pytest.importorskip("pyarrow")
+        array = LazyArray.from_sources([source[0:10], source[20:30]])
+        array.to_frame().to_parquet(tmp_path / "frame.parquet")
+        stored = pd.read_parquet(tmp_path / "frame.parquet")
+        back = LazyArray.from_frame(stored, array.shape, array.dtype)
+        assert {(x.scale, x.stored_dtype) for x in back.sources} == {
+            (source.scale, source.stored_dtype)
+        }
+        np.testing.assert_array_equal(back.load(), array.load())
+
+    def test_no_scale(self, tmp_path):
+        """A file stating no scale records none, and loads its stored samples."""
+        path = shutil.copy2(fetch("decimated_optodas.hdf5"), tmp_path / "a.hdf5")
+        with h5py.File(path, "r+") as fi:
+            del fi["header/dataScale"]
+            stored = fi["data"][:]
+        source = dc.read(path)[0]._source
+        assert source.offsets and source.scale is None and not source.stored_dtype
+        np.testing.assert_array_equal(source.load(), stored)

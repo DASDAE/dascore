@@ -174,6 +174,8 @@ def _build_patch_summary_payload(
     source_patch_key="",
     data_offsets=(),
     data_chunk_rows=0,
+    data_scale=None,
+    data_stored_dtype="",
 ) -> dict[str, Any]:
     """Build the canonical structured payload used to validate PatchSummary."""
     source_patch_key = normalize_source_patch_key(source_patch_key)
@@ -209,6 +211,8 @@ def _build_patch_summary_payload(
         "source_patch_key": source_patch_key,
         "data_offsets": tuple(data_offsets),
         "data_chunk_rows": int(data_chunk_rows),
+        "data_scale": data_scale,
+        "data_stored_dtype": data_stored_dtype,
     }
 
 
@@ -226,10 +230,11 @@ class PatchSummary(DascoreBaseModel):
     source_format: str = ""
     source_version: str = ""
     source_patch_key: str = ""
-    # Where the data's rows are stored, for a reader marked as returning
-    # stored bytes; see ArraySource.
+    # Where and how the data's rows are stored; see ArraySource.
     data_offsets: tuple[int, ...] = ()
     data_chunk_rows: int = 0
+    data_scale: float | None = None
+    data_stored_dtype: str = ""
 
     @model_validator(mode="before")
     @classmethod
@@ -266,6 +271,8 @@ class PatchSummary(DascoreBaseModel):
                 source_patch_key=key,
                 data_offsets=data.get("data_offsets", ()),
                 data_chunk_rows=data.get("data_chunk_rows", 0),
+                data_scale=data.get("data_scale"),
+                data_stored_dtype=data.get("data_stored_dtype", ""),
             )
         msg = (
             "PatchSummary requires structured `attrs`/`coords` input. "
@@ -295,6 +302,8 @@ class PatchSummary(DascoreBaseModel):
             source_patch_key=patch._source.key if patch._source else "",
             data_offsets=patch._source.offsets if patch._source else (),
             data_chunk_rows=patch._source.chunk_rows if patch._source else 0,
+            data_scale=patch._source.scale if patch._source else None,
+            data_stored_dtype=patch._source.stored_dtype if patch._source else "",
         )
 
     def dump_structured(self) -> dict[str, Any]:

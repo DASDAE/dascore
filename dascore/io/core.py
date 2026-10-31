@@ -66,7 +66,12 @@ from dascore.exceptions import (
     RemoteCacheError,
     UnknownFiberFormatError,
 )
-from dascore.io.utils import selection_windows, slice_dataset, validate_windows
+from dascore.io.utils import (
+    _scale_stored,
+    selection_windows,
+    slice_dataset,
+    validate_windows,
+)
 from dascore.utils.downloader import resolve_example_uri
 from dascore.utils.hdf5 import H5Reader, _ManagedH5pyFile, stored_byte_layout
 from dascore.utils.identity import (
@@ -706,21 +711,6 @@ def _is_wrapped_func(func1, func2):
     return func is func2
 
 
-# The array hooks marked as returning stored bytes. A registry rather than
-# an attribute, which `functools.wraps` would copy onto any wrapper.
-_BYTE_HOOKS: set[Callable] = set()
-
-
-def _returns_stored_bytes(func: Callable) -> Callable:
-    """
-    Mark an array hook as returning its dataset's stored bytes.
-
-    The source's offsets may then stand in for it; a wrapper is not marked.
-    """
-    _BYTE_HOOKS.add(func)
-    return func
-
-
 class FiberIO:
     """
     Interface for a fiber data format; subclass it to add format support.
@@ -816,6 +806,14 @@ class FiberIO:
             return array_func(resource, windows, key=key, _pre_cast=True)
 
         return read
+
+    def _read_stored(self, handle, stat, source) -> np.ndarray | None:
+        """
+        Return a source's window read from its offsets, or None.
+
+        A reader whose arrays are its datasets as stored, apart from a
+        `scale`, defines this as `_read_bytes`; this default reads nothing.
+        """
 
     def _prepare_read(self, manager, snap, keys=frozenset()):
         """Return metadata and a loader for ordered ``(windows, key)`` requests.
@@ -1074,8 +1072,6 @@ class FiberIO:
             arg_name = list(sig.parameters)[param_ind]
             required_type = get_type_hints(method).get(arg_name)
             method_wrapped = _type_caster(method, sig, required_type, arg_name)
-            if method in _BYTE_HOOKS:  # the caster's wrapper keeps the mark
-                _BYTE_HOOKS.add(method_wrapped)
             setattr(cls, name, method_wrapped)
         # Keep the methods each hook was written against, so subclass and
         # runtime wrappers of them take effect.
@@ -1111,6 +1107,7 @@ _HOOK_METHODS = FrozenDict(
     {
         "_prepare_read": ("get_metadata", "read_array"),
         "_prepare_array_reader": ("read_array",),
+        "_read_stored": ("read_array",),
     }
 )
 
@@ -1146,6 +1143,12 @@ class H5ArrayMixin:
     # Supplied by the FiberIO this is mixed into.
     get_metadata: Callable[..., list[dc.PatchMeta]]
 
+    def __init_subclass__(cls, **kwargs):
+        """Pair the stored-bytes hook with this read_array, where it is used."""
+        if cls.read_array is H5ArrayMixin.read_array:
+            cls._read_stored = staticmethod(_read_bytes)
+        super().__init_subclass__(**kwargs)
+
     @staticmethod
     def _dataset_meta(attrs, coords, dataset: H5pyDataset) -> list[dc.PatchMeta]:
         """Return a one-item PatchMeta list whose array is `dataset`."""
@@ -1153,7 +1156,6 @@ class H5ArrayMixin:
         dtype = str(dataset.dtype)
         return [dc.PatchMeta(attrs=attrs, coords=coords, dtype=dtype, source=source)]
 
-    @_returns_stored_bytes
     def read_array(
         self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:
@@ -1164,12 +1166,17 @@ class H5ArrayMixin:
         return slice_dataset(resource[key], windows)
 
 
-def _dataset_source(dataset: H5pyDataset, key: str = "") -> ArraySource:
+def _dataset_source(
+    dataset: H5pyDataset, key: str = "", scale: float | None = None
+) -> ArraySource:
     """
     Return a source for a dataset, with its offsets if plain reads find them.
 
-    The stored shape and the stat of the file holding the dataset come
-    with them, for `_stamp_source_ids` to check against what was scanned.
+    A reader whose `read_array` returns the dataset as stored, apart from a
+    `scale` it multiplies by (see `_scale_stored`), records them here and
+    defines `_read_stored` to read them. The stored shape and the stat of
+    the file holding the dataset come with them, for `_stamp_source_ids` to
+    check against what was scanned.
     """
     layout = stored_byte_layout(dataset)
     if layout is None:
@@ -1183,6 +1190,8 @@ def _dataset_source(dataset: H5pyDataset, key: str = "") -> ArraySource:
         extent=tuple(dataset.shape),
         mtime_ns=mtime,
         size_bytes=size,
+        scale=scale,
+        stored_dtype="" if scale is None else str(dataset.dtype),
     )
 
 
@@ -1357,14 +1366,6 @@ def _array_reader(
     return _paired_hook(fiberio, "_prepare_array_reader")(resource, key=key)
 
 
-def _returns_bytes(fiberio: FiberIO) -> bool:
-    """Whether a reader's arrays are its datasets' bytes as stored."""
-    hook = _paired_hook(fiberio, "_prepare_array_reader")
-    if getattr(hook, "__func__", None) is FiberIO._prepare_array_reader:
-        hook = fiberio.read_array
-    return getattr(hook, "__func__", None) in _BYTE_HOOKS
-
-
 def _open_bytes(source: ArraySource):
     """Open the local file a source records offsets in, or return None."""
     if not is_local_path(source.path):
@@ -1380,13 +1381,14 @@ def _read_bytes(handle, stat, source: ArraySource) -> np.ndarray | None:
     Read a source's window from its offsets, or return None for its reader.
 
     The window's rows are read at full width, abutting chunks in one read,
-    then sliced. None when that is over four times the bytes asked for, the
-    file's stat is not the one recorded, before or after the reads (nothing
-    locks the file), or a read reaches the end of the file.
+    then sliced and scaled. None when that is over four times the bytes asked
+    for, the file's stat is not the one recorded, before or after the reads
+    (nothing locks the file), or a read reaches the end of the file.
     """
     if not source.offsets or stat != (source.size_bytes, source.mtime_ns):
         return None
-    dtype, (start, stop), *rest = np.dtype(source.dtype), *source.windows
+    dtype = np.dtype(source.stored_dtype or source.dtype)
+    (start, stop), *rest = source.windows
     row, per = prod(source.extent[1:]) * dtype.itemsize, source.chunk_rows
     if (stop - start) * row > 4 * source.size * dtype.itemsize:
         return None
@@ -1409,7 +1411,10 @@ def _read_bytes(handle, stat, source: ArraySource) -> np.ndarray | None:
             done += got
     if _size_and_mtime(os.fstat(handle.fileno())) != stat:
         return None
-    return np.ascontiguousarray(out[(slice(None), *(slice(*x) for x in rest))])
+    out = out[(slice(None), *(slice(*x) for x in rest))]
+    if source.scale is not None:
+        out = _scale_stored(out, source.dtype, source.scale)
+    return np.ascontiguousarray(out)
 
 
 @contextmanager
@@ -1427,14 +1432,15 @@ def _open_array_reader(
     path which carries more (a remote store's options).
 
     Without `path`, a source recording where its bytes are in a local file,
-    unchanged since, is read with plain file reads when its reader is marked
-    as returning stored bytes; the resource is opened only for the sources
-    which cannot be.
+    unchanged since, is read by its reader's `_read_stored`; the resource is
+    opened only for the sources which cannot be.
     """
     fiberio = FiberIO.manager.get_fiberio(format=source.format, version=source.version)
+    read_stored = _paired_hook(fiberio, "_read_stored")
     with ExitStack() as stack:
         handle = stat = fallback = None
-        if path is None and source.offsets and _returns_bytes(fiberio):
+        default = getattr(read_stored, "__func__", None) is FiberIO._read_stored
+        if path is None and source.offsets and not default:
             handle = _open_bytes(source)
         if handle is not None:
             stack.enter_context(handle)
@@ -1444,7 +1450,7 @@ def _open_array_reader(
             nonlocal fallback
             if (
                 handle is not None
-                and (out := _read_bytes(handle, stat, source)) is not None
+                and (out := read_stored(handle, stat, source)) is not None
             ):
                 return out
             if fallback is None:

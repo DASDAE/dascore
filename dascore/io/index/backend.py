@@ -635,6 +635,8 @@ class SQLiteIndexBackend:
                             patch.attr_dtypes,
                             patch.data_offsets,
                             patch.data_chunk_rows,
+                            patch.data_scale,
+                            patch.data_stored_dtype,
                         )
                     )
                     attrs = patch.attrs

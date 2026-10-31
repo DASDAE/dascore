@@ -156,6 +156,11 @@ def _row_str(value) -> str:
     return "" if value is None or pd.isnull(value) else str(value)
 
 
+def _row_float(value) -> float | None:
+    """A row cell as a float, with the frame's nulls (None/NaN) as None."""
+    return None if value is None or pd.isnull(value) else float(value)
+
+
 def _numeric_dtype_str(stored) -> str:
     """The numeric dtype a row states for a coordinate, else float64."""
     if not isinstance(stored, str) or not stored:
@@ -787,6 +792,8 @@ class PlanResolver(PatchResolver):
             origin_id="" if origin is None or pd.isnull(origin) else str(origin),
             offsets=_text_offsets(offsets),
             chunk_rows=int(row["_data_chunk_rows"]) if offsets else 0,
+            scale=_row_float(row.get("_data_scale")) if offsets else None,
+            stored_dtype=_row_str(row.get("_data_stored_dtype")) if offsets else "",
             mtime_ns=mtime,
             size_bytes=size,
         )

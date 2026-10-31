@@ -75,8 +75,11 @@ class ArraySource:
         reads nothing; see [`full`](`dascore.core.source.ArraySource.full`).
     offsets, chunk_rows
         Byte offsets of the whole array's rows in the file, `chunk_rows`
-        rows at each, for a reader marked as returning stored bytes; empty
-        when only the reader can read them.
+        rows at each, for a reader whose array is the dataset as stored;
+        empty when only the reader can read them.
+    scale, stored_dtype
+        The factor the reader multiplies the stored samples by, if any, and
+        the dtype they are stored as, which the scale makes `dtype`.
     mtime_ns, size_bytes
         The file's modification time and size when the offsets were taken,
         which must still hold for them to be used. These and the offsets
@@ -116,6 +119,8 @@ class ArraySource:
     chunk_rows: int = field(default=0, compare=False)
     mtime_ns: int | None = field(default=None, compare=False)
     size_bytes: int | None = field(default=None, compare=False)
+    scale: float | None = field(default=None, compare=False)
+    stored_dtype: str = field(default="", compare=False)
 
     @classmethod
     def full(
@@ -204,7 +209,15 @@ class ArraySource:
 
     def _without_layout(self) -> ArraySource:
         """Return this source recording no byte offsets."""
-        return replace(self, offsets=(), chunk_rows=0, mtime_ns=None, size_bytes=None)
+        return replace(
+            self,
+            offsets=(),
+            chunk_rows=0,
+            mtime_ns=None,
+            size_bytes=None,
+            scale=None,
+            stored_dtype="",
+        )
 
     def detach(self) -> ArraySource:
         """Return the provenance alone, for an array this no longer loads."""

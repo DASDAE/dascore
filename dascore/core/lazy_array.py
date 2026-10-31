@@ -54,12 +54,27 @@ NEW_AXIS = -1
 AXIS_FIELDS = ("out_start", "out_stop", "src_axis", "src_start", "src_extent")
 
 # Each layout column of a source, with the value one recording no offsets
-# has: space separated offsets, rows per offset, and the file stat they were
-# taken under.
+# has: space separated offsets, rows per offset, the file stat they were
+# taken under, and the stored samples' scale and dtype.
 _LAYOUT_DEFAULTS = MappingProxyType(
-    {"offsets": "", "chunk_rows": 0, "mtime_ns": None, "size_bytes": None}
+    {
+        "offsets": "",
+        "chunk_rows": 0,
+        "mtime_ns": None,
+        "size_bytes": None,
+        "scale": None,
+        "stored_dtype": "",
+    }
 )
-_LAYOUT_NUMBERS = ("chunk_rows", "mtime_ns", "size_bytes")
+# The numeric layout columns, with the nullable dtype a frame gives each.
+_LAYOUT_NUMBERS = MappingProxyType(
+    {
+        "chunk_rows": "Int64",
+        "mtime_ns": "Int64",
+        "size_bytes": "Int64",
+        "scale": "Float64",
+    }
+)
 
 # The columns of the sources table besides `filled`, in the frame's order.
 SOURCE_FIELDS = (
@@ -306,6 +321,8 @@ class _Sources:
     chunk_rows: _Column
     mtime_ns: _Column
     size_bytes: _Column
+    scale: _Column
+    stored_dtype: _Column
     value: _Column
     filled: np.ndarray
     # Whether the columns of one value have been folded; see LazyTable.
@@ -613,7 +630,10 @@ def _layout_value(name: str, value: Any, default: Any) -> Any:
     """Return a layout cell of a frame as a source states it."""
     if value is None or pd.isna(value):
         return default
-    return int(value) if name in _LAYOUT_NUMBERS else value
+    if (kind := _LAYOUT_NUMBERS.get(name)) is None:
+        return value
+    # a python float, as a numpy scalar would promote the scaled dtype
+    return float(value) if kind == "Float64" else int(value)
 
 
 def _table(blocks: Sequence[_Block]) -> LazyTable:
@@ -1230,7 +1250,7 @@ class LazyArray:
             else:
                 out[name] = _spread(column.codes[rows], column.values, ndim)
                 if name in _LAYOUT_NUMBERS:  # exact through parquet, nulls too
-                    out[name] = pd.array(out[name], dtype="Int64")
+                    out[name] = pd.array(out[name], dtype=_LAYOUT_NUMBERS[name])
         out["cast"] = _spread(members.cast.codes, members.cast.values, ndim)
         out["filled"] = np.repeat(members.filled, ndim)
         # The values are python scalars of several types, which stay objects.
@@ -1530,6 +1550,8 @@ def _sources_of(block: _Block) -> list[ArraySource]:
                 chunk_rows=at["chunk_rows"][member],
                 mtime_ns=at["mtime_ns"][member],
                 size_bytes=at["size_bytes"][member],
+                scale=at["scale"][member],
+                stored_dtype=at["stored_dtype"][member],
             )
         )
     return out

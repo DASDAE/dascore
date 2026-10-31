@@ -147,10 +147,12 @@ class PatchRow(NamedTuple):
     # JSON mapping for numeric attrs whose scalar dtype SQL would erase.
     attr_dtypes: str | None
     # Space separated byte offsets of the data array's chunks of
-    # `data_chunk_rows` rows, for a reader marked as returning stored bytes;
-    # else NULL.
+    # `data_chunk_rows` rows, for a reader whose array is its dataset as
+    # stored, times `data_scale` read as `data_stored_dtype`; else NULL.
     data_offsets: str | None
     data_chunk_rows: int | None
+    data_scale: float | None
+    data_stored_dtype: str | None
 
 
 class AttrsRow(NamedTuple):
@@ -356,6 +358,8 @@ RESERVED_ATTR_COLUMNS = frozenset(
         "attr_dtypes",
         "data_offsets",
         "data_chunk_rows",
+        "data_scale",
+        "data_stored_dtype",
         # These named structural columns until version 9 dropped them.
         # They stay reserved: the spool gives them a meaning whether or
         # not a column holds one, and un-reserving a name silently turns
@@ -420,6 +424,8 @@ SPOOL_LATE_RENAMES = MappingProxyType(
         "attr_dtypes": "_attr_dtypes",
         "data_offsets": "_data_offsets",
         "data_chunk_rows": "_data_chunk_rows",
+        "data_scale": "_data_scale",
+        "data_stored_dtype": "_data_stored_dtype",
         "mtime_ns": SOURCE_STAT_COLUMNS[0],
         "size_bytes": SOURCE_STAT_COLUMNS[1],
     }

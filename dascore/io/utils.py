@@ -175,6 +175,11 @@ def validate_windows(windows: Sequence[Any]) -> tuple[Any, ...]:
     return tuple(windows)
 
 
+def _scale_stored(data: np.ndarray, dtype, scale: float) -> np.ndarray:
+    """Return stored samples as `dtype`, times the reader's storage scale."""
+    return data.astype(dtype, copy=False) * scale
+
+
 def _in_bounds_slices(windows, shape) -> tuple[slice, ...] | None:
     """Fast path for in-bounds integer pairs, as lazy loads send; else None."""
     if type(windows) is not tuple or len(windows) > len(shape):

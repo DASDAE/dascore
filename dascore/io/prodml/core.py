@@ -7,7 +7,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
-from dascore.io.core import _dataset_source, _returns_stored_bytes
+from dascore.io.core import _dataset_source, _read_bytes
 from dascore.io.utils import slice_dataset
 
 from ...utils.hdf5 import H5Reader, H5Writer, h5_encoding
@@ -25,6 +25,7 @@ class ProdMLV2_0(FiberIO):  # noqa
     name = "PRODML"
     preferred_extensions = ("hdf5", "h5")
     version = "2.0"
+    _read_stored = staticmethod(_read_bytes)
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
@@ -44,7 +45,6 @@ class ProdMLV2_0(FiberIO):  # noqa
             )
         return out
 
-    @_returns_stored_bytes
     def read_array(
         self, resource: H5Reader, windows: windows_type = (), key: str = ""
     ) -> np.ndarray:

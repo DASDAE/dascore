@@ -2339,6 +2339,25 @@ class TestH5ArrayMixin:
         with pytest.raises(KeyError):
             mixin_io.read_array(path, (), key="/group/nope")
 
+    def test_stored_hook_needs_mixin_read_array(self, mixin_io, monkeypatch):
+        """Offsets are read for the mixin's read_array, not for an override."""
+        monkeypatch.setattr(FiberIO, "manager", copy.deepcopy(FiberIO.manager))
+
+        def read_array(self, resource: H5Reader, windows=(), key=""):
+            return H5ArrayMixin.read_array(self, resource, windows, key) * 2
+
+        overrides = [
+            type(name, bases, {"name": f"_test_{name}", "read_array": read_array})
+            for name, bases in (
+                ("direct", (H5ArrayMixin, FiberIO)),
+                ("subclass", (type(mixin_io),)),
+            )
+        ]
+        assert io_core._paired_hook(mixin_io, "_read_stored") is io_core._read_bytes
+        for cls in overrides:
+            hook = io_core._paired_hook(cls(), "_read_stored")
+            assert hook.__func__ is FiberIO._read_stored
+
 
 class TestOpenArrayReader:
     """One loading context reads many sources of one resource."""

@@ -25,6 +25,7 @@ from dascore.io import FiberIO
 from dascore.io import core as io_core
 from dascore.io.h5simple.core import H5Simple
 from dascore.io.index.planned import PlanResolver
+from dascore.io.optodas import OptoDASV8
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import H5Reader
 from tests.conftest import needs_chunk_iter
@@ -708,18 +709,22 @@ class TestOffsetReads:
         np.testing.assert_array_equal(source[2:9].load(), data[2:9, :3])
 
     @needs_chunk_iter
-    def test_array_override_is_honored(self, path, registry, stored_reads):
+    @pytest.mark.parametrize("base", [H5Simple, OptoDASV8])
+    def test_array_override_is_honored(self, path, registry, stored_reads, base):
         """A subclass transforming read_array is not bypassed by offsets."""
 
-        class Doubled(H5Simple):
-            name = "_test_h5simple_doubled_offsets"
+        class Doubled(base):
+            name = f"_test_doubled_offsets_{base.name}"
 
             def read_array(self, resource: H5Reader, windows=(), key=""):
                 return super().read_array(resource, windows, key=key) * 2
 
-        source = replace(dc.read(path)[0]._source, format=Doubled.name)
-        assert source.offsets
-        np.testing.assert_array_equal(source.load(), _stored(path, slice(None)) * 2)
+        file = path if base is H5Simple else fetch("opto_das_1.hdf5")
+        source = dc.read(file)[0]._source
+        expected = source.load() * 2
+        source = replace(source, format=Doubled.name, version=Doubled.version)
+        assert source.offsets and not stored_reads
+        np.testing.assert_array_equal(source.load(), expected)
         assert len(stored_reads) == 1
 
     def test_external_link(self, tmp_path, stored_reads):
@@ -800,26 +805,30 @@ class TestOffsetReads:
         monkeypatch.setattr("builtins.open", original)
         assert len(reads) == (1 if most is None else -(-data.nbytes // most))
 
-    def test_wrapped_array_hooks(self, monkeypatch, registry):
+    @needs_chunk_iter
+    def test_wrapped_array_hooks(self, monkeypatch, registry, stored_reads):
         """
-        A marked read_array wrapped with functools.wraps is not marked, so a
-        load goes through the wrapper.
+        A read_array wrapped with functools.wraps is not bypassed by offsets.
+        A dataset reader's own key path bypasses read_array either way, so its
+        values are unchanged, but it is read by its reader.
         """
-        source = dc.read(fetch("prodml_2.1.h5"))[0]._source
-        expected = replace(source, offsets=()).load()[2:9] * 2
-        for name, version in (("PRODML", "2.1"), ("GDR_DAS", "1")):
-            owner = type(FiberIO.manager.get_fiberio(format=name, version=version))
-            original = owner.read_array
+        sources = [dc.read(fetch(x))[0]._source for x in ("prodml_2.1.h5", "gdr_1.h5")]
+        expected = [x[2:9].load() for x in sources]
+        assert all(x.offsets for x in sources) and not stored_reads
+        for source in sources:
+            fiberio = FiberIO.manager.get_fiberio(
+                format=source.format, version=source.version
+            )
+            original = type(fiberio).read_array
 
             @wraps(original)
             def doubled(*args, _original=original, **kwargs):
                 return _original(*args, **kwargs) * 2
 
-            monkeypatch.setattr(owner, "read_array", doubled)
-        np.testing.assert_array_equal(source[2:9].load(), expected)
-        # A dataset reader's own key path bypasses read_array either way.
-        gdr = FiberIO.manager.get_fiberio(format="GDR_DAS", version="1")
-        assert not io_core._returns_bytes(gdr)
+            monkeypatch.setattr(type(fiberio), "read_array", doubled)
+        np.testing.assert_array_equal(sources[0][2:9].load(), expected[0] * 2)
+        np.testing.assert_array_equal(sources[1][2:9].load(), expected[1])
+        assert len(stored_reads) == 2
 
 
 class TestIndexedOffsetReads:

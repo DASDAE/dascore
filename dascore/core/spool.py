@@ -3022,6 +3022,8 @@ class Spool(NodeRepr, NamespaceOwner):
                 # where a file keeps a patch's bytes is not what it is
                 "_data_offsets",
                 "_data_chunk_rows",
+                "_data_scale",
+                "_data_stored_dtype",
                 # when a source was last written and how big it is says
                 # what backs the row, not what the row describes
                 *SOURCE_STAT_COLUMNS,

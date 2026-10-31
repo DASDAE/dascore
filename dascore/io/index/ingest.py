@@ -149,6 +149,8 @@ class PatchRecord:
     attr_dtypes: str | None = None
     data_offsets: str | None = None
     data_chunk_rows: int | None = None
+    data_scale: float | None = None
+    data_stored_dtype: str | None = None
 
 
 @dataclass(frozen=True)
@@ -531,6 +533,8 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
         attr_dtypes=attr_dtypes,
         data_offsets=_offsets_text(summary.data_offsets) or None,
         data_chunk_rows=summary.data_chunk_rows or None,
+        data_scale=summary.data_scale,
+        data_stored_dtype=summary.data_stored_dtype or None,
     )
 
 

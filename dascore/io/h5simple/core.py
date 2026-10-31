@@ -9,7 +9,7 @@ import numpy as np
 import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.io import FiberIO
-from dascore.io.core import _dataset_source, _returns_stored_bytes
+from dascore.io.core import _dataset_source, _read_bytes
 from dascore.io.utils import slice_dataset
 from dascore.io.xdas.utils import is_xdas_file
 from dascore.utils.hdf5 import H5Reader
@@ -27,6 +27,7 @@ class H5Simple(FiberIO):
     name = "H5Simple"
     preferred_extensions = ("hdf5", "h5")
     version = "1"
+    _read_stored = staticmethod(_read_bytes)
 
     def get_version(self, resource: H5Reader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
@@ -44,7 +45,6 @@ class H5Simple(FiberIO):
         """
         return self._prepare_array_reader(resource, key=key)(windows)
 
-    @_returns_stored_bytes
     def _prepare_array_reader(self, resource: H5Reader, *, key: str = ""):
         """Find the data node once, for any number of windows."""
         if key and hasattr(node := resource.get(key), "shape"):
