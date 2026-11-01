@@ -58,7 +58,7 @@ with config_context(
     patch = dc.read(remote_path)[0]
 ```
 
-When a metadata query would require a full download and metadata caching is disabled, DASCore raises [`RemoteCacheError`](`dascore.exceptions.RemoteCacheError`). Format detection passes over a reader which would need that download and raises the error only if no other reader claims the file. Some formats, such as SEG-Y, are detected from their first bytes but still need a local file to scan. Opt in only for a known operation:
+When a metadata query would require a full download and metadata caching is disabled, DASCore raises [`RemoteCacheError`](`dascore.exceptions.RemoteCacheError`). Format detection passes over a reader which would need that download and raises the error only if no other reader claims the file. Detection reads only the header bytes of MiniSEED and SEG-Y files, but scanning or reading them still needs a local copy, which a scan makes only after the opt-in. Opt in only for a known operation:
 
 ```python
 http_path = UPath("https://raw.githubusercontent.com/dasdae/test_data/master/das/example_dasdae_event_1.h5")

@@ -43,7 +43,7 @@ from dascore.constants import snap_type, windows_type
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io import FiberIO
 from dascore.io.utils import resolve_keyed_source
-from dascore.utils.io import BinaryReader, StreamBinaryReader
+from dascore.utils.io import BinaryReader, LocalPath
 from dascore.utils.misc import optional_import
 
 from .utils import (
@@ -52,7 +52,6 @@ from .utils import (
     _coalesce_source_traces,
     _detect_format,
     _group_segments,
-    _iter_records,
     _merge_summaries,
     _metadata_from_summaries,
     _record_to_summary,
@@ -73,7 +72,9 @@ def _scan_read_records(resource, pymseed):
     """Keep record membership while applying the scanner's grouping rules."""
     headers = [
         _ReadSummary(**_record_to_summary(record, pymseed).__dict__, records=[index])
-        for index, record in enumerate(_iter_records(resource, pymseed))
+        for index, record in enumerate(
+            pymseed.MS3Record.from_file(str(resource), unpack_data=False)
+        )
     ]
 
     def merge(pending, summary):
@@ -104,7 +105,7 @@ class MSeedV2(FiberIO):
         return _match[1] if (_match := _detect_format(resource)) else None
 
     def get_metadata(
-        self, resource: StreamBinaryReader, *, snap: snap_type = ()
+        self, resource: LocalPath, *, snap: snap_type = ()
     ) -> list[dc.PatchMeta]:
         """Scan a MiniSEED file."""
         pymseed = optional_import("pymseed")
@@ -112,7 +113,7 @@ class MSeedV2(FiberIO):
 
     def _prepare_read(self, manager, snap, keys=frozenset()):
         """Share one header scan across every logical patch in this read."""
-        resource = manager.get_resource(StreamBinaryReader)
+        resource = manager.get_resource(LocalPath)
         pymseed = optional_import("pymseed")
         headers, summaries, groups = _scan_read_records(resource, pymseed)
 
@@ -123,7 +124,7 @@ class MSeedV2(FiberIO):
 
     def read_array(
         self,
-        resource: StreamBinaryReader,
+        resource: LocalPath,
         windows: windows_type = (),
         key: str = "",
     ) -> np.ndarray:
@@ -160,7 +161,9 @@ class MSeedV2(FiberIO):
                     offset += count
         if copies:
             record_count = 0
-            for index, record in enumerate(_iter_records(resource, pymseed)):
+            for index, record in enumerate(
+                pymseed.MS3Record.from_file(str(resource), unpack_data=False)
+            ):
                 record_count += 1
                 targets = copies.pop(index, ())
                 if not targets:

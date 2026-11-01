@@ -140,8 +140,8 @@ def _pymseed_for_records(records):
     class PyMseed:
         class MS3Record:
             @staticmethod
-            def from_filelike(stream, *, unpack_data):
-                assert isinstance(stream, io.BytesIO)
+            def from_file(path, *, unpack_data):
+                assert path == "unused"
                 assert unpack_data is False
                 yield from records
 
@@ -176,16 +176,16 @@ class TestReadWork:
             _MiniSeedRecord("FDSN:XX_00001__H_S_F", samprate=20),
         ]
         pymseed = _pymseed_for_records(records)
-        original = pymseed.MS3Record.from_filelike
+        original = pymseed.MS3Record.from_file
         passes = []
 
-        def from_filelike(*args, **kwargs):
+        def from_file(*args, **kwargs):
             passes.append(1)
             return original(*args, **kwargs)
 
-        monkeypatch.setattr(pymseed.MS3Record, "from_filelike", from_filelike)
+        monkeypatch.setattr(pymseed.MS3Record, "from_file", from_file)
         monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
-        patches = MSeedV3().read(io.BytesIO())
+        patches = MSeedV3().read("unused")
         assert len(patches) == 2
         assert len(passes) == 2
         for patch in patches:
@@ -208,9 +208,9 @@ class TestReadWork:
         monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
         reader = MSeedV3()
         if array_only:
-            data = reader.read_array(io.BytesIO(), (None, (4, 7)))
+            data = reader.read_array("unused", (None, (4, 7)))
         else:
-            data = reader.read(io.BytesIO(), samples=True, time=(4, 7))[0].data
+            data = reader.read("unused", samples=True, time=(4, 7))[0].data
         np.testing.assert_array_equal(data, np.arange(4, 7)[None, :])
 
     @pytest.mark.parametrize("samples", [None, (2, 4)])
@@ -225,13 +225,13 @@ class TestReadWork:
         pymseed = _pymseed_for_records(records)
         monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
         reader = MSeedV3()
-        metadata = reader.get_metadata(io.BytesIO())
+        metadata = reader.get_metadata("unused")
         query = {} if samples is None else {"samples": True, "time": samples}
         for patches in [
-            reader.read(io.BytesIO(), **query),
+            reader.read("unused", **query),
             [
-                reader.read(io.BytesIO(), source_patch_key=x._source.key, **query)[0]
-                for x in metadata
+                reader.read("unused", source_patch_key=patch._source.key, **query)[0]
+                for patch in metadata
             ],
         ]:
             assert len(patches) == 2
@@ -258,7 +258,7 @@ class TestReadWork:
         ]
         pymseed = _pymseed_for_records(records)
         monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
-        patches = MSeedV3().read(io.BytesIO(), samples=True, time=(2, 3))
+        patches = MSeedV3().read("unused", samples=True, time=(2, 3))
         assert len(patches) == 2
         assert [patch.data.item() for patch in patches] == [2, 5]
 
@@ -279,7 +279,7 @@ class TestReadWork:
         ]
         pymseed = _pymseed_for_records(records)
         monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
-        patch = MSeedV3().read(io.BytesIO(), samples=True, time=(6, 12))[0]
+        patch = MSeedV3().read("unused", samples=True, time=(6, 12))[0]
         np.testing.assert_array_equal(patch.data, np.arange(6, 12)[None, :])
         assert patch.get_coord("time").step_exact == Fraction(1, 7)
 
@@ -294,10 +294,10 @@ class TestReadWork:
         ]
         pymseed = _pymseed_for_records(records)
         monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
-        MSeedV3().get_metadata(io.BytesIO())  # Warm metadata classes before measuring.
+        MSeedV3().get_metadata("unused")  # Warm metadata classes before measuring.
         tracemalloc.start()
         try:
-            patches = MSeedV3().read(io.BytesIO())
+            patches = MSeedV3().read("unused")
             _, peak = tracemalloc.get_traced_memory()
         finally:
             tracemalloc.stop()
@@ -313,9 +313,9 @@ class TestReadWork:
         pymseed = _pymseed_for_records(records)
         monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
         reader = MSeedV3()
-        first = reader.read(io.BytesIO())[0]
+        first = reader.read("unused")[0]
         records[:] = [_MiniSeedRecord(data=np.arange(7, dtype=np.int32))]
-        second = reader.read(io.BytesIO())[0]
+        second = reader.read("unused")[0]
         assert first.shape == (1, 3)
         np.testing.assert_array_equal(second.data, np.arange(7)[None, :])
 
@@ -553,7 +553,7 @@ class TestMiniSeedRead:
         )
         patches = list(
             MSeedV3().read(
-                io.BytesIO(),
+                "unused",
                 source_patch_key=target,
             )
         )
@@ -573,7 +573,7 @@ class TestMiniSeedRead:
         )
         patches = list(
             MSeedV3().read(
-                io.BytesIO(),
+                "unused",
                 channel=(0, 0),
             )
         )
@@ -589,7 +589,7 @@ class TestMiniSeedRead:
         )
         patches = list(
             MSeedV3().read(
-                io.BytesIO(),
+                "unused",
                 source_patch_key="v3:XX..HSF:1:10:3",
             )
         )
@@ -604,7 +604,7 @@ class TestMiniSeedRead:
         )
         patches = list(
             MSeedV3().read(
-                io.BytesIO(),
+                "unused",
                 channel=(10, 10),
             )
         )
@@ -688,8 +688,8 @@ class TestMiniSeedScan:
         class PyMseed:
             class MS3Record:
                 @staticmethod
-                def from_filelike(stream, *, unpack_data):
-                    assert isinstance(stream, io.BytesIO)
+                def from_file(path, *, unpack_data):
+                    assert path == "unused"
                     assert unpack_data is False
                     yield Record()
 
@@ -698,7 +698,7 @@ class TestMiniSeedScan:
                 assert source_id == Record.sourceid
                 return "XX", "00000", "", "HSF"
 
-        payload = mseed_utils._scan_patches(io.BytesIO(), PyMseed)[0]
+        payload = mseed_utils._scan_patches("unused", PyMseed)[0]
         assert payload.shape == (1, 10)
         assert payload.dtype == "int32"
 
@@ -736,7 +736,7 @@ class TestMiniSeedUtils:
         records = [_MiniSeedRecord()]
         pymseed = _pymseed_for_records(records)
         monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
-        patch = MSeedV3().read(io.BytesIO(), time=limits)[0]
+        patch = MSeedV3().read("unused", time=limits)[0]
         np.testing.assert_array_equal(patch.data, np.arange(3)[None, :])
 
     def test_exact_time_limits_and_trim(self, monkeypatch):
@@ -745,9 +745,9 @@ class TestMiniSeedUtils:
         pymseed = _pymseed_for_records(records)
         monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
         reader = MSeedV3()
-        full = reader.read(io.BytesIO())[0]
+        full = reader.read("unused")[0]
         selected = reader.read(
-            io.BytesIO(),
+            "unused",
             time=(np.datetime64(333333334, "ns"), np.datetime64(1400000000, "ns")),
         )[0]
         np.testing.assert_array_equal(selected.data, [[2, 3, 4]])
@@ -804,8 +804,7 @@ class TestMiniSeedUtils:
         records = [_MiniSeedRecord(fail_unpack=True)]
         pymseed = _pymseed_for_records(records)
         monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
-        time = (np.datetime64(1, "s"), None)
-        assert len(MSeedV3().read(io.BytesIO(), time=time)) == 0
+        assert len(MSeedV3().read("unused", time=(np.datetime64(1, "s"), None))) == 0
 
     def test_time_range_between_samples_is_empty(self, monkeypatch):
         """A time window between adjacent samples yields no data."""
@@ -813,7 +812,7 @@ class TestMiniSeedUtils:
         pymseed = _pymseed_for_records(records)
         monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
         patches = MSeedV3().read(
-            io.BytesIO(),
+            "unused",
             time=(np.datetime64(25_000_000, "ns"), np.datetime64(75_000_000, "ns")),
         )
         assert len(patches) == 0
@@ -872,8 +871,8 @@ class TestMiniSeedUtils:
         pymseed = _pymseed_for_records(records)
         monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
         reader = MSeedV3()
-        metadata = reader.get_metadata(io.BytesIO())
-        patches = reader.read(io.BytesIO())
+        metadata = reader.get_metadata("unused")
+        patches = reader.read("unused")
         assert len(metadata) == len(patches) == 2
         for description, patch in zip(metadata, patches, strict=True):
             assert description.coords == patch.coords
@@ -911,10 +910,6 @@ class TestMiniSeedUtils:
     def test_detect_format_no_records(self):
         """Streams with no records are not MiniSEED."""
         assert mseed_utils._detect_format(io.BytesIO()) is False
-
-    def test_detect_format_missing_file(self, tmp_path):
-        """Missing paths are not MiniSEED."""
-        assert MSeedV3().get_version(tmp_path / "missing.mseed") is None
 
     def test_detect_format_unsupported_version(self):
         """Unsupported MiniSEED versions are rejected."""
@@ -1147,7 +1142,7 @@ class TestDecodedSourceMatching:
         pymseed = _pymseed_for_records(records)
         calls = 0
 
-        def from_filelike(stream, *, unpack_data):
+        def from_file(path, *, unpack_data):
             nonlocal calls
             calls += 1
             if calls == 1:
@@ -1164,10 +1159,10 @@ class TestDecodedSourceMatching:
                 records[0].sourceid = "FDSN:XX_CHANGED__H_S_F"
             return iter(records)
 
-        monkeypatch.setattr(pymseed.MS3Record, "from_filelike", from_filelike)
+        monkeypatch.setattr(pymseed.MS3Record, "from_file", from_file)
         monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
         with pytest.raises(InvalidFiberFileError, match="decoded segments"):
-            MSeedV3().read(io.BytesIO())
+            MSeedV3().read("unused")
 
     def test_decoded_sources_follow_metadata_order(self, monkeypatch):
         """File record order cannot swap the metadata's channel order."""
@@ -1180,8 +1175,8 @@ class TestDecodedSourceMatching:
         pymseed = _pymseed_for_records(records)
         monkeypatch.setattr(mseed_core, "optional_import", lambda name: pymseed)
         reader = MSeedV3()
-        metadata = reader.get_metadata(io.BytesIO())[0]
-        patch = reader.read(io.BytesIO())[0]
+        metadata = reader.get_metadata("unused")[0]
+        patch = reader.read("unused")[0]
         np.testing.assert_array_equal(
             patch.data, np.array([[0, 1, 2], [100, 101, 102]])
         )

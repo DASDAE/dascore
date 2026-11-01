@@ -29,12 +29,8 @@ from dascore.utils.paths import (
     is_local_path,
     is_pathlike,
 )
-from dascore.utils.remote_io import (
-    _FallbackFileObj,
-    get_local_handle,
-    is_no_range_http_error,
-)
 from dascore.utils.remote_io import ensure_local_file as _ensure_local_file
+from dascore.utils.remote_io import get_local_handle, remote_first_handle
 from dascore.utils.time import to_float
 from dascore.xarray.patch import (  # noqa: F401  published under this module
     patch_to_xarray,
@@ -139,8 +135,8 @@ class StreamBinaryReader(BinaryReader):
     """
     A binary reader which streams remote resources.
 
-    It moves to a local copy only if the server cannot serve the byte
-    ranges a read past a remote file's first block needs.
+    If the server cannot serve byte ranges, a read past the first block
+    switches to a local copy, which the remote-cache settings may refuse.
     """
 
     @classmethod
@@ -148,10 +144,8 @@ class StreamBinaryReader(BinaryReader):
         """Get the binary handle, streaming remote resources when possible."""
         if not isinstance(resource, UPath):
             return super().get_handle(resource)
-        return _FallbackFileObj(
-            remote_opener=lambda: BinaryReader.get_handle(resource),
-            local_opener=lambda: _ensure_local_file(resource).open(cls.mode),
-            error_predicate=is_no_range_http_error,
+        return remote_first_handle(
+            resource, cls.mode, lambda: BinaryReader.get_handle(resource)
         )
 
 
@@ -349,6 +343,16 @@ class IOResourceManager:
                 out = get_handle_from_resource(source, required_type)
                 self._cache[required_type] = out
             return self._cache[required_type]
+
+    def discard(self, required_type):
+        """Close and forget one type's resource, so a later request reopens it."""
+        if isinstance(self._source, self.__class__):
+            return self._source.discard(required_type)
+        with self._lock:
+            handle = self._cache.pop(_get_required_type(required_type), None)
+        if handle is not None and handle is not self.source:
+            with suppress(Exception):
+                release_handle(handle)
 
     def close_all(self, abort: bool = False):
         """

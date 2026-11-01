@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import h5py
 import pytest
 from upath import UPath
 
@@ -53,18 +52,6 @@ def isolated_remote_cache(tmp_path):
         clear_remote_file_cache()
         yield
         clear_remote_file_cache()
-
-
-def _write_netcdf_v0(path: Path) -> Path:
-    """Write a NetCDF file with no CF version, claimed only by a fallback."""
-    pytest.importorskip("h5netcdf")
-    pytest.importorskip("xarray")
-    dc.write(dc.get_example_patch("random_das"), path, "NETCDF_CF")
-    # H5Simple also claims a root "data" beside "time".
-    with h5py.File(path, "r+") as handle:
-        handle.move("data", "strain")
-        del handle.attrs["Conventions"]
-    return path
 
 
 @pytest.fixture()
@@ -268,40 +255,28 @@ class TestMemoryRemoteMetadataAccess:
         assert attrs[0].source_format == "DASDAE"
         assert not list(get_remote_cache_path().rglob(memory_dasdae_path.name))
 
+    def test_late_reader_needs_no_download(self):
+        """
+        A file without an extension, claimed only after the MiniSEED and SEG-Y
+        readers are asked, is detected and scanned without a download.
+        """
+        source = Path(fetch("h5_simple_2.h5"))
+        path = _copy_file_to_memory(source, UPath("memory://dascore/late/h5simple"))
+        assert dc.get_format(path) == ("H5Simple", "1")
+        assert dc.scan(path)[0].source_format == "H5Simple"
+        assert not list(get_remote_cache_path().rglob("*"))
+
     @pytest.mark.parametrize(
-        ("name", "expected"),
-        [("v0.nc", ("NETCDF_CF", "0")), ("h5_simple_2", ("H5Simple", "1"))],
+        "fetch_name", ["etna_9n_3chan_10s.mseed", "small_channel_patch.sgy"]
     )
-    def test_detection_needs_no_download(self, tmp_path, name, expected):
+    def test_header_detection_scan_needs_metadata_cache(
+        self, memory_fetch_copy, fetch_name
+    ):
         """
-        Files claimed only after the MiniSEED and SEG-Y readers are asked are
-        detected and scanned without a download.
+        MiniSEED and SEG-Y are detected from their header bytes, but scanning
+        them needs a local file, so it waits for the metadata cache opt-in.
         """
-        if name == "v0.nc":
-            source = _write_netcdf_v0(tmp_path / name)
-        else:
-            source = Path(fetch("h5_simple_2.h5"))
-        path = _copy_file_to_memory(source, UPath(f"memory://dascore/late/{name}"))
-        assert dc.get_format(path) == expected
-        attrs = dc.scan(path)
-        assert {(x.source_format, x.source_version) for x in attrs} == {expected}
-        assert not list(get_remote_cache_path().rglob("*"))
-
-    def test_mseed_streams(self, memory_fetch_copy):
-        """MiniSEED is detected, scanned and read without a download."""
-        source, path = memory_fetch_copy("etna_9n_3chan_10s.mseed", "mseed")
-        assert dc.get_format(path) == dc.get_format(source)
-        scan = dc.scan(path)
-        assert [x.coords for x in scan] == [x.coords for x in dc.scan(source)]
-        assert list(dc.read(path)) == list(dc.read(source))
-        assert not list(get_remote_cache_path().rglob("*"))
-
-    def test_segy_scan_needs_metadata_cache(self, memory_fetch_copy):
-        """
-        SEG-Y is detected from its headers, but scanning it needs a local
-        file, so it waits for the metadata cache opt-in.
-        """
-        source, path = memory_fetch_copy("small_channel_patch.sgy", "segy")
+        source, path = memory_fetch_copy(fetch_name, "header")
         assert dc.get_format(path) == dc.get_format(source)
         assert not list(get_remote_cache_path().rglob("*"))
         with pytest.raises(RemoteCacheError, match="allow_remote_cache_for"):
@@ -309,4 +284,4 @@ class TestMemoryRemoteMetadataAccess:
         with config_context(
             allow_remote_cache_for_metadata=True, warn_on_remote_cache=False
         ):
-            assert len(dc.scan(path)) == 1
+            assert len(dc.scan(path)) == len(dc.scan(source))

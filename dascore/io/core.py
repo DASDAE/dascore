@@ -568,9 +568,10 @@ class _FiberIOManager:
                 fiber_io_hint=fiber_io_hint,
                 input_type=input_type,
             )
-            # A reader needing a download the config refuses is passed over;
-            # the first refusal is raised only if no reader claims the file,
-            # and a resource type once refused is not built again.
+            # Pass over a reader whose resource needs a download the config
+            # refuses, to be built or read further, and drop that resource so
+            # no later reader builds or reuses it. Raise the first refusal only
+            # if no reader claims the file.
             cache_error, refused = None, set()
             for fiber_io in iterator:
                 # We need to wrap this in try except to make it robust to what
@@ -580,7 +581,7 @@ class _FiberIOManager:
                 required_type = _required_resource_type(fiber_io.get_version)
                 if required_type in refused:
                     continue
-                func_input = None
+                func_input, format_version = None, False
                 try:
                     # Get resource has to be in the try block because it can also
                     # raise, in which case the format doesn't belong.
@@ -588,9 +589,8 @@ class _FiberIOManager:
                     format_version = func(func_input, _pre_cast=True)
                 except RemoteCacheError as exc:
                     cache_error = cache_error or exc
-                    if func_input is None:
-                        refused.add(required_type)
-                    continue
+                    refused.add(required_type)
+                    man.discard(required_type)
                 except PermissionError:
                     # Denied access is a real error, not a "wrong format"
                     # signal, so it must propagate rather than be swallowed
@@ -598,10 +598,14 @@ class _FiberIOManager:
                     raise
                 # For robustness, we need to catch everything else here.
                 except Exception:
-                    continue
+                    pass
                 finally:
-                    # If file handle-like seek back to 0 so it can be reused.
-                    getattr(func_input, "seek", lambda x: None)(0)
+                    # Seek back to 0 so the next reader can reuse the handle; one
+                    # which cannot seek back (a stream) is dropped for a fresh one.
+                    try:
+                        getattr(func_input, "seek", lambda x: None)(0)
+                    except Exception:
+                        man.discard(required_type)
                 if format_version:
                     return format_version
             if cache_error is not None:

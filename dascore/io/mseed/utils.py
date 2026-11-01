@@ -17,7 +17,7 @@ from dascore.constants import ONE_BILLION, snap_type
 from dascore.core import get_coord, get_coord_manager
 from dascore.core.source import ArraySource
 from dascore.io.utils import stored_coord, windows_to_slices
-from dascore.utils.io import BinaryReader
+from dascore.utils.io import BinaryReader, LocalPath
 
 _T = TypeVar("_T", bound="_TraceSummary")
 _T2 = TypeVar("_T2", bound="_SourceTrace")
@@ -237,16 +237,10 @@ def _coalesce_source_summaries(summaries: list[_TraceSummary]) -> list[_TraceSum
     return _coalesce_source_traces(summaries, _can_merge_summaries, _merge_summaries)
 
 
-def _iter_records(stream: BinaryReader, pymseed):
-    """Iterate a stream's records from its start without unpacking samples."""
-    stream.seek(0)
-    return pymseed.MS3Record.from_filelike(stream, unpack_data=False)
-
-
-def _scan_segments(stream: BinaryReader, pymseed) -> list[_TraceSummary]:
+def _scan_segments(path: LocalPath, pymseed) -> list[_TraceSummary]:
     """Read and coalesce MiniSEED record metadata without unpacking samples."""
     summaries = []
-    for record in _iter_records(stream, pymseed):
+    for record in pymseed.MS3Record.from_file(str(path), unpack_data=False):
         summary = _record_to_summary(record, pymseed)
         if summary.sample_count:
             summaries.append(summary)
@@ -375,9 +369,9 @@ def _patch_meta(
     )
 
 
-def _scan_patches(stream, pymseed, snap: snap_type = ()) -> list[dc.PatchMeta]:
+def _scan_patches(path, pymseed, snap: snap_type = ()) -> list[dc.PatchMeta]:
     """Return the metadata of each patch in a MiniSEED file."""
-    return _metadata_from_summaries(_scan_segments(stream, pymseed), snap)
+    return _metadata_from_summaries(_scan_segments(path, pymseed), snap)
 
 
 def _metadata_from_summaries(all_segments, snap: snap_type = ()):
@@ -434,7 +428,7 @@ def _detect_mseed_v2_header(header: bytes) -> bool:
 
 
 def _detect_format(stream: BinaryReader) -> tuple[str, str] | Literal[False]:
-    """Return the MiniSEED version of a byte stream or False."""
+    """Return the (format, version) of a MiniSEED byte stream, or False."""
     header = stream.read(48)
     if header.startswith(b"MS\x03"):
         return "MSEED", "3"

@@ -28,11 +28,9 @@ from dascore.utils.misc import (
     unbyte,
 )
 from dascore.utils.remote_io import (
-    _FallbackFileObj,
     _get_cached_local_file,
-    ensure_local_file,
-    is_no_range_http_error,
     pause_gc,
+    remote_first_handle,
     resume_gc,
 )
 
@@ -267,10 +265,8 @@ def open_h5_resource(
         # intercepts UPath targets with its temp-file write-back handle.
         file_mode = "rb" if mode == "r" else "r+b"
         open_kwargs = open_kwargs_getter(resource)
-        handle = _FallbackFileObj(
-            remote_opener=lambda: resource.open(file_mode, **open_kwargs),
-            local_opener=lambda: ensure_local_file(resource).open(file_mode),
-            error_predicate=is_no_range_http_error,
+        handle = remote_first_handle(
+            resource, file_mode, lambda: resource.open(file_mode, **open_kwargs)
         )
         # h5py holds its global lock while blocking on fsspec's event-loop
         # thread for remote fetches; an automatic garbage collection on that

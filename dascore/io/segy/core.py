@@ -8,7 +8,7 @@ import dascore as dc
 from dascore.constants import snap_type, windows_type
 from dascore.io.core import FiberIO
 from dascore.io.utils import windows_to_slices
-from dascore.utils.io import BinaryReader, LocalPath
+from dascore.utils.io import LocalPath, StreamBinaryReader
 from dascore.utils.misc import optional_import
 
 from .utils import (
@@ -31,7 +31,7 @@ class SegyV1_0(FiberIO):  # noqa
     # subclassed and this changed for debugging reasons.
     _package_name = "segyio"
 
-    def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
+    def get_version(self, resource: StreamBinaryReader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
         return _match[1] if (_match := _parse_binary_header(resource)) else None
 
