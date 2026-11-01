@@ -43,6 +43,7 @@ from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import BaseCoord, get_coord
 from dascore.exceptions import InvalidFiberFileError
 from dascore.models import OptionalFiniteFloat
+from dascore.utils.io import read_exactly
 
 DIMS = ("time", "distance")
 REQUIRED_BLOCKS = frozenset(
@@ -392,7 +393,7 @@ def _get_patch_attrs(
 def _get_format(resource, name: str, version: str) -> tuple[str, str] | Literal[False]:
     """Return SR-4731 format/version if the resource is supported."""
     # Check the map block's name before reading the whole file.
-    if resource.read(4) != b"Map\x00":
+    if read_exactly(resource, 4) != b"Map\x00":
         return False
     try:
         parsed = _parse_sor(resource, load_samples=False)

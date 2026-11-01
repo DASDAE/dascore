@@ -267,15 +267,17 @@ class TestMemoryRemoteMetadataAccess:
         assert not list(get_remote_cache_path().rglob("*"))
 
     @pytest.mark.parametrize(
-        "fetch_name", ["etna_9n_3chan_10s.mseed", "small_channel_patch.sgy"]
+        ("fetch_name", "package"),
+        [("etna_9n_3chan_10s.mseed", "pymseed"), ("small_channel_patch.sgy", "segyio")],
     )
     def test_header_detection_scan_needs_metadata_cache(
-        self, memory_fetch_copy, fetch_name
+        self, memory_fetch_copy, fetch_name, package
     ):
         """
         MiniSEED and SEG-Y are detected from their header bytes, but scanning
         them needs a local file, so it waits for the metadata cache opt-in.
         """
+        pytest.importorskip(package)
         source, path = memory_fetch_copy(fetch_name, "header")
         assert dc.get_format(path) == dc.get_format(source)
         assert not list(get_remote_cache_path().rglob("*"))

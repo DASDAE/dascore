@@ -95,6 +95,15 @@ def _annotate_handle_path(handle, resource):
     return handle
 
 
+def read_exactly(handle, size: int) -> bytes:
+    """Read `size` bytes, or up to the end, from a handle that may return fewer."""
+    chunks, remaining = [], size
+    while remaining > 0 and (chunk := handle.read(remaining)):
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
+
+
 class BinaryReader(io.BytesIO):
     """Base file for reading binary files."""
 

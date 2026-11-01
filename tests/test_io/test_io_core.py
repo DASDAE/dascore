@@ -937,6 +937,31 @@ class TestGetFormatErrors:
             assert BinaryReader not in manager._cache
         assert built.count(LocalPath) == built.count(BinaryReader) == 1
 
+    def test_untyped_refusal_skips_only_that_reader(self, monkeypatch, tmp_path):
+        """An untyped reader refusing a download does not skip later untyped ones."""
+        manager = _FiberIOManager("dascore.fiber_io")
+        manager.__dict__["_eps"] = pd.Series({}, dtype=object)
+        monkeypatch.setattr(FiberIO, "manager", manager)
+
+        class _UntypedRefuses(FiberIO):
+            name = "_untyped_refuses"
+            version = "1"
+            preferred_extensions = ("rcx",)
+
+            def get_version(self, resource, **kwargs) -> str | None:
+                raise RemoteCacheError("refused by the reader")
+
+        class _UntypedClaims(FiberIO):
+            name = "_untyped_claims"
+            version = "1"
+
+            def get_version(self, resource, **kwargs) -> str | None:
+                return self.version
+
+        path = tmp_path / "file.rcx"
+        path.write_bytes(b"RCX1")
+        assert dc.get_format(path) == ("_untyped_claims", "1")
+
     def test_handle_which_cannot_rewind_is_reopened(self, monkeypatch, tmp_path):
         """A reader after one which read a stream it cannot rewind gets it fresh."""
         manager = _FiberIOManager("dascore.fiber_io")

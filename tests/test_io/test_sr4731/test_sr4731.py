@@ -392,6 +392,8 @@ class TestSR4731Utils:
     def test_get_format_false_for_invalid_sor(self):
         """Invalid bytes should not be claimed as SR-4731."""
         assert not _get_format(BytesIO(b"Map"), "SR4731", "200")
+        # opens with the map block's name but cannot be parsed
+        assert not _get_format(BytesIO(b"Map\x00\x01"), "SR4731", "200")
 
     def test_get_format_reads_only_the_head_of_other_files(self):
         """A file not opening with the map block is refused from four bytes."""

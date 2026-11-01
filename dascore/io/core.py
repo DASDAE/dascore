@@ -589,8 +589,10 @@ class _FiberIOManager:
                     format_version = func(func_input, _pre_cast=True)
                 except RemoteCacheError as exc:
                     cache_error = cache_error or exc
-                    refused.add(required_type)
-                    man.discard(required_type)
+                    # An untyped reader builds no shared resource to refuse.
+                    if required_type is not None:
+                        refused.add(required_type)
+                        man.discard(required_type)
                 except PermissionError:
                     # Denied access is a real error, not a "wrong format"
                     # signal, so it must propagate rather than be swallowed
