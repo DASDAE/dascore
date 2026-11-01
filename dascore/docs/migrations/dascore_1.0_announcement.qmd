@@ -10,7 +10,7 @@ keywords: [release, announcement, migration, "1.0"]
 Paste this into your agent from your project's directory:
 
 ```text
-Follow https://dascore.org/migrations/test_latest_beta.html to test the latest DASCore beta on this project.
+Follow https://dascore.netlify.app/migrations/test_latest_beta.html to test the latest DASCore beta on this project.
 ```
 :::
 
@@ -71,7 +71,7 @@ An [`Inventory`](`dascore.Inventory`) is a StationXML-inspired metadata store fo
 
 ### The AnnotationSet
 
-An [`AnnotationSet`](`dascore.AnnotationSet`) annotates data with points, paths, and polygons over a patch's dimensions. Sets are stored as CSV or Parquet and can be plotted on top of a waterfall. `Spool.cut` returns one patch per annotated feature. See the [annotations tutorial](../tutorial/annotations.qmd).
+An [`AnnotationSet`](`dascore.AnnotationSet`) annotates data with points, paths, and polygons over a patch's dimensions. Sets are stored as CSV or Parquet and can be plotted on top of a waterfall. `Spool.cut` cuts a spool's patches to each annotated feature. See the [annotations tutorial](../tutorial/annotations.qmd).
 
 ### The PatchProcessor
 

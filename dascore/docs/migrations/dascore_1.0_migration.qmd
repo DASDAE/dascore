@@ -28,12 +28,12 @@ pandas 3 stores text columns as strings rather than `object`, which can affect c
 | `patch.iselect(time=(0, 10))` | `patch.select(time=(0, 10), samples=True)` or `patch.isel(time=slice(0, 10))` |
 | `patch.iresample(...)` | `patch.resample(..., samples=True)` |
 | `patch.tran.*` | the same method on the patch, e.g. `patch.dft(...)` |
-| `dascore.transform.rfft`, `patch.tran.rfft` | `patch.dft(dim, real=True)` |
-| `patch.spectrogram(...)` | `patch.stft(...)` |
+| `dascore.transform.rfft`, `patch.rfft`, `patch.tran.rfft` | `patch.dft(dim, real=True)`. **Silent:** `dft` scales by the sample spacing, so its values are the old ones times the step, and it pads to a fast length unless `pad=False` |
+| `patch.spectrogram(...)` | `patch.stft(time=<window>, ...)`, which returns complex coefficients rather than the real power values `spectrogram` returned; take `abs(...) ** 2` of the data for power |
 | `patch.viz.spectrogram(nperseg=..., noverlap=...)` | `patch.viz.spectrogram(time=<window>, overlap=...)`, with the same window arguments as `patch.stft` |
 | `Patch.from_parts(...)` | `dc.Patch(data=..., coords=..., attrs=...)` |
 | `velocity_to_strain_rate(gauge_multiple=g)` | `velocity_to_strain_rate(step_multiple=2 * g)`; copying the value unchanged halves the gauge length |
-| `correlate(..., lag=...)` | select on the output's lag coordinate, e.g. `out.select(lag_time=(-1, 1))` |
+| `correlate(..., lag=...)` | drop `lag`, which 0.1.x ignored; to restrict the output, select on its lag coordinate, e.g. `out.select(lag_time=(-1, 1))` |
 | `slope_filter(..., notch=...)` | `slope_filter(..., invert=...)` |
 | `MemorySpool`, `DirectorySpool`, `FileSpool`, `dascore.clients` | `dc.spool(...)`, which returns a `dc.Spool` |
 | `select_kwargs` | call `spool.select(...)` |
@@ -132,7 +132,7 @@ Selecting samples by a mask or array (`select`, `dropna`) keeps the coordinate's
 # Files
 
 - **Reading 0.1.x DASDAE files.** DASDAE files written by 0.1.x store coordinate metadata as a pickle, which 1.0 does not unpickle by default, so reading, scanning, or indexing them raises `DASDAEUnpickleError`. For files you trust, read them inside `with dc.config_context(allow_dasdae_format_unpickle=True):`, and rewrite them once with 1.0 to drop the need.
-- **Writing DASDAE.** `dc.write(..., "DASDAE")` writes format version 2, which 0.1.x cannot read. Pass `file_version="1"` while collaborators still run 0.1.x. Version 1 cannot hold fractional steps or holes.
+- **Writing DASDAE.** `dc.write(..., "DASDAE")` writes format version 2, which 0.1.x cannot read. Pass `file_version="1"` while collaborators still run 0.1.x. Version 1 cannot hold fractional steps or holes, and 0.1.x reads the `origin_id` and `data_id` such files carry as ordinary attributes, so merging patches with different ids there needs `conflict="drop"`.
 - **Write options.** `dc.write` raises `ParameterError` for an option the format's writer does not declare, rather than ignoring it.
 - **Silent: globs.** String metadata globs follow SQLite, so a character class is negated with `[^...]`. The 0.1.x spelling `[!...]` no longer negates, and selects a different set of patches without an error.
 - **Patch names.** `get_patch_names` defaults to `acquisition_key` and `tag`, rather than `network`, `station`, and `tag`, which changes the names DASCore gives patches inside files it writes.
