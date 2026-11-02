@@ -10,8 +10,12 @@ from upath import UPath
 import dascore as dc
 from dascore.config import config_context
 from dascore.exceptions import InvalidSpoolError, RemoteCacheError
+from dascore.utils import io as io_utils
+from dascore.utils.downloader import fetch
+from dascore.utils.hdf5 import H5Reader
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import clear_remote_file_cache, get_remote_cache_path
+from tests.test_io.conftest import _RegressionHTTPRequestHandler, _serve_das_tree
 
 # The intermittent stall formerly attributed to Windows was a platform-agnostic
 # deadlock between h5py's global lock and garbage collection on fsspec's
@@ -36,6 +40,15 @@ def suppress_expected_remote_cache_warnings(request):
     msg = "Downloading remote file .* to local cache at .*"
     with suppress_warnings(message=msg):
         yield
+
+
+class _NoLengthHandler(_RegressionHTTPRequestHandler):
+    """Serve files without a Content-Length, so clients can only stream them."""
+
+    def send_header(self, keyword, value):
+        """Drop the Content-Length header."""
+        if keyword.lower() != "content-length":
+            super().send_header(keyword, value)
 
 
 @pytest.fixture(autouse=True)
@@ -151,6 +164,56 @@ class TestHTTPFormatAndSpool:
         assert spool_2
         cached_files_3 = list(get_remote_cache_path().rglob(fname))
         assert cached_files_3 == cached_files_2
+
+    def test_http_hdf5_refused_mid_detection_still_raises(
+        self, http_regression_das_path, ensure_http_regression_file, monkeypatch
+    ):
+        """
+        An HDF5 file opens from its first block, but a reader probing past it
+        needs the refused local copy; the scan must still ask for the opt-in,
+        and no later HDF5 reader reopens the file.
+        """
+        fname = "terra15_das_1_trimmed.hdf5"
+        ensure_http_regression_file(fname)
+        built, build = [], io_utils.get_handle_from_resource
+
+        def _spy(resource, required_type):
+            built.append(required_type)
+            return build(resource, required_type)
+
+        monkeypatch.setattr(io_utils, "get_handle_from_resource", _spy)
+        with pytest.raises(RemoteCacheError, match="allow_remote_cache_for"):
+            dc.scan(http_regression_das_path / fname)
+        assert built.count(H5Reader) == 1
+
+    def test_http_segy_header_past_first_block(
+        self, http_regression_das_path, ensure_http_regression_file
+    ):
+        """
+        SEG-Y's binary header lies past a small first block, which a server
+        without byte ranges cannot serve, so detecting it needs the local copy.
+        """
+        fname = "small_channel_patch.sgy"
+        ensure_http_regression_file(fname)
+        path = UPath(str(http_regression_das_path / fname), block_size=512)
+        with pytest.raises(RemoteCacheError, match="allow_remote_cache_for"):
+            dc.get_format(path)
+        assert len(dc.read(path)) == 1
+        with config_context(allow_remote_cache_for_metadata=True):
+            assert dc.get_format(path) == dc.get_format(fetch(fname))
+
+    def test_http_mseed_without_content_length(
+        self, http_regression_data_root, ensure_http_regression_file
+    ):
+        """A file served with no size streams, so detection cannot rewind it."""
+        fname = "etna_9n_3chan_10s.mseed"
+        ensure_http_regression_file(fname)
+        with _serve_das_tree(
+            _NoLengthHandler, http_regression_data_root, "no length"
+        ) as root:
+            path = root / fname
+            assert dc.get_format(path) == ("MSEED", "2")
+            assert len(dc.read(path)) == 3
 
     def test_http_range_server_supports_partial_reads(
         self, http_range_das_path, ensure_http_fetch_file

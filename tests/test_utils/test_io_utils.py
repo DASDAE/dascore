@@ -32,6 +32,7 @@ from dascore.utils.io import (
     TextReader,
     ensure_local_file,
     get_handle_from_resource,
+    read_exactly,
 )
 from dascore.utils.misc import suppress_warnings
 from dascore.utils.remote_io import (
@@ -1260,6 +1261,25 @@ class TestFallbackFileObj:
         with config_context(allow_remote_cache=False):
             with pytest.raises(RemoteCacheError, match="Remote caching is disabled"):
                 H5Reader.get_handle(path)
+
+
+class TestReadExactly:
+    """Tests for reading a fixed byte count from short-reading handles."""
+
+    class _Trickle(BytesIO):
+        """A handle returning at most three bytes per read, like a stream."""
+
+        def read(self, size=-1):
+            return super().read(min(3, size) if size >= 0 else 3)
+
+    def test_collects_short_reads(self):
+        """Short reads are joined until the count is reached."""
+        handle = self._Trickle(b"MS\x03" + bytes(60))
+        assert read_exactly(handle, 48) == b"MS\x03" + bytes(45)
+
+    def test_stops_at_end(self):
+        """A handle ending early returns what it holds."""
+        assert read_exactly(self._Trickle(b"Map"), 4) == b"Map"
 
 
 class TestTextReader:

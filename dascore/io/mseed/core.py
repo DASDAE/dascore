@@ -43,7 +43,7 @@ from dascore.constants import snap_type, windows_type
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io import FiberIO
 from dascore.io.utils import resolve_keyed_source
-from dascore.utils.io import LocalPath
+from dascore.utils.io import BinaryReader, LocalPath
 from dascore.utils.misc import optional_import
 
 from .utils import (
@@ -100,7 +100,7 @@ class MSeedV2(FiberIO):
     preferred_extensions = ("mseed", "msd", "miniseed")
     version = "2"
 
-    def get_version(self, resource: LocalPath, **kwargs) -> str | None:
+    def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
         """Return the file version when the resource matches this family."""
         return _match[1] if (_match := _detect_format(resource)) else None
 

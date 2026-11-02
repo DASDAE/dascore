@@ -30,7 +30,7 @@ from dascore.utils.paths import (
     is_pathlike,
 )
 from dascore.utils.remote_io import ensure_local_file as _ensure_local_file
-from dascore.utils.remote_io import get_local_handle
+from dascore.utils.remote_io import get_local_handle, remote_first_handle
 from dascore.utils.time import to_float
 from dascore.xarray.patch import (  # noqa: F401  published under this module
     patch_to_xarray,
@@ -95,13 +95,13 @@ def _annotate_handle_path(handle, resource):
     return handle
 
 
-def _read_file_header(path, length: int) -> bytes:
-    """Return the first bytes from a file-like path or empty bytes on IO errors."""
-    try:
-        with open(path, "rb") as fi:
-            return fi.read(length)
-    except OSError:
-        return b""
+def read_exactly(handle, size: int) -> bytes:
+    """Read `size` bytes, or up to the end, from a handle that may return fewer."""
+    chunks, remaining = [], size
+    while remaining > 0 and (chunk := handle.read(remaining)):
+        chunks.append(chunk)
+        remaining -= len(chunk)
+    return b"".join(chunks)
 
 
 class BinaryReader(io.BytesIO):
@@ -138,6 +138,24 @@ class LocalBinaryReader(BinaryReader):
                 resource.seek(0)
             return resource
         return get_local_handle(resource, super().get_handle)
+
+
+class StreamBinaryReader(BinaryReader):
+    """
+    A binary reader which streams remote resources.
+
+    If the server cannot serve byte ranges, a read past the first block
+    switches to a local copy, which the remote-cache settings may refuse.
+    """
+
+    @classmethod
+    def get_handle(cls, resource):
+        """Get the binary handle, streaming remote resources when possible."""
+        if not isinstance(resource, UPath):
+            return super().get_handle(resource)
+        return remote_first_handle(
+            resource, cls.mode, lambda: BinaryReader.get_handle(resource)
+        )
 
 
 class BinaryWriter(BinaryReader):
@@ -334,6 +352,16 @@ class IOResourceManager:
                 out = get_handle_from_resource(source, required_type)
                 self._cache[required_type] = out
             return self._cache[required_type]
+
+    def discard(self, required_type):
+        """Close and forget one type's resource, so a later request reopens it."""
+        if isinstance(self._source, self.__class__):
+            return self._source.discard(required_type)
+        with self._lock:
+            handle = self._cache.pop(_get_required_type(required_type), None)
+        if handle is not None and handle is not self.source:
+            with suppress(Exception):
+                release_handle(handle)
 
     def close_all(self, abort: bool = False):
         """

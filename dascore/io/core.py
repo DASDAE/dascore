@@ -568,34 +568,52 @@ class _FiberIOManager:
                 fiber_io_hint=fiber_io_hint,
                 input_type=input_type,
             )
+            # Pass over a reader whose resource needs a download the config
+            # refuses, to be built or read further, and drop that resource so
+            # no later reader builds or reuses it. Raise the first refusal only
+            # if no reader claims the file.
+            cache_error, refused = None, set()
             for fiber_io in iterator:
                 # We need to wrap this in try except to make it robust to what
                 # may happen in each fiber_ios get_format method, many of which
                 # may be third party code.
                 func = fiber_io.get_format
                 required_type = _required_resource_type(fiber_io.get_version)
-                func_input = None
+                if required_type in refused:
+                    continue
+                func_input, format_version = None, False
                 try:
                     # Get resource has to be in the try block because it can also
                     # raise, in which case the format doesn't belong.
                     func_input = man.get_resource(required_type)
                     format_version = func(func_input, _pre_cast=True)
-                except (RemoteCacheError, PermissionError):
-                    # A remote fetch failure or denied access is a real error,
-                    # not a "wrong format" signal, so it must propagate rather
-                    # than be swallowed by the robustness handler below.
+                except RemoteCacheError as exc:
+                    cache_error = cache_error or exc
+                    # An untyped reader builds no shared resource to refuse.
+                    if required_type is not None:
+                        refused.add(required_type)
+                        man.discard(required_type)
+                except PermissionError:
+                    # Denied access is a real error, not a "wrong format"
+                    # signal, so it must propagate rather than be swallowed
+                    # by the robustness handler below.
                     raise
                 # For robustness, we need to catch everything else here.
                 except Exception:
-                    continue
+                    pass
                 finally:
-                    # If file handle-like seek back to 0 so it can be reused.
-                    getattr(func_input, "seek", lambda x: None)(0)
+                    # Seek back to 0 so the next reader can reuse the handle; one
+                    # which cannot seek back (a stream) is dropped for a fresh one.
+                    try:
+                        getattr(func_input, "seek", lambda x: None)(0)
+                    except Exception:
+                        man.discard(required_type)
                 if format_version:
                     return format_version
-            else:
-                msg = f"Could not determine file format of {man.source}"
-                raise UnknownFiberFormatError(msg)
+            if cache_error is not None:
+                raise cache_error
+            msg = f"Could not determine file format of {man.source}"
+            raise UnknownFiberFormatError(msg)
 
     def _get_input_type_name(self, obj):
         """Get the name of the IO type."""

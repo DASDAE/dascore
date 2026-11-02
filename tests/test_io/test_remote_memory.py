@@ -9,7 +9,11 @@ from upath import UPath
 
 import dascore as dc
 from dascore.config import config_context
-from dascore.exceptions import InvalidSpoolError, UnknownFiberFormatError
+from dascore.exceptions import (
+    InvalidSpoolError,
+    RemoteCacheError,
+    UnknownFiberFormatError,
+)
 from dascore.utils.downloader import fetch
 from dascore.utils.remote_io import clear_remote_file_cache, get_remote_cache_path
 
@@ -250,3 +254,36 @@ class TestMemoryRemoteMetadataAccess:
         assert len(attrs) == 1
         assert attrs[0].source_format == "DASDAE"
         assert not list(get_remote_cache_path().rglob(memory_dasdae_path.name))
+
+    def test_late_reader_needs_no_download(self):
+        """
+        A file without an extension, claimed only after the MiniSEED and SEG-Y
+        readers are asked, is detected and scanned without a download.
+        """
+        source = Path(fetch("h5_simple_2.h5"))
+        path = _copy_file_to_memory(source, UPath("memory://dascore/late/h5simple"))
+        assert dc.get_format(path) == ("H5Simple", "1")
+        assert dc.scan(path)[0].source_format == "H5Simple"
+        assert not list(get_remote_cache_path().rglob("*"))
+
+    @pytest.mark.parametrize(
+        ("fetch_name", "package"),
+        [("etna_9n_3chan_10s.mseed", "pymseed"), ("small_channel_patch.sgy", "segyio")],
+    )
+    def test_header_detection_scan_needs_metadata_cache(
+        self, memory_fetch_copy, fetch_name, package
+    ):
+        """
+        MiniSEED and SEG-Y are detected from their header bytes, but scanning
+        them needs a local file, so it waits for the metadata cache opt-in.
+        """
+        pytest.importorskip(package)
+        source, path = memory_fetch_copy(fetch_name, "header")
+        assert dc.get_format(path) == dc.get_format(source)
+        assert not list(get_remote_cache_path().rglob("*"))
+        with pytest.raises(RemoteCacheError, match="allow_remote_cache_for"):
+            dc.scan(path)
+        with config_context(
+            allow_remote_cache_for_metadata=True, warn_on_remote_cache=False
+        ):
+            assert len(dc.scan(path)) == len(dc.scan(source))

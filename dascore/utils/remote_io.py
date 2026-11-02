@@ -563,3 +563,20 @@ class _FallbackFileObj:
     def __getattr__(self, item):
         """Delegate unknown attributes to the backing handle."""
         return getattr(self._handle, item)
+
+
+def remote_first_handle(resource: UPath, mode: str, remote_opener):
+    """
+    Open a remote file, preferring a cached local copy.
+
+    Otherwise the handle reads remotely through ``remote_opener`` until the
+    server cannot serve the byte ranges a read needs, then moves to a local
+    copy, which the remote-cache settings may refuse.
+    """
+    if cached_path := _get_cached_local_file(resource):
+        return cached_path.open(mode)
+    return _FallbackFileObj(
+        remote_opener=remote_opener,
+        local_opener=lambda: ensure_local_file(resource).open(mode),
+        error_predicate=is_no_range_http_error,
+    )

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import tracemalloc
 from fractions import Fraction
 from typing import Any
@@ -906,22 +907,14 @@ class TestMiniSeedUtils:
         )
         assert mseed_utils._source_patch_key(group_key) == "v3:XX..HSF:10:10:12"
 
-    def test_detect_format_no_records(self, tmp_path):
-        """Files with no records are not MiniSEED."""
-        path = tmp_path / "empty.mseed"
-        path.write_bytes(b"")
-        out = mseed_utils._detect_format(path)
-        assert out is False
+    def test_detect_format_no_records(self):
+        """Streams with no records are not MiniSEED."""
+        assert mseed_utils._detect_format(io.BytesIO()) is False
 
-    def test_detect_format_missing_file(self, tmp_path):
-        """Missing paths are not MiniSEED."""
-        assert mseed_utils._detect_format(tmp_path / "missing.mseed") is False
-
-    def test_detect_format_unsupported_version(self, tmp_path):
+    def test_detect_format_unsupported_version(self):
         """Unsupported MiniSEED versions are rejected."""
-        path = tmp_path / "v4.mseed"
-        path.write_bytes(b"MS\x04" + bytes(45))
-        assert mseed_utils._detect_format(path) is False
+        stream = io.BytesIO(b"MS\x04" + bytes(45))
+        assert mseed_utils._detect_format(stream) is False
 
     @pytest.mark.parametrize("channel", [b"Z  ", b"HZ "])
     def test_padded_channel(self, tmp_path, channel):

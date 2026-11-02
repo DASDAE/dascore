@@ -392,6 +392,21 @@ class TestSR4731Utils:
     def test_get_format_false_for_invalid_sor(self):
         """Invalid bytes should not be claimed as SR-4731."""
         assert not _get_format(BytesIO(b"Map"), "SR4731", "200")
+        # opens with the map block's name but cannot be parsed
+        assert not _get_format(BytesIO(b"Map\x00\x01"), "SR4731", "200")
+
+    def test_get_format_reads_only_the_head_of_other_files(self):
+        """A file not opening with the map block is refused from four bytes."""
+
+        class _Counting(BytesIO):
+            def read(self, size=-1):
+                out = super().read(size)
+                self.bytes_read = getattr(self, "bytes_read", 0) + len(out)
+                return out
+
+        resource = _Counting(b"\x89HDF" + bytes(1_000_000))
+        assert not _get_format(resource, "SR4731", "200")
+        assert resource.bytes_read == 4
 
     def test_fixed_and_data_sample_counts_must_match(self):
         """FxdParams and DataPts must agree on trace length."""

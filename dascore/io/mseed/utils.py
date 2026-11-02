@@ -17,7 +17,7 @@ from dascore.constants import ONE_BILLION, snap_type
 from dascore.core import get_coord, get_coord_manager
 from dascore.core.source import ArraySource
 from dascore.io.utils import stored_coord, windows_to_slices
-from dascore.utils.io import LocalPath, _read_file_header
+from dascore.utils.io import BinaryReader, LocalPath, read_exactly
 
 _T = TypeVar("_T", bound="_TraceSummary")
 _T2 = TypeVar("_T2", bound="_SourceTrace")
@@ -427,9 +427,9 @@ def _detect_mseed_v2_header(header: bytes) -> bool:
     return valid_time and valid_offsets and sample_count > 0
 
 
-def _detect_format(path: LocalPath) -> tuple[str, str] | Literal[False]:
-    """Return the MiniSEED version for a path or False."""
-    header = _read_file_header(path, 48)
+def _detect_format(stream: BinaryReader) -> tuple[str, str] | Literal[False]:
+    """Return the (format, version) of a MiniSEED byte stream, or False."""
+    header = read_exactly(stream, 48)
     if header.startswith(b"MS\x03"):
         return "MSEED", "3"
     if _detect_mseed_v2_header(header):
