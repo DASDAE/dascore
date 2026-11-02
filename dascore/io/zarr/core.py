@@ -26,10 +26,12 @@ _MARKERS = {"3": "zarr.json", "2": ".zgroup"}
 
 def _open_zarr(path: UPath, zarr_format: int | None, group: str | None = None):
     """
-    Open a store (or one group) as a lazy dataset; only coordinates are read.
+    Open a store (or one group) as a lazy dataset.
 
-    Naming the format (None sniffs it) saves probing for the other
-    format's metadata files, each a request on a remote store.
+    No indexes are built, so a windowed read touches only the chunks it
+    needs; decoding reads a CF time's first and last chunk. Naming the format
+    (None sniffs it) saves probing for the other format's metadata files,
+    each a request on a remote store.
     """
     xr = optional_import("xarray")
     optional_import("zarr")
@@ -41,6 +43,7 @@ def _open_zarr(path: UPath, zarr_format: int | None, group: str | None = None):
             group=group,
             chunks=None,
             cache=False,
+            create_default_indexes=False,
             zarr_format=zarr_format,
         )
 
