@@ -1,4 +1,4 @@
-"""One authored recipe serves the skills CLI and ordinary documentation."""
+"""One authored page serves the skills CLI and ordinary documentation."""
 
 from __future__ import annotations
 
@@ -43,7 +43,7 @@ class TestSkills:
             assert text == read_document(root, manifest, target)
 
     def test_cli(self, cache, capsys):
-        """Discovery lists canonical recipes and retrieval serves their contents."""
+        """Discovery lists canonical pages and retrieval serves their contents."""
         assert main(["skills"]) == 0
         listed = capsys.readouterr().out
         for name, info in doc_skills.get_skills().items():

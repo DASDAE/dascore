@@ -6,7 +6,9 @@ keywords: [migration, upgrade, deprecation, breaking changes, "1.0"]
 
 This guide covers the changes between DASCore 0.1.24 and 1.0 which can break existing code. Most of them raise a clear error, but a few change results without one; those are marked **silent** below and deserve a search of your code even if it runs. See the [announcement](dascore_1.0_announcement.qmd) for what is new.
 
-# Workflow
+An agent can follow this guide directly from this page; the project does not need DASCore 1.0 installed first, and 0.1.x has no skills command to load it from. Substitute the project environment's Python executable for `python` in the commands below.
+
+## Workflow
 
 1. Upgrade the environment to meet the minimum versions in DASCore's [`pyproject.toml`](https://github.com/DASDAE/dascore/blob/dev/pyproject.toml). Confirm which DASCore the project's Python imports with `python -c "import dascore; print(dascore.__version__, dascore.__file__)"`.
 2. Search the code for every old name in the tables below, and replace each with its 1.0 spelling. Read the installed docstring of each replacement before using it, since arguments changed too.
@@ -14,13 +16,13 @@ This guide covers the changes between DASCore 0.1.24 and 1.0 which can break exi
 4. Plan for existing files: 0.1.x DASDAE files need an explicit opt-in to read, old spool indexes are replaced, and DASDAE files written by 1.0 cannot be read by 0.1.x.
 5. Run the project's tests. Treat new `ParameterError`, `UnitError`, `CoordError`, `PatchCoordinateError`, and `InvalidSpoolQueryError` exceptions as places where 0.1.x computed something questionable, not as noise to suppress, and read new `FutureWarning`s as errors to come.
 
-# Requirements
+## Requirements
 
 DASCore 1.0 raises its minimum Python, NumPy, and pandas versions; check `requires-python` and `dependencies` in [`pyproject.toml`](https://github.com/DASDAE/dascore/blob/dev/pyproject.toml).
 
 pandas 3 stores text columns as strings rather than `object`, which can affect code that inspects `Spool.get_contents()` or `dc.scan_to_df()` dtypes.
 
-# Removed APIs
+## Removed APIs
 
 | 0.1.x | 1.0 |
 |---|---|
@@ -49,7 +51,7 @@ pandas 3 stores text columns as strings rather than `object`, which can affect c
 
 `dascore.utils.patch.merge_patches` still works but is deprecated; use `dc.spool(patches).chunk(time=None)`.
 
-# Attributes and coordinates
+## Attributes and coordinates
 
 In 0.1.x, `patch.attrs` duplicated each coordinate's bounds, step, and units as flat fields such as `time_min` and `distance_step`, and every patch carried empty `network`, `station`, `instrument_id`, and `acquisition_id` fields. In 1.0, attrs hold only non-coordinate metadata, the coordinates are the single source of truth, and an attribute exists only when something sets it.
 
@@ -81,7 +83,7 @@ An extra attribute holds one value. An array belongs on the patch as a coordinat
 
 `dc.scan(path)` returns [`PatchSummary`](`dascore.PatchSummary`) objects rather than `PatchAttrs`. Read coordinate envelopes from `summary.get_coord_summary("time").min`, or use `dc.scan_to_df(path)`, whose `time_min` style columns remain.
 
-# Spools
+## Spools
 
 - **Indexes.** Directory indexes are now `.dascore_index.sqlite3`. Old `.dascore_index.h5` files are no longer used and can be deleted; DASCore warns when it finds one. SQLite indexes are not supported on network filesystems with unreliable locking.
 - **`update`** is allowed only on the spool returned by `dc.spool(path)`, not on one derived from it by `select`, `chunk`, slicing, or `+`. Call `update()` first.
@@ -91,7 +93,7 @@ An extra attribute holds one value. An array belongs on the patch as a coordinat
 - **Kinds.** `chunk`, `concatenate`, and `stack` combine only patches of the same kind, decided by the `patch_kind_attrs` config option; patches of other kinds come out separately, and `stack` warns. `data_type` is no longer part of a patch's kind, so chunking a spool which mixes, say, strain rate and velocity raises `CoordMergeError`, or merges them under `conflict="drop"`. Pass `group="data_type"` to keep them apart as 0.1.x did.
 - **Directory names.** Hive-style `key=value` directory names become string attributes of the patches beneath them.
 
-# Coordinates
+## Coordinates
 
 The coordinate classes were unified into one run-based [`NumericCoord`](`dascore.core.coords.NumericCoord`), plus string coordinates. Build coordinates with [`dc.get_coord`](`dascore.get_coord`) rather than a class.
 
@@ -111,7 +113,7 @@ The coordinate classes were unified into one run-based [`NumericCoord`](`dascore
 
 Selecting samples by a mask or array (`select`, `dropna`) keeps the coordinate's step and records the removed samples as holes, where 0.1.x dropped the step. Operations which need evenly sampled data (`differentiate`, `integrate`, `taper`, `sobel_filter`, filtered `decimate`) still compute on such a patch but issue a `FutureWarning`, and will raise in a later release. Use `fill_gaps` or `split_gaps` first.
 
-# Processing
+## Processing
 
 - Functional entry points take the patch positionally: `dc.proc.demean(patch)`, not `dc.proc.demean(patch=patch)`.
 - `Patch.apply_ufunc` takes the patch first: `patch.apply_ufunc(np.add, other)`. Code calling `Patch.apply_ufunc(ufunc, patch)` should use `dascore.utils.array.apply_ufunc`.
@@ -123,13 +125,13 @@ Selecting samples by a mask or array (`select`, `dropna`) keeps the coordinate's
 - **Silent: correlation units.** `correlate` reports the square of the input data units.
 - **Silent: taper.** `taper` builds its ramp from `2n + 1` samples rather than `2n`, changing edge values slightly.
 
-# Units and time
+## Units and time
 
 - `dc.to_float` raises `UnitError` for a dimensionless or non-time quantity; 0.1.x silently reduced it to base units, so `25 MB` became `2e8`. A time quantity converts to seconds. Use `convert_units` for other conversions.
 - `notch_filter` raises `UnitError` for a dimensionless quantity such as `20 %` on a coordinate without units; 0.1.x read it as a bare number.
 - `dc.to_datetime64` and `dc.to_timedelta64` raise `TimeOverflowError` for times outside the nanosecond range rather than wrapping or returning `NaT`.
 
-# Files
+## Files
 
 - **Reading 0.1.x DASDAE files.** DASDAE files written by 0.1.x store coordinate metadata as a pickle, which 1.0 does not unpickle by default, so reading, scanning, or indexing them raises `DASDAEUnpickleError`. For files you trust, read them inside `with dc.config_context(allow_dasdae_format_unpickle=True):`, and rewrite them once with 1.0 to drop the need.
 - **Writing DASDAE.** `dc.write(..., "DASDAE")` writes format version 2, which 0.1.x cannot read. Pass `file_version="1"` while collaborators still run 0.1.x. Version 1 cannot hold fractional steps or holes, and 0.1.x reads the `origin_id` and `data_id` such files carry as ordinary attributes, so merging patches with different ids there needs `conflict="drop"`.
@@ -137,6 +139,6 @@ Selecting samples by a mask or array (`select`, `dropna`) keeps the coordinate's
 - **Silent: globs.** String metadata globs follow SQLite, so a character class is negated with `[^...]`. The 0.1.x spelling `[!...]` no longer negates, and selects a different set of patches without an error.
 - **Patch names.** `get_patch_names` defaults to `acquisition_key` and `tag`, rather than `network`, `station`, and `tag`, which changes the names DASCore gives patches inside files it writes.
 
-# Format authors
+## Format authors
 
 A 0.1.x `FiberIO` overrode `get_format`, `scan`, and `read`. In 1.0 a format implements `get_version`, `get_metadata`, and `read_array`, and detection, scanning, and reading are derived from them; a reader overriding only the old methods still works but warns. Write options are declared as named parameters of `write` rather than read from `**kwargs`. See [Adding a new format](../contributing/new_format.qmd).

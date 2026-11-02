@@ -19,7 +19,7 @@ python -m dascore skill dascore
 python -m dascore skill make-inventory
 ```
 
-The Skills navigation and CLI use one catalog. Membership in `dascore/docs/skills.yml` makes a recipe a skill; its title, description, and procedure remain in the original documentation page. Recipes keep their ordinary `.qmd` filenames. Keyword tags describe topics independently of skill membership.
+The Skills navigation and CLI use one catalog. Membership in `dascore/docs/skills.yml` makes a page a skill; its title, description, and procedure remain in the original documentation page. Pages keep their ordinary `.qmd` filenames. Keyword tags describe topics independently of skill membership.
 
 ## Install the agent bootstrap
 

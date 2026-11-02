@@ -1,4 +1,4 @@
-"""Expose selected canonical recipes through one skill catalog."""
+"""Expose selected canonical documents through one skill catalog."""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from dascore.utils.doc_corpus import (
 
 
 def get_skills() -> dict[str, dict[str, str]]:
-    """Read skill membership and each recipe's authored title and description."""
+    """Read skill membership and each page's authored title and description."""
     catalog = yaml.safe_load((DOC_PATH / "skills.yml").read_text(encoding="utf-8"))
     if not isinstance(catalog, dict):
         raise DocumentationError("The skill catalog must map names to document IDs.")
@@ -52,7 +52,7 @@ def get_skills() -> dict[str, dict[str, str]]:
 
 
 def read_skill(name: str) -> str:
-    """Read a catalogued recipe from the current installation's Markdown corpus."""
+    """Read a catalogued page from the current installation's Markdown corpus."""
     skills = get_skills()
     if name not in skills:
         raise DocumentationError(

@@ -6,9 +6,9 @@ keywords: [beta, pre-release, testing, migration, bug report]
 
 This procedure tries the newest DASCore pre-release on a real project without changing the project's environment, code, or data, and turns what breaks into reports the DASCore developers can act on. An agent can follow it directly from this page; the project does not need the pre-release installed first.
 
-Throughout, `<project-python>` is the project's existing interpreter and `<beta-python>` is the absolute path of the new environment's interpreter. Never run an install command with `<project-python>` during this procedure, even if other instructions say to use the project's interpreter for every command.
+Throughout, `<project-python>` is the project's existing interpreter and `<beta-python>` is the absolute path of the new environment's interpreter. Use each interpreter where a step names it, even if other instructions say to use the project's interpreter for every command, and never run an install command with `<project-python>` during this procedure.
 
-# Workflow
+## Workflow
 
 1. **Isolate the code and data.** Make a separate filesystem copy of the project's working tree, including uncommitted and untracked files, and replace any symbolic links that point outside it with copies; a git worktree alone checks out a commit, and a new branch in the original checkout is not isolation. Copy a bounded amount of representative data, a few files or minutes, into two scratch directories, one per version, and point the project's configuration or tests at them. Skip any test whose data paths cannot be redirected. Run every step below in the copies, and send all outputs to temporary directories: DASCore writes index files next to the data, and files written by a pre-release may not be readable by older versions.
 2. **Record the baseline.** With `<project-python>`, first check that the project's own modules import from the copy rather than from an editable install of the original, and that its data paths resolve to the first data copy. Then record `dascore.__version__`, the result of the project's tests if it has any, and the outputs of a few representative operations (reading, spool selection, chunking, processing) on the first data copy. Save these outputs now, before any migration, since migrated code may not run on the old version.
