@@ -12,9 +12,11 @@ on:
 
 jobs:
   claude-review:
-    # Secrets aren't available to pull_request runs from forks, so skip them
-    # rather than reporting a failed check on contributor PRs.
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    # Forks cannot access secrets, and Claude rejects bot-initiated reviews.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.sender.type != 'Bot' &&
+      github.actor != 'dependabot[bot]'
 
     runs-on: ubuntu-latest
     permissions:
@@ -24,13 +26,27 @@ jobs:
       id-token: write
 
     steps:
+      - name: Check Claude credentials
+        id: credentials
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+        run: |
+          if [ -n "$CLAUDE_CODE_OAUTH_TOKEN" ]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::notice::Skipping Claude review because credentials are unavailable."
+          fi
+
       - name: Checkout repository
+        if: steps.credentials.outputs.available == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1  # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 1
 
       - name: Run Claude Code Review
+        if: steps.credentials.outputs.available == 'true'
         id: claude-review
         uses: anthropics/claude-code-action@6d5ae526d25ce88daa2200be073e1a373167f064  # v1.0.265
         with:
