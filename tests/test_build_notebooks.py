@@ -1,22 +1,29 @@
 """
-Test notebook links, Pyodide kernelspecs, and mirrored data paths.
+Test notebook links, the marimo setup cell, and mirrored data paths.
 
-These can break in the browser despite a successful build. Build failures and
-unavailable browser imports are covered by Quarto, pooch, and Pyodide doc tests.
+These can break in the browser despite a successful build. Build failures are
+caught by quarto and marimo during the doc build; these tests need neither.
 """
 
 from __future__ import annotations
 
+import ast
 import importlib.util
 import json
+import os
+import sys
+import tempfile
+from collections import defaultdict
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from dascore.constants import DATA_VERSION
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
-_SCRIPT_PATH = _REPO_ROOT / "scripts" / "build_notebooks.py"
+_SCRIPTS = _REPO_ROOT / "scripts"
+_SCRIPT_PATH = _SCRIPTS / "build_notebooks.py"
 
 # These checks exercise checkout-only build tools; the sdist omits scripts/.
 pytestmark = pytest.mark.skipif(
@@ -24,10 +31,12 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-def _load_module():
-    """Import the build script by path; scripts/ is not a package."""
-    spec = importlib.util.spec_from_file_location("build_notebooks", _SCRIPT_PATH)
+def _load_module(name):
+    """Import a script by path; scripts/ is not a package."""
+    spec = importlib.util.spec_from_file_location(name, _SCRIPTS / f"{name}.py")
     module = importlib.util.module_from_spec(spec)
+    # Dataclasses look their module up while the class is created.
+    sys.modules[name] = module
     spec.loader.exec_module(module)
     return module
 
@@ -35,7 +44,7 @@ def _load_module():
 @pytest.fixture(scope="module")
 def build_notebooks():
     """The loaded build_notebooks module."""
-    return _load_module()
+    return _load_module("build_notebooks")
 
 
 @pytest.fixture()
@@ -95,46 +104,50 @@ def _notebook(cells):
     return {"cells": cells, "metadata": {"kernelspec": {"name": "local"}}}
 
 
-def _code(source, outputs=None):
+def _code(source):
     """Build a code cell."""
-    return {
-        "cell_type": "code",
-        "source": [source],
-        "outputs": outputs if outputs is not None else [],
-        "execution_count": 3,
-    }
+    return {"cell_type": "code", "source": [source], "outputs": []}
 
 
 class TestPostProcess:
-    """Tests for adjusting a rendered notebook for the browser."""
+    """Tests for preparing a rendered notebook for marimo."""
+
+    wheel = "dascore-1.0-py3-none-any.whl"
 
     @pytest.fixture()
     def processed(self, build_notebooks, tmp_path, tutorial_page, site_url):
         """A notebook run through post_process."""
         cells = [
             {"cell_type": "markdown", "source": ["[a](coords.qmd)\n"]},
-            _code("import dascore", outputs=[{"text": "stale"}]),
-            _code("   \n"),
+            _code("import dascore"),
         ]
         path = tmp_path / "nb.ipynb"
         path.write_text(json.dumps(_notebook(cells)))
-        return build_notebooks.post_process(path, tutorial_page, site_url)
+        return build_notebooks.post_process(path, tutorial_page, site_url, self.wheel)
 
     def test_setup_cell_is_first(self, processed):
-        """The reader has to install dascore before anything else runs."""
-        first = "".join(processed["cells"][0]["source"])
-        assert "%pip install" in first
-        assert "dascore" in first
+        """Marimo convert makes the first cell named setup the setup cell."""
+        first = processed["cells"][0]
+        assert first["metadata"]["marimo"]["name"] == "setup"
+        assert "DFS_DATA_DIR" in first["source"]
 
-    def test_kernel_points_at_pyodide(self, build_notebooks, processed):
-        """A local interpreter path would not exist in the browser."""
-        assert processed["metadata"]["kernelspec"] == build_notebooks.KERNELSPEC
+    def test_mo_is_defined(self, processed):
+        """The markdown cells call mo.md, so some cell must import it."""
+        sources = ["".join(c["source"]) for c in processed["cells"]]
+        assert "import marimo as mo" in sources
 
-    def test_blank_code_cells_are_removed(self, processed):
-        """Non-python blocks render as empty cells, which help nobody."""
-        code = [c for c in processed["cells"] if c["cell_type"] == "code"]
-        # Only the setup cell and the real one survive.
-        assert len(code) == 2
+    def test_header_installs_bundled_wheel(self, build_notebooks, processed):
+        """The released dascore does not install in Pyodide; the wheel must."""
+        header = processed["metadata"]["marimo"]["header"]
+        assert header.startswith("# /// script")
+        assert f'"dascore @ ./wheels/{self.wheel}"' in header
+        for package in build_notebooks.EXTRA_PACKAGES:
+            assert f'"{package}"' in header
+
+    def test_links_point_at_site(self, processed):
+        """A relative .qmd link means nothing inside the notebook."""
+        markdown = "".join(processed["cells"][2]["source"])
+        assert markdown == "[a](https://dascore.org/tutorial/coords.html)\n"
 
     def test_page_with_only_empty_code_is_skipped(
         self, build_notebooks, tmp_path, tutorial_page, site_url
@@ -147,61 +160,149 @@ class TestPostProcess:
         cells = [{"cell_type": "markdown", "source": ["hi\n"]}, _code("  \n")]
         path = tmp_path / "diagrams.ipynb"
         path.write_text(json.dumps(_notebook(cells)))
-        assert build_notebooks.post_process(path, tutorial_page, site_url) is None
+        assert (
+            build_notebooks.post_process(path, tutorial_page, site_url, self.wheel)
+            is None
+        )
+
+
+class TestFindWheel:
+    """The build bundles exactly one wheel unless told which."""
+
+    def test_single_wheel(self, build_notebooks, tmp_path):
+        """The only wheel in dist is the one used."""
+        wheel = tmp_path / "dascore-1.0-py3-none-any.whl"
+        wheel.touch()
+        assert build_notebooks.find_wheel(tmp_path) == wheel
+
+    @pytest.mark.parametrize("count", [0, 2])
+    def test_ambiguous_dist_exits(self, build_notebooks, tmp_path, count):
+        """Guessing between stale wheels could ship the wrong code."""
+        for version in range(count):
+            (tmp_path / f"dascore-{version}-py3-none-any.whl").touch()
+        with pytest.raises(SystemExit, match="Expected one dascore wheel"):
+            build_notebooks.find_wheel(tmp_path)
+
+
+class _FakeRequest:
+    """Stands in for js.XMLHttpRequest, reading urls as local paths."""
+
+    @classmethod
+    def new(cls):
+        return cls()
+
+    def open(self, method, url, asynchronous):
+        self.url = url
+
+    def send(self, body):
+        data = Path(self.url).read_bytes()
+        self.response = SimpleNamespace(to_py=lambda: memoryview(data))
 
 
 class TestMirroredData:
     """Example data ships with the site so tutorials do not hit GitHub."""
 
-    def test_setup_cell_points_pooch_at_the_mirror(self, build_notebooks):
-        """Without the env var the reader downloads from GitHub instead."""
-        assert "DFS_DATA_DIR" in build_notebooks.SETUP_SOURCE
-        assert build_notebooks.BROWSER_DATA_DIR in build_notebooks.SETUP_SOURCE
+    @pytest.fixture()
+    def stub_fetch(self, build_notebooks, tmp_path, monkeypatch):
+        """Point fetch at small stand-ins for the mirrored files."""
+        stub = tmp_path / "stub"
+        stub.mkdir()
+        for name in build_notebooks.MIRRORED_DATA:
+            (stub / name).write_bytes(name.encode())
+        monkeypatch.setattr(build_notebooks, "fetch", lambda name: stub / name)
 
-    def test_layout_matches_what_pooch_expects(
-        self, build_notebooks, tmp_path, monkeypatch
+    def test_browser_reads_mirror_where_pooch_looks(
+        self, build_notebooks, stub_fetch, tmp_path, monkeypatch
     ):
-        """Pooch resolves DFS_DATA_DIR as `<dir>/<DATA_VERSION>/<name>`.
+        """The setup cell must land each file at `<DFS_DATA_DIR>/<DATA_VERSION>/`.
 
-        Mirroring to any other shape leaves the files unreachable and the
-        tutorials quietly downloading again, so the version subdirectory is
-        the part worth pinning.
+        Any other shape leaves the files unreachable and the tutorials quietly
+        downloading again. This runs the setup cell against the mirrored site
+        with the browser's modules faked.
         """
-        stub = tmp_path / "stub"
-        stub.mkdir()
+        site = tmp_path / "site"
+        build_notebooks.mirror_data(site / "public")
+        notebook = SimpleNamespace(notebook_location=lambda: site)
+        monkeypatch.setitem(sys.modules, "marimo", notebook)
+        monkeypatch.setitem(
+            sys.modules, "js", SimpleNamespace(XMLHttpRequest=_FakeRequest)
+        )
+        monkeypatch.setattr(sys, "platform", "emscripten")
+        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "browser_tmp"))
+        monkeypatch.setenv("DFS_DATA_DIR", "unset")
+
+        exec(build_notebooks.SETUP_SOURCE, {})
+
+        cache = Path(os.environ["DFS_DATA_DIR"])
         for name in build_notebooks.MIRRORED_DATA:
-            (stub / name).write_bytes(b"x")
-        monkeypatch.setattr(
-            "dascore.utils.downloader.fetch", lambda name, **kw: stub / name
-        )
+            assert (cache / DATA_VERSION / name).read_bytes() == name.encode()
 
-        contents = tmp_path / "contents"
-        build_notebooks.mirror_data(contents)
+    def test_setup_is_inert_outside_browser(self, build_notebooks, monkeypatch):
+        """Running a notebook locally must keep the reader's own data dir."""
+        monkeypatch.setenv("DFS_DATA_DIR", "mine")
+        exec(build_notebooks.SETUP_SOURCE, {})
+        assert os.environ["DFS_DATA_DIR"] == "mine"
 
-        target = contents / build_notebooks.DATA_DIR_NAME / DATA_VERSION
-        assert sorted(p.name for p in target.iterdir()) == sorted(
-            build_notebooks.MIRRORED_DATA
-        )
-        # The browser path the setup cell exports must resolve to that dir.
-        assert build_notebooks.BROWSER_DATA_DIR.endswith(build_notebooks.DATA_DIR_NAME)
-
-    def test_rebuild_drops_stale_files(self, build_notebooks, tmp_path, monkeypatch):
+    def test_rebuild_drops_stale_files(self, build_notebooks, stub_fetch, tmp_path):
         """A file dropped from the list must not linger in the site."""
-        stub = tmp_path / "stub"
-        stub.mkdir()
-        for name in build_notebooks.MIRRORED_DATA:
-            (stub / name).write_bytes(b"x")
-        monkeypatch.setattr(
-            "dascore.utils.downloader.fetch", lambda name, **kw: stub / name
-        )
-        contents = tmp_path / "contents"
-        target = contents / build_notebooks.DATA_DIR_NAME / DATA_VERSION
-        target.mkdir(parents=True)
-        (target / "obsolete.h5").write_bytes(b"old")
+        public = tmp_path / "public"
+        (public / "data").mkdir(parents=True)
+        (public / "data" / "obsolete.h5").write_bytes(b"old")
 
-        build_notebooks.mirror_data(contents)
+        build_notebooks.mirror_data(public)
 
-        assert not (target / "obsolete.h5").exists()
+        assert not (public / "data" / "obsolete.h5").exists()
+
+
+def _defined_names(code: str) -> set[str]:
+    """Return the names a cell binds at module scope, as marimo counts them."""
+    names = set()
+
+    def visit(node):
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                names.add(child.name)
+                continue
+            if isinstance(
+                child,
+                ast.Lambda
+                | ast.ListComp
+                | ast.SetComp
+                | ast.DictComp
+                | ast.GeneratorExp,
+            ):
+                continue
+            if isinstance(child, ast.Import | ast.ImportFrom):
+                names.update((a.asname or a.name).split(".")[0] for a in child.names)
+            elif isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store):
+                names.add(child.id)
+            visit(child)
+
+    visit(ast.parse(code))
+    return {name for name in names if not name.startswith("_")}
+
+
+class TestTutorialNames:
+    """Each tutorial page defines a top-level name in one block only."""
+
+    def test_no_name_defined_twice(self):
+        """Marimo convert renames a redefinition, so the notebook drifts.
+
+        A name assigned in two blocks becomes `name_1` in the second notebook
+        cell, which no longer matches the page the reader came from.
+        """
+        extract = _load_module("generate_doc_code_tests").extract_qmd_file
+        repeated = {}
+        for page in sorted(
+            (_REPO_ROOT / "dascore" / "docs" / "tutorial").glob("*.qmd")
+        ):
+            blocks = defaultdict(list)
+            for chunk in extract(page).chunks:
+                for name in _defined_names(chunk.source):
+                    blocks[name].append(chunk.start_line)
+            if dupes := {k: v for k, v in blocks.items() if len(v) > 1}:
+                repeated[page.name] = dupes
+        assert not repeated
 
 
 class TestSiteUrl:

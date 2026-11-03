@@ -119,13 +119,11 @@ prof/
 #JetBrains
 .idea/
 
-# JupyterLite site and the notebooks it is built from (see
+# marimo tutorial site and the notebooks it is built from (see
 # scripts/build_notebooks.py); both are build artifacts.
-dascore/docs/lite/
-dascore/docs/lite_contents/
-dascore/docs/tutorial/lite_tmp_*
-# `jupyter lite build` keeps its incremental-build state here.
-.jupyterlite.doit.db
+dascore/docs/marimo/
+dascore/docs/marimo_contents/
+dascore/docs/tutorial/marimo_tmp_*
 
 # Written by scripts/_doc_report.py; a build artifact, not a page.
 doc_build_report.json

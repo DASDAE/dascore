@@ -380,9 +380,9 @@ def measure_site(
         size = file_path.stat().st_size
         total += size
         relative = file_path.relative_to(site_path)
-        # The JupyterLite site is copied in whole, application pages and
-        # all. None of it is a documentation page.
-        if file_path.suffix != ".html" or relative.parts[0] == "lite":
+        # The marimo site is copied in whole, notebook pages and all. None
+        # of it is a documentation page.
+        if file_path.suffix != ".html" or relative.parts[0] == "marimo":
             resources[relative.parts[0] if len(relative.parts) > 1 else "root"] += size
             continue
         text = file_path.read_text(errors="replace")
