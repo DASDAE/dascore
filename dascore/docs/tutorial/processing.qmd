@@ -130,9 +130,7 @@ To demonstrate, we create some plotting code and an example patch.
 ```{python}
 
 import matplotlib.pyplot as plt
-import numpy as np
 
-import dascore as dc
 from dascore.utils.time import to_float
 
 
@@ -183,48 +181,47 @@ def make_noisy_sine_patch():
 ```
 
 ```{python}
-patch = make_noisy_sine_patch()
-plot_time_and_frequency(patch);
+noisy_patch = make_noisy_sine_patch()
+plot_time_and_frequency(noisy_patch);
 ```
 
 The default whitening makes all spectral amplitudes equal.
 
 ```{python}
-white_patch = patch.whiten()
+white_patch = noisy_patch.whiten()
 plot_time_and_frequency(white_patch);
 ```
 
 The whitening can be restricted to certain frequency bands by specifying the dimension and a frequency range.
 
 ```{python}
-white_patch = patch.whiten(time=(20, 80))
-plot_time_and_frequency(white_patch);
+white_band = noisy_patch.whiten(time=(20, 80))
+plot_time_and_frequency(white_band);
 ```
 
 Four values can be used to control the start/end of the taper.
 
 ```{python}
-white_patch = patch.whiten(time=(20, 40, 60, 80))
-plot_time_and_frequency(white_patch);
+white_tapered = noisy_patch.whiten(time=(20, 40, 60, 80))
+plot_time_and_frequency(white_tapered);
 ```
 
 Whiten also supports using a smoothed amplitude for normalization which causes less drastic changes to the amplitude spectrum.
 
 ```{python}
-white_patch = patch.whiten(smooth_size=1)
-_ = plot_time_and_frequency(white_patch)
+white_smooth = noisy_patch.whiten(smooth_size=1)
+_ = plot_time_and_frequency(white_smooth)
 ```
 
-
 ```{python}
-white_patch = patch.whiten(smooth_size=2, time=(10, 20, 80, 90))
-_ = plot_time_and_frequency(white_patch)
+white_smooth_band = noisy_patch.whiten(smooth_size=2, time=(10, 20, 80, 90))
+_ = plot_time_and_frequency(white_smooth_band)
 ```
 
 `Whiten` also accepts patches in the frequency domain, in which case frequency patches are returned. This might be useful if whiten is only a part of a frequency domain workflow.
 
 ```{python}
-fft_patch = patch.dft("time", real=True)
+fft_patch = noisy_patch.dft("time", real=True)
 dft_white = fft_patch.whiten(smooth_size=1, time=(20, 40, 60, 80))
 td_patch = dft_white.idft()
 plot_time_and_frequency(td_patch);

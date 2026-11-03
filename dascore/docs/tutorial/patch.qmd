@@ -43,13 +43,13 @@ To build a patch directly, supply the data, its dimension names, and coordinates
 ```{python}
 rng = np.random.default_rng(13)
 data = rng.random((300, 2_000))
-time = dc.to_datetime64("2017-09-18") + np.arange(2_000) * dc.to_timedelta64(1 / 250)
-distance = np.arange(300)
+times = dc.to_datetime64("2017-09-18") + np.arange(2_000) * dc.to_timedelta64(1 / 250)
+distances = np.arange(300)
 
 manual_patch = dc.Patch(
     data=data,
     dims=("distance", "time"),
-    coords={"distance": distance, "time": time},
+    coords={"distance": distances, "time": times},
     attrs={"data_units": "um/(m * s)"},
 )
 ```
@@ -223,7 +223,7 @@ first_half = patch.select(distance=(..., np.mean(patch.get_array("distance"))))
 With `relative=True`, positive bounds are measured from the start and negative bounds from the end:
 
 ```{python}
-trimmed = patch.select(time=(1, -1), relative=True)
+trimmed_relative = patch.select(time=(1, -1), relative=True)
 ```
 
 Relative quantities are converted before measuring from an endpoint:
@@ -306,9 +306,9 @@ The supported subset covers dimension names and scalar, slice, and unlabelled 1D
 
 ```{python}
 outside = patch.unselect(distance=(50, 200))
-distance = outside.get_coord("distance")
-assert distance.step == patch.get_coord("distance").step
-assert distance.missing().count > 0
+segmented = outside.get_coord("distance")
+assert segmented.step == patch.get_coord("distance").step
+assert segmented.missing().count > 0
 ```
 
 Each named coordinate is complemented independently. At spool level, patch coordinates cannot be unselected because removing an interior interval could turn one patch into two; use `Patch.unselect` when subdivision is intended.
@@ -328,7 +328,7 @@ expanded = patch.append_dims(realization=2).update_coords(realization=[0, 1])
 The new dimension is appended to the array. Use `transpose` to place it elsewhere:
 
 ```{python}
-expanded = expanded.transpose("distance", "realization", "time")
+reordered = expanded.transpose("distance", "realization", "time")
 ```
 
 # Processing and visualization
@@ -368,10 +368,10 @@ retagged = patch.update_attrs(tag="processed")
 shifted = patch.update_coords(time_min=patch.coords.min("time") + one_second)
 
 latitude = np.linspace(41.5, 41.8, patch.shape[0])
-located = patch.update_coords(latitude=("distance", latitude))
+with_latitude = patch.update_coords(latitude=("distance", latitude))
 
 quality = np.ones_like(patch.data)
-with_quality = located.update_coords(quality=(patch.dims, quality))
+with_quality = with_latitude.update_coords(quality=(patch.dims, quality))
 ```
 
 Several coordinates can be attached in one call, and the associated dimension determines the required shape:
@@ -425,10 +425,10 @@ Use `set_units` only when values are already expressed in the new unit or when c
 Quantities may be passed directly to selection and processing functions:
 
 ```{python}
-from dascore.units import ft, m
+from dascore.units import m
 
 selected = patch.select(distance=(10 * ft, 10 * m))
-filtered = patch.pass_filter(distance=(10 * m, 100 * m))
+wavelength_filtered = patch.pass_filter(distance=(10 * m, 100 * m))
 ```
 
 Quantities are converted to the coordinate's units before selection or processing, so the same expression works after a coordinate is converted from metres to feet.
@@ -438,11 +438,11 @@ Quantities are converted to the coordinate's units before selection or processin
 Scalar and NumPy-array operations broadcast over patch data. Patch-to-patch operations require compatible metadata and align coordinates on their intersection; units participate in the calculation. See [Patch compatibility](../notes/patch_compatibility.qmd) for the shared rules.
 
 ```{python}
-scaled = patch / 10
+divided = patch / 10
 offset = patch + np.ones(patch.shape)
 combined = patch + patch
 
-assert np.allclose(scaled.data, patch.data / 10)
+assert np.allclose(divided.data, patch.data / 10)
 assert np.allclose(combined.data, patch.data * 2)
 ```
 
@@ -496,7 +496,7 @@ summed = patch.add.reduce("distance")
 
 ```{python}
 same_absolute = patch.apply_ufunc(np.abs)
-scaled = patch.apply_ufunc(np.multiply, 10)
+multiplied = patch.apply_ufunc(np.multiply, 10)
 ```
 
 Named reduction removes the reduced dimension and coordinates which depend on it. Accumulation retains the original shape and dimension coordinates.

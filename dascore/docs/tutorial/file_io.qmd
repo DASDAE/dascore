@@ -80,9 +80,9 @@ DASCore reads, but does not write, NetCDF files in the XDAS layout. Each signal,
 Many instruments store a timestamp per sample, from a clock that jitters or runs apart from the sampling. Readers put the dimensions a format stores this way on a grid, from the start and rate the file states or else from its first and last labels, and check the grid against a few stored labels. Where one sits more than `dascore.config.max_shift` (a fifth of a step) off it, the file may hold a gap, so the labels are kept as stored, with a warning naming the file. `snap` chooses the dimensions: by default the format's own (its reader's `get_metadata` signature shows them), `True` for all, `False` for none, or a tuple of names. `dc.read`, `dc.scan`, `dc.scan_payloads` and `dc.spool` all take it; a directory's index records the `snap` and `max_shift` it was scanned under, and rescans its files when opened with others.
 
 ```{python}
-path = dc.utils.downloader.fetch("terra15_das_1_trimmed.hdf5")
-gridded = dc.read(path)[0].get_coord("time")  # on a grid
-stored = dc.read(path, snap=False)[0].get_coord("time")  # the GPS times
+terra15_path = dc.utils.downloader.fetch("terra15_das_1_trimmed.hdf5")
+gridded = dc.read(terra15_path)[0].get_coord("time")  # on a grid
+stored = dc.read(terra15_path, snap=False)[0].get_coord("time")  # the GPS times
 ```
 
 # Scanning metadata
@@ -140,8 +140,8 @@ spool = (
 Iteration is where patch arrays are loaded:
 
 ```{python}
-for patch in spool:
-    processed = patch.detrend("time")
+for chunk in spool:
+    processed = chunk.detrend("time")
 ```
 
 The hidden `.dascore_index.sqlite3` stores file metadata and enables selections before patch data is loaded. Opening a new directory creates the index; call `spool.update()` after files change. See the [spool tutorial](spool.qmd) and [index note](../notes/spool_index.qmd) for path attributes and index lifecycle.

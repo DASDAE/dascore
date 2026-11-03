@@ -72,7 +72,7 @@ assert np.allclose(
 DASCore uses [Pint](https://pint.readthedocs.io/) quantities. Import common units or parse them with [`get_quantity`](`dascore.units.get_quantity`):
 
 ```{python}
-from dascore.units import ft, get_quantity, m
+from dascore.units import ft, get_quantity
 
 distance = 10 * m
 print(distance.to(ft))
