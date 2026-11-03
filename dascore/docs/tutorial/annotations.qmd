@@ -45,8 +45,8 @@ picks = pd.DataFrame(
         "confidence": [0.9, 0.95, 0.8, 0.7, 0.9, 0.4],
     }
 )
-ann = dc.AnnotationSet.from_patch(patch, picks)
-ann.annotations
+pick_set = dc.AnnotationSet.from_patch(patch, picks)
+pick_set.annotations
 ```
 
 A set of only annotations writes as one bare file. The file holds the annotations table, with no features or bases. A CSV records neither the dimensions nor the set's attributes, such as `data_id`; reading states the dimensions again, and may state the attributes. `io.to_parquet` writes a Parquet file that keeps both, and needs pyarrow. The directory form described under [Saving and loading](#saving-and-loading) keeps them in either encoding.
@@ -54,8 +54,8 @@ A set of only annotations writes as one bare file. The file holds the annotation
 ```{python}
 folder = Path(tempfile.mkdtemp())
 path = folder / "picks.csv"
-ann.io.to_csv(path)
-assert dc.annotations(path, dims=patch.dims).annotations.equals(ann.annotations)
+pick_set.io.to_csv(path)
+assert dc.annotations(path, dims=patch.dims).annotations.equals(pick_set.annotations)
 ```
 
 # Building features
@@ -70,14 +70,14 @@ event.features
 Builders return new sets. In [`add_path`](`dascore.core.annotations.AnnotationSet.add_path`) an array keyword is an annotations column, one value per vertex, and a scalar keyword is a features column:
 
 ```{python}
-ann = event.add_path(
+with_s_wave = event.add_path(
     "s_wave",
     time=[0.026, 0.06, 0.09],
     distance=[700.0, 580.0, 470.0],
     amplitude=[20.0, 12.0, 6.0],
     wave="S",
 )
-ann["s_wave"].kind, ann["s_wave"].extra
+with_s_wave["s_wave"].kind, with_s_wave["s_wave"].extra
 ```
 
 A path can also be drawn from a basis, given as a model or its document, and no vertices:
@@ -88,14 +88,14 @@ line = {
     "start": {"time": 0.01, "distance": 700.0},
     "end": {"time": 0.04, "distance": 900.0},
 }
-ann = ann.add_path("p_wave", basis=line, wave="P")
+with_p_wave = with_s_wave.add_path("p_wave", basis=line, wave="P")
 ```
 
 [`add_polygon`](`dascore.core.annotations.AnnotationSet.add_polygon`) takes rings, the outer ring first and then any holes, each a table of vertices in order. Closure is implied:
 
 ```{python}
 outer = {"time": [0.06, 0.1, 0.1, 0.06], "distance": [400.0, 400.0, 450.0, 450.0]}
-ann = ann.add_polygon("noise", rings=[outer], note="traffic")
+ann = with_p_wave.add_polygon("noise", rings=[outer], note="traffic")
 ann
 ```
 
@@ -147,12 +147,12 @@ len(cut), cut.get_contents()[["feature_id", "time_min", "time_max"]]
 
 # Plotting
 
-[`ann.viz.plot`](`dascore.viz.annotations.plot`) draws every feature on an axis, putting dimensions where [`waterfall`](`dascore.viz.waterfall.waterfall`) puts them. Draw the patch first and the annotations over it. `color` may name a column, giving one color per value and a legend; features with no value, here the paths, the polygon and a trigger time added across the fiber, are black, so they read over the waterfall: lines and markers with a white halo, filled shapes with a solid edge. `palette` fixes the colors of chosen values, e.g. `palette={"P": "tab:red", "S": "tab:cyan"}`, and when no color column is given and two or more kinds are drawn, a legend names the kinds:
+[`AnnotationSet.viz.plot`](`dascore.viz.annotations.plot`) draws every feature on an axis, putting dimensions where [`waterfall`](`dascore.viz.waterfall.waterfall`) puts them. Draw the patch first and the annotations over it. `color` may name a column, giving one color per value and a legend; features with no value, here the paths, the polygon and a trigger time added across the fiber, are black, so they read over the waterfall: lines and markers with a white halo, filled shapes with a solid edge. `palette` fixes the colors of chosen values, e.g. `palette={"P": "tab:red", "S": "tab:cyan"}`, and when no color column is given and two or more kinds are drawn, a legend names the kinds:
 
 ```{python}
-ann = ann.add(pd.DataFrame({"time": [0.08], "note": ["trigger"]}))
+with_trigger = ann.add(pd.DataFrame({"time": [0.08], "note": ["trigger"]}))
 ax = patch.viz.waterfall()
-ax = ann.viz.plot(ax=ax, color="phase")
+ax = with_trigger.viz.plot(ax=ax, color="phase")
 ```
 
 A pick is a marker, a path a line, a polygon a filled shape, and a row spanning one axis a line or band across it.
@@ -162,7 +162,7 @@ A pick is a marker, a path a line, a polygon a filled shape, and a row spanning 
 [`update`](`dascore.core.annotations.AnnotationSet.update`) changes the columns of one feature or one annotation, and [`remove`](`dascore.core.annotations.AnnotationSet.remove`) drops one. [`merge`](`dascore.core.annotations.AnnotationSet.merge`) combines sets stated in the same dimensions, such as hand and automatic picks.
 
 ```{python}
-ann = ann.update(feature="event_1", magnitude=1.2).remove(feature="noise")
+edited = with_trigger.update(feature="event_1", magnitude=1.2).remove(feature="noise")
 ```
 
 # Saving and loading
@@ -170,6 +170,6 @@ ann = ann.update(feature="event_1", magnitude=1.2).remove(feature="noise")
 A set with features or bases is saved as a directory holding `attrs.json`, the annotations and features tables, and `bases.json`. [`dc.annotations`](`dascore.annotations`) reads it back, and also reads bare tables and collections of sets:
 
 ```{python}
-directory = ann.io.save(folder / "event_1")
-assert dc.annotations(directory) == ann
+directory = edited.io.save(folder / "event_1")
+assert dc.annotations(directory) == edited
 ```

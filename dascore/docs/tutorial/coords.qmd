@@ -55,13 +55,13 @@ Time and integer ranges keep their spacing exactly. A step may be given as a `Fr
 from fractions import Fraction
 
 t0 = np.datetime64("2020-01-01T00:00:00")
-time = get_coord(start=t0, step=(1, 1024), shape=(3_686_400,))
+hour = get_coord(start=t0, step=(1, 1024), shape=(3_686_400,))
 
-assert time.step_exact == Fraction(1, 1024)
-assert time[::2].step_exact == Fraction(1, 512)
-assert time.step == np.timedelta64(976562, "ns")
+assert hour.step_exact == Fraction(1, 1024)
+assert hour[::2].step_exact == Fraction(1, 512)
+assert hour.step == np.timedelta64(976562, "ns")
 # the rounded step would have drifted 1.8 ms by the end of the hour
-assert time.max() - (t0 + time.step * (len(time) - 1)) == np.timedelta64(1843199, "ns")
+assert hour.max() - (t0 + hour.step * (len(hour) - 1)) == np.timedelta64(1843199, "ns")
 ```
 
 Float coordinates have no tick to be exact against, so a fraction step on one raises and their `step_exact` is `None`.
@@ -120,8 +120,8 @@ A dense array whose runs would outnumber a tenth of its samples keeps its labels
 ```{python}
 import dascore as dc
 
-patch = dc.Patch(data=np.ones(len(coord)), coords={"x": coord}, dims=("x",))
-filled = patch.fill_gaps("x", fill_value=0)
+gapped = dc.Patch(data=np.ones(len(coord)), coords={"x": coord}, dims=("x",))
+filled = gapped.fill_gaps("x", fill_value=0)
 assert filled.shape == (12,) and filled.data.sum() == len(coord)
 ```
 
@@ -133,10 +133,10 @@ assert filled.shape == (12,) and filled.data.sum() == len(coord)
 
 ```{python}
 start = np.datetime64("2023-01-01")
-coord = get_coord(start=start, stop=start + np.timedelta64(1, "h"), step=np.timedelta64(1, "m"))
+by_minute = get_coord(start=start, stop=start + np.timedelta64(1, "h"), step=np.timedelta64(1, "m"))
 
-shifted = coord.update(data=coord.values + np.timedelta64(10, "s"))
-coarser = coord.update(step=np.timedelta64(30, "m"))
+shifted = by_minute.update(data=by_minute.values + np.timedelta64(10, "s"))
+coarser = by_minute.update(step=np.timedelta64(30, "m"))
 ```
 
 Updating `min`, `max`, or `step` retains the coordinate length and derives the remaining range values. Updating `data` instead lets DASCore choose the simplest coordinate class that represents the new array.
@@ -156,11 +156,11 @@ Methods that reorder or remove samples return both a coordinate and an indexer f
 unsorted = get_coord(data=np.array([3, 1, 2]))
 sorted_coord, indexer = unsorted.sort()
 
-data = np.arange(6).reshape(3, 2)
-sorted_data = data[indexer, :]
+array = np.arange(6).reshape(3, 2)
+sorted_array = array[indexer, :]
 
 selected_coord, indexer = regular.select((3, 7))
-selected_data = np.arange(len(regular))[indexer]
+selected_array = np.arange(len(regular))[indexer]
 ```
 
 Selections accept compatible quantities and convert them before comparison:
@@ -182,7 +182,7 @@ String coordinates support exact matches, `*` and `?` wildcards, compiled regula
 ```{python}
 labels = get_coord(data=np.array(["ch_a", "ch_b", "aux_1", "aux_2"]))
 
-exact, _ = labels.select("ch_b")
+exact_match, _ = labels.select("ch_b")
 channels, _ = labels.select("ch_*")
 aux, _ = labels.select(re.compile(r"^aux_\d$"))
 sorted_labels, sort_indexer = labels.sort()
@@ -254,14 +254,12 @@ Setting a dimension coordinate to `None` drops that dimension and every coordina
 Operations that change array alignment accept the array and return an updated manager and array. Coordinate names are keyword arguments, as on `Patch`.
 
 ```{python}
-import dascore as dc
-
 patch = dc.get_example_patch()
-manager, data = patch.coords, patch.data
+patch_manager, data = patch.coords, patch.data
 
-selected_manager, selected_data = manager.select(data=data, distance=(..., 100))
-sorted_manager, sorted_data = manager.sort("time", "distance", array=data, reverse=True)
-renamed = manager.rename_coord(time="elapsed_time")
+selected_manager, selected_data = patch_manager.select(data=data, distance=(..., 100))
+sorted_manager, sorted_data = patch_manager.sort("time", "distance", array=data, reverse=True)
+renamed = patch_manager.rename_coord(time="elapsed_time")
 ```
 
 When several dimensions are sorted together, the returned data reflects each permutation in dimension order. Renaming a dimension also updates every coordinate association that refers to it.

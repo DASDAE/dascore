@@ -72,11 +72,11 @@ assert np.allclose(
 DASCore uses [Pint](https://pint.readthedocs.io/) quantities. Import common units or parse them with [`get_quantity`](`dascore.units.get_quantity`):
 
 ```{python}
-from dascore.units import ft, get_quantity, m
+from dascore.units import ft, get_quantity
 
-distance = 10 * m
-print(distance.to(ft))
-assert get_quantity("meters") == 1 * m
+distance = 10 * ft
+print(distance.to("m"))
+assert get_quantity("feet") == 1 * ft
 ```
 
 Patch selection, processing, and conversion methods accept quantities directly. See [Patch units](patch.qmd#units) for examples.
