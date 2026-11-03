@@ -28,5 +28,4 @@ prune dascore/docs/_site
 prune dascore/docs/.quarto
 prune dascore/docs/site_libs
 prune dascore/docs/marimo
-prune dascore/docs/marimo_contents
 prune dascore/docs/filters

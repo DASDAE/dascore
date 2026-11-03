@@ -1,5 +1,6 @@
 """
-Test notebook links, the marimo setup cell, and mirrored data paths.
+Test notebook links and images, the marimo setup cell, mirrored data paths, and
+that each tutorial name has one defining block.
 
 These can break in the browser despite a successful build. Build failures are
 caught by quarto and marimo during the doc build; these tests need neither.
@@ -106,13 +107,13 @@ def _notebook(cells):
 
 def _code(source):
     """Build a code cell."""
-    return {"cell_type": "code", "source": [source], "outputs": []}
+    return {"cell_type": "code", "source": [source]}
 
 
 class TestPostProcess:
     """Tests for preparing a rendered notebook for marimo."""
 
-    wheel = "dascore-1.0-py3-none-any.whl"
+    wheel = Path("/dist/dascore-1.0-py3-none-any.whl")
 
     @pytest.fixture()
     def processed(self, build_notebooks, tmp_path, tutorial_page, site_url):
@@ -130,23 +131,20 @@ class TestPostProcess:
         first = processed["cells"][0]
         assert first["metadata"]["marimo"]["name"] == "setup"
         assert "DFS_DATA_DIR" in first["source"]
-
-    def test_mo_is_defined(self, processed):
-        """The markdown cells call mo.md, so some cell must import it."""
-        sources = ["".join(c["source"]) for c in processed["cells"]]
-        assert "import marimo as mo" in sources
+        # Every cell sees the setup cell's names, and the markdown needs mo.
+        assert first["source"].startswith("import marimo as mo\n")
 
     def test_header_installs_bundled_wheel(self, build_notebooks, processed):
         """The released dascore does not install in Pyodide; the wheel must."""
         header = processed["metadata"]["marimo"]["header"]
         assert header.startswith("# /// script")
-        assert f'"dascore @ ./wheels/{self.wheel}"' in header
+        assert f'"dascore @ {self.wheel}"' in header
         for package in build_notebooks.EXTRA_PACKAGES:
             assert f'"{package}"' in header
 
     def test_links_point_at_site(self, processed):
         """A relative .qmd link means nothing inside the notebook."""
-        markdown = "".join(processed["cells"][2]["source"])
+        markdown = "".join(processed["cells"][1]["source"])
         assert markdown == "[a](https://dascore.org/tutorial/coords.html)\n"
 
     def test_page_with_only_empty_code_is_skipped(
@@ -166,36 +164,52 @@ class TestPostProcess:
         )
 
 
-class TestFindWheel:
-    """The build bundles exactly one wheel unless told which."""
+class TestAttachments:
+    """Quarto stores local images as attachments, which marimo convert drops."""
 
-    def test_single_wheel(self, build_notebooks, tmp_path):
-        """The only wheel in dist is the one used."""
-        wheel = tmp_path / "dascore-1.0-py3-none-any.whl"
-        wheel.touch()
-        assert build_notebooks.find_wheel(tmp_path) == wheel
+    def test_attachment_becomes_data_url(self, build_notebooks):
+        """The image travels inside the markdown, the only part marimo keeps."""
+        cell = {
+            "cell_type": "markdown",
+            "source": ['<img src="attachment:../_static/a.png" />\n'],
+            "attachments": {"../_static/a.png": {"image/png": "iVBORw0K"}},
+        }
+        out = build_notebooks.inline_attachments(cell)
+        assert out == ['<img src="data:image/png;base64,iVBORw0K" />\n']
+        notebook = _notebook([{**cell, "source": out}])
+        assert not build_notebooks.find_unrewritten_links(notebook)
 
-    @pytest.mark.parametrize("count", [0, 2])
-    def test_ambiguous_dist_exits(self, build_notebooks, tmp_path, count):
-        """Guessing between stale wheels could ship the wrong code."""
-        for version in range(count):
-            (tmp_path / f"dascore-{version}-py3-none-any.whl").touch()
-        with pytest.raises(SystemExit, match="Expected one dascore wheel"):
-            build_notebooks.find_wheel(tmp_path)
+    def test_missing_attachment_is_reported(self, build_notebooks):
+        """An image without its payload would render broken, so the build stops."""
+        cell = {"cell_type": "markdown", "source": ['<img src="attachment:b.svg" />']}
+        cell["source"] = build_notebooks.inline_attachments(cell)
+        out = build_notebooks.find_unrewritten_links(_notebook([cell]))
+        assert out == ["attachment:b.svg"]
 
 
 class _FakeRequest:
-    """Stands in for js.XMLHttpRequest, reading urls as local paths."""
+    """Stands in for js.XMLHttpRequest, serving urls as local paths."""
+
+    # Whether a missing file is a dropped connection rather than a 404.
+    network_error = False
 
     @classmethod
     def new(cls):
         return cls()
 
     def open(self, method, url, asynchronous):
+        # An asynchronous send returns before the response arrives.
+        assert asynchronous is False
         self.url = url
 
     def send(self, body):
-        data = Path(self.url).read_bytes()
+        # Any other response type hands Python text instead of the bytes.
+        assert self.responseType == "arraybuffer"
+        path = Path(self.url)
+        if self.network_error and not path.exists():
+            raise OSError("connection dropped")
+        self.status = 200 if path.exists() else 404
+        data = path.read_bytes() if path.exists() else b"Not Found"
         self.response = SimpleNamespace(to_py=lambda: memoryview(data))
 
 
@@ -211,15 +225,9 @@ class TestMirroredData:
             (stub / name).write_bytes(name.encode())
         monkeypatch.setattr(build_notebooks, "fetch", lambda name: stub / name)
 
-    def test_browser_reads_mirror_where_pooch_looks(
-        self, build_notebooks, stub_fetch, tmp_path, monkeypatch
-    ):
-        """The setup cell must land each file at `<DFS_DATA_DIR>/<DATA_VERSION>/`.
-
-        Any other shape leaves the files unreachable and the tutorials quietly
-        downloading again. This runs the setup cell against the mirrored site
-        with the browser's modules faked.
-        """
+    @pytest.fixture()
+    def browser(self, build_notebooks, stub_fetch, tmp_path, monkeypatch):
+        """Mirror the data into a site and fake the browser around it."""
         site = tmp_path / "site"
         build_notebooks.mirror_data(site / "public")
         notebook = SimpleNamespace(notebook_location=lambda: site)
@@ -230,32 +238,52 @@ class TestMirroredData:
         monkeypatch.setattr(sys, "platform", "emscripten")
         monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "browser_tmp"))
         monkeypatch.setenv("DFS_DATA_DIR", "unset")
+        return site
 
+    def test_browser_reads_mirror_where_pooch_looks(self, build_notebooks, browser):
+        """The setup cell must land each file at `<DFS_DATA_DIR>/<DATA_VERSION>/`.
+
+        Any other shape leaves the files unreachable and the tutorials quietly
+        downloading again.
+        """
         exec(build_notebooks.SETUP_SOURCE, {})
 
         cache = Path(os.environ["DFS_DATA_DIR"])
         for name in build_notebooks.MIRRORED_DATA:
             assert (cache / DATA_VERSION / name).read_bytes() == name.encode()
 
+    @pytest.mark.parametrize("network_error", [False, True])
+    def test_failed_copy_is_left_to_pooch(
+        self, build_notebooks, browser, monkeypatch, network_error
+    ):
+        """A file the site cannot serve is skipped, not cached as an error page.
+
+        pooch then downloads it; an error page in the cache would fail its hash
+        check, and an exception would fail every cell in the notebook.
+        """
+        monkeypatch.setattr(_FakeRequest, "network_error", network_error)
+        missing, *served = build_notebooks.MIRRORED_DATA
+        (browser / "public" / "data" / missing).unlink()
+
+        exec(build_notebooks.SETUP_SOURCE, {})
+
+        cache = Path(os.environ["DFS_DATA_DIR"]) / DATA_VERSION
+        assert not (cache / missing).exists()
+        for name in served:
+            assert (cache / name).read_bytes() == name.encode()
+
     def test_setup_is_inert_outside_browser(self, build_notebooks, monkeypatch):
         """Running a notebook locally must keep the reader's own data dir."""
+        # The test suite also runs under Pyodide, which is emscripten.
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setitem(sys.modules, "marimo", SimpleNamespace())
         monkeypatch.setenv("DFS_DATA_DIR", "mine")
         exec(build_notebooks.SETUP_SOURCE, {})
         assert os.environ["DFS_DATA_DIR"] == "mine"
 
-    def test_rebuild_drops_stale_files(self, build_notebooks, stub_fetch, tmp_path):
-        """A file dropped from the list must not linger in the site."""
-        public = tmp_path / "public"
-        (public / "data").mkdir(parents=True)
-        (public / "data" / "obsolete.h5").write_bytes(b"old")
-
-        build_notebooks.mirror_data(public)
-
-        assert not (public / "data" / "obsolete.h5").exists()
-
 
 def _defined_names(code: str) -> set[str]:
-    """Return the names a cell binds at module scope, as marimo counts them."""
+    """Return the module-scope names bound by assignment, import, def or class."""
     names = set()
 
     def visit(node):
@@ -289,7 +317,8 @@ class TestTutorialNames:
         """Marimo convert renames a redefinition, so the notebook drifts.
 
         A name assigned in two blocks becomes `name_1` in the second notebook
-        cell, which no longer matches the page the reader came from.
+        cell, and a repeated import is dropped from it, so the notebook no
+        longer matches the page the reader came from.
         """
         extract = _load_module("generate_doc_code_tests").extract_qmd_file
         repeated = {}
