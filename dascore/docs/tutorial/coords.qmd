@@ -133,10 +133,10 @@ assert filled.shape == (12,) and filled.data.sum() == len(coord)
 
 ```{python}
 start = np.datetime64("2023-01-01")
-minutes = get_coord(start=start, stop=start + np.timedelta64(1, "h"), step=np.timedelta64(1, "m"))
+by_minute = get_coord(start=start, stop=start + np.timedelta64(1, "h"), step=np.timedelta64(1, "m"))
 
-shifted = minutes.update(data=minutes.values + np.timedelta64(10, "s"))
-coarser = minutes.update(step=np.timedelta64(30, "m"))
+shifted = by_minute.update(data=by_minute.values + np.timedelta64(10, "s"))
+coarser = by_minute.update(step=np.timedelta64(30, "m"))
 ```
 
 Updating `min`, `max`, or `step` retains the coordinate length and derives the remaining range values. Updating `data` instead lets DASCore choose the simplest coordinate class that represents the new array.
@@ -255,11 +255,11 @@ Operations that change array alignment accept the array and return an updated ma
 
 ```{python}
 patch = dc.get_example_patch()
-coords, data = patch.coords, patch.data
+patch_manager, data = patch.coords, patch.data
 
-selected_manager, selected_data = coords.select(data=data, distance=(..., 100))
-sorted_manager, sorted_data = coords.sort("time", "distance", array=data, reverse=True)
-renamed = coords.rename_coord(time="elapsed_time")
+selected_manager, selected_data = patch_manager.select(data=data, distance=(..., 100))
+sorted_manager, sorted_data = patch_manager.sort("time", "distance", array=data, reverse=True)
+renamed = patch_manager.rename_coord(time="elapsed_time")
 ```
 
 When several dimensions are sorted together, the returned data reflects each permutation in dimension order. Renaming a dimension also updates every coordinate association that refers to it.

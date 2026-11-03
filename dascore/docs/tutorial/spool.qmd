@@ -220,13 +220,12 @@ filled = with_gaps.chunk(time=None, tolerance=300, fill_value=np.nan)
 [`Spool.get_gaps`](`dascore.core.spool.Spool.get_gaps`) reports boundaries that `chunk` will not merge. [`Spool.get_coverage`](`dascore.core.spool.Spool.get_coverage`) summarizes the same compatible groups.
 
 ```{python}
-gappy = random_spool(time_gap=np.timedelta64(1, "s"), length=3)
-gaps = gappy.get_gaps()
-coverage = gappy.get_coverage()
+gaps = with_gaps.get_gaps()
+coverage = with_gaps.get_coverage()
 ```
 
 ```{python}
-second_scale_gaps = gappy.get_gaps(tolerance=1 * s)
+second_scale_gaps = with_gaps.get_gaps(tolerance=1 * s)
 ```
 
 `gap_size` spans from the last sample before a gap to the first after it, so subtract one sample step for the missing extent. The `tolerance` argument, shared with `chunk`, controls which boundaries count. Pass another dimension as in `get_gaps("distance")`; `time` is only the default. Coverage uses patch envelopes; a patch with holes is one row, and the runs its index stores make its holes gaps like any other. `group_id` links coverage rows to their gaps.
@@ -298,8 +297,7 @@ See the [parallel processing recipe](../recipes/parallelization.qmd) for executo
 A spool can attach a DASDAE [inventory](inventory.qmd). Inventory labels become available to `select` and [`expand_by`](`dascore.core.spool.Spool.expand_by`); [`enrich`](`dascore.core.spool.Spool.enrich`) copies observing-system metadata onto extracted patches.
 
 ```{python}
-zoned, zone_inventory = inventory_patch_pair()
-with_inventory = dc.spool(zoned).attach_inventory(zone_inventory)
+with_inventory = dc.spool(inventory_patch).attach_inventory(inventory)
 assert len(with_inventory.expand_by("zone")) == 2
 ```
 
