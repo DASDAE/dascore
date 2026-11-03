@@ -13,7 +13,7 @@ import importlib.util
 import json
 import sys
 from collections import defaultdict
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from types import SimpleNamespace
 
 import pytest
@@ -198,7 +198,7 @@ class TestMirroredData:
     @pytest.fixture()
     def browser(self, monkeypatch):
         """Fake the browser: emscripten, with the notebook served from a site."""
-        site = SimpleNamespace(notebook_location=lambda: Path("/site/marimo"))
+        site = SimpleNamespace(notebook_location=lambda: PurePosixPath("/site/marimo"))
         monkeypatch.setitem(sys.modules, "marimo", site)
         monkeypatch.setattr(sys, "platform", "emscripten")
 
