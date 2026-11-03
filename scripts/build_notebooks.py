@@ -42,43 +42,25 @@ EXTRA_PACKAGES = ("pyyaml", "tabulate", "findiff")
 # during tutorial doc-code tests.
 MIRRORED_DATA = ("terra15_das_1_trimmed.hdf5", "example_dasdae_event_1.h5")
 
-# marimo runs the setup cell before every other cell. In the browser it copies
-# the data this site ships into a cache laid out the way pooch reads it,
-# `<DFS_DATA_DIR>/<DATA_VERSION>/<name>`; elsewhere it does nothing.
+# marimo runs the setup cell before every other cell. In the browser it points
+# pooch at the copies this site ships, so a file downloads from the site only
+# when a cell first asks for it; elsewhere it does nothing.
 SETUP_SOURCE = f"""\
 import marimo as mo
 
 
-# Read the example data this site ships rather than downloading it.
+# Download the example data from this site rather than from GitHub.
 def _use_bundled_data():
-    import os
     import sys
-    import tempfile
-    from contextlib import suppress
 
     if sys.platform != "emscripten":
         return
-    from pathlib import Path
+    from dascore.utils.downloader import get_fetcher
 
-    from js import XMLHttpRequest
-
-    from dascore.constants import DATA_VERSION
-
-    cache = Path(tempfile.gettempdir()) / "dascore-data"
-    (cache / DATA_VERSION).mkdir(parents=True, exist_ok=True)
+    fetcher = get_fetcher()
     for name in {MIRRORED_DATA!r}:
         url = mo.notebook_location() / "public" / "data" / name
-        request = XMLHttpRequest.new()
-        # Synchronous, which the notebook's web worker allows.
-        request.open("GET", str(url), False)
-        request.responseType = "arraybuffer"
-        # A file that fails to copy is left for pooch to download.
-        with suppress(Exception):
-            request.send(None)
-            if request.status == 200:
-                data = request.response.to_py().tobytes()
-                (cache / DATA_VERSION / name).write_bytes(data)
-    os.environ["DFS_DATA_DIR"] = str(cache)
+        fetcher.urls[name] = str(url)
 
 
 _use_bundled_data()"""
@@ -233,7 +215,7 @@ def mirror_data(public_dir: Path) -> None:
     """
     Copy the example data the tutorials read into the site's public files.
 
-    The setup cell fetches each file from `public/data/<name>`.
+    The setup cell points pooch at `public/data/<name>`.
     """
     target = public_dir / "data"
     target.mkdir(parents=True)

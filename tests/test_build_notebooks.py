@@ -11,16 +11,14 @@ from __future__ import annotations
 import ast
 import importlib.util
 import json
-import os
 import sys
-import tempfile
 from collections import defaultdict
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from dascore.constants import DATA_VERSION
+from dascore.utils import downloader
 
 _REPO_ROOT = Path(__file__).resolve().parents[1]
 _SCRIPTS = _REPO_ROOT / "scripts"
@@ -130,7 +128,7 @@ class TestPostProcess:
         """Marimo convert makes the first cell named setup the setup cell."""
         first = processed["cells"][0]
         assert first["metadata"]["marimo"]["name"] == "setup"
-        assert "DFS_DATA_DIR" in first["source"]
+        assert "get_fetcher" in first["source"]
         # Every cell sees the setup cell's names, and the markdown needs mo.
         assert first["source"].startswith("import marimo as mo\n")
 
@@ -187,99 +185,72 @@ class TestAttachments:
         assert out == ["attachment:b.svg"]
 
 
-class _FakeRequest:
-    """Stands in for js.XMLHttpRequest, serving urls as local paths."""
-
-    # Whether a missing file is a dropped connection rather than a 404.
-    network_error = False
-
-    @classmethod
-    def new(cls):
-        return cls()
-
-    def open(self, method, url, asynchronous):
-        # An asynchronous send returns before the response arrives.
-        assert asynchronous is False
-        self.url = url
-
-    def send(self, body):
-        # Any other response type hands Python text instead of the bytes.
-        assert self.responseType == "arraybuffer"
-        path = Path(self.url)
-        if self.network_error and not path.exists():
-            raise OSError("connection dropped")
-        self.status = 200 if path.exists() else 404
-        data = path.read_bytes() if path.exists() else b"Not Found"
-        self.response = SimpleNamespace(to_py=lambda: memoryview(data))
-
-
 class TestMirroredData:
     """Example data ships with the site so tutorials do not hit GitHub."""
 
     @pytest.fixture()
-    def stub_fetch(self, build_notebooks, tmp_path, monkeypatch):
-        """Point fetch at small stand-ins for the mirrored files."""
+    def fetcher(self, tmp_path, monkeypatch):
+        """A fresh pooch fetcher standing in for dascore's shared one."""
+        fetcher = downloader._get_fetcher.__wrapped__(str(tmp_path / "cache"))
+        monkeypatch.setattr(downloader, "get_fetcher", lambda: fetcher)
+        return fetcher
+
+    @pytest.fixture()
+    def browser(self, monkeypatch):
+        """Fake the browser: emscripten, with the notebook served from a site."""
+        site = SimpleNamespace(notebook_location=lambda: Path("/site/marimo"))
+        monkeypatch.setitem(sys.modules, "marimo", site)
+        monkeypatch.setattr(sys, "platform", "emscripten")
+
+    def test_browser_downloads_from_site(self, build_notebooks, fetcher, browser):
+        """In the browser, pooch fetches each mirrored file from the site."""
+        exec(build_notebooks.SETUP_SOURCE, {})
+
+        for name in build_notebooks.MIRRORED_DATA:
+            assert fetcher.get_url(name) == f"/site/marimo/public/data/{name}"
+
+    def test_unmirrored_files_still_use_registry(
+        self, build_notebooks, fetcher, browser
+    ):
+        """Only the mirrored files move; anything else downloads as before."""
+        other = next(
+            name
+            for name in fetcher.registry
+            if name not in build_notebooks.MIRRORED_DATA
+        )
+        before = fetcher.get_url(other)
+
+        exec(build_notebooks.SETUP_SOURCE, {})
+
+        assert fetcher.get_url(other) == before
+
+    def test_setup_is_inert_outside_browser(
+        self, build_notebooks, fetcher, monkeypatch
+    ):
+        """Running a notebook locally keeps downloading from the registry."""
+        # The test suite also runs under Pyodide, which is emscripten.
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setitem(sys.modules, "marimo", SimpleNamespace())
+        before = dict(fetcher.urls)
+
+        exec(build_notebooks.SETUP_SOURCE, {})
+
+        assert fetcher.urls == before
+
+    def test_mirror_layout_matches_setup_cell(
+        self, build_notebooks, tmp_path, monkeypatch
+    ):
+        """mirror_data writes each file where the setup cell points pooch."""
         stub = tmp_path / "stub"
         stub.mkdir()
         for name in build_notebooks.MIRRORED_DATA:
             (stub / name).write_bytes(name.encode())
         monkeypatch.setattr(build_notebooks, "fetch", lambda name: stub / name)
 
-    @pytest.fixture()
-    def browser(self, build_notebooks, stub_fetch, tmp_path, monkeypatch):
-        """Mirror the data into a site and fake the browser around it."""
-        site = tmp_path / "site"
-        build_notebooks.mirror_data(site / "public")
-        notebook = SimpleNamespace(notebook_location=lambda: site)
-        monkeypatch.setitem(sys.modules, "marimo", notebook)
-        monkeypatch.setitem(
-            sys.modules, "js", SimpleNamespace(XMLHttpRequest=_FakeRequest)
-        )
-        monkeypatch.setattr(sys, "platform", "emscripten")
-        monkeypatch.setattr(tempfile, "tempdir", str(tmp_path / "browser_tmp"))
-        monkeypatch.setenv("DFS_DATA_DIR", "unset")
-        return site
+        build_notebooks.mirror_data(tmp_path / "public")
 
-    def test_browser_reads_mirror_where_pooch_looks(self, build_notebooks, browser):
-        """The setup cell must land each file at `<DFS_DATA_DIR>/<DATA_VERSION>/`.
-
-        Any other shape leaves the files unreachable and the tutorials quietly
-        downloading again.
-        """
-        exec(build_notebooks.SETUP_SOURCE, {})
-
-        cache = Path(os.environ["DFS_DATA_DIR"])
         for name in build_notebooks.MIRRORED_DATA:
-            assert (cache / DATA_VERSION / name).read_bytes() == name.encode()
-
-    @pytest.mark.parametrize("network_error", [False, True])
-    def test_failed_copy_is_left_to_pooch(
-        self, build_notebooks, browser, monkeypatch, network_error
-    ):
-        """A file the site cannot serve is skipped, not cached as an error page.
-
-        pooch then downloads it; an error page in the cache would fail its hash
-        check, and an exception would fail every cell in the notebook.
-        """
-        monkeypatch.setattr(_FakeRequest, "network_error", network_error)
-        missing, *served = build_notebooks.MIRRORED_DATA
-        (browser / "public" / "data" / missing).unlink()
-
-        exec(build_notebooks.SETUP_SOURCE, {})
-
-        cache = Path(os.environ["DFS_DATA_DIR"]) / DATA_VERSION
-        assert not (cache / missing).exists()
-        for name in served:
-            assert (cache / name).read_bytes() == name.encode()
-
-    def test_setup_is_inert_outside_browser(self, build_notebooks, monkeypatch):
-        """Running a notebook locally must keep the reader's own data dir."""
-        # The test suite also runs under Pyodide, which is emscripten.
-        monkeypatch.setattr(sys, "platform", "linux")
-        monkeypatch.setitem(sys.modules, "marimo", SimpleNamespace())
-        monkeypatch.setenv("DFS_DATA_DIR", "mine")
-        exec(build_notebooks.SETUP_SOURCE, {})
-        assert os.environ["DFS_DATA_DIR"] == "mine"
+            assert (tmp_path / "public" / "data" / name).read_bytes() == name.encode()
 
 
 def _defined_names(code: str) -> set[str]:
