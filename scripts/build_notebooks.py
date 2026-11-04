@@ -1,9 +1,10 @@
 """
-Render tutorial qmd pages as unexecuted notebooks for JupyterLite.
+Build the tutorial pages as marimo notebooks that run in the browser.
 
-Render inside the Quarto project for cross-references, then make doc links absolute,
-select the Pyodide kernel, and prepend a dascore installation cell. Notebooks are build
-artifacts; qmd files remain the source.
+Render each page inside the Quarto project for cross-references, make doc links
+absolute, convert the result to a marimo notebook, and export the notebooks as one
+WebAssembly site. The notebooks install dascore from a bundled wheel. Notebooks are
+build artifacts; qmd files remain the source.
 """
 
 from __future__ import annotations
@@ -18,35 +19,22 @@ import sys
 import tempfile
 from pathlib import Path
 
-from dascore.constants import DATA_VERSION
 from dascore.utils.downloader import fetch
 
 ROOT = Path(__file__).resolve().parent.parent
 DOCS = ROOT / "dascore" / "docs"
 TUTORIAL_DIR = DOCS / "tutorial"
-# Not configurable: dascore/docs/filters/lite_button.lua looks for the notebooks here,
-# and prep_doc_build hands the same path to `jupyter lite build`.
-CONTENTS_DIR = DOCS / "lite_contents"
-OUT_DIR = CONTENTS_DIR / "tutorial"
-# Where the mirrored example data lands inside the site. The browser kernel
-# mounts the site's contents at /drive, and pooch appends DATA_VERSION, so
-# DFS_DATA_DIR=/drive/data resolves to /drive/data/<DATA_VERSION>/<file>.
-DATA_DIR_NAME = "data"
-BROWSER_DATA_DIR = f"/drive/{DATA_DIR_NAME}"
+# The exported site. Not configurable: dascore/docs/filters/marimo_button.lua
+# links to /marimo/<stem>.html when that file exists.
+SITE_DIR = DOCS / "marimo"
 
 # Use the deployment URL so dev notebooks can link to unreleased pages.
 # The site is served at the domain root, without the configured /docs prefix.
 DEFAULT_SITE_URL = "https://dascore.org"
 
-KERNELSPEC = {
-    "name": "python",
-    "display_name": "Python (Pyodide)",
-    "language": "python",
-}
-
 # Packages the doc examples need that are not dascore install requirements.
 # pyyaml -> inventory serialization, tabulate -> DataFrame.to_markdown,
-# findiff -> velocity_to_strain_rate. IPython ships with the kernel.
+# findiff -> velocity_to_strain_rate.
 EXTRA_PACKAGES = ("pyyaml", "tabulate", "findiff")
 
 # Mirror tutorial data to avoid GitHub IP rate limits in shared classrooms.
@@ -54,21 +42,39 @@ EXTRA_PACKAGES = ("pyyaml", "tabulate", "findiff")
 # during tutorial doc-code tests.
 MIRRORED_DATA = ("terra15_das_1_trimmed.hdf5", "example_dasdae_event_1.h5")
 
+# marimo runs the setup cell before every other cell. In the browser it points
+# pooch at the copies this site ships, so a file downloads from the site only
+# when a cell first asks for it; elsewhere it does nothing.
 SETUP_SOURCE = f"""\
-# This notebook runs DASCore in your browser through Pyodide; nothing is
-# installed on your computer. Run this cell first, it takes a moment.
-%pip install -q dascore {" ".join(EXTRA_PACKAGES)}
-import os
+import marimo as mo
 
-# The example data ships with this site, so DASCore reads it from here rather
-# than downloading it.
-os.environ["DFS_DATA_DIR"] = "{BROWSER_DATA_DIR}"
-"""
 
-SETUP_CELL_ID = "dascore-setup"
+# Download the example data from this site rather than from GitHub.
+def _use_bundled_data():
+    import sys
+
+    if sys.platform != "emscripten":
+        return
+    from dascore.utils.downloader import get_fetcher
+
+    fetcher = get_fetcher()
+    for name in {MIRRORED_DATA!r}:
+        url = mo.notebook_location() / "public" / "data" / name
+        fetcher.urls[name] = str(url)
+
+
+_use_bundled_data()"""
+
+# marimo convert names the cell "setup" and hides its code from this metadata.
+# Importing mo here also stops it adding a visible import cell for mo.md.
+SETUP_CELL = {
+    "cell_type": "code",
+    "metadata": {"marimo": {"name": "setup", "config": {"hide_code": True}}},
+    "source": SETUP_SOURCE,
+}
 
 # Prefix for the transient per-page copies build() renders through quarto.
-TEMP_PREFIX = "lite_tmp_"
+TEMP_PREFIX = "marimo_tmp_"
 
 # Executable mermaid blocks, which quarto would rasterize through chrome.
 MERMAID_REGEX = re.compile(r"^```\{mermaid\}", re.MULTILINE)
@@ -76,10 +82,24 @@ MERMAID_REGEX = re.compile(r"^```\{mermaid\}", re.MULTILINE)
 # Matches a markdown link whose target is a .qmd page, with optional anchor.
 LINK_REGEX = re.compile(r"(?<=]\()(?P<target>[^)\s]+\.qmd)(?P<anchor>#[^)\s]*)?(?=\))")
 
+# Links the notebook cannot follow: qmd pages and cell attachments.
+UNREWRITTEN_REGEX = re.compile(r"\]\([^)]*\.qmd[^)]*\)|attachment:[^\s\"')]+")
+
 
 def get_site_url() -> str:
     """Return the base url the notebooks should link back to."""
     return os.environ.get("DASCORE_DOC_SITE_URL", DEFAULT_SITE_URL).rstrip("/")
+
+
+def script_header(wheel: Path) -> str:
+    """
+    Return the PEP 723 header installing dascore from a local wheel.
+
+    marimo's export copies the wheel into the site and points the header at it.
+    """
+    dependencies = [f"dascore @ {wheel}", *EXTRA_PACKAGES]
+    lines = [f'#     "{dependency}",' for dependency in dependencies]
+    return "\n".join(["# /// script", "# dependencies = [", *lines, "# ]", "# ///"])
 
 
 def qmd_link_to_url(target: str, anchor: str, source: Path, site_url: str) -> str:
@@ -105,12 +125,34 @@ def rewrite_links(cell_source: list[str], source: Path, site_url: str) -> list[s
     return [LINK_REGEX.sub(_replace, line) for line in cell_source]
 
 
+def inline_attachments(cell: dict) -> list[str]:
+    """
+    Return a markdown cell's source with its attached images as data urls.
+
+    Quarto stores local images as cell attachments, which marimo convert drops.
+    """
+    source = cell["source"]
+    for name, bundle in cell.get("attachments", {}).items():
+        ((mime, payload),) = bundle.items()
+        url = f"data:{mime};base64,{payload}"
+        source = [line.replace(f"attachment:{name}", url) for line in source]
+    return source
+
+
+def _run(command: list[str], name: str, **kwargs) -> None:
+    """Run a build tool on name, exiting with its own output if it fails."""
+    result = subprocess.run(command, capture_output=True, text=True, **kwargs)
+    if result.returncode:
+        output = (result.stdout + result.stderr).strip()
+        sys.exit(f"{command[0]} failed on {name}:\n{output}")
+
+
 def prepare_source(source: Path) -> Path:
     """
     Write a notebook-compatible page copy beside the source and return its path.
 
-    Convert executable mermaid blocks to plain fences for JupyterLab, avoiding Quarto's
-    headless Chrome rendering.
+    Convert executable mermaid blocks to plain fences, avoiding Quarto's headless
+    Chrome rendering.
     """
     text = MERMAID_REGEX.sub("```mermaid", source.read_text())
     # Keep the copy in the Quarto project, without an underscore prefix, so the
@@ -127,89 +169,55 @@ def render_one(source: Path, out_dir: Path) -> Path | None:
         relative = prepared.relative_to(DOCS)
         # Rendering from inside the docs project makes quarto apply the project
         # filters; without them cross references stay as `dascore.X` aliases.
-        result = subprocess.run(
-            [
-                "quarto",
-                "render",
-                str(relative),
-                "--to",
-                "ipynb",
-                "--no-execute",
-                "--output-dir",
-                str(out_dir),
-            ],
-            cwd=DOCS,
-            capture_output=True,
-            text=True,
-        )
-        if result.returncode:
-            # Quarto puts the useful line in stderr; a traceback here would
-            # bury it.
-            sys.exit(f"quarto failed on {source.name}:\n{result.stderr.strip()}")
+        command = ["quarto", "render", str(relative), "--to", "ipynb"]
+        command += ["--no-execute", "--output-dir", str(out_dir)]
+        _run(command, source.name, cwd=DOCS)
     finally:
         prepared.unlink(missing_ok=True)
     rendered = out_dir / relative.with_suffix(".ipynb")
     return rendered if rendered.exists() else None
 
 
-def post_process(notebook_path: Path, source: Path, site_url: str) -> dict | None:
-    """Adjust a rendered notebook for the browser, or None if it has no code."""
+def post_process(
+    notebook_path: Path, source: Path, site_url: str, wheel: Path
+) -> dict | None:
+    """Prepare a rendered notebook for marimo, or None if it has no code."""
     notebook = json.loads(notebook_path.read_text())
     cells = notebook.get("cells", [])
-    # Remove empty cells from non-Python blocks before checking for runnable code;
-    # otherwise a notebook containing only the setup cell could get a launch link.
-    cells = [
-        c for c in cells if c["cell_type"] != "code" or "".join(c["source"]).strip()
-    ]
-    if not any(cell["cell_type"] == "code" for cell in cells):
+    # Non-Python blocks render as empty code cells, which marimo drops; a page
+    # with only those would get a notebook holding just the setup cell.
+    if not any(
+        c["cell_type"] == "code" and "".join(c["source"]).strip() for c in cells
+    ):
         return None
     for cell in cells:
         if cell["cell_type"] == "markdown":
-            cell["source"] = rewrite_links(cell["source"], source, site_url)
-        elif cell["cell_type"] == "code":
-            # The reader executes these; shipping stale output would be worse
-            # than shipping none, and it keeps the notebooks small.
-            cell["outputs"] = []
-            cell["execution_count"] = None
-    setup = {
-        "cell_type": "code",
-        # nbformat 4.5 requires an id on every cell; quarto gives the cells it
-        # renders one, so without this the setup cell is the only invalid cell.
-        "id": SETUP_CELL_ID,
-        "execution_count": None,
-        "metadata": {},
-        "outputs": [],
-        # No trailing newline on the last line, which would render as a blank
-        # line at the bottom of the first cell every reader sees.
-        "source": SETUP_SOURCE.rstrip("\n").splitlines(keepends=True),
-    }
-    notebook["cells"] = [setup, *cells]
-    notebook["metadata"]["kernelspec"] = KERNELSPEC
+            cell["source"] = rewrite_links(inline_attachments(cell), source, site_url)
+    notebook["cells"] = [SETUP_CELL, *cells]
+    notebook["metadata"]["marimo"] = {"header": script_header(wheel)}
     return notebook
 
 
 def find_unrewritten_links(notebook: dict) -> list[str]:
     """
-    Return qmd links left in a notebook.
+    Return qmd and attachment links left in a notebook.
 
-    Catch titled or angle-bracketed targets missed by LINK_REGEX before they become
-    broken JupyterLite links.
+    Catch titled or angle-bracketed targets missed by LINK_REGEX, and images
+    without an attachment, before they become broken notebook links.
     """
     markdown = [
         "".join(c["source"]) for c in notebook["cells"] if c["cell_type"] == "markdown"
     ]
-    return re.findall(r"\]\([^)]*\.qmd[^)]*\)", "\n".join(markdown))
+    return UNREWRITTEN_REGEX.findall("\n".join(markdown))
 
 
-def mirror_data(contents_dir: Path) -> int:
-    """Copy the example data the tutorials read into the site's contents.
-
-    Returns the number of bytes mirrored. The layout has to match what pooch
-    expects under DFS_DATA_DIR, which is `<dir>/<DATA_VERSION>/<name>`.
+def mirror_data(public_dir: Path) -> None:
     """
-    target = contents_dir / DATA_DIR_NAME / DATA_VERSION
-    if target.exists():
-        shutil.rmtree(target)
+    Copy the example data the tutorials read into the site's public files.
+
+    The setup cell points pooch at `public/data/<name>`.
+    """
+    target = public_dir / "data"
     target.mkdir(parents=True)
     total = 0
     for name in MIRRORED_DATA:
@@ -222,17 +230,16 @@ def mirror_data(contents_dir: Path) -> int:
         f"Mirrored {len(MIRRORED_DATA)} data files "
         f"({total / 1_000_000:.1f} MB) into {target}"
     )
-    return total
 
 
-def build(out_dir: Path, site_url: str) -> int:
-    """Render every tutorial page with code into out_dir."""
-    if shutil.which("quarto") is None:
-        sys.exit("quarto is required to build the notebooks but was not found")
-    # Rebuild to remove stale notebooks and launch links after pages change.
-    if out_dir.exists():
-        shutil.rmtree(out_dir)
-    out_dir.mkdir(parents=True)
+def build(wheel: Path, site_url: str) -> None:
+    """Build a marimo notebook for every tutorial page with code and export them."""
+    for tool in ("quarto", "marimo", "uv"):
+        if shutil.which(tool) is None:
+            sys.exit(f"{tool} is required to build the notebooks but was not found")
+    # Rebuild to remove stale pages and launch links after tutorials change.
+    if SITE_DIR.exists():
+        shutil.rmtree(SITE_DIR)
     # A crashed run can leave a copy behind, and it would then be rendered
     # into the real site by the next doc build.
     for stale in TUTORIAL_DIR.glob(f"{TEMP_PREFIX}*"):
@@ -243,15 +250,16 @@ def build(out_dir: Path, site_url: str) -> int:
             shutil.rmtree(stale)
         else:
             stale.unlink()
-    written = 0
     with tempfile.TemporaryDirectory() as tmp:
         tmp_dir = Path(tmp)
+        notebook_dir = tmp_dir / "notebooks"
+        notebook_dir.mkdir()
         for source in sorted(TUTORIAL_DIR.glob("*.qmd")):
             rendered = render_one(source, tmp_dir)
             if rendered is None:
                 print(f"  {source.name}: quarto produced no notebook, skipping")  # noqa: T201
                 continue
-            notebook = post_process(rendered, source, site_url)
+            notebook = post_process(rendered, source, site_url, wheel)
             if notebook is None:
                 print(f"  {source.name}: no code cells, skipping")  # noqa: T201
                 continue
@@ -260,15 +268,27 @@ def build(out_dir: Path, site_url: str) -> int:
                     f"{source.name}: these links were not rewritten and would "
                     f"break in the notebook: {leftover}"
                 )
-            destination = out_dir / f"{source.stem}.ipynb"
-            destination.write_text(json.dumps(notebook, indent=1) + "\n")
+            rendered.write_text(json.dumps(notebook))
+            destination = notebook_dir / f"{source.stem}.py"
+            command = ["marimo", "-q", "-y", "convert", str(rendered)]
+            _run([*command, "-o", str(destination)], source.name)
             print(f"  {source.name} -> {destination.name}")  # noqa: T201
-            written += 1
-    if not written:
-        sys.exit("No notebooks were built; the tutorial directory looks wrong.")
-    print(f"Built {written} notebooks in {out_dir} linking to {site_url}")  # noqa: T201
-    mirror_data(out_dir.parent)
-    return written
+        notebooks = sorted(notebook_dir.glob("*.py"))
+        if not notebooks:
+            sys.exit("No notebooks were built; the tutorial directory looks wrong.")
+        # Fails on notebooks marimo could not run, such as a dependency cycle.
+        _run(["marimo", "check", *map(str, notebooks)], "the notebooks")
+        mirror_data(notebook_dir / "public")
+        # Exporting into one directory lets the notebooks share marimo's assets.
+        for notebook in notebooks:
+            output = SITE_DIR / f"{notebook.stem}.html"
+            command = ["marimo", "-q", "-y", "export", "html-wasm", str(notebook)]
+            command += ["-o", str(output), "--mode", "edit", "--no-sandbox"]
+            _run(command, notebook.name)
+    # The export adds an assistant prompt for editing notebooks, which agents
+    # working in this checkout would otherwise pick up as instructions.
+    (SITE_DIR / "CLAUDE.md").unlink(missing_ok=True)
+    print(f"Exported {len(notebooks)} notebooks to {SITE_DIR} linking to {site_url}")  # noqa: T201
 
 
 def main() -> None:
@@ -280,7 +300,12 @@ def main() -> None:
         help="Base url the notebooks link back to (env DASCORE_DOC_SITE_URL).",
     )
     args = parser.parse_args()
-    build(OUT_DIR, args.site_url.rstrip("/"))
+    # The newest wheel is the one just built from this checkout.
+    wheels = (ROOT / "dist").glob("dascore-*.whl")
+    wheel = max(wheels, key=lambda path: path.stat().st_mtime, default=None)
+    if wheel is None:
+        sys.exit("No dascore wheel in dist/; build one with `python -m build --wheel`.")
+    build(wheel, args.site_url.rstrip("/"))
 
 
 if __name__ == "__main__":

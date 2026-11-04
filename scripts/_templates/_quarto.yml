@@ -4,22 +4,20 @@
 project:
   type: website
   output-dir: _site
-  # The JupyterLite site is built by scripts/build_notebooks.py plus
-  # `jupyter lite build` (see .github/actions/prep_doc_build); quarto only
-  # copies it. Both directories hold notebooks, and lite/ also holds prebuilt
-  # html, so they are kept out of the render list -- quarto would otherwise
-  # treat them as pages to render.
+  # The marimo tutorial site is built by scripts/build_notebooks.py (see
+  # .github/actions/prep_doc_build); quarto only copies it. marimo/ holds the
+  # notebooks' html export, so it is kept out of the render list and quarto
+  # never treats it as pages.
   resources:
-    - lite/**
+    - marimo/**
   render:
     - "**/*.qmd"
-    - "!lite/**"
-    - "!lite_contents/**"
+    - "!marimo/**"
 
 filters:
   - quarto
   - filters/fill_links.py
-  - filters/lite_button.lua
+  - filters/marimo_button.lua
 
 execute:
   warning: false

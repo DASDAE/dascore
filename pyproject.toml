@@ -109,11 +109,9 @@ docs = [
     "jupyter-client",
     "nbclient",
     "nbformat",
-    # The JupyterLite site the tutorial pages link to. jupyter-server is not
-    # used at runtime, but jupyterlite-core requires it to add custom content.
-    "jupyterlite-core",
-    "jupyterlite-pyodide-kernel",
-    "jupyter-server",
+    # Builds the browser notebooks the tutorial pages link to; the floor is the
+    # release the setup cell and wheel bundling were verified with.
+    "marimo>=0.25.2",
 ]
 
 test_base = [

@@ -33,7 +33,7 @@ _API_MODULES = (
     "dascore.utils.downloader",
     "dascore.utils.time",
 )
-_EXCLUDED = {"api", "filters", "_static", "_site", "site_libs", "lite", "lite_contents"}
+_EXCLUDED = {"api", "filters", "_static", "_site", "site_libs", "marimo"}
 _LINK = re.compile(r"(!?\[[^\n]*?\])\(([^\s)]+)\)")
 _INCLUDE = re.compile(r"\{\{<\s*include\s+([^>]+?)\s*>\}\}")
 

@@ -77,12 +77,10 @@ tbody tr:nth-child(odd) {
     margin-bottom: 10px;
 }
 
-/* Link added to tutorial pages by filters/lite_button.lua, which opens the
-   page as a live notebook in the JupyterLite site. */
-/* The "Open in JupyterLite" launcher at the top of runnable tutorials. Greys
-are given as translucent neutrals so one rule serves the light and dark
-themes. */
-.lite-launch {
+/* The "Open in marimo" launcher filters/marimo_button.lua adds to the top of
+runnable tutorials. Greys are given as translucent neutrals so one rule serves
+the light and dark themes. */
+.marimo-launch {
     display: inline-flex;
     align-items: center;
     gap: 0.55em;
@@ -101,21 +99,16 @@ themes. */
     transition: border-color 120ms ease, background-color 120ms ease;
 }
 
-.lite-launch:hover,
-.lite-launch:focus-visible {
-    border-color: #f37726;
-    background-color: rgba(243, 119, 38, 0.12);
+.marimo-launch:hover,
+.marimo-launch:focus-visible {
+    border-color: #1d7363;
+    background-color: rgba(29, 115, 99, 0.12);
     color: inherit;
     text-decoration: none;
 }
 
-.lite-launch-logo {
+.marimo-launch-logo {
     height: 1.4em;
     width: auto;
     flex: none;
-}
-
-/* The mark's stock planets are mid-grey and sink into the dark theme. */
-body.quarto-dark .lite-launch .jupyter-planet {
-    fill: #c9c9c9;
 }

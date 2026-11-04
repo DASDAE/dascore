@@ -1,12 +1,10 @@
 name: "prepare for doc build"
 description: >
-  Installs quarto, renders api docs, and builds the JupyterLite site the
-  tutorial pages link to. Quarto copies dascore/docs/lite into the published site as
-  a project resource, so this must run before `quarto render`/`publish`.
+  Installs quarto, renders api docs, and builds the marimo notebooks the
+  tutorial pages link to. Quarto copies dascore/docs/marimo into the published site
+  as a project resource, so this must run before `quarto render`/`publish`.
   Each phase is timed into the build report; preparation is a large enough
   share of the end-to-end build to be worth keeping separate from the render.
-  The lite site is built without sourcemaps: they are half of what it weighs
-  and a browser asks for one only with its developer tools open.
 
 runs:
   using: "composite"
@@ -35,7 +33,7 @@ runs:
       run: |
         python scripts/_doc_report.py index
 
-    # The notebooks install dascore from a wheel bundled into the JupyterLite
+    # The notebooks install dascore from a wheel bundled into the marimo
     # site rather than from PyPI, so the tutorials always run against the same
     # version the surrounding docs were built from.
     - name: build dascore wheel for the browser
@@ -45,18 +43,8 @@ runs:
         python scripts/_doc_report.py time build_wheel -- \
           python -m build --wheel
 
-    - name: build tutorial notebooks
+    - name: build marimo tutorial notebooks
       shell: bash
       run: |
-        python scripts/_doc_report.py time build_notebooks -- \
+        python scripts/_doc_report.py time build_marimo -- \
           python scripts/build_notebooks.py
-
-    - name: build JupyterLite site
-      shell: bash
-      run: |
-        python scripts/_doc_report.py time build_jupyterlite -- \
-          jupyter lite build \
-            --contents dascore/docs/lite_contents \
-            --output-dir dascore/docs/lite \
-            --piplite-wheels dist/dascore-*.whl \
-            --no-sourcemaps
