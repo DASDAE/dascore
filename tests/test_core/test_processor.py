@@ -1890,6 +1890,27 @@ class TestLazyKernelFor:
         assert Parent.kernel_for("lazy") is _parent
         assert Child.kernel_for("lazy") is lazy_kernel
 
+    def test_registered_kernel_only_is_not_metadata_only(
+        self, lazy_patch, recipe_loads
+    ):
+        """A class whose kernel is registered for numpy alone still computes."""
+
+        class Triple(PatchProcessor):
+            """An operation whose only kernel is registered for numpy."""
+
+            name = None
+
+        @register_kernel(Triple, "numpy")
+        def _triple(processor, data):
+            """Triple it."""
+            return data * 3
+
+        assert Triple.kernel_for("lazy") is lazy_kernel
+        # No contract, so refused rather than handed back untouched.
+        with pytest.raises(LazyOperationError, match="Triple cannot run"):
+            Triple()(lazy_patch)
+        assert not recipe_loads
+
     def test_dask_is_unchanged(self):
         """Dask keeps the array api kernel and the numpy fallback."""
         assert SeamScale.kernel_for("dask") is SeamScale.__dict__["kernel"]

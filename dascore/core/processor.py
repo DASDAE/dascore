@@ -333,11 +333,13 @@ class PatchProcessor(DascoreBaseModel):
             contents = klass.__dict__
             if (found := contents.get("_kernels", {}).get(backend)) is not None:
                 return found
-            numpy_only = contents.get("numpy_kernel")
             if backend == LAZY_BACKEND:
-                if numpy_only is not None or contents.get("kernel") is not None:
+                # Never the array api kernel or the numpy fallback; a kernel
+                # registered for any backend says the class computes too.
+                if _computes(klass):
                     return _lazy_kernel()
                 continue
+            numpy_only = contents.get("numpy_kernel")
             if numpy_only is not None and backend == "numpy":
                 return numpy_only
             if (generic := contents.get("kernel")) is not None:
@@ -566,14 +568,19 @@ _UNCHECKED: list[type[PatchProcessor]] = []
 _HOSTS: list[type] = []
 
 
+def _computes(klass: type) -> bool:
+    """Whether a class's own body, or a registration on it, gives it a kernel."""
+    contents = klass.__dict__
+    return (
+        contents.get("kernel") is not None
+        or contents.get("numpy_kernel") is not None
+        or bool(contents.get("_kernels"))
+    )
+
+
 def _has_kernel(cls: type[PatchProcessor]) -> bool:
     """Whether anything in the MRO computes data; see `kernel_for`."""
-    return any(
-        x.__dict__.get("kernel") is not None
-        or x.__dict__.get("numpy_kernel") is not None
-        or x.__dict__.get("_kernels")
-        for x in cls.__mro__
-    )
+    return any(_computes(x) for x in cls.__mro__)
 
 
 def _is_dascores(cls) -> bool:
