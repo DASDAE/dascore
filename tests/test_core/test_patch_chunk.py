@@ -39,6 +39,7 @@ from dascore.exceptions import (
 from dascore.io.febus.core import FebusPatchAttrs
 from dascore.io.index import catalog, planned
 from dascore.io.index.schema import SOURCE_STAT_COLUMNS
+from dascore.io.neubrex.core import NeubrexDASPatchAttrs
 from dascore.lazy.recipe import Recipe
 from dascore.units import get_quantity
 from dascore.utils.chunk_plan import (
@@ -3060,6 +3061,20 @@ class TestChunkFromIndex:
         assert dict(out.attrs) == dict(expected.attrs)
         assert out.attrs.zone == expected.attrs.zone == ""
         assert np.array_equal(out.data, expected.data)
+
+    def test_mixed_models_merge_as_loaded(self, tmp_path, route):
+        """Vendor defaults are not compared as values against a plain model."""
+        spool = ex.get_example_spool("random_das", length=2, time_gap=0)
+        models = (NeubrexDASPatchAttrs, dc.PatchAttrs)
+        for num, (patch, model) in enumerate(zip(spool, models)):
+            patch = patch.update(attrs=model(**patch.attrs.model_dump()))
+            patch.io.write(tmp_path / f"p{num}.h5", "dasdae")
+        indexed = dc.spool(tmp_path).update()
+        out = indexed.chunk(time=None, conflict="drop")[0]
+        assert route.counts == {"patch": 0, "array": 2}
+        route.force_patches()
+        expected = indexed.chunk(time=None, conflict="drop")[0]
+        assert dict(out.attrs) == dict(expected.attrs)
 
     def test_an_attr_the_index_cannot_hold_loads_patch(self, tmp_path_factory, route):
         """An attr no column holds is on the patch, so no row stands in."""

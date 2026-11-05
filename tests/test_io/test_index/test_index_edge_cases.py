@@ -1591,13 +1591,20 @@ class TestWhatARowCannotState:
         patch = dc.get_example_patch().update(attrs=_Attrs(level=None))
         assert not patch_record(PatchSummary.from_patch(patch)).attrs_complete
 
-    def test_default_json_cannot_hold_requires_loading(self):
+    @pytest.mark.parametrize(
+        "default, given",
+        [
+            (np.datetime64("NaT"), {"when": np.datetime64(1, "s")}),
+            (np.array([1, 2]), {}),
+        ],
+    )
+    def test_default_json_cannot_hold_requires_loading(self, default, given):
         """A declared default JSON cannot restate keeps the patch path."""
 
         class _Attrs(dc.PatchAttrs):
-            when: Any = np.datetime64("NaT")
+            when: Any = default
 
-        patch = dc.get_example_patch().update(attrs=_Attrs(when=np.datetime64(1, "s")))
+        patch = dc.get_example_patch().update(attrs=_Attrs(**given))
         record = patch_record(PatchSummary.from_patch(patch))
         assert not record.attrs_complete
         assert record.attr_defaults is None

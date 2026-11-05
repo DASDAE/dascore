@@ -381,7 +381,7 @@ def _extract_attrs(
         elif name in defaults:
             # The stored default stands in only for the value it equals.
             default = defaults[name]
-            complete &= type(value) is type(default) and value == default
+            complete = complete and type(value) is type(default) and value == default
         elif name not in PatchAttrs.model_fields or not _is_missing(value):
             # Only declared defaults can be recovered from an omitted value.
             # An empty extra attribute still has a name and a representation.
@@ -390,7 +390,7 @@ def _extract_attrs(
         out,
         complete,
         json.dumps(dtypes) if dtypes else None,
-        json.dumps(defaults) if defaults and complete else None,
+        json.dumps(defaults, sort_keys=True) if defaults and complete else None,
     )
 
 
