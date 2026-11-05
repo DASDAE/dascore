@@ -11,9 +11,10 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.core.processor import PatchProcessor, _subclasses
 from dascore.exceptions import LazyOperationError
 from dascore.lazy.array import LazyArray
-from dascore.lazy.contract import Pointwise
+from dascore.lazy.contract import Pointwise, Unchanged
 
 from .conftest import lazy_patch, stored_patch
 
@@ -24,6 +25,9 @@ DTYPES = (
     "int8",
     "int16",
     "int64",
+    "uint8",
+    "uint16",
+    "uint64",
     "float16",
     "float32",
     "float64",
@@ -42,6 +46,8 @@ def _values(shape, dtype):
     values = (values - values.mean()) / values.size * 200
     if dtype == "bool":
         return values > 0
+    if np.dtype(dtype).kind == "u":
+        values = np.abs(values)
     if np.dtype(dtype).kind == "c":
         values = values + 1j * values[::-1]
     return values.astype(dtype)
@@ -145,3 +151,51 @@ class TestChain:
         with pytest.raises(LazyOperationError, match="detrend"):
             out.detrend("time")
         assert not recipe_loads
+
+
+# Every one of DASCore's own operations which states a chunk contract.
+CONTRACTED = sorted(
+    {
+        x
+        for x in _subclasses(PatchProcessor)
+        if "chunk_contract" in x.__dict__ and x.__module__.startswith("dascore.")
+    },
+    key=lambda x: x.__name__,
+)
+
+
+class TestContractsHold:
+    """
+    What each declared contract promises, checked on its numpy kernel.
+
+    Driven by the registry, so an operation declared later is checked too.
+    """
+
+    def test_the_declared_are_found(self):
+        """The registry walk finds the five declared here."""
+        names = {x.__name__ for x in CONTRACTED}
+        assert {"Abs", "Real", "Imag", "Angle", "Conj"} <= names
+
+    @pytest.mark.parametrize("dtype", DTYPES)
+    @pytest.mark.parametrize("cls", CONTRACTED, ids=lambda x: x.__name__)
+    def test_contract_holds(self, cls, dtype):
+        """Unchanged hands the input back; Pointwise works on any halves."""
+        data = _values((6, 4), dtype)
+        coords = {"a": np.arange(6), "b": np.arange(4)}
+        patch = dc.Patch(data=data, coords=coords, dims=("a", "b"))
+        processor = cls()
+        out, plan = processor.get_metadata(patch.drop_data())
+        contract = processor.chunk_contract(np.dtype(dtype), plan)
+        kernel = cls.kernel_for("numpy")
+        result = kernel(processor, data, **plan)
+        if isinstance(contract, Unchanged):
+            assert result is data
+            return
+        assert isinstance(contract, Pointwise)
+        assert result.shape == data.shape
+        assert np.dtype(result.dtype) == out.dtype
+        for axis, cut in ((0, 3), (1, 1)):
+            first, second = np.split(data, [cut], axis=axis)
+            halves = [kernel(processor, x, **plan) for x in (first, second)]
+            joined = np.concatenate(halves, axis=axis)
+            np.testing.assert_array_equal(joined, result)

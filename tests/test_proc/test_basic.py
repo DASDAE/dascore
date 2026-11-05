@@ -160,6 +160,9 @@ POINTWISE_DTYPES = (
     "int8",
     "int16",
     "int64",
+    "uint8",
+    "uint16",
+    "uint64",
     "float16",
     "float32",
     "float64",
@@ -176,6 +179,8 @@ class TestPointwiseMetadataDtype:
     def _of_dtype(patch, dtype):
         """The patch with distinct values of a dtype, negative ones included."""
         values = np.asarray(patch.data) - 0.5
+        if np.dtype(dtype).kind == "u":
+            values = np.abs(values)
         if np.dtype(dtype).kind == "c":
             values = values + 1j * values[::-1]
         return patch.new(data=(values * 100).astype(dtype))
