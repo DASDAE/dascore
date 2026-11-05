@@ -421,8 +421,11 @@ class PatchProcessor(DascoreBaseModel):
         # The body is an operation, which names itself; the replacements it
         # makes on the way do not.
         with operation_context():
-            out = self._run(patch, record=record)
-            return out if record else self._unrecorded(patch, out)
+            return self._run(patch, record=record)
+
+    def _finished(self, patch, out, record: bool):
+        """Return a result, given the ids of a bypass if it was one."""
+        return out if record else self._unrecorded(patch, out)
 
     def _unrecorded(self, patch, out):
         """Return the result of a bypass, which records neither history nor ids."""
@@ -430,16 +433,7 @@ class PatchProcessor(DascoreBaseModel):
         # from still stands. The patch itself, handed back, is what it was.
         if out is patch or not isinstance(out, dc.Patch):
             return out
-        if not ids_enabled():
-            new = out.update(attrs=_without_ids(out.attrs))
-        else:
-            new = out.update(attrs=out.attrs.update(data_id=new_id()))
-        # A step this call added to lazy data was settled under the id just
-        # replaced; it records the one the patch ends with.
-        if new.backend != LAZY_BACKEND or new.data is patch.data:
-            return new
-        before, after = out.attrs.data_id, new.attrs.data_id
-        return new.update(data=new.data._restamped(before, after))
+        return out.update(attrs=_unrecorded_attrs(out.attrs))
 
     def _run(self, patch: dc.PatchMeta, record: bool) -> dc.PatchMeta:
         """Run the operation; `record=False` writes no history or ids."""
@@ -455,7 +449,7 @@ class PatchProcessor(DascoreBaseModel):
         kernel = self.kernel_for(meta.backend)
         if kernel is None:
             if out is meta:
-                return self._unchanged(patch, record)
+                return self._finished(patch, self._unchanged(patch, record), record)
             # The hook which sees both halves runs whether or not a kernel
             # computed anything: the data are the ones which came in, and
             # metadata has none to show.
@@ -464,7 +458,7 @@ class PatchProcessor(DascoreBaseModel):
             attrs = self._result_attrs(out) if not record else self._record(patch, out)
             # The data are whatever they were: a patch puts its own back,
             # and metadata has none to put.
-            return patch._reattach(out, attrs)
+            return self._finished(patch, patch._reattach(out, attrs), record)
         # `check` refused metadata for an operation with a kernel, so what
         # is left here holds data; the assert is what says so statically.
         assert isinstance(patch, dc.Patch)
@@ -473,17 +467,23 @@ class PatchProcessor(DascoreBaseModel):
         # must not write into that argument and return it.
         result = kernel(self, data, **plan)
         if out is meta and result is data:
-            return self._unchanged(patch, record)
+            return self._finished(patch, self._unchanged(patch, record), record)
         out = self.reconcile(result, out, meta)
+        reconciled = isinstance(out, dc.Patch)
         attrs = self._record(patch, out) if record else self._result_attrs(out)
+        if not (record or reconciled):
+            # The ids a bypass ends with, given before a lazy step is settled
+            # so the step is settled once, with them. A patch from reconcile
+            # gets them as any other result does, below.
+            attrs = _unrecorded_attrs(attrs)
         out = out.update(attrs=attrs)
         if meta.backend == LAZY_BACKEND:
             result = self._settled(result, out)
-        new = out if isinstance(out, dc.Patch) else out.to_patch(result)
+        new = out if reconciled else out.to_patch(result)
         # Only an operation which set a source of its own says it loads the result.
         if out._source is not meta._source:
             new._source = out._source
-        return new
+        return self._finished(patch, new, record) if reconciled else new
 
     def _settled(self, result, out: dc.PatchMeta):
         """Give a step pending on lazy data the shape, dtype and id it made."""
@@ -566,6 +566,13 @@ _MODULE_SPELLINGS = frozenset({"dascore.proc.aggregate"})
 _UNCHECKED: list[type[PatchProcessor]] = []
 # `[Patch, PatchMeta]`, once there are such classes to check against.
 _HOSTS: list[type] = []
+
+
+def _unrecorded_attrs(attrs: PatchAttrs) -> PatchAttrs:
+    """Return the attrs a bypass leaves: a new id, or none with ids disabled."""
+    if not ids_enabled():
+        return _without_ids(attrs)
+    return attrs.update(data_id=new_id())
 
 
 def _computes(klass: type) -> bool:

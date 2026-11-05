@@ -2170,6 +2170,37 @@ class TestLazyStep:
         assert renamed.data is out.data
         assert renamed.data.chain.last.data_id == out.attrs.data_id
 
+    def test_bypass_leaves_earlier_steps(self, lazy_patch):
+        """A bypass never changes the id of a step it did not add."""
+
+        class Moved(PatchProcessor):
+            """Changes an attr; its lazy kernel copies the array, chain and all."""
+
+            name = None
+
+            def get_metadata(self, meta):
+                """A new tag."""
+                return meta.new(attrs=meta.attrs.update(tag="moved")), {}
+
+            def kernel(self, data):
+                """Hand the data back."""
+                return data
+
+        @register_kernel(Moved, "lazy")
+        def _copy(processor, data):
+            """A new lazy array holding the same steps."""
+            return LazyArray(data.recipe, data.chain)
+
+        scaled = SeamLazyScale(factor=3)(lazy_patch)
+        before = [x.data_id for x in scaled.data.chain]
+        token = processor_module._RECORD.set(False)
+        try:
+            out = Moved()(scaled)
+        finally:
+            processor_module._RECORD.reset(token)
+        assert out.attrs.data_id != scaled.attrs.data_id
+        assert [x.data_id for x in out.data.chain] == before
+
     def test_ids_disabled(self, lazy_patch):
         """With ids disabled, the step's id is the patch's: empty."""
         with config_context(patch_provenance="disabled"):

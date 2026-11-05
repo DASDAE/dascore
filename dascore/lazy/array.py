@@ -137,14 +137,6 @@ class LazyArray:
         node = last.settled(shape, dtype, data_id)
         return LazyArray(self._recipe, Chain((*before, node)))
 
-    def _restamped(self, before: str, after: str) -> LazyArray:
-        """Return the array with its last step's id `after` if it was `before`."""
-        last = self._chain.last
-        if last is None or last.data_id != before:
-            return self
-        shape, dtype, _ = last.made()
-        return self._settled(shape, dtype, after)
-
     def load(self) -> np.ndarray:
         """
         Read the recipe and run every pending step, in memory.
