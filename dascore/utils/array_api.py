@@ -39,6 +39,8 @@ __all__ = [
 
 # The name reported for numpy arrays, and for array-likes numpy handles.
 NUMPY_BACKEND = "numpy"
+# The name reported for a lazy array, whose values are read only on `load`.
+LAZY_BACKEND = "lazy"
 
 
 def array_namespace(*arrays: Any) -> Any:
