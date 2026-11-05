@@ -28,8 +28,10 @@ from dascore.units import (
     get_quantity_str,
 )
 from dascore.utils.array_api import (
+    LAZY_BACKEND,
     array_namespace,
     asarray_like,
+    backend_name,
     is_foreign,
     is_numpy,
     nan_reduce,
@@ -1232,7 +1234,13 @@ def apply_ufunc(ufunc, *args, **kwargs):
         )
         raise ParameterError(msg)
     data = _get_foreign_data(args, kwargs)
-    if data is None or _backend_can_apply(ufunc, key, args, kwargs, data):
+    # Lazy data have no namespace to apply anything in, so they go to the
+    # fallback, which refuses them rather than reading them.
+    native = data is None or (
+        backend_name(data) != LAZY_BACKEND
+        and _backend_can_apply(ufunc, key, args, kwargs, data)
+    )
+    if native:
         out = func(ufunc, *args, **kwargs)
     else:
         name = getattr(ufunc, "__name__", "operation")

@@ -7,11 +7,27 @@ import pytest
 
 import dascore as dc
 from dascore.core.source import ArraySource
+from dascore.exceptions import LazyOperationError
 from dascore.lazy.array import LazyArray
+from dascore.lazy.contract import Pointwise
 from dascore.lazy.recipe import Recipe
 from dascore.utils.identity import operation_context
 
 from .conftest import lazy_patch
+
+
+class Negate(dc.PatchProcessor):
+    """Negate every sample, one sample at a time."""
+
+    name = None
+
+    def chunk_contract(self, dtype, plan):
+        """Each sample needs only itself."""
+        return Pointwise()
+
+    def kernel(self, data):
+        """Negate."""
+        return -data
 
 
 @pytest.fixture()
@@ -90,3 +106,55 @@ class TestLoad:
         with operation_context():
             patch = Mine(data=recipe, coords={"x": range(3)}, dims=("x",))
         assert type(patch.load()) is Mine
+
+
+class TestNoFallback:
+    """Nothing outside an operation reads lazy data unasked."""
+
+    @pytest.mark.parametrize("show", (repr, str, lambda x: x._repr_html_()))
+    def test_repr_reads_nothing(self, lazy, recipe_loads, show):
+        """The data are described, not printed."""
+        text = show(Negate()(lazy))
+        assert "not read yet; 1 operation pending" in text
+        assert "float64" in text
+        assert not recipe_loads
+
+    def test_repr_counts_steps(self, lazy):
+        """The number of pending operations is stated."""
+        assert "0 operations pending" in str(lazy)
+        assert "2 operations pending" in str(Negate()(Negate()(lazy)))
+
+    @pytest.mark.parametrize(
+        "run",
+        (
+            lambda x: x + 1,
+            lambda x: -x,
+            lambda x: x * x,
+            lambda x: np.abs(x),
+            lambda x: np.mean(x),
+            lambda x: np.cumsum(x, axis=0),
+        ),
+        ids=("add", "negative", "multiply", "ufunc", "reduce", "array_function"),
+    )
+    def test_numpy_fallback_refused(self, lazy, recipe_loads, run):
+        """What would convert to numpy raises the lazy error instead."""
+        with pytest.raises(LazyOperationError, match=r"patch\.load\(\)"):
+            run(lazy)
+        assert not recipe_loads
+
+    def test_names_the_ufunc(self, lazy):
+        """The message names the operation refused."""
+        with pytest.raises(LazyOperationError, match=r"^add cannot run"):
+            lazy + 1
+
+    def test_asarray_reads(self, lazy, stored_float, recipe_loads):
+        """Asking numpy for the values reads them; the caller asked."""
+        out = np.asarray(Negate()(lazy))
+        assert len(recipe_loads) == 1
+        assert np.array_equal(out, -np.asarray(stored_float.data))
+
+    def test_write_reads(self, lazy, stored_float, tmp_path):
+        """So does writing the patch to a file."""
+        path = tmp_path / "written.h5"
+        dc.write(Negate()(lazy), path, "dasdae")
+        assert np.array_equal(dc.read(path)[0].data, -stored_float.data)

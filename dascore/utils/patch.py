@@ -35,11 +35,13 @@ from dascore.exceptions import (
 )
 from dascore.units import get_quantity
 from dascore.utils.array_api import (
+    LAZY_BACKEND,
     array_namespace,
     asarray_like,
     backend_name,
     is_foreign,
     is_numpy,
+    lazy_refusal,
     to_numpy,
     warn_numpy_fallback,
 )
@@ -426,8 +428,17 @@ def numpy_fallback(name, data, func, args=(), kwargs=None, stacklevel=4):
         Keyword arguments for func; patches and arrays are converted.
     stacklevel
         The stack level, as understood by warnings.warn, of the caller.
+
+    Raises
+    ------
+    LazyOperationError
+        If data are lazy: converting them would read them, which the lazy
+        backend never does behind the caller's back.
     """
-    warn_numpy_fallback(name, backend_name(data), stacklevel=stacklevel + 1)
+    backend = backend_name(data)
+    if backend == LAZY_BACKEND:
+        raise lazy_refusal(name)
+    warn_numpy_fallback(name, backend, stacklevel=stacklevel + 1)
     # Crossing the backend boundary is part of the operation being applied,
     # not data replacement: the same values are the same data, and what
     # `func` records still stands.
