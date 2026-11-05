@@ -18,15 +18,23 @@ from pydantic import ConfigDict, Field, ValidationError
 from scipy import ndimage
 
 import dascore as dc
+from dascore.config import config_context
 from dascore.constants import PatchMetaType, PatchType
 from dascore.core import processor as processor_module
 from dascore.core.processor import PatchProcessor, register_kernel
+from dascore.core.source import ArraySource
 from dascore.exceptions import (
+    LazyOperationError,
     ParameterError,
     PatchAttributeError,
     PatchCoordinateError,
     PatchDataError,
+    PatchError,
 )
+from dascore.lazy.array import LazyArray
+from dascore.lazy.contract import ChunkContract, Pointwise, Unchanged
+from dascore.lazy.kernels import lazy_kernel
+from dascore.lazy.recipe import Recipe
 from dascore.proc.basic import Abs, Normalize, _known_real
 from dascore.utils.array_api import backend_name
 from dascore.utils.docs import compose_docstring
@@ -131,6 +139,25 @@ class SeamKernelNamed(PatchProcessor):
     def kernel(self, data):
         """Hand the data back."""
         return data
+
+
+class SeamLazyScale(SeamScale):
+    """Scale, stating that each sample needs only itself."""
+
+    name = "seam_lazy_scale"
+
+    @staticmethod
+    def seam_lazy_scale(patch: PatchType, /, factor: float = 2.0) -> PatchType:
+        """Scale the patch."""
+        return SeamLazyScale(factor=factor).run(patch)
+
+    def chunk_contract(self, dtype, plan):
+        """Pointwise for every dtype, a no-op for a factor of one."""
+        return Unchanged() if self.factor == 1 else Pointwise()
+
+    def kernel(self, data):
+        """Scale every sample; a factor of one hands the data back."""
+        return data if self.factor == 1 else data * self.factor
 
 
 def _host_method(host, name, monkeypatch, run=None):
@@ -1772,3 +1799,258 @@ class TestAggregations:
         """`dascore.proc.aggregate` stays the module, not the function."""
         assert isinstance(dc.proc.aggregate, ModuleType)
         assert dc.proc.agg.aggregate is dc.Patch.aggregate
+
+
+@pytest.fixture()
+def lazy_patch():
+    """A patch whose data are a recipe of a constant, not read yet."""
+    recipe = Recipe.from_source(ArraySource.full((4, 3), -2.0))
+    coords = {"distance": np.arange(4), "time": np.arange(3)}
+    return dc.Patch(data=recipe, coords=coords, dims=("distance", "time"))
+
+
+@pytest.fixture()
+def recipe_loads(monkeypatch):
+    """Record each recipe which is loaded, whatever loads it."""
+    calls = []
+    original = Recipe.load
+
+    def recorded(self):
+        calls.append(self)
+        return original(self)
+
+    monkeypatch.setattr(Recipe, "load", recorded)
+    return calls
+
+
+class TestLazyKernelFor:
+    """Which kernel the lazy backend runs; it never falls back."""
+
+    def test_a_kernel_is_answered_by_the_lazy_kernel(self):
+        """The array api kernel is never reached."""
+        assert SeamScale.kernel_for("lazy") is lazy_kernel
+        assert Abs.kernel_for("lazy") is lazy_kernel
+
+    def test_a_numpy_kernel_is_answered_by_the_lazy_kernel(self):
+        """Neither is the numpy fallback."""
+
+        class NumpyOnly(PatchProcessor):
+            """A processor with only a numpy kernel."""
+
+            name = None
+
+            def numpy_kernel(self, data):
+                """Hand the data back."""
+                return data
+
+        assert NumpyOnly.kernel_for("lazy") is lazy_kernel
+
+    def test_no_kernel_is_metadata_only(self):
+        """A processor with no kernel has none for the lazy backend either."""
+        assert SeamHidden.kernel_for("lazy") is None
+        assert not processor_module._has_kernel(SeamHidden)
+
+    def test_own_registered_kernel_wins(self):
+        """A class's own lazy kernel answers for it."""
+
+        class Local(SeamScale):
+            """A class to register against."""
+
+            name = None
+
+        @register_kernel(Local, "lazy")
+        def _own(processor, data):
+            """The class's own lazy kernel."""
+            return data
+
+        assert Local.kernel_for("lazy") is _own
+
+    def test_subclass_kernel_beats_parents_lazy_kernel(self):
+        """A parent's registered lazy kernel must not answer for a subclass."""
+
+        class Parent(SeamScale):
+            """The parent."""
+
+            name = None
+
+        @register_kernel(Parent, "lazy")
+        def _parent(processor, data):
+            """The parent's lazy kernel."""
+            return data
+
+        class Child(Parent):
+            """A subclass computing something else."""
+
+            name = None
+
+            def kernel(self, data):
+                """The child's own arithmetic."""
+                return data + 1
+
+        assert Parent.kernel_for("lazy") is _parent
+        assert Child.kernel_for("lazy") is lazy_kernel
+
+    def test_dask_is_unchanged(self):
+        """Dask keeps the array api kernel and the numpy fallback."""
+        assert SeamScale.kernel_for("dask") is SeamScale.__dict__["kernel"]
+
+
+class TestLazyRefusal:
+    """An operation with no chunk contract reads nothing and raises."""
+
+    @pytest.mark.parametrize(
+        "run",
+        (
+            lambda x: SeamScale()(x),
+            lambda x: x.normalize("time"),
+            lambda x: x.detrend("time"),
+            lambda x: x.pass_filter(time=(None, 0.2)),
+        ),
+        ids=("seam", "array_api_kernel", "numpy_kernel", "filter"),
+    )
+    def test_refused(self, lazy_patch, recipe_loads, run):
+        """The error is the lazy one, and names a way out."""
+        with pytest.raises(LazyOperationError, match=r"patch\.load\(\)"):
+            run(lazy_patch)
+        assert not recipe_loads
+
+    def test_names_the_operation(self, lazy_patch):
+        """The message says which operation was refused."""
+        with pytest.raises(LazyOperationError, match=r"^normalize cannot run"):
+            lazy_patch.normalize("time")
+
+    def test_unknown_contract_refused(self, lazy_patch, recipe_loads):
+        """A contract the lazy backend cannot keep yet is refused too."""
+
+        class Haloed(SeamScale):
+            """States a contract no executor keeps."""
+
+            name = None
+
+            def chunk_contract(self, dtype, plan):
+                """Some other contract."""
+                return ChunkContract()
+
+        with pytest.raises(LazyOperationError, match="Haloed cannot run"):
+            Haloed()(lazy_patch)
+        assert not recipe_loads
+
+    def test_reconciled_patch_refused(self, lazy_patch, recipe_loads):
+        """A reconcile which returns a patch drops the kernel's result."""
+
+        class Reconciled(SeamLazyScale):
+            """Reconciles to a patch of its own."""
+
+            name = None
+
+            def reconcile(self, data, out, meta):
+                """A patch, not metadata."""
+                return out.to_patch(np.zeros(out.shape))
+
+        with pytest.raises(LazyOperationError, match="reconcile returns a patch"):
+            Reconciled()(lazy_patch)
+        assert not recipe_loads
+
+
+class TestLazyStep:
+    """An operation with a contract appends a step and reads nothing."""
+
+    def test_pointwise_appends(self, lazy_patch, recipe_loads):
+        """The step is settled with what the patch says it holds."""
+        out = SeamLazyScale(factor=3)(lazy_patch)
+        assert not recipe_loads
+        assert isinstance(out.data, LazyArray)
+        assert out.data.recipe is lazy_patch.data.recipe
+        node = out.data.chain.last
+        assert len(out.data.chain) == 1 and not node.pending
+        assert node.processor == SeamLazyScale(factor=3)
+        assert node.shape == out.shape
+        assert node.dtype == out.dtype
+        assert node.data_id == out.attrs.data_id
+
+    def test_matches_eager(self, lazy_patch):
+        """Loaded, the result and its id are the eager ones."""
+        out = SeamLazyScale(factor=3)(lazy_patch)
+        eager = SeamLazyScale(factor=3)(lazy_patch.load())
+        loaded = out.load()
+        assert np.array_equal(loaded.data, eager.data)
+        assert loaded.attrs == eager.attrs
+        assert loaded.attrs.data_id == eager.attrs.data_id
+
+    def test_unchanged_is_a_no_op(self, lazy_patch, recipe_loads):
+        """The patch itself comes back, as it does eagerly."""
+        assert SeamLazyScale(factor=1)(lazy_patch) is lazy_patch
+        assert not recipe_loads
+        eager = lazy_patch.load()
+        assert SeamLazyScale(factor=1)(eager) is eager
+
+    def test_unchanged_data_new_metadata(self, lazy_patch, recipe_loads):
+        """Data handed back under new metadata keep the array, as eagerly."""
+
+        class Relabel(PatchProcessor):
+            """Changes an attr, and hands the data back."""
+
+            name = None
+
+            def get_metadata(self, meta):
+                """A new tag."""
+                return meta.new(attrs=meta.attrs.update(tag="relabelled")), {}
+
+            def chunk_contract(self, dtype, plan):
+                """Nothing to do to the data."""
+                return Unchanged()
+
+            def kernel(self, data):
+                """Hand the data back."""
+                return data
+
+        out = Relabel()(lazy_patch)
+        assert out.data is lazy_patch.data
+        assert out.attrs.tag == "relabelled"
+        assert not recipe_loads
+        eager = Relabel()(lazy_patch.load())
+        assert out.attrs.data_id == eager.attrs.data_id != lazy_patch.attrs.data_id
+
+    def test_metadata_only_keeps_the_data(self, lazy_patch, recipe_loads):
+        """An operation with no kernel leaves the lazy array as it was."""
+        out = lazy_patch.update_attrs(station="here").rename_coords(time="t")
+        assert out.data is lazy_patch.data
+        assert out.attrs.station == "here"
+        assert "t" in out.dims
+        assert not recipe_loads
+
+    def test_undeclared_dtype_raises_at_load(self, lazy_patch):
+        """A kernel whose result differs from its metadata is caught."""
+
+        class Halving(SeamLazyScale):
+            """Computes float32 while its metadata keeps the input's dtype."""
+
+            name = None
+
+            def kernel(self, data):
+                """Scale, in single precision."""
+                return (data * self.factor).astype(np.float32)
+
+        out = Halving()(lazy_patch)
+        assert out.dtype == np.float64
+        with pytest.raises(PatchError, match=r"Halving computed .* float32"):
+            out.load()
+
+    def test_bypass_settles_the_final_id(self, lazy_patch):
+        """The bypass gives the patch a new id after `_run`; the step takes it."""
+        bypass = SeamLazyScale.patch_function.raw_function
+        out = bypass(lazy_patch, factor=3)
+        assert out.attrs.data_id != lazy_patch.attrs.data_id
+        assert out.data.chain.last.data_id == out.attrs.data_id
+        # A metadata-only bypass after it leaves the step's id alone.
+        renamed = dc.proc.rename_coords.raw_function(out, time="t")
+        assert renamed.data is out.data
+        assert renamed.data.chain.last.data_id == out.attrs.data_id
+
+    def test_ids_disabled(self, lazy_patch):
+        """With ids disabled, the step's id is the patch's: empty."""
+        with config_context(patch_provenance="disabled"):
+            out = SeamLazyScale(factor=3)(lazy_patch)
+            raw = SeamLazyScale.patch_function.raw_function(lazy_patch, factor=3)
+        assert out.data.chain.last.data_id == out.attrs.data_id == ""
+        assert raw.data.chain.last.data_id == raw.attrs.data_id == ""

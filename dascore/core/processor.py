@@ -57,9 +57,10 @@ import dascore as dc
 from dascore.compat import is_array_like
 from dascore.config import get_config
 from dascore.constants import PatchMetaType, PatchType
-from dascore.exceptions import ParameterError
+from dascore.exceptions import LazyOperationError, ParameterError
 from dascore.models.base import DascoreBaseModel, model_values
 from dascore.utils.array_api import (
+    LAZY_BACKEND,
     asarray_like,
     backend_name,
     to_numpy,
@@ -320,6 +321,11 @@ class PatchProcessor(DascoreBaseModel):
         which wrote its own kernel means it, and a backend kernel
         registered against its parent must not answer for it. A backend
         other than NumPy first loads its `dascore.kernels` entry points, once.
+
+        The lazy backend never falls back: the first class which computes
+        anything is answered by its own registered lazy kernel, or else by
+        [`lazy_kernel`](`dascore.lazy.kernels.lazy_kernel`), which runs the
+        operation by its chunk contract or refuses it.
         """
         if backend != "numpy":
             _load_kernel_plugin(backend)
@@ -328,6 +334,10 @@ class PatchProcessor(DascoreBaseModel):
             if (found := contents.get("_kernels", {}).get(backend)) is not None:
                 return found
             numpy_only = contents.get("numpy_kernel")
+            if backend == LAZY_BACKEND:
+                if numpy_only is not None or contents.get("kernel") is not None:
+                    return _lazy_kernel()
+                continue
             if numpy_only is not None and backend == "numpy":
                 return numpy_only
             if (generic := contents.get("kernel")) is not None:
@@ -419,8 +429,15 @@ class PatchProcessor(DascoreBaseModel):
         if out is patch or not isinstance(out, dc.Patch):
             return out
         if not ids_enabled():
-            return out.update(attrs=_without_ids(out.attrs))
-        return out.update(attrs=out.attrs.update(data_id=new_id()))
+            new = out.update(attrs=_without_ids(out.attrs))
+        else:
+            new = out.update(attrs=out.attrs.update(data_id=new_id()))
+        # A step this call added to lazy data was settled under the id just
+        # replaced; it records the one the patch ends with.
+        if new.backend != LAZY_BACKEND or new.data is patch.data:
+            return new
+        before, after = out.attrs.data_id, new.attrs.data_id
+        return new.update(data=new.data._restamped(before, after))
 
     def _run(self, patch: dc.PatchMeta, record: bool) -> dc.PatchMeta:
         """Run the operation; `record=False` writes no history or ids."""
@@ -458,11 +475,32 @@ class PatchProcessor(DascoreBaseModel):
         out = self.reconcile(result, out, meta)
         attrs = self._record(patch, out) if record else self._result_attrs(out)
         out = out.update(attrs=attrs)
+        if meta.backend == LAZY_BACKEND:
+            result = self._settled(result, out)
         new = out if isinstance(out, dc.Patch) else out.to_patch(result)
         # Only an operation which set a source of its own says it loads the result.
         if out._source is not meta._source:
             new._source = out._source
         return new
+
+    def _settled(self, result, out: dc.PatchMeta):
+        """Give a step pending on lazy data the shape, dtype and id it made."""
+        # Imported here: dascore.lazy reads files through dascore.core.source,
+        # which imports the processors.
+        from dascore.lazy.array import LazyArray  # noqa: PLC0415
+
+        last = result.chain.last if isinstance(result, LazyArray) else None
+        if last is None or not last.pending:
+            return result
+        if isinstance(out, dc.Patch):
+            name = type(self).__name__
+            msg = (
+                f"{name}.reconcile returns a patch, which drops what its "
+                "kernel made, so it cannot run on a lazy patch. Call "
+                "patch.load() to read the data into memory first."
+            )
+            raise LazyOperationError(msg)
+        return result._settled(out.shape, out.dtype, out.attrs.data_id)
 
     def _unchanged(self, patch: dc.PatchMeta, record: bool) -> dc.PatchMeta:
         """Return the patch an operation did nothing to; nothing is recorded."""
@@ -977,6 +1015,15 @@ def _is_plain(value) -> bool:
     # Data of any dtype but object, which could hold anything: `where`
     # fills with datetime and string data.
     return isinstance(value, np.ndarray) and not value.dtype.hasobject
+
+
+def _lazy_kernel():
+    """Return the kernel the lazy backend runs; see `dascore.lazy.kernels`."""
+    # Imported here: dascore.lazy reads files through dascore.core.source,
+    # which imports the processors.
+    from dascore.lazy.kernels import lazy_kernel  # noqa: PLC0415
+
+    return lazy_kernel
 
 
 def _via_numpy(numpy_kernel, name: str):

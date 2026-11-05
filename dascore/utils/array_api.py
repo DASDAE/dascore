@@ -22,6 +22,7 @@ from array_api_compat import array_namespace as _array_namespace
 from array_api_compat import device, is_array_api_obj, to_device
 
 from dascore.compat import is_array
+from dascore.exceptions import LazyOperationError
 from dascore.warnings import NumpyFallbackWarning
 
 __all__ = [
@@ -31,6 +32,7 @@ __all__ = [
     "device",
     "is_foreign",
     "is_numpy",
+    "lazy_refusal",
     "namespace_name",
     "nan_reduce",
     "to_numpy",
@@ -165,6 +167,33 @@ def backend_name(array: Any) -> str:
     if is_numpy(array):
         return NUMPY_BACKEND
     return namespace_name(array_namespace(array))
+
+
+def lazy_refusal(name: str) -> LazyOperationError:
+    """
+    Return the error for an operation which would have to read lazy data.
+
+    The lazy backend's answer where another backend would fall back to
+    numpy: it never reads the data behind the caller's back.
+
+    Parameters
+    ----------
+    name
+        The name of the operation, which the message states.
+
+    Examples
+    --------
+    >>> from dascore.exceptions import LazyOperationError
+    >>> from dascore.utils.array_api import lazy_refusal
+    >>>
+    >>> assert isinstance(lazy_refusal("detrend"), LazyOperationError)
+    """
+    msg = (
+        f"{name} cannot run on a lazy patch: it would have to read the data, "
+        "which the lazy backend never does behind your back. Call "
+        "patch.load() to read them into memory first."
+    )
+    return LazyOperationError(msg)
 
 
 def namespace_name(namespace: Any) -> str:

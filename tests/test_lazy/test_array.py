@@ -97,6 +97,14 @@ class TestWithSteps:
         assert settled.chain.nodes[0] is first
         assert array.chain.last.pending
 
+    def test_restamped_only_the_given_id(self, recipe):
+        """Only a last step settled under the old id takes the new one."""
+        array = LazyArray(recipe)._appended(_step(Abs(), (4, 3), np.float64, "old"))
+        assert array._restamped("old", "new").data_id == "new"
+        assert array._restamped("other", "new") is array
+        empty = LazyArray(recipe)
+        assert empty._restamped("old", "new") is empty
+
     def test_repr_counts_steps(self, recipe):
         """The repr says what it is without reading anything."""
         array = LazyArray(recipe)._appended(_step(Abs(), (4, 3), np.float64))
