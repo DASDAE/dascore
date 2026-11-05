@@ -14,7 +14,7 @@ from dascore.core.source import ArraySource
 from dascore.lazy import columns as columns_module
 from dascore.lazy import identity as identity_module
 from dascore.lazy.columns import SOURCE_FIELDS
-from dascore.lazy.recipe import LazyArray, LazyTable, concat
+from dascore.lazy.recipe import Recipe, RecipeTable, concat
 from tests.test_lazy.conftest import (
     ALIKE_VALUES,
     FORMAT,
@@ -33,7 +33,7 @@ class TestFoldedColumns:
     @staticmethod
     def many(count=2000):
         """Return many members over a few files, with one-valued columns."""
-        return LazyArray.from_columns(
+        return Recipe.from_columns(
             [f"/data/f{x % 97:03d}.h5" for x in range(count)],
             (2, 3),
             key=[["", "k"][x % 3 == 0] for x in range(count)],
@@ -45,7 +45,7 @@ class TestFoldedColumns:
         paths = [f"/data/f{x:05d}.h5" for x in range(20_000)]
         tracemalloc.start()
         try:
-            array = LazyArray.from_columns(paths, (1000, 100), **FORMAT)
+            array = Recipe.from_columns(paths, (1000, 100), **FORMAT)
             held = tracemalloc.get_traced_memory()[0]
             assert len(array) == len(paths)
         finally:
@@ -116,7 +116,7 @@ class TestStringColumns:
     def test_missing_strings_stay_distinct(self, repeats):
         """A missing value among strings is a value of its own."""
         keys = pd.Series(["k1", None, "k2"] * repeats)
-        array = LazyArray.from_columns("/a", (2,), key=keys, **FORMAT)
+        array = Recipe.from_columns("/a", (2,), key=keys, **FORMAT)
         members = array.table.members
         key = members.sources.key
         assert key.codes[members.source_row].tolist() == [0, 1, 2] * repeats
@@ -178,15 +178,15 @@ class TestSourceTable:
             array[10:500],
             concat([array[:half], array[half:]]),
             *array.rechunk([0, 7, 333, 600]),
-            LazyTable.from_arrays([array[:half], array[half:]])[1],
+            RecipeTable.from_arrays([array[:half], array[half:]])[1],
         ]
         assert all(x.table.members.sources is sources for x in views)
 
     def test_built_apart_is_built_together(self):
         """Arrays built apart and joined are the array built from all of them."""
         sources = [*mixed_sources(), *mixed_sources()[::-1]]
-        together = LazyArray.from_sources(sources)
-        apart = concat([LazyArray.from_sources(x) for x in (sources[:5], sources[5:])])
+        together = Recipe.from_sources(sources)
+        apart = concat([Recipe.from_sources(x) for x in (sources[:5], sources[5:])])
         assert apart.data_id == together.data_id
         # A nan is not equal to itself, so the sources are compared as written.
         assert repr(apart.sources) == repr(together.sources)
@@ -200,7 +200,7 @@ class TestSourceTable:
         assert len(joined.table.members.sources) < len(array.table.members.sources)
         assert len(joined.table.members.sources) <= 5
         sources = [*parts[0].sources, *parts[1].sources]
-        rebuilt = LazyArray.from_sources(sources, base_uri="/root/")
+        rebuilt = Recipe.from_sources(sources, base_uri="/root/")
         assert joined.data_id == rebuilt.data_id
         assert joined.sources == rebuilt.sources
         pd.testing.assert_frame_equal(joined.to_frame(), rebuilt.to_frame())
@@ -214,22 +214,22 @@ class TestSourceTable:
             for x, y in zip(texts, origins)
         ]
         sources.insert(2, ArraySource.full((2,), 0.0))
-        array = LazyArray.from_sources(sources, base_uri="/root/")
+        array = Recipe.from_sources(sources, base_uri="/root/")
         assert array.sources == tuple(sources)
         assert array.sources[2].path == ""
-        back = LazyArray.from_frame(array.to_frame(), array.shape, array.dtype)
+        back = Recipe.from_frame(array.to_frame(), array.shape, array.dtype)
         assert back.sources == tuple(sources)
         assert back.data_id == array.data_id
-        first = LazyArray.from_sources(sources[:2], base_uri="/root/")
+        first = Recipe.from_sources(sources[:2], base_uri="/root/")
         joined = concat([array[4:], first, array[8:]])
         assert joined.sources == (*sources[2:], *sources[:2], sources[-1])
 
     def test_undecodable_path(self):
         """A path holding an escaped undecodable byte is read back as it was."""
         source = stored((2,), path="/root/\udcff.h5")
-        array = LazyArray.from_sources([source, source], base_uri="/root/")
+        array = Recipe.from_sources([source, source], base_uri="/root/")
         assert array.sources == (source, source)
-        joined = concat([array, LazyArray.from_source(source), array[2:]])
+        joined = concat([array, Recipe.from_source(source), array[2:]])
         assert joined.sources == (source,) * 4
 
     def test_constant_values_stay_apart(self):
@@ -238,7 +238,7 @@ class TestSourceTable:
         sources = [
             ArraySource(filled=True, value=x).describe((1, 2), "f8") for x in values
         ]
-        array = LazyArray.from_sources([stored((1, 2), dtype="f8"), *sources])
+        array = Recipe.from_sources([stored((1, 2), dtype="f8"), *sources])
         assert len(array.table.members.sources) == len(values) + 1
         ids = [array[0 : x + 2].data_id for x in range(len(values))]
         assert len(set(ids)) == len(values)
@@ -247,31 +247,29 @@ class TestSourceTable:
         """Members of one source row keep their own casts."""
         source = stored((2,), path="/a/c.h5")
         casts = [None, "f4", "f8"]
-        together = LazyArray.from_sources([source] * 3, cast_via=casts, dtype="f8")
+        together = Recipe.from_sources([source] * 3, cast_via=casts, dtype="f8")
         assert len(together.table.members.sources) == 1
-        apart = [
-            LazyArray.from_sources([source], cast_via=[x], dtype="f8") for x in casts
-        ]
+        apart = [Recipe.from_sources([source], cast_via=[x], dtype="f8") for x in casts]
         assert together.data_id == concat(apart).data_id
-        uncast = LazyArray.from_sources([source] * 3, dtype="f8")
+        uncast = Recipe.from_sources([source] * 3, dtype="f8")
         assert together.data_id != uncast.data_id
 
     def test_whole_member_of_a_later_source(self):
         """A member left whole is named as its own source, whichever row it reads."""
         first = stored((2,), path="/a/f4.h5", dtype="f4")
         second = stored((2,), path="/a/f8.h5", dtype="f8")
-        cut = LazyArray.from_sources([first, second], dtype="f8")[2:]
-        assert cut.data_id == LazyArray.from_sources([second]).data_id == second.data_id
+        cut = Recipe.from_sources([first, second], dtype="f8")[2:]
+        assert cut.data_id == Recipe.from_sources([second]).data_id == second.data_id
 
     def test_whole_constant_of_a_later_source(self):
         """A constant cut from a mixed array is named as the constant alone."""
         filled = ArraySource.full((2,), 5.0)
-        cut = LazyArray.from_sources([stored((2,), dtype="f8"), filled])[2:]
-        assert cut.data_id == LazyArray.from_sources([filled]).data_id
+        cut = Recipe.from_sources([stored((2,), dtype="f8"), filled])[2:]
+        assert cut.data_id == Recipe.from_sources([filled]).data_id
 
     def test_empty_frame_columns(self):
         """An array of no members has the text columns of any other."""
-        array = LazyArray.from_sources([stored((2,)), stored((2,), path="/c.h5")])
+        array = Recipe.from_sources([stored((2,)), stored((2,), path="/c.h5")])
         expected = array.to_frame().dtypes
         for empty in (array[0:0], concat([array[0:0], constant((0,))])):
             assert empty.to_frame().dtypes.equals(expected)
@@ -280,16 +278,14 @@ class TestSourceTable:
         """Windows of one file built apart and joined read one source row."""
         whole = stored((1000,), path="/a/one.h5")
         windows = [whole[x : x + 10] for x in range(0, 1000, 10)]
-        joined = concat([LazyArray.from_source(x) for x in windows])
+        joined = concat([Recipe.from_source(x) for x in windows])
         assert len(joined.table.members.sources) == 1
-        assert joined.data_id == LazyArray.from_sources(windows).data_id
+        assert joined.data_id == Recipe.from_sources(windows).data_id
 
     def test_copies_are_named_once(self, monkeypatch):
         """Copies of one array joined keep, and name, one row per source."""
         copies = [many_members(30) for _ in range(20)]
-        expected = LazyArray.from_sources(
-            [x for y in copies for x in y.sources]
-        ).data_id
+        expected = Recipe.from_sources([x for y in copies for x in y.sources]).data_id
         joined = concat(copies)
         assert len(joined.table.members.sources) == 30
         hashed = []
@@ -303,7 +299,7 @@ class TestSourceTable:
     def test_most_read_is_kept_whole(self):
         """A join reading most of a table shares it rather than cutting it."""
         paths = [f"/a/f{x}.h5" for x in range(300)]
-        array = LazyArray.from_columns(paths, (2,), **FORMAT)
+        array = Recipe.from_columns(paths, (2,), **FORMAT)
         joined = concat([array[:-2], array[:0]])
         assert joined.table.members.sources is array.table.members.sources
 
@@ -396,11 +392,11 @@ class TestMergedDictionaries:
         sources = [mixed_member(rng, (2, 3), 0) for _ in range(400)]
         casts = [[None, "f4"][x] for x in rng.integers(0, 2, len(sources))]
         kwargs = {"base_uri": "/root/", "dtype": "f8"}
-        together = LazyArray.from_sources(sources, cast_via=casts, **kwargs)
+        together = Recipe.from_sources(sources, cast_via=casts, **kwargs)
         bounds = [0, *np.sort(rng.choice(np.arange(1, 400), 150, replace=False)), 400]
         apart = concat(
             [
-                LazyArray.from_sources(sources[a:b], cast_via=casts[a:b], **kwargs)
+                Recipe.from_sources(sources[a:b], cast_via=casts[a:b], **kwargs)
                 for a, b in pairwise(bounds)
             ]
         )
@@ -422,12 +418,12 @@ class TestMergedDictionaries:
             else replace(stored((2, 3), path=f"/root/f{x % 5}.h5"), key=f"k{x}")
             for x in range(600)
         ]
-        big = LazyArray.from_sources(sources, base_uri="/root/")
-        other = LazyArray.from_sources(sources[5:9], base_uri="/root/")
+        big = Recipe.from_sources(sources, base_uri="/root/")
+        other = Recipe.from_sources(sources[5:9], base_uri="/root/")
         parts = [big[x : x + 6] for x in (0, 400, 1100)]
         joined = concat([parts[0], other, parts[1], other, parts[2]])
         rows = [*range(0, 3), *range(5, 9), *range(200, 203), *range(5, 9)]
-        rebuilt = LazyArray.from_sources(
+        rebuilt = Recipe.from_sources(
             [sources[x] for x in [*rows, *range(550, 553)]], base_uri="/root/"
         )
         # The rows read are kept in the order the big table held them.

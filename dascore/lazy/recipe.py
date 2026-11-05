@@ -1,12 +1,12 @@
 """
 A recipe for an array which is read a member at a time.
 
-A [`LazyArray`](`dascore.lazy.recipe.LazyArray`) holds no data. It holds
+A [`Recipe`](`dascore.lazy.recipe.Recipe`) holds no data. It holds
 members, and each member says "this window of this source goes in this box of
 the output". Everything is positional: axis numbers and sample indices, never
 dimension names, coordinates or units.
 
-Many arrays share one [`LazyTable`](`dascore.lazy.recipe.LazyTable`),
+Many arrays share one [`RecipeTable`](`dascore.lazy.recipe.RecipeTable`),
 which owns the storage; an array is a view of one of its rows. Members of an
 array are stored together, in canonical placement order, so slicing, joining
 and rechunking are vectorized over members and never open a file.
@@ -15,10 +15,10 @@ Examples
 --------
 >>> import numpy as np
 >>> from dascore.core.source import ArraySource
->>> from dascore.lazy.recipe import LazyArray, concat
+>>> from dascore.lazy.recipe import Recipe, concat
 >>>
->>> left = LazyArray.from_source(ArraySource.full((4, 3), 1.0))
->>> right = LazyArray.from_source(ArraySource.full((4, 3), 2.0))
+>>> left = Recipe.from_source(ArraySource.full((4, 3), 1.0))
+>>> right = Recipe.from_source(ArraySource.full((4, 3), 2.0))
 >>> array = concat([left, right], axis=0)
 >>> assert array.shape == (8, 3) and len(array) == 2
 >>> assert np.array_equal(array[0:5].load()[:4], np.ones((4, 3)))
@@ -102,7 +102,7 @@ def _merge_sorted_unique(first: np.ndarray, second: np.ndarray) -> np.ndarray:
 
 
 @dataclass(frozen=True, eq=False)
-class LazyTable:
+class RecipeTable:
     """
     The storage many lazy arrays share.
 
@@ -120,11 +120,11 @@ class LazyTable:
     --------
     >>> import numpy as np
     >>> from dascore.core.source import ArraySource
-    >>> from dascore.lazy.recipe import LazyArray, LazyTable
+    >>> from dascore.lazy.recipe import Recipe, RecipeTable
     >>>
-    >>> flat = LazyArray.from_source(ArraySource.full((4, 3), 1.0))
-    >>> cube = LazyArray.from_source(ArraySource.full((2, 3, 4), 2.0))
-    >>> table = LazyTable.from_arrays([flat, cube])
+    >>> flat = Recipe.from_source(ArraySource.full((4, 3), 1.0))
+    >>> cube = Recipe.from_source(ArraySource.full((2, 3, 4), 2.0))
+    >>> table = RecipeTable.from_arrays([flat, cube])
     >>> assert [x.ndim for x in table] == [2, 3]
     """
 
@@ -188,7 +188,7 @@ class LazyTable:
         ]
 
     @classmethod
-    def from_arrays(cls, arrays: Sequence[LazyArray]) -> LazyTable:
+    def from_arrays(cls, arrays: Sequence[Recipe]) -> RecipeTable:
         """Stack arrays, which may differ in ndim, into one table."""
         return _table([x._block() for x in arrays])
 
@@ -196,18 +196,18 @@ class LazyTable:
         """The number of arrays in the table."""
         return len(self.member_offsets) - 1
 
-    def __getitem__(self, row: int) -> LazyArray:
+    def __getitem__(self, row: int) -> Recipe:
         """Return the array stored in one row."""
         index = int(row)
         row = index + len(self) if index < 0 else index
         if not 0 <= row < len(self):
             msg = f"Row {index} is outside a table of {len(self)} arrays."
             raise IndexError(msg)
-        return LazyArray(self, row)
+        return Recipe(self, row)
 
     def __iter__(self):
         """Iterate over the arrays in the table."""
-        return (LazyArray(self, row) for row in range(len(self)))
+        return (Recipe(self, row) for row in range(len(self)))
 
     @property
     def n_members(self) -> int:
@@ -215,7 +215,7 @@ class LazyTable:
         return len(self.members)
 
 
-def _table(blocks: Sequence[_Block]) -> LazyTable:
+def _table(blocks: Sequence[_Block]) -> RecipeTable:
     """Stack blocks into one table."""
     counts = np.array([len(x) for x in blocks], np.int64)
     ndim = np.array([x.ndim for x in blocks], np.int64)
@@ -229,7 +229,7 @@ def _table(blocks: Sequence[_Block]) -> LazyTable:
             else np.empty(0, np.int64)
             for name in AXIS_FIELDS
         }
-    return LazyTable(
+    return RecipeTable(
         member_offsets=_offsets(counts),
         axis_offsets=_offsets(counts * ndim),
         shape_offsets=_offsets(ndim),
@@ -248,17 +248,17 @@ def _offsets(counts: np.ndarray) -> np.ndarray:
     return out
 
 
-class LazyArray:
+class Recipe:
     """
     An array which says where each of its members is read from.
 
-    A view of one row of a [`LazyTable`](`dascore.lazy.recipe.LazyTable`).
+    A view of one row of a [`RecipeTable`](`dascore.lazy.recipe.RecipeTable`).
     Slicing and transposing keep a window and an axis order instead, and
     the members are clipped to them only when something needs them.
     The shape, ndim and dtype are stored rather than derived, so an array
     which selects nothing still knows what it is. Boxes may not overlap and
     must cover the whole output; a hole is an explicit constant member.
-    [`validate`](`dascore.lazy.recipe.LazyArray.validate`) checks every
+    [`validate`](`dascore.lazy.recipe.Recipe.validate`) checks every
     rule, on demand.
 
     A member is cast once, from the dtype it is stored at to the array's, so
@@ -270,9 +270,9 @@ class LazyArray:
     --------
     >>> import numpy as np
     >>> from dascore.core.source import ArraySource
-    >>> from dascore.lazy.recipe import LazyArray
+    >>> from dascore.lazy.recipe import Recipe
     >>>
-    >>> array = LazyArray.from_source(ArraySource.full((6, 4), np.nan))
+    >>> array = Recipe.from_source(ArraySource.full((6, 4), np.nan))
     >>> assert array.shape == (6, 4) and array.ndim == 2
     >>> window = array[2:5]
     >>> assert window.shape == (3, 4)
@@ -283,14 +283,14 @@ class LazyArray:
     # its lock makes every thread asking at once get the one table.
     __slots__ = ("_lock", "_row", "_table", "_view")
 
-    def __init__(self, table: LazyTable, row: int):
-        self._table: LazyTable | None = table
+    def __init__(self, table: RecipeTable, row: int):
+        self._table: RecipeTable | None = table
         self._row = int(row)
         self._view: _View | None = None
         self._lock: threading.Lock | None = None
 
     @classmethod
-    def from_source(cls, source: ArraySource, base_uri: str = "") -> LazyArray:
+    def from_source(cls, source: ArraySource, base_uri: str = "") -> Recipe:
         """
         Return the array one source loads, placed at the origin.
 
@@ -313,7 +313,7 @@ class LazyArray:
         base_uri: str = "",
         dtype=None,
         cast_via: Sequence | None = None,
-    ) -> LazyArray:
+    ) -> Recipe:
         """
         Return an array which reads one member from each source.
 
@@ -350,7 +350,7 @@ class LazyArray:
             msg = "A lazy array takes at least one source."
             raise ParameterError(msg)
         block = _block_of_sources(sources, base_uri, cast_via)
-        return LazyArray._placed(block, starts, axis, shape, dtype)
+        return Recipe._placed(block, starts, axis, shape, dtype)
 
     @staticmethod
     def _placed(block: _Block, starts=None, axis=0, shape=None, dtype=None):
@@ -396,7 +396,7 @@ class LazyArray:
         base_uri: str = "",
         dtype: DTypeLike | None = None,
         cast_via: DTypeLike | ArrayLike | None = None,
-    ) -> LazyArray:
+    ) -> Recipe:
         """
         Return an array which reads one member per row, laid end to end.
 
@@ -429,10 +429,10 @@ class LazyArray:
         Examples
         --------
         >>> import numpy as np
-        >>> from dascore.lazy.recipe import LazyArray
+        >>> from dascore.lazy.recipe import Recipe
         >>>
         >>> paths = np.array(["/data/f0.h5", "/data/f1.h5", "/data/f2.h5"])
-        >>> array = LazyArray.from_columns(
+        >>> array = Recipe.from_columns(
         ...     paths, (100, 10), format="DASDAE", version="1", source_dtype="f4"
         ... )
         >>> assert array.shape == (300, 10) and len(array) == 3
@@ -465,7 +465,7 @@ class LazyArray:
         return cls._placed(block, axis=axis, dtype=dtype)
 
     @classmethod
-    def from_frame(cls, frame: pd.DataFrame, shape, dtype) -> LazyArray:
+    def from_frame(cls, frame: pd.DataFrame, shape, dtype) -> Recipe:
         """
         Return the array `to_frame` wrote.
 
@@ -500,7 +500,7 @@ class LazyArray:
         return _array(block)
 
     @property
-    def table(self) -> LazyTable:
+    def table(self) -> RecipeTable:
         """The table which holds this array."""
         if self._table is None:
             assert self._lock is not None, "only a view has no table"
@@ -582,9 +582,9 @@ class LazyArray:
         return _View(block, (0,) * ndim, self.shape, tuple(range(ndim)), rows)
 
     @staticmethod
-    def _of_view(view: _View) -> LazyArray:
+    def _of_view(view: _View) -> Recipe:
         """Return the array a view names, whose members are clipped on demand."""
-        out = LazyArray.__new__(LazyArray)
+        out = Recipe.__new__(Recipe)
         out._table, out._row, out._view = None, 0, view
         out._lock = threading.Lock()
         return out
@@ -605,7 +605,7 @@ class LazyArray:
         """The source each member reads, in placement order."""
         return tuple(_sources_of(self._block()))
 
-    def __getitem__(self, index) -> LazyArray:
+    def __getitem__(self, index) -> Recipe:
         """
         Return the array a selection of samples describes; nothing is read.
 
@@ -635,7 +635,7 @@ class LazyArray:
             view._replace(starts=tuple(low), stops=tuple(high), rows=rows)
         )
 
-    def transpose(self, order: Sequence[int] | None = None) -> LazyArray:
+    def transpose(self, order: Sequence[int] | None = None) -> Recipe:
         """
         Return the array with its output axes permuted.
 
@@ -655,7 +655,7 @@ class LazyArray:
         order = tuple(view.order[x] for x in order)
         return self._of_view(view._replace(order=order))
 
-    def rechunk(self, bounds, axis: int = 0) -> LazyTable:
+    def rechunk(self, bounds, axis: int = 0) -> RecipeTable:
         """
         Cut the array at new bounds along one axis, giving one array each.
 
@@ -691,7 +691,7 @@ class LazyArray:
             raise ParameterError(msg)
         return _rechunk(block, bounds, axis)
 
-    def validate(self) -> LazyArray:
+    def validate(self) -> Recipe:
         """
         Check the array's rules, raising `ParameterError` for the first broken.
 
@@ -709,7 +709,7 @@ class LazyArray:
 
         The rules are checked first, so no sample of the result is left
         uninitialized; see
-        [`validate`](`dascore.lazy.recipe.LazyArray.validate`).
+        [`validate`](`dascore.lazy.recipe.Recipe.validate`).
         Abutting windows of one source are read as one. Members are read a
         resource at a time: each resource is opened once for all of its
         members, and closed before the next is opened.
@@ -771,9 +771,9 @@ class LazyArray:
         Examples
         --------
         >>> from dascore.core.source import ArraySource
-        >>> from dascore.lazy.recipe import LazyArray
+        >>> from dascore.lazy.recipe import Recipe
         >>>
-        >>> array = LazyArray.from_source(ArraySource.full((8, 2), 1.0))
+        >>> array = Recipe.from_source(ArraySource.full((8, 2), 1.0))
         >>> assert array[0:4].data_id == array[0:8][0:4].data_id
         """
         cache, row = self.table._ids, self.row
@@ -837,9 +837,9 @@ def _spread(codes: np.ndarray, values: Sequence, ndim: int, dtype=None) -> np.nd
     return np.asarray(values, dtype)[np.repeat(codes, ndim)]
 
 
-def _array(block: _Block) -> LazyArray:
+def _array(block: _Block) -> Recipe:
     """Return the array one block describes, in a table of its own."""
-    return LazyArray(_table([block]), 0)
+    return Recipe(_table([block]), 0)
 
 
 def _resolve(item, size: int) -> tuple[int, int]:
@@ -854,7 +854,7 @@ def _resolve(item, size: int) -> tuple[int, int]:
     return start, max(start, stop)
 
 
-def _resolved(view: _View | None) -> LazyTable:
+def _resolved(view: _View | None) -> RecipeTable:
     """Return the table of the members a view shows, in no storage of its base's."""
     assert view is not None, "an array is a table row or a view"
     block, starts, stops, order = view.block, view.starts, view.stops, view.order
@@ -888,7 +888,7 @@ def _rows_of(values, rows: int, ndim: int, name: str) -> np.ndarray:
     return np.array(np.broadcast_to(array, (rows, ndim)))
 
 
-def concat(arrays: Sequence[LazyArray], axis: int = 0) -> LazyArray:
+def concat(arrays: Sequence[Recipe], axis: int = 0) -> Recipe:
     """
     Join arrays end to end along one axis, in one pass over their members.
 
@@ -903,9 +903,9 @@ def concat(arrays: Sequence[LazyArray], axis: int = 0) -> LazyArray:
     --------
     >>> import numpy as np
     >>> from dascore.core.source import ArraySource
-    >>> from dascore.lazy.recipe import LazyArray, concat
+    >>> from dascore.lazy.recipe import Recipe, concat
     >>>
-    >>> parts = [LazyArray.from_source(ArraySource.full((2, 3), x)) for x in (1, 2)]
+    >>> parts = [Recipe.from_source(ArraySource.full((2, 3), x)) for x in (1, 2)]
     >>> joined = concat(parts, axis=1)
     >>> assert joined.shape == (2, 6)
     >>> expected = np.concatenate([x.load() for x in parts], axis=1)
@@ -944,7 +944,7 @@ def _join(blocks: Sequence[_Block], axis: int) -> _Block:
     )
 
 
-def stack(arrays: Sequence[LazyArray], axis: int = 0) -> LazyArray:
+def stack(arrays: Sequence[Recipe], axis: int = 0) -> Recipe:
     """
     Join arrays along a new axis, in one pass over their members.
 
@@ -959,9 +959,9 @@ def stack(arrays: Sequence[LazyArray], axis: int = 0) -> LazyArray:
     --------
     >>> import numpy as np
     >>> from dascore.core.source import ArraySource
-    >>> from dascore.lazy.recipe import LazyArray, stack
+    >>> from dascore.lazy.recipe import Recipe, stack
     >>>
-    >>> parts = [LazyArray.from_source(ArraySource.full((2, 3), x)) for x in (1, 2)]
+    >>> parts = [Recipe.from_source(ArraySource.full((2, 3), x)) for x in (1, 2)]
     >>> stacked = stack(parts, axis=1)
     >>> assert stacked.shape == (2, 2, 3)
     >>> assert np.array_equal(stacked.load(), np.stack([x.load() for x in parts], 1))
@@ -990,7 +990,7 @@ def _expand(block: _Block, axis: int) -> _Block:
     return replace(block, shape=tuple(shape), concat_axis=moved, axes=axes)
 
 
-def _blocks_of(arrays: Sequence[LazyArray]) -> tuple[list[_Block], int]:
+def _blocks_of(arrays: Sequence[Recipe]) -> tuple[list[_Block], int]:
     """Return the block of each array, which must agree on ndim."""
     if not arrays:
         msg = "At least one array is needed."
@@ -1022,7 +1022,7 @@ def _check_stack(block: _Block, axis: int) -> None:
         raise NotImplementedError(msg)
 
 
-def _rechunk(block: _Block, bounds: np.ndarray, axis: int) -> LazyTable:
+def _rechunk(block: _Block, bounds: np.ndarray, axis: int) -> RecipeTable:
     """Cut a stack of slabs at new bounds, as one table of many arrays."""
     start = block.axes["out_start"][:, axis]
     stop = block.axes["out_stop"][:, axis]
@@ -1048,7 +1048,7 @@ def _rechunk(block: _Block, bounds: np.ndarray, axis: int) -> LazyTable:
     shapes = np.tile(np.asarray(block.shape, np.int64), (len(bounds) - 1, 1))
     shapes[:, axis] = np.diff(bounds)
     ndim = block.ndim
-    return LazyTable(
+    return RecipeTable(
         member_offsets=_offsets(counts),
         axis_offsets=_offsets(counts * ndim),
         shape_offsets=_offsets(np.full(len(counts), ndim, np.int64)),

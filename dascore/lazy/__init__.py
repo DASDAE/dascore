@@ -7,4 +7,4 @@ stored source fills which box of the output.
 
 from __future__ import annotations
 
-from dascore.lazy.recipe import LazyArray, LazyTable, concat, stack
+from dascore.lazy.recipe import Recipe, RecipeTable, concat, stack

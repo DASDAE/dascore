@@ -11,7 +11,7 @@ import dascore as dc
 from dascore.core.source import ArraySource
 from dascore.lazy import read as read_module
 from dascore.lazy import recipe as recipe_module
-from dascore.lazy.recipe import LazyArray, concat
+from dascore.lazy.recipe import Recipe, concat
 from tests.test_lazy.conftest import FORMAT
 
 
@@ -30,7 +30,7 @@ class TestCoalescedReads:
     def test_windows_of_one_file(self, two_sources, patch, reads):
         """Abutting windows of one file take one read."""
         source = two_sources[0]
-        many = LazyArray.from_sources([source[x : x + 10] for x in range(0, 100, 10)])
+        many = Recipe.from_sources([source[x : x + 10] for x in range(0, 100, 10)])
         assert np.array_equal(many.load(), patch.data[:100])
         assert len(reads) == 1 and reads[0].windows[0] == (0, 100)
 
@@ -43,7 +43,7 @@ class TestCoalescedReads:
         parts += [first[40:50], second[0:10], second[10:20]]
         expected = [patch.data[a:b] for a, b in [(0, 20), (30, 40), (20, 30)]]
         expected += [np.zeros((2, width)), patch.data[40:50], patch.data[100:120]]
-        out = LazyArray.from_sources(parts).load()
+        out = Recipe.from_sources(parts).load()
         assert np.array_equal(out, np.concatenate(expected))
         assert [x.windows[0] for x in reads] == [
             (0, 20),
@@ -57,7 +57,7 @@ class TestCoalescedReads:
         """Members cast through different dtypes are read apart."""
         source = two_sources[0]
         parts = [source[0:10], source[10:20], source[20:30]]
-        array = LazyArray.from_sources(parts, dtype="f8", cast_via=[None, "f4", "f4"])
+        array = Recipe.from_sources(parts, dtype="f8", cast_via=[None, "f4", "f4"])
         expected = np.concatenate(
             [patch.data[0:10], patch.data[10:30].astype("f4")]
         ).astype("f8")
@@ -67,7 +67,7 @@ class TestCoalescedReads:
     def test_tiles_merge_along_one_axis(self, two_sources, patch, reads):
         """Tiles merge along one axis only, so each row of tiles takes one read."""
         source = two_sources[0]
-        tile = LazyArray.from_source
+        tile = Recipe.from_source
         rows = [
             concat([tile(source[a:b, 0:5]), tile(source[a:b, 5:10])], axis=1)
             for a, b in ((0, 50), (50, 100))
@@ -79,7 +79,7 @@ class TestCoalescedReads:
     def test_other_axes_must_match(self, two_sources, patch, reads):
         """Windows which meet on one axis but differ on another are read apart."""
         source = two_sources[0]
-        array = LazyArray.from_sources([source[0:10, 0:5], source[10:20, 100:105]])
+        array = Recipe.from_sources([source[0:10, 0:5], source[10:20, 100:105]])
         expected = np.concatenate([patch.data[0:10, 0:5], patch.data[10:20, 100:105]])
         assert np.array_equal(array.load(), expected)
         assert len(reads) == 2
@@ -87,8 +87,8 @@ class TestCoalescedReads:
     def test_axis_maps_must_match(self, two_sources, patch, reads):
         """A transposed member is not merged with a plain one of its file."""
         source = two_sources[0]
-        plain = LazyArray.from_source(source[0:10, 0:10])
-        turned = LazyArray.from_source(source[0:10, 10:20]).transpose()
+        plain = Recipe.from_source(source[0:10, 0:10])
+        turned = Recipe.from_source(source[0:10, 10:20]).transpose()
         expected = np.concatenate([patch.data[0:10, 0:10], patch.data[0:10, 10:20].T])
         assert np.array_equal(concat([plain, turned]).load(), expected)
         assert len(reads) == 2
@@ -97,8 +97,8 @@ class TestCoalescedReads:
         """A transposed window of a square source is not merged with a plain one."""
         data = square_source.load()
         reads.clear()
-        plain = LazyArray.from_source(square_source[0:5, 0:5])
-        turned = LazyArray.from_source(square_source[0:5, 5:10]).transpose()
+        plain = Recipe.from_source(square_source[0:5, 0:5])
+        turned = Recipe.from_source(square_source[0:5, 5:10]).transpose()
         expected = np.concatenate([data[0:5, 0:5], data[0:5, 5:10].T])
         assert np.array_equal(concat([plain, turned]).load(), expected)
         assert len(reads) == 2
@@ -107,7 +107,7 @@ class TestCoalescedReads:
         """Tiles which join along one axis, then another, are read as two runs."""
         whole = two_sources[0]
         boxes = [(0, 1, 0, 1), (0, 2, 1, 2), (1, 2, 0, 1), (2, 3, 0, 1), (2, 3, 1, 2)]
-        array = LazyArray.from_sources(
+        array = Recipe.from_sources(
             [whole[a:b, c:d] for a, b, c, d in boxes],
             starts=[(a, c) for a, _, c, _ in boxes],
         )
@@ -129,7 +129,7 @@ class TestCoalescedReads:
     ):
         """Floats read into integers, or through text, are read a window at a time."""
         source = two_sources[0]
-        array = LazyArray.from_sources(
+        array = Recipe.from_sources(
             [source[0:1], source[1:2]], dtype=dtype, cast_via=[cast, cast]
         )
         with np.errstate(invalid="ignore"):
@@ -139,7 +139,7 @@ class TestCoalescedReads:
     @pytest.mark.parametrize(("dtype", "merged"), [("f4", 1), ("S10", 2)])
     def test_only_numbers_merge(self, dtype, merged):
         """Text, whose casts may take their unit from the samples, is read apart."""
-        array = LazyArray.from_columns(
+        array = Recipe.from_columns(
             ["/a.h5", "/a.h5"],
             (1,),
             start=[[0], [1]],
@@ -150,7 +150,7 @@ class TestCoalescedReads:
 
     def test_extents_must_match(self):
         """Windows of one source which state different extents are read apart."""
-        array = LazyArray.from_columns(
+        array = Recipe.from_columns(
             ["/a.h5", "/a.h5"], (4,), start=[[0], [4]], extent=[[8], [9]], **FORMAT
         )
         assert len(read_module._coalesced(array._block())) == 2
@@ -163,7 +163,7 @@ class TestCoalescedReads:
         itemsize = np.dtype(patch.dtype).itemsize
         monkeypatch.setattr(read_module, "_RUN_BYTES", 30 * patch.shape[1] * itemsize)
         spans = [(0, 10), (10, 20), (20, 50), (50, 60), (60, 100)]
-        array = LazyArray.from_sources([source[a:b] for a, b in spans])
+        array = Recipe.from_sources([source[a:b] for a, b in spans])
         assert np.array_equal(array.load(), patch.data[:100])
         # Cut where members start in another 30 rows: 0-29, 30-59, 60-89.
         assert [x.windows[0] for x in reads] == [(0, 50), (50, 60), (60, 100)]
@@ -171,7 +171,7 @@ class TestCoalescedReads:
     def test_members_over_the_budget_stay_apart(self, two_sources, reads, monkeypatch):
         """Members each bigger than the budget are read one at a time."""
         monkeypatch.setattr(read_module, "_RUN_BYTES", 1)
-        array = LazyArray.from_sources([two_sources[0][0:10], two_sources[0][10:20]])
+        array = Recipe.from_sources([two_sources[0][0:10], two_sources[0][10:20]])
         array.load()
         assert len(reads) == 2
 
@@ -189,7 +189,7 @@ class TestCoalescedReads:
             parts += [source[a:b, 2:7] for a, b in pieces]
             if rng.random() < 0.3:
                 parts.append(ArraySource.full((3, 5), 1.0, dtype=source.dtype))
-        array = LazyArray.from_sources(parts)
+        array = Recipe.from_sources(parts)
         window = array[int(rng.integers(0, 20)) :]
         got = [array.load(), window.load()]
         monkeypatch.setattr(recipe_module, "_coalesced", lambda block: block)

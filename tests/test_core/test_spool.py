@@ -35,7 +35,7 @@ from dascore.exceptions import (
 )
 from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
-from dascore.lazy import LazyArray
+from dascore.lazy import Recipe
 from dascore.proc.basic import Abs
 from dascore.utils.display import range_texts
 from dascore.utils.downloader import fetch
@@ -381,7 +381,7 @@ class TestLoad:
         from dascore.core.source import ArraySource  # noqa: PLC0415
 
         budget(1)
-        lazy = LazyArray.from_source(ArraySource.full((10,), 1.0))
+        lazy = Recipe.from_source(ArraySource.full((10,), 1.0))
         spool = dc.spool(self._line(lazy, np.arange(10)))
         with pytest.raises(InsufficientMemoryError):
             spool.load()
@@ -412,7 +412,7 @@ class TestLoad:
         from dascore.core.source import ArraySource  # noqa: PLC0415
 
         budget(10**9)
-        lazy = LazyArray.from_source(ArraySource.full((10,), 1.0))
+        lazy = Recipe.from_source(ArraySource.full((10,), 1.0))
         patch = self._line(lazy, np.arange(10))
         loaded = dc.spool(patch).load()[0]
         assert loaded.attrs.data_id == patch.attrs.data_id
@@ -435,7 +435,7 @@ class TestLoad:
         path = tmp_path / "lazy.h5"
         dc.write(random_patch, path, "dasdae")
         stored = dc.read(path)[0]
-        lazy = stored.to_patch(LazyArray.from_sources([stored._source]))
+        lazy = stored.to_patch(Recipe.from_sources([stored._source]))
         loaded = dc.spool(lazy).load()[0]
         assert isinstance(loaded.data, np.ndarray)
         assert np.array_equal(loaded.data, stored.data)

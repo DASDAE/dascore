@@ -7,7 +7,7 @@ joins member rows to their source rows, loads each source patch through
 a caller-supplied loader, applies exact trims, and merges multi-member
 outputs. When the output size is known, a merge whose members the rows
 fully describe becomes a
-[`LazyArray`](`dascore.lazy.recipe.LazyArray`) recipe -- the window
+[`Recipe`](`dascore.lazy.recipe.Recipe`) recipe -- the window
 of a stored array each member is, read into one output -- and any other
 such merge streams loaded patches into a pre-allocated buffer; the rest
 concatenate. The spool owns *what* rows exist; this module owns *how* a
@@ -37,7 +37,7 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
-from dascore.lazy import LazyArray
+from dascore.lazy import Recipe
 from dascore.units import conversion_factors, get_quantity, units_match
 from dascore.utils.array_api import to_numpy
 from dascore.utils.attrs import (
@@ -818,7 +818,7 @@ class PatchAssembler:
         attrs = [meta.attrs for meta in metas]
         return self._assemble(data, dims, merge_dim, coords, attrs)
 
-    def _recipe(self, rows, metas, dims, axis) -> LazyArray | None:
+    def _recipe(self, rows, metas, dims, axis) -> Recipe | None:
         """
         The lazy array the members make, or None when one cannot be named.
 
@@ -849,9 +849,7 @@ class PatchAssembler:
                 return None
             sources.append(source)
         chain, casts = _cast_chain([x.dtype for x in sources])
-        return LazyArray.from_sources(
-            sources, axis=axis, dtype=chain[-1], cast_via=casts
-        )
+        return Recipe.from_sources(sources, axis=axis, dtype=chain[-1], cast_via=casts)
 
     def _member_source(self, row, meta, dims) -> ArraySource | None:
         """The stored window a member is, or None if it is not one."""

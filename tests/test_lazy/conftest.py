@@ -15,7 +15,7 @@ import dascore as dc
 from dascore.core.source import ArraySource
 from dascore.io import core as io_core
 from dascore.lazy.block import AXIS_FIELDS
-from dascore.lazy.recipe import LazyArray
+from dascore.lazy.recipe import Recipe
 from dascore.utils.downloader import fetch
 
 
@@ -40,7 +40,7 @@ def source(patch):
 @pytest.fixture(scope="module")
 def lazy(source):
     """The whole of the stored array, as one member."""
-    return LazyArray.from_source(source)
+    return Recipe.from_source(source)
 
 
 @pytest.fixture(scope="module")
@@ -66,7 +66,7 @@ def two_sources(two_files):
 @pytest.fixture(scope="module")
 def joined(two_sources):
     """The two files, joined along their first axis."""
-    return LazyArray.from_sources(two_sources)
+    return Recipe.from_sources(two_sources)
 
 
 @pytest.fixture()
@@ -92,7 +92,7 @@ def parts():
 
 def constant(shape, value=1.0, dtype=None):
     """Return a lazy array of one constant member."""
-    return LazyArray.from_source(ArraySource.full(shape, value, dtype))
+    return Recipe.from_source(ArraySource.full(shape, value, dtype))
 
 
 def stored(shape, path="/a/b.h5", origin_id="", key="", dtype=np.float32):
@@ -105,7 +105,7 @@ def stored(shape, path="/a/b.h5", origin_id="", key="", dtype=np.float32):
 
 def placed(sources, starts, shape):
     """Return the array which puts each source at a corner."""
-    return LazyArray.from_sources(sources, starts=np.array(starts), shape=shape)
+    return Recipe.from_sources(sources, starts=np.array(starts), shape=shape)
 
 
 def random_boxes(rng, shape, splits):
@@ -160,12 +160,12 @@ def mixed_sources():
 def mixed():
     """Return an array of every kind of member, some cast on the way."""
     casts = [None, "f8", None, "f4", None, None, "f4", None]
-    return LazyArray.from_sources(mixed_sources(), base_uri="/root/", cast_via=casts)
+    return Recipe.from_sources(mixed_sources(), base_uri="/root/", cast_via=casts)
 
 
 def many_members(count=300):
     """Return an array of many members over a few files, some paths repeated."""
-    return LazyArray.from_columns(
+    return Recipe.from_columns(
         [f"/root/f{x % 97:03d}.h5" for x in range(count)],
         (2, 3),
         format="DASDAE",

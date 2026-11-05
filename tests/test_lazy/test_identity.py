@@ -16,7 +16,7 @@ from dascore.io import core as io_core
 from dascore.lazy import identity as identity_module
 from dascore.lazy.block import NEW_AXIS
 from dascore.lazy.identity import MAX_CUT_AXES
-from dascore.lazy.recipe import LazyArray, LazyTable, concat, stack
+from dascore.lazy.recipe import Recipe, RecipeTable, concat, stack
 from dascore.utils.identity import H
 from tests.test_lazy.conftest import (
     constant,
@@ -62,7 +62,7 @@ def bent(array, changes):
     for name, member, out_axis, value in changes:
         row = (frame["ordinal"] == member) & (frame["out_axis"] == out_axis)
         frame.loc[row, name] = value
-    return LazyArray.from_frame(frame, array.shape, array.dtype)
+    return Recipe.from_frame(frame, array.shape, array.dtype)
 
 
 def random_tiling(rng, shape):
@@ -162,7 +162,7 @@ class TestIdentity:
         """Cutting one window into adjacent members does not rename it."""
         length = patch.shape[0]
         parts = [source[0:7], source[7:length]]
-        array = concat([LazyArray.from_source(x) for x in parts], axis=0)
+        array = concat([Recipe.from_source(x) for x in parts], axis=0)
         assert array.data_id == lazy.data_id
 
     def test_member_size_is_not_in_the_id(self, joined):
@@ -176,8 +176,8 @@ class TestIdentity:
         """The same members under another base uri are the same array."""
         # A base is a literal prefix, so it ends as this platform's paths do.
         base = source.path[: -len(path.name)]
-        under = LazyArray.from_source(source, base_uri=base)
-        assert under.data_id == LazyArray.from_source(source).data_id
+        under = Recipe.from_source(source, base_uri=base)
+        assert under.data_id == Recipe.from_source(source).data_id
         assert under.to_frame()["base_uri"].iloc[0] == base
         assert under.source(0) == source
 
@@ -210,7 +210,7 @@ class TestIdentity:
         source = ArraySource(path="/a/b.h5", format="DASDAE", version="1").describe(
             (3, 2), np.float32
         )
-        array = LazyArray.from_source(source)
+        array = Recipe.from_source(source)
         assert array.data_id == source.data_id
         assert array[0:2].data_id == source[0:2].data_id
 
@@ -218,7 +218,7 @@ class TestIdentity:
         """An origin which is not 32 hex characters is folded into the id."""
         frame = lazy.to_frame()
         frame["origin_id"] = "a stored name"
-        array = LazyArray.from_frame(frame, lazy.shape, lazy.dtype)
+        array = Recipe.from_frame(frame, lazy.shape, lazy.dtype)
         pair = concat([array[0:10], array[10:601]], axis=0)
         assert pair.data_id == array.data_id
         assert array.data_id == array.source(0).data_id
@@ -234,8 +234,8 @@ class TestIdentity:
             array.data_id
             != concat(
                 [
-                    LazyArray.from_source(second[0:50]),
-                    LazyArray.from_source(first[50:100]),
+                    Recipe.from_source(second[0:50]),
+                    Recipe.from_source(first[50:100]),
                 ],
                 axis=0,
             ).data_id
@@ -248,11 +248,11 @@ class TestIdentity:
         ).describe((4, 6), np.float32)
         parts = [whole[0:2, 0:3], whole[2:4, 3:6]]
         starts = np.array([[0, 0], [2, 3]])
-        array = LazyArray.from_sources(parts, starts=starts, shape=(4, 6))
-        assert array.data_id != LazyArray.from_source(whole).data_id
+        array = Recipe.from_sources(parts, starts=starts, shape=(4, 6))
+        assert array.data_id != Recipe.from_source(whole).data_id
         assert (
             array.data_id
-            == LazyArray.from_sources(parts, starts=starts, shape=(4, 6)).data_id
+            == Recipe.from_sources(parts, starts=starts, shape=(4, 6)).data_id
         )
 
     def test_constants_among_the_members(self, lazy, patch):
@@ -270,7 +270,7 @@ class TestIdentity:
         """An origin which is not 32 hex characters still names its member."""
         frame = lazy.to_frame()
         frame["origin_id"] = origin
-        array = LazyArray.from_frame(frame, lazy.shape, lazy.dtype)
+        array = Recipe.from_frame(frame, lazy.shape, lazy.dtype)
         pair = concat([array[0:10], array[100:110]], axis=0)
         assert pair.data_id == concat([array[0:10], array[100:110]], axis=0).data_id
         assert pair.data_id != concat([array[0:10], array[101:111]], axis=0).data_id
@@ -283,7 +283,7 @@ class TestIdentity:
     def test_transposed_member_is_another_array(self):
         """A square source read the other way up is not the source's array."""
         source = stored((4, 4))
-        array = LazyArray.from_source(source)
+        array = Recipe.from_source(source)
         assert array.data_id == source.data_id
         assert array.transpose().data_id != source.data_id
         assert len(array.transpose()) == 1
@@ -314,10 +314,10 @@ class TestIdentity:
         unnamed = stored((8, 3), path="/a/unnamed.h5")
         odd = stored((8, 3), path="/a/odd.h5", origin_id="a stored name")
         members = [
-            LazyArray.from_source(stored((2, 3), path="/a/one.h5", origin_id="d" * 32)),
-            LazyArray.from_source(whole[0:2]),
-            LazyArray.from_source(unnamed[3:5]),
-            LazyArray.from_source(odd[6:8]),
+            Recipe.from_source(stored((2, 3), path="/a/one.h5", origin_id="d" * 32)),
+            Recipe.from_source(whole[0:2]),
+            Recipe.from_source(unnamed[3:5]),
+            Recipe.from_source(odd[6:8]),
             constant((2, 3), 5.0),
             constant((2, 3), 6, np.int16),
         ]
@@ -334,7 +334,7 @@ class TestIdentity:
         parts = [source[0:2], source[4:6]]
         starts = [[0, 0], [2, 0]]
         plain = placed(parts, starts, (4, 3))
-        under = LazyArray.from_sources(
+        under = Recipe.from_sources(
             parts, starts=np.array(starts), shape=(4, 3), base_uri="/data/alpha/"
         )
         assert len(under) == 2
@@ -346,7 +346,7 @@ class TestIdentity:
         for base in ("/data/alpha/", "/data/beta/"):
             source = stored((8, 3), path=base + "f.h5")
             ids.append(
-                LazyArray.from_sources(
+                Recipe.from_sources(
                     [source[0:2], source[4:6]],
                     starts=np.array([[0, 0], [2, 0]]),
                     shape=(4, 3),
@@ -369,11 +369,11 @@ class TestIdentity:
     def test_a_cast_member_is_not_its_source(self):
         """A stored array laid at another dtype is not the source's array."""
         source = stored((4, 3), origin_id="a" * 32)
-        frame = LazyArray.from_source(source).to_frame()
-        cast = LazyArray.from_frame(frame, (4, 3), np.float64)
+        frame = Recipe.from_source(source).to_frame()
+        cast = Recipe.from_frame(frame, (4, 3), np.float64)
         assert cast.dtype == np.float64
         assert cast.data_id != source.data_id
-        assert LazyArray.from_source(source).data_id == source.data_id
+        assert Recipe.from_source(source).data_id == source.data_id
 
     @pytest.mark.parametrize(
         "boxes",
@@ -388,34 +388,34 @@ class TestIdentity:
         whole = stored((2, 4), origin_id="e" * 32)
         parts = [whole[a[0] : b[0], a[1] : b[1]] for a, b in boxes]
         array = placed(parts, [list(a) for a, _ in boxes], (2, 4))
-        assert array.data_id == LazyArray.from_source(whole).data_id
+        assert array.data_id == Recipe.from_source(whole).data_id
 
     def test_a_cube_cut_on_two_axes_coalesces(self):
         """The same holds for an array of three dimensions."""
         whole = stored((2, 2, 4), origin_id="f" * 32)
         parts = [whole[:, :, 0:2], whole[0:1, :, 2:4], whole[1:2, :, 2:4]]
         array = placed(parts, [[0, 0, 0], [0, 0, 2], [1, 0, 2]], (2, 2, 4))
-        assert array.data_id == LazyArray.from_source(whole).data_id
+        assert array.data_id == Recipe.from_source(whole).data_id
 
     def test_one_file_two_keys(self):
         """Two patches of one file, abutting in both, stay two members."""
         first = stored((4, 3), key="patch_0")
         second = stored((4, 3), key="patch_1")
         array = concat(
-            [LazyArray.from_source(first[0:2]), LazyArray.from_source(second[2:4])],
+            [Recipe.from_source(first[0:2]), Recipe.from_source(second[2:4])],
             axis=0,
         )
-        assert array.data_id != LazyArray.from_source(first).data_id
+        assert array.data_id != Recipe.from_source(first).data_id
 
     def test_one_file_two_origins(self):
         """Two origins of one location, abutting in both, stay two."""
         first = stored((4, 3), origin_id="a" * 32)
         second = stored((4, 3), origin_id="b" * 32)
         array = concat(
-            [LazyArray.from_source(first[0:2]), LazyArray.from_source(second[2:4])],
+            [Recipe.from_source(first[0:2]), Recipe.from_source(second[2:4])],
             axis=0,
         )
-        assert array.data_id != LazyArray.from_source(first).data_id
+        assert array.data_id != Recipe.from_source(first).data_id
 
     def test_origins_name_their_own_members(self):
         """Members of one location with two origins are not one origin twice."""
@@ -429,7 +429,7 @@ class TestIdentity:
     def test_a_member_is_named_by_its_whole_path(self):
         """A member under a base uri is named as the whole path names it."""
         source = stored((8, 3), path="/data/alpha/f.h5")
-        array = LazyArray.from_source(source, base_uri="/data/alpha/")
+        array = Recipe.from_source(source, base_uri="/data/alpha/")
         assert array.data_id == source.data_id
 
     def test_keys_name_their_own_members(self):
@@ -468,8 +468,8 @@ class TestIdentity:
             for path, origin in pairs
         ]
         values = {"a": 0, "b": 10, "c": 20, "d": 30}
-        first = LazyArray.from_sources(sources[:2])
-        second = LazyArray.from_sources(sources[2:])
+        first = Recipe.from_sources(sources[:2])
+        second = Recipe.from_sources(sources[2:])
 
         @contextmanager
         def fake(source):
@@ -484,15 +484,15 @@ class TestIdentity:
         """An array is named by its own members, not by its neighbours'."""
         odd = stored((1,), path="/a/odd.h5", origin_id="a" * 30)
         other = stored((1,), path="/a/other.h5", origin_id="b" * 34)
-        array = LazyArray.from_sources([odd, other])
-        alone = LazyArray.from_source(other)
-        assert LazyTable.from_arrays([alone, array])[1].data_id == array.data_id
+        array = Recipe.from_sources([odd, other])
+        alone = Recipe.from_source(other)
+        assert RecipeTable.from_arrays([alone, array])[1].data_id == array.data_id
 
     def test_record_dtypes_are_not_one_array(self):
         """Two record layouts of one width are two arrays."""
-        frame = LazyArray.from_source(ArraySource.full((2,), 1)).to_frame()
-        first = LazyArray.from_frame(frame, (2,), [("x", "<i4"), ("y", "<i4")])
-        second = LazyArray.from_frame(frame, (2,), [("z", "<i8")])
+        frame = Recipe.from_source(ArraySource.full((2,), 1)).to_frame()
+        first = Recipe.from_frame(frame, (2,), [("x", "<i4"), ("y", "<i4")])
+        second = Recipe.from_frame(frame, (2,), [("z", "<i8")])
         assert first.load().dtype != second.load().dtype
         assert first.data_id != second.data_id
         assert first[0:0].data_id != second[0:0].data_id
@@ -501,15 +501,15 @@ class TestIdentity:
         """Two windows of one file merge however their paths were split."""
         source = stored((4, 3), path="/data/alpha/f.h5")
         parts = [source[0:2], source[2:4]]
-        plain = concat([LazyArray.from_source(x) for x in parts], axis=0)
+        plain = concat([Recipe.from_source(x) for x in parts], axis=0)
         mixed = concat(
             [
-                LazyArray.from_source(parts[0], base_uri="/data/alpha/"),
-                LazyArray.from_source(parts[1]),
+                Recipe.from_source(parts[0], base_uri="/data/alpha/"),
+                Recipe.from_source(parts[1]),
             ],
             axis=0,
         )
-        assert mixed.data_id == plain.data_id == LazyArray.from_source(source).data_id
+        assert mixed.data_id == plain.data_id == Recipe.from_source(source).data_id
 
     def test_equal_constants_are_one_group(self):
         """Two equal constants apart in the output are one source, not two."""
@@ -523,15 +523,15 @@ class TestIdentity:
         """Two windows laid side by side are not the window they look like."""
         whole = stored((8, 3), origin_id="a" * 32)
         parts = [whole[0:2], whole[4:6]]
-        array = concat([LazyArray.from_source(x) for x in parts], axis=0)
-        assert array.data_id != LazyArray.from_source(whole[0:4]).data_id
-        assert array.data_id != LazyArray.from_source(whole[2:6]).data_id
+        array = concat([Recipe.from_source(x) for x in parts], axis=0)
+        assert array.data_id != Recipe.from_source(whole[0:4]).data_id
+        assert array.data_id != Recipe.from_source(whole[2:6]).data_id
 
     def test_the_same_samples_twice(self):
         """One window read twice is not two windows of one source."""
         whole = stored((8, 3), origin_id="a" * 32)
-        twice = concat([LazyArray.from_source(whole[0:2])] * 2, axis=0)
-        assert twice.data_id != LazyArray.from_source(whole[0:4]).data_id
+        twice = concat([Recipe.from_source(whole[0:2])] * 2, axis=0)
+        assert twice.data_id != Recipe.from_source(whole[0:4]).data_id
 
     def test_the_whole_extent_is_in_the_id(self):
         """A window of a longer source is not the whole of a shorter one."""
@@ -540,17 +540,17 @@ class TestIdentity:
         cut = []
         for source in (short, long_source):
             parts = [source[0:2], source[2:4]]
-            cut.append(concat([LazyArray.from_source(x) for x in parts], axis=0))
+            cut.append(concat([Recipe.from_source(x) for x in parts], axis=0))
         assert cut[0].data_id != cut[1].data_id
-        assert cut[0].data_id == LazyArray.from_source(short).data_id
-        assert cut[1].data_id == LazyArray.from_source(long_source[0:4]).data_id
+        assert cut[0].data_id == Recipe.from_source(short).data_id
+        assert cut[1].data_id == Recipe.from_source(long_source[0:4]).data_id
 
     def test_a_shifted_window_is_another_array(self):
         """Two windows of one file a sample apart are two arrays."""
         whole = stored((8, 8), origin_id="a" * 32)
         assert (
-            LazyArray.from_source(whole[0:4, 0:4]).data_id
-            != LazyArray.from_source(whole[1:5, 0:4]).data_id
+            Recipe.from_source(whole[0:4, 0:4]).data_id
+            != Recipe.from_source(whole[1:5, 0:4]).data_id
         )
 
     def test_a_signed_zero_is_its_own_constant(self):
@@ -566,7 +566,7 @@ class TestIdentity:
         ids = []
         for value in (1, 1.0):
             frame["value"] = np.array([1, 1, value, value], object)
-            ids.append(LazyArray.from_frame(frame, array.shape, array.dtype).data_id)
+            ids.append(Recipe.from_frame(frame, array.shape, array.dtype).data_id)
         assert ids[0] != ids[1]
 
     def test_a_constant_dtype_is_in_its_group(self):
@@ -587,7 +587,7 @@ class TestIdentity:
             ids = set()
             for value in values:
                 source = stored((4, 4), **{name: value})
-                array = LazyArray.from_source(source[0:2])
+                array = Recipe.from_source(source[0:2])
                 ids.add(concat([array, constant((2, 4), 1.0)], axis=0).data_id)
             assert len(ids) == 2
 
@@ -603,10 +603,10 @@ class TestIdentity:
     def test_a_transposed_member_does_not_join_a_straight_one(self):
         """Two boxes of one square source read different ways up stay two."""
         whole = stored((4, 4), origin_id="a" * 32)
-        turned = LazyArray.from_source(whole[0:4, 2:4]).transpose()
-        array = concat([LazyArray.from_source(whole[0:2, 0:4]), turned], axis=0)
+        turned = Recipe.from_source(whole[0:4, 2:4]).transpose()
+        array = concat([Recipe.from_source(whole[0:2, 0:4]), turned], axis=0)
         assert array.shape == (4, 4)
-        assert array.data_id != LazyArray.from_source(whole).data_id
+        assert array.data_id != Recipe.from_source(whole).data_id
 
     def test_groups_are_framed_by_their_size(self):
         """Which source fills how many boxes is part of the id."""
@@ -636,14 +636,14 @@ class TestIdentity:
     def test_a_hole_is_not_the_whole(self):
         """An array which leaves a hole is not the array which covers it."""
         source = stored((4, 3), origin_id="a" * 32)
-        narrow = LazyArray.from_sources(
+        narrow = Recipe.from_sources(
             [source[0:2, 0:2]], starts=np.zeros((1, 2)), shape=(2, 3)
         )
         stacked = concat([narrow, narrow], axis=0)
         with pytest.raises(ParameterError, match="leave a hole"):
             stacked.validate()
-        assert narrow.data_id != LazyArray.from_source(source[0:2, 0:3]).data_id
-        assert stacked.data_id != LazyArray.from_source(source).data_id
+        assert narrow.data_id != Recipe.from_source(source[0:2, 0:3]).data_id
+        assert stacked.data_id != Recipe.from_source(source).data_id
 
     def test_a_box_covered_twice(self):
         """A source laid twice in one place is not the source's own array."""
@@ -651,7 +651,7 @@ class TestIdentity:
         twice = placed([whole, whole], [[0, 0], [0, 0]], (4, 4))
         with pytest.raises(ParameterError, match="overlap"):
             twice.validate()
-        assert twice.data_id != LazyArray.from_source(whole).data_id
+        assert twice.data_id != Recipe.from_source(whole).data_id
 
     def test_overlapping_boxes_are_not_a_tiling(self):
         """Boxes which overlap are named, and not as the samples they cover."""
@@ -659,7 +659,7 @@ class TestIdentity:
         array = placed([whole[0:3], whole[2:4]], [[0, 0], [2, 0]], (4, 3))
         with pytest.raises(ParameterError, match="overlap"):
             array.validate()
-        assert array.data_id != LazyArray.from_source(whole).data_id
+        assert array.data_id != Recipe.from_source(whole).data_id
 
     def test_a_hand_placed_partition_is_the_whole(self):
         """Five boxes with no mergeable pair are still the array they tile."""
@@ -701,13 +701,13 @@ class TestCutAxes:
     def test_a_high_dimensional_constant(self, expanded):
         """A constant of thirty axes is named without expanding one."""
         source = ArraySource.full((1,) * 30, 1)
-        assert LazyArray.from_source(source).data_id == source.data_id
+        assert Recipe.from_source(source).data_id == source.data_id
         assert max(expanded) == 0
 
     def test_a_high_dimensional_stored_source(self, expanded):
         """A stored array of thirty axes is named without expanding one."""
         source = stored((1,) * 30, path="/a/b.h5")
-        array = LazyArray.from_source(source)
+        array = Recipe.from_source(source)
         assert array.data_id == source.data_id
         assert array[0:1].data_id == source[0:1].data_id
         assert max(expanded) == 0
@@ -716,9 +716,9 @@ class TestCutAxes:
         """A thousand members of a twelve axis array expand one axis."""
         whole = stored((1000, *[1] * 11), origin_id="a" * 32)
         parts = [whole[x : x + 1] for x in range(1000)]
-        array = LazyArray.from_sources(parts)
+        array = Recipe.from_sources(parts)
         assert len(array) == 1000
-        assert array.data_id == LazyArray.from_source(whole).data_id
+        assert array.data_id == Recipe.from_source(whole).data_id
         assert max(expanded) == 1
 
     def test_too_many_cut_axes(self):
@@ -791,13 +791,13 @@ class TestCutAxes:
         steps = region_array(regions, shape)
         # Two coordinates on an axis would factor; a staircase has three.
         assert described(steps) == [([(-1, -1), (-1, -1)], 7)]
-        assert steps.data_id != LazyArray.from_source(source).data_id
+        assert steps.data_id != Recipe.from_source(source).data_id
 
     def test_a_band_of_a_square_knows_its_axis(self):
         """A row band and a column band of one square are two arrays."""
         whole = stored((4, 4), origin_id="a" * 32)
         arrays = [
-            LazyArray.from_sources(
+            Recipe.from_sources(
                 [window], starts=np.zeros((1, 2), np.int64), shape=(4, 4)
             )
             for window in (whole[0:2, 0:4], whole[0:4, 0:2])
@@ -809,11 +809,11 @@ class TestCutAxes:
     def test_a_region_short_of_the_origin(self):
         """A box which reaches the far corner but not the origin is its own."""
         whole = stored((4, 4), origin_id="a" * 32)
-        array = LazyArray.from_sources(
+        array = Recipe.from_sources(
             [whole[1:4]], starts=np.array([[1, 0]]), shape=(4, 4)
         )
         assert described(array) == [([(1, 4), (0, 4)], 1)]
-        assert array.data_id != LazyArray.from_source(whole).data_id
+        assert array.data_id != Recipe.from_source(whole).data_id
 
     def test_an_empty_region_cut_along_an_axis(self):
         """Boxes of no samples cover nothing, however they were cut up."""
@@ -822,7 +822,7 @@ class TestCutAxes:
             array = concat([constant((2 // pieces, 1), 1.0)] * pieces, axis=0)
             frame = array.to_frame()
             frame.loc[frame["out_axis"] == 1, "out_stop"] = 0
-            flat = LazyArray.from_frame(frame, (2, 0), array.dtype)
+            flat = Recipe.from_frame(frame, (2, 0), array.dtype)
             assert described(flat) == [([(-1, -1), (-1, -1)], 0)]
             ids.append(flat.data_id)
         assert ids[0] == ids[1]
@@ -841,7 +841,7 @@ class TestCutAxes:
         regions += [(np.array([1, 1]), np.array([2, 2]), 4.0)]
         array = region_array(regions, shape)
         assert described(array) == [([(-1, -1), (-1, -1)], 8), ([(1, 2), (1, 2)], 1)]
-        assert array.validate().data_id != LazyArray.from_source(source).data_id
+        assert array.validate().data_id != Recipe.from_source(source).data_id
 
 
 class TestPartitions:
@@ -938,7 +938,7 @@ class TestPartitions:
             bounds = [0, *edges, 16]
             spans = list(pairwise(bounds))
             parts = [pair[x % 2][low:high] for x, (low, high) in enumerate(spans)]
-            array = LazyArray.from_sources(parts)
+            array = Recipe.from_sources(parts)
             assert array._block().concat_axis == 0
             scattered = replace(array.table, concat_axes=np.array([NEW_AXIS]), _ids={})
             assert scattered[0].data_id == array.data_id
@@ -948,7 +948,7 @@ class TestPartitions:
         array = constant((2, 1), 1.0)
         frame = array.to_frame()
         frame.loc[frame["out_axis"] == 1, "out_stop"] = 0
-        flat = LazyArray.from_frame(frame, (2, 0), array.dtype)
+        flat = Recipe.from_frame(frame, (2, 0), array.dtype)
         assert flat._block().concat_axis == 0
         scattered = replace(flat.table, concat_axes=np.array([NEW_AXIS]), _ids={})
         assert scattered[0].data_id == flat.data_id
@@ -971,8 +971,8 @@ class TestOriginNames:
         """One named source beside a constant, so the digest is what names it."""
         source = ArraySource(path="a", format="TEST", origin_id=origin)
         source = source.describe((2,), "i8")
-        blocks = [LazyArray.from_source(source)]
-        blocks.append(LazyArray.from_source(ArraySource.full((1,), 0)))
+        blocks = [Recipe.from_source(source)]
+        blocks.append(Recipe.from_source(ArraySource.full((1,), 0)))
         return concat(blocks)
 
     def test_case_is_kept(self):
@@ -997,7 +997,7 @@ class TestOriginNames:
         ids = set()
         for dtype in ([("x", "<i4"), ("y", "<i4")], [("z", "<i8")]):
             source = ArraySource(filled=True, value=1).describe((2,), dtype)
-            ids.add(LazyArray.from_source(source).data_id)
+            ids.add(Recipe.from_source(source).data_id)
         assert len(ids) == 2
 
 
@@ -1018,7 +1018,7 @@ class TestPinnedIds:
     def test_a_transposed_window(self):
         """A member read the other way up hashes to a known digest."""
         source = stored((4, 4), path="/a/b.h5", origin_id="a" * 32)
-        array = LazyArray.from_source(source[0:2, 0:4]).transpose()
+        array = Recipe.from_source(source[0:2, 0:4]).transpose()
         assert array.data_id == "af96513603df1a85c7d3d6b35f0996e4"
 
 
@@ -1042,5 +1042,5 @@ class TestPinnedSourceIds:
     def test_stacked_round_trip(self):
         """Two windows stacked, through a frame."""
         array = stack([mixed()[1:5], mixed()[6:10]], axis=1)
-        back = LazyArray.from_frame(array.to_frame(), array.shape, array.dtype)
+        back = Recipe.from_frame(array.to_frame(), array.shape, array.dtype)
         assert back.data_id == "f3ddaf77e1e762dff63826dc6f4054cf"

@@ -258,7 +258,7 @@ class _Sources:
     size_bytes: _Column
     value: _Column
     filled: np.ndarray
-    # Whether the columns of one value have been folded; see LazyTable.
+    # Whether the columns of one value have been folded; see RecipeTable.
     folded: bool = field(default=False, repr=False)
 
     def __len__(self) -> int:

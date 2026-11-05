@@ -1,4 +1,4 @@
-"""Tests for LazyArray, the recipe for an array read a member at a time."""
+"""Tests for Recipe, the recipe for an array read a member at a time."""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from dascore.exceptions import InvalidFiberIOError, ParameterError
 from dascore.lazy import recipe as recipe_module
 from dascore.lazy.block import AXIS_FIELDS, NEW_AXIS
 from dascore.lazy.columns import SOURCE_FIELDS
-from dascore.lazy.recipe import LazyArray, LazyTable, _tiles, concat, stack
+from dascore.lazy.recipe import Recipe, RecipeTable, _tiles, concat, stack
 from dascore.utils.array_api import backend_name
 from dascore.utils.hdf5 import H5Reader
 from tests.test_lazy.conftest import (
@@ -77,7 +77,7 @@ def broadcast_array(shape=(2, 3), length=4):
     frame = stack([array], axis=0).to_frame()
     new = frame["out_axis"] == 0
     frame.loc[new, "out_stop"] = length
-    return LazyArray.from_frame(frame, (length, *shape), array.dtype)
+    return Recipe.from_frame(frame, (length, *shape), array.dtype)
 
 
 def tiling_array(boxes, shape):
@@ -143,18 +143,18 @@ class TestDescription:
     def test_needs_a_source(self):
         """An array is made of at least one source."""
         with pytest.raises(ParameterError, match="at least one source"):
-            LazyArray.from_sources([])
+            Recipe.from_sources([])
 
     def test_refuses_unloadable(self):
         """A source which describes no array cannot be a member."""
         with pytest.raises(ParameterError, match="does not say enough"):
-            LazyArray.from_source(ArraySource(key="a"))
+            Recipe.from_source(ArraySource(key="a"))
 
     def test_refuses_scalar(self):
         """An array has at least one axis."""
         source = ArraySource.full((1,), 1.0).describe((), np.float64)
         with pytest.raises(ParameterError, match="at least one dimension"):
-            LazyArray.from_source(source)
+            Recipe.from_source(source)
 
     def test_refuses_unknown_extent(self):
         """A member must know how big the whole stored array is."""
@@ -162,13 +162,13 @@ class TestDescription:
             path="a", format="b", windows=((0, 2),), shape=(2,), dtype=np.float64
         )
         with pytest.raises(ParameterError, match="extent"):
-            LazyArray.from_source(source)
+            Recipe.from_source(source)
 
     def test_refuses_ragged_sources(self):
         """Sources of one array all have the same ndim."""
         sources = [ArraySource.full((2, 2), 1.0), ArraySource.full((2,), 1.0)]
         with pytest.raises(ParameterError, match="same ndim"):
-            LazyArray.from_sources(sources)
+            Recipe.from_sources(sources)
 
 
 class TestSlice:
@@ -212,7 +212,7 @@ class TestSlice:
         """An array which is not a stack of slabs is scanned instead."""
         pieces = [constant((2, 3), float(x)) for x in range(4)]
         starts = np.array([[0, 0], [0, 3], [2, 0], [2, 3]])
-        grid = LazyArray.from_sources([x.source(0) for x in pieces], starts=starts)
+        grid = Recipe.from_sources([x.source(0) for x in pieces], starts=starts)
         assert grid.shape == (4, 6)
         assert np.array_equal(grid[0:2].load(), grid.load()[0:2])
         assert len(grid[0:2]) == 2
@@ -326,7 +326,7 @@ class TestCombine:
             ArraySource.full((2, 2), 1, np.int32),
             ArraySource.full((2, 2), 1.5, np.float32),
         ]
-        array = LazyArray.from_sources(sources)
+        array = Recipe.from_sources(sources)
         assert array.dtype == np.result_type(np.int32, np.float32)
         expected = np.concatenate([x.load() for x in sources])
         assert np.array_equal(array.load(), expected)
@@ -445,7 +445,7 @@ class TestViews:
         return [
             (concat(pieces, axis=0), True),
             (concat(pieces, axis=1), True),
-            (LazyArray.from_sources([*mixed, ArraySource.full((3, 4), 2.0)]), False),
+            (Recipe.from_sources([*mixed, ArraySource.full((3, 4), 2.0)]), False),
             (stack(pieces, axis=1), True),
             (concat([concat(pieces[:2]), concat(pieces[2:])], axis=1), True),
             (
@@ -479,7 +479,7 @@ class TestViews:
     def test_members_untouched(self, monkeypatch):
         """Views of a large array clip nothing until the members are needed."""
         paths = np.char.add("/a/f", np.arange(10_000).astype(str))
-        array = LazyArray.from_columns(
+        array = Recipe.from_columns(
             paths, (4, 3), format="DASDAE", version="1", source_dtype="f4"
         )
 
@@ -530,7 +530,7 @@ class TestViews:
         view = joined[90:110]
         assert view.table.n_members == 2 and view.row == 0
         assert view.table[view.row].data_id == view.data_id
-        assert len(LazyTable.from_arrays([view, joined.transpose()])) == 2
+        assert len(RecipeTable.from_arrays([view, joined.transpose()])) == 2
 
     def test_views_compose(self, joined, patch):
         """Views of views agree with numpy."""
@@ -555,7 +555,7 @@ class TestViews:
     def test_turned_back_lets_its_base_go(self):
         """A view which shows its whole base unmoved does not keep the base."""
         big = concat([constant((4, 3), float(x)) for x in range(50)])
-        table = LazyTable.from_arrays([constant((4, 3)), big])
+        table = RecipeTable.from_arrays([constant((4, 3)), big])
         owner = table.axes["out_start"]
         while owner.base is not None:
             owner = owner.base
@@ -587,10 +587,10 @@ class TestViews:
 
     def test_bare_transpose_keeps_members(self):
         """A transpose with no window keeps each member as it is stored."""
-        frame = LazyArray.from_source(ArraySource.full((4, 3), 1.0)).to_frame()
+        frame = Recipe.from_source(ArraySource.full((4, 3), 1.0)).to_frame()
         frame["src_start"] += 2
         frame["src_extent"] += 2
-        array = LazyArray.from_frame(frame, (4, 3), "f8")
+        array = Recipe.from_frame(frame, (4, 3), "f8")
         # Windows are stated in the source's own axis order, so they stand.
         assert array.transpose().sources == array.sources
 
@@ -598,13 +598,13 @@ class TestViews:
         """A transpose and its inverse put members out of order back in order."""
         frame = concat([constant((2, 3), 1.0), constant((2, 3), 2.0)]).to_frame()
         frame["ordinal"] = 1 - frame["ordinal"]
-        array = LazyArray.from_frame(frame, (4, 3), "f8")
+        array = Recipe.from_frame(frame, (4, 3), "f8")
         expected = np.concatenate([np.full((2, 3), 1.0), np.full((2, 3), 2.0)])
         assert np.array_equal(array.transpose().transpose().load(), expected)
 
     def test_transpose_keeps_refusing(self):
         """A transpose does not hide a member outside its array."""
-        array = LazyArray.from_sources([ArraySource.full((4, 3), 7.0)], shape=(2, 3))
+        array = Recipe.from_sources([ArraySource.full((4, 3), 7.0)], shape=(2, 3))
         with pytest.raises(ParameterError):
             array.transpose().load()
 
@@ -679,7 +679,7 @@ class TestConstants:
         big = 2**53 + 1
         parts = [constant((1, 2), big, np.int64), constant((1, 2), 1.5)]
         array = concat(parts, axis=0)
-        back = LazyArray.from_frame(array.to_frame(), array.shape, array.dtype)
+        back = Recipe.from_frame(array.to_frame(), array.shape, array.dtype)
         for out in (array, back):
             assert out.sources[0].value == big
             assert out.sources[0].dtype == np.dtype(np.int64)
@@ -708,7 +708,7 @@ class TestValidate:
 
     def test_hole(self):
         """A box left uncovered is refused."""
-        array = LazyArray.from_sources(
+        array = Recipe.from_sources(
             [ArraySource.full((2, 3), 1.0)], starts=np.zeros((1, 2)), shape=(4, 3)
         )
         with pytest.raises(ParameterError, match="leave a hole"):
@@ -718,7 +718,7 @@ class TestValidate:
         """Boxes which cover too many samples are refused."""
         source = ArraySource.full((4, 3), 1.0)
         starts = np.array([[0, 0], [1, 0]])
-        array = LazyArray.from_sources([source] * 2, starts=starts, shape=(5, 3))
+        array = Recipe.from_sources([source] * 2, starts=starts, shape=(5, 3))
         with pytest.raises(ParameterError, match="so they overlap"):
             array.validate()
 
@@ -726,21 +726,21 @@ class TestValidate:
         """Boxes which overlap and leave a hole are refused as well."""
         source = ArraySource.full((2, 2), 1.0)
         starts = np.array([[0, 0], [0, 1]])
-        array = LazyArray.from_sources([source] * 2, starts=starts, shape=(2, 4))
+        array = Recipe.from_sources([source] * 2, starts=starts, shape=(2, 4))
         with pytest.raises(ParameterError, match="overlap"):
             array.validate()
 
     def test_box_outside_the_array(self):
         """A box must be inside the array it fills."""
         source = ArraySource.full((4, 3), 1.0)
-        array = LazyArray.from_sources([source], starts=np.zeros((1, 2)), shape=(2, 3))
+        array = Recipe.from_sources([source], starts=np.zeros((1, 2)), shape=(2, 3))
         with pytest.raises(ParameterError, match="outside an array"):
             array.validate()
 
     def test_negative_shape(self, lazy):
         """An array cannot have a negative shape."""
         frame = lazy.to_frame()
-        array = LazyArray.from_frame(frame, (-1, 1001), lazy.dtype)
+        array = Recipe.from_frame(frame, (-1, 1001), lazy.dtype)
         with pytest.raises(ParameterError, match="cannot have shape"):
             array.validate()
 
@@ -748,7 +748,7 @@ class TestValidate:
         """A window must be inside the array it reads."""
         frame = lazy.to_frame()
         frame.loc[0, "src_start"] = 10
-        array = LazyArray.from_frame(frame, lazy.shape, lazy.dtype)
+        array = Recipe.from_frame(frame, lazy.shape, lazy.dtype)
         with pytest.raises(ParameterError, match="outside the source"):
             array.validate()
 
@@ -756,7 +756,7 @@ class TestValidate:
         """A stored axis cannot be read onto an axis which is not there."""
         frame = lazy.to_frame()
         frame.loc[0, "src_axis"] = 5
-        array = LazyArray.from_frame(frame, lazy.shape, lazy.dtype)
+        array = Recipe.from_frame(frame, lazy.shape, lazy.dtype)
         with pytest.raises(ParameterError, match="does not have"):
             array.validate()
 
@@ -764,7 +764,7 @@ class TestValidate:
         """One stored axis cannot feed two output axes."""
         frame = lazy.to_frame()
         frame.loc[1, "src_axis"] = 0
-        array = LazyArray.from_frame(frame, lazy.shape, lazy.dtype)
+        array = Recipe.from_frame(frame, lazy.shape, lazy.dtype)
         with pytest.raises(ParameterError, match="two output axes"):
             array.validate()
 
@@ -772,7 +772,7 @@ class TestValidate:
         """Members which are not in placement order are refused."""
         frame = joined.to_frame()
         frame["ordinal"] = 1 - frame["ordinal"]
-        array = LazyArray.from_frame(
+        array = Recipe.from_frame(
             frame.sort_values(["ordinal", "out_axis"]), joined.shape, joined.dtype
         )
         with pytest.raises(ParameterError, match="canonical placement order"):
@@ -780,7 +780,7 @@ class TestValidate:
 
     def test_members_of_an_empty_array(self, lazy):
         """An array of no samples has no box a member could fill."""
-        array = LazyArray.from_frame(lazy.to_frame(), (0, 1001), lazy.dtype)
+        array = Recipe.from_frame(lazy.to_frame(), (0, 1001), lazy.dtype)
         with pytest.raises(ParameterError, match="outside an array"):
             array.validate()
 
@@ -788,7 +788,7 @@ class TestValidate:
         """Members which tile a two dimensional grid are accepted."""
         source = ArraySource.full((2, 3), 1.0)
         starts = np.array([[0, 0], [0, 3], [2, 0], [2, 3]])
-        grid = LazyArray.from_sources([source] * 4, starts=starts, shape=(4, 6))
+        grid = Recipe.from_sources([source] * 4, starts=starts, shape=(4, 6))
         assert grid.validate() is grid
         assert np.array_equal(grid.load(), np.ones((4, 6)))
 
@@ -796,7 +796,7 @@ class TestValidate:
         """Members which cover the right samples in the wrong place."""
         source = ArraySource.full((2, 2), 1.0)
         starts = np.array([[2, 0], [2, 0], [2, 2], [2, 2]])
-        array = LazyArray.from_sources([source] * 4, starts=starts, shape=(4, 4))
+        array = Recipe.from_sources([source] * 4, starts=starts, shape=(4, 4))
         with pytest.raises(ParameterError, match="do not tile"):
             array.validate()
 
@@ -807,7 +807,7 @@ class TestValidate:
         frame = array.to_frame()
         frame.loc[0, "src_extent"] = 3
         with pytest.raises(ParameterError, match="outside the source"):
-            LazyArray.from_frame(frame, array.shape, array.dtype).validate()
+            Recipe.from_frame(frame, array.shape, array.dtype).validate()
 
     def test_staircase_tiling(self):
         """Two differently cut segments joined on another axis are accepted."""
@@ -858,7 +858,7 @@ class TestValidate:
         """A member which reads its second stored axis but not its first."""
         frame = lazy.to_frame()
         frame.loc[frame["out_axis"] == 0, ["src_axis", "src_extent"]] = (NEW_AXIS, 0)
-        array = LazyArray.from_frame(frame, lazy.shape, lazy.dtype)
+        array = Recipe.from_frame(frame, lazy.shape, lazy.dtype)
         with pytest.raises(ParameterError, match="stored axes"):
             array.validate()
 
@@ -879,7 +879,7 @@ class TestValidate:
         """An array which says it is stacked on an axis it is not is refused."""
         source = ArraySource.full((2, 3), 1.0)
         starts = np.array([[0, 0], [0, 3], [2, 0], [2, 3]])
-        grid = LazyArray.from_sources([source] * 4, starts=starts, shape=(4, 6))
+        grid = Recipe.from_sources([source] * 4, starts=starts, shape=(4, 6))
         assert grid.validate() is grid
         bent_table = replace(grid.table, concat_axes=np.ones(1, np.int64))
         with pytest.raises(ParameterError, match="stacked along axis 1"):
@@ -896,15 +896,15 @@ class TestValidate:
     @pytest.mark.parametrize("shape", [(0,), (0, 3), (2, 0, 4), (2, 3, 0, 5)])
     def test_a_source_of_no_samples(self, shape):
         """A source with an empty axis is the empty array it describes."""
-        array = LazyArray.from_source(ArraySource.full(shape, 1))
+        array = Recipe.from_source(ArraySource.full(shape, 1))
         assert array.shape == shape and len(array) == 0
         assert array.validate() is array
         assert np.array_equal(array.load(), np.full(shape, 1))
 
     def test_operations_on_a_memberless_array(self):
         """Every operation works on an array which has no members."""
-        array = LazyArray.from_source(ArraySource.full((0, 3), 1))
-        back = LazyArray.from_frame(array.to_frame(), array.shape, array.dtype)
+        array = Recipe.from_source(ArraySource.full((0, 3), 1))
+        back = Recipe.from_frame(array.to_frame(), array.shape, array.dtype)
         assert back.data_id == array.data_id == array[:, 0:3].data_id
         assert array[:, 0:2].shape == (0, 2)
         assert array.transpose().shape == (3, 0)
@@ -919,7 +919,7 @@ class TestValidate:
             ArraySource.full((0, 3), 1.0),
             ArraySource.full((1, 3), 2.0),
         ]
-        array = LazyArray.from_sources(sources)
+        array = Recipe.from_sources(sources)
         assert array.shape == (3, 3) and len(array) == 2
         expected = np.concatenate([x.load() for x in sources])
         assert np.array_equal(array.validate().load(), expected)
@@ -927,9 +927,9 @@ class TestValidate:
     def test_an_empty_stored_window(self):
         """A stored window of no samples is left out as a constant one is."""
         whole = stored((4, 3), path="/a/b.h5")
-        array = LazyArray.from_sources([whole[0:4], whole[2:2]])
+        array = Recipe.from_sources([whole[0:4], whole[2:2]])
         assert array.shape == (4, 3) and len(array) == 1
-        assert array.validate().data_id == LazyArray.from_source(whole).data_id
+        assert array.validate().data_id == Recipe.from_source(whole).data_id
 
 
 class TestSources:
@@ -944,12 +944,12 @@ class TestSources:
         """A path stored in two parts is resolved as it is read out."""
         # A base is a literal prefix, so it ends as this platform's paths do.
         base = source.path[: -len(path.name)]
-        array = LazyArray.from_source(source, base_uri=base)
+        array = Recipe.from_source(source, base_uri=base)
         assert array.source(0).path == source.path
 
     def test_path_outside_the_base(self, source):
         """A path which does not start with the base uri is stored whole."""
-        array = LazyArray.from_source(source, base_uri="/somewhere/else/")
+        array = Recipe.from_source(source, base_uri="/somewhere/else/")
         assert array.to_frame()["base_uri"].iloc[0] == ""
         assert array.source(0) == source
 
@@ -976,8 +976,8 @@ class TestLoad:
         source = two_sources[0]
         # Windows with gaps between them, so each is its own read.
         spans = [(x, x + 5) for x in range(0, 100, 10)]
-        many = LazyArray.from_sources([source[a:b] for a, b in spans])
-        LazyArray.from_source(source[0:10]).load()
+        many = Recipe.from_sources([source[a:b] for a, b in spans])
+        Recipe.from_source(source[0:10]).load()
         alone = len(handles.opened), len(lookups)
         expected = np.concatenate([patch.data[a:b] for a, b in spans])
         assert np.array_equal(many.load(), expected)
@@ -1000,7 +1000,7 @@ class TestLoad:
                 for offset in (0, 100)
             ]
         )
-        assert np.array_equal(LazyArray.from_sources(parts).load(), expected)
+        assert np.array_equal(Recipe.from_sources(parts).load(), expected)
         assert handles.busy == [0, 0]
         assert not any(x.id.valid for x in handles.opened)
 
@@ -1011,7 +1011,7 @@ class TestLoad:
         raw = replace(first, key=f"/waveforms/{first.key}/data")
         parts = [first[0:4], second[4:8], raw[8:12], second[12:16], first[16:]]
         expected = [one[0:4], two[4:8], one[8:12], two[12:16], one[16:]]
-        out = LazyArray.from_sources(parts).load()
+        out = Recipe.from_sources(parts).load()
         assert np.array_equal(out, np.concatenate(expected))
         assert len(handles.opened) == 1 and len(reads) == len(parts)
 
@@ -1020,10 +1020,10 @@ class TestLoad:
         source = two_sources[0][0:4, 0:6]
         data = patch.data[0:4, 0:6]
         pieces = [source[0:2], source[2:4]]
-        rounded = LazyArray.from_sources(pieces, cast_via=["float16", None])
+        rounded = Recipe.from_sources(pieces, cast_via=["float16", None])
         array = concat(
             [
-                LazyArray.from_source(source).transpose(),
+                Recipe.from_source(source).transpose(),
                 constant((6, 4), 7.0),
                 rounded.transpose(),
             ],
@@ -1037,7 +1037,7 @@ class TestLoad:
     def test_changed_resource_raises_and_closes(self, two_sources, handles):
         """A member which no longer matches its source is refused, not cast."""
         stale = replace(two_sources[0], dtype=np.dtype(np.float32))
-        array = LazyArray.from_sources([stale[0:10], stale[20:30]])
+        array = Recipe.from_sources([stale[0:10], stale[20:30]])
         with pytest.raises(InvalidFiberIOError, match="may have changed"):
             array.load()
         assert len(handles.opened) == 1 and not handles.opened[0].id.valid
@@ -1050,7 +1050,7 @@ class TestLoad:
             raise error("placing failed")
 
         monkeypatch.setattr(recipe_module, "_to_output", fail)
-        array = LazyArray.from_sources([two_sources[0][0:10], two_sources[0][20:30]])
+        array = Recipe.from_sources([two_sources[0][0:10], two_sources[0][20:30]])
         with pytest.raises(error, match="placing failed"):
             array.load()
         assert len(handles.opened) == 1 and not handles.opened[0].id.valid
@@ -1069,7 +1069,7 @@ class TestLoad:
 
     def test_a_hole_is_never_loaded(self):
         """An array which does not cover itself is refused, not made up."""
-        array = LazyArray.from_sources(
+        array = Recipe.from_sources(
             [ArraySource.full((2, 3), 1.0)], starts=np.zeros((1, 2)), shape=(4, 3)
         )
         with pytest.raises(ParameterError, match="leave a hole"):
@@ -1085,12 +1085,12 @@ class TestStatedDtype:
 
     def test_the_default_promotes_the_members(self):
         """Without a dtype the members promote together, as before."""
-        array = LazyArray.from_sources(self._sources(), axis=0)
+        array = Recipe.from_sources(self._sources(), axis=0)
         assert array.dtype == np.result_type(np.int16, np.float64)
 
     def test_load_gives_the_stated_dtype(self):
         """The array loads as what it says it loads as."""
-        array = LazyArray.from_sources(self._sources(), axis=0, dtype="float32")
+        array = Recipe.from_sources(self._sources(), axis=0, dtype="float32")
         assert array.dtype == np.dtype("float32")
         loaded = array.load()
         assert loaded.dtype == np.dtype("float32")
@@ -1098,22 +1098,22 @@ class TestStatedDtype:
 
     def test_the_stated_dtype_is_part_of_the_id(self):
         """Two arrays loading different dtypes are not the same array."""
-        default = LazyArray.from_sources(self._sources(), axis=0)
-        stated = LazyArray.from_sources(self._sources(), axis=0, dtype="float32")
+        default = Recipe.from_sources(self._sources(), axis=0)
+        stated = Recipe.from_sources(self._sources(), axis=0, dtype="float32")
         assert default.data_id != stated.data_id
 
     def test_one_whole_source_keeps_the_stated_dtype_in_its_id(self):
         """An array which is one source whole is not that source recast."""
         source = ArraySource.full((2, 3), np.int16(1))
-        whole = LazyArray.from_source(source)
-        recast = LazyArray.from_sources([source], dtype="float32")
+        whole = Recipe.from_source(source)
+        recast = Recipe.from_sources([source], dtype="float32")
         assert whole.data_id != recast.data_id
         assert recast.load().dtype == np.dtype("float32")
 
     def test_a_frame_round_trip_keeps_it(self):
         """The frame plus the array's own shape and dtype rebuild it."""
-        array = LazyArray.from_sources(self._sources(), axis=0, dtype="float32")
-        back = LazyArray.from_frame(array.to_frame(), array.shape, array.dtype)
+        array = Recipe.from_sources(self._sources(), axis=0, dtype="float32")
+        back = Recipe.from_frame(array.to_frame(), array.shape, array.dtype)
         assert back.dtype == array.dtype
         assert back.data_id == array.data_id
         assert np.array_equal(back.load(), array.load())
@@ -1125,9 +1125,9 @@ class TestCastVia:
     def test_a_frame_with_no_cast_column_reads_back(self):
         """A frame written before casts existed rebuilds with none."""
         source = ArraySource.full((3,), 1.5)
-        array = LazyArray.from_source(source)
+        array = Recipe.from_source(source)
         frame = array.to_frame().drop(columns=["cast"])
-        back = LazyArray.from_frame(frame, array.shape, array.dtype)
+        back = Recipe.from_frame(frame, array.shape, array.dtype)
         assert back.data_id == array.data_id
         assert np.array_equal(back.load(), array.load())
 
@@ -1143,13 +1143,11 @@ class TestCastVia:
 
     def _via(self):
         """The same two, the first told to pass through float32."""
-        return LazyArray.from_sources(
-            self._sources(), axis=0, cast_via=["float32", None]
-        )
+        return Recipe.from_sources(self._sources(), axis=0, cast_via=["float32", None])
 
     def test_the_member_rounds_where_it_is_told_to(self):
         """The stated intermediate is what the samples come back through."""
-        straight = LazyArray.from_sources(self._sources(), axis=0)
+        straight = Recipe.from_sources(self._sources(), axis=0)
         via = self._via()
         assert straight.load()[0, 0] == np.float64(self._value)
         assert via.load()[0, 0] == np.float64(np.float32(self._value))
@@ -1157,7 +1155,7 @@ class TestCastVia:
 
     def test_the_cast_is_part_of_the_id(self):
         """Two arrays whose samples differ are not the same array."""
-        straight = LazyArray.from_sources(self._sources(), axis=0)
+        straight = Recipe.from_sources(self._sources(), axis=0)
         assert straight.data_id != self._via().data_id
 
     @pytest.mark.parametrize(("shape", "dtype"), [((2, 3), "float64"), ((3,), None)])
@@ -1168,8 +1166,8 @@ class TestCastVia:
         """
         source = ArraySource.full(shape, self._value, "int32")
         kwargs = {} if dtype is None else {"dtype": dtype}
-        whole = LazyArray.from_sources([source], **kwargs)
-        via = LazyArray.from_sources([source], cast_via=["float32"], **kwargs)
+        whole = Recipe.from_sources([source], **kwargs)
+        via = Recipe.from_sources([source], cast_via=["float32"], **kwargs)
         assert whole.data_id != via.data_id
         assert not np.array_equal(whole.load(), via.load())
         assert np.ravel(via.load())[0] == np.float64(np.float32(self._value))
@@ -1177,32 +1175,32 @@ class TestCastVia:
     def test_a_whole_constant_keeps_its_cast_through_a_round_trip(self):
         """The cast rides with the members, so the id does not move."""
         source = ArraySource.full((3,), self._value, "int32")
-        via = LazyArray.from_sources([source], cast_via=["float32"])
-        back = LazyArray.from_frame(via.to_frame(), via.shape, via.dtype)
+        via = Recipe.from_sources([source], cast_via=["float32"])
+        back = Recipe.from_frame(via.to_frame(), via.shape, via.dtype)
         assert back.data_id == via.data_id
-        assert LazyTable.from_arrays([via])[0].data_id == via.data_id
+        assert RecipeTable.from_arrays([via])[0].data_id == via.data_id
 
     @pytest.mark.parametrize(("count", "dtype"), [(1, None), (2, "float64")])
     def test_a_stored_member_states_its_cast_too(self, count, dtype):
         """A whole stored file put through another dtype is another array."""
         sources = [stored((4, 4), path=f"/a/{num}.h5") for num in range(count)]
         kwargs = {} if dtype is None else {"dtype": dtype}
-        whole = LazyArray.from_sources(sources, **kwargs)
+        whole = Recipe.from_sources(sources, **kwargs)
         casts = ["float16", *[None] * (count - 1)]
-        via = LazyArray.from_sources(sources, cast_via=casts, **kwargs)
+        via = Recipe.from_sources(sources, cast_via=casts, **kwargs)
         assert whole.data_id != via.data_id
 
     def test_a_frame_round_trip_keeps_it(self):
         """The cast rides in the member frame with everything else."""
         array = self._via()
-        back = LazyArray.from_frame(array.to_frame(), array.shape, array.dtype)
+        back = Recipe.from_frame(array.to_frame(), array.shape, array.dtype)
         assert back.data_id == array.data_id
         assert np.array_equal(back.load(), array.load())
 
     def test_one_cast_per_source(self):
         """A cast for some of the members says nothing about the rest."""
         with pytest.raises(ParameterError, match="every source"):
-            LazyArray.from_sources(self._sources(), axis=0, cast_via=["float32"])
+            Recipe.from_sources(self._sources(), axis=0, cast_via=["float32"])
 
 
 class TestTable:
@@ -1225,7 +1223,7 @@ class TestTable:
 
     def test_mixed_ndim(self, joined):
         """Arrays of different ndim sit in one table."""
-        table = LazyTable.from_arrays([joined, stack([joined, joined])])
+        table = RecipeTable.from_arrays([joined, stack([joined, joined])])
         assert [x.ndim for x in table] == [2, 3]
         assert [x.shape for x in table] == [joined.shape, (2, *joined.shape)]
         assert table.n_members == len(joined) + 2 * len(joined)
@@ -1236,7 +1234,7 @@ class TestTable:
 
     def test_indexing(self, joined):
         """A table is indexed by row, from either end."""
-        table = LazyTable.from_arrays([joined, joined[0:10]])
+        table = RecipeTable.from_arrays([joined, joined[0:10]])
         assert len(table) == 2
         assert table[-1].shape == (10, joined.shape[1])
         with pytest.raises(IndexError, match="outside a table"):
@@ -1249,7 +1247,7 @@ class TestFrames:
     def test_array_round_trip(self, joined, patch):
         """One array round trips through its long frame."""
         frame = joined.to_frame()
-        back = LazyArray.from_frame(frame, joined.shape, joined.dtype)
+        back = Recipe.from_frame(frame, joined.shape, joined.dtype)
         assert back.data_id == joined.data_id
         assert np.array_equal(back.load(), patch.data)
         assert len(frame) == len(joined) * joined.ndim
@@ -1263,7 +1261,7 @@ class TestFrames:
     def test_out_of_order_frame(self, joined):
         """A frame which was shuffled is put back in order."""
         frame = joined.to_frame()
-        back = LazyArray.from_frame(frame.iloc[::-1], joined.shape, joined.dtype)
+        back = Recipe.from_frame(frame.iloc[::-1], joined.shape, joined.dtype)
         assert back.data_id == joined.data_id
 
     def test_frame_keeps_the_concat_hint(self, joined):
@@ -1271,18 +1269,18 @@ class TestFrames:
         pair = [constant((2, 3), 1.0), constant((2, 3), 2.0)]
         grid = concat([concat(pair, axis=0), concat(pair, axis=0)], axis=1)
         for array in (joined, stack([joined, joined]), concat(pair, axis=1), grid):
-            back = LazyArray.from_frame(array.to_frame(), array.shape, array.dtype)
+            back = Recipe.from_frame(array.to_frame(), array.shape, array.dtype)
             assert back._block().concat_axis == array._block().concat_axis
 
     def test_empty_table(self):
         """A table of no arrays holds no members."""
-        table = LazyTable.from_arrays([])
+        table = RecipeTable.from_arrays([])
         assert len(table) == 0 and table.n_members == 0
 
     def test_constant_round_trip(self):
         """A constant member keeps its value and dtype through a frame."""
         array = concat([constant((2, 3), np.nan), constant((2, 3), 1.0)], axis=0)
-        back = LazyArray.from_frame(array.to_frame(), array.shape, array.dtype)
+        back = Recipe.from_frame(array.to_frame(), array.shape, array.dtype)
         assert back.data_id == array.data_id
         assert np.array_equal(back.load(), array.load(), equal_nan=True)
 
@@ -1290,8 +1288,8 @@ class TestFrames:
         """A member of a record dtype is read back with every field."""
         dtype = np.dtype([("x", "<i4"), ("y", "<f4")])
         source = stored((3,), path="/a/record.h5", dtype=dtype)
-        array = LazyArray.from_source(source)
-        back = LazyArray.from_frame(array.to_frame(), array.shape, array.dtype)
+        array = Recipe.from_source(source)
+        back = Recipe.from_frame(array.to_frame(), array.shape, array.dtype)
         assert array.dtype == back.dtype == dtype
         assert array.source(0) == source
         assert back.source(0) == source
@@ -1299,11 +1297,11 @@ class TestFrames:
 
     def test_frame_edits_do_not_reach_the_array(self):
         """The array holds its own copy of what the frame said."""
-        original = LazyArray.from_sources(
+        original = Recipe.from_sources(
             [ArraySource.full((2,), 1.0), ArraySource.full((2,), 2.0)]
         )
         frame = original.to_frame()
-        array = LazyArray.from_frame(frame, original.shape, original.dtype)
+        array = Recipe.from_frame(frame, original.shape, original.dtype)
         before = array.data_id
         frame.loc[0, "out_stop"] = 1
         frame.loc[0, "src_extent"] = 1
@@ -1315,17 +1313,17 @@ class TestFrames:
     def test_frame_edits_do_not_reach_a_table(self):
         """Tables built from the array do not read the frame either."""
         whole = stored((10,), path="/a/w.h5", dtype=np.int64)
-        array = LazyArray.from_source(whole[0:3])
+        array = Recipe.from_source(whole[0:3])
         frame = array.to_frame()
-        back = LazyArray.from_frame(frame, array.shape, array.dtype)
-        table = LazyTable.from_arrays([back])
+        back = Recipe.from_frame(frame, array.shape, array.dtype)
+        table = RecipeTable.from_arrays([back])
         frame.loc[0, "src_start"] = 4
         assert back.source(0) == whole[0:3]
         assert table[0].source(0) == whole[0:3]
 
     def test_storage_is_read_only(self, joined):
         """Nothing a table exposes can be written, so no view can be bent."""
-        table = LazyTable.from_arrays([joined, joined[0:10]])
+        table = RecipeTable.from_arrays([joined, joined[0:10]])
         assert not any(x.flags.writeable for x in storage(table))
         assert not any(x.flags.writeable for x in table[0]._block().axes.values())
         with pytest.raises(ValueError, match="read-only"):
@@ -1335,23 +1333,23 @@ class TestFrames:
         """The arrays a table's storage is a view of cannot be written."""
         array = joined[0:10]
         tables = [
-            LazyArray.from_source(ArraySource.full((4, 3), 1.0)).table,
-            LazyArray.from_sources([ArraySource.full((4, 3), 1.0)]).table,
-            LazyArray.from_frame(array.to_frame(), array.shape, array.dtype).table,
+            Recipe.from_source(ArraySource.full((4, 3), 1.0)).table,
+            Recipe.from_sources([ArraySource.full((4, 3), 1.0)]).table,
+            Recipe.from_frame(array.to_frame(), array.shape, array.dtype).table,
             array.table,
             concat([array, array], axis=0).table,
             stack([array, array], axis=0).table,
             array.transpose().table,
             array.rechunk([0, 4, 10]),
-            LazyTable.from_arrays([array, joined]),
+            RecipeTable.from_arrays([array, joined]),
         ]
         for table in tables:
             assert not any(x.flags.writeable for x in owned_storage(table))
 
     def test_a_shared_owner_cannot_be_bent(self):
         """Writing through a view's owner would change two tables at once."""
-        array = LazyArray.from_source(stored((6,), dtype=np.int64)[0:2])
-        shared = LazyTable.from_arrays([array])[0]
+        array = Recipe.from_source(stored((6,), dtype=np.int64)[0:2])
+        shared = RecipeTable.from_arrays([array])[0]
         before = (array.data_id, shared.data_id)
         with pytest.raises(ValueError, match="read-only"):
             array.table.axes["src_start"].base[0, 0] = 2
@@ -1416,7 +1414,7 @@ class TestRechunk:
     )
     def test_a_memberless_array(self, shape, axis, bounds, expected):
         """An array with no members is cut into the empty pieces asked for."""
-        array = LazyArray.from_source(ArraySource.full(shape, 1))
+        array = Recipe.from_source(ArraySource.full(shape, 1))
         table = array.rechunk(bounds, axis=axis)
         assert [x.shape for x in table] == expected
         for piece in table:
@@ -1427,7 +1425,7 @@ class TestRechunk:
         """An array which is not a stack of slabs is not rechunked yet."""
         source = ArraySource.full((2, 3), 1.0)
         starts = np.array([[0, 0], [0, 3], [2, 0], [2, 3]])
-        grid = LazyArray.from_sources([source] * 4, starts=starts, shape=(4, 6))
+        grid = Recipe.from_sources([source] * 4, starts=starts, shape=(4, 6))
         with pytest.raises(NotImplementedError, match="full width"):
             grid.rechunk([0, 2, 4])
 
@@ -1528,14 +1526,14 @@ class TestFromColumns:
         """A random case gives the frame, id, shape and dtype of its sources."""
         kwargs = column_case(np.random.default_rng(seed))
         sources = sources_of_columns(kwargs)
-        expected = LazyArray.from_sources(
+        expected = Recipe.from_sources(
             sources,
             axis=kwargs["axis"],
             base_uri=kwargs["base_uri"],
             dtype=kwargs.get("dtype"),
             cast_via=kwargs.get("cast_via"),
         )
-        array = LazyArray.from_columns(**kwargs)
+        array = Recipe.from_columns(**kwargs)
         pd.testing.assert_frame_equal(array.to_frame(), expected.to_frame())
         assert array.data_id == expected.data_id
         assert array.shape == expected.shape
@@ -1566,8 +1564,8 @@ class TestFromColumns:
             "base_uri": "/root/",
         }
         sources = sources_of_columns(kwargs)
-        array = LazyArray.from_columns(**kwargs)
-        expected = LazyArray.from_sources(sources, axis=1, base_uri="/root/")
+        array = Recipe.from_columns(**kwargs)
+        expected = Recipe.from_sources(sources, axis=1, base_uri="/root/")
         assert array.sources == tuple(sources)
         pd.testing.assert_frame_equal(array.to_frame(), expected.to_frame())
         assert array.data_id == expected.data_id
@@ -1575,7 +1573,7 @@ class TestFromColumns:
     def test_loads_files(self, two_sources, joined):
         """Windows of files load as the sources' array does."""
         sources = [x[5:50] for x in two_sources]
-        array = LazyArray.from_columns(
+        array = Recipe.from_columns(
             np.array([x.path for x in sources]),
             [x.shape for x in sources],
             format=sources[0].format,
@@ -1586,14 +1584,14 @@ class TestFromColumns:
             start=[[w[0] for w in x.windows] for x in sources],
             extent=[x.extent for x in sources],
         )
-        expected = LazyArray.from_sources(sources)
+        expected = Recipe.from_sources(sources)
         assert array.data_id == expected.data_id
         assert np.array_equal(array.load(), expected.load())
 
     def test_whole_files(self, two_sources, joined):
         """One shared shape and default windows read each file whole."""
         first = two_sources[0]
-        array = LazyArray.from_columns(
+        array = Recipe.from_columns(
             [first.path, first.path],
             first.shape,
             format=first.format,
@@ -1609,7 +1607,7 @@ class TestFromColumns:
 
     def test_one_path_many_rows(self):
         """A scalar path is repeated over the rows of the shape."""
-        array = LazyArray.from_columns(
+        array = Recipe.from_columns(
             "/a.h5", [[2, 3], [4, 3]], format="DASDAE", version="1", source_dtype="f4"
         )
         assert array.shape == (6, 3) and len(array) == 2
@@ -1623,7 +1621,7 @@ class TestFromColumns:
 
     def test_paths_split_under_base(self):
         """A path under the base uri is stored relative to it; others whole."""
-        array = LazyArray.from_columns(
+        array = Recipe.from_columns(
             ["/root/a.h5", "/other/b.h5"],
             (2,),
             format="DASDAE",
@@ -1642,7 +1640,7 @@ class TestFromColumns:
 
     def test_rows_from_any_column(self):
         """A per member key sets the member count when path and shape are shared."""
-        array = LazyArray.from_columns("/a.h5", (2,), key=["a", "b"], **FORMAT)
+        array = Recipe.from_columns("/a.h5", (2,), key=["a", "b"], **FORMAT)
         assert array.shape == (4,)
         assert [x.key for x in array.sources] == ["a", "b"]
 
@@ -1652,12 +1650,12 @@ class TestFromColumns:
         windows = {"start": [[0], [2]], "extent": 4}
         if name == "extent":
             windows = {"extent": [[4], [4]]}
-        array = LazyArray.from_columns("/a.h5", (2,), **windows, **FORMAT)
+        array = Recipe.from_columns("/a.h5", (2,), **windows, **FORMAT)
         assert array.shape == (4,) and len(array) == 2
 
     def test_spellings_of_one_dtype(self):
         """Two spellings of one dtype or cast are one value."""
-        array = LazyArray.from_columns(
+        array = Recipe.from_columns(
             ["/a", "/b"],
             (2,),
             format="DASDAE",
@@ -1680,7 +1678,7 @@ class TestFromColumns:
             for x in (spec, np.dtype(spec))
         )
         listed = replace(listed, dtype=spec)
-        first, second = (LazyArray.from_sources([x]) for x in (listed, typed))
+        first, second = (Recipe.from_sources([x]) for x in (listed, typed))
         pd.testing.assert_frame_equal(first.to_frame(), second.to_frame())
         assert first.data_id == second.data_id
         assert first.dtype == np.dtype(spec)
@@ -1692,8 +1690,7 @@ class TestFromColumns:
             (2,), spec
         )
         first, second = (
-            LazyArray.from_sources([source], cast_via=[x])
-            for x in (spec, np.dtype(spec))
+            Recipe.from_sources([source], cast_via=[x]) for x in (spec, np.dtype(spec))
         )
         pd.testing.assert_frame_equal(first.to_frame(), second.to_frame())
         assert first.data_id == second.data_id
@@ -1701,13 +1698,13 @@ class TestFromColumns:
     def test_cast_array(self):
         """Casts given as an array apply one per source."""
         sources = [ArraySource.full((2,), 1.0), ArraySource.full((3,), 2.0)]
-        array = LazyArray.from_sources(sources, cast_via=np.array(["f4", "f4"]))
+        array = Recipe.from_sources(sources, cast_via=np.array(["f4", "f4"]))
         assert array.to_frame()["cast"].tolist() == ["<f4", "<f4"]
 
     def test_caller_arrays_stay_writable(self):
         """The array keeps copies, never the caller's own arrays."""
         shape = np.array([[2, 3]])
-        LazyArray.from_columns(
+        Recipe.from_columns(
             ["/a.h5"], shape, format="DASDAE", version="1", source_dtype="f4"
         )
         shape[0, 0] = 5
@@ -1721,33 +1718,33 @@ class TestFromColumnsRefuses:
     def test_no_members(self):
         """An array needs at least one member."""
         with pytest.raises(ParameterError, match="at least one member"):
-            LazyArray.from_columns([], (2,), **self.kwargs)
+            Recipe.from_columns([], (2,), **self.kwargs)
 
     def test_no_axes(self):
         """An array has at least one axis."""
         with pytest.raises(ParameterError, match="at least one dimension"):
-            LazyArray.from_columns("/a.h5", (), **self.kwargs)
+            Recipe.from_columns("/a.h5", (), **self.kwargs)
 
     def test_bad_shape(self):
         """A shape is one row of lengths, or one row per member."""
         with pytest.raises(ParameterError, match="shape"):
-            LazyArray.from_columns("/a.h5", [[[1]]], **self.kwargs)
+            Recipe.from_columns("/a.h5", [[[1]]], **self.kwargs)
 
     def test_too_many_axes(self):
         """A flat shape is one shape, so per member lengths are refused."""
         with pytest.raises(ParameterError, match=r"\(n, ndim\)"):
-            LazyArray.from_columns(["/a"] * 65, np.arange(1, 66), **self.kwargs)
+            Recipe.from_columns(["/a"] * 65, np.arange(1, 66), **self.kwargs)
 
     def test_mismatched_rows(self):
         """Per member columns must all have a row per member."""
         with pytest.raises(ParameterError, match="shape"):
-            LazyArray.from_columns(["/a", "/b"], [[1], [2], [3]], **self.kwargs)
+            Recipe.from_columns(["/a", "/b"], [[1], [2], [3]], **self.kwargs)
         with pytest.raises(ParameterError, match="key"):
-            LazyArray.from_columns(["/a", "/b"], [1], key=["x"], **self.kwargs)
+            Recipe.from_columns(["/a", "/b"], [1], key=["x"], **self.kwargs)
         with pytest.raises(ParameterError, match="cast_via"):
-            LazyArray.from_columns(["/a", "/b"], [1], cast_via=["f8"], **self.kwargs)
+            Recipe.from_columns(["/a", "/b"], [1], cast_via=["f8"], **self.kwargs)
         with pytest.raises(ParameterError, match="origin_id"):
-            LazyArray.from_columns(
+            Recipe.from_columns(
                 "/a", [1], key=["x", "y"], origin_id=["o"] * 3, **self.kwargs
             )
 
@@ -1757,7 +1754,7 @@ class TestFromColumnsRefuses:
     def test_missing_dtype(self, source_dtype):
         """Every member states the dtype it is stored at."""
         with pytest.raises(ParameterError, match="source_dtype"):
-            LazyArray.from_columns(
+            Recipe.from_columns(
                 ["/a", "/b"],
                 (2,),
                 format="DASDAE",
@@ -1768,7 +1765,7 @@ class TestFromColumnsRefuses:
     def test_ndim_disagrees(self):
         """Starts and extents have one number per axis of the shape."""
         with pytest.raises(ParameterError, match="start"):
-            LazyArray.from_columns("/a", (2, 2), start=(0,), **self.kwargs)
+            Recipe.from_columns("/a", (2, 2), start=(0,), **self.kwargs)
 
     @pytest.mark.parametrize(
         "window",
@@ -1783,7 +1780,7 @@ class TestFromColumnsRefuses:
         """A window must be of positive length and inside its stored array."""
         window = {"shape": (2, 2), **window}
         with pytest.raises(ParameterError, match="outside"):
-            LazyArray.from_columns("/a", **window, **self.kwargs)
+            Recipe.from_columns("/a", **window, **self.kwargs)
 
     @pytest.mark.parametrize("empty", ["path", "format"])
     @pytest.mark.parametrize("missing", ["", None, np.nan])
@@ -1791,7 +1788,7 @@ class TestFromColumnsRefuses:
         """A member needs a path and a format to be read."""
         kwargs = {**self.kwargs, "path": ["/a", "/b"], empty: ["x", missing]}
         with pytest.raises(ParameterError, match="path and a format"):
-            LazyArray.from_columns(shape=(2,), **kwargs)
+            Recipe.from_columns(shape=(2,), **kwargs)
 
 
 class TestMissingText:
@@ -1802,11 +1799,11 @@ class TestMissingText:
     @pytest.mark.parametrize("origin", [None, [None, "x"]])
     def test_columns(self, origin):
         """A None origin id is no origin id, as an empty one is."""
-        array = LazyArray.from_columns(
+        array = Recipe.from_columns(
             ["/a", "/b"], (2, 1), origin_id=origin, **self.kwargs
         )
         empty = [x or "" for x in origin] if isinstance(origin, list) else ""
-        expected = LazyArray.from_columns(
+        expected = Recipe.from_columns(
             ["/a", "/b"], (2, 1), origin_id=empty, **self.kwargs
         )
         assert array.data_id == expected.data_id
@@ -1814,32 +1811,30 @@ class TestMissingText:
 
     def test_pinned(self):
         """The id is the one an array with no origin id always had."""
-        array = LazyArray.from_columns(
-            ["/a", "/b"], (2, 1), origin_id=None, **self.kwargs
-        )
+        array = Recipe.from_columns(["/a", "/b"], (2, 1), origin_id=None, **self.kwargs)
         assert array.data_id == "bdc10f0ac9771acac56db59e8a5807f3"
 
     def test_source(self):
         """A source whose origin id is None reads as one with none."""
         source = ArraySource(path="/a", format="F", origin_id=None).describe((2,), "f4")
-        array = LazyArray.from_sources([source])
-        expected = LazyArray.from_sources([replace(source, origin_id="")])
+        array = Recipe.from_sources([source])
+        expected = Recipe.from_sources([replace(source, origin_id="")])
         assert array.data_id == expected.data_id
         pd.testing.assert_frame_equal(array.to_frame(), expected.to_frame())
 
     def test_frame(self):
         """A frame whose origin ids read back as missing gives the same array."""
-        array = LazyArray.from_columns(["/a", "/b"], (2, 1), **self.kwargs)
+        array = Recipe.from_columns(["/a", "/b"], (2, 1), **self.kwargs)
         frame = array.to_frame().astype({"origin_id": object})
         frame["origin_id"] = None
-        back = LazyArray.from_frame(frame, array.shape, array.dtype)
+        back = Recipe.from_frame(frame, array.shape, array.dtype)
         assert back.data_id == array.data_id
         assert back.sources == array.sources
 
     @pytest.mark.parametrize("name", ["key", "origin_id", "dtype", "cast", "value"])
     def test_frame_without_column(self, name):
         """A frame missing a member column reads it as empty."""
-        array = LazyArray.from_columns(["/a", "/b"], (2, 1), **self.kwargs)
+        array = Recipe.from_columns(["/a", "/b"], (2, 1), **self.kwargs)
         frame = array.to_frame()
-        back = LazyArray.from_frame(frame.drop(columns=name), array.shape, array.dtype)
+        back = Recipe.from_frame(frame.drop(columns=name), array.shape, array.dtype)
         assert back.data_id == array.data_id

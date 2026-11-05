@@ -10,7 +10,7 @@ import pytest
 
 from dascore.core.source import ArraySource
 from dascore.lazy import block as block_module
-from dascore.lazy.recipe import LazyArray, concat
+from dascore.lazy.recipe import Recipe, concat
 from tests.test_lazy.conftest import (
     FORMAT,
     assert_same_members,
@@ -26,10 +26,10 @@ def mixed_stack(rng, count, axis, ndim, laid=True):
     casts = [[None, "f4"][x] for x in rng.integers(0, 2, count)]
     kwargs = {"base_uri": "/root/", "cast_via": casts, "dtype": "f8"}
     if laid:
-        return LazyArray.from_sources(sources, axis=axis, **kwargs)
+        return Recipe.from_sources(sources, axis=axis, **kwargs)
     corners = np.zeros((count, ndim), np.int64)
     corners[1:, axis] = np.cumsum(sizes[:-1, axis])
-    return LazyArray.from_sources(sources, starts=corners, **kwargs)
+    return Recipe.from_sources(sources, starts=corners, **kwargs)
 
 
 def random_window(rng, array):
@@ -78,7 +78,7 @@ class TestClipEnds:
             mixed_stack(rng, 20, 0, 1),
             mixed_stack(rng, 40, 1, 2, laid=False),
             mixed_stack(rng, 40, 0, 2, laid=False),
-            LazyArray.from_columns(paths, (2, 3), axis=1, base_uri="/root/", **FORMAT),
+            Recipe.from_columns(paths, (2, 3), axis=1, base_uri="/root/", **FORMAT),
             concat([stacked := mixed_stack(rng, 20, 0, 2), stacked], axis=1),
         ]
 
@@ -120,7 +120,7 @@ class TestClipEnds:
     def test_owns_its_storage(self):
         """A clipped view shares no placement with its base but broadcast values."""
         paths = [f"/root/f{x}.h5" for x in range(300)]
-        array = LazyArray.from_columns(paths, (4, 3), **FORMAT)
+        array = Recipe.from_columns(paths, (4, 3), **FORMAT)
 
         def placement(table):
             members = table.members
@@ -135,17 +135,17 @@ class TestClipEnds:
     def test_invalid_members_take_the_general_path(self):
         """Boxes outside the array or empty are clipped as any other window."""
         sources = [ArraySource.full((4, 3), float(x)) for x in range(3)]
-        wide = LazyArray.from_sources(sources, shape=(12, 2))
+        wide = Recipe.from_sources(sources, shape=(12, 2))
         assert wide[1:11].validate().shape == (10, 2)
         frame = wide.to_frame()
         frame.loc[frame["ordinal"] == 1, "out_stop"] = frame["out_start"]
-        empty = LazyArray.from_frame(frame, (12, 3), "f8")
+        empty = Recipe.from_frame(frame, (12, 3), "f8")
         assert len(empty[1:11]) == 2
 
     def test_overlapping_members_take_the_general_path(self, monkeypatch):
         """Members overlapping on the stacked axis are clipped as any others."""
-        short = LazyArray.from_sources([ArraySource.full((4,), 1)], shape=(2,))
-        joined = concat([short, LazyArray.from_source(ArraySource.full((4,), 2))])
+        short = Recipe.from_sources([ArraySource.full((4,), 1)], shape=(2,))
+        joined = concat([short, Recipe.from_source(ArraySource.full((4,), 2))])
         fast = joined[3:5]
         fast.table
         monkeypatch.setattr(block_module, "_trims_ends", lambda *_: False)

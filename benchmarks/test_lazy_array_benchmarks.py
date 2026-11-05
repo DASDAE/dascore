@@ -7,7 +7,7 @@ import pytest
 
 import dascore as dc
 from dascore.core.source import ArraySource
-from dascore.lazy import LazyArray, concat, stack
+from dascore.lazy import Recipe, concat, stack
 
 # How many members the big table holds, and how long each one is.
 MEMBERS = 100_000
@@ -27,7 +27,7 @@ def sources():
 @pytest.fixture(scope="module")
 def array(sources):
     """One array of many members, built by joining windows end to end."""
-    part = LazyArray.from_sources(sources)
+    part = Recipe.from_sources(sources)
     return concat([part] * (MEMBERS // len(sources)), axis=0)
 
 
@@ -35,7 +35,7 @@ def array(sources):
 def scattered(sources):
     """One array of many members whose windows never join up."""
     spread = sources[::2]
-    part = LazyArray.from_sources(spread)
+    part = Recipe.from_sources(spread)
     return concat([part] * (MEMBERS // len(spread)), axis=0)
 
 
@@ -43,7 +43,7 @@ def scattered(sources):
 def grid(sources):
     """One array whose members tile a grid rather than stacking up."""
     spread = sources[::2]
-    part = LazyArray.from_sources(spread)
+    part = Recipe.from_sources(spread)
     column = concat([part] * (MEMBERS // 2 // len(spread)), axis=0)
     return concat([column, column], axis=1)
 
@@ -54,7 +54,7 @@ def deep():
     whole = ArraySource(
         path="/data/deep.h5", format="DASDAE", version="1", origin_id="b" * 32
     ).describe((1000, *[2] * 11), np.float32)
-    return LazyArray.from_sources([whole[x : x + 1] for x in range(1000)])
+    return Recipe.from_sources([whole[x : x + 1] for x in range(1000)])
 
 
 @pytest.fixture(scope="module")
@@ -64,13 +64,13 @@ def fragments(tmp_path_factory):
     patch = dc.get_example_patch("random_das", shape=(256, 1024))
     dc.write(patch, path, "DASDAE")
     source = dc.read(path)[0]._source
-    return LazyArray.from_sources([source[x : x + 1] for x in range(256)])
+    return Recipe.from_sources([source[x : x + 1] for x in range(256)])
 
 
 @pytest.fixture(scope="module")
 def constants():
     """Many small arrays, each one constant member."""
-    return [LazyArray.from_source(ArraySource.full((ROWS, WIDTH), 1.0))] * 1_000
+    return [Recipe.from_source(ArraySource.full((ROWS, WIDTH), 1.0))] * 1_000
 
 
 class TestTableBenchmarks:
@@ -79,7 +79,7 @@ class TestTableBenchmarks:
     @pytest.mark.benchmark
     def test_build(self, sources):
         """Time building a table from sources."""
-        LazyArray.from_sources(sources)
+        Recipe.from_sources(sources)
 
     @pytest.mark.benchmark
     def test_slice_few_members(self, array):
