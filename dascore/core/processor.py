@@ -98,6 +98,7 @@ from dascore.utils.plugins import KERNEL_GROUP
 
 if TYPE_CHECKING:
     from dascore.core.attrs import PatchAttrs
+    from dascore.lazy.contract import ChunkContract
 
 # Whether the next operation to run writes its call into history and ids.
 # A bypass (`patch_function.raw_function`) clears it for the one call it
@@ -122,6 +123,9 @@ class PatchProcessor(DascoreBaseModel):
     - `reconcile(result, out, meta)`: the one hook which sees both halves,
       given the input metadata as well. Return
       metadata to attach the result, or a patch holding the final data.
+    - `chunk_contract(dtype, plan)`: what a chunk of the output needs of
+      the input, which is what lets the operation run on a lazy array.
+      None, the default, says it cannot.
 
     Each subclass is registered under `name` (snake case of the class name
     unless set). One of DASCore's own is reached through a method of that
@@ -369,6 +373,18 @@ class PatchProcessor(DascoreBaseModel):
     def reconcile(self, data, out: dc.PatchMeta, meta: dc.PatchMeta) -> dc.PatchMeta:
         """Return metadata or a patch holding the final data; default as is."""
         return out
+
+    def chunk_contract(self, dtype, plan: dict[str, Any]) -> ChunkContract | None:
+        """
+        Return what a chunk of the output needs of the input, or None.
+
+        Asked when the operation runs on a lazy array, with the input's
+        dtype and the plan `get_metadata` returned, before anything is read.
+        A contract from [`dascore.lazy.contract`](`dascore.lazy.contract`)
+        lets it run there; None, the default, says it cannot, and the
+        operation is refused rather than the data loaded for it.
+        """
+        return None
 
     @overload
     def run(self, patch: PatchType) -> PatchType: ...
