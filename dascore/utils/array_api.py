@@ -32,7 +32,6 @@ __all__ = [
     "device",
     "is_foreign",
     "is_numpy",
-    "lazy_refusal",
     "namespace_name",
     "nan_reduce",
     "to_numpy",
