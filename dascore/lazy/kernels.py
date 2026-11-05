@@ -3,7 +3,8 @@ The kernel every operation runs on a lazy array, unless it registers its own.
 
 It computes nothing. It asks the processor for its
 [chunk contract](`dascore.lazy.contract`) for the input's dtype and the
-plan, then:
+plan -- a contract written above the class which owns the kernel describes
+some other kernel, so it does not count -- then:
 
 - no contract: refuses, before anything is read;
 - [`Unchanged`](`dascore.lazy.contract.Unchanged`): hands the data back, so
@@ -46,6 +47,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from dascore.core.processor import _computes
 from dascore.lazy.array import LazyArray
 from dascore.lazy.chain import Node
 from dascore.lazy.contract import Pointwise, Unchanged
@@ -71,10 +73,25 @@ def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
     LazyOperationError
         If the operation states no contract this backend can keep.
     """
-    contract = processor.chunk_contract(data.dtype, plan)
+    contract = _contract(processor, data.dtype, plan)
     if isinstance(contract, Unchanged):
         return data
     if isinstance(contract, Pointwise):
         return data._appended(Node(processor, plan))
     # No contract, or one nothing here runs yet: refused, and nothing read.
     raise lazy_refusal(processor.name or type(processor).__name__)
+
+
+def _contract(processor, dtype, plan: dict[str, Any]):
+    """
+    Return the processor's contract, if it describes the kernel that runs.
+
+    A subclass which writes its own kernel means it, as `kernel_for` says;
+    a contract it inherits from above that kernel was written for another.
+    """
+    mro = type(processor).__mro__
+    owner = next((x for x in mro if _computes(x)), mro[0])
+    stated = next(x for x in mro if "chunk_contract" in x.__dict__)
+    if not issubclass(stated, owner):
+        return None
+    return processor.chunk_contract(dtype, plan)

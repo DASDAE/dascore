@@ -35,7 +35,7 @@ from dascore.lazy.array import LazyArray
 from dascore.lazy.contract import ChunkContract, Pointwise, Unchanged
 from dascore.lazy.kernels import lazy_kernel
 from dascore.lazy.recipe import Recipe
-from dascore.proc.basic import Abs, Normalize, _known_real
+from dascore.proc.basic import Abs, Normalize, Real, _known_real
 from dascore.utils.array_api import backend_name
 from dascore.utils.docs import compose_docstring
 from dascore.utils.identity import encode
@@ -1973,6 +1973,80 @@ class TestLazyRefusal:
         assert not recipe_loads
 
 
+class TestInheritedContract:
+    """A contract holds only for the kernel it was written beside, or below."""
+
+    @staticmethod
+    def _doubled_real():
+        """A subclass of Real whose own kernel doubles real data."""
+
+        class DoubledReal(Real):
+            """The real part, doubled."""
+
+            name = None
+
+            def kernel(self, data):
+                """Double it."""
+                return data * 2
+
+        return DoubledReal
+
+    @staticmethod
+    def _running_abs():
+        """A subclass of Abs whose own kernel is cumulative, not pointwise."""
+
+        class RunningAbs(Abs):
+            """Cumulative magnitude along the first axis."""
+
+            name = None
+
+            def kernel(self, data):
+                """Sum the magnitudes along the first axis."""
+                return np.cumsum(np.abs(data), axis=0)
+
+        return RunningAbs
+
+    @pytest.mark.parametrize("make", ("_doubled_real", "_running_abs"))
+    def test_overriding_kernel_drops_parents_contract(
+        self, lazy_patch, recipe_loads, make
+    ):
+        """The parent's contract describes the parent's kernel, so it is refused."""
+        cls = getattr(self, make)()
+        # The eager result is not the input: a lazy no-op would be wrong.
+        eager = lazy_patch.load()
+        assert not np.array_equal(cls()(eager).data, eager.data)
+        recipe_loads.clear()
+        with pytest.raises(LazyOperationError, match=cls.__name__):
+            cls()(lazy_patch)
+        assert not recipe_loads
+
+    def test_inherited_kernel_and_contract_kept(self, lazy_patch):
+        """A subclass which changes neither keeps both."""
+
+        class Renamed(SeamLazyScale):
+            """The same operation under no name of its own."""
+
+            name = None
+
+        out = Renamed(factor=3)(lazy_patch)
+        assert len(out.data.chain) == 1
+
+    def test_contract_written_over_a_parents_kernel(self, lazy_patch):
+        """A contract a subclass states for the kernel it inherits holds."""
+
+        class PointwiseScale(SeamScale):
+            """States what its parent's kernel does."""
+
+            name = None
+
+            def chunk_contract(self, dtype, plan):
+                """Each sample needs only itself."""
+                return Pointwise()
+
+        out = PointwiseScale(factor=3)(lazy_patch)
+        assert np.array_equal(out.load().data, np.full((4, 3), -6.0))
+
+
 class TestLazyStep:
     """An operation with a contract appends a step and reads nothing."""
 
@@ -2047,6 +2121,10 @@ class TestLazyStep:
             """Computes float32 while its metadata keeps the input's dtype."""
 
             name = None
+
+            def chunk_contract(self, dtype, plan):
+                """Pointwise, for the kernel written here."""
+                return Pointwise()
 
             def kernel(self, data):
                 """Scale, in single precision."""
