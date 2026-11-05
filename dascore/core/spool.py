@@ -80,6 +80,7 @@ from dascore.core._spool_inventory import (
 )
 from dascore.core.inventory import _SYSTEM_FACT_NAMES, Inventory
 from dascore.core.inventory_loader import BLESSED_NAME, carries_inventory
+from dascore.core.patch import _is_lazy
 from dascore.exceptions import (
     InsufficientMemoryError,
     InvalidInventoryError,
@@ -91,9 +92,7 @@ from dascore.exceptions import (
     UnknownFiberFormatError,
     UnresolvedPatchError,
 )
-from dascore.lazy.recipe import Recipe
 from dascore.units import Quantity
-from dascore.utils.array_api import backend_name, to_numpy
 from dascore.utils.chunk_plan import (
     _SOURCE_COLUMNS,
     ChunkPlan,
@@ -136,7 +135,6 @@ from dascore.utils.explicit_ranges import (
     known_coordinates,
     looks_explicit,
 )
-from dascore.utils.identity import operation_context
 from dascore.utils.misc import (
     _spool_map,
     available_memory,
@@ -313,19 +311,9 @@ def _bytes_to_load(df: pd.DataFrame, lazy: Container[str] = frozenset()) -> int:
     return int(np.nansum(samples.to_numpy() * itemsize.to_numpy(dtype=float)))
 
 
-def _is_lazy(data) -> bool:
-    """Whether an array's values are read only when asked for."""
-    return isinstance(data, Recipe) or backend_name(data) == "dask"
-
-
 def _loaded(patch: dc.Patch) -> dc.Patch:
-    """The patch with its data array in memory."""
-    data = patch.data
-    if not _is_lazy(data):
-        return patch
-    # The array read is the one the patch described, so it keeps its id.
-    with operation_context():
-        return patch.to_patch(to_numpy(data))
+    """The patch with its data array in memory; see `Patch.load`."""
+    return patch.load()
 
 
 def _spool_input_message(data) -> str:
