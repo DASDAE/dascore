@@ -337,13 +337,19 @@ def _extract_attrs(
     Also says whether they are all of them: an attr the index cannot hold
     (a value no kind covers, a name a structural column owns) stays on
     the patch, and a row missing one cannot stand in for the patch. A
-    vendor field with no stored value is kept as JSON, if JSON restates it.
+    vendor model's declared defaults are kept as JSON, if JSON restates them.
     """
     raw = summary.attrs.model_dump()
     out = {}
-    complete = True
-    dtypes, defaults = {}, {}
-    vendor = type(summary.attrs).model_fields.keys() - PatchAttrs.model_fields.keys()
+    fields = type(summary.attrs).model_fields
+    defaults = {
+        name: fields[name].get_default(call_default_factory=True)
+        for name in fields.keys() - PatchAttrs.model_fields.keys()
+    }
+    # Rows rebuild base PatchAttrs, so a vendor model's declared defaults
+    # ride in the row to fill what the row or a merge leaves out.
+    complete = all(map(_json_exact, defaults.values()))
+    dtypes = {}
     for name, value in raw.items():
         status = _attr_name_status(name)
         if status == "reserved":
@@ -372,9 +378,10 @@ def _extract_attrs(
                     dtype.kind == "f" and typed.value != value
                 ):
                     complete = False  # SQL's float lost precision.
-        elif name in vendor and _json_exact(value):
-            # Reconstruction builds base PatchAttrs, which lacks this field.
-            defaults[name] = value
+        elif name in defaults:
+            # The stored default stands in only for the value it equals.
+            default = defaults[name]
+            complete &= type(value) is type(default) and value == default
         elif name not in PatchAttrs.model_fields or not _is_missing(value):
             # Only declared defaults can be recovered from an omitted value.
             # An empty extra attribute still has a name and a representation.
@@ -383,7 +390,7 @@ def _extract_attrs(
         out,
         complete,
         json.dumps(dtypes) if dtypes else None,
-        json.dumps(defaults) if defaults else None,
+        json.dumps(defaults) if defaults and complete else None,
     )
 
 

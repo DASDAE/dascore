@@ -3043,17 +3043,20 @@ class TestChunkFromIndex:
         assert np.array_equal(out.data, expected.data)
         assert out.coords == expected.coords
 
-    def test_vendor_model_merges_from_the_index(self, tmp_path, route):
-        """A vendor model's empty fields ride in the row, so no patch is read."""
+    @pytest.mark.parametrize("gauges", [(None, None), (10.0, 20.0)])
+    def test_vendor_model_merges_from_the_index(self, tmp_path, route, gauges):
+        """A vendor model's defaults ride in the row, so no patch is read."""
         spool = ex.get_example_spool("random_das", length=2, time_gap=0)
-        for num, patch in enumerate(spool):
-            patch = patch.update(attrs=FebusPatchAttrs(**patch.attrs.model_dump()))
+        for num, (patch, gauge) in enumerate(zip(spool, gauges)):
+            attrs = patch.attrs.model_dump() | {"gauge_length": gauge}
+            patch = patch.update(attrs=FebusPatchAttrs(**attrs))
             patch.io.write(tmp_path / f"p{num}.h5", "dasdae")
         indexed = dc.spool(tmp_path).update()
-        out = indexed.chunk(time=None)[0]
+        out = indexed.chunk(time=None, conflict="drop")[0]
         assert route.counts == {"patch": 0, "array": 2}
         route.force_patches()
-        expected = indexed.chunk(time=None)[0]
+        expected = indexed.chunk(time=None, conflict="drop")[0]
+        assert out.attrs.gauge_length is expected.attrs.gauge_length is None
         assert dict(out.attrs) == dict(expected.attrs)
         assert out.attrs.zone == expected.attrs.zone == ""
         assert np.array_equal(out.data, expected.data)

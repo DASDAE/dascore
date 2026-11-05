@@ -315,7 +315,7 @@ def _attrs_from_row(
 
 
 def _row_defaults(row: Mapping) -> dict[str, Any]:
-    """The vendor attrs fields a row stores no column for."""
+    """The declared defaults of the vendor attrs model a row was read with."""
     stored = row.get("_attr_defaults")
     return json.loads(stored) if isinstance(stored, str) and stored else {}
 
@@ -981,8 +981,9 @@ class PatchAssembler:
     def _assemble(self, data, dims, merge_dim, coords, attrs, defaults=None):
         """Build the merged patch from the members' data, coords and attrs."""
         coords, attrs = self._merged_meta(merge_dim, coords, attrs)
-        # The merge drops empty attrs, which the first member's vendor model
-        # would fill back in; rows rebuild base attrs, so restate them.
+        # The merge drops empty and conflicting attrs, which the first
+        # member's vendor model fills with its defaults; rows rebuild base
+        # attrs, so restate them.
         if defaults:
             present = attrs.model_dump()
             attrs = attrs.update(

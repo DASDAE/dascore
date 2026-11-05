@@ -163,4 +163,5 @@ class TestIndexedMerge:
         """A persisted index states the defaults it was written with."""
         row = dc.spool(directory)._df.iloc[0]
         assert row["_attrs_complete"]
-        assert json.loads(row["_attr_defaults"]) == {"schema_version": ""}
+        defaults = {"gauge_length": None, "schema_version": ""}
+        assert json.loads(row["_attr_defaults"]) == defaults

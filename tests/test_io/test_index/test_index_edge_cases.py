@@ -1572,7 +1572,35 @@ class TestWhatARowCannotState:
         record = patch_record(dc.scan(fetch("opto_das_1.hdf5"))[0])
         assert record.attrs_complete
         assert "gauge_length" in record.attrs
-        assert json.loads(record.attr_defaults) == {"schema_version": ""}
+        defaults = {"gauge_length": None, "schema_version": ""}
+        assert json.loads(record.attr_defaults) == defaults
+
+    def test_set_vendor_fields_still_store_defaults(self):
+        """A merge dropping a conflicting vendor field restores its default."""
+        patch = dc.get_example_patch().update(attrs=FebusPatchAttrs(gauge_length=10))
+        record = patch_record(PatchSummary.from_patch(patch))
+        assert record.attrs_complete
+        assert json.loads(record.attr_defaults)["gauge_length"] is None
+
+    def test_empty_value_unlike_default_requires_loading(self):
+        """An empty value the default does not equal cannot be restated."""
+
+        class _Attrs(dc.PatchAttrs):
+            level: float | None = 0.0
+
+        patch = dc.get_example_patch().update(attrs=_Attrs(level=None))
+        assert not patch_record(PatchSummary.from_patch(patch)).attrs_complete
+
+    def test_default_json_cannot_hold_requires_loading(self):
+        """A declared default JSON cannot restate keeps the patch path."""
+
+        class _Attrs(dc.PatchAttrs):
+            when: Any = np.datetime64("NaT")
+
+        patch = dc.get_example_patch().update(attrs=_Attrs(when=np.datetime64(1, "s")))
+        record = patch_record(PatchSummary.from_patch(patch))
+        assert not record.attrs_complete
+        assert record.attr_defaults is None
 
     @pytest.mark.parametrize(
         "value", [np.nan, np.datetime64("NaT"), np.float64("nan"), [1, 2]]
