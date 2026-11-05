@@ -104,7 +104,7 @@ def _merge_sorted_unique(first: np.ndarray, second: np.ndarray) -> np.ndarray:
 @dataclass(frozen=True, eq=False)
 class RecipeTable:
     """
-    The storage many lazy arrays share.
+    The storage many recipes share.
 
     Members of array `k` are the rows `member_offsets[k]:member_offsets[k+1]`
     of `source_row` and `cast`, whose sources sit in one shared table, and
@@ -765,8 +765,9 @@ class Recipe:
         Naming costs what the cuts did: an axis every member spans alike is
         an interval rather than a pair of corners, so an array of any
         number of dimensions is named as cheaply as one which is cut the
-        same way in two. One cut on more than `MAX_CUT_AXES` distinct axes
-        is refused, since every axis cut doubles the corners.
+        same way in two. One cut on more than
+        [`MAX_CUT_AXES`](`dascore.lazy.identity.MAX_CUT_AXES`) distinct
+        axes is refused, since every axis cut doubles the corners.
 
         Examples
         --------

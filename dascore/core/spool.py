@@ -91,7 +91,7 @@ from dascore.exceptions import (
     UnknownFiberFormatError,
     UnresolvedPatchError,
 )
-from dascore.lazy import Recipe
+from dascore.lazy.recipe import Recipe
 from dascore.units import Quantity
 from dascore.utils.array_api import backend_name, to_numpy
 from dascore.utils.chunk_plan import (

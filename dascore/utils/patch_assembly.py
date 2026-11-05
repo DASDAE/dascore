@@ -7,7 +7,7 @@ joins member rows to their source rows, loads each source patch through
 a caller-supplied loader, applies exact trims, and merges multi-member
 outputs. When the output size is known, a merge whose members the rows
 fully describe becomes a
-[`Recipe`](`dascore.lazy.recipe.Recipe`) recipe -- the window
+[`Recipe`](`dascore.lazy.recipe.Recipe`) -- the window
 of a stored array each member is, read into one output -- and any other
 such merge streams loaded patches into a pre-allocated buffer; the rest
 concatenate. The spool owns *what* rows exist; this module owns *how* a
@@ -37,7 +37,7 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
-from dascore.lazy import Recipe
+from dascore.lazy.recipe import Recipe
 from dascore.units import conversion_factors, get_quantity, units_match
 from dascore.utils.array_api import to_numpy
 from dascore.utils.attrs import (
@@ -820,7 +820,7 @@ class PatchAssembler:
 
     def _recipe(self, rows, metas, dims, axis) -> Recipe | None:
         """
-        The lazy array the members make, or None when one cannot be named.
+        The recipe the members make, or None when one cannot be named.
 
         Nothing is read here: every member is a window of a stored array
         whose shape its row states, so the members are laid end to end

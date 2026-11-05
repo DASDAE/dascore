@@ -1,7 +1,7 @@
 """
 Dictionary encoded columns, string buffers and the sources table.
 
-Members of a lazy array keep what they read as columns: a column holds each
+Members of a recipe keep what they read as columns: a column holds each
 distinct value once and a code per row, and the sources table holds one row
 per distinct stored array or constant.
 """

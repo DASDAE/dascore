@@ -24,7 +24,7 @@ from dascore.io import FiberIO
 from dascore.io import core as io_core
 from dascore.io.h5simple.core import H5Simple
 from dascore.io.index.planned import PlanResolver
-from dascore.lazy import Recipe
+from dascore.lazy.recipe import Recipe
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import H5Reader
 from tests.conftest import needs_chunk_iter

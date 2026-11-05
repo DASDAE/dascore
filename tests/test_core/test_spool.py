@@ -35,7 +35,7 @@ from dascore.exceptions import (
 )
 from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
-from dascore.lazy import Recipe
+from dascore.lazy.recipe import Recipe
 from dascore.proc.basic import Abs
 from dascore.utils.display import range_texts
 from dascore.utils.downloader import fetch

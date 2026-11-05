@@ -7,7 +7,7 @@ import pytest
 
 import dascore as dc
 from dascore.core.source import ArraySource
-from dascore.lazy import Recipe, concat, stack
+from dascore.lazy.recipe import Recipe, concat, stack
 
 # How many members the big table holds, and how long each one is.
 MEMBERS = 100_000

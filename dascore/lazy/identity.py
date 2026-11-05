@@ -1,5 +1,5 @@
 """
-The id of a lazy array, which no way of cutting it into members changes.
+The id of a recipe, which no way of cutting it into members changes.
 
 The members are grouped by what they read, each group's region is reduced to
 a form unique to it, and the digest is taken over those groups.

@@ -39,7 +39,7 @@ from dascore.exceptions import (
 from dascore.io.febus.core import FebusPatchAttrs
 from dascore.io.index import catalog, planned
 from dascore.io.index.schema import SOURCE_STAT_COLUMNS
-from dascore.lazy import Recipe
+from dascore.lazy.recipe import Recipe
 from dascore.units import get_quantity
 from dascore.utils.chunk_plan import (
     _adopt_lone_steps,
