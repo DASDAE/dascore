@@ -7,7 +7,7 @@ joins member rows to their source rows, loads each source patch through
 a caller-supplied loader, applies exact trims, and merges multi-member
 outputs. When the output size is known, a merge whose members the rows
 fully describe becomes a
-[`LazyArray`](`dascore.core.lazy_array.LazyArray`) recipe -- the window
+[`LazyArray`](`dascore.lazy.recipe.LazyArray`) recipe -- the window
 of a stored array each member is, read into one output -- and any other
 such merge streams loaded patches into a pre-allocated buffer; the rest
 concatenate. The spool owns *what* rows exist; this module owns *how* a
@@ -28,7 +28,6 @@ import pandas as pd
 import dascore as dc
 from dascore.core.coordmanager import CoordManager, get_coord_manager
 from dascore.core.coords import _grid_coord, get_coord
-from dascore.core.lazy_array import LazyArray
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
     ChunkError,
@@ -38,6 +37,7 @@ from dascore.exceptions import (
     UnitError,
 )
 from dascore.io.index.schema import RESERVED_ATTR_COLUMNS
+from dascore.lazy import LazyArray
 from dascore.units import conversion_factors, get_quantity, units_match
 from dascore.utils.array_api import to_numpy
 from dascore.utils.attrs import (

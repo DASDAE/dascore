@@ -19,7 +19,6 @@ import dascore.core.spool as spool_module
 import dascore.utils.patch_assembly as assembly_mod
 from dascore.config import config_context
 from dascore.core.coords import get_coord
-from dascore.core.lazy_array import LazyArray
 from dascore.core.spool import BaseSpool, Spool, _bytes_to_load
 from dascore.examples import ricker_moveout
 from dascore.exceptions import (
@@ -36,6 +35,7 @@ from dascore.exceptions import (
 )
 from dascore.io.index.planned import PlanResolver
 from dascore.io.segy import SegyV1_0
+from dascore.lazy import LazyArray
 from dascore.proc.basic import Abs
 from dascore.utils.display import range_texts
 from dascore.utils.downloader import fetch

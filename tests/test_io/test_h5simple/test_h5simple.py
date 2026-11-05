@@ -18,13 +18,13 @@ import pytest
 
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
-from dascore.core.lazy_array import LazyArray
 from dascore.core.source import ArraySource
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io import FiberIO
 from dascore.io import core as io_core
 from dascore.io.h5simple.core import H5Simple
 from dascore.io.index.planned import PlanResolver
+from dascore.lazy import LazyArray
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import H5Reader
 from tests.conftest import needs_chunk_iter

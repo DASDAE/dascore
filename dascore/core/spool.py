@@ -80,7 +80,6 @@ from dascore.core._spool_inventory import (
 )
 from dascore.core.inventory import _SYSTEM_FACT_NAMES, Inventory
 from dascore.core.inventory_loader import BLESSED_NAME, carries_inventory
-from dascore.core.lazy_array import LazyArray
 from dascore.exceptions import (
     InsufficientMemoryError,
     InvalidInventoryError,
@@ -92,6 +91,7 @@ from dascore.exceptions import (
     UnknownFiberFormatError,
     UnresolvedPatchError,
 )
+from dascore.lazy import LazyArray
 from dascore.units import Quantity
 from dascore.utils.array_api import backend_name, to_numpy
 from dascore.utils.chunk_plan import (

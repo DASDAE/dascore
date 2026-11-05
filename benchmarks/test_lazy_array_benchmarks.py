@@ -6,8 +6,8 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.core.lazy_array import LazyArray, concat, stack
 from dascore.core.source import ArraySource
+from dascore.lazy import LazyArray, concat, stack
 
 # How many members the big table holds, and how long each one is.
 MEMBERS = 100_000
