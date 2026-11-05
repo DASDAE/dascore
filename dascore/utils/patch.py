@@ -35,13 +35,12 @@ from dascore.exceptions import (
 )
 from dascore.units import get_quantity
 from dascore.utils.array_api import (
-    LAZY_BACKEND,
     array_namespace,
     asarray_like,
     backend_name,
     is_foreign,
     is_numpy,
-    lazy_refusal,
+    refuse_lazy,
     to_numpy,
     warn_numpy_fallback,
 )
@@ -405,6 +404,12 @@ def _to_numpy_arg(obj):
     return obj
 
 
+def _operand_arrays(args, kwargs=None):
+    """Yield every operand, a patch as its data."""
+    for value in (*args, *(kwargs or {}).values()):
+        yield value.data if isinstance(value, dc.Patch) else value
+
+
 def numpy_fallback(name, data, func, args=(), kwargs=None, stacklevel=4):
     """
     Apply a function numpy can perform but the patch's backend cannot.
@@ -432,13 +437,11 @@ def numpy_fallback(name, data, func, args=(), kwargs=None, stacklevel=4):
     Raises
     ------
     LazyOperationError
-        If data are lazy: converting them would read them, which the lazy
+        If any operand is lazy: converting it would read it, which the lazy
         backend never does behind the caller's back.
     """
-    backend = backend_name(data)
-    if backend == LAZY_BACKEND:
-        raise lazy_refusal(name)
-    warn_numpy_fallback(name, backend, stacklevel=stacklevel + 1)
+    refuse_lazy(name, (data, *_operand_arrays(args, kwargs)))
+    warn_numpy_fallback(name, backend_name(data), stacklevel=stacklevel + 1)
     # Crossing the backend boundary is part of the operation being applied,
     # not data replacement: the same values are the same data, and what
     # `func` records still stands.

@@ -142,6 +142,26 @@ class TestNoFallback:
             run(lazy)
         assert not recipe_loads
 
+    @pytest.mark.parametrize(
+        "run",
+        (
+            lambda x, y: y + x,
+            lambda x, y: x + y,
+            lambda x, y: np.add(y, x),
+            lambda x, y: np.subtract(y, x),
+        ),
+        ids=("other_first", "lazy_first", "np_add", "np_subtract"),
+    )
+    def test_any_operand_lazy_refused(self, lazy, recipe_loads, run):
+        """Whichever operand comes first, a lazy one is refused, not read."""
+        da = pytest.importorskip("dask.array")
+        eager = lazy.load()
+        recipe_loads.clear()
+        dask_patch = eager.new(data=da.from_array(np.asarray(eager.data)))
+        with pytest.raises(LazyOperationError):
+            run(lazy, dask_patch)
+        assert not recipe_loads
+
     def test_names_the_ufunc(self, lazy):
         """The message names the operation refused."""
         with pytest.raises(LazyOperationError, match=r"^add cannot run"):

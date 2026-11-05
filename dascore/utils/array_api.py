@@ -196,6 +196,21 @@ def lazy_refusal(name: str) -> LazyOperationError:
     return LazyOperationError(msg)
 
 
+def refuse_lazy(name: str, arrays) -> None:
+    """
+    Raise `lazy_refusal(name)` if any of `arrays` is lazy; read none of them.
+
+    Parameters
+    ----------
+    name
+        The name of the operation, which the message states.
+    arrays
+        The arrays, and anything else, an operation would read.
+    """
+    if any(is_foreign(x) and backend_name(x) == LAZY_BACKEND for x in arrays):
+        raise lazy_refusal(name)
+
+
 def namespace_name(namespace: Any) -> str:
     """
     Return the backend name of an array API namespace.
