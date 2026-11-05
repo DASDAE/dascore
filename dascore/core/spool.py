@@ -80,7 +80,6 @@ from dascore.core._spool_inventory import (
 )
 from dascore.core.inventory import _SYSTEM_FACT_NAMES, Inventory
 from dascore.core.inventory_loader import BLESSED_NAME, carries_inventory
-from dascore.core.lazy_array import LazyArray
 from dascore.exceptions import (
     InsufficientMemoryError,
     InvalidInventoryError,
@@ -92,6 +91,7 @@ from dascore.exceptions import (
     UnknownFiberFormatError,
     UnresolvedPatchError,
 )
+from dascore.lazy.recipe import Recipe
 from dascore.units import Quantity
 from dascore.utils.array_api import backend_name, to_numpy
 from dascore.utils.chunk_plan import (
@@ -309,7 +309,7 @@ def _bytes_to_load(df: pd.DataFrame, lazy: Container[str] = frozenset()) -> int:
 
 def _is_lazy(data) -> bool:
     """Whether an array's values are read only when asked for."""
-    return isinstance(data, LazyArray) or backend_name(data) == "dask"
+    return isinstance(data, Recipe) or backend_name(data) == "dask"
 
 
 def _loaded(patch: dc.Patch) -> dc.Patch:

@@ -18,13 +18,13 @@ import pytest
 
 import dascore as dc
 from dascore.constants import STORAGE_PROVENANCE_ATTRS
-from dascore.core.lazy_array import LazyArray
 from dascore.core.source import ArraySource
 from dascore.exceptions import UnknownFiberFormatError
 from dascore.io import FiberIO
 from dascore.io import core as io_core
 from dascore.io.h5simple.core import H5Simple
 from dascore.io.index.planned import PlanResolver
+from dascore.lazy.recipe import Recipe
 from dascore.utils.downloader import fetch
 from dascore.utils.hdf5 import H5Reader
 from tests.conftest import needs_chunk_iter
@@ -289,7 +289,7 @@ class TestH5Simple:
         patch = dc.read(h5simple_path, file_format=H5Simple.name)[0]
         expected = np.array(patch.data)[:6] * 2
         source = replace(patch._source, format=Compatible.name)
-        array = LazyArray.from_sources([source[0:2], source[2:4], source[4:6]])
+        array = Recipe.from_sources([source[0:2], source[2:4], source[4:6]])
         monkeypatch.setattr(h5py.Group, "items", items)
         np.testing.assert_array_equal(array.load(), expected)
         assert prepared == [""] and not traversals
@@ -440,7 +440,7 @@ class TestArrayLookup:
         np.testing.assert_array_equal(
             H5Simple().read_array(path, ((1, 4), (1, 3))), data[1:4, 1:3]
         )
-        lazy = LazyArray.from_source(source)
+        lazy = Recipe.from_source(source)
         np.testing.assert_array_equal(lazy[1:4, 1:3].load(), data[1:4, 1:3])
 
     def test_no_walk(self, array_file, monkeypatch):
@@ -456,7 +456,7 @@ class TestArrayLookup:
         monkeypatch.setattr(h5py.Group, "items", refuse)
         monkeypatch.setattr(h5py.Group, "__iter__", refuse)
         np.testing.assert_array_equal(H5Simple().read_array(path), data)
-        np.testing.assert_array_equal(LazyArray.from_source(source).load(), data)
+        np.testing.assert_array_equal(Recipe.from_source(source).load(), data)
 
     @pytest.mark.parametrize("names", [(), ("raw", "data"), ("group",)])
     def test_invalid_data_nodes(self, tmp_path, names):
@@ -502,7 +502,7 @@ class TestArrayLookup:
             lambda source: ("/fixed/h5simple.h5", 4096, 123456789),
         )
         patch = dc.read(path)[0]
-        lazy = LazyArray.from_source(patch._source)
+        lazy = Recipe.from_source(patch._source)
         assert patch._source.key == ""
         assert patch.attrs.data_id == lazy.data_id == "af8aa5c7443693b5f6af5dd541cc83d4"
 
@@ -595,7 +595,7 @@ class TestOffsetReads:
             return original(*args, **kwargs)
 
         monkeypatch.setattr("builtins.open", counted)
-        array = LazyArray.from_sources([source[20:30], source[0:4], source[9:12]])
+        array = Recipe.from_sources([source[20:30], source[0:4], source[9:12]])
         expected = np.concatenate(
             [_stored(path, slice(*x)) for x in ((20, 30), (0, 4), (9, 12))]
         )
@@ -662,20 +662,20 @@ class TestOffsetReads:
         one with empty layout cells keeps its offsets exactly through parquet.
         """
         source = dc.read(path)[0]._source
-        frame = LazyArray.from_sources([source[0:10], source[10:20]]).to_frame()
+        frame = Recipe.from_sources([source[0:10], source[10:20]]).to_frame()
         layout = ["offsets", "chunk_rows", "mtime_ns", "size_bytes"]
         older = frame[frame["ordinal"] == 0].drop(columns=layout)
         joined = pd.concat([older, frame[frame["ordinal"] == 1]])
         expected = _stored(path, slice(0, 20))
-        back = LazyArray.from_frame(joined, (20, 5), source.dtype)
+        back = Recipe.from_frame(joined, (20, 5), source.dtype)
         np.testing.assert_array_equal(back.load(), expected)
         assert len(stored_reads) == 1
         pytest.importorskip("pyarrow")
         filled = ArraySource.full((4, 5), 0.0, dtype=source.dtype)
-        array = LazyArray.from_sources([source[0:10], filled])
+        array = Recipe.from_sources([source[0:10], filled])
         array.to_frame().to_parquet(tmp_path / "frame.parquet")
         stored = pd.read_parquet(tmp_path / "frame.parquet")
-        back = LazyArray.from_frame(stored, array.shape, array.dtype)
+        back = Recipe.from_frame(stored, array.shape, array.dtype)
         np.testing.assert_array_equal(back.load(), array.load())
         assert len(stored_reads) == 1
 

@@ -28,7 +28,6 @@ import dascore.examples as ex
 import dascore.utils.patch_assembly as assembly_module
 from dascore.config import config_context
 from dascore.core.coords import Grid, NumericCoord, get_coord
-from dascore.core.lazy_array import LazyArray
 from dascore.core.source import ArraySource
 from dascore.exceptions import (
     ChunkError,
@@ -40,6 +39,7 @@ from dascore.exceptions import (
 from dascore.io.febus.core import FebusPatchAttrs
 from dascore.io.index import catalog, planned
 from dascore.io.index.schema import SOURCE_STAT_COLUMNS
+from dascore.lazy.recipe import Recipe
 from dascore.units import get_quantity
 from dascore.utils.chunk_plan import (
     _adopt_lone_steps,
@@ -4725,7 +4725,7 @@ class TestTrimmedRecipeMerge:
             msg = "the disk is on fire"
             raise RuntimeError(msg)
 
-        monkeypatch.setattr(LazyArray, "load", boom)
+        monkeypatch.setattr(Recipe, "load", boom)
         with pytest.raises(RuntimeError, match="on fire"):
             spool.chunk(time=None)[0]
 
