@@ -653,6 +653,7 @@ class SQLiteIndexBackend:
                             patch.distance_step,
                             int(patch.attrs_complete),
                             patch.attr_dtypes,
+                            patch.attr_defaults,
                             patch.data_offsets,
                             patch.data_chunk_rows,
                         )

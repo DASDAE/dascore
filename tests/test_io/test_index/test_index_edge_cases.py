@@ -76,6 +76,7 @@ from dascore.io.index.query import (
 )
 from dascore.units import get_quantity, m, s
 from dascore.units import get_quantity as _gq
+from dascore.utils.downloader import fetch
 from dascore.utils.misc import _canonical_range
 
 
@@ -1555,11 +1556,42 @@ class TestWhatARowCannotState:
                 assert expected.type(row[name]) == patch.attrs[name]
             assert "_attr_dtypes" not in spool.get_contents().columns
 
-    def test_vendor_attribute_model_requires_loading(self):
-        """A scalar row cannot recreate a vendor's attribute class and defaults."""
+    def test_vendor_defaults_ride_with_the_row(self):
+        """A vendor field the index stores no value for is kept as JSON."""
         patch = dc.get_example_patch().update(attrs=FebusPatchAttrs())
         row = dc.spool([patch])._df.iloc[0]
-        assert not row["_attrs_complete"]
+        assert row["_attrs_complete"]
+        defaults = json.loads(row["_attr_defaults"])
+        assert defaults == {"gauge_length": None, "pulse_length": None} | dict.fromkeys(
+            ("group", "source", "zone", "folog_a1_software_version"), ""
+        )
+        assert "_attr_defaults" not in dc.spool([patch]).get_contents().columns
+
+    def test_optodas_summary_is_complete(self):
+        """An OptoDAS row stores gauge_length and keeps its empty schema_version."""
+        record = patch_record(dc.scan(fetch("opto_das_1.hdf5"))[0])
+        assert record.attrs_complete
+        assert "gauge_length" in record.attrs
+        assert json.loads(record.attr_defaults) == {"schema_version": ""}
+
+    @pytest.mark.parametrize(
+        "value", [np.nan, np.datetime64("NaT"), np.float64("nan"), [1, 2]]
+    )
+    def test_vendor_value_json_cannot_hold_requires_loading(self, value):
+        """A vendor field with a value JSON cannot restate keeps the patch path."""
+
+        class _Attrs(dc.PatchAttrs):
+            level: Any = None
+
+        patch = dc.get_example_patch().update(attrs=_Attrs(level=value))
+        record = patch_record(PatchSummary.from_patch(patch))
+        assert not record.attrs_complete
+
+    def test_plain_attrs_store_no_defaults(self):
+        """A base attrs model has no vendor fields to restate."""
+        record = patch_record(PatchSummary.from_patch(dc.get_example_patch()))
+        assert record.attrs_complete
+        assert record.attr_defaults is None
 
     def test_source_dtypes_survive_shared_coordinate_definitions(self):
         """Identical coordinates share a definition; a dtype is part of one."""
@@ -1614,7 +1646,7 @@ class TestTransactionIsolation:
             source_path="mem://one",
             source_format="mem",
             format_version="",
-            patches=(patch_record(patch.summary),),
+            patches=(patch_record(PatchSummary.from_patch(patch)),),
         )
         backend = get_backend(str(tmp_path / "idx.sqlite3"))
         backend.write_sources([record])

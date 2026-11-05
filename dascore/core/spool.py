@@ -3059,6 +3059,7 @@ class Spool(NodeRepr, NamespaceOwner):
                 # what the index can state, not what the patch is
                 "_attrs_complete",
                 "_attr_dtypes",
+                "_attr_defaults",
                 # where a file keeps a patch's bytes is not what it is
                 "_data_offsets",
                 "_data_chunk_rows",

@@ -217,6 +217,7 @@ class PatchRecord:
     # whether ``attrs`` holds every attr the patch defines
     attrs_complete: bool = True
     attr_dtypes: str | None = None
+    attr_defaults: str | None = None
     data_offsets: str | None = None
     data_chunk_rows: int | None = None
 
@@ -329,19 +330,20 @@ def _attr_name_status(name: str) -> str:
 
 def _extract_attrs(
     summary: PatchSummary,
-) -> tuple[dict[str, TypedValue], bool, str | None]:
+) -> tuple[dict[str, TypedValue], bool, str | None, str | None]:
     """
     Get indexable typed attrs from a patch summary.
 
     Also says whether they are all of them: an attr the index cannot hold
     (a value no kind covers, a name a structural column owns) stays on
-    the patch, and a row missing one cannot stand in for the patch.
+    the patch, and a row missing one cannot stand in for the patch. A
+    vendor field with no stored value is kept as JSON, if JSON restates it.
     """
     raw = summary.attrs.model_dump()
     out = {}
-    # Reconstruction creates base PatchAttrs; vendor models need their reader.
-    complete = type(summary.attrs) is PatchAttrs
-    dtypes = {}
+    complete = True
+    dtypes, defaults = {}, {}
+    vendor = type(summary.attrs).model_fields.keys() - PatchAttrs.model_fields.keys()
     for name, value in raw.items():
         status = _attr_name_status(name)
         if status == "reserved":
@@ -370,11 +372,26 @@ def _extract_attrs(
                     dtype.kind == "f" and typed.value != value
                 ):
                     complete = False  # SQL's float lost precision.
+        elif name in vendor and _json_exact(value):
+            # Reconstruction builds base PatchAttrs, which lacks this field.
+            defaults[name] = value
         elif name not in PatchAttrs.model_fields or not _is_missing(value):
             # Only declared defaults can be recovered from an omitted value.
             # An empty extra attribute still has a name and a representation.
             complete = False
-    return out, complete, json.dumps(dtypes) if dtypes else None
+    return (
+        out,
+        complete,
+        json.dumps(dtypes) if dtypes else None,
+        json.dumps(defaults) if defaults else None,
+    )
+
+
+def _json_exact(value) -> bool:
+    """True when JSON hands back the same value of the same type."""
+    if type(value) is float:
+        return math.isfinite(value)
+    return value is None or type(value) in (str, bool, int)
 
 
 # What a directory name may never claim to be. A path says where data is
@@ -596,7 +613,7 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
     coords = tuple(coords)
     time_min, time_max, time_step = _envelope(coords, "time", "time")
     dist_min, dist_max, dist_step = _envelope(coords, "distance", "num")
-    attrs, attrs_complete, attr_dtypes = _extract_attrs(summary)
+    attrs, attrs_complete, attr_dtypes, attr_defaults = _extract_attrs(summary)
     return PatchRecord(
         source_patch_key=normalize_source_patch_key(summary.source_patch_key),
         dims=",".join(summary.dims),
@@ -618,6 +635,7 @@ def patch_record(summary: PatchSummary) -> PatchRecord:
         coords=coords,
         attrs_complete=attrs_complete,
         attr_dtypes=attr_dtypes,
+        attr_defaults=attr_defaults,
         data_offsets=_offsets_text(summary.data_offsets) or None,
         data_chunk_rows=summary.data_chunk_rows or None,
     )

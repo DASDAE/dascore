@@ -2,6 +2,7 @@
 Tests for optoDAS files.
 """
 
+import json
 import shutil
 
 import h5py
@@ -9,6 +10,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
+from dascore.io.index import planned
 from dascore.io.optodas import OptoDASV8
 from dascore.utils.downloader import fetch
 
@@ -118,3 +120,47 @@ class TestDataScale:
         expected = dc.read(scaled_file)[0].select(samples=True, time=(1, 4))
         np.testing.assert_array_equal(out, expected.data)
         assert str(out.dtype) == dc.scan(scaled_file)[0].dtype
+
+
+class TestIndexedMerge:
+    """An index row restates the OptoDAS attrs, so merges plan from it."""
+
+    @pytest.fixture(scope="class")
+    def directory(self, tmp_path_factory):
+        """Two adjacent OptoDAS files, the second shifted by 10 s."""
+        path = tmp_path_factory.mktemp("optodas_adjacent")
+        for num in range(2):
+            out = path / f"file_{num}.hdf5"
+            shutil.copyfile(fetch("opto_das_1.hdf5"), out)
+            with h5py.File(out, "r+") as h5:
+                h5["header/time"][()] = 1695736872.0 + 10 * num
+        dc.spool(path).update()
+        return path
+
+    def test_merge_equals_reader_merge(self, directory, monkeypatch):
+        """The indexed merge loads no member through the reader."""
+        loads = []
+        original = planned.PlanResolver._load_member
+
+        def counted(resolver, kwargs):
+            loads.append(kwargs)
+            return original(resolver, kwargs)
+
+        monkeypatch.setattr(planned.PlanResolver, "_load_member", counted)
+        merged = dc.spool(directory).chunk(time=None)[0]
+        assert not loads
+        files = sorted(directory.glob("*.hdf5"))
+        patches = [dc.read(x)[0] for x in files]
+        expected = dc.spool(patches).chunk(time=None)[0]
+        assert merged.shape == (40000, 550)
+        np.testing.assert_array_equal(merged.data, expected.data)
+        assert merged.coords == expected.coords
+        assert merged.attrs.model_dump() == expected.attrs.model_dump()
+        assert merged.attrs.schema_version == ""
+        assert merged.attrs.gauge_length == patches[0].attrs.gauge_length
+
+    def test_reopened_index_keeps_defaults(self, directory):
+        """A persisted index states the defaults it was written with."""
+        row = dc.spool(directory)._df.iloc[0]
+        assert row["_attrs_complete"]
+        assert json.loads(row["_attr_defaults"]) == {"schema_version": ""}
