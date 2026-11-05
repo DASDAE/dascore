@@ -32,6 +32,7 @@ from dascore.exceptions import (
     PatchError,
 )
 from dascore.lazy.array import LazyArray
+from dascore.lazy.chain import Node
 from dascore.lazy.contract import ChunkContract, Pointwise, Unchanged
 from dascore.lazy.kernels import lazy_kernel
 from dascore.lazy.recipe import Recipe
@@ -1956,8 +1957,25 @@ class TestLazyRefusal:
             Haloed()(lazy_patch)
         assert not recipe_loads
 
+    def test_reconcile_refused_before_it_runs(self, lazy_patch, recipe_loads):
+        """A reconcile is given the kernel's result, so it never sees lazy data."""
+
+        class Reading(SeamLazyScale):
+            """Reads the result in its reconcile."""
+
+            name = None
+
+            def reconcile(self, data, out, meta):
+                """Look at the values."""
+                np.asarray(data)
+                return out
+
+        with pytest.raises(LazyOperationError, match="Reading cannot run"):
+            Reading(factor=3)(lazy_patch)
+        assert not recipe_loads
+
     def test_reconciled_patch_refused(self, lazy_patch, recipe_loads):
-        """A reconcile which returns a patch drops the kernel's result."""
+        """With a lazy kernel of its own, a reconcile returning a patch is refused."""
 
         class Reconciled(SeamLazyScale):
             """Reconciles to a patch of its own."""
@@ -1967,6 +1985,11 @@ class TestLazyRefusal:
             def reconcile(self, data, out, meta):
                 """A patch, not metadata."""
                 return out.to_patch(np.zeros(out.shape))
+
+        @register_kernel(Reconciled, "lazy")
+        def _append(processor, data, **plan):
+            """Chain the step, as the generic kernel would."""
+            return data._appended(Node(processor, plan))
 
         with pytest.raises(LazyOperationError, match="reconcile returns a patch"):
             Reconciled()(lazy_patch)

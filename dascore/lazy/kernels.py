@@ -6,7 +6,8 @@ It computes nothing. It asks the processor for its
 plan -- a contract written above the class which owns the kernel describes
 some other kernel, so it does not count -- then:
 
-- no contract: refuses, before anything is read;
+- no contract, or a `reconcile` of the processor's own, which would be
+  handed the lazy array: refuses, before anything is read;
 - [`Unchanged`](`dascore.lazy.contract.Unchanged`): hands the data back, so
   the operation is the same no-op it is on data in memory;
 - [`Pointwise`](`dascore.lazy.contract.Pointwise`): appends the operation
@@ -47,7 +48,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from dascore.core.processor import _computes
+from dascore.core.processor import PatchProcessor, _computes
 from dascore.lazy.array import LazyArray
 from dascore.lazy.chain import Node
 from dascore.lazy.contract import Pointwise, Unchanged
@@ -90,6 +91,9 @@ def _contract(processor, dtype, plan: dict[str, Any]):
     a contract it inherits from above that kernel was written for another.
     """
     mro = type(processor).__mro__
+    # A reconcile is handed the kernel's result, and may read it.
+    if type(processor).reconcile is not PatchProcessor.reconcile:
+        return None
     owner = next((x for x in mro if _computes(x)), mro[0])
     stated = next(x for x in mro if "chunk_contract" in x.__dict__)
     if not issubclass(stated, owner):
