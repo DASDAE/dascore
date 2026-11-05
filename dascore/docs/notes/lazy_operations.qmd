@@ -30,7 +30,13 @@ loaded = out.load()
 assert loaded.dtype == out.dtype and loaded.shape == out.shape
 ```
 
-**The lazy backend never falls back.** An operation with no contract raises [`LazyOperationError`](`dascore.exceptions.LazyOperationError`) before anything is read, where another backend would convert to NumPy. So do arithmetic and NumPy functions on the patch. A patch's repr describes lazy data without reading them. Reading happens only when the caller asks for the values: `Patch.load`, `np.asarray(patch)`, or writing the patch to a file.
+**The lazy backend never falls back.** An operation with no contract raises [`LazyOperationError`](`dascore.exceptions.LazyOperationError`) before anything is read, where another backend would convert to NumPy. So do arithmetic and NumPy functions on the patch, whichever operand is lazy, and `rolling`, stacking a spool, and the waterfall and specplot figures. A patch's repr describes lazy data without reading them. The data are read in these places only:
+
+- `Patch.load` (and `Spool.load`, which calls it), `np.asarray(patch)`, and writing the patch to a file, where the caller asks for the values;
+- `Patch.equals` (and `==`), which compares them;
+- taking a merged patch from a spool, as `spool.chunk(time=None)[0]` does, since that is how a spool loads; a merge which stays lazy is a later feature.
+
+Everything else refuses.
 
 ```{python}
 from dascore.exceptions import LazyOperationError

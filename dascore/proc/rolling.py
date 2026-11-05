@@ -11,6 +11,7 @@ import pandas as pd
 import dascore as dc
 from dascore.constants import samples_arg_description
 from dascore.exceptions import ParameterError
+from dascore.utils.array_api import refuse_lazy
 from dascore.utils.docs import compose_docstring
 from dascore.utils.identity import operation_context, stamp, try_operation_id
 from dascore.utils.patch import (
@@ -339,6 +340,9 @@ def rolling(
     >>> # drop nan at the start of the time axis.
     >>> out = mean_patch.dropna("time")
     """
+    # The rollers read the array whole, which lazy data never give unasked;
+    # metadata, which a roller is also built on, holds none.
+    refuse_lazy("rolling", [getattr(patch, "data", None)])
     resolved = resolve_window(
         patch,
         kwargs,

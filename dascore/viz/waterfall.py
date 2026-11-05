@@ -14,6 +14,7 @@ from matplotlib.patches import Rectangle
 from dascore.constants import DEFAULT_COLORMAPS, PatchType
 from dascore.core.coordmanager import _cell_edge_names
 from dascore.exceptions import ParameterError
+from dascore.utils.array_api import refuse_lazy
 from dascore.utils.gaps import GapTolerance, get_gap_edges, is_monotonic_and_finite
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import (
@@ -328,6 +329,8 @@ def waterfall(
     ``scale=(0, 1)`` for the full data range. A scalar such as ``scale=1.0``
     centres on the mean, so it can still clip skewed data.
     """
+    # Every numpy call below would read lazy data whole, again and again.
+    refuse_lazy("waterfall", [patch.data])
     if 0 in patch.shape:
         msg = "Cannot plot a Patch with an empty dimension."
         raise ParameterError(msg)

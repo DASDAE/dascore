@@ -1858,6 +1858,8 @@ def stack_patches(
     >>> stacked_patch = spool.stack(dim_vary='time')
     """
     # check the dims/coords of first patch (considered to be standard for rest)
+    # Adding arrays reads them, and zeros_like reads one for its shape.
+    refuse_lazy("stack", (x.data for x in patches))
     init_patch = patches[0]
     stack_arr = np.zeros_like(init_patch.data)
 

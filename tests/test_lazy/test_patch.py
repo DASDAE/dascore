@@ -178,3 +178,40 @@ class TestNoFallback:
         path = tmp_path / "written.h5"
         dc.write(Negate()(lazy), path, "dasdae")
         assert np.array_equal(dc.read(path)[0].data, -stored_float.data)
+
+
+class TestOtherReaders:
+    """Routes outside operations which would read lazy data refuse instead."""
+
+    @pytest.mark.parametrize(
+        "run",
+        (
+            lambda x: x.rolling(time=10, samples=True).mean(),
+            lambda x: x.rolling(time=10, samples=True, engine="pandas").mean(),
+            lambda x: x.viz.waterfall(show=False),
+            lambda x: dc.spool([x, x]).stack(dim_vary="time"),
+        ),
+        ids=("rolling", "rolling_pandas", "waterfall", "stack"),
+    )
+    def test_refused(self, lazy, recipe_loads, run):
+        """The lazy error, and nothing read."""
+        with pytest.raises(LazyOperationError, match=r"patch\.load\(\)"):
+            run(lazy)
+        assert not recipe_loads
+
+    def test_stack_with_one_lazy(self, lazy, recipe_loads):
+        """A lazy patch anywhere in the stack is refused."""
+        eager = lazy.load()
+        recipe_loads.clear()
+        with pytest.raises(LazyOperationError, match="stack"):
+            dc.spool([eager, lazy]).stack(dim_vary="time")
+        assert not recipe_loads
+
+    def test_specplot(self, recipe_loads):
+        """A lazy patch with a Fourier coordinate is not drawn either."""
+        recipe = Recipe.from_source(ArraySource.full((4, 3), 1.0))
+        coords = {"x": np.arange(4.0), "ft_time": np.arange(3.0)}
+        patch = dc.Patch(data=recipe, coords=coords, dims=("x", "ft_time"))
+        with pytest.raises(LazyOperationError, match="specplot"):
+            patch.viz.specplot(show=False)
+        assert not recipe_loads

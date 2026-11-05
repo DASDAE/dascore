@@ -11,6 +11,7 @@ from matplotlib import ticker
 
 from dascore.constants import PatchType
 from dascore.exceptions import CoordError, PatchError
+from dascore.utils.array_api import refuse_lazy
 from dascore.utils.patch import patch_function
 from dascore.utils.plotting import _get_dim_label
 
@@ -86,6 +87,8 @@ def specplot(
     >>> fk_patch = patch.dft(("time", "distance")).abs()
     >>> ax = fk_patch.viz.specplot(log=True, cmap='inferno')
     """
+    # Drawing reads the values, which lazy data never give unasked.
+    refuse_lazy("specplot", [patch.data])
     # Require at least one Fourier-transformed dimension.
     dims = patch.coords.dims
     is_fft_dim = [d.startswith("ft_") for d in dims]
