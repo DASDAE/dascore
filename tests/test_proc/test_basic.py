@@ -153,6 +153,50 @@ class TestsAngle:
         assert np.allclose(out.data, np.angle(random_complex_patch.data))
 
 
+# Every dtype whose result dtype a pointwise operation could get wrong: the
+# integers and bool which angle promotes, and the complex ones whose part or
+# magnitude is real.
+POINTWISE_DTYPES = (
+    "int8",
+    "int16",
+    "int64",
+    "float16",
+    "float32",
+    "float64",
+    "complex64",
+    "complex128",
+    "bool",
+)
+
+
+class TestPointwiseMetadataDtype:
+    """The metadata of a pointwise operation states the dtype it computes."""
+
+    @staticmethod
+    def _of_dtype(patch, dtype):
+        """The patch with distinct values of a dtype, negative ones included."""
+        values = np.asarray(patch.data) - 0.5
+        if np.dtype(dtype).kind == "c":
+            values = values + 1j * values[::-1]
+        return patch.new(data=(values * 100).astype(dtype))
+
+    @pytest.mark.parametrize("dtype", POINTWISE_DTYPES)
+    @pytest.mark.parametrize("name", ("abs", "real", "imag", "angle", "conj"))
+    def test_matches_result(self, random_patch, name, dtype):
+        """The dtype from metadata alone is the dtype the data come back as."""
+        patch = self._of_dtype(random_patch, dtype)
+        processor = getattr(dc.Patch, name).__processor__()
+        stated, _ = processor.get_metadata(patch.drop_data())
+        assert stated.dtype == getattr(patch, name)().dtype
+
+    @pytest.mark.parametrize("dtype", ("int16", "float32", "bool"))
+    def test_real_of_real_is_a_no_op(self, random_patch, dtype):
+        """Stating the dtype keeps real data a no-op, and its id with it."""
+        patch = self._of_dtype(random_patch, dtype)
+        assert patch.real() is patch
+        assert patch.conj() is patch
+
+
 class TestNormalize:
     """Tests for normalization."""
 

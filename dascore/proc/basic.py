@@ -108,6 +108,21 @@ def _as_float(data):
     return xp.astype(data, xp.float64)
 
 
+def _with_dtype(meta, dtype):
+    """
+    Return `meta` stating `dtype`, and an empty plan.
+
+    The metadata itself when it already states that dtype, so an operation
+    whose kernel hands the data back is still seen to change nothing.
+    """
+    return (meta if dtype == meta.dtype else meta.new(dtype=dtype)), {}
+
+
+def _real_dtype_metadata(meta):
+    """Return `meta` stating the real counterpart of its dtype; see `_with_dtype`."""
+    return _with_dtype(meta, _result_dtype(meta.dtype, real=True))
+
+
 def _data_id_given(patch, attrs) -> bool:
     """Whether the caller installed a data id of its own rather than the patch's."""
     return getattr(attrs, "data_id", "") != getattr(patch.attrs, "data_id", "")
@@ -490,6 +505,10 @@ class Abs(PatchProcessor):
     >>> out = patch.abs()
     """
 
+    def get_metadata(self, meta):
+        """Complex data have a real magnitude; every other dtype keeps its own."""
+        return _real_dtype_metadata(meta)
+
     def kernel(self, data):
         """Return the magnitude of every sample."""
         return array_namespace(data).abs(data)
@@ -527,6 +546,10 @@ class Real(PatchProcessor):
     >>> out = pa.real()
     """
 
+    def get_metadata(self, meta):
+        """Complex data have a real part of the real dtype; real data are kept."""
+        return _real_dtype_metadata(meta)
+
     def kernel(self, data):
         """Return the real part, or the data which is already only that."""
         if _known_real(data):
@@ -544,6 +567,10 @@ class Imag(PatchProcessor):
     >>> pa = dascore.get_example_patch()
     >>> out = pa.imag()
     """
+
+    def get_metadata(self, meta):
+        """The imaginary part is real; real data give zeros of their own dtype."""
+        return _real_dtype_metadata(meta)
 
     def kernel(self, data):
         """
@@ -570,6 +597,16 @@ class Angle(PatchProcessor):
     """
 
     data_type = ""
+
+    def get_metadata(self, meta):
+        """
+        The angle is real, and floating point for integer and bool data.
+
+        Numpy's own promotion, worked out on an empty array of the dtype:
+        it is not one rule, since bool goes to float64 and int8 to float16.
+        """
+        empty = np.empty(0, _as_numpy_dtype(meta.dtype))
+        return _with_dtype(meta, _result_dtype(np.angle(empty).dtype, like=meta.dtype))
 
     def numpy_kernel(self, data):
         """Return the phase angle of every sample."""
