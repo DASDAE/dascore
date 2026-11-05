@@ -2082,6 +2082,7 @@ class TestLazyStep:
         node = out.data.chain.last
         assert len(out.data.chain) == 1 and not node.pending
         assert node.processor == SeamLazyScale(factor=3)
+        assert node.contract == Pointwise()
         assert node.shape == out.shape
         assert node.dtype == out.dtype
         assert node.data_id == out.attrs.data_id

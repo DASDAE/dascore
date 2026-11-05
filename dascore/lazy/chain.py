@@ -2,7 +2,8 @@
 The operations pending on a lazy array, as a linear chain.
 
 A [`Node`](`dascore.lazy.chain.Node`) is one step: the processor, the plan
-its `get_metadata` worked out, and what the step made -- the shape and dtype
+its `get_metadata` worked out, the chunk contract it was chained under, and
+what the step made -- the shape and dtype
 of its output and the `data_id` of the patch which holds it. A node is
 pending from the moment a kernel appends it until the operation settles
 it with those three facts, before the resulting patch is built. A
@@ -32,6 +33,7 @@ from typing import Any
 import numpy as np
 
 from dascore.exceptions import PatchError
+from dascore.lazy.contract import ChunkContract
 
 
 # Not compared by value: a plan may hold arrays, and two steps are the same
@@ -48,6 +50,9 @@ class Node:
         whose kernel computes the step.
     plan
         The arguments its kernel takes beyond the data.
+    contract
+        The chunk contract the step was chained under, so what was promised
+        is recorded with the step rather than asked for again.
     shape, dtype
         The shape and dtype the step's metadata states; None while pending.
     data_id
@@ -56,6 +61,7 @@ class Node:
 
     processor: Any
     plan: Mapping[str, Any] = field(default_factory=dict)
+    contract: ChunkContract | None = None
     shape: tuple[int, ...] | None = None
     dtype: np.dtype | None = None
     data_id: str | None = None

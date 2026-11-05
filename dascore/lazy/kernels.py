@@ -78,7 +78,7 @@ def lazy_kernel(processor, data: LazyArray, **plan: Any) -> LazyArray:
     if isinstance(contract, Unchanged):
         return data
     if isinstance(contract, Pointwise):
-        return data._appended(Node(processor, plan))
+        return data._appended(Node(processor, plan, contract))
     # No contract, or one nothing here runs yet: refused, and nothing read.
     raise lazy_refusal(processor.name or type(processor).__name__)
 
