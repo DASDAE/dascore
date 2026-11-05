@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 import dascore as dc
-from dascore.exceptions import InvalidFiberFileError
+from dascore.exceptions import InvalidFiberFileError, ParameterError
 from dascore.io.puniu import PuniuV1
 
 from .conftest import make_file
@@ -71,6 +71,8 @@ class TestPuniu:
             {"row_major_order": "unknown"},
             {"column_major_order": "time, channel"},
             {"version": 2},
+            {"epoch": 10_000_000_000},
+            {"spatial_resolution": 0},
         ],
     )
     def test_bad_metadata_refused(self, tmp_path, changes):
@@ -86,6 +88,27 @@ class TestPuniu:
         with h5py.File(p, "w") as f:
             f.create_group("default")
         assert not PuniuV1().get_format(p)
+        with pytest.raises(InvalidFiberFileError, match="Expected /default"):
+            PuniuV1().read(p)
+
+    def test_nonnumeric_data(self, tmp_path):
+        """Reject a text dataset even when its acquisition header is valid."""
+        path, data = make_file(tmp_path)
+        with h5py.File(path, "r+") as resource:
+            attrs = dict(resource["default"].attrs)
+            del resource["default"]
+            resource.create_dataset("default", data=data.astype("S8"))
+            resource["default"].attrs.update(attrs)
+        with pytest.raises(InvalidFiberFileError, match="numeric two-dimensional"):
+            PuniuV1().read(path)
+
+    @pytest.mark.parametrize("name", ["time", "distance", "channel"])
+    @pytest.mark.parametrize("window", [1, (1,), (1, 2, 3)])
+    def test_invalid_interval(self, tmp_path, name, window):
+        """Each selector requires an interval with two endpoints."""
+        path, _ = make_file(tmp_path)
+        with pytest.raises(ParameterError, match="two-ended interval"):
+            PuniuV1().read(path, **{name: window})
 
     def test_missing_clock_refused(self, tmp_path):
         """Missing clock refused."""
@@ -167,6 +190,44 @@ class TestPuniu:
         """Empty distance window."""
         p, _ = make_file(tmp_path)
         assert len(PuniuV1().read(p, distance=(100, 101))) == 0
+
+    @pytest.mark.parametrize(
+        "selection",
+        [
+            {"distance": (100, 101), "channel": (311, 316)},
+            {"distance": (1, 2), "channel": (999, 1000)},
+            {"distance": (0, 1), "channel": (316, 321)},
+        ],
+    )
+    def test_empty_combined_selection(self, tmp_path, monkeypatch, selection):
+        """Empty or disjoint intervals return no patches without reading data."""
+        path, _ = make_file(tmp_path)
+
+        def reject(*args, **kwargs):
+            raise AssertionError("payload accessed")
+
+        monkeypatch.setattr(h5py.Dataset, "__getitem__", reject)
+        assert len(dc.read(path, **selection)) == 0
+
+    @pytest.mark.parametrize("order", ["time, channel", "channel, time"])
+    def test_large_distance_range(self, tmp_path, order):
+        """Floating-point distance endpoints must not drop the final channel."""
+        count = 2_097_156
+        shape = (1, count) if order == "time, channel" else (count, 1)
+        path, data = make_file(
+            tmp_path,
+            shape=shape,
+            order=order,
+            spatial_sampling_rate=0.3,
+            step="1",
+            end_channel=str(306 + count - 1),
+        )
+        expected = data.reshape(1, count)
+        patch = dc.read(path)[0]
+        assert patch.shape == (1, count)
+        np.testing.assert_array_equal(patch.data, expected)
+        tail = dc.read(path, channel=(306 + count - 3, None))[0]
+        np.testing.assert_array_equal(tail.data, expected[:, -3:])
 
     def test_detect(self, puniu_path):
         """The installed entry point detects PUNIU without an explicit format."""

@@ -147,19 +147,25 @@ def _get_metadata(resource):
 
 def _read_data(resource, coords, order, time=None, distance=None, channel=None):
     """Select coordinate intervals before reading the HDF5 hyperslab."""
-    selected = coords
+    slices = {name: slice(0, size) for name, size in zip(coords.dims, coords.shape)}
     for name, window in (("time", time), ("distance", distance), ("channel", channel)):
         if window is None:
             continue
         if not isinstance(window, tuple | list) or len(window) != 2:
             raise ParameterError(f"{name} must be a two-ended interval")
-        selected, _ = selected.select(**{name: tuple(window)})
+        coord = coords.get_coord(name)
+        _, index = coord.select(tuple(window))
+        start, stop, _ = index.indices(len(coord))
+        dim = coords.dim_map[name][0]
+        previous = slices[dim]
+        start = max(previous.start, start)
+        stop = min(previous.stop, stop)
+        slices[dim] = slice(start, max(start, stop))
+    # Apply the same integer bounds to coordinates and data without converting
+    # selected endpoints back to floating-point distances.
+    selected, _ = coords.select(samples=True, **slices)
     if not selected.size:
         return selected, None
-    slices = {}
-    for name in coords.dims:
-        coord = selected.get_coord(name)
-        _, slices[name] = coords.get_coord(name).select((coord.min(), coord.max()))
     storage_dims = tuple("distance" if name == "channel" else name for name in order)
     data = resource[_DATASET][tuple(slices[name] for name in storage_dims)]
     if storage_dims != coords.dims:
