@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+__experimental__ = True
+
 from typing import Any, get_args
 
 import numpy as np

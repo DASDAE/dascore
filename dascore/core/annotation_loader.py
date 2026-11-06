@@ -19,6 +19,8 @@ errors are exposed as annotation errors.
 
 from __future__ import annotations
 
+__experimental__ = True
+
 import json
 import os
 from collections.abc import Collection, Mapping, Sequence

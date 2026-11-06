@@ -29,6 +29,7 @@ from dascore.utils.display import (
     get_header_text,
     split_block,
 )
+from dascore.utils.docs import compose_docstring, experimental_note
 from dascore.utils.identity import (
     _without_ids,
     ids_enabled,
@@ -433,6 +434,7 @@ class PatchMeta(NodeRepr):
             origin=origin, ord=ord, prefix=prefix
         ).run(self)
 
+    @compose_docstring(experimental=experimental_note)
     def enrich(
         self,
         inventory: Inventory,
@@ -444,7 +446,11 @@ class PatchMeta(NodeRepr):
         on_missing: ON_MISSING = "raise",
         conflict: ENRICH_CONFLICT = "raise",
     ) -> Self:
-        """Copy inventory metadata onto a patch."""
+        """
+        Copy inventory metadata onto a patch.
+
+        {experimental}
+        """
         return dascore.proc.inventory.Enrich(
             inventory=inventory,
             attrs=attrs,

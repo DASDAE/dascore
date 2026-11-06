@@ -32,6 +32,8 @@ begins with an underscore: that is the author's own, and a set never holds it.
 
 from __future__ import annotations
 
+__experimental__ = True
+
 import datetime
 import json
 import numbers
@@ -62,6 +64,7 @@ from pydantic import (
     PlainSerializer,
     TypeAdapter,
     ValidationError,
+    field_validator,
     model_validator,
 )
 from rich.text import Text
@@ -155,6 +158,8 @@ OBJECT_SUFFIXES = (".json", ".yaml", ".yml")
 DIMS_KEY = "dascore:dims"
 # Where a bare parquet table keeps what attrs.json holds in a directory.
 ATTRS_KEY = "dascore:attrs"
+# The newest annotation format_version this DASCore reads.
+FORMAT_VERSION = 1
 
 # Range suffixes, as everywhere else in DASCore.
 _MIN, _MAX = "_min", "_max"
@@ -734,6 +739,23 @@ class AnnotationSetAttrs(_AnnotationModel):
             "not the merged one."
         ),
     )
+    format_version: int = Field(
+        default=FORMAT_VERSION,
+        description="Version of the stored format; stored attrs stating none are 1.",
+    )
+
+    @field_validator("format_version", mode="before")
+    @classmethod
+    def _check_format_version(cls, value):
+        """Refuse a version this DASCore cannot read, rather than misread it."""
+        if type(value) is not int or not 1 <= value <= FORMAT_VERSION:
+            msg = (
+                f"format_version {value!r} is not one this DASCore reads (1 to "
+                f"{FORMAT_VERSION}). A newer one was written by a newer DASCore; "
+                "upgrade DASCore to read it."
+            )
+            raise ValueError(msg)
+        return value
 
     @model_validator(mode="after")
     def _check_dims(self) -> Self:
@@ -3455,7 +3477,8 @@ def annotation_set_to_csv(
     Neither the dimensions nor the attributes are written; parquet keeps
     both. Reading the table back states them again in the call, or the
     dimensions in a ``# dims: distance, time`` line written above the header
-    by hand.
+    by hand. So a bare CSV, unlike parquet or a saved directory, states no
+    format version, and reads as version 1.
 
     Parameters
     ----------
@@ -3523,6 +3546,8 @@ def annotation_set_to_parquet(
     attrs = annotations._attrs.model_dump(
         mode="json", exclude_defaults=True, exclude={"dims"}
     )
+    # Written even at its default: it tells a later DASCore what this is.
+    attrs = {"format_version": annotations._attrs.format_version} | attrs
     metadata = {DIMS_KEY: json.dumps(list(annotations.dims))}
     write_parquet(annotations._df, path, {**metadata, ATTRS_KEY: json.dumps(attrs)})
     return pathlib.Path(path)
@@ -3607,9 +3632,9 @@ def save_annotation_set(
     tables = {ANNOTATION_STEM: _spell_table(annotations._df, suffix, annotations.dims)}
     if len(annotations._features):
         tables[FEATURE_STEM] = _spell_table(annotations._features, suffix)
-    documents = {
-        ATTRS_STEM: annotations._attrs.model_dump(mode="json", exclude_defaults=True)
-    }
+    attrs = annotations._attrs
+    dumped = attrs.model_dump(mode="json", exclude_defaults=True)
+    documents = {ATTRS_STEM: {"format_version": attrs.format_version} | dumped}
     if annotations._bases:
         documents[BASES_STEM] = {
             k: v.model_dump(mode="json") for k, v in annotations._bases.items()

@@ -7,12 +7,20 @@ import typing
 
 import pytest
 
+import dascore as dc
 from dascore.core.spool import Spool
 
 # These tests only work if doc deps are installed.
 pytest.importorskip("jinja2")
 
-from _render_api import build_signature, get_type_hints, to_quarto_code
+from _index_api import parse_project
+from _render_api import (
+    EXPERIMENTAL_BANNER,
+    Render,
+    build_signature,
+    get_type_hints,
+    to_quarto_code,
+)
 
 
 class TestGetTypeHints:
@@ -132,3 +140,14 @@ class TestToQuartoCode:
         """
         out = to_quarto_code(code1)
         assert out
+
+
+def test_experimental_banner():
+    """A module flagged `__experimental__` gets the banner; others do not."""
+    data = parse_project(dc)
+
+    def page(obj):
+        return Render(data, str(id(obj)), {}).render_markdown()
+
+    assert EXPERIMENTAL_BANNER in page(dc.core.inventory)
+    assert EXPERIMENTAL_BANNER not in page(dc.Patch)
