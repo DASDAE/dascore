@@ -1114,6 +1114,68 @@ class TestSelect:
             assert abs((len(out) / len(coord)) - 0.70) < len(coord) / 100.0
 
 
+class TestSelectLongFloatGrid:
+    """Label lookups on float grids where index arithmetic drifts."""
+
+    grids: ClassVar = {
+        "long": dict(start=0.0, stop=200_000.0, step=0.1),
+        "odd_step": dict(start=0.0, stop=6000.0, step=0.003),
+        "far_origin": dict(start=1.7e9, stop=1.7e9 + 20, step=1e-5),
+        "descending": dict(start=200_000.0, stop=0.0, step=-0.1),
+    }
+
+    @pytest.fixture(params=list(grids))
+    def grid_coord(self, request):
+        """A float grid of two million samples."""
+        return get_coord(**self.grids[request.param])
+
+    @staticmethod
+    def _selected(coord, first, last, low, high):
+        """True if selecting (low, high) gives exactly samples first..last."""
+        if coord.reverse_sorted:
+            low, high = high, low
+        _, index = coord.select((low, high))
+        return index.indices(len(coord))[:2] == (first, last + 1)
+
+    def test_label_bounds_inclusive(self, grid_coord):
+        """Bounds equal to labels select exactly the samples between them."""
+        coord, last = grid_coord, len(grid_coord) - 1
+        bad = [
+            k
+            for k in range(0, len(coord), 9973)
+            if not self._selected(coord, k, k, coord[k], coord[k])
+            or not self._selected(coord, 0, k, coord[0], coord[k])
+            or not self._selected(coord, k, last, coord[k], coord[last])
+        ]
+        assert not bad
+
+    def test_between_labels_exclusive(self, grid_coord):
+        """Bounds halfway between labels select only the sample inside."""
+        coord = grid_coord
+        bad = []
+        for k in range(1, len(coord) - 1, 9973):
+            before = (coord[k - 1] + coord[k]) / 2
+            after = (coord[k] + coord[k + 1]) / 2
+            if not self._selected(coord, k, k, before, after):
+                bad.append(k)
+        assert not bad
+
+    @pytest.mark.parametrize("name", ["odd_step", "far_origin"])
+    def test_next_index_of_labels(self, name):
+        """The next index of an array of labels is their own positions."""
+        coord = get_coord(**self.grids[name])
+        positions = np.arange(0, len(coord), 997)
+        assert np.all(coord.get_next_index(coord.values[positions]) == positions)
+
+    def test_first_label_stays_first(self):
+        """An extrapolated label rounding onto the first does not shift it."""
+        coord = get_coord(
+            start=np.float32(-1048576), step=np.float32(0.0625), shape=(10,)
+        )
+        assert coord.get_next_index(coord.min()) == 0
+        assert self._selected(coord, 0, 0, coord.min(), coord.min())
+
+
 class TestOrder:
     """Tests for ordering coordinates."""
 

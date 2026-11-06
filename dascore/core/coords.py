@@ -3306,7 +3306,9 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             fraction = func(
                 np.round((np.atleast_1d(value) - start) / step, decimals=10)
             )
-            return fraction.astype(np.int64)
+            return self._include_reached(
+                grid, value, fraction.astype(np.int64), forward
+            )
         # Scalar fast path. A zero step is caught after the division: python
         # scalars raise, numpy scalars give inf/nan, and testing a numpy step
         # for truthiness up front costs ~10x more on this hot path.
@@ -3321,9 +3323,31 @@ get_coord(start=0.0, stop=20.0, step=1.0)
             out = len(self) if fraction > 0 else -1
         else:
             out = math.ceil(fraction) if forward else math.floor(fraction)
+            # Drift under one sample cannot round onto the wrong whole index,
+            # so only a fractional estimate needs its neighbor checked.
+            if fraction != out:
+                out = int(self._include_reached(grid, value, out, forward))
         if (forward and out < 0) or (not forward and out >= len(self)):
             return None
         return out
+
+    def _include_reached(self, grid: Grid, value, out, forward):
+        """
+        Step an index estimate one sample toward the bound if that label meets it.
+
+        The (value - start) / step estimate drifts from the linspace labels on
+        long, far-from-zero or float32 grids, so an inclusive bound equal to a
+        label can land one sample past it.
+        """
+        neighbor = out - 1 if forward else out + 1
+        labels = grid.labels(neighbor, self.dtype)
+        if forward != self.reverse_sorted:
+            reached = labels >= value
+        else:
+            reached = labels <= value
+        # labels past either end are extrapolated and may round onto an end
+        inside = (neighbor >= 0) & (neighbor < len(self))
+        return np.where(reached & inside, neighbor, out)
 
     def _samples_in(self, duration):
         """How many steps a duration spans, unrounded."""
