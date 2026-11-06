@@ -16,6 +16,7 @@ from filelock import FileLock
 import dascore as dc
 from dascore.utils.doc_corpus import (
     PACKAGE_PATH,
+    SKILL_PATH,
     DocumentationError,
     _read_readme,
     source_paths,
@@ -33,6 +34,7 @@ def _source_identity():
         if child.is_dir() and child.name != "docs":
             paths.extend(child.rglob("*.py"))
     paths.extend(source_paths())
+    paths.extend(SKILL_PATH.rglob("*.md"))
     digest.update(_read_readme().encode())
     for entry in sorted(
         metadata.distribution("dascore").entry_points,

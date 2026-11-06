@@ -304,6 +304,18 @@ class TestCache:
             assert first["identity"]["source"] != second["identity"]["source"]
             assert doc_cache.read_document(root, second, "example") == "second"
 
+    def test_skill_sources(self, cache, monkeypatch):
+        """Editing a skill file invalidates the corpus built from it."""
+        skill = cache.parent / "skills" / "example" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text("before")
+        monkeypatch.setattr(doc_cache, "SKILL_PATH", skill.parent.parent)
+        with doc_cache.documentation_cache() as (_, before):
+            pass
+        skill.write_text("after")
+        with doc_cache.documentation_cache() as (_, after):
+            assert before["identity"] != after["identity"]
+
     def test_nested_sources(self, cache):
         """Nested API edits invalidate the corpus; generated website files do not."""
         nested = cache.parent / "core" / "operation.py"
@@ -504,6 +516,24 @@ class TestProcesses:
         assert (root / "manifest.json").is_file()
         assert not root.with_name(root.name + ".previous").exists()
 
+    @pytest.mark.skipif(
+        sys.platform == "win32", reason="Windows reports a closed pipe differently"
+    )
+    def test_closed_pipe(self, tmp_path):
+        """A reader that stops early, such as `head`, leaves stderr empty."""
+        process = subprocess.Popen(
+            [sys.executable, "-m", "dascore", "skill", "--bootstrap"],
+            cwd=tmp_path,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        # Close the read end before the command has anything to write.
+        process.stdout.close()
+        stderr = process.stderr.read()
+        assert process.wait(timeout=60) == 1
+        assert stderr == ""
+
     @pytest.mark.parametrize(
         "command",
         [
@@ -526,39 +556,27 @@ class TestProcesses:
         assert dc.__version__ in result.stdout
 
 
-class TestOptionalCLI:
-    """CLI commands require Typer; Python library use does not."""
-
-    def test_missing_typer(self, hide_module, capsys):
-        """A missing Typer reports the standard optional-dependency guidance."""
-        hide_module("typer")
-        assert main(["doc"]) == 1
-        captured = capsys.readouterr()
-        assert not captured.out
-        assert "typer is not installed" in captured.err
-        assert "pip install typer" in captured.err
-        assert "uv pip install typer" in captured.err
-        assert "Traceback" not in captured.err
+class TestUsageErrors:
+    """Invalid invocations fail with a usage message, not a traceback."""
 
     @pytest.mark.parametrize("args", [[], ["unknown"], ["doc", "--unknown"]])
     def test_usage_errors(self, args, capsys):
         """Missing commands and invalid arguments return a nonzero usage error."""
         assert main(args) == 2
         captured = capsys.readouterr()
-        assert "Usage:" in captured.err
-        assert "Error" in captured.err
+        assert "usage:" in captured.err
+        assert "error:" in captured.err
+        assert "Traceback" not in captured.err
 
-    @pytest.mark.concurrency
-    def test_import_is_lazy(self):
-        """Importing the library and entry point does not import Typer."""
-        code = (
-            "import sys; import dascore; import dascore.cli; "
-            "assert 'typer' not in sys.modules"
-        )
-        result = subprocess.run(
-            [sys.executable, "-c", code], capture_output=True, text=True, timeout=30
-        )
-        assert result.returncode == 0, result.stderr
+    def test_closed_pipe(self, monkeypatch, capfd):
+        """A reader that stops early, such as `head`, ends the command quietly."""
+
+        def closed():
+            raise BrokenPipeError
+
+        monkeypatch.setattr("dascore.cli.read_bootstrap", closed)
+        assert main(["skill", "--bootstrap"]) == 1
+        assert capfd.readouterr().err == ""
 
 
 class TestKeywordMetadata:

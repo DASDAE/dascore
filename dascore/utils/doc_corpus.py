@@ -20,6 +20,8 @@ from dascore.utils.array import PatchUFunc
 
 PACKAGE_PATH = Path(dc.__file__).resolve().parent
 DOC_PATH = PACKAGE_PATH / "docs"
+# Skill files ship where installers look; their documentation pages include them.
+SKILL_PATH = PACKAGE_PATH / ".agents" / "skills"
 # Import the analysis API, without crawling file-format or external plugins.
 _API_PACKAGES = ("core", "proc", "transform", "viz")
 _API_MODULES = (
@@ -288,22 +290,30 @@ def _read_readme():
 
 
 def _read_source(path, stack=()):
-    """Expand packaged includes, including the README shipped in metadata."""
+    """
+    Return a page's metadata and body, with packaged includes expanded.
+
+    An included file's front matter fills in metadata the page lacks, as Quarto
+    merges the metadata blocks of the files a page includes.
+    """
     if path in stack:
         raise DocumentationError(f"Circular documentation include: {path}")
-    text = path.read_text(encoding="utf-8")
+    front, body = _frontmatter(path.read_text(encoding="utf-8"))
 
     def include(match):
         target = (path.parent / match[1].strip().strip("\"'")).resolve()
         if target == PACKAGE_PATH.parent / "readme.md":
             return _read_readme()
-        if not target.is_relative_to(DOC_PATH):
+        if not any(target.is_relative_to(x) for x in (DOC_PATH, SKILL_PATH)):
             raise DocumentationError(
                 f"Documentation include escapes its source directory: {target}"
             )
-        return _read_source(target, (*stack, path))
+        included, text = _read_source(target, (*stack, path))
+        for key, value in included.items():
+            front.setdefault(key, value)
+        return text
 
-    return _INCLUDE.sub(include, text)
+    return front, _INCLUDE.sub(include, body)
 
 
 def _frontmatter(text):
@@ -314,6 +324,8 @@ def _frontmatter(text):
     if len(parts) < 2:
         raise DocumentationError("Unterminated documentation frontmatter")
     front = yaml.safe_load(parts[0][4:]) or {}
+    if not isinstance(front, dict):
+        raise DocumentationError("Documentation frontmatter must be a mapping")
     return front, "\n---".join(parts[1:]).lstrip("\n")
 
 
@@ -418,7 +430,7 @@ def write_corpus(destination: Path) -> dict:
     records, omitted = _api_documents()
     for source in source_paths():
         relative = source.relative_to(DOC_PATH)
-        front, body = _frontmatter(_read_source(source))
+        front, body = _read_source(source)
         key = relative.with_suffix("").as_posix()
         keywords = front.get("keywords", [])
         records[key] = dict(

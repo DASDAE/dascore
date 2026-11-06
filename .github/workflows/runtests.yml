@@ -18,6 +18,8 @@ on:
       # the file changes.
       - 'environment.yml'
       - 'dascore/docs/**/*.qmd'
+      # Skill files hold the text and code cells of the pages that include them.
+      - 'dascore/.agents/**'
       - '**.py'
       - '.github/workflows/*.yml'
       - '.github/actions/**/*.yml'

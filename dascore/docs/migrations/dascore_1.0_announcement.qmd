@@ -52,7 +52,7 @@ Some changes break code written for 0.1.x. See the [migration guide](dascore_1.0
 python -m pip install "dascore[all]==1.0.0b1"
 ```
 
-Pinning the pre-release this way keeps the other dependencies on stable releases; `[all]` brings in the optional xarray, Parquet, and CLI support used below. DASCore 1.0 also bumps minimum versions. It requires Python 3.12 or newer, NumPy 2.3.3 or newer, and pandas 3.0 or newer.
+Pinning the pre-release this way keeps the other dependencies on stable releases; `[all]` brings in the optional xarray and Parquet support used below. DASCore 1.0 also bumps minimum versions. It requires Python 3.12 or newer, NumPy 2.3.3 or newer, and pandas 3.0 or newer.
 
 ## Highlights
 

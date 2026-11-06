@@ -199,17 +199,6 @@ website:
 
             - recipes/docker_basic.qmd
 
-    - id: skills
-      title: "Skills"
-      style: "floating"
-      contents:
-        - text: Agent onboarding
-          href: tutorial/agents.qmd
-{% for name, target in skills.items() %}
-        - text: {{ name }}
-          href: {{ target }}.qmd
-{% endfor %}
-
     - id: contributing
       title: "Contributing"
       contents:
@@ -247,6 +236,19 @@ website:
 
         - text: "Code of Conduct"
           href: contributing/code_of_conduct.qmd
+
+    # Listed after the sidebars above so a page that is also a tutorial, recipe,
+    # or contributing guide keeps that sidebar; Quarto uses the first match.
+    - id: skills
+      title: "Skills"
+      style: "floating"
+      contents:
+        - text: Agent onboarding
+          href: tutorial/agents.qmd
+{% for name, target in skills.items() %}
+        - text: {{ name }}
+          href: {{ target }}.qmd
+{% endfor %}
 
     - id: Notes
       title: 'Notes'
