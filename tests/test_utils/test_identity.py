@@ -11,6 +11,7 @@ import warnings
 from enum import Enum
 from functools import partial
 from pathlib import PureWindowsPath
+from types import ModuleType
 
 import numpy as np
 import pandas as pd
@@ -24,6 +25,7 @@ from dascore.utils.array import hash_array
 from dascore.utils.identity import (
     H,
     PatchMarker,
+    callable_name,
     derive,
     encode,
     extract_patches,
@@ -414,6 +416,35 @@ class TestCallables:
 
         assert digest(make(1)) == digest(make(1))
         assert digest(make(1)) != digest(make(2))
+
+    @pytest.mark.parametrize("module", ["__main__", "__mp_main__"])
+    def test_a_script_function_by_source(self, monkeypatch, module):
+        """A path into a script finds it, but two scripts share that path."""
+        script = ModuleType(module)
+        monkeypatch.setitem(sys.modules, module, script)
+
+        def doubled():
+            def clean(x):
+                return x * 2
+
+            return clean
+
+        def tripled():
+            def clean(x):
+                return x * 3
+
+            return clean
+
+        names = []
+        for func in (doubled(), tripled()):
+            # Only the bodies differ: one name, one signature.
+            func.__module__ = module
+            func.__qualname__ = "clean"
+            script.clean = func
+            names.append(callable_name(func))
+        # A spawned worker's `__mp_main__` names it as its parent does.
+        assert names[0].startswith("__main__:clean@")
+        assert names[0] != names[1]
 
     def test_partial(self):
         """A partial is what it wraps and what it wraps it with."""

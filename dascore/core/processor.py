@@ -87,10 +87,10 @@ from dascore.utils.patch import (
     check_patch_data,
 )
 from dascore.utils.patch_registry import (
+    _identifying_tag,
     _memoized_operation_id,
     _spell,
     is_default,
-    patch_function_tag,
     register_patch_function,
     resolve_patch_function,
 )
@@ -228,16 +228,15 @@ class PatchProcessor(DascoreBaseModel):
     @property
     def tag(self) -> str:
         """Return the name this operation is identified by."""
-        cls = type(self)
+        return type(self)._class_tag()
+
+    @classmethod
+    def _class_tag(cls) -> str:
+        """Return the name the class's operations are identified by."""
         func = cls.patch_function
-        if func is not None and (tag := patch_function_tag(func)) is not None:
+        if func is not None and (tag := _identifying_tag(func)) is not None:
             return tag
-        # Unregistered or defined inside a call: named by its source, or --
-        # one with no source to read -- by which class object it is.
-        try:
-            return callable_name(cls)
-        except ParameterError:
-            return f"{_spell(cls)}#{id(cls):x}"
+        return _class_name(cls)
 
     def _inputs(self) -> tuple[dict, list]:
         """Return the non-default fields, and the patches found among them."""
@@ -857,6 +856,23 @@ def _check_returns_self(cls: type[PatchProcessor], func) -> None:
         "which only `-> Self` says. Annotate it `-> Self`."
     )
     raise ParameterError(msg)
+
+
+# Bounded, and holding the classes it names, so an address it used is never
+# reused underneath it. Read once per class, since `inspect.getsource` of a
+# class is slow; a class's name takes no defaults which could change.
+@functools.lru_cache(maxsize=2048)
+def _class_name(cls: type[PatchProcessor]) -> str:
+    """
+    Name a processor class which has no tag naming it outside this process.
+
+    Unregistered, or defined inside a call, a script or a notebook: named by
+    its source or -- with no source to read -- by which class object it is.
+    """
+    try:
+        return callable_name(cls)
+    except ParameterError:
+        return f"{_spell(cls)}#{id(cls):x}"
 
 
 def _make_bypass(func):

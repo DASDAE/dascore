@@ -14,6 +14,7 @@ from dascore.exceptions import ParameterError
 from dascore.units import get_quantity
 from dascore.utils.patch_registry import (
     _bind,
+    _identifying_tag,
     call_operation_id,
     patch_function_tag,
     register_patch_function,
@@ -261,6 +262,17 @@ class TestBinding:
         with pytest.raises(ParameterError, match="cannot be called that way"):
             _bind(dc.proc.normalize, (), {"dim": "time", "not_a_parameter": 1})
 
+    def test_a_call_to_an_untagged_function_says_which(self):
+        """A function with no tag is named in the message by where it lives."""
+
+        @dc.patch_function()
+        def local(patch, factor):
+            """Need one argument."""
+            return patch
+
+        with pytest.raises(ParameterError, match=r"\.local cannot be called"):
+            _bind(local, (), {"nope": 1})
+
     def test_a_positional_before_a_star_args_group(self):
         """A leading positional and a `*args` group bind to their names."""
         func = registry_test_leading_then_group
@@ -308,6 +320,65 @@ class TestCallOperationId:
         second = call_operation_id(dc.proc.select, (), {"distance": hundred_cm})
         assert first != second
         assert call_operation_id(dc.proc.select, (), {"distance": one_meter}) == first
+
+    @pytest.mark.parametrize("module", ["__main__", "__mp_main__"])
+    def test_a_script_function_is_its_source(self, own_registry, module):
+        """Two scripts' `clean` share a tag, but not an operation id."""
+
+        def first(patch, factor=1):
+            return patch.new(data=patch.data * 2)
+
+        def second(patch, factor=1):
+            return patch.new(data=patch.data * 3)
+
+        made = []
+        for func in (first, second):
+            func.__module__ = module
+            func.__name__ = func.__qualname__ = "clean"
+            made.append(dc.patch_function()(func))
+        assert patch_function_tag(made[0]) == f"{module}:clean"
+        assert _identifying_tag(made[0]) is None
+        assert resolve_patch_function(f"{module}:clean") is made[1]
+        ids = [call_operation_id(x, (), {"factor": 2}) for x in made]
+        assert ids[0] != ids[1]
+        assert ids[0] == call_operation_id(made[0], (2,), {})
+
+    def test_a_mutated_default_is_another_call(self):
+        """A function named by its source is named by its defaults as they are now."""
+
+        @dc.patch_function()
+        def scaled(patch, factors=[2]):
+            """Scale by a default which can be mutated."""
+            return patch
+
+        before = call_operation_id(scaled)
+        scaled.raw_function.__defaults__[0][0] = 3
+        assert call_operation_id(scaled) != before
+
+    @pytest.mark.concurrency
+    def test_an_edited_script_changes_the_data_id(self, tmp_path):
+        """Run as a script, an edited body is a new `data_id`; the same one is not."""
+        script = (
+            "import dascore as dc\n"
+            "@dc.patch_function()\n"
+            "def clean(patch):\n"
+            "    return patch.new(data=patch.data * {})\n"
+            "print(clean(dc.get_example_patch().pin_id()).attrs.data_id)\n"
+        )
+
+        def data_id(name, factor):
+            """Run the script with one body and return its result's data_id."""
+            path = tmp_path / f"{name}.py"
+            path.write_text(script.format(factor))
+            cmd = [sys.executable, "-I", "-W", "ignore", str(path)]
+            run = subprocess.run(
+                cmd, check=True, timeout=120, capture_output=True, text=True
+            )
+            return run.stdout.split()[-1]
+
+        doubled = data_id("first", 2)
+        assert doubled != data_id("edited", 3)
+        assert doubled == data_id("again", 2)
 
     @pytest.mark.parametrize(
         ("func", "args", "kwargs", "expected"),

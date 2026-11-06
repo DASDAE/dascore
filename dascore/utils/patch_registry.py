@@ -29,6 +29,7 @@ from pydantic.fields import FieldInfo
 
 from dascore.exceptions import ParameterError
 from dascore.utils.identity import (
+    SCRIPT_MODULES,
     PatchMarker,
     callable_name,
     extract_patches,
@@ -139,7 +140,7 @@ def resolve_patch_function(name: str, module: str | None = None):
 def _missing(name: str, module: str | None) -> str:
     """Return the message a tag nothing registers deserves."""
     package, _, leaf = name.rpartition(_SEPARATOR)
-    if package == "__main__":
+    if package in SCRIPT_MODULES:
         return (
             f"No patch function {leaf!r} is registered in this process. It was "
             "defined in a script or a notebook session, which nothing can "
@@ -350,22 +351,48 @@ def _as_key(value, budget: int = _KEY_LIMIT):
     return (type(value), value)
 
 
+def _identifying_tag(func) -> str | None:
+    """
+    Return the tag a call to a patch function is identified by, if any.
+
+    None for a function with no tag, and for one defined in a script or a
+    notebook: its tag is only its name, which two scripts -- or one cell
+    before and after an edit -- share while running different code.
+    """
+    tag = patch_function_tag(func)
+    if tag is None or tag.partition(_SEPARATOR)[0] in SCRIPT_MODULES:
+        return None
+    return tag
+
+
 def _call_name(func) -> str:
     """
     Return the name a call is identified by.
 
-    The registry tag when the function has one. When it does not -- a patch
-    function defined inside another call -- something was still done to the
+    The registry tag when the function has one which names it outside this
+    process. When it does not -- a patch function defined inside another
+    call, or in a script or a notebook -- something was still done to the
     patch, and a `data_id` which did not move would claim it was not.
     So the call is named by where it was written instead: enough to tell it
     from another operation, and honestly not resolvable.
     """
-    if (tag := patch_function_tag(func)) is not None:
+    if (tag := _identifying_tag(func)) is not None:
         return tag
+    # A processor's method is named as the processor is, so a call made
+    # through it and one made by the processor are one operation.
+    if (owner := getattr(func, "__processor__", None)) is not None:
+        return owner._class_tag()
     # By its source rather than its address, which is reused once it is
     # collected. One which holds state its source does not show -- a
     # closure from a factory -- is refused, and its result's id is random.
+    # Not cached: its defaults are part of the name, and can be mutated.
     return callable_name(getattr(func, "raw_function", func))
+
+
+def _label(func) -> str:
+    """Name a patch function in a message; unlike `_call_name`, never raises."""
+    inner = getattr(func, "raw_function", func)
+    return patch_function_tag(func) or _spell(inner)
 
 
 # Bounded, and it holds function references: a process which builds patch
@@ -396,7 +423,7 @@ def _check(func, args: tuple, kwargs: dict) -> None:
     try:
         _signature(func).bind(_PATCH, *args, **kwargs)
     except TypeError as error:
-        msg = f"{_call_name(func)} cannot be called that way: {error}"
+        msg = f"{_label(func)} cannot be called that way: {error}"
         raise ParameterError(msg) from error
 
 
@@ -435,7 +462,7 @@ def _bind(func, args: tuple, kwargs: dict) -> dict:
         # positional-only parameter left at its default is absent here.
         if collisions := set(extras) & (set(out) | set(signature.parameters)):
             msg = (
-                f"{_call_name(func)} was given {sorted(collisions)} both as a "
+                f"{_label(func)} was given {sorted(collisions)} both as a "
                 "parameter and as an extra, so the call cannot be written "
                 "down as one mapping."
             )
