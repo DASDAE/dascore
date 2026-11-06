@@ -33,7 +33,7 @@ def _get_epoch(coord):
     """Return a datetime coordinate's start as an ISO 8601 UTC string, or None."""
     if not np.issubdtype(coord.dtype, np.datetime64):
         return None
-    start = np.datetime64(coord.values[0], "ns")
+    start = np.datetime64(coord[0], "ns")
     return f"{np.datetime_as_string(start, unit='ns')}Z"
 
 
@@ -89,7 +89,7 @@ class RSFV1(FiberIO):
         patch = patches[0]
         require_grid(patch, patch.dims, "RSF")
         axis_lengths = patch.shape
-        axis_origs = [to_float(patch.get_coord(x).values[0]) for x in patch.dims]
+        axis_origs = [to_float(patch.get_coord(x)[0]) for x in patch.dims]
         axis_steps = [_get_step(patch.get_coord(x)) for x in patch.dims]
         axis_names = patch.dims
         axis_units = [get_quantity_str(patch.get_coord(x).units) for x in patch.dims]
@@ -104,12 +104,12 @@ class RSFV1(FiberIO):
             msg = f"RSF stores float32; casting {dtype} data to float32."
             warnings.warn(msg, DASCoreWarning, stacklevel=2)
         ## we are casting to float32 to ensure that esize=4 for m8r
-        data = patch.data.astype(np.float32)
+        data = data.astype(np.float32, copy=False)
         dtype = np.dtype(data.dtype)
         file_esize = dtype.itemsize
         file_format = 'data_format="native_float"'
 
-        data_bytes = data.astype(np.float32).tobytes("F")
+        data_bytes = data.tobytes("F")
 
         hdr_str = f"DASCORE {dc.__version__}   {dt.datetime.now()} \n"
 
