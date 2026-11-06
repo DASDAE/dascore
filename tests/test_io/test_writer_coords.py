@@ -134,7 +134,7 @@ class TestWriterCoordinates:
             return
         with _skip_without_dependency(fio), suppress_warnings(UserWarning):
             dc.write(*args)  # SEGY warns its distance is lost
-        if fio.name.upper() in {"WAV", "RSF"}:  # no reader
+        if fio.name.upper() == "WAV":  # no reader
             return
         (meta,) = _stored(fio, path)
         for dim in ["time"] if time_only else patch.dims:

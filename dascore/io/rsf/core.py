@@ -1,22 +1,40 @@
 """IO module for reading and writing RSF file format support of MADAGASCAR."""
-# from __future__ import annotations
+
+from __future__ import annotations
 
 # import segyio
-import datetime as dt
+import json
 import warnings
 
 import numpy as np
 
 import dascore as dc
-from dascore.exceptions import CoordError
+from dascore.constants import snap_type, windows_type
+from dascore.exceptions import CoordError, InvalidFiberFileError
 from dascore.io.core import FiberIO
-from dascore.io.utils import _DASCORE_DIR, require_grid
+from dascore.io.utils import _DASCORE_DIR, require_grid, slice_dataset
 from dascore.units import get_quantity_str
+from dascore.utils.io import BinaryReader, LocalPath
+from dascore.utils.misc import iterate
 from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
 from dascore.utils.time import to_float
 from dascore.warnings import DASCoreWarning
 
+from .utils import (
+    HISTORY,
+    PREFIX,
+    RESERVED,
+    _get_attrs,
+    _get_coords,
+    _get_dtype,
+    _get_header,
+    _get_layout,
+    _read_header,
+)
+
 RSFKEYS_WRITE = ("in", "esize", "data_format")
+# A history entry is prose: no token in it may bind.
+_HISTORY_TEXT = str.maketrans({"=": ":", "\n": " ", "\t": " "})
 
 
 def _coerce_output_path(path):
@@ -38,6 +56,64 @@ def _get_epoch(coord):
     return f"{np.datetime_as_string(start, unit='ns')}Z"
 
 
+def _get_history_lines(patch) -> list[str]:
+    """Return a history line per entry of the patch's history."""
+    version = dc.__version__
+    entries = iterate(patch.attrs.history)
+    return [f"{HISTORY}{version} {x.translate(_HISTORY_TEXT)}" for x in entries]
+
+
+def _get_attr_text(value) -> str:
+    """Return an attr value as header text, quoted unless a number or bool."""
+    if isinstance(value, np.datetime64):
+        value = f"{np.datetime_as_string(value.astype('datetime64[ns]'))}Z"
+    elif isinstance(value, np.number | np.bool_):
+        value = value.item()
+    if value is None or isinstance(value, bool | int | float):
+        return json.dumps(value)
+    text = json.dumps(value, default=str) if isinstance(value, dict) else str(value)
+    escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _is_one_binding(line: str) -> bool:
+    """Return True when Madagascar reads a header line as a single binding."""
+    # simtab.c opens or closes a string at every '"', with no escape, and
+    # ends a word at whitespace outside one and a string at a newline.
+    parts = line.split('"')
+    outside = "".join(parts[::2])
+    return (
+        len(parts) % 2 == 1
+        and "\n" not in line
+        and not any(x.isspace() for x in outside)
+    )
+
+
+def _get_attr_lines(patch) -> list[str]:
+    """Return a key=value line per attr that is set and not stored elsewhere."""
+    # the history has its own lines, a read derives the ids from the file,
+    # and an attr named for a coordinate's field repeats the coordinate.
+    skip = {"history", "origin_id", "data_id"}
+    fields = dc.core.CoordSummary.model_fields
+    skip |= {f"{x}_{y}" for x in patch.coords.coord_map for y in fields}
+    out = []
+    for name, value in patch.attrs.model_dump(exclude_defaults=True).items():
+        if name in skip:
+            continue
+        if RESERVED.fullmatch(name) or name.startswith(PREFIX):
+            name = PREFIX + name
+        line = f"{name}={_get_attr_text(value)}"
+        if not _is_one_binding(line):
+            msg = (
+                f"The {name} attr is not written to RSF: Madagascar would "
+                "misread its quotes, newline, or spacing."
+            )
+            warnings.warn(msg, DASCoreWarning, skip_file_prefixes=(_DASCORE_DIR,))
+            continue
+        out.append(line)
+    return out
+
+
 class RSFV1(FiberIO):
     """An IO class supporting the RSF format of MADAGASCAR."""
 
@@ -46,6 +122,43 @@ class RSFV1(FiberIO):
     # also specify a version so when version 2 is released you can
     # just make another class in the same module named rsfV2.
     version = "1"
+
+    def get_version(self, resource: BinaryReader, **kwargs) -> str | None:
+        """Return the version when the resource starts with an RSF header."""
+        return self.version if _read_header(resource) is not None else None
+
+    def get_metadata(
+        self, resource: BinaryReader, *, snap: snap_type = ()
+    ) -> list[dc.PatchMeta]:
+        """
+        Describe the patch from the header alone.
+
+        A key that does not describe the file is an attr, read back as the
+        type it was written with; a key another program wrote reads as an
+        extra attr. The history is read from the lines DASCore wrote, each
+        '=' of an entry having become ':'; another program's history lines
+        are prose and are not read.
+        """
+        path = getattr(resource, "name", resource)
+        hdr, _, text = _get_header(resource, path)
+        try:
+            coords = _get_coords(hdr)
+        except ValueError as exc:
+            msg = f"RSF header {path} has an invalid axis: {exc}"
+            raise InvalidFiberFileError(msg) from exc
+        dtype = _get_dtype(hdr).newbyteorder("=")
+        cm = dc.core.get_coord_manager(coords=coords, dims=tuple(coords))
+        attrs = _get_attrs(text)
+        return [dc.PatchMeta(coords=cm, dtype=str(dtype), attrs=attrs)]
+
+    def read_array(
+        self, resource: LocalPath, windows: windows_type = (), key: str = ""
+    ) -> np.ndarray:
+        """Memory-map the samples, n1 fastest, and select the windows."""
+        binary, offset, dtype, shape = _get_layout(resource)
+        data = np.memmap(binary, dtype, "r", offset, shape, order="F")
+        out = slice_dataset(data, windows)
+        return out if dtype.isnative else out.astype(dtype.newbyteorder("="))
 
     def write(self, spool, resource, data_path=None, **kwargs):
         """
@@ -84,6 +197,17 @@ class RSFV1(FiberIO):
         - With data_path, the header's in= holds the binary's absolute path
         - Without data_path, the header ends with a blank line and the
         separator bytes 0x0c 0x0c 0x04 before the binary
+        - Each attr that is set is written as one key=value line, a dict as
+        one quoted JSON string, and with the prefix 'dascore_' when its
+        name is an RSF key such as n1 or in. The ids are not written; a
+        read derives them from the file. An attr Madagascar would misread,
+        such as text with one quote or a newline, is skipped with a
+        DASCoreWarning, since RSF has no escape inside a quoted value.
+        - Each history entry opens the header as a line
+        '# dascore <version> <entry>' with every '=' written as ':', so no
+        RSF reader binds it. The entry reads back with ':' in place of
+        '='. Nothing in the header comes from a clock, so writing a patch
+        twice gives the same bytes.
         """
         patches = [spool] if isinstance(spool, dc.Patch) else spool
         assert len(patches) == 1
@@ -116,10 +240,8 @@ class RSFV1(FiberIO):
 
         data_bytes = data.tobytes("F")
 
-        hdr_str = f"DASCORE {dc.__version__}   {dt.datetime.now()} \n"
-
         length = len(axis_lengths)
-        hdr_info = [hdr_str, file_format, f"esize={file_esize}"]
+        hdr_info = [*_get_history_lines(patch), file_format, f"esize={file_esize}"]
         for i in range(length):
             hdr_info.append(f"n{i + 1}={axis_lengths[i]}")
             if axis_names[i] == "time" and axis_epochs[i] is not None:
@@ -133,6 +255,7 @@ class RSFV1(FiberIO):
             hdr_info.append(f'label{i + 1}="{axis_names[i]}"')
             if axis_units[i]:
                 hdr_info.append(f'unit{i + 1}="{axis_units[i]}"')
+        hdr_info.extend(_get_attr_lines(patch))
 
         if data_path is not None:
             # outputs header and binary separately (.rsf and .rsf@)
