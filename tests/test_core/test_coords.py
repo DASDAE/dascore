@@ -30,7 +30,7 @@ from dascore.core.coords import (
     concat_coords,
     get_coord,
 )
-from dascore.exceptions import CoordError, ParameterError
+from dascore.exceptions import CoordError, ParameterError, TimeOverflowError
 from dascore.units import get_quantity, percent
 from dascore.utils.array import _coerce_text_array, _is_text_coercible_array
 from dascore.utils.misc import all_close, register_func, suppress_warnings
@@ -3533,3 +3533,10 @@ class TestSnapTimeUnits:
         labels = np.array(["2024-01", "2024-02", "2024-04"], dtype="datetime64[M]")
         out = get_coord(data=labels, snap=False).snap()
         assert out.min() == labels[0] and out.max() == labels[-1]
+
+    @pytest.mark.parametrize("unit", ["s", "Y"])
+    def test_snap_wide_span_raises(self, unit):
+        """A span too long for a nanosecond step raises instead of wrapping."""
+        labels = np.array(["1700", "1800", "2250"], dtype=f"datetime64[{unit}]")
+        with pytest.raises(TimeOverflowError):
+            get_coord(data=labels, snap=False).snap()
