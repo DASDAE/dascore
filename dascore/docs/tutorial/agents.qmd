@@ -8,14 +8,9 @@ keywords: [agents, skills, cli]
 
 Ask your agent:
 
-> Run `dascore skill --bootstrap` and save its output as `SKILL.md` in your agent's personal `dascore` skill directory. Replace an existing file only if the command succeeds.
+> Run `dascore skill --bootstrap` and install its output as a personal skill named `dascore`. Replace an existing skill only if the command succeeds.
 
-| Agent | Skill directory |
-| --- | --- |
-| Codex | `~/.agents/skills/dascore/` |
-| Claude Code | `~/.claude/skills/dascore/` |
-
-For other agents, use their supported skills directory. Reload the agent if needed, then ask it to use DASCore on your data. If the command is unavailable, see [Local documentation](local_documentation.qmd).
+Reload the agent if needed, then ask it to use DASCore on your data. If the command is unavailable, see [Local documentation](local_documentation.qmd).
 
 ## Included skills
 
