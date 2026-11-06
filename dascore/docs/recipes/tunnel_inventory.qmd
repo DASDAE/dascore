@@ -6,6 +6,8 @@ execute:
   warning: false
 ---
 
+{{< include ../_experimental.qmd >}}
+
 Use an inventory to describe the observing system independently of the files containing its measurements. Start from recorded deployment facts; the tunnel example below shows how the pieces fit together.
 
 ## Workflow

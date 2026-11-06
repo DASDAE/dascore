@@ -3,6 +3,7 @@ Febus specific tests.
 """
 
 import shutil
+from fractions import Fraction
 
 import h5py
 import numpy as np
@@ -15,6 +16,7 @@ from dascore.io.febus.a1utils import (
     _flatten_febus_info,
     _get_source_patch_key,
     _get_zone_time,
+    _step_from_ms,
 )
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import unbyte
@@ -251,3 +253,66 @@ class TestFebusA1Interrogator:
         scanned = dict(dc.scan(a1_path)[0].attrs)
         read = dict(Febus2().read(a1_path)[0].attrs)
         assert scanned["interrogator.name"] == read["interrogator.name"]
+
+
+class TestFebusA1TimeStep:
+    """The time step is the one the file states, exactly where it is simple."""
+
+    @staticmethod
+    def _time_coords(path):
+        """The time coordinate as read and as scanned."""
+        return (
+            Febus2().read(path)[0].get_coord("time"),
+            Febus2().scan(path)[0].get_coord("time"),
+        )
+
+    def test_spacing_in_ms(self, tmp_path):
+        """A versioned file's spacing of 0.9765625 ms is exactly 1/1024 s."""
+        path = tmp_path / "spacing_1024.h5"
+        shutil.copy2(fetch("febus_1.h5"), path)
+        with h5py.File(path, "r+") as f:
+            zone = _flatten_febus_info(f)[0].zone
+            spacing = zone.attrs["Spacing"]
+            spacing[1] = 1000 / 1024
+            zone.attrs["Spacing"] = spacing
+        for coord in self._time_coords(path):
+            assert coord.step_exact == Fraction(1, 1024)
+
+    def test_sampling_rate(self, tmp_path):
+        """An unversioned file's SamplingRate of 1024 Hz is exactly 1/1024 s."""
+        path = tmp_path / "rate_1024.h5"
+        shutil.copy2(fetch("valencia_febus_example.h5"), path)
+        with h5py.File(path, "r+") as f:
+            _flatten_febus_info(f)[0].zone.attrs["SamplingRate"] = 1024.0
+        for coord in self._time_coords(path):
+            assert coord.step_exact == Fraction(1, 1024)
+
+    def test_placeholder_rate_uses_spacing(self, tmp_path):
+        """An unversioned file's 250 MHz placeholder rate defers to Spacing."""
+        path = tmp_path / "placeholder_rate.h5"
+        shutil.copy2(fetch("valencia_febus_example.h5"), path)
+        with h5py.File(path, "r+") as f:
+            zone = _flatten_febus_info(f)[0].zone
+            zone.attrs["SamplingRate"] = 250_000_000.0
+            spacing = zone.attrs["Spacing"]
+            spacing[1] = 1000 / 1024
+            zone.attrs["Spacing"] = spacing
+        for coord in self._time_coords(path):
+            assert coord.step_exact == Fraction(1, 1024)
+
+    def test_inexact_spacing_keeps_nanoseconds(self):
+        """A spacing that is no simple number gives the nearest nanosecond."""
+        out = _step_from_ms(0.1234567891234)
+        assert isinstance(out, np.timedelta64)
+        assert out == dc.to_timedelta64(0.1234567891234 / 1_000)
+
+    def test_stated_rates_kept_exactly(self):
+        """The bundled files keep the exact steps their attrs state."""
+        expected = {
+            "febus_1.h5": Fraction(1, 40),
+            "febus_2.h5": Fraction(1, 1050),
+            "valencia_febus_example.h5": Fraction(1, 250),
+        }
+        for name, step in expected.items():
+            for coord in self._time_coords(fetch(name)):
+                assert coord.step_exact == step

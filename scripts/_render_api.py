@@ -15,6 +15,8 @@ from pathlib import Path
 import pandas as pd
 from jinja2 import Environment, FileSystemLoader
 
+from dascore.utils.docs import experimental_note
+
 RENDER_FUNCS = {}
 DOC_PATH = Path(__file__).absolute().parent.parent / "dascore" / "docs"
 API_DOC_PATH = DOC_PATH / "api"
@@ -23,6 +25,9 @@ TEMPLATE_PATH = DOC_PATH / "_templates"
 GITHUB_PATH = "https://github.com"
 GITHUB_REPOSITORY = "DASDAE/dascore"
 GITHUB_REF = "/master"
+EXPERIMENTAL_BANNER = (
+    f'::: {{.callout-warning title="Experimental"}}\n{experimental_note}\n:::\n\n'
+)
 
 
 @cache
@@ -54,6 +59,12 @@ def sha_256(path_or_str: Path | str) -> str:
         with open(path_or_str) as fi:
             path_or_str = fi.read()
     return hashlib.sha256(str(path_or_str).encode("utf-8")).hexdigest()
+
+
+def is_experimental(obj) -> bool:
+    """Return True if an object's module sets `__experimental__`."""
+    obj = getattr(obj, "__processor__", None) or obj
+    return getattr(inspect.getmodule(obj), "__experimental__", False)
 
 
 def build_table(df: pd.DataFrame, caption=None):
@@ -522,9 +533,10 @@ class Render:
             if self.has_subsection(x)
         ]
         signature = build_signature(data, self._data_dict, self._address_dict)
+        banner = EXPERIMENTAL_BANNER if is_experimental(data["object"]) else ""
         out = (
             f"# {self._data['name']}\n\n"
-            f"{self._get_parent_source_block(data)}\n\n"
+            f"{self._get_parent_source_block(data)}\n\n{banner}"
             f"{signature}\n"
             f"{docstr()}\n"
             f"{''.join(tables)}\n"

@@ -30,7 +30,7 @@ from dascore.core.coords import (
     concat_coords,
     get_coord,
 )
-from dascore.exceptions import CoordError, ParameterError
+from dascore.exceptions import CoordError, ParameterError, TimeOverflowError
 from dascore.units import get_quantity, percent
 from dascore.utils.array import _coerce_text_array, _is_text_coercible_array
 from dascore.utils.misc import all_close, register_func, suppress_warnings
@@ -998,10 +998,9 @@ class TestSelect:
         assert in_coord.sum() == len(out) == reduction.sum()
 
     def test_negative_samples_held(self, long_coord):
-        """Negative positions down to -len pick samples, without a warning."""
+        """Negative positions down to -len pick samples."""
         inds = np.array([-len(long_coord), -1, 0])
-        with suppress_warnings(FutureWarning, action="error"):
-            coord, _ = long_coord.order(inds, samples=True)
+        coord, _ = long_coord.order(inds, samples=True)
         assert len(coord) == 3
         assert coord.values[0] == coord.values[2] == long_coord.values[0]
 
@@ -1132,22 +1131,20 @@ class TestOrder:
         assert len(out) == len(values[reduction])
 
     def test_overlapping_array(self, long_coord):
-        """Ensure an overlapping array works as well."""
+        """An array holding values the coordinate lacks raises."""
         # Create an array which likely has values not contained in the original.
         values1 = long_coord.values[: len(long_coord) // 2]
         values2 = long_coord._get_compatible_value(-to_float(values1))
         values = np.concatenate([values1, values2])
-        # Ensure this still gets some output.
-        in_coord = np.isin(values, long_coord.values)
-        with pytest.warns(FutureWarning, match="does not hold"):
-            out, reduction = long_coord.order(values)
-        assert in_coord.sum() == len(out) == len(long_coord.values[reduction])
+        if np.isin(values, long_coord.values).all():
+            return
+        with pytest.raises(CoordError, match="does not hold"):
+            long_coord.order(values)
 
     def test_negative_samples_held(self, long_coord):
-        """Negative positions down to -len pick samples, without a warning."""
+        """Negative positions down to -len pick samples."""
         inds = np.array([-len(long_coord), -1, 0])
-        with suppress_warnings(FutureWarning, action="error"):
-            coord, _ = long_coord.order(inds, samples=True)
+        coord, _ = long_coord.order(inds, samples=True)
         assert len(coord) == 3
         assert coord.values[0] == coord.values[2] == long_coord.values[0]
 
@@ -1174,7 +1171,7 @@ class TestOrder:
         assert np.all(vals == coord.values)
 
     def test_values_no_in_coord(self, long_coord):
-        """Ensure using values not in coord results in an empty coordinate."""
+        """Values the coordinate does not hold raise."""
         values1 = long_coord.values[: len(long_coord) // 2]
         rand = random_state.rand(len(values1))
         # try to make values that won't be in the coordinate.
@@ -1182,21 +1179,14 @@ class TestOrder:
         # if by some chance there are any overlaps just bail out.
         if np.any(np.isin(values2, long_coord.values)):
             return
-        with pytest.warns(FutureWarning, match="does not hold"):
-            out, red = long_coord.order(values2)
-        assert out.shape == red.shape
-        assert len(out) == 0
+        with pytest.raises(CoordError, match="does not hold"):
+            long_coord.order(values2)
 
     def test_index_not_in_coord(self, long_coord):
-        """
-        Ensure using samples array with values not in coord results in
-        an empty coordinate.
-        """
+        """Positions past the coordinate's end raise."""
         bad_indices = np.arange(len(long_coord)) + len(long_coord)
-        with pytest.warns(FutureWarning, match="does not hold"):
-            out, red = long_coord.order(bad_indices, samples=True)
-        assert out.shape == red.shape
-        assert len(out) == 0
+        with pytest.raises(CoordError, match="does not hold"):
+            long_coord.order(bad_indices, samples=True)
 
     def test_duplicate_coord_single_value(self, coord_with_duplicates):
         """Ensure order works with duplicate coordinates and single value."""
@@ -1325,6 +1315,11 @@ class TestRangeCoord:
         """With start, stop and step all given, the stop bounds the range."""
         coord = get_coord(start=0.0, stop=10.0, step=1.0)
         assert len(coord.new(start=2.0)) == 8
+
+    def test_min_max_stand_in_for_start_stop(self):
+        """Without start/stop, min and max bound the range."""
+        coord = get_coord(min=0.0, max=10.0, step=1.0)
+        assert coord == get_coord(start=0.0, stop=10.0, step=1.0)
 
     def test_empty_slice_units(self):
         """An empty compact slice keeps its coordinate units without expansion."""
@@ -3402,12 +3397,11 @@ class TestFractionalSnap:
         assert np.array_equal(out.values, coord.values)
 
     def test_jitter_still_snaps(self):
-        """Nearly uniform labels still snap to their median step."""
+        """With snap=True, nearly uniform labels snap to their median step."""
         step = np.timedelta64(1, "ms")
         values = self.t0 + np.arange(100) * step
         values[1:-1:7] += np.timedelta64(1, "ns")
-        with pytest.warns(FutureWarning, match="0.1.26"):
-            out = get_coord(data=values)
+        out = get_coord(data=values, snap=True)
         assert out == get_coord(start=self.t0, step=step, shape=(100,))
         assert get_coord(data=values, snap=False).jittered
 
@@ -3415,8 +3409,7 @@ class TestFractionalSnap:
         """Labels no fractional grid holds keep the rounded median step."""
         values = get_coord(start=self.t0, step=(1, 1024), shape=(60,)).values.copy()
         values[30] += np.timedelta64(1, "ns")
-        with pytest.warns(FutureWarning, match="0.1.26"):
-            out = get_coord(data=values)
+        out = get_coord(data=values, snap=True)
         step = np.timedelta64(976562, "ns")
         assert out == get_coord(start=self.t0, step=step, shape=(60,))
 
@@ -3426,16 +3419,14 @@ class TestFractionalSnap:
         values = self.t0 + np.arange(100) * step
         values[[1, -1]] += tick
         values[2] -= tick
-        with pytest.warns(FutureWarning, match="0.1.26"):
-            out = get_coord(data=values)
+        out = get_coord(data=values, snap=True)
         assert out == get_coord(start=self.t0, step=step, shape=(100,))
 
     def test_offsets_past_int64_fall_through(self):
         """A grid whose offsets would overflow int64 keeps the median step."""
         num = 617 * 10**15 + 1
         values = np.array([k * num // 617 for k in range(1000)], dtype=np.int64)
-        with pytest.warns(FutureWarning, match="0.1.26"):
-            out = get_coord(data=values)
+        out = get_coord(data=values, snap=True)
         assert out == get_coord(start=0, step=10**15, shape=(1000,))
 
     def test_integer_fractional_grid(self):
@@ -3510,3 +3501,33 @@ class TestDeclaredStepSnap:
         values[1::2] += 0.1 * 5e-7
         out = get_coord(data=values, step=0.1, snap=False)
         assert np.array_equal(out.values, values)
+
+
+class TestSnapTimeUnits:
+    """Snapping time labels stored in any unit keeps their span."""
+
+    @pytest.mark.parametrize("unit", ["ns", "us", "ms", "s"])
+    @pytest.mark.parametrize("kind", ["datetime64", "timedelta64"])
+    def test_snap_keeps_ends(self, unit, kind):
+        """The snapped grid keeps the first and last labels for every unit."""
+        offsets = np.array([0, 1001, 1999, 3000, 4000], dtype=f"m8[{unit}]")
+        zero = np.timedelta64(0, unit)
+        start = np.datetime64("2024-01-01", unit) if kind == "datetime64" else zero
+        labels = start + offsets
+        out = get_coord(data=labels, snap=False).snap()
+        assert out.evenly_sampled and len(out) == len(labels)
+        assert out.min() == labels[0] and out.max() == labels[-1]
+        assert out.step == np.timedelta64(1000, unit)
+
+    def test_snap_calendar_units(self):
+        """Month labels snap to a grid between their actual first and last."""
+        labels = np.array(["2024-01", "2024-02", "2024-04"], dtype="datetime64[M]")
+        out = get_coord(data=labels, snap=False).snap()
+        assert out.min() == labels[0] and out.max() == labels[-1]
+
+    @pytest.mark.parametrize("unit", ["s", "Y"])
+    def test_snap_wide_span_raises(self, unit):
+        """A span too long for a nanosecond step raises instead of wrapping."""
+        labels = np.array(["1700", "1800", "2250"], dtype=f"datetime64[{unit}]")
+        with pytest.raises(TimeOverflowError):
+            get_coord(data=labels, snap=False).snap()

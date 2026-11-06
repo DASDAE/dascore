@@ -7,6 +7,7 @@ from __future__ import annotations
 import gc
 import struct
 import warnings
+from fractions import Fraction
 from functools import cache
 from io import BufferedReader
 from pathlib import Path
@@ -511,6 +512,20 @@ class TestSintelaProtobuf:
         assert patch.shape[0] == sum(
             _get_num_samples(payload) for _tag, payload in ts_records
         )
+
+    def test_sample_rate_gives_exact_step(self, fiber_io, write_sintela_file):
+        """A 1024 Hz sample_rate gives a step of exactly 1/1024 s."""
+
+        def _set_rate(msg):
+            msg.header.common_header.sample_rate = 1024.0
+
+        records = _mutate_all(_build_ts_payloads(1), "TimeseriesPacket", _set_rate)
+        path = write_sintela_file("ts_1024.pb", records)
+        for coord in (
+            fiber_io.read(path)[0].get_coord("time"),
+            fiber_io.scan(path)[0].get_coord("time"),
+        ):
+            assert coord.step_exact == Fraction(1, 1024)
 
     def test_time_coords_keep_datetime_dtype(
         self, fiber_io, write_sintela_file, ts_records, fft_records

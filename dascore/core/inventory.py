@@ -14,6 +14,8 @@ Each object documents the rules it enforces.
 
 from __future__ import annotations
 
+__experimental__ = True
+
 import difflib
 import itertools
 from collections.abc import Mapping, Sized
@@ -2112,6 +2114,10 @@ def _yaml_label(text: str) -> str:
     return f"{text!r}" if short else "the given YAML text"
 
 
+# The newest inventory schema_version this DASCore reads.
+SCHEMA_VERSION = 1
+
+
 class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
     """
     Top-level DASDAE inventory manifest.
@@ -2125,7 +2131,8 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
     _namespace_entry_point_group: ClassVar[str] = "dascore.inventory_namespace"
 
     schema_version: int = Field(
-        default=1, description="Version of the inventory manifest envelope."
+        default=SCHEMA_VERSION,
+        description="Version of the inventory manifest envelope.",
     )
     # Empty unless stated, as CreationInfo's strings are, so the same files
     # load to the same inventory; nothing refers to the manifest by this id.
@@ -2147,6 +2154,19 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
     networks: tuple[Network, ...] = Field(
         default=(), description="Network containers in the inventory."
     )
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def _check_schema_version(cls, value):
+        """Refuse a version this DASCore cannot read, rather than misread it."""
+        if type(value) is not int or not 1 <= value <= SCHEMA_VERSION:
+            msg = (
+                f"schema_version {value!r} is not one this DASCore reads (1 to "
+                f"{SCHEMA_VERSION}). A newer one was written by a newer DASCore; "
+                "upgrade DASCore to read it."
+            )
+            raise InvalidInventoryError(msg)
+        return value
 
     @field_validator("resources", mode="before")
     @classmethod

@@ -4,6 +4,7 @@ Tests for optoDAS files.
 
 import json
 import shutil
+from fractions import Fraction
 
 import h5py
 import numpy as np
@@ -27,6 +28,29 @@ class TestOptoDASIssues:
             payload = fiber_io.scan(path, snap=snap)[0]
             distance = payload.coords.get_coord("distance")
             assert distance.units == dc.get_quantity("m")
+
+
+class TestTimeStep:
+    """The time step comes from the header's unitScale."""
+
+    @pytest.mark.parametrize("first", [0, 3])
+    def test_exact_step(self, tmp_path, first):
+        """A unitScale of 1/1024 s gives an exact step, and a shifted start."""
+        path = tmp_path / "hz_1024.hdf5"
+        shutil.copyfile(fetch("opto_das_1.hdf5"), path)
+        with h5py.File(path, "r+") as fi:
+            crange = fi["header/dimensionRanges/dimension0"]
+            crange["unitScale"][()] = 1 / 1024
+            crange["min"][()] = first
+            crange["max"][()] = first + fi["data"].shape[0] - 1
+            t1 = dc.to_datetime64(fi["header/time"][()])
+        for coord in (
+            OptoDASV8().read(path)[0].get_coord("time"),
+            OptoDASV8().scan(path)[0].get_coord("time"),
+        ):
+            assert coord.step_exact == Fraction(1, 1024)
+            offset = round(first * 10**9 / 1024)
+            assert coord.min() == t1 + np.timedelta64(offset, "ns")
 
 
 class TestReadArray:

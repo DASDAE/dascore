@@ -13,6 +13,7 @@ from scipy import ndimage, signal
 import dascore as dc
 from dascore.exceptions import (
     CoordDataError,
+    CoordError,
     FilterValueError,
     ParameterError,
     UnitError,
@@ -154,8 +155,22 @@ class TestPassFilter:
         patch.pass_filter(time=(1 * hz, 10 * hz))
         # Filter wavelengths 50m to 100m
         patch.pass_filter(distance=(50 * m, 100 * m))
-        # filter wavelengths less than 200 ft
+        # keep wavelengths of 200 ft and longer
         patch.pass_filter(distance=(200 * ft, None))
+
+    def test_one_sided_period_matches_frequency(self, random_patch):
+        """
+        A one-sided period bound equals the frequency filter it describes:
+        periods up to 1 s is a 1 Hz highpass, periods from 1 s a 1 Hz lowpass.
+        """
+        s, hz = dc.units.get_unit("s"), dc.units.get_unit("Hz")
+        patch = random_patch
+        assert patch.pass_filter(time=(None, 1 * s)).equals(
+            patch.pass_filter(time=(1 * hz, None))
+        )
+        assert patch.pass_filter(time=(1 * s, ...)).equals(
+            patch.pass_filter(time=(..., 1 * hz))
+        )
 
     def test_one_unit_raises(self, random_patch):
         """When only one unit is specified it should raise."""
@@ -195,6 +210,51 @@ class TestPassFilter:
         assert not np.any(pd.isnull(out.data))
 
 
+class TestPassFilterPeriodBand:
+    """Period bounds keep the same band whether one- or two-sided (s07-F1)."""
+
+    dt = 0.1  # sample spacing in seconds
+    short_period = 2.0
+    long_period = 20.0
+
+    def _amplitude(self, trace, period):
+        """Return the amplitude of the given period in the trace's interior."""
+        time = np.arange(len(trace)) * self.dt
+        sl = slice(len(trace) // 4, 3 * len(trace) // 4)
+        phase = 2 * np.pi * time[sl] / period
+        cos_amp = 2 * np.mean(trace[sl] * np.cos(phase))
+        sin_amp = 2 * np.mean(trace[sl] * np.sin(phase))
+        return np.hypot(cos_amp, sin_amp)
+
+    @pytest.fixture(scope="class")
+    def two_period_patch(self):
+        """A patch holding equal sinusoids of 2 s and 20 s period."""
+        time = np.arange(4000) * self.dt
+        trace = np.sin(2 * np.pi * time / self.short_period) + np.sin(
+            2 * np.pi * time / self.long_period
+        )
+        patch = dc.Patch(
+            data=np.stack([trace, trace]),
+            coords={"distance": np.arange(2.0), "time": time},
+            dims=("distance", "time"),
+        )
+        return patch.set_units(time="s", distance="m")
+
+    @pytest.mark.parametrize(
+        "bounds, kept, removed",
+        [
+            ((1 * s, 10 * s), short_period, long_period),
+            ((None, 10 * s), short_period, long_period),
+            ((10 * s, None), long_period, short_period),
+        ],
+    )
+    def test_period_band_kept(self, two_period_patch, bounds, kept, removed):
+        """Only periods inside the requested band survive the filter."""
+        trace = two_period_patch.pass_filter(time=bounds).data[0]
+        assert self._amplitude(trace, kept) > 0.9
+        assert self._amplitude(trace, removed) < 0.1
+
+
 class TestSobelFilter:
     """Tests for the Sobel filter."""
 
@@ -220,19 +280,19 @@ class TestSobelFilter:
         assert isinstance(out, dc.Patch)
         assert not np.any(pd.isnull(out.data))
 
-    def test_holes_warn(self, holed_patch):
-        """Missing samples filter until 0.1.26, with a warning."""
-        with pytest.warns(FutureWarning, match=r"not evenly sampled.*split_gaps"):
+    def test_holes_raise(self, holed_patch):
+        """Missing samples raise, naming the fixes."""
+        # the kernel smooths along every dimension, so each is checked
+        with pytest.raises(CoordError, match="not evenly sampled"):
             holed_patch.sobel_filter("time")
         # the kernel also smooths along time when filtering distance
-        with pytest.warns(FutureWarning, match="not evenly sampled"):
+        with pytest.raises(CoordError, match="not evenly sampled"):
             holed_patch.sobel_filter("distance")
 
     def test_stepless_runs(self, stepless_seam_patch):
-        """Step-less labels still filter until 0.1.26, with a warning."""
-        with pytest.warns(FutureWarning, match="0.1.26"):
-            out = stepless_seam_patch.sobel_filter("time")
-        assert out.shape == stepless_seam_patch.shape
+        """Step-less labels raise."""
+        with pytest.raises(CoordError, match="sobel_filter"):
+            stepless_seam_patch.sobel_filter("time")
 
 
 @pytest.mark.parametrize("name", ["median_filter", "notch_filter", "savgol_filter"])

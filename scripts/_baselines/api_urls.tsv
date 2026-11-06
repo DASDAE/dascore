@@ -1384,7 +1384,6 @@ dascore.core.patch.transform.fourier.dft	/api/dascore/transform/fourier/dft.qmd
 dascore.core.patch.transform.fourier.get_coord	/api/dascore/core/coords/get_coord.qmd
 dascore.core.patch.transform.fourier.get_coord_manager	/api/dascore/core/coordmanager/get_coord_manager.qmd
 dascore.core.patch.transform.fourier.get_dim_axis_value	/api/dascore/utils/patch/get_dim_axis_value.qmd
-dascore.core.patch.transform.fourier.get_window_axis_step	/api/dascore/utils/patch/get_window_axis_step.qmd
 dascore.core.patch.transform.fourier.idft	/api/dascore/transform/fourier/idft.qmd
 dascore.core.patch.transform.fourier.invert_quantity	/api/dascore/units/invert_quantity.qmd
 dascore.core.patch.transform.fourier.is_datetime64	/api/dascore/utils/time/is_datetime64.qmd
@@ -2786,7 +2785,6 @@ dascore.io.optodas.utils.build_patches	/api/dascore/io/utils/build_patches.qmd
 dascore.io.optodas.utils.get_coord	/api/dascore/core/coords/get_coord.qmd
 dascore.io.optodas.utils.get_exact_coord	/api/dascore/io/utils/get_exact_coord.qmd
 dascore.io.optodas.utils.unbyte	/api/dascore/utils/misc/unbyte.qmd
-dascore.io.optodas.utils.unpack_scalar_h5_dataset	/api/dascore/utils/hdf5/unpack_scalar_h5_dataset.qmd
 dascore.io.patch_to_dataframe	/api/dascore/utils/pd/patch_to_dataframe.qmd
 dascore.io.patch_to_obspy	/api/dascore/utils/io/patch_to_obspy.qmd
 dascore.io.patch_to_xarray	/api/dascore/utils/io/patch_to_xarray.qmd
@@ -4357,7 +4355,6 @@ dascore.proc.get_dim_axis_value	/api/dascore/utils/patch/get_dim_axis_value.qmd
 dascore.proc.get_parent_code_name	/api/dascore/utils/misc/get_parent_code_name.qmd
 dascore.proc.hampel	/api/dascore/proc/hampel.qmd
 dascore.proc.hampel.ParameterError	/api/dascore/exceptions/ParameterError.qmd
-dascore.proc.hampel.get_patch_window_size	/api/dascore/utils/patch/get_patch_window_size.qmd
 dascore.proc.hampel.hampel_filter	/api/dascore/proc/hampel/hampel_filter.qmd
 dascore.proc.hampel.move_median	/api/dascore/utils/moving/move_median.qmd
 dascore.proc.hampel.patch_function	/api/dascore/utils/patch/patch_function.qmd
@@ -4476,7 +4473,6 @@ dascore.proc.rolling	/api/dascore/proc/rolling.qmd
 dascore.proc.rolling.ParameterError	/api/dascore/exceptions/ParameterError.qmd
 dascore.proc.rolling.compose_docstring	/api/dascore/utils/docs/compose_docstring.qmd
 dascore.proc.rolling.get_dim_axis_value	/api/dascore/utils/patch/get_dim_axis_value.qmd
-dascore.proc.rolling.get_window_axis_step	/api/dascore/utils/patch/get_window_axis_step.qmd
 dascore.proc.rolling.rolling	/api/dascore/proc/rolling/rolling.qmd
 dascore.proc.rolling.rolling_df	/api/dascore/utils/pd/rolling_df.qmd
 dascore.proc.savgol_filter	/api/dascore/proc/filter/savgol_filter.qmd
@@ -4561,7 +4557,6 @@ dascore.proc.whiten.patch_function	/api/dascore/utils/patch/patch_function.qmd
 dascore.proc.whiten.whiten	/api/dascore/proc/whiten/whiten.qmd
 dascore.proc.wiener	/api/dascore/proc/wiener.qmd
 dascore.proc.wiener.ParameterError	/api/dascore/exceptions/ParameterError.qmd
-dascore.proc.wiener.get_patch_window_size	/api/dascore/utils/patch/get_patch_window_size.qmd
 dascore.proc.wiener.lazy_import	/api/dascore/utils/imports/lazy_import.qmd
 dascore.proc.wiener.patch_function	/api/dascore/utils/patch/patch_function.qmd
 dascore.proc.wiener.wiener_filter	/api/dascore/proc/wiener/wiener_filter.qmd
@@ -4619,7 +4614,6 @@ dascore.transform.fourier.dft	/api/dascore/transform/fourier/dft.qmd
 dascore.transform.fourier.get_coord	/api/dascore/core/coords/get_coord.qmd
 dascore.transform.fourier.get_coord_manager	/api/dascore/core/coordmanager/get_coord_manager.qmd
 dascore.transform.fourier.get_dim_axis_value	/api/dascore/utils/patch/get_dim_axis_value.qmd
-dascore.transform.fourier.get_window_axis_step	/api/dascore/utils/patch/get_window_axis_step.qmd
 dascore.transform.fourier.idft	/api/dascore/transform/fourier/idft.qmd
 dascore.transform.fourier.invert_quantity	/api/dascore/units/invert_quantity.qmd
 dascore.transform.fourier.is_datetime64	/api/dascore/utils/time/is_datetime64.qmd
@@ -4904,7 +4898,6 @@ dascore.utils.hdf5.open_h5_resource	/api/dascore/utils/hdf5/open_h5_resource.qmd
 dascore.utils.hdf5.pause_gc	/api/dascore/utils/remote_io/pause_gc.qmd
 dascore.utils.hdf5.resume_gc	/api/dascore/utils/remote_io/resume_gc.qmd
 dascore.utils.hdf5.unbyte	/api/dascore/utils/misc/unbyte.qmd
-dascore.utils.hdf5.unpack_scalar_h5_dataset	/api/dascore/utils/hdf5/unpack_scalar_h5_dataset.qmd
 dascore.utils.identity	/api/dascore/utils/identity.qmd
 dascore.utils.identity.advance	/api/dascore/utils/identity/advance.qmd
 dascore.utils.identity.combine_hashes	/api/dascore/utils/serialize/combine_hashes.qmd
@@ -5014,7 +5007,6 @@ dascore.utils.misc.validate_acquisition_key	/api/dascore/utils/misc/validate_acq
 dascore.utils.misc.validate_progress_level	/api/dascore/utils/progress/validate_progress_level.qmd
 dascore.utils.misc.validate_warn_level	/api/dascore/utils/misc/validate_warn_level.qmd
 dascore.utils.misc.warn_or_raise	/api/dascore/utils/misc/warn_or_raise.qmd
-dascore.utils.misc.yield_sub_sequences	/api/dascore/utils/misc/yield_sub_sequences.qmd
 dascore.utils.models	/api/dascore/utils/models.qmd
 dascore.utils.models.DascoreBaseModel	/api/dascore/models/base/DascoreBaseModel.qmd
 dascore.utils.models.DascoreBaseModel.new	/api/dascore/models/base/DascoreBaseModel/new.qmd
@@ -5079,7 +5071,6 @@ dascore.utils.patch.check_patch_coords	/api/dascore/utils/patch/check_patch_coor
 dascore.utils.patch.check_patch_data	/api/dascore/utils/patch/check_patch_data.qmd
 dascore.utils.patch.combine_patch_attrs	/api/dascore/utils/attrs/combine_patch_attrs.qmd
 dascore.utils.patch.compose_docstring	/api/dascore/utils/docs/compose_docstring.qmd
-dascore.utils.patch.concatenate_patches	/api/dascore/utils/patch/concatenate_patches.qmd
 dascore.utils.patch.concatenate_planned	/api/dascore/utils/patch/concatenate_planned.qmd
 dascore.utils.patch.convert_units	/api/dascore/units/convert_units.qmd
 dascore.utils.patch.deprecate	/api/dascore/utils/deprecate/deprecate.qmd
@@ -5092,10 +5083,8 @@ dascore.utils.patch.get_dim_sampling_rate	/api/dascore/utils/patch/get_dim_sampl
 dascore.utils.patch.get_middle_value	/api/dascore/utils/misc/get_middle_value.qmd
 dascore.utils.patch.get_patch_kind	/api/dascore/utils/patch/get_patch_kind.qmd
 dascore.utils.patch.get_patch_names	/api/dascore/utils/patch/get_patch_names.qmd
-dascore.utils.patch.get_patch_window_size	/api/dascore/utils/patch/get_patch_window_size.qmd
 dascore.utils.patch.get_quantity	/api/dascore/units/get_quantity.qmd
 dascore.utils.patch.get_start_stop_step	/api/dascore/utils/patch/get_start_stop_step.qmd
-dascore.utils.patch.get_window_axis_step	/api/dascore/utils/patch/get_window_axis_step.qmd
 dascore.utils.patch.ids_enabled	/api/dascore/utils/identity/ids_enabled.qmd
 dascore.utils.patch.is_foreign	/api/dascore/utils/array_api/is_foreign.qmd
 dascore.utils.patch.is_memory_uri	/api/dascore/utils/paths/is_memory_uri.qmd
@@ -5104,7 +5093,6 @@ dascore.utils.patch.is_percent	/api/dascore/units/is_percent.qmd
 dascore.utils.patch.iterate	/api/dascore/utils/misc/iterate.qmd
 dascore.utils.patch.merge_compatible_coords_attrs	/api/dascore/utils/patch/merge_compatible_coords_attrs.qmd
 dascore.utils.patch.merge_coord_managers	/api/dascore/utils/coordmanager/merge_coord_managers.qmd
-dascore.utils.patch.merge_patches	/api/dascore/utils/patch/merge_patches.qmd
 dascore.utils.patch.numpy_fallback	/api/dascore/utils/patch/numpy_fallback.qmd
 dascore.utils.patch.operation_fingerprint	/api/dascore/utils/identity/operation_fingerprint.qmd
 dascore.utils.patch.patch_function	/api/dascore/utils/patch/patch_function.qmd
@@ -5122,7 +5110,6 @@ dascore.utils.patch.validate_warn_level	/api/dascore/utils/misc/validate_warn_le
 dascore.utils.patch.warn_if_histories_differ	/api/dascore/utils/attrs/warn_if_histories_differ.qmd
 dascore.utils.patch.warn_numpy_fallback	/api/dascore/utils/array_api/warn_numpy_fallback.qmd
 dascore.utils.patch.warn_or_raise	/api/dascore/utils/misc/warn_or_raise.qmd
-dascore.utils.patch.yield_sub_sequences	/api/dascore/utils/misc/yield_sub_sequences.qmd
 dascore.utils.patch_assembly	/api/dascore/utils/patch_assembly.qmd
 dascore.utils.patch_assembly.CoordManager.transpose	/api/dascore/core/coordmanager/CoordManager/transpose.qmd
 dascore.utils.patch_assembly.CoordMergeError	/api/dascore/exceptions/CoordMergeError.qmd
@@ -5175,7 +5162,6 @@ dascore.utils.pd.fill_defaults_from_pydantic	/api/dascore/utils/pd/fill_defaults
 dascore.utils.pd.filter_df	/api/dascore/utils/pd/filter_df.qmd
 dascore.utils.pd.get_dim_names_from_columns	/api/dascore/utils/pd/get_dim_names_from_columns.qmd
 dascore.utils.pd.get_interval_columns	/api/dascore/utils/pd/get_interval_columns.qmd
-dascore.utils.pd.get_regex	/api/dascore/utils/pd/get_regex.qmd
 dascore.utils.pd.is_range	/api/dascore/utils/misc/is_range.qmd
 dascore.utils.pd.iter_rows	/api/dascore/utils/pd/iter_rows.qmd
 dascore.utils.pd.list_ser_to_str	/api/dascore/utils/pd/list_ser_to_str.qmd
@@ -7552,8 +7538,6 @@ docs/api/dascore/utils/hdf5/h5_matches_structure	/api/dascore/utils/hdf5/h5_matc
 docs/api/dascore/utils/hdf5/h5_matches_structure.qmd	/api/dascore/utils/hdf5/h5_matches_structure.qmd
 docs/api/dascore/utils/hdf5/open_h5_resource	/api/dascore/utils/hdf5/open_h5_resource.qmd
 docs/api/dascore/utils/hdf5/open_h5_resource.qmd	/api/dascore/utils/hdf5/open_h5_resource.qmd
-docs/api/dascore/utils/hdf5/unpack_scalar_h5_dataset	/api/dascore/utils/hdf5/unpack_scalar_h5_dataset.qmd
-docs/api/dascore/utils/hdf5/unpack_scalar_h5_dataset.qmd	/api/dascore/utils/hdf5/unpack_scalar_h5_dataset.qmd
 docs/api/dascore/utils/identity	/api/dascore/utils/identity.qmd
 docs/api/dascore/utils/identity.qmd	/api/dascore/utils/identity.qmd
 docs/api/dascore/utils/identity/advance	/api/dascore/utils/identity/advance.qmd
@@ -7722,8 +7706,6 @@ docs/api/dascore/utils/misc/validate_warn_level	/api/dascore/utils/misc/validate
 docs/api/dascore/utils/misc/validate_warn_level.qmd	/api/dascore/utils/misc/validate_warn_level.qmd
 docs/api/dascore/utils/misc/warn_or_raise	/api/dascore/utils/misc/warn_or_raise.qmd
 docs/api/dascore/utils/misc/warn_or_raise.qmd	/api/dascore/utils/misc/warn_or_raise.qmd
-docs/api/dascore/utils/misc/yield_sub_sequences	/api/dascore/utils/misc/yield_sub_sequences.qmd
-docs/api/dascore/utils/misc/yield_sub_sequences.qmd	/api/dascore/utils/misc/yield_sub_sequences.qmd
 docs/api/dascore/utils/models	/api/dascore/utils/models.qmd
 docs/api/dascore/utils/models.qmd	/api/dascore/utils/models.qmd
 docs/api/dascore/utils/moving	/api/dascore/utils/moving.qmd
@@ -7774,8 +7756,6 @@ docs/api/dascore/utils/patch/check_patch_coords	/api/dascore/utils/patch/check_p
 docs/api/dascore/utils/patch/check_patch_coords.qmd	/api/dascore/utils/patch/check_patch_coords.qmd
 docs/api/dascore/utils/patch/check_patch_data	/api/dascore/utils/patch/check_patch_data.qmd
 docs/api/dascore/utils/patch/check_patch_data.qmd	/api/dascore/utils/patch/check_patch_data.qmd
-docs/api/dascore/utils/patch/concatenate_patches	/api/dascore/utils/patch/concatenate_patches.qmd
-docs/api/dascore/utils/patch/concatenate_patches.qmd	/api/dascore/utils/patch/concatenate_patches.qmd
 docs/api/dascore/utils/patch/concatenate_planned	/api/dascore/utils/patch/concatenate_planned.qmd
 docs/api/dascore/utils/patch/concatenate_planned.qmd	/api/dascore/utils/patch/concatenate_planned.qmd
 docs/api/dascore/utils/patch/get_dim_axis_value	/api/dascore/utils/patch/get_dim_axis_value.qmd
@@ -7786,16 +7766,10 @@ docs/api/dascore/utils/patch/get_patch_kind	/api/dascore/utils/patch/get_patch_k
 docs/api/dascore/utils/patch/get_patch_kind.qmd	/api/dascore/utils/patch/get_patch_kind.qmd
 docs/api/dascore/utils/patch/get_patch_names	/api/dascore/utils/patch/get_patch_names.qmd
 docs/api/dascore/utils/patch/get_patch_names.qmd	/api/dascore/utils/patch/get_patch_names.qmd
-docs/api/dascore/utils/patch/get_patch_window_size	/api/dascore/utils/patch/get_patch_window_size.qmd
-docs/api/dascore/utils/patch/get_patch_window_size.qmd	/api/dascore/utils/patch/get_patch_window_size.qmd
 docs/api/dascore/utils/patch/get_start_stop_step	/api/dascore/utils/patch/get_start_stop_step.qmd
 docs/api/dascore/utils/patch/get_start_stop_step.qmd	/api/dascore/utils/patch/get_start_stop_step.qmd
-docs/api/dascore/utils/patch/get_window_axis_step	/api/dascore/utils/patch/get_window_axis_step.qmd
-docs/api/dascore/utils/patch/get_window_axis_step.qmd	/api/dascore/utils/patch/get_window_axis_step.qmd
 docs/api/dascore/utils/patch/merge_compatible_coords_attrs	/api/dascore/utils/patch/merge_compatible_coords_attrs.qmd
 docs/api/dascore/utils/patch/merge_compatible_coords_attrs.qmd	/api/dascore/utils/patch/merge_compatible_coords_attrs.qmd
-docs/api/dascore/utils/patch/merge_patches	/api/dascore/utils/patch/merge_patches.qmd
-docs/api/dascore/utils/patch/merge_patches.qmd	/api/dascore/utils/patch/merge_patches.qmd
 docs/api/dascore/utils/patch/numpy_fallback	/api/dascore/utils/patch/numpy_fallback.qmd
 docs/api/dascore/utils/patch/numpy_fallback.qmd	/api/dascore/utils/patch/numpy_fallback.qmd
 docs/api/dascore/utils/patch/patch_function	/api/dascore/utils/patch/patch_function.qmd
@@ -7858,8 +7832,6 @@ docs/api/dascore/utils/pd/get_dim_names_from_columns	/api/dascore/utils/pd/get_d
 docs/api/dascore/utils/pd/get_dim_names_from_columns.qmd	/api/dascore/utils/pd/get_dim_names_from_columns.qmd
 docs/api/dascore/utils/pd/get_interval_columns	/api/dascore/utils/pd/get_interval_columns.qmd
 docs/api/dascore/utils/pd/get_interval_columns.qmd	/api/dascore/utils/pd/get_interval_columns.qmd
-docs/api/dascore/utils/pd/get_regex	/api/dascore/utils/pd/get_regex.qmd
-docs/api/dascore/utils/pd/get_regex.qmd	/api/dascore/utils/pd/get_regex.qmd
 docs/api/dascore/utils/pd/iter_rows	/api/dascore/utils/pd/iter_rows.qmd
 docs/api/dascore/utils/pd/iter_rows.qmd	/api/dascore/utils/pd/iter_rows.qmd
 docs/api/dascore/utils/pd/list_ser_to_str	/api/dascore/utils/pd/list_ser_to_str.qmd

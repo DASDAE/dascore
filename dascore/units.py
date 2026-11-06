@@ -479,10 +479,13 @@ def get_filter_units(
     >>> assert get_filter_units(None, 10 * Hz, s) == (None, 10.)
     >>> assert get_filter_units(1 * Hz, 10 * Hz, s) == (1., 10.)
     >>>
-    >>> # Passing a tuple in seconds will convert to Hz and switch order, if needed.
+    >>> # Passing periods in seconds converts to Hz and swaps the order, so
+    >>> # the bounds still describe the same band of periods.
     >>> assert get_filter_units(1 * s, 10 * s, s) == (0.1, 1.)
-    >>> assert get_filter_units(None, 10 * s, s) == (None, 0.1)
-    >>> assert get_filter_units(10 * s, None, s) == (0.1, None)
+    >>> # Periods up to 10 s means frequencies from 0.1 Hz up (a highpass).
+    >>> assert get_filter_units(None, 10 * s, s) == (0.1, None)
+    >>> # Periods from 10 s up means frequencies up to 0.1 Hz (a lowpass).
+    >>> assert get_filter_units(10 * s, None, s) == (None, 0.1)
     """
 
     def _ensure_same_units(quant1, quant2):
@@ -517,8 +520,10 @@ def get_filter_units(
     _ensure_same_units(quant1, quant2)
     out1, inverted1 = get_inverted_quant(quant1, to_units)
     out2, inverted2 = get_inverted_quant(quant2, to_units)
-    # if inverted units weren't passed 1 and 2 must be swapped
-    if not (inverted1 or inverted2):
+    # Bounds in the coordinate's units (eg periods) flip order when inverted.
+    # A None bound reports inverted, so only one bound need be non-inverted;
+    # one-sided bounds swap too, keeping the band the user described.
+    if not (inverted1 and inverted2):
         out1, out2 = out2, out1
     return out1, out2
 

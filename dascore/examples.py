@@ -28,6 +28,7 @@ from dascore.core.inventory import (
     OpticalPathLabel,
 )
 from dascore.exceptions import UnknownExampleError
+from dascore.utils.docs import compose_docstring, experimental_note
 from dascore.utils.downloader import (
     _fetch_cached,
     get_fetcher,
@@ -978,9 +979,12 @@ def random_das_inventory() -> Inventory:
     return inventory_patch_pair()[1]
 
 
+@compose_docstring(experimental=experimental_note)
 def get_example_inventory(example_name="random_das", **kwargs) -> Inventory:
     """
     Load an example Inventory.
+
+    {experimental}
 
     Supported example inventories are:
     ```{python}

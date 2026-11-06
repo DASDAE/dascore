@@ -1,7 +1,7 @@
 """Utilities functions for Neubrex DAS IO support"""
 
 import dascore as dc
-from dascore.io.utils import convert_attr_units
+from dascore.io.utils import convert_attr_units, step_from_interval
 from dascore.utils.misc import maybe_get_items, unbyte
 
 
@@ -34,7 +34,7 @@ def _get_coord_manager(acoustic):
         gps = unbyte(attrs["GPSTimeStamp(UTC)"])
         cpu = unbyte(attrs["CPUTimeStamp(UTC)"])
         start = dc.to_datetime64(gps if gps else cpu)
-        step = dc.to_timedelta64(attrs["TimeSamplingInterval(seconds)"])
+        step = step_from_interval(attrs["TimeSamplingInterval(seconds)"])
         return dc.get_coord(start=start, step=step, shape=(acoustic.shape[0],))
 
     def _get_dist_coord(acoustic):
