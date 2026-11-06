@@ -145,3 +145,35 @@ class TestRsfWrite:
         newdatapath = UPath(f"{datapath}@")
         expected = random_patch.data.astype(np.float32).tobytes("F")
         assert newdatapath.read_bytes() == expected
+
+
+class TestRsfEpoch:
+    """Tests for the absolute time the writer stores on a datetime time axis."""
+
+    def test_header_text(self, random_patch, tmp_path):
+        """The time axis carries epoch, relative o and d, unit s, and starttime."""
+        path = tmp_path / "epoch.rsf"
+        patch = random_patch.new(data=random_patch.data.astype(np.float32))
+        RSFV1().write(patch, path)
+        _, head, _ = _split_combined(path.read_bytes())
+        lines = head.decode().splitlines()
+        start = lines.index("n2=2000")
+        assert lines[start : start + 7] == [
+            "n2=2000",
+            "o2=0.0",
+            'epoch2="2017-09-18T00:00:00.000000000Z"',
+            "starttime=1505692800.0",
+            "d2=0.004",
+            'label2="time"',
+            'unit2="s"',
+        ]
+        assert not any(x.startswith("epoch1") for x in lines)
+
+    def test_nanoseconds(self, fractional_patch, tmp_path):
+        """The epoch keeps the start time to the nanosecond."""
+        path = tmp_path / "epoch_ns.rsf"
+        RSFV1().write(fractional_patch, path)
+        hdr, _, _ = _split_combined(path.read_bytes())
+        assert hdr["epoch2"] == "2024-01-01T00:00:00.123456789Z"
+        start = fractional_patch.get_coord("time").min()
+        assert np.datetime64(hdr["epoch2"][:-1], "ns") == start

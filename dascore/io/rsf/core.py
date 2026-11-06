@@ -28,6 +28,14 @@ def _get_step(coord):
     return float(step) if step is not None else to_float(coord.step)
 
 
+def _get_epoch(coord):
+    """Return a datetime coordinate's start as an ISO 8601 UTC string, or None."""
+    if not np.issubdtype(coord.dtype, np.datetime64):
+        return None
+    start = np.datetime64(coord.values[0], "ns")
+    return f"{np.datetime_as_string(start, unit='ns')}Z"
+
+
 class RSFV1(FiberIO):
     """An IO class supporting the RSF format of MADAGASCAR."""
 
@@ -50,8 +58,10 @@ class RSFV1(FiberIO):
 
         spool needs to have a single patch in it
 
-        time origin is forced to 0.0 in the new RSF file, but a dummy
-        variable named 'starttime' still holds the real start time
+        time origin is forced to 0.0 in the new RSF file; for a datetime
+        time axis i, epoch<i> holds the start time as an ISO 8601 UTC
+        string with nanoseconds, and the legacy key 'starttime' holds it
+        as float seconds since 1970
 
         Parameters
         ----------
@@ -82,6 +92,7 @@ class RSFV1(FiberIO):
         axis_steps = [_get_step(patch.get_coord(x)) for x in patch.dims]
         axis_names = patch.dims
         axis_units = [get_quantity_str(patch.get_coord(x).units) for x in patch.dims]
+        axis_epochs = [_get_epoch(patch.get_coord(x)) for x in patch.dims]
 
         data = patch.data
         dtype = np.dtype(data.dtype)
@@ -107,6 +118,9 @@ class RSFV1(FiberIO):
             hdr_info.append(f"n{i + 1}={axis_lengths[i]}")
             if axis_names[i] == "time":
                 hdr_info.append(f"o{i + 1}=0.0")
+                if axis_epochs[i] is not None:
+                    hdr_info.append(f'epoch{i + 1}="{axis_epochs[i]}"')
+                # legacy key, kept for readers of earlier output
                 hdr_info.append(f"starttime={axis_origs[i]}")
             else:
                 hdr_info.append(f"o{i + 1}={axis_origs[i]}")
