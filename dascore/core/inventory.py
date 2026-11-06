@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import difflib
 import itertools
+import numbers
 from collections.abc import Mapping, Sized
 from contextlib import suppress
 from functools import cache
@@ -111,6 +112,10 @@ CouplingType = Literal[
     "other",
 ]
 VALID_COUPLING_TYPES = get_args(CouplingType)
+
+# The newest inventory schema_version this DASCore reads. A document stating
+# a newer one was written by a newer DASCore and is refused, never misread.
+INVENTORY_SCHEMA_VERSION = 1
 
 # Coordinates are stored on the canonical (x, y, z) axes; these labels are
 # resolvable aliases whose meaning the inventory CRS declares.
@@ -2140,7 +2145,8 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
     _namespace_entry_point_group: ClassVar[str] = "dascore.inventory_namespace"
 
     schema_version: int = Field(
-        default=1, description="Version of the inventory manifest envelope."
+        default=INVENTORY_SCHEMA_VERSION,
+        description="Version of the inventory manifest envelope.",
     )
     # Empty unless stated, as CreationInfo's strings are, so the same files
     # load to the same inventory; nothing refers to the manifest by this id.
@@ -2162,6 +2168,30 @@ class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
     networks: tuple[Network, ...] = Field(
         default=(), description="Network containers in the inventory."
     )
+
+    @field_validator("schema_version", mode="before")
+    @classmethod
+    def _check_schema_version(cls, value):
+        """
+        Refuse a schema_version this DASCore cannot read.
+
+        Checked before pydantic coerces, so `"1"`, `1.0` or `true` are refused
+        rather than read as a version nobody wrote.
+        """
+        if isinstance(value, bool) or not isinstance(value, numbers.Integral):
+            msg = f"schema_version must be an integer, not {value!r}."
+            raise InvalidInventoryError(msg)
+        if value > INVENTORY_SCHEMA_VERSION:
+            msg = (
+                f"schema_version {value} was written by a newer DASCore, which "
+                f"this one cannot read (it reads 1 through "
+                f"{INVENTORY_SCHEMA_VERSION}). Upgrade DASCore to read it."
+            )
+            raise InvalidInventoryError(msg)
+        if value < 1:
+            msg = f"schema_version must be at least 1, not {value}."
+            raise InvalidInventoryError(msg)
+        return int(value)
 
     @field_validator("resources", mode="before")
     @classmethod
