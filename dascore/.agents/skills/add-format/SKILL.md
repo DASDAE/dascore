@@ -1,0 +1,145 @@
+---
+name: add-format
+description: Add a file format with a FiberIO subclass, covering metadata, array windows, attrs, tests, and entry-point registration.
+---
+
+Adding IO support requires a `FiberIO` subclass, a small fixture, common IO registration, any format-specific tests, and a package entry point. This guide uses a fictional `jingle` format with extension `.jgl`.
+
+## Implement `FiberIO`
+
+Create `dascore/io/jingle/__init__.py` and `core.py`. The module docstring should describe basic use and non-obvious format details.
+
+```{python filename="dascore/io/jingle/core.py"}
+
+import numpy as np
+import dascore as dc
+from dascore.constants import snap_type, windows_type
+from dascore.io import FiberIO, ArraySource
+
+
+class JingleV1(FiberIO):
+    """Jingle version 1 support."""
+
+    name = "jingle"
+    preferred_extensions = ("jgl",)
+    version = "1"
+
+    def get_version(self, resource) -> str | None:
+        """Return the resource's Jingle version, or None for another family."""
+
+    def get_metadata(self, resource, *, snap: snap_type = ()) -> list[dc.Patch]:
+        """Describe each logical patch without retaining its sample array."""
+        return [
+            dc.Patch(
+                attrs=patch_attrs,
+                coords=coord_manager,
+                dtype=dtype,
+                source=ArraySource(key=patch_key),
+            )
+        ]
+
+    def read_array(self, resource, windows: windows_type = (), key: str = "") -> np.ndarray:
+        """Read the positional sample windows in the metadata's order and dtype."""
+```
+
+Every reader implements these three hooks. The base class derives `get_format`, `scan`, and `read`; keep those inherited for new formats. Sintela protobuf retains a specialized `read` because its fast scan inspects only the endpoints, while loading samples also collects META records occurring in the middle. This avoids making directory indexing walk every packet. `get_version` detects the family and may return a version other than the class's own version, allowing the manager to select the matching implementation. `None` means the resource belongs to another family; an empty version string is valid. Set `fallback = True` on a reader that claims a broad family (such as any netCDF-4 file); it is then tried after every other reader and never as the next file's first guess in a directory scan.
+
+Writing is optional: implement `write(self, spool, resource, **kwargs)` when supported. Writer options must be named parameters of `write`; `dc.write` refuses others. HDF5 writers taking `encoding` should use the helpers in `dascore.utils.hdf5`, as DASDAE does. Set `multi_patch_write` when one file takes several patches; otherwise `dc.write` refuses a spool of more than one. `dc.write` hands a writer each patch whole. A writer keeps a coordinate's step, holes and jitter, or refuses (rule 13 of the [coordinate guidelines](`dascore/docs/notes/coordinates.qmd`)); a format storing only a start and step can call `dascore.io.utils.require_grid`, whose error says to regularize or split first.
+
+## Metadata and coordinates
+
+[`FiberIO.get_metadata`](`dascore.io.core.FiberIO.get_metadata`) returns [`PatchMeta`](`dascore.PatchMeta`) objects carrying full coordinate managers, attrs, and dtype. Dimensions and shape come from the coordinates. Metadata has no `.data`; the framework later attaches the requested array with [`to_patch`](`dascore.PatchMeta.to_patch`), which makes the patch it describes.
+
+[`scan_payloads`](`dascore.scan_payloads`) exposes this metadata with source provenance attached. [`scan`](`dascore.scan`) returns `PatchSummary` objects, and [`scan_to_df`](`dascore.scan_to_df`) flattens those summaries for indexing. Metadata and loaded patches describe the same shape, dtype, and coordinates for a given snap mode. Their attrs also agree, except that Sintela protobuf reads collect additional META records while loading samples.
+
+The metadata hook accepts one option, `snap`, which names the dimensions whose stored labels come back on a grid (rule 3 of [the coordinate guidelines](`dascore/docs/notes/coordinates.qmd`)):
+
+- its default in your `get_metadata` signature is the format's own: the dimensions it stores as labels restating a grid, such as `("time",)` for interrogator timestamps; `()` when a header states every grid; `True` for every dimension. `read` and `scan` use it when given `snap=None`.
+- `snap=True` snaps every one-dimensional numeric or time-like dimension.
+- `snap=False` returns every coordinate exactly as stored.
+- `snap="time"` or `snap=("time", "distance")` snaps those dimensions; the framework raises for a name the patch has no such dimension of.
+
+Build every coordinate a file stores as labels with [`stored_coord`](`dascore.io.utils.stored_coord`), passing `snap` and the coordinate's name. It returns the labels exactly unless `snap` names them, and otherwise builds the one grid DASCore readers share: from a start and step the file states (pass both when reliable, such as a start time and the acquisition rate), else from the first and last labels and the count. It reads only the labels it checks; where one sits more than `dascore.config.max_shift` steps off the grid (beyond the labels' stored precision), it warns, naming the file, and returns the labels as stored. Header-defined start/step/count coordinates need nothing: every `snap` gives the same grid. Snapping changes coordinate labels, not the number of written samples. Both modes must trim unwritten storage rows (`stored_coord(count=...)`).
+
+Exact metadata can retain large coordinate arrays; request it for targeted files rather than whole directories. Formats such as Pickle may need to deserialize sample data to obtain metadata, but must return patches that do not retain those arrays.
+
+## Identify patches within a file
+
+Multi-patch formats attach a stable native key with `source=ArraySource(key=...)`. The framework passes that key to `read_array`. Prefer native group or node names; use positions only when ordering is guaranteed. Single-patch files usually need no key.
+
+`ArraySource` is framework plumbing stored privately on `patch._source`; it is separate from scientific attrs. Readers supply the logical key, and the dispatcher fills the path, format, and version. Directory readers may also supply an internal member path for timestamp filtering and to pin array loading to the corresponding metadata entry; public source provenance still names the requested resource. Public summaries retain the existing `source_path`, `source_format`, `source_version`, and `source_patch_key` fields. When a multi-patch resource supplies no native keys, public scans and reads expose positional keys such as `"0"` and `"1"`; these keys can be passed back to `read` while source IDs retain their original ordinal-based derivation. Source retention through processing is not guaranteed, and no lazy `Patch.load()` is provided.
+
+The shared `read` exposes keyword-only `samples=False` and `source_patch_key=""` parameters. `samples=True` interprets coordinate bounds as sample indices. It accepts one or multiple `source_patch_key` values, selects metadata, and loads matching arrays. `snap` is as above; `snap=None` reads the format's default, and the deprecated `snap_dims` spelling still works, with a warning, an explicit `snap` taking precedence. Source IDs are derived before selection, so selecting a subset keeps the original logical patch identity. Stored IDs remain authoritative.
+
+## Choose attrs
+
+Reader attrs fall into four groups:
+
+1. `acquisition_key`: the inventory identity `network.fiber_array.location.acquisition`, only when the file carries it.
+2. Observing-system facts from `dascore.constants.INVENTORY_ATTRS`. Use canonical names and convert to their fixed units with [`convert_attr_units`](`dascore.io.utils.convert_attr_units`).
+3. Data state: `data_type`, `data_category`, and `data_units`.
+4. Genuine vendor fields, lightly normalized to snake case and listed in `VENDOR_ATTRS` in `tests/test_io/test_common_io.py`.
+
+Declare vendor fields on a format-specific `PatchAttrs` subclass when they need validation; see [format-specific subclasses](`dascore/docs/notes/patch_attrs.qmd`). Reserve `_id` for opaque identifiers and `_key` for structured lookup keys. Source provenance belongs to spool contents, not patch attrs.
+
+Optional numeric vendor attrs should not default to NaN or infinity.
+
+## Read array windows
+
+[`FiberIO.read_array`](`dascore.io.core.FiberIO.read_array`) accepts sample indices on the resource's original grid. The shared reader resolves coordinate selections first and calls this hook with a contiguous bounding window. It then applies any residual noncontiguous selection to the returned array.
+
+- `windows` is one half-open `(start, stop)` sample range per axis, in the order `get_metadata` declares; an entry of `None`, or an axis left off the end, is returned whole.
+- Return the shape, dtype, and dimension order declared by `get_metadata`. Apply storage-layout transposes, casts, padding removal, or block unrolling inside this hook when needed.
+- Multi-patch formats receive `key`; raise rather than guess when it is missing or ambiguous.
+- Accept sample indices, not coordinate values or snapping options. `snap` belongs to metadata construction.
+- Slice storage directly where possible; formats requiring decoding may decode and then slice. There is no fallback through `read`.
+
+Use [`slice_dataset`](`dascore.io.utils.slice_dataset`) for a dataset already in the declared axis order, or [`windows_to_slices`](`dascore.io.utils.windows_to_slices`) to resolve windows before format-specific decoding. The shared reader validates the returned shape and dtype before attaching data.
+
+The built-in TDMS, H5Simple, and MiniSEED readers retain parsed headers or dataset handles for the duration of a read through a private preparation helper. MiniSEED batches selected windows into one sample-reading pass. This optimization adds no work to scans and stores no state on the formatter. Subclass overrides and runtime wrappers of either public hook restore the shared path, so inherited optimizations cannot bypass them.
+
+Resource annotations belong on each hook independently. A format can scan with `BinaryReader` and load arrays with `LocalBinaryReader`, for example.
+
+## Accept managed resources
+
+Type hints let DASCore open and reuse the right resource:
+
+| Type | Contract |
+|---|---|
+| [`BinaryReader`](`dascore.io.BinaryReader`) | `read` and `seek` |
+| [`BinaryWriter`](`dascore.io.BinaryWriter`) | `write` |
+| [`H5Reader`](`dascore.io.H5Reader`) | `h5py.File` opened for reading |
+| [`H5Writer`](`dascore.io.H5Writer`) | `h5py.File` opened for append |
+
+Prefer `H5Reader` for HDF5 formats. Unsupported type hints have no resource-management effect.
+
+```{python filename="dascore/io/jingle/core.py"}
+import io
+
+from dascore.io import BinaryReader, FiberIO
+
+
+class JingleV1(FiberIO):
+    name = "jingle"
+    preferred_extensions = ("jgl",)
+    version = "1"
+
+    def get_version(self, resource: BinaryReader) -> str | None:
+        assert isinstance(resource, io.BufferedIOBase)
+        header = resource.read(50)
+        resource.seek(20)
+        ...
+```
+
+## Test and register
+
+Add a fixture under 10 MB using [Adding Test Data](adding_test_data.qmd), then register the format in `tests/test_io/test_common_io.py` to run common conformance tests. Add format-specific cases under `tests/test_io/test_jingle/`.
+
+Register each version in `pyproject.toml`; the entry-point name separates format and version with `__`:
+
+```default
+[project.entry-points."dascore.fiber_io"]
+JINGLE__V1 = "dascore.io.jingle.core:JingleV1"
+```
+
+For a directory format, set `input_type = "directory"`; see [`xml_binary`](`dascore.io.xml_binary`). Once DASCore recognizes such a directory, it does not search its contents for other patch formats.

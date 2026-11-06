@@ -20,6 +20,8 @@ from dascore.utils.array import PatchUFunc
 
 PACKAGE_PATH = Path(dc.__file__).resolve().parent
 DOC_PATH = PACKAGE_PATH / "docs"
+# Skill files ship where installers look; their documentation pages include them.
+SKILL_PATH = PACKAGE_PATH / ".agents" / "skills"
 # Import the analysis API, without crawling file-format or external plugins.
 _API_PACKAGES = ("core", "proc", "transform", "viz")
 _API_MODULES = (
@@ -287,8 +289,8 @@ def _read_readme():
     return text.partition("\n\n")[2]
 
 
-def _read_source(path, stack=()):
-    """Expand packaged includes, including the README shipped in metadata."""
+def _read_source(path, included, stack=()):
+    """Expand packaged includes, collecting each included file's front matter."""
     if path in stack:
         raise DocumentationError(f"Circular documentation include: {path}")
     text = path.read_text(encoding="utf-8")
@@ -297,13 +299,22 @@ def _read_source(path, stack=()):
         target = (path.parent / match[1].strip().strip("\"'")).resolve()
         if target == PACKAGE_PATH.parent / "readme.md":
             return _read_readme()
-        if not target.is_relative_to(DOC_PATH):
+        if not any(target.is_relative_to(x) for x in (DOC_PATH, SKILL_PATH)):
             raise DocumentationError(
                 f"Documentation include escapes its source directory: {target}"
             )
-        return _read_source(target, (*stack, path))
+        front, body = _frontmatter(_read_source(target, included, (*stack, path)))
+        included.update(front)
+        return body
 
     return _INCLUDE.sub(include, text)
+
+
+def _read_page(path):
+    """Return a page's metadata and body; its own keys override an include's."""
+    included = {}
+    front, body = _frontmatter(_read_source(path, included))
+    return {**included, **front}, body
 
 
 def _frontmatter(text):
@@ -418,7 +429,7 @@ def write_corpus(destination: Path) -> dict:
     records, omitted = _api_documents()
     for source in source_paths():
         relative = source.relative_to(DOC_PATH)
-        front, body = _frontmatter(_read_source(source))
+        front, body = _read_page(source)
         key = relative.with_suffix("").as_posix()
         keywords = front.get("keywords", [])
         records[key] = dict(

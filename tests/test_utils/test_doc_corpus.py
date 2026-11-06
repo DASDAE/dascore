@@ -69,6 +69,29 @@ class TestAuthoredDocuments:
         with pytest.raises(doc_corpus.DocumentationError, match=message):
             doc_corpus.write_corpus(output)
 
+    def test_included_skill(self, sources, monkeypatch):
+        """A page takes its body and any metadata it lacks from an included skill."""
+        source, _ = sources
+        skill = source.parent / "skills" / "example" / "SKILL.md"
+        skill.parent.mkdir(parents=True)
+        skill.write_text(
+            "---\nname: example\ndescription: From the skill\ntitle: Skill title\n"
+            "---\n\nSkill procedure.\n"
+        )
+        monkeypatch.setattr(doc_corpus, "SKILL_PATH", skill.parent.parent)
+        page = source / "page.qmd"
+        page.write_text(
+            "---\ntitle: Page title\n---\n\n"
+            "{{< include ../skills/example/SKILL.md >}}\n"
+        )
+        front, body = doc_corpus._read_page(page)
+        assert front == {
+            "name": "example",
+            "description": "From the skill",
+            "title": "Page title",
+        }
+        assert body.strip() == "Skill procedure."
+
     @pytest.mark.parametrize(
         "version, ref",
         [

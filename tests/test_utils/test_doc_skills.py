@@ -9,7 +9,7 @@ import dascore as dc
 from dascore.cli import main
 from dascore.utils import doc_skills
 from dascore.utils.doc_cache import documentation_cache, read_document
-from dascore.utils.doc_corpus import DocumentationError
+from dascore.utils.doc_corpus import SKILL_PATH, DocumentationError
 
 # The shipped catalog, in listing order.
 _CATALOG = {
@@ -37,6 +37,19 @@ class TestSkills:
         skills = doc_skills.get_skills()
         assert {name: info["target"] for name, info in skills.items()} == _CATALOG
         assert all(x["title"] and x["description"] for x in skills.values())
+
+    def test_skill_files(self):
+        """Each shipped skill is a named file, and catalogued pages include theirs."""
+        shipped = {}
+        for path in sorted(SKILL_PATH.glob("*/SKILL.md")):
+            front = yaml.safe_load(path.read_text(encoding="utf-8").split("---", 2)[1])
+            assert front["name"] == path.parent.name and front["description"]
+            shipped[front["name"]] = front["description"]
+        assert set(_CATALOG) <= set(shipped)
+        for name, info in doc_skills.get_skills().items():
+            # The entry point's page is its routing recipe, not the bootstrap file.
+            if name != "dascore":
+                assert info["description"] == shipped[name]
 
     @pytest.mark.parametrize("name", list(_CATALOG))
     def test_same_document(self, cache, name):

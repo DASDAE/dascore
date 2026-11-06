@@ -1,7 +1,8 @@
 # DASCore
 
 - Keep changes focused; follow nearby code and preserve unrelated work.
-- For code changes, use an isolated worktree and environment. See `.agents/skills/start-task/SKILL.md` when setting up a task. Target PRs at `dev`.
+- For code changes, use an isolated worktree and environment. See `dascore/.agents/skills/start-task/SKILL.md` when setting up a task. Target PRs at `dev`.
+- Skills ship with the package in `dascore/.agents/skills/`; read the one that matches the work, such as `add-format`, `make-namespace`, or `draft-release`.
 - Read `.agents/agents.local.md` if present. For code, tests, or docs, read the relevant section of `.agents/conventions.md`.
 - Before changing coordinate behavior, read `dascore/docs/notes/coordinates.qmd`. Changes conflicting with that contract need a separate note PR first.
 - Run affected tests and `pre-commit run --files <changed-files>`. Repeat checks after auto-fixes. Broaden testing for shared behavior; CI runs the full suite. Report checks run and any gaps.

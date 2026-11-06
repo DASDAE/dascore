@@ -27,3 +27,5 @@ Install the `dascore` entry point once; it discovers the workflows available in 
 | `test-beta` | [Test the latest pre-release](../migrations/test_latest_beta.qmd) | Try a pre-release in isolation and draft problem reports. |
 
 Run `dascore skills` to list available workflows, or `dascore skill <name>` to read one. Each linked page is the same procedure served by the CLI. The migration and beta-testing pages can also be given directly to an agent without installing the skill.
+
+Every skill is a `SKILL.md` file under `dascore/.agents/skills/` in the installed package, where tools that link skills from a project's dependencies find them. The same directory holds `start-task` and `draft-release` for work on DASCore itself.
