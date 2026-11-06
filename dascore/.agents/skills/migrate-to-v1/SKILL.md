@@ -46,6 +46,9 @@ pandas 3 stores text columns as strings rather than `object`, which can affect c
 | `dascore.utils.array.hash_numpy_array` | `dascore.utils.array.hash_array` |
 | `to_float.register`, `to_int.register` | register on the private `_to_float`, `_to_int` |
 | `dc.proc.align_patch_coords` | `dascore.utils.patch.align_patch_coords` |
+| `dc.print`, `from dascore import print` | `from rich import print`; `from dascore import *` no longer replaces the builtin `print` |
+| `dc.std_warnings` | the standard library `warnings` module |
+| `dascore.utils.display` | private (`dascore.utils._display`); render objects with `str(...)` or rich |
 | `DEFAULT_ATTRS_TO_IGNORE`, `PATCH_MERGE_ATTRS`, `attrs_to_ignore=` | the `patch_kind_attrs` config option; see [Patch compatibility](../notes/patch_compatibility.qmd) |
 | `dascore.utils.patch.merge_patches(patches)` | `dc.spool(patches).chunk(time=None)` |
 | `dascore.utils.patch.concatenate_patches(patches, time=None)` | `dc.spool(patches).concatenate(time=None)`, which puts patches that cannot be concatenated together in separate outputs rather than skipping them |
