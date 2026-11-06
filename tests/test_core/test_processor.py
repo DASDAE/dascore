@@ -31,7 +31,11 @@ from dascore.proc.basic import Abs, Normalize, _known_real
 from dascore.utils.array_api import backend_name
 from dascore.utils.docs import compose_docstring
 from dascore.utils.identity import encode
-from dascore.utils.patch_registry import patch_function_tag, resolve_patch_function
+from dascore.utils.patch_registry import (
+    _call_name,
+    patch_function_tag,
+    resolve_patch_function,
+)
 from dascore.warnings import NumpyFallbackWarning
 
 
@@ -900,6 +904,28 @@ class TestOperationId:
 
         assert Other() != SeamScale()
         assert Other().operation_id != SeamScale().operation_id
+
+    def test_a_script_tag_is_not_its_name(self, monkeypatch):
+        """One whose method a script defines is named by its source instead."""
+
+        def clean(patch):
+            """Stand in for a method a script defined."""
+            return patch
+
+        clean.__module__ = "__main__"
+        clean.__qualname__ = "clean"
+
+        class Scripted(SeamScale):
+            """A processor whose method lives in `__main__`."""
+
+            name = None
+
+        monkeypatch.setattr(Scripted, "patch_function", clean)
+        assert patch_function_tag(clean) == "__main__:clean"
+        assert "@" in Scripted().tag
+        # Called through its method, it is the same operation.
+        monkeypatch.setattr(clean, "__processor__", Scripted, raising=False)
+        assert _call_name(clean) == Scripted().tag
 
     def test_the_version_counts(self, monkeypatch):
         """A bump makes a new operation."""

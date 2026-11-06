@@ -262,6 +262,17 @@ class TestBinding:
         with pytest.raises(ParameterError, match="cannot be called that way"):
             _bind(dc.proc.normalize, (), {"dim": "time", "not_a_parameter": 1})
 
+    def test_a_call_to_an_untagged_function_says_which(self):
+        """A function with no tag is named in the message by where it lives."""
+
+        @dc.patch_function()
+        def local(patch, factor):
+            """Need one argument."""
+            return patch
+
+        with pytest.raises(ParameterError, match=r"\.local cannot be called"):
+            _bind(local, (), {"nope": 1})
+
     def test_a_positional_before_a_star_args_group(self):
         """A leading positional and a `*args` group bind to their names."""
         func = registry_test_leading_then_group
@@ -310,7 +321,8 @@ class TestCallOperationId:
         assert first != second
         assert call_operation_id(dc.proc.select, (), {"distance": one_meter}) == first
 
-    def test_a_script_function_is_its_source(self, own_registry):
+    @pytest.mark.parametrize("module", ["__main__", "__mp_main__"])
+    def test_a_script_function_is_its_source(self, own_registry, module):
         """Two scripts' `clean` share a tag, but not an operation id."""
 
         def first(patch, factor=1):
@@ -321,12 +333,12 @@ class TestCallOperationId:
 
         made = []
         for func in (first, second):
-            func.__module__ = "__main__"
+            func.__module__ = module
             func.__name__ = func.__qualname__ = "clean"
             made.append(dc.patch_function()(func))
-        assert patch_function_tag(made[0]) == "__main__:clean"
+        assert patch_function_tag(made[0]) == f"{module}:clean"
         assert _identifying_tag(made[0]) is None
-        assert resolve_patch_function("__main__:clean") is made[1]
+        assert resolve_patch_function(f"{module}:clean") is made[1]
         ids = [call_operation_id(x, (), {"factor": 2}) for x in made]
         assert ids[0] != ids[1]
         assert ids[0] == call_operation_id(made[0], (2,), {})

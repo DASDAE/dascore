@@ -228,17 +228,15 @@ class PatchProcessor(DascoreBaseModel):
     @property
     def tag(self) -> str:
         """Return the name this operation is identified by."""
-        cls = type(self)
+        return type(self)._class_tag()
+
+    @classmethod
+    def _class_tag(cls) -> str:
+        """Return the name the class's operations are identified by."""
         func = cls.patch_function
         if func is not None and (tag := _identifying_tag(func)) is not None:
             return tag
-        # Unregistered, or defined inside a call or in a script or a
-        # notebook: named by its source, or --
-        # one with no source to read -- by which class object it is.
-        try:
-            return callable_name(cls)
-        except ParameterError:
-            return f"{_spell(cls)}#{id(cls):x}"
+        return _class_name(cls)
 
     def _inputs(self) -> tuple[dict, list]:
         """Return the non-default fields, and the patches found among them."""
@@ -858,6 +856,23 @@ def _check_returns_self(cls: type[PatchProcessor], func) -> None:
         "which only `-> Self` says. Annotate it `-> Self`."
     )
     raise ParameterError(msg)
+
+
+# Bounded, and holding the classes it names, so an address it used is never
+# reused underneath it. Read once per class: `inspect.getsource` is slow,
+# and a file edited mid-run should not rename the code already running.
+@functools.lru_cache(maxsize=2048)
+def _class_name(cls: type[PatchProcessor]) -> str:
+    """
+    Name a processor class which has no tag naming it outside this process.
+
+    Unregistered, or defined inside a call, a script or a notebook: named by
+    its source or -- with no source to read -- by which class object it is.
+    """
+    try:
+        return callable_name(cls)
+    except ParameterError:
+        return f"{_spell(cls)}#{id(cls):x}"
 
 
 def _make_bypass(func):
