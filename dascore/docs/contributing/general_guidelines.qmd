@@ -30,6 +30,12 @@ DASCore has no changelog file. Release notes are assembled from each pull reques
 
 After the colon, write a complete sentence with a subject, verb, and period. `none` may be bare or the only bullet (`- none`).
 
+# Public API
+
+The public API is `dascore.__all__`, the public names of a few user-facing modules (such as `dascore.units`, `dascore.exceptions`, `dascore.io` and `dascore.utils.time`), and the public methods of `Patch` and `Spool`. `tests/test_public_api.py` compares it, signatures included, with `scripts/_baselines/public_api.tsv`. When a change to it is intended, run `python scripts/public_api.py freeze` and justify each added, removed or changed entry in the pull request.
+
+A module or package whose name starts with an underscore is private: it gets no API pages, and anything in it may change without notice. Put new internals in such a module rather than adding public names.
+
 # Code conventions
 
 - Prefer `pathlib.Path`; strings may be faster for very large file indexes.
