@@ -57,7 +57,7 @@ pick_set.io.to_csv(path)
 assert dc.annotations(path, dims=patch.dims).annotations.equals(pick_set.annotations)
 ```
 
-A CSV written by another tool reads the same way once its columns are named as in [the model](#the-model): `time` for a value, `time_min` and `time_max` for a range, and likewise for each dimension. Rename them with pandas and pass the dataframe to `dc.AnnotationSet(df, dims=("time", "distance"))`. A row stating no dimension is refused.
+A CSV written by another tool reads the same way once its columns are named as in [the model](#the-model): `time` for a value, `time_min` and `time_max` for a range, and likewise for each dimension. Rename the header and read the file with `dc.annotations(path, dims=("time", "distance"))`, which keeps identifiers as text and treats only empty cells as missing. Reading it with pandas' defaults instead turns `001` into `1` and `NA` into a missing value. A row stating no dimension is refused.
 
 # Building features
 
