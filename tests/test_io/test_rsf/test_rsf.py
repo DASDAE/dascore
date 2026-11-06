@@ -117,6 +117,12 @@ class TestRsfWrite:
         _, _, binary = _split_combined(path.read_bytes())
         assert binary == data.astype(np.float32).tobytes("F")
 
+    def test_warning_location(self, random_patch, tmp_path):
+        """The cast warning points at the caller, not inside DASCore."""
+        with pytest.warns(DASCoreWarning, match="float32") as record:
+            dc.write(random_patch, tmp_path / "located.rsf", "rsf")
+        assert record[0].filename == __file__
+
     def test_write_cmplx(self, random_patch, tmp_path):
         """Complex data are refused."""
         complex_patch = random_patch.dft("time")

@@ -9,7 +9,7 @@ import numpy as np
 
 import dascore as dc
 from dascore.io.core import FiberIO
-from dascore.io.utils import require_grid
+from dascore.io.utils import _DASCORE_DIR, require_grid
 from dascore.units import get_quantity_str
 from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
 from dascore.utils.time import to_float
@@ -102,7 +102,8 @@ class RSFV1(FiberIO):
             raise ValueError("Data format is not integer or floating.")
         if dtype != np.float32:
             msg = f"RSF stores float32; casting {dtype} data to float32."
-            warnings.warn(msg, DASCoreWarning, stacklevel=2)
+            # Point at the caller's write, past dascore's dispatch.
+            warnings.warn(msg, DASCoreWarning, skip_file_prefixes=(_DASCORE_DIR,))
         ## we are casting to float32 to ensure that esize=4 for m8r
         data = data.astype(np.float32, copy=False)
         dtype = np.dtype(data.dtype)
