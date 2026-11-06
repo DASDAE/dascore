@@ -1,2 +1,4 @@
 dascore: recipes/dascore
 make-inventory: recipes/tunnel_inventory
+migrate-to-v1: migrations/dascore_1.0_migration
+test-beta: migrations/test_latest_beta

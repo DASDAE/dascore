@@ -98,6 +98,17 @@ website:
         - text: Changelog
           href: https://github.com/DASDAE/dascore/releases
 
+        - section: "DASCore 1.0"
+          contents:
+            - text: Announcement
+              href: migrations/dascore_1.0_announcement.qmd
+
+            - text: Migration Guide
+              href: migrations/dascore_1.0_migration.qmd
+
+            - text: Test the Latest Beta
+              href: migrations/test_latest_beta.qmd
+
         - text: Contributors
           href: contributors.qmd
 

@@ -8,7 +8,7 @@ execute:
 
 Use an inventory to describe the observing system independently of the files containing its measurements. Start from recorded deployment facts; the tunnel example below shows how the pieces fit together.
 
-# Workflow
+## Workflow
 
 1. Gather known identity, resource, survey, coupling, acquisition, and validity-time information. Keep unknown deployment facts explicit. Do not invent serial numbers, coordinates, dates, or installation details to fill a schema.
 2. Separate owned resources from components on the optical path, geometry, coupling, labels, and acquisition configuration. Model a continuous run with a shared break history as one fiber array and path.
@@ -19,7 +19,7 @@ Use an inventory to describe the observing system independently of the files con
 
 Consult `python -m dascore doc Inventory` with the selected environment's Python executable, and read the relevant field or method documentation when adapting the example to a different deployment.
 
-# Tunnel example
+## Tunnel example
 
 This end-to-end [inventory](../tutorial/inventory.qmd) example models an underground tunnel deployment from survey files through enriched patches. A 1500 m telemetry cable feeds trenched fiber, a buried coil, and three instrumented boreholes.
 
@@ -56,7 +56,7 @@ def table(name):
 PATH = "fiber_arrays/XT.TUN1/path.00"
 ```
 
-# What the drawing says
+## What the drawing says
 
 Reading @fig-tunnel along the fiber, from the interrogator:
 
@@ -85,7 +85,7 @@ $$
 
 Thus 25 m of fiber covers 22.15 m of tunnel. The geometry track stores this mapping so consumers use coordinates directly.
 
-# The hardware
+## The hardware
 
 Cables, enclosures, and interrogators live under `resources/`; filenames become referenced `resource_id` values.
 
@@ -104,7 +104,7 @@ show("inventory.yaml")
 show("fiber_arrays/XT.TUN1/attrs.yaml")
 ```
 
-# The path, as a table
+## The path, as a table
 
 Optical components tile the path with `distance_min` and `distance_max`. Point components such as splices state one distance. Location code `00` names the `path.00` directory.
 
@@ -132,7 +132,7 @@ at = spans(components_csv)
 print("borehole 3 sensing fiber:", at["borehole 3 down"][0], "to", at["borehole 3 up"][1])
 ```
 
-# Where the fiber is
+## Where the fiber is
 
 Geometry pairs surveyed control points with the fiber segments between them.
 
@@ -146,7 +146,7 @@ geometry.head(8)
 
 Unsurveyed slack links and the coil remain `nan` rather than receiving invented positions. Control-point interpolation captures the helical mapping without storing a wind angle.
 
-# How it is attached to the ground
+## How it is attached to the ground
 
 Coupling is interval metadata: `coupling_type` is controlled, while `medium` and `attachment` add detail.
 
@@ -160,7 +160,7 @@ coupling
 
 The coil is `coiled`, not `trench`, because it does not sample a unique position.
 
-# Everything else
+## Everything else
 
 Labels become selectable patch coordinates. Here `section` identifies installation type and `borehole` numbers the holes.
 
@@ -174,7 +174,7 @@ labels
 
 Each label group must use one value type.
 
-# How the instrument was set up
+## How the instrument was set up
 
 An acquisition describes an instrument configuration on the path. Its filename yields acquisition key `XT.TUN1.00.DAS`; `distance_map` maps instrument distance to optical distance and remains explicit even when it is the identity.
 
@@ -182,7 +182,7 @@ An acquisition describes an instrument configuration on the path. Its filename y
 show("acquisitions/XT.TUN1.00.DAS.yaml")
 ```
 
-# Reading it back
+## Reading it back
 
 Loading validates schemas, resource references, and track bounds.
 
@@ -196,7 +196,7 @@ names = inventory.get_names()
 print("coords:", [x for x in names.coords if "." not in x])
 ```
 
-# Seeing it
+## Seeing it
 
 Plot tracks against optical distance:
 
@@ -210,7 +210,7 @@ Or plot the local survey grid:
 inventory.viz.map(x="x", y="z", color="section", show=True);
 ```
 
-# What the data gets out of it
+## What the data gets out of it
 
 A patch joins the inventory by acquisition key and time.
 
@@ -257,7 +257,7 @@ assert np.isclose(along[1510], 100.0 + 7.5 * 0.886)
 assert np.isnan(depth[1000])
 ```
 
-# A repair, and what it does to the data
+## A repair, and what it does to the data
 
 In September, two splices and a two-meter patch cord repair a break 15 m into the trench. A new dated path epoch preserves the earlier geometry; its component table replaces one row with five and shifts downstream optical distances by two meters.
 
@@ -326,7 +326,7 @@ assert np.isclose(
 )
 ```
 
-# Shipping it
+## Shipping it
 
 Author with the directory form; ship a single YAML file beside an archive with [`Inventory.io.to_yaml`](`dascore.core.inventory.inventory_to_yaml`). [`dc.inventory`](`dascore.core.inventory_loader.inventory`) reads either.
 

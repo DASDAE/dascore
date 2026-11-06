@@ -1,0 +1,127 @@
+---
+title: DASCore 1.0
+description: What is new in the DASCore 1.0 beta, and where to start.
+keywords: [release, announcement, migration, "1.0"]
+---
+
+:::{.callout-tip}
+## Test the beta with your coding agent
+
+Paste this into your agent from your project's directory:
+
+```text
+Follow https://dascore.netlify.app/migrations/test_latest_beta.html to test the latest DASCore beta on this project.
+```
+:::
+
+We are excited to announce the DASCore 1.0 beta!
+
+This release represents a huge amount of work. Key features include:
+
+- A more flexible and efficient spool indexer based on SQLite
+
+- The `Inventory`: a StationXML-inspired DAS metadata store
+
+- The `AnnotationSet`: a data structure for annotating data
+
+- The `PatchProcessor`: a structured class for separating metadata and data operations, opening the door to supporting many different array backends.
+
+- Coding agent skills and agent-friendly documentation, including a token-efficient CLI
+
+- A re-imagined coordinate class to reduce rounding errors
+
+- Greatly improved compatibility with Xarray
+
+- A simplified and more efficient FiberIO interface
+
+- Unique processing and patch identity markers
+
+- Support for remote files and directories thanks to universal-pathlib
+
+- A new runtime configuration system, with process-wide defaults and thread-safe overrides
+
+- Support for free-threaded Python and Pyodide build targets (DASCore now runs in the browser!)
+
+The beta is the time to try it on real data and tell us what breaks through the [issue tracker](https://github.com/DASDAE/dascore/issues) or the [discussions](https://github.com/DASDAE/dascore/discussions), before the API settles for 1.0. The best part? You can simply have your agent do it with the [test the latest beta skill](test_latest_beta.qmd). Use the prompt at the top of this page.
+
+Some changes break code written for 0.1.x. See the [migration guide](dascore_1.0_migration.qmd) for details.
+
+## Install the beta
+
+```bash
+python -m pip install "dascore[all]==1.0.0b1"
+```
+
+Pinning the pre-release this way keeps the other dependencies on stable releases; `[all]` brings in the optional xarray, Parquet, and CLI support used below. DASCore 1.0 also bumps minimum versions. It requires Python 3.12 or newer, NumPy 2.3.3 or newer, and pandas 3.0 or newer.
+
+## Highlights
+
+### A SQLite spool index
+
+There is now just one [`Spool`](`dascore.Spool`) class. Directory spools keep their index in SQLite, which supports concurrent readers, records every coordinate rather than only time, and scales to archives of a million patches. Selecting and chunking only plan against the index; no data are read until a patch is extracted.
+
+- [`Spool.get_gaps`](`dascore.Spool.get_gaps`) and [`Spool.get_coverage`](`dascore.Spool.get_coverage`) report what a spool holds and where it is missing; `Spool.viz.coverage` and `Spool.viz.calendar` draw it.
+- [`Spool.chunk`](`dascore.Spool.chunk`) now also accepts a `tolerance` in the coordinate's own units, a `fill_value` to bridge holes, and explicit arrays of windows.
+- [`Spool.unselect`](`dascore.Spool.unselect`), [`Spool.load`](`dascore.Spool.load`), [`Spool.cut`](`dascore.Spool.cut`), and `Spool.iterate(max_in_flight=...)` round out selection and loading.
+- Hive-style `key=value` directory names become selectable attributes.
+
+### The Inventory
+
+An [`Inventory`](`dascore.Inventory`) is a StationXML-inspired metadata store for DAS. It describes the observing system (networks, fiber arrays, optical paths, interrogators, cables, and their geometry) independently of the data files. Author it as a directory of YAML and CSV files, attach it to a spool, select data by what it states, and copy relevant parts onto patches. See the [inventory tutorial](../tutorial/inventory.qmd) and the [tunnel recipe](../recipes/tunnel_inventory.qmd).
+
+### The AnnotationSet
+
+An [`AnnotationSet`](`dascore.AnnotationSet`) annotates data with points, paths, and polygons over a patch's dimensions. Sets are stored as CSV or Parquet and can be plotted on top of a waterfall. `Spool.cut` cuts a spool's patches to each annotated feature. See the [annotations tutorial](../tutorial/annotations.qmd).
+
+### The PatchProcessor
+
+A [`PatchProcessor`](`dascore.PatchProcessor`) separates what an operation does to a patch's metadata from what it does to the array. The metadata step runs on a [`PatchMeta`](`dascore.PatchMeta`), so a chain of operations can be checked and planned without loading data, and the array step is a kernel which another package can register for its own array backend.
+
+Processing also gained [`Patch.tile_apply`](`dascore.Patch.tile_apply`), [`Patch.stft`](`dascore.Patch.stft`) and `istft` over several dimensions, [`Patch.adaptive_spectral_filter`](`dascore.Patch.adaptive_spectral_filter`), [`Patch.idxmax`](`dascore.Patch.idxmax`)/`idxmin`, [`Patch.pow_coord`](`dascore.Patch.pow_coord`), windowed `normalize`, and boolean operators.
+
+### Agent skills and documentation
+
+`python -m dascore doc` writes the installed version's API documentation as Markdown that coding agents search with their own tools, and `python -m dascore skills` lists workflow recipes, such as building an inventory or [migrating to 1.0](dascore_1.0_migration.qmd), that an agent loads on demand. The CLI prints only what is asked for, keeping token use low. See [agent onboarding](../tutorial/agents.qmd).
+
+### Re-imagined coordinates
+
+Coordinates hold an exact sampling grid, so fractional sampling rates survive reading, writing, and merging without accumulating rounding error. A coordinate can now contain holes, which [`Patch.fill_gaps`](`dascore.Patch.fill_gaps`) and [`Patch.split_gaps`](`dascore.Patch.split_gaps`) handle explicitly. String coordinates are also now supported. The [coordinate guidelines](../notes/coordinates.qmd) discuss the design.
+
+### Xarray compatibility
+
+`Spool.io.to_xarray()` turns a spool into a lazy, dask-backed xarray DataTree, and the `.dc` accessor brings patch operations to `DataArray`s. [`Patch.sel`](`dascore.Patch.sel`) and [`Patch.isel`](`dascore.Patch.isel`) follow xarray's indexing, NumPy functions such as `transpose`, `diff`, and `gradient` return patches with correct coordinates, and NetCDF, Zarr, and DASDAE writes accept xarray's `encoding` for chunking and compression.
+
+### A simpler FiberIO
+
+A format now implements three methods, `get_version`, `get_metadata`, and `read_array`, and detection, scanning, and reading follow from them. Because `read_array` takes a window, most formats slice their storage directly, and [`dc.read_array`](`dascore.read_array`) reads part of a file's array without building a patch. See [adding a new format](../contributing/new_format.qmd).
+
+New readers cover MiniSEED (v2 and v3), Sintela protobuf, AI4EPS, OptaSense ODH4, WITSML 1.4 DTS logs, Silixa H5 version 2, XDAS-layout NetCDF, and NetCDF-4 files without a CF version. CF NetCDF-4 and Zarr are new writers, and DASDAE format version 2 stores exact and gapped coordinates.
+
+### Patch identity
+
+Every patch carries an `origin_id` naming its source data and a `data_id` naming that data after processing, so patches read from the same file and processed the same way get the same ids. Files which store their ids keep them wherever they are copied. A spool can find a patch by id without loading it. See [Keys, IDs and Rows](../notes/identity.qmd). This opens the door to comprehensive data provenance tracking.
+
+### Remote files and directories
+
+Thanks to [universal-pathlib](https://github.com/fsspec/universal_pathlib), `read`, `scan`, `spool`, and `write` accept remote paths such as S3, HTTP, or remote Zarr stores. `examples://<name>` opens any of DASCore's example data files. See [working with remote patches](../tutorial/remote_patches.qmd).
+
+### Configuration
+
+DASCore now has runtime configuration. `dc.set_config` changes the process-wide defaults, and `dc.config_context` overrides them for a block of code, restoring them on exit without disturbing other threads or tasks. `Spool.map` carries the caller's settings into its workers.
+
+```python
+import dascore as dc
+
+with dc.config_context(patch_history="disabled", display_max_items=3):
+    patch = dc.get_example_patch().abs()
+```
+
+Settings cover display (precision, how much a repr shows, HTML or text output), history and provenance tracking, which attributes decide whether patches may be combined (`patch_kind_attrs`), cache directories, and how remote files are cached and read. See the [configuration tutorial](../tutorial/configuration.qmd).
+
+### Free-threaded Python and the browser
+
+DASCore is tested on free-threaded (no-GIL) CPython and builds for Pyodide, so it runs in the browser: tutorial pages open as live JupyterLite notebooks with nothing to install.
+
+### Usability
+
+- Rich text and collapsible HTML representations for patches, spools, inventories, and annotation sets.

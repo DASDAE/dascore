@@ -67,7 +67,7 @@ def doc(
 
 @app.command()
 def skills() -> None:
-    """List the recipes available as skills."""
+    """List the documentation pages available as skills."""
     for name, info in get_skills().items():
         typer.echo(f"{name}: {info['description']}")
 
