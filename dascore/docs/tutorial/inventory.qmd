@@ -4,6 +4,10 @@ execute:
   warning: false
 ---
 
+::: {.callout-warning title="Experimental"}
+Inventories are experimental in DASCore 1.x. Their API and file formats may change in any minor release without a deprecation period; see [experimental features](../contributing/general_guidelines.qmd#experimental-features).
+:::
+
 A DASDAE **inventory** describes the observing system behind a fiber archive: the optical path, interrogator settings, deployment geometry, coupling, and labels. It plays the role StationXML plays for point sensors while leaving the data files unchanged.
 
 Patches join to the inventory through `acquisition_key` (`network.fiber_array.location.acquisition`) and time. The result is metadata: patch attributes, coordinates along the fiber, and names available for selection and grouping.

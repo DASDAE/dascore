@@ -4,6 +4,10 @@ execute:
   warning: false
 ---
 
+::: {.callout-warning title="Experimental"}
+Annotations are experimental in DASCore 1.x. Their API and file formats may change in any minor release without a deprecation period; see [experimental features](../contributing/general_guidelines.qmd#experimental-features).
+:::
+
 An [`AnnotationSet`](`dascore.core.annotations.AnnotationSet`) records where things are in a patch's dimensions: phase picks, boxes around noise, vehicle tracks, outlines of a region. It is a dataframe first. A picker's output is one table, and the same set can grow into grouped events, paths and polygons without changing what it already holds.
 
 Annotations describe data but never hold it. They are stated in coordinates, not sample indices, so they stay valid when the data is decimated, trimmed or re-chunked.

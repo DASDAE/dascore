@@ -8,6 +8,14 @@ Develop each change on its own branch and merge it into `dev` by pull request. R
 
 DASCore loosely follows [semantic versioning](https://semver.org/): features normally advance the minor version and fixes the patch version.
 
+## Experimental features
+
+Some parts of DASCore are experimental: currently the inventory (`dascore.core.inventory`, `dascore.core.inventory_loader`) and annotations (`dascore.core.annotations`, `dascore.core.annotation_loader`). Their API pages carry an "Experimental" banner, and their modules set `__experimental__ = True`.
+
+- Experimental APIs and file formats may change in any minor release (1.x) without a deprecation period.
+- Such changes are still listed in the release notes.
+- Files written in an experimental format carry a format version. A newer DASCore either reads a file or refuses it with a clear error; it never misreads one.
+
 ## Contribution workflow
 
 1. Fork DASCore if you cannot push to the main repository, clone your fork, and add `https://github.com/DASDAE/dascore.git` as the `upstream` remote.

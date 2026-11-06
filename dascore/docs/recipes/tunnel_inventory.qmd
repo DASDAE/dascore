@@ -6,6 +6,10 @@ execute:
   warning: false
 ---
 
+::: {.callout-warning title="Experimental"}
+Inventories are experimental in DASCore 1.x. Their API and file formats may change in any minor release without a deprecation period; see [experimental features](../contributing/general_guidelines.qmd#experimental-features).
+:::
+
 Use an inventory to describe the observing system independently of the files containing its measurements. Start from recorded deployment facts; the tunnel example below shows how the pieces fit together.
 
 ## Workflow

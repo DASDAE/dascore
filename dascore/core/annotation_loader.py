@@ -15,6 +15,13 @@ Columns beginning with an underscore are ignored.
 CSV cells are typed before validation: dimension columns use the set's
 reader, order columns are numbers, and reserved columns stay text. Table
 errors are exposed as annotation errors.
+
+Note
+----
+This module is experimental: its API and file format may change in any
+minor release, without a deprecation period. See what
+[experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
+means.
 """
 
 from __future__ import annotations
@@ -64,6 +71,10 @@ from dascore.utils.tables import (
     read_parquet_metadata,
     read_table,
 )
+
+# Marks this module experimental; the API docs builder reads it to put
+# an Experimental banner on its pages.
+__experimental__ = True
 
 # What an attrs file declares itself to be; the model writes its own tag.
 _SET_TAG = "AnnotationSetAttrs"
@@ -1118,6 +1129,10 @@ def annotations(
 ) -> AnnotationSet:
     """
     Load annotations from whatever holds them.
+
+    Experimental: this may change in any minor release. See what
+    [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
+    means.
 
     Accept an existing set, dataframe-compatible data, a table, a set directory, a
     collection directory, or a data directory carrying ``.annotations``.

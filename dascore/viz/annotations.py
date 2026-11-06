@@ -127,6 +127,10 @@ def plot(
     """
     Draw every feature of the set on an axis, e.g. over a waterfall.
 
+    Experimental: this may change in any minor release. See what
+    [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
+    means.
+
     Parameters
     ----------
     annotations

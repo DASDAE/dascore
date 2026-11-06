@@ -888,6 +888,10 @@ def inventory_patch_pair():
     """
     Return a patch and an inventory which resolves it.
 
+    Experimental: this may change in any minor release. See what
+    [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
+    means.
+
     The random DAS patch identifies the inventory's single acquisition. A measured
     two-point distance map projects path geometry, coupling, and labels onto its 300
     channels.
@@ -974,6 +978,10 @@ def random_das_inventory() -> Inventory:
 def get_example_inventory(example_name="random_das", **kwargs) -> Inventory:
     """
     Load an example Inventory.
+
+    Experimental: this may change in any minor release. See what
+    [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
+    means.
 
     Supported example inventories are:
     ```{python}

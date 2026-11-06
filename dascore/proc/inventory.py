@@ -512,6 +512,10 @@ class Enrich(PatchProcessor):
     """
     Copy inventory metadata onto a patch.
 
+    Experimental: this may change in any minor release. See what
+    [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
+    means.
+
     The patch resolves its inventory context from its ``acquisition_key`` and
     its time, then the acquisition's channel map places each channel on the
     optical path so the path's tracks can be projected onto it. The patch

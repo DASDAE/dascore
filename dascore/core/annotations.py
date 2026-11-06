@@ -28,6 +28,13 @@ none, and its own label does not change it; a lone row is its own feature.
 
 Any other column is an extra carried untouched, except a column whose name
 begins with an underscore: that is the author's own, and a set never holds it.
+
+Note
+----
+This module is experimental: its API and file format may change in any
+minor release, without a deprecation period. See what
+[experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
+means.
 """
 
 from __future__ import annotations
@@ -106,6 +113,10 @@ from dascore.utils.time import to_datetime64, to_timedelta64
 
 if TYPE_CHECKING:
     from dascore.core.patch import Patch
+
+# Marks this module experimental; the API docs builder reads it to put
+# an Experimental banner on its pages.
+__experimental__ = True
 
 # Columns each table models; everything else is an extra.
 ANNOTATION_COLUMNS = (
@@ -817,6 +828,10 @@ class _Spelling(NamedTuple):
 class AnnotationSet(NodeRepr, NamespaceOwner):
     """
     An immutable set of annotations, the features they compose, and bases.
+
+    Experimental: this may change in any minor release. See what
+    [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
+    means.
 
     Parameters
     ----------

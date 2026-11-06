@@ -11,6 +11,13 @@ the format version. Facts repeated inside a file must agree with its address.
 
 Malformed entries that resemble format members raise errors; unrelated files
 are ignored. Columns beginning with an underscore are also ignored.
+
+Note
+----
+This module is experimental: its API and file format may change in any
+minor release, without a deprecation period. See what
+[experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
+means.
 """
 
 from __future__ import annotations
@@ -60,6 +67,10 @@ from dascore.utils.tables import (
     row_cells,
 )
 from dascore.utils.time import to_datetime64
+
+# Marks this module experimental; the API docs builder reads it to put
+# an Experimental banner on its pages.
+__experimental__ = True
 
 # One data model stands behind all three spellings, so they are accepted
 # identically -- but one identity may only be spelled once.
@@ -1524,6 +1535,10 @@ def _looks_like_a_path(source: str) -> bool:
 def inventory(source: Inventory | str | os.PathLike | None = None) -> Inventory:
     """
     Load or create a DASDAE inventory.
+
+    Experimental: this may change in any minor release. See what
+    [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
+    means.
 
     The one door every source goes through: what a source is decides how
     it is read, so nothing else has to guess.

@@ -444,7 +444,13 @@ class PatchMeta(NodeRepr):
         on_missing: ON_MISSING = "raise",
         conflict: ENRICH_CONFLICT = "raise",
     ) -> Self:
-        """Copy inventory metadata onto a patch."""
+        """
+        Copy inventory metadata onto a patch.
+
+        Experimental: this may change in any minor release. See what
+        [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
+        means.
+        """
         return dascore.proc.inventory.Enrich(
             inventory=inventory,
             attrs=attrs,

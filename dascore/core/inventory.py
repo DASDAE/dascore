@@ -10,6 +10,13 @@ patches. Patches carry a ``acquisition_key``
 resolves against an inventory.
 
 Each object documents the rules it enforces.
+
+Note
+----
+This module is experimental: its API and file format may change in any
+minor release, without a deprecation period. See what
+[experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
+means.
 """
 
 from __future__ import annotations
@@ -87,6 +94,10 @@ from dascore.utils.misc import (
     validate_acquisition_key,
 )
 from dascore.utils.namespace import NamespaceOwner
+
+# Marks this module experimental; the API docs builder reads it to put
+# an Experimental banner on its pages.
+__experimental__ = True
 
 CouplingType = Literal[
     "conduit",
@@ -2115,6 +2126,10 @@ def _yaml_label(text: str) -> str:
 class Inventory(NodeRepr, NamespaceOwner, InventoryModel):
     """
     Top-level DASDAE inventory manifest.
+
+    Experimental: this may change in any minor release. See what
+    [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
+    means.
 
     Stores document metadata, shareable resources keyed by resource_id, the
     inventory-wide coordinate reference system, and network containers.

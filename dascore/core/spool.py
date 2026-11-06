@@ -1364,6 +1364,10 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Attach a DASDAE inventory to this spool.
 
+        Experimental: this may change in any minor release. See what
+        [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
+        means.
+
         Attaching is lazy and does not modify yielded patches. It replaces any
         previous inventory and clears configured enrichment; call ``enrich`` to copy
         inventory metadata onto extracted patches.
@@ -1456,6 +1460,10 @@ class Spool(NodeRepr, NamespaceOwner):
         """
         Return a spool carrying no inventory.
 
+        Experimental: this may change in any minor release. See what
+        [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
+        means.
+
         Any enrichment set up by [`Spool.enrich`](`dascore.core.spool.Spool.enrich`)
         goes with it, since there is nothing left to enrich from. A spool
         with no inventory is returned unchanged in substance; as everywhere
@@ -1501,6 +1509,10 @@ class Spool(NodeRepr, NamespaceOwner):
     ) -> Self:
         """
         Enrich each patch this spool yields from an inventory.
+
+        Experimental: this may change in any minor release. See what
+        [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
+        means.
 
         Enrichment runs lazily as patches are extracted and survives subsequent
         spool operations. It never removes patches: ``on_unresolved`` controls
@@ -1682,6 +1694,10 @@ class Spool(NodeRepr, NamespaceOwner):
     ) -> Self:
         """
         Return a spool the inventory describes exactly, patch for patch.
+
+        Experimental: this may change in any minor release. See what
+        [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
+        means.
 
         This eager metadata step resolves every row, drops unmatched patches, and
         splits rows at optical-path changes without loading patch data. Splits occur
@@ -2576,6 +2592,10 @@ class Spool(NodeRepr, NamespaceOwner):
     def cut(self, annotations: dc.AnnotationSet, /, **pads) -> Self:
         """
         Return one lazy patch per feature of an annotation set.
+
+        Experimental: this may change in any minor release. See what
+        [experimental](`dascore/docs/contributing/general_guidelines`#experimental-features)
+        means.
 
         Each feature, lone rows included, is cut to its bounds (see
         `AnnotationSet.bounds`) and merged across source patches along
