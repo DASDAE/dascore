@@ -76,6 +76,23 @@ class TestSkills:
         assert main(["skill", "make-inventory"]) == 0
         assert capsys.readouterr().out == doc_skills.read_skill("make-inventory")
 
+    def test_install(self, tmp_path, capsys):
+        """One command copies every shipped skill and replaces an older copy."""
+        target = tmp_path / "agent" / "skills"
+        stale = target / "dascore" / "SKILL.md"
+        stale.parent.mkdir(parents=True)
+        stale.write_text("An older copy.")
+        assert main(["skills", "--install", str(target)]) == 0
+        installed = capsys.readouterr().out.split()
+        sources = sorted(SKILL_PATH.glob("*/SKILL.md"))
+        assert installed == [str(target / x.parent.name / x.name) for x in sources]
+        assert {x.parent.name for x in sources} == set(_CATALOG)
+        for source in sources:
+            copy = target / source.parent.name / source.name
+            assert copy.read_text(encoding="utf-8") == source.read_text(
+                encoding="utf-8"
+            )
+
     @pytest.mark.parametrize(
         "args, code, message",
         [

@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import re
+import shutil
+from pathlib import Path
 
 import yaml
 
@@ -60,6 +62,16 @@ def read_skill(name: str) -> str:
         )
     with documentation_cache() as (root, manifest):
         return read_document(root, manifest, skills[name]["target"])
+
+
+def install_skills(directory: Path | str) -> list[Path]:
+    """Copy every shipped skill into an agent's skill directory, replacing copies."""
+    out = []
+    for source in sorted(SKILL_PATH.glob("*/SKILL.md")):
+        target = Path(directory) / source.parent.name
+        shutil.copytree(source.parent, target, dirs_exist_ok=True)
+        out.append(target / source.name)
+    return out
 
 
 def read_bootstrap() -> str:

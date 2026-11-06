@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import io
 import sys
+from pathlib import Path
 
 import typer
 
 import dascore as dc
 from dascore.utils.doc_cache import documentation_cache, read_document
-from dascore.utils.doc_skills import get_skills, read_bootstrap, read_skill
+from dascore.utils.doc_skills import (
+    get_skills,
+    install_skills,
+    read_bootstrap,
+    read_skill,
+)
 
 app = typer.Typer(
     help="The DASCore command-line interface.",
@@ -66,8 +72,19 @@ def doc(
 
 
 @app.command()
-def skills() -> None:
-    """List the documentation pages available as skills."""
+def skills(
+    install: Path | None = typer.Option(
+        None,
+        "--install",
+        metavar="DIRECTORY",
+        help="Copy every skill into this agent skills directory",
+    ),
+) -> None:
+    """List the skills, or install all of them into an agent's skills directory."""
+    if install is not None:
+        for path in install_skills(install):
+            typer.echo(path)
+        return
     for name, info in get_skills().items():
         typer.echo(f"{name}: {info['description']}")
 
