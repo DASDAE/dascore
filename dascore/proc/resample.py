@@ -85,7 +85,7 @@ class Decimate(_DecimateFields):
       everything indexed by it.
 
     - With a filter, a dimension which is not evenly sampled (holes or
-      jitter) warns, and raises from DASCore 0.1.26; use
+      jitter) raises; use
       [split_gaps](`dascore.Patch.split_gaps`) or
       [fill_gaps](`dascore.Patch.fill_gaps`) first.
 

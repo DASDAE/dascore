@@ -7,6 +7,7 @@ import pytest
 
 import dascore as dc
 import dascore.proc.coords
+from dascore.exceptions import CoordError
 from dascore.transform.integrate import Integrate, integrate
 from dascore.units import get_quantity
 from dascore.utils.misc import broadcast_for_index
@@ -52,9 +53,9 @@ class TestIndefiniteIntegrals:
             assert np.allclose(flat, np.sort(flat))
 
     def test_integrate_non_evenly_sampled(self, wacky_dim_patch):
-        """Ensure we can integrate along non-evenly sampled dims."""
-        out = wacky_dim_patch.integrate(dim="time", definite=False)
-        assert isinstance(out, dc.Patch)
+        """A dimension which is not evenly sampled raises."""
+        with pytest.raises(CoordError, match="integrate"):
+            wacky_dim_patch.integrate(dim="time", definite=False)
 
     def test_units(self, random_patch):
         """Ensure output units are as expected."""
@@ -133,9 +134,9 @@ class TestDefiniteIntegration:
         assert out.shape == tuple([1] * len(random_patch.shape))
 
     def test_integrate_non_evenly_sampled_dim(self, wacky_dim_patch):
-        """Simple test to integrate along non-evenly sampled dimension."""
-        out = wacky_dim_patch.integrate(dim="time", definite=True)
-        assert isinstance(out, dc.Patch)
+        """A definite integral along a dimension with no step raises."""
+        with pytest.raises(CoordError, match="integrate"):
+            wacky_dim_patch.integrate(dim="time", definite=True)
 
 
 class TestDataType:
@@ -239,45 +240,20 @@ class TestNumericalIntegrals:
         if not definite:
             assert out.data.dtype == dtype
 
-    @pytest.mark.parametrize("width", [2, 3])
-    @pytest.mark.parametrize("axis", [0, 1, 2])
-    def test_uneven_axis(self, width, axis):
-        """Uneven intervals weight the named axis in any array position."""
-        distance = np.array([0, 1, 3, 6])
-        patch = dc.Patch(
-            data=np.ones((4, 2, width)),
-            coords={"distance": distance, "x": np.arange(2), "y": np.arange(width)},
-            dims=("distance", "x", "y"),
-        )
-        dims = ["x", "y"]
-        dims.insert(axis, "distance")
-        out = patch.transpose(*dims).integrate("distance").transpose(*patch.dims)
-        expected = np.broadcast_to(distance[:, None, None], patch.shape)
-        np.testing.assert_array_equal(out.data, expected)
-        np.testing.assert_array_equal(out.data, patch.integrate("distance").data)
-
-    def test_multiple_uneven_axes(self):
-        """Integrating a constant over two uneven axes gives their product."""
-        x, y = np.array([0, 1, 3, 6]), np.array([0, 2, 5])
-        patch = dc.Patch(data=np.ones((4, 3)), coords={"x": x, "y": y}, dims=("x", "y"))
-        out = patch.integrate(None)
-        np.testing.assert_array_equal(out.data, x[:, None] * y[None, :])
-
 
 class TestHoles:
     """Integration must not integrate across a coordinate hole."""
 
     @pytest.mark.parametrize("definite", [True, False])
-    def test_holes_warn(self, holed_patch, definite):
-        """Missing samples integrate by their labels until 0.1.26, with a warning."""
-        with pytest.warns(FutureWarning, match=r"not evenly sampled.*split_gaps"):
+    def test_holes_raise(self, holed_patch, definite):
+        """Missing samples raise, naming the fixes."""
+        with pytest.raises(CoordError, match=r"not evenly sampled.*split_gaps"):
             holed_patch.integrate("time", definite=definite)
 
     def test_stepless_runs(self, stepless_seam_patch):
-        """Step-less labels use label spacing until 0.1.26, with a warning."""
-        with pytest.warns(FutureWarning, match="0.1.26"):
-            out = stepless_seam_patch.integrate("time", definite=True)
-        assert np.allclose(out.data, 79.5)
+        """Step-less labels raise."""
+        with pytest.raises(CoordError, match="integrate"):
+            stepless_seam_patch.integrate("time", definite=True)
 
 
 class TestIntegrateMetadata:
