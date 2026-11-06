@@ -320,11 +320,22 @@ class TestGetFilterUnits:
         assert get_filter_units(1.0 * hz, 10.0 * hz, s) == (1.0, 10.0)
 
     def test_same_units(self):
-        """Tests for when filter units are already those selected."""
+        """Bounds in the coordinate's units are inverted and swapped."""
         s = get_unit("s")
         assert get_filter_units(1.0 * s, 10.0 * s, s) == (0.1, 1.0)
-        assert get_filter_units(None, 10.0 * s, s) == (None, 0.1)
-        assert get_filter_units(10.0 * s, None, s) == (0.1, None)
+        assert get_filter_units(None, 10.0 * s, s) == (0.1, None)
+        assert get_filter_units(10.0 * s, None, s) == (None, 0.1)
+
+    @pytest.mark.parametrize("unit", ["s", "m"])
+    def test_one_sided_inverse_keeps_slot(self, unit):
+        """
+        A one-sided period or wavelength bound lands in the same slot it
+        occupies in the two-sided call (s07-F1).
+        """
+        un = get_unit(unit)
+        lower, upper = get_filter_units(1 * un, 10 * un, un)
+        assert get_filter_units(None, 10 * un, un) == (lower, None)
+        assert get_filter_units(1 * un, None, un) == (None, upper)
 
     def test_different_units_raises(self):
         """The units must be the same or it should raise."""
