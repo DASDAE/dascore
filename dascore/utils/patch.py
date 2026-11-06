@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import functools
 import inspect
-import math
 import warnings
 from collections import namedtuple
 from collections.abc import Callable, Iterable, Mapping, Sequence
@@ -24,7 +23,6 @@ from dascore.constants import (
     WARN_LEVELS,
     PatchMetaType,
     PatchType,
-    check_behavior_description,
 )
 from dascore.exceptions import (
     CoordDataError,
@@ -54,8 +52,6 @@ from dascore.utils.attrs import (
     warn_if_histories_differ,
 )
 from dascore.utils.coordmanager import merge_coord_managers
-from dascore.utils.deprecate import deprecate
-from dascore.utils.docs import compose_docstring
 from dascore.utils.gaps import GapTolerance
 from dascore.utils.identity import (
     _ID_FIELDS,
@@ -76,7 +72,6 @@ from dascore.utils.misc import (
     to_object_array,
     validate_warn_level,
     warn_or_raise,
-    yield_sub_sequences,
 )
 from dascore.utils.patch_registry import (
     call_inputs,
@@ -618,41 +613,6 @@ def patches_to_df(
     return df
 
 
-@deprecate(
-    info=(
-        "merge_patches is deprecated. Use spool.chunk instead. "
-        "For example, to merge a list of patches you can use: "
-        "dascore.spool(patch_list).chunk(time=None) to merge on the time "
-        "dimension."
-    ),
-    removed_in="0.2.0",
-)
-def merge_patches(
-    patches: Sequence[dc.Patch] | pd.DataFrame | dc.Spool,
-    dim: str = "time",
-    check_history: bool = True,
-    tolerance: float = 1.5,
-) -> dc.Spool:
-    """
-    Merge all compatible patches in spool or patch list together.
-
-    Parameters
-    ----------
-    patches
-        A sequence of patches to merge (if compatible)
-    dim
-        The dimension along which to merge
-    check_history
-        If True, only merge patches with common history. This will, for
-        example, prevent merging filtered and unfiltered data together.
-    tolerance
-        The upper limit of a gap to tolerate in terms of the sampling
-        along the desired dimension. e.g., the default value means any patches
-        with gaps <= 1.5 * dt will be merged.
-    """
-    return dc.spool(patches).chunk(**{dim: None}, tolerance=tolerance)
-
-
 def _get_merge_dim(df) -> str | None:
     """
     Get the merge dimension from a dataframe of patch dim summaries.
@@ -1046,78 +1006,6 @@ def get_dim_sampling_rate(patch: PatchType, dim: str) -> float:
         msg = _uneven_message(dim, coord, get_parent_code_name())
         raise CoordDataError(msg)
     return 1.0 / d_dim
-
-
-@deprecate(
-    info=(
-        "get_patch_window_size is deprecated. Use "
-        "dascore.utils.window.resolve_window(...).full_size() instead."
-    ),
-    removed_in="0.2.0",
-)
-def get_patch_window_size(
-    patch: PatchType,
-    kwargs: dict,
-    samples: bool = False,
-    *,
-    require_odd: bool = False,
-    warn_above: int | None = None,
-    min_samples: int = 1,
-    enforce_lt_coord: bool = False,
-) -> tuple[int, ...]:
-    """Return the window along every patch axis; see `resolve_window`."""
-    # Deferred: dascore.utils.window imports this module.
-    from dascore.utils.window import resolve_window  # noqa: PLC0415
-
-    if not kwargs:
-        return (1,) * len(patch.dims)
-    size = resolve_window(
-        patch,
-        kwargs,
-        samples=samples,
-        require_odd=require_odd,
-        min_samples=min_samples,
-        enforce_lt_coord=enforce_lt_coord,
-    ).full_size()
-    if warn_above is not None and math.prod(size) > warn_above:
-        msg = (
-            f"Large window size ({math.prod(size)} samples) may result in slow "
-            "performance. Consider reducing the window size."
-        )
-        warnings.warn(msg, UserWarning, stacklevel=2)
-    return size
-
-
-@deprecate(
-    info=(
-        "get_window_axis_step is deprecated. Use "
-        "dascore.utils.window.resolve_window instead."
-    ),
-    removed_in="0.2.0",
-)
-def get_window_axis_step(
-    patch,
-    overlap=None,
-    step=None,
-    samples=False,
-    **kwargs,
-) -> tuple[int, int, int | None]:
-    """Return one dimension's window, axis, and step; see `resolve_window`."""
-    # Deferred: dascore.utils.window imports this module.
-    from dascore.utils.window import resolve_window  # noqa: PLC0415
-
-    window = resolve_window(
-        patch,
-        kwargs,
-        samples=samples,
-        overlap=overlap,
-        step=step,
-        allow_multiple=False,
-        min_samples=0,
-        enforce_lt_coord=True,
-    )
-    stride = None if window.stride is None else window.stride[0]
-    return window.size[0], window.axes[0], stride
 
 
 # What a derivative along a dimension makes of the data. Read forward to
@@ -1753,121 +1641,6 @@ def merge_compatible_coords_attrs(
     return coord_out, attrs
 
 
-@deprecate(
-    info=(
-        "concatenate_patches is deprecated. Use Spool.concatenate instead, "
-        "for example dascore.spool(patches).concatenate(time=None), which "
-        "partitions incompatible patches rather than skipping them."
-    ),
-    removed_in="0.2.0",
-)
-@compose_docstring(check_bev=check_behavior_description)
-def concatenate_patches(
-    patches: Sequence[dc.Patch] | dc.Spool,
-    check_behavior: WARN_LEVELS = "warn",
-    **kwargs,
-) -> Sequence[dc.Patch]:
-    """
-    Concatenate the patches together.
-
-    Only patches compatible with the first patch are concatenated together:
-    the same kind (see [`check_kind`](`dascore.utils.patch.check_kind`);
-    compared strictly, so a missing value equals only another missing
-    value), the same data units, the same dimensions, and equal
-    coordinates other than the concatenated one. The output carries the
-    first patch's attributes.
-
-    Parameters
-    ----------
-    {check_bev}
-    **kwargs
-        Used to specify the dimension and number of patches to merge
-        together. A value of None attempts to concatenate all patches
-        into as single patch.
-
-    Examples
-    --------
-    >>> import dascore as dc
-    >>> patch = dc.get_example_patch()
-    >>>
-    >>> from dascore.utils.patch import concatenate_patches
-    >>>
-    >>> # Concatenate patches along time axis
-    >>> out = concatenate_patches([patch, patch], time=None)
-    >>> assert len(out) == 1
-    >>>
-    >>> # Concatenate patches along a new dimension.
-    >>> # Note: This will only include the first patch if existing
-    >>> # dimensions are not identical.
-    >>> out = concatenate_patches([patch, patch], wave_rank=None)
-    >>> assert "wave_rank" in out[0].dims
-    >>>
-    >>> # Concatenate patches in groups of 3.
-    >>> out = concatenate_patches([patch] * 12, time=3)
-    >>> assert len(out) == 4
-
-    Notes
-    -----
-    - [`Spool.concatenate`](`dascore.Spool.concatenate`) is the spool
-      form: it partitions patches which cannot be concatenated together
-      into separate outputs instead of skipping them.
-    - [`Spool.chunk`](`dascore.Spool.chunk`) performs a similar operation
-      but accounts for coordinate values.
-    - See also the
-      [chunk section of the spool tutorial](`dascore/docs/tutorial/spool`#concatenate)
-    """
-
-    def _get_dim_and_value(kwargs):
-        """Get the dimension name and value"""
-        if not len(kwargs) == 1:
-            msg = "Exactly one keyword argument must be passed to concatenate."
-            raise ParameterError(msg)
-        assert len(kwargs) == 1
-        [(dim, val)] = kwargs.items()
-
-        return dim, val
-
-    def get_compatible_patches(patches, dim, check_behavior):
-        """Get the patches which can be concatenated with the first."""
-        # We need to drop private coords for dft concats to work.
-        patches = list(x.drop_private_coords() for x in patches)
-        first_patch = patches[0]
-        compat_patches = []
-        first_dims = first_patch.dims
-        # Get patches compatible with first. Kind is compared strictly:
-        # this combines a collection, so a missing value is a value.
-        for p in patches:
-            kind_ok = check_kind(first_patch, p, check_behavior, strict=True)
-            if kind_ok and p.dims != first_dims:
-                # a same-kind patch with other dimensions is never skipped
-                msg = "Cannot concatenate patches with different dimensions."
-                raise PatchCoordinateError(msg)
-            coords_ok = kind_ok and check_coords(
-                patch1=first_patch,
-                patch2=p,
-                check_behavior=check_behavior,
-                dim_to_ignore=dim,
-                ignore_dim_eq_shape=False,
-                riders_vary=True,
-            )
-            if coords_ok and check_data_units(first_patch, p, check_behavior):
-                compat_patches.append(p)
-        return compat_patches
-
-    dim, val = _get_dim_and_value(kwargs)
-    patches = get_compatible_patches(patches, dim, check_behavior)
-    operation = operation_id(
-        "Concatenate",
-        {"arguments": tuple(kwargs.items()), "check_behavior": check_behavior},
-    )
-    out = []
-    for patch_list in yield_sub_sequences(patches, val):
-        # The members agree on kind and units, so the first states them.
-        attrs = patch_list[0].attrs
-        out.append(_concatenate_group(patch_list, dim, attrs, operation))
-    return out
-
-
 def _concatenate_group(
     patches: Sequence[dc.Patch],
     dim: str,
@@ -1910,10 +1683,8 @@ def _concatenate_group(
         for name, cdims in first.coords.dim_map.items():
             if name == dim or dim not in cdims:
                 continue
-            if not all(x.coords.dim_map.get(name) == cdims for x in patches):
-                # a member lacks it, or attaches it elsewhere: values cannot
-                # be invented for it, so it is left out
-                continue
+            # the plan refuses a rider some member lacks or attaches elsewhere
+            assert all(x.coords.dim_map.get(name) == cdims for x in patches)
             # one spelling, the one the catalog keeps too: that of the
             # member lowest along the rider; a unitless member adopts it,
             # as a unitless operand conflicts with nothing

@@ -48,8 +48,12 @@ pandas 3 stores text columns as strings rather than `object`, which can affect c
 | `to_float.register`, `to_int.register` | register on the private `_to_float`, `_to_int` |
 | `dc.proc.align_patch_coords` | `dascore.utils.patch.align_patch_coords` |
 | `DEFAULT_ATTRS_TO_IGNORE`, `PATCH_MERGE_ATTRS`, `attrs_to_ignore=` | the `patch_kind_attrs` config option; see [Patch compatibility](../notes/patch_compatibility.qmd) |
-
-`dascore.utils.patch.merge_patches` still works but is deprecated; use `dc.spool(patches).chunk(time=None)`.
+| `dascore.utils.patch.merge_patches(patches)` | `dc.spool(patches).chunk(time=None)` |
+| `dascore.utils.patch.concatenate_patches(patches, time=None)` | `dc.spool(patches).concatenate(time=None)`, which puts patches that cannot be concatenated together in separate outputs rather than skipping them |
+| `dascore.utils.patch.get_patch_window_size`, `get_window_axis_step` | `dascore.utils.window.resolve_window(...)`; `.full_size()` gives the window along every axis |
+| `dascore.utils.pd.get_regex` | `dascore.utils.misc.glob_to_regex`, which negates a character class with `[^...]` rather than fnmatch's `[!...]` |
+| `dascore.utils.hdf5.unpack_scalar_h5_dataset(dataset)` | `dataset[()]`, taking the first element of a length-one array |
+| `dascore.utils.misc.yield_sub_sequences` | slice the sequence directly |
 
 ## Attributes and coordinates
 

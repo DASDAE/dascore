@@ -8,7 +8,6 @@ import pytest
 import dascore as dc
 from dascore.exceptions import CoordError, ParameterError
 from dascore.units import percent
-from dascore.utils.patch import get_patch_window_size, get_window_axis_step
 from dascore.utils.window import Window, resolve_window
 
 
@@ -390,40 +389,6 @@ class TestPolicies:
                 overlap={"time": None},
                 default_overlap=2,
             )
-
-
-class TestDeprecatedResolvers:
-    """The two public utilities this replaces still answer, with a warning."""
-
-    def test_get_patch_window_size(self, simple_patch):
-        """The full-size tuple, as before."""
-        with pytest.warns(DeprecationWarning, match="resolve_window"):
-            size = get_patch_window_size(simple_patch, {"time": 5}, samples=True)
-        assert (
-            size == resolve_window(simple_patch, {"time": 5}, samples=True).full_size()
-        )
-
-    def test_get_patch_window_size_warns_above(self, simple_patch):
-        """The deprecated helper still warns on a large window."""
-        with pytest.warns(UserWarning, match="Large window"):
-            with pytest.warns(DeprecationWarning):
-                get_patch_window_size(
-                    simple_patch, {"time": 5}, samples=True, warn_above=4
-                )
-
-    def test_get_patch_window_size_with_no_window(self, simple_patch):
-        """As before, no dimension gives one along every axis."""
-        with pytest.warns(DeprecationWarning, match="resolve_window"):
-            size = get_patch_window_size(simple_patch, {})
-        assert size == (1,) * simple_patch.data.ndim
-
-    def test_get_window_axis_step(self, random_patch):
-        """Window, axis, and step, as before."""
-        with pytest.warns(DeprecationWarning, match="resolve_window"):
-            out = get_window_axis_step(
-                random_patch, distance=16, overlap=50 * percent, samples=True
-            )
-        assert out == (16, random_patch.get_axis("distance"), 8)
 
 
 class TestWindow:

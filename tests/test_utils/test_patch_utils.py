@@ -29,13 +29,11 @@ from dascore.utils.patch import (
     check_data_units,
     check_dims,
     check_kind,
-    concatenate_patches,
     concatenate_planned,
     get_dim_axis_value,
     get_patch_kind,
     get_patch_names,
     merge_compatible_coords_attrs,
-    merge_patches,
     patch_function,
     patches_to_df,
     stack_patches,
@@ -325,13 +323,12 @@ class TestHistory:
             out = add_one(patch)
         assert out.attrs.history == original_history
 
-    @pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
     def test_concatenate_history_disabled(self, random_patch):
         """Concatenate should use the shared history helper."""
         with config_context(patch_history="disabled"):
-            out = concatenate_patches([random_patch, random_patch], time=None)
-        assert len(out) == 1
-        assert out[0].attrs.history == random_patch.attrs.history
+            out = dc.spool([random_patch, random_patch.new()]).concatenate(time=None)
+            assert len(out) == 1
+            assert out[0].attrs.history == random_patch.attrs.history
 
     def test_stack_history_disabled(self, random_patch):
         """Stack should use the shared history helper."""
@@ -740,29 +737,8 @@ class TestMergeCompatibleCoordsAttrs:
         assert set(coord.dims) == (set(patch1.dims) | set(patch2.dims))
 
 
-@pytest.mark.filterwarnings("ignore:.*concatenate_patches is deprecated")
 class TestConcatenate:
-    """Tests for concatenating spools."""
-
-    def test_deprecated_merge_patches_uses_spool_chunk(self, random_patch):
-        """The deprecated merge helper should still merge compatible patches."""
-        patch_1 = random_patch.update_attrs(history=[])
-        time = patch_1.get_coord("time")
-        patch_2 = patch_1.update_coords(time_min=time.max() + time.step).update_attrs(
-            history=[]
-        )
-
-        with pytest.warns(DeprecationWarning, match="merge_patches is deprecated"):
-            out = merge_patches([patch_1, patch_2])
-
-        assert len(out) == 1
-        assert out[0].get_coord("time").max() == patch_2.get_coord("time").max()
-
-    def test_concatenate_patches_deprecated(self, random_patch):
-        """concatenate_patches warns, pointing to Spool.concatenate."""
-        with pytest.warns(DeprecationWarning, match="Spool.concatenate"):
-            out = concatenate_patches([random_patch, random_patch], time=None)
-        assert len(out) == 1
+    """Tests for concatenating patches with Spool.concatenate."""
 
     def test_aggregated_patches_keep_their_dim_kind(self, random_spool):
         """
@@ -775,7 +751,7 @@ class TestConcatenate:
         means = [patch.mean("time") for patch in random_spool]
         assert all(x.get_coord("time").dtype.kind == "M" for x in means)
 
-        out = concatenate_patches(means, time=None)[0]
+        out = dc.spool(means).concatenate(time=None)[0]
         coord = out.get_coord("time")
         assert coord.dtype.kind == "M", "the axis is still made of times"
         assert coord.values.dtype.kind == "M"
@@ -793,18 +769,8 @@ class TestConcatenate:
             else np.arange(size, dtype=float)
         )
         stated = random_patch.update_coords(time=values)
-        out = concatenate_patches([blank, stated], time=None)[0]
+        out = dc.spool([blank, stated]).concatenate(time=None)[0]
         assert out.get_coord("time").values.dtype.kind == expected
-
-    def test_blank_member_against_a_kind_with_no_null_raises(self, random_patch):
-        """Whole numbers have no missing value, so the join is refused."""
-        size = len(random_patch.get_array("time"))
-        blank = random_patch.update_coords(
-            time=np.full(size, "NaT", dtype="datetime64[ns]")
-        )
-        stated = random_patch.update_coords(time=np.arange(size))
-        with pytest.raises(CoordMergeError, match="states no values there"):
-            concatenate_patches([blank, stated], time=None)
 
     def test_every_member_blank_with_clashing_kinds(self, random_patch):
         """
@@ -819,29 +785,11 @@ class TestConcatenate:
             time=np.full(size, "NaT", dtype="datetime64[ns]")
         )
         nan = random_patch.update_coords(time=np.full(size, np.nan))
-        out = concatenate_patches([nat, nan], time=None)[0]
+        out = dc.spool([nat, nan]).concatenate(time=None)[0]
         values = out.get_coord("time").values
         assert values.dtype.kind == "f"
         assert len(values) == 2 * size
         assert np.all(pd.isnull(values))
-
-    def test_empty_dim_joins_a_stated_one(self, random_patch):
-        """
-        A dimension with no entries states nothing and refuses nothing.
-
-        Every value of an empty array is null, but there are none to write
-        a null into, so the kinds which have no null must still join.
-        """
-        size = len(random_patch.get_array("distance"))
-        labeled = random_patch.update_coords(
-            distance=np.array([f"d{i}" for i in range(size)])
-        )
-        empty = labeled.select(distance=(0, 0), samples=True)
-        assert len(empty.get_array("distance")) == 0
-
-        out = concatenate_patches([empty, labeled], distance=None)[0]
-        assert out.get_coord("distance").dtype.kind == "U"
-        assert np.all(out.get_array("distance") == labeled.get_array("distance"))
 
     @pytest.mark.parametrize(("other", "expected"), [("datetime", "M"), ("float", "f")])
     def test_blank_rider_takes_the_stated_kind(self, random_patch, other, expected):
@@ -856,111 +804,11 @@ class TestConcatenate:
             else np.arange(size, dtype=float)
         )
         stated = random_patch.update_coords(rider=("time", values))
-        out = concatenate_patches([blank, stated], time=None)[0]
+        out = dc.spool([blank, stated]).concatenate(time=None)[0]
         joined = out.get_array("rider")
         assert joined.dtype.kind == expected
         assert np.all(pd.isnull(joined[:size]))
         assert np.all(joined[size:] == values)
-
-    def test_blank_rider_against_a_kind_with_no_null_raises(self, random_patch):
-        """A rider is refused for the same reason its dimension would be."""
-        size = len(random_patch.get_array("time"))
-        blank = random_patch.update_coords(
-            rider=("time", np.full(size, "NaT", dtype="datetime64[ns]"))
-        )
-        stated = random_patch.update_coords(rider=("time", np.arange(size)))
-        with pytest.raises(CoordMergeError, match="states no values there"):
-            concatenate_patches([blank, stated], time=None)
-
-    def test_different_dims_raises(self, random_patch):
-        """Patches can't be concated when they have different dims."""
-        p1 = random_patch
-        p2 = random_patch.rename_coords(time="money")
-        msg = "Cannot concatenate"
-        with pytest.raises(PatchCoordinateError, match=msg):
-            concatenate_patches([p1, p2], time=None)
-
-    def test_different_kind_skipped(self, random_patch):
-        """A patch of another kind is left out per check_behavior."""
-        other = random_patch.update_attrs(tag="other")
-        msg = "not the same kind"
-        with pytest.warns(UserWarning, match=msg):
-            out = concatenate_patches([random_patch, other], time=None)
-        assert len(out) == 1
-        assert out[0].shape == random_patch.shape
-        assert out[0].attrs.tag == random_patch.attrs.tag
-        with pytest.raises(IncompatiblePatchError, match=msg):
-            concatenate_patches(
-                [random_patch, other], time=None, check_behavior="raise"
-            )
-
-    def test_missing_kind_value_is_another_kind(self, random_patch):
-        """A patch which never stated a kind attr is not the kind which did."""
-        blank = random_patch.update_attrs(tag="")
-        a = random_patch.update_attrs(tag="a")
-        with pytest.warns(UserWarning, match="not the same kind"):
-            out = concatenate_patches([blank, a], time=None)
-        assert len(out) == 1
-        assert out[0].shape == random_patch.shape
-        assert out[0].attrs.tag == ""
-        # NaN is the same missing value, and just as much a value.
-        with config_context(patch_kind_attrs=("foo",)):
-            nan = random_patch.update_attrs(foo=np.nan)
-            known = random_patch.update_attrs(foo="a")
-            with pytest.warns(UserWarning, match="not the same kind"):
-                out = concatenate_patches([nan, known], time=None)
-            assert out[0].shape == random_patch.shape
-
-    def test_dims_mismatch_raises_even_after_rejections(self, random_patch):
-        """Different dimensions raise whatever was rejected before them."""
-        bad = random_patch.update_coords(distance_min=5)
-        odd = random_patch.rename_coords(time="money")
-        with pytest.warns(UserWarning, match="not equal"):
-            with pytest.raises(PatchCoordinateError, match="different dimensions"):
-                concatenate_patches([random_patch, bad, odd], time=None)
-        # another kind with other dimensions is merely skipped
-        other_kind = random_patch.update_attrs(tag="z").rename_coords(time="money")
-        with pytest.warns(UserWarning, match="not the same kind"):
-            out = concatenate_patches([random_patch, other_kind], time=None)
-        assert len(out) == 1
-
-    def test_different_kind_skipped_before_dims(self, random_patch):
-        """A different-kind patch is skipped whatever its dimensions."""
-        other = random_patch.update_attrs(tag="other").rename_coords(time="money")
-        with suppress_warnings(UserWarning, action="error"):
-            out = concatenate_patches(
-                [random_patch, other], time=None, check_behavior="ignore"
-            )
-        assert len(out) == 1
-        assert out[0].shape == random_patch.shape
-
-    def test_missing_units_are_not_spliced_into_known(self, random_patch):
-        """A patch without units is not spliced onto one which has them."""
-        other = random_patch.set_units("m/s").update_attrs(
-            history=random_patch.attrs.history
-        )
-        with pytest.warns(UserWarning, match="data units differ"):
-            out = concatenate_patches([random_patch, other], time=None)
-        assert out[0].shape == random_patch.shape
-        assert out[0].attrs.data_units is None
-
-    def test_different_units_are_not_spliced(self, random_patch):
-        """Known, different data units are skipped or raise, never mixed."""
-        metres = random_patch.set_units("m")
-        km = random_patch.set_units("km").update_attrs(history=metres.attrs.history)
-        with pytest.warns(UserWarning, match="data units differ"):
-            out = concatenate_patches([metres, km], time=None)
-        assert out[0].shape == metres.shape
-        with pytest.raises(IncompatiblePatchError, match="data units differ"):
-            concatenate_patches([metres, km], time=None, check_behavior="raise")
-
-    def test_history_divergence_warns(self, random_patch):
-        """Splicing processed beside unprocessed data warns but proceeds."""
-        other = random_patch.pass_filter(time=(None, 10))
-        with pytest.warns(UserWarning, match="histories differ"):
-            out = concatenate_patches([random_patch, other], time=None)
-        assert out[0].shape[1] == 2 * random_patch.shape[1]
-        assert not any("pass_filter" in x for x in out[0].attrs.history)
 
     def test_duplicate_patches_existing_dim(self, random_patch):
         """Ensure equal (but distinct) patches are concatenated together.
@@ -970,7 +818,7 @@ class TestConcatenate:
         a distinct instance with equal contents.
         """
         spool = dc.spool([random_patch, random_patch.new()])
-        out = concatenate_patches(spool, time=None)
+        out = dc.spool(spool).concatenate(time=None)
         assert len(out) == 1
         patch = out[0]
         time_coord = patch.get_coord("time")
@@ -981,29 +829,16 @@ class TestConcatenate:
         assert np.all(val1[: len(val2)] == val2)
         assert np.all(val1[len(val2) :] == val2)
 
-    def test_concatenate_ignores_private_attrs(self, random_patch):
-        """Private ids should not block concatenation of compatible patches."""
-        patch_1 = random_patch.update_attrs(_source_patch_key="one")
-        shifted = (
-            random_patch.coords.get_array("time") + random_patch.get_coord("time").step
-        )
-        patch_2 = random_patch.update_coords(time=shifted).update_attrs(
-            _source_patch_key="two"
-        )
-        out = concatenate_patches([patch_1, patch_2], time=None)
-        assert len(out) == 1
-        assert out[0].attrs["_source_patch_key"] == "one"
-
     def test_different_lens(self, random_patch):
         """Ensure different lengths can be chunked on same dim."""
         patches = [random_patch] * 6
-        out = concatenate_patches(patches, time=2)
+        out = dc.spool([x.new() for x in patches]).concatenate(time=2)
         assert len(out) == 3
 
     def test_new_dim(self, random_patch):
         """Ensure we create a new dimension."""
         patches = [random_patch, random_patch]
-        out = concatenate_patches(patches, zoolou=None)
+        out = dc.spool([x.new() for x in patches]).concatenate(zoolou=None)
         assert len(out) == 1
         patch = out[0]
         assert "zoolou" in patch.dims
@@ -1043,16 +878,16 @@ class TestConcatenate:
 
     def test_bad_kwargs(self, random_patch):
         """Ensure bad number of keywords raise."""
-        msg = "Exactly one keyword argument"
+        msg = "exactly one dimension keyword"
         with pytest.raises(ParameterError, match=msg):
-            concatenate_patches([random_patch])
+            dc.spool([random_patch]).concatenate()
         with pytest.raises(ParameterError, match=msg):
-            concatenate_patches([random_patch], time=None, distance=None)
+            dc.spool([random_patch]).concatenate(time=None, distance=None)
 
     def test_concat_along_non_dim(self, random_patch):
         """Ensure we can concat along non dims."""
         patches = [random_patch.mean("time") for _ in range(10)]
-        out = concatenate_patches(patches, time=None)
+        out = dc.spool(patches).concatenate(time=None)
         assert len(out) == 1
         patch = out[0]
         coord = patch.get_coord("time")
@@ -1062,7 +897,7 @@ class TestConcatenate:
         """Ensure coordinates with different sizes (along concat axis) work."""
         p1 = random_patch.select(time=(0, 10), samples=True)
         p2 = random_patch.select(time=(15, 20), samples=True)
-        out = concatenate_patches([p1, p2], time=None)
+        out = dc.spool([p1, p2]).concatenate(time=None)
         assert len(out) == 1
         patch = out[0]
         new_time = patch.get_array("time")

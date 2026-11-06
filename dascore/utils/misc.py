@@ -724,13 +724,6 @@ def to_str(val):
     return str(val)
 
 
-def yield_sub_sequences(sequence, length=None):
-    """Yield subsequences of a sequence for specified length."""
-    length = length if length is not None else len(sequence)
-    for i in range(0, len(sequence), length):
-        yield sequence[i : i + length]
-
-
 def maybe_get_items(
     obj, attr_map: Mapping[str, str], unpack_names: set[str] | None = None
 ):
