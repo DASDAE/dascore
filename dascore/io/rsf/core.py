@@ -13,6 +13,7 @@ from dascore.io.utils import require_grid
 from dascore.units import get_quantity_str
 from dascore.utils.paths import coerce_to_local_path, coerce_to_upath, is_local_path
 from dascore.utils.time import to_float
+from dascore.warnings import DASCoreWarning
 
 RSFKEYS_WRITE = ("in", "esize", "data_format")
 
@@ -78,7 +79,7 @@ class RSFV1(FiberIO):
         -----
         - Patch datatype is converted to float32 for compatibility with
         Madagascar (may be able to keep dtype in the future), with a
-        UserWarning when the data are not already float32
+        DASCoreWarning when the data are not already float32
         - With data_path, the header's in= holds the binary's absolute path
         - Without data_path, the header ends with a blank line and the
         separator bytes 0x0c 0x0c 0x04 before the binary
@@ -101,7 +102,7 @@ class RSFV1(FiberIO):
             raise ValueError("Data format is not integer or floating.")
         if dtype != np.float32:
             msg = f"RSF stores float32; casting {dtype} data to float32."
-            warnings.warn(msg, UserWarning, stacklevel=2)
+            warnings.warn(msg, DASCoreWarning, stacklevel=2)
         ## we are casting to float32 to ensure that esize=4 for m8r
         data = patch.data.astype(np.float32)
         dtype = np.dtype(data.dtype)

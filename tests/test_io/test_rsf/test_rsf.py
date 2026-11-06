@@ -9,6 +9,7 @@ from upath import UPath
 
 import dascore as dc
 from dascore.io.rsf import RSFV1
+from dascore.warnings import DASCoreWarning
 
 SEPARATOR = b"\x0c\x0c\x04"
 
@@ -46,7 +47,7 @@ class TestRsfWrite:
     def test_combined(self, random_patch, tmp_path):
         """Combined output is header, blank line, separator, then the samples."""
         path = tmp_path / "test_hdrdata.rsf"
-        with pytest.warns(UserWarning, match="float32"):
+        with pytest.warns(DASCoreWarning, match="float32"):
             RSFV1().write(dc.spool(random_patch), path)
         hdr, head, binary = _split_combined(path.read_bytes())
         assert head.endswith(b'in="stdin"\n\n')
@@ -64,7 +65,7 @@ class TestRsfWrite:
         """Split output names its binary by absolute path and ends in a newline."""
         path = tmp_path / "test_hdr.rsf"
         datapath = tmp_path / "binary/test_data.rsf"
-        with pytest.warns(UserWarning, match="float32"):
+        with pytest.warns(DASCoreWarning, match="float32"):
             RSFV1().write(dc.spool(random_patch), path, data_path=datapath)
         text = path.read_text()
         assert text.endswith("\n")
@@ -111,7 +112,7 @@ class TestRsfWrite:
         """Integer data are cast to float32 with a warning."""
         data = np.full(random_patch.shape, 2**24 + 1, dtype=np.int32)
         path = tmp_path / "int.rsf"
-        with pytest.warns(UserWarning, match="int32"):
+        with pytest.warns(DASCoreWarning, match="int32"):
             RSFV1().write(random_patch.new(data=data), path)
         _, _, binary = _split_combined(path.read_bytes())
         assert binary == data.astype(np.float32).tobytes("F")
@@ -130,7 +131,7 @@ class TestRsfWrite:
     def test_write_remote_memory_combined(self, random_patch):
         """Combined RSF output should support remote UPath destinations."""
         path = UPath("memory://dascore/test_hdrdata_remote.rsf")
-        with pytest.warns(UserWarning, match="float32"):
+        with pytest.warns(DASCoreWarning, match="float32"):
             RSFV1().write(dc.spool(random_patch), path)
         _, _, binary = _split_combined(path.read_bytes())
         assert binary == random_patch.data.astype(np.float32).tobytes("F")
@@ -139,7 +140,7 @@ class TestRsfWrite:
         """Split RSF output should support remote UPath destinations."""
         path = UPath("memory://dascore/test_hdr_remote.rsf")
         datapath = UPath("memory://dascore/binary/test_data_remote.rsf")
-        with pytest.warns(UserWarning, match="float32"):
+        with pytest.warns(DASCoreWarning, match="float32"):
             RSFV1().write(dc.spool(random_patch), path, data_path=datapath)
         assert _parse_header(path.read_text())["in"] == f"{datapath}@"
         newdatapath = UPath(f"{datapath}@")
