@@ -11,6 +11,7 @@ import pytest
 import dascore as dc
 from dascore.exceptions import InvalidFiberFileError
 from dascore.io.odh4 import ODH4V1
+from dascore.io.odh4.utils import _time_step
 from dascore.utils.downloader import fetch
 
 
@@ -153,6 +154,11 @@ class TestODH4:
             h5.attrs["endtime"] = end.isoformat()
         time = ODH4V1().read(path)[0].get_coord("time")
         assert time.step == np.timedelta64(20_000_010, "ns")
+
+    def test_inexact_rate_keeps_span_step(self):
+        """A rate that is no simple number leaves the span's step."""
+        span_step = np.timedelta64(976_562, "ns")
+        assert _time_step(1024.0001234567891, span_step) == span_step
 
     def test_near_miss_not_claimed(self, tmp_path):
         """A file with raw_data but not the full attr set isn't claimed."""

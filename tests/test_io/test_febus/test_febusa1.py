@@ -16,6 +16,7 @@ from dascore.io.febus.a1utils import (
     _flatten_febus_info,
     _get_source_patch_key,
     _get_zone_time,
+    _step_from_ms,
 )
 from dascore.utils.downloader import fetch
 from dascore.utils.misc import unbyte
@@ -285,6 +286,25 @@ class TestFebusA1TimeStep:
             _flatten_febus_info(f)[0].zone.attrs["SamplingRate"] = 1024.0
         for coord in self._time_coords(path):
             assert coord.step_exact == Fraction(1, 1024)
+
+    def test_placeholder_rate_uses_spacing(self, tmp_path):
+        """An unversioned file's 250 MHz placeholder rate defers to Spacing."""
+        path = tmp_path / "placeholder_rate.h5"
+        shutil.copy2(fetch("valencia_febus_example.h5"), path)
+        with h5py.File(path, "r+") as f:
+            zone = _flatten_febus_info(f)[0].zone
+            zone.attrs["SamplingRate"] = 250_000_000.0
+            spacing = zone.attrs["Spacing"]
+            spacing[1] = 1000 / 1024
+            zone.attrs["Spacing"] = spacing
+        for coord in self._time_coords(path):
+            assert coord.step_exact == Fraction(1, 1024)
+
+    def test_inexact_spacing_keeps_nanoseconds(self):
+        """A spacing that is no simple number gives the nearest nanosecond."""
+        out = _step_from_ms(0.1234567891234)
+        assert isinstance(out, np.timedelta64)
+        assert out == dc.to_timedelta64(0.1234567891234 / 1_000)
 
     def test_stated_rates_kept_exactly(self):
         """The bundled files keep the exact steps their attrs state."""

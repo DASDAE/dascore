@@ -1326,6 +1326,11 @@ class TestRangeCoord:
         coord = get_coord(start=0.0, stop=10.0, step=1.0)
         assert len(coord.new(start=2.0)) == 8
 
+    def test_min_max_stand_in_for_start_stop(self):
+        """Without start/stop, min and max bound the range."""
+        coord = get_coord(min=0.0, max=10.0, step=1.0)
+        assert coord == get_coord(start=0.0, stop=10.0, step=1.0)
+
     def test_empty_slice_units(self):
         """An empty compact slice keeps its coordinate units without expansion."""
         coord = get_coord(start=0, stop=10, step=1, units="m")

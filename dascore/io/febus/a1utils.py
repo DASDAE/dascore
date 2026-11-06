@@ -12,7 +12,6 @@ from dascore.core import get_coord, get_coord_manager
 from dascore.core.coordmanager import CoordManager
 from dascore.io.utils import (
     drop_blank_attrs,
-    step_from_interval,
     step_from_rate,
     windows_to_slices,
 )
@@ -78,10 +77,7 @@ def _get_zone_time(feb):
     # use spatial sampling.
     if has_version:
         block_pad = 1 + extents[3] - extents[2]
-        if block_pad != 0:
-            dt, step = spacing[1] / 1_000, _step_from_ms(spacing[1])
-        else:
-            dt, step = block_time, step_from_interval(block_time)
+        dt, step = spacing[1] / 1_000, _step_from_ms(spacing[1])
     else:
         # In these versions of the files the extents appear to be wrong, but
         # they don't have overlaps so we can just use the shape.
