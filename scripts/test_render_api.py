@@ -7,12 +7,28 @@ import typing
 
 import pytest
 
+import dascore as dc
+from dascore.core import annotation_loader, annotations, inventory, inventory_loader
+from dascore.core import spool as spool_module
 from dascore.core.spool import Spool
 
 # These tests only work if doc deps are installed.
 pytest.importorskip("jinja2")
 
-from _render_api import build_signature, get_type_hints, to_quarto_code
+from _index_api import parse_project
+from _render_api import (
+    DOC_PATH,
+    EXPERIMENTAL_BANNER,
+    EXPERIMENTAL_LINK,
+    Render,
+    _map_other_qmd_files,
+    build_signature,
+    get_type_hints,
+    is_experimental,
+    to_quarto_code,
+)
+
+EXPERIMENTAL_MODULES = (inventory, inventory_loader, annotations, annotation_loader)
 
 
 class TestGetTypeHints:
@@ -132,3 +148,67 @@ class TestToQuartoCode:
         """
         out = to_quarto_code(code1)
         assert out
+
+
+@pytest.fixture(scope="module")
+def data_dict():
+    """The parsed project, as the docs build sees it."""
+    return parse_project(dc)
+
+
+class TestExperimentalBanner:
+    """Tests for the banner on pages of experimental modules."""
+
+    def _render(self, data_dict, obj) -> str:
+        """Render the API page of one object."""
+        return Render(data_dict, str(id(obj)), {}).render_markdown()
+
+    @pytest.mark.parametrize("module", EXPERIMENTAL_MODULES)
+    def test_flagged_modules(self, module):
+        """The inventory and annotation modules state they are experimental."""
+        assert module.__experimental__ is True
+        assert is_experimental(module)
+
+    @pytest.mark.parametrize(
+        "obj",
+        [
+            dc.Inventory,
+            dc.inventory,
+            dc.AnnotationSet,
+            dc.annotations,
+            dc.AnnotationSet.overlapping,
+            inventory.Inventory.resolve,
+        ],
+    )
+    def test_objects_defined_there(self, obj):
+        """What an experimental module defines is experimental too."""
+        assert is_experimental(obj)
+
+    @pytest.mark.parametrize(
+        "obj", [dc.Patch, Spool, Spool.cut, spool_module, dc.Patch.enrich, 1]
+    )
+    def test_stable_objects(self, obj):
+        """Objects elsewhere are not, even those taking inventories."""
+        assert not is_experimental(obj)
+
+    @pytest.mark.parametrize(
+        "obj", [dc.Inventory, inventory, dc.AnnotationSet.overlapping]
+    )
+    def test_banner_on_experimental_pages(self, data_dict, obj):
+        """An experimental page carries the banner between header and body."""
+        page = self._render(data_dict, obj)
+        assert EXPERIMENTAL_BANNER in page
+        summary = inspect.getdoc(obj).splitlines()[0]
+        assert page.index(EXPERIMENTAL_BANNER) < page.index(summary)
+
+    def test_no_banner_on_stable_pages(self, data_dict):
+        """A stable page has no banner."""
+        assert EXPERIMENTAL_BANNER not in self._render(data_dict, dc.Patch)
+
+    def test_banner_link_resolves(self):
+        """The banner links to the section which defines experimental."""
+        page, anchor = EXPERIMENTAL_LINK.split("#")
+        assert page.strip("`") in _map_other_qmd_files()
+        text = (DOC_PATH / "contributing" / "general_guidelines.qmd").read_text()
+        assert "\n## Experimental features\n" in text
+        assert anchor == "experimental-features"
