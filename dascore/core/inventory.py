@@ -677,9 +677,9 @@ class Geometry(InventoryModel):
     """
     Measured curves along an interval of an optical path.
 
-    ``distance`` contains at least two strictly increasing optical distances and
+    ``optical_distance`` holds at least two strictly increasing control points and
     defines a half-open coverage span. Each named column supplies one value per
-    distance. CRS axis columns use CRS units; other numeric columns declare their
+    control point. CRS axis columns use CRS units; other numeric columns declare their
     own units. For coils, optical distance advances while physical coordinates repeat.
     Interpolation is linear within segments and undefined outside them.
     Overlapping segments must describe different columns and share the same name.
@@ -691,14 +691,14 @@ class Geometry(InventoryModel):
     >>> # A surveyed run, placed by the CRS's axes.
     >>> trench = Geometry(
     ...     name="trench",
-    ...     distance=(0.0, 100.0),
+    ...     optical_distance=(0.0, 100.0),
     ...     columns={"x": (0.0, 86.6), "y": (0.0, 0.0), "z": (-0.5, -0.5)},
     ... )
     >>>
     >>> # A curve which is not a position at all.
     >>> chainage = Geometry(
     ...     name="chainage",
-    ...     distance=(0.0, 100.0),
+    ...     optical_distance=(0.0, 100.0),
     ...     columns={"chainage": (1200.0, 1290.0)},
     ...     units={"chainage": "m"},
     ... )
@@ -706,7 +706,7 @@ class Geometry(InventoryModel):
 
     _identity_field: ClassVar[str] = "name"
     name: str = Field(default="", description="Human-readable geometry name.")
-    distance: tuple[float, ...] = Field(
+    optical_distance: tuple[float, ...] = Field(
         description=(
             "Optical distances paired to values; at least two strictly "
             "increasing values whose span is the segment's coverage."
@@ -726,27 +726,30 @@ class Geometry(InventoryModel):
     @model_validator(mode="after")
     def _validate_geometry(self) -> Self:
         """Enforce paired, strictly increasing control points."""
-        if len(self.distance) == 1:
+        if len(self.optical_distance) == 1:
             msg = (
-                "Geometry distance requires at least 2 control points, since "
+                "Geometry optical_distance requires at least 2 control points, since "
                 "a segment covers a span of fiber. Fiber gathered at one "
                 "place, such as a spool, is two points with the same "
                 "position at the start and end distances of the spool."
             )
             raise InvalidInventoryError(msg)
-        _check_control_points(self.distance, "Geometry distance", minimum=2)
+        _check_control_points(
+            self.optical_distance, "Geometry optical_distance", minimum=2
+        )
         if not self.columns:
             msg = "Geometry states no columns, so it describes nothing."
             raise InvalidInventoryError(msg)
         wrong = sorted(
             name
             for name, values in self.columns.items()
-            if len(values) != len(self.distance)
+            if len(values) != len(self.optical_distance)
         )
         if wrong:
             msg = (
-                f"Geometry column(s) {wrong} do not have one value per "
-                f"distance; distance states {len(self.distance)}."
+                f"Geometry column(s) {wrong} do not have "
+                f"{len(self.optical_distance)} values, one per optical_distance "
+                "point."
             )
             raise InvalidInventoryError(msg)
         for name, values in self.columns.items():
@@ -763,7 +766,7 @@ class Geometry(InventoryModel):
     @property
     def interval(self) -> tuple[float, float]:
         """The (start, end) optical distance covered by this segment."""
-        return (self.distance[0], self.distance[-1])
+        return (self.optical_distance[0], self.optical_distance[-1])
 
     def interpolate(self, distances) -> dict[str, np.ndarray]:
         """
@@ -776,7 +779,7 @@ class Geometry(InventoryModel):
         dist = np.atleast_1d(np.asarray(distances, dtype=float))
         start, end = self.interval
         inside = (dist >= start) & (dist < end)
-        knots = np.asarray(self.distance, dtype=float)
+        knots = np.asarray(self.optical_distance, dtype=float)
         out = {}
         for name, values in self.columns.items():
             column = np.full(len(dist), np.nan)
@@ -849,7 +852,46 @@ class OpticalPathLabel(_IntervalModel):
 
 
 # The coordinates a DistanceMap may be written in, in preference order.
-DISTANCE_MAP_AXES = ("channel", "instrument_distance")
+DISTANCE_MAP_AXES = ("channel", "acquisition_distance")
+
+# The names fields had before they said which distance each one is. The
+# Acquisition and OpticalPath validators accept them when building from a
+# mapping, so documents written with the old names still load; DistanceMap
+# and Geometry themselves take only the new names.
+_LEGACY_DISTANCE_MAP_NAMES = MappingProxyType(
+    {"instrument_distance": "acquisition_distance", "distance": "optical_distance"}
+)
+_LEGACY_GEOMETRY_NAMES = MappingProxyType({"distance": "optical_distance"})
+
+
+def _legacy_renames(names, legacy: Mapping[str, str], where: str) -> dict[str, str]:
+    """
+    Return the renames which bring legacy field names up to date.
+
+    A mapping stating both a legacy name and its replacement spells one
+    fact twice, possibly two ways, so it is refused rather than resolved.
+    """
+    names = set(names)
+    out = {}
+    for old, new in legacy.items():
+        if old not in names:
+            continue
+        if new in names:
+            msg = (
+                f"{where} states both {old} and {new}; {old} is the former "
+                f"name of {new}, so one fact is spelled twice."
+            )
+            raise InvalidInventoryError(msg)
+        out[old] = new
+    return out
+
+
+def _upgrade_legacy(value, legacy: Mapping[str, str], where: str):
+    """Rename a mapping's legacy keys; anything else passes through."""
+    if not isinstance(value, Mapping):
+        return value
+    renames = _legacy_renames(value, legacy, where)
+    return {renames.get(k, k): v for k, v in value.items()}
 
 
 def _check_control_points(values, what: str, minimum: int = 1) -> None:
@@ -874,25 +916,25 @@ class DistanceMap(InventoryModel):
     The map is a function, not a roster of existing channels. It states one
     set of control points in whichever input coordinates were measured:
     ``channel`` when the interrogator reports channel numbers,
-    ``instrument_distance`` when it reports its own nominal meters, or both
+    ``acquisition_distance`` when it reports its own nominal meters, or both
     when the same points are known in both, which lets one acquisition
     serve patches whose axes differ. Values between control points are
     piecewise-linearly interpolated; channels outside the covered range are
     undefined (NaN). A single-point map states an origin and takes its
     slope from the axis it is read on: the acquisition's nominal
     ``spatial_interval`` on the channel axis, and one meter of path per
-    interrogator meter on the instrument_distance axis.
+    interrogator meter on the acquisition_distance axis.
     """
 
     channel: tuple[float, ...] | None = Field(
         default=None,
         description="Interrogator-reported channel numbers; strictly increasing.",
     )
-    instrument_distance: tuple[float, ...] | None = Field(
+    acquisition_distance: tuple[float, ...] | None = Field(
         default=None,
         description="Interrogator-reported nominal distances; strictly increasing.",
     )
-    distance: tuple[float, ...] = Field(
+    optical_distance: tuple[float, ...] = Field(
         description=(
             "Optical path distances at the control points; strictly increasing."
         ),
@@ -904,15 +946,15 @@ class DistanceMap(InventoryModel):
         if not self.axes:
             msg = (
                 "DistanceMap requires at least one input axis: "
-                "channel or instrument_distance."
+                "channel or acquisition_distance."
             )
             raise InvalidInventoryError(msg)
-        _check_control_points(self.distance, "DistanceMap distance")
+        _check_control_points(self.optical_distance, "DistanceMap optical_distance")
         for axis in self.axes:
             source = getattr(self, axis)
-            if len(source) != len(self.distance):
+            if len(source) != len(self.optical_distance):
                 msg = (
-                    f"DistanceMap {axis} and distance must have the same "
+                    f"DistanceMap {axis} and optical_distance must have the same "
                     "length; they are the same control points."
                 )
                 raise InvalidInventoryError(msg)
@@ -929,14 +971,14 @@ class DistanceMap(InventoryModel):
         varying spacing describe no instrument, and reading the map on one
         axis would then contradict reading it on the other.
         """
-        if len(self.axes) < 2 or len(self.distance) < 3:
+        if len(self.axes) < 2 or len(self.optical_distance) < 3:
             return
         channel = np.asarray(self.channel, dtype=float)
-        instrument = np.asarray(self.instrument_distance, dtype=float)
-        ratios = np.diff(instrument) / np.diff(channel)
+        acquired = np.asarray(self.acquisition_distance, dtype=float)
+        ratios = np.diff(acquired) / np.diff(channel)
         if not np.allclose(ratios, ratios[0], rtol=1e-6, atol=0):
             msg = (
-                "DistanceMap channel and instrument_distance imply a channel "
+                "DistanceMap channel and acquisition_distance imply a channel "
                 f"spacing which varies along the fiber ({ratios.min()} to "
                 f"{ratios.max()} interrogator meters per channel); one "
                 "interrogator samples at a fixed spacing."
@@ -951,11 +993,11 @@ class DistanceMap(InventoryModel):
         a measured map holds enough of them to bury the line it sits on.
         """
         axes = " and ".join(self.axes)
-        points = f"{len(self.distance)} control points"
+        points = f"{len(self.optical_distance)} control points"
         base = Text("")
         base += Text(self.__class__.__name__, style="bold")
         base += Text("(")
-        base += Text(f" {axes} -> distance", dascore_styles["keys"])
+        base += Text(f" {axes} -> optical_distance", dascore_styles["keys"])
         base += Text(f", {points}")
         base += Text(" )")
         return base
@@ -989,7 +1031,7 @@ class DistanceMap(InventoryModel):
         Parameters
         ----------
         values
-            Channel numbers, or instrument distances in meters.
+            Channel numbers, or acquisition distances in meters.
         axis
             The input axis ``values`` are on; the map's first axis by
             default.
@@ -1000,7 +1042,7 @@ class DistanceMap(InventoryModel):
         """
         vals = np.atleast_1d(np.asarray(values, dtype=float))
         source = np.asarray(self.source_values(axis), dtype=float)
-        dist = np.asarray(self.distance, dtype=float)
+        dist = np.asarray(self.optical_distance, dtype=float)
         if len(source) == 1:
             if slope is None:
                 msg = (
@@ -1098,6 +1140,12 @@ class Acquisition(TimeRangedModel):
         description="True when the interrogator is attached to both path ends.",
     )
 
+    @field_validator("distance_map", mode="before")
+    @classmethod
+    def _upgrade_distance_map(cls, value):
+        """Read a distance map written with the legacy field names."""
+        return _upgrade_legacy(value, _LEGACY_DISTANCE_MAP_NAMES, "distance_map")
+
     def channel_to_distance(self, values, axis: str | None = None) -> np.ndarray:
         """
         Map channel-like patch coordinates onto optical path distance.
@@ -1107,7 +1155,7 @@ class Acquisition(TimeRangedModel):
         values
             The interrogator-reported coordinate to place on the path,
             in the units of ``axis``: bare channel numbers on the channel
-            axis, and meters on the instrument_distance axis.
+            axis, and meters on the acquisition_distance axis.
         axis
             Which of the map's input axes ``values`` are on; the map's
             first axis by default.
@@ -1121,7 +1169,7 @@ class Acquisition(TimeRangedModel):
         axis = dist_map.axes[0] if axis is None else axis
         # The slope carries the units of the axis being read: meters of path
         # per channel on the channel axis, and per interrogator meter --
-        # nominally one -- on the instrument_distance axis.
+        # nominally one -- on the acquisition_distance axis.
         slope = self.spatial_interval if axis == "channel" else 1.0
         return dist_map.map_to_distance(values, axis=axis, slope=slope)
 
@@ -1251,7 +1299,7 @@ def _track_identity_fields() -> Mapping[str, str]:
 # at enrichment, where it would shadow one of these, and a stamped attr
 # at expansion, where it would replace the patch's identity.
 RESERVED_GROUP_NAMES = frozenset(
-    {"time", "distance", "channel", "instrument_distance", "acquisition_key"}
+    {"time", "distance", "channel", "acquisition_distance", "acquisition_key"}
     | {"optical_components", "geometry", "coupling", "labels"}
     | set(VALID_COORDINATE_LABELS)
 )
@@ -1323,6 +1371,14 @@ class OpticalPath(TimeRangedModel):
         it touches, which is where the fiber puts it.
         """
         return tuple(sorted(value, key=lambda x: x.interval))
+
+    @field_validator("geometry", mode="before")
+    @classmethod
+    def _upgrade_geometry(cls, value):
+        """Read geometry segments written with the legacy field names."""
+        if not isinstance(value, list | tuple):
+            return value
+        return [_upgrade_legacy(x, _LEGACY_GEOMETRY_NAMES, "geometry") for x in value]
 
     def _repr_line(self, description: str | None = None) -> Text:
         """One line naming the path, its extent, and its track sizes."""
@@ -1585,7 +1641,7 @@ class OpticalPath(TimeRangedModel):
             if s_hi <= lo or s_lo >= hi:
                 continue
             new_lo, new_hi = max(s_lo, lo), min(s_hi, hi)
-            dist = np.asarray(seg.distance, dtype=float)
+            dist = np.asarray(seg.optical_distance, dtype=float)
             inside = (dist > new_lo) & (dist < new_hi)
             new_dist = np.concatenate([[new_lo], dist[inside], [new_hi]])
             new_columns = {
@@ -1595,7 +1651,9 @@ class OpticalPath(TimeRangedModel):
             # new(), not model_copy(): a copy skips the validators, and
             # would leave `columns` a plain mutable dict nothing had
             # checked against the new distance array.
-            geometry.append(seg.new(distance=tuple(new_dist), columns=new_columns))
+            geometry.append(
+                seg.new(optical_distance=tuple(new_dist), columns=new_columns)
+            )
         coupling = clip_intervals(self.coupling, lo, hi, outer)
         labels = clip_intervals(self.labels, lo, hi, outer)
         return self.model_copy(
@@ -1631,17 +1689,17 @@ class OpticalPath(TimeRangedModel):
 
         geometry = []
         for seg in self.geometry:
-            dist = np.asarray(seg.distance, dtype=float)
+            dist = np.asarray(seg.optical_distance, dtype=float)
             geometry.append(
                 seg.new(
-                    distance=tuple(flip(dist)[::-1]),
+                    optical_distance=tuple(flip(dist)[::-1]),
                     columns={
                         name: tuple(values[::-1])
                         for name, values in seg.columns.items()
                     },
                 )
             )
-        geometry.sort(key=lambda s: s.distance[0])
+        geometry.sort(key=lambda s: s.optical_distance[0])
 
         def flip_item(item):
             update = {
@@ -1695,7 +1753,11 @@ class OpticalPath(TimeRangedModel):
             raise InvalidInventoryError(msg)
         offset = self.distance_max - other.distance_min
         geometry = tuple(
-            seg.model_copy(update={"distance": tuple(d + offset for d in seg.distance)})
+            seg.model_copy(
+                update={
+                    "optical_distance": tuple(d + offset for d in seg.optical_distance)
+                }
+            )
             for seg in other.geometry
         )
 

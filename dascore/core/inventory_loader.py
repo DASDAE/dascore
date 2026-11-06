@@ -30,6 +30,8 @@ import pandas as pd
 from pydantic import ValidationError
 
 from dascore.core.inventory import (
+    _LEGACY_DISTANCE_MAP_NAMES,
+    _LEGACY_GEOMETRY_NAMES,
     Acquisition,
     Cable,
     CoordinateReferenceSystem,
@@ -43,6 +45,7 @@ from dascore.core.inventory import (
     OpticalPath,
     Station,
     _explain_problem,
+    _legacy_renames,
     _overlapping_epochs,
     _times_equal,
 )
@@ -459,6 +462,8 @@ class _Table(NamedTuple):
     # The field every column but the order gathers into, keyed by header.
     # None where each column names a field of the object directly.
     columns: str | None = None
+    # Former header names, each with the name it is read as now.
+    legacy: Mapping[str, str] | None = None
 
 
 # Keyed by CSV stem, which is the attribute the table fills. Held as a
@@ -469,8 +474,16 @@ _TABLES: Mapping[str, _Table] = {
     "optical_components": _Table(),
     "coupling": _Table(),
     "labels": _Table(),
-    "geometry": _Table(points=True, group="name", order="distance", columns="columns"),
-    "distance_map": _Table(points=True, order="distance"),
+    "geometry": _Table(
+        points=True,
+        group="name",
+        order="optical_distance",
+        columns="columns",
+        legacy=_LEGACY_GEOMETRY_NAMES,
+    ),
+    "distance_map": _Table(
+        points=True, order="optical_distance", legacy=_LEGACY_DISTANCE_MAP_NAMES
+    ),
 }
 
 # The one suffix a table takes, and the table stems folded once so the
@@ -481,7 +494,7 @@ _TABLES_BY_FOLD = {x.casefold(): x for x in _TABLES}
 # The columns of geometry.csv which are not columns of the segment: the one
 # naming it and the one placing each row along it. Read off the registry so
 # the headers and the fields they fill cannot drift apart.
-_GEOMETRY_STRUCTURAL = frozenset({"name", "distance"})
+_GEOMETRY_STRUCTURAL = frozenset({"name", "optical_distance"})
 assert _GEOMETRY_STRUCTURAL == {_TABLES["geometry"].group, _TABLES["geometry"].order}
 
 
@@ -824,6 +837,11 @@ def _read_track_table(path: Path, table: _Table, stem: str, crs):
     # are both none of its business. A table of nothing else keeps its
     # rows, and is refused by the columns it then fails to state.
     frame = drop_private_columns(frame)
+    if table.legacy is not None:
+        # Before the order column is looked for, which a table written
+        # with the legacy headers would otherwise not have.
+        renames = _legacy_renames(frame.columns, table.legacy, _quote(path))
+        frame = frame.rename(columns=renames)
     units: Mapping[str, str] = {}
     if stem == "geometry":
         frame, units = _geometry_columns(frame, crs, path)
@@ -880,9 +898,9 @@ def _geometry_columns(frame: pd.DataFrame, crs, path: Path):
             raise InvalidInventoryError(msg)
         if unit:
             units[name] = unit
-    # Counted against the structural columns as well: `distance (m)` renames
-    # to a column the table already has, and two of them would reach pandas
-    # rather than this message.
+    # Counted against the structural columns as well: `optical_distance (m)`
+    # renames to a column the table already has, and two of them would reach
+    # pandas rather than this message.
     written = [*renamed.values(), *_GEOMETRY_STRUCTURAL]
     if repeated := sorted({x for x in written if written.count(x) > 1}):
         msg = (

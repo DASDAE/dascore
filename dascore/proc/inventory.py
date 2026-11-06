@@ -22,6 +22,7 @@ from dascore.core._spool_inventory import (
     VALID_ON_MISSING,
     _unstated,
     attr_owner,
+    former_axis_coord,
     get_coord_values,
     get_interrogator,
     header_agrees,
@@ -247,6 +248,8 @@ def _get_channel_axes(patch, context) -> list[tuple[str, str]]:
             "its channels cannot be placed on the optical path."
         )
         raise PatchError(msg)
+    if (reason := former_axis_coord(dist_map, patch.coords.coord_map)) is not None:
+        raise PatchError(f"The patch {reason}.")
     if out := map_axis_coords(dist_map, patch.coords.coord_map):
         return out
     msg = (
@@ -254,7 +257,7 @@ def _get_channel_axes(patch, context) -> list[tuple[str, str]]:
         f"path distance, so it needs one of the {readable_on(dist_map)} "
         f"coordinates, and this patch has {sorted(patch.coords.coord_map)}. "
         "An acquisition whose patches carry interrogator meters is "
-        "calibrated with a distance_map on the instrument_distance axis, "
+        "calibrated with a distance_map on the acquisition_distance axis, "
         "one control point being enough to state an origin."
     )
     raise PatchError(msg)
@@ -464,7 +467,7 @@ def _get_coords(inventory, context, patch, coords, on_missing) -> dict:
                 f"The patch's {name!r} coordinate is the one this acquisition "
                 "maps onto the path, so enrich will not overwrite it with the "
                 "path distance. Rename it first "
-                f"(patch.rename_coords({name}='instrument_distance'))."
+                f"(patch.rename_coords({name}='acquisition_distance'))."
             )
             raise PatchError(msg)
         existing = patch.coords.coord_map.get(name)

@@ -689,7 +689,7 @@ def _as_patch_value(value):
 # under the explicit name, which is why it wins over plain distance.
 AXIS_COORDS = {
     "channel": ("channel",),
-    "instrument_distance": ("instrument_distance", "distance"),
+    "acquisition_distance": ("acquisition_distance", "distance"),
 }
 # A map axis with no patch coordinate could never be read.
 assert set(AXIS_COORDS) == set(DISTANCE_MAP_AXES)
@@ -716,17 +716,36 @@ def map_axis_coords(dist_map, names) -> list[tuple[str, str]]:
     return out
 
 
+# Coordinate names the map once read, each with the name it reads now.
+# Only refused, never read: a patch which still carries one would otherwise
+# be read on plain `distance`, which on an enriched patch is the optical
+# distance, and every channel would move by the map's offset, silently.
+FORMER_AXIS_COORDS = {"instrument_distance": "acquisition_distance"}
+
+
+def former_axis_coord(dist_map, names) -> str | None:
+    """Return why carrying a former name of one of the map's axes is refused."""
+    for old, new in FORMER_AXIS_COORDS.items():
+        if old in names and new in dist_map.axes:
+            return (
+                f"carries {old!r}, the former name of {new!r}; rename it "
+                f"(patch.rename_coords({old}={new!r})) so the distance_map "
+                "can read it"
+            )
+    return None
+
+
 def readable_on(dist_map) -> list[str]:
     """The names a map could be read on, whichever axis answers."""
     return sorted({x for axis in dist_map.axes for x in AXIS_COORDS[axis]})
 
 
 # The units each map axis states its control points in. A channel number
-# counts channels and states no unit, while an instrument distance is the
+# counts channels and states no unit, while an acquisition distance is the
 # interrogator's own meters, so a patch which carries feet must be
 # converted before the map can read it. Reading raw magnitudes instead
 # would place the channels somewhere else on the fiber, silently.
-AXIS_UNITS = {"channel": None, "instrument_distance": "m"}
+AXIS_UNITS = {"channel": None, "acquisition_distance": "m"}
 assert set(AXIS_UNITS) == set(DISTANCE_MAP_AXES)
 
 
@@ -1195,6 +1214,8 @@ def _channel_placement(dims: set[str], context) -> tuple:
             f"{key!r} defines no distance_map, so its channels "
             "cannot be placed on the optical path"
         )
+    if (reason := former_axis_coord(dist_map, dims)) is not None:
+        return None, reason
     found = map_axis_coords(dist_map, dims)
     if not found:
         return None, (

@@ -1092,7 +1092,7 @@ TRACKS = {
         "120,340,frost_depth,1.2\n"
     ),
     "fiber_arrays/DAS.L001/path/geometry.csv": (
-        "name,distance,longitude,latitude,elevation\n"
+        "name,optical_distance,longitude,latitude,elevation\n"
         "S100,100.0,-117.0,40.0,687.0\n"
         "S100,102.0,-117.1,40.1,685.0\n"
     ),
@@ -1196,7 +1196,7 @@ class TestTrackTables:
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "name,distance,longitude,latitude,elevation,borehole_depth\n"
+                "name,optical_distance,longitude,latitude,elevation,borehole_depth\n"
                 "S100,100.0,-117.0,40.0,687.0,0.0\n"
                 "S100,102.0,-117.1,40.1,685.0,2.0\n"
             ),
@@ -1211,7 +1211,7 @@ class TestTrackTables:
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "name,distance,depth (m)\nS100,100.0,0.0\nS100,102.0,2.0\n"
+                "name,optical_distance,depth (m)\nS100,100.0,0.0\nS100,102.0,2.0\n"
             ),
         }
         geometry = one_path(make_inventory(files)).geometry[0]
@@ -1224,7 +1224,7 @@ class TestTrackTables:
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "name,distance,longitude,latitude,elevation (ft)\n"
+                "name,optical_distance,longitude,latitude,elevation (ft)\n"
                 "S100,100.0,-117.0,40.0,687.0\n"
                 "S100,102.0,-117.1,40.1,685.0\n"
             ),
@@ -1238,19 +1238,20 @@ class TestTrackTables:
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "name,distance,zone\nS100,100.0,north\nS100,102.0,south\n"
+                "name,optical_distance,zone\nS100,100.0,north\nS100,102.0,south\n"
             ),
         }
         with pytest.raises(InvalidInventoryError, match=r"labels\.csv"):
             make_inventory(files)
 
     def test_a_structural_column_restated_with_units(self, make_inventory):
-        """`distance (m)` renames onto a column the table already has."""
+        """`optical_distance (m)` renames onto a column the table already has."""
         files = {
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "name,distance,distance (m)\nS100,100.0,100.0\nS100,102.0,102.0\n"
+                "name,optical_distance,optical_distance (m)\n"
+                "S100,100.0,100.0\nS100,102.0,102.0\n"
             ),
         }
         with pytest.raises(InvalidInventoryError, match="more than once"):
@@ -1268,7 +1269,7 @@ class TestTrackTables:
                 "  units: [meter, meter]\n"
             ),
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "name,distance,z (m)\nS100,100.0,0.0\nS100,102.0,2.0\n"
+                "name,optical_distance,z (m)\nS100,100.0,0.0\nS100,102.0,2.0\n"
             ),
         }
         geometry = one_path(make_inventory(files)).geometry[0]
@@ -1281,7 +1282,7 @@ class TestTrackTables:
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "name,distance,depth,depth (m)\nS100,100.0,0.0,0.0\n"
+                "name,optical_distance,depth,depth (m)\nS100,100.0,0.0,0.0\n"
                 "S100,102.0,2.0,2.0\n"
             ),
         }
@@ -1292,7 +1293,7 @@ class TestTrackTables:
         """Coordinates are stored canonically, whatever the CRS calls them."""
         path = one_path(make_inventory({**MINIMAL, **TRACKS}))
         geometry = path.geometry[0]
-        assert geometry.distance == (100.0, 102.0)
+        assert geometry.optical_distance == (100.0, 102.0)
         # A column is keyed by the header which states it.
         assert geometry.columns["longitude"] == (-117.0, -117.1)
         assert geometry.columns["elevation"] == (687.0, 685.0)
@@ -1311,7 +1312,7 @@ class TestTrackTables:
                 "  units: [meter, meter, meter]\n"
             ),
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "name,distance,x,y,elevation\n"
+                "name,optical_distance,x,y,elevation\n"
                 "S100,100.0,2562048.25,1137365.53,687.0\n"
                 "S100,102.0,2562048.17,1137365.63,685.0\n"
             ),
@@ -1326,7 +1327,7 @@ class TestTrackTables:
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "name,distance,longitude,latitude\nS100,100.0,1.0,2.0\n"
+                "name,optical_distance,longitude,latitude\nS100,100.0,1.0,2.0\n"
                 "S100,102.0,1.1,2.1\n"
             ),
         }
@@ -1339,7 +1340,7 @@ class TestTrackTables:
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "name,distance,longitude,latitude,elevation\n"
+                "name,optical_distance,longitude,latitude,elevation\n"
                 "S100,100.0,-117.0,40.0,687.0\n"
                 "S100,102.0,-117.1,,685.0\n"
             ),
@@ -1354,7 +1355,7 @@ class TestTrackTables:
                 "object_type: Acquisition\nspatial_interval: 1.0\n"
             ),
             "acquisitions/DAS.L001.02.DEC/distance_map.csv": (
-                "channel,distance\n512,500.0\n1710,1698.0\n"
+                "channel,optical_distance\n512,500.0\n1710,1698.0\n"
             ),
         }
         out = make_inventory(files)
@@ -1375,7 +1376,7 @@ class TestTrackTables:
             "fiber_arrays/DAS.L001/path/crew_notes.csv": "who,when\nderrick,tuesday\n",
             "fiber_arrays/DAS.L001/path/components.csv": "a,b\n1,2\n",
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "name,distance,longitude,latitude,elevation\nS,0,0,0,0\nS,100,1,1,0\n"
+                "name,optical_distance,longitude,latitude,elevation\nS,0,0,0,0\nS,100,1,1,0\n"
             ),
         }
         inventory = make_inventory(files)
@@ -1387,7 +1388,7 @@ class TestTrackTables:
         """A near-miss did claim to be a track, so it is not quietly dropped."""
         files = {
             **PATH_DIRECTORY,
-            f"fiber_arrays/DAS.L001/path/{name}.csv": "name,distance\nS,0\n",
+            f"fiber_arrays/DAS.L001/path/{name}.csv": "name,optical_distance\nS,0\n",
         }
         with pytest.raises(InvalidInventoryError, match="Did you mean"):
             make_inventory(files)
@@ -1410,7 +1411,7 @@ class TestTrackTables:
         """The right file one directory too high still says it is a track."""
         files = {
             **PATH_DIRECTORY,
-            "fiber_arrays/DAS.L001/geometry.csv": "name,distance\nS,0\n",
+            "fiber_arrays/DAS.L001/geometry.csv": "name,optical_distance\nS,0\n",
         }
         with pytest.raises(InvalidInventoryError, match="names the track geometry"):
             make_inventory(files)
@@ -1420,7 +1421,7 @@ class TestTrackTables:
         """Case decides nothing here, as it decides nothing for a suffix."""
         files = {
             **PATH_DIRECTORY,
-            f"fiber_arrays/DAS.L001/path/{name}.CSV": "name,distance\nS,0\n",
+            f"fiber_arrays/DAS.L001/path/{name}.CSV": "name,optical_distance\nS,0\n",
         }
         with pytest.raises(InvalidInventoryError, match="Did you mean geometry"):
             make_inventory(files)
@@ -1474,7 +1475,7 @@ class TestTrackTables:
                 "name,longitude,latitude,elevation\nS100,-117.0,40.0,687.0\n"
             ),
         }
-        with pytest.raises(InvalidInventoryError, match="no distance column"):
+        with pytest.raises(InvalidInventoryError, match="no optical_distance column"):
             make_inventory(files)
 
     def test_a_column_stated_twice(self, make_inventory):
@@ -1521,7 +1522,7 @@ class TestPrivateColumns:
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "name,distance,longitude,latitude,elevation,_surveyed_by\n"
+                "name,optical_distance,longitude,latitude,elevation,_surveyed_by\n"
                 "S100,100.0,-117.0,40.0,687.0,north crew\n"
                 "S100,102.0,-117.1,40.1,685.0,north crew\n"
             ),
@@ -1752,12 +1753,12 @@ class TestUnreadableTables:
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "name,distance,longitude,latitude,elevation\n"
+                "name,optical_distance,longitude,latitude,elevation\n"
                 "S100,near,-117.0,40.0,687.0\n"
                 "S100,far,-117.1,40.1,685.0\n"
             ),
         }
-        with pytest.raises(InvalidInventoryError, match="non-numeric distance"):
+        with pytest.raises(InvalidInventoryError, match="non-numeric optical_distance"):
             make_inventory(files)
 
     def test_a_column_no_row_states(self, make_inventory):
@@ -1767,12 +1768,12 @@ class TestUnreadableTables:
                 "object_type: Acquisition\nspatial_interval: 1.0\n"
             ),
             "acquisitions/DAS.L001.02.DEC/distance_map.csv": (
-                "channel,instrument_distance,distance\n512,,500.0\n1710,,1698.0\n"
+                "channel,acquisition_distance,optical_distance\n512,,500.0\n1710,,1698.0\n"
             ),
         }
         acquisition = make_inventory(files).networks[0].fiber_arrays[0].acquisitions[0]
         # Unset, rather than a tuple of nothing, which the model would refuse.
-        assert acquisition.distance_map.instrument_distance is None
+        assert acquisition.distance_map.acquisition_distance is None
 
     def test_a_label_stating_no_value(self, make_inventory):
         """An empty value cell states membership: the value stays unset."""
@@ -1909,6 +1910,144 @@ class TestTableRegistry:
             assert stem  # every key names something
 
 
+class TestLegacyDistanceNames:
+    """Documents using the former distance field names still load."""
+
+    ATTRS = "acquisitions/DAS.L001.02.DEC/attrs.yaml"
+    TABLE = "acquisitions/DAS.L001.02.DEC/distance_map.csv"
+
+    @staticmethod
+    def _map(inventory):
+        return inventory.networks[0].fiber_arrays[0].acquisitions[0].distance_map
+
+    def test_table_headers(self, make_inventory):
+        """instrument_distance and distance headers read as the new fields."""
+        files = {
+            self.ATTRS: "object_type: Acquisition\nspatial_interval: 1.0\n",
+            self.TABLE: "instrument_distance,distance\n0.0,100.0\n10.0,110.0\n",
+        }
+        dist_map = self._map(make_inventory(files))
+        assert dist_map.acquisition_distance == (0.0, 10.0)
+        assert dist_map.optical_distance == (100.0, 110.0)
+
+    def test_object_file(self, make_inventory):
+        """An acquisition's inline map is upgraded the same way."""
+        files = {
+            self.ATTRS: (
+                "object_type: Acquisition\n"
+                "distance_map:\n"
+                "  instrument_distance: [0.0, 10.0]\n"
+                "  distance: [100.0, 110.0]\n"
+            ),
+        }
+        dist_map = self._map(make_inventory(files))
+        assert dist_map.acquisition_distance == (0.0, 10.0)
+        assert dist_map.optical_distance == (100.0, 110.0)
+
+    def test_serialized_document(self):
+        """A whole-inventory document is upgraded too."""
+        text = (
+            "networks:\n"
+            "- code: DAS\n"
+            "  fiber_arrays:\n"
+            "  - code: L001\n"
+            "    acquisitions:\n"
+            "    - code: DEC\n"
+            "      distance_map:\n"
+            "        instrument_distance: [0.0, 10.0]\n"
+            "        distance: [100.0, 110.0]\n"
+        )
+        dist_map = self._map(inv.Inventory.from_yaml(text))
+        assert dist_map.acquisition_distance == (0.0, 10.0)
+        assert dist_map.optical_distance == (100.0, 110.0)
+
+    @pytest.mark.parametrize(
+        "header",
+        [
+            "channel,distance,optical_distance",
+            "channel,instrument_distance,acquisition_distance,optical_distance",
+        ],
+    )
+    def test_both_spellings_in_a_table(self, make_inventory, header):
+        """A legacy header beside its replacement is refused, naming the file."""
+        width = header.count(",") + 1
+        rows = "\n".join(",".join([str(float(i))] * width) for i in range(2))
+        files = {
+            self.ATTRS: "object_type: Acquisition\n",
+            self.TABLE: f"{header}\n{rows}\n",
+        }
+        with pytest.raises(
+            InvalidInventoryError, match=r"distance_map\.csv states both"
+        ):
+            make_inventory(files)
+
+    def test_both_spellings_in_an_object_file(self, make_inventory):
+        """The same refusal holds for an inline map."""
+        files = {
+            self.ATTRS: (
+                "object_type: Acquisition\n"
+                "distance_map:\n"
+                "  channel: [0.0]\n"
+                "  distance: [1.0]\n"
+                "  optical_distance: [1.0]\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="former name"):
+            make_inventory(files)
+
+    def test_model_does_not_take_legacy_names(self):
+        """DistanceMap and Geometry themselves take only the new names."""
+        with pytest.raises(ValidationError):
+            inv.DistanceMap(channel=(0.0,), distance=(1.0,))
+        with pytest.raises(ValidationError):
+            inv.Geometry(distance=(0.0, 1.0), columns={"chainage": (0.0, 1.0)})
+
+    def test_geometry_table_header(self, make_inventory):
+        """A geometry.csv ordered by distance reads as optical_distance."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "name,distance,chainage (m)\nS,100.0,0.0\nS,102.0,2.0\n"
+            ),
+        }
+        geometry = one_path(make_inventory(files)).geometry[0]
+        assert geometry.optical_distance == (100.0, 102.0)
+        assert geometry.columns["chainage"] == (0.0, 2.0)
+
+    def test_inline_geometry(self):
+        """Every one of a path's inline segments is upgraded the same way."""
+        segments = tuple(
+            {"distance": (x, x + 1.0), "columns": {"chainage": (x, x + 1.0)}}
+            for x in (0.0, 5.0)
+        )
+        path = inv.OpticalPath(geometry=segments)
+        out = [x.optical_distance for x in path.geometry]
+        assert out == [(0.0, 1.0), (5.0, 6.0)]
+
+    def test_both_spellings_in_inline_geometry(self):
+        """An inline segment stating both spellings is refused."""
+        segment = {
+            "distance": (0.0, 1.0),
+            "optical_distance": (0.0, 1.0),
+            "columns": {"chainage": (0.0, 1.0)},
+        }
+        with pytest.raises(ValidationError, match="former name"):
+            inv.OpticalPath(geometry=[segment])
+
+    def test_both_spellings_in_a_geometry_table(self, make_inventory):
+        """A geometry table stating both spellings is refused."""
+        files = {
+            **MINIMAL,
+            **TRACKS,
+            "fiber_arrays/DAS.L001/path/geometry.csv": (
+                "name,distance,optical_distance,chainage\nS,0,0,0\nS,1,1,1\n"
+            ),
+        }
+        with pytest.raises(InvalidInventoryError, match="former name"):
+            make_inventory(files)
+
+
 class TestSilentlyLostRows:
     """A row which states a place must keep it, or say it has none."""
 
@@ -1918,7 +2057,7 @@ class TestSilentlyLostRows:
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "name,distance,longitude,latitude,elevation\n"
+                "name,optical_distance,longitude,latitude,elevation\n"
                 "S100,100.0,-117.0,40.0,687.0\n"
                 ",102.0,-117.1,40.1,685.0\n"
             ),
@@ -1932,7 +2071,7 @@ class TestSilentlyLostRows:
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "name,distance,longitude,latitude,elevation\n"
+                "name,optical_distance,longitude,latitude,elevation\n"
                 ",100.0,-117.0,40.0,687.0\n"
                 ",102.0,-117.1,40.1,685.0\n"
             ),
@@ -1946,7 +2085,7 @@ class TestSilentlyLostRows:
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "name,distance,longitude,latitude,elevation\n"
+                "name,optical_distance,longitude,latitude,elevation\n"
                 "S100,100.0,-117.0,40.0,687.0\n"
                 "S100,,-117.1,40.1,685.0\n"
             ),
@@ -1963,7 +2102,7 @@ class TestSilentlyLostRows:
             # Channel 5 states no distance and 100 states no channel; read
             # column by column they would pair up as though they had.
             "acquisitions/DAS.L001.02.DEC/distance_map.csv": (
-                "channel,instrument_distance,distance\n5,,10.0\n,20.0,100.0\n"
+                "channel,acquisition_distance,optical_distance\n5,,10.0\n,20.0,100.0\n"
             ),
         }
         with pytest.raises(InvalidInventoryError, match="stated by every point"):
@@ -2060,7 +2199,7 @@ class TestGapsMutationTestingFound:
             **MINIMAL,
             **TRACKS,
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                "name,distance,longitude,latitude,elevation\n"
+                "name,optical_distance,longitude,latitude,elevation\n"
                 "S100,100.0,-117.0,40.0,687.0\n"
                 "S120,200.0,-117.2,40.2,690.0\n"
                 "S100,102.0,-117.1,40.1,685.0\n"
@@ -2070,8 +2209,8 @@ class TestGapsMutationTestingFound:
         geometry = {x.name: x for x in one_path(make_inventory(files)).geometry}
         assert set(geometry) == {"S100", "S120"}
         # Interleaved in the file; gathered by name and ordered by distance.
-        assert geometry["S100"].distance == (100.0, 102.0)
-        assert geometry["S120"].distance == (200.0, 202.0)
+        assert geometry["S100"].optical_distance == (100.0, 102.0)
+        assert geometry["S120"].optical_distance == (200.0, 202.0)
         assert geometry["S100"].columns["latitude"] == (40.0, 40.1)
 
     def test_a_wrong_cell_names_the_field_it_could_not_take(self, make_inventory):
@@ -2226,7 +2365,7 @@ class TestPRReviewFindings:
             # Sorted by distance these rows reverse, so a position within
             # the sorted frame is not the line the author would open.
             "acquisitions/DAS.L001.02.DEC/distance_map.csv": (
-                "channel,instrument_distance,distance\n"
+                "channel,acquisition_distance,optical_distance\n"
                 "1,10,300\n"  # line 2
                 "2,,100\n"  # line 3, the gap
                 "3,30,200\n"  # line 4
@@ -2243,7 +2382,9 @@ class TestPRReviewFindings:
             "acquisitions/DAS.L001.02.DEC/attrs.yaml": (
                 "object_type: Acquisition\nspatial_interval: 1.0\n"
             ),
-            "acquisitions/DAS.L001.02.DEC/distance_map.csv": "channel,distance\n",
+            "acquisitions/DAS.L001.02.DEC/distance_map.csv": (
+                "channel,optical_distance\n"
+            ),
         }
         with pytest.raises(InvalidInventoryError, match="describes no distance_map"):
             make_inventory(files)
@@ -2290,10 +2431,10 @@ class TestPRReviewFindings:
                 "object_type,distance_min,distance_max,name\nFiberSegment,0,3000,a\n"
             ),
             "fiber_arrays/DAS.L001/path/geometry.csv": (
-                f"name,distance,longitude,latitude,elevation\n{rows}\n"
+                f"name,optical_distance,longitude,latitude,elevation\n{rows}\n"
             ),
         }
-        assert len(one_path(make_inventory(files)).geometry[0].distance) == 2000
+        assert len(one_path(make_inventory(files)).geometry[0].optical_distance) == 2000
 
 
 class TestFindInventory:
@@ -2565,7 +2706,9 @@ class TestReadableErrors:
 
     def test_point_table_names_table_not_line(self, make_inventory):
         """A geometry segment gathers several rows, so no one line is named."""
-        text = "name,distance,longitude,latitude,elevation\nS100,100,inf,40,687\n"
+        text = (
+            "name,optical_distance,longitude,latitude,elevation\nS100,100,inf,40,687\n"
+        )
         text += "S100,102,-117.1,40.1,685\n"
         msg = self._message(make_inventory, geometry__csv=text)
         assert "geometry.csv: " in msg

@@ -3098,8 +3098,11 @@ class TestChannelSelectEdges:
             inventory,
             distance_map=DistanceMap(
                 channel=(float(distance.min()), float(distance.max())),
-                instrument_distance=(float(distance.min()), float(distance.max())),
-                distance=(100.0, 100.0 + float(distance.max() - distance.min())),
+                acquisition_distance=(float(distance.min()), float(distance.max())),
+                optical_distance=(
+                    100.0,
+                    100.0 + float(distance.max() - distance.min()),
+                ),
             ),
         )
         channels = dc.Patch(
@@ -3197,8 +3200,11 @@ class TestChannelSelectEdges:
             inventory,
             distance_map=DistanceMap(
                 channel=(float(distance.min()), float(distance.max())),
-                instrument_distance=(float(distance.min()), float(distance.max())),
-                distance=(100.0, 100.0 + float(distance.max() - distance.min())),
+                acquisition_distance=(float(distance.min()), float(distance.max())),
+                optical_distance=(
+                    100.0,
+                    100.0 + float(distance.max() - distance.min()),
+                ),
             ),
         )
         stacked = patch.data[:3][..., np.newaxis]
@@ -3336,8 +3342,8 @@ def _float_grid_pair(distance, span):
         gauge_length=10.0,
         sample_rate=1.0 / dc.to_float(patch.get_coord("time").step),
         distance_map=DistanceMap(
-            instrument_distance=(float(distance.min()), float(distance.max())),
-            distance=(0.0, span),
+            acquisition_distance=(float(distance.min()), float(distance.max())),
+            optical_distance=(0.0, span),
         ),
     )
     path = OpticalPath(
@@ -3433,11 +3439,18 @@ class TestChannelUnits:
         assert shapes["feet"] == patch.shape
         assert shapes["random"] == (100, patch.shape[1])
 
+    def test_former_coordinate_name_raises(self, patch, inventory):
+        """Selection refuses instrument_distance as enrichment does."""
+        old = patch.rename_coords(distance="instrument_distance")
+        spool = dc.spool(old).attach_inventory(inventory)
+        with pytest.raises(PatchError, match="former name of 'acquisition_distance'"):
+            spool.select(zone="north")
+
     def test_incompatible_units_raise(self, patch, inventory):
         """A coordinate which is not a length cannot be a distance."""
         seconds = patch.set_units(distance="s")
         spool = dc.spool(seconds).attach_inventory(inventory)
-        with pytest.raises(UnitError, match="instrument_distance"):
+        with pytest.raises(UnitError, match="acquisition_distance"):
             spool.select(zone="north")
 
 
