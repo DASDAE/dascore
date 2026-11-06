@@ -97,6 +97,9 @@ class TestReadArray:
 class TestPacketContinuity:
     """Tests for files whose packets are not one contiguous run."""
 
+    # A packet is 500 samples at 1000 Hz, so half a packet is 0.25 s.
+    half_packet_ns = 250_000_000
+
     @pytest.fixture(scope="class")
     def packets(self):
         """The example file's raw bytes split into its packets."""
@@ -108,32 +111,46 @@ class TestPacketContinuity:
         return [raw[i : i + size] for i in range(0, len(raw), size)]
 
     @staticmethod
-    def _shift_time(packet, shift_ns):
-        """Return the packet with its start_time_ns moved by shift_ns."""
-        start = int(np.frombuffer(packet[20:28], dtype="<u8")[0]) + shift_ns
-        return packet[:20] + np.uint64(start).tobytes() + packet[28:]
+    def _shift(packet, field, delta):
+        """Return the packet with sample_count or start_time_ns moved by delta."""
+        start = {"count": 12, "time": 20}[field]
+        value = int(np.frombuffer(packet[start : start + 8], dtype="<u8")[0])
+        return packet[:start] + np.uint64(value + delta).tobytes() + packet[start + 8 :]
 
     def test_dropped_packet_raises(self, packets, tmp_path):
         """A missing middle packet raises rather than shifting later samples."""
         path = tmp_path / "dropped.raw"
         path.write_bytes(b"".join(packets[:2] + packets[3:]))
-        with pytest.raises(InvalidFiberFileError, match="packet 2"):
+        with pytest.raises(InvalidFiberFileError, match=r"packet 3 .* sample count"):
             SintelaBinaryV3().scan(path)
-        with pytest.raises(InvalidFiberFileError, match="contiguous"):
+        with pytest.raises(InvalidFiberFileError, match=r"packet 2 .* sample count"):
             SintelaBinaryV3().read_array(path)
 
-    def test_time_gap_raises(self, packets, tmp_path):
-        """A packet whose start time jumps raises despite contiguous counts."""
-        path = tmp_path / "time_gap.raw"
-        tail = [self._shift_time(x, 60 * 10**9) for x in packets[3:]]
+    def test_time_jump_raises(self, packets, tmp_path):
+        """Packets whose start time jumps raise despite contiguous counts."""
+        path = tmp_path / "time_jump.raw"
+        tail = [self._shift(x, "time", 60 * 10**9) for x in packets[3:]]
         path.write_bytes(b"".join(packets[:3] + tail))
-        with pytest.raises(InvalidFiberFileError, match="packet 3"):
+        with pytest.raises(InvalidFiberFileError, match=r"packet 4 .* start time"):
             SintelaBinaryV3().scan(path)
 
-    def test_time_jitter_allowed(self, packets, tmp_path):
-        """Start times a few samples off the nominal grid still read."""
-        path = tmp_path / "jitter.raw"
-        jittered = [packets[0], self._shift_time(packets[1], 3 * 10**6)]
-        path.write_bytes(b"".join(jittered + packets[2:]))
-        patch = dc.spool(path)[0]
-        assert patch.shape[0] == len(packets) * 500
+    def test_inner_count_checked_on_read(self, packets, tmp_path):
+        """A bad count between good endpoints passes scan but fails read."""
+        path = tmp_path / "inner_count.raw"
+        bad = self._shift(packets[2], "count", 1)
+        path.write_bytes(b"".join([*packets[:2], bad, *packets[3:]]))
+        assert len(SintelaBinaryV3().scan(path)) == 1
+        with pytest.raises(InvalidFiberFileError, match=r"packet 2 .* sample count"):
+            SintelaBinaryV3().read_array(path)
+
+    @pytest.mark.parametrize("shift", [-1, 1])
+    def test_time_tolerance(self, packets, tmp_path, shift):
+        """A start time within half a packet of the grid reads; beyond raises."""
+        near = self._shift(packets[2], "time", shift * (self.half_packet_ns - 1))
+        far = self._shift(packets[2], "time", shift * (self.half_packet_ns + 1))
+        near_path, far_path = tmp_path / "near.raw", tmp_path / "far.raw"
+        near_path.write_bytes(b"".join([*packets[:2], near, *packets[3:]]))
+        far_path.write_bytes(b"".join([*packets[:2], far, *packets[3:]]))
+        assert dc.read(near_path)[0].shape[0] == len(packets) * 500
+        with pytest.raises(InvalidFiberFileError, match=r"packet 2 .* start time"):
+            dc.read(far_path)
