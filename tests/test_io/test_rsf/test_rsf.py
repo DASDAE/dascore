@@ -8,6 +8,7 @@ import pytest
 from upath import UPath
 
 import dascore as dc
+from dascore.exceptions import CoordError
 from dascore.io.rsf import RSFV1
 from dascore.warnings import DASCoreWarning
 
@@ -196,3 +197,14 @@ class TestRsfEpoch:
         assert (hdr["o2"], hdr["d2"], hdr["unit2"]) == ("5.0", "0.004", "s")
         assert "epoch2" not in hdr
         assert "starttime" not in hdr
+
+    def test_nat_start(self, fractional_patch, tmp_path):
+        """A time axis whose start is NaT is refused, not written as an epoch."""
+        start, step = np.datetime64("2024-01-01"), np.timedelta64(1, "s")
+        time = dc.get_coord(start=start, step=step, shape=(8,))
+        nat_time = time.update_limits(min=np.datetime64("NaT", "ns"))
+        patch = fractional_patch.update_coords(time=nat_time)
+        path = tmp_path / "nat.rsf"
+        with pytest.raises(CoordError, match="finite start"):
+            RSFV1().write(patch, path)
+        assert not path.exists()

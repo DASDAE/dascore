@@ -8,6 +8,7 @@ import warnings
 import numpy as np
 
 import dascore as dc
+from dascore.exceptions import CoordError
 from dascore.io.core import FiberIO
 from dascore.io.utils import _DASCORE_DIR, require_grid
 from dascore.units import get_quantity_str
@@ -90,6 +91,9 @@ class RSFV1(FiberIO):
         require_grid(patch, patch.dims, "RSF")
         axis_lengths = patch.shape
         axis_origs = [to_float(patch.get_coord(x)[0]) for x in patch.dims]
+        if not np.all(np.isfinite(axis_origs)):
+            msg = "The RSF writer needs a finite start on every dimension."
+            raise CoordError(msg)
         axis_steps = [_get_step(patch.get_coord(x)) for x in patch.dims]
         axis_names = patch.dims
         axis_units = [get_quantity_str(patch.get_coord(x).units) for x in patch.dims]
