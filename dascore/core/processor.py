@@ -87,10 +87,10 @@ from dascore.utils.patch import (
     check_patch_data,
 )
 from dascore.utils.patch_registry import (
+    _identifying_tag,
     _memoized_operation_id,
     _spell,
     is_default,
-    patch_function_tag,
     register_patch_function,
     resolve_patch_function,
 )
@@ -230,9 +230,10 @@ class PatchProcessor(DascoreBaseModel):
         """Return the name this operation is identified by."""
         cls = type(self)
         func = cls.patch_function
-        if func is not None and (tag := patch_function_tag(func)) is not None:
+        if func is not None and (tag := _identifying_tag(func)) is not None:
             return tag
-        # Unregistered or defined inside a call: named by its source, or --
+        # Unregistered, or defined inside a call or in a script or a
+        # notebook: named by its source, or --
         # one with no source to read -- by which class object it is.
         try:
             return callable_name(cls)

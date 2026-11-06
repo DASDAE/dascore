@@ -99,6 +99,10 @@ _UNIT = "$unit"
 # are combined: the result's are worked out from its members'.
 _ID_FIELDS = ("origin_id", "data_id")
 
+# The module a script or notebook runs as. Nothing outside the process can
+# import what it defines, so a path into it names nothing on its own.
+SCRIPT_MODULE = "__main__"
+
 
 @dataclass(frozen=True, slots=True)
 class PatchMarker:
@@ -920,17 +924,20 @@ def callable_name(func: Any) -> str:
     Return a name which says which function or class this is.
 
     Its import path, when the path leads back to it. Otherwise -- defined
-    inside a call -- the path, a digest of its source and its encoded
-    defaults. Anything holding state that leaves out is refused: closure
-    cells, a bound instance, a callable object, or a lambda, which shares
-    its source line with its neighbours.
+    inside a call, or in a script or notebook -- the path, a digest of its
+    source and its encoded defaults. Anything holding state that leaves out
+    is refused: closure cells, a bound instance, a callable object, or a
+    lambda, which shares its source line with its neighbours.
     """
     module = getattr(func, "__module__", None) or "<unknown>"
     qualname = getattr(func, "__qualname__", None)
     if not isinstance(qualname, str):
         _refuse(func, "is a callable object, whose state is not its name")
     path = f"{module}:{qualname}"
-    if _resolves(func, module, qualname):
+    # A path into `__main__` leads back to the object, but only in this
+    # process: every script and notebook has one, and editing a cell keeps
+    # the path while changing what it runs.
+    if module != SCRIPT_MODULE and _resolves(func, module, qualname):
         return path
     # A builtin's `__self__` is its module. Anything else it is bound to --
     # an instance, or the class an inherited classmethod reads -- is state.

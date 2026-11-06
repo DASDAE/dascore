@@ -24,6 +24,7 @@ from dascore.utils.array import hash_array
 from dascore.utils.identity import (
     H,
     PatchMarker,
+    callable_name,
     derive,
     encode,
     extract_patches,
@@ -423,6 +424,24 @@ class TestCallables:
 
         assert digest(make(1)) == digest(make(1))
         assert digest(make(1)) != digest(make(2))
+
+    def test_a_script_function_by_source(self, monkeypatch):
+        """A path into `__main__` finds it, but two scripts share that path."""
+
+        def first(x):
+            return x * 2
+
+        def second(x):
+            return x * 3
+
+        names = []
+        for func in (first, second):
+            func.__module__ = "__main__"
+            func.__name__ = func.__qualname__ = "clean"
+            monkeypatch.setattr(sys.modules["__main__"], "clean", func, raising=False)
+            names.append(callable_name(func))
+        assert names[0].startswith("__main__:clean@")
+        assert names[0] != names[1]
 
     def test_partial(self):
         """A partial is what it wraps and what it wraps it with."""
